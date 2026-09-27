@@ -158,6 +158,12 @@ describe('addLink', () => {
       where: { id: 'assign-1', module: { classroom_id: CLASSROOM } },
       select: { id: true },
     });
+    // Any kind of slide may be linked to an assignment or a repository: the
+    // deck-only rule is for quiz material.
+    expect(slideFindFirst).toHaveBeenCalledExactlyOnceWith({
+      where: { id: 'slide-1', classroom_id: CLASSROOM },
+      select: { id: true },
+    });
     // The unused target column is an explicit null in the duplicate lookup too.
     // `repository_id: undefined` would be DROPPED from the `where` by Prisma,
     // which would match this slide's link to ANY repository and report a
@@ -333,6 +339,27 @@ describe('addLink — quiz target (source material)', () => {
       });
     }
     expect(pageLinkCreate.mock.calls[0][0].data).toMatchObject({ quiz_id: 'quiz-1', order: 6 });
+  });
+
+  it('admits a slide as quiz material only when it is a reveal.js deck', async () => {
+    await addLink({ ...PAGE_TO_QUIZ, resourceType: 'slide', resourceId: 'slide-1' });
+
+    expect(slideFindFirst).toHaveBeenCalledExactlyOnceWith({
+      where: { id: 'slide-1', classroom_id: CLASSROOM, kind: 'DECK' },
+      select: { id: true },
+    });
+  });
+
+  it('refuses a FILE or LINK slide as quiz material with the same not-found, writing nothing', async () => {
+    // It has no indexed text, so it could never reach a prompt. The kind
+    // filter matches nothing for it.
+    slideFindFirst.mockResolvedValue(null);
+
+    expect(
+      await codeOf(addLink({ ...PAGE_TO_QUIZ, resourceType: 'slide', resourceId: 'file-slide' }))
+    ).toBe('resource_not_found');
+    expect(quizFindFirst).not.toHaveBeenCalled();
+    expectNoWrites();
   });
 
   it('appends a deck after the last page when the quiz has only pages', async () => {

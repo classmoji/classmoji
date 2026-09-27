@@ -382,8 +382,9 @@ describe('setQuizSourceMaterial', () => {
       where: { id: { in: ['p1', 'p2'] }, classroom_id: CLASSROOM },
       select: { id: true },
     });
+    // Only a reveal.js deck can be material: FILE and LINK slides have no text.
     expect(tx.slide.findMany).toHaveBeenCalledWith({
-      where: { id: { in: ['s1'] }, classroom_id: CLASSROOM },
+      where: { id: { in: ['s1'] }, classroom_id: CLASSROOM, kind: 'DECK' },
       select: { id: true },
     });
     expect(tx.pageLink.deleteMany).toHaveBeenCalledWith({ where: { quiz_id: 'quiz-1' } });
@@ -426,6 +427,33 @@ describe('setQuizSourceMaterial', () => {
     expect(error).toBeInstanceOf(ResourceLinkServiceError);
     expect(tx.pageLink.deleteMany).not.toHaveBeenCalled();
     expect(tx.slideLink.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses a FILE or LINK slide as resource_not_found BEFORE deleting anything', async () => {
+    const tx = makeTx();
+    // The classroom has a deck and a FILE slide; the kind filter admits the deck only.
+    const kinds: Record<string, string> = { deck: 'DECK', pdf: 'FILE' };
+    tx.slide.findMany.mockImplementation(
+      async ({ where }: { where: { id: { in: string[] }; kind?: string } }) =>
+        where.id.in.filter(id => !where.kind || kinds[id] === where.kind).map(id => ({ id }))
+    );
+
+    const error = await setQuizSourceMaterial(tx as never, {
+      quizId: 'quiz-1',
+      classroomId: CLASSROOM,
+      material: [
+        { kind: 'slide', id: 'deck' },
+        { kind: 'slide', id: 'pdf' },
+      ],
+    }).catch(e => e);
+
+    expect(error).toBeInstanceOf(ResourceLinkServiceError);
+    expect((error as InstanceType<typeof ResourceLinkServiceError>).code).toBe(
+      'resource_not_found'
+    );
+    expect(tx.pageLink.deleteMany).not.toHaveBeenCalled();
+    expect(tx.slideLink.deleteMany).not.toHaveBeenCalled();
+    expect(tx.slideLink.createMany).not.toHaveBeenCalled();
   });
 });
 

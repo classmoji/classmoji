@@ -459,7 +459,9 @@ export function normalizeSourceMaterial(input: unknown): SourceMaterialRef[] {
  *
  * Every id is proven to be in `classroomId` up front (one query per kind), so an
  * unknown or foreign id throws BEFORE anything is deleted and the caller's
- * transaction rolls back the quiz write with it. The quiz itself must already
+ * transaction rolls back the quiz write with it. A slide must be a reveal.js
+ * DECK: a FILE or LINK slide has no indexed text and could never reach a
+ * prompt, so it is refused the same way. The quiz itself must already
  * be proven to be in `classroomId` by the caller. The content manifest is not
  * rebuilt: it has no quiz section.
  */
@@ -483,12 +485,12 @@ export async function setQuizSourceMaterial(
     : [];
   const slides = slideIds.length
     ? await tx.slide.findMany({
-        where: { id: { in: slideIds }, classroom_id: classroomId },
+        where: { id: { in: slideIds }, classroom_id: classroomId, kind: 'DECK' },
         select: { id: true },
       })
     : [];
   if (pages.length !== pageIds.length || slides.length !== slideIds.length) {
-    throw refusal(`a source material document is not in classroom ${classroomId}`);
+    throw refusal(`a source material document is not a page or deck in classroom ${classroomId}`);
   }
 
   await tx.pageLink.deleteMany({ where: { quiz_id: quizId } });

@@ -154,18 +154,24 @@ type TargetColumns = {
  * write on the same side: a value that is neither literal cannot be validated
  * as one kind and written as the other, it is refused here before any query
  * runs — as the same not-found an unknown id gets.
+ *
+ * `decksOnly` (set for a quiz target) admits only reveal.js DECK slides: a FILE
+ * or LINK slide has no indexed text, so as quiz source material it could never
+ * reach a prompt. It is refused as the same not-found, not written.
  */
 async function resolveResource(
   classroomId: string,
   resourceType: ResourceLinkResourceType,
-  resourceId: string
+  resourceId: string,
+  { decksOnly = false }: { decksOnly?: boolean } = {}
 ): Promise<ResourceColumn> {
   const db = getPrisma();
   const where = { id: resourceId, classroom_id: classroomId };
   const notFound = () =>
     new ResourceLinkServiceError(
       'resource_not_found',
-      `[resourceLink] ${resourceType} ${resourceId} not found in classroom ${classroomId}`
+      `[resourceLink] ${resourceType} ${resourceId} not found in classroom ${classroomId}` +
+        (decksOnly && resourceType === 'slide' ? ' as a deck' : '')
     );
 
   switch (resourceType) {
@@ -175,7 +181,10 @@ async function resolveResource(
       return { page_id: resourceId };
     }
     case 'slide': {
-      const found = await db.slide.findFirst({ where, select: { id: true } });
+      const found = await db.slide.findFirst({
+        where: decksOnly ? { ...where, kind: 'DECK' } : where,
+        select: { id: true },
+      });
       if (!found) throw notFound();
       return { slide_id: resourceId };
     }
@@ -309,7 +318,9 @@ export const addLink = async ({
   // those return values is what makes the duplicate lookup and the insert
   // describe the same row: the unset target column is an explicit NULL in both,
   // never an `undefined` that Prisma would drop from the `where`.
-  const resourceColumn = await resolveResource(classroomId, resourceType, resourceId);
+  const resourceColumn = await resolveResource(classroomId, resourceType, resourceId, {
+    decksOnly: targetType === 'quiz',
+  });
   const targetColumns = await resolveTarget(classroomId, targetType, targetId);
   const columns = { ...resourceColumn, ...targetColumns };
 
