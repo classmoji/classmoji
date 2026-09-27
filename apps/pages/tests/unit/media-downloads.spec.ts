@@ -25,6 +25,8 @@ import {
   type DownloadableRecord,
 } from '~/utils/mediaDownloads.ts';
 import { renderSitePage } from '~/site/render.server.ts';
+import { viewerSchema } from '~/components/viewer/viewerBlocks.tsx';
+import { schema as editorSchema } from '~/components/editor/blocks/index.tsx';
 
 const source = (relative: string) =>
   readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
@@ -285,5 +287,29 @@ test.describe('the class site', () => {
     const empty = await renderSitePage({ blocks, resolveLink, downloads: {} });
     expect(without.html).not.toContain('media-download-link');
     expect(empty.html).toBe(without.html);
+  });
+});
+
+test.describe('the viewer schema', () => {
+  type Impl = { implementation?: { meta?: { fileBlockAccept?: string[] } } };
+  const specs = viewerSchema.blockSpecs as unknown as Record<string, Impl>;
+  const editorSpecs = editorSchema.blockSpecs as unknown as Record<string, Impl>;
+
+  test('its file and audio blocks are still file blocks, styled as BlockNote styles them', () => {
+    // `fileBlockAccept` is what puts `data-file-block` on the DOM, and every
+    // BlockNote file-block style is scoped under that attribute.
+    for (const type of ['file', 'audio']) {
+      expect(specs[type].implementation?.meta?.fileBlockAccept, type).toEqual(
+        editorSpecs[type].implementation?.meta?.fileBlockAccept
+      );
+    }
+  });
+
+  test('reads documents with the same props as the editor', () => {
+    for (const type of ['file', 'audio']) {
+      const viewer = (viewerSchema.blockSpecs as Record<string, { config: unknown }>)[type];
+      const editor = (editorSchema.blockSpecs as Record<string, { config: unknown }>)[type];
+      expect(viewer.config, type).toEqual(editor.config);
+    }
   });
 });

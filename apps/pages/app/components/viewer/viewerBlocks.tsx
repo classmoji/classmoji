@@ -81,12 +81,18 @@ function ViewerAudio(props: AudioProps) {
   return <WithDownload props={props as unknown as FileLikeProps}>{preview}</WithDownload>;
 }
 
+// `meta.fileBlockAccept` is what puts `data-file-block` on the block's DOM, and
+// every one of BlockNote's file-block styles (the wrapper's column layout, the
+// name-with-icon row, the icon's size) is scoped under that attribute. The
+// values are BlockNote's own for these two blocks.
 const DownloadableFile = createReactBlockSpec(createFileBlockConfig, {
+  meta: { fileBlockAccept: ['*/*'] },
   render: props => <ViewerFile {...(props as unknown as WrapperProps)} />,
   parse: fileParse(),
 });
 
 const DownloadableAudio = createReactBlockSpec(createAudioBlockConfig, config => ({
+  meta: { fileBlockAccept: ['audio/*'] },
   render: props => <ViewerAudio {...(props as unknown as AudioProps)} />,
   parse: audioParse(config),
   toExternalHTML: AudioToExternalHTML,
