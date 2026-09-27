@@ -384,6 +384,14 @@ describe('withIdMaps', () => {
   it('leaves the phases untouched', () => {
     expect(withIdMaps(base, { slides: { 's-1': 'S1' } }).phases).toEqual(base.phases);
   });
+
+  // The media copy's resume map rides the same merge: one pair per copy, as
+  // each lands, and a later pair never erases an earlier one.
+  it('merges media copy pairs one at a time', () => {
+    const first = withIdMaps(base, { media: { 'm-1': 'M1' } });
+    const second = withIdMaps(first, { media: { 'm-2': 'M2' } });
+    expect(second.id_maps?.media).toEqual({ 'm-1': 'M1', 'm-2': 'M2' });
+  });
 });
 
 describe('importedSourceIds', () => {

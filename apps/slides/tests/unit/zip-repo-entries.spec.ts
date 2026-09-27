@@ -170,13 +170,14 @@ test.describe('slides.com importer', () => {
   const source = readFileSync(join(here, '../../app/utils/slidesComImporter.server.ts'), 'utf8');
 
   test('reads every repository-bound ZIP entry through the gate', () => {
-    // Images, videos and the theme's lib/ files — nothing reaches `files`
-    // straight from JSZip any more.
-    expect(source.match(/await repoGate\.read\(/g)).toHaveLength(3);
+    // Images, videos and the theme's lib/ files are all placed by
+    // `placeImportEntry`, which admits through the gate and the import's
+    // inflate budget (pinned in import-video-media.spec). Nothing reaches
+    // `files` straight from JSZip.
+    expect(source.match(/gate: repoGate,/g)).toHaveLength(2);
+    expect(source.match(/budget: inflateBudget,/g)).toHaveLength(2);
+    expect(source.match(/file\.async\('nodebuffer'\)/g)).toHaveLength(2);
     expect(source).not.toMatch(/file\.async\('base64'\)/);
-    // A video its header routed to media but whose bytes did not already holds
-    // them, so it asks by size.
-    expect(source).toContain('repoGate.admit(filename, buffer.length, filePath)');
   });
 
   test('resolves every media reference against both the kept and the skipped files', () => {
@@ -196,7 +197,7 @@ test.describe('slides.com importer', () => {
     );
     expect(source).toMatch(/\n\s+warnings, \/\/ Entries left out/);
     // Built after the last reference pass, so it can name the slides.
-    expect(source.indexOf('const warnings = repoGate.warnings(skippedOnSlides);')).toBeGreaterThan(
+    expect(source.indexOf('warnings = repoGate.warnings(skippedOnSlides);')).toBeGreaterThan(
       source.indexOf("$slides.find('section[data-background-video]')")
     );
   });

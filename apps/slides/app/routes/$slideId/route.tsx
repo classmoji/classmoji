@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useLoaderData, useFetcher, data, redirect } from 'react-router';
 import { Tooltip, Popconfirm } from 'antd';
 import getPrisma from '@classmoji/database';
@@ -46,11 +46,20 @@ import {
 } from '@classmoji/utils/upload-limit';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import { uploadMultipart } from '@classmoji/ui-components/upload';
-import { deckAssetTarget, deckUploadErrorMessage, mediaUploadMessage } from '~/utils/mediaUpload';
+import {
+  UploadReroute,
+  afterMediaFailure,
+  deckUploadErrorMessage,
+  editorMediaOptions,
+  placeDeckAsset,
+  type UploadFailure,
+} from '~/utils/mediaUpload';
 import { playableMediaUrl } from '~/utils/mediaClient';
+import { canonicalMediaUrls, deliveryHostOf } from '~/utils/mediaRefs';
 import { useToast, useUser } from '~/hooks';
 import { diffDeckSnapshots, extractDeckSnapshot, type DeckSnapshot } from '~/utils/deckOpsDiff';
 import { getThemeUrls } from '~/utils/themeService.server';
+import { loadUploadCapability } from '~/utils/uploadCapability.server';
 import {
   deckAccessFor,
   deckDeliveryContext,
@@ -529,12 +538,15 @@ export const loader = async ({
   // student opening every slide, so the Pro and usage reads would be pure cost
   // for them. Every upload route re-derives it from the file it receives.
   const uploadCapability = canEdit
-    ? await ClassmojiService.media.uploadCapabilityFor(slide.classroom)
+    ? await loadUploadCapability(slide.classroom, 'deck editor')
     : null;
 
   return {
     slide,
     uploadCapability,
+    // The host signed media URLs are minted on, for the editor's diff (see
+    // `canonicalMediaUrls`). Editors only, like the capability above.
+    mediaDeliveryHost: canEdit ? deliveryHostOf(process.env.CONTENT_DELIVERY_ORIGIN) : null,
     contentUrl,
     slideContent,
     contentError,
@@ -1126,8 +1138,10 @@ export const action = async ({
         path: result.path,
       };
     } catch (error: unknown) {
-      // 409 `USE_MEDIA`: the file belongs in media, and the editor re-sends it
-      // there. Tagged like every other answer from this intent.
+      // 409 `USE_MEDIA`: the file belongs in media (the editor's capability was
+      // stale). The editor sends it there once, to media's multipart upload,
+      // and places it by reference. Tagged like every other answer from this
+      // intent.
       if (ClassmojiService.media.isMediaRoutingError(error)) {
         return data(
           { intent: 'upload-image' as const, error: error.code, message: error.message },
@@ -1650,6 +1664,18 @@ export const action = async ({
   const saveOursSha =
     typeof rawSaveOursSha === 'string' && rawSaveOursSha ? rawSaveOursSha : undefined;
 
+  // The save response's document goes straight back into the editor (a merge
+  // remounts it, view mode shows it until the loader catches up), so its
+  // `media://` references are signed exactly as the editor's own read signs
+  // them — they have no proxy to load through. The edit tier: only an editor
+  // reaches this action. `html_sha` is always the raw document's identity.
+  const saveDeliveryCtx = deckDeliveryContext(
+    slide,
+    gitOrgLogin,
+    repo,
+    deckAccessFor('viewer', { canEdit: true }, slide)
+  );
+
   // Conflict report → 409 the chooser renders (the client re-submits the
   // same payload + resolutions + the report's ours_sha). Shared by both save
   // shapes.
@@ -1734,7 +1760,7 @@ export const action = async ({
         success: true,
         sha: result.sha,
         sha_source: 'deck' as const,
-        savedContent: result.html,
+        savedContent: await resolveDeckMedia(result.html, saveDeliveryCtx),
         // The committed index.html's IDENTITY. `sha` above is deck.json's, and
         // the viewer's read is of index.html — comparing those two would never
         // match. Hashed from the bytes just committed, which is the same object
@@ -1929,9 +1955,12 @@ export const action = async ({
     }
 
     // Return the full HTML: it is the editor's next-session document and the
-    // baseline the next save diffs against, and it stays UNSIGNED for that.
-    // View mode no longer renders it once the loader's revalidation lands —
-    // that read is by sha through the Worker, so it is not behind this one.
+    // baseline the next save diffs against. Its repo references stay unsigned
+    // (the editor loads them through the proxy); its `media://` references are
+    // signed, as the editor's own read signs them, and the client compares
+    // media by reference (`canonicalMediaUrls`), so a fresh signature is not an
+    // edit. View mode no longer renders it once the loader's revalidation lands
+    // — that read is by sha through the Worker, so it is not behind this one.
     // sha is the DECK sha (+ sha_source 'deck') — deck.json now exists, so the
     // client's conflict token must point at it for the next save.
     // merged_with_concurrent (present iff the merge path committed) → the
@@ -1941,7 +1970,7 @@ export const action = async ({
       success: true,
       sha: saved.sha,
       sha_source: 'deck' as const,
-      savedContent: saved.html,
+      savedContent: await resolveDeckMedia(saved.html, saveDeliveryCtx),
       // index.html's identity — see the ops path above for why it is not `sha`.
       html_sha: gitBlobSha(saved.html),
       orphanedImages,
@@ -1987,6 +2016,7 @@ export default function SlideViewer() {
   const {
     slide,
     uploadCapability,
+    mediaDeliveryHost,
     contentUrl,
     slideContent,
     deckSha,
@@ -2071,24 +2101,38 @@ export default function SlideViewer() {
   // re-submit must carry the SAME ops so the server re-derives the SAME
   // conflict report the choices answer.
   const lastPostedOpsRef = useRef<{ ops: string; baseSha: string } | null>(null);
+  /**
+   * The document as the diff compares it: media by REFERENCE. Both sides of
+   * every diff pass through this — the baseline (a server read, signed at read
+   * time) and the DOM (signed whenever it was loaded) — so a media URL minted
+   * at a different moment is not an edit, and an edited slide's ops carry the
+   * `media://` reference rather than an expiring signature.
+   */
+  const mediaScope = useMemo(
+    () => ({ host: mediaDeliveryHost, classroomId: slide.classroom_id }),
+    [mediaDeliveryHost, slide.classroom_id]
+  );
   /** Capture/refresh the diff baseline from a server-rendered document. */
-  const captureBaseline = useCallback((content: unknown, sha: unknown, source: unknown): void => {
-    if (
-      typeof content === 'string' &&
-      content &&
-      typeof sha === 'string' &&
-      sha &&
-      source === 'deck' &&
-      typeof DOMParser !== 'undefined'
-    ) {
-      const snapshot = extractDeckSnapshot(content, html =>
-        new DOMParser().parseFromString(html, 'text/html')
-      );
-      baselineRef.current = snapshot ? { snapshot, baseSha: sha } : null;
-    } else {
-      baselineRef.current = null;
-    }
-  }, []);
+  const captureBaseline = useCallback(
+    (content: unknown, sha: unknown, source: unknown): void => {
+      if (
+        typeof content === 'string' &&
+        content &&
+        typeof sha === 'string' &&
+        sha &&
+        source === 'deck' &&
+        typeof DOMParser !== 'undefined'
+      ) {
+        const snapshot = extractDeckSnapshot(canonicalMediaUrls(content, mediaScope), html =>
+          new DOMParser().parseFromString(html, 'text/html')
+        );
+        baselineRef.current = snapshot ? { snapshot, baseSha: sha } : null;
+      } else {
+        baselineRef.current = null;
+      }
+    },
+    [mediaScope]
+  );
   // Bumped when a merged save lands while editing: the committed document is
   // the MERGE (not what the DOM holds), so a live editor must remount from
   // the merged savedContent — otherwise the next save, carrying the fresh
@@ -2471,7 +2515,10 @@ export default function SlideViewer() {
     } else if (fetcher.data?.savedContent) {
       // After save, update our local content to match what was saved. This is
       // the EDITOR's copy: it seeds the next edit session and is what the next
-      // save diffs against, and it must stay unsigned for that round trip.
+      // save diffs against. Its repo references are unsigned; its media ones
+      // are signed like the editor's own read, so a remount (or view mode,
+      // until the loader lands) plays them — and the diff compares media by
+      // reference (`mediaScope`), so the fresh signature is not an edit.
       setEditableContent(fetcher.data.savedContent);
       // View mode wants the loader's signed copy instead — but not yet. The
       // action has only just returned; the loader revalidation React Router
@@ -2594,43 +2641,56 @@ export default function SlideViewer() {
   // Routed first: a file the storage router sends to media (a Pro video, or
   // anything over the repository's cap on a classroom with media) goes straight
   // there from the browser and is placed by its playable URL; a refusal is the
-  // router's own sentence. Everything else takes the deck's repository upload,
-  // which asks the router again and answers `USE_MEDIA` if this was wrong.
+  // router's own sentence. Everything else takes the deck's repository upload.
+  // The capability can be stale, so the server's answer wins, ONCE
+  // (`placeDeckAsset`): the repository answering `USE_MEDIA` sends the file to
+  // media, and media turning away a file the repository can take (not Pro any
+  // more, media unavailable, `USE_REPO`) sends it to the repository. A full
+  // media quota is refused with the server's sentence and never falls back.
+  // `first` lets a caller that already knows skip the router.
   const handleImageUpload = useCallback(
-    async (file: File): Promise<string> => {
-      const target = uploadCapability
-        ? deckAssetTarget(uploadCapability, file)
-        : ({ kind: 'repo' } as const);
-      if (target.kind === 'refused') throw new Error(target.message);
-      if (target.kind === 'media') {
-        try {
-          const { ref } = await uploadMultipart({
-            file,
-            classroomId: slide.classroom_id,
-            endpoints: { base: '/api/media' },
-          });
-          return await playableMediaUrl(slide.id, ref);
-        } catch (error: unknown) {
-          throw new Error(mediaUploadMessage(error as { code?: string }) ?? 'Upload cancelled.');
-        }
-      }
+    async (file: File, first?: 'repo' | 'media'): Promise<string> =>
+      placeDeckAsset(
+        file,
+        uploadCapability,
+        {
+          toMedia: async mediaFile => {
+            try {
+              const { ref } = await uploadMultipart({
+                file: mediaFile,
+                classroomId: slide.classroom_id,
+                options: editorMediaOptions(mediaFile),
+                endpoints: { base: '/api/media' },
+              });
+              return await playableMediaUrl(slide.id, ref);
+            } catch (error: unknown) {
+              const outcome = afterMediaFailure(
+                error as UploadFailure,
+                mediaFile,
+                uploadCapability
+              );
+              if (outcome.kind === 'repo') throw new UploadReroute('repo');
+              throw new Error(outcome.message ?? 'Upload cancelled.');
+            }
+          },
+          toRepo: repoFile =>
+            new Promise<string>((resolve, reject) => {
+              const formData = new FormData();
+              formData.append('intent', 'upload-image');
+              formData.append('file', repoFile);
 
-      return new Promise<string>((resolve, reject) => {
-        const formData = new FormData();
-        formData.append('intent', 'upload-image');
-        formData.append('file', file);
+              fetcher.submit(formData, {
+                method: 'post',
+                encType: 'multipart/form-data',
+              });
 
-        fetcher.submit(formData, {
-          method: 'post',
-          encType: 'multipart/form-data',
-        });
-
-        // We'll resolve this in the useEffect when we get the response
-        // Store the resolve/reject for later
-        window.__imageUploadResolve = resolve;
-        window.__imageUploadReject = reject;
-      });
-    },
+              // Settled by the effect below when the response arrives.
+              window.__imageUploadResolve = resolve;
+              window.__imageUploadReject = reject;
+            }),
+        },
+        first
+      ),
     [fetcher, uploadCapability, slide.classroom_id, slide.id]
   );
 
@@ -2639,9 +2699,11 @@ export default function SlideViewer() {
     if (fetcher.data?.intent === 'upload-image') {
       if (fetcher.data.success && fetcher.data.url) {
         window.__imageUploadResolve?.(fetcher.data.url);
+      } else if (fetcher.data.error === 'USE_MEDIA') {
+        // The file belongs in media: `placeDeckAsset` sends it there, once.
+        window.__imageUploadReject?.(new UploadReroute('media'));
       } else if (fetcher.data.error) {
-        // The server's sentence, never its code: a `USE_MEDIA` refusal carries
-        // what it means in `message`.
+        // The server's sentence, never its code.
         window.__imageUploadReject?.(new Error(deckUploadErrorMessage(fetcher.data)));
       }
       // Clean up
@@ -2692,7 +2754,7 @@ export default function SlideViewer() {
         contentToken.content_sha === baseline.baseSha &&
         typeof DOMParser !== 'undefined'
       ) {
-        const currSnapshot = extractDeckSnapshot(content, html =>
+        const currSnapshot = extractDeckSnapshot(canonicalMediaUrls(content, mediaScope), html =>
           new DOMParser().parseFromString(html, 'text/html')
         );
         const ops = currSnapshot ? diffDeckSnapshots(baseline.snapshot, currSnapshot) : null;
@@ -2716,7 +2778,7 @@ export default function SlideViewer() {
       }
       return payload;
     },
-    [contentToken]
+    [contentToken, mediaScope]
   );
 
   // Save the current slide content and, once the committed content is ready,

@@ -240,6 +240,30 @@ export function sanitizedExtension(name: string): string {
  * @returns the sanitized name with a timestamp prefix for uniqueness
  */
 export function sanitizeFilename(filename: string): string {
+  const { base, ext } = sanitizedParts(filename);
+  // Add timestamp prefix for uniqueness
+  const timestamp = Date.now();
+  return `${timestamp}-${base}${ext ? `.${ext}` : ''}`;
+}
+
+/**
+ * The same sanitized name with a fixed `suffix` in place of the timestamp:
+ * `{base}-{suffix}.{ext}`. For a write that must land at the SAME path every
+ * time it is attempted — an agent upload's placement names the file after its
+ * upload id, so a retried placement finds the file its first attempt committed
+ * instead of committing a second copy. `suffix` must already be safe (lowercase
+ * letters, digits, dashes); anything else is dropped.
+ */
+export function stableFilename(filename: string, suffix: string): string {
+  const { base, ext } = sanitizedParts(filename);
+  const safeSuffix = String(suffix)
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '');
+  return `${base}${safeSuffix ? `-${safeSuffix}` : ''}${ext ? `.${ext}` : ''}`;
+}
+
+/** The base and extension `sanitizeFilename` and `stableFilename` agree on. */
+function sanitizedParts(filename: string): { base: string; ext: string } {
   const name = (
     String(filename ?? '')
       .split(/[/\\]/)
@@ -252,7 +276,7 @@ export function sanitizeFilename(filename: string): string {
   const baseName = hasExt ? name.slice(0, dot) : name;
 
   // Sanitize: lowercase, replace spaces and special chars with dashes
-  const sanitized =
+  const base =
     baseName
       .toLowerCase()
       .replace(/[^a-z0-9]/g, '-')
@@ -261,8 +285,5 @@ export function sanitizeFilename(filename: string): string {
       .slice(0, 50) // Limit length
       .replace(/-$/, '') || 'file';
 
-  // Add timestamp prefix for uniqueness
-  const timestamp = Date.now();
-
-  return `${timestamp}-${sanitized}${ext ? `.${ext}` : ''}`;
+  return { base, ext };
 }

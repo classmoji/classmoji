@@ -15,6 +15,8 @@
  * next to its own module in `packages/utils/src/__tests__/uploadConcurrency.test.ts`.
  */
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 
 import {
@@ -27,6 +29,7 @@ import {
   readLimitedFormData,
   uploadBodyLimit,
 } from '@classmoji/utils/upload-limit';
+import { SLIDES_IMPORT_MAX_BYTES, SLIDES_IMPORT_MAX_LABEL } from '../../app/utils/importLimits.ts';
 /** A stream that hands over `count` chunks of `size` bytes. */
 function streamOf(count: number, size: number): ReadableStream<Uint8Array> {
   let sent = 0;
@@ -138,5 +141,23 @@ test.describe('reading without joining', () => {
     await expect(readLimitedChunks(streamOf(100, 10), 25)).rejects.toBeInstanceOf(
       UploadTooLargeError
     );
+  });
+});
+
+test.describe('the slides.com import cap', () => {
+  const read = (relative: string) =>
+    readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
+
+  test('is one constant, read by both the screen and the endpoint', () => {
+    expect(SLIDES_IMPORT_MAX_BYTES).toBe(150 * 1024 * 1024);
+    expect(SLIDES_IMPORT_MAX_LABEL).toBe('150 MB');
+    for (const file of [
+      '../../app/routes/import/route.tsx',
+      '../../app/routes/api.slides.import.start/route.ts',
+    ]) {
+      const text = read(file);
+      expect(text).toContain("from '~/utils/importLimits'");
+      expect(text).not.toMatch(/150 \* 1024 \* 1024/);
+    }
   });
 });

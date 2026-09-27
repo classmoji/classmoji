@@ -37,9 +37,7 @@ import {
   readLimitedFormData,
   uploadBodyLimit,
 } from '@classmoji/utils/upload-limit';
-
-// Max file size for ZIP uploads (in bytes)
-const MAX_FILE_SIZE = 150 * 1024 * 1024; // 150MB
+import { SLIDES_IMPORT_MAX_BYTES, SLIDES_IMPORT_MAX_LABEL } from '~/utils/importLimits';
 
 export const action = async ({ request }: { request: Request }) => {
   // A session first — the cheapest thing that can be checked without the body,
@@ -53,12 +51,11 @@ export const action = async ({ request }: { request: Request }) => {
 
   let formData: FormData;
   try {
-    formData = await readLimitedFormData(request, uploadBodyLimit(MAX_FILE_SIZE));
+    formData = await readLimitedFormData(request, uploadBodyLimit(SLIDES_IMPORT_MAX_BYTES));
   } catch (error: unknown) {
     if (error instanceof UploadTooLargeError) {
-      const maxMB = MAX_FILE_SIZE / 1024 / 1024;
       return Response.json(
-        { error: `ZIP file is too large. Maximum size is ${maxMB}MB.` },
+        { error: `ZIP file is too large. Maximum size is ${SLIDES_IMPORT_MAX_LABEL}.` },
         { status: 413 }
       );
     }
@@ -85,10 +82,9 @@ export const action = async ({ request }: { request: Request }) => {
     return Response.json({ error: 'Please enter a title for the slides' }, { status: 400 });
   }
 
-  if (zipFile.size > MAX_FILE_SIZE) {
-    const maxMB = MAX_FILE_SIZE / 1024 / 1024;
+  if (zipFile.size > SLIDES_IMPORT_MAX_BYTES) {
     return Response.json(
-      { error: `ZIP file is too large. Maximum size is ${maxMB}MB.` },
+      { error: `ZIP file is too large. Maximum size is ${SLIDES_IMPORT_MAX_LABEL}.` },
       { status: 400 }
     );
   }

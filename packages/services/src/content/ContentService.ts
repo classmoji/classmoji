@@ -962,6 +962,12 @@ export class ContentService {
    *
    * @param options.fileTypes - `'any'` only for a classroom `canDeliverContent`
    *   says yes to; defaults to the image/PDF allowlist. See `validateFile.ts`.
+   * @param options.storedName - the exact name to store the file under
+   *   (`stableFilename`), in place of the timestamped one — and the write
+   *   becomes idempotent: when a file already exists at that path on `branch`,
+   *   nothing is written and its `{ path, sha }` is returned. For a caller that
+   *   may repeat the same upload (a retried placement job); `filename` is still
+   *   what the type and size checks read.
    * @returns `{ path, sha, url }` — `url` is the raw.githubusercontent.com URL
    *   on `branch`.
    */
@@ -975,6 +981,7 @@ export class ContentService {
     branch: requestedBranch,
     message,
     fileTypes = 'allowlist',
+    storedName,
   }: {
     gitOrganization?: GitOrganizationRecord;
     orgLogin?: string;
@@ -985,6 +992,7 @@ export class ContentService {
     branch?: string;
     message?: string;
     fileTypes?: FileTypePolicy;
+    storedName?: string;
   }): Promise<{ path: string; sha: string; url: string }> {
     // Validate before anything touches the network: a file that is too large or
     // of the wrong type costs no round trip to find out.
@@ -1003,11 +1011,33 @@ export class ContentService {
     const branch =
       requestedBranch ?? (await resolveContentBranch(resolvedOrg, resolvedOrg.login, repo));
 
-    // Sanitize filename with timestamp
-    const sanitizedFilename = sanitizeFilename(filename);
+    // Sanitize filename with timestamp — or the caller's stable name, which is
+    // held to the same alphabet `sanitizeFilename` produces.
+    if (storedName !== undefined && !/^[a-z0-9-]+(\.[a-z0-9]+)?$/.test(storedName)) {
+      throw new Error(`ContentService.upload: storedName is not a sanitized name (${storedName})`);
+    }
+    const sanitizedFilename = storedName ?? sanitizeFilename(filename);
     const filePath = folder
       ? `${folder.replace(/\/$/, '')}/${sanitizedFilename}`
       : sanitizedFilename;
+
+    if (storedName !== undefined) {
+      // Read at the branch itself (a ref-bearing read skips the cache), so a
+      // file the previous attempt committed seconds ago is seen.
+      const existing = await this.getMeta({
+        gitOrganization: resolvedOrg,
+        repo,
+        path: filePath,
+        ref: branch,
+      });
+      if (existing) {
+        return {
+          path: filePath,
+          sha: existing.sha,
+          url: `https://raw.githubusercontent.com/${resolvedOrg.login}/${repo}/${branch}/${filePath}`,
+        };
+      }
+    }
 
     if (file.length > CONTENTS_PUT_MAX_BYTES) {
       return this.uploadLarge({

@@ -730,6 +730,12 @@ export interface ImportMediaCopy {
    * went, or null when it could not be copied (already warned).
    */
   copyObject(sourceMediaId: string): Promise<string | null>;
+  /**
+   * Delete the copies this run made, for a caller whose commit of the
+   * rewritten content failed before it landed. Copies reused from an earlier
+   * run are kept. Never throws.
+   */
+  discard(): Promise<void>;
 }
 
 type MediaCopyModule = typeof import('../media/mediaImportCopy.ts');
@@ -756,6 +762,8 @@ export function openImportMediaCopy({
   targetClassroomId,
   importedBy,
   warn,
+  knownCopies,
+  onCopied,
 }: {
   sourceClassroomId: string;
   targetClassroomId: string;
@@ -763,6 +771,13 @@ export function openImportMediaCopy({
   importedBy?: string | null;
   /** Unscoped detail — the caller adds the `media:` scope and the cap. */
   warn: (detail: string) => void;
+  /**
+   * Copies an earlier run of this import made (source id → copy id), from the
+   * job row. A copy still READY in the destination is reused, not re-made.
+   */
+  knownCopies?: Readonly<Record<string, string>> | null;
+  /** Each pair this run copies, as it lands — for the caller to persist. */
+  onCopied?: (sourceMediaId: string, copyMediaId: string) => void;
 }): ImportMediaCopy {
   let copier: ReturnType<MediaCopyModule['createMediaImportCopier']> | null = null;
 
@@ -777,6 +792,8 @@ export function openImportMediaCopy({
           targetClassroomId,
           importedBy,
           warn,
+          knownCopies,
+          onCopied,
         });
       }
       await copier.prepare(candidates);
@@ -791,6 +808,14 @@ export function openImportMediaCopy({
     copyObject: async sourceMediaId => {
       await prepare([`media://${sourceMediaId}`]);
       return copier ? copier.copiedIdFor(sourceMediaId) : null;
+    },
+    discard: async () => {
+      if (!copier) return;
+      try {
+        await copier.discard();
+      } catch (error: unknown) {
+        console.warn('[import] Could not remove unused media copies:', errText(error));
+      }
     },
   };
 }

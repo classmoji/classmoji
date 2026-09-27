@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   FileRefusedError,
   sanitizeFilename,
+  stableFilename,
   uploadRefusalStatus,
   validateFile,
 } from '../utils/validateFile.ts';
@@ -114,5 +115,31 @@ describe('upload refusals as HTTP statuses', () => {
   it('recognises a refusal that crossed a boundary as a plain object', () => {
     expect(uploadRefusalStatus({ code: 'FILE_REFUSED', status: 400 })).toBe(400);
     expect(uploadRefusalStatus({ code: 'FILE_REFUSED', status: 415 })).toBe(415);
+  });
+});
+
+describe('stableFilename', () => {
+  it('is the sanitized name with a fixed suffix in place of the timestamp', () => {
+    expect(stableFilename('Lecture 1 (final).MP4', '77777777')).toBe(
+      'lecture-1-final-77777777.mp4'
+    );
+    expect(stableFilename('Lecture 1 (final).MP4', '77777777')).toBe(
+      stableFilename('Lecture 1 (final).MP4', '77777777')
+    );
+  });
+
+  it('shares sanitizeFilename’s base and extension', () => {
+    const timestamped = sanitizeFilename('Über Notes.PDF');
+    expect(timestamped.replace(/^\d+-/, '')).toBe('ber-notes.pdf');
+    expect(stableFilename('Über Notes.PDF', 'abcd1234')).toBe('ber-notes-abcd1234.pdf');
+  });
+
+  it('handles no extension and an unsanitizable base', () => {
+    expect(stableFilename('README', 'abcd1234')).toBe('readme-abcd1234');
+    expect(stableFilename('講義.pdf', 'abcd1234')).toBe('file-abcd1234.pdf');
+  });
+
+  it('drops unsafe suffix characters', () => {
+    expect(stableFilename('a.png', '../X')).toBe('a-x.png');
   });
 });

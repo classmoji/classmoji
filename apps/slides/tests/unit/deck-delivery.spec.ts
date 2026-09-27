@@ -20,6 +20,8 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { ClassmojiService } from '@classmoji/services';
+import { NO_MEDIA_URL, stripMediaRefs } from '../../app/utils/mediaRefs.ts';
 import {
   deckAccessFor,
   deckDeliveryContext,
@@ -30,6 +32,7 @@ import {
   rebaseThemeRef,
   isMediaRef,
   resolveDeckAssets,
+  resolveDeckAssetsPublic,
   resolveDeckDelivery,
   resolveDeckMedia,
   resolveUnservedMedia,
@@ -679,5 +682,79 @@ test.describe('media references', () => {
     );
     expect(html).not.toContain('media://');
     expect(html).toContain('src="about:blank"');
+  });
+});
+
+/**
+ * A failed pass must still never hand a browser `media://`.
+ *
+ * Every catch in the module degrades to the stored document, which is right for
+ * a repo reference (it loads through the proxy) and wrong for a media one (it
+ * has no proxy and no scheme a browser loads). So each catch blanks them.
+ */
+test.describe('a failed read pass never leaks a media reference', () => {
+  const failing = () => {
+    throw new Error('resolver down');
+  };
+
+  /** Swap the service's resolver for one that throws, for one test. */
+  let original: typeof ClassmojiService.contentDelivery;
+  test.beforeEach(() => {
+    original = ClassmojiService.contentDelivery;
+  });
+  test.afterEach(() => {
+    (ClassmojiService as { contentDelivery: typeof original }).contentDelivery = original;
+  });
+  const breakResolver = () => {
+    (ClassmojiService as { contentDelivery: typeof original }).contentDelivery = {
+      ...original,
+      resolveDelivery: failing,
+    } as typeof original;
+  };
+
+  test('the pure pass blanks every reference and nothing else', () => {
+    const out = stripMediaRefs(MEDIA_DECK);
+    expect(out).not.toContain('media://');
+    expect(out.split(NO_MEDIA_URL).length - 1).toBe(3);
+    expect(out).toContain(`/content/${ORG}/${REPO}/slides/week-1/img/a.png`);
+    // An id in capitals is still one (a browser may hand one back that way).
+    expect(stripMediaRefs(`<video src="media://${MEDIA_ID.toUpperCase()}">`)).toBe(
+      '<video src="about:blank">'
+    );
+    expect(stripMediaRefs('<video src="media://not-a-uuid">')).toBe(
+      '<video src="media://not-a-uuid">'
+    );
+    expect(stripMediaRefs(null)).toBeNull();
+  });
+
+  test('resolveDeckDelivery: a resolver that throws', async () => {
+    const { html } = await resolveDeckDelivery(MEDIA_DECK, ctx(), {
+      themeName: null,
+      resolvers: fakeResolvers({ resolveDelivery: failing }),
+    });
+    expect(html).not.toContain('media://');
+    expect((html ?? '').split(NO_MEDIA_URL).length - 1).toBe(3);
+    // The repo reference is still the stored one — the proxy serves it.
+    expect(html).toContain(`/content/${ORG}/${REPO}/slides/week-1/img/a.png`);
+  });
+
+  test('resolveDeckDelivery: no context and no classroom to form a placeholder for', async () => {
+    const { html } = await resolveDeckDelivery(MEDIA_DECK, null);
+    expect(html).not.toContain('media://');
+    expect((html ?? '').split(NO_MEDIA_URL).length - 1).toBe(3);
+  });
+
+  test('resolveUnservedMedia: the placeholder lookup throws', async () => {
+    breakResolver();
+    const html = await resolveUnservedMedia(MEDIA_DECK, CLASSROOM);
+    expect(html).not.toContain('media://');
+    expect(html.split(NO_MEDIA_URL).length - 1).toBe(3);
+  });
+
+  test('resolveDeckAssetsPublic: the placeholder lookup throws', async () => {
+    breakResolver();
+    const html = await resolveDeckAssetsPublic(MEDIA_DECK, ORG, REPO, CLASSROOM);
+    expect(html).not.toContain('media://');
+    expect((html ?? '').split(NO_MEDIA_URL).length - 1).toBe(3);
   });
 });

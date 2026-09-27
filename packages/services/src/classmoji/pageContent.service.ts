@@ -688,7 +688,13 @@ async function recordPageFile(
 export async function uploadPageAsset(
   page: PageWithContentRepo,
   buffer: Buffer,
-  filename: string
+  filename: string,
+  /**
+   * `storedName`: store under this exact name and skip the write when the file
+   * is already there (`ContentService.upload`). The agent-upload placement
+   * passes one so a retried job does not commit the file twice.
+   */
+  options: { storedName?: string } = {}
 ): Promise<{ url: string; path: string; sha: string; displayUrl: string | null }> {
   // The storage router first: a Pro video, or a file over the repository's cap
   // on a classroom with media, belongs in media and is refused here with
@@ -719,6 +725,7 @@ export async function uploadPageAsset(
     // Any file type where the delivery layer serves this classroom; the
     // image/PDF allowlist everywhere else.
     fileTypes: uploadFileTypes(page.classroom as unknown as Parameters<typeof uploadFileTypes>[0]),
+    ...(options.storedName ? { storedName: options.storedName } : {}),
   });
 
   const classroomId = (page.classroom as { id?: unknown }).id;

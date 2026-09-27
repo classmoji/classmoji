@@ -5,8 +5,11 @@ import { useIsDarkMode } from '~/hooks/useIsDarkMode';
 import { useMediaUpload } from '~/hooks/useMediaUpload';
 import {
   DEFAULT_VIDEO_OPTIONS,
+  afterMediaFailure,
   applyVideoOption,
   formatSize,
+  mediaUploadMessage,
+  type UploadCapability,
   type VideoOptions,
 } from '~/utils/mediaUpload';
 import { MediaUploadProgress } from './MediaUploadProgress';
@@ -19,18 +22,29 @@ import { VideoOptionsFields } from './VideoOptionsFields';
  * The dialog stays open until the upload has finished or been cancelled —
  * closing it mid-upload cancels, rather than leaving bytes going up behind a
  * screen that no longer says so.
+ *
+ * When media turns the file away and the repository can take it (the class is
+ * no longer Pro, or media is unavailable, and the video fits), the dialog
+ * hands it to `onUseRepo` instead of showing a refusal. A full quota is never
+ * handed over: its sentence is shown as the server wrote it.
  */
 export function VideoUploadDialog({
   file,
   classroomId,
+  capability,
   onClose,
   onUploaded,
+  onUseRepo,
 }: {
   /** The picked video; the dialog is open while this is set. */
   file: File | null;
   classroomId: string;
+  /** What the editor routed with, for wording a refusal. */
+  capability?: UploadCapability | null;
   onClose: () => void;
   onUploaded: (result: MultipartUploadResult) => void;
+  /** Take a file media turned away to the course repository instead. */
+  onUseRepo?: (file: File) => void;
 }) {
   const isDark = useIsDarkMode();
   const [options, setOptions] = useState<VideoOptions>(DEFAULT_VIDEO_OPTIONS);
@@ -50,7 +64,17 @@ export function VideoUploadDialog({
 
   const begin = async () => {
     if (!file) return;
-    const result = await upload.start(file, options);
+    const result = await upload.start(file, options, failure => {
+      const outcome = afterMediaFailure(failure, file, capability);
+      if (outcome.kind === 'repo' && onUseRepo) {
+        onUseRepo(file);
+        return { handled: true };
+      }
+      return {
+        message:
+          outcome.kind === 'refused' ? outcome.message : mediaUploadMessage({ code: 'USE_REPO' }),
+      };
+    });
     if (result) onUploaded(result);
   };
 

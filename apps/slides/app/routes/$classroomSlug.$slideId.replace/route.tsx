@@ -25,7 +25,6 @@ import {
   data,
 } from 'react-router';
 import getPrisma from '@classmoji/database';
-import { ClassmojiService } from '@classmoji/services';
 import { assertSlideAccess } from '@classmoji/auth/server';
 import {
   SLIDE_FILE_EXTENSIONS,
@@ -37,6 +36,8 @@ import {
 } from '@classmoji/services/slides';
 import { assertSlideInClassroom, assertSlideKind } from '~/utils/slideRouteGuards';
 import { webappClassUrl } from '~/utils/webappLinks';
+import { loadUploadCapability } from '~/utils/uploadCapability.server';
+import { mediaUnusedBySlides } from '~/utils/uploadedMedia.server';
 import {
   UploadTooLargeError,
   readLimitedFormData,
@@ -56,7 +57,8 @@ import {
 import { isSubmissionPending } from '~/utils/pendingSubmission';
 import { MediaUploadProgress } from '~/components/media/MediaUploadProgress';
 import { useMediaUpload } from '~/hooks/useMediaUpload';
-import { formatGigabytes, slideFileTarget } from '~/utils/mediaUpload';
+import { useDiscardRefusedUpload } from '~/hooks/useDiscardRefusedUpload';
+import { formatGigabytes, mediaFailureMessage, slideFileTarget } from '~/utils/mediaUpload';
 
 /** Load the slide, prove the caller may edit it, and prove it is a file slide. */
 async function authorizeFileSlide(request: Request, classroomSlug: string, slideId: string) {
@@ -98,7 +100,7 @@ export const loader = async ({
 
   // Where a new document goes — see the new-slide screen. Re-derived by the
   // action from the uploaded row; this is only what the form says.
-  const uploadCapability = await ClassmojiService.media.uploadCapabilityFor(slide.classroom);
+  const uploadCapability = await loadUploadCapability(slide.classroom, 'replace slide file');
 
   return {
     classroomSlug,
@@ -122,7 +124,7 @@ export const loader = async ({
     // is what this avoids.
     upload: {
       maxBytes: SLIDE_FILE_MAX_BYTES,
-      maxLabel: uploadCapability.media
+      maxLabel: uploadCapability?.media
         ? formatGigabytes(uploadCapability.media.perFileMaxBytes)
         : SLIDE_FILE_MAX_LABEL,
       extensions: [...SLIDE_FILE_EXTENSIONS] as string[],
@@ -216,7 +218,12 @@ async function replaceFromMedia({
     const ours =
       error instanceof slideFileService.SlideSourceError || error instanceof SlideKindError;
     return data(
-      { error: ours ? error.message : "Couldn't save the slide. Please try again." },
+      {
+        error: ours ? error.message : "Couldn't save the slide. Please try again.",
+        // Uploaded only for this slide: when nothing points at it (the slide
+        // was not moved onto it), the browser deletes it.
+        discardMedia: await mediaUnusedBySlides(mediaId),
+      },
       { status: ours ? error.status : 500 }
     );
   }
@@ -318,7 +325,8 @@ export default function ReplaceSlideFilePage() {
     upload,
   } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
-  const actionData = useActionData() as { error?: string } | undefined;
+  const actionData = useActionData() as { error?: string; discardMedia?: boolean } | undefined;
+  const rememberUpload = useDiscardRefusedUpload(actionData);
   const [fileError, setFileError] = useState<string | null>(null);
   // Name and size for the status panel, captured when the file is chosen. The
   // input itself is disabled mid-flight and `files` is not readable from a
@@ -357,11 +365,16 @@ export default function ReplaceSlideFilePage() {
   /** Upload to media, then post the form with the uploaded object's id. */
   const submitViaMedia = async (file: File) => {
     setViaMedia(true);
-    const result = await media.start(file);
+    // A refusal in the router's words for THIS file (what Pro stores, or that
+    // media is unavailable) — or a full quota in the server's.
+    const result = await media.start(file, {}, failure => ({
+      message: mediaFailureMessage(failure, file, uploadCapability),
+    }));
     if (!result) {
       setViaMedia(false);
       return;
     }
+    rememberUpload(result.mediaId);
     submit({ mediaId: result.mediaId }, { method: 'post' });
   };
 

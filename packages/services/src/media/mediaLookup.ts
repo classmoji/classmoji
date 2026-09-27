@@ -16,7 +16,7 @@ import { RESERVATION_WINDOW_MS } from './mediaQuota.ts';
  *
  * `size_bytes` and `rendition_bytes` are BIGINT, so Prisma hands back `bigint`,
  * which `JSON.stringify` refuses. `toMediaRecord` converts both to `number`:
- * the per-file ceiling is 2 GiB and the quota 10 GiB, both an order of
+ * the per-file ceiling is 2 GB and the quota 10 GiB, both an order of
  * magnitude under `Number.MAX_SAFE_INTEGER`, so nothing is lost. The column
  * keeps the wider type because it outlives this phase's limits.
  */
@@ -136,6 +136,8 @@ export function toMediaRecord(row: MediaRow): MediaRecord {
  * uploaded.
  */
 export function servedVariant(row: { ext: string; renditionKey?: string | null }): string {
+  // TODO(P4): the rendition job writes content-derived names (`web-{hex}.mp4`);
+  // serve the variant the row's `rendition_key` names, not a fixed `web.mp4`.
   if (row.renditionKey) return 'web.mp4';
   // The ext was checked against the variant grammar at create time, so the fallback
   // is unreachable for a row this codebase wrote — and if it ever is reached,

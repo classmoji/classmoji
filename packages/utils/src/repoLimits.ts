@@ -79,3 +79,16 @@ export function repoFileSkippedWarning(name: string, bytes: number): string {
 export function exceedsRepoFileLimit(bytes: number): boolean {
   return bytes > REPO_REST_MAX_BYTES;
 }
+
+/**
+ * 150 MiB — the most one import upload may send: a slides.com export ZIP (the
+ * slides app's import route and its client-side check) and a page import body
+ * (the webapp). Not a repository limit — nothing this size is committed whole;
+ * each file inside is checked against `REPO_REST_MAX_BYTES` (or routed to
+ * media) — but a bound on what one request may make the server buffer. One
+ * number, so the route and the dialog in front of it can never disagree.
+ */
+export const SLIDES_IMPORT_MAX_BYTES = 150 * MIB;
+
+/** The import cap as a person reads it — `150 MB`. */
+export const SLIDES_IMPORT_MAX_LABEL = formatMegabytes(SLIDES_IMPORT_MAX_BYTES);

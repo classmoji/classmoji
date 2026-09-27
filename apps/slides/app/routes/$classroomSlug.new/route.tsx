@@ -55,7 +55,6 @@ import {
   data,
 } from 'react-router';
 import getPrisma from '@classmoji/database';
-import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomTeachingTeam } from '@classmoji/auth/server';
 import {
   SLIDE_FILE_EXTENSIONS,
@@ -67,6 +66,8 @@ import {
   validateSlideLinkUrl,
 } from '@classmoji/services/slides';
 import { webappClassUrl } from '~/utils/webappLinks';
+import { loadUploadCapability } from '~/utils/uploadCapability.server';
+import { mediaUnusedBySlides } from '~/utils/uploadedMedia.server';
 import {
   UploadTooLargeError,
   readLimitedFormData,
@@ -86,7 +87,8 @@ import {
 import { isSubmissionPending } from '~/utils/pendingSubmission';
 import { MediaUploadProgress } from '~/components/media/MediaUploadProgress';
 import { useMediaUpload } from '~/hooks/useMediaUpload';
-import { formatGigabytes, slideFileTarget } from '~/utils/mediaUpload';
+import { useDiscardRefusedUpload } from '~/hooks/useDiscardRefusedUpload';
+import { formatGigabytes, mediaFailureMessage, slideFileTarget } from '~/utils/mediaUpload';
 
 /** The four things the picker offers. `import` is a link, not a form. */
 type SlideSource = 'blank' | 'file' | 'link';
@@ -149,7 +151,7 @@ export const loader = async ({
   // What this classroom's uploads can do: on Pro with media, a document too
   // large for the repository goes to media instead of being refused. The
   // action re-derives it from the uploaded row; this is only what the form says.
-  const uploadCapability = await ClassmojiService.media.uploadCapabilityFor(classroom);
+  const uploadCapability = await loadUploadCapability(classroom, 'new slide');
 
   return {
     classroomSlug,
@@ -180,7 +182,7 @@ export const loader = async ({
       maxBytes: SLIDE_FILE_MAX_BYTES,
       // The largest file the form will take — media's ceiling where the
       // classroom has media, the repository's otherwise.
-      maxLabel: uploadCapability.media
+      maxLabel: uploadCapability?.media
         ? formatGigabytes(uploadCapability.media.perFileMaxBytes)
         : SLIDE_FILE_MAX_LABEL,
       extensions: [...SLIDE_FILE_EXTENSIONS] as string[],
@@ -190,8 +192,13 @@ export const loader = async ({
 };
 
 /** Every failure this action reports, in the shape the form re-renders from. */
-function failure(error: string, source: SlideSource, status = 400) {
-  return data({ error, source }, { status });
+function failure(
+  error: string,
+  source: SlideSource,
+  status = 400,
+  extra: { discardMedia?: boolean } = {}
+) {
+  return data({ error, source, ...extra }, { status });
 }
 
 /**
@@ -345,7 +352,16 @@ async function createFromForm({
         return redirect(slidesListUrl);
       } catch (error: unknown) {
         console.error('Failed to create file slide from media:', error);
-        return failure(messageFor(error, "Couldn't save the slide. Please try again."), 'file');
+        // The document was uploaded only for this slide: when nothing points at
+        // it, the browser deletes it rather than leave it billed in media.
+        return failure(
+          messageFor(error, "Couldn't save the slide. Please try again."),
+          'file',
+          400,
+          {
+            discardMedia: await mediaUnusedBySlides(mediaId),
+          }
+        );
       }
     }
 
@@ -538,7 +554,10 @@ export default function NewSlidePage() {
     upload,
   } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
-  const actionData = useActionData() as { error?: string; source?: SlideSource } | undefined;
+  const actionData = useActionData() as
+    | { error?: string; source?: SlideSource; discardMedia?: boolean }
+    | undefined;
+  const rememberUpload = useDiscardRefusedUpload(actionData);
 
   // The title survives a switch between the cards, which after hydration is a
   // client navigation that never remounts this component. A pre-hydration
@@ -601,11 +620,16 @@ export default function NewSlidePage() {
   /** Upload to media, then post the form with the uploaded object's id. */
   const submitViaMedia = async (file: File) => {
     setViaMedia(true);
-    const result = await media.start(file);
+    // A refusal in the router's words for THIS file (what Pro stores, or that
+    // media is unavailable) — or a full quota in the server's.
+    const result = await media.start(file, {}, failure => ({
+      message: mediaFailureMessage(failure, file, uploadCapability),
+    }));
     if (!result) {
       setViaMedia(false);
       return;
     }
+    rememberUpload(result.mediaId);
     submit({ source: 'file', title, mediaId: result.mediaId }, { method: 'post' });
   };
 

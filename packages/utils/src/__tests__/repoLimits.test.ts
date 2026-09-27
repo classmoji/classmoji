@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   REPO_REST_MAX_BYTES,
   REPO_REST_MAX_LABEL,
+  SLIDES_IMPORT_MAX_BYTES,
+  SLIDES_IMPORT_MAX_LABEL,
   exceedsRepoFileLimit,
   formatMegabytes,
   repoFileSkippedWarning,
@@ -36,5 +38,13 @@ describe('repo file limit', () => {
     expect(formatMegabytes(35.4 * 1024 * 1024)).toBe('35.4 MB');
     expect(formatMegabytes(5 * 1024 * 1024)).toBe('5 MB');
     expect(formatMegabytes(120.4 * 1024 * 1024)).toBe('120 MB');
+  });
+});
+
+describe('import upload cap', () => {
+  // The slides.com ZIP route, its dialog and the page import body all read this.
+  it('is 150 MiB, and reads as 150 MB', () => {
+    expect(SLIDES_IMPORT_MAX_BYTES).toBe(150 * 1024 * 1024);
+    expect(SLIDES_IMPORT_MAX_LABEL).toBe('150 MB');
   });
 });

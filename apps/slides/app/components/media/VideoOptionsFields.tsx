@@ -54,7 +54,7 @@ export function VideoOptionsFields({
       <OptionRow
         id="slides-media-optimise"
         label="Optimise for streaming"
-        help="Re-encode in the background so it starts playing straight away and works in every browser."
+        help="Converts it to a format that plays in every browser."
         checked={value.optimise}
         disabled={disabled}
         onChange={next => onChange('optimise', next)}
@@ -78,7 +78,7 @@ export function VideoOptionsFields({
       <OptionRow
         id="slides-media-allow-download"
         label="Allow download"
-        help="Give students a download button. Teaching staff can always download from the Media page."
+        help="Show students a download button."
         checked={value.allowDownload}
         disabled={disabled}
         onChange={next => onChange('allowDownload', next)}
