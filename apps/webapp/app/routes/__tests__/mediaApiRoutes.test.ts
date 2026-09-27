@@ -385,6 +385,7 @@ describe('DELETE /api/media/:mediaId', () => {
     expect(mocks.deleteMedia).toHaveBeenCalledWith({
       classroom: { id: CLASSROOM_ID },
       mediaId: MEDIA_ID,
+      userId: 'user-1',
     });
   });
 
@@ -427,6 +428,7 @@ describe('POST /api/media/uploads/:mediaId/abort', () => {
     expect(mocks.abortUpload).toHaveBeenCalledWith({
       classroom: { id: CLASSROOM_ID },
       mediaId: MEDIA_ID,
+      userId: 'user-1',
     });
     expect(mocks.deleteMedia).not.toHaveBeenCalled();
   });
