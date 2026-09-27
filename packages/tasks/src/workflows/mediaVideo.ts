@@ -1,4 +1,4 @@
-import { AbortTaskRunError, logger, task } from '@trigger.dev/sdk';
+import { AbortTaskRunError, logger, task, usage } from '@trigger.dev/sdk';
 import getPrisma from '@classmoji/database';
 import { mediaKey, posterVariant, renditionVariant } from '@classmoji/content-signing';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
@@ -20,6 +20,7 @@ import {
   decideVideo,
   isCompleteOutput,
   isVideoRefusal,
+  mappedDurationSec,
   parseProbe,
   posterArgs,
   renditionArgs,
@@ -40,15 +41,32 @@ import { probeFile, runFfmpeg } from '../helpers/videoTools.ts';
  *
  * ## Steps
  *
- *   1. Re-read the row: READY, VIDEO, optimise, PENDING — else exit quietly.
+ *   1. Re-read the row: READY, VIDEO, optimise, PENDING or FAILED — else exit
+ *      quietly — and claim it back to PENDING (clearing `processing_error`)
+ *      with a conditional update.
  *   2. Stream the original to a tmp dir (exactly `size_bytes`).
  *   3. ffprobe → remux or transcode (`decideVideo`), or refuse.
  *   4. ffmpeg → rendition; ffprobe it; it must be COMPLETE (§12.6).
- *   5. Poster from the rendition. Best-effort: a poster that cannot be made
- *      leaves `poster_key` null rather than failing a finished rendition.
- *   6. SHA-256 → content-derived names; stream-upload; HeadObject verify.
+ *   5. SHA-256 → content-derived name; stream-upload; HeadObject verify.
+ *   6. Poster from the rendition, named, uploaded and verified the same way.
+ *      Best-effort throughout: any failure leaves `poster_key` null rather
+ *      than failing a finished rendition.
  *   7. The DONE write, fenced on `READY + PENDING`.
  *   8. `keep_original` off: mark the original dropped, then delete it.
+ *
+ * ## Retrying a video (runbook)
+ *
+ * To retry a video, replay its run in Trigger (or trigger
+ * `media-video-process` with `{classroomId, mediaId}`); never replay a run
+ * that is still executing. A FAILED row is eligible and is claimed back to
+ * PENDING; a DONE row is left alone.
+ *
+ * ## The deadline
+ *
+ * `maxDuration` counts compute across ALL attempts, and a run the platform
+ * stops at it never reaches `onFailure`, leaving the row PENDING. So the run
+ * sets its own deadline 15 minutes short of what is left, kills ffmpeg there,
+ * and records FAILED ("took too long") through the normal path.
  *
  * ## Fencing
  *
@@ -113,6 +131,12 @@ export interface DoneFields {
  */
 export interface VideoJobDeps {
   findRow(mediaId: string): Promise<VideoRow | null>;
+  /**
+   * Claim the row for this run: PENDING or FAILED → PENDING, clearing
+   * `processing_error`, only while it is still this classroom's READY
+   * optimised video. Returns the number of rows it matched (0 or 1).
+   */
+  claim(mediaId: string, classroomId: string): Promise<number>;
   /** The fenced DONE write. Returns the number of rows it matched (0 or 1). */
   commitDone(mediaId: string, fields: DoneFields): Promise<number>;
   /** Mark the original dropped, only while the row is READY and names `renditionKey`. */
@@ -141,7 +165,8 @@ export function ineligibility(row: VideoRow | null, classroomId: string): string
   if (row.status !== 'READY') return 'not-ready';
   if (row.kind !== 'VIDEO') return 'not-video';
   if (!row.optimise) return 'not-optimised';
-  if (row.processing !== 'PENDING') return 'not-pending';
+  // PENDING: queued on upload. FAILED: a retry (see the runbook above).
+  if (row.processing !== 'PENDING' && row.processing !== 'FAILED') return 'not-queued';
   return null;
 }
 
@@ -203,6 +228,9 @@ export async function processVideo(
   const row = await deps.findRow(mediaId);
   const skip = ineligibility(row, classroomId);
   if (skip || !row) return { status: 'skipped', reason: skip ?? 'missing' };
+  if ((await deps.claim(mediaId, classroomId)) === 0) {
+    return { status: 'skipped', reason: 'claim-lost' };
+  }
 
   const origKey = mediaKey(row.classroom_id, row.id, `orig.${row.ext}`);
   const inputBytes = Number(row.size_bytes);
@@ -247,33 +275,16 @@ export async function processVideo(
       if (isVideoRefusal(error)) throw new VideoRefusal('INCOMPLETE', 'output unreadable');
       throw error;
     }
-    if (!output.video || !isCompleteOutput(facts.durationSec, output)) {
+    const expectedSec = mappedDurationSec(facts);
+    if (!output.video || !isCompleteOutput(expectedSec, output)) {
       throw new VideoRefusal(
         'INCOMPLETE',
-        `output ${output.durationSec}s of ${facts.durationSec}s, video ${Boolean(output.video)}`
+        `output ${output.durationSec}s of ${expectedSec}s, video ${Boolean(output.video)}`
       );
     }
+    const outputVideo = output.video;
 
-    // 5. The poster — best-effort.
-    let poster: { file: string; bytes: number } | null = null;
-    try {
-      const file = join(dir, 'poster.jpg');
-      await deps.ffmpeg(
-        posterArgs({
-          rendition,
-          output: file,
-          durationSec: output.durationSec,
-          renditionWidth: output.video.displayWidth,
-        })
-      );
-      const bytes = await deps.fileSize(file);
-      if (bytes > 0) poster = { file, bytes };
-    } catch (error) {
-      if (!isVideoRefusal(error)) throw error;
-      logger.warn('No poster for this video', { mediaId, error: describe(error) });
-    }
-
-    // 6. Content-derived names, streamed up, verified.
+    // 5. The rendition: content-derived name, streamed up, verified.
     const renditionKey = mediaKey(
       row.classroom_id,
       row.id,
@@ -286,18 +297,40 @@ export async function processVideo(
       throw new Error(`rendition stored as ${storedRendition} bytes, expected ${renditionBytes}`);
     }
 
+    // 6. The poster, best-effort from the first command to the last.
     let posterKey: string | null = null;
-    if (poster) {
-      posterKey = mediaKey(
-        row.classroom_id,
-        row.id,
-        posterVariant((await deps.sha256(poster.file)).slice(0, 12))
+    let posterAttempt: string | null = null;
+    try {
+      const file = join(dir, 'poster.jpg');
+      await deps.ffmpeg(
+        posterArgs({
+          rendition,
+          output: file,
+          durationSec: output.durationSec,
+          renditionWidth: outputVideo.displayWidth,
+        })
       );
-      uploaded.push(posterKey);
-      await deps.upload(posterKey, poster.file, poster.bytes, 'image/jpeg');
-      const storedPoster = await deps.headBytes(posterKey);
-      if (storedPoster !== poster.bytes) {
-        throw new Error(`poster stored as ${storedPoster} bytes, expected ${poster.bytes}`);
+      const bytes = await deps.fileSize(file);
+      if (bytes > 0) {
+        posterAttempt = mediaKey(
+          row.classroom_id,
+          row.id,
+          posterVariant((await deps.sha256(file)).slice(0, 12))
+        );
+        uploaded.push(posterAttempt);
+        await deps.upload(posterAttempt, file, bytes, 'image/jpeg');
+        const storedPoster = await deps.headBytes(posterAttempt);
+        if (storedPoster !== bytes) {
+          throw new Error(`poster stored as ${storedPoster} bytes, expected ${bytes}`);
+        }
+        posterKey = posterAttempt;
+      }
+    } catch (error) {
+      logger.warn('No poster for this video', { mediaId, error: describe(error) });
+      if (posterAttempt) {
+        await deps
+          .deleteObject(posterAttempt)
+          .catch(e => logger.warn('Could not delete a failed poster', { error: describe(e) }));
       }
     }
 
@@ -307,8 +340,8 @@ export async function processVideo(
       rendition_bytes: BigInt(renditionBytes),
       poster_key: posterKey,
       duration_ms: Math.round(output.durationSec * 1000),
-      width: output.video.displayWidth,
-      height: output.video.displayHeight,
+      width: outputVideo.displayWidth,
+      height: outputVideo.displayHeight,
     });
     if (matched === 0) {
       logger.info('The row moved on while this run worked; removing its uploads', { mediaId });
@@ -346,18 +379,20 @@ export async function processVideo(
 /**
  * Run one attempt and decide what a failure means: a refusal is recorded and
  * ends the run (`AbortTaskRunError`); anything else is retried, and recorded
- * with the generic sentence on the last attempt.
+ * with the generic sentence on the last attempt. `maxAttempts` is the run's
+ * own (`ctx.run.maxAttempts`), which a trigger can override.
  */
 export async function runVideoAttempt(
   payload: MediaVideoPayload,
   attempt: number,
+  maxAttempts: number,
   deps: VideoJobDeps
 ): Promise<MediaVideoResult> {
   try {
     return await processVideo(payload, deps);
   } catch (error) {
     const refusal = isVideoRefusal(error);
-    const final = refusal || attempt >= VIDEO_MAX_ATTEMPTS;
+    const final = refusal || attempt >= maxAttempts;
     logger.warn('Video processing failed', {
       mediaId: payload.mediaId,
       attempt,
@@ -371,6 +406,21 @@ export async function runVideoAttempt(
     }
     throw error;
   }
+}
+
+/** The task's `maxDuration`, in seconds: a long lecture's transcode plus the transfers. */
+export const VIDEO_MAX_DURATION_SEC = 4 * 60 * 60;
+
+/** How far short of the platform's limit the run stops itself. */
+export const DEADLINE_MARGIN_MS = 15 * 60 * 1000;
+
+/**
+ * Milliseconds this attempt may run before it kills ffmpeg: what is left of
+ * `maxDuration` after the compute already used (earlier attempts included),
+ * less the margin. Never negative — a late attempt gets a deadline already past.
+ */
+export function deadlineInMs(maxDurationSec: number, computeUsedMs: number): number {
+  return Math.max(0, maxDurationSec * 1000 - computeUsedMs - DEADLINE_MARGIN_MS);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -397,13 +447,28 @@ const ROW_SELECT = {
   poster_key: true,
 } as const;
 
-export function liveDeps(): VideoJobDeps {
+/** `deadline` kills ffmpeg/ffprobe when it fires (see "The deadline"). */
+export function liveDeps(deadline?: AbortSignal): VideoJobDeps {
   return {
     findRow: async mediaId =>
       (await getPrisma().mediaObject.findUnique({
         where: { id: mediaId },
         select: ROW_SELECT,
       })) as VideoRow | null,
+    claim: async (mediaId, classroomId) =>
+      (
+        await getPrisma().mediaObject.updateMany({
+          where: {
+            id: mediaId,
+            classroom_id: classroomId,
+            status: 'READY',
+            kind: 'VIDEO',
+            optimise: true,
+            processing: { in: ['PENDING', 'FAILED'] },
+          },
+          data: { processing: 'PENDING', processing_error: null },
+        })
+      ).count,
     commitDone: async (mediaId, fields) =>
       (
         await getPrisma().mediaObject.updateMany({
@@ -439,8 +504,8 @@ export function liveDeps(): VideoJobDeps {
     headBytes: key => headBytes(requireStore(), key),
     deleteObject: key => deleteObject(requireStore(), key),
 
-    probe: probeFile,
-    ffmpeg: runFfmpeg,
+    probe: file => probeFile(file, deadline),
+    ffmpeg: args => runFfmpeg(args, deadline),
     sha256: sha256File,
     fileSize: async file => (await stat(file)).size,
 
@@ -460,15 +525,25 @@ export const mediaVideoProcess = task({
   /** 8 vCPU / 16 GB / 10 GB disk: x264 scales with cores; the disk budget is §12.6. */
   machine: { preset: 'large-2x' },
   /** 4 hours: a long lecture's transcode, plus the transfers either side. */
-  maxDuration: 4 * 60 * 60,
+  maxDuration: VIDEO_MAX_DURATION_SEC,
   retry: {
     maxAttempts: VIDEO_MAX_ATTEMPTS,
     minTimeoutInMs: 10_000,
     maxTimeoutInMs: 120_000,
     factor: 2,
   },
-  run: async (payload: MediaVideoPayload, { ctx }): Promise<MediaVideoResult> =>
-    runVideoAttempt(payload, ctx.attempt.number, liveDeps()),
+  run: async (payload: MediaVideoPayload, { ctx }): Promise<MediaVideoResult> => {
+    const deadlineMs = deadlineInMs(
+      ctx.run.maxDuration ?? VIDEO_MAX_DURATION_SEC,
+      usage.getCurrent().compute.total.durationMs
+    );
+    return runVideoAttempt(
+      payload,
+      ctx.attempt.number,
+      ctx.run.maxAttempts ?? VIDEO_MAX_ATTEMPTS,
+      liveDeps(AbortSignal.timeout(deadlineMs))
+    );
+  },
   /**
    * After the last attempt. `run` has usually recorded the failure already
    * (then this matches no PENDING row and does nothing); this catches a throw
@@ -478,8 +553,9 @@ export const mediaVideoProcess = task({
    * (SDK 4.6.3 `taskExecutor`). A run the platform ends from outside — killed
    * at `maxDuration`, OOM-killed, over the disk limit, heartbeat timeout,
    * cancelled, or a crash on its last attempt — never reaches it, and the row
-   * stays PENDING ("Optimising"). The original keeps serving; a Trigger replay
-   * picks the row up again.
+   * stays PENDING ("Optimising"). The in-run deadline keeps `maxDuration` out
+   * of that list in practice. The original keeps serving; a Trigger replay
+   * picks the row up again (see the runbook at the top).
    */
   onFailure: async ({ payload }) => {
     try {
