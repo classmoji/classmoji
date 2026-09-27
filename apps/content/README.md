@@ -166,8 +166,10 @@ and only ever read here. That difference is the whole route.
 - **No transform.** A media URL carrying `w` or `fmt` is malformed: the query
   allowlist is exactly `p, v, exp, sig, dl`.
 
-`{variant}` is one of `orig.{ext}` (ext ≤ 8 lowercase alphanumerics), `web.mp4`
-(the streaming rendition) or `poster.webp` — a closed list, because the same
+`{variant}` is one of `orig.{ext}` (ext ≤ 8 lowercase alphanumerics),
+`web-{hex12}.mp4` (the streaming rendition) or `poster-{hex12}.webp` (the poster
+frame), the 12 hex being the first 12 of the SHA-256 of that object's bytes — a
+closed grammar, because the same
 string is both a URL segment and the tail of an R2 key. WHICH variant to serve
 is decided at signing time by the app, from the media row; the Worker holds no
 state about it, so a new rendition is simply a new URL.
@@ -489,8 +491,8 @@ The media bucket is the opposite on both counts. Its keys are classroom-scoped,
 
 ```
 m/{classroomId}/{mediaId}/orig.{ext}     # the original, as uploaded
-m/{classroomId}/{mediaId}/web.mp4        # the streaming rendition
-m/{classroomId}/{mediaId}/poster.webp    # the poster frame
+m/{classroomId}/{mediaId}/web-{hex12}.mp4        # the streaming rendition
+m/{classroomId}/{mediaId}/poster-{hex12}.webp    # the poster frame
 ```
 
 and there is nothing behind them: deleting one of these objects destroys the

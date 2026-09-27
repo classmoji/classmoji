@@ -136,8 +136,8 @@ describe('media delivery', () => {
   });
 
   it.each([
-    ['web.mp4', 'video/mp4'],
-    ['poster.webp', 'image/webp'],
+    ['web-0123456789ab.mp4', 'video/mp4'],
+    ['poster-0123456789ab.webp', 'image/webp'],
     ['orig.pdf', 'application/pdf'],
     ['orig.mp4', 'video/mp4'],
     // The three the general web table does not know: an `orig.{ext}` falls back
@@ -373,11 +373,11 @@ describe('media refusals', () => {
     // A poster-frame URL must not be editable into the 2 GB original.
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const media = fakeBucket({
-      [key('poster.webp')]: { body: 'poster', contentType: 'image/webp' },
+      [key('poster-0123456789ab.webp')]: { body: 'poster', contentType: 'image/webp' },
       [key('orig.mp4')]: { body: VIDEO, contentType: 'video/mp4' },
     });
-    const url = (await signedMediaUrl({ variant: 'poster.webp' })).replace(
-      'poster.webp',
+    const url = (await signedMediaUrl({ variant: 'poster-0123456789ab.webp' })).replace(
+      'poster-0123456789ab.webp',
       'orig.mp4'
     );
     const response = await worker.fetch(

@@ -5,7 +5,7 @@
  * `media://{uuid}` and shown through a signed URL of the form
  * `{origin}/c/{classroomId}/media/{mediaId}/{variant}?…`. Neither says what the
  * file IS by its ending — the reference has no extension at all, and the
- * signed URL ends in a variant (`orig.mov`, `web.mp4`) that is an
+ * signed URL ends in a variant (`orig.mov`, `web-{hex12}.mp4`) that is an
  * implementation detail — so everything that has to decide how to show one
  * decides by SCHEME, here, rather than by extension. A URL's path shape counts
  * only on the delivery origin's host, which callers pass in.

@@ -268,7 +268,7 @@ test.describe('the class site', () => {
   const signed = (id: string, variant: string) =>
     `${ORIGIN}/c/${CLASSROOM}/media/${id}/${variant}?p=week&v=0&exp=1&sig=abc`;
   const blocks = [
-    { type: 'video', props: { url: signed(VIDEO_ID, 'web.mp4'), caption: '' } },
+    { type: 'video', props: { url: signed(VIDEO_ID, 'web-0123456789ab.mp4'), caption: '' } },
     { type: 'file', props: { url: signed(PDF_ID, 'orig.pdf'), name: 'notes.pdf' } },
     { type: 'audio', props: { url: signed(AUDIO_ID, 'orig.mp3'), name: 'talk.mp3' } },
   ];
@@ -291,7 +291,7 @@ test.describe('the class site', () => {
       blocks,
       resolveLink,
       downloads: {
-        [signed(VIDEO_ID, 'web.mp4')]: mediaDownloadHref(
+        [signed(VIDEO_ID, 'web-0123456789ab.mp4')]: mediaDownloadHref(
           'page-1',
           ref(VIDEO_ID),
           'https://pages.test'

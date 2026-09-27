@@ -74,10 +74,10 @@ test.describe('media references and URLs, by shape', () => {
 
   test('signed media URLs and their placeholders are media URLs; repo blobs are not', () => {
     expect(isMediaUrl(signed('orig.mov'), ORIGIN)).toBe(true);
-    expect(isMediaUrl(signed('web.mp4'), ORIGIN)).toBe(true);
+    expect(isMediaUrl(signed('web-0123456789ab.mp4'), ORIGIN)).toBe(true);
     expect(isMediaUrl(PLACEHOLDER, ORIGIN)).toBe(true);
     expect(isMediaPlaceholderUrl(PLACEHOLDER, ORIGIN)).toBe(true);
-    expect(isMediaPlaceholderUrl(signed('web.mp4'), ORIGIN)).toBe(false);
+    expect(isMediaPlaceholderUrl(signed('web-0123456789ab.mp4'), ORIGIN)).toBe(false);
     expect(isMediaUrl(`${ORIGIN}/c/${CLASSROOM}/blob/abc.png?sig=x`, ORIGIN)).toBe(false);
     expect(isMediaUrl('https://youtu.be/abc', ORIGIN)).toBe(false);
   });
@@ -108,7 +108,7 @@ test.describe('media references and URLs, by shape', () => {
     }
     // A foreign URL that happens to end in a video extension still plays by
     // that extension, like any pasted direct link.
-    expect(playsAsNativeVideo(foreign(signed('web.mp4')), ORIGIN)).toBe(true);
+    expect(playsAsNativeVideo(foreign(signed('web-0123456789ab.mp4')), ORIGIN)).toBe(true);
 
     // No delivery origin: this deployment mints no URLs, so none is ours. A
     // `media://` reference is still one by its scheme.
@@ -126,7 +126,7 @@ test.describe('media references and URLs, by shape', () => {
       REF,
       signed('orig.mov'),
       signed('orig.mkv'),
-      signed('web.mp4'),
+      signed('web-0123456789ab.mp4'),
       'https://cdn.test/lecture.mp4',
       'https://cdn.test/lecture.MOV?x=1',
       'https://cdn.test/lecture.m4v',
@@ -162,7 +162,7 @@ test.describe('the class site plays media videos natively', () => {
   });
   test.afterAll(() => restore());
 
-  for (const variant of ['orig.mp4', 'orig.mov', 'orig.mkv', 'orig.avi', 'web.mp4']) {
+  for (const variant of ['orig.mp4', 'orig.mov', 'orig.mkv', 'orig.avi', 'web-0123456789ab.mp4']) {
     test(`a signed ${variant} renders a <video>, not a frame`, async () => {
       const { html } = await renderSitePage({ blocks: [video(signed(variant))], resolveLink });
       expect(html).toContain('<video');
@@ -188,7 +188,7 @@ test.describe('the class site plays media videos natively', () => {
   });
 
   test('a media-shaped http:// URL on another host is only a link', async () => {
-    const url = foreign(signed('web.mp4'), 'http://elsewhere.test');
+    const url = foreign(signed('web-0123456789ab.mp4'), 'http://elsewhere.test');
     const { html } = await renderSitePage({ blocks: [video(url)], resolveLink });
     expect(html).not.toContain('<video');
     expect(html).not.toContain('<iframe');
