@@ -111,6 +111,11 @@ const STATUS_FOR: Record<string, number> = {
   // Gone for good: the reservation lapsed and the upload was cancelled, so no
   // retry of the same call can succeed. The client starts over.
   UPLOAD_EXPIRED: 410,
+  // Agent uploads (MCP). No HTTP route raises these today; listed so a future
+  // one answers with a status that means what they mean.
+  STORAGE_REFUSED: 422,
+  STAGE_LIMIT: 429,
+  NOT_UPLOADED: 409,
 };
 
 /**

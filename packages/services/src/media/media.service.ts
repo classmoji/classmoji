@@ -203,7 +203,7 @@ export async function listMedia(classroom: MediaClassroom): Promise<MediaRecord[
  * were never set. Returning a non-nullable client is the point — the callers
  * below never have to assert it away.
  */
-function requireClient(): { client: S3Client; bucket: string } {
+export function requireClient(): { client: S3Client; bucket: string } {
   const client = r2Client();
   const bucket = mediaBucket();
   if (!client || !bucket) {
@@ -607,7 +607,7 @@ export async function signParts({
 }
 
 /** Abort the multipart without letting a failure there hide the real error. */
-async function abortQuietly(
+export async function abortQuietly(
   client: S3Client,
   bucket: string,
   key: string,
@@ -632,7 +632,7 @@ async function abortQuietly(
  * is logged and the next key is tried, rather than throwing and leaving the
  * remaining two untouched.
  */
-async function deleteObjectsQuietly(
+export async function deleteObjectsQuietly(
   client: S3Client,
   bucket: string,
   keys: string[]
@@ -663,7 +663,7 @@ async function deleteObjectsQuietly(
  * Returns whether it landed, so a caller that cares can tell "I tombstoned it"
  * from "somebody else got there first".
  */
-async function markDeleted(
+export async function markDeleted(
   mediaId: string,
   expected: MediaStatus | MediaStatus[]
 ): Promise<boolean> {
@@ -749,7 +749,7 @@ const HEAD_RETRY_DELAY_MS = 250;
  * nobody had managed to measure. Unverified is unverified: it falls through to
  * the retry and then to null, and the caller says VERIFY_FAILED.
  */
-async function verifiedSize(client: S3Client, bucket: string, key: string): Promise<number | null> {
+export async function verifiedSize(client: S3Client, bucket: string, key: string): Promise<number | null> {
   for (let attempt = 1; attempt <= HEAD_ATTEMPTS; attempt += 1) {
     if (attempt > 1) {
       await new Promise(resolve => setTimeout(resolve, HEAD_RETRY_DELAY_MS));

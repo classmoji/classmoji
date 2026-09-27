@@ -182,3 +182,56 @@ export async function onMediaReady(
 ): ReturnType<MediaWrites['onMediaReady']> {
   return (await mediaWrites()).onMediaReady(args);
 }
+
+// ─── Agent uploads (MCP) ──────────────────────────────────────────────────────
+//
+// The staging protocol behind `file_upload_start` / `file_upload_finish` /
+// `file_upload_status` / `file_import_url`, and the service half of the two
+// Trigger tasks that place and import. Lazy for the same reason as the rest of
+// the write half: it holds the S3 client, and it also pulls the Trigger SDK and
+// the content-repo commit path, none of which a render needs.
+
+export type { StageTarget, StageTargetType, StagedStatus } from './mediaStaging.service.ts';
+type StagingWrites = typeof import('./mediaStaging.service.ts');
+
+let staging: Promise<StagingWrites> | null = null;
+function mediaStaging(): Promise<StagingWrites> {
+  staging ??= import('./mediaStaging.service.ts').catch(error => {
+    staging = null;
+    throw error;
+  });
+  return staging;
+}
+
+export async function startStagedUpload(
+  args: Parameters<StagingWrites['startStagedUpload']>[0]
+): ReturnType<StagingWrites['startStagedUpload']> {
+  return (await mediaStaging()).startStagedUpload(args);
+}
+
+export async function finishStagedUpload(
+  args: Parameters<StagingWrites['finishStagedUpload']>[0]
+): ReturnType<StagingWrites['finishStagedUpload']> {
+  return (await mediaStaging()).finishStagedUpload(args);
+}
+
+export async function stagedUploadStatus(
+  args: Parameters<StagingWrites['stagedUploadStatus']>[0]
+): ReturnType<StagingWrites['stagedUploadStatus']> {
+  return (await mediaStaging()).stagedUploadStatus(args);
+}
+
+export async function startUrlImport(
+  args: Parameters<StagingWrites['startUrlImport']>[0]
+): ReturnType<StagingWrites['startUrlImport']> {
+  return (await mediaStaging()).startUrlImport(args);
+}
+
+/**
+ * The task side, as one namespace: `packages/tasks` imports it once per run and
+ * calls the steps in order. Not individually wrapped — every function on it is
+ * used only there.
+ */
+export async function stagingTaskSteps(): Promise<StagingWrites> {
+  return mediaStaging();
+}

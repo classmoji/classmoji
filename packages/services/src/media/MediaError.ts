@@ -58,7 +58,25 @@ export type MediaErrorCode =
    * did not say it was a deliberate "store this in media" (`explicit`, which
    * only Settings → Media's own Upload button sends).
    */
-  | 'USE_REPO';
+  | 'USE_REPO'
+  /**
+   * An agent upload (`file_upload_start`, `file_import_url`) the storage router
+   * cannot place anywhere this classroom can put it — too large for the
+   * repository with no media, a type the repository policy refuses, or over
+   * media's own per-file ceiling. The message is the router's sentence.
+   */
+  | 'STORAGE_REFUSED'
+  /**
+   * The classroom already has as many agent uploads waiting to be placed as it
+   * may (bytes or count). Admission control for the `stage/` prefix, whose
+   * lifecycle deletion is asynchronous and so cannot be the limit itself.
+   */
+  | 'STAGE_LIMIT'
+  /**
+   * `file_upload_finish` was called before the file was uploaded to the staged
+   * URL (there is no object there yet). Not terminal: upload, then finish.
+   */
+  | 'NOT_UPLOADED';
 
 export class MediaError extends Error {
   readonly code: MediaErrorCode;
