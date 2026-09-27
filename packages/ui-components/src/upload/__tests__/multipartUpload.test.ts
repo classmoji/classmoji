@@ -32,13 +32,20 @@ interface Call {
   body: unknown;
   bodySize?: number;
   contentType?: string | null;
+  /** Exactly what the client passed — `undefined` when it sent no signal at all. */
+  signal?: AbortSignal | null;
 }
 
 interface ServerOptions {
   create?: () => Response;
   parts?: (call: number, partNumbers: number[]) => Response;
-  put?: (partNumber: number, attempt: number) => Response | Promise<Response> | Error;
+  put?: (
+    partNumber: number,
+    attempt: number,
+    signal?: AbortSignal | null
+  ) => Response | Promise<Response> | Error;
   complete?: () => Response;
+  abort?: () => Response | Promise<Response>;
   partCount?: number;
 }
 
@@ -71,6 +78,7 @@ function makeServer(options: ServerOptions = {}) {
       body,
       bodySize: isPut ? (init.body as Blob).size : undefined,
       contentType: isPut ? new Headers(init.headers).get('Content-Type') : undefined,
+      signal: init.signal,
     });
 
     if (url === `${BASE}/uploads` && method === 'POST') {
@@ -106,14 +114,14 @@ function makeServer(options: ServerOptions = {}) {
     }
 
     if (url === `${BASE}/uploads/${MEDIA_ID}/abort` && method === 'POST') {
-      return new Response(null, { status: 204 });
+      return options.abort?.() ?? new Response(null, { status: 204 });
     }
 
     if (isPut) {
       const partNumber = Number(url.match(/\/part\/(\d+)/)?.[1]);
       const attempt = (attempts.get(partNumber) ?? 0) + 1;
       attempts.set(partNumber, attempt);
-      const outcome = options.put?.(partNumber, attempt);
+      const outcome = options.put?.(partNumber, attempt, init.signal);
       if (outcome instanceof Error) throw outcome;
       return outcome ?? putOk(partNumber);
     }
@@ -146,6 +154,23 @@ async function settleThroughBackoff<T>(promise: Promise<T>): Promise<T | Multipa
   );
   for (let i = 0; i < 20; i += 1) await vi.advanceTimersByTimeAsync(10_000);
   return settled;
+}
+
+/**
+ * A PUT that never answers on its own — the part is still on the wire — and
+ * fails the way `fetch` does the moment its signal is aborted.
+ */
+const inFlightUntilAborted = (signal?: AbortSignal | null) =>
+  new Promise<Response>((_, reject) => {
+    const fail = () => reject(new DOMException('The operation was aborted.', 'AbortError'));
+    if (signal?.aborted) fail();
+    else signal?.addEventListener('abort', fail, { once: true });
+  });
+
+/** Let queued promise callbacks run until `ready` holds (or give up). */
+async function until(ready: () => boolean) {
+  for (let i = 0; i < 50 && !ready(); i += 1) await new Promise(r => setTimeout(r, 0));
+  expect(ready()).toBe(true);
 }
 
 afterEach(() => {
@@ -361,6 +386,67 @@ describe('uploadMultipart — cancellation', () => {
     expect(server.of('POST', '/abort')).toHaveLength(1);
     expect(server.of('POST', '/abort')[0].url).toBe(`${BASE}/uploads/${MEDIA_ID}/abort`);
     expect(server.of('POST', '/complete')).toHaveLength(0);
+  });
+
+  it('stops every PUT in flight, sends one un-signalled abort, and does not wait for it', async () => {
+    const controller = new AbortController();
+    const server = makeServer({
+      partCount: 6,
+      // Four parts on the wire at once, none of them finishing by itself.
+      put: (_partNumber, _attempt, signal) => inFlightUntilAborted(signal),
+      // The cleanup's answer never comes back; the caller must not care.
+      abort: () => new Promise<Response>(() => {}),
+    });
+
+    const settled = uploadMultipart({
+      file: new File([new Uint8Array(24)], 'lecture.zip'),
+      classroomId: 'class-1',
+      endpoints: { base: BASE },
+      signal: controller.signal,
+    }).catch((e: MultipartUploadError) => e);
+
+    await until(() => server.of('PUT').length === 4);
+    controller.abort();
+
+    const error = await settled;
+    expect((error as MultipartUploadError).code).toBe('ABORTED');
+
+    // Every part that was flying was told to stop, and no fifth one started.
+    const puts = server.of('PUT');
+    expect(puts).toHaveLength(4);
+    expect(puts.every(p => p.signal?.aborted)).toBe(true);
+
+    // Exactly one cleanup, and not tied to the signal that had just aborted —
+    // one that was would be cancelled by the browser before it was sent.
+    const aborts = server.of('POST', '/abort');
+    expect(aborts).toHaveLength(1);
+    expect(aborts[0].url).toBe(`${BASE}/uploads/${MEDIA_ID}/abort`);
+    expect(aborts[0].signal).toBeUndefined();
+    expect(server.calls.filter(c => c.method === 'DELETE')).toHaveLength(0);
+  });
+
+  it('stops the other PUTs when one part fails for good', async () => {
+    const server = makeServer({
+      partCount: 6,
+      put: (partNumber, _attempt, signal) =>
+        partNumber === 1 ? new Response('nope', { status: 400 }) : inFlightUntilAborted(signal),
+    });
+
+    await expect(
+      uploadMultipart({
+        file: new File([new Uint8Array(24)], 'lecture.zip'),
+        classroomId: 'class-1',
+        endpoints: { base: BASE },
+      })
+    ).rejects.toMatchObject({ code: 'NETWORK', status: 400 });
+
+    const others = server.of('PUT').filter(c => !c.url.includes('/part/1?'));
+    expect(others.length).toBeGreaterThan(0);
+    expect(others.every(p => p.signal?.aborted)).toBe(true);
+    // The queue stops with them: nothing new is sent into a cancelled upload.
+    await new Promise(r => setTimeout(r, 0));
+    expect(server.of('PUT').some(c => c.url.includes('/part/6?'))).toBe(false);
+    expect(server.of('POST', '/abort')).toHaveLength(1);
   });
 
   it('refuses before it creates anything when the signal is already aborted', async () => {

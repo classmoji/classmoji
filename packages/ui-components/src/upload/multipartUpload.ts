@@ -16,7 +16,10 @@
  *              one is a short-lived credential and most would expire unused)
  *   PUT × n  → the only step that carries bytes, four at a time
  *   complete → the ETags, in part order, so S3 can stitch the object together
- *   abort    → only on failure: cancels the upload if it is still open
+ *   abort    → only on failure or cancel: cancels the upload if it is still
+ *              open. Sent once, on its own — never with the signal that just
+ *              aborted — and not waited for: a cancel is over for the caller
+ *              the moment it is asked for
  *
  * Nothing here is resumable across a reload; the multipart id lives for seven
  * days on R2's side, so adding that later is additive.
@@ -318,6 +321,17 @@ export async function uploadMultipart({
   const { mediaId, partSize, partCount } = created;
   const totalBytes = file.size;
 
+  // Every request past the create runs under a controller of our own, linked
+  // to the caller's. The caller's cancel reaches all of them through it, and so
+  // does our own failure: when one part gives up, the three PUTs still flying
+  // beside it have to stop too, or they go on pushing bytes into an upload the
+  // cleanup below has just cancelled.
+  const inner = new AbortController();
+  const stop = () => inner.abort();
+  if (signal?.aborted) stop();
+  else signal?.addEventListener('abort', stop, { once: true });
+  const innerSignal = inner.signal;
+
   // Everything past the create has an upload behind it, so every failure from
   // here owes R2 a cleanup: the abort cancels the multipart and drops the row,
   // which is what stops a dead reservation eating the classroom's quota for the
@@ -333,7 +347,7 @@ export async function uploadMultipart({
     let sentBytes = 0;
 
     for (let first = 1; first <= partCount; first += URL_BATCH_SIZE) {
-      if (signal?.aborted) throw aborted();
+      if (innerSignal.aborted) throw aborted();
 
       const partNumbers: number[] = [];
       for (let n = first; n < first + URL_BATCH_SIZE && n <= partCount; n += 1) partNumbers.push(n);
@@ -343,7 +357,7 @@ export async function uploadMultipart({
         const { urls } = await postJson<{ urls: SignedPart[] }>(
           `${base}/uploads/${mediaId}/parts`,
           { partNumbers: wanted },
-          signal
+          innerSignal
         );
         for (const url of urls) signed.set(url.partNumber, url);
       };
@@ -369,7 +383,7 @@ export async function uploadMultipart({
         let refreshes = 0;
 
         for (;;) {
-          if (signal?.aborted) throw aborted();
+          if (innerSignal.aborted) throw aborted();
 
           let part = signed.get(partNumber);
           if (!part) throw new MultipartUploadError('NETWORK', `No URL for part ${partNumber}.`);
@@ -386,7 +400,7 @@ export async function uploadMultipart({
               method: 'PUT',
               body: blob,
               headers: created.contentType ? { 'Content-Type': created.contentType } : undefined,
-              signal,
+              signal: innerSignal,
             });
 
             if (response.ok) {
@@ -435,7 +449,7 @@ export async function uploadMultipart({
           if (!retryable || retries >= RETRY_BACKOFF_MS.length) {
             throw retryable ?? new MultipartUploadError('NETWORK', `Part ${partNumber} failed.`);
           }
-          await delay(RETRY_BACKOFF_MS[retries], signal);
+          await delay(RETRY_BACKOFF_MS[retries], innerSignal);
           retries += 1;
         }
       };
@@ -451,7 +465,7 @@ export async function uploadMultipart({
       await Promise.all(workers);
     }
 
-    if (signal?.aborted) throw aborted();
+    if (innerSignal.aborted) throw aborted();
 
     const parts = [...etags.entries()]
       .map(([partNumber, etag]) => ({ partNumber, etag }))
@@ -460,14 +474,23 @@ export async function uploadMultipart({
     const completed = await postJson<{ mediaId: string; ref: string }>(
       `${base}/uploads/${mediaId}/complete`,
       { parts },
-      signal
+      innerSignal
     );
 
     return { mediaId: completed.mediaId ?? mediaId, ref: completed.ref ?? `media://${mediaId}` };
   } catch (error) {
-    // Best-effort, and deliberately un-signalled: the usual reason we are here
-    // is that `signal` just aborted, and a cleanup wired to it would abort too.
-    await fetch(`${base}/uploads/${mediaId}/abort`, { method: 'POST' }).catch(() => {});
+    // Stop every request still in flight before telling the server to cancel,
+    // so no part lands after the abort has closed the upload.
+    stop();
+    // Exactly one cleanup per upload, and this is the only place that sends
+    // it. Deliberately un-signalled: the usual reason we are here is that the
+    // signal just aborted, and a request wired to it would be cancelled before
+    // it left. Not awaited either — its answer changes nothing for the caller,
+    // who is told at once that the upload is over, and a cancel that sat
+    // waiting on a round trip would look like a button that did nothing.
+    void fetch(`${base}/uploads/${mediaId}/abort`, { method: 'POST' }).catch(() => {});
     throw error;
+  } finally {
+    signal?.removeEventListener('abort', stop);
   }
 }

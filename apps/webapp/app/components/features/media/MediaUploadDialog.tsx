@@ -110,6 +110,8 @@ const MediaUploadDialog = ({
   const chooseFile = (chosen: File | null) =>
     dispatch({ type: 'choose', file: chosen, refusal: chosen ? precheck(chosen, quota) : null });
 
+  // Back to idle at once. The client stops its PUTs and sends the server-side
+  // abort on its own, un-awaited; nothing here waits for that answer.
   const cancel = () => {
     abortRef.current?.abort();
     abortRef.current = null;
@@ -263,7 +265,11 @@ const MediaUploadDialog = ({
           </div>
         ) : (
           <div className="flex justify-end gap-2">
-            <Button onClick={close}>{uploading ? 'Cancel upload' : 'Cancel'}</Button>
+            {/* Cancelling an upload keeps the dialog, and the file, where they
+                were; the X still cancels and closes in one go. */}
+            <Button onClick={uploading ? cancel : close}>
+              {uploading ? 'Cancel upload' : 'Cancel'}
+            </Button>
             <Button
               type="primary"
               onClick={start}
