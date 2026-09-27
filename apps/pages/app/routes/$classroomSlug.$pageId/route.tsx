@@ -7,6 +7,8 @@ import { toast } from 'react-toastify';
 
 import Header from '~/components/layout/Header.tsx';
 import HeaderImage from '~/components/editor/HeaderImage.tsx';
+import { PageMediaProvider, usePageMedia } from '~/components/editor/media/PageMedia.tsx';
+import { fetchMediaDisplayUrl } from '~/components/editor/media/mediaDisplayUrl.ts';
 import {
   PreviewBar,
   PendingPreviewBanner,
@@ -37,6 +39,32 @@ const widthClasses: Record<number, string> = {
   4: 'max-w-7xl',
 };
 
+/**
+ * "Choose from media" beside "Add cover": an image the classroom already
+ * stores in media, as the cover. Renders nothing where media is unavailable.
+ */
+function ChooseCoverFromMedia({ onChoose }: { onChoose: (ref: string) => void }) {
+  const media = usePageMedia();
+  if (!media.canUseMedia) return null;
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        const item = await media.choose('IMAGE');
+        if (item) onChoose(item.ref);
+      }}
+      className="
+        flex items-center gap-1.5
+        px-2 py-1 text-sm text-gray-500 dark:text-gray-400
+        hover:bg-gray-100 dark:hover:bg-gray-800
+        rounded transition-colors
+      "
+    >
+      Choose from media
+    </button>
+  );
+}
+
 const PageRoute = () => {
   const {
     page,
@@ -50,6 +78,7 @@ const PageRoute = () => {
     contentSha,
     resolvedAssets,
     resolvedSrcSets,
+    uploadCapability,
   } = useLoaderData<typeof import('./route.server.ts').loader>();
   // Stored refs stay in the document; these are the URLs to display them with.
   const assets = useAssetMap(resolvedAssets, page.id);
@@ -65,6 +94,16 @@ const PageRoute = () => {
   const srcSets = useMemo(
     () => ({ ...(resolvedSrcSets ?? {}), ...mergedSrcSets }),
     [resolvedSrcSets, mergedSrcSets]
+  );
+  // A media file just placed in the page (an upload, a pick) has no entry in
+  // the loader's map yet — the loader only resolves the SAVED document — so its
+  // display URL is fetched and remembered before the block or cover gets the
+  // reference.
+  const placeMedia = useCallback(
+    async (ref: string) => {
+      assets.remember(ref, await fetchMediaDisplayUrl(page.id, ref));
+    },
+    [assets, page.id]
   );
   const outletContext = useOutletContext<{ isEmbedded?: boolean }>();
   const isEmbedded = outletContext?.isEmbedded || false;
@@ -535,7 +574,14 @@ const PageRoute = () => {
   }, []);
 
   return (
-    <>
+    <PageMediaProvider
+      classroomId={classroom.id}
+      // Picking from media is for editors of a classroom whose media is
+      // available; the provider still hands the upload path the classroom id,
+      // so a server redirect to media works even when the capability did not.
+      enabled={canEdit && Boolean(uploadCapability?.media)}
+      place={placeMedia}
+    >
       {!isEmbedded && (
         <Header
           classroom={classroom}
@@ -657,6 +703,16 @@ const PageRoute = () => {
                   Add cover
                 </button>
               )}
+              {coverFetcher.state === 'idle' && (
+                <ChooseCoverFromMedia
+                  onChoose={ref =>
+                    coverFetcher.submit(
+                      { intent: 'set-header-image', url: ref, position: 50 },
+                      { method: 'POST', encType: 'application/json' }
+                    )
+                  }
+                />
+              )}
             </div>
           )}
 
@@ -718,6 +774,7 @@ const PageRoute = () => {
                 srcSets={srcSets}
                 displayUrl={assets.displayUrl}
                 onAssetUploaded={assets.remember}
+                uploadCapability={uploadCapability}
                 // P5: block editing while the save-merge chooser is open so no
                 // edits are silently discarded when the resolved merge remounts
                 // the editor. The chooser is the way forward (Apply / Reload).
@@ -749,7 +806,7 @@ const PageRoute = () => {
           )}
         </div>
       </div>
-    </>
+    </PageMediaProvider>
   );
 };
 

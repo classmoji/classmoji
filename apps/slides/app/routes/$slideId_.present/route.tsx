@@ -90,7 +90,8 @@ export const loader = async ({
     // background mid-lecture.
     const { html } = await resolveDeckDelivery(
       contentResult.content,
-      deckDeliveryContext(slide, gitOrgLogin, repo, deckAccessFor('present', { canEdit }, slide))
+      deckDeliveryContext(slide, gitOrgLogin, repo, deckAccessFor('present', { canEdit }, slide)),
+      { classroomId: slide.classroom_id }
     );
     slideContent = html;
   } else {

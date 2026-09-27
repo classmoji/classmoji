@@ -17,7 +17,9 @@
  * READ ONLY. None of this may reach a document on its way INTO the editor: the
  * editor posts its document back on save, and a signed URL that made that round
  * trip would be committed into deck.json, freezing one viewer's expiring
- * signature into the deck forever.
+ * signature into the deck forever. The single exception is `resolveDeckMedia`:
+ * a `media://` reference has no proxy to load through, so the editor gets it
+ * signed and `saveDeck` turns it back into the reference — see there.
  *
  * Every failure degrades to the stored URLs, which still work through the
  * content proxy. Nothing here is allowed to break a deck read.
@@ -336,9 +338,24 @@ const defaultResolvers: DeckDeliveryResolvers = {
 export async function resolveDeckDelivery(
   html: string | null,
   ctx: DeliveryContext,
-  opts: { themeName?: string | null; resolvers?: DeckDeliveryResolvers } = {}
+  opts: {
+    themeName?: string | null;
+    resolvers?: DeckDeliveryResolvers;
+    /**
+     * The deck's classroom, for the one thing a read with NO context still has
+     * to do: turn `media://` references into the resolver's placeholder rather
+     * than hand a browser a scheme it cannot load. See `resolveUnservedMedia`.
+     */
+    classroomId?: string | null;
+  } = {}
 ): Promise<{ html: string | null; themeBase: string | null }> {
-  if (!ctx || !html) return { html, themeBase: null };
+  if (!html) return { html, themeBase: null };
+  if (!ctx) {
+    return {
+      html: opts.classroomId ? await resolveUnservedMedia(html, opts.classroomId) : html,
+      themeBase: null,
+    };
+  }
 
   const resolvers = opts.resolvers ?? defaultResolvers;
 
@@ -406,10 +423,125 @@ export async function resolveDeckDelivery(
 export async function resolveDeckAssets(
   html: string | null,
   ctx: DeliveryContext,
-  opts: { resolvers?: DeckDeliveryResolvers } = {}
+  opts: { resolvers?: DeckDeliveryResolvers; classroomId?: string | null } = {}
 ): Promise<string | null> {
   const { html: next } = await resolveDeckDelivery(html, ctx, { ...opts, themeName: null });
   return next;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Media references — `media://{id}`, the deck content that is not in git
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Is this a `media://` reference? The resolver's own parse, so the two cannot
+ * disagree about what counts as one.
+ */
+export function isMediaRef(ref: string): boolean {
+  return ClassmojiService.contentDelivery.parseMediaRef(ref) !== null;
+}
+
+/**
+ * The EDITOR's pass: sign the deck's `media://` references and nothing else.
+ *
+ * The editor is deliberately handed its repo references unsigned — they load
+ * through the session-gated content proxy, and a signed URL that made the round
+ * trip back into a save would be one more thing for the save path to undo. A
+ * media reference has no proxy to load through: the bytes are in R2, reachable
+ * only by a signed URL, so without this pass a video the instructor just placed
+ * shows as a broken player in the one screen they placed it from.
+ *
+ * Safe to put into the editor because every writer passes `saveDeck`, whose
+ * canonicalization turns a signed media URL back into `media://{id}` by its
+ * shape alone — no database read, and not behind the classroom's delivery flag
+ * — so the reference is what gets committed, never the signature.
+ *
+ * No context → the document comes back as it went in, `media://` included. The
+ * editor is the one surface where keeping the stored reference is right even
+ * though it will not play: what the author saves is what they loaded.
+ */
+export async function resolveDeckMedia(
+  html: string | null,
+  ctx: DeliveryContext,
+  opts: { resolvers?: Pick<DeckDeliveryResolvers, 'resolveDelivery'> } = {}
+): Promise<string | null> {
+  if (!ctx || !html || !html.includes('media://')) return html;
+  const resolvers = opts.resolvers ?? defaultResolvers;
+  try {
+    return await rewriteDeckAssetUrls(html, async refs => {
+      const media = refs.filter(isMediaRef);
+      if (media.length === 0) return new Map();
+      const { urls } = await resolvers.resolveDelivery(ctx, media);
+      // Only the media answers: a repo reference the resolver happened to be
+      // handed is left exactly as stored.
+      return new Map([...urls].filter(([ref]) => isMediaRef(ref)));
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn('[slides] Media resolution for the editor failed, serving stored refs:', message);
+    return html;
+  }
+}
+
+/** What stands in for a media reference that has no URL at all. Never `media://`. */
+const NO_MEDIA_URL = 'about:blank';
+
+/**
+ * The placeholder URL for each media reference, for a read with no context.
+ *
+ * The resolver's own answer, asked of it with the classroom's layer switched
+ * off — which is exactly the state that produced "no context". It hands back
+ * the deterministic `/missing/` URL a deleted object gets (which a save turns
+ * back into the reference), and never touches the database for it. A deployment
+ * with no delivery origin at all has no placeholder to form and hands the
+ * reference back; that is replaced with `about:blank` here, because a
+ * `media://` in a `src` is a scheme no browser loads and must never leave this
+ * module.
+ */
+async function unservedMediaUrls(
+  classroomId: string,
+  refs: string[]
+): Promise<Map<string, string>> {
+  const media = [...new Set(refs.filter(isMediaRef))];
+  if (media.length === 0) return new Map();
+  const { urls } = await ClassmojiService.contentDelivery.resolveDelivery(
+    {
+      classroom: {
+        id: classroomId,
+        content_key_version: 0,
+        content_repo: '',
+        git_organization: { login: '' },
+        content_delivery_enabled: false,
+      },
+      tier: 'week',
+    },
+    media
+  );
+  return new Map(
+    media.map(ref => {
+      const url = urls.get(ref);
+      return [ref, url && !isMediaRef(url) ? url : NO_MEDIA_URL];
+    })
+  );
+}
+
+/**
+ * A rendered deck with every `media://` reference replaced by its placeholder.
+ *
+ * For every READ surface when there is no delivery context — the layer is off
+ * for the classroom, or this deployment cannot sign. Cheap when there is
+ * nothing to do: a document with no `media://` in it is returned without a
+ * parse. Every failure returns the input, as everywhere in this module.
+ */
+export async function resolveUnservedMedia(html: string, classroomId: string): Promise<string> {
+  if (!html.includes('media://')) return html;
+  try {
+    return await rewriteDeckAssetUrls(html, refs => unservedMediaUrls(classroomId, refs));
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn('[slides] Media placeholder pass failed:', message);
+    return html;
+  }
 }
 
 /**
@@ -498,7 +630,10 @@ export async function resolveDeliveryThemeUrls(
  * branch cannot hand a private repo to a public URL.
  *
  * Anything that is not a reference into THIS repo — an absolute URL, a `data:`
- * URI, another classroom's content — comes back untouched.
+ * URI, another classroom's content — comes back untouched. The one exception is
+ * a `media://` reference, which has no public URL at all and is NEVER echoed:
+ * it comes back null. `resolveDeckAssetsPublic` answers those with the
+ * resolver's placeholder before this is ever asked.
  */
 export function publicContentUrl(
   ref: string | null | undefined,
@@ -506,6 +641,7 @@ export function publicContentUrl(
   repo: string
 ): string | null | undefined {
   if (!ref) return ref;
+  if (isMediaRef(ref)) return null;
   const prefix = `/content/${gitOrgLogin}/${repo}/`;
   if (!ref.startsWith(prefix)) return ref;
   return getContentUrl({ org: gitOrgLogin, repo, path: ref.slice(prefix.length) });
@@ -516,18 +652,22 @@ export function publicContentUrl(
  *
  * The signed twin is `resolveDeckAssets`; this is what the same document gets
  * when there is no delivery context to sign with. Same rewriter, and the same
- * "a reference nobody claims is left exactly as it was" contract.
+ * "a reference nobody claims is left exactly as it was" contract — except for
+ * `media://`, which has no public form and gets the resolver's placeholder
+ * (`resolveUnservedMedia`), never itself.
  */
 export async function resolveDeckAssetsPublic(
   html: string | null,
   gitOrgLogin: string,
-  repo: string
+  repo: string,
+  classroomId: string
 ): Promise<string | null> {
   if (!html) return html;
   try {
     return await rewriteDeckAssetUrls(html, async refs => {
-      const urls = new Map<string, string>();
+      const urls = await unservedMediaUrls(classroomId, refs);
       for (const ref of refs) {
+        if (urls.has(ref)) continue;
         const next = publicContentUrl(ref, gitOrgLogin, repo);
         if (next && next !== ref) urls.set(ref, next);
       }

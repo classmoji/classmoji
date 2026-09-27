@@ -30,21 +30,25 @@ import { ResponsiveImage } from './ImageBlock.tsx';
 /**
  * BlockNote schema with all built-in + custom block specs.
  *
- * Built-in blocks (8): paragraph, heading, bulletListItem, numberedListItem,
- * checkListItem, codeBlock, table, image, file, quote
- * Excluded: audio, video (using custom video block instead)
+ * Built-in blocks: paragraph, heading, bulletListItem, numberedListItem,
+ * checkListItem, codeBlock, table, image, file, audio, quote
+ * Excluded: video (using custom video block instead)
  *
  * XL package (2): column, columnList
  *
  * Custom blocks (8): callout, terminal, profile, divider, embed, video, pageLink,
  * navGrid
  */
-// Remove audio, video, codeBlock and image from default blocks. The first three
-// are replaced or dropped outright; `image` is replaced by the same block with
-// responsive candidates (see ImageBlock.tsx) — the attributes have to be on the
-// element before it is inserted, so they have to come from the render.
+// Remove video, codeBlock and image from default blocks. The first two are
+// replaced; `image` is replaced by the same block with responsive candidates
+// (see ImageBlock.tsx) — the attributes have to be on the element before it is
+// inserted, so they have to come from the render.
+//
+// `audio` is BlockNote's own, kept: it uploads through the same `uploadFile`
+// as every file block, so a large recording on a Pro classroom lands in media
+// and a small one stays in the repository, and it plays through
+// `resolveFileUrl` like the image block's picture does.
 const {
-  audio: _audio,
   video: _defaultVideo,
   codeBlock: _defaultCodeBlock,
   image: _defaultImage,

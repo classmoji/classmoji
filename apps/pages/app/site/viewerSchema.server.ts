@@ -5,6 +5,12 @@ import { createReactBlockSpec } from '@blocknote/react';
 import { schema as editorSchema } from '~/components/editor/blocks/index.tsx';
 import { AVATAR_SIZES, imageSizesFor, responsiveImageAttrs } from '~/utils/imageSizes.ts';
 import {
+  isMediaPlaceholderUrl,
+  isMediaRef,
+  isMediaUrl,
+  playsAsNativeVideo,
+} from '~/utils/mediaRefs.ts';
+import {
   navGridEntryEmoji,
   navGridEntryLabel,
   normalizeNavGridColumns,
@@ -86,8 +92,6 @@ function toEmbedUrl(url: string): string {
   if (vimeo) return `https://player.vimeo.com/video/${vimeo[1]}`;
   return url;
 }
-
-const isDirectVideo = (url: string): boolean => /\.(mp4|webm|ogg)(\?|$)/i.test(url);
 
 /** A 16:9 responsive frame wrapper, matching the editor's populated state. */
 function frameBox(child: React.ReactNode) {
@@ -319,6 +323,17 @@ function StaticEmbed(props: RenderProps) {
   );
 }
 
+/** A native player, matching the editor's populated state. */
+function nativeVideo(src: string) {
+  return h('video', {
+    key: 'v',
+    src,
+    controls: true,
+    preload: 'metadata',
+    style: { width: '100%', borderRadius: '0.5rem' },
+  });
+}
+
 function StaticVideo(props: RenderProps) {
   const url = String(props.block.props.url || '');
   const caption = String(props.block.props.caption || '');
@@ -327,16 +342,23 @@ function StaticVideo(props: RenderProps) {
     : null;
 
   if (!url) return h('div', { className: 'bn-site-empty' });
+
+  // A media video, by scheme: by the time this runs the document rewrite has
+  // turned `media://{id}` into a signed URL of our own delivery origin (or the
+  // placeholder for one it could not sign). Its ending is a variant name, not
+  // a promise about the format, so it is never judged by extension — and it is
+  // ours, so it is never framed or turned into an outbound link.
+  if (isMediaRef(url) || isMediaPlaceholderUrl(url)) {
+    return h('div', { className: 'bn-site-empty' });
+  }
+  if (isMediaUrl(url)) {
+    return h('div', null, [h('div', { key: 'm' }, nativeVideo(url)), captionNode]);
+  }
+
   if (!isHttpsUrl(url)) return h('div', null, [plainLink(url), captionNode]);
 
-  const media = isDirectVideo(url)
-    ? h('video', {
-        key: 'v',
-        src: url,
-        controls: true,
-        preload: 'metadata',
-        style: { width: '100%', borderRadius: '0.5rem' },
-      })
+  const media = playsAsNativeVideo(url)
+    ? nativeVideo(url)
     : frameBox(
         h('iframe', {
           src: toEmbedUrl(url),

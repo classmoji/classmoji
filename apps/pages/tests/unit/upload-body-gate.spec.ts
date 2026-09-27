@@ -38,16 +38,22 @@ test.describe('page uploads read the body after the gate', () => {
 
   test('the editor toasts every refusal before BlockNote swallows it', () => {
     // BlockNote's upload tab turns any thrown error into "Upload failed", so
-    // the reason reaches the person only through the toast.
+    // the reason reaches the person only through the toast. Every refusal —
+    // the router's (size, type), the repository route's, media's — arrives as
+    // an `UploadRefused` carrying its sentence, and is toasted on the way out.
     const upload = EDITOR_SOURCE.slice(EDITOR_SOURCE.indexOf('const uploadFile = useCallback('));
-    expect(upload).toContain('toast.error(message);\n        throw new Error(message);');
-    expect(upload).toContain('refuse(repoFileTooLargeMessage(file.name));');
     expect(upload).toContain(
-      "refuse(typeof body?.error === 'string' ? body.error : 'Upload failed');"
+      'if (error instanceof UploadRefused) toast.error(error.message);\n        throw error;'
     );
-    expect(upload.slice(0, upload.indexOf('return result.url;'))).not.toContain(
-      'throw new Error(repo'
+    expect(upload).toContain(
+      "throw new UploadRefused(typeof body?.error === 'string' ? body.error : 'Upload failed');"
     );
+    expect(upload).toContain(
+      'throw new UploadRefused(mediaUploadMessage(error, capabilityRef.current));'
+    );
+    // The size cap is refused before a byte is sent (the router, via
+    // `placeUpload`), never after a large file has spent a minute uploading.
+    expect(upload).toContain('await placeUpload(file, capabilityRef.current, ports)');
   });
 
   test('the editor sends the page in the query string, not the form', () => {
