@@ -42,7 +42,7 @@ const emptyParagraph = (): LooseBlock => ({ type: 'paragraph', content: [] });
  *
  * Their populated state is fine on a static site (an `<img>`, a download link).
  * Their EMPTY state is not: `FileBlockWrapper` branches on `props.url === ''`
- * and renders the editor's "Add image" / "Add file" button — a clickable
+ * and renders the editor's "Add image" / "Add file" / "Add audio" button — a clickable
  * affordance, on a page with no JavaScript, offering a visitor an upload the
  * site cannot and must not perform. An unset block is easy to leave behind (add
  * an image, never pick one, publish), so this is the common case, not an
@@ -51,7 +51,7 @@ const emptyParagraph = (): LooseBlock => ({ type: 'paragraph', content: [] });
  * Redacting rather than adding two more schema overrides keeps the fix in the
  * layer that already owns "this block must not reach the serializer".
  */
-const FILE_BLOCK_TYPES = new Set(['image', 'file']);
+const FILE_BLOCK_TYPES = new Set(['image', 'file', 'audio']);
 
 function redactBlock(block: LooseBlock, resolveLink: PageLinkResolver): LooseBlock {
   const children = Array.isArray(block.children)

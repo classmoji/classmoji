@@ -12,6 +12,7 @@ import {
 import type { PageLinkResolver } from './viewerSchema.server.ts';
 import { collectBlockAssetRefs, mapBlockAssetRefs } from '@classmoji/utils';
 import { assetResolveContext } from '~/utils/assetRefs.server.ts';
+import { coverWithoutUnresolvedMediaRef, withoutUnresolvedMediaRefs } from './siteMedia.server.ts';
 
 /**
  * The shared "render one page of this site" path.
@@ -133,7 +134,9 @@ export async function renderPageForViewer(
   let rendered;
   try {
     rendered = await renderSitePage({
-      blocks: resolvedBlocks,
+      // Whatever the resolve managed, no `media://` reaches the markup — see
+      // siteMedia.server.ts for the three paths that would otherwise leak one.
+      blocks: withoutUnresolvedMediaRefs(resolvedBlocks),
       resolveLink,
       // Keyed by the signed URL, because the blocks now hold signed URLs.
       srcSets,
@@ -161,7 +164,7 @@ export async function renderPageForViewer(
   // directly rather than going through the block rewrite — but under the same
   // guard: this is the anonymous, cached path, and a database hiccup resolving
   // one image must degrade to the stored reference, not 500 the site.
-  const coverImage = await resolveSiteCover(assetCtx, rawCover);
+  const coverImage = coverWithoutUnresolvedMediaRef(await resolveSiteCover(assetCtx, rawCover));
 
   return {
     title: page.title || 'Untitled',

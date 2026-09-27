@@ -2,6 +2,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { useFetcher } from 'react-router';
 import { toast } from 'react-toastify';
 import useHeaderImageDrag from '~/hooks/useHeaderImageDrag.ts';
+import { usePageMedia } from './media/PageMedia.tsx';
 
 /**
  * Header/banner image with Notion-style drag-to-reposition.
@@ -24,6 +25,7 @@ const HeaderImage = ({ imageUrl, position, editMode, pageId: _pageId }: HeaderIm
   const containerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fetcher = useFetcher();
+  const media = usePageMedia();
   const positionBeforeReposition = useRef(position);
 
   // Sync localPosition when prop changes (e.g. after save + revalidation)
@@ -102,6 +104,17 @@ const HeaderImage = ({ imageUrl, position, editMode, pageId: _pageId }: HeaderIm
   const handleChangeCover = useCallback(() => {
     fileInputRef.current?.click();
   }, []);
+
+  // An image the classroom already stores in media, as the cover. The stored
+  // cover is the `media://` reference; the loader signs it like any other.
+  const handleChooseFromMedia = useCallback(async () => {
+    const item = await media.choose('IMAGE');
+    if (!item) return;
+    fetcher.submit(
+      { intent: 'set-header-image', url: item.ref, position: 50 },
+      { method: 'POST', encType: 'application/json' }
+    );
+  }, [fetcher, media]);
 
   // Hidden file input (shared by add + change)
   const fileInput = (
@@ -197,6 +210,11 @@ const HeaderImage = ({ imageUrl, position, editMode, pageId: _pageId }: HeaderIm
           <button type="button" onClick={handleChangeCover} className="header-image-btn">
             Change cover
           </button>
+          {media.canUseMedia && (
+            <button type="button" onClick={handleChooseFromMedia} className="header-image-btn">
+              Choose from media
+            </button>
+          )}
           <button type="button" onClick={handleStartReposition} className="header-image-btn">
             Reposition
           </button>
