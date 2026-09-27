@@ -65,31 +65,40 @@ const GITHUB_HEADERS = (token: string): Record<string, string> => ({
   'User-Agent': 'classmoji-explore',
 });
 
+/** One file of the repository tree, as the Git Trees API lists it. */
+interface TreeEntry {
+  path: string;
+  size: number;
+  type: string;
+  /** Git file mode, e.g. `100644`; `120000` is a symlink. */
+  mode?: string;
+}
+
+/** The git file mode of a symlink. Symlinks are not explored. */
+const SYMLINK_MODE = '120000';
+
 /**
  * Fetch the full gitRepo file tree via the Git Trees API.
- * Returns a flat list of all files with paths, sizes, and types.
+ * Returns a flat list of all files with paths, sizes, types and modes.
  *
  * @param {string} owner - GitHub org/user
  * @param {string} repo - GitRepo name
  * @param {string} token - GitHub installation access token
- * @returns {Promise<Array<{path: string, size: number, type: string}>>}
+ * @returns {Promise<TreeEntry[]>}
  */
-async function fetchRepoTree(
-  owner: string,
-  repo: string,
-  token: string
-): Promise<Array<{ path: string; size: number; type: string }>> {
+async function fetchRepoTree(owner: string, repo: string, token: string): Promise<TreeEntry[]> {
   const url = `${GITHUB_API}/repos/${owner}/${repo}/git/trees/HEAD?recursive=1`;
   const res = await githubFetch(url, GITHUB_HEADERS(token), `GitHub tree API (${owner}/${repo})`);
 
   const data = await res.json();
   // Filter to blobs (files) only, exclude tree entries (directories)
   return (data.tree || [])
-    .filter((entry: { type: string; path: string; size?: number }) => entry.type === 'blob')
-    .map((entry: { type: string; path: string; size?: number }) => ({
+    .filter((entry: { type: string }) => entry.type === 'blob')
+    .map((entry: { type: string; path: string; size?: number; mode?: string }) => ({
       path: entry.path,
       size: entry.size || 0,
       type: entry.type,
+      mode: entry.mode,
     }));
 }
 
@@ -103,7 +112,7 @@ async function fetchRepoTree(
  * @param {string} token - GitHub installation access token
  * @returns {Promise<string>} File content as text
  */
-async function fetchFileContent(
+export async function fetchFileContent(
   owner: string,
   repo: string,
   path: string,
@@ -117,6 +126,13 @@ async function fetchFileContent(
   const res = await githubFetch(url, GITHUB_HEADERS(token), `GitHub contents (${path})`);
 
   const data = await res.json();
+
+  // Symlinks are not explored. The tree listing already leaves them out; the
+  // Contents API's own answer is held to the same rule, including the path it
+  // says it returned.
+  if (data?.type === 'symlink' || (typeof data?.path === 'string' && !isVisiblePath(data.path))) {
+    throw new Error(`GitHub contents (${path}): not explored`);
+  }
 
   if (data.encoding === 'base64' && data.content) {
     return Buffer.from(data.content, 'base64').toString('utf-8');
@@ -165,6 +181,49 @@ async function fetchMultipleFiles(
     }
   }
   return results;
+}
+
+/**
+ * Which repository paths exploration may show or read.
+ *
+ * The same rule the ai-agent's secure file tools apply
+ * (apps/ai-agent src/llm/utils/pathValidator.js, `isVisiblePath`): any path
+ * with a dot-prefixed component is left out, with two exceptions a code quiz
+ * can use — `.gitignore` as the file itself, and `.github/workflows/...` at the
+ * repository root. Two dotted components are always left out.
+ */
+export function isVisiblePath(path: string): boolean {
+  const parts = path.split(/[\\/]+/).filter(part => part !== '' && part !== '.');
+  const dotted = parts.filter(part => part.startsWith('.'));
+  if (dotted.length === 0) return true;
+  if (dotted.length > 1) return false;
+
+  // `.gitignore`, and only as the file itself.
+  if (dotted[0] === '.gitignore' && parts[parts.length - 1] === '.gitignore') return true;
+
+  // `.github/workflows/...`, and only with `workflows` actually under it.
+  return dotted[0] === '.github' && parts[0] === '.github' && parts[1] === 'workflows';
+}
+
+/**
+ * Which tree entries exploration may list, pick or fetch: a visible path that
+ * is not a symlink (symlinks are not explored).
+ */
+export function isExplorableEntry(entry: { path: string; mode?: string }): boolean {
+  return entry.mode !== SYMLINK_MODE && isVisiblePath(entry.path);
+}
+
+/**
+ * The picker's paths that may be read: each must name a file in the (already
+ * filtered) tree, so a path the model made up, or one the tree left out, is
+ * never fetched.
+ */
+export function readablePickedPaths(
+  picked: string[],
+  tree: ReadonlyArray<{ path: string }>
+): string[] {
+  const inTree = new Set(tree.map(entry => entry.path));
+  return picked.filter(path => inTree.has(path) && isVisiblePath(path));
 }
 
 /**
@@ -1299,7 +1358,8 @@ export const exploreRepoTask = task({
     ]);
     await metadata.flush();
 
-    const tree = await fetchRepoTree(owner, repo, accessToken);
+    // Only entries exploration may read are listed, picked or fetched.
+    const tree = (await fetchRepoTree(owner, repo, accessToken)).filter(isExplorableEntry);
     console.log(`[explore-repo] Step 1 done: ${tree.length} files in tree`);
     logger.info(`GitRepo has ${tree.length} files`);
 
@@ -1316,15 +1376,18 @@ export const exploreRepoTask = task({
     });
     await metadata.flush();
 
-    const filePaths = await pickRelevantFiles(
-      client,
-      model,
-      treeListing,
-      focusArea,
-      depth,
-      previousFindings,
-      specificQuestion,
-      previouslyReadFiles
+    const filePaths = readablePickedPaths(
+      await pickRelevantFiles(
+        client,
+        model,
+        treeListing,
+        focusArea,
+        depth,
+        previousFindings,
+        specificQuestion,
+        previouslyReadFiles
+      ),
+      tree
     );
     console.log(
       `[explore-repo] Step 2 done: picked ${filePaths.length} files: ${filePaths.join(', ')}`

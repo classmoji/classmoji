@@ -10,7 +10,7 @@ const MESSAGE_TIMEOUT = 300000; // 5 min for complex LLM responses + exploration
  * @param {string} attemptId - Quiz attempt ID
  * @param {Object} quizConfig - Quiz configuration (systemPrompt, rubricPrompt, etc.)
  * @param {Object|null} codeAwareOptions - Optional: { orgLogin, repoName, accessToken }
- * @param {Object} callbacks - Optional callbacks: { onExplorationStep, onWelcomeMessage }
+ * @param {Object} options - Optional: { onExplorationStep, onWelcomeMessage, mcpToken }
  */
 interface CodeAwareOptions {
   orgLogin: string;
@@ -18,9 +18,23 @@ interface CodeAwareOptions {
   accessToken: string;
 }
 
+/**
+ * The per-call MCP read token (quiz source material, Stage 2). Sent at the TOP
+ * of the payload, never inside `quizConfig`: the ai-agent persists quizConfig
+ * into the attempt's agent_config, and a token must never be stored. Never
+ * logged here either.
+ */
+export interface QuizMcpToken {
+  accessToken: string;
+  /** ISO 8601, as Ask Moji sends it. */
+  expiresAt: string;
+}
+
 interface QuizCallbacks {
   onExplorationStep?: ((step: unknown) => void) | null;
   onWelcomeMessage?: ((msg: unknown) => void) | null;
+  /** Omitted when minting failed: the ai-agent then runs without verification. */
+  mcpToken?: QuizMcpToken;
 }
 
 interface AgentResponse {
@@ -33,7 +47,7 @@ export async function initializeQuizViaAgent(
   codeAwareOptions: CodeAwareOptions | null = null,
   callbacks: QuizCallbacks = {}
 ) {
-  const { onExplorationStep = null, onWelcomeMessage = null } = callbacks || {};
+  const { onExplorationStep = null, onWelcomeMessage = null, mcpToken } = callbacks || {};
   const _isCodeAware = !!codeAwareOptions;
 
   try {
@@ -48,6 +62,8 @@ export async function initializeQuizViaAgent(
       payload.repoName = codeAwareOptions.repoName;
       payload.accessToken = codeAwareOptions.accessToken;
     }
+
+    if (mcpToken) payload.mcpToken = mcpToken;
 
     const response = await sendRequest('QUIZ_INIT', payload, {
       timeout: INIT_TIMEOUT,
@@ -74,14 +90,21 @@ export async function initializeQuizViaAgent(
  *
  * @param {string} attemptId - Quiz attempt ID
  * @param {string} content - Student message content
- * @param {string|null} messageId - Optional message ID
- * @param {Function|null} onExplorationStep - Optional callback for real-time exploration steps
+ * @param {Object} options - Optional: { messageId, onExplorationStep, mcpToken }
  */
 export async function sendMessageToAgent(
   attemptId: string,
   content: string,
-  messageId: string | null = null,
-  onExplorationStep: ((step: unknown) => void) | null = null
+  {
+    messageId = null,
+    onExplorationStep = null,
+    mcpToken,
+  }: {
+    messageId?: string | null;
+    onExplorationStep?: ((step: unknown) => void) | null;
+    /** This turn's MCP read token; omitted when minting failed. */
+    mcpToken?: QuizMcpToken;
+  } = {}
 ) {
   try {
     const response = await sendRequest(
@@ -90,6 +113,7 @@ export async function sendMessageToAgent(
         attemptId,
         content,
         messageId,
+        ...(mcpToken ? { mcpToken } : {}),
       },
       {
         timeout: MESSAGE_TIMEOUT,

@@ -1,12 +1,14 @@
 /**
  * The student quiz list's payload.
  *
- * `quiz.getQuizzesForStudent` spreads each of the student's attempt rows into
- * its result, so every attempt carried the agent config, the session token,
- * the grading columns and the codebase path alongside what the attempts table
- * shows. The list stays mounted under the attempt drawer and revalidates with
- * it, so that went out on every poll. The loader now narrows each attempt, and
- * the per-quiz summary, to the fields the list reads (~/utils/quizPayloads).
+ * `quiz.getQuizzesForStudent` used to spread each of the student's attempt rows
+ * into its result, so every attempt carried the agent config, the session
+ * token, the grading columns and the codebase path alongside what the attempts
+ * table shows. The list stays mounted under the attempt drawer and revalidates
+ * with it, so that went out on every poll. The service now selects the attempt
+ * columns it reads, and the loader narrows each attempt, and the per-quiz
+ * summary, to the fields the list reads (~/utils/quizPayloads). The fake below
+ * still returns whole rows, so the loader's own narrowing is what is pinned.
  *
  * The REAL service map runs here, against a fake of the one query it makes,
  * so the test feeds the loader exactly the shape the service hands it.
