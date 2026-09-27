@@ -5,7 +5,13 @@ import {
   GitLabProvider,
   createWithUniqueClassroomSlug,
 } from '@classmoji/services';
-import { canonicalTimeZone, defaultContentRepoName, scopeGitlabId } from '@classmoji/utils';
+import {
+  canonicalTimeZone,
+  defaultContentRepoName,
+  GITLAB_PROJECTS_SUBGROUP,
+  GITLAB_TEAMS_SUBGROUP,
+  scopeGitlabId,
+} from '@classmoji/utils';
 import { ActionTypes } from '~/constants';
 import { slugify } from './utils';
 import { pickContentNamespace } from './contentNamespace.server';
@@ -163,6 +169,27 @@ export async function createGitLabClassroom(
     await provider.createSubgroup(group.full_path, 'Templates', 'templates');
   } catch (error: unknown) {
     console.error('Templates subgroup creation failed:', error);
+  }
+
+  // The whole class layout from the start, so the subgroup reads the same on
+  // day one as in week ten: `projects` (student and team projects), `teams`
+  // (team subgroups) and the Content project. Best-effort: each is also made
+  // on first use if this fails.
+  const namespace = `${group.full_path}/${classroom.slug}`;
+  for (const [path, title] of [
+    [GITLAB_PROJECTS_SUBGROUP, 'Projects'],
+    [GITLAB_TEAMS_SUBGROUP, 'Teams'],
+  ] as const) {
+    try {
+      await provider.createSubgroup(namespace, title, path);
+    } catch (error: unknown) {
+      console.error(`${title} subgroup creation failed:`, error);
+    }
+  }
+  try {
+    await ClassmojiService.page.ensureContentRepo(classroom.id);
+  } catch (error: unknown) {
+    console.error('Content project creation failed:', error);
   }
 
   // Import from a source classroom if asked (settings, repositories, and in
