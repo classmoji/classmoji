@@ -49,11 +49,11 @@ test.describe('page uploads read the body after the gate', () => {
       "throw new UploadRefused(typeof body?.error === 'string' ? body.error : 'Upload failed');"
     );
     expect(upload).toContain(
-      'throw new UploadRefused(mediaUploadMessage(error, uploadCapability));'
+      'throw new UploadRefused(mediaUploadMessage(error, capabilityRef.current));'
     );
     // The size cap is refused before a byte is sent (the router, via
     // `placeUpload`), never after a large file has spent a minute uploading.
-    expect(upload).toContain('await placeUpload(file, uploadCapability, ports)');
+    expect(upload).toContain('await placeUpload(file, capabilityRef.current, ports)');
   });
 
   test('the editor sends the page in the query string, not the form', () => {

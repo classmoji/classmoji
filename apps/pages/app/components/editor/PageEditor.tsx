@@ -136,6 +136,12 @@ const PageEditor = forwardRef(function PageEditor(
 ) {
   const media = usePageMedia();
   const classroomId = media.classroomId;
+  // Read at upload time, not captured: BlockNote holds the `uploadFile` it was
+  // created with for the editor's whole life, and every loader revalidation
+  // (each save) hands down a fresher capability — the quota left, a classroom
+  // that has since gone Pro.
+  const capabilityRef = useRef(uploadCapability);
+  capabilityRef.current = uploadCapability;
   // `uploadFile` is handed to BlockNote once, at creation, so it reads the
   // editor through a ref rather than closing over a value that does not exist
   // yet.
@@ -212,7 +218,7 @@ const PageEditor = forwardRef(function PageEditor(
               // The router keeps this one in the repository after all.
               if (error.code === 'USE_REPO') throw new UploadReroute('repo');
               if (error.code === 'ABORTED') throw new UploadCancelled();
-              throw new UploadRefused(mediaUploadMessage(error, uploadCapability));
+              throw new UploadRefused(mediaUploadMessage(error, capabilityRef.current));
             }
             throw error;
           }
@@ -221,7 +227,7 @@ const PageEditor = forwardRef(function PageEditor(
 
       let placed;
       try {
-        placed = await placeUpload(file, uploadCapability, ports);
+        placed = await placeUpload(file, capabilityRef.current, ports);
       } catch (error) {
         if (error instanceof UploadRefused) toast.error(error.message);
         throw error;
@@ -243,7 +249,7 @@ const PageEditor = forwardRef(function PageEditor(
       }
       return placed.ref;
     },
-    [pageId, onAssetUploaded, classroomId, uploadCapability]
+    [pageId, onAssetUploaded, classroomId]
   );
   const typedInitialContent =
     Array.isArray(initialContent) && initialContent.length > 0
