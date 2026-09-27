@@ -20,8 +20,10 @@ export {
   sanitizeFilename,
   MAX_FILE_SIZE,
   ALLOWED_EXTENSIONS,
+  FileRefusedError,
+  uploadRefusalStatus,
 } from './content/utils/validateFile.ts';
-export type { FileTypePolicy } from './content/utils/validateFile.ts';
+export type { FileTypePolicy, FileRefusalReason } from './content/utils/validateFile.ts';
 export {
   RepoFileTooLargeError,
   asRepoTooLarge,

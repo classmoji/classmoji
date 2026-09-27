@@ -143,6 +143,8 @@ export default function MediaSettings({ loaderData }: Route.ComponentProps) {
   const { revalidate } = useRevalidator();
 
   const [dialogOpen, setDialogOpen] = useState(false);
+  // Stable, because the dialog closes itself from an effect keyed on it.
+  const closeDialog = useCallback(() => setDialogOpen(false), []);
   const [notice, setNotice] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
@@ -359,7 +361,7 @@ export default function MediaSettings({ loaderData }: Route.ComponentProps) {
 
       <MediaUploadDialog
         open={dialogOpen}
-        onClose={() => setDialogOpen(false)}
+        onClose={closeDialog}
         classroomId={classroomId}
         quota={usage}
         upload={uploadMultipart}

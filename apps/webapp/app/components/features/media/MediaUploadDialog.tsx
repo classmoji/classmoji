@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useReducer, useRef } from 'react';
 import { Button, Modal } from 'antd';
 import { IconUpload } from '@tabler/icons-react';
 import type {
@@ -8,15 +8,8 @@ import type {
 } from '@classmoji/ui-components';
 
 import MediaVideoOptions from './MediaVideoOptions';
-import {
-  DEFAULT_VIDEO_OPTIONS,
-  applyVideoOption,
-  formatBytes,
-  isVideoFilename,
-  precheck,
-  type QuotaSummary,
-  type VideoOptions,
-} from './mediaUploadOptions';
+import { formatBytes, isVideoFilename, precheck, type QuotaSummary } from './mediaUploadOptions';
+import { INITIAL_UPLOAD_DIALOG_STATE, uploadDialogReducer } from './uploadDialogState';
 
 /**
  * Pick a file, choose what happens to it, watch it go.
@@ -87,57 +80,66 @@ const MediaUploadDialog = ({
   upload,
   onUploaded,
 }: MediaUploadDialogProps) => {
-  const [file, setFile] = useState<File | null>(null);
-  const [options, setOptions] = useState<VideoOptions>(DEFAULT_VIDEO_OPTIONS);
-  const [refusal, setRefusal] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [sentBytes, setSentBytes] = useState(0);
-  const [uploading, setUploading] = useState(false);
+  const [state, dispatch] = useReducer(uploadDialogReducer, INITIAL_UPLOAD_DIALOG_STATE);
+  const { file, options, refusal, error, sentBytes, phase, closeRequested } = state;
+  const uploading = phase === 'uploading';
+  const done = phase === 'done';
+  // Nothing is editable once an upload is under way or finished.
+  const locked = phase !== 'idle';
   const abortRef = useRef<AbortController | null>(null);
+  const runRef = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // A reopened dialog starts clean; a stale progress bar from the last upload
   // would be read as this one already being under way.
   useEffect(() => {
-    if (open) return;
-    setFile(null);
-    setOptions(DEFAULT_VIDEO_OPTIONS);
-    setRefusal(null);
-    setError(null);
-    setSentBytes(0);
+    if (!open) dispatch({ type: 'reset' });
   }, [open]);
+
+  // Close only once the finished — or cancelled — frame is on screen. Closing
+  // in the same render as the success or the cancel would freeze the Modal on
+  // the frame before it: the progress bar and a live "Cancel upload" (see
+  // `uploadDialogState.ts`).
+  useEffect(() => {
+    if (phase === 'done' || closeRequested) onClose();
+  }, [phase, closeRequested, onClose]);
 
   // Nothing survives an unmount: the request is cancelled rather than left to
   // finish against a component that is gone.
   useEffect(() => () => abortRef.current?.abort(), []);
 
-  const chooseFile = (chosen: File | null) => {
-    setError(null);
-    setSentBytes(0);
-    setFile(chosen);
-    setRefusal(chosen ? precheck(chosen, quota) : null);
-    setOptions(DEFAULT_VIDEO_OPTIONS);
-  };
+  const chooseFile = (chosen: File | null) =>
+    dispatch({ type: 'choose', file: chosen, refusal: chosen ? precheck(chosen, quota) : null });
 
+  // Back to idle at once. The client stops its PUTs and sends the server-side
+  // abort on its own, un-awaited; nothing here waits for that answer.
   const cancel = () => {
     abortRef.current?.abort();
     abortRef.current = null;
-    setUploading(false);
-    setSentBytes(0);
+    dispatch({ type: 'cancelled' });
   };
 
+  // X and Escape. Mid-upload, cancel first and let the effect above close once
+  // the cancelled frame has rendered; otherwise there is no live frame to
+  // leave behind, so close at once.
   const close = () => {
-    if (uploading) cancel();
-    onClose();
+    if (!uploading) {
+      onClose();
+      return;
+    }
+    abortRef.current?.abort();
+    abortRef.current = null;
+    dispatch({ type: 'cancelled', close: true });
   };
 
   const start = async () => {
-    if (!file || refusal) return;
+    if (!file || refusal || phase !== 'idle') return;
     const controller = new AbortController();
     abortRef.current = controller;
-    setUploading(true);
-    setError(null);
-    setSentBytes(0);
+    // A number of its own, so this upload's callbacks can be told from a later one's.
+    runRef.current += 1;
+    const run = runRef.current;
+    dispatch({ type: 'start', run });
 
     try {
       const result = await upload({
@@ -145,19 +147,25 @@ const MediaUploadDialog = ({
         classroomId,
         options: isVideoFilename(file.name) ? options : undefined,
         endpoints: { base: '/api/media' },
-        onProgress: progress => setSentBytes(progress.sentBytes),
+        onProgress: progress => dispatch({ type: 'progress', run, sentBytes: progress.sentBytes }),
         signal: controller.signal,
       });
-      setUploading(false);
-      abortRef.current = null;
+      // The file is stored whether or not this run is still the one on screen,
+      // so the list refreshes either way; only the dialog ignores a stale run.
       onUploaded(result);
-      onClose();
+      dispatch({ type: 'succeeded', run });
     } catch (thrown) {
       const failure = thrown as MultipartUploadError;
-      setUploading(false);
-      abortRef.current = null;
       // A cancel is not a failure and says so by staying silent.
-      if (failure?.code !== 'ABORTED') setError(messageFor(failure, quota));
+      dispatch({
+        type: 'failed',
+        run,
+        error: failure?.code === 'ABORTED' ? null : messageFor(failure, quota),
+      });
+    } finally {
+      // Only our own controller: a cancel followed by a fresh Upload has
+      // already put the next run's controller here.
+      if (abortRef.current === controller) abortRef.current = null;
     }
   };
 
@@ -187,14 +195,14 @@ const MediaUploadDialog = ({
           <input
             ref={inputRef}
             type="file"
-            disabled={uploading}
+            disabled={locked}
             onChange={event => chooseFile(event.target.files?.[0] ?? null)}
             className="sr-only"
           />
           <button
             type="button"
             onClick={() => inputRef.current?.click()}
-            disabled={uploading}
+            disabled={locked}
             className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left ring-1 ring-line transition-colors hover:bg-nav-hover disabled:cursor-not-allowed disabled:opacity-60"
           >
             <IconUpload size={18} strokeWidth={1.75} className="shrink-0 text-ink-3" />
@@ -219,10 +227,8 @@ const MediaUploadDialog = ({
           <MediaVideoOptions
             filename={file.name}
             value={options}
-            disabled={uploading}
-            onChange={(field, next) =>
-              setOptions(current => applyVideoOption(current, field, next))
-            }
+            disabled={locked}
+            onChange={(field, next) => dispatch({ type: 'option', field, value: next })}
           />
         )}
 
@@ -246,23 +252,43 @@ const MediaUploadDialog = ({
           </div>
         )}
 
+        {done && (
+          <p role="status" className="text-sm font-semibold text-ink-0">
+            Uploaded.
+          </p>
+        )}
+
         {error && (
           <p className="rounded-xl bg-peach-bg px-3 py-2 text-xs text-peach-ink ring-1 ring-peach-bord">
             {error}
           </p>
         )}
 
-        <div className="flex justify-end gap-2">
-          <Button onClick={close}>{uploading ? 'Cancel upload' : 'Cancel'}</Button>
-          <Button
-            type="primary"
-            onClick={start}
-            loading={uploading}
-            disabled={!file || Boolean(refusal) || uploading}
-          >
-            Upload
-          </Button>
-        </div>
+        {done ? (
+          // What stays on screen while the dialog closes itself: a finished
+          // upload with nothing left to cancel.
+          <div className="flex justify-end gap-2">
+            <Button type="primary" onClick={onClose}>
+              Done
+            </Button>
+          </div>
+        ) : (
+          <div className="flex justify-end gap-2">
+            {/* Cancelling an upload keeps the dialog, and the file, where they
+                were; the X still cancels and closes in one go. */}
+            <Button onClick={uploading ? cancel : close}>
+              {uploading ? 'Cancel upload' : 'Cancel'}
+            </Button>
+            <Button
+              type="primary"
+              onClick={start}
+              loading={uploading}
+              disabled={!file || Boolean(refusal) || uploading}
+            >
+              Upload
+            </Button>
+          </div>
+        )}
       </div>
     </Modal>
   );

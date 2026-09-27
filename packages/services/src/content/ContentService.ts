@@ -7,8 +7,12 @@
 
 import getPrisma from '@classmoji/database';
 import { getGitProvider } from '../git/index.ts';
-import { validateFile, sanitizeFilename, type FileTypePolicy } from './utils/validateFile.ts';
-import { REPO_REST_MAX_BYTES } from '@classmoji/utils';
+import {
+  FileRefusedError,
+  validateFile,
+  sanitizeFilename,
+  type FileTypePolicy,
+} from './utils/validateFile.ts';
 import { RepoFileTooLargeError, asRepoTooLarge } from './repoLimits.ts';
 import { resolveContentBranch } from './contentBranch.ts';
 
@@ -869,8 +873,13 @@ export class ContentService {
     // of the wrong type costs no round trip to find out.
     const validation = validateFile({ filename, size: file.length, fileTypes });
     if (!validation.valid) {
-      if (file.length > REPO_REST_MAX_BYTES) throw new RepoFileTooLargeError();
-      throw new Error(validation.error);
+      if (validation.reason === 'too_large') throw new RepoFileTooLargeError();
+      // Typed, so every boundary answers a 4xx the uploader can act on rather
+      // than the 500 an untyped Error became (`uploadRefusalStatus`).
+      throw new FileRefusedError(
+        validation.error ?? 'That file cannot be uploaded.',
+        validation.reason ?? 'type'
+      );
     }
 
     const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);

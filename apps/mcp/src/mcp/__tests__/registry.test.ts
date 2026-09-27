@@ -707,6 +707,19 @@ describe('coded service refusals are reported, not swallowed (S5)', () => {
     expect(parsed.code).toBe('SLIDE_SOURCE_REJECTED');
   });
 
+  // `FileRefusedError` (a content-repo upload's type, extension or name) and
+  // `RepoFileTooLargeError` — the refusals the HTTP routes answer 415/400/413.
+  it.each(['FILE_REFUSED', 'REPO_FILE_TOO_LARGE'])(
+    'maps a refused content upload (%s) to invalid_params',
+    async code => {
+      const client = await connectClient(makeViewer(['read']));
+
+      const parsed = parseErrorResult(await callTool(client, 't_service_refusal', { code }));
+      expect(parsed.error).toBe('invalid_params');
+      expect(parsed.code).toBe(code);
+    }
+  );
+
   it('finds the refusal when a service wrapped it as a cause', async () => {
     const client = await connectClient(makeViewer(['read']));
 

@@ -12,6 +12,7 @@ import {
   readLimitedFormData,
   uploadBodyLimit,
 } from '@classmoji/utils/upload-limit';
+import { uploadRefusalStatus } from '@classmoji/services';
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
 import { pageMutationBlocked } from '~/utils/auth.server.ts';
 import {
@@ -887,8 +888,11 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
       });
       return Response.json({ success: true, url, displayUrl, sha });
     } catch (error: unknown) {
-      if ((error as { code?: unknown } | null)?.code === 'REPO_FILE_TOO_LARGE') {
-        return Response.json({ error: (error as Error).message }, { status: 413 });
+      // Too large, a type this classroom does not take, a bad name: the
+      // uploader's to fix, so a 4xx with the service's sentence (413/415/400).
+      const refused = uploadRefusalStatus(error);
+      if (refused) {
+        return Response.json({ error: (error as Error).message }, { status: refused });
       }
       if ((error as { status?: number } | null)?.status === 409) {
         // F5: the asset uploaded fine, but the cover-image metadata write
