@@ -104,3 +104,42 @@ test.describe('reading and deleting a media-backed file slide', () => {
     expect(DELETE_SOURCE).not.toContain('!slideInfo.slide.source_path');
   });
 });
+
+test.describe('a refused document uploaded to media for the slide', () => {
+  const HOOK = source('../../app/hooks/useDiscardRefusedUpload.ts');
+  const CHECK = source('../../app/utils/uploadedMedia.server.ts');
+  const CLIENT = source('../../app/utils/mediaClient.ts');
+
+  test('both actions say whether it may be discarded, from the database', () => {
+    const newCatch = NEW_SOURCE.slice(NEW_SOURCE.indexOf('createFileSlideFromMedia('));
+    expect(newCatch.slice(0, newCatch.indexOf('const file = formData.get'))).toContain(
+      'discardMedia: await mediaUnusedBySlides(mediaId)'
+    );
+    const replace = REPLACE_SOURCE.slice(REPLACE_SOURCE.indexOf('replaceSlideFileWithMedia('));
+    expect(replace.slice(0, replace.indexOf('return redirect('))).toContain(
+      'discardMedia: await mediaUnusedBySlides(mediaId)'
+    );
+    // Unused means NO slide points at it; any doubt keeps it.
+    expect(CHECK).toContain('slide.count({ where: { media_id: mediaId } })');
+    expect(CHECK).toMatch(/catch[\s\S]*return false;/);
+  });
+
+  test('the server never deletes by a posted id; the browser does, through the gated route', () => {
+    for (const text of [NEW_SOURCE, REPLACE_SOURCE, CHECK]) {
+      expect(text).not.toContain('media.deleteMedia(');
+    }
+    expect(CLIENT).toContain(
+      "fetch(`/api/media/${encodeURIComponent(mediaId)}`, { method: 'DELETE' })"
+    );
+    expect(HOOK).toContain('actionData.discardMedia === true');
+  });
+
+  test('each form remembers the id it posts, and only that one', () => {
+    for (const text of [NEW_SOURCE, REPLACE_SOURCE]) {
+      expect(text).toContain('useDiscardRefusedUpload(actionData)');
+      const remember = text.indexOf('rememberUpload(result.mediaId);');
+      expect(remember).toBeGreaterThan(-1);
+      expect(text.indexOf('mediaId: result.mediaId }', remember)).toBeGreaterThan(remember);
+    }
+  });
+});

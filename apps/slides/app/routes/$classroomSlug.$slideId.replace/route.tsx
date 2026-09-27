@@ -37,6 +37,7 @@ import {
 import { assertSlideInClassroom, assertSlideKind } from '~/utils/slideRouteGuards';
 import { webappClassUrl } from '~/utils/webappLinks';
 import { loadUploadCapability } from '~/utils/uploadCapability.server';
+import { mediaUnusedBySlides } from '~/utils/uploadedMedia.server';
 import {
   UploadTooLargeError,
   readLimitedFormData,
@@ -56,6 +57,7 @@ import {
 import { isSubmissionPending } from '~/utils/pendingSubmission';
 import { MediaUploadProgress } from '~/components/media/MediaUploadProgress';
 import { useMediaUpload } from '~/hooks/useMediaUpload';
+import { useDiscardRefusedUpload } from '~/hooks/useDiscardRefusedUpload';
 import { formatGigabytes, slideFileTarget } from '~/utils/mediaUpload';
 
 /** Load the slide, prove the caller may edit it, and prove it is a file slide. */
@@ -216,7 +218,12 @@ async function replaceFromMedia({
     const ours =
       error instanceof slideFileService.SlideSourceError || error instanceof SlideKindError;
     return data(
-      { error: ours ? error.message : "Couldn't save the slide. Please try again." },
+      {
+        error: ours ? error.message : "Couldn't save the slide. Please try again.",
+        // Uploaded only for this slide: when nothing points at it (the slide
+        // was not moved onto it), the browser deletes it.
+        discardMedia: await mediaUnusedBySlides(mediaId),
+      },
       { status: ours ? error.status : 500 }
     );
   }
@@ -318,7 +325,8 @@ export default function ReplaceSlideFilePage() {
     upload,
   } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
-  const actionData = useActionData() as { error?: string } | undefined;
+  const actionData = useActionData() as { error?: string; discardMedia?: boolean } | undefined;
+  const rememberUpload = useDiscardRefusedUpload(actionData);
   const [fileError, setFileError] = useState<string | null>(null);
   // Name and size for the status panel, captured when the file is chosen. The
   // input itself is disabled mid-flight and `files` is not readable from a
@@ -362,6 +370,7 @@ export default function ReplaceSlideFilePage() {
       setViaMedia(false);
       return;
     }
+    rememberUpload(result.mediaId);
     submit({ mediaId: result.mediaId }, { method: 'post' });
   };
 
