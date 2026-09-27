@@ -66,6 +66,11 @@ const ctx = {
   tier: 'week' as const,
 };
 
+const WEB = 'web-0123456789ab.mp4';
+const POSTER = 'poster-0123456789ab.webp';
+const WEB_KEY = `m/${CLASSROOM_ID}/${MEDIA_ID}/${WEB}`;
+const POSTER_KEY = `m/${CLASSROOM_ID}/${MEDIA_ID}/${POSTER}`;
+
 function record(overrides: Partial<MediaRecord> = {}): MediaRecord {
   return {
     id: MEDIA_ID,
@@ -144,10 +149,29 @@ describe('resolveAssetUrl', () => {
     });
   });
 
-  it('prefers the rendition once the P2 job has produced one', async () => {
-    lookupReadyMedia.mockResolvedValue(new Map([[MEDIA_ID, record({ renditionKey: 'web' })]]));
+  it('prefers the rendition the row names once the job has produced one', async () => {
+    lookupReadyMedia.mockResolvedValue(
+      new Map([[MEDIA_ID, record({ renditionKey: WEB_KEY, processing: 'DONE' })]])
+    );
     const url = await resolveAssetUrl(ctx, REF);
-    expect(url).toContain(`/media/${MEDIA_ID}/web.mp4`);
+    expect(url).toContain(`/media/${MEDIA_ID}/${WEB}?`);
+  });
+
+  it('accepts a bare rendition variant in the column too', async () => {
+    lookupReadyMedia.mockResolvedValue(new Map([[MEDIA_ID, record({ renditionKey: WEB })]]));
+    const url = await resolveAssetUrl(ctx, REF);
+    expect(url).toContain(`/media/${MEDIA_ID}/${WEB}?`);
+  });
+
+  it('serves the original, not an unsignable URL, when the rendition key does not parse', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (const renditionKey of ['web', 'web.mp4', `m/${CLASSROOM_ID}/${MEDIA_ID}/orig.mp4`]) {
+      lookupReadyMedia.mockResolvedValue(new Map([[MEDIA_ID, record({ renditionKey })]]));
+      const url = await resolveAssetUrl(ctx, REF);
+      expect(url).toContain(`/media/${MEDIA_ID}/orig.mp4?`);
+    }
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it('is a /missing/ placeholder when the row is unknown, deleted, or foreign', async () => {
@@ -309,9 +333,14 @@ describe('resolveMediaPoster', () => {
   });
 
   it('signs the poster variant when there is one', async () => {
-    lookupReadyMedia.mockResolvedValue(new Map([[MEDIA_ID, record({ posterKey: 'poster' })]]));
+    lookupReadyMedia.mockResolvedValue(new Map([[MEDIA_ID, record({ posterKey: POSTER_KEY })]]));
     const url = await resolveMediaPoster(ctx, REF);
-    expect(url).toContain(`/media/${MEDIA_ID}/poster.webp`);
+    expect(url).toContain(`/media/${MEDIA_ID}/${POSTER}?`);
+  });
+
+  it('is null when the poster key does not parse', async () => {
+    lookupReadyMedia.mockResolvedValue(new Map([[MEDIA_ID, record({ posterKey: 'poster.webp' })]]));
+    await expect(resolveMediaPoster(ctx, REF)).resolves.toBeNull();
   });
 
   it('is null for anything that is not a media reference', async () => {
@@ -398,10 +427,29 @@ describe('mediaDownloadUrl', () => {
   it('hands over the rendition once the original is gone', async () => {
     const url = await mediaDownloadUrl({
       classroom: ctx.classroom,
-      record: record({ renditionKey: 'web', originalDeletedAt: new Date() }),
+      record: record({ renditionKey: WEB_KEY, originalDeletedAt: new Date() }),
       forStudent: false,
     });
-    expect(url).toContain('/web.mp4');
+    expect(url).toContain(`/${WEB}?`);
+  });
+
+  it('hands over the ORIGINAL while it is kept, even with a rendition beside it', async () => {
+    const url = await mediaDownloadUrl({
+      classroom: ctx.classroom,
+      record: record({ renditionKey: WEB_KEY, processing: 'DONE' }),
+      forStudent: false,
+    });
+    expect(url).toContain('/orig.mp4?');
+  });
+
+  it('is null when the original is gone and no rendition key parses', async () => {
+    await expect(
+      mediaDownloadUrl({
+        classroom: ctx.classroom,
+        record: record({ renditionKey: 'web.mp4', originalDeletedAt: new Date() }),
+        forStudent: false,
+      })
+    ).resolves.toBeNull();
   });
 
   it('is null when delivery is off', async () => {

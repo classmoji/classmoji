@@ -20,7 +20,15 @@ import { REPO_REST_MAX_BYTES } from '@classmoji/utils';
 import { canServeSignedContent } from '../classmoji/contentDelivery.service.ts';
 import { getProStateForClassroomId } from '../classmoji/subscription.service.ts';
 import { MediaError } from './MediaError.ts';
-import { mediaKey, mediaPrefix, stageKey, stagePrefix } from './mediaKeys.ts';
+import {
+  mediaKey,
+  mediaObjectPrefix,
+  mediaPrefix,
+  stageKey,
+  stagePrefix,
+  storedPosterVariant,
+  storedRenditionVariant,
+} from './mediaKeys.ts';
 import { classifyFilename, filenameRefusal } from './mediaKinds.ts';
 import {
   billedBytes,
@@ -1124,16 +1132,13 @@ export async function abortUpload({
  * back the `/missing/` placeholder, exactly as it does for a repo path that
  * has left the repo.
  *
- * All three variants, unconditionally, because two of them may or may not exist
- * depending on whether the rendition job has run and a delete that skipped them
- * would leave bytes nobody can see and nobody is billed for. R2 answers a
- * delete of a missing key with success.
- *
- * The rendition and the poster are deleted at the key the ROW names, and only
- * fall back to the conventional `web.mp4`/`poster.webp` when the column is
- * null. The job records where it put them; assuming the name instead would work
- * right up until the job ever writes one somewhere else, and then the bytes
- * would survive the row that was billed for them, invisible and unreclaimable.
+ * EVERY object under the row's prefix `m/{classroom}/{id}/` — listed, not
+ * named — because the rendition and the poster may or may not exist depending
+ * on whether the video job has run, their names are content-derived
+ * (`web-{hex12}.mp4`), and a replayed job can have written a pair the row never
+ * recorded. A delete that skipped any of them would leave bytes nobody can see
+ * and nobody is billed for. When the listing fails, the keys the row names are
+ * deleted instead (best effort, like the rest).
  *
  * Deleting an UPLOADING row aborts its multipart first: without that, R2 holds
  * the uploaded parts until its own 7-day expiry.
@@ -1188,18 +1193,68 @@ export async function deleteMedia({
     await abortQuietly(client, bucket, staged, row.upload_id);
   }
 
-  // One command per key rather than a batch DeleteObjects: that operation
-  // REQUIRES a checksum, and the modern ones the SDK sends by default are not
-  // reliably supported by S3-compatible stores. Three round trips for at most
-  // three keys is not worth the compatibility risk.
-  await deleteObjectsQuietly(client, bucket, [
-    origKey,
-    row.rendition_key ?? mediaKey(classroom.id, row.id, 'web.mp4'),
-    row.poster_key ?? mediaKey(classroom.id, row.id, 'poster.webp'),
-    ...(staged ? [staged] : []),
-  ]);
+  // Everything under the row's own prefix, listed rather than named: the
+  // rendition and poster names are content-derived, and a replayed job whose
+  // result write lost the race can have left a pair the row never recorded.
+  // When the listing itself fails, the keys the row DOES name are deleted
+  // instead, so a delete is never worse than it was before the listing — and
+  // asking again (see "Retryable" above) lists again.
+  const listed = await deletePrefixQuietly(client, bucket, mediaObjectPrefix(classroom.id, row.id));
+  const named: string[] = [];
+  if (!listed) {
+    named.push(origKey);
+    const rendition = storedRenditionVariant(row.rendition_key);
+    if (rendition) named.push(mediaKey(classroom.id, row.id, rendition));
+    const poster = storedPosterVariant(row.poster_key);
+    if (poster) named.push(mediaKey(classroom.id, row.id, poster));
+  }
+  await deleteObjectsQuietly(client, bucket, [...named, ...(staged ? [staged] : [])]);
 
   return { mediaId: row.id };
+}
+
+/**
+ * Delete every object under `prefix`, quietly. Returns false when the LISTING
+ * failed (nothing is known about what is there), true otherwise — a failed
+ * delete of one listed key is logged and the rest are still tried, exactly as
+ * `deleteObjectsQuietly` does.
+ *
+ * One `DeleteObject` per key rather than a batch `DeleteObjects`: that
+ * operation REQUIRES a checksum, and the modern ones the SDK sends by default
+ * are not reliably supported by S3-compatible stores. A media row's prefix
+ * holds a handful of keys, so the round trips are not worth that risk — the
+ * classroom purge makes the same choice.
+ */
+export async function deletePrefixQuietly(
+  client: S3Client,
+  bucket: string,
+  prefix: string
+): Promise<boolean> {
+  let continuationToken: string | undefined;
+  do {
+    let page;
+    try {
+      page = await client.send(
+        new ListObjectsV2Command({
+          Bucket: bucket,
+          Prefix: prefix,
+          ContinuationToken: continuationToken,
+        })
+      );
+    } catch (error) {
+      console.warn(
+        `[media] Could not list ${prefix}:`,
+        error instanceof Error ? error.message : error
+      );
+      return false;
+    }
+    const keys = (page.Contents ?? [])
+      .map(object => object.Key)
+      .filter((key): key is string => typeof key === 'string' && key.startsWith(prefix));
+    await deleteObjectsQuietly(client, bucket, keys);
+    continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (continuationToken);
+  return true;
 }
 
 /**

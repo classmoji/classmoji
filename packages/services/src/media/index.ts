@@ -76,7 +76,9 @@ export {
   findMediaRow,
   listReadyMedia,
   lookupReadyMedia,
+  downloadVariant,
   mediaRef,
+  posterVariantOf,
   servedVariant,
   toMediaRecord,
 } from './mediaLookup.ts';

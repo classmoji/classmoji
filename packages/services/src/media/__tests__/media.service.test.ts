@@ -258,7 +258,7 @@ describe('usage', () => {
       row({
         size_bytes: BigInt(4 * GIB),
         rendition_bytes: BigInt(800 * 1024 * 1024),
-        rendition_key: 'web',
+        rendition_key: `m/${CLASSROOM_ID}/${MEDIA_ID}/web-0123456789ab.mp4`,
         original_deleted_at: new Date(),
       }),
     ]);
@@ -272,7 +272,7 @@ describe('usage', () => {
       row({
         size_bytes: BigInt(4 * GIB),
         rendition_bytes: BigInt(100),
-        rendition_key: 'web',
+        rendition_key: `m/${CLASSROOM_ID}/${MEDIA_ID}/web-0123456789ab.mp4`,
         original_deleted_at: null,
       }),
     ]);
@@ -1517,42 +1517,90 @@ describe('abortUpload', () => {
 });
 
 describe('deleteMedia', () => {
-  beforeEach(() => sendImpl.mockResolvedValue({}));
+  const PREFIX = `m/${CLASSROOM_ID}/${MEDIA_ID}/`;
+  const WEB_KEY = `${PREFIX}web-0123456789ab.mp4`;
+  const POSTER_KEY = `${PREFIX}poster-0123456789ab.webp`;
+  /** A replay's pair the row never recorded — the reason the prefix is listed. */
+  const STRAY_KEY = `${PREFIX}web-ffffffffffff.mp4`;
 
-  it('removes all three variants, because two of them may exist', async () => {
-    prisma.mediaObject.findFirst.mockResolvedValue(row());
+  /** R2 answers the prefix listing with `keys`, and every other call with `{}`. */
+  function listing(keys: string[]) {
+    sendImpl.mockImplementation(async (name: string) =>
+      name === 'ListObjectsV2' ? { Contents: keys.map(Key => ({ Key })), IsTruncated: false } : {}
+    );
+  }
+
+  const deletedKeys = () =>
+    sent.filter(call => call.name === 'DeleteObject').map(call => call.input.Key);
+
+  beforeEach(() => listing([ORIG_KEY, WEB_KEY, POSTER_KEY]));
+
+  it('removes every object under the row’s own prefix, named in a column or not', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ rendition_key: WEB_KEY, rendition_bytes: BigInt(100), poster_key: POSTER_KEY })
+    );
+    listing([ORIG_KEY, WEB_KEY, POSTER_KEY, STRAY_KEY]);
+
     await deleteMedia({ classroom, mediaId: MEDIA_ID });
 
-    expect(sent.map(call => call.input.Key)).toEqual([
-      ORIG_KEY,
-      `m/${CLASSROOM_ID}/${MEDIA_ID}/web.mp4`,
-      `m/${CLASSROOM_ID}/${MEDIA_ID}/poster.webp`,
-    ]);
+    const list = sent.find(call => call.name === 'ListObjectsV2');
+    expect(list?.input).toMatchObject({ Bucket: 'classmoji-media-test', Prefix: PREFIX });
+    expect(deletedKeys()).toEqual([ORIG_KEY, WEB_KEY, POSTER_KEY, STRAY_KEY]);
     expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
       where: { id: MEDIA_ID, status: { in: ['UPLOADING', 'READY', 'STAGING'] } },
       data: expect.objectContaining({ status: 'DELETED' }),
     });
   });
 
-  it('deletes the rendition and poster the row NAMES, not the names it assumes', async () => {
-    // The job records where it put them. Assuming `web.mp4` works right up
-    // until it writes one somewhere else, and then the bytes outlive the row
-    // that was billed for them.
-    prisma.mediaObject.findFirst.mockResolvedValue(
-      row({
-        rendition_key: `m/${CLASSROOM_ID}/${MEDIA_ID}/web-720.mp4`,
-        rendition_bytes: BigInt(100),
-        poster_key: `m/${CLASSROOM_ID}/${MEDIA_ID}/poster-00001.webp`,
-      })
-    );
+  it('follows a truncated listing to the end', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(row());
+    sendImpl.mockImplementation(async (name: string, input: Record<string, unknown>) => {
+      if (name !== 'ListObjectsV2') return {};
+      return input.ContinuationToken === 'page-2'
+        ? { Contents: [{ Key: WEB_KEY }], IsTruncated: false }
+        : { Contents: [{ Key: ORIG_KEY }], IsTruncated: true, NextContinuationToken: 'page-2' };
+    });
 
     await deleteMedia({ classroom, mediaId: MEDIA_ID });
+    expect(deletedKeys()).toEqual([ORIG_KEY, WEB_KEY]);
+  });
 
-    expect(sent.map(call => call.input.Key)).toEqual([
-      ORIG_KEY,
-      `m/${CLASSROOM_ID}/${MEDIA_ID}/web-720.mp4`,
-      `m/${CLASSROOM_ID}/${MEDIA_ID}/poster-00001.webp`,
-    ]);
+  it('never deletes a listed key outside the row’s prefix', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(row());
+    listing([ORIG_KEY, `m/${CLASSROOM_ID}/77777777-8888-4999-8aaa-bbbbbbbbbbbc/orig.mp4`]);
+    await deleteMedia({ classroom, mediaId: MEDIA_ID });
+    expect(deletedKeys()).toEqual([ORIG_KEY]);
+  });
+
+  it('falls back to the keys the row names when the listing fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ rendition_key: WEB_KEY, poster_key: POSTER_KEY })
+    );
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name === 'ListObjectsV2') throw new Error('list failed');
+      return {};
+    });
+
+    await expect(deleteMedia({ classroom, mediaId: MEDIA_ID })).resolves.toEqual({
+      mediaId: MEDIA_ID,
+    });
+    expect(deletedKeys()).toEqual([ORIG_KEY, WEB_KEY, POSTER_KEY]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Could not list'), 'list failed');
+  });
+
+  it('in the fallback, deletes only rendition and poster keys that parse', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ rendition_key: 'web.mp4', poster_key: '../../elsewhere/poster.webp' })
+    );
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name === 'ListObjectsV2') throw new Error('list failed');
+      return {};
+    });
+
+    await deleteMedia({ classroom, mediaId: MEDIA_ID });
+    expect(deletedKeys()).toEqual([ORIG_KEY]);
   });
 
   it('tombstones the row before it touches a single object', async () => {
@@ -1566,18 +1614,26 @@ describe('deleteMedia', () => {
     });
     sendImpl.mockImplementation(async (name: string) => {
       order.push(name);
-      return {};
+      return name === 'ListObjectsV2' ? { Contents: [{ Key: ORIG_KEY }] } : {};
     });
 
     await deleteMedia({ classroom, mediaId: MEDIA_ID });
-    expect(order[0]).toBe('tombstone');
+    expect(order).toEqual(['tombstone', 'ListObjectsV2', 'DeleteObject']);
   });
 
   it('keeps deleting the other keys when one delete fails', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     prisma.mediaObject.findFirst.mockResolvedValue(row());
-    sendImpl.mockImplementationOnce(async () => {
-      throw new Error('r2 said no');
+    let failed = false;
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name === 'ListObjectsV2') {
+        return { Contents: [ORIG_KEY, WEB_KEY, POSTER_KEY].map(Key => ({ Key })) };
+      }
+      if (!failed) {
+        failed = true;
+        throw new Error('r2 said no');
+      }
+      return {};
     });
 
     await expect(deleteMedia({ classroom, mediaId: MEDIA_ID })).resolves.toMatchObject({
@@ -1586,7 +1642,7 @@ describe('deleteMedia', () => {
 
     // All three were attempted, the row is still a tombstone, and the failure
     // was reported rather than swallowed silently.
-    expect(sent.filter(call => call.name === 'DeleteObject')).toHaveLength(3);
+    expect(deletedKeys()).toHaveLength(3);
     expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0].data).toMatchObject({
       status: 'DELETED',
     });
@@ -1603,33 +1659,31 @@ describe('deleteMedia', () => {
     await expect(deleteMedia({ classroom, mediaId: MEDIA_ID })).resolves.toEqual({
       mediaId: MEDIA_ID,
     });
-    expect(sent.filter(call => call.name === 'DeleteObject')).toHaveLength(3);
+    expect(deletedKeys()).toHaveLength(3);
   });
 
   it('aborts first when the upload is still open', async () => {
     // Without the abort, R2 holds the uploaded parts until its own 7-day expiry.
     prisma.mediaObject.findFirst.mockResolvedValue(row({ status: 'UPLOADING', upload_id: 'up-1' }));
+    listing([ORIG_KEY]);
     await deleteMedia({ classroom, mediaId: MEDIA_ID });
     expect(sent[0].name).toBe('AbortMultipartUpload');
-    expect(sent.filter(call => call.name === 'DeleteObject')).toHaveLength(3);
+    expect(deletedKeys()).toEqual([ORIG_KEY]);
   });
 
   it('re-attempts the object deletes for a row that is already deleted', async () => {
     // A delete whose R2 half failed left a tombstone and some bytes. Asking
     // again must finish the job, not answer NOT_FOUND and strand them.
     prisma.mediaObject.findFirst.mockResolvedValue(
-      row({ status: 'DELETED', rendition_key: `m/${CLASSROOM_ID}/${MEDIA_ID}/web.mp4` })
+      row({ status: 'DELETED', rendition_key: WEB_KEY })
     );
+    listing([WEB_KEY, POSTER_KEY]);
 
     await expect(deleteMedia({ classroom, mediaId: MEDIA_ID })).resolves.toEqual({
       mediaId: MEDIA_ID,
     });
 
-    expect(sent.map(call => call.input.Key)).toEqual([
-      ORIG_KEY,
-      `m/${CLASSROOM_ID}/${MEDIA_ID}/web.mp4`,
-      `m/${CLASSROOM_ID}/${MEDIA_ID}/poster.webp`,
-    ]);
+    expect(deletedKeys()).toEqual([WEB_KEY, POSTER_KEY]);
     // The tombstone is not rewritten: `deleted_at` keeps the first delete's time.
     expect(prisma.mediaObject.updateMany).not.toHaveBeenCalled();
   });
@@ -1638,6 +1692,7 @@ describe('deleteMedia', () => {
     prisma.mediaObject.findFirst.mockResolvedValue(
       row({ status: 'STAGING', destination: 'media', upload_id: 'up-3' })
     );
+    listing([]);
     await deleteMedia({ classroom, mediaId: MEDIA_ID, userId: 'user-1' });
 
     expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
@@ -1647,9 +1702,7 @@ describe('deleteMedia', () => {
       name: 'AbortMultipartUpload',
       input: { Bucket: 'classmoji-media-test', Key: STAGE_KEY_FIXTURE(), UploadId: 'up-3' },
     });
-    expect(sent.filter(call => call.name === 'DeleteObject').map(call => call.input.Key)).toContain(
-      STAGE_KEY_FIXTURE()
-    );
+    expect(deletedKeys()).toContain(STAGE_KEY_FIXTURE());
   });
 
   it('is NOT_FOUND for somebody else’s agent upload still staging', async () => {
@@ -1675,12 +1728,7 @@ describe('deleteMedia', () => {
     // a placement whose cleanup failed left it, and deleting is idempotent.
     prisma.mediaObject.findFirst.mockResolvedValue(row({ destination: 'media' }));
     await deleteMedia({ classroom, mediaId: MEDIA_ID });
-    expect(sent.map(call => call.input.Key)).toEqual([
-      ORIG_KEY,
-      `m/${CLASSROOM_ID}/${MEDIA_ID}/web.mp4`,
-      `m/${CLASSROOM_ID}/${MEDIA_ID}/poster.webp`,
-      STAGE_KEY_FIXTURE(),
-    ]);
+    expect(deletedKeys()).toEqual([ORIG_KEY, WEB_KEY, POSTER_KEY, STAGE_KEY_FIXTURE()]);
   });
 
   it('is NOT_FOUND for an id this classroom never had', async () => {

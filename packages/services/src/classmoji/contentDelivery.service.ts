@@ -14,8 +14,10 @@ import {
   type TransformWidth,
 } from '@classmoji/content-signing';
 import {
+  downloadVariant,
   lookupReadyMedia,
   mediaRef,
+  posterVariantOf,
   servedVariant,
   type MediaRecord,
 } from '../media/mediaLookup.ts';
@@ -1175,9 +1177,11 @@ export async function resolveMediaPoster(ctx: ResolveContext, ref: string): Prom
 
   const records = await lookupReadyMedia(ctx.classroom.id, [mediaId]);
   const record = records.get(mediaId);
-  if (!record?.posterKey) return null;
+  if (!record) return null;
+  const poster = posterVariantOf(record);
+  if (!poster) return null;
 
-  return mintMedia(ctx, env, record, 'poster.webp', ctx.tier, undefined);
+  return mintMedia(ctx, env, record, poster, ctx.tier, undefined);
 }
 
 /**
@@ -1218,10 +1222,10 @@ export async function mediaDownloadUrl({
   if (!env) return null;
 
   // The original is gone once the rendition replaced it, so that is what there
-  // is to hand over. Same rule the player uses, for the one row where it differs.
-  // TODO(P4): content-derived rendition names (`web-{hex}.mp4`) — take the
-  // variant from the row's rendition key (as `servedVariant` will), not `web.mp4`.
-  const variant = record.originalDeletedAt ? 'web.mp4' : `orig.${record.ext}`;
+  // is to hand over — named by the row's rendition key (`downloadVariant`). A
+  // row with neither has nothing to download.
+  const variant = downloadVariant(record);
+  if (!variant) return null;
 
   // A name that does not survive normalization (all-bidi, all-separator, far
   // too long) must not cost the URL its `dl` — without it the response carries
