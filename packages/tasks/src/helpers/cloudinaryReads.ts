@@ -474,24 +474,32 @@ export async function readClassroomFacts(
     memberships: { user: { subscriptions: OwnerSubscription[] } }[];
   }[];
 
-  const live = (await prisma.mediaObject.findMany({
-    where: {
-      classroom_id: { in: classroomIds },
-      OR: [
-        { status: 'READY' },
-        {
-          status: { in: ['UPLOADING', 'STAGING'] },
-          created_at: { gte: new Date(now - RESERVATION_WINDOW_MS) },
-        },
-      ],
-    },
-    select: {
-      classroom_id: true,
-      size_bytes: true,
-      rendition_bytes: true,
-      original_deleted_at: true,
-    },
-  })) as LiveRow[];
+  // Before the media release reaches a database, `media_objects` does not
+  // exist there (Prisma P2021). A dry run is still meaningful then: nothing
+  // has been stored yet, so every classroom's usage is zero.
+  const live = (await prisma.mediaObject
+    .findMany({
+      where: {
+        classroom_id: { in: classroomIds },
+        OR: [
+          { status: 'READY' },
+          {
+            status: { in: ['UPLOADING', 'STAGING'] },
+            created_at: { gte: new Date(now - RESERVATION_WINDOW_MS) },
+          },
+        ],
+      },
+      select: {
+        classroom_id: true,
+        size_bytes: true,
+        rendition_bytes: true,
+        original_deleted_at: true,
+      },
+    })
+    .catch((error: unknown) => {
+      if ((error as { code?: string } | null)?.code === 'P2021') return [];
+      throw error;
+    })) as LiveRow[];
   const used = new Map<string, number>();
   for (const row of live) {
     used.set(row.classroom_id, (used.get(row.classroom_id) ?? 0) + billedBytes(row));
