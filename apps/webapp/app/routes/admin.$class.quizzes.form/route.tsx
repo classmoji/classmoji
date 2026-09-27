@@ -388,7 +388,6 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                   showIcon
                   message={saveError}
                   style={{ marginBottom: 16 }}
-                  data-testid="quiz-form-error"
                 />
               )}
               <Form
