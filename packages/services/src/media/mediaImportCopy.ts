@@ -49,12 +49,32 @@ import { uploadCapabilityFor } from './uploadCapability.ts';
  * twelve pages is copied once, and a later pass (the slides after the pages,
  * the page covers after the tree) finds it already done.
  *
+ * ## Across runs: a retried import reuses its copies
+ *
+ * The term rollover persists each old→new pair as it lands (`onCopied` →
+ * `ImportIdMaps.media` on the job row) and hands the map back to the next run
+ * as `knownCopies`. A retried run reuses a known copy only if the destination
+ * still has it READY — proven in SQL scoped to the destination, the same shape
+ * as the source proof — and copies again when the copy is gone (deleted, or
+ * never finished). So a retry never bills the destination twice for one
+ * object, and never repoints a reference at a copy that does not exist.
+ *
+ * A caller whose commit of the rewritten content FAILED calls `discard`: the
+ * copies this run made are deleted (`deleteMedia` — tombstone, then the
+ * objects), because nothing references them and a destination should not pay
+ * for them. Copies reused from `knownCopies` are left alone — content an
+ * earlier run DID commit may point at them. A discarded pair can stay in the
+ * persisted map; the next run finds its copy gone and copies again.
+ *
  * ## "Never a half-rewritten file", decided
  *
- * `rewrite` replaces a reference only when its object was copied and its new
- * row is READY; every other reference in the same file is left byte-for-byte as
- * it was. The invariant that holds is the one the plan cares about: NO file
- * ever points at a new id whose object does not exist. The alternative — leave
+ * `rewrite` repoints a reference only when its object was copied and its new
+ * row is READY; every other `media://` reference in the same file is left
+ * byte-for-byte as it was, and a signed URL naming the source whose object was
+ * not copied becomes the bare `media://{sourceId}` (so no source signature is
+ * ever carried into the copy; see "Signed URLs are references too"). The
+ * invariant that holds is the one the plan cares about: NO file ever points at
+ * a new id whose object does not exist. The alternative — leave
  * the whole file untouched when any one of its objects could not be copied —
  * was weighed and rejected: it would strand the copies that DID succeed (billed
  * to the destination, referenced by nothing) and leave more broken references
@@ -68,7 +88,9 @@ import { uploadCapabilityFor } from './uploadCapability.ts';
  * storage as well (pasted from a rendered page, or saved before the editor
  * canonicalized its own URLs). One naming the SOURCE classroom is treated
  * exactly like `media://{mediaId}`: copied, and rewritten to `media://{newId}`,
- * which the destination signs for itself on render. Any variant — the original,
+ * which the destination signs for itself on render — and when it could NOT be
+ * copied, still rewritten, to the bare `media://{mediaId}`: the signature is
+ * the source's, and it never travels into the copy. Any variant — the original,
  * the rendition, the poster — becomes the bare reference, the same rule
  * `canonicalizeAssetRef` applies on save. A signed URL naming any OTHER
  * classroom is the third-classroom case and is left alone with a warning; it
@@ -104,6 +126,14 @@ export interface MediaImportCopyOptions {
    */
   importedBy?: string | null;
   warn: MediaCopyWarn;
+  /**
+   * Copies an earlier run of the same import already made: source id →
+   * destination id. Reused when the destination row is still READY; anything
+   * else is copied again. See the header.
+   */
+  knownCopies?: Readonly<Record<string, string>> | null;
+  /** Called once per object this run copies, so the caller can persist the pair. */
+  onCopied?: (sourceMediaId: string, copyMediaId: string) => void;
 }
 
 export interface MediaImportCopier {
@@ -117,6 +147,12 @@ export interface MediaImportCopier {
   rewrite(text: string): string;
   /** The destination id a source object was copied to, or null. */
   copiedIdFor(sourceMediaId: string): string | null;
+  /**
+   * Delete every copy THIS run made (never one reused from `knownCopies`), for
+   * a caller whose content never landed — see the header. Afterwards `rewrite`
+   * no longer repoints at them. Never throws.
+   */
+  discard(): Promise<void>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -146,12 +182,14 @@ const MEDIA_REF_PATTERN = new RegExp(`media://(${UUID})(?![0-9A-Za-z-])`, 'g');
  * a backslash (a `\"` inside deck.json's HTML-in-JSON); signed query values are
  * base64url and numbers, so neither can occur inside one. It runs THROUGH `&`
  * and `;`, which is what lets an `&amp;`-escaped query in `index.html` be taken
- * whole.
+ * whole — but it stops before an HTML-escaped quote (`&quot;`, `&#34;`,
+ * `&#39;`), so `url(&quot;…?p=x&amp;sig=y&quot;)` in an inline style loses only
+ * the URL, never the closing quote.
  */
 const SIGNED_MEDIA_URL_PATTERN = new RegExp(
   `(?:https?:\\/\\/[^\\s"'()<>\\/\\\\]+|(?<![^\\s"'(<>,;]))` +
     `\\/c\\/([0-9a-fA-F-]{36})\\/media\\/(${UUID})\\/[A-Za-z0-9._-]+` +
-    `(?:\\?[^\\s"'()<>,\\\\]*)?`,
+    `(?:\\?(?:(?!&(?:quot|#34|#39);)[^\\s"'()<>,\\\\])*)?`,
   'gi'
 );
 
@@ -193,28 +231,39 @@ export function collectMediaRefs(text: string, sourceClassroomId: string): Colle
 }
 
 /**
- * Replace every reference whose object was copied with `media://{newId}`.
+ * Replace every reference whose object was copied with `media://{newId}`, and
+ * every signed URL naming the source with a bare reference.
  *
- * Only ids in `copied` move; everything else — an object that could not be
- * copied, one that was never the source's, a signed URL for another classroom —
- * comes back exactly as it was. See the header for why that is the rule.
+ * Only ids in `copied` move to a new id. A `media://` reference whose object
+ * was not copied, and a signed URL for another classroom, come back exactly as
+ * they were; a signed URL naming the SOURCE whose object was not copied comes
+ * back as `media://{sourceId}` — never with its signature. See the header.
  */
 export function rewriteMediaRefs(
   text: string,
   sourceClassroomId: string,
   copied: ReadonlyMap<string, string>
 ): string {
-  if (copied.size === 0 || typeof text !== 'string' || text.length === 0) return text;
+  if (typeof text !== 'string' || text.length === 0) return text;
   const source = sourceClassroomId.toLowerCase();
 
+  // EVERY signed URL naming the source becomes a bare reference, copied or
+  // not: its object's copy when there is one, otherwise the SOURCE id. A URL
+  // carries a live signature for the source classroom, and a copy that could
+  // not be made must not carry it into the destination's content (where it
+  // would keep serving the source's bytes until it expired). The bare source
+  // reference resolves, in the destination, to the `/missing/` placeholder —
+  // the lookup is scoped to the classroom rendering it — which is exactly what
+  // an uncopied object is there.
   const withUrls = text.replace(
     SIGNED_MEDIA_URL_PATTERN,
     (url: string, classroomId: string, mediaId: string) => {
       if (classroomId.toLowerCase() !== source) return url;
-      const next = copied.get(mediaId.toLowerCase());
-      return next ? mediaRef(next) : url;
+      const id = mediaId.toLowerCase();
+      return mediaRef(copied.get(id) ?? id);
     }
   );
+  if (copied.size === 0) return withUrls;
 
   return withUrls.replace(MEDIA_REF_PATTERN, (ref: string, mediaId: string) => {
     const next = copied.get(mediaId);
@@ -238,6 +287,31 @@ const KIND_LABEL: Record<MediaKind, string> = {
 
 function describe(row: Pick<MediaRow, 'kind' | 'filename'>): string {
   return `${KIND_LABEL[row.kind] ?? 'file'} "${row.filename}"`;
+}
+
+/** Why an object was skipped when the destination's media storage had no room for it. */
+export const DESTINATION_FULL_REASON =
+  "the destination class's media storage is full (contact hello@classmoji.io to upgrade)";
+
+/** How many files a skip summary names before it counts the rest. */
+const SKIPPED_NAMED_MAX = 5;
+
+/**
+ * Every object a pass could not copy for one shared reason, as one warning:
+ * `Skipped video "a.mp4": …` for one, `Skipped 12 media files (video "a.mp4",
+ * …, and 7 more): …` for many.
+ */
+export function skippedSummary(
+  rows: readonly Pick<MediaRow, 'kind' | 'filename'>[],
+  reason: string
+): string {
+  if (rows.length === 1) return `Skipped ${describe(rows[0])}: ${reason}`;
+  const named = rows.slice(0, SKIPPED_NAMED_MAX).map(describe);
+  const more = rows.length - named.length;
+  return (
+    `Skipped ${rows.length} media files (${named.join(', ')}` +
+    `${more > 0 ? `, and ${more} more` : ''}): ${reason}`
+  );
 }
 
 function errText(error: unknown): string {
@@ -299,11 +373,14 @@ async function copyOne({
   bucket,
   row,
   opts,
+  onQuotaFull,
 }: {
   client: S3Client;
   bucket: string;
   row: MediaRow;
   opts: MediaImportCopyOptions;
+  /** The destination had no room for this object; the caller warns. */
+  onQuotaFull: (row: MediaRow) => void;
 }): Promise<string | null> {
   const { sourceClassroomId, targetClassroomId, warn } = opts;
   const newId = randomUUID();
@@ -390,7 +467,8 @@ async function copyOne({
   });
 
   if (!reserved.ok) {
-    warn(`Skipped ${describe(row)}: the destination class is over its media storage quota`);
+    // Named by the caller, in one summary for the whole pass.
+    onQuotaFull(row);
     return null;
   }
 
@@ -476,8 +554,38 @@ export function createMediaImportCopier(opts: MediaImportCopyOptions): MediaImpo
   const settled = new Set<string>();
   /** Foreign signed URLs already warned about. */
   const warnedUrls = new Set<string>();
+  /** source id → copy id, for the copies THIS run made (what `discard` removes). */
+  const created = new Map<string, string>();
   /** Asked once per run, and only when there is an object to copy. */
   let refusal: Promise<string | null> | null = null;
+  const knownCopies = opts.knownCopies ?? {};
+
+  /**
+   * Take over the copies an earlier run made, for the wanted ids that have one
+   * still READY in the destination; those leave `wanted`.
+   */
+  async function reuseKnownCopies(wanted: Set<string>): Promise<void> {
+    const candidates = [...wanted].filter(
+      id => typeof knownCopies[id] === 'string' && knownCopies[id].length > 0
+    );
+    if (candidates.length === 0) return;
+    const live = (await getPrisma().mediaObject.findMany({
+      where: {
+        classroom_id: targetClassroomId,
+        status: 'READY',
+        id: { in: candidates.map(id => knownCopies[id]) },
+      },
+      select: { id: true },
+    })) as { id: string }[];
+    const ready = new Set(live.map(row => row.id));
+    for (const id of candidates) {
+      const copy = knownCopies[id];
+      if (!ready.has(copy)) continue;
+      settled.add(id);
+      copied.set(id, copy);
+      wanted.delete(id);
+    }
+  }
 
   async function prepare(texts: readonly string[]): Promise<void> {
     const wanted = new Set<string>();
@@ -490,6 +598,9 @@ export function createMediaImportCopier(opts: MediaImportCopyOptions): MediaImpo
         warn(`Left a media link unchanged: it belongs to a class other than the source (${url})`);
       }
     }
+    if (wanted.size === 0) return;
+
+    await reuseKnownCopies(wanted);
     if (wanted.size === 0) return;
 
     // The proof. Scoped to the source and to READY in the query itself, so an
@@ -518,12 +629,11 @@ export function createMediaImportCopier(opts: MediaImportCopyOptions): MediaImpo
     const client = r2Client();
     const bucket = mediaBucket();
     if (reason || !client || !bucket) {
-      for (const row of rows) {
-        settled.add(row.id);
-        warn(
-          `Skipped ${describe(row)}: ${reason ?? 'media storage is not configured on this deployment'}`
-        );
-      }
+      for (const row of rows) settled.add(row.id);
+      // ONE warning for the lot: every object is skipped for the same reason,
+      // and a course with forty videos would otherwise fill the import's
+      // bounded warning list with forty copies of one sentence.
+      warn(skippedSummary(rows, reason ?? 'media storage is not configured on this deployment'));
       return;
     }
 
@@ -531,10 +641,38 @@ export function createMediaImportCopier(opts: MediaImportCopyOptions): MediaImpo
     // SUM and INSERT, and the copies are server-side, so running them in
     // parallel would buy little and would race this run's own reservations
     // against each other for no reason.
+    const noRoom: MediaRow[] = [];
     for (const row of rows) {
       settled.add(row.id);
-      const newId = await copyOne({ client, bucket, row, opts });
-      if (newId) copied.set(row.id, newId);
+      const newId = await copyOne({
+        client,
+        bucket,
+        row,
+        opts,
+        onQuotaFull: full => noRoom.push(full),
+      });
+      if (newId) {
+        copied.set(row.id, newId);
+        created.set(row.id, newId);
+        opts.onCopied?.(row.id, newId);
+      }
+    }
+    if (noRoom.length > 0) warn(skippedSummary(noRoom, DESTINATION_FULL_REASON));
+  }
+
+  async function discard(): Promise<void> {
+    if (created.size === 0) return;
+    // Loaded here, not at the top: `media.service.ts` is the rest of the media
+    // store, and a run that never discards has no reason to load it.
+    const { deleteMedia } = await import('./media.service.ts');
+    for (const [sourceId, copyId] of [...created]) {
+      created.delete(sourceId);
+      copied.delete(sourceId);
+      try {
+        await deleteMedia({ classroom: { id: targetClassroomId }, mediaId: copyId });
+      } catch (error) {
+        console.warn(`[media] Could not remove unused import copy ${copyId}:`, errText(error));
+      }
     }
   }
 
@@ -542,5 +680,6 @@ export function createMediaImportCopier(opts: MediaImportCopyOptions): MediaImpo
     prepare,
     rewrite: text => rewriteMediaRefs(text, sourceClassroomId, copied),
     copiedIdFor: sourceMediaId => copied.get(sourceMediaId) ?? null,
+    discard,
   };
 }

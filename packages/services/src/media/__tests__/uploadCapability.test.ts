@@ -69,7 +69,7 @@ describe('uploadCapabilityFor', () => {
       repoMaxBytes: 35 * MB,
       repoFileTypes: 'any',
       isPro: true,
-      media: { perFileMaxBytes: 2 * GIB, remainingBytes: 7 * GIB },
+      media: { perFileMaxBytes: 2_000_000_000, remainingBytes: 7 * GIB },
     });
   });
 

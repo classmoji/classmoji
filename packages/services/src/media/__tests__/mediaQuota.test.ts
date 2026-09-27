@@ -23,10 +23,16 @@ import {
 const GIB = 1024 * 1024 * 1024;
 
 describe('the numbers', () => {
-  it('is 0 free, 10 GiB Pro, 2 GiB per file', () => {
+  it('is 0 free, 10 GiB Pro, a decimal 2 GB per file', () => {
     expect(FREE_QUOTA_BYTES).toBe(0);
     expect(PRO_QUOTA_BYTES).toBe(10 * GIB);
-    expect(PER_FILE_MAX_BYTES).toBe(2 * GIB);
+    expect(PER_FILE_MAX_BYTES).toBe(2_000_000_000);
+  });
+
+  // `Slide.source_size` is an Int: a media-backed file slide records its
+  // document's size there, so the largest media file must fit one.
+  it('keeps the per-file ceiling inside a signed 32-bit integer', () => {
+    expect(PER_FILE_MAX_BYTES).toBeLessThanOrEqual(2 ** 31 - 1);
   });
 
   it('reserves an unfinished upload for 24 hours', () => {
@@ -56,10 +62,10 @@ describe('partCountFor', () => {
   });
 
   it('keeps the largest allowed file inside one signing batch per few rounds', () => {
-    // 2 GiB in 32 MiB parts is 64 — small enough that a whole upload is a
+    // 2 GB in 32 MiB parts is 60 — small enough that a whole upload is a
     // handful of `signParts` calls rather than hundreds, and well under S3's
     // 10,000-part ceiling.
-    expect(partCountFor(PER_FILE_MAX_BYTES)).toBe(64);
+    expect(partCountFor(PER_FILE_MAX_BYTES)).toBe(60);
     expect(partCountFor(PER_FILE_MAX_BYTES)).toBeLessThan(10000);
     expect(partCountFor(PER_FILE_MAX_BYTES) / MAX_PARTS_PER_SIGN).toBeLessThan(3);
   });

@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   order: [] as string[],
   pushedTree: new Map<string, string>(),
   seed: new Map<string, string>(),
+  failPush: false,
 }));
 
 function readTree(dir: string, root = dir, out = new Map<string, string>()) {
@@ -56,6 +57,7 @@ vi.mock('simple-git', () => ({
     addRemote: async () => {},
     push: async () => {
       mocks.order.push('push');
+      if (mocks.failPush) throw new Error('remote hung up');
     },
   }),
 }));
@@ -77,7 +79,7 @@ vi.mock('@classmoji/services', () => ({
   redactAccessTokens: (text: string) => text,
 }));
 
-const { cloneContentRepo } = await import('../cloneContentRepo.ts');
+const { cloneContentRepo, oversizedWarning } = await import('../cloneContentRepo.ts');
 
 const SOURCE = { orgLogin: 'uniglos', repo: 'content-25', token: 'ghs_src' };
 const TARGET = { orgLogin: 'uniglos', repo: 'content-26', token: 'ghs_tgt' };
@@ -90,6 +92,9 @@ function fakeMedia() {
   const copied = new Map<string, string>();
   return {
     prepared,
+    discard: vi.fn(async () => {
+      mocks.order.push('discard');
+    }),
     prepare: vi.fn(async (texts: readonly (string | null | undefined)[]) => {
       mocks.order.push('prepare');
       prepared.push(texts.filter((t): t is string => typeof t === 'string'));
@@ -102,7 +107,7 @@ function fakeMedia() {
   };
 }
 
-const run = (media?: ReturnType<typeof fakeMedia>) =>
+const run = (media?: ReturnType<typeof fakeMedia>, warn?: (detail: string) => void) =>
   cloneContentRepo({
     source: SOURCE,
     target: TARGET,
@@ -110,9 +115,11 @@ const run = (media?: ReturnType<typeof fakeMedia>) =>
     keepSlides: true,
     commitMessage: 'Import content from content-25',
     ...(media ? { media } : {}),
+    ...(warn ? { warn } : {}),
   });
 
 beforeEach(() => {
+  mocks.failPush = false;
   mocks.order.length = 0;
   mocks.pushedTree = new Map();
   mocks.seed = new Map([
@@ -158,6 +165,66 @@ describe('cloneContentRepo — media in the tree', () => {
     expect(mocks.order).toEqual(['add', 'push']);
     expect(mocks.pushedTree.get('pages/lab-1/content.json')).toBe(
       `{"a":"media://${OLD}","b":"media://${UNCOPIED}"}`
+    );
+  });
+});
+
+describe('cloneContentRepo — a push that fails', () => {
+  it('discards the media copies made for the tree, then rethrows', async () => {
+    mocks.failPush = true;
+    const media = fakeMedia();
+
+    await expect(run(media)).rejects.toThrow(/pushing to uniglos\/content-26 failed/);
+
+    expect(mocks.order).toEqual(['prepare', 'add', 'push', 'discard']);
+    expect(media.discard).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the copies once the push has landed', async () => {
+    const media = fakeMedia();
+    await run(media);
+    expect(media.discard).not.toHaveBeenCalled();
+  });
+});
+
+describe('cloneContentRepo — text files too large to rewrite', () => {
+  it('pushes them verbatim and names them in ONE import warning', async () => {
+    const big = `{"v":"media://${OLD}","pad":"${'x'.repeat(5 * 1024 * 1024)}"}`;
+    mocks.seed.set('pages/huge/content.json', big);
+    mocks.seed.set('slides/huge/index.html', big);
+    const media = fakeMedia();
+    const warnings: string[] = [];
+
+    await run(media, detail => warnings.push(detail));
+
+    // Not handed to the media copy, not rewritten.
+    expect(media.prepared[0].some(text => text.length > 5 * 1024 * 1024)).toBe(false);
+    expect(mocks.pushedTree.get('pages/huge/content.json')).toBe(big);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('2 text files over 5 MB');
+    expect(warnings[0]).toContain('pages/huge/content.json (5 MB)');
+    expect(warnings[0]).toContain('slides/huge/index.html (5 MB)');
+    expect(warnings[0]).toContain('media included');
+  });
+
+  it('warns about nothing when every text file was rewritable', async () => {
+    const warnings: string[] = [];
+    await run(fakeMedia(), detail => warnings.push(detail));
+    expect(warnings).toEqual([]);
+  });
+
+  it('names five files and counts the rest', () => {
+    const files = Array.from({ length: 7 }, (_, i) => ({
+      file: `f${i}.json`,
+      size: 6 * 1024 * 1024,
+    }));
+    const text = oversizedWarning(files);
+    expect(text).toContain('7 text files');
+    expect(text).toContain('f4.json (6 MB)');
+    expect(text).not.toContain('f5.json');
+    expect(text).toContain('and 2 more');
+    expect(oversizedWarning([files[0]])).toMatch(
+      /^Copied text file over 5 MB without updating its links/
     );
   });
 });

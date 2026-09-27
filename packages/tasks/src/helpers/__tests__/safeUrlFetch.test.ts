@@ -32,6 +32,7 @@ import { MockAgent, request } from 'undici';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  HOST_NOT_PUBLIC_MESSAGE,
   UrlImportError,
   createPinnedAgent,
   createPinnedLookup,
@@ -240,6 +241,32 @@ describe('resolvePublicAddress', () => {
     await expectCode(resolvePublicAddress('localhost'), 'BLOCKED_ADDRESS');
   });
 
+  // Two sentences would let a caller probe which internal names exist.
+  it('says the same thing for a name that does not resolve and one that resolves privately', async () => {
+    const unresolved = await expectCode(
+      resolvePublicAddress('nx.example.com', async () => {
+        throw Object.assign(new Error('nope'), { code: 'ENOTFOUND' });
+      }),
+      'DNS_FAILED'
+    );
+    const empty = await expectCode(
+      resolvePublicAddress('empty.example.com', answering([])),
+      'DNS_FAILED'
+    );
+    const privateName = await expectCode(
+      resolvePublicAddress(
+        'db.internal.example.com',
+        answering([{ address: '10.0.0.5', family: 4 }])
+      ),
+      'BLOCKED_ADDRESS'
+    );
+    const privateLiteral = await expectCode(resolvePublicAddress('127.0.0.1'), 'BLOCKED_ADDRESS');
+    for (const err of [unresolved, empty, privateName, privateLiteral]) {
+      expect(err.message).toBe(HOST_NOT_PUBLIC_MESSAGE);
+    }
+    expect(HOST_NOT_PUBLIC_MESSAGE).not.toMatch(/example|10\.0|127/);
+  });
+
   it('maps resolver failure and empty answers to DNS_FAILED', async () => {
     await expectCode(
       resolvePublicAddress('nx.example.com', async () => {
@@ -430,6 +457,27 @@ describe('fetchImportUrl', () => {
     mock.get(ORIGIN).intercept({ path: '/x', method: 'GET' }).reply(status, 'nope');
     const err = await expectCode(fetchImportUrl(`${ORIGIN}/x`, opts()), 'HTTP_ERROR');
     expect(err.status).toBe(status);
+  });
+
+  it.each(['gzip', 'br', 'deflate', 'gzip, identity'])(
+    'refuses a body sent with content-encoding: %s',
+    async encoding => {
+      mock
+        .get(ORIGIN)
+        .intercept({ path: '/z', method: 'GET' })
+        .reply(200, 'compressed', { headers: { 'content-encoding': encoding } });
+      const err = await expectCode(fetchImportUrl(`${ORIGIN}/z`, opts()), 'UNSUPPORTED_ENCODING');
+      expect(err.message).toMatch(/only uncompressed downloads/);
+    }
+  );
+
+  it('accepts an explicit identity encoding', async () => {
+    mock
+      .get(ORIGIN)
+      .intercept({ path: '/id', method: 'GET' })
+      .reply(200, 'plain', { headers: { 'content-encoding': 'Identity' } });
+    const res = await fetchImportUrl(`${ORIGIN}/id`, opts());
+    expect(await drain(res.body)).toBe(5);
   });
 
   it('refuses early when Content-Length exceeds the cap', async () => {

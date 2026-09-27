@@ -64,6 +64,7 @@ const {
   fileUploadFinishTool,
   fileUploadStatusTool,
   fileImportUrlTool,
+  auditableUrl,
 } = await import('../media.ts');
 
 const PAGE_ID = '11111111-1111-4111-8111-111111111111';
@@ -210,12 +211,12 @@ describe('file_upload_start', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
-  it('carries the quota numbers on QUOTA_EXCEEDED', async () => {
-    mocks.startStagedUpload.mockRejectedValue(
-      new FakeMediaError('QUOTA_EXCEEDED', 'over quota', 9, 10)
-    );
+  it('carries the full-storage sentence and the quota numbers on QUOTA_EXCEEDED', async () => {
+    const full = "This class's media storage is full. Contact hello@classmoji.io to upgrade.";
+    mocks.startStagedUpload.mockRejectedValue(new FakeMediaError('QUOTA_EXCEEDED', full, 9, 10));
     await expect(start({ page_id: PAGE_ID })).rejects.toMatchObject({
       code: 'QUOTA_EXCEEDED',
+      message: full,
       data: { used_bytes: 9, quota_bytes: 10 },
     });
   });
@@ -303,6 +304,30 @@ describe('file_import_url', () => {
   });
 });
 
+describe('file_import_url: the audit row', () => {
+  it('records the URL without its query string — a signed link keeps its credential there', async () => {
+    mocks.startUrlImport.mockResolvedValue({ uploadId: UPLOAD_ID, filename: 'a.mp4', maxBytes: 1 });
+    const url = 'https://bucket.example.com/a.mp4?X-Amz-Signature=secret&X-Amz-Credential=k#t=5';
+    await fileImportUrlTool.handler({ classroom: 'org/cs', page_id: PAGE_ID, url }, TEACHER);
+
+    // The service still gets the whole URL; only the audit is trimmed.
+    expect(mocks.startUrlImport).toHaveBeenCalledWith(expect.objectContaining({ url }));
+    const audited = JSON.stringify(mocks.auditCreate.mock.calls.at(-1));
+    expect(audited).toContain('https://bucket.example.com/a.mp4');
+    expect(audited).not.toContain('secret');
+    expect(audited).not.toContain('X-Amz');
+  });
+
+  it('auditableUrl drops query, fragment and credentials', () => {
+    expect(auditableUrl('https://u:p@x.test/a/b.mp4?sig=1#f')).toBe('https://x.test/a/b.mp4');
+    expect(auditableUrl('not a url?sig=1')).toBe('not a url');
+  });
+
+  it('tells the agent large files need a reasonably fast host', () => {
+    expect(fileImportUrlTool.description).toMatch(/reasonably fast host/);
+  });
+});
+
 describe('media_list / media_delete', () => {
   it('lists this classroom’s ready media only, by kind', async () => {
     mocks.listReadyMedia.mockResolvedValue([
@@ -328,6 +353,7 @@ describe('media_list / media_delete', () => {
     expect(mocks.deleteMedia).toHaveBeenCalledWith({
       classroom: { id: 'class-1' },
       mediaId: UPLOAD_ID,
+      userId: TEACHER.viewer.userId,
     });
     expect(mocks.auditCreate).toHaveBeenCalledWith(
       expect.objectContaining({ resource_type: 'MEDIA', action: 'DELETE' })

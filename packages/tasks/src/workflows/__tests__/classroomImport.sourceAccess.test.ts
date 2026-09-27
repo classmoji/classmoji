@@ -25,11 +25,16 @@ vi.mock('@trigger.dev/sdk', () => ({
   logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
 }));
 
-vi.mock('@classmoji/database', () => ({ default: () => ({}) }));
+/** What the orchestrator's own `getPrisma()` answers with (see the retry test). */
+const db = {
+  importJob: { findUnique: vi.fn(), update: vi.fn() },
+  classroomMembership: { findFirst: vi.fn() },
+};
+vi.mock('@classmoji/database', () => ({ default: () => db }));
 vi.mock('@classmoji/services', () => ({ ClassmojiService: {} }));
 vi.mock('@classmoji/services/import-progress', async importOriginal => importOriginal());
 
-const { assertSourceAccess } = await import('../classroomImport.ts');
+const { assertSourceAccess, classroomImportTask } = await import('../classroomImport.ts');
 
 const findFirst = vi.fn();
 const prisma = { classroomMembership: { findFirst } } as never;
@@ -80,5 +85,46 @@ describe('assertSourceAccess', () => {
     const { where } = findFirst.mock.calls[0][0];
     expect(where.role.in).not.toContain('ASSISTANT');
     expect(where.role.in).not.toContain('STUDENT');
+  });
+});
+
+/**
+ * The retry endpoint (`POST /api/import-jobs/:jobId`) only flips the row back
+ * to PENDING and re-triggers this orchestrator — so THIS is where a retry's
+ * access is re-checked. Pinned end to end: a requester who lost their source
+ * membership since the first attempt gets a FAILED job, and the run never
+ * reaches RUNNING or any child phase.
+ */
+describe('classroom-import on a retry', () => {
+  it('re-checks source access before anything runs, and fails the job without it', async () => {
+    db.importJob.findUnique.mockResolvedValue({
+      id: 'job-1',
+      classroom_id: 'target-classroom',
+      source_classroom_id: 'source-classroom',
+      requested_by: 'user-1',
+      status: 'PENDING',
+      phase: null,
+      selections: { content: { pages: true } },
+      progress: { phases: {} },
+      warnings: [],
+    });
+    db.importJob.update.mockResolvedValue({});
+    db.classroomMembership.findFirst.mockResolvedValue(null);
+
+    const run = (classroomImportTask as unknown as { run: (p: unknown) => Promise<unknown> }).run;
+    await expect(run({ importJobId: 'job-1' })).rejects.toThrow(
+      'Requester no longer has access to the source classroom'
+    );
+
+    expect(db.classroomMembership.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          classroom_id: 'source-classroom',
+          user_id: 'user-1',
+        }),
+      })
+    );
+    const statuses = db.importJob.update.mock.calls.map(([arg]) => arg.data.status);
+    expect(statuses).toEqual(['FAILED']);
   });
 });

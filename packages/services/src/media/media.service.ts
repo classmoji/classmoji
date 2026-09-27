@@ -40,6 +40,7 @@ import {
 } from './mediaLookup.ts';
 import {
   MAX_PARTS_PER_SIGN,
+  MEDIA_QUOTA_FULL_MESSAGE,
   PART_SIZE_BYTES,
   PER_FILE_MAX_BYTES,
   partCountFor,
@@ -103,7 +104,7 @@ import { r2Client } from './r2Client.ts';
  *
  * `size_bytes` and `rendition_bytes` are BIGINT, so Prisma hands back `bigint`,
  * which `JSON.stringify` refuses. Every function here returns plain `number`s:
- * the per-file ceiling is 2 GiB and the quota 10 GiB, both an order of
+ * the per-file ceiling is 2 GB and the quota 10 GiB, both an order of
  * magnitude under `Number.MAX_SAFE_INTEGER`, so nothing is lost. The database
  * keeps the wider type because the column outlives this phase's limits.
  */
@@ -349,11 +350,7 @@ async function reserveUpload({
     const usedBytes = rows.reduce((total, live) => total + billedBytes(live), 0);
 
     if (usedBytes + sizeBytes > quotaBytes) {
-      throw new MediaError(
-        'QUOTA_EXCEEDED',
-        'This file would put the class over its storage quota',
-        { usedBytes, quotaBytes }
-      );
+      throw new MediaError('QUOTA_EXCEEDED', MEDIA_QUOTA_FULL_MESSAGE, { usedBytes, quotaBytes });
     }
 
     return tx.mediaObject.create({
@@ -1051,6 +1048,22 @@ export async function completeUpload({
 }
 
 /**
+ * The row, unless it is an agent upload still STAGING that `userId` did not
+ * open — then null, which the callers answer NOT_FOUND.
+ *
+ * A stage is its uploader's until it is placed: `file_upload_finish` and
+ * `file_upload_status` are already bound to them (`ownStagedRow`), and a
+ * cancel or delete must not be the way around that for another member of the
+ * teaching team. Every other status is a classroom resource, as before — an
+ * UPLOADING browser upload included, so the web abort route is unchanged.
+ */
+function stagedRowOf(row: MediaRow | null, userId: string | null | undefined): MediaRow | null {
+  if (!row) return null;
+  if (row.status === 'STAGING' && (!userId || row.uploaded_by !== userId)) return null;
+  return row;
+}
+
+/**
  * Cancel an upload in flight — the client's own "stop" button, and the upload
  * client's cleanup after any failure.
  *
@@ -1070,12 +1083,15 @@ export async function completeUpload({
 export async function abortUpload({
   classroom,
   mediaId,
+  userId,
 }: {
   classroom: MediaClassroom;
   mediaId: string;
+  /** The caller. Required to touch an agent upload still STAGING — see `stagedRowOf`. */
+  userId?: string | null;
 }): Promise<{ mediaId: string; aborted: boolean }> {
   const { client, bucket } = requireClient();
-  const row = await findMediaRow(classroom.id, mediaId);
+  const row = stagedRowOf(await findMediaRow(classroom.id, mediaId), userId);
   if (!row) throw new MediaError('NOT_FOUND', 'No such media object');
 
   // An agent upload not yet placed: cancelling it removes the staged bytes.
@@ -1139,12 +1155,15 @@ export async function abortUpload({
 export async function deleteMedia({
   classroom,
   mediaId,
+  userId,
 }: {
   classroom: MediaClassroom;
   mediaId: string;
+  /** The caller. Required to touch an agent upload still STAGING — see `stagedRowOf`. */
+  userId?: string | null;
 }): Promise<{ mediaId: string }> {
   const { client, bucket } = requireClient();
-  const row = await findMediaRow(classroom.id, mediaId);
+  const row = stagedRowOf(await findMediaRow(classroom.id, mediaId), userId);
   if (!row) throw new MediaError('NOT_FOUND', 'No such media object');
 
   const origKey = mediaKey(classroom.id, row.id, `orig.${row.ext}`);
@@ -1365,10 +1384,22 @@ export async function putMediaObject({
   }
 
   const readyAt = new Date();
-  const { count } = await getPrisma().mediaObject.updateMany({
-    where: { id: mediaId, status: 'UPLOADING' },
-    data: { status: 'READY', ready_at: readyAt, upload_id: null, processing: 'NONE' },
-  });
+  let count: number;
+  try {
+    ({ count } = await getPrisma().mediaObject.updateMany({
+      where: { id: mediaId, status: 'UPLOADING' },
+      data: { status: 'READY', ready_at: readyAt, upload_id: null, processing: 'NONE' },
+    }));
+  } catch (error) {
+    // The bytes are written and the flip to READY failed. Whether it landed is
+    // asked, not assumed: a lost response looks exactly like a failed write.
+    const outcome = await afterFailedReadyFlip(classroom.id, mediaId, 'UPLOADING');
+    if (outcome !== 'ready') {
+      if (outcome === 'released') await deleteObjectsQuietly(client, bucket, [key]);
+      throw error;
+    }
+    count = 1;
+  }
   if (count === 0) {
     // Deleted from Settings → Media while the write ran: nothing will serve it.
     await deleteObjectsQuietly(client, bucket, [key]);
@@ -1378,6 +1409,43 @@ export async function putMediaObject({
   const row = await findMediaRow(classroom.id, mediaId);
   if (row) await onMediaReady(toMediaRecord(row));
   return { mediaId, ref: mediaRef(mediaId) };
+}
+
+/**
+ * What to do with bytes already written when the flip to READY threw.
+ *
+ *   - `'ready'`    — the flip landed after all (its response was lost): the
+ *                    object is being served; keep it and carry on;
+ *   - `'released'` — the row is not READY, and is now tombstoned from `from`
+ *                    (or was already gone): nothing will ever serve the object,
+ *                    so the caller deletes it;
+ *   - `'unknown'`  — the row could not be read or tombstoned. The object is
+ *                    left: deleting bytes a READY row might be serving is worse
+ *                    than an orphan, which `deleteMedia` / the classroom purge
+ *                    still reach through the row.
+ *
+ * `from: null` skips the tombstone and only answers whether the flip landed —
+ * for a caller that keeps its row for a retry (an agent upload stays STAGING;
+ * its staged bytes are still there to copy again).
+ */
+export async function afterFailedReadyFlip(
+  classroomId: string,
+  mediaId: string,
+  from: MediaStatus | null
+): Promise<'ready' | 'released' | 'unknown'> {
+  let fresh: MediaRow | null;
+  try {
+    fresh = await findMediaRow(classroomId, mediaId);
+  } catch {
+    return 'unknown';
+  }
+  if (fresh?.status === 'READY') return 'ready';
+  if (!fresh || fresh.status === 'DELETED' || from === null) return 'released';
+  try {
+    return (await markDeleted(mediaId, from)) ? 'released' : 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }
 
 /**

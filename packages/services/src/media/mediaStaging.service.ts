@@ -14,12 +14,14 @@ import { randomUUID } from 'node:crypto';
 import getPrisma from '@classmoji/database';
 import { REPO_REST_MAX_BYTES } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
+import { stableFilename } from '../content/utils/validateFile.ts';
 import { recordContentAsset } from '../classmoji/contentAssets.service.ts';
 import { uploadFileTypes } from '../classmoji/contentDelivery.service.ts';
 import { uploadPageAsset, type PageWithContentRepo } from '../classmoji/pageContent.service.ts';
 import { MediaError } from './MediaError.ts';
 import {
   abortQuietly,
+  afterFailedReadyFlip,
   deleteObjectsQuietly,
   markDeleted,
   onMediaReady,
@@ -38,7 +40,7 @@ import {
   toMediaRecord,
   type MediaRow,
 } from './mediaLookup.ts';
-import { PER_FILE_MAX_BYTES, quotaBytesFor } from './mediaQuota.ts';
+import { MEDIA_QUOTA_FULL_MESSAGE, PER_FILE_MAX_BYTES, quotaBytesFor } from './mediaQuota.ts';
 import {
   assertRepoTarget,
   uploadCapabilityFor,
@@ -93,8 +95,16 @@ import { kindOfFilename, storageTargetFor } from './storageRouter.ts';
  * same answer as an id that does not exist.
  */
 
-/** How long the staged PUT URL lives. Short: it is a reusable write until it expires. */
-export const STAGE_URL_TTL_SECONDS = 15 * 60;
+/** What `file_upload_status` says about a stage that outlived its reservation. */
+export const STAGE_EXPIRED_REASON = 'This upload expired before it was placed.';
+
+/**
+ * How long the staged PUT URL lives. Short: it is a reusable write until it
+ * expires — and it cannot be revoked, so an agent upload keeps counting toward
+ * the outstanding caps for this long even once it is cancelled (see
+ * `insertStagingRow`).
+ */
+export const STAGE_URL_TTL_SECONDS = 10 * 60;
 
 const GIB = 1024 * 1024 * 1024;
 
@@ -190,11 +200,27 @@ async function insertStagingRow(args: {
   await getPrisma().$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM classrooms WHERE id = ${args.classroomId} FOR UPDATE`;
 
-    const live = (await tx.mediaObject.findMany({
-      where: liveRowsWhere(args.classroomId),
+    // What costs quota (`liveRowsWhere`), plus every agent upload whose PUT URL
+    // may still be live. Cancelling or failing a stage tombstones the row at
+    // once, but a presigned URL cannot be revoked: until it expires, the stage
+    // key can still be written — up to the declared size — so the outstanding
+    // caps keep counting it. Without this, "start 2 GB, cancel, start again"
+    // would open unbounded writable stage keys, however low the caps.
+    const urlLiveSince = new Date(Date.now() - STAGE_URL_TTL_SECONDS * 1000);
+    const liveWhere = liveRowsWhere(args.classroomId);
+    const rows = (await tx.mediaObject.findMany({
+      where: {
+        classroom_id: args.classroomId,
+        OR: [...liveWhere.OR, { destination: { not: null }, created_at: { gt: urlLiveSince } }],
+      },
     })) as MediaRow[];
+    const live = rows.filter(row => row.status !== 'DELETED');
 
-    const staged = live.filter(row => row.status === 'STAGING');
+    const staged = rows.filter(
+      row =>
+        row.status === 'STAGING' ||
+        (row.destination !== null && row.created_at.getTime() > urlLiveSince.getTime())
+    );
     const stagedBytes = staged.reduce((total, row) => total + Number(row.size_bytes), 0);
     if (
       staged.length >= STAGE_OUTSTANDING_MAX_COUNT ||
@@ -211,11 +237,7 @@ async function insertStagingRow(args: {
       const usedBytes = live.reduce((total, row) => total + billedBytes(row), 0);
       const quotaBytes = quotaBytesFor(true);
       if (usedBytes + args.sizeBytes > quotaBytes) {
-        throw new MediaError(
-          'QUOTA_EXCEEDED',
-          'This file would put the class over its storage quota',
-          { usedBytes, quotaBytes }
-        );
+        throw new MediaError('QUOTA_EXCEEDED', MEDIA_QUOTA_FULL_MESSAGE, { usedBytes, quotaBytes });
       }
     }
 
@@ -456,7 +478,7 @@ function statusOf(row: MediaRow, now: number = Date.now()): StagedStatus {
     };
   }
   if (row.created_at.getTime() < reservationCutoff(now).getTime()) {
-    return { ...base, status: 'failed', error: 'This upload expired before it was placed.' };
+    return { ...base, status: 'failed', error: STAGE_EXPIRED_REASON };
   }
   return { ...base, status: row.processing === 'PENDING' ? 'placing' : 'awaiting_upload' };
 }
@@ -537,16 +559,31 @@ async function placeIntoMedia(client: S3Client, bucket: string, row: MediaRow): 
 
   const ref = mediaRef(row.id);
   const readyAt = new Date();
-  const { count } = await getPrisma().mediaObject.updateMany({
-    where: { id: row.id, status: 'STAGING' },
-    data: {
-      status: 'READY',
-      ready_at: readyAt,
-      placed_ref: ref,
-      processing: 'NONE',
-      upload_id: null,
-    },
-  });
+  let count: number;
+  try {
+    ({ count } = await getPrisma().mediaObject.updateMany({
+      where: { id: row.id, status: 'STAGING' },
+      data: {
+        status: 'READY',
+        ready_at: readyAt,
+        placed_ref: ref,
+        processing: 'NONE',
+        upload_id: null,
+      },
+    }));
+  } catch (error) {
+    // The copy is in media and the flip to READY failed. If it landed after
+    // all, carry on. Otherwise remove the copy — nothing serves it — and leave
+    // the row STAGING, its staged bytes intact, so finishing again (or the
+    // placement job's retry) copies it again; a final failure tombstones it and
+    // removes the key once more (`failStagedPlacement`).
+    const outcome = await afterFailedReadyFlip(row.classroom_id, row.id, null);
+    if (outcome !== 'ready') {
+      if (outcome === 'released') await deleteObjectsQuietly(client, bucket, [target]);
+      throw error;
+    }
+    count = 1;
+  }
   if (count === 0) {
     const fresh = await findMediaRow(row.classroom_id, row.id);
     if (fresh?.status === 'READY') return fresh.placed_ref ?? ref;
@@ -621,7 +658,14 @@ export async function finishStagedUpload({
     );
   }
 
+  // The route is decided again before anything lands in media. The class may
+  // have changed since the stage opened — lost Pro, lost delivery, media
+  // switched off — and placing then would store bytes nothing can serve. The
+  // quota is NOT re-checked: this row has held its reservation since it was
+  // opened, under the lock (`insertStagingRow`).
   if (row.destination === 'media') {
+    const routed = await rerouteBeforeMedia(row);
+    if (routed === 'repo') return queueRepoPlacement(classroom.id, { ...row, destination: 'repo' });
     const ref = await placeIntoMedia(client, bucket, row);
     return {
       status: 'placed',
@@ -632,12 +676,41 @@ export async function finishStagedUpload({
     };
   }
 
-  // Repo: claim the placement (STAGING/NONE → PENDING) and queue it.
+  return queueRepoPlacement(classroom.id, row);
+}
+
+/**
+ * Route a media-bound stage again, at finish. `'media'` to go ahead; `'repo'`
+ * when the class can no longer take media but the file fits the repository
+ * (the row's destination is rewritten); a refusal is recorded on the row
+ * (`failStagedPlacement`) and thrown as the router's `STORAGE_REFUSED`.
+ */
+async function rerouteBeforeMedia(row: MediaRow): Promise<'repo' | 'media'> {
+  let routed: 'repo' | 'media';
+  try {
+    routed = await routeAgentFile({ id: row.classroom_id }, row.filename, Number(row.size_bytes));
+  } catch (error) {
+    if (error instanceof MediaError && error.code === 'STORAGE_REFUSED') {
+      await failStagedPlacement(row.id, error.message);
+    }
+    throw error;
+  }
+  if (routed === 'repo') {
+    await getPrisma().mediaObject.updateMany({
+      where: { id: row.id, status: 'STAGING' },
+      data: { destination: 'repo' },
+    });
+  }
+  return routed;
+}
+
+/** Repo: claim the placement (STAGING/NONE → PENDING) and queue it. */
+async function queueRepoPlacement(classroomId: string, row: MediaRow): Promise<StagedStatus> {
   const { count } = await getPrisma().mediaObject.updateMany({
     where: { id: row.id, status: 'STAGING', processing: 'NONE' },
     data: { processing: 'PENDING' },
   });
-  if (count === 0) return statusOf((await findMediaRow(classroom.id, row.id)) ?? row);
+  if (count === 0) return statusOf((await findMediaRow(classroomId, row.id)) ?? row);
   const pending = { ...row, processing: 'PENDING' as const };
   try {
     await enqueuePlacement(pending);
@@ -677,7 +750,19 @@ export async function failStagedPlacement(mediaId: string, reason: string): Prom
   if (!client) return;
   const key = stageKey(row.classroom_id, row.id);
   if (row.upload_id) await abortQuietly(client.client, client.bucket, key, row.upload_id);
-  await deleteObjectsQuietly(client.client, client.bucket, [key]);
+  // A media-bound stage may have got as far as its copy into media before it
+  // failed (`placeIntoMedia` whose READY flip did not land). The row never
+  // became READY — this tombstone came from STAGING — so nothing serves that
+  // key, and it goes with the staged bytes.
+  const keys = [key];
+  if (row.destination === 'media') {
+    try {
+      keys.push(mediaKey(row.classroom_id, row.id, `orig.${row.ext}`));
+    } catch {
+      // An extension the key grammar refuses was never copied anywhere.
+    }
+  }
+  await deleteObjectsQuietly(client.client, client.bucket, keys);
 }
 
 function requireClientOrNull(): { client: S3Client; bucket: string } | null {
@@ -686,6 +771,21 @@ function requireClientOrNull(): { client: S3Client; bucket: string } | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Refuse a row older than the reservation window, recording why.
+ *
+ * Past `reservationCutoff()` the row no longer counts toward the quota sum, so
+ * placing it now would put bytes in media — or in the repository — that no
+ * reservation paid for, and a queued job that ran a day late (a stalled queue,
+ * a long backoff) would do exactly that. The row is tombstoned with the reason
+ * `statusOf` already reports for it. True when refused.
+ */
+async function failIfExpired(row: MediaRow): Promise<boolean> {
+  if (row.created_at.getTime() >= reservationCutoff().getTime()) return false;
+  await failStagedPlacement(row.id, STAGE_EXPIRED_REASON);
+  return true;
 }
 
 /** A staged row by id alone — for the tasks, which are handed nothing else. */
@@ -711,9 +811,15 @@ async function readStagedObject(client: S3Client, bucket: string, key: string): 
  *   - slide → the deck's `images/` folder, the deck editor's own upload
  *             convention (`{content_path}/images`), with its asset-map row; the
  *             ref is the repo path.
+ *
+ * Both store the file as `{sanitized-name}-{upload id's first 8}.{ext}`
+ * (`stagedRepoName`) and write only if nothing is there yet: the job is retried,
+ * and a retry after a commit that landed — but whose tombstone did not — finds
+ * its own file and records it, rather than committing a second copy.
  */
 async function commitToRepo(row: MediaRow, buffer: Buffer): Promise<string> {
   const prisma = getPrisma();
+  const storedName = stagedRepoName(row);
   if (row.stage_target_type === 'page') {
     const page = await prisma.page.findUnique({
       where: { id: row.stage_target_id ?? '' },
@@ -725,7 +831,8 @@ async function commitToRepo(row: MediaRow, buffer: Buffer): Promise<string> {
     const uploaded = await uploadPageAsset(
       page as unknown as PageWithContentRepo,
       buffer,
-      row.filename
+      row.filename,
+      { storedName }
     );
     return uploaded.url;
   }
@@ -754,6 +861,7 @@ async function commitToRepo(row: MediaRow, buffer: Buffer): Promise<string> {
       folder: `${slide.content_path}/images`,
       message: `Upload image for slides: ${slide.title}`,
       fileTypes: uploadFileTypes(classroom as never),
+      storedName,
     });
     await recordContentAsset(row.classroom_id, {
       path: result.path,
@@ -766,6 +874,14 @@ async function commitToRepo(row: MediaRow, buffer: Buffer): Promise<string> {
   throw new PlacementRefused('This upload has no page or slide to be added to.');
 }
 
+/**
+ * The repository name a staged file is placed under: deterministic per upload,
+ * so every attempt of the same placement writes — or finds — the same path.
+ */
+export function stagedRepoName(row: Pick<MediaRow, 'id' | 'filename'>): string {
+  return stableFilename(row.filename, row.id.slice(0, 8));
+}
+
 /** A placement that cannot succeed on retry — recorded, not rethrown. */
 export class PlacementRefused extends Error {
   constructor(message: string) {
@@ -775,13 +891,24 @@ export class PlacementRefused extends Error {
 }
 
 /**
+ * `MediaError` codes a later attempt CAN change: a copy whose size check
+ * disagreed (a read racing R2's own consistency), and a deployment briefly
+ * missing its media configuration (a secret rotated mid-deploy). Every other
+ * `MediaError` is about the file or the classroom and says the same thing next
+ * time.
+ */
+const RETRYABLE_MEDIA_CODES: ReadonlySet<unknown> = new Set(['VERIFY_FAILED', 'NOT_CONFIGURED']);
+
+/**
  * Is this a refusal a retry cannot change? The repository's own typed
- * refusals (type, name, size), the router's `USE_MEDIA`, and our own.
+ * refusals (type, name, size), the router's `USE_MEDIA`, and our own — but
+ * not the `MediaError`s in `RETRYABLE_MEDIA_CODES`.
  */
 export function isPermanentPlacementError(error: unknown): boolean {
   let current: unknown = error;
   while (current instanceof Error) {
     const code = (current as { code?: unknown }).code;
+    if (current.name === 'MediaError' && RETRYABLE_MEDIA_CODES.has(code)) return false;
     if (
       current instanceof PlacementRefused ||
       current.name === 'PlacementRefused' ||
@@ -808,6 +935,7 @@ export async function placeStagedObject(
 ): Promise<{ status: 'placed'; ref: string } | { status: 'skipped'; reason: string }> {
   const row = await stagedRowById(mediaId);
   if (!row || row.status !== 'STAGING') return { status: 'skipped', reason: 'not-staging' };
+  if (await failIfExpired(row)) return { status: 'skipped', reason: 'expired' };
   const { client, bucket } = requireClient();
 
   if (row.destination === 'media') {
@@ -843,12 +971,17 @@ export async function placeStagedObject(
 // URL imports (the `media-import-url` task's service half)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** What the import task needs to know before it fetches. */
+/**
+ * What the import task needs to know before it fetches — or null for a row no
+ * longer STAGING (cancelled, deleted, done), or `{ expired: true }` for one
+ * past the reservation window (recorded as failed here).
+ */
 export async function stagedImportContext(
   mediaId: string
-): Promise<{ row: MediaRow; maxBytes: number } | null> {
+): Promise<{ row: MediaRow; maxBytes: number } | { expired: true } | null> {
   const row = await stagedRowById(mediaId);
   if (!row || row.status !== 'STAGING') return null;
+  if (await failIfExpired(row)) return { expired: true };
   return { row, maxBytes: await importByteCapFor({ id: row.classroom_id }) };
 }
 
@@ -970,6 +1103,7 @@ export async function settleStagedImport(mediaId: string, sizeBytes: number): Pr
   if (!row || row.status !== 'STAGING') {
     throw new PlacementRefused('This import was cancelled.');
   }
+  if (await failIfExpired(row)) throw new PlacementRefused(STAGE_EXPIRED_REASON);
   const destination = await routeAgentFile({ id: row.classroom_id }, row.filename, sizeBytes);
 
   await getPrisma().$transaction(async tx => {
@@ -983,14 +1117,10 @@ export async function settleStagedImport(mediaId: string, sizeBytes: number): Pr
         .reduce((total, other) => total + billedBytes(other), 0);
       const quotaBytes = quotaBytesFor(true);
       if (usedBytes + sizeBytes > quotaBytes) {
-        throw new MediaError(
-          'QUOTA_EXCEEDED',
-          'This file would put the class over its storage quota',
-          {
-            usedBytes,
-            quotaBytes,
-          }
-        );
+        throw new MediaError('QUOTA_EXCEEDED', MEDIA_QUOTA_FULL_MESSAGE, {
+          usedBytes,
+          quotaBytes,
+        });
       }
     }
     await tx.mediaObject.updateMany({

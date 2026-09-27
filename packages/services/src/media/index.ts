@@ -45,6 +45,7 @@ export {
   FREE_QUOTA_BYTES,
   MAX_PARTS_PER_SIGN,
   PART_SIZE_BYTES,
+  MEDIA_QUOTA_FULL_MESSAGE,
   PER_FILE_MAX_BYTES,
   PRO_QUOTA_BYTES,
   RESERVATION_WINDOW_MS,
@@ -56,7 +57,7 @@ export { isMediaConfigured } from './mediaConfig.ts';
 
 // The storage router: pure, so it is ALSO reachable from the browser through
 // the `@classmoji/services/media/router` subpath, which is this one module.
-export { kindOfFilename, storageTargetFor } from './storageRouter.ts';
+export { formatGigabytes, kindOfFilename, storageTargetFor } from './storageRouter.ts';
 export type { StorageRefusalCode, StorageTarget, UploadCapability } from './storageRouter.ts';
 
 // Its server half — the capability a loader hands an editor, and the check every
