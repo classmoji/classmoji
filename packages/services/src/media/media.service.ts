@@ -144,6 +144,12 @@ const PART_URL_TTL_SECONDS = 15 * 60;
 export const VIDEO_PROCESS_TASK_ID = 'media-video-process';
 
 /**
+ * How long `onMediaReady`'s idempotency key lives. Short on purpose: the DB
+ * claim is the real dedupe, and the key is only there for an immediate resend.
+ */
+export const VIDEO_PROCESS_IDEMPOTENCY_TTL = '10m';
+
+/**
  * What `processing_error` says when the job could not even be queued. Shown as
  * the detail under "Couldn't optimise — the original is shown", so it is about
  * the outcome, not the machinery.
@@ -162,10 +168,13 @@ export const VIDEO_ENQUEUE_FAILED_REASON = 'Optimising could not be started for 
  * job is queued, so it is written here, where that becomes true, and nowhere
  * else — a row carrying it with no job behind it shows as forever optimising.
  *
- * The claim is what makes a second call a no-op: a row already PENDING, DONE or
- * FAILED matches nothing, so a double fire (a copy reused by a retried import,
- * a concurrent complete) queues nothing twice. The idempotency key collapses a
- * repeat that did get through.
+ * The claim is the dedupe: a row already PENDING, DONE or FAILED matches
+ * nothing, so a double fire (a copy reused by a retried import, a concurrent
+ * complete) queues nothing twice. The idempotency key only covers the gap the
+ * claim cannot — a trigger whose answer was lost and is sent again moments
+ * later — so it lives for `VIDEO_PROCESS_IDEMPOTENCY_TTL`, not Trigger's 30-day
+ * default. A long-lived key would hand back the old, finished run to a later
+ * legitimate enqueue for the same id and leave the row PENDING with no job.
  *
  * NEVER throws. The object is already READY and serving its original; the
  * caller's upload succeeded whatever happens here. A failed enqueue marks the
@@ -192,7 +201,10 @@ export async function onMediaReady(row: MediaRecord): Promise<void> {
     await tasks.trigger(
       VIDEO_PROCESS_TASK_ID,
       { classroomId: row.classroomId, mediaId: row.id },
-      { idempotencyKey: `media-video-process:${row.id}` }
+      {
+        idempotencyKey: `media-video-process:${row.id}`,
+        idempotencyKeyTTL: VIDEO_PROCESS_IDEMPOTENCY_TTL,
+      }
     );
   } catch (error) {
     console.warn(

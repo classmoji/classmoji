@@ -2089,7 +2089,7 @@ describe('onMediaReady', () => {
     expect(trigger).toHaveBeenCalledWith(
       'media-video-process',
       { classroomId: CLASSROOM_ID, mediaId },
-      { idempotencyKey: `media-video-process:${mediaId}` }
+      { idempotencyKey: `media-video-process:${mediaId}`, idempotencyKeyTTL: '10m' }
     );
   };
 
