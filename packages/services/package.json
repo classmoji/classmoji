@@ -18,6 +18,7 @@
     "./form-contract": "./src/classmoji/formContract.ts",
     "./team-set-checks": "./src/classmoji/teamSetChecks.ts",
     "./team-set-config": "./src/classmoji/teamSetConfig.ts",
+    "./team-set-explain": "./src/classmoji/teamSetExplain.ts",
     "./team-set-metrics": "./src/classmoji/teamSetMetrics.ts",
     "./team-set-problem": "./src/classmoji/teamSetProblem.ts",
     "./team-set-score": "./src/classmoji/teamSetScore.ts",

@@ -5,7 +5,7 @@ import {
   IconGripVertical,
   IconTrash,
 } from '@tabler/icons-react';
-import type { FormField } from '@classmoji/services/form-contract';
+import { isIdentityQuestion, type FormField } from '@classmoji/services/form-contract';
 
 import { isDisplayField, metaFor } from '../fieldTypes.ts';
 import FieldConfig, { type ScopeChoices } from './FieldConfig.tsx';
@@ -28,6 +28,8 @@ interface FieldCardProps {
   onChange: (patch: Record<string, unknown>) => void;
   onRemove: () => void;
   scopes: ScopeChoices;
+  /** The form's top-level fields, for the dropdown's `options_from` picker. */
+  siblings: FormField[];
 }
 
 /** One line describing the field without opening it. */
@@ -44,6 +46,7 @@ export default function FieldCard({
   onChange,
   onRemove,
   scopes,
+  siblings,
 }: FieldCardProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: field.id,
@@ -96,6 +99,13 @@ export default function FieldCard({
             </span>
             <span className="text-sm text-gray-800 dark:text-gray-100">{summarize(field)}</span>
             {field.required ? <span className="ml-1 text-red-500">*</span> : null}
+            {/* Derived from the flag alone: nothing records which preset, if
+                any, a question came from. */}
+            {isIdentityQuestion(field) ? (
+              <span className="ml-2 whitespace-nowrap rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-800 dark:bg-violet-900 dark:text-violet-200">
+                Identity question
+              </span>
+            ) : null}
           </span>
         </button>
 
@@ -111,7 +121,7 @@ export default function FieldCard({
 
       {expanded ? (
         <div className="border-t border-gray-100 px-3 pb-3 dark:border-gray-700">
-          <FieldConfig field={field} onChange={onChange} scopes={scopes} />
+          <FieldConfig field={field} onChange={onChange} scopes={scopes} siblings={siblings} />
         </div>
       ) : null}
     </div>

@@ -10,6 +10,7 @@ import {
   IconLock,
   IconPencil,
   IconPlus,
+  IconUsersGroup,
   IconWorld,
 } from '@tabler/icons-react';
 
@@ -35,8 +36,8 @@ dayjs.extend(relativeTime);
  * responses, all of which stay in apps/pages where the builder is. Exactly as
  * `admin.$class.slides` lists decks the slides app edits and presents.
  *
- * The four links that leave (New Form, Edit, Responses, and the back link that
- * comes home) are plain same-tab anchors to the pages app, not `window.open`:
+ * The links that leave (New Form, Edit, Responses, Teams, and the back link
+ * that comes home) are plain same-tab anchors to the pages app, not `window.open`:
  * this is one task that happens to span two origins, and a builder that opens
  * in a tab you did not ask for is a tab you then have to close. The exception
  * is the public fill URL, which really is a different site — a respondent view
@@ -456,13 +457,18 @@ export default function FormsAdmin({ loaderData }: Route.ComponentProps) {
     {
       title: 'Actions',
       key: 'actions',
-      width: 210,
+      width: 280,
       /**
-       * Four actions, not five. Responses was dropped from this column because
-       * the Responses COUNT is already a link at rest — a second door to the
-       * same page, three columns away, was the whole reason this column ran to
-       * 370px against the slides list's 220. Delete drops its label the way
+       * No Responses action. It was dropped from this column because the
+       * Responses COUNT is already a link at rest — a second door to the same
+       * page, three columns away, was the whole reason this column ran to 370px
+       * against the slides list's 220. Delete drops its label the way
        * RepoActions and the assignment table do; the red trash is unambiguous.
+       *
+       * Teams appears on CLASSROOM forms only: team sets are made from the
+       * classroom roster's answers, and a PUBLIC form's respondents are not a
+       * roster. It comes after Edit, so Copy link, Open and Edit sit in the
+       * same place on every row whether or not it is there.
        */
       render: (_: unknown, record: FormRow) => (
         <TableActionButtons
@@ -501,6 +507,14 @@ export default function FormsAdmin({ loaderData }: Route.ComponentProps) {
           <FormActionLink href={`${formsUrl}/${record.slug}/edit`} icon={<IconPencil size={17} />}>
             Edit
           </FormActionLink>
+          {record.access === 'CLASSROOM' && (
+            <FormActionLink
+              href={`${formsUrl}/${record.slug}/teams`}
+              icon={<IconUsersGroup size={17} />}
+            >
+              Teams
+            </FormActionLink>
+          )}
         </TableActionButtons>
       ),
     },

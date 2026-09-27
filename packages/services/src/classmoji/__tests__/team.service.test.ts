@@ -6,22 +6,42 @@
  * The tests pin the two invariants the extraction exists to establish: every
  * mutation resolves its team through the classroom BEFORE anything reaches the
  * provider, and every bulk operation reports its per-item failures instead of
- * swallowing them.
+ * swallowing them. They also pin the tag rule: a team is created with at least
+ * one tag of its classroom, written with its row, and keeps at least one.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const teamFindFirst = vi.fn();
+const teamRowCreate = vi.fn();
 const tagFindMany = vi.fn();
 const teamTagFindFirst = vi.fn();
+const teamTagCount = vi.fn();
+const teamTagRowDelete = vi.fn();
 const userFindFirst = vi.fn();
+const queryRaw = vi.fn();
+const transaction = vi.fn((fn: (tx: unknown) => unknown) => fn(client));
+
+// The transaction client exposes the same model methods, so the assertions hold
+// whether a call went through `$transaction` or not, plus the raw query used
+// for the row lock.
+const client = {
+  team: {
+    findFirst: (...a: unknown[]) => teamFindFirst(...a),
+    create: (...a: unknown[]) => teamRowCreate(...a),
+  },
+  tag: { findMany: (...a: unknown[]) => tagFindMany(...a) },
+  teamTag: {
+    findFirst: (...a: unknown[]) => teamTagFindFirst(...a),
+    count: (...a: unknown[]) => teamTagCount(...a),
+    delete: (...a: unknown[]) => teamTagRowDelete(...a),
+  },
+  user: { findFirst: (...a: unknown[]) => userFindFirst(...a) },
+  $queryRaw: (...a: unknown[]) => queryRaw(...a),
+  $transaction: (fn: (tx: unknown) => unknown) => transaction(fn),
+};
 vi.mock('@classmoji/database', () => ({
-  default: () => ({
-    team: { findFirst: (...a: unknown[]) => teamFindFirst(...a) },
-    tag: { findMany: (...a: unknown[]) => tagFindMany(...a) },
-    teamTag: { findFirst: (...a: unknown[]) => teamTagFindFirst(...a) },
-    user: { findFirst: (...a: unknown[]) => userFindFirst(...a) },
-  }),
+  default: () => client,
 }));
 
 const getTeam = vi.fn();
@@ -72,14 +92,16 @@ vi.mock('../teamMembership.service.ts', () => ({
 }));
 
 const teamTagCreate = vi.fn();
-const teamTagDelete = vi.fn();
 vi.mock('../teamTag.service.ts', () => ({
   create: (...a: unknown[]) => teamTagCreate(...a),
-  delete: (...a: unknown[]) => teamTagDelete(...a),
 }));
 
 const teamAdmin = await import('../teamAdmin.service.ts');
 const { TeamServiceError } = teamAdmin;
+// The real team.service, for the one test of its own write; teamAdmin above
+// still gets the mock.
+const teamService =
+  await vi.importActual<typeof import('../team.service.ts')>('../team.service.ts');
 
 const CLASSROOM = {
   id: 'class-1',
@@ -106,7 +128,9 @@ beforeEach(() => {
   teamFindFirst.mockResolvedValue(TEAM);
   teamFindBySlug.mockResolvedValue(null);
   teamFindByIdWithRepositories.mockResolvedValue({ git_repos: [] });
-  tagFindMany.mockResolvedValue([]);
+  tagFindMany.mockResolvedValue([{ id: 'tag-1' }]);
+  teamTagCount.mockResolvedValue(2);
+  queryRaw.mockResolvedValue([{ id: 'team-1' }]);
   getTeam.mockRejectedValue(notFound());
   createTeam.mockResolvedValue({ id: 7, slug: 'blue-team', name: 'Blue Team' });
   teamCreate.mockResolvedValue(TEAM);
@@ -123,6 +147,7 @@ describe('teamAdmin.createTeam', () => {
       classroomId: 'class-1',
       name: '  Blue Team  ',
       isVisible: true,
+      tagIds: ['tag-1'],
     });
 
     expect(createTeam).toHaveBeenCalledWith('cs1-org', 'Blue Team');
@@ -133,6 +158,7 @@ describe('teamAdmin.createTeam', () => {
       slug: 'blue-team',
       classroomId: 'class-1',
       isVisible: true,
+      tagIds: ['tag-1'],
     });
     expect(result.team).toEqual({
       id: 'team-1',
@@ -140,19 +166,21 @@ describe('teamAdmin.createTeam', () => {
       slug: 'blue-team',
       isVisible: true,
     });
+    expect(result.tagsAdded).toEqual(['tag-1']);
+    expect(result.tagsFailed).toEqual([]);
   });
 
   it('defaults is_visible to false rather than always storing a visible team', async () => {
-    await teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team' });
+    await teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team', tagIds: ['tag-1'] });
 
     expect(teamCreate.mock.calls[0][0]).toMatchObject({ isVisible: false });
   });
 
   it('refuses a name whose slug would collide with the classroom teams', async () => {
     for (const name of ['cs1 25f students', 'CS1-25F-Assistants']) {
-      await expect(teamAdmin.createTeam({ classroomId: 'class-1', name })).rejects.toMatchObject({
-        code: 'reserved_name',
-      });
+      await expect(
+        teamAdmin.createTeam({ classroomId: 'class-1', name, tagIds: ['tag-1'] })
+      ).rejects.toMatchObject({ code: 'reserved_name' });
     }
     expect(getTeam).not.toHaveBeenCalled();
     expect(createTeam).not.toHaveBeenCalled();
@@ -160,7 +188,7 @@ describe('teamAdmin.createTeam', () => {
 
   it('rejects an empty name before anything else runs', async () => {
     await expect(
-      teamAdmin.createTeam({ classroomId: 'class-1', name: '   ' })
+      teamAdmin.createTeam({ classroomId: 'class-1', name: '   ', tagIds: ['tag-1'] })
     ).rejects.toMatchObject({ code: 'invalid_name' });
     expect(classroomFindById).not.toHaveBeenCalled();
   });
@@ -169,7 +197,7 @@ describe('teamAdmin.createTeam', () => {
     getTeam.mockResolvedValue({ id: 3, slug: 'blue-team', name: 'Blue Team' });
 
     await expect(
-      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team' })
+      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team', tagIds: ['tag-1'] })
     ).rejects.toMatchObject({ code: 'name_collision' });
     expect(createTeam).not.toHaveBeenCalled();
   });
@@ -178,7 +206,7 @@ describe('teamAdmin.createTeam', () => {
     getTeam.mockRejectedValue(Object.assign(new Error('rate limited'), { status: 403 }));
 
     await expect(
-      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team' })
+      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team', tagIds: ['tag-1'] })
     ).rejects.toThrow('rate limited');
     expect(createTeam).not.toHaveBeenCalled();
   });
@@ -196,34 +224,80 @@ describe('teamAdmin.createTeam', () => {
       id: { in: ['tag-ok', 'tag-elsewhere'] },
       classroom_id: 'class-1',
     });
-    // The out-of-classroom id never reaches a write.
-    expect(teamTagCreate).toHaveBeenCalledTimes(1);
-    expect(teamTagCreate).toHaveBeenCalledWith('team-1', 'tag-ok');
+    expect(tagFindMany.mock.invocationCallOrder[0]).toBeLessThan(
+      getTeam.mock.invocationCallOrder[0]
+    );
+    // The out-of-classroom id never reaches a write; the valid one goes in with
+    // the team row, not as a separate write afterwards.
+    expect(teamCreate.mock.calls[0][0]).toMatchObject({ tagIds: ['tag-ok'] });
+    expect(teamTagCreate).not.toHaveBeenCalled();
     expect(result.tagsAdded).toEqual(['tag-ok']);
     expect(result.tagsFailed).toEqual([{ tagId: 'tag-elsewhere', error: 'invalid' }]);
   });
 
-  it('reports a failing tag without losing the tags after it', async () => {
-    tagFindMany.mockResolvedValue([{ id: 'tag-a' }, { id: 'tag-b' }]);
-    teamTagCreate.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce({ id: 'tt-2' });
+  it('refuses with tag_required before any provider call when no tag is given', async () => {
+    await expect(
+      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team', tagIds: [] })
+    ).rejects.toMatchObject({ code: 'tag_required' });
 
-    const result = await teamAdmin.createTeam({
-      classroomId: 'class-1',
-      name: 'Blue Team',
-      tagIds: ['tag-a', 'tag-b'],
-    });
+    expect(getTeam).not.toHaveBeenCalled();
+    expect(createTeam).not.toHaveBeenCalled();
+    expect(teamCreate).not.toHaveBeenCalled();
+  });
 
-    expect(result.tagsAdded).toEqual(['tag-b']);
-    // The reason is reported; the raw message stays in the server log.
-    expect(result.tagsFailed).toEqual([{ tagId: 'tag-a', error: 'db_error' }]);
-    expect(JSON.stringify(result.tagsFailed)).not.toContain('boom');
+  it('refuses with tag_required when no requested tag belongs to the classroom', async () => {
+    tagFindMany.mockResolvedValue([]);
+
+    await expect(
+      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team', tagIds: ['tag-elsewhere'] })
+    ).rejects.toMatchObject({ code: 'tag_required' });
+
+    expect(getTeam).not.toHaveBeenCalled();
+    expect(createTeam).not.toHaveBeenCalled();
+    expect(teamCreate).not.toHaveBeenCalled();
+  });
+
+  it('deletes the provider team again when the local write fails, and rethrows', async () => {
+    const writeError = Object.assign(new Error('foreign key'), { code: 'P2003' });
+    teamCreate.mockRejectedValue(writeError);
+
+    await expect(
+      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team', tagIds: ['tag-1'] })
+    ).rejects.toBe(writeError);
+
+    expect(deleteTeam).toHaveBeenCalledWith('cs1-org', 'blue-team');
+    expect(createTeam.mock.invocationCallOrder[0]).toBeLessThan(
+      deleteTeam.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('rethrows the write error even when the rollback fails too', async () => {
+    const writeError = Object.assign(new Error('connection lost'), { code: 'P1001' });
+    teamCreate.mockRejectedValue(writeError);
+    deleteTeam.mockRejectedValueOnce(new Error('rollback failed'));
+
+    await expect(
+      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team', tagIds: ['tag-1'] })
+    ).rejects.toBe(writeError);
+    expect(deleteTeam).toHaveBeenCalledWith('cs1-org', 'blue-team');
+  });
+
+  it('leaves the provider team alone when another local row already holds it', async () => {
+    // Two requests racing on one name: the provider create adopted the team the
+    // other request made, and that request's row was written first.
+    teamCreate.mockRejectedValue(Object.assign(new Error('unique'), { code: 'P2002' }));
+
+    await expect(
+      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team', tagIds: ['tag-1'] })
+    ).rejects.toMatchObject({ code: 'name_collision' });
+    expect(deleteTeam).not.toHaveBeenCalled();
   });
 
   it('throws no_org_configured when the classroom has no git organization', async () => {
     classroomFindById.mockResolvedValue({ ...CLASSROOM, git_organization: null });
 
     await expect(
-      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team' })
+      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team', tagIds: ['tag-1'] })
     ).rejects.toMatchObject({ code: 'no_org_configured' });
   });
 
@@ -236,7 +310,7 @@ describe('teamAdmin.createTeam', () => {
     createTeam.mockResolvedValue({ id: 9, slug: 'cs1-25f-students', name: 'CS1-25F Students!' });
 
     await expect(
-      teamAdmin.createTeam({ classroomId: 'class-1', name: 'CS1-25F Students!' })
+      teamAdmin.createTeam({ classroomId: 'class-1', name: 'CS1-25F Students!', tagIds: ['tag-1'] })
     ).rejects.toMatchObject({ code: 'reserved_name' });
 
     expect(deleteTeam).toHaveBeenCalledWith('cs1-org', 'cs1-25f-students');
@@ -248,7 +322,7 @@ describe('teamAdmin.createTeam', () => {
     teamFindBySlug.mockResolvedValue({ id: 'other-team', slug: 'blue-team' });
 
     await expect(
-      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team!' })
+      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team!', tagIds: ['tag-1'] })
     ).rejects.toMatchObject({ code: 'name_collision' });
 
     expect(teamFindBySlug).toHaveBeenCalledWith('blue-team', 'class-1');
@@ -262,15 +336,62 @@ describe('teamAdmin.createTeam', () => {
     deleteTeam.mockRejectedValueOnce(new Error('rollback failed'));
 
     await expect(
-      teamAdmin.createTeam({ classroomId: 'class-1', name: 'CS1 25F.Assistants' })
+      teamAdmin.createTeam({
+        classroomId: 'class-1',
+        name: 'CS1 25F.Assistants',
+        tagIds: ['tag-1'],
+      })
     ).rejects.toMatchObject({ code: 'reserved_name' });
     expect(teamCreate).not.toHaveBeenCalled();
   });
 });
 
+describe('team.create', () => {
+  it('writes the team row and its tags in one nested create', async () => {
+    teamRowCreate.mockResolvedValue(TEAM);
+
+    await teamService.create({
+      providerId: 7,
+      provider: 'GITHUB',
+      name: 'Blue Team',
+      slug: 'blue-team',
+      classroomId: 'class-1',
+      tagIds: ['tag-a', 'tag-b'],
+    });
+
+    // One create call carries the tags, so Prisma writes the row and the
+    // TeamTag rows in a single transaction.
+    expect(teamRowCreate).toHaveBeenCalledTimes(1);
+    expect(teamRowCreate).toHaveBeenCalledWith({
+      data: {
+        provider_id: '7',
+        provider: 'GITHUB',
+        name: 'Blue Team',
+        slug: 'blue-team',
+        classroom_id: 'class-1',
+        is_visible: false,
+        tags: { create: [{ tag_id: 'tag-a' }, { tag_id: 'tag-b' }] },
+      },
+    });
+    expect(teamTagCreate).not.toHaveBeenCalled();
+  });
+});
+
 describe('teamAdmin.deleteTeam', () => {
-  it('deletes on the provider and locally once the local row resolves', async () => {
+  it('leaves the provider team alone unless asked, and removes the local row', async () => {
     const result = await teamAdmin.deleteTeam({ classroomId: 'class-1', slugOrId: 'blue-team' });
+
+    expect(deleteTeam).not.toHaveBeenCalled();
+    expect(teamDeleteBySlug).toHaveBeenCalledWith('class-1', 'blue-team');
+    expect(result.removedFromProvider).toBe(false);
+  });
+
+  it('deletes on the provider and locally once the local row resolves', async () => {
+    const result = await teamAdmin.deleteTeam({
+      classroomId: 'class-1',
+      slugOrId: 'blue-team',
+      deleteOnProvider: true,
+    });
 
     expect(deleteTeam).toHaveBeenCalledWith('cs1-org', 'blue-team');
     expect(teamDeleteBySlug).toHaveBeenCalledWith('class-1', 'blue-team');
@@ -313,7 +434,11 @@ describe('teamAdmin.deleteTeam', () => {
     teamFindFirst.mockResolvedValue(null);
 
     await expect(
-      teamAdmin.deleteTeam({ classroomId: 'class-1', slugOrId: 'cs1-25f-students' })
+      teamAdmin.deleteTeam({
+        classroomId: 'class-1',
+        slugOrId: 'cs1-25f-students',
+        deleteOnProvider: true,
+      })
     ).rejects.toMatchObject({ code: 'team_not_found' });
 
     expect(deleteTeam).not.toHaveBeenCalled();
@@ -332,8 +457,13 @@ describe('teamAdmin.deleteTeam', () => {
   it('tolerates a provider 404 and still removes the local row', async () => {
     deleteTeam.mockRejectedValue(notFound());
 
-    const result = await teamAdmin.deleteTeam({ classroomId: 'class-1', slugOrId: 'blue-team' });
+    const result = await teamAdmin.deleteTeam({
+      classroomId: 'class-1',
+      slugOrId: 'blue-team',
+      deleteOnProvider: true,
+    });
 
+    expect(deleteTeam).toHaveBeenCalledWith('cs1-org', 'blue-team');
     expect(teamDeleteBySlug).toHaveBeenCalledWith('class-1', 'blue-team');
     expect(result.removedFromProvider).toBe(false);
   });
@@ -342,7 +472,11 @@ describe('teamAdmin.deleteTeam', () => {
     deleteTeam.mockRejectedValue(Object.assign(new Error('forbidden'), { status: 403 }));
 
     await expect(
-      teamAdmin.deleteTeam({ classroomId: 'class-1', slugOrId: 'blue-team' })
+      teamAdmin.deleteTeam({
+        classroomId: 'class-1',
+        slugOrId: 'blue-team',
+        deleteOnProvider: true,
+      })
     ).rejects.toThrow('forbidden');
     expect(teamDeleteBySlug).not.toHaveBeenCalled();
   });
@@ -618,7 +752,7 @@ describe('teamAdmin.removeTeamTag', () => {
       id: 'tt-1',
       team: { classroom_id: 'class-1' },
     });
-    expect(teamTagDelete).toHaveBeenCalledWith('tt-1');
+    expect(teamTagRowDelete).toHaveBeenCalledWith({ where: { id: 'tt-1' } });
     expect(result).toEqual({ teamTagId: 'tt-1', teamId: 'team-1', tagId: 'tag-1' });
   });
 
@@ -628,7 +762,46 @@ describe('teamAdmin.removeTeamTag', () => {
     await expect(
       teamAdmin.removeTeamTag({ classroomId: 'class-1', teamTagId: 'tt-elsewhere' })
     ).rejects.toMatchObject({ code: 'tag_not_found' });
-    expect(teamTagDelete).not.toHaveBeenCalled();
+    expect(teamTagRowDelete).not.toHaveBeenCalled();
+  });
+
+  it("refuses to remove the team's last tag", async () => {
+    teamTagFindFirst.mockResolvedValue({ id: 'tt-1', team_id: 'team-1', tag_id: 'tag-1' });
+    teamTagCount.mockResolvedValue(1);
+
+    await expect(
+      teamAdmin.removeTeamTag({ classroomId: 'class-1', teamTagId: 'tt-1' })
+    ).rejects.toMatchObject({ code: 'tag_required' });
+    expect(teamTagCount).toHaveBeenCalledWith({ where: { team_id: 'team-1' } });
+    expect(teamTagRowDelete).not.toHaveBeenCalled();
+  });
+
+  it('counts the tags inside the transaction, behind a row lock on the team', async () => {
+    teamTagFindFirst.mockResolvedValue({ id: 'tt-1', team_id: 'team-1', tag_id: 'tag-1' });
+
+    await teamAdmin.removeTeamTag({ classroomId: 'class-1', teamTagId: 'tt-1' });
+
+    expect(transaction).toHaveBeenCalledTimes(1);
+    const [strings, ...values] = queryRaw.mock.calls[0] as [string[], ...unknown[]];
+    expect(strings.join('?')).toContain('FOR UPDATE');
+    expect(values).toEqual(['team-1']);
+    // The lock is taken BEFORE the count that authorizes the delete, and the
+    // delete happens after both.
+    expect(queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      teamTagCount.mock.invocationCallOrder[0]
+    );
+    expect(teamTagCount.mock.invocationCallOrder[0]).toBeLessThan(
+      teamTagRowDelete.mock.invocationCallOrder[0]
+    );
+  });
+});
+
+describe('teamTag.service', () => {
+  it('has no delete: removeTeamTag, with its last-tag rule, is the only way a tag comes off', async () => {
+    const teamTagService =
+      await vi.importActual<typeof import('../teamTag.service.ts')>('../teamTag.service.ts');
+
+    expect(Object.keys(teamTagService)).toEqual(['create']);
   });
 });
 

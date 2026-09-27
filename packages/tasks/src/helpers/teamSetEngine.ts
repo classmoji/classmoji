@@ -17,6 +17,11 @@
  * objective would surface there as a TypeError deep in the scorer; here it is
  * a named `bad_result` before anything touches the database.
  *
+ * The shape depends on the problem: a problem with a `group` (IR version 2,
+ * two stages) always gets `stages`, and any other problem never does, so the
+ * caller passes the problem it solved and a line that breaks that rule is a
+ * `bad_result` too.
+ *
  * ── Why failures carry a reason and not the output ──────────────────────────
  * The problem file holds user ids, and a non-zero exit's error message embeds
  * the script's whole stdout and stderr. `EngineFailure.reason` is a closed code
@@ -82,6 +87,17 @@ export interface SolverStats {
   build_s: number;
 }
 
+/**
+ * Per-stage outcome of a two-stage solve (problem.group), as the engine
+ * reports it. Mirrors TeamSetSolveStages (teamSetProblem.ts); the cross-check
+ * test pins the two types equal. `second` is null when stage 2 never ran.
+ * When the result has an objective, it is first.objective + second.objective.
+ */
+export interface SolverStages {
+  first: { status: SolverStatus; objective: number | null; bound: number | null };
+  second: { status: SolverStatus; objective: number | null } | null;
+}
+
 export interface SolverOutput {
   status: SolverStatus;
   teams: { slot: number; members: number[] }[];
@@ -96,6 +112,17 @@ export interface SolverOutput {
   stats?: SolverStats;
   /** Only with MODEL_INVALID: why, naming IR entries by index (no ids). */
   message?: string;
+  /** Present exactly when the problem has a `group`. */
+  stages?: SolverStages;
+}
+
+/**
+ * What the parser needs to know about the problem that was solved: whether
+ * it has a `group`. The engine treats a null `group` as none, and a group
+ * with no members as a group.
+ */
+export interface SolvedProblem {
+  group?: unknown;
 }
 
 const SOLVER_STATUSES: ReadonlySet<string> = new Set<SolverStatus>([
@@ -155,8 +182,13 @@ export function solverKillAfterMs(timeLimitS: number): number {
 }
 
 const isInt = (value: unknown): value is number => Number.isSafeInteger(value);
+const isIntOrNull = (value: unknown): value is number | null => value === null || isInt(value);
 const isNumOrNull = (value: unknown): value is number | null =>
   value === null || (typeof value === 'number' && Number.isFinite(value));
+const isStatus = (value: unknown): value is SolverStatus =>
+  typeof value === 'string' && SOLVER_STATUSES.has(value);
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === 'object' && !Array.isArray(value);
 
 /**
  * Parse the solver's stdout into a SolverOutput.
@@ -164,9 +196,10 @@ const isNumOrNull = (value: unknown): value is number | null =>
  * Scans from the END for the last line that parses as `{"type":"result"}`, so
  * progress lines (and any stray non-JSON output a library prints) are ignored.
  * Throws EngineFailure('no_result_line') when there is none and
- * EngineFailure('bad_result') when the line does not have the contract's shape.
+ * EngineFailure('bad_result') when the line does not have the contract's shape
+ * for `problem` (see SolvedProblem).
  */
-export function parseSolverOutput(stdout: string): SolverOutput {
+export function parseSolverOutput(stdout: string, problem: SolvedProblem): SolverOutput {
   const lines = stdout.split('\n');
   for (let index = lines.length - 1; index >= 0; index--) {
     const line = lines[index].trim();
@@ -180,12 +213,12 @@ export function parseSolverOutput(stdout: string): SolverOutput {
     if (!parsed || typeof parsed !== 'object' || (parsed as { type?: unknown }).type !== 'result') {
       continue;
     }
-    return validateResult(parsed as Record<string, unknown>);
+    return validateResult(parsed as Record<string, unknown>, problem.group != null);
   }
   throw new EngineFailure('no_result_line');
 }
 
-function validateResult(raw: Record<string, unknown>): SolverOutput {
+function validateResult(raw: Record<string, unknown>, hasGroup: boolean): SolverOutput {
   const { status, teams, objective, bound, wall_s, core } = raw;
   if (typeof status !== 'string' || !SOLVER_STATUSES.has(status))
     throw new EngineFailure('bad_result');
@@ -233,7 +266,52 @@ function validateResult(raw: Record<string, unknown>): SolverOutput {
     if (typeof message !== 'string') throw new EngineFailure('bad_result');
     output.message = message.slice(0, MAX_MESSAGE_LENGTH);
   }
+  // `stages`: required for a group problem, refused for any other.
+  const { stages } = raw;
+  if ((stages !== undefined) !== hasGroup) throw new EngineFailure('bad_result');
+  if (stages !== undefined) output.stages = validateStages(stages, output);
   return output;
+}
+
+/**
+ * The exact `stages` shape (unknown keys are dropped, as at the top level),
+ * plus what the engine promises about it: a result with an objective has run
+ * both stages and its objective is their sum, and OPTIMAL means both stages
+ * are. A line that breaks either would reach completeRun as a score mismatch.
+ */
+function validateStages(raw: unknown, output: SolverOutput): SolverStages {
+  if (!isObject(raw)) throw new EngineFailure('bad_result');
+  const { first, second } = raw;
+  if (!isObject(first) || (second !== null && !isObject(second))) {
+    throw new EngineFailure('bad_result');
+  }
+  if (!isStatus(first.status) || !isIntOrNull(first.objective) || !isIntOrNull(first.bound)) {
+    throw new EngineFailure('bad_result');
+  }
+  const stages: SolverStages = {
+    first: { status: first.status, objective: first.objective, bound: first.bound },
+    second: null,
+  };
+  if (second !== null) {
+    if (!isStatus(second.status) || !isIntOrNull(second.objective)) {
+      throw new EngineFailure('bad_result');
+    }
+    stages.second = { status: second.status, objective: second.objective };
+  }
+  if (output.objective !== null) {
+    const one = stages.first.objective;
+    const two = stages.second?.objective ?? null;
+    if (one === null || two === null || one + two !== output.objective) {
+      throw new EngineFailure('bad_result');
+    }
+  }
+  if (
+    output.status === 'OPTIMAL' &&
+    (stages.first.status !== 'OPTIMAL' || stages.second?.status !== 'OPTIMAL')
+  ) {
+    throw new EngineFailure('bad_result');
+  }
+  return stages;
 }
 
 function validateStats(raw: unknown): SolverStats {

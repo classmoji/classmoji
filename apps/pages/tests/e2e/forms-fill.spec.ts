@@ -53,16 +53,21 @@ const CLASSROOM_FORM_SLUG = 'zz-e2e-fill-members';
 const TYPES_FORM_SLUG = 'zz-e2e-fill-types';
 /** A form in the state the CLASSROOM→PUBLIC flip used to leave behind. */
 const LEAK_FORM_SLUG = 'zz-e2e-fill-roster-leak';
+/** Identity questions: an exclusive multiselect option and a flagged name question. */
+const IDENTITY_FORM_SLUG = 'zz-e2e-fill-identity';
 
 const fillPath = `/${CLASS}/forms/${FORM_SLUG}`;
 const verifyPath = `${fillPath}/verify`;
 const typesPath = `/${CLASS}/forms/${TYPES_FORM_SLUG}`;
 const leakPath = `/${CLASS}/forms/${LEAK_FORM_SLUG}`;
+const identityPath = `/${CLASS}/forms/${IDENTITY_FORM_SLUG}`;
 
 let formId: string | null = null;
 let classroomFormId: string | null = null;
 let typesFormId: string | null = null;
 let leakFormId: string | null = null;
+let identityFormId: string | null = null;
+let identityRevisionId: string | null = null;
 let revisionId: string | null = null;
 /** A real roster label — `Name (login)` — that must never reach the wire. */
 let leakedLabel: string | null = null;
@@ -98,10 +103,23 @@ const OPT_CODES = {
   k1: '51',
   k2: '52',
   k3: '53',
+  g1: '61',
+  g2: '62',
+  g3: '63',
+  g4: '64',
 } as const;
 
 const opt = (name: keyof typeof OPT_CODES) =>
   `aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa${OPT_CODES[name]}`;
+
+/** Field ids for the identity-question fixture. */
+const I = {
+  gender: 'cccccccc-cccc-4ccc-8ccc-cccccccccc01',
+  chosenName: 'cccccccc-cccc-4ccc-8ccc-cccccccccc02',
+} as const;
+const GENDER_LABEL = 'How do you describe your gender? (pick any that apply)';
+const CHOSEN_NAME_LABEL = 'Chosen name';
+const PREFER_NOT = 'Prefer not to say';
 
 // ─── The dev log, where the link lives ──────────────────────────────────────
 
@@ -169,7 +187,9 @@ test.beforeAll(async () => {
   await prisma.form.deleteMany({
     where: {
       classroom_id: classroomId,
-      slug: { in: [FORM_SLUG, CLASSROOM_FORM_SLUG, TYPES_FORM_SLUG, LEAK_FORM_SLUG] },
+      slug: {
+        in: [FORM_SLUG, CLASSROOM_FORM_SLUG, TYPES_FORM_SLUG, LEAK_FORM_SLUG, IDENTITY_FORM_SLUG],
+      },
     },
   });
 
@@ -365,11 +385,52 @@ test.beforeAll(async () => {
     where: { id: leakForm.id },
     data: { current_revision_id: leakRevision.id, access: 'PUBLIC' },
   });
+
+  // Identity questions, on a PUBLIC form with no email field of its own (so
+  // the dedicated identity inputs carry the name). The multiselect's last
+  // option is `exclusive`; the short text's label matches the name heuristic
+  // but is flagged, so it must never become the response's name.
+  const identityDefinition = parseFormDefinition([
+    {
+      id: I.gender,
+      type: 'multiselect',
+      label: GENDER_LABEL,
+      identity_question: true,
+      options: [
+        { id: opt('g1'), label: 'Woman' },
+        { id: opt('g2'), label: 'Man' },
+        { id: opt('g3'), label: 'Non-binary' },
+        { id: opt('g4'), label: PREFER_NOT, exclusive: true },
+      ],
+    },
+    { id: I.chosenName, type: 'short_text', label: CHOSEN_NAME_LABEL, identity_question: true },
+  ]);
+
+  const identityForm = await prisma.form.create({
+    data: {
+      classroom_id: classroomId,
+      title: 'ZZ E2E Identity Questions',
+      slug: IDENTITY_FORM_SLUG,
+      access: 'PUBLIC',
+      status: 'OPEN',
+      created_by: owner.user_id,
+      draft_fields: identityDefinition as never,
+    },
+  });
+  identityFormId = identityForm.id;
+  const identityRevision = await prisma.formRevision.create({
+    data: { form_id: identityForm.id, version: 1, fields: identityDefinition as never },
+  });
+  identityRevisionId = identityRevision.id;
+  await prisma.form.update({
+    where: { id: identityForm.id },
+    data: { current_revision_id: identityRevision.id },
+  });
 });
 
 test.afterAll(async () => {
   const prisma = await getTestPrisma();
-  for (const id of [formId, classroomFormId, typesFormId, leakFormId]) {
+  for (const id of [formId, classroomFormId, typesFormId, leakFormId, identityFormId]) {
     if (id) await prisma.form.delete({ where: { id } }).catch(() => {});
   }
 });
@@ -383,7 +444,7 @@ async function responsesOf(id: string) {
 /** Reset between tests so each starts from a form with no responses. */
 test.beforeEach(async () => {
   const prisma = await getTestPrisma();
-  for (const id of [formId, typesFormId]) {
+  for (const id of [formId, typesFormId, identityFormId]) {
     if (id) await prisma.formResponse.deleteMany({ where: { form_id: id } });
   }
 });
@@ -593,6 +654,144 @@ test.describe('public fill — every control', () => {
     expect(answers[T.matrix]).toEqual({ [opt('r1')]: opt('c2'), [opt('r2')]: opt('c1') });
     // Ranks are positional: index 0 is the first choice.
     expect(answers[T.ranked]).toEqual([opt('k3'), opt('k1')]);
+  });
+});
+
+// ─── Identity questions ─────────────────────────────────────────────────────
+
+/**
+ * An `exclusive` option ("Prefer not to say") can't be combined with any other
+ * choice: the contract refuses the combination, the server enforces it, and the
+ * renderer's checkboxes keep a person from building it. And an identity
+ * question's answer is never lifted into the response's name column, which is
+ * shown on every staff surface and never masked.
+ *
+ * Before the `page.request` cut-off note on the oversized-body test, on
+ * purpose: the server-refusal case posts directly.
+ */
+test.describe('public fill — identity questions', () => {
+  const box = (page: Page, label: string) =>
+    page
+      .getByRole('group', { name: GENDER_LABEL })
+      .getByRole('checkbox', { name: label, exact: true });
+
+  /** Clicks before hydration reach no handler, so wait for the live form. */
+  const hydrated = (page: Page) => expect(page.locator('form[data-hydrated="true"]')).toBeVisible();
+
+  test('an exclusive option clears the others, and any other option clears it', async ({
+    page,
+  }) => {
+    await page.goto(identityPath);
+    await hydrated(page);
+
+    await box(page, 'Woman').check();
+    await box(page, 'Non-binary').check();
+    await box(page, PREFER_NOT).check();
+
+    await expect(box(page, PREFER_NOT)).toBeChecked();
+    await expect(box(page, 'Woman')).not.toBeChecked();
+    await expect(box(page, 'Non-binary')).not.toBeChecked();
+
+    await box(page, 'Man').check();
+
+    await expect(box(page, 'Man')).toBeChecked();
+    await expect(box(page, PREFER_NOT)).not.toBeChecked();
+
+    await page.getByLabel(CHOSEN_NAME_LABEL, { exact: true }).fill('Answer Only Staff May Reveal');
+    await page.getByLabel('Your email address').fill('zz-e2e-identity@example.edu');
+    await page.getByLabel('Your name', { exact: true }).fill('Identity Input Name');
+
+    await page.getByRole('button', { name: 'Submit' }).click();
+    await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible();
+
+    const rows = await responsesOf(identityFormId!);
+    expect(rows).toHaveLength(1);
+    const answers = rows[0].answers as Record<string, unknown>;
+    expect(answers[I.gender]).toEqual([opt('g2')]);
+    expect(answers[I.chosenName]).toBe('Answer Only Staff May Reveal');
+    // The flagged question's label matches the name heuristic; the name column
+    // still comes from the identity input, never from the identity answer.
+    expect(rows[0].name).toBe('Identity Input Name');
+  });
+
+  test('a combination the page did not stop is refused in the field, with the server’s words', async ({
+    page,
+  }) => {
+    // A saved draft holding the combination, the shape a draft written before
+    // the option was made exclusive would have. Seeded before the page's own
+    // scripts run: set after load, the page's debounced autosave of its empty
+    // state could land on top of it.
+    await page.addInitScript(
+      ({ key, draft }) => window.localStorage.setItem(key, JSON.stringify(draft)),
+      {
+        key: `forms:${identityFormId}:${identityRevisionId}`,
+        draft: {
+          answers: { [I.gender]: [opt('g1'), opt('g4')], [I.chosenName]: 'Still Mine To See' },
+          identityName: 'Draft Person',
+          identityEmail: 'zz-e2e-identity-draft@example.edu',
+        },
+      }
+    );
+    await page.goto(identityPath);
+    await hydrated(page);
+    await expect(
+      page.getByText('We restored the answers you started on this device')
+    ).toBeVisible();
+
+    // The respondent's own view shows their own identity answers, unmasked.
+    await expect(page.getByLabel(CHOSEN_NAME_LABEL, { exact: true })).toHaveValue(
+      'Still Mine To See'
+    );
+    await expect(box(page, 'Woman')).toBeChecked();
+    await expect(box(page, PREFER_NOT)).toBeChecked();
+
+    await page.getByRole('button', { name: 'Submit' }).click();
+
+    // In the field's own error slot, not the banner above the button.
+    const fieldError = page.locator(`[id="answers.${I.gender}-error"]`);
+    await expect(fieldError).toHaveText(`"${PREFER_NOT}" can't be combined with other choices`);
+    await expect(page.getByRole('heading', { name: 'Check your email' })).toHaveCount(0);
+
+    // Ticking another option drops the exclusive one, and the re-validation
+    // after a failed submit sees the final selection: the error goes away.
+    await box(page, 'Man').check();
+    await expect(box(page, PREFER_NOT)).not.toBeChecked();
+    await expect(fieldError).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Submit' }).click();
+    await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible();
+
+    const rows = await responsesOf(identityFormId!);
+    expect(rows).toHaveLength(1);
+    expect((rows[0].answers as Record<string, unknown>)[I.gender]).toEqual([opt('g1'), opt('g2')]);
+  });
+
+  test('the server refuses the combination from a client that skipped the check', async ({
+    page,
+  }) => {
+    const post = (email: string, gender: string[]) =>
+      page.request
+        .post(identityPath, {
+          maxRedirects: 0,
+          // A fresh sender per post, so the per-client limit never decides it.
+          headers: { 'content-type': 'application/json', 'x-forwarded-for': `e2e-${randomUUID()}` },
+          data: {
+            answers: { [I.gender]: gender },
+            identity: { email, name: 'Direct Post' },
+            revisionId: identityRevisionId,
+          },
+        })
+        .catch(() => null);
+
+    await post('zz-e2e-identity-combo@example.edu', [opt('g3'), opt('g4')]);
+    expect(await responsesOf(identityFormId!)).toHaveLength(0);
+
+    // CONTROL: the exclusive option alone is an answer, so the refusal above is
+    // about the combination and not a malformed body.
+    await post('zz-e2e-identity-alone@example.edu', [opt('g4')]);
+    const rows = await responsesOf(identityFormId!);
+    expect(rows).toHaveLength(1);
+    expect((rows[0].answers as Record<string, unknown>)[I.gender]).toEqual([opt('g4')]);
   });
 });
 
