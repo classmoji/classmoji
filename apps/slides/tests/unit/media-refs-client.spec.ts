@@ -63,6 +63,15 @@ test.describe('the editor diff compares media by reference', () => {
     expect(out).not.toContain(HOST);
   });
 
+  test('an inline-style url keeps its HTML-escaped closing quote', () => {
+    for (const quote of ['&quot;', '&#34;', '&#39;']) {
+      const html = `<div style="background: url(${quote}${signed('e=1&amp;s=x')}${quote})"></div>`;
+      expect(canonicalMediaUrls(html, scope)).toBe(
+        `<div style="background: url(${quote}media://${MEDIA_ID}${quote})"></div>`
+      );
+    }
+  });
+
   test('another host, another classroom, or no host at all is left alone', () => {
     const foreign = `<video src="${signed('e=1', 'elsewhere.example')}"></video>`;
     const otherClass = `<video src="${signed('e=1', HOST, '99999999-2222-4333-8444-555555555555')}"></video>`;

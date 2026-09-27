@@ -72,7 +72,11 @@ export function canonicalMediaUrls(
   if (!html || !host || !classroomId) return html;
   const signed = new RegExp(
     `https?://${escapeRegExp(host)}/c/${escapeRegExp(classroomId)}/media/` +
-      `([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/[^"'\\s)<>]*`,
+      `([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/` +
+      // Up to the end of the URL: through an `&amp;`-escaped query, but never
+      // past an HTML-escaped quote (`url(&quot;…&quot;)` in an inline style
+      // keeps its closing quote).
+      `(?:(?!&(?:quot|#34|#39);)[^"'\\s)<>])*`,
     'gi'
   );
   return html.replace(signed, (_match, id: string) => `media://${id.toLowerCase()}`);
