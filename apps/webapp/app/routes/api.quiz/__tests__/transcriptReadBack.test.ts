@@ -109,7 +109,7 @@ vi.mock('~/utils/classroomProFlag.server', () => ({
 vi.mock('~/utils/routeAuth.server', () => ({ assertClassroomMutationAllowed: vi.fn() }));
 vi.mock('~/utils/aiFeatures.server', () => ({ isAIAgentConfigured: () => true }));
 vi.mock('~/utils/backgroundTask.server', () => ({ runBackgroundTask: vi.fn() }));
-vi.mock('../../student.$class.quizzes/helpers.server', () => ({ getInstallationToken: vi.fn() }));
+vi.mock('../../student.$class.quizzes/helpers.server', () => ({ getInstallationToken: vi.fn(), gitlabProjectAccess: vi.fn() }));
 vi.mock('../../student.$class.quizzes/aiAgent.server', () => ({
   initializeQuizViaAgent: vi.fn(),
   sendMessageToAgent: (...a: unknown[]) => sendMessageToAgentMock(...a),

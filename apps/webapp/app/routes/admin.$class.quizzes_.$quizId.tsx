@@ -195,7 +195,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
 
       // Restore last used repo from localStorage
       const lastUsed = localStorage.getItem(`lastTestRepo_${quizId}`);
-      if (lastUsed && data.some((r: Record<string, unknown>) => r.name === lastUsed)) {
+      if (lastUsed && data.some((r: Record<string, unknown>) => (r.ref ?? r.name) === lastUsed)) {
         setSelectedRepo(lastUsed);
       }
     } catch (error: unknown) {
@@ -648,7 +648,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
               option!.label.toLowerCase().includes(input.toLowerCase())
             }
             options={repos.map((r: Record<string, unknown>) => ({
-              value: r.name as string,
+              value: ((r.ref as string | undefined) ?? r.name) as string,
               label: r.name as string,
             }))}
           />

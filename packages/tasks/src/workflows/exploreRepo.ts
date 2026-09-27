@@ -59,6 +59,70 @@ async function githubFetch(
   throw new Error(`${label} failed: max retries (${maxRetries}) exceeded`);
 }
 
+/**
+ * Gitlab: the same reads through a Gitlab instance's REST API. `gitHost` (the
+ * instance origin) in the payload selects it; `owner` is then the project's
+ * namespace (a class subgroup's `projects`), which may hold slashes. Calls go
+ * through gitlabFetch, which refuses private addresses in production.
+ */
+function gitlabProjectApi(gitHost: string, owner: string, repo: string): string {
+  return `${gitHost.replace(/\/+$/, '')}/api/v4/projects/${encodeURIComponent(`${owner}/${repo}`)}`;
+}
+
+async function gitlabGet(url: string, token: string, label: string): Promise<Response> {
+  const { ClassmojiService } = await import('@classmoji/services');
+  const res = await ClassmojiService.gitlabInstance.gitlabFetch(url, {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`${label} failed (${res.status}): ${body.slice(0, 200)}`);
+  }
+  return res;
+}
+
+async function fetchGitlabTree(
+  gitHost: string,
+  owner: string,
+  repo: string,
+  token: string
+): Promise<TreeEntry[]> {
+  const entries: TreeEntry[] = [];
+  // Paginated; capped so a huge repository cannot stall the exploration.
+  for (let page = 1; page <= 50; page++) {
+    const res = await gitlabGet(
+      `${gitlabProjectApi(gitHost, owner, repo)}/repository/tree?recursive=true&per_page=100&page=${page}`,
+      token,
+      `Gitlab tree API (${owner}/${repo})`
+    );
+    const batch = (await res.json()) as Array<{ path: string; type: string; mode?: string }>;
+    for (const entry of batch) {
+      if (entry.type === 'blob') {
+        // Gitlab's tree has no sizes; the file read enforces its own limits.
+        entries.push({ path: entry.path, size: 0, type: 'blob', mode: entry.mode });
+      }
+    }
+    if (!res.headers.get('x-next-page')) break;
+  }
+  return entries;
+}
+
+async function fetchGitlabFile(
+  gitHost: string,
+  owner: string,
+  repo: string,
+  path: string,
+  token: string
+): Promise<string> {
+  if (!isVisiblePath(path)) throw new Error(`Gitlab file (${path}): not explored`);
+  const res = await gitlabGet(
+    `${gitlabProjectApi(gitHost, owner, repo)}/repository/files/${encodeURIComponent(path)}/raw?ref=HEAD`,
+    token,
+    `Gitlab file (${path})`
+  );
+  return res.text();
+}
+
 const GITHUB_HEADERS = (token: string): Record<string, string> => ({
   Authorization: `token ${token}`,
   Accept: 'application/vnd.github.v3+json',
@@ -86,7 +150,13 @@ const SYMLINK_MODE = '120000';
  * @param {string} token - GitHub installation access token
  * @returns {Promise<TreeEntry[]>}
  */
-async function fetchRepoTree(owner: string, repo: string, token: string): Promise<TreeEntry[]> {
+async function fetchRepoTree(
+  owner: string,
+  repo: string,
+  token: string,
+  gitHost?: string | null
+): Promise<TreeEntry[]> {
+  if (gitHost) return fetchGitlabTree(gitHost, owner, repo, token);
   const url = `${GITHUB_API}/repos/${owner}/${repo}/git/trees/HEAD?recursive=1`;
   const res = await githubFetch(url, GITHUB_HEADERS(token), `GitHub tree API (${owner}/${repo})`);
 
@@ -116,8 +186,10 @@ export async function fetchFileContent(
   owner: string,
   repo: string,
   path: string,
-  token: string
+  token: string,
+  gitHost?: string | null
 ): Promise<string> {
+  if (gitHost) return fetchGitlabFile(gitHost, owner, repo, path, token);
   const encodedPath = path
     .split('/')
     .map(segment => encodeURIComponent(segment))
@@ -158,7 +230,8 @@ async function fetchMultipleFiles(
   repo: string,
   paths: string[],
   token: string,
-  concurrency: number = 3
+  concurrency: number = 3,
+  gitHost: string | null = null
 ): Promise<Array<{ path: string; content: string; error?: string }>> {
   const results = [];
   // Process in batches for concurrency control
@@ -166,7 +239,7 @@ async function fetchMultipleFiles(
     const batch = paths.slice(i, i + concurrency);
     const batchResults = await Promise.allSettled(
       batch.map(async path => {
-        const content = await fetchFileContent(owner, repo, path, token);
+        const content = await fetchFileContent(owner, repo, path, token, gitHost);
         return { path, content };
       })
     );
@@ -1301,6 +1374,8 @@ export const exploreRepoTask = task({
     owner: string;
     repo: string;
     accessToken: string;
+    /** Gitlab instance origin; absent for Github. */
+    gitHost?: string | null;
     focusArea?: string;
     depth?: string;
     previousFindings?: string[];
@@ -1315,6 +1390,7 @@ export const exploreRepoTask = task({
       owner,
       repo,
       accessToken,
+      gitHost = null,
       focusArea = 'initial',
       depth = 'focused',
       previousFindings = [],
@@ -1359,7 +1435,9 @@ export const exploreRepoTask = task({
     await metadata.flush();
 
     // Only entries exploration may read are listed, picked or fetched.
-    const tree = (await fetchRepoTree(owner, repo, accessToken)).filter(isExplorableEntry);
+    const tree = (await fetchRepoTree(owner, repo, accessToken, gitHost)).filter(
+      isExplorableEntry
+    );
     console.log(`[explore-repo] Step 1 done: ${tree.length} files in tree`);
     logger.info(`GitRepo has ${tree.length} files`);
 
@@ -1409,7 +1487,7 @@ export const exploreRepoTask = task({
     metadata.set('currentStep', `Reading ${filePaths.length} files`);
     await metadata.flush();
 
-    const files = await fetchMultipleFiles(owner, repo, filePaths, accessToken);
+    const files = await fetchMultipleFiles(owner, repo, filePaths, accessToken, 3, gitHost);
 
     const successCount = files.filter(f => !f.error).length;
     console.log(`[explore-repo] Step 3 done: read ${successCount}/${filePaths.length} files`);

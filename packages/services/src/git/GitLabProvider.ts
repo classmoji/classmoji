@@ -459,7 +459,9 @@ export class GitLabProvider extends GitProvider {
       method: 'POST',
       body: {
         name: 'classmoji-content-delivery',
-        scopes: ['read_api'],
+        // Read-only: the API (content delivery, code exploration) and git
+        // clone over https (the AI agent's local code-aware mode).
+        scopes: ['read_api', 'read_repository'],
         access_level: REPORTER_ACCESS_LEVEL,
         expires_at: expiresOn,
       },

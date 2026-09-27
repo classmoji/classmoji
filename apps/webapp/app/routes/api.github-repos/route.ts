@@ -24,6 +24,7 @@ const SEARCH_LIMIT = 50;
 
 interface RepoSearchItem {
   name: string;
+  ref?: string;
   full_name: string;
   description: string | null;
   updated_at: string | null | undefined;
@@ -162,6 +163,9 @@ async function listGitLabTemplates(
     .map(p => ({
       name: p.name,
       full_name: p.path_with_namespace,
+      // What the quiz preview sends back: a project's display name is not
+      // its path, and it may live anywhere in the group.
+      ref: p.path_with_namespace,
       description: p.description,
       updated_at: p.last_activity_at,
       private: p.visibility !== 'public',
