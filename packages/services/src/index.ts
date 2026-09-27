@@ -169,6 +169,38 @@ export type {
 } from './classmoji/orgRepoSettings.service.ts';
 // Quiz authorization refusal, so routes can answer 403 instead of 500.
 export { QuizAccessError, QUIZ_STAFF_ROLES } from './classmoji/quiz.service.ts';
+// Quiz source material: the linked pages and decks a quiz is about. The
+// ai-agent reads them through `ClassmojiService.quizSourceMaterial.load`; the
+// flat names are for callers that want the functions and types directly.
+export {
+  loadQuizSourceMaterial,
+  countStartableSourceMaterial,
+  applyMaterialBudget,
+  setQuizSourceMaterial,
+  normalizeSourceMaterial,
+  sourceMaterialOf,
+  listSourceMaterialOptions,
+  truncationMarker,
+  MAX_DOCS,
+  MAX_CHARS_PER_DOC,
+  MAX_CHARS_TOTAL,
+  MIN_ROOM_CHARS,
+  DEFAULT_MATERIAL_BUDGET,
+} from './classmoji/quizSourceMaterial.service.ts';
+export type {
+  SourceDocKind,
+  SourceMaterialRef,
+  SourceDoc,
+  OmittedReason,
+  OmittedDoc,
+  QuizSourceMaterial,
+  QuizSourceMaterialArgs,
+  StartableSourceMaterial,
+  MaterialBudget,
+  BudgetedMaterial,
+  QuizSourceMaterialEntry,
+  SourceMaterialOption,
+} from './classmoji/quizSourceMaterial.service.ts';
 // "No such attempt", so routes can answer 404 for that and only that — a query
 // that failed for any other reason has to keep its 500 and its log line.
 export { QuizAttemptNotFoundError } from './classmoji/quizAttempt.service.ts';

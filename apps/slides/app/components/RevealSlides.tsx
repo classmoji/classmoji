@@ -49,6 +49,14 @@ interface RevealSlidesProps {
   isEditing?: boolean;
   onContentChange?: () => void;
   onThemeChange?: (themes: { theme: string; codeTheme: string }) => void;
+  /**
+   * Called with the Reveal.js instance once `initialize()` resolves, and with
+   * null when that instance is destroyed. Initialization is async (two dynamic
+   * imports, then initialize), so this is the only reliable signal that the
+   * instance exists — reading the ref after a fixed delay loses the race on
+   * large decks and leaves the caller holding null for good.
+   */
+  onRevealReady?: (deck: RevealApi | null) => void;
   customThemes?: CustomTheme[];
   sharedThemes?: SharedTheme[];
 }
@@ -104,6 +112,7 @@ const RevealSlides = forwardRef(function RevealSlides(
     isEditing = false,
     onContentChange,
     onThemeChange, // Callback when themes are extracted from content
+    onRevealReady,
     customThemes = [], // Custom themes with cssUrl for loading
     sharedThemes = [], // Shared themes from slides.com imports (with lib/ folder)
   }: RevealSlidesProps,
@@ -111,6 +120,10 @@ const RevealSlides = forwardRef(function RevealSlides(
 ) {
   const deckRef = useRef<HTMLDivElement>(null);
   const revealRef = useRef<RevealApi | null>(null);
+  // Held in a ref so a new callback identity never re-runs the init effect
+  // below (which would destroy and rebuild the deck).
+  const onRevealReadyRef = useRef(onRevealReady);
+  onRevealReadyRef.current = onRevealReady;
   const [loading, setLoading] = useState(!initialContent && !initialError);
   const [error, setError] = useState(initialError);
   const [htmlContent, setHtmlContent] = useState<string | null>(null);
@@ -410,6 +423,7 @@ const RevealSlides = forwardRef(function RevealSlides(
       }
 
       revealRef.current = deck;
+      onRevealReadyRef.current?.(deck);
 
       // Reactive centering (the structural cure for intermittent off-center
       // slides after save): observe the .reveal container and re-layout on any
@@ -515,6 +529,7 @@ const RevealSlides = forwardRef(function RevealSlides(
       if (revealRef.current) {
         revealRef.current.destroy();
         revealRef.current = null;
+        onRevealReadyRef.current?.(null);
       }
     };
   }, [isClient, htmlContent, isEditing, onContentChange]);

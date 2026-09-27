@@ -100,4 +100,27 @@ describe('assistant Modules loader', () => {
     expect(result.candidates.quizzes).toHaveLength(1);
     expect(result.boundQuizIds).toEqual(['q1']);
   });
+
+  // The read-only card offers no Delete, so this page gets no Delete flag —
+  // not even for a module that owns hidden quiz assignments.
+  it('sends no Delete flag, and nothing about hidden assignments', async () => {
+    mocks.listModuleContentsForClassroom.mockResolvedValue([
+      {
+        id: 'mod-2',
+        items: [],
+        assignments: [{ id: 'asg-quiz-2', type: 'QUIZ', quiz: { id: 'q2', name: 'Closures' } }],
+      },
+      { id: 'mod-3', items: [], assignments: [{ id: 'asg-repo-3', type: 'REPO' }] },
+    ]);
+
+    mocks.loadQuizzesVisible.mockResolvedValue(false);
+    const hidden = await load();
+    expect(hidden.modules.map(m => 'hasUnlistedAssignments' in m)).toEqual([false, false]);
+    expect(hidden.modules[0].assignments).toEqual([]);
+    expect(JSON.stringify(hidden)).not.toMatch(/Closures|asg-quiz-2|"q2"|hasUnlistedAssignments/);
+
+    mocks.loadQuizzesVisible.mockResolvedValue(true);
+    const shown = await load();
+    expect(shown.modules.map(m => 'hasUnlistedAssignments' in m)).toEqual([false, false]);
+  });
 });
