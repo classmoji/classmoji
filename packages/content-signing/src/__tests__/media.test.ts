@@ -111,6 +111,8 @@ describe('contentTypeForMediaExt', () => {
     expect(contentTypeForMediaExt('zip')).toBe('application/zip');
     expect(contentTypeForMediaExt('key')).toBe('application/zip');
     expect(contentTypeForMediaExt('jpeg')).toBe('image/jpeg');
+    expect(contentTypeForMediaExt('mkv')).toBe('video/x-matroska');
+    expect(contentTypeForMediaExt('avi')).toBe('video/x-msvideo');
   });
 
   it('has no type for anything a browser could be talked into executing', () => {

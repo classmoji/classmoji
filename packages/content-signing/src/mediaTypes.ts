@@ -29,6 +29,8 @@ const MEDIA_CONTENT_TYPES: Readonly<Record<string, string>> = {
   webm: 'video/webm',
   mov: 'video/quicktime',
   m4v: 'video/x-m4v',
+  mkv: 'video/x-matroska',
+  avi: 'video/x-msvideo',
   // audio
   mp3: 'audio/mpeg',
   m4a: 'audio/mp4',

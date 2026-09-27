@@ -55,7 +55,7 @@ interface KindSpec {
  * variant needs.
  */
 export const MEDIA_KINDS: readonly KindSpec[] = [
-  { kind: 'VIDEO', exts: ['mp4', 'webm', 'mov', 'm4v'] },
+  { kind: 'VIDEO', exts: ['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi'] },
   { kind: 'AUDIO', exts: ['mp3', 'm4a', 'wav'] },
   { kind: 'DOCUMENT', exts: ['pdf', 'ppt', 'pptx', 'key'] },
   { kind: 'ARCHIVE', exts: ['zip'] },

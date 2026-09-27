@@ -52,6 +52,16 @@ describe('kinds and types', () => {
     expect(contentTypeForExt('jpeg')).toBe('image/jpeg');
   });
 
+  it('takes Matroska and AVI as video, with their registered types', () => {
+    // Screen recorders (OBS defaults to .mkv) and older lecture captures (.avi)
+    // produce these; as VIDEO the router sends them to media on Pro rather than
+    // refusing or committing them to git.
+    expect(kindForExt('mkv')).toBe('VIDEO');
+    expect(kindForExt('AVI')).toBe('VIDEO');
+    expect(contentTypeForExt('mkv')).toBe('video/x-matroska');
+    expect(contentTypeForExt('avi')).toBe('video/x-msvideo');
+  });
+
   it('serves anything a browser could be talked into running as a download', () => {
     for (const ext of ['html', 'htm', 'svg', 'js', 'mjs', 'xml', 'exe', 'sh']) {
       expect(kindForExt(ext)).toBe('OTHER');
