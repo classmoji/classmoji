@@ -269,8 +269,15 @@ describe('teamAdmin.createTeam', () => {
 });
 
 describe('teamAdmin.deleteTeam', () => {
-  it('deletes on the provider and locally once the local row resolves', async () => {
+  it('leaves the provider alone unless asked', async () => {
     const result = await teamAdmin.deleteTeam({ classroomId: 'class-1', slugOrId: 'blue-team' });
+    expect(deleteTeam).not.toHaveBeenCalled();
+    expect(teamDeleteBySlug).toHaveBeenCalledWith('class-1', 'blue-team');
+    expect(result.removedFromProvider).toBe(false);
+  });
+
+  it('deletes on the provider and locally once the local row resolves', async () => {
+    const result = await teamAdmin.deleteTeam({ classroomId: 'class-1', slugOrId: 'blue-team', deleteOnProvider: true });
 
     expect(deleteTeam).toHaveBeenCalledWith('cs1-org', 'blue-team');
     expect(teamDeleteBySlug).toHaveBeenCalledWith('class-1', 'blue-team');
@@ -321,7 +328,7 @@ describe('teamAdmin.deleteTeam', () => {
   });
 
   it('scopes the lookup to the classroom, by slug or id', async () => {
-    await teamAdmin.deleteTeam({ classroomId: 'class-1', slugOrId: 'blue-team' });
+    await teamAdmin.deleteTeam({ classroomId: 'class-1', slugOrId: 'blue-team', deleteOnProvider: true });
 
     expect(teamFindFirst.mock.calls[0][0].where).toEqual({
       classroom_id: 'class-1',
@@ -332,7 +339,7 @@ describe('teamAdmin.deleteTeam', () => {
   it('tolerates a provider 404 and still removes the local row', async () => {
     deleteTeam.mockRejectedValue(notFound());
 
-    const result = await teamAdmin.deleteTeam({ classroomId: 'class-1', slugOrId: 'blue-team' });
+    const result = await teamAdmin.deleteTeam({ classroomId: 'class-1', slugOrId: 'blue-team', deleteOnProvider: true });
 
     expect(teamDeleteBySlug).toHaveBeenCalledWith('class-1', 'blue-team');
     expect(result.removedFromProvider).toBe(false);
@@ -342,7 +349,7 @@ describe('teamAdmin.deleteTeam', () => {
     deleteTeam.mockRejectedValue(Object.assign(new Error('forbidden'), { status: 403 }));
 
     await expect(
-      teamAdmin.deleteTeam({ classroomId: 'class-1', slugOrId: 'blue-team' })
+      teamAdmin.deleteTeam({ classroomId: 'class-1', slugOrId: 'blue-team', deleteOnProvider: true })
     ).rejects.toThrow('forbidden');
     expect(teamDeleteBySlug).not.toHaveBeenCalled();
   });

@@ -39,6 +39,9 @@ const mocks = vi.hoisted(() => ({
   listForClassroom: vi.fn(),
   findAllAssignmentsForStudent: vi.fn(),
   findLatestByGitRepoIds: vi.fn(),
+  assignmentListForClassroom: vi.fn(),
+  moduleFindByClassroomSlug: vi.fn(),
+  getCandidateContent: vi.fn(),
 }));
 
 vi.mock('@classmoji/database', () => ({
@@ -49,11 +52,21 @@ vi.mock('@classmoji/database', () => ({
   }),
 }));
 
-vi.mock('@classmoji/services', () => ({
+vi.mock('@classmoji/services', async () => ({
   ClassmojiService: {
     helper: { findAllAssignmentsForStudent: mocks.findAllAssignmentsForStudent },
     autogradingResult: { findLatestByGitRepoIds: mocks.findLatestByGitRepoIds },
-    module: { listForClassroom: mocks.listForClassroom },
+    // The REAL repository service, over the mocked Prisma above: the staff
+    // loader's draft policy is whatever query that service builds.
+    repository: await vi.importActual(
+      '../../../../../packages/services/src/classmoji/repository.service.ts'
+    ),
+    assignment: { listForClassroom: mocks.assignmentListForClassroom },
+    module: {
+      listForClassroom: mocks.listForClassroom,
+      findByClassroomSlug: mocks.moduleFindByClassroomSlug,
+      getCandidateContent: mocks.getCandidateContent,
+    },
   },
 }));
 
@@ -98,15 +111,7 @@ const runLoader = async (routePath: string, pathname: string) => {
 const repositoryQuery = (callIndex = 0) =>
   mocks.repositoryFindMany.mock.calls[callIndex][0] as {
     where: Record<string, unknown>;
-    include: {
-      assignments: {
-        where?: unknown;
-        include: { slides: { where?: unknown }; pages: { where?: unknown } };
-      };
-      slides: { where?: unknown };
-      pages: { where?: unknown };
-      quizzes: { where?: unknown };
-    };
+    include: { assignments: unknown };
   };
 
 const asTeacher = () =>
@@ -131,6 +136,9 @@ beforeEach(() => {
   });
 
   mocks.repositoryFindMany.mockResolvedValue([]);
+  mocks.assignmentListForClassroom.mockResolvedValue([]);
+  mocks.moduleFindByClassroomSlug.mockResolvedValue([]);
+  mocks.getCandidateContent.mockResolvedValue({ quizzes: [], forms: [], pages: [], slides: [] });
   mocks.classroomFindUnique.mockResolvedValue(null);
   mocks.gitRepoFindMany.mockResolvedValue([]);
   mocks.findAllAssignmentsForStudent.mockResolvedValue([]);
@@ -147,25 +155,22 @@ describe('the staff repos loader hides nothing', () => {
     await runLoader('assistant.$class_.repos', `/assistant/${CLASS_SLUG}/repos`);
 
     const query = repositoryQuery();
-    expect(query.where).toEqual({ classroom_id: CLASSROOM.id });
+    expect(query.where).toEqual({ classroom: { slug: CLASS_SLUG } });
     expect('is_published' in query.where).toBe(false);
   });
 
   it('does not filter is_published on the nested assignments', async () => {
     await runLoader('assistant.$class_.repos', `/assistant/${CLASS_SLUG}/repos`);
 
-    expect(repositoryQuery().include.assignments.where).toBeUndefined();
+    // `assignments: true`: every assignment, drafts included, no `where`.
+    expect(repositoryQuery().include.assignments).toBe(true);
   });
 
-  it('does not filter draft slides, pages or quizzes either', async () => {
+  it('offers the editor every candidate, drafts included, for the classroom', async () => {
     await runLoader('assistant.$class_.repos', `/assistant/${CLASS_SLUG}/repos`);
 
-    const { include } = repositoryQuery();
-    expect(include.slides.where).toBeUndefined();
-    expect(include.pages.where).toBeUndefined();
-    expect(include.quizzes.where).toBeUndefined();
-    expect(include.assignments.include.slides.where).toBeUndefined();
-    expect(include.assignments.include.pages.where).toBeUndefined();
+    expect(mocks.getCandidateContent).toHaveBeenCalledWith(CLASSROOM.id);
+    expect(mocks.assignmentListForClassroom).toHaveBeenCalledWith(CLASSROOM.id);
   });
 
   it('serves /teacher from the very same loader', async () => {
