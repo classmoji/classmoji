@@ -18,6 +18,7 @@ import {
   type UploadCapability,
 } from '@classmoji/services/media/router';
 import { REPO_REST_MAX_BYTES, repoFileTooLargeMessage } from '@classmoji/utils/repo-limits';
+import { MEDIA_QUOTA_FULL_MESSAGE } from './mediaRouterShared.ts';
 
 export type { UploadCapability };
 
@@ -99,10 +100,8 @@ const VIDEO_EXTENSIONS = ['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi'].filter(
  */
 export const VIDEO_FILE_ACCEPT = ['video/*', ...VIDEO_EXTENSIONS.map(ext => `.${ext}`)].join(',');
 
-/** `2 GB` — the per-file ceiling as a person reads it. */
-export function formatGigabytes(bytes: number): string {
-  return `${Math.round((bytes / (1024 * 1024 * 1024)) * 10) / 10} GB`;
-}
+// The router's decimal formatter and the quota sentence (see the module).
+export { formatGigabytes, MEDIA_QUOTA_FULL_MESSAGE } from './mediaRouterShared.ts';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Video upload options (plan §3.10 — the uploader's three choices, once)
@@ -201,17 +200,10 @@ export function mediaUploadMessage(error: UploadFailure | null | undefined): str
       return "This class isn't set up to serve content yet, so media can't be uploaded.";
     case 'USE_REPO':
       return 'This file goes in the course repository. Reload the page and try again.';
-    case 'QUOTA_EXCEEDED': {
+    case 'QUOTA_EXCEEDED':
       // The server's sentence as it is: it says what to do (who to contact).
-      // Ours only when it sent none.
-      const sentence = serverSentence(error);
-      if (sentence) return sentence;
-      const usage =
-        error.usedBytes !== undefined && error.quotaBytes !== undefined
-          ? ` (${formatSize(error.usedBytes)} of ${formatSize(error.quotaBytes)} in use)`
-          : '';
-      return `This class's media storage is full${usage}. Contact hello@classmoji.io to upgrade.`;
-    }
+      // The shared one when it sent none.
+      return serverSentence(error) ?? MEDIA_QUOTA_FULL_MESSAGE;
     case 'FILE_TOO_LARGE':
       return 'That file is over the limit for a single upload.';
     case 'KIND_NOT_ALLOWED':

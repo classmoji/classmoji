@@ -29,7 +29,7 @@ import {
   type ImportZipEntry,
   type PutImportMedia,
 } from '../../app/utils/importVideoMedia.ts';
-import type { UploadCapability } from '../../app/utils/mediaUpload.ts';
+import { MEDIA_QUOTA_FULL_MESSAGE, type UploadCapability } from '../../app/utils/mediaUpload.ts';
 import { RepoEntryGate, resolveMediaRef } from '../../app/utils/zipRepoEntries.ts';
 
 const path = (relative: string) => fileURLToPath(new URL(relative, import.meta.url));
@@ -42,7 +42,8 @@ const PRO: UploadCapability = {
   repoMaxBytes: 35 * MB,
   repoFileTypes: 'any',
   isPro: true,
-  media: { perFileMaxBytes: 2 * GB, remainingBytes: 10 * GB },
+  // The per-file ceiling as the services set it: 2,000,000,000 bytes (a decimal 2 GB).
+  media: { perFileMaxBytes: 2_000_000_000, remainingBytes: 10 * GB },
 };
 const FREE: UploadCapability = { ...PRO, isPro: false, media: null };
 const PRO_NO_MEDIA: UploadCapability = { ...PRO, media: null };
@@ -107,7 +108,7 @@ function mockPut(log: string[]) {
     async bytes => {
       log.push(`put ${filename} ${bytes.length}`);
       if (filename === 'lecture.mp4') {
-        throw Object.assign(new Error('Quota exceeded: 9.9 GB of 10 GB'), {
+        throw Object.assign(new Error(MEDIA_QUOTA_FULL_MESSAGE), {
           name: 'MediaError',
           code: 'QUOTA_EXCEEDED',
         });
@@ -168,8 +169,9 @@ test.describe('placing ZIP entries (media storage mocked)', () => {
     expect(errors).toEqual(['lecture.mp4']);
     expect(gate.skippedPaths()).toEqual(new Set(['media/b/lecture.mp4']));
     const [warning] = gate.warnings(new Map([['media/b/lecture.mp4', ['4']]]));
+    // A full quota says what the server says: who to contact.
     expect(warning).toBe(
-      "Slide 4: Skipped lecture.mp4 (5 MB) — media storage could not take it (this class's media storage is full)"
+      "Slide 4: Skipped lecture.mp4 (5 MB) — This class's media storage is full. Contact hello@classmoji.io to upgrade."
     );
     expect(warning).not.toContain('QUOTA_EXCEEDED');
     expect(resolveMediaRef('media/b/lecture.mp4', new Map(), gate.skippedPaths())).toEqual({
@@ -239,8 +241,8 @@ test.describe('placing ZIP entries (media storage mocked)', () => {
     expect(gate.warnings()).toEqual([
       'Skipped outro.mp4 (30 MB) — this import is over its 0.1 GB limit for all files together',
     ]);
-    // The real budget is 3 GB.
-    expect(IMPORT_INFLATE_BUDGET_BYTES).toBe(3 * GB);
+    // The real budget is 3 GB (decimal, like the per-file ceiling).
+    expect(IMPORT_INFLATE_BUDGET_BYTES).toBe(3_000_000_000);
   });
 
   test('a lying header is judged again on the bytes', async () => {
@@ -301,6 +303,12 @@ test.describe('placing ZIP entries (media storage mocked)', () => {
     });
     expect(video.kind).toBe('repo');
     expect(log.some(line => line.startsWith('put'))).toBe(false);
+  });
+
+  test('a full quota without a sentence falls back to the shared one', () => {
+    expect(importMediaSkippedWarning('a.mp4', MB, { code: 'QUOTA_EXCEEDED' })).toBe(
+      `Skipped a.mp4 (1 MB) — ${MEDIA_QUOTA_FULL_MESSAGE}`
+    );
   });
 
   test('a warning never carries a code or an upstream message', () => {

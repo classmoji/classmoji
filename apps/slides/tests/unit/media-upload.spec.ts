@@ -19,6 +19,8 @@ import { test, expect } from '@playwright/test';
 import { MEDIA_KINDS } from '../../../../packages/services/src/media/mediaKinds.ts';
 import {
   DEFAULT_VIDEO_OPTIONS,
+  MEDIA_QUOTA_FULL_MESSAGE,
+  formatGigabytes,
   UploadReroute,
   VIDEO_FILE_ACCEPT,
   afterMediaFailure,
@@ -48,7 +50,8 @@ const PRO: UploadCapability = {
   repoMaxBytes: 35 * MB,
   repoFileTypes: 'any',
   isPro: true,
-  media: { perFileMaxBytes: 2 * GB, remainingBytes: 10 * GB },
+  // The per-file ceiling as the services set it: 2,000,000,000 bytes (a decimal 2 GB).
+  media: { perFileMaxBytes: 2_000_000_000, remainingBytes: 10 * GB },
 };
 const FREE: UploadCapability = { ...PRO, isPro: false, media: null };
 /** A classroom the delivery layer does not serve: images and PDFs only. */
@@ -236,6 +239,11 @@ test.describe('the three video choices', () => {
     expect(panel).toContain('accept={VIDEO_FILE_ACCEPT}');
   });
 
+  test('the per-file ceiling reads as the decimal 2 GB it is', () => {
+    expect(formatGigabytes(2_000_000_000)).toBe('2 GB');
+    expect(formatGigabytes(PRO.media?.perFileMaxBytes ?? 0)).toBe('2 GB');
+  });
+
   test('knows a video by the store’s own kind table', () => {
     expect(isVideoFile({ name: 'a.mp4' })).toBe(true);
     expect(isVideoFile({ name: 'a.pdf' })).toBe(false);
@@ -251,7 +259,7 @@ test.describe('what an uploader is told', () => {
     const sentence =
       "This class's media storage is full. Contact hello@classmoji.io to upgrade to more storage.";
     expect(mediaUploadMessage({ code: 'QUOTA_EXCEEDED', message: sentence })).toBe(sentence);
-    // No sentence (or only a status): ours, with the numbers and who to ask.
+    // No sentence (or only a status): the shared one, which says who to ask.
     for (const message of [undefined, 'Upload failed (409).']) {
       const fallback = mediaUploadMessage({
         code: 'QUOTA_EXCEEDED',
@@ -259,7 +267,7 @@ test.describe('what an uploader is told', () => {
         usedBytes: 9 * GB,
         quotaBytes: 10 * GB,
       });
-      expect(fallback).toContain('9.0 GB of 10 GB');
+      expect(fallback).toBe(MEDIA_QUOTA_FULL_MESSAGE);
       expect(fallback).toContain('hello@classmoji.io');
     }
   });
@@ -513,6 +521,8 @@ test.describe('the video element, structurally', () => {
     for (const file of [
       '../../app/utils/mediaUpload.ts',
       '../../app/utils/mediaClient.ts',
+      '../../app/utils/mediaRouterShared.ts',
+      '../../app/utils/mediaRefs.ts',
       '../../app/hooks/useMediaUpload.ts',
       '../../app/components/media/VideoUploadDialog.tsx',
       '../../app/components/media/MediaPickerDialog.tsx',

@@ -31,7 +31,12 @@ import {
   type UploadCapability,
 } from '@classmoji/services/media/router';
 import { formatMegabytes } from '@classmoji/utils/repo-limits';
-import { DEFAULT_VIDEO_OPTIONS, formatGigabytes, type VideoOptions } from './mediaUpload.ts';
+import {
+  DEFAULT_VIDEO_OPTIONS,
+  MEDIA_QUOTA_FULL_MESSAGE,
+  formatGigabytes,
+  type VideoOptions,
+} from './mediaUpload.ts';
 import type { RepoEntryGate } from './zipRepoEntries.ts';
 
 /**
@@ -61,8 +66,6 @@ export function importEntryGoesToMedia(
 function mediaRefusalPhrase(error: unknown): string {
   const code = (error as { code?: unknown } | null)?.code;
   switch (code) {
-    case 'QUOTA_EXCEEDED':
-      return "this class's media storage is full";
     case 'FILE_TOO_LARGE':
       return 'it is over the limit for one file';
     case 'NOT_CONFIGURED':
@@ -77,11 +80,21 @@ function mediaRefusalPhrase(error: unknown): string {
 }
 
 /**
- * The warning for a video left out because media storage would not take it:
- * `Skipped lecture.mp4 (40 MB) — media storage could not take it (this class's
- * media storage is full)`.
+ * The warning for a file left out because media storage would not take it:
+ * `Skipped lecture.mp4 (40 MB) — media storage could not take it (it is over the
+ * limit for one file)`. A full quota says what the server says — who to contact
+ * — rather than a phrase of ours: `Skipped lecture.mp4 (40 MB) — This class's
+ * media storage is full. Contact hello@classmoji.io to upgrade.`
  */
 export function importMediaSkippedWarning(name: string, bytes: number, error: unknown): string {
+  const failure = error as { code?: unknown; message?: unknown } | null;
+  if (failure?.code === 'QUOTA_EXCEEDED') {
+    const sentence =
+      typeof failure.message === 'string' && failure.message.trim()
+        ? failure.message.trim()
+        : MEDIA_QUOTA_FULL_MESSAGE;
+    return `Skipped ${name} (${formatMegabytes(bytes)}) — ${sentence}`;
+  }
   return (
     `Skipped ${name} (${formatMegabytes(bytes)}) — media storage could not take it ` +
     `(${mediaRefusalPhrase(error)})`
@@ -125,7 +138,7 @@ export function importAssetType(filePath: string): 'image' | 'video' | null {
  * slides VM has 2 GB of memory and an import's repository files are all held
  * until its single commit; this bounds the work one ZIP can ask for.
  */
-export const IMPORT_INFLATE_BUDGET_BYTES = 3 * 1024 * 1024 * 1024;
+export const IMPORT_INFLATE_BUDGET_BYTES = 3_000_000_000;
 
 /** The import's running total of inflated bytes. */
 export class ImportInflateBudget {
