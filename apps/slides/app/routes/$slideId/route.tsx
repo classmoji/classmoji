@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useLoaderData, useFetcher, data, redirect } from 'react-router';
 import { Tooltip, Popconfirm } from 'antd';
 import getPrisma from '@classmoji/database';
@@ -48,6 +48,7 @@ import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import { uploadMultipart } from '@classmoji/ui-components/upload';
 import { deckAssetTarget, deckUploadErrorMessage, mediaUploadMessage } from '~/utils/mediaUpload';
 import { playableMediaUrl } from '~/utils/mediaClient';
+import { canonicalMediaUrls, deliveryHostOf } from '~/utils/mediaRefs';
 import { useToast, useUser } from '~/hooks';
 import { diffDeckSnapshots, extractDeckSnapshot, type DeckSnapshot } from '~/utils/deckOpsDiff';
 import { getThemeUrls } from '~/utils/themeService.server';
@@ -536,6 +537,9 @@ export const loader = async ({
   return {
     slide,
     uploadCapability,
+    // The host signed media URLs are minted on, for the editor's diff (see
+    // `canonicalMediaUrls`). Editors only, like the capability above.
+    mediaDeliveryHost: canEdit ? deliveryHostOf(process.env.CONTENT_DELIVERY_ORIGIN) : null,
     contentUrl,
     slideContent,
     contentError,
@@ -1651,6 +1655,18 @@ export const action = async ({
   const saveOursSha =
     typeof rawSaveOursSha === 'string' && rawSaveOursSha ? rawSaveOursSha : undefined;
 
+  // The save response's document goes straight back into the editor (a merge
+  // remounts it, view mode shows it until the loader catches up), so its
+  // `media://` references are signed exactly as the editor's own read signs
+  // them — they have no proxy to load through. The edit tier: only an editor
+  // reaches this action. `html_sha` is always the raw document's identity.
+  const saveDeliveryCtx = deckDeliveryContext(
+    slide,
+    gitOrgLogin,
+    repo,
+    deckAccessFor('viewer', { canEdit: true }, slide)
+  );
+
   // Conflict report → 409 the chooser renders (the client re-submits the
   // same payload + resolutions + the report's ours_sha). Shared by both save
   // shapes.
@@ -1735,7 +1751,7 @@ export const action = async ({
         success: true,
         sha: result.sha,
         sha_source: 'deck' as const,
-        savedContent: result.html,
+        savedContent: await resolveDeckMedia(result.html, saveDeliveryCtx),
         // The committed index.html's IDENTITY. `sha` above is deck.json's, and
         // the viewer's read is of index.html — comparing those two would never
         // match. Hashed from the bytes just committed, which is the same object
@@ -1930,9 +1946,12 @@ export const action = async ({
     }
 
     // Return the full HTML: it is the editor's next-session document and the
-    // baseline the next save diffs against, and it stays UNSIGNED for that.
-    // View mode no longer renders it once the loader's revalidation lands —
-    // that read is by sha through the Worker, so it is not behind this one.
+    // baseline the next save diffs against. Its repo references stay unsigned
+    // (the editor loads them through the proxy); its `media://` references are
+    // signed, as the editor's own read signs them, and the client compares
+    // media by reference (`canonicalMediaUrls`), so a fresh signature is not an
+    // edit. View mode no longer renders it once the loader's revalidation lands
+    // — that read is by sha through the Worker, so it is not behind this one.
     // sha is the DECK sha (+ sha_source 'deck') — deck.json now exists, so the
     // client's conflict token must point at it for the next save.
     // merged_with_concurrent (present iff the merge path committed) → the
@@ -1942,7 +1961,7 @@ export const action = async ({
       success: true,
       sha: saved.sha,
       sha_source: 'deck' as const,
-      savedContent: saved.html,
+      savedContent: await resolveDeckMedia(saved.html, saveDeliveryCtx),
       // index.html's identity — see the ops path above for why it is not `sha`.
       html_sha: gitBlobSha(saved.html),
       orphanedImages,
@@ -1988,6 +2007,7 @@ export default function SlideViewer() {
   const {
     slide,
     uploadCapability,
+    mediaDeliveryHost,
     contentUrl,
     slideContent,
     deckSha,
@@ -2072,24 +2092,38 @@ export default function SlideViewer() {
   // re-submit must carry the SAME ops so the server re-derives the SAME
   // conflict report the choices answer.
   const lastPostedOpsRef = useRef<{ ops: string; baseSha: string } | null>(null);
+  /**
+   * The document as the diff compares it: media by REFERENCE. Both sides of
+   * every diff pass through this — the baseline (a server read, signed at read
+   * time) and the DOM (signed whenever it was loaded) — so a media URL minted
+   * at a different moment is not an edit, and an edited slide's ops carry the
+   * `media://` reference rather than an expiring signature.
+   */
+  const mediaScope = useMemo(
+    () => ({ host: mediaDeliveryHost, classroomId: slide.classroom_id }),
+    [mediaDeliveryHost, slide.classroom_id]
+  );
   /** Capture/refresh the diff baseline from a server-rendered document. */
-  const captureBaseline = useCallback((content: unknown, sha: unknown, source: unknown): void => {
-    if (
-      typeof content === 'string' &&
-      content &&
-      typeof sha === 'string' &&
-      sha &&
-      source === 'deck' &&
-      typeof DOMParser !== 'undefined'
-    ) {
-      const snapshot = extractDeckSnapshot(content, html =>
-        new DOMParser().parseFromString(html, 'text/html')
-      );
-      baselineRef.current = snapshot ? { snapshot, baseSha: sha } : null;
-    } else {
-      baselineRef.current = null;
-    }
-  }, []);
+  const captureBaseline = useCallback(
+    (content: unknown, sha: unknown, source: unknown): void => {
+      if (
+        typeof content === 'string' &&
+        content &&
+        typeof sha === 'string' &&
+        sha &&
+        source === 'deck' &&
+        typeof DOMParser !== 'undefined'
+      ) {
+        const snapshot = extractDeckSnapshot(canonicalMediaUrls(content, mediaScope), html =>
+          new DOMParser().parseFromString(html, 'text/html')
+        );
+        baselineRef.current = snapshot ? { snapshot, baseSha: sha } : null;
+      } else {
+        baselineRef.current = null;
+      }
+    },
+    [mediaScope]
+  );
   // Bumped when a merged save lands while editing: the committed document is
   // the MERGE (not what the DOM holds), so a live editor must remount from
   // the merged savedContent — otherwise the next save, carrying the fresh
@@ -2472,7 +2506,10 @@ export default function SlideViewer() {
     } else if (fetcher.data?.savedContent) {
       // After save, update our local content to match what was saved. This is
       // the EDITOR's copy: it seeds the next edit session and is what the next
-      // save diffs against, and it must stay unsigned for that round trip.
+      // save diffs against. Its repo references are unsigned; its media ones
+      // are signed like the editor's own read, so a remount (or view mode,
+      // until the loader lands) plays them — and the diff compares media by
+      // reference (`mediaScope`), so the fresh signature is not an edit.
       setEditableContent(fetcher.data.savedContent);
       // View mode wants the loader's signed copy instead — but not yet. The
       // action has only just returned; the loader revalidation React Router
@@ -2693,7 +2730,7 @@ export default function SlideViewer() {
         contentToken.content_sha === baseline.baseSha &&
         typeof DOMParser !== 'undefined'
       ) {
-        const currSnapshot = extractDeckSnapshot(content, html =>
+        const currSnapshot = extractDeckSnapshot(canonicalMediaUrls(content, mediaScope), html =>
           new DOMParser().parseFromString(html, 'text/html')
         );
         const ops = currSnapshot ? diffDeckSnapshots(baseline.snapshot, currSnapshot) : null;
@@ -2717,7 +2754,7 @@ export default function SlideViewer() {
       }
       return payload;
     },
-    [contentToken]
+    [contentToken, mediaScope]
   );
 
   // Save the current slide content and, once the committed content is ready,
