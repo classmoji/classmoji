@@ -19,12 +19,9 @@ import { webappClassUrl } from '~/utils/webappLinks';
 import { listSavedThemes } from '~/utils/themeService.server';
 import ImportProgressModal from '~/components/ImportProgressModal';
 import { useImportStream } from '~/hooks/useImportStream';
+import { SLIDES_IMPORT_MAX_BYTES, SLIDES_IMPORT_MAX_LABEL } from '~/utils/importLimits';
 
 // Note: prisma, ClassmojiService, getContentRepoName are used in the loader
-
-// Max file size for ZIP uploads (in bytes)
-const MAX_FILE_SIZE = 150 * 1024 * 1024; // 150MB
-const MAX_FILE_SIZE_MB = MAX_FILE_SIZE / 1024 / 1024;
 
 export const loader = async ({ request }: { request: Request }) => {
   const url = new URL(request.url);
@@ -174,7 +171,9 @@ export default function ImportPage() {
 
     if (errorCode === 'file-too-large') {
       const sizeMB = (file.size / 1024 / 1024).toFixed(1);
-      setDropzoneError(`File is too large (${sizeMB} MB). Maximum size is ${MAX_FILE_SIZE_MB} MB.`);
+      setDropzoneError(
+        `File is too large (${sizeMB} MB). Maximum size is ${SLIDES_IMPORT_MAX_LABEL}.`
+      );
     } else if (errorCode === 'file-invalid-type') {
       setDropzoneError('Please select a ZIP file (.zip)');
     } else {
@@ -189,7 +188,7 @@ export default function ImportPage() {
       'application/zip': ['.zip'],
     },
     maxFiles: 1,
-    maxSize: MAX_FILE_SIZE,
+    maxSize: SLIDES_IMPORT_MAX_BYTES,
   });
 
   // Handle form submission - start async import with SSE progress
@@ -358,7 +357,7 @@ export default function ImportPage() {
                           Drag & drop your slides.com export here, or click to browse
                         </p>
                         <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
-                          ZIP files only, max {MAX_FILE_SIZE_MB}MB
+                          ZIP files only, max {SLIDES_IMPORT_MAX_LABEL}
                         </p>
                       </>
                     )}
