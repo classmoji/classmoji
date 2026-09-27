@@ -4,12 +4,12 @@
  * A "resource link" associates a page or a slide deck with a repository (the
  * assignment container — content shows on the repo page), one specific
  * assignment inside it, or a quiz (the quiz's source material: the documents
- * its questions are generated from, in `order`). Extracted from the web admin.$class.resources action so
- * that the resources kanban and the MCP resource-link tools share this path —
- * same precedent as roster.service.ts, staff.service.ts and
- * teamAdmin.service.ts. It is not the only writer of these tables: the
- * repository form route, page.service.linkPage and the slides importer all
- * create links of their own and do not come through here.
+ * its questions are generated from, in `order`). The MCP resource-link tools
+ * come through here — same precedent as roster.service.ts, staff.service.ts
+ * and teamAdmin.service.ts. It is not the only writer of these tables: the
+ * repository form route, page.service.linkPage, the slides importer and the
+ * quiz form (quizSourceMaterial.setQuizSourceMaterial) all create links of
+ * their own and do not come through here.
  *
  * Three rules run through every function here:
  *
@@ -23,22 +23,21 @@
  *    whose target resolves outside the classroom is dropped rather than
  *    reported, since the writers above are not all classroom-scoped.
  *
- * 2. DUPLICATES ARE CAUGHT BY THE PRE-CHECK, AND ONLY BY THE PRE-CHECK. The
- *    kanban drops a duplicate drag before submitting, but it decides that from
- *    loader data that may be stale, and an API caller has no such check at all.
- *    The @@unique on (page_id, repository_id, assignment_id) cannot stand in
- *    for one either: at most one of the target columns is ever set, and the
+ * 2. DUPLICATES ARE CAUGHT BY A READ-THEN-WRITE PRE-CHECK. A caller cannot be
+ *    trusted to have checked, so `addLink` looks for an identical row first.
+ *    For REPOSITORY and ASSIGNMENT links that pre-check is the whole guard: the
+ *    @@unique on (page_id, repository_id, assignment_id) cannot stand in for
+ *    it, because at most one of the target columns is ever set and the
  *    Postgres unique index is nulls-distinct (see the migration — no
- *    `NULLS NOT DISTINCT`), so a second identical row inserts happily. Quiz
- *    links are the exception: a partial unique index on (page_id|slide_id,
- *    quiz_id) WHERE quiz_id IS NOT NULL (quiz_source_material migration)
- *    refuses the duplicate, and the P2002 below maps it to `already_linked`. The
- *    read-then-write pre-check below is therefore the whole guard, and two
- *    identical adds racing each other can both pass it — a duplicate row from
- *    concurrent adds is an ACCEPTED outcome here, not a prevented one. It is
- *    cosmetic (the manifest keys content by slug, and either row can be
+ *    `NULLS NOT DISTINCT`), so a second identical row inserts happily. Two
+ *    identical adds racing each other can both pass the pre-check, and the
+ *    duplicate row that results is an ACCEPTED outcome, not a prevented one: it
+ *    is cosmetic (the manifest keys content by slug, and either row can be
  *    removed), and ruling it out needs an index change the existing rows would
- *    have to be de-duplicated for first.
+ *    have to be de-duplicated for first. QUIZ links do have a database
+ *    backstop: a partial unique index on (page_id|slide_id, quiz_id) WHERE
+ *    quiz_id IS NOT NULL (quiz_source_material migration) refuses the second
+ *    row, and the P2002 below maps it to `already_linked`.
  *
  * 3. THE MANIFEST IS BEST EFFORT, AND SAYS SO. Every successful write rebuilds
  *    `.classmoji/manifest.json` in the classroom content repo. That push talks
@@ -54,7 +53,6 @@
  * scopes) own that, exactly as in the sibling services above.
  */
 import getPrisma from '@classmoji/database';
-import type { Prisma } from '@prisma/client';
 
 import * as contentManifestService from './contentManifest.service.ts';
 
@@ -62,13 +60,6 @@ import * as contentManifestService from './contentManifest.service.ts';
 export type ResourceLinkResourceType = 'page' | 'slide';
 /** What the content is being linked TO. */
 export type ResourceLinkTargetType = 'repository' | 'assignment' | 'quiz';
-
-/**
- * The client a write runs on: the shared client, or the transaction client a
- * caller is already inside (quiz source material is written in the quiz's own
- * transaction).
- */
-type LinkClient = Prisma.TransactionClient | ReturnType<typeof getPrisma>;
 
 /** Thrown for every caller-fixable failure so routes/tools can map it to a message. */
 export class ResourceLinkServiceError extends Error {
@@ -167,9 +158,9 @@ type TargetColumns = {
 async function resolveResource(
   classroomId: string,
   resourceType: ResourceLinkResourceType,
-  resourceId: string,
-  db: LinkClient = getPrisma()
+  resourceId: string
 ): Promise<ResourceColumn> {
+  const db = getPrisma();
   const where = { id: resourceId, classroom_id: classroomId };
   const notFound = () =>
     new ResourceLinkServiceError(
@@ -208,9 +199,9 @@ async function resolveResource(
 async function resolveTarget(
   classroomId: string,
   targetType: ResourceLinkTargetType,
-  targetId: string,
-  db: LinkClient = getPrisma()
+  targetId: string
 ): Promise<TargetColumns> {
+  const db = getPrisma();
   const notFound = () =>
     new ResourceLinkServiceError(
       'target_not_found',
@@ -279,10 +270,6 @@ async function syncManifest(classroomId: string): Promise<boolean> {
  * existing identical link is reported as `already_linked` rather than inserted
  * twice. On success the content manifest is refreshed (best effort — the result
  * comes back as `manifestSynced`), except for a quiz target (rule 3).
- *
- * `tx` runs the whole call on a caller's transaction client. The manifest push
- * is skipped only for quiz targets, so a caller passing `tx` for another target
- * should know the push then runs before its transaction commits.
  */
 export const addLink = async ({
   classroomId,
@@ -290,16 +277,14 @@ export const addLink = async ({
   resourceId,
   targetType,
   targetId,
-  tx,
 }: {
   classroomId: string;
   resourceType: ResourceLinkResourceType;
   resourceId: string;
   targetType: ResourceLinkTargetType;
   targetId: string;
-  tx?: Prisma.TransactionClient;
 }): Promise<CreatedResourceLink> => {
-  const db: LinkClient = tx ?? getPrisma();
+  const db = getPrisma();
   assertUsableId(resourceId, 'resource_not_found', 'resourceId');
   assertUsableId(targetId, 'target_not_found', 'targetId');
 
@@ -308,8 +293,8 @@ export const addLink = async ({
   // those return values is what makes the duplicate lookup and the insert
   // describe the same row: the unset target column is an explicit NULL in both,
   // never an `undefined` that Prisma would drop from the `where`.
-  const resourceColumn = await resolveResource(classroomId, resourceType, resourceId, db);
-  const targetColumns = await resolveTarget(classroomId, targetType, targetId, db);
+  const resourceColumn = await resolveResource(classroomId, resourceType, resourceId);
+  const targetColumns = await resolveTarget(classroomId, targetType, targetId);
   const columns = { ...resourceColumn, ...targetColumns };
 
   const existing =
@@ -386,21 +371,19 @@ export const addLink = async ({
  *
  * The row's target is read (under the same classroom compound) before the
  * delete, because a quiz link must not rebuild the manifest (rule 3) and the
- * caller names only the link id. `tx` runs the call on a caller's transaction.
+ * caller names only the link id.
  */
 export const removeLink = async ({
   classroomId,
   resourceType,
   linkId,
-  tx,
 }: {
   classroomId: string;
   resourceType: ResourceLinkResourceType;
   linkId: string;
-  tx?: Prisma.TransactionClient;
 }): Promise<RemovedResourceLink> => {
   assertUsableId(linkId, 'link_not_found', 'linkId');
-  const db: LinkClient = tx ?? getPrisma();
+  const db = getPrisma();
 
   let count: number;
   let isQuizLink = false;

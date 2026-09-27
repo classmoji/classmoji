@@ -1,15 +1,14 @@
 /**
- * Unit tests for resourceLink — the page/slide link management extracted from
- * the web admin.$class.resources action so the MCP resource-link tools share it.
+ * Unit tests for resourceLink — the page/slide link management behind the MCP
+ * resource-link tools.
  *
- * Prisma and the content manifest are mocked. The tests pin the invariants the
- * extraction exists to establish: both ends of a link are proven to be in the
- * caller's classroom BEFORE anything is written, reads drop a row whose target
- * resolves outside the classroom, a duplicate is refused by the service's own
- * pre-check rather than by the kanban's drop-time guard on loader data, a
- * remove that matched nothing leaves the manifest alone, and a manifest push
- * that fails is reported rather than turning a committed write into a failed
- * call.
+ * Prisma and the content manifest are mocked. The tests pin the service's
+ * invariants: both ends of a link are proven to be in the caller's classroom
+ * BEFORE anything is written, reads drop a row whose target resolves outside
+ * the classroom, a duplicate is refused by the service's own pre-check rather
+ * than left to the caller, a remove that matched nothing leaves the manifest
+ * alone, and a manifest push that fails is reported rather than turning a
+ * committed write into a failed call.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -226,9 +225,9 @@ describe('addLink', () => {
   });
 
   it('reports an existing identical link as already_linked instead of duplicating it', async () => {
-    // This pre-check is the whole guard: the kanban's drop-time check reads
-    // loader data that may be stale, an API caller has no check at all, and the
-    // nulls-distinct unique index would happily take a second row.
+    // For a repository link this pre-check is the whole guard: a caller may
+    // not have checked, and the nulls-distinct unique index would happily take
+    // a second row.
     pageLinkFindFirst.mockResolvedValue({ id: 'link-existing' });
 
     expect(await codeOf(addLink({ ...PAGE_TO_REPO }))).toBe('already_linked');
@@ -328,27 +327,6 @@ describe('addLink — quiz target (source material)', () => {
     pageLinkCreate.mockRejectedValue(Object.assign(new Error('unique'), { code: 'P2002' }));
 
     expect(await codeOf(addLink({ ...PAGE_TO_QUIZ }))).toBe('already_linked');
-  });
-
-  it('runs every read and the write on the caller transaction client when given one', async () => {
-    const txQuizFindFirst = vi.fn(async () => ({ id: 'quiz-1' }));
-    const txPageFindFirst = vi.fn(async () => ({ id: 'page-1' }));
-    const txLinkFindFirst = vi.fn(async () => null);
-    const txLinkCreate = vi.fn(async () => ({ id: 'link-tx', order: 0, created_at: CREATED_AT }));
-    const tx = {
-      page: { findFirst: txPageFindFirst },
-      quiz: { findFirst: txQuizFindFirst },
-      pageLink: { findFirst: txLinkFindFirst, create: txLinkCreate },
-    } as unknown as Parameters<typeof addLink>[0]['tx'];
-
-    await expect(addLink({ ...PAGE_TO_QUIZ, tx })).resolves.toMatchObject({ id: 'link-tx' });
-    expect(txPageFindFirst).toHaveBeenCalledOnce();
-    expect(txQuizFindFirst).toHaveBeenCalledOnce();
-    expect(txLinkCreate).toHaveBeenCalledOnce();
-    // Nothing went through the shared client.
-    expect(pageFindFirst).not.toHaveBeenCalled();
-    expect(quizFindFirst).not.toHaveBeenCalled();
-    expectNoWrites();
   });
 });
 
