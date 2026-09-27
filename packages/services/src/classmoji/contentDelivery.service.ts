@@ -992,6 +992,38 @@ export function parseMediaUrl(ctx: ResolveContext, ref: string): string | null {
 }
 
 /**
+ * A signed media URL anywhere in a text — a candidate only: whether it is OURS
+ * is `parseMediaUrl`'s call, per match.
+ *
+ * Needs a scheme and host (ours are always absolute). The query stops at a
+ * comma (a `srcset` or `data-background-video` list), at a backslash (a `\"`
+ * inside JSON) and before an HTML-escaped quote (`&quot;`, `&#34;`, `&#39;`);
+ * signed query values are base64url and numbers, so none of those occur inside
+ * one. It runs through `&` and `;`, so an `&amp;`-escaped query is taken whole.
+ */
+const SIGNED_MEDIA_URL_IN_TEXT = new RegExp(
+  String.raw`https?:\/\/[^\s"'()<>\/\\]+\/c\/[0-9a-fA-F-]{36}\/media\/[0-9a-fA-F-]{36}\/[A-Za-z0-9._-]+` +
+    String.raw`(?:\?(?:(?!&(?:quot|#34|#39);)[^\s"'()<>,\\])*)?`,
+  'g'
+);
+
+/**
+ * Every signed media URL of OURS in `text` → `media://{id}`; everything else
+ * untouched. For a whole serialized document (a deck's JSON) when the
+ * structured pass could not run: it never inserts a quote or a backslash, so a
+ * JSON text stays JSON.
+ */
+export function stripSignedMediaUrls(ctx: ResolveContext, text: string): string {
+  if (typeof text !== 'string' || text.length === 0) return text;
+  return text.replace(SIGNED_MEDIA_URL_IN_TEXT, url => {
+    // The anchored parse wants the URL alone; an `&amp;` in its query is
+    // still one URL.
+    const mediaId = parseMediaUrl(ctx, url.replace(/&amp;/g, '&'));
+    return mediaId !== null ? mediaRef(mediaId) : url;
+  });
+}
+
+/**
  * THE INVARIANT, media edition.
  *
  * `mintSigned`'s proof is a row read out of one classroom's asset map. Here it

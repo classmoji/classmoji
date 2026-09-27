@@ -27,6 +27,7 @@ import {
   isOwnAssetRef,
   parseMediaUrl,
   parseMissingUrl,
+  stripSignedMediaUrls,
   warmContentText,
   type ResolveContext,
   type WarmContext,
@@ -355,7 +356,14 @@ export async function canonicalizeDeckForSave(
         '[slideContent] Could not canonicalize media refs on save either:',
         fallbackError instanceof Error ? fallbackError.message : fallbackError
       );
-      return deck;
+      // Last resort, at the text level: a signed media URL is never committed.
+      // If even this cannot be done, the save is refused rather than storing
+      // expiring signatures.
+      try {
+        return JSON.parse(stripSignedMediaUrls(ctx, JSON.stringify(deck))) as DeckJson;
+      } catch {
+        throw new Error('This deck could not be saved. Try again.');
+      }
     }
   }
 }
