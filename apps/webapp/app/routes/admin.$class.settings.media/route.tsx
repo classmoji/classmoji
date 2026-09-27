@@ -90,7 +90,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     forStudent: false,
   });
 
-  return url ? { url } : { error: 'Downloads need content delivery, which is not set up here.' };
+  return url ? { url } : { error: "Downloading isn't available right now." };
 };
 
 /** used / quota, and the bar that turns red before an owner is surprised. */
@@ -319,7 +319,7 @@ export default function MediaSettings({ loaderData }: Route.ComponentProps) {
 
       {usage.isPro && !configured && (
         <p className="mb-5 rounded-xl bg-amber-bg px-4 py-3 text-sm text-amber-ink ring-1 ring-amber-bord">
-          Media storage is not configured in this environment, so nothing new can be uploaded here.
+          Uploading here isn&rsquo;t available right now.
         </p>
       )}
 

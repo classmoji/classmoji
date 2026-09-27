@@ -300,7 +300,7 @@ describe('action — minting a download URL', () => {
 
     const result = await action(args(post({ mediaId: MEDIA_ID })));
 
-    expect(result).toEqual({ error: 'Downloads need content delivery, which is not set up here.' });
+    expect(result).toEqual({ error: "Downloading isn't available right now." });
   });
 
   it('never answers with a Response, so a fetcher cannot turn it into an error', async () => {

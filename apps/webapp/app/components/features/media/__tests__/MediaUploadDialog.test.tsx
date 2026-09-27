@@ -52,7 +52,9 @@ describe('messageFor', () => {
   });
 
   it('leaves every other code saying what it already said', () => {
-    expect(messageFor(failure('NOT_CONFIGURED'), quota)).toContain('not configured');
+    expect(messageFor(failure('NOT_CONFIGURED'), quota)).toBe(
+      "Uploading here isn't available right now."
+    );
     expect(messageFor(failure('PRO_REQUIRED'), quota)).toContain('Pro');
     expect(messageFor(failure('KIND_NOT_ALLOWED'), quota)).toContain("can't be uploaded");
     expect(messageFor(failure('SIZE_MISMATCH'), quota)).toContain('discarded');

@@ -19,6 +19,7 @@ const source = (relative: string) =>
 const UPLOAD_SOURCE = source('../../app/routes/api.upload/route.ts');
 const PAGE_ACTION_SOURCE = source('../../app/routes/$classroomSlug.$pageId/route.server.ts');
 const EDITOR_SOURCE = source('../../app/components/editor/PageEditor.tsx');
+const MEDIA_UPLOAD_SOURCE = source('../../app/components/editor/media/mediaUpload.ts');
 
 test.describe('page uploads read the body after the gate', () => {
   test('api.upload names the page in the URL and authorizes before reading', () => {
@@ -48,8 +49,11 @@ test.describe('page uploads read the body after the gate', () => {
     expect(upload).toContain(
       "throw new UploadRefused(typeof body?.error === 'string' ? body.error : 'Upload failed');"
     );
-    expect(upload).toContain(
-      'throw new UploadRefused(mediaUploadMessage(error, capabilityRef.current));'
+    // Media's refusals are turned into sentences by the shared media sender,
+    // which the editor's media port goes through.
+    expect(upload).toContain('await sendToMedia({');
+    expect(MEDIA_UPLOAD_SOURCE).toContain(
+      'throw new UploadRefused(mediaUploadMessage(error, capability));'
     );
     // The size cap is refused before a byte is sent (the router, via
     // `placeUpload`), never after a large file has spent a minute uploading.

@@ -27,9 +27,8 @@ import {
   getMultiColumnSlashMenuItems,
   locales as multiColumnLocales,
 } from '@blocknote/xl-multi-column';
-import { toast, type Id as ToastId } from 'react-toastify';
+import { toast } from 'react-toastify';
 import { kindOfFilename, type UploadCapability } from '@classmoji/services/media/router';
-import { MultipartUploadError, uploadMultipart } from '@classmoji/ui-components/upload';
 
 import {
   schema,
@@ -47,11 +46,10 @@ import {
 import { MediaFilePanel } from './media/MediaFilePanel.tsx';
 import { usePageMedia } from './media/PageMedia.tsx';
 import { fetchMediaDisplayUrl } from './media/mediaDisplayUrl.ts';
+import { sendToMedia } from './media/mediaUpload.ts';
 import {
-  UploadCancelled,
   UploadRefused,
   UploadReroute,
-  mediaUploadMessage,
   placeUpload,
   type UploadPorts,
 } from './media/uploadRouting.ts';
@@ -187,41 +185,15 @@ const PageEditor = forwardRef(function PageEditor(
         },
 
         async toMedia(mediaFile, options) {
-          if (!classroomId) throw new UploadRefused('Upload failed');
-          // BlockNote's own "loading" state says nothing about how far a
-          // two-gigabyte upload has got, so a media upload carries a progress
-          // toast of its own.
-          const progressToast: ToastId = toast(`Uploading ${mediaFile.name}`, {
-            progress: 0,
-            autoClose: false,
-            closeButton: false,
-            closeOnClick: false,
-            draggable: false,
+          // Progress, destination and room left are the toast's; the
+          // failures come back as the routing errors `placeUpload` follows.
+          const { ref } = await sendToMedia({
+            file: mediaFile,
+            classroomId,
+            options,
+            capability: capabilityRef.current,
           });
-          try {
-            const { ref } = await uploadMultipart({
-              file: mediaFile,
-              classroomId,
-              options,
-              endpoints: { base: '/api/media' },
-              onProgress: ({ sentBytes, totalBytes }) => {
-                // Held under 1: `done` is what completes the bar and closes it.
-                const progress = totalBytes > 0 ? Math.min(0.99, sentBytes / totalBytes) : 0;
-                toast.update(progressToast, { progress });
-              },
-            });
-            toast.done(progressToast);
-            return { ref, displayUrl: await fetchMediaDisplayUrl(pageId, ref) };
-          } catch (error) {
-            toast.dismiss(progressToast);
-            if (error instanceof MultipartUploadError) {
-              // The router keeps this one in the repository after all.
-              if (error.code === 'USE_REPO') throw new UploadReroute('repo');
-              if (error.code === 'ABORTED') throw new UploadCancelled();
-              throw new UploadRefused(mediaUploadMessage(error, capabilityRef.current));
-            }
-            throw error;
-          }
+          return { ref, displayUrl: await fetchMediaDisplayUrl(pageId, ref) };
         },
       };
 

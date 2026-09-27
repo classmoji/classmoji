@@ -50,7 +50,7 @@ interface MediaUploadDialogProps {
 export function messageFor(error: MultipartUploadError, quota: QuotaSummary): string {
   switch (error.code) {
     case 'NOT_CONFIGURED':
-      return 'Media storage is not configured in this environment.';
+      return "Uploading here isn't available right now.";
     case 'PRO_REQUIRED':
       return 'Uploading media needs a Pro classroom.';
     case 'DELIVERY_REQUIRED':

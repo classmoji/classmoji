@@ -18,6 +18,7 @@ import {
   UploadReroute,
   firstDestination,
   mediaOptionsFor,
+  mediaProgressLabel,
   mediaUploadMessage,
   placeUpload,
   type UploadPorts,
@@ -168,5 +169,28 @@ test.describe('media refusals read as sentences', () => {
 
   test('an unknown failure reads as a connection problem, not silence', () => {
     expect(mediaUploadMessage({ code: 'NETWORK' }, PRO)).toMatch(/connection/);
+  });
+});
+
+test.describe('the media progress toast', () => {
+  test('names the destination and the room there was before the upload', () => {
+    expect(mediaProgressLabel({ name: 'lecture.mp4' }, PRO)).toBe(
+      'Saving lecture.mp4 to your class media — 10 GB free'
+    );
+  });
+
+  test('a full store reads as none free, not a rounding artefact', () => {
+    const full = { ...PRO, media: { perFileMaxBytes: 2 * GIB, remainingBytes: 0 } };
+    expect(mediaProgressLabel({ name: 'a.mp4' }, full)).toContain('— 0 KB free');
+  });
+
+  test('without a capability it still says where the file is going', () => {
+    expect(mediaProgressLabel({ name: 'a.mp4' }, null)).toBe('Saving a.mp4 to your class media');
+  });
+
+  test('says nothing about the environment when storage is not set up', () => {
+    const message = mediaUploadMessage({ code: 'NOT_CONFIGURED' }, PRO);
+    expect(message).toBe("Uploading here isn't available right now.");
+    expect(message).not.toMatch(/configured|environment/);
   });
 });

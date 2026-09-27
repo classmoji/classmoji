@@ -135,12 +135,30 @@ export async function placeUpload(
   }
 }
 
+/**
+ * The line a media upload's progress toast reads: where the file is going and
+ * how much room there was before it left. The room is the loader's figure
+ * (`capability.media.remainingBytes`) — the server enforces the quota, this
+ * only tells the uploader where they stand.
+ */
+export function mediaProgressLabel(
+  file: { name: string },
+  capability: UploadCapability | null | undefined
+): string {
+  const remaining = capability?.media?.remainingBytes;
+  const free = typeof remaining === 'number' ? formatBytes(remaining) : '';
+  return free
+    ? `Saving ${file.name} to your class media — ${free} free`
+    : `Saving ${file.name} to your class media`;
+}
+
 const GB = 1024 * 1024 * 1024;
 const MB = 1024 * 1024;
 
 /** `1.2 GB`, `35 MB`, `640 KB` — sizes as a person reads them. */
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return '';
+  if (bytes === 0) return '0 KB';
   if (bytes >= GB) return `${Math.round((bytes / GB) * 10) / 10} GB`;
   if (bytes >= MB) return `${Math.round((bytes / MB) * 10) / 10} MB`;
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -158,7 +176,7 @@ export function mediaUploadMessage(
 ): string {
   switch (error.code) {
     case 'NOT_CONFIGURED':
-      return 'Media storage is not configured in this environment.';
+      return "Uploading here isn't available right now.";
     case 'PRO_REQUIRED':
       return 'Uploading media needs a Pro classroom.';
     case 'DELIVERY_REQUIRED':
