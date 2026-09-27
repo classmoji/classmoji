@@ -12,6 +12,7 @@ import MediaUploadDialog from '~/components/features/media/MediaUploadDialog';
 import { formatBytes } from '~/components/features/media/mediaUploadOptions';
 import {
   MEDIA_STATE_CHIP,
+  MEDIA_STATE_LABEL,
   isActionable,
   mediaState,
   meterReading,
@@ -228,9 +229,30 @@ export default function MediaSettings({ loaderData }: Route.ComponentProps) {
       render: (filename: string, row: MediaListItem) => {
         const state = mediaState(row);
         return (
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="truncate font-medium text-ink-0">{filename}</span>
-            <span className={`chip shrink-0 ${MEDIA_STATE_CHIP[state]}`}>{state}</span>
+          <div className="flex min-w-0 items-center gap-3">
+            {row.posterUrl && (
+              <img
+                src={row.posterUrl}
+                alt=""
+                loading="lazy"
+                className="h-9 w-16 shrink-0 rounded-md bg-gray-100 object-cover ring-1 ring-stone-200 dark:bg-neutral-800 dark:ring-neutral-700"
+              />
+            )}
+            <div className="min-w-0">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="truncate font-medium text-ink-0">{filename}</span>
+                {state && (
+                  <span className={`chip shrink-0 ${MEDIA_STATE_CHIP[state]}`}>
+                    {MEDIA_STATE_LABEL[state]}
+                  </span>
+                )}
+              </div>
+              {state === 'failed' && row.processingError && (
+                <div className="truncate text-xs text-ink-3" title={row.processingError}>
+                  {row.processingError}
+                </div>
+              )}
+            </div>
           </div>
         );
       },

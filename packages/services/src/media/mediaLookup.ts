@@ -1,6 +1,6 @@
 import getPrisma from '@classmoji/database';
 import type { MediaKind } from './mediaKinds.ts';
-import { origVariant } from './mediaKeys.ts';
+import { origVariant, storedPosterVariant, storedRenditionVariant } from './mediaKeys.ts';
 import { RESERVATION_WINDOW_MS } from './mediaQuota.ts';
 
 /**
@@ -130,19 +130,56 @@ export function toMediaRecord(row: MediaRow): MediaRecord {
  * Which variant a row is SERVED as.
  *
  * The rendition's presence is the switch, and there is deliberately no
- * override: a `web.mp4` exists only once the job has verified it, so preferring
+ * override: a rendition exists only once the job has verified it, so preferring
  * it is always right, and a per-object toggle would be a second source of truth
  * for something the job already knows. A row with no rendition serves what was
  * uploaded.
+ *
+ * The rendition's name is the one `rendition_key` records — content-derived,
+ * `web-{hex12}.mp4` — checked against the grammar (`storedRenditionVariant`).
+ * A key that does not parse is served as the original, with a warning, rather
+ * than signed into a URL nothing can answer: the original is there unless the
+ * job dropped it, and it only drops it after writing a key that does parse.
  */
-export function servedVariant(row: { ext: string; renditionKey?: string | null }): string {
-  // TODO(P4): the rendition job writes content-derived names (`web-{hex}.mp4`);
-  // serve the variant the row's `rendition_key` names, not a fixed `web.mp4`.
-  if (row.renditionKey) return 'web.mp4';
+export function servedVariant(row: {
+  id?: string;
+  ext: string;
+  renditionKey?: string | null;
+}): string {
+  if (row.renditionKey) {
+    const rendition = storedRenditionVariant(row.renditionKey);
+    if (rendition) return rendition;
+    console.warn(
+      `[media] Unrecognised rendition key on ${row.id ?? 'a media row'}; serving the original`
+    );
+  }
   // The ext was checked against the variant grammar at create time, so the fallback
   // is unreachable for a row this codebase wrote — and if it ever is reached,
   // an unsignable variant is better than one the Worker would 404 on silently.
   return origVariant(row.ext) ?? `orig.${row.ext}`;
+}
+
+/**
+ * The variant a DOWNLOAD hands over, or null when there is nothing to hand.
+ *
+ * The original while it is kept — a download is the file the instructor
+ * uploaded, not the copy the player uses. Once the job has dropped it, the
+ * rendition is all there is. A row whose original is gone and whose rendition
+ * key does not parse has nothing downloadable, and null says so rather than
+ * signing a URL that 404s.
+ */
+export function downloadVariant(row: {
+  ext: string;
+  renditionKey?: string | null;
+  originalDeletedAt?: Date | null;
+}): string | null {
+  if (!row.originalDeletedAt) return origVariant(row.ext) ?? `orig.${row.ext}`;
+  return storedRenditionVariant(row.renditionKey);
+}
+
+/** The poster frame's variant (`poster-{hex12}.jpg`), or null when there is none. */
+export function posterVariantOf(row: { posterKey?: string | null }): string | null {
+  return storedPosterVariant(row.posterKey);
 }
 
 /**

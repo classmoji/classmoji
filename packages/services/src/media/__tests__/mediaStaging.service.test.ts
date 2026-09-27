@@ -1025,3 +1025,83 @@ describe('startUrlImport', () => {
     ).rejects.toMatchObject({ code: 'STORAGE_REFUSED' });
   });
 });
+
+describe('placeIntoMedia: an optimisable video gets its job (onMediaReady)', () => {
+  const video = (overrides: Record<string, unknown> = {}) =>
+    stagedRow({
+      kind: 'VIDEO',
+      filename: 'lecture.mp4',
+      ext: 'mp4',
+      content_type: 'video/mp4',
+      destination: 'media',
+      optimise: true,
+      allow_download: false,
+      ...overrides,
+    });
+
+  beforeEach(() => {
+    sendImpl.mockImplementation(async (name: string) =>
+      name === 'HeadObject' ? { ContentLength: 4096 } : {}
+    );
+  });
+
+  const videoJob = () => trigger.mock.calls.filter(call => call[0] === 'media-video-process');
+
+  it('file_upload_finish (media destination): READY, then claimed and queued', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(video());
+
+    await expect(
+      staging.finishStagedUpload({ classroom, userId: USER, uploadId: MEDIA_ID })
+    ).resolves.toMatchObject({ status: 'placed', ref: `media://${MEDIA_ID}` });
+
+    const writes = prisma.mediaObject.updateMany.mock.calls.map(call => call[0]);
+    const readyAt = writes.findIndex(w => w.data?.status === 'READY');
+    const claimAt = writes.findIndex(w => w.data?.processing === 'PENDING');
+    expect(readyAt).toBeGreaterThanOrEqual(0);
+    // The placement reset `processing` to NONE on the READY flip (it meant
+    // "placing" while STAGING); the video claim is a separate, later write
+    // conditioned on READY, so the two meanings never meet.
+    expect(writes[readyAt].data.processing).toBe('NONE');
+    expect(claimAt).toBeGreaterThan(readyAt);
+    expect(writes[claimAt].where).toEqual({ id: MEDIA_ID, status: 'READY', processing: 'NONE' });
+    expect(videoJob()).toEqual([
+      [
+        'media-video-process',
+        { classroomId: CLASSROOM_ID, mediaId: MEDIA_ID },
+        { idempotencyKey: `media-video-process:${MEDIA_ID}` },
+      ],
+    ]);
+  });
+
+  it('URL import (placeStagedObject, media destination): claimed and queued', async () => {
+    prisma.mediaObject.findUnique.mockResolvedValue(video({ processing: 'PENDING' }));
+
+    await expect(staging.placeStagedObject(MEDIA_ID)).resolves.toEqual({
+      status: 'placed',
+      ref: `media://${MEDIA_ID}`,
+    });
+    expect(videoJob()).toHaveLength(1);
+    expect(videoJob()[0][1]).toEqual({ classroomId: CLASSROOM_ID, mediaId: MEDIA_ID });
+  });
+
+  it('a failed enqueue leaves the placement standing and the row FAILED', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    trigger.mockRejectedValue(new Error('trigger is down'));
+    prisma.mediaObject.findFirst.mockResolvedValue(video());
+
+    await expect(
+      staging.finishStagedUpload({ classroom, userId: USER, uploadId: MEDIA_ID })
+    ).resolves.toMatchObject({ status: 'placed' });
+    expect(
+      prisma.mediaObject.updateMany.mock.calls
+        .map(call => call[0])
+        .find(w => w.data?.processing === 'FAILED')
+    ).toMatchObject({ where: { id: MEDIA_ID, processing: 'PENDING' } });
+  });
+
+  it('a non-optimised or non-video placement queues nothing', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(video({ optimise: false }));
+    await staging.finishStagedUpload({ classroom, userId: USER, uploadId: MEDIA_ID });
+    expect(videoJob()).toHaveLength(0);
+  });
+});

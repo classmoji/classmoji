@@ -3,6 +3,8 @@ import {
   isClassroomId,
   isMediaId,
   isMediaVariant,
+  isPosterVariant,
+  isRenditionVariant,
   mediaKey,
 } from '@classmoji/content-signing';
 
@@ -21,7 +23,7 @@ import {
  * lookup, the record shape — can have the key grammar without pulling the S3
  * client and its transitive AWS dependencies into their import graph.
  */
-export { isMediaVariant, mediaKey };
+export { isMediaVariant, isPosterVariant, isRenditionVariant, mediaKey };
 
 /**
  * The stored/served content type for an extension, from the same table the
@@ -57,6 +59,49 @@ export function mediaPrefix(classroomId: string): string {
     throw new TypeError(`media: not a classroom id (got ${classroomId})`);
   }
   return `m/${classroomId}/`;
+}
+
+/**
+ * `m/{classroomId}/{mediaId}/` — every object ONE media row has in the bucket:
+ * the original, and every rendition and poster the video job ever wrote for it.
+ *
+ * A delete lists this prefix rather than trusting a fixed list of names: the
+ * rendition and poster names are content-derived (`web-{hex12}.mp4`), and a
+ * replayed job whose result write lost the race may have left a second pair
+ * the row never recorded. Both ids are checked for the reason `mediaPrefix`
+ * checks its one — this string is handed to a list-and-delete, and a truncated
+ * id would match its neighbours.
+ */
+export function mediaObjectPrefix(classroomId: string, mediaId: string): string {
+  if (!isClassroomId(classroomId)) {
+    throw new TypeError(`media: not a classroom id (got ${classroomId})`);
+  }
+  if (!isMediaId(mediaId)) {
+    throw new TypeError(`media: not a media id (got ${mediaId})`);
+  }
+  return `m/${classroomId}/${mediaId}/`;
+}
+
+/**
+ * The variant a stored rendition/poster key names, or null when it names none.
+ *
+ * `rendition_key` / `poster_key` hold the full R2 key the job wrote
+ * (`m/{classroom}/{id}/web-{hex12}.mp4`); a bare variant is accepted too. The
+ * LAST segment is taken and checked against the grammar for that one kind, so a
+ * malformed value can never be signed into a URL or used as a copy source —
+ * the caller rebuilds the key from its own ids with `mediaKey`.
+ */
+export function storedRenditionVariant(key: string | null | undefined): string | null {
+  if (typeof key !== 'string' || key.length === 0) return null;
+  const tail = key.slice(key.lastIndexOf('/') + 1);
+  return isRenditionVariant(tail) ? tail : null;
+}
+
+/** As `storedRenditionVariant`, for `poster_key` (`poster-{hex12}.jpg`). */
+export function storedPosterVariant(key: string | null | undefined): string | null {
+  if (typeof key !== 'string' || key.length === 0) return null;
+  const tail = key.slice(key.lastIndexOf('/') + 1);
+  return isPosterVariant(tail) ? tail : null;
 }
 
 /**

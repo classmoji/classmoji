@@ -1,6 +1,12 @@
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
-import type { MediaKind, MediaProcessing, MediaStatus, MediaUsage } from '@classmoji/services';
+import type {
+  MediaKind,
+  MediaProcessing,
+  MediaRecord,
+  MediaStatus,
+  MediaUsage,
+} from '@classmoji/services';
 
 /**
  * What the media settings tab reads.
@@ -23,6 +29,11 @@ export interface MediaListItem {
   status: MediaStatus;
   processing: MediaProcessing;
   processingError: string | null;
+  /**
+   * The poster frame, signed, when the video job produced one — the row's
+   * thumbnail. Null for everything else, and when the layer cannot sign.
+   */
+  posterUrl: string | null;
   optimise: boolean;
   keepOriginal: boolean;
   allowDownload: boolean;
@@ -41,6 +52,8 @@ export interface MediaListItem {
  */
 export interface MediaPageClassroom {
   id: string;
+  /** The signing key version — needed to sign the poster thumbnails. */
+  content_key_version?: number | null;
   content_delivery_enabled?: boolean | null;
   content_repo?: string | null;
   git_organization?: {
@@ -115,6 +128,51 @@ async function uploaderNames(userIds: string[]): Promise<Map<string, string>> {
 }
 
 /**
+ * Signed poster URLs for the rows that have a poster, keyed by row id.
+ *
+ * Only rows with a `posterKey` are signed — most have none — and a signing
+ * failure is a missing thumbnail, never a failed page. The rows were read
+ * scoped to this classroom, which is the proof the signer asks for.
+ */
+async function posterUrls(
+  classroom: MediaPageClassroom,
+  records: MediaRecord[]
+): Promise<Map<string, string>> {
+  const withPoster = records.filter(record => record.posterKey && record.status === 'READY');
+  if (withPoster.length === 0) return new Map();
+
+  // The signer's classroom shape, from the fields this page already reads. A
+  // classroom missing one of them cannot be signed for, so it gets no posters
+  // rather than a cast that pretends otherwise.
+  const login = classroom.git_organization?.login;
+  if (typeof classroom.content_key_version !== 'number' || !classroom.content_repo || !login) {
+    return new Map();
+  }
+  const signer = {
+    id: classroom.id,
+    content_key_version: classroom.content_key_version,
+    content_repo: classroom.content_repo,
+    git_organization: { login },
+    content_delivery_enabled: classroom.content_delivery_enabled === true,
+  };
+
+  const minted = await Promise.all(
+    withPoster.map(async record => {
+      try {
+        const url = await ClassmojiService.contentDelivery.mediaPosterUrl({
+          classroom: signer,
+          record,
+        });
+        return url ? ([record.id, url] as const) : null;
+      } catch {
+        return null;
+      }
+    })
+  );
+  return new Map(minted.filter((entry): entry is readonly [string, string] => entry !== null));
+}
+
+/**
  * Usage and the list, for a classroom.
  *
  * Both are read even when media is unconfigured: they are plain database reads
@@ -128,7 +186,10 @@ export async function loadMediaPage(classroom: MediaPageClassroom): Promise<Medi
     ClassmojiService.media.listMedia(classroom),
   ]);
 
-  const names = await uploaderNames(records.map(record => record.uploadedBy));
+  const [names, posters] = await Promise.all([
+    uploaderNames(records.map(record => record.uploadedBy)),
+    posterUrls(classroom, records),
+  ]);
 
   return {
     classroomId: classroom.id,
@@ -149,6 +210,7 @@ export async function loadMediaPage(classroom: MediaPageClassroom): Promise<Medi
       status: record.status,
       processing: record.processing,
       processingError: record.processingError,
+      posterUrl: posters.get(record.id) ?? null,
       optimise: record.optimise,
       keepOriginal: record.keepOriginal,
       allowDownload: record.allowDownload,

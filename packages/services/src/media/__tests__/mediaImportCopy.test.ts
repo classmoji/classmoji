@@ -67,9 +67,11 @@ vi.mock('../uploadCapability.ts', () => ({
 
 const deleteMedia = vi.fn();
 const afterFailedReadyFlip = vi.fn();
+const onMediaReady = vi.fn();
 vi.mock('../media.service.ts', () => ({
   deleteMedia: (...args: unknown[]) => deleteMedia(...args),
   afterFailedReadyFlip: (...args: unknown[]) => afterFailedReadyFlip(...args),
+  onMediaReady: (...args: unknown[]) => onMediaReady(...args),
 }));
 
 const {
@@ -225,7 +227,7 @@ describe('collectMediaRefs', () => {
   });
 
   it('reads an &amp;-escaped signed URL in HTML whole', () => {
-    const html = `<video src="${signed(SOURCE, VIDEO, 'web.mp4', '&amp;')}"></video>`;
+    const html = `<video src="${signed(SOURCE, VIDEO, 'web-0123456789ab.mp4', '&amp;')}"></video>`;
     expect([...collectMediaRefs(html, SOURCE).ids]).toEqual([VIDEO]);
   });
 
@@ -294,7 +296,7 @@ describe('rewriteMediaRefs: HTML-escaped quotes', () => {
   });
 
   it('still takes an &amp;-escaped query whole when nothing follows it', () => {
-    const text = `<video src="${signed(SOURCE, VIDEO, 'web.mp4', '&amp;')}">`;
+    const text = `<video src="${signed(SOURCE, VIDEO, 'web-0123456789ab.mp4', '&amp;')}">`;
     expect(rewriteMediaRefs(text, SOURCE, new Map([[VIDEO, NEW]]))).toBe(
       `<video src="media://${NEW}">`
     );
@@ -307,9 +309,9 @@ describe('createMediaImportCopier: success', () => {
       sourceRows: [
         row({
           processing: 'DONE',
-          rendition_key: `m/${SOURCE}/${VIDEO}/web.mp4`,
+          rendition_key: `m/${SOURCE}/${VIDEO}/web-0123456789ab.mp4`,
           rendition_bytes: BigInt(400),
-          poster_key: `m/${SOURCE}/${VIDEO}/poster.webp`,
+          poster_key: `m/${SOURCE}/${VIDEO}/poster-0123456789ab.jpg`,
         }),
       ],
     });
@@ -339,14 +341,14 @@ describe('createMediaImportCopier: success', () => {
       },
       {
         Bucket: 'media-bucket',
-        Key: `m/${TARGET}/${newId}/web.mp4`,
-        CopySource: `media-bucket/m/${SOURCE}/${VIDEO}/web.mp4`,
+        Key: `m/${TARGET}/${newId}/web-0123456789ab.mp4`,
+        CopySource: `media-bucket/m/${SOURCE}/${VIDEO}/web-0123456789ab.mp4`,
         MetadataDirective: 'COPY',
       },
       {
         Bucket: 'media-bucket',
-        Key: `m/${TARGET}/${newId}/poster.webp`,
-        CopySource: `media-bucket/m/${SOURCE}/${VIDEO}/poster.webp`,
+        Key: `m/${TARGET}/${newId}/poster-0123456789ab.jpg`,
+        CopySource: `media-bucket/m/${SOURCE}/${VIDEO}/poster-0123456789ab.jpg`,
         MetadataDirective: 'COPY',
       },
     ]);
@@ -374,9 +376,9 @@ describe('createMediaImportCopier: success', () => {
       ext: 'mp4',
       content_type: 'video/mp4',
       size_bytes: BigInt(1000),
-      rendition_key: `m/${TARGET}/${newId}/web.mp4`,
+      rendition_key: `m/${TARGET}/${newId}/web-0123456789ab.mp4`,
       rendition_bytes: BigInt(400),
-      poster_key: `m/${TARGET}/${newId}/poster.webp`,
+      poster_key: `m/${TARGET}/${newId}/poster-0123456789ab.jpg`,
       duration_ms: 60_000,
     });
     // The insert writes its own created_at — the attempt's marker — and the
@@ -414,7 +416,7 @@ describe('createMediaImportCopier: success', () => {
         row({
           processing: 'DONE',
           original_deleted_at: new Date(),
-          rendition_key: `m/${SOURCE}/${VIDEO}/web.mp4`,
+          rendition_key: `m/${SOURCE}/${VIDEO}/web-0123456789ab.mp4`,
           rendition_bytes: BigInt(400),
         }),
       ],
@@ -428,7 +430,7 @@ describe('createMediaImportCopier: success', () => {
     await copier.prepare([`media://${VIDEO}`]);
 
     const keys = sent.filter(s => s.name === 'CopyObject').map(s => s.input.Key);
-    expect(keys).toEqual([`m/${TARGET}/${copier.copiedIdFor(VIDEO)}/web.mp4`]);
+    expect(keys).toEqual([`m/${TARGET}/${copier.copiedIdFor(VIDEO)}/web-0123456789ab.mp4`]);
     expect(prisma.mediaObject.create.mock.calls[0][0].data.original_deleted_at).toBeInstanceOf(
       Date
     );
@@ -587,14 +589,21 @@ describe('createMediaImportCopier: what is not copied', () => {
   it('a failed copy backs out and never repoints the file at it', async () => {
     database({
       sourceRows: [
-        row({ id: VIDEO, poster_key: `m/${SOURCE}/${VIDEO}/poster.webp` }),
+        row({
+          id: VIDEO,
+          processing: 'DONE',
+          original_deleted_at: new Date(),
+          rendition_key: `m/${SOURCE}/${VIDEO}/web-0123456789ab.mp4`,
+          rendition_bytes: BigInt(400),
+          poster_key: `m/${SOURCE}/${VIDEO}/poster-0123456789ab.jpg`,
+        }),
         row({ id: PDF, kind: 'DOCUMENT', filename: 'notes.pdf', ext: 'pdf' }),
       ],
     });
     // The video's poster copy fails; the PDF copies fine.
     sendImpl.mockImplementation(async (name: string, input: { Key: string }) => {
       order.push(name);
-      if (name === 'CopyObject' && input.Key.endsWith('/poster.webp')) {
+      if (name === 'CopyObject' && input.Key.endsWith('/poster-0123456789ab.jpg')) {
         throw new Error('R2 is having a moment');
       }
       return {};
@@ -614,8 +623,8 @@ describe('createMediaImportCopier: what is not copied', () => {
     // Both destination keys of the failed object are deleted — the one that
     // landed and the one that may have.
     expect(sent.filter(s => s.name === 'DeleteObject').map(s => s.input.Key)).toEqual([
-      `m/${TARGET}/${videoCopy}/orig.mp4`,
-      `m/${TARGET}/${videoCopy}/poster.webp`,
+      `m/${TARGET}/${videoCopy}/web-0123456789ab.mp4`,
+      `m/${TARGET}/${videoCopy}/poster-0123456789ab.jpg`,
     ]);
     expect(prisma.mediaObject.deleteMany).toHaveBeenCalledWith({
       where: { id: videoCopy, status: 'UPLOADING', created_at: videoMarker },
@@ -764,7 +773,7 @@ describe('createMediaImportCopier: a partial copy never leaks a source signature
       warn,
     });
     const html =
-      `<video src="${signed(SOURCE, VIDEO, 'web.mp4', '&amp;')}"></video>` +
+      `<video src="${signed(SOURCE, VIDEO, 'web-0123456789ab.mp4', '&amp;')}"></video>` +
       `<a href="${signed(SOURCE, PDF, 'orig.pdf', '&amp;')}">notes</a>` +
       `<img src="${signed(THIRD, FOREIGN, 'orig.png')}">`;
 
@@ -1521,5 +1530,181 @@ describe('createMediaImportCopier: discard', () => {
     await copier.prepare([`media://${VIDEO}`]);
     await expect(copier.discard()).resolves.toBeUndefined();
     warnSpy.mockRestore();
+  });
+});
+
+describe('createMediaImportCopier: video processing state', () => {
+  const WEB = 'web-0123456789ab.mp4';
+  const POSTER = 'poster-0123456789ab.jpg';
+
+  function copier() {
+    const { list, warn } = warnings();
+    return {
+      list,
+      copier: createMediaImportCopier({
+        sourceClassroomId: SOURCE,
+        targetClassroomId: TARGET,
+        warn,
+      }),
+    };
+  }
+  const createdData = () => prisma.mediaObject.create.mock.calls[0][0].data;
+  const readyFlip = () =>
+    prisma.mediaObject.updateMany.mock.calls
+      .map(call => call[0])
+      .find(arg => arg.data?.status === 'READY');
+  const copySources = () => sent.filter(s => s.name === 'CopyObject').map(s => s.input.CopySource);
+
+  it('a DONE source: rendition + poster + processing fields come along, no new job', async () => {
+    database({
+      sourceRows: [
+        row({
+          processing: 'DONE',
+          rendition_key: `m/${SOURCE}/${VIDEO}/${WEB}`,
+          rendition_bytes: BigInt(400),
+          poster_key: `m/${SOURCE}/${VIDEO}/${POSTER}`,
+        }),
+      ],
+    });
+    const { copier: c, list } = copier();
+    await c.prepare([`media://${VIDEO}`]);
+    const newId = c.copiedIdFor(VIDEO);
+
+    expect(list).toEqual([]);
+    expect(copySources()).toEqual([
+      `media-bucket/m/${SOURCE}/${VIDEO}/orig.mp4`,
+      `media-bucket/m/${SOURCE}/${VIDEO}/${WEB}`,
+      `media-bucket/m/${SOURCE}/${VIDEO}/${POSTER}`,
+    ]);
+    expect(createdData()).toMatchObject({
+      rendition_key: `m/${TARGET}/${newId}/${WEB}`,
+      rendition_bytes: BigInt(400),
+      poster_key: `m/${TARGET}/${newId}/${POSTER}`,
+      duration_ms: 60_000,
+      width: 1920,
+      height: 1080,
+      original_deleted_at: null,
+    });
+    expect(readyFlip()?.data.processing).toBe('DONE');
+    expect(onMediaReady).not.toHaveBeenCalled();
+  });
+
+  it('a DONE source whose original was dropped: reserved at the RENDITION’s bytes', async () => {
+    // The original alone is the whole quota; the rendition is 400 bytes. Billed
+    // at the original, the copy would be refused as not fitting.
+    database({
+      sourceRows: [
+        row({
+          size_bytes: BigInt(PRO_QUOTA_BYTES),
+          processing: 'DONE',
+          original_deleted_at: new Date(),
+          rendition_key: `m/${SOURCE}/${VIDEO}/${WEB}`,
+          rendition_bytes: BigInt(400),
+          poster_key: `m/${SOURCE}/${VIDEO}/${POSTER}`,
+        }),
+      ],
+      targetLive: [row({ id: PDF, classroom_id: TARGET, size_bytes: BigInt(1000) })],
+    });
+    const { copier: c, list } = copier();
+    await c.prepare([`media://${VIDEO}`]);
+
+    expect(list).toEqual([]);
+    expect(c.copiedIdFor(VIDEO)).not.toBeNull();
+    // Only what exists: no original.
+    expect(copySources()).toEqual([
+      `media-bucket/m/${SOURCE}/${VIDEO}/${WEB}`,
+      `media-bucket/m/${SOURCE}/${VIDEO}/${POSTER}`,
+    ]);
+    expect(createdData().original_deleted_at).toBeInstanceOf(Date);
+    expect(createdData().rendition_bytes).toBe(BigInt(400));
+  });
+
+  it.each(['NONE', 'PENDING', 'FAILED'])(
+    'a %s optimisable video: the original alone, then its own job once READY',
+    async processing => {
+      database({ sourceRows: [row({ processing, processing_error: 'x' })] });
+      const { copier: c } = copier();
+      await c.prepare([`media://${VIDEO}`]);
+      const newId = c.copiedIdFor(VIDEO);
+
+      expect(copySources()).toEqual([`media-bucket/m/${SOURCE}/${VIDEO}/orig.mp4`]);
+      expect(createdData()).toMatchObject({
+        rendition_key: null,
+        rendition_bytes: null,
+        poster_key: null,
+        duration_ms: null,
+        width: null,
+        height: null,
+        original_deleted_at: null,
+      });
+      expect(readyFlip()?.data.processing).toBe('NONE');
+      expect(onMediaReady).toHaveBeenCalledTimes(1);
+      expect(onMediaReady.mock.calls[0][0]).toMatchObject({
+        id: newId,
+        classroomId: TARGET,
+        kind: 'VIDEO',
+        optimise: true,
+        status: 'READY',
+      });
+    }
+  );
+
+  it('queues nothing for a video not marked optimise, or a document', async () => {
+    database({
+      sourceRows: [
+        row({ optimise: false }),
+        row({ id: PDF, kind: 'DOCUMENT', filename: 'notes.pdf', ext: 'pdf', optimise: false }),
+      ],
+    });
+    const { copier: c } = copier();
+    await c.prepare([`media://${VIDEO} media://${PDF}`]);
+    expect(c.copiedIdFor(VIDEO)).not.toBeNull();
+    expect(onMediaReady).not.toHaveBeenCalled();
+  });
+
+  it('treats a DONE source whose rendition key does not parse as unprocessed', async () => {
+    database({
+      sourceRows: [
+        row({
+          processing: 'DONE',
+          rendition_key: `m/${SOURCE}/${VIDEO}/web.mp4`,
+          poster_key: `m/${SOURCE}/${VIDEO}/${POSTER}`,
+        }),
+      ],
+    });
+    const { copier: c } = copier();
+    await c.prepare([`media://${VIDEO}`]);
+    expect(copySources()).toEqual([`media-bucket/m/${SOURCE}/${VIDEO}/orig.mp4`]);
+    expect(readyFlip()?.data.processing).toBe('NONE');
+    expect(onMediaReady).toHaveBeenCalledTimes(1);
+  });
+
+  it('rebuilds the copy source from the SOURCE object, never the stored key verbatim', async () => {
+    // A key naming another object's prefix is not a copy source: only the
+    // variant is taken from it.
+    database({
+      sourceRows: [
+        row({
+          processing: 'DONE',
+          rendition_key: `m/${THIRD}/${FOREIGN}/${WEB}`,
+          rendition_bytes: BigInt(400),
+        }),
+      ],
+    });
+    const { copier: c } = copier();
+    await c.prepare([`media://${VIDEO}`]);
+    expect(copySources()).toEqual([
+      `media-bucket/m/${SOURCE}/${VIDEO}/orig.mp4`,
+      `media-bucket/m/${SOURCE}/${VIDEO}/${WEB}`,
+    ]);
+  });
+
+  it('a queue failure never fails the copy', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    onMediaReady.mockRejectedValueOnce(new Error('boom'));
+    const { copier: c, list } = copier();
+    await c.prepare([`media://${VIDEO}`]);
+    expect(c.copiedIdFor(VIDEO)).not.toBeNull();
+    expect(list).toEqual([]);
   });
 });

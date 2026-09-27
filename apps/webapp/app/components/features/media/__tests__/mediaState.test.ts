@@ -10,6 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   MEDIA_STATE_CHIP,
+  MEDIA_STATE_LABEL,
   isActionable,
   mediaState,
   meterReading,
@@ -21,8 +22,8 @@ describe('mediaState', () => {
     ['UPLOADING', 'NONE', 'uploading'],
     ['UPLOADING', 'PENDING', 'uploading'],
     ['STAGING', 'NONE', 'uploading'],
-    ['READY', 'NONE', 'ready'],
-    ['READY', 'DONE', 'ready'],
+    ['READY', 'NONE', null],
+    ['READY', 'DONE', 'optimised'],
     ['READY', 'PENDING', 'optimising'],
     ['READY', 'FAILED', 'failed'],
   ] as const)('reads %s + %s as %s', (status, processing, expected) => {
@@ -30,17 +31,21 @@ describe('mediaState', () => {
   });
 
   it('calls a row uploading whatever the job says, because it is not there yet', () => {
-    // The rendition job cannot have run on an object that has not finished
+    // The video job cannot have run on an object that has not finished
     // arriving, so the upload is the only fact worth showing.
     expect(mediaState({ status: 'UPLOADING', processing: 'FAILED' })).toBe('uploading');
   });
 
-  it('has a chip for every state', () => {
-    for (const state of ['uploading', 'optimising', 'ready', 'failed'] as const) {
+  it('has a chip and a label for every state', () => {
+    for (const state of ['uploading', 'optimising', 'optimised', 'failed'] as const) {
       expect(MEDIA_STATE_CHIP[state]).toMatch(/bg-\w+-bg/);
       // The border needs the important marker to beat unlayered `.chip` CSS.
       expect(MEDIA_STATE_CHIP[state]).toContain('!border-');
+      expect(MEDIA_STATE_LABEL[state].length).toBeGreaterThan(0);
     }
+    expect(MEDIA_STATE_LABEL.optimising).toBe('Optimising');
+    expect(MEDIA_STATE_LABEL.optimised).toBe('Optimised');
+    expect(MEDIA_STATE_LABEL.failed).toBe('Couldn\u2019t optimise \u2014 the original is shown');
   });
 
   it('offers actions only on a finished object', () => {

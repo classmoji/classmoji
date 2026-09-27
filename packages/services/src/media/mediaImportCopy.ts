@@ -2,13 +2,14 @@ import { CopyObjectCommand, DeleteObjectCommand, type S3Client } from '@aws-sdk/
 import { createHash, randomUUID } from 'node:crypto';
 import getPrisma from '@classmoji/database';
 import { isMediaConfigured, mediaBucket } from './mediaConfig.ts';
-import { mediaKey } from './mediaKeys.ts';
+import { mediaKey, storedPosterVariant, storedRenditionVariant } from './mediaKeys.ts';
 import type { MediaKind } from './mediaKinds.ts';
 import {
   billedBytes,
   findMediaRow,
   liveRowsWhere,
   mediaRef,
+  toMediaRecord,
   type MediaRow,
 } from './mediaLookup.ts';
 import { quotaBytesFor } from './mediaQuota.ts';
@@ -43,9 +44,10 @@ import { uploadCapabilityFor } from './uploadCapability.ts';
  *      destination classroom, the live-rows sum, and an UPLOADING row, all in
  *      one transaction. Two imports into one classroom serialize on that lock,
  *      and so does an import racing an ordinary upload;
- *   4. R2 `CopyObject`s the original — and the rendition and poster when the
- *      row has them — to the same variant names under a NEW id in the
- *      destination's prefix. Server-side: the bytes never pass through this
+ *   4. R2 `CopyObject`s the original — and, from a source the video job
+ *      finished, the rendition and poster — to the same variant names under a
+ *      NEW id in the destination's prefix (an optimisable video copied before
+ *      its job finished gets its own job once the copy is READY). Server-side: the bytes never pass through this
  *      process, which matters for a 2 GiB lecture recording;
  *   5. and only when every copy of that object has landed, flips the row to
  *      READY. A copy that fails deletes whatever landed (best effort), removes
@@ -397,9 +399,13 @@ function copySource(bucket: string, key: string): string {
   return `${bucket}/${key.split('/').map(encodeURIComponent).join('/')}`;
 }
 
-/** The last path segment of a stored key — the variant name it was written as. */
-function variantOf(key: string): string {
-  return key.slice(key.lastIndexOf('/') + 1);
+/**
+ * Whether a copy of `row` carries the source's rendition: only from a source
+ * the video job FINISHED (DONE) whose `rendition_key` names a rendition the
+ * grammar accepts. Anything else is copied as its original alone.
+ */
+export function copiesRendition(row: Pick<MediaRow, 'processing' | 'rendition_key'>): boolean {
+  return row.processing === 'DONE' && storedRenditionVariant(row.rendition_key) !== null;
 }
 
 /**
@@ -540,11 +546,17 @@ async function copyOne({
   // written, so a variant the grammar does not accept is a refusal for this
   // one object rather than a reservation with nothing behind it.
   //
-  // The ORIGINAL is skipped when the rendition job has dropped it: the key
-  // names bytes that are gone, and a CopyObject would fail a copy that is
-  // otherwise complete. The rendition and poster are copied from the key the
-  // ROW names (the job records where it wrote them) to the same variant name
-  // under the new id.
+  // The ORIGINAL is skipped when the video job has dropped it: the key names
+  // bytes that are gone, and a CopyObject would fail a copy that is otherwise
+  // complete. The rendition and poster come along only from a source the job
+  // FINISHED (`copiesRendition`), under the same content-derived variant names
+  // under the new id — and with the processing fields, so the copy is DONE
+  // too. Their source keys are rebuilt from the SOURCE classroom and id and the
+  // variant the stored key names (`storedRenditionVariant`), never used raw: a
+  // key that does not parse is not copied, and nothing outside the source
+  // object's own prefix can ever be a copy source. A source not DONE is copied
+  // as its original alone and gets its own job once READY (`prepare`).
+  const withRendition = copiesRendition(row);
   let copies: { from: string; to: string }[];
   let renditionKey: string | null = null;
   let posterKey: string | null = null;
@@ -556,13 +568,15 @@ async function copyOne({
         to: mediaKey(targetClassroomId, newId, `orig.${row.ext}`),
       });
     }
-    if (row.rendition_key) {
-      renditionKey = mediaKey(targetClassroomId, newId, variantOf(row.rendition_key));
-      copies.push({ from: row.rendition_key, to: renditionKey });
-    }
-    if (row.poster_key) {
-      posterKey = mediaKey(targetClassroomId, newId, variantOf(row.poster_key));
-      copies.push({ from: row.poster_key, to: posterKey });
+    if (withRendition) {
+      const rendition = storedRenditionVariant(row.rendition_key) as string;
+      renditionKey = mediaKey(targetClassroomId, newId, rendition);
+      copies.push({ from: mediaKey(sourceClassroomId, row.id, rendition), to: renditionKey });
+      const poster = storedPosterVariant(row.poster_key);
+      if (poster) {
+        posterKey = mediaKey(targetClassroomId, newId, poster);
+        copies.push({ from: mediaKey(sourceClassroomId, row.id, poster), to: posterKey });
+      }
     }
   } catch (error) {
     warn(`Could not copy ${describe(row)} into this class: ${errText(error)}`);
@@ -573,10 +587,25 @@ async function copyOne({
     return null;
   }
 
+  // What the copy's row records beyond the source's identity. A copy WITH the
+  // rendition mirrors the finished job; one without it is an unprocessed
+  // original, whatever the source's state.
+  const processed = {
+    rendition_key: renditionKey,
+    rendition_bytes: withRendition ? row.rendition_bytes : null,
+    poster_key: posterKey,
+    duration_ms: withRendition ? row.duration_ms : null,
+    width: withRendition ? row.width : null,
+    height: withRendition ? row.height : null,
+    original_deleted_at: withRendition ? row.original_deleted_at : null,
+  };
+
   // The reservation, exactly as `createUpload` makes one: the sum and the
   // insert it authorizes in ONE transaction, behind a row lock on the
-  // destination classroom. Charged at what the source row is BILLED — a row
-  // whose original was dropped costs its rendition, and so does its copy.
+  // destination classroom. Charged at what the COPY will be billed
+  // (`billedBytes` over its own fields): the rendition's bytes when the
+  // original was dropped and the rendition came along, the original's size
+  // otherwise — the same number the quota sum will read off the row.
   //
   // The row's `created_at` doubles as this attempt's marker. Under a derived
   // id, two attempts of one import can each hold a reservation for the same id
@@ -593,7 +622,11 @@ async function copyOne({
   // marker strictly after it; and an insert into a free id comes after the
   // commit that freed it, several round trips later. (The column is
   // millisecond precision, `TIMESTAMP(3)`, the same as a JS Date.)
-  const bytes = billedBytes(row);
+  const bytes = billedBytes({
+    size_bytes: row.size_bytes,
+    rendition_bytes: processed.rendition_bytes,
+    original_deleted_at: processed.original_deleted_at,
+  });
   const quotaBytes = quotaBytesFor(true);
   let reserved: Reservation;
   try {
@@ -643,13 +676,7 @@ async function copyOne({
           optimise: row.optimise,
           keep_original: row.keep_original,
           allow_download: row.allow_download,
-          rendition_key: renditionKey,
-          rendition_bytes: row.rendition_bytes,
-          poster_key: posterKey,
-          duration_ms: row.duration_ms,
-          width: row.width,
-          height: row.height,
-          original_deleted_at: row.original_deleted_at,
+          ...processed,
           created_at: createdAt,
         },
       });
@@ -734,9 +761,9 @@ async function copyOne({
     return null;
   }
 
-  // READY only FROM the reservation. The copy mirrors the source's processing
-  // state: DONE stays DONE (the rendition came along), anything else is NONE —
-  // PENDING would claim a job is queued for the copy, and none is.
+  // READY only FROM the reservation. DONE when the rendition came along;
+  // otherwise NONE — PENDING would claim a job is queued for the copy, and none
+  // is yet: `prepare` queues one (`onMediaReady`) once the copy is READY.
   //
   // And only from THIS attempt's reservation (its marker, `created_at`): a row
   // another attempt re-inserted under the same id after taking this one over
@@ -748,7 +775,7 @@ async function copyOne({
       data: {
         status: 'READY',
         ready_at: new Date(),
-        processing: row.processing === 'DONE' ? 'DONE' : 'NONE',
+        processing: withRendition ? 'DONE' : 'NONE',
       },
     }));
   } catch (error) {
@@ -940,6 +967,7 @@ export function createMediaImportCopier(opts: MediaImportCopyOptions): MediaImpo
       });
       if (!outcome) continue;
       copied.set(row.id, outcome.id);
+      await queueCopyProcessing(row, outcome.id);
       // A copy another attempt made is reused like a known one: not this run's
       // to discard, and findable by its derived id, so there is no pair to add.
       if (outcome.made) {
@@ -948,6 +976,37 @@ export function createMediaImportCopier(opts: MediaImportCopyOptions): MediaImpo
       }
     }
     if (noRoom.length > 0) warn(skippedSummary(noRoom, DESTINATION_FULL_REASON));
+  }
+
+  /**
+   * A copy that did not carry a rendition is an unprocessed original, and an
+   * optimisable video gets its own job — the source's (queued, failed, or never
+   * run) belongs to the source. `onMediaReady` claims the copy only from
+   * READY + NONE, so a copy reused from another attempt of this import, whose
+   * own flip already queued it, queues nothing twice. Never throws.
+   */
+  async function queueCopyProcessing(row: MediaRow, copyId: string): Promise<void> {
+    if (row.kind !== 'VIDEO' || !row.optimise || copiesRendition(row)) return;
+    try {
+      // Loaded here for the reason `discard` gives.
+      const { onMediaReady } = await import('./media.service.ts');
+      await onMediaReady(
+        toMediaRecord({
+          ...row,
+          id: copyId,
+          classroom_id: targetClassroomId,
+          status: 'READY',
+          processing: 'NONE',
+          processing_error: null,
+          rendition_key: null,
+          rendition_bytes: null,
+          poster_key: null,
+          original_deleted_at: null,
+        })
+      );
+    } catch (error) {
+      console.warn(`[media] Could not queue optimising for import copy ${copyId}:`, errText(error));
+    }
   }
 
   async function discard(): Promise<void> {
