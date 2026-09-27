@@ -26,7 +26,7 @@ function getEmbedUrl(url: string): string {
 }
 
 /** Formats the upload picker offers; the router, not this list, decides where each goes. */
-const VIDEO_ACCEPT = 'video/*,.mp4,.webm,.mov,.m4v,.mkv';
+const VIDEO_ACCEPT = 'video/*,.mp4,.webm,.mov,.m4v,.mkv,.avi';
 
 /** A small text button in the empty state, matching the input beside it. */
 const EMPTY_STATE_BUTTON =

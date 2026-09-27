@@ -134,6 +134,9 @@ const PageEditor = forwardRef(function PageEditor(
 ) {
   const media = usePageMedia();
   const classroomId = media.classroomId;
+  // Read at upload time for the same reason as the capability below.
+  const mediaRef = useRef(media);
+  mediaRef.current = media;
   // Read at upload time, not captured: BlockNote holds the `uploadFile` it was
   // created with for the editor's whole life, and every loader revalidation
   // (each save) hands down a fresher capability — the quota left, a classroom
@@ -151,6 +154,9 @@ const PageEditor = forwardRef(function PageEditor(
   //   - repo  → POST /api/upload?pageId=…, which answers with the repo path;
   //   - media → a multipart upload straight to storage over /api/media, which
   //             answers with `media://{id}`.
+  //
+  // A video headed for media first asks the uploader for its three options
+  // (Upload / Cancel); a cancel sends nothing and says nothing.
   //
   // Either way what goes INTO the block is the reference that keeps following
   // the file — a repo path or `media://{id}` — and never a signed URL: that
@@ -195,6 +201,10 @@ const PageEditor = forwardRef(function PageEditor(
           });
           return { ref, displayUrl: await fetchMediaDisplayUrl(pageId, ref) };
         },
+
+        // A video bound for media is set up by the uploader, in the same
+        // three-option dialog every other surface shows, before it is sent.
+        askVideoOptions: videoFile => mediaRef.current.askVideoOptions(videoFile),
       };
 
       let placed;

@@ -1,4 +1,7 @@
 @import 'tailwindcss';
+/* The shared video upload options (`@classmoji/ui-components/media-options`)
+ * ship their own stylesheet; this app renders them in the video dialog. */
+@import '@classmoji/ui-components/styles/media-options.css';
 
 /* Drive `dark:` from the theme CLASS, not `prefers-color-scheme`.
  *

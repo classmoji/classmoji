@@ -13,11 +13,10 @@ import type { UploadCapability } from '@classmoji/services/media/router';
 import { REPO_REST_MAX_BYTES } from '@classmoji/utils/repo-limits';
 
 import {
-  EDITOR_VIDEO_OPTIONS,
+  UploadCancelled,
   UploadRefused,
   UploadReroute,
   firstDestination,
-  mediaOptionsFor,
   mediaProgressLabel,
   mediaUploadMessage,
   placeUpload,
@@ -45,11 +44,25 @@ const SMALL_VIDEO = file('lecture.mp4', 5 * 1024 * 1024);
 const SMALL_IMAGE = file('diagram.png', 200 * 1024);
 const BIG_PDF = file('scans.pdf', REPO_REST_MAX_BYTES + 1);
 
+/** What the uploader picks in the video dialog, in these tests. */
+const CHOSEN = { optimise: false, keepOriginal: true, allowDownload: true };
+
 /** Ports that record which side was called and answer as scripted. */
-function ports(script: { repo?: () => unknown; media?: () => unknown } = {}) {
+function ports(
+  script: {
+    repo?: () => unknown;
+    media?: () => unknown;
+    /** The dialog's answer; null = the uploader pressed Cancel. */
+    ask?: () => typeof CHOSEN | null;
+  } = {}
+) {
   const calls: string[] = [];
   const mediaOptions: unknown[] = [];
   const impl: UploadPorts = {
+    async askVideoOptions(asked) {
+      calls.push(`ask:${asked.name}`);
+      return script.ask ? script.ask() : CHOSEN;
+    },
     async toRepo() {
       calls.push('repo');
       const out = script.repo?.();
@@ -95,30 +108,36 @@ test.describe('placing an upload', () => {
       displayUrl: 'https://signed/media',
       destination: 'media',
     });
-    expect(p.calls).toEqual(['media']);
+    expect(p.calls).toEqual(['ask:lecture.mp4', 'media']);
   });
 
-  test('videos carry the editor defaults; nothing else carries options', async () => {
+  test('a video bound for media carries what the uploader chose; nothing else is asked', async () => {
     const p = ports();
     await placeUpload(SMALL_VIDEO, PRO, p.impl);
     await placeUpload(BIG_PDF, PRO, p.impl);
-    expect(p.mediaOptions).toEqual([EDITOR_VIDEO_OPTIONS, undefined]);
-    expect(EDITOR_VIDEO_OPTIONS).toEqual({
-      optimise: true,
-      keepOriginal: true,
-      allowDownload: false,
-    });
-    expect(mediaOptionsFor({ name: 'x.MOV' })).toEqual(EDITOR_VIDEO_OPTIONS);
-    expect(mediaOptionsFor({ name: 'x.pdf' })).toBeUndefined();
+    expect(p.mediaOptions).toEqual([CHOSEN, undefined]);
+    expect(p.calls).toEqual(['ask:lecture.mp4', 'media', 'media']);
+  });
+
+  test('a video staying in the repository is not asked about media options', async () => {
+    const p = ports();
+    await placeUpload(SMALL_VIDEO, FREE, p.impl);
+    expect(p.calls).toEqual(['repo']);
+  });
+
+  test('cancelling the video dialog sends nothing, and says nothing', async () => {
+    const p = ports({ ask: () => null });
+    await expect(placeUpload(SMALL_VIDEO, PRO, p.impl)).rejects.toBeInstanceOf(UploadCancelled);
+    expect(p.calls).toEqual(['ask:lecture.mp4']);
   });
 
   test('a stale capability: the repository says USE_MEDIA, the file goes to media once', async () => {
     const p = ports({ repo: () => new UploadReroute('media') });
     const placed = await placeUpload(SMALL_VIDEO, FREE, p.impl);
     expect(placed.destination).toBe('media');
-    expect(p.calls).toEqual(['repo', 'media']);
-    // The redirected video still gets the video defaults.
-    expect(p.mediaOptions).toEqual([EDITOR_VIDEO_OPTIONS]);
+    // The redirected video is asked about, right before it goes to media.
+    expect(p.calls).toEqual(['repo', 'ask:lecture.mp4', 'media']);
+    expect(p.mediaOptions).toEqual([CHOSEN]);
   });
 
   test('a missing capability is rescued by the same redirect', async () => {
@@ -130,7 +149,7 @@ test.describe('placing an upload', () => {
     const p = ports({ media: () => new UploadReroute('repo') });
     const placed = await placeUpload(SMALL_VIDEO, PRO, p.impl);
     expect(placed.destination).toBe('repo');
-    expect(p.calls).toEqual(['media', 'repo']);
+    expect(p.calls).toEqual(['ask:lecture.mp4', 'media', 'repo']);
   });
 
   test('two disagreements are refused, never chased back', async () => {
@@ -139,7 +158,7 @@ test.describe('placing an upload', () => {
       media: () => new UploadReroute('repo'),
     });
     await expect(placeUpload(SMALL_VIDEO, FREE, p.impl)).rejects.toBeInstanceOf(UploadRefused);
-    expect(p.calls).toEqual(['repo', 'media']);
+    expect(p.calls).toEqual(['repo', 'ask:lecture.mp4', 'media']);
   });
 
   test('a router refusal never reaches either store', async () => {
@@ -152,7 +171,7 @@ test.describe('placing an upload', () => {
     const boom = new UploadRefused('Quota full.');
     const p = ports({ media: () => boom });
     await expect(placeUpload(SMALL_VIDEO, PRO, p.impl)).rejects.toBe(boom);
-    expect(p.calls).toEqual(['media']);
+    expect(p.calls).toEqual(['ask:lecture.mp4', 'media']);
   });
 });
 

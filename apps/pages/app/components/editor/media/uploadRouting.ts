@@ -68,22 +68,18 @@ export interface UploadPorts {
     file: File,
     options: MediaUploadOptions | undefined
   ): Promise<Omit<PlacedUpload, 'destination'>>;
+  /**
+   * Ask the uploader for a video's three options (media plan §3.10) — the
+   * shared dialog. Null when they cancelled. Asked only for a video that is
+   * about to go to media, and only then: those choices mean nothing for a
+   * repository file or for any other kind.
+   */
+  askVideoOptions(file: File): Promise<MediaUploadOptions | null>;
 }
 
-/**
- * The per-video choices the editor makes without asking (decision §7.4's
- * defaults): optimise for playback, keep the original, no student download.
- * Only videos carry them — the server ignores them for every other kind.
- */
-export const EDITOR_VIDEO_OPTIONS: MediaUploadOptions = Object.freeze({
-  optimise: true,
-  keepOriginal: true,
-  allowDownload: false,
-});
-
-export function mediaOptionsFor(file: { name: string }): MediaUploadOptions | undefined {
-  return kindOfFilename(file.name) === 'VIDEO' ? { ...EDITOR_VIDEO_OPTIONS } : undefined;
-}
+/** Whether a file is one the three video options apply to. */
+export const takesVideoOptions = (file: { name: string }): boolean =>
+  kindOfFilename(file.name) === 'VIDEO';
 
 /** The first destination for a file, before any server has seen it. */
 export function firstDestination(
@@ -117,9 +113,16 @@ export async function placeUpload(
   if (first.kind === 'refused') throw new UploadRefused(first.message);
 
   const send = async (to: 'repo' | 'media'): Promise<PlacedUpload> => {
-    const placed =
-      to === 'repo' ? await ports.toRepo(file) : await ports.toMedia(file, mediaOptionsFor(file));
-    return { ...placed, destination: to };
+    if (to === 'repo') return { ...(await ports.toRepo(file)), destination: to };
+    // A video's options are the uploader's to choose, right before the bytes
+    // go — including a video the repository has just sent here.
+    let options: MediaUploadOptions | undefined;
+    if (takesVideoOptions(file)) {
+      const chosen = await ports.askVideoOptions(file);
+      if (!chosen) throw new UploadCancelled();
+      options = chosen;
+    }
+    return { ...(await ports.toMedia(file, options)), destination: to };
   };
 
   try {

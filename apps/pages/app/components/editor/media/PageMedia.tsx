@@ -9,10 +9,18 @@ import {
 } from 'react';
 
 import {
+  DEFAULT_VIDEO_OPTIONS,
+  MediaVideoOptions,
+  applyVideoOption,
+  type VideoOptions,
+} from '@classmoji/ui-components/media-options';
+
+import {
   MediaLibraryList,
   type MediaLibraryItem,
   type MediaLibraryKind,
 } from './MediaLibraryList.tsx';
+import { formatBytes } from './uploadRouting.ts';
 
 /**
  * What an editor block may do with the classroom's media.
@@ -34,6 +42,11 @@ export interface PageMediaApi {
   choose(kind?: MediaLibraryKind): Promise<MediaLibraryItem | null>;
   /** Seed the display URL for a reference about to go into a block. */
   place(ref: string): Promise<void>;
+  /**
+   * Ask the uploader for a video's three options (media plan §3.10) before it
+   * is sent to media. Resolves with their choice, or null when they cancelled.
+   */
+  askVideoOptions(file: { name: string; size: number }): Promise<VideoOptions | null>;
 }
 
 const NO_MEDIA: PageMediaApi = {
@@ -41,6 +54,8 @@ const NO_MEDIA: PageMediaApi = {
   classroomId: null,
   choose: async () => null,
   place: async () => {},
+  // No provider, no dialog to ask with: the plan's defaults.
+  askVideoOptions: async () => ({ ...DEFAULT_VIDEO_OPTIONS }),
 };
 
 const PageMediaContext = createContext<PageMediaApi>(NO_MEDIA);
@@ -50,6 +65,11 @@ export const usePageMedia = () => useContext(PageMediaContext);
 type PickRequest = {
   kind?: MediaLibraryKind;
   resolve: (item: MediaLibraryItem | null) => void;
+};
+
+type VideoOptionsRequest = {
+  file: { name: string; size: number };
+  resolve: (options: VideoOptions | null) => void;
 };
 
 export function PageMediaProvider({
@@ -65,6 +85,27 @@ export function PageMediaProvider({
 }) {
   const [request, setRequest] = useState<PickRequest | null>(null);
   const [placing, setPlacing] = useState(false);
+  const [videoRequest, setVideoRequest] = useState<VideoOptionsRequest | null>(null);
+
+  const askVideoOptions = useCallback(
+    (file: { name: string; size: number }) =>
+      new Promise<VideoOptions | null>(resolve => {
+        setVideoRequest(previous => {
+          // Two uploads asking at once: the first one is cancelled, so no
+          // upload is left waiting on a dialog that is no longer on screen.
+          previous?.resolve(null);
+          return { file, resolve };
+        });
+      }),
+    []
+  );
+
+  const answerVideoOptions = useCallback((options: VideoOptions | null) => {
+    setVideoRequest(previous => {
+      previous?.resolve(options);
+      return null;
+    });
+  }, []);
 
   const choose = useCallback(
     (kind?: MediaLibraryKind) =>
@@ -102,8 +143,8 @@ export function PageMediaProvider({
 
   const canUseMedia = enabled && Boolean(classroomId);
   const api = useMemo<PageMediaApi>(
-    () => ({ canUseMedia, classroomId: classroomId ?? null, choose, place }),
-    [canUseMedia, classroomId, choose, place]
+    () => ({ canUseMedia, classroomId: classroomId ?? null, choose, place, askVideoOptions }),
+    [canUseMedia, classroomId, choose, place, askVideoOptions]
   );
 
   return (
@@ -118,8 +159,51 @@ export function PageMediaProvider({
           onClose={close}
         />
       )}
+      {videoRequest && (
+        <VideoOptionsDialog
+          // A fresh dialog, with fresh defaults, for every file asked about.
+          key={`${videoRequest.file.name}:${videoRequest.file.size}`}
+          file={videoRequest.file}
+          onAnswer={answerVideoOptions}
+        />
+      )}
     </PageMediaContext.Provider>
   );
+}
+
+/**
+ * Escape to close and Tab kept inside the panel — the pages app's hand-rolled
+ * dialog idiom (see `ConfirmDialog`), shared by the two dialogs here.
+ */
+function useDialogKeys(panelRef: React.RefObject<HTMLDivElement | null>, onClose: () => void) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const panel = panelRef.current;
+      if (!panel) return;
+      const focusable = panel.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled])'
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !panel.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !panel.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [panelRef, onClose]);
 }
 
 /**
@@ -143,33 +227,7 @@ function MediaPickerDialog({
   onClose: () => void;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.stopPropagation();
-        onClose();
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const panel = panelRef.current;
-      if (!panel) return;
-      const focusable = panel.querySelectorAll<HTMLElement>('button:not([disabled])');
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const active = document.activeElement;
-      if (event.shiftKey && (active === first || !panel.contains(active))) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && (active === last || !panel.contains(active))) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
+  useDialogKeys(panelRef, onClose);
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
@@ -205,6 +263,91 @@ function MediaPickerDialog({
             className="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
           >
             Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The three video choices, asked before a video goes to media (§3.10).
+ *
+ * The same component the webapp's media page shows
+ * (`@classmoji/ui-components/media-options`), so a video uploaded from a page
+ * is set up exactly like one uploaded from Settings → Media. Upload sends it
+ * with these choices; Cancel (or Escape) sends nothing.
+ */
+function VideoOptionsDialog({
+  file,
+  onAnswer,
+}: {
+  file: { name: string; size: number };
+  onAnswer: (options: VideoOptions | null) => void;
+}) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const uploadRef = useRef<HTMLButtonElement>(null);
+  const [options, setOptions] = useState<VideoOptions>({ ...DEFAULT_VIDEO_OPTIONS });
+  const cancel = useCallback(() => onAnswer(null), [onAnswer]);
+  useDialogKeys(panelRef, cancel);
+
+  useEffect(() => {
+    uploadRef.current?.focus();
+  }, []);
+
+  const size = formatBytes(file.size);
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+      <div
+        className="absolute inset-0 bg-black/40"
+        onClick={cancel}
+        role="presentation"
+        aria-hidden="true"
+      />
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="video-options-title"
+        className="relative z-10 w-full max-w-md rounded-lg bg-white shadow-xl dark:bg-gray-800"
+      >
+        <div className="px-5 pb-3 pt-5">
+          <h2
+            id="video-options-title"
+            className="text-base font-semibold text-gray-900 dark:text-white"
+          >
+            Upload video
+          </h2>
+          <p className="mt-1 truncate text-sm text-gray-500 dark:text-gray-400">
+            {file.name}
+            {size ? ` · ${size}` : ''}
+          </p>
+        </div>
+        <div className="px-5 pb-4">
+          <MediaVideoOptions
+            filename={file.name}
+            value={options}
+            onChange={(field, next) =>
+              setOptions(current => applyVideoOption(current, field, next))
+            }
+          />
+        </div>
+        <div className="flex justify-end gap-2 border-t border-gray-200 px-5 py-3 dark:border-gray-700">
+          <button
+            type="button"
+            onClick={cancel}
+            className="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+          >
+            Cancel
+          </button>
+          <button
+            ref={uploadRef}
+            type="button"
+            onClick={() => onAnswer(options)}
+            className="rounded-md bg-gray-900 px-3 py-2 text-sm font-medium text-white hover:bg-gray-700 dark:bg-white dark:text-gray-900 dark:hover:bg-gray-200"
+          >
+            Upload
           </button>
         </div>
       </div>
