@@ -8,10 +8,11 @@ import { canDropOriginal, warnsWithoutOptimising, type VideoOptions } from './vi
  * extensions and it is the server's. A pdf or an mp3 has nothing to choose and
  * should get no options area at all.
  *
- * Styled by its own stylesheet (`styles.css`, imported by this module's index)
- * rather than by Tailwind classes, because a consuming app's Tailwind does not
- * scan this package: the pages app, the webapp and slides each get the same
- * look, in light and dark, with or without the shared design tokens loaded.
+ * Styled by its own stylesheet, `@classmoji/ui-components/styles/media-options.css`,
+ * which the app imports, rather than by Tailwind classes, because a consuming
+ * app's Tailwind does not scan this package: the pages app, the webapp and
+ * slides each get the same look, in light and dark, with or without the shared
+ * design tokens loaded.
  */
 
 interface OptionRowProps {

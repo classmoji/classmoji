@@ -5,9 +5,13 @@
  * Browser-safe and free of `@classmoji/services`. Whether a file IS a video is
  * the caller's call, with `kindOfFilename` from
  * `@classmoji/services/media/router`.
+ *
+ * The component's stylesheet is `@classmoji/ui-components/styles/media-options.css`
+ * and the app imports it (from its CSS entry, or next to the dialog that
+ * renders this). It is deliberately NOT imported from here: modules that only
+ * need the rules, or that sit in a server-rendered graph a test harness loads
+ * without a CSS pipeline, must be able to import this entry.
  */
-
-import './styles.css';
 
 export { MediaVideoOptions, default } from './MediaVideoOptions.tsx';
 export type { MediaVideoOptionsProps } from './MediaVideoOptions.tsx';

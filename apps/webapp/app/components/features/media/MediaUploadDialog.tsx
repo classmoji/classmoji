@@ -8,6 +8,7 @@ import type {
 } from '@classmoji/ui-components';
 
 import { MediaVideoOptions } from '@classmoji/ui-components/media-options';
+import '@classmoji/ui-components/styles/media-options.css';
 import {
   createUploadOptions,
   formatBytes,
