@@ -63,6 +63,11 @@ vi.mock('../uploadCapability.ts', () => ({
   uploadCapabilityFor: (...args: unknown[]) => uploadCapabilityFor(...args),
 }));
 
+const deleteMedia = vi.fn();
+vi.mock('../media.service.ts', () => ({
+  deleteMedia: (...args: unknown[]) => deleteMedia(...args),
+}));
+
 const { collectMediaRefs, createMediaImportCopier, rewriteMediaRefs } =
   await import('../mediaImportCopy.ts');
 const { PRO_QUOTA_BYTES } = await import('../mediaQuota.ts');
@@ -660,5 +665,59 @@ describe('createMediaImportCopier: resuming from a persisted map', () => {
     expect(sent.filter(s => s.name === 'CopyObject')).toHaveLength(0);
     expect(second.copiedIdFor(VIDEO)).toBe(copy);
     expect(persisted).toEqual({ [VIDEO]: copy });
+  });
+});
+
+describe('createMediaImportCopier: discard', () => {
+  const KEPT = '66666666-6666-4666-8666-666666666666';
+
+  it('deletes only the copies this run made, and stops repointing at them', async () => {
+    deleteMedia.mockResolvedValue({});
+    // The PDF has a copy from an earlier run, still READY; the video is new.
+    prisma.mediaObject.findMany.mockImplementation(
+      async ({
+        where,
+      }: {
+        where: { classroom_id: string; status?: string; id?: { in: string[] } };
+      }) => {
+        if (where.classroom_id === SOURCE) return [row()].filter(r => where.id?.in.includes(r.id));
+        if (where.status === 'READY') return where.id?.in.includes(KEPT) ? [{ id: KEPT }] : [];
+        return [];
+      }
+    );
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn: () => {},
+      knownCopies: { [PDF]: KEPT },
+    });
+    const text = `media://${VIDEO} media://${PDF}`;
+    await copier.prepare([text]);
+    const made = copier.copiedIdFor(VIDEO)!;
+
+    await copier.discard();
+
+    expect(deleteMedia).toHaveBeenCalledTimes(1);
+    expect(deleteMedia).toHaveBeenCalledWith({ classroom: { id: TARGET }, mediaId: made });
+    expect(copier.copiedIdFor(VIDEO)).toBeNull();
+    expect(copier.copiedIdFor(PDF)).toBe(KEPT);
+    expect(copier.rewrite(text)).toBe(`media://${VIDEO} media://${KEPT}`);
+
+    // A second discard has nothing left to do.
+    await copier.discard();
+    expect(deleteMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it('never throws when a delete fails', async () => {
+    deleteMedia.mockRejectedValue(new Error('R2 is down'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn: () => {},
+    });
+    await copier.prepare([`media://${VIDEO}`]);
+    await expect(copier.discard()).resolves.toBeUndefined();
+    warnSpy.mockRestore();
   });
 });

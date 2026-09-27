@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   order: [] as string[],
   pushedTree: new Map<string, string>(),
   seed: new Map<string, string>(),
+  failPush: false,
 }));
 
 function readTree(dir: string, root = dir, out = new Map<string, string>()) {
@@ -56,6 +57,7 @@ vi.mock('simple-git', () => ({
     addRemote: async () => {},
     push: async () => {
       mocks.order.push('push');
+      if (mocks.failPush) throw new Error('remote hung up');
     },
   }),
 }));
@@ -90,6 +92,9 @@ function fakeMedia() {
   const copied = new Map<string, string>();
   return {
     prepared,
+    discard: vi.fn(async () => {
+      mocks.order.push('discard');
+    }),
     prepare: vi.fn(async (texts: readonly (string | null | undefined)[]) => {
       mocks.order.push('prepare');
       prepared.push(texts.filter((t): t is string => typeof t === 'string'));
@@ -113,6 +118,7 @@ const run = (media?: ReturnType<typeof fakeMedia>) =>
   });
 
 beforeEach(() => {
+  mocks.failPush = false;
   mocks.order.length = 0;
   mocks.pushedTree = new Map();
   mocks.seed = new Map([
@@ -159,5 +165,23 @@ describe('cloneContentRepo — media in the tree', () => {
     expect(mocks.pushedTree.get('pages/lab-1/content.json')).toBe(
       `{"a":"media://${OLD}","b":"media://${UNCOPIED}"}`
     );
+  });
+});
+
+describe('cloneContentRepo — a push that fails', () => {
+  it('discards the media copies made for the tree, then rethrows', async () => {
+    mocks.failPush = true;
+    const media = fakeMedia();
+
+    await expect(run(media)).rejects.toThrow(/pushing to uniglos\/content-26 failed/);
+
+    expect(mocks.order).toEqual(['prepare', 'add', 'push', 'discard']);
+    expect(media.discard).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the copies once the push has landed', async () => {
+    const media = fakeMedia();
+    await run(media);
+    expect(media.discard).not.toHaveBeenCalled();
   });
 });

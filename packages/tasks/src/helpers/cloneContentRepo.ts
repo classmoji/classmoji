@@ -82,6 +82,12 @@ export interface CloneContentRepoPayload {
 export interface RolloverMediaCopy {
   prepare(texts: readonly (string | null | undefined)[]): Promise<void>;
   rewrite(text: string): string;
+  /**
+   * Delete the copies this run made. Called when the clone fails before its
+   * push lands: nothing references them, and the target should not pay for
+   * them. Optional so a test can hand in two functions.
+   */
+  discard?(): Promise<void>;
 }
 
 /** Why nothing reached the target. Set whenever `pushed` is false. */
@@ -333,6 +339,10 @@ export const cloneContentRepo = async (
     `content-import-${target.repo}-${Date.now()}`
   );
 
+  // Set once the push has returned. Until then, media copies made for this
+  // tree are referenced by nothing that exists, and a failure removes them.
+  let pushed = false;
+
   try {
     if (fs.existsSync(localPath)) {
       fs.rmSync(localPath, { recursive: true, force: true });
@@ -422,6 +432,7 @@ export const cloneContentRepo = async (
       await freshGit.addRemote('origin', cloneUrl(target));
       // Overwrites ONLY the auto-init scaffold ensureContentRepo just created.
       await freshGit.push('origin', 'main', ['--force']);
+      pushed = true;
     } catch (error: unknown) {
       throw gitFailure('pushing to', target, error);
     }
@@ -434,6 +445,19 @@ export const cloneContentRepo = async (
     });
 
     return { pushed: true, rewritten, files, copied };
+  } catch (error: unknown) {
+    // Nothing reached the target, so the media copies made for this tree are
+    // referenced by nothing. A push that failed AFTER the remote took it is
+    // indistinguishable from here; the retry this failure invites pushes the
+    // tree again and copies what it needs again, so that case converges too.
+    if (!pushed && media?.discard) {
+      await media.discard().catch((discardError: unknown) => {
+        logger.warn('content import: could not remove unused media copies', {
+          error: discardError instanceof Error ? discardError.message : String(discardError),
+        });
+      });
+    }
+    throw error;
   } finally {
     if (fs.existsSync(localPath)) {
       fs.rmSync(localPath, { recursive: true, force: true });

@@ -730,6 +730,12 @@ export interface ImportMediaCopy {
    * went, or null when it could not be copied (already warned).
    */
   copyObject(sourceMediaId: string): Promise<string | null>;
+  /**
+   * Delete the copies this run made, for a caller whose commit of the
+   * rewritten content failed before it landed. Copies reused from an earlier
+   * run are kept. Never throws.
+   */
+  discard(): Promise<void>;
 }
 
 type MediaCopyModule = typeof import('../media/mediaImportCopy.ts');
@@ -802,6 +808,14 @@ export function openImportMediaCopy({
     copyObject: async sourceMediaId => {
       await prepare([`media://${sourceMediaId}`]);
       return copier ? copier.copiedIdFor(sourceMediaId) : null;
+    },
+    discard: async () => {
+      if (!copier) return;
+      try {
+        await copier.discard();
+      } catch (error: unknown) {
+        console.warn('[import] Could not remove unused media copies:', errText(error));
+      }
     },
   };
 }

@@ -59,6 +59,13 @@ import { uploadCapabilityFor } from './uploadCapability.ts';
  * never finished). So a retry never bills the destination twice for one
  * object, and never repoints a reference at a copy that does not exist.
  *
+ * A caller whose commit of the rewritten content FAILED calls `discard`: the
+ * copies this run made are deleted (`deleteMedia` — tombstone, then the
+ * objects), because nothing references them and a destination should not pay
+ * for them. Copies reused from `knownCopies` are left alone — content an
+ * earlier run DID commit may point at them. A discarded pair can stay in the
+ * persisted map; the next run finds its copy gone and copies again.
+ *
  * ## "Never a half-rewritten file", decided
  *
  * `rewrite` replaces a reference only when its object was copied and its new
@@ -135,6 +142,12 @@ export interface MediaImportCopier {
   rewrite(text: string): string;
   /** The destination id a source object was copied to, or null. */
   copiedIdFor(sourceMediaId: string): string | null;
+  /**
+   * Delete every copy THIS run made (never one reused from `knownCopies`), for
+   * a caller whose content never landed — see the header. Afterwards `rewrite`
+   * no longer repoints at them. Never throws.
+   */
+  discard(): Promise<void>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -494,6 +507,8 @@ export function createMediaImportCopier(opts: MediaImportCopyOptions): MediaImpo
   const settled = new Set<string>();
   /** Foreign signed URLs already warned about. */
   const warnedUrls = new Set<string>();
+  /** source id → copy id, for the copies THIS run made (what `discard` removes). */
+  const created = new Map<string, string>();
   /** Asked once per run, and only when there is an object to copy. */
   let refusal: Promise<string | null> | null = null;
   const knownCopies = opts.knownCopies ?? {};
@@ -585,7 +600,24 @@ export function createMediaImportCopier(opts: MediaImportCopyOptions): MediaImpo
       const newId = await copyOne({ client, bucket, row, opts });
       if (newId) {
         copied.set(row.id, newId);
+        created.set(row.id, newId);
         opts.onCopied?.(row.id, newId);
+      }
+    }
+  }
+
+  async function discard(): Promise<void> {
+    if (created.size === 0) return;
+    // Loaded here, not at the top: `media.service.ts` is the rest of the media
+    // store, and a run that never discards has no reason to load it.
+    const { deleteMedia } = await import('./media.service.ts');
+    for (const [sourceId, copyId] of [...created]) {
+      created.delete(sourceId);
+      copied.delete(sourceId);
+      try {
+        await deleteMedia({ classroom: { id: targetClassroomId }, mediaId: copyId });
+      } catch (error) {
+        console.warn(`[media] Could not remove unused import copy ${copyId}:`, errText(error));
       }
     }
   }
@@ -594,5 +626,6 @@ export function createMediaImportCopier(opts: MediaImportCopyOptions): MediaImpo
     prepare,
     rewrite: text => rewriteMediaRefs(text, sourceClassroomId, copied),
     copiedIdFor: sourceMediaId => copied.get(sourceMediaId) ?? null,
+    discard,
   };
 }
