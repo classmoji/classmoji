@@ -56,12 +56,12 @@ cached.
 Each tier is named for the window it buys, because that is the only thing it
 decides:
 
-| Tier | Window | Cache | Minted when |
-| --- | --- | --- | --- |
-| `edit` | exact `now + 4h`, 5m grace | `no-store` | the viewer can edit, or an explicit staff read of a preview branch |
-| `week` | end of the classroom's current 7d bucket, 6h grace | `public, max-age={exp-now}, immutable` | everything else — the ordinary members-only read |
-| `month` | end of the classroom's current 30d bucket, 6h grace | `public, max-age={exp-now}, immutable` | the content itself is public (`Page.is_public`, or a deck's) |
-| `download` | exact `now + 10m`, 30s grace | `no-store` | one viewer clicked a save-to-disk link (see **Downloads**) |
+| Tier       | Window                                              | Cache                                  | Minted when                                                        |
+| ---------- | --------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------ |
+| `edit`     | exact `now + 4h`, 5m grace                          | `no-store`                             | the viewer can edit, or an explicit staff read of a preview branch |
+| `week`     | end of the classroom's current 7d bucket, 6h grace  | `public, max-age={exp-now}, immutable` | everything else — the ordinary members-only read                   |
+| `month`    | end of the classroom's current 30d bucket, 6h grace | `public, max-age={exp-now}, immutable` | the content itself is public (`Page.is_public`, or a deck's)       |
+| `download` | exact `now + 10m`, 30s grace                        | `no-store`                             | one viewer clicked a save-to-disk link (see **Downloads**)         |
 
 **A tier is not access control — the signature is.** It picks a lifetime and a
 cacheability for a URL that has already been minted for someone who was allowed
@@ -122,23 +122,23 @@ Pages rebuild. There is no separate text scheme and no per-extension allowlist:
 the extension is a FIELD of the canonical string, so a signature minted for
 `.json` can never serve the same sha as `.html`.
 
-| Extension | Content-Type |
-| --- | --- |
-| `html`, `htm` | `text/html; charset=utf-8` |
-| `css` | `text/css; charset=utf-8` |
-| `js`, `mjs` | `text/javascript; charset=utf-8` |
-| `json` | `application/json; charset=utf-8` |
-| `md` | `text/markdown; charset=utf-8` |
-| `txt` | `text/plain; charset=utf-8` |
-| `svg` | `image/svg+xml` — an image, but never transformed |
-| `woff`, `woff2`, `ttf`, `otf` | the matching `font/*` |
+| Extension                     | Content-Type                                      |
+| ----------------------------- | ------------------------------------------------- |
+| `html`, `htm`                 | `text/html; charset=utf-8`                        |
+| `css`                         | `text/css; charset=utf-8`                         |
+| `js`, `mjs`                   | `text/javascript; charset=utf-8`                  |
+| `json`                        | `application/json; charset=utf-8`                 |
+| `md`                          | `text/markdown; charset=utf-8`                    |
+| `txt`                         | `text/plain; charset=utf-8`                       |
+| `svg`                         | `image/svg+xml` — an image, but never transformed |
+| `woff`, `woff2`, `ttf`, `otf` | the matching `font/*`                             |
 
 Two rules hold for all of them:
 
 - **The type comes from the extension, never from the bytes.** Nothing here
   sniffs, and `X-Content-Type-Options: nosniff` tells the browser not to either.
 - **A served `.html` is inert.** `Content-Security-Policy: default-src 'none';
-  sandbox` drops it into an opaque origin with no script execution, so opening
+sandbox` drops it into an opaque origin with no script execution, so opening
   one as a top-level navigation cannot run script on the `.classmoji.io`
   session-cookie domain — the same reason the CSP was there for SVG. No
   response from this Worker carries a cookie.
@@ -166,8 +166,10 @@ and only ever read here. That difference is the whole route.
 - **No transform.** A media URL carrying `w` or `fmt` is malformed: the query
   allowlist is exactly `p, v, exp, sig, dl`.
 
-`{variant}` is one of `orig.{ext}` (ext ≤ 8 lowercase alphanumerics), `web.mp4`
-(the streaming rendition) or `poster.webp` — a closed list, because the same
+`{variant}` is one of `orig.{ext}` (ext ≤ 8 lowercase alphanumerics),
+`web-{hex12}.mp4` (the streaming rendition) or `poster-{hex12}.jpg` (the poster
+frame), the 12 hex being the first 12 of the SHA-256 of that object's bytes — a
+closed grammar, because the same
 string is both a URL segment and the tail of an R2 key. WHICH variant to serve
 is decided at signing time by the app, from the media row; the Worker holds no
 state about it, so a new rendition is simply a new URL.
@@ -189,7 +191,7 @@ the app assigned the stored type from, so the two cannot drift.
 **Deleting media does not revoke URLs already minted for it.** A signed URL is
 self-contained: it carries its own tier, expiry and key version, and it is
 checked against the key rather than against a row, so a `week` or `month` URL
-handed out before the delete keeps *verifying* until it expires. What changes is
+handed out before the delete keeps _verifying_ until it expires. What changes is
 the answer — the object is gone, so the reply is a 404 instead of bytes. This is
 the same property a blob URL has (see the tiers above), and the mitigation is
 the same one: the tier's lifetime. Nothing revokes an issued URL early.
@@ -205,7 +207,7 @@ the same one: the tier's lifetime. Nothing revokes an issued URL early.
   the deliberate exception — a different bucket, and classroom-scoped, because
   quota and delete are per classroom.
 - **`fmt=auto` negotiates on `Accept`** — avif when the browser offers it, else
-  webp — and the *stored* variant is keyed by the concrete format, so no viewer
+  webp — and the _stored_ variant is keyed by the concrete format, so no viewer
   is ever handed a format it cannot decode.
 - **A failed transform is not a failure.** If the Images binding throws
   (unsupported source, quota), the original bytes are served with the original
@@ -216,7 +218,7 @@ the same one: the tier's lifetime. Nothing revokes an issued URL early.
 - **EXIF:** transformed variants are webp or avif, and both discard all
   metadata unconditionally, so GPS never survives a transform. Untransformed
   originals stream through verbatim, EXIF included — this is a pass-through
-  cache, and the place to strip metadata is upload. The Images *binding*
+  cache, and the place to strip metadata is upload. The Images _binding_
   exposes no `metadata` option to change that; it exists only on the `cf.image`
   fetch API.
 - **The `edit` and `download` tiers are `no-store`,** everything else
@@ -246,16 +248,16 @@ the same one: the tier's lifetime. Nothing revokes an issued URL early.
 
 ## Bindings, vars, secrets
 
-| Name | Kind | Notes |
-| --- | --- | --- |
-| `CACHE` | R2 bucket | `classmoji-content-cache-stg` / `-prod` |
-| `MEDIA` | R2 bucket | `classmoji-media-stg` / `-prod` — large uploads, read-only from here and never a cache |
-| `IMAGES` | Images binding | width/format variants |
-| `CONTENT_TOKEN_ENDPOINT` | var | webapp endpoint that mints installation tokens |
-| `ENVIRONMENT` | var | `staging` / `production` |
-| `CONTENT_SIGNING_SECRET` | secret | HMAC master key for signed URLs |
+| Name                              | Kind             | Notes                                                                                            |
+| --------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------ |
+| `CACHE`                           | R2 bucket        | `classmoji-content-cache-stg` / `-prod`                                                          |
+| `MEDIA`                           | R2 bucket        | `classmoji-media-stg` / `-prod` — large uploads, read-only from here and never a cache           |
+| `IMAGES`                          | Images binding   | width/format variants                                                                            |
+| `CONTENT_TOKEN_ENDPOINT`          | var              | webapp endpoint that mints installation tokens                                                   |
+| `ENVIRONMENT`                     | var              | `staging` / `production`                                                                         |
+| `CONTENT_SIGNING_SECRET`          | secret           | HMAC master key for signed URLs                                                                  |
 | `CONTENT_SIGNING_SECRET_PREVIOUS` | secret, optional | the key the current one replaced; accepted for verification during a rotation, never signed with |
-| `CONTENT_WORKER_SHARED_SECRET` | secret | bearer token presented to the token endpoint |
+| `CONTENT_WORKER_SHARED_SECRET`    | secret           | bearer token presented to the token endpoint                                                     |
 
 Secrets come from Infisical (`/content-worker`, env `sta` for staging and `prod`
 for production) and are pushed by CI with `wrangler secret bulk` after the
@@ -337,7 +339,7 @@ Three things have to agree, and all three are easy to get subtly wrong:
    verifies. A mismatch is indistinguishable from tampering — every image 403s
    with `bad-signature` and nothing says why.
 2. **The origin the apps sign for is the origin the Worker answers on**, host
-   *and* port, because the host is inside the canonical string.
+   _and_ port, because the host is inside the canonical string.
 3. **The Worker's token endpoint points at the LOCAL webapp**, not staging.
 
 #### 1. Generate a throwaway pair
@@ -435,7 +437,7 @@ Three things beyond the flag, each of which fails in its own confusing way:
   host rewriter is a no-op without it, so with it unset there is no way to reach
   the site at all. Start the pages app with e.g. `SITE_BASE_DOMAIN=classmoji.io`
   and address the site with a `Host:` header; there is no local DNS for it. The
-  site also has to be *enabled* and have a home page — a claimed-but-disabled
+  site also has to be _enabled_ and have a home page — a claimed-but-disabled
   site 404s. Seeing the `month` tier no longer needs any of it: the tier follows
   the content's visibility, so a public page mints `month` inside the pages app
   too.
@@ -481,7 +483,7 @@ done
 ```
 
 The delete is safe in the sense that matters: the next request for that sha
-refetches it from GitHub and writes it back. It is *not* scoped to a classroom —
+refetches it from GitHub and writes it back. It is _not_ scoped to a classroom —
 one object serves every classroom referencing that sha, which is the point of a
 content-addressed key.
 
@@ -489,8 +491,8 @@ The media bucket is the opposite on both counts. Its keys are classroom-scoped,
 
 ```
 m/{classroomId}/{mediaId}/orig.{ext}     # the original, as uploaded
-m/{classroomId}/{mediaId}/web.mp4        # the streaming rendition
-m/{classroomId}/{mediaId}/poster.webp    # the poster frame
+m/{classroomId}/{mediaId}/web-{hex12}.mp4        # the streaming rendition
+m/{classroomId}/{mediaId}/poster-{hex12}.jpg    # the poster frame
 ```
 
 and there is nothing behind them: deleting one of these objects destroys the
@@ -512,18 +514,18 @@ Logs** (`classmoji-content-staging` or `classmoji-content`), with
 `observability.enabled` set in `wrangler.jsonc` for both. `npx wrangler tail
 --env staging` gives the same stream in a terminal. The lines worth searching:
 
-| Shape | Means |
-| --- | --- |
-| `[content] 403 {reason} classroom=… path=… p=… v=…` | refused: `bad-signature`, `expired`, `malformed`, `unsupported-version`. Never carries `sig` or a query string |
-| `[content] key=previous classroom=… path=… p=… v=…` | served, but the signature only verified against `CONTENT_SIGNING_SECRET_PREVIOUS`. Expected during a rotation. Logged once per classroom and key version per isolate, so it counts classrooms, not requests |
-| `[content] 404 missing classroom=… path=…` | the app minted a `/missing/` URL: a reference that resolves to no blob (deleted, renamed, or a directory). Not an attack — a content bug |
-| `[content] 404 media classroom=… media=… variant=…` | a signed media URL whose object is not in the bucket: deleted, or an upload that never completed. There is no origin to fall back to |
-| `[content] origin blob {sha}: {status}` | GitHub refused the blob; the client got a 502 |
-| `[content] origin error: …` / `[content] unhandled error: …` | 502 / 500 |
-| `[content] image transform failed (w=…, fmt=…)` | Images could not do it; the original was served on `max-age=60` |
-| `[content] skipping transform for {sha}: …ceiling` | source past `MAX_TRANSFORM_SOURCE_BYTES`; the original was streamed instead |
-| `[content] refusing to cache truncated tree {sha}` | the listing was used but not stored |
-| `[content] failed to cache {key}` | the R2 write-back failed; the client was still served |
+| Shape                                                        | Means                                                                                                                                                                                                       |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `[content] 403 {reason} classroom=… path=… p=… v=…`          | refused: `bad-signature`, `expired`, `malformed`, `unsupported-version`. Never carries `sig` or a query string                                                                                              |
+| `[content] key=previous classroom=… path=… p=… v=…`          | served, but the signature only verified against `CONTENT_SIGNING_SECRET_PREVIOUS`. Expected during a rotation. Logged once per classroom and key version per isolate, so it counts classrooms, not requests |
+| `[content] 404 missing classroom=… path=…`                   | the app minted a `/missing/` URL: a reference that resolves to no blob (deleted, renamed, or a directory). Not an attack — a content bug                                                                    |
+| `[content] 404 media classroom=… media=… variant=…`          | a signed media URL whose object is not in the bucket: deleted, or an upload that never completed. There is no origin to fall back to                                                                        |
+| `[content] origin blob {sha}: {status}`                      | GitHub refused the blob; the client got a 502                                                                                                                                                               |
+| `[content] origin error: …` / `[content] unhandled error: …` | 502 / 500                                                                                                                                                                                                   |
+| `[content] image transform failed (w=…, fmt=…)`              | Images could not do it; the original was served on `max-age=60`                                                                                                                                             |
+| `[content] skipping transform for {sha}: …ceiling`           | source past `MAX_TRANSFORM_SOURCE_BYTES`; the original was streamed instead                                                                                                                                 |
+| `[content] refusing to cache truncated tree {sha}`           | the listing was used but not stored                                                                                                                                                                         |
+| `[content] failed to cache {key}`                            | the R2 write-back failed; the client was still served                                                                                                                                                       |
 
 A burst of `403 bad-signature` on one classroom usually means a stale page in
 someone's browser, not an attacker: signatures expire, and the grace window is
@@ -543,11 +545,10 @@ whole trick: it lets a key change without invalidating every URL already sitting
 in a browser, a `<link>` tag, or an edge cache.
 
 1. **Set both keys in Infisical**, project `e9a6487c-350e-41e7-8bba-2d95ca5934a6`,
-   environment `prod`. The `/content-worker` folder holds *references* to the
+   environment `prod`. The `/content-worker` folder holds _references_ to the
    root-level secrets the Fly apps read, so there is one value per key and not
    two copies to keep in step — but a brand-new key needs the reference created
    the first time round:
-
    - root `CONTENT_SIGNING_SECRET_PREVIOUS` ← the current value of `CONTENT_SIGNING_SECRET`
    - root `CONTENT_SIGNING_SECRET` ← a fresh `openssl rand -hex 32`
    - `/content-worker` ← a reference for `CONTENT_SIGNING_SECRET_PREVIOUS` alongside
@@ -585,7 +586,7 @@ in a browser, a `<link>` tag, or an edge cache.
 
    That line is logged once per classroom and key version per isolate, not once
    per request — a warn on every request for a month would bury the 403 and 404
-   lines. Which means its disappearance is a *weaker* signal than it looks:
+   lines. Which means its disappearance is a _weaker_ signal than it looks:
    isolates recycle, so a fresh one logs the same classroom again, and a quiet
    hour may just be a quiet hour.
 
@@ -647,7 +648,7 @@ environment; `cf:dev` and `cf:types` pass `--env staging` for the same reason.
 Once, in this order:
 
 1. **R2 read on the Cloudflare API token** — already done. The token in
-   `CLOUDFLARE_API_TOKEN` needs Workers Scripts edit *and* R2 read, or the
+   `CLOUDFLARE_API_TOKEN` needs Workers Scripts edit _and_ R2 read, or the
    deploy fails validating the `CACHE` and `MEDIA` bindings rather than at
    request time.
 
@@ -664,6 +665,7 @@ Once, in this order:
 
    The app writes to the media bucket over the S3 API and this Worker only
    reads from it, so both sides have to name the same bucket per environment.
+
 2. **Push to `main`.** The workflow deploys `classmoji-content` and then pushes
    `CONTENT_SIGNING_SECRET` and `CONTENT_WORKER_SHARED_SECRET` from Infisical
    `prod`. Both must already exist under `/content-worker` there — the job
@@ -677,6 +679,7 @@ Once, in this order:
 
    `configured:false` means the secret step did not land; re-run the workflow
    with `workflow_dispatch` rather than redeploying by hand.
+
 4. **The custom domain and its certificate are wrangler's job.** The
    `production` env declares `content.classmoji.io` as a `custom_domain`, so
    wrangler creates the hostname and orders an Advanced Certificate for it on
@@ -686,9 +689,10 @@ Once, in this order:
    purpose — it fights Fly's renewal of the `*.classmoji.io` wildcard — and the
    Advanced Certificate above is what covers this hostname. Turning Universal
    SSL back on to "fix" a certificate here breaks the apps instead.
+
 5. **Then the per-classroom gate.** A deployed Worker serves nobody by itself.
    The apps mint signed URLs only where `isContentDeliveryConfigured`
-   (`contentDelivery.service.ts`) is satisfied *and* the classroom is switched
+   (`contentDelivery.service.ts`) is satisfied _and_ the classroom is switched
    on: `Classroom.content_delivery_enabled`, which staff toggle in the admin app
    under `/content-delivery`.
 

@@ -48,6 +48,9 @@ vi.mock('@aws-sdk/client-s3', () => ({
   UploadPartCommand: command('UploadPart'),
 }));
 
+const trigger = vi.fn();
+vi.mock('@trigger.dev/sdk', () => ({ tasks: { trigger: (...a: unknown[]) => trigger(...a) } }));
+
 vi.mock('@aws-sdk/s3-request-presigner', () => ({
   getSignedUrl: (...args: unknown[]) => getSignedUrl(...args),
 }));
@@ -90,12 +93,15 @@ const {
   createUpload,
   deleteMedia,
   listMedia,
+  onMediaReady,
   purgeClassroomMedia,
   putMediaObject,
   signParts,
   SINGLE_PUT_MAX_BYTES,
   usage,
+  VIDEO_ENQUEUE_FAILED_REASON,
 } = await import('../media.service.ts');
+const { toMediaRecord } = await import('../mediaLookup.ts');
 const { PART_SIZE_BYTES, PER_FILE_MAX_BYTES, PRO_QUOTA_BYTES, RESERVATION_WINDOW_MS } =
   await import('../mediaQuota.ts');
 const { resetR2Client } = await import('../r2Client.ts');
@@ -167,12 +173,20 @@ function unconfigure(): void {
   resetR2Client();
 }
 
+/** The conditional write that flipped a row READY. */
+const readyFlip = () =>
+  prisma.mediaObject.updateMany.mock.calls
+    .map(call => call[0])
+    .find(arg => (arg as { data?: { status?: string } }).data?.status === 'READY');
+
 /** The one key every variant of the fixture row lives under. */
 const ORIG_KEY = `m/${CLASSROOM_ID}/${MEDIA_ID}/orig.mp4`;
 
 beforeEach(() => {
   sent.length = 0;
   sendImpl.mockReset();
+  trigger.mockReset();
+  trigger.mockResolvedValue({ id: 'run_1' });
   getSignedUrl.mockReset();
   getSignedUrl.mockResolvedValue('https://r2.example/signed');
   for (const fn of Object.values(prisma.mediaObject)) fn.mockReset();
@@ -258,7 +272,7 @@ describe('usage', () => {
       row({
         size_bytes: BigInt(4 * GIB),
         rendition_bytes: BigInt(800 * 1024 * 1024),
-        rendition_key: 'web',
+        rendition_key: `m/${CLASSROOM_ID}/${MEDIA_ID}/web-0123456789ab.mp4`,
         original_deleted_at: new Date(),
       }),
     ]);
@@ -272,7 +286,7 @@ describe('usage', () => {
       row({
         size_bytes: BigInt(4 * GIB),
         rendition_bytes: BigInt(100),
-        rendition_key: 'web',
+        rendition_key: `m/${CLASSROOM_ID}/${MEDIA_ID}/web-0123456789ab.mp4`,
         original_deleted_at: null,
       }),
     ]);
@@ -872,13 +886,13 @@ describe('completeUpload', () => {
     expect(result).toEqual({ mediaId: MEDIA_ID, ref: `media://${MEDIA_ID}`, sizeBytes: 4096 });
     // READY only FROM UPLOADING: a conditional write, never an unconditional one.
     expect(prisma.mediaObject.update).not.toHaveBeenCalled();
-    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
+    expect(readyFlip()).toMatchObject({
       where: { id: MEDIA_ID, status: 'UPLOADING' },
       data: {
         status: 'READY',
         upload_id: null,
-        // NONE even though the row asked to be optimised: P1 queues nothing, and
-        // PENDING with no job behind it is a row that processes forever.
+        // NONE even for a row that asked to be optimised: PENDING is written by
+        // `onMediaReady`, in the step that queues the job, and nowhere else.
         processing: 'NONE',
       },
     });
@@ -949,7 +963,7 @@ describe('completeUpload', () => {
     // overloaded node the same question.
     expect(at[1] - at[0]).toBeGreaterThanOrEqual(250);
     expect(result).toMatchObject({ mediaId: MEDIA_ID });
-    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0].data).toMatchObject({
+    expect(readyFlip()?.data).toMatchObject({
       status: 'READY',
     });
   });
@@ -1181,6 +1195,8 @@ describe('completeUpload', () => {
     );
     prisma.mediaObject.updateMany.mockImplementation(
       async ({ where, data }: { where: { status: string }; data: { status: string } }) => {
+        // `onMediaReady`'s processing claim writes no status; not this race.
+        if (data.status === undefined) return { count: 0 };
         if (where.status !== state.status) return { count: 0 };
         state.status = data.status;
         return { count: 1 };
@@ -1244,6 +1260,8 @@ describe('completeUpload', () => {
     });
     prisma.mediaObject.updateMany.mockImplementation(
       async ({ where, data }: { where: { status: string }; data: { status: string } }) => {
+        // `onMediaReady`'s processing claim writes no status; not this race.
+        if (data.status === undefined) return { count: 0 };
         if (where.status !== state.status) return { count: 0 };
         state.status = data.status;
         return { count: 1 };
@@ -1313,6 +1331,7 @@ describe('completeUpload', () => {
     );
     prisma.mediaObject.updateMany.mockImplementation(
       async ({ data }: { data: { status: string } }) => {
+        if (data.status === undefined) return { count: 0 };
         state.status = data.status;
         return { count: 1 };
       }
@@ -1517,42 +1536,90 @@ describe('abortUpload', () => {
 });
 
 describe('deleteMedia', () => {
-  beforeEach(() => sendImpl.mockResolvedValue({}));
+  const PREFIX = `m/${CLASSROOM_ID}/${MEDIA_ID}/`;
+  const WEB_KEY = `${PREFIX}web-0123456789ab.mp4`;
+  const POSTER_KEY = `${PREFIX}poster-0123456789ab.jpg`;
+  /** A replay's pair the row never recorded — the reason the prefix is listed. */
+  const STRAY_KEY = `${PREFIX}web-ffffffffffff.mp4`;
 
-  it('removes all three variants, because two of them may exist', async () => {
-    prisma.mediaObject.findFirst.mockResolvedValue(row());
+  /** R2 answers the prefix listing with `keys`, and every other call with `{}`. */
+  function listing(keys: string[]) {
+    sendImpl.mockImplementation(async (name: string) =>
+      name === 'ListObjectsV2' ? { Contents: keys.map(Key => ({ Key })), IsTruncated: false } : {}
+    );
+  }
+
+  const deletedKeys = () =>
+    sent.filter(call => call.name === 'DeleteObject').map(call => call.input.Key);
+
+  beforeEach(() => listing([ORIG_KEY, WEB_KEY, POSTER_KEY]));
+
+  it('removes every object under the row’s own prefix, named in a column or not', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ rendition_key: WEB_KEY, rendition_bytes: BigInt(100), poster_key: POSTER_KEY })
+    );
+    listing([ORIG_KEY, WEB_KEY, POSTER_KEY, STRAY_KEY]);
+
     await deleteMedia({ classroom, mediaId: MEDIA_ID });
 
-    expect(sent.map(call => call.input.Key)).toEqual([
-      ORIG_KEY,
-      `m/${CLASSROOM_ID}/${MEDIA_ID}/web.mp4`,
-      `m/${CLASSROOM_ID}/${MEDIA_ID}/poster.webp`,
-    ]);
+    const list = sent.find(call => call.name === 'ListObjectsV2');
+    expect(list?.input).toMatchObject({ Bucket: 'classmoji-media-test', Prefix: PREFIX });
+    expect(deletedKeys()).toEqual([ORIG_KEY, WEB_KEY, POSTER_KEY, STRAY_KEY]);
     expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
       where: { id: MEDIA_ID, status: { in: ['UPLOADING', 'READY', 'STAGING'] } },
       data: expect.objectContaining({ status: 'DELETED' }),
     });
   });
 
-  it('deletes the rendition and poster the row NAMES, not the names it assumes', async () => {
-    // The job records where it put them. Assuming `web.mp4` works right up
-    // until it writes one somewhere else, and then the bytes outlive the row
-    // that was billed for them.
-    prisma.mediaObject.findFirst.mockResolvedValue(
-      row({
-        rendition_key: `m/${CLASSROOM_ID}/${MEDIA_ID}/web-720.mp4`,
-        rendition_bytes: BigInt(100),
-        poster_key: `m/${CLASSROOM_ID}/${MEDIA_ID}/poster-00001.webp`,
-      })
-    );
+  it('follows a truncated listing to the end', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(row());
+    sendImpl.mockImplementation(async (name: string, input: Record<string, unknown>) => {
+      if (name !== 'ListObjectsV2') return {};
+      return input.ContinuationToken === 'page-2'
+        ? { Contents: [{ Key: WEB_KEY }], IsTruncated: false }
+        : { Contents: [{ Key: ORIG_KEY }], IsTruncated: true, NextContinuationToken: 'page-2' };
+    });
 
     await deleteMedia({ classroom, mediaId: MEDIA_ID });
+    expect(deletedKeys()).toEqual([ORIG_KEY, WEB_KEY]);
+  });
 
-    expect(sent.map(call => call.input.Key)).toEqual([
-      ORIG_KEY,
-      `m/${CLASSROOM_ID}/${MEDIA_ID}/web-720.mp4`,
-      `m/${CLASSROOM_ID}/${MEDIA_ID}/poster-00001.webp`,
-    ]);
+  it('never deletes a listed key outside the row’s prefix', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(row());
+    listing([ORIG_KEY, `m/${CLASSROOM_ID}/77777777-8888-4999-8aaa-bbbbbbbbbbbc/orig.mp4`]);
+    await deleteMedia({ classroom, mediaId: MEDIA_ID });
+    expect(deletedKeys()).toEqual([ORIG_KEY]);
+  });
+
+  it('falls back to the keys the row names when the listing fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ rendition_key: WEB_KEY, poster_key: POSTER_KEY })
+    );
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name === 'ListObjectsV2') throw new Error('list failed');
+      return {};
+    });
+
+    await expect(deleteMedia({ classroom, mediaId: MEDIA_ID })).resolves.toEqual({
+      mediaId: MEDIA_ID,
+    });
+    expect(deletedKeys()).toEqual([ORIG_KEY, WEB_KEY, POSTER_KEY]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Could not list'), 'list failed');
+  });
+
+  it('in the fallback, deletes only rendition and poster keys that parse', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ rendition_key: 'web.mp4', poster_key: '../../elsewhere/poster.webp' })
+    );
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name === 'ListObjectsV2') throw new Error('list failed');
+      return {};
+    });
+
+    await deleteMedia({ classroom, mediaId: MEDIA_ID });
+    expect(deletedKeys()).toEqual([ORIG_KEY]);
   });
 
   it('tombstones the row before it touches a single object', async () => {
@@ -1566,18 +1633,26 @@ describe('deleteMedia', () => {
     });
     sendImpl.mockImplementation(async (name: string) => {
       order.push(name);
-      return {};
+      return name === 'ListObjectsV2' ? { Contents: [{ Key: ORIG_KEY }] } : {};
     });
 
     await deleteMedia({ classroom, mediaId: MEDIA_ID });
-    expect(order[0]).toBe('tombstone');
+    expect(order).toEqual(['tombstone', 'ListObjectsV2', 'DeleteObject']);
   });
 
   it('keeps deleting the other keys when one delete fails', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     prisma.mediaObject.findFirst.mockResolvedValue(row());
-    sendImpl.mockImplementationOnce(async () => {
-      throw new Error('r2 said no');
+    let failed = false;
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name === 'ListObjectsV2') {
+        return { Contents: [ORIG_KEY, WEB_KEY, POSTER_KEY].map(Key => ({ Key })) };
+      }
+      if (!failed) {
+        failed = true;
+        throw new Error('r2 said no');
+      }
+      return {};
     });
 
     await expect(deleteMedia({ classroom, mediaId: MEDIA_ID })).resolves.toMatchObject({
@@ -1586,7 +1661,7 @@ describe('deleteMedia', () => {
 
     // All three were attempted, the row is still a tombstone, and the failure
     // was reported rather than swallowed silently.
-    expect(sent.filter(call => call.name === 'DeleteObject')).toHaveLength(3);
+    expect(deletedKeys()).toHaveLength(3);
     expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0].data).toMatchObject({
       status: 'DELETED',
     });
@@ -1603,33 +1678,31 @@ describe('deleteMedia', () => {
     await expect(deleteMedia({ classroom, mediaId: MEDIA_ID })).resolves.toEqual({
       mediaId: MEDIA_ID,
     });
-    expect(sent.filter(call => call.name === 'DeleteObject')).toHaveLength(3);
+    expect(deletedKeys()).toHaveLength(3);
   });
 
   it('aborts first when the upload is still open', async () => {
     // Without the abort, R2 holds the uploaded parts until its own 7-day expiry.
     prisma.mediaObject.findFirst.mockResolvedValue(row({ status: 'UPLOADING', upload_id: 'up-1' }));
+    listing([ORIG_KEY]);
     await deleteMedia({ classroom, mediaId: MEDIA_ID });
     expect(sent[0].name).toBe('AbortMultipartUpload');
-    expect(sent.filter(call => call.name === 'DeleteObject')).toHaveLength(3);
+    expect(deletedKeys()).toEqual([ORIG_KEY]);
   });
 
   it('re-attempts the object deletes for a row that is already deleted', async () => {
     // A delete whose R2 half failed left a tombstone and some bytes. Asking
     // again must finish the job, not answer NOT_FOUND and strand them.
     prisma.mediaObject.findFirst.mockResolvedValue(
-      row({ status: 'DELETED', rendition_key: `m/${CLASSROOM_ID}/${MEDIA_ID}/web.mp4` })
+      row({ status: 'DELETED', rendition_key: WEB_KEY })
     );
+    listing([WEB_KEY, POSTER_KEY]);
 
     await expect(deleteMedia({ classroom, mediaId: MEDIA_ID })).resolves.toEqual({
       mediaId: MEDIA_ID,
     });
 
-    expect(sent.map(call => call.input.Key)).toEqual([
-      ORIG_KEY,
-      `m/${CLASSROOM_ID}/${MEDIA_ID}/web.mp4`,
-      `m/${CLASSROOM_ID}/${MEDIA_ID}/poster.webp`,
-    ]);
+    expect(deletedKeys()).toEqual([WEB_KEY, POSTER_KEY]);
     // The tombstone is not rewritten: `deleted_at` keeps the first delete's time.
     expect(prisma.mediaObject.updateMany).not.toHaveBeenCalled();
   });
@@ -1638,6 +1711,7 @@ describe('deleteMedia', () => {
     prisma.mediaObject.findFirst.mockResolvedValue(
       row({ status: 'STAGING', destination: 'media', upload_id: 'up-3' })
     );
+    listing([]);
     await deleteMedia({ classroom, mediaId: MEDIA_ID, userId: 'user-1' });
 
     expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
@@ -1647,9 +1721,7 @@ describe('deleteMedia', () => {
       name: 'AbortMultipartUpload',
       input: { Bucket: 'classmoji-media-test', Key: STAGE_KEY_FIXTURE(), UploadId: 'up-3' },
     });
-    expect(sent.filter(call => call.name === 'DeleteObject').map(call => call.input.Key)).toContain(
-      STAGE_KEY_FIXTURE()
-    );
+    expect(deletedKeys()).toContain(STAGE_KEY_FIXTURE());
   });
 
   it('is NOT_FOUND for somebody else’s agent upload still staging', async () => {
@@ -1675,12 +1747,7 @@ describe('deleteMedia', () => {
     // a placement whose cleanup failed left it, and deleting is idempotent.
     prisma.mediaObject.findFirst.mockResolvedValue(row({ destination: 'media' }));
     await deleteMedia({ classroom, mediaId: MEDIA_ID });
-    expect(sent.map(call => call.input.Key)).toEqual([
-      ORIG_KEY,
-      `m/${CLASSROOM_ID}/${MEDIA_ID}/web.mp4`,
-      `m/${CLASSROOM_ID}/${MEDIA_ID}/poster.webp`,
-      STAGE_KEY_FIXTURE(),
-    ]);
+    expect(deletedKeys()).toEqual([ORIG_KEY, WEB_KEY, POSTER_KEY, STAGE_KEY_FIXTURE()]);
   });
 
   it('is NOT_FOUND for an id this classroom never had', async () => {
@@ -1876,7 +1943,7 @@ describe('putMediaObject', () => {
       ContentType: 'video/mp4',
       ContentLength: 4096,
     });
-    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
+    expect(readyFlip()).toMatchObject({
       where: { id: reservedId(), status: 'UPLOADING' },
       data: expect.objectContaining({ status: 'READY' }),
     });
@@ -2003,5 +2070,165 @@ describe('putMediaObject', () => {
     );
     expect(sent.some(call => call.name === 'PutObject')).toBe(false);
     expect(sent.some(call => call.name === 'CompleteMultipartUpload')).toBe(true);
+  });
+});
+
+describe('onMediaReady', () => {
+  /** The claim: NONE → PENDING, only while the row is READY. */
+  const claim = () =>
+    prisma.mediaObject.updateMany.mock.calls
+      .map(call => call[0])
+      .find(arg => (arg as { data?: { processing?: string } }).data?.processing === 'PENDING');
+  const failure = () =>
+    prisma.mediaObject.updateMany.mock.calls
+      .map(call => call[0])
+      .find(arg => (arg as { data?: { processing?: string } }).data?.processing === 'FAILED');
+
+  const expectEnqueued = (mediaId: string) => {
+    expect(trigger).toHaveBeenCalledTimes(1);
+    expect(trigger).toHaveBeenCalledWith(
+      'media-video-process',
+      { classroomId: CLASSROOM_ID, mediaId },
+      { idempotencyKey: `media-video-process:${mediaId}` }
+    );
+  };
+
+  it('claims an optimisable video and queues its job in the same step', async () => {
+    const order: string[] = [];
+    prisma.mediaObject.updateMany.mockImplementation(async () => {
+      order.push('claim');
+      return { count: 1 };
+    });
+    trigger.mockImplementation(async () => {
+      order.push('trigger');
+      return { id: 'run_1' };
+    });
+
+    await onMediaReady(toMediaRecord(row() as never));
+
+    expect(claim()).toEqual({
+      where: { id: MEDIA_ID, status: 'READY', processing: 'NONE' },
+      data: { processing: 'PENDING', processing_error: null },
+    });
+    expect(order).toEqual(['claim', 'trigger']);
+    expectEnqueued(MEDIA_ID);
+  });
+
+  it.each([
+    ['a non-video', { kind: 'DOCUMENT', optimise: false }],
+    ['a video not marked optimise', { optimise: false }],
+    ['a row that is not READY', { status: 'UPLOADING' }],
+  ])('does nothing for %s', async (_label, overrides) => {
+    await onMediaReady(toMediaRecord(row(overrides) as never));
+    expect(prisma.mediaObject.updateMany).not.toHaveBeenCalled();
+    expect(trigger).not.toHaveBeenCalled();
+  });
+
+  it('queues nothing when the claim matches no row (already PENDING, DONE or FAILED)', async () => {
+    prisma.mediaObject.updateMany.mockResolvedValue({ count: 0 });
+    await onMediaReady(toMediaRecord(row() as never));
+    expect(trigger).not.toHaveBeenCalled();
+  });
+
+  it('marks the row FAILED with a short reason when the job cannot be queued — and does not throw', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    trigger.mockRejectedValue(new Error('trigger is down'));
+
+    await expect(onMediaReady(toMediaRecord(row() as never))).resolves.toBeUndefined();
+
+    expect(failure()).toEqual({
+      where: { id: MEDIA_ID, processing: 'PENDING' },
+      data: { processing: 'FAILED', processing_error: VIDEO_ENQUEUE_FAILED_REASON },
+    });
+    expect(VIDEO_ENQUEUE_FAILED_REASON.length).toBeLessThan(120);
+  });
+
+  it('never throws, even when the database write fails', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    prisma.mediaObject.updateMany.mockRejectedValue(new Error('db down'));
+    await expect(onMediaReady(toMediaRecord(row() as never))).resolves.toBeUndefined();
+    expect(trigger).not.toHaveBeenCalled();
+
+    prisma.mediaObject.updateMany
+      .mockReset()
+      .mockResolvedValueOnce({ count: 1 })
+      .mockRejectedValueOnce(new Error('db down'));
+    trigger.mockRejectedValue(new Error('trigger is down'));
+    await expect(onMediaReady(toMediaRecord(row() as never))).resolves.toBeUndefined();
+  });
+
+  describe('every READY path calls it', () => {
+    it('completeUpload', async () => {
+      prisma.mediaObject.findFirst.mockResolvedValue(
+        row({ status: 'UPLOADING', upload_id: 'up-1', size_bytes: BigInt(4096) })
+      );
+      sendImpl.mockImplementation(async (name: string) =>
+        name === 'HeadObject' ? { ContentLength: 4096 } : {}
+      );
+      await completeUpload({
+        classroom,
+        mediaId: MEDIA_ID,
+        parts: [{ partNumber: 1, etag: '"a"' }],
+      });
+      expect(claim()).toMatchObject({ where: { id: MEDIA_ID, status: 'READY' } });
+      expectEnqueued(MEDIA_ID);
+    });
+
+    it('completeUpload, with a failed enqueue: the upload still succeeds, the row is FAILED', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      trigger.mockRejectedValue(new Error('trigger is down'));
+      prisma.mediaObject.findFirst.mockResolvedValue(
+        row({ status: 'UPLOADING', upload_id: 'up-1', size_bytes: BigInt(4096) })
+      );
+      sendImpl.mockImplementation(async (name: string) =>
+        name === 'HeadObject' ? { ContentLength: 4096 } : {}
+      );
+      await expect(
+        completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
+      ).resolves.toMatchObject({ mediaId: MEDIA_ID });
+      expect(failure()).toMatchObject({ data: { processing: 'FAILED' } });
+    });
+
+    it('completeUpload of a non-video queues nothing', async () => {
+      prisma.mediaObject.findFirst.mockResolvedValue(
+        row({
+          status: 'UPLOADING',
+          upload_id: 'up-1',
+          size_bytes: BigInt(4096),
+          kind: 'DOCUMENT',
+          optimise: false,
+        })
+      );
+      sendImpl.mockImplementation(async (name: string) =>
+        name === 'HeadObject' ? { ContentLength: 4096 } : {}
+      );
+      await completeUpload({
+        classroom,
+        mediaId: MEDIA_ID,
+        parts: [{ partNumber: 1, etag: '"a"' }],
+      });
+      expect(trigger).not.toHaveBeenCalled();
+    });
+
+    it('putMediaObject (the slides.com import)', async () => {
+      let createdId = '';
+      prisma.mediaObject.create.mockImplementation(async ({ data }: { data: { id: string } }) => {
+        createdId = data.id;
+        return row({ status: 'UPLOADING', ...data });
+      });
+      prisma.mediaObject.findFirst.mockImplementation(async () => row({ id: createdId }));
+      sendImpl.mockImplementation(async (name: string) =>
+        name === 'HeadObject' ? { ContentLength: 4096 } : {}
+      );
+
+      await putMediaObject({
+        classroom,
+        userId: 'user-1',
+        filename: 'intro.mp4',
+        bytes: Buffer.alloc(4096, 1),
+      });
+      expect(claim()).toMatchObject({ where: { id: createdId, status: 'READY' } });
+      expectEnqueued(createdId);
+    });
   });
 });

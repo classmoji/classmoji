@@ -43,33 +43,27 @@ export interface MediaBody extends MediaHead {
  * rather than taken from the uploader.
  *
  * The fallback is the variant's own extension, never a sniff of the bytes and
- * never the general web table: `web.mp4` is video, `poster.webp` is an image,
- * and an `orig.{ext}` the MEDIA store's own table does not know — `.html`,
- * `.svg`, anything else a browser could run — is an opaque download rather
- * than whatever the general table would have called it (`content-type.ts`
- * would type `orig.html` as `text/html`, which is exactly the mistake this
- * store exists to avoid). Together with `nosniff` and the sandboxing CSP (see
- * cache.ts) that is what keeps an uploaded document from ever being run as
- * something else.
+ * never the general web table: a rendition (`web-{hex12}.mp4`) is video, a
+ * poster (`poster-{hex12}.jpg`) is an image, and an `orig.{ext}` the MEDIA
+ * store's own table does not know — `.html`, `.svg`, anything else a browser
+ * could run — is an opaque download rather than whatever the general table
+ * would have called it (`content-type.ts` would type `orig.html` as
+ * `text/html`, which is exactly the mistake this store exists to avoid).
+ * Together with `nosniff` and the sandboxing CSP (see cache.ts) that is what
+ * keeps an uploaded document from ever being run as something else.
  *
- * An `orig.{ext}` is resolved against the MEDIA store's own table — the same
- * one the app assigned the stored type from, so a fallback answers what the
- * upload would have answered. `web.mp4` and `poster.webp` are the two other
- * shapes `MEDIA_VARIANT_PATTERN` allows, never a user-supplied extension, so
- * their type is looked up the same way, by the fixed extension each name
- * carries.
+ * Every shape `MEDIA_VARIANT_PATTERN` allows has exactly one dot, before its
+ * extension: `orig.{ext}`, `web-{hex12}.mp4`, `poster-{hex12}.jpg`. So the
+ * extension is what follows that dot, and it is resolved against the MEDIA
+ * store's own table — the same one the app assigned the stored type from, so a
+ * fallback answers what the upload would have answered. The rendition's and
+ * the poster's are fixed by the grammar, never user-supplied.
  */
-const ORIG_PREFIX = 'orig.';
-
 function contentTypeOf(object: R2Object, variant: string): string {
   const stored = object.httpMetadata?.contentType;
   if (typeof stored === 'string' && stored.trim().length > 0) return stored;
 
-  const ext = variant.startsWith(ORIG_PREFIX)
-    ? variant.slice(ORIG_PREFIX.length)
-    : variant === 'web.mp4'
-      ? 'mp4'
-      : 'webp'; // poster.webp — the only other shape MEDIA_VARIANT_PATTERN allows
+  const ext = variant.slice(variant.lastIndexOf('.') + 1);
   return contentTypeForMediaExt(ext) ?? 'application/octet-stream';
 }
 

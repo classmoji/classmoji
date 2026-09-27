@@ -338,13 +338,47 @@ describe('media_list / media_delete', () => {
         kind: 'VIDEO',
         sizeBytes: 10,
         createdAt: new Date('2026-09-26T00:00:00Z'),
+        processing: 'DONE',
+        processingError: null,
       },
     ]);
     const payload = parse(
       await mediaListTool.handler({ classroom: 'org/cs', kind: 'VIDEO' }, TEACHER)
     );
     expect(mocks.listReadyMedia).toHaveBeenCalledWith('class-1', { kind: 'VIDEO' });
-    expect(payload.media[0]).toMatchObject({ id: 'm-1', ref: 'media://m-1', size_bytes: 10 });
+    expect(payload.media[0]).toMatchObject({
+      id: 'm-1',
+      ref: 'media://m-1',
+      size_bytes: 10,
+      processing: 'DONE',
+    });
+    expect(payload.media[0]).not.toHaveProperty('processing_error');
+  });
+
+  it('reports a failed optimisation with its reason, read-only', async () => {
+    mocks.listReadyMedia.mockResolvedValue([
+      {
+        id: 'm-2',
+        ref: 'media://m-2',
+        filename: 'b.mov',
+        kind: 'VIDEO',
+        sizeBytes: 10,
+        createdAt: new Date('2026-09-26T00:00:00Z'),
+        processing: 'FAILED',
+        processingError: 'The video could not be read.',
+      },
+    ]);
+    const payload = parse(await mediaListTool.handler({ classroom: 'org/cs' }, TEACHER));
+    expect(payload.media[0]).toMatchObject({
+      processing: 'FAILED',
+      processing_error: 'The video could not be read.',
+    });
+    // Read-only: nothing on the tool's input can change it.
+    expect(Object.keys(mediaListTool.inputSchema)).toEqual(['classroom', 'kind']);
+  });
+
+  it('keeps its description under 1,500 bytes', () => {
+    expect(Buffer.byteLength(mediaListTool.description, 'utf8')).toBeLessThan(1500);
   });
 
   it('deletes in this classroom and audits it', async () => {

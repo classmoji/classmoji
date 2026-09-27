@@ -11,7 +11,15 @@
 import { describe, expect, it } from 'vitest';
 
 import { bucketExpiry, graceFor } from '../bucket.ts';
-import { mediaCanonicalString, mediaKey, toBase64Url } from '../canonical.ts';
+import {
+  isPosterVariant,
+  isRenditionVariant,
+  mediaCanonicalString,
+  mediaKey,
+  posterVariant,
+  renditionVariant,
+  toBase64Url,
+} from '../canonical.ts';
 import { deriveKey, signCanonical } from '../derive.ts';
 import { encodeDownloadFilename } from '../downloads.ts';
 import { contentTypeForMediaExt } from '../mediaTypes.ts';
@@ -79,15 +87,55 @@ async function downloadOnTier(dl: string, tier: Tier): Promise<string> {
   );
 }
 
+const HEX = '0123456789ab';
+const WEB = `web-${HEX}.mp4`;
+const POSTER = `poster-${HEX}.jpg`;
+
+describe('renditionVariant / posterVariant', () => {
+  it('names the content-derived rendition and poster', () => {
+    expect(renditionVariant(HEX)).toBe(WEB);
+    expect(posterVariant(HEX)).toBe(POSTER);
+    expect(isRenditionVariant(WEB)).toBe(true);
+    expect(isPosterVariant(POSTER)).toBe(true);
+    expect(isRenditionVariant(POSTER)).toBe(false);
+    expect(isPosterVariant(WEB)).toBe(false);
+    expect(isRenditionVariant('orig.mp4')).toBe(false);
+    expect(isRenditionVariant('web.mp4')).toBe(false);
+    expect(isPosterVariant('poster.webp')).toBe(false);
+  });
+
+  it.each(['', '0123456789a', '0123456789abc', '0123456789AB', '0123456789ag', '../../x', 12])(
+    'refuses the hash %s',
+    hash => {
+      expect(() => renditionVariant(hash as string)).toThrow(TypeError);
+      expect(() => posterVariant(hash as string)).toThrow(TypeError);
+    }
+  );
+
+  it('produces names the key grammar accepts', () => {
+    expect(mediaKey(CLASSROOM_A, MEDIA_ID, renditionVariant('ffffffffffff'))).toBe(
+      `m/${CLASSROOM_A}/${MEDIA_ID}/web-ffffffffffff.mp4`
+    );
+    expect(mediaKey(CLASSROOM_A, MEDIA_ID, posterVariant('000000000000'))).toBe(
+      `m/${CLASSROOM_A}/${MEDIA_ID}/poster-000000000000.jpg`
+    );
+  });
+});
+
 describe('mediaKey', () => {
   it('is classroom-scoped, and spells the variant out', () => {
     expect(mediaKey(CLASSROOM_A, MEDIA_ID, 'orig.mov')).toBe(
       `m/${CLASSROOM_A}/${MEDIA_ID}/orig.mov`
     );
-    expect(mediaKey(CLASSROOM_A, MEDIA_ID, 'web.mp4')).toBe(`m/${CLASSROOM_A}/${MEDIA_ID}/web.mp4`);
-    expect(mediaKey(CLASSROOM_A, MEDIA_ID, 'poster.webp')).toBe(
-      `m/${CLASSROOM_A}/${MEDIA_ID}/poster.webp`
-    );
+    expect(mediaKey(CLASSROOM_A, MEDIA_ID, WEB)).toBe(`m/${CLASSROOM_A}/${MEDIA_ID}/${WEB}`);
+    expect(mediaKey(CLASSROOM_A, MEDIA_ID, POSTER)).toBe(`m/${CLASSROOM_A}/${MEDIA_ID}/${POSTER}`);
+  });
+
+  it('no longer accepts the fixed rendition names', () => {
+    // Content-derived only: a fixed name could be rewritten with new bytes
+    // under a URL browsers cache immutable.
+    expect(() => mediaKey(CLASSROOM_A, MEDIA_ID, 'web.mp4')).toThrow(TypeError);
+    expect(() => mediaKey(CLASSROOM_A, MEDIA_ID, 'poster.webp')).toThrow(TypeError);
   });
 
   it('refuses anything that is not a uuid or a known variant', () => {
@@ -96,7 +144,7 @@ describe('mediaKey', () => {
     expect(() => mediaKey('not-a-uuid', MEDIA_ID, 'orig.mov')).toThrow(TypeError);
     expect(() => mediaKey(CLASSROOM_A, MEDIA_ID.toUpperCase(), 'orig.mov')).toThrow(TypeError);
     expect(() => mediaKey(CLASSROOM_A, MEDIA_ID, '../../blobs/secret')).toThrow(TypeError);
-    expect(() => mediaKey(CLASSROOM_A, MEDIA_ID, 'orig.mov/../web.mp4')).toThrow(TypeError);
+    expect(() => mediaKey(CLASSROOM_A, MEDIA_ID, `orig.mov/../${WEB}`)).toThrow(TypeError);
     expect(() => mediaKey(CLASSROOM_A, MEDIA_ID, 'orig.')).toThrow(TypeError);
     expect(() => mediaKey(CLASSROOM_A, MEDIA_ID, 'orig.thisistoolong')).toThrow(TypeError);
   });
@@ -111,6 +159,9 @@ describe('contentTypeForMediaExt', () => {
     expect(contentTypeForMediaExt('zip')).toBe('application/zip');
     expect(contentTypeForMediaExt('key')).toBe('application/zip');
     expect(contentTypeForMediaExt('jpeg')).toBe('image/jpeg');
+    // The poster frame (`poster-{hex12}.jpg`) and the rendition (`web-{hex12}.mp4`).
+    expect(contentTypeForMediaExt('jpg')).toBe('image/jpeg');
+    expect(contentTypeForMediaExt('mp4')).toBe('video/mp4');
     expect(contentTypeForMediaExt('mkv')).toBe('video/x-matroska');
     expect(contentTypeForMediaExt('avi')).toBe('video/x-msvideo');
     expect(contentTypeForMediaExt('ogv')).toBe('video/ogg');
@@ -134,12 +185,12 @@ describe('canonical string', () => {
         host: HOST,
         classroomId: CLASSROOM_A,
         mediaId: MEDIA_ID,
-        variant: 'web.mp4',
+        variant: WEB,
         tier: 'month',
         keyVersion: 3,
         exp: 1767225600,
       })
-    ).toBe(`cm1|media|${HOST}|${CLASSROOM_A}|${MEDIA_ID}|web.mp4|month|3|1767225600`);
+    ).toBe(`cm1|media|${HOST}|${CLASSROOM_A}|${MEDIA_ID}|${WEB}|month|3|1767225600`);
   });
 
   it('appends a dl suffix, exactly as the blob shape does', () => {
@@ -198,7 +249,7 @@ describe('round trip', () => {
     expect([...url.searchParams.keys()]).toEqual(['p', 'v', 'exp', 'sig']);
   });
 
-  it.each(['orig.mp4', 'orig.mov', 'orig.pdf', 'orig.zip', 'web.mp4', 'poster.webp'])(
+  it.each(['orig.mp4', 'orig.mov', 'orig.pdf', 'orig.zip', WEB, POSTER])(
     'round trips the %s variant',
     async variant => {
       const result = await verifyMediaUrl(MASTER, await media('week', variant), NOW);
@@ -223,10 +274,10 @@ describe('round trip', () => {
   });
 
   it('parses structurally without any key material', async () => {
-    const parsed = parseContentUrl(await media('week', 'web.mp4'));
+    const parsed = parseContentUrl(await media('week', WEB));
     expect(parsed?.kind).toBe('media');
     expect(parsed && parsed.kind === 'media' && parsed.mediaId).toBe(MEDIA_ID);
-    expect(parsed && parsed.kind === 'media' && parsed.variant).toBe('web.mp4');
+    expect(parsed && parsed.kind === 'media' && parsed.variant).toBe(WEB);
   });
 });
 
@@ -251,6 +302,17 @@ describe('mint-side refusals', () => {
     'web.webm',
     'poster.png',
     'poster.webp/x',
+    'web.mp4',
+    'poster.webp',
+    'web-0123456789ab.webm',
+    'web-0123456789AB.mp4',
+    'web-0123456789a.mp4',
+    'web-0123456789abc.mp4',
+    'poster-0123456789ab.png',
+    'poster-0123456789ab.webp',
+    'poster-0123456789ab.jpeg',
+    'poster-0123456789ab.jpg/x',
+    `${WEB}/../orig.mov`,
     '../orig.mov',
     'orig.mov?x=1',
   ])('refuses the variant %s', async variant => {
@@ -319,8 +381,8 @@ describe('tampering', () => {
     // The whole point of signing the variant: a poster-frame URL must not be
     // editable into the 2 GB original, and an `orig` URL must not be editable
     // into a variant the app deliberately did not hand out.
-    const url = await media('month', 'poster.webp');
-    const swapped = url.replace('poster.webp', 'web.mp4');
+    const url = await media('month', POSTER);
+    const swapped = url.replace(POSTER, WEB);
     expect(await verifyMediaUrl(MASTER, swapped, NOW)).toEqual({
       ok: false,
       reason: 'bad-signature',

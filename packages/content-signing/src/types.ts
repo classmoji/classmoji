@@ -97,7 +97,7 @@ export type MediaVerification =
       kind: 'media';
       classroomId: string;
       mediaId: string;
-      /** `orig.{ext}`, `web.mp4` or `poster.webp` — which object of the three. */
+      /** `orig.{ext}`, `web-{hex12}.mp4` or `poster-{hex12}.jpg` — which object of the three. */
       variant: string;
       tier: Tier;
       keyVersion: number;

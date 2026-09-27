@@ -2342,11 +2342,12 @@ enum MediaProcessing {
 /// a signed `/blob/` URL — same key, same tiers, same proof that the row
 /// belongs to the classroom doing the signing.
 ///
-/// R2 keys are DERIVED, never stored: `m/{classroom_id}/{id}/{variant}` with
-/// the variant being `orig.{ext}`, `web.mp4` or `poster.webp`. A stored key
-/// would be a second place for the key shape to live, and the app and the
-/// Worker have to agree on it byte for byte — `mediaKey()` in
-/// @classmoji/content-signing is the one copy.
+/// R2 keys are DERIVED: `m/{classroom_id}/{id}/{variant}` with the variant
+/// being `orig.{ext}`, `web-{hex12}.mp4` or `poster-{hex12}.jpg` (the hex being
+/// content-derived). `rendition_key`/`poster_key` record the job's output, but
+/// readers take only the variant from them and rebuild the key with
+/// `mediaKey()` in @classmoji/content-signing — the one copy of a shape the app
+/// and the Worker have to agree on byte for byte.
 ///
 /// QUOTA is a SUM over these rows, deliberately without a counter column:
 /// `size_bytes` for READY rows whose original is still there, `rendition_bytes`
@@ -2387,8 +2388,8 @@ model MediaObject {
   allow_download      Boolean         @default(false)
   processing          MediaProcessing @default(NONE)
   processing_error    String?
-  /// Set by the phase-2 rendition job. Its presence is the serve switch: a row
-  /// with a rendition serves `web.mp4`, otherwise `orig.{ext}`.
+  /// Set by the video job (the full key of its `web-{hex12}.mp4`). Its presence
+  /// is the serve switch: a row with a rendition serves it, otherwise `orig.{ext}`.
   rendition_key       String?
   rendition_bytes     BigInt?
   poster_key          String?

@@ -147,7 +147,9 @@ export const mediaListTool: ToolDefinition<MediaListArgs> = {
     "Lists the class's finished media files (large files stored outside the course repo, " +
     'mostly Pro videos), newest first, up to 200. Each has a `ref` (media://…) to put in page ' +
     'or deck content, e.g. a video block. Optional kind filter. Uploads still in progress ' +
-    'are not listed.',
+    'are not listed. `processing` is read-only: NONE (not optimised), PENDING (a streaming ' +
+    'copy is being made), DONE (the streaming copy is served), FAILED (the original is ' +
+    'served; `processing_error` says why).',
   scope: 'read',
   roles: TEACHING_TEAM,
   inputSchema: {
@@ -170,6 +172,8 @@ export const mediaListTool: ToolDefinition<MediaListArgs> = {
         kind: item.kind,
         size_bytes: item.sizeBytes,
         created_at: item.createdAt,
+        processing: item.processing,
+        ...(item.processingError ? { processing_error: item.processingError } : {}),
       })),
     });
   },

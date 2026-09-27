@@ -42,7 +42,7 @@ export interface ThemeRef {
 export interface MediaRef {
   /** The `MediaObject` row's uuid. */
   mediaId: string;
-  /** `orig.{ext}`, `web.mp4` or `poster.webp`. The app picks it from the row. */
+  /** `orig.{ext}`, `web-{hex12}.mp4` or `poster-{hex12}.jpg`. The app picks it from the row. */
   variant: string;
   /** RAW display filename for a save-to-disk URL. See `BlobRef.dl`. */
   dl?: string;
