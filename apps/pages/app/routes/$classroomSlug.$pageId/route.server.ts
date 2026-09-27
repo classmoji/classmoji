@@ -888,6 +888,11 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
       });
       return Response.json({ success: true, url, displayUrl, sha });
     } catch (error: unknown) {
+      // A cover the storage router sends to media (over the repository's cap on
+      // a classroom with media): 409 `USE_MEDIA`. Checked before the 409 below,
+      // which means something else entirely.
+      const routed = ClassmojiService.media.mediaRoutingResponse(error);
+      if (routed) return routed;
       // Too large, a type this classroom does not take, a bad name: the
       // uploader's to fix, so a 4xx with the service's sentence (413/415/400).
       const refused = uploadRefusalStatus(error);

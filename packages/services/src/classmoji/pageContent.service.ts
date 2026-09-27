@@ -18,6 +18,7 @@ import {
   type ResolveContext,
   type WarmContext,
 } from './contentDelivery.service.ts';
+import { assertRepoTarget, type CapabilityClassroom } from '../media/uploadCapability.ts';
 import { indexOneFile } from './contentIndex.service.ts';
 import {
   dedupeMergedTreeIds,
@@ -687,6 +688,16 @@ export async function uploadPageAsset(
   buffer: Buffer,
   filename: string
 ): Promise<{ url: string; path: string; sha: string; displayUrl: string | null }> {
+  // The storage router first: a Pro video, or a file over the repository's cap
+  // on a classroom with media, belongs in media and is refused here with
+  // `MediaRoutingError('USE_MEDIA')` — before a GitHub round trip. Every
+  // caller of this function (the page editor, the page cover, MCP
+  // `page_asset_upload`) is covered by this one line.
+  await assertRepoTarget(page.classroom as unknown as CapabilityClassroom, {
+    name: filename,
+    size: buffer.length,
+  });
+
   const { gitOrganization, repo } = contentRepoFor(page);
 
   // Asked, not assumed — the same reason the asset sync asks. A content repo on

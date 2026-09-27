@@ -1044,11 +1044,22 @@ export const pageAssetUploadTool: ToolDefinition<PageAssetUploadArgs> = {
       throw new ToolError('invalid_params', (validation.error ?? 'Invalid file') + hint);
     }
 
-    const uploaded = await ClassmojiService.pageContent.uploadPageAsset(
-      page,
-      buffer,
-      args.filename
-    );
+    let uploaded: Awaited<ReturnType<typeof ClassmojiService.pageContent.uploadPageAsset>>;
+    try {
+      uploaded = await ClassmojiService.pageContent.uploadPageAsset(page, buffer, args.filename);
+    } catch (error) {
+      // The storage router sends this file to media (a Pro video, or a file
+      // over the repository's cap): not a commit this tool can make. Say which
+      // tool can, rather than a bare refusal the agent cannot act on.
+      if (ClassmojiService.media.isMediaRoutingError(error)) {
+        throw new ToolError(
+          'invalid_params',
+          `${error.message} Upload it with file_upload_start instead.`,
+          'USE_MEDIA'
+        );
+      }
+      throw error;
+    }
 
     await writeAudit(ctx, {
       resource_type: 'PAGES',

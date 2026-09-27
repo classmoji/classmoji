@@ -218,6 +218,9 @@ const CALLER_ERROR_CODES = new Map<string, ToolErrorKind>([
   // same refusals the HTTP routes answer 415/400/413.
   ['FILE_REFUSED', 'invalid_params'],
   ['REPO_FILE_TOO_LARGE', 'invalid_params'],
+  // A repository upload the storage router sends to media (a Pro video, or a
+  // file over the repository's cap on a classroom with media).
+  ['USE_MEDIA', 'invalid_params'],
 ]);
 
 /**
