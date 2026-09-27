@@ -195,8 +195,11 @@ test.describe('/api/media-download', () => {
     // mints the site's download links must not treat them as a member either.
     expect(loader).toMatch(/accessType: 'view',\s+acceptedOnly: true,/);
     const auth = source('../../app/utils/auth.server.ts');
-    expect(auth).toContain('...(acceptedOnly ? { has_accepted_invite: true } : {}),');
     expect(auth).toContain('acceptedOnly = false,');
+    // The filter itself lives in the one role lookup assertPageAccess uses.
+    expect(source('../../app/utils/classroomRole.server.ts')).toContain(
+      '...(acceptedOnly ? { has_accepted_invite: true } : {}),'
+    );
     // Without one, it is the same 404 as every other refusal.
     expect(loader).toContain('if (!access.membership) return notFound();');
   });

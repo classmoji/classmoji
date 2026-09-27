@@ -1,5 +1,6 @@
 import { assertClassroomMutationAllowed, type ClassroomStatusInput } from '@classmoji/auth/server';
-import { prisma, getAuthSession } from '~/utils/db.server.ts';
+import { getAuthSession } from '~/utils/db.server.ts';
+import { findClassroomRole } from '~/utils/classroomRole.server.ts';
 import type { PageForContent } from '~/types/pages.ts';
 
 /**
@@ -81,20 +82,16 @@ export async function assertPageAccess({
   if (authData) {
     result.userId = authData.userId;
 
-    // Get membership in this classroom
-    const membership = await prisma.classroomMembership.findFirst({
-      where: {
-        user_id: authData.userId,
-        classroom_id: page.classroom_id,
-        ...(acceptedOnly ? { has_accepted_invite: true } : {}),
-      },
-      include: { classroom: true },
+    // Their role in this classroom: the highest of the rows they hold there.
+    const role = await findClassroomRole({
+      userId: authData.userId,
+      classroomId: page.classroom_id,
+      acceptedOnly,
     });
 
-    result.membership = membership;
+    result.membership = role ? { role } : null;
 
-    if (membership) {
-      const role = membership.role;
+    if (role) {
       const isStaff = role === 'OWNER' || role === 'TEACHER';
       const isTeachingTeam = isStaff || role === 'ASSISTANT';
 
