@@ -17,6 +17,11 @@
  *
  * Preview branches (`preview/<content_path>`) are never read, written, or
  * cleaned: reads target MAIN only.
+ *
+ * Media objects (R2, not git) are the one thing a repo copy cannot carry: the
+ * references travel, the bytes do not. They are copied into the target's media
+ * before the files that name them are committed, and the references repointed
+ * — see `openImportMediaCopy` and `media/mediaImportCopy.ts`.
  */
 
 import getPrisma from '@classmoji/database';
@@ -182,6 +187,14 @@ export interface UrlRewriteContext {
    * course can carry hundreds, and one warning each would bury everything else.
    */
   onUncopiedRef?: (ref: string) => void;
+  /**
+   * The media half of the copy: turns `media://{id}` references and signed
+   * `/c/{source}/media/…` URLs whose objects were copied into references to
+   * the copies. Runs FIRST, before any repo-shape pass. Absent means media
+   * references are carried across verbatim — see `openImportMediaCopy`, whose
+   * `rewrite` is what callers pass here.
+   */
+  rewriteMedia?: (text: string) => string;
 }
 
 const RAW_HOST = 'https://raw.githubusercontent.com';
@@ -273,7 +286,11 @@ export function rewriteContentUrls(text: string, ctx: UrlRewriteContext): string
   const rawSourcePrefix = `${RAW_HOST}/${ctx.sourceLogin}/${ctx.sourceRepo}/`;
   const rawTargetPrefix = `${RAW_HOST}/${ctx.targetLogin}/${ctx.targetRepo}/`;
 
-  const withPaths = rewriteSignedUrls(text, ctx);
+  // Media first. Its references name rows, not repo paths, so no pass below
+  // would touch them — but a signed media URL is still the source classroom's
+  // until this turns it into a `media://` reference to the copy.
+  const withMedia = ctx.rewriteMedia ? ctx.rewriteMedia(text) : text;
+  const withPaths = rewriteSignedUrls(withMedia, ctx);
 
   // Branch-agnostic: the branch segment is consumed positionally and carried
   // across unchanged. Normalizing it would mean guessing the TARGET repo's
@@ -676,6 +693,109 @@ export function rewriteStagedFiles(files: BatchFile[], ctx: UrlRewriteContext): 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Media objects — the content that does not travel with the repo
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Could this text hold a media reference at all? A substring test, nothing
+ * more: `media://` or a `/media/` path segment. False means the media pass has
+ * nothing to do for it, and the whole pass is skipped — no module load, no SQL.
+ * True only means "look closer"; `mediaImportCopy.ts` does the real parse.
+ */
+export function mayReferenceMedia(text: string | null | undefined): boolean {
+  return typeof text === 'string' && (text.includes('media://') || text.includes('/media/'));
+}
+
+/**
+ * One import run's media copy — the old→new id map every pass of the run
+ * shares, so an object referenced from many files is copied once.
+ */
+export interface ImportMediaCopy {
+  /**
+   * Copy every media object these texts reference into the destination, before
+   * any of them is committed. Call it with every text a pass is about to
+   * rewrite; ids an earlier call already dealt with are not revisited. Never
+   * throws: whatever could not be copied is warned about and left as it was.
+   */
+  prepare(texts: readonly (string | null | undefined)[]): Promise<void>;
+  /**
+   * The references whose objects were copied, repointed at the copies;
+   * everything else byte-for-byte. Synchronous, so it can sit inside
+   * `rewriteContentUrls` as `rewriteMedia`. Identity until `prepare` has
+   * copied something.
+   */
+  rewrite(text: string): string;
+  /**
+   * Copy ONE object by id (a FILE slide's `media_id`) and answer where it
+   * went, or null when it could not be copied (already warned).
+   */
+  copyObject(sourceMediaId: string): Promise<string | null>;
+}
+
+type MediaCopyModule = typeof import('../media/mediaImportCopy.ts');
+
+/**
+ * Open the media copy for one import run.
+ *
+ * Cheap to open and free to never use. The copier itself lives in
+ * `media/mediaImportCopy.ts`, which needs the AWS SDK, and this module is in
+ * the services barrel every app imports — so it is reached through a dynamic
+ * `import()`, and only once a text passed to `prepare` actually contains
+ * something that looks like a media reference. An import of a course with no
+ * media never loads it, never asks R2 anything, and runs no media SQL.
+ *
+ * Failure policy is this file's usual one — an import must not fail over a
+ * reference it could not tidy up. An unexpected error in the copier (the
+ * module would not load, the database blinked) is one warning, and every
+ * reference not yet copied stays exactly as it was. Copies that had already
+ * landed stay mapped, so `rewrite` is still never half-right: whatever it
+ * repoints, it repoints at an object that is READY in the destination.
+ */
+export function openImportMediaCopy({
+  sourceClassroomId,
+  targetClassroomId,
+  importedBy,
+  warn,
+}: {
+  sourceClassroomId: string;
+  targetClassroomId: string;
+  /** The user running the import; the copies are recorded as theirs. */
+  importedBy?: string | null;
+  /** Unscoped detail — the caller adds the `media:` scope and the cap. */
+  warn: (detail: string) => void;
+}): ImportMediaCopy {
+  let copier: ReturnType<MediaCopyModule['createMediaImportCopier']> | null = null;
+
+  const prepare = async (texts: readonly (string | null | undefined)[]): Promise<void> => {
+    const candidates = texts.filter((text): text is string => mayReferenceMedia(text));
+    if (candidates.length === 0) return;
+    try {
+      if (!copier) {
+        const { createMediaImportCopier } = await import('../media/mediaImportCopy.ts');
+        copier = createMediaImportCopier({
+          sourceClassroomId,
+          targetClassroomId,
+          importedBy,
+          warn,
+        });
+      }
+      await copier.prepare(candidates);
+    } catch (error: unknown) {
+      warn(`could not copy media into this class: ${errText(error)}`);
+    }
+  };
+
+  return {
+    prepare,
+    rewrite: text => (copier ? copier.rewrite(text) : text),
+    copyObject: async sourceMediaId => {
+      await prepare([`media://${sourceMediaId}`]);
+      return copier ? copier.copiedIdFor(sourceMediaId) : null;
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Impl helpers (touch DB/GitHub — not unit-tested)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1051,6 +1171,16 @@ export const importClassroomContent = async (
     uncopiedRefs++;
   };
 
+  // ONE media copy for the whole run, shared by both passes: a video embedded
+  // in a page and in a deck is copied once, and the slides pass finds the
+  // pages pass's copies already made.
+  const media = openImportMediaCopy({
+    sourceClassroomId,
+    targetClassroomId,
+    importedBy: createdByUserId,
+    warn: detail => warn('media', detail),
+  });
+
   // ── Pages ──
   if (wantPages) {
     try {
@@ -1063,6 +1193,7 @@ export const importClassroomContent = async (
         idMap: summary.page_id_map,
         onProgress: opts.onProgress,
         onUncopiedRef,
+        media,
       });
       summary.pages = created;
       if (created > 0) createdAny = true;
@@ -1089,6 +1220,7 @@ export const importClassroomContent = async (
         idMap: summary.slide_id_map,
         onProgress: opts.onProgress,
         onUncopiedRef,
+        media,
       });
       summary.slides = created;
       if (created > 0) createdAny = true;
@@ -1135,6 +1267,7 @@ async function importPages({
   idMap,
   onProgress,
   onUncopiedRef,
+  media,
 }: {
   source: RepoContext;
   target: RepoContext;
@@ -1144,6 +1277,8 @@ async function importPages({
   idMap: Record<string, string>;
   onProgress?: ContentProgressFn;
   onUncopiedRef?: (ref: string) => void;
+  /** The run's media copy — see `openImportMediaCopy`. Absent: refs verbatim. */
+  media?: ImportMediaCopy;
 }): Promise<number> {
   const sourcePages = await getPrisma().page.findMany({
     where: { classroom_id: source.classroomId },
@@ -1228,6 +1363,15 @@ async function importPages({
   // source org is repointed only if that file is actually here.
   const targetHasPath = await buildTargetPathIndex(target.classroomId, staged);
 
+  // The media objects these pages reference are copied into the target NOW,
+  // before the commit below: a committed file must never name a copy that does
+  // not exist yet. The covers go into the same sweep for the same reason the
+  // sha resolve above takes them.
+  await media?.prepare([
+    ...stagedTexts(staged),
+    ...staged.map(item => item.source.header_image_url),
+  ]);
+
   const written = staged.map(item => ({
     item,
     files: rewriteDecodedFiles(item.files, {
@@ -1240,6 +1384,7 @@ async function importPages({
       shaPaths,
       targetHasPath,
       onUncopiedRef,
+      rewriteMedia: media?.rewrite,
     }),
   }));
 
@@ -1316,6 +1461,7 @@ async function importPages({
                   shaPaths,
                   targetHasPath,
                   onUncopiedRef,
+                  rewriteMedia: media?.rewrite,
                 })
               : item.source.header_image_url,
             header_image_position: item.source.header_image_position,
@@ -1390,6 +1536,16 @@ type SourceSlide = Prisma.SlideGetPayload<Record<string, never>>;
  * come across is warned about and its slide is skipped, and the decks are
  * already committed and safe by the time this runs.
  *
+ * ## A document in media is copied, not committed
+ *
+ * A FILE slide whose document was too large for the repository names a media
+ * object (`media_id`) instead of a repo path. Its document is COPIED into the
+ * target's media through the run's media copy, and the new row names the copy
+ * (`copiedMediaIds`). A document that cannot be copied — a Free target, no
+ * room, a failed copy — abandons the slide, on the same rule as a repo
+ * document that cannot be read: a FILE row whose download names another
+ * classroom's object is a slide that downloads nothing.
+ *
  * @returns the SOURCE ids whose row must not be created.
  */
 async function commitSlideDocuments({
@@ -1398,17 +1554,38 @@ async function commitSlideDocuments({
   staged,
   commitMessage,
   warn,
+  media,
+  copiedMediaIds,
 }: {
   source: RepoContext;
   target: RepoContext;
   staged: StagedItem<SourceSlide>[];
   commitMessage: string;
   warn: WarnFn;
+  media?: ImportMediaCopy;
+  /** Filled here: source slide id → the copied document's media id. */
+  copiedMediaIds: Map<string, string>;
 }): Promise<Set<string>> {
   const abandoned = new Set<string>();
 
   for (const item of staged) {
     if (item.source.kind !== 'FILE') continue;
+
+    if (item.source.media_id) {
+      const copiedId = media ? await media.copyObject(item.source.media_id) : null;
+      if (copiedId) {
+        copiedMediaIds.set(item.source.id, copiedId);
+      } else {
+        // The copy has already said which file and why (Free, quota, failure);
+        // this line says which SLIDE that cost.
+        warn(
+          'slides',
+          `skipped "${item.targetTitle}" — its file is in media storage and could not be copied`
+        );
+        abandoned.add(item.source.id);
+      }
+      continue;
+    }
 
     let files: BatchFile[];
     try {
@@ -1470,6 +1647,7 @@ async function importSlides({
   idMap,
   onProgress,
   onUncopiedRef,
+  media,
 }: {
   source: RepoContext;
   target: RepoContext;
@@ -1479,6 +1657,8 @@ async function importSlides({
   idMap: Record<string, string>;
   onProgress?: ContentProgressFn;
   onUncopiedRef?: (ref: string) => void;
+  /** The run's media copy — shared with the pages pass. Absent: refs verbatim. */
+  media?: ImportMediaCopy;
 }): Promise<number> {
   const sourceSlides = await getPrisma().slide.findMany({
     where: { classroom_id: source.classroomId },
@@ -1541,7 +1721,9 @@ async function importSlides({
         files = [];
       } else if (slide.kind === 'FILE') {
         files = [];
-        if (slide.source_path) {
+        // A document in MEDIA is not in the repo at all, so it has no target
+        // path to announce; `commitSlideDocuments` copies the object instead.
+        if (slide.source_path && !slide.media_id) {
           fileSlidePaths.push(
             remapFilePath(slide.source_path, slide.content_path, targetContentPath)
           );
@@ -1587,6 +1769,20 @@ async function importSlides({
   // Same gate as the page pass — see buildTargetPathIndex.
   const targetHasPath = await buildTargetPathIndex(target.classroomId, staged, fileSlidePaths);
 
+  // Media before the commit, exactly as in the page pass. deck.json and
+  // index.html go through the same map, so the pair stays consistent: a video
+  // either moved in both or in neither.
+  //
+  // The FILE slides whose document is in media go into the same call, so the
+  // whole pass is proven in one query and `commitSlideDocuments` only looks
+  // the copies up.
+  await media?.prepare([
+    ...stagedTexts(staged),
+    ...staged
+      .filter(item => item.source.kind === 'FILE' && item.source.media_id)
+      .map(item => `media://${item.source.media_id}`),
+  ]);
+
   const files = staged.flatMap(item =>
     rewriteDecodedFiles(item.files, {
       sourceLogin: source.login,
@@ -1598,6 +1794,7 @@ async function importSlides({
       shaPaths,
       targetHasPath,
       onUncopiedRef,
+      rewriteMedia: media?.rewrite,
     })
   );
 
@@ -1630,12 +1827,16 @@ async function importSlides({
     }
   }
 
+  /** Source FILE slide id → the media object its document was copied to. */
+  const copiedMediaIds = new Map<string, string>();
   const abandoned = await commitSlideDocuments({
     source,
     target,
     staged,
     commitMessage,
     warn,
+    media,
+    copiedMediaIds,
   });
 
   /** The artifacts this import committed, by path — see the page pass. */
@@ -1684,6 +1885,11 @@ async function importSlides({
                 source_filename: item.source.source_filename,
                 source_mime: item.source.source_mime,
                 source_size: item.source.source_size,
+                // The COPY in this classroom's media, never the source's id: a
+                // slide naming another classroom's object downloads nothing.
+                ...(copiedMediaIds.has(item.source.id)
+                  ? { media_id: copiedMediaIds.get(item.source.id) }
+                  : {}),
               }
             : {}),
           ...(item.source.kind === 'LINK' ? { source_url: item.source.source_url } : {}),

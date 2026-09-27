@@ -52,7 +52,11 @@ import {
   type ImportProgress,
   type ImportSummaryCounts,
 } from '@classmoji/services/import-progress'; // eslint-disable-line import/no-unresolved
-import { cloneContentRepo, type CloneSkipReason } from '../helpers/cloneContentRepo.ts';
+import {
+  cloneContentRepo,
+  type CloneSkipReason,
+  type RolloverMediaCopy,
+} from '../helpers/cloneContentRepo.ts';
 
 /**
  * Minimum spacing between `progress` writes.
@@ -444,6 +448,18 @@ export const importContentTask = task({
     );
     await writer.flush();
 
+    // ONE media copy for the whole content phase. The clone copies what the
+    // tree references before it pushes; the page covers and the FILE slides'
+    // media documents below go through the same session, so an object named
+    // in both places is copied once. Nothing loads and nothing is queried
+    // unless some text actually holds a media reference.
+    const media = ClassmojiService.contentImport.openImportMediaCopy({
+      sourceClassroomId: job.source_classroom_id,
+      targetClassroomId: job.classroom_id,
+      importedBy: job.requested_by,
+      warn: detail => writer.addWarnings([`media: ${detail}`]),
+    });
+
     const clone = await cloneContentRepo({
       source,
       target,
@@ -451,6 +467,7 @@ export const importContentTask = task({
       keepSlides: wantSlides,
       commitMessage: `Import content from ${source.repo}`,
       onStep: note => writer.patch(...activePhases.map(phase => ({ phase, note }))),
+      media,
     });
     writer.patch(...activePhases.map(phase => ({ phase, note: null })));
     await writer.flush();
@@ -503,10 +520,17 @@ export const importContentTask = task({
         source,
         target,
         copied: clone.copied,
+        media,
       });
     }
     if (wantSlides) {
-      counts.slides = await importSlideRows({ prisma, job, writer, copied: clone.copied });
+      counts.slides = await importSlideRows({
+        prisma,
+        job,
+        writer,
+        copied: clone.copied,
+        media,
+      });
     }
 
     // Rebuilt wholesale from the TARGET's rows — the source's manifest was
@@ -573,12 +597,20 @@ export async function importPageRows({
   source,
   target,
   copied,
+  media,
 }: {
   prisma: PrismaClient;
   job: LoadedImportJob;
   writer: ProgressWriter;
   source: { orgLogin: string; repo: string };
   target: { orgLogin: string; repo: string };
+  /**
+   * The content phase's media copy, shared with the clone. A cover that is a
+   * `media://` reference (or a signed media URL) is copied into the target's
+   * media before its row is written, and repointed at the copy — or left as it
+   * was, with a named warning, when it cannot be. Absent: covers verbatim.
+   */
+  media?: RolloverMediaCopy;
   /**
    * Every repo path the clone pushed — what `header_image_url` is checked
    * against for the chained-import rewrite. The tree and the rows have to
@@ -607,6 +639,13 @@ export async function importPageRows({
   const onUncopiedRef = (): void => {
     uncopiedRefs++;
   };
+  // Every cover this attempt is about to write, copied first — in one call, so
+  // the source rows are proven in one query. Pages an earlier attempt already
+  // imported are left out: their rows exist, and copying their covers again
+  // would only make copies nothing names.
+  await media?.prepare(
+    sourcePages.filter(page => !already.has(page.id)).map(page => page.header_image_url)
+  );
   for (const page of sourcePages) {
     // Resume: this page's row already exists from an earlier attempt. It still
     // counts as done — it IS imported — and it is not warned about.
@@ -645,6 +684,7 @@ export async function importPageRows({
                   // did not.
                   ...(copied ? { targetHasPath: (p: string) => copied.has(p) } : {}),
                   onUncopiedRef,
+                  ...(media ? { rewriteMedia: (text: string) => media.rewrite(text) } : {}),
                 })
               : page.header_image_url,
             header_image_position: page.header_image_position,
@@ -718,6 +758,7 @@ export async function importSlideRows({
   job,
   writer,
   copied,
+  media,
 }: {
   prisma: PrismaClient;
   job: LoadedImportJob;
@@ -728,6 +769,14 @@ export async function importSlideRows({
    * the push either carried the whole tree or the caller returned before here.
    */
   copied?: ReadonlySet<string>;
+  /**
+   * The content phase's media copy. A FILE slide whose document is in MEDIA
+   * (`media_id`) has nothing in the tree; its object is copied into the
+   * target's media and the new row names the copy — or the slide is skipped,
+   * warned, when it cannot be (a row naming the source's object downloads
+   * nothing here). Absent: such a slide is skipped.
+   */
+  media?: RolloverMediaCopy & { copyObject(sourceMediaId: string): Promise<string | null> };
 }): Promise<number> {
   const sourceSlides = await prisma.slide.findMany({
     where: { classroom_id: job.source_classroom_id },
@@ -740,13 +789,31 @@ export async function importSlideRows({
   let done = already.size;
   let created = 0;
   const warnings: string[] = [];
+  // Every media document this attempt will need, copied in one pass (one
+  // query) — the per-slide `copyObject` below then only looks the copy up.
+  await media?.prepare(
+    sourceSlides
+      .filter(slide => !already.has(slide.id) && slide.kind === 'FILE' && slide.media_id)
+      .map(slide => `media://${slide.media_id}`)
+  );
   for (const slide of sourceSlides) {
     if (already.has(slide.id)) continue;
     try {
       // A FILE row is only worth creating if its document came across. The
       // path is not remapped on this route — the tree was pushed as it stood —
       // so the row's own `source_path` is what the target holds it under.
-      if (slide.kind === 'FILE') {
+      // A document in media: copy the object, and the row names the copy.
+      let mediaId: string | null = null;
+      if (slide.kind === 'FILE' && slide.media_id) {
+        mediaId = media ? await media.copyObject(slide.media_id) : null;
+        if (!mediaId) {
+          warnings.push(
+            `slides: skipped "${slide.title}" — its file is in media storage and could not be ` +
+              'copied into this class'
+          );
+          continue;
+        }
+      } else if (slide.kind === 'FILE') {
         const missing = !slide.source_path || (copied ? !copied.has(slide.source_path) : false);
         if (missing) {
           warnings.push(
@@ -777,6 +844,7 @@ export async function importSlideRows({
           source_mime: slide.source_mime,
           source_size: slide.source_size,
           source_url: slide.source_url,
+          ...(mediaId ? { media_id: mediaId } : {}),
         },
       });
       writer.mergeIdMaps({ slides: { [slide.id]: row.id } });
