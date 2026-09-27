@@ -90,6 +90,20 @@ describe('uploadCapabilityFor', () => {
     });
   });
 
+  it('gives no media where the deployment has a bucket but cannot sign delivery URLs', async () => {
+    // Media is only ever served signed. R2 credentials without the signing
+    // secret (or the delivery origin) would take uploads nothing can show.
+    delete process.env.CONTENT_SIGNING_SECRET;
+    await expect(uploadCapabilityFor(deliverable)).resolves.toMatchObject({
+      isPro: true,
+      repoFileTypes: 'allowlist',
+      media: null,
+    });
+    process.env.CONTENT_SIGNING_SECRET = 'secret';
+    delete process.env.CONTENT_DELIVERY_ORIGIN;
+    await expect(uploadCapabilityFor(deliverable)).resolves.toMatchObject({ media: null });
+  });
+
   it('gives no media to a classroom that cannot deliver, and keeps its allowlist', async () => {
     await expect(
       uploadCapabilityFor({ ...deliverable, content_delivery_enabled: false })

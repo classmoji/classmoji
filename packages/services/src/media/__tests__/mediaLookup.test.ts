@@ -89,6 +89,9 @@ describe('listReadyMedia', () => {
     const query = findMany.mock.calls[0][0];
     expect(query.where).toEqual({ classroom_id: 'class-1', status: 'READY', kind: 'VIDEO' });
     expect(query.orderBy).toEqual({ created_at: 'desc' });
+    // Bounded: the newest 200, never every row a classroom ever kept. READY
+    // only, so a STAGING agent upload never appears in a picker.
+    expect(query.take).toBe(200);
   });
 
   it('does not narrow by kind unless asked', async () => {

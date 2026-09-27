@@ -114,11 +114,21 @@ describe('storageTargetFor — without media', () => {
     });
   });
 
-  it('does not sell Pro to a class that already has it', () => {
+  it('does not sell Pro to a class that already has it — media is what is unavailable', () => {
     expect(storageTargetFor(proNoMedia, { name: 'lecture.mp4', size: 120 * MB })).toEqual({
       kind: 'refused',
-      code: 'TOO_LARGE_FOR_REPO',
-      message: 'This file is larger than the 35 MB your course repository accepts.',
+      code: 'MEDIA_UNAVAILABLE',
+      message:
+        "Media storage isn't available for this class right now, and this file is larger " +
+        'than the 35 MB your course repository accepts.',
+    });
+  });
+
+  it('names the per-file ceiling for a Pro class without media when the file is past it', () => {
+    expect(storageTargetFor(proNoMedia, { name: 'raw.mov', size: 2 * GB + 1 })).toEqual({
+      kind: 'refused',
+      code: 'MEDIA_UNAVAILABLE',
+      message: 'This file is larger than the 2 GB limit for one file.',
     });
   });
 

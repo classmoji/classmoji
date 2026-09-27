@@ -132,11 +132,27 @@ export function storageTargetFor(
     return { kind: 'repo' };
   }
 
-  const tooLarge = `This file is larger than the ${formatMegabytes(cap.repoMaxBytes)} your course repository accepts.`;
+  // Over the repository's cap, and media cannot take it here.
+  if (cap.isPro) {
+    // A Pro classroom already has media — it is the deployment or the class's
+    // delivery setup that is not ready, so selling Pro would be wrong, and the
+    // repository's size is not the thing to fix. A file over media's own
+    // per-file ceiling would be refused even when media is up, so it says so.
+    if (file.size > PER_FILE_MAX_BYTES) {
+      return refused(
+        'MEDIA_UNAVAILABLE',
+        `This file is larger than the ${formatGigabytes(PER_FILE_MAX_BYTES)} limit for one file.`
+      );
+    }
+    return refused(
+      'MEDIA_UNAVAILABLE',
+      "Media storage isn't available for this class right now, and this file is larger than " +
+        `the ${formatMegabytes(cap.repoMaxBytes)} your course repository accepts.`
+    );
+  }
   return refused(
     'TOO_LARGE_FOR_REPO',
-    cap.isPro
-      ? tooLarge
-      : `${tooLarge} Pro stores files up to ${formatGigabytes(PER_FILE_MAX_BYTES)}.`
+    `This file is larger than the ${formatMegabytes(cap.repoMaxBytes)} your course repository ` +
+      `accepts. Pro stores files up to ${formatGigabytes(PER_FILE_MAX_BYTES)}.`
   );
 }
