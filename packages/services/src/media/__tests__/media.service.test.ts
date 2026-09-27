@@ -48,6 +48,9 @@ vi.mock('@aws-sdk/client-s3', () => ({
   UploadPartCommand: command('UploadPart'),
 }));
 
+const trigger = vi.fn();
+vi.mock('@trigger.dev/sdk', () => ({ tasks: { trigger: (...a: unknown[]) => trigger(...a) } }));
+
 vi.mock('@aws-sdk/s3-request-presigner', () => ({
   getSignedUrl: (...args: unknown[]) => getSignedUrl(...args),
 }));
@@ -90,12 +93,15 @@ const {
   createUpload,
   deleteMedia,
   listMedia,
+  onMediaReady,
   purgeClassroomMedia,
   putMediaObject,
   signParts,
   SINGLE_PUT_MAX_BYTES,
   usage,
+  VIDEO_ENQUEUE_FAILED_REASON,
 } = await import('../media.service.ts');
+const { toMediaRecord } = await import('../mediaLookup.ts');
 const { PART_SIZE_BYTES, PER_FILE_MAX_BYTES, PRO_QUOTA_BYTES, RESERVATION_WINDOW_MS } =
   await import('../mediaQuota.ts');
 const { resetR2Client } = await import('../r2Client.ts');
@@ -167,12 +173,20 @@ function unconfigure(): void {
   resetR2Client();
 }
 
+/** The conditional write that flipped a row READY. */
+const readyFlip = () =>
+  prisma.mediaObject.updateMany.mock.calls
+    .map(call => call[0])
+    .find(arg => (arg as { data?: { status?: string } }).data?.status === 'READY');
+
 /** The one key every variant of the fixture row lives under. */
 const ORIG_KEY = `m/${CLASSROOM_ID}/${MEDIA_ID}/orig.mp4`;
 
 beforeEach(() => {
   sent.length = 0;
   sendImpl.mockReset();
+  trigger.mockReset();
+  trigger.mockResolvedValue({ id: 'run_1' });
   getSignedUrl.mockReset();
   getSignedUrl.mockResolvedValue('https://r2.example/signed');
   for (const fn of Object.values(prisma.mediaObject)) fn.mockReset();
@@ -872,13 +886,13 @@ describe('completeUpload', () => {
     expect(result).toEqual({ mediaId: MEDIA_ID, ref: `media://${MEDIA_ID}`, sizeBytes: 4096 });
     // READY only FROM UPLOADING: a conditional write, never an unconditional one.
     expect(prisma.mediaObject.update).not.toHaveBeenCalled();
-    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
+    expect(readyFlip()).toMatchObject({
       where: { id: MEDIA_ID, status: 'UPLOADING' },
       data: {
         status: 'READY',
         upload_id: null,
-        // NONE even though the row asked to be optimised: P1 queues nothing, and
-        // PENDING with no job behind it is a row that processes forever.
+        // NONE even for a row that asked to be optimised: PENDING is written by
+        // `onMediaReady`, in the step that queues the job, and nowhere else.
         processing: 'NONE',
       },
     });
@@ -949,7 +963,7 @@ describe('completeUpload', () => {
     // overloaded node the same question.
     expect(at[1] - at[0]).toBeGreaterThanOrEqual(250);
     expect(result).toMatchObject({ mediaId: MEDIA_ID });
-    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0].data).toMatchObject({
+    expect(readyFlip()?.data).toMatchObject({
       status: 'READY',
     });
   });
@@ -1181,6 +1195,8 @@ describe('completeUpload', () => {
     );
     prisma.mediaObject.updateMany.mockImplementation(
       async ({ where, data }: { where: { status: string }; data: { status: string } }) => {
+        // `onMediaReady`'s processing claim writes no status; not this race.
+        if (data.status === undefined) return { count: 0 };
         if (where.status !== state.status) return { count: 0 };
         state.status = data.status;
         return { count: 1 };
@@ -1244,6 +1260,8 @@ describe('completeUpload', () => {
     });
     prisma.mediaObject.updateMany.mockImplementation(
       async ({ where, data }: { where: { status: string }; data: { status: string } }) => {
+        // `onMediaReady`'s processing claim writes no status; not this race.
+        if (data.status === undefined) return { count: 0 };
         if (where.status !== state.status) return { count: 0 };
         state.status = data.status;
         return { count: 1 };
@@ -1313,6 +1331,7 @@ describe('completeUpload', () => {
     );
     prisma.mediaObject.updateMany.mockImplementation(
       async ({ data }: { data: { status: string } }) => {
+        if (data.status === undefined) return { count: 0 };
         state.status = data.status;
         return { count: 1 };
       }
@@ -1924,7 +1943,7 @@ describe('putMediaObject', () => {
       ContentType: 'video/mp4',
       ContentLength: 4096,
     });
-    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
+    expect(readyFlip()).toMatchObject({
       where: { id: reservedId(), status: 'UPLOADING' },
       data: expect.objectContaining({ status: 'READY' }),
     });
@@ -2051,5 +2070,165 @@ describe('putMediaObject', () => {
     );
     expect(sent.some(call => call.name === 'PutObject')).toBe(false);
     expect(sent.some(call => call.name === 'CompleteMultipartUpload')).toBe(true);
+  });
+});
+
+describe('onMediaReady', () => {
+  /** The claim: NONE → PENDING, only while the row is READY. */
+  const claim = () =>
+    prisma.mediaObject.updateMany.mock.calls
+      .map(call => call[0])
+      .find(arg => (arg as { data?: { processing?: string } }).data?.processing === 'PENDING');
+  const failure = () =>
+    prisma.mediaObject.updateMany.mock.calls
+      .map(call => call[0])
+      .find(arg => (arg as { data?: { processing?: string } }).data?.processing === 'FAILED');
+
+  const expectEnqueued = (mediaId: string) => {
+    expect(trigger).toHaveBeenCalledTimes(1);
+    expect(trigger).toHaveBeenCalledWith(
+      'media-video-process',
+      { classroomId: CLASSROOM_ID, mediaId },
+      { idempotencyKey: `media-video-process:${mediaId}` }
+    );
+  };
+
+  it('claims an optimisable video and queues its job in the same step', async () => {
+    const order: string[] = [];
+    prisma.mediaObject.updateMany.mockImplementation(async () => {
+      order.push('claim');
+      return { count: 1 };
+    });
+    trigger.mockImplementation(async () => {
+      order.push('trigger');
+      return { id: 'run_1' };
+    });
+
+    await onMediaReady(toMediaRecord(row() as never));
+
+    expect(claim()).toEqual({
+      where: { id: MEDIA_ID, status: 'READY', processing: 'NONE' },
+      data: { processing: 'PENDING', processing_error: null },
+    });
+    expect(order).toEqual(['claim', 'trigger']);
+    expectEnqueued(MEDIA_ID);
+  });
+
+  it.each([
+    ['a non-video', { kind: 'DOCUMENT', optimise: false }],
+    ['a video not marked optimise', { optimise: false }],
+    ['a row that is not READY', { status: 'UPLOADING' }],
+  ])('does nothing for %s', async (_label, overrides) => {
+    await onMediaReady(toMediaRecord(row(overrides) as never));
+    expect(prisma.mediaObject.updateMany).not.toHaveBeenCalled();
+    expect(trigger).not.toHaveBeenCalled();
+  });
+
+  it('queues nothing when the claim matches no row (already PENDING, DONE or FAILED)', async () => {
+    prisma.mediaObject.updateMany.mockResolvedValue({ count: 0 });
+    await onMediaReady(toMediaRecord(row() as never));
+    expect(trigger).not.toHaveBeenCalled();
+  });
+
+  it('marks the row FAILED with a short reason when the job cannot be queued — and does not throw', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    trigger.mockRejectedValue(new Error('trigger is down'));
+
+    await expect(onMediaReady(toMediaRecord(row() as never))).resolves.toBeUndefined();
+
+    expect(failure()).toEqual({
+      where: { id: MEDIA_ID, processing: 'PENDING' },
+      data: { processing: 'FAILED', processing_error: VIDEO_ENQUEUE_FAILED_REASON },
+    });
+    expect(VIDEO_ENQUEUE_FAILED_REASON.length).toBeLessThan(120);
+  });
+
+  it('never throws, even when the database write fails', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    prisma.mediaObject.updateMany.mockRejectedValue(new Error('db down'));
+    await expect(onMediaReady(toMediaRecord(row() as never))).resolves.toBeUndefined();
+    expect(trigger).not.toHaveBeenCalled();
+
+    prisma.mediaObject.updateMany
+      .mockReset()
+      .mockResolvedValueOnce({ count: 1 })
+      .mockRejectedValueOnce(new Error('db down'));
+    trigger.mockRejectedValue(new Error('trigger is down'));
+    await expect(onMediaReady(toMediaRecord(row() as never))).resolves.toBeUndefined();
+  });
+
+  describe('every READY path calls it', () => {
+    it('completeUpload', async () => {
+      prisma.mediaObject.findFirst.mockResolvedValue(
+        row({ status: 'UPLOADING', upload_id: 'up-1', size_bytes: BigInt(4096) })
+      );
+      sendImpl.mockImplementation(async (name: string) =>
+        name === 'HeadObject' ? { ContentLength: 4096 } : {}
+      );
+      await completeUpload({
+        classroom,
+        mediaId: MEDIA_ID,
+        parts: [{ partNumber: 1, etag: '"a"' }],
+      });
+      expect(claim()).toMatchObject({ where: { id: MEDIA_ID, status: 'READY' } });
+      expectEnqueued(MEDIA_ID);
+    });
+
+    it('completeUpload, with a failed enqueue: the upload still succeeds, the row is FAILED', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      trigger.mockRejectedValue(new Error('trigger is down'));
+      prisma.mediaObject.findFirst.mockResolvedValue(
+        row({ status: 'UPLOADING', upload_id: 'up-1', size_bytes: BigInt(4096) })
+      );
+      sendImpl.mockImplementation(async (name: string) =>
+        name === 'HeadObject' ? { ContentLength: 4096 } : {}
+      );
+      await expect(
+        completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
+      ).resolves.toMatchObject({ mediaId: MEDIA_ID });
+      expect(failure()).toMatchObject({ data: { processing: 'FAILED' } });
+    });
+
+    it('completeUpload of a non-video queues nothing', async () => {
+      prisma.mediaObject.findFirst.mockResolvedValue(
+        row({
+          status: 'UPLOADING',
+          upload_id: 'up-1',
+          size_bytes: BigInt(4096),
+          kind: 'DOCUMENT',
+          optimise: false,
+        })
+      );
+      sendImpl.mockImplementation(async (name: string) =>
+        name === 'HeadObject' ? { ContentLength: 4096 } : {}
+      );
+      await completeUpload({
+        classroom,
+        mediaId: MEDIA_ID,
+        parts: [{ partNumber: 1, etag: '"a"' }],
+      });
+      expect(trigger).not.toHaveBeenCalled();
+    });
+
+    it('putMediaObject (the slides.com import)', async () => {
+      let createdId = '';
+      prisma.mediaObject.create.mockImplementation(async ({ data }: { data: { id: string } }) => {
+        createdId = data.id;
+        return row({ status: 'UPLOADING', ...data });
+      });
+      prisma.mediaObject.findFirst.mockImplementation(async () => row({ id: createdId }));
+      sendImpl.mockImplementation(async (name: string) =>
+        name === 'HeadObject' ? { ContentLength: 4096 } : {}
+      );
+
+      await putMediaObject({
+        classroom,
+        userId: 'user-1',
+        filename: 'intro.mp4',
+        bytes: Buffer.alloc(4096, 1),
+      });
+      expect(claim()).toMatchObject({ where: { id: createdId, status: 'READY' } });
+      expectEnqueued(createdId);
+    });
   });
 });

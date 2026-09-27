@@ -10,6 +10,7 @@ import {
   UploadPartCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { tasks } from '@trigger.dev/sdk';
 import { randomUUID } from 'node:crypto';
 import getPrisma from '@classmoji/database';
 import { REPO_REST_MAX_BYTES } from '@classmoji/utils';
@@ -139,21 +140,79 @@ export interface MediaUsage {
 /** How long a presigned part URL lives. */
 const PART_URL_TTL_SECONDS = 15 * 60;
 
+/** The Trigger task that turns an optimisable video into a streaming rendition. */
+export const VIDEO_PROCESS_TASK_ID = 'media-video-process';
+
 /**
- * Called once an upload is complete and verified.
- *
- * A no-op in phase 1. Phase 2 enqueues the `media-video-process` task here for
- * rows with `optimise` set, which is why the seam exists now: `completeUpload`
- * is the only moment that knows an object has just become real, and adding the
- * call later would mean editing the function rather than filling this in.
- *
- * Setting `processing` to PENDING belongs HERE, in the same step that enqueues
- * the job — not in `completeUpload`. PENDING is a claim that something is
- * queued, and a row that carries it with no job behind it shows as forever
- * processing on the admin page.
+ * What `processing_error` says when the job could not even be queued. Shown as
+ * the detail under "Couldn't optimise — the original is shown", so it is about
+ * the outcome, not the machinery.
  */
-export async function onMediaReady(_row: MediaRecord): Promise<void> {
-  // Phase 2: enqueue media-video-process for VIDEO rows with `optimise`.
+export const VIDEO_ENQUEUE_FAILED_REASON = 'Optimising could not be started for this video.';
+
+/**
+ * Called once an object has become READY — by EVERY path that makes one:
+ * `completeUpload` (the browser), `putMediaObject` (the slides.com import),
+ * `placeIntoMedia` (an agent upload finished into media, and a URL import,
+ * which places through the same function), and the class-to-class copy.
+ *
+ * For a VIDEO row with `optimise` set it claims the row for processing
+ * (`processing` NONE → PENDING, conditional on the row still READY) and
+ * enqueues `media-video-process` in the same step. PENDING is a claim that a
+ * job is queued, so it is written here, where that becomes true, and nowhere
+ * else — a row carrying it with no job behind it shows as forever optimising.
+ *
+ * The claim is what makes a second call a no-op: a row already PENDING, DONE or
+ * FAILED matches nothing, so a double fire (a copy reused by a retried import,
+ * a concurrent complete) queues nothing twice. The idempotency key collapses a
+ * repeat that did get through.
+ *
+ * NEVER throws. The object is already READY and serving its original; the
+ * caller's upload succeeded whatever happens here. A failed enqueue marks the
+ * row FAILED with a short reason, and the original keeps serving.
+ */
+export async function onMediaReady(row: MediaRecord): Promise<void> {
+  if (row.kind !== 'VIDEO' || !row.optimise || row.status !== 'READY') return;
+
+  try {
+    const { count } = await getPrisma().mediaObject.updateMany({
+      where: { id: row.id, status: 'READY', processing: 'NONE' },
+      data: { processing: 'PENDING', processing_error: null },
+    });
+    if (count === 0) return;
+  } catch (error) {
+    console.warn(
+      `[media] Could not claim ${row.id} for optimising:`,
+      error instanceof Error ? error.message : error
+    );
+    return;
+  }
+
+  try {
+    await tasks.trigger(
+      VIDEO_PROCESS_TASK_ID,
+      { classroomId: row.classroomId, mediaId: row.id },
+      { idempotencyKey: `media-video-process:${row.id}` }
+    );
+  } catch (error) {
+    console.warn(
+      `[media] Could not enqueue ${VIDEO_PROCESS_TASK_ID} for ${row.id}:`,
+      error instanceof Error ? error.message : error
+    );
+    // Only from the claim this call made: a job that did start (the trigger's
+    // answer was lost) and already moved the row on is not overwritten.
+    try {
+      await getPrisma().mediaObject.updateMany({
+        where: { id: row.id, processing: 'PENDING' },
+        data: { processing: 'FAILED', processing_error: VIDEO_ENQUEUE_FAILED_REASON },
+      });
+    } catch (writeError) {
+      console.warn(
+        `[media] Could not record the failed enqueue for ${row.id}:`,
+        writeError instanceof Error ? writeError.message : writeError
+      );
+    }
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
