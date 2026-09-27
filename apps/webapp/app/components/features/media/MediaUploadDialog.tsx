@@ -81,7 +81,7 @@ const MediaUploadDialog = ({
   onUploaded,
 }: MediaUploadDialogProps) => {
   const [state, dispatch] = useReducer(uploadDialogReducer, INITIAL_UPLOAD_DIALOG_STATE);
-  const { file, options, refusal, error, sentBytes, phase } = state;
+  const { file, options, refusal, error, sentBytes, phase, closeRequested } = state;
   const uploading = phase === 'uploading';
   const done = phase === 'done';
   // Nothing is editable once an upload is under way or finished.
@@ -96,12 +96,13 @@ const MediaUploadDialog = ({
     if (!open) dispatch({ type: 'reset' });
   }, [open]);
 
-  // Close only once the finished frame is on screen. Closing in the same render
-  // as the success would freeze the Modal on the frame before it — the one with
-  // the progress bar and "Cancel upload" (see `uploadDialogState.ts`).
+  // Close only once the finished — or cancelled — frame is on screen. Closing
+  // in the same render as the success or the cancel would freeze the Modal on
+  // the frame before it: the progress bar and a live "Cancel upload" (see
+  // `uploadDialogState.ts`).
   useEffect(() => {
-    if (phase === 'done') onClose();
-  }, [phase, onClose]);
+    if (phase === 'done' || closeRequested) onClose();
+  }, [phase, closeRequested, onClose]);
 
   // Nothing survives an unmount: the request is cancelled rather than left to
   // finish against a component that is gone.
@@ -118,9 +119,17 @@ const MediaUploadDialog = ({
     dispatch({ type: 'cancelled' });
   };
 
+  // X and Escape. Mid-upload, cancel first and let the effect above close once
+  // the cancelled frame has rendered; otherwise there is no live frame to
+  // leave behind, so close at once.
   const close = () => {
-    if (uploading) cancel();
-    onClose();
+    if (!uploading) {
+      onClose();
+      return;
+    }
+    abortRef.current?.abort();
+    abortRef.current = null;
+    dispatch({ type: 'cancelled', close: true });
   };
 
   const start = async () => {

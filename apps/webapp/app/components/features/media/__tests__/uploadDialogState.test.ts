@@ -134,3 +134,25 @@ describe('while uploading', () => {
     ).toBe(uploading);
   });
 });
+
+describe('closing during an upload (X, Escape)', () => {
+  const closing = uploadDialogReducer(uploading, { type: 'cancelled', close: true });
+
+  it('cancels first — the frame left to freeze is idle, not a live upload — then asks to close', () => {
+    expect(closing).toMatchObject({ phase: 'idle', sentBytes: 0, closeRequested: true });
+  });
+
+  it('plain Cancel upload does not ask to close', () => {
+    expect(uploadDialogReducer(uploading, { type: 'cancelled' }).closeRequested).toBe(false);
+  });
+
+  it('still closes when the upload finished in the same instant', () => {
+    const done = uploadDialogReducer(uploading, { type: 'succeeded', run: 1 });
+    expect(uploadDialogReducer(done, { type: 'cancelled', close: true }).closeRequested).toBe(true);
+  });
+
+  it('opens fresh next time, with no close pending', () => {
+    expect(uploadDialogReducer(closing, { type: 'reset' })).toEqual(INITIAL_UPLOAD_DIALOG_STATE);
+    expect(INITIAL_UPLOAD_DIALOG_STATE.closeRequested).toBe(false);
+  });
+});

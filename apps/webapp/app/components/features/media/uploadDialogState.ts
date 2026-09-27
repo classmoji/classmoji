@@ -12,8 +12,9 @@ import { DEFAULT_VIDEO_OPTIONS, applyVideoOption, type VideoOptions } from './me
  *   frame for as long as its leave animation runs. When the state reset and
  *   the close land in the same render, the frame it freezes is the one BEFORE
  *   them — the progress bar at 100% and a live "Cancel upload". So success
- *   moves to `done` first, and the dialog closes from an effect once that frame
- *   has been committed.
+ *   moves to `done` first, and closing mid-upload (X, Escape) moves to the
+ *   cancelled idle frame first; either way the dialog closes from an effect
+ *   once that frame has been committed.
  *
  * - **A settled upload only speaks for itself.** Every upload gets a `run`
  *   number, and progress, success and failure carry the number they belong
@@ -41,6 +42,12 @@ export interface UploadDialogState {
    * nothing.
    */
   run: number;
+  /**
+   * The dialog should close once this frame is on screen — set by closing
+   * (X, Escape) during an upload, so the frame the Modal freezes on is the
+   * cancelled one, never a live progress bar.
+   */
+  closeRequested: boolean;
 }
 
 export type UploadDialogAction =
@@ -50,7 +57,8 @@ export type UploadDialogAction =
   | { type: 'progress'; run: number; sentBytes: number }
   | { type: 'succeeded'; run: number }
   | { type: 'failed'; run: number; error: string | null }
-  | { type: 'cancelled' }
+  /** `close`: the person closed the dialog rather than pressing Cancel upload. */
+  | { type: 'cancelled'; close?: boolean }
   | { type: 'reset' };
 
 export const INITIAL_UPLOAD_DIALOG_STATE: UploadDialogState = {
@@ -61,6 +69,7 @@ export const INITIAL_UPLOAD_DIALOG_STATE: UploadDialogState = {
   sentBytes: 0,
   phase: 'idle',
   run: 0,
+  closeRequested: false,
 };
 
 /** Whether a callback from `run` still speaks for what the dialog is showing. */
@@ -104,12 +113,16 @@ export function uploadDialogReducer(
       if (!isCurrent(state, action.run)) return state;
       return { ...state, phase: 'idle', sentBytes: 0, error: action.error };
 
-    case 'cancelled':
+    case 'cancelled': {
+      // A close asked for mid-upload is honoured whatever the phase has become
+      // since: an upload that finished in the same instant still closes.
+      const closing = action.close ? { closeRequested: true } : {};
       // Back to where the person was before they pressed Upload: the file is
       // still chosen, so trying again is one click rather than a second trip
       // through the file picker for a file that may be gigabytes.
-      if (state.phase !== 'uploading') return state;
-      return { ...state, phase: 'idle', sentBytes: 0, error: null };
+      if (state.phase !== 'uploading') return action.close ? { ...state, ...closing } : state;
+      return { ...state, phase: 'idle', sentBytes: 0, error: null, ...closing };
+    }
 
     case 'reset':
       return INITIAL_UPLOAD_DIALOG_STATE;
