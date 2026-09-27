@@ -220,6 +220,52 @@ export class ImportLimits {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The deck itself
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The most of `index.html` an import will inflate. A slides.com export's
+ * index.html is the deck's markup plus its inline theme CSS — tens to hundreds
+ * of kilobytes (the test export's is 74 KB) — and cheerio builds a DOM several
+ * times its size on top, so this is a ceiling nothing real comes near.
+ */
+export const INDEX_HTML_MAX_BYTES = 32 * MiB;
+
+/** The sentence an import whose ZIP holds no index.html fails with. */
+export const INDEX_HTML_MISSING_MESSAGE =
+  'No index.html found in ZIP. Please ensure this is a valid slides.com export.';
+
+/** The sentence an import whose index.html cannot be read fails with. */
+export const INDEX_HTML_INVALID_MESSAGE =
+  "The ZIP's index.html could not be read. Please ensure this is a valid slides.com export.";
+
+/**
+ * The export's index.html as text, inflating no more than
+ * `INDEX_HTML_MAX_BYTES` of it and charging what it inflated to the import's
+ * budget. `inflate` is `inflateAtMost` on the entry, or null when the ZIP has
+ * none. An entry past the ceiling, or not the size its header declares, fails
+ * the import as an export that is not one.
+ */
+export async function readImportIndexHtml(
+  inflate: ((limitBytes: number) => Promise<Buffer>) | null,
+  limits: ImportLimits
+): Promise<string> {
+  if (!inflate) throw new Error(INDEX_HTML_MISSING_MESSAGE);
+  let buffer: Buffer;
+  try {
+    buffer = await inflate(INDEX_HTML_MAX_BYTES);
+  } catch (error: unknown) {
+    if (!(error instanceof EntrySizeError)) throw error;
+    limits.inflated.spend(error.inflatedBytes);
+    throw new Error(INDEX_HTML_INVALID_MESSAGE);
+  }
+  limits.inflated.spend(buffer.length);
+  const html = buffer.toString('utf8');
+  if (!html) throw new Error(INDEX_HTML_MISSING_MESSAGE);
+  return html;
+}
+
 /**
  * The warning for an entry left out because the import has already inflated
  * as much as it may: `Skipped lecture.mp4 (90 MB) — this import is over its

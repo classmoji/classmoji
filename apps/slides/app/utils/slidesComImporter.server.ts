@@ -31,6 +31,7 @@ import {
   importAssetType,
   importMediaOptions,
   placeImportEntry,
+  readImportIndexHtml,
 } from './importVideoMedia.ts';
 
 /**
@@ -142,12 +143,18 @@ export async function processZipImport({
   const arrayBuffer = await zipFile.arrayBuffer();
   const zip = await JSZip.loadAsync(arrayBuffer);
 
-  // 2. Parse index.html with Cheerio
+  // What this import has inflated (index.html, repository and media alike) and
+  // what it holds for the commit (assets and theme files) — one set, every entry.
+  const limits = new ImportLimits();
+
+  // 2. Parse index.html with Cheerio — inflated under its own ceiling, since
+  // its header is the uploader's word like every other entry's.
   onProgress({ type: 'step', step: 'parsing_html' });
-  const indexHtml = await zip.file('index.html')?.async('string');
-  if (!indexHtml) {
-    throw new Error('No index.html found in ZIP. Please ensure this is a valid slides.com export.');
-  }
+  const indexEntry = zip.file('index.html');
+  const indexHtml = await readImportIndexHtml(
+    indexEntry ? limit => inflateAtMost(indexEntry, limit) : null,
+    limits
+  );
   const $ = cheerio.load(indexHtml);
 
   // 3. Extract title from HTML if not provided
@@ -306,9 +313,6 @@ export async function processZipImport({
     /** @type {Map<string, string>} Maps old video path to new absolute URL */
     const videoMap = new Map();
     const videoBaseUrl = `${baseUrl}/videos`;
-    // What this import has inflated (repository and media alike) and what it
-    // holds for the commit (assets and theme files) — one set, every entry.
-    const limits = new ImportLimits();
 
     // 7c. First pass: identify images and videos for progress tracking
     const mediaFiles: Array<{

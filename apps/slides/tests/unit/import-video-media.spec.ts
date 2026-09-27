@@ -16,23 +16,33 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
+import JSZip from 'jszip';
 
 import {
   IMPORT_ENTRY_MAX_BYTES,
   IMPORT_INFLATE_BUDGET_BYTES,
   IMPORT_REPO_HELD_BYTES,
   IMPORT_VIDEO_OPTIONS,
+  INDEX_HTML_INVALID_MESSAGE,
+  INDEX_HTML_MAX_BYTES,
+  INDEX_HTML_MISSING_MESSAGE,
   ImportLimits,
   importAssetType,
   importEntryGoesToMedia,
   importMediaOptions,
   importMediaSkippedWarning,
   placeImportEntry,
+  readImportIndexHtml,
   type ImportZipEntry,
   type PutImportMedia,
 } from '../../app/utils/importVideoMedia.ts';
 import { MEDIA_QUOTA_FULL_MESSAGE, type UploadCapability } from '../../app/utils/mediaUpload.ts';
-import { EntrySizeError, RepoEntryGate, resolveMediaRef } from '../../app/utils/zipRepoEntries.ts';
+import {
+  EntrySizeError,
+  RepoEntryGate,
+  inflateAtMost,
+  resolveMediaRef,
+} from '../../app/utils/zipRepoEntries.ts';
 
 const path = (relative: string) => fileURLToPath(new URL(relative, import.meta.url));
 const source = (relative: string) => readFileSync(path(relative), 'utf8');
@@ -491,6 +501,68 @@ test.describe('which ZIP entries are assets, by the store’s kind table', () =>
   });
 });
 
+test.describe('the deck’s index.html', () => {
+  /** A DEFLATE zip holding `index.html`, its header optionally rewritten to `declared`. */
+  async function indexEntry(html: string, declared?: number) {
+    const zip = new JSZip();
+    zip.file('index.html', html);
+    const built = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
+    const entry = (await JSZip.loadAsync(built)).file('index.html')!;
+    if (declared !== undefined) {
+      (entry as unknown as { _data: { uncompressedSize: number } })._data.uncompressedSize =
+        declared;
+    }
+    return entry;
+  }
+
+  test('an export’s index.html is read and charged to the import’s budget', async () => {
+    const html = '<html><body><div class="reveal"><div class="slides"></div></div></body></html>';
+    const entry = await indexEntry(html);
+    const limits = new ImportLimits();
+    const read = await readImportIndexHtml(limit => inflateAtMost(entry, limit), limits);
+    expect(read).toBe(html);
+    expect(limits.inflated.usedBytes).toBe(Buffer.byteLength(html));
+  });
+
+  test('one past the ceiling stops there and fails as an export that is not one', async () => {
+    // Spaces DEFLATE to almost nothing: a small ZIP whose index.html inflates
+    // past 32 MB, whatever its header says.
+    const entry = await indexEntry(' '.repeat(INDEX_HTML_MAX_BYTES + 4 * MB), 1024);
+    const limits = new ImportLimits();
+    const error = await readImportIndexHtml(limit => inflateAtMost(entry, limit), limits).catch(
+      (e: unknown) => e
+    );
+    expect((error as Error).message).toBe(INDEX_HTML_INVALID_MESSAGE);
+    // Stopped a chunk past the ceiling, not at the end; and charged.
+    expect(limits.inflated.usedBytes).toBeGreaterThan(INDEX_HTML_MAX_BYTES);
+    expect(limits.inflated.usedBytes).toBeLessThan(INDEX_HTML_MAX_BYTES + 4 * MB);
+  });
+
+  test('one that is not the size its header says fails the same way', async () => {
+    const entry = await indexEntry('<html></html>', 2 * MB);
+    const error = await readImportIndexHtml(
+      limit => inflateAtMost(entry, limit),
+      new ImportLimits()
+    ).catch((e: unknown) => e);
+    expect((error as Error).message).toBe(INDEX_HTML_INVALID_MESSAGE);
+  });
+
+  test('a ZIP without one, or with an empty one, is not an export', async () => {
+    await expect(readImportIndexHtml(null, new ImportLimits())).rejects.toThrow(
+      INDEX_HTML_MISSING_MESSAGE
+    );
+    const empty = await indexEntry('');
+    await expect(
+      readImportIndexHtml(limit => inflateAtMost(empty, limit), new ImportLimits())
+    ).rejects.toThrow(INDEX_HTML_MISSING_MESSAGE);
+  });
+
+  test('well under the ceiling for a real export', () => {
+    // The test export's index.html is 74 KB.
+    expect(INDEX_HTML_MAX_BYTES).toBe(32 * MB);
+  });
+});
+
 test.describe('the importer’s wiring', () => {
   const IMPORTER = source('../../app/utils/slidesComImporter.server.ts');
   const START = source('../../app/routes/api.slides.import.start/route.ts');
@@ -523,6 +595,15 @@ test.describe('the importer’s wiring', () => {
     );
     expect(assets.match(/inflateAtMost\(/g)).toHaveLength(1);
     expect(IMPORTER).not.toMatch(/\.async\('nodebuffer'\)/);
+  });
+
+  test('reads index.html under its ceiling, charged to the same limits', () => {
+    expect(IMPORTER).not.toMatch(/\.async\('string'\)/);
+    expect(IMPORTER).toContain('indexEntry ? limit => inflateAtMost(indexEntry, limit) : null,');
+    // The limits exist before index.html is read, so it is charged to them.
+    expect(IMPORTER.indexOf('const limits = new ImportLimits();')).toBeLessThan(
+      IMPORTER.indexOf('await readImportIndexHtml(')
+    );
   });
 
   test('writes with putMediaObject and each file’s own options', () => {
