@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// uploadBatch pacing and rate-limit retry.
+// uploadBatch rate-limit retry.
 //
-// GitHub allows an installation 80 content-creating requests a minute, shared
-// by the whole org. uploadBatch paces its own writes to 60 a rolling minute and
-// retries a rate-limit refusal after the wait GitHub names. The clock is faked
-// (setTimeout + Date), so a test that waits a minute takes milliseconds — and a
-// batch that should NOT wait is caught by never advancing the clock at all.
+// uploadBatch does not pace its own writes — the Octokit throttling plugin
+// already sends a process's writes one a second (mocked away here). What it
+// owns is the retry: a rate-limit refusal is retried after the wait GitHub
+// names, a bounded number of times, and never slept on past two minutes. The
+// clock is faked (setTimeout + Date), so a test that waits a minute takes
+// milliseconds — and a batch that should NOT wait is caught by never advancing
+// the clock at all.
 
 const requestMock = vi.fn();
 
@@ -118,45 +120,23 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('uploadBatch — pacing', () => {
-  it('never waits when the whole batch fits in one minute (57 blobs + tree/commit/ref = 60)', async () => {
-    github();
-    const files = makeFiles(57);
-
-    const result = await settlesWithoutWaiting(
-      ContentService.uploadBatch({ gitOrganization, repo: 'pace-small', files })
-    );
-
-    expect(result.files).toEqual(files.map((f, i) => ({ path: f.path, sha: `blob-c${i}` })));
-    expect(callsTo(BLOB)).toBe(57);
-  });
-
-  it('holds the 61st write until the first has left the one-minute window', async () => {
+describe('uploadBatch — writes', () => {
+  it('sends a batch larger than a minute of GitHub budget without waiting on its own clock', async () => {
     github();
     const files = makeFiles(130);
-    const upload = settle(ContentService.uploadBatch({ gitOrganization, repo: 'pace-big', files }));
 
-    await vi.advanceTimersByTimeAsync(0);
-    expect(callsTo(BLOB)).toBe(60);
+    const result = await settlesWithoutWaiting(
+      ContentService.uploadBatch({ gitOrganization, repo: 'no-pacer', files })
+    );
 
-    await vi.advanceTimersByTimeAsync(59_999);
-    expect(callsTo(BLOB)).toBe(60);
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(callsTo(BLOB)).toBe(120);
-
-    // The last 10 blobs plus tree/commit/ref fit in the third window.
-    await vi.advanceTimersByTimeAsync(60_000);
-    const { value, error } = await upload;
-    expect(error).toBeUndefined();
     expect(callsTo(BLOB)).toBe(130);
-    expect(value!.files).toEqual(files.map((f, i) => ({ path: f.path, sha: `blob-c${i}` })));
+    expect(result.files).toEqual(files.map((f, i) => ({ path: f.path, sha: `blob-c${i}` })));
   });
 
   it('sends every write with the Octokit retry plugin switched off', async () => {
     github();
     await settlesWithoutWaiting(
-      ContentService.uploadBatch({ gitOrganization, repo: 'pace-no-plugin', files: makeFiles(1) })
+      ContentService.uploadBatch({ gitOrganization, repo: 'no-plugin', files: makeFiles(1) })
     );
     for (const [route, params] of requestMock.mock.calls) {
       const isWrite = !String(route).startsWith('GET ');
@@ -166,26 +146,25 @@ describe('uploadBatch — pacing', () => {
     }
   });
 
-  it('stops blobs still waiting for a slot once the batch has failed', async () => {
-    // c59 is the 60th write — refused while the other workers wait for the
-    // next window. Nothing further may reach GitHub for this batch.
+  it('starts no new blobs once the batch has failed', async () => {
+    // mapWithConcurrency's guarantee: the blobs already in flight finish, but
+    // nothing further is started for a batch that will not be committed.
     github((route, params) => {
       if (route !== BLOB) return undefined;
       const decoded = Buffer.from(String(params.content), 'base64').toString('utf-8');
-      if (decoded === 'c59') throw Object.assign(new Error('too large'), { status: 413 });
+      if (decoded === 'c3') throw Object.assign(new Error('too large'), { status: 413 });
       return undefined;
     });
 
-    const upload = settle(
-      ContentService.uploadBatch({ gitOrganization, repo: 'pace-abort', files: makeFiles(70) })
+    const { error } = await settlesWithoutWaiting(
+      settle(ContentService.uploadBatch({ gitOrganization, repo: 'abort', files: makeFiles(70) }))
     );
-    await vi.advanceTimersByTimeAsync(0);
-    const { error } = await upload;
     expect(error).toBeInstanceOf(RepoFileTooLargeError);
-    expect(callsTo(BLOB)).toBe(60);
+    const sent = callsTo(BLOB);
+    expect(sent).toBeLessThan(10);
 
     await vi.advanceTimersByTimeAsync(120_000);
-    expect(callsTo(BLOB)).toBe(60);
+    expect(callsTo(BLOB)).toBe(sent);
   });
 });
 
