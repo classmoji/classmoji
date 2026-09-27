@@ -142,21 +142,6 @@ export class RepoEntryGate {
   }
 
   /**
-   * The entry's bytes when they fit, or null (recorded as skipped) when not.
-   *
-   * The declared size is checked BEFORE decompressing, so an entry that is too
-   * large is never inflated into memory at all. The bytes are measured again
-   * afterwards, because a header is only a claim.
-   */
-  async read(entry: JSZip.JSZipObject, name: string): Promise<Buffer | null> {
-    const declared = declaredUncompressedSize(entry);
-    if (declared !== null && !this.admit(name, declared, entry.name)) return null;
-
-    const buffer = await entry.async('nodebuffer');
-    return this.admit(name, buffer.length, entry.name) ? buffer : null;
-  }
-
-  /**
    * Record an entry left out for a reason of the caller's own, with the
    * sentence its warning says — a video bound for media storage whose write
    * failed. Through the gate rather than beside it, so the entry takes the

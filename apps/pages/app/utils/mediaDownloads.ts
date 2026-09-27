@@ -17,6 +17,27 @@ import { parseMediaRef } from './mediaRefs.ts';
  * and the unit suite all read it, and none may pull in the services root.
  */
 
+/**
+ * The teaching team: they see drafts, and download any media file whatever its
+ * uploader chose for students.
+ */
+export const TEACHING_TEAM_ROLES: ReadonlySet<string> = new Set(['OWNER', 'TEACHER', 'ASSISTANT']);
+
+/**
+ * The role a reader's download map is drawn for, or null for no buttons.
+ *
+ * It has to be the role `/api/media-download` reads when the button is
+ * clicked, or the button 404s: an ACCEPTED membership only (as the class site
+ * counts members), given as `acceptedRole` — and only where that role can view
+ * the page, which for a draft is the teaching team. A pending invite, or a
+ * draft seen through a role whose invite is still pending, draws nothing.
+ */
+export function downloadMapRole(acceptedRole: string | null, isDraft: boolean): string | null {
+  if (!acceptedRole) return null;
+  if (isDraft && !TEACHING_TEAM_ROLES.has(acceptedRole)) return null;
+  return acceptedRole;
+}
+
 /** The blocks a download button belongs on: the ones that are a file to a reader. */
 export const DOWNLOADABLE_BLOCK_TYPES: ReadonlySet<string> = new Set(['video', 'file', 'audio']);
 

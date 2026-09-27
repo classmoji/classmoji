@@ -16,11 +16,13 @@
  *
  * The classroom arrives as a FORM FIELD (the import page posts a FormData built
  * from its own form), so the per-classroom gate cannot run until the body has
- * been parsed. Two things can, and do:
+ * been parsed. Three things can, and do:
  *
  *   - a SESSION. An anonymous caller is refused before 150 MB are buffered;
  *     the classroom gate below still decides whether this particular signed-in
  *     user may import into this particular classroom.
+ *   - the IMPORT SLOT (`importSlot.server.ts`): one import per process, so a
+ *     second one is refused before its ZIP is buffered beside the first.
  *   - the SIZE, through `readLimitedFormData`. `request.formData()` trusts the
  *     sender to stop; that counts the bytes as they arrive and cancels the
  *     stream the moment they cross the cap, so a missing or lying
@@ -38,6 +40,12 @@ import {
   uploadBodyLimit,
 } from '@classmoji/utils/upload-limit';
 import { SLIDES_IMPORT_MAX_BYTES, SLIDES_IMPORT_MAX_LABEL } from '~/utils/importLimits';
+import {
+  IMPORT_BUSY_MESSAGE,
+  IMPORT_RETRY_AFTER_SECONDS,
+  acquireImportSlot,
+  releaseImportSlot,
+} from '~/utils/importSlot.server';
 
 export const action = async ({ request }: { request: Request }) => {
   // A session first — the cheapest thing that can be checked without the body,
@@ -49,6 +57,25 @@ export const action = async ({ request }: { request: Request }) => {
     return Response.json({ error: 'Unauthorized' }, { status: 403 });
   }
 
+  // One import at a time in this process (`importSlot.server.ts`), taken before
+  // the body is read: the ZIP it buffers is part of what an import holds.
+  if (!acquireImportSlot()) {
+    return Response.json(
+      { error: IMPORT_BUSY_MESSAGE },
+      { status: 503, headers: { 'Retry-After': String(IMPORT_RETRY_AFTER_SECONDS) } }
+    );
+  }
+  // Given back here when this answers without starting an import; once one is
+  // started, its own settle gives it back instead (`slot.held` goes false).
+  const slot = { held: true };
+  try {
+    return await startImport(request, slot);
+  } finally {
+    if (slot.held) releaseImportSlot();
+  }
+};
+
+async function startImport(request: Request, slot: { held: boolean }) {
   let formData: FormData;
   try {
     formData = await readLimitedFormData(request, uploadBodyLimit(SLIDES_IMPORT_MAX_BYTES));
@@ -150,8 +177,9 @@ export const action = async ({ request }: { request: Request }) => {
     importStreamManager.publish(importId, event);
   };
 
-  // Start import asynchronously (fire and forget)
-  processZipImport({
+  // Start import asynchronously (fire and forget). It holds the import slot
+  // until it settles, however it ends.
+  const run = processZipImport({
     zipFile,
     title: title.trim(),
     repositoryId,
@@ -164,15 +192,19 @@ export const action = async ({ request }: { request: Request }) => {
     contentNamespace,
     userId,
     onProgress,
-  }).catch(err => {
-    console.error('[import.start] Import failed:', err);
-    importStreamManager.publish(importId, {
-      type: 'error',
-      message: err.message || 'Import failed',
-    });
   });
+  slot.held = false;
+  run
+    .catch(err => {
+      console.error('[import.start] Import failed:', err);
+      importStreamManager.publish(importId, {
+        type: 'error',
+        message: err.message || 'Import failed',
+      });
+    })
+    .finally(releaseImportSlot);
 
   // Return importId immediately - client subscribes to SSE stream with this ID
   // The 'done' event from processZipImport will include the actual slideId
   return Response.json({ importId });
-};
+}

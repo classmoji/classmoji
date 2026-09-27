@@ -24,7 +24,8 @@
  *     and one bound for the repository is already under its 35 MB cap;
  *   - the files kept for the repository are held until the import's one
  *     commit, so their total is capped (`IMPORT_REPO_HELD_BYTES`);
- *   - everything inflated counts against one budget (`IMPORT_INFLATE_BUDGET_BYTES`).
+ *   - everything inflated counts against one budget (`IMPORT_INFLATE_BUDGET_BYTES`),
+ *     an entry left out after inflating included.
  *
  * The limits live on one `ImportLimits` per import.
  *
@@ -220,6 +221,52 @@ export class ImportLimits {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The deck itself
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The most of `index.html` an import will inflate. A slides.com export's
+ * index.html is the deck's markup plus its inline theme CSS — tens to hundreds
+ * of kilobytes (the test export's is 74 KB) — and cheerio builds a DOM several
+ * times its size on top, so this is a ceiling nothing real comes near.
+ */
+export const INDEX_HTML_MAX_BYTES = 32 * MiB;
+
+/** The sentence an import whose ZIP holds no index.html fails with. */
+export const INDEX_HTML_MISSING_MESSAGE =
+  'No index.html found in ZIP. Please ensure this is a valid slides.com export.';
+
+/** The sentence an import whose index.html cannot be read fails with. */
+export const INDEX_HTML_INVALID_MESSAGE =
+  "The ZIP's index.html could not be read. Please ensure this is a valid slides.com export.";
+
+/**
+ * The export's index.html as text, inflating no more than
+ * `INDEX_HTML_MAX_BYTES` of it and charging what it inflated to the import's
+ * budget. `inflate` is `inflateAtMost` on the entry, or null when the ZIP has
+ * none. An entry past the ceiling, or not the size its header declares, fails
+ * the import as an export that is not one.
+ */
+export async function readImportIndexHtml(
+  inflate: ((limitBytes: number) => Promise<Buffer>) | null,
+  limits: ImportLimits
+): Promise<string> {
+  if (!inflate) throw new Error(INDEX_HTML_MISSING_MESSAGE);
+  let buffer: Buffer;
+  try {
+    buffer = await inflate(INDEX_HTML_MAX_BYTES);
+  } catch (error: unknown) {
+    if (!(error instanceof EntrySizeError)) throw error;
+    limits.inflated.spend(error.inflatedBytes);
+    throw new Error(INDEX_HTML_INVALID_MESSAGE);
+  }
+  limits.inflated.spend(buffer.length);
+  const html = buffer.toString('utf8');
+  if (!html) throw new Error(INDEX_HTML_MISSING_MESSAGE);
+  return html;
+}
+
 /**
  * The warning for an entry left out because the import has already inflated
  * as much as it may: `Skipped lecture.mp4 (90 MB) — this import is over its
@@ -387,6 +434,10 @@ export async function placeImportEntry({
     entry.declared ??
     Math.min(IMPORT_ENTRY_MAX_BYTES, limits.inflated.limitBytes - limits.inflated.usedBytes);
 
+  // Every byte inflated is charged to the budget, the entry kept or not: one
+  // left out after inflating still cost what it inflated, and a run of them
+  // must trip the budget like anything else. Charged AFTER the checks that read
+  // the budget, so an entry is never measured against its own bytes.
   let buffer: Buffer;
   try {
     buffer = await entry.inflate(limit);
@@ -397,10 +448,12 @@ export async function placeImportEntry({
     if (entry.declared !== null || !leftOut(error.inflatedBytes)) {
       gate.skip(filename, error.inflatedBytes, filePath, importEntryMisdeclaredWarning(filename));
     }
+    limits.inflated.spend(error.inflatedBytes);
     return { kind: 'skipped' };
   }
-  if (leftOut(buffer.length) || mediaIsFull(buffer.length)) return { kind: 'skipped' };
+  const refused = leftOut(buffer.length) || mediaIsFull(buffer.length);
   limits.inflated.spend(buffer.length);
+  if (refused) return { kind: 'skipped' };
 
   if (!importEntryGoesToMedia(capability, filename, buffer.length)) {
     limits.repoHeld.spend(buffer.length);

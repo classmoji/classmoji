@@ -10,7 +10,8 @@
  * approach).
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 
@@ -40,7 +41,9 @@ test.describe('every reader of a member’s role asks the same helper', () => {
 
   test('the page loader and its save action', () => {
     expect(PAGE_ROUTE).not.toContain('findByClassroomAndUser');
-    expect(PAGE_ROUTE.match(/await findClassroomRole\(\{/g)).toHaveLength(2);
+    // The loader's role, its save action's, and the download map's (accepted only).
+    expect(PAGE_ROUTE.match(/await findClassroomRole\(\{/g)).toHaveLength(3);
+    expect(PAGE_ROUTE.match(/acceptedOnly: true,/g)).toHaveLength(1);
   });
 
   test('assertPageAccess, which the download route reads its role from', () => {
@@ -54,5 +57,38 @@ test.describe('every reader of a member’s role asks the same helper', () => {
     expect(HELPER).toContain('return highestRole(rows.map(row => row.role));');
     expect(HELPER).toContain('...(acceptedOnly ? { has_accepted_invite: true } : {}),');
     expect(TENANT).toContain('highestRole(memberships.map(membership => membership.role))');
+  });
+
+  test('the classroom index, its action, the pages API and the form fill', () => {
+    for (const relative of [
+      '../../app/routes/$classroomSlug/route.tsx',
+      '../../app/routes/api.pages.$classroomSlug/route.ts',
+      '../../app/forms/fill/classroomForm.server.ts',
+    ]) {
+      const text = source(relative);
+      expect(text, relative).toContain(
+        "import { findClassroomRole } from '~/utils/classroomRole.server.ts';"
+      );
+      // The default: every row, accepted or not, as these always counted.
+      expect(text, relative).not.toContain('acceptedOnly');
+    }
+    const index = source('../../app/routes/$classroomSlug/route.tsx');
+    // The loader and the action gate.
+    expect(index.match(/await findClassroomRole\(\{/g)).toHaveLength(2);
+    expect(index).toContain("if (!role || !['OWNER', 'TEACHER'].includes(role)) {");
+  });
+
+  test('nothing in the app picks one of a member’s rows by itself', () => {
+    const root = fileURLToPath(new URL('../../app/', import.meta.url));
+    const files = (readdirSync(root, { recursive: true }) as string[]).filter(file =>
+      /\.(ts|tsx)$/.test(file)
+    );
+    expect(files.length).toBeGreaterThan(50);
+    for (const file of files) {
+      const text = readFileSync(join(root, file), 'utf8');
+      // `site/tenant.server.ts` names the service method in a comment only.
+      expect(text.replace(/^\s*(\*|\/\/).*$/gm, ''), file).not.toContain('findByClassroomAndUser');
+      expect(text, file).not.toMatch(/classroomMembership\.findFirst/);
+    }
   });
 });

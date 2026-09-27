@@ -19,6 +19,7 @@ import { createImageBlockSpec } from '@blocknote/core';
 
 import {
   collectMediaDownloadRefs,
+  downloadMapRole,
   downloadableByRef,
   isDownloadable,
   mediaDownloadHref,
@@ -215,13 +216,46 @@ test.describe('/api/media-download', () => {
   });
 });
 
+test.describe('the role a download map is drawn for', () => {
+  test('a pending invite draws nothing: the route counts accepted members only', () => {
+    // A pending TEACHER, or a roster student who never joined, reads the page
+    // through their unaccepted row; the route's lookup finds no role at all.
+    expect(downloadMapRole(null, false)).toBeNull();
+    expect(downloadMapRole(null, true)).toBeNull();
+  });
+
+  test('an accepted member of a published page gets their accepted role', () => {
+    expect(downloadMapRole('STUDENT', false)).toBe('STUDENT');
+    expect(downloadMapRole('TEACHER', false)).toBe('TEACHER');
+  });
+
+  test('a draft only for an accepted role on the teaching team, as the route views it', () => {
+    // Accepted STUDENT with a pending TEACHER row: the page opens (the highest
+    // role, pending or not), but the route sees a student on a draft.
+    expect(downloadMapRole('STUDENT', true)).toBeNull();
+    expect(downloadMapRole('ASSISTANT', true)).toBe('ASSISTANT');
+    expect(downloadMapRole('OWNER', true)).toBe('OWNER');
+  });
+});
+
 test.describe('the page loader', () => {
   test('ships the map only to a member looking at the viewer, where the class can sign', () => {
-    expect(LOADER_SOURCE).toContain('userRole && viewerShown && assetCtx');
+    expect(LOADER_SOURCE).toContain('authData?.userId && userRole && viewerShown && assetCtx');
     expect(LOADER_SOURCE).toContain(
-      'await loadMediaDownloads(page.classroom.id, viewerContent, userRole)'
+      'await loadMediaDownloads(page.classroom.id, viewerContent, downloadRole)'
     );
     expect(LOADER_SOURCE).toMatch(/\n {4}mediaDownloads,\n/);
+  });
+
+  test('draws it for the accepted-only role the download route reads', () => {
+    const map = LOADER_SOURCE.slice(LOADER_SOURCE.indexOf('const downloadRole ='));
+    expect(map).toMatch(
+      /downloadMapRole\(\s+await findClassroomRole\(\{\s+userId: authData\.userId,\s+classroomId: page\.classroom\.id,\s+acceptedOnly: true,\s+\}\),\s+page\.is_draft\s+\)/
+    );
+    // Never the role that opened the page.
+    expect(LOADER_SOURCE).not.toContain(
+      'loadMediaDownloads(page.classroom.id, viewerContent, userRole)'
+    );
   });
 
   test('the class site asks only for a signed-in member', () => {
