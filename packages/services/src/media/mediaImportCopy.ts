@@ -49,6 +49,16 @@ import { uploadCapabilityFor } from './uploadCapability.ts';
  * twelve pages is copied once, and a later pass (the slides after the pages,
  * the page covers after the tree) finds it already done.
  *
+ * ## Across runs: a retried import reuses its copies
+ *
+ * The term rollover persists each old→new pair as it lands (`onCopied` →
+ * `ImportIdMaps.media` on the job row) and hands the map back to the next run
+ * as `knownCopies`. A retried run reuses a known copy only if the destination
+ * still has it READY — proven in SQL scoped to the destination, the same shape
+ * as the source proof — and copies again when the copy is gone (deleted, or
+ * never finished). So a retry never bills the destination twice for one
+ * object, and never repoints a reference at a copy that does not exist.
+ *
  * ## "Never a half-rewritten file", decided
  *
  * `rewrite` replaces a reference only when its object was copied and its new
@@ -104,6 +114,14 @@ export interface MediaImportCopyOptions {
    */
   importedBy?: string | null;
   warn: MediaCopyWarn;
+  /**
+   * Copies an earlier run of the same import already made: source id →
+   * destination id. Reused when the destination row is still READY; anything
+   * else is copied again. See the header.
+   */
+  knownCopies?: Readonly<Record<string, string>> | null;
+  /** Called once per object this run copies, so the caller can persist the pair. */
+  onCopied?: (sourceMediaId: string, copyMediaId: string) => void;
 }
 
 export interface MediaImportCopier {
@@ -478,6 +496,34 @@ export function createMediaImportCopier(opts: MediaImportCopyOptions): MediaImpo
   const warnedUrls = new Set<string>();
   /** Asked once per run, and only when there is an object to copy. */
   let refusal: Promise<string | null> | null = null;
+  const knownCopies = opts.knownCopies ?? {};
+
+  /**
+   * Take over the copies an earlier run made, for the wanted ids that have one
+   * still READY in the destination; those leave `wanted`.
+   */
+  async function reuseKnownCopies(wanted: Set<string>): Promise<void> {
+    const candidates = [...wanted].filter(
+      id => typeof knownCopies[id] === 'string' && knownCopies[id].length > 0
+    );
+    if (candidates.length === 0) return;
+    const live = (await getPrisma().mediaObject.findMany({
+      where: {
+        classroom_id: targetClassroomId,
+        status: 'READY',
+        id: { in: candidates.map(id => knownCopies[id]) },
+      },
+      select: { id: true },
+    })) as { id: string }[];
+    const ready = new Set(live.map(row => row.id));
+    for (const id of candidates) {
+      const copy = knownCopies[id];
+      if (!ready.has(copy)) continue;
+      settled.add(id);
+      copied.set(id, copy);
+      wanted.delete(id);
+    }
+  }
 
   async function prepare(texts: readonly string[]): Promise<void> {
     const wanted = new Set<string>();
@@ -490,6 +536,9 @@ export function createMediaImportCopier(opts: MediaImportCopyOptions): MediaImpo
         warn(`Left a media link unchanged: it belongs to a class other than the source (${url})`);
       }
     }
+    if (wanted.size === 0) return;
+
+    await reuseKnownCopies(wanted);
     if (wanted.size === 0) return;
 
     // The proof. Scoped to the source and to READY in the query itself, so an
@@ -534,7 +583,10 @@ export function createMediaImportCopier(opts: MediaImportCopyOptions): MediaImpo
     for (const row of rows) {
       settled.add(row.id);
       const newId = await copyOne({ client, bucket, row, opts });
-      if (newId) copied.set(row.id, newId);
+      if (newId) {
+        copied.set(row.id, newId);
+        opts.onCopied?.(row.id, newId);
+      }
     }
   }
 

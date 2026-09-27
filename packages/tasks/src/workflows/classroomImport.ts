@@ -416,138 +416,154 @@ export const importContentTask = task({
     const prisma = getPrisma();
     const job = await loadJob(prisma, importJobId);
     const writer = new ProgressWriter(prisma, job);
+    // Whatever this run recorded — the media copies above all — reaches the
+    // row before a failure propagates: the writer is debounced, and a copy
+    // whose pair was never persisted is one a retry would make again.
+    try {
+      const wantPages = job.progress.phases.pages?.status !== 'skipped';
+      const wantSlides = job.progress.phases.slides?.status !== 'skipped';
+      const activePhases = CONTENT_PHASE_KEYS.filter(key =>
+        key === 'pages' ? wantPages : wantSlides
+      );
 
-    const wantPages = job.progress.phases.pages?.status !== 'skipped';
-    const wantSlides = job.progress.phases.slides?.status !== 'skipped';
-    const activePhases = CONTENT_PHASE_KEYS.filter(key =>
-      key === 'pages' ? wantPages : wantSlides
-    );
-
-    const [source, target] = await Promise.all([
-      contentRepoCoordinates(prisma, job.source_classroom_id),
-      contentRepoCoordinates(prisma, job.classroom_id),
-    ]);
-    if (!source) {
-      // A source with no content repo has no content — zeros and a warning,
-      // exactly as the per-file importer behaved.
-      writer.addWarnings(['source: source classroom has no configured content repository']);
-      writer.patch(...activePhases.map(phase => ({ phase, status: 'done' as const, note: null })));
-      await writer.flush();
-      return { pages: 0, slides: 0, pushed: false };
-    }
-    if (!target) {
-      throw new Error('Target classroom content repository is not configured');
-    }
-
-    writer.patch(
-      ...activePhases.map(phase => ({
-        phase,
-        status: 'running' as const,
-        note: 'copying the content repository',
-      }))
-    );
-    await writer.flush();
-
-    // ONE media copy for the whole content phase. The clone copies what the
-    // tree references before it pushes; the page covers and the FILE slides'
-    // media documents below go through the same session, so an object named
-    // in both places is copied once. Nothing loads and nothing is queried
-    // unless some text actually holds a media reference.
-    const media = ClassmojiService.contentImport.openImportMediaCopy({
-      sourceClassroomId: job.source_classroom_id,
-      targetClassroomId: job.classroom_id,
-      importedBy: job.requested_by,
-      warn: detail => writer.addWarnings([`media: ${detail}`]),
-    });
-
-    const clone = await cloneContentRepo({
-      source,
-      target,
-      keepPages: wantPages,
-      keepSlides: wantSlides,
-      commitMessage: `Import content from ${source.repo}`,
-      onStep: note => writer.patch(...activePhases.map(phase => ({ phase, note }))),
-      media,
-    });
-    writer.patch(...activePhases.map(phase => ({ phase, note: null })));
-    await writer.flush();
-
-    if (clone.skipped === 'missing') {
-      // GitHub answers 404 both for a repo that never existed and for one this
-      // installation cannot see — but here the DB breaks the tie. Every page
-      // and slide row is created only after `ensureContentRepo` (page.service
-      // `createPage`, slide.service `create`), so a single source row proves
-      // the repo was created at some point. Rows present + a 404 therefore
-      // means deleted, renamed, or out of the installation's reach: a real
-      // failure, and one the user can act on.
-      //
-      // It has to THROW rather than warn. Warning marks the phases `done`,
-      // which finalizes the job COMPLETED — and a completed job cannot be
-      // retried (the retry endpoint refuses anything but FAILED) while a
-      // `done` phase is skipped on resume. That would strand an instructor
-      // with an empty term-rollover classroom and no way back. Failing keeps
-      // the job retryable, so granting access and retrying recovers content.
-      const [sourcePages, sourceSlides] = await Promise.all([
-        wantPages ? prisma.page.count({ where: { classroom_id: job.source_classroom_id } }) : 0,
-        wantSlides ? prisma.slide.count({ where: { classroom_id: job.source_classroom_id } }) : 0,
+      const [source, target] = await Promise.all([
+        contentRepoCoordinates(prisma, job.source_classroom_id),
+        contentRepoCoordinates(prisma, job.classroom_id),
       ]);
-      if (sourcePages + sourceSlides > 0) {
-        throw new Error(
-          `source content repository ${source.orgLogin}/${source.repo} could not be cloned, but ` +
-            `the source classroom has ${sourcePages + sourceSlides} item(s) of content to copy. ` +
-            `The repository may have been deleted or renamed, or the Classmoji GitHub App may no ` +
-            `longer have access to it. Nothing was changed — fix the access and retry.`
+      if (!source) {
+        // A source with no content repo has no content — zeros and a warning,
+        // exactly as the per-file importer behaved.
+        writer.addWarnings(['source: source classroom has no configured content repository']);
+        writer.patch(
+          ...activePhases.map(phase => ({ phase, status: 'done' as const, note: null }))
         );
+        await writer.flush();
+        return { pages: 0, slides: 0, pushed: false };
       }
-    }
+      if (!target) {
+        throw new Error('Target classroom content repository is not configured');
+      }
 
-    if (!clone.pushed) {
-      // Nothing reached the target repo. Creating rows now would point every
-      // page and deck at a path that does not exist — a classroom full of
-      // broken content, which is worse than an empty one. Say why and stop.
-      writer.addWarnings([describeEmptyCopy(source, clone.skipped)]);
-      writer.patch(...activePhases.map(phase => ({ phase, status: 'done' as const, note: null })));
+      writer.patch(
+        ...activePhases.map(phase => ({
+          phase,
+          status: 'running' as const,
+          note: 'copying the content repository',
+        }))
+      );
       await writer.flush();
-      return { pages: 0, slides: 0, pushed: false, files: clone.files };
-    }
 
-    const counts = { pages: 0, slides: 0 };
-    if (wantPages) {
-      counts.pages = await importPageRows({
-        prisma,
-        job,
-        writer,
+      // ONE media copy for the whole content phase. The clone copies what the
+      // tree references before it pushes; the page covers and the FILE slides'
+      // media documents below go through the same session, so an object named
+      // in both places is copied once. Nothing loads and nothing is queried
+      // unless some text actually holds a media reference.
+      const media = ClassmojiService.contentImport.openImportMediaCopy({
+        sourceClassroomId: job.source_classroom_id,
+        targetClassroomId: job.classroom_id,
+        importedBy: job.requested_by,
+        warn: detail => writer.addWarnings([`media: ${detail}`]),
+        // Resume: copies an earlier attempt made are reused while still READY,
+        // and every copy this attempt makes is recorded the moment it lands.
+        knownCopies: job.progress.id_maps?.media ?? {},
+        onCopied: (sourceMediaId, copyMediaId) =>
+          writer.mergeIdMaps({ media: { [sourceMediaId]: copyMediaId } }),
+      });
+
+      const clone = await cloneContentRepo({
         source,
         target,
-        copied: clone.copied,
+        keepPages: wantPages,
+        keepSlides: wantSlides,
+        commitMessage: `Import content from ${source.repo}`,
+        onStep: note => writer.patch(...activePhases.map(phase => ({ phase, note }))),
         media,
       });
-    }
-    if (wantSlides) {
-      counts.slides = await importSlideRows({
-        prisma,
-        job,
-        writer,
-        copied: clone.copied,
-        media,
-      });
-    }
+      writer.patch(...activePhases.map(phase => ({ phase, note: null })));
+      await writer.flush();
 
-    // Rebuilt wholesale from the TARGET's rows — the source's manifest was
-    // deliberately dropped from the pushed tree.
-    if (counts.pages > 0 || counts.slides > 0) {
-      try {
-        await ClassmojiService.contentManifest.saveManifest(job.classroom_id);
-      } catch (error: unknown) {
-        writer.addWarnings([`manifest: failed to refresh target manifest: ${errText(error)}`]);
+      if (clone.skipped === 'missing') {
+        // GitHub answers 404 both for a repo that never existed and for one this
+        // installation cannot see — but here the DB breaks the tie. Every page
+        // and slide row is created only after `ensureContentRepo` (page.service
+        // `createPage`, slide.service `create`), so a single source row proves
+        // the repo was created at some point. Rows present + a 404 therefore
+        // means deleted, renamed, or out of the installation's reach: a real
+        // failure, and one the user can act on.
+        //
+        // It has to THROW rather than warn. Warning marks the phases `done`,
+        // which finalizes the job COMPLETED — and a completed job cannot be
+        // retried (the retry endpoint refuses anything but FAILED) while a
+        // `done` phase is skipped on resume. That would strand an instructor
+        // with an empty term-rollover classroom and no way back. Failing keeps
+        // the job retryable, so granting access and retrying recovers content.
+        const [sourcePages, sourceSlides] = await Promise.all([
+          wantPages ? prisma.page.count({ where: { classroom_id: job.source_classroom_id } }) : 0,
+          wantSlides ? prisma.slide.count({ where: { classroom_id: job.source_classroom_id } }) : 0,
+        ]);
+        if (sourcePages + sourceSlides > 0) {
+          throw new Error(
+            `source content repository ${source.orgLogin}/${source.repo} could not be cloned, but ` +
+              `the source classroom has ${sourcePages + sourceSlides} item(s) of content to copy. ` +
+              `The repository may have been deleted or renamed, or the Classmoji GitHub App may no ` +
+              `longer have access to it. Nothing was changed — fix the access and retry.`
+          );
+        }
       }
+
+      if (!clone.pushed) {
+        // Nothing reached the target repo. Creating rows now would point every
+        // page and deck at a path that does not exist — a classroom full of
+        // broken content, which is worse than an empty one. Say why and stop.
+        writer.addWarnings([describeEmptyCopy(source, clone.skipped)]);
+        writer.patch(
+          ...activePhases.map(phase => ({ phase, status: 'done' as const, note: null }))
+        );
+        await writer.flush();
+        return { pages: 0, slides: 0, pushed: false, files: clone.files };
+      }
+
+      const counts = { pages: 0, slides: 0 };
+      if (wantPages) {
+        counts.pages = await importPageRows({
+          prisma,
+          job,
+          writer,
+          source,
+          target,
+          copied: clone.copied,
+          media,
+        });
+      }
+      if (wantSlides) {
+        counts.slides = await importSlideRows({
+          prisma,
+          job,
+          writer,
+          copied: clone.copied,
+          media,
+        });
+      }
+
+      // Rebuilt wholesale from the TARGET's rows — the source's manifest was
+      // deliberately dropped from the pushed tree.
+      if (counts.pages > 0 || counts.slides > 0) {
+        try {
+          await ClassmojiService.contentManifest.saveManifest(job.classroom_id);
+        } catch (error: unknown) {
+          writer.addWarnings([`manifest: failed to refresh target manifest: ${errText(error)}`]);
+        }
+      }
+
+      writer.patch(...activePhases.map(phase => ({ phase, status: 'done' as const, note: null })));
+      writer.mergeCounts(counts);
+      await writer.flush();
+
+      return { ...counts, pushed: clone.pushed, files: clone.files };
+    } catch (error: unknown) {
+      await writer.flush();
+      throw error;
     }
-
-    writer.patch(...activePhases.map(phase => ({ phase, status: 'done' as const, note: null })));
-    writer.mergeCounts(counts);
-    await writer.flush();
-
-    return { ...counts, pushed: clone.pushed, files: clone.files };
   },
 });
 

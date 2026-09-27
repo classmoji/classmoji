@@ -553,3 +553,112 @@ describe('createMediaImportCopier: what is not copied', () => {
     ]);
   });
 });
+
+describe('createMediaImportCopier: resuming from a persisted map', () => {
+  const COPY = '55555555-5555-4555-8555-555555555555';
+
+  /** The destination answers READY for the ids in `readyCopies` only. */
+  function withReadyCopies(readyCopies: string[]) {
+    prisma.mediaObject.findMany.mockImplementation(
+      async ({
+        where,
+      }: {
+        where: { classroom_id: string; status?: string; id?: { in: string[] } };
+      }) => {
+        if (where.classroom_id === SOURCE) {
+          order.push('findMany:source');
+          return [row()].filter(r => where.id?.in.includes(r.id));
+        }
+        if (where.status === 'READY') {
+          order.push('findMany:known');
+          return readyCopies.filter(id => where.id?.in.includes(id)).map(id => ({ id }));
+        }
+        order.push('findMany:target');
+        return [];
+      }
+    );
+  }
+
+  it('reuses a copy still READY in the destination: no lookup, no reservation, no copy', async () => {
+    withReadyCopies([COPY]);
+    const onCopied = vi.fn();
+    const { list, warn } = warnings();
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn,
+      knownCopies: { [VIDEO]: COPY },
+      onCopied,
+    });
+
+    await copier.prepare([`media://${VIDEO}`]);
+
+    // Proven in SQL scoped to the DESTINATION and READY.
+    const known = prisma.mediaObject.findMany.mock.calls[0][0];
+    expect(known.where).toEqual({ classroom_id: TARGET, status: 'READY', id: { in: [COPY] } });
+    expect(order).toEqual(['findMany:known']);
+    expect(sent).toEqual([]);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(copier.copiedIdFor(VIDEO)).toBe(COPY);
+    expect(copier.rewrite(`media://${VIDEO}`)).toBe(`media://${COPY}`);
+    expect(onCopied).not.toHaveBeenCalled();
+    expect(list).toEqual([]);
+  });
+
+  it('copies again when the known copy is gone, and records the new pair', async () => {
+    withReadyCopies([]); // deleted, or never finished
+    const onCopied = vi.fn();
+    const { warn } = warnings();
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn,
+      knownCopies: { [VIDEO]: COPY },
+      onCopied,
+    });
+
+    await copier.prepare([`media://${VIDEO}`]);
+
+    const fresh = copier.copiedIdFor(VIDEO);
+    expect(fresh).not.toBeNull();
+    expect(fresh).not.toBe(COPY);
+    expect(sent.filter(s => s.name === 'CopyObject')).toHaveLength(1);
+    expect(onCopied).toHaveBeenCalledWith(VIDEO, fresh);
+  });
+
+  it('a retry after a failed run copies nothing twice', async () => {
+    // Run 1 copies the video and records the pair; the run then fails later.
+    const persisted: Record<string, string> = {};
+    const first = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn: () => {},
+      knownCopies: persisted,
+      onCopied: (source, copy) => {
+        persisted[source] = copy;
+      },
+    });
+    await first.prepare([`media://${VIDEO}`]);
+    const copy = first.copiedIdFor(VIDEO)!;
+    expect(persisted).toEqual({ [VIDEO]: copy });
+    expect(sent.filter(s => s.name === 'CopyObject')).toHaveLength(1);
+
+    // Run 2 (the retry) starts from the persisted map; the copy is READY.
+    sent.length = 0;
+    withReadyCopies([copy]);
+    const second = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn: () => {},
+      knownCopies: { ...persisted },
+      onCopied: (source, next) => {
+        persisted[source] = next;
+      },
+    });
+    await second.prepare([`media://${VIDEO}`, `"${signed(SOURCE, VIDEO)}"`]);
+
+    expect(sent.filter(s => s.name === 'CopyObject')).toHaveLength(0);
+    expect(second.copiedIdFor(VIDEO)).toBe(copy);
+    expect(persisted).toEqual({ [VIDEO]: copy });
+  });
+});

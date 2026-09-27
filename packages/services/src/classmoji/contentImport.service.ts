@@ -756,6 +756,8 @@ export function openImportMediaCopy({
   targetClassroomId,
   importedBy,
   warn,
+  knownCopies,
+  onCopied,
 }: {
   sourceClassroomId: string;
   targetClassroomId: string;
@@ -763,6 +765,13 @@ export function openImportMediaCopy({
   importedBy?: string | null;
   /** Unscoped detail — the caller adds the `media:` scope and the cap. */
   warn: (detail: string) => void;
+  /**
+   * Copies an earlier run of this import made (source id → copy id), from the
+   * job row. A copy still READY in the destination is reused, not re-made.
+   */
+  knownCopies?: Readonly<Record<string, string>> | null;
+  /** Each pair this run copies, as it lands — for the caller to persist. */
+  onCopied?: (sourceMediaId: string, copyMediaId: string) => void;
 }): ImportMediaCopy {
   let copier: ReturnType<MediaCopyModule['createMediaImportCopier']> | null = null;
 
@@ -777,6 +786,8 @@ export function openImportMediaCopy({
           targetClassroomId,
           importedBy,
           warn,
+          knownCopies,
+          onCopied,
         });
       }
       await copier.prepare(candidates);
