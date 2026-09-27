@@ -36,7 +36,9 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-function fakeStore(send: (command: unknown, options?: { abortSignal?: AbortSignal }) => Promise<unknown>) {
+function fakeStore(
+  send: (command: unknown, options?: { abortSignal?: AbortSignal }) => Promise<unknown>
+) {
   const client = { send: vi.fn(send) };
   return { store: { client, bucket: 'b' } as unknown as MediaStore, send: client.send };
 }
@@ -244,7 +246,7 @@ describe('downloadToFile', () => {
     expect((await stat(file)).size).toBe(500);
   });
 
-  it('refuses a stored object whose ContentLength is not the row\'s size, before streaming', async () => {
+  it("refuses a stored object whose ContentLength is not the row's size, before streaming", async () => {
     for (const declared of [10, 501]) {
       const file = join(dir, `input-${declared}`);
       await expect(downloadToFile(serving(declared), 'k', file, 500)).rejects.toMatchObject({

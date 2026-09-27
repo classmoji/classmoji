@@ -11,9 +11,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const spawn = vi.fn();
 vi.mock('node:child_process', () => ({ spawn: (...a: unknown[]) => spawn(...a) }));
 
-const { PROBE_STDOUT_MAX_BYTES, ToolCrashed, probeFile, runFfmpeg } = await import(
-  '../videoTools.ts'
-);
+const { PROBE_STDOUT_MAX_BYTES, ToolCrashed, probeFile, runFfmpeg } =
+  await import('../videoTools.ts');
 const { VideoRefusal } = await import('../videoPlan.ts');
 
 type Ending = {
@@ -42,7 +41,10 @@ function fakeChild(ending: Ending, options?: { signal?: AbortSignal }) {
   });
   // What spawn does with its `signal` option: kill, then report an AbortError.
   options?.signal?.addEventListener('abort', () => {
-    child.emit('error', Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }));
+    child.emit(
+      'error',
+      Object.assign(new Error('The operation was aborted'), { name: 'AbortError' })
+    );
     setImmediate(() => child.emit('close', null, 'SIGKILL'));
   });
   setImmediate(() => {

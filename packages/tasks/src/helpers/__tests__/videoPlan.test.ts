@@ -221,7 +221,8 @@ describe('parseProbe', () => {
   });
 
   it('reads the frame rate from avg_frame_rate, r_frame_rate only when there is no average', () => {
-    const rate = (over: Partial<ProbeStream>) => parseProbe(probe([h264(over)]), 1).video?.frameRate;
+    const rate = (over: Partial<ProbeStream>) =>
+      parseProbe(probe([h264(over)]), 1).video?.frameRate;
     expect(rate({ avg_frame_rate: '30000/1001', r_frame_rate: '120/1' })).toBeCloseTo(29.97, 2);
     expect(rate({ avg_frame_rate: '0/0', r_frame_rate: '120/1' })).toBe(120);
     expect(rate({ avg_frame_rate: '0/0', r_frame_rate: '0/0' })).toBeNull();
@@ -454,8 +455,9 @@ describe('argument lists — arrays, fixed shape, numbers only', () => {
       'fps=60,scale=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2'
     );
     expect(transcodeFilter(video({ avg_frame_rate: '60/1' }))).not.toContain('fps=');
-    expect(transcodeFilter(video({ avg_frame_rate: '30000/1001', r_frame_rate: '120/1' }))).not
-      .toContain('fps=');
+    expect(
+      transcodeFilter(video({ avg_frame_rate: '30000/1001', r_frame_rate: '120/1' }))
+    ).not.toContain('fps=');
     expect(transcodeFilter(video({ color_transfer: 'arib-std-b67' }))).toBe(
       'scale=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2,' +
         TONEMAP_FILTERS
@@ -471,7 +473,13 @@ describe('argument lists — arrays, fixed shape, numbers only', () => {
       facts(probe([h264({ codec_name: 'hevc', color_transfer: 'smpte2084' }), AAC])),
       'mp4'
     );
-    const args = renditionArgs({ input: IN, output: OUT, decision: d, audioIndex: 1, inputBytes: 1 });
+    const args = renditionArgs({
+      input: IN,
+      output: OUT,
+      decision: d,
+      audioIndex: 1,
+      inputBytes: 1,
+    });
     const after = (flag: string) => args[args.indexOf(flag) + 1];
     expect(after('-vf')).toContain('tonemap=hable');
     expect(after('-color_primaries')).toBe('bt709');

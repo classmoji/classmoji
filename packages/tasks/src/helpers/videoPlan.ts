@@ -635,16 +635,7 @@ export function renditionArgs({
     else args.push('-c:a', 'aac', '-b:a', '128k', '-ac', '2');
   }
 
-  args.push(
-    '-movflags',
-    '+faststart',
-    '-fs',
-    assertPositive(cap),
-    '-f',
-    'mp4',
-    '-y',
-    output
-  );
+  args.push('-movflags', '+faststart', '-fs', assertPositive(cap), '-f', 'mp4', '-y', output);
   return args;
 }
 
