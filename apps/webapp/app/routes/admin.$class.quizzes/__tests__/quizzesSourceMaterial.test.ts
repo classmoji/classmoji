@@ -4,7 +4,9 @@
  *   - Create and update forward `sourceMaterial` / `courseSearchEnabled` to the
  *     quiz service, which writes them in the quiz's own transaction. A
  *     malformed or foreign document comes back as a ResourceLinkServiceError;
- *     the action answers 404 and audits nothing (nothing was written).
+ *     the action answers 404 and audits nothing (nothing was written). Its
+ *     `conflict` code (another save of the same material committed first, and
+ *     this one was rolled back) answers 409 with its own copy.
  *   - A save that leaves the quiz PUBLISHED while every linked document is
  *     still a draft succeeds WITH a warning: students cannot start it yet.
  *     Saving is allowed; the warning is the whole intervention.
@@ -168,6 +170,28 @@ describe('create and update forward the material to the service', () => {
     });
 
     expect(status).toBe(404);
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('updateQuiz: a conflicting save is a 409 that says to save again, audited nothing', async () => {
+    mocks.update.mockRejectedValue(
+      Object.assign(new Error("[quizSourceMaterial] quiz quiz-1's source material was saved"), {
+        name: 'ResourceLinkServiceError',
+        code: 'conflict',
+      })
+    );
+
+    const { status, body } = await submit({
+      _action: 'updateQuiz',
+      id: 'quiz-1',
+      sourceMaterial: [{ kind: 'page', id: 'p1' }],
+    });
+
+    expect(status).toBe(409);
+    expect(body).toEqual({
+      error:
+        "Someone else saved this quiz's source material at the same time. Reload and save again.",
+    });
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 

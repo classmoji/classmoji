@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { useFetcher, useLocation, useNavigate, useParams } from 'react-router';
 import { useCallout } from '@classmoji/ui-components';
 import {
+  Alert,
   Drawer,
   ConfigProvider,
   theme,
@@ -264,6 +265,14 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetcher.state, fetcher.data]);
 
+  // A refused save answers `{ error }` (source material not in this class,
+  // another save of the same material at once, a quiz that is gone) and leaves
+  // the drawer open, since only a success closes it: say why, here.
+  const saveError =
+    fetcher.state === 'idle' && typeof fetcher.data?.error === 'string'
+      ? (fetcher.data.error as string)
+      : null;
+
   // Handle successful form submission
   useEffect(() => {
     if (fetcher.state === 'idle' && fetcher.data?.success) {
@@ -406,6 +415,15 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                 maxWidth: '800px',
               }}
             >
+              {saveError && (
+                <Alert
+                  type="error"
+                  showIcon
+                  message={saveError}
+                  style={{ marginBottom: 16 }}
+                  data-testid="quiz-form-error"
+                />
+              )}
               <Form
                 form={form}
                 layout="vertical"

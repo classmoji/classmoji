@@ -40,6 +40,16 @@ const allSourceMaterialDraft = (
 const isSourceMaterialRefusal = (error: unknown) =>
   (error as { name?: unknown } | null)?.name === 'ResourceLinkServiceError';
 
+/**
+ * The refusal's `conflict` code: another save of the same quiz's material
+ * committed first, and this one was rolled back whole. Saving again is the fix.
+ */
+const isSourceMaterialConflict = (error: unknown) =>
+  (error as { code?: unknown } | null)?.code === 'conflict';
+
+const SOURCE_MATERIAL_CONFLICT =
+  "Someone else saved this quiz's source material at the same time. Reload and save again.";
+
 interface AdminQuiz {
   id: string;
   name: string;
@@ -220,6 +230,16 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       headers: { 'Content-Type': 'application/json' },
     });
 
+  const sourceMaterialConflict = () =>
+    new Response(JSON.stringify({ error: SOURCE_MATERIAL_CONFLICT }), {
+      status: 409,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+  /** A ResourceLinkServiceError from quiz.create/update, as the form shows it. */
+  const sourceMaterialRefused = (error: unknown) =>
+    isSourceMaterialConflict(error) ? sourceMaterialConflict() : sourceMaterialNotFound();
+
   /** The draft warning for a quiz that is now published, read after the write. */
   const publishedDraftWarning = async (quizId: string) =>
     allSourceMaterialDraft(await ClassmojiService.quiz.findById(quizId))
@@ -280,7 +300,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           classroomId: classroom.id,
         });
       } catch (error) {
-        if (isSourceMaterialRefusal(error)) return sourceMaterialNotFound();
+        if (isSourceMaterialRefusal(error)) return sourceMaterialRefused(error);
         throw error;
       }
       await audit('CREATE', newQuiz.id, {
@@ -305,7 +325,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       try {
         await ClassmojiService.quiz.update(data.id, data);
       } catch (error) {
-        if (isSourceMaterialRefusal(error)) return sourceMaterialNotFound();
+        if (isSourceMaterialRefusal(error)) return sourceMaterialRefused(error);
         throw error;
       }
       await audit('UPDATE', data.id, {
