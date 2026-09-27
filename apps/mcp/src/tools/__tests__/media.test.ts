@@ -64,6 +64,7 @@ const {
   fileUploadFinishTool,
   fileUploadStatusTool,
   fileImportUrlTool,
+  auditableUrl,
 } = await import('../media.ts');
 
 const PAGE_ID = '11111111-1111-4111-8111-111111111111';
@@ -300,6 +301,30 @@ describe('file_import_url', () => {
     });
     expect(payload).toMatchObject({ upload_id: UPLOAD_ID, status: 'placing' });
     expect(mocks.auditCreate).toHaveBeenCalledWith(expect.objectContaining({ action: 'CREATE' }));
+  });
+});
+
+describe('file_import_url: the audit row', () => {
+  it('records the URL without its query string — a signed link keeps its credential there', async () => {
+    mocks.startUrlImport.mockResolvedValue({ uploadId: UPLOAD_ID, filename: 'a.mp4', maxBytes: 1 });
+    const url = 'https://bucket.example.com/a.mp4?X-Amz-Signature=secret&X-Amz-Credential=k#t=5';
+    await fileImportUrlTool.handler({ classroom: 'org/cs', page_id: PAGE_ID, url }, TEACHER);
+
+    // The service still gets the whole URL; only the audit is trimmed.
+    expect(mocks.startUrlImport).toHaveBeenCalledWith(expect.objectContaining({ url }));
+    const audited = JSON.stringify(mocks.auditCreate.mock.calls.at(-1));
+    expect(audited).toContain('https://bucket.example.com/a.mp4');
+    expect(audited).not.toContain('secret');
+    expect(audited).not.toContain('X-Amz');
+  });
+
+  it('auditableUrl drops query, fragment and credentials', () => {
+    expect(auditableUrl('https://u:p@x.test/a/b.mp4?sig=1#f')).toBe('https://x.test/a/b.mp4');
+    expect(auditableUrl('not a url?sig=1')).toBe('not a url');
+  });
+
+  it('tells the agent large files need a reasonably fast host', () => {
+    expect(fileImportUrlTool.description).toMatch(/reasonably fast host/);
   });
 });
 
