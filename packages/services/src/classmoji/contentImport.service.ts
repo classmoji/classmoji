@@ -731,11 +731,16 @@ export interface ImportMediaCopy {
    */
   copyObject(sourceMediaId: string): Promise<string | null>;
   /**
-   * Delete the copies this run made, for a caller whose commit of the
-   * rewritten content failed before it landed. Copies reused from an earlier
-   * run are kept. Never throws.
+   * Delete the copies this run made since the last `keep`, for a caller whose
+   * commit of the rewritten content failed before it landed. Copies reused
+   * from an earlier run are kept. Never throws.
    */
   discard(): Promise<void>;
+  /**
+   * The copies made so far are referenced by content that is now committed; a
+   * later `discard` (a later pass whose commit failed) leaves them.
+   */
+  keep(): void;
 }
 
 type MediaCopyModule = typeof import('../media/mediaImportCopy.ts');
@@ -816,6 +821,7 @@ export function openImportMediaCopy({
       await prepare([`media://${sourceMediaId}`]);
       return copier ? copier.copiedIdFor(sourceMediaId) : null;
     },
+    keep: () => copier?.keep(),
     discard: async () => {
       if (!copier) return;
       try {
@@ -1431,6 +1437,9 @@ async function importPages({
       branch: 'main',
       message: commitMessage,
     });
+    // The pages now in the repo reference these copies; nothing below may
+    // discard them.
+    media?.keep();
     for (const file of result.files) committedShas.set(file.path, file.sha);
     // Write-through: imported `content.json` is read through the asset map, and
     // an import is followed immediately by someone opening what they imported.
@@ -1439,6 +1448,8 @@ async function importPages({
     await recordContentAssets(target.classroomId, result.files);
   } catch (error: unknown) {
     warn('pages', `page content commit failed: ${errText(error)}`);
+    // Nothing committed references the copies this pass made.
+    await media?.discard();
     return 0;
   }
 
@@ -1848,6 +1859,7 @@ async function importSlides({
         branch: 'main',
         message: commitMessage,
       });
+      media?.keep();
       for (const file of result.files) committedShas.set(file.path, file.sha);
       // Write-through, for the same reason as the page batch above: `deck.json`
       // and `index.html` are read through the map, and an imported deck is
@@ -1855,6 +1867,9 @@ async function importSlides({
       await recordContentAssets(target.classroomId, result.files);
     } catch (error: unknown) {
       warn('slides', `slide content commit failed: ${errText(error)}`);
+      // No deck and no slide row is created, so nothing references the copies
+      // this pass made; the ones the committed pages use were kept above.
+      await media?.discard();
       return 0;
     }
   }

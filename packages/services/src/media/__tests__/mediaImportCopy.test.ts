@@ -1098,6 +1098,41 @@ describe('createMediaImportCopier: discard', () => {
     expect(deleteMedia).toHaveBeenCalledTimes(1);
   });
 
+  it('after keep, discards only the copies made since, and a later pass copies again', async () => {
+    deleteMedia.mockResolvedValue({});
+    database({
+      sourceRows: [row(), row({ id: PDF, kind: 'DOCUMENT', filename: 'notes.pdf', ext: 'pdf' })],
+    });
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn: () => {},
+    });
+
+    // Pass 1 (the pages) copies the video, and its commit lands.
+    await copier.prepare([`media://${VIDEO}`]);
+    const video = copier.copiedIdFor(VIDEO)!;
+    copier.keep();
+
+    // Pass 2 (the decks) copies the PDF, and its commit fails.
+    await copier.prepare([`media://${VIDEO} media://${PDF}`]);
+    const pdf = copier.copiedIdFor(PDF)!;
+    await copier.discard();
+
+    expect(deleteMedia).toHaveBeenCalledTimes(1);
+    expect(deleteMedia).toHaveBeenCalledWith({ classroom: { id: TARGET }, mediaId: pdf });
+    expect(copier.copiedIdFor(VIDEO)).toBe(video);
+    expect(copier.copiedIdFor(PDF)).toBeNull();
+
+    // A later pass that references the PDF copies it afresh.
+    sent.length = 0;
+    await copier.prepare([`media://${PDF}`]);
+    const again = copier.copiedIdFor(PDF);
+    expect(again).not.toBeNull();
+    expect(again).not.toBe(pdf);
+    expect(sent.filter(s => s.name === 'CopyObject')).toHaveLength(1);
+  });
+
   it('never throws when a delete fails', async () => {
     deleteMedia.mockRejectedValue(new Error('R2 is down'));
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});

@@ -75,7 +75,10 @@ import { uploadCapabilityFor } from './uploadCapability.ts';
  * objects), because nothing references them and a destination should not pay
  * for them. Copies reused from `knownCopies` are left alone — content an
  * earlier run DID commit may point at them. A discarded pair can stay in the
- * persisted map; the next run finds its copy gone and copies again.
+ * persisted map; the next run finds its copy gone and copies again. A run that
+ * commits more than once (the pages, then the decks) calls `keep` as each
+ * commit lands, so a LATER commit that fails discards only its own copies, never
+ * ones the committed content already names.
  *
  * ## "Never a half-rewritten file", decided
  *
@@ -165,11 +168,17 @@ export interface MediaImportCopier {
   /** The destination id a source object was copied to, or null. */
   copiedIdFor(sourceMediaId: string): string | null;
   /**
-   * Delete every copy THIS run made (never one reused from `knownCopies`), for
-   * a caller whose content never landed — see the header. Afterwards `rewrite`
-   * no longer repoints at them. Never throws.
+   * Delete every copy THIS run made since the last `keep` (never one reused
+   * from `knownCopies`), for a caller whose content never landed — see the
+   * header. Afterwards `rewrite` no longer repoints at them, and a later
+   * `prepare` copies those objects again. Never throws.
    */
   discard(): Promise<void>;
+  /**
+   * Every copy made so far is now referenced by committed content: a later
+   * `discard` (a LATER commit that failed) leaves it alone.
+   */
+  keep(): void;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -787,6 +796,10 @@ export function createMediaImportCopier(opts: MediaImportCopyOptions): MediaImpo
     for (const [sourceId, copyId] of [...created]) {
       created.delete(sourceId);
       copied.delete(sourceId);
+      // Undecided again: a later pass that references the same object (the
+      // slides after a page commit that failed) copies it afresh rather than
+      // leaving its reference pointing at the source.
+      settled.delete(sourceId);
       try {
         await deleteMedia({ classroom: { id: targetClassroomId }, mediaId: copyId });
       } catch (error) {
@@ -800,5 +813,6 @@ export function createMediaImportCopier(opts: MediaImportCopyOptions): MediaImpo
     rewrite: text => rewriteMediaRefs(text, sourceClassroomId, copied),
     copiedIdFor: sourceMediaId => copied.get(sourceMediaId) ?? null,
     discard,
+    keep: () => created.clear(),
   };
 }
