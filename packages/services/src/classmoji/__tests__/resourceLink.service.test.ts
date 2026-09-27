@@ -18,6 +18,7 @@ const pageFindFirst = vi.fn();
 const slideFindFirst = vi.fn();
 const repositoryFindFirst = vi.fn();
 const assignmentFindFirst = vi.fn();
+const quizFindFirst = vi.fn();
 const pageLinkFindFirst = vi.fn();
 const slideLinkFindFirst = vi.fn();
 const pageLinkCreate = vi.fn();
@@ -33,6 +34,7 @@ vi.mock('@classmoji/database', () => ({
     slide: { findFirst: (...a: unknown[]) => slideFindFirst(...a) },
     repository: { findFirst: (...a: unknown[]) => repositoryFindFirst(...a) },
     assignment: { findFirst: (...a: unknown[]) => assignmentFindFirst(...a) },
+    quiz: { findFirst: (...a: unknown[]) => quizFindFirst(...a) },
     pageLink: {
       findFirst: (...a: unknown[]) => pageLinkFindFirst(...a),
       create: (...a: unknown[]) => pageLinkCreate(...a),
@@ -86,6 +88,7 @@ beforeEach(() => {
   slideFindFirst.mockResolvedValue({ id: 'slide-1' });
   repositoryFindFirst.mockResolvedValue({ id: 'repo-1' });
   assignmentFindFirst.mockResolvedValue({ id: 'assign-1' });
+  quizFindFirst.mockResolvedValue({ id: 'quiz-1' });
   pageLinkFindFirst.mockResolvedValue(null);
   slideLinkFindFirst.mockResolvedValue(null);
   pageLinkCreate.mockResolvedValue({ id: 'link-1', order: 0, created_at: CREATED_AT });
@@ -127,6 +130,7 @@ describe('addLink', () => {
       page_id: 'page-1',
       repository_id: 'repo-1',
       assignment_id: null,
+      quiz_id: null,
     });
     expect(saveManifest).toHaveBeenCalledExactlyOnceWith(CLASSROOM);
   });
@@ -150,13 +154,19 @@ describe('addLink', () => {
     // which would match this slide's link to ANY repository and report a
     // duplicate that is not one.
     expect(slideLinkFindFirst).toHaveBeenCalledExactlyOnceWith({
-      where: { slide_id: 'slide-1', repository_id: null, assignment_id: 'assign-1' },
+      where: {
+        slide_id: 'slide-1',
+        repository_id: null,
+        assignment_id: 'assign-1',
+        quiz_id: null,
+      },
       select: { id: true },
     });
     expect(slideLinkCreate.mock.calls[0][0].data).toEqual({
       slide_id: 'slide-1',
       repository_id: null,
       assignment_id: 'assign-1',
+      quiz_id: null,
     });
   });
 
@@ -223,7 +233,7 @@ describe('addLink', () => {
 
     expect(await codeOf(addLink({ ...PAGE_TO_REPO }))).toBe('already_linked');
     expect(pageLinkFindFirst).toHaveBeenCalledWith({
-      where: { page_id: 'page-1', repository_id: 'repo-1', assignment_id: null },
+      where: { page_id: 'page-1', repository_id: 'repo-1', assignment_id: null, quiz_id: null },
       select: { id: true },
     });
     expectNoWrites();
@@ -270,6 +280,78 @@ describe('addLink', () => {
   });
 });
 
+describe('addLink — quiz target (source material)', () => {
+  const PAGE_TO_QUIZ = {
+    classroomId: CLASSROOM,
+    resourceType: 'page',
+    resourceId: 'page-1',
+    targetType: 'quiz',
+    targetId: 'quiz-1',
+  } as const;
+
+  it('proves the quiz is in this classroom and writes quiz_id with the other targets null', async () => {
+    await expect(addLink({ ...PAGE_TO_QUIZ })).resolves.toMatchObject({
+      id: 'link-1',
+      targetType: 'quiz',
+      targetId: 'quiz-1',
+    });
+
+    expect(quizFindFirst).toHaveBeenCalledExactlyOnceWith({
+      where: { id: 'quiz-1', classroom_id: CLASSROOM },
+      select: { id: true },
+    });
+    expect(pageLinkCreate.mock.calls[0][0].data).toEqual({
+      page_id: 'page-1',
+      repository_id: null,
+      assignment_id: null,
+      quiz_id: 'quiz-1',
+    });
+  });
+
+  it('does NOT rebuild the manifest for a quiz link, and reports it in sync', async () => {
+    // The manifest has no quiz section: nothing it describes changed.
+    await expect(addLink({ ...PAGE_TO_QUIZ })).resolves.toMatchObject({ manifestSynced: true });
+    expect(saveManifest).not.toHaveBeenCalled();
+  });
+
+  it('refuses a quiz from another classroom without writing', async () => {
+    quizFindFirst.mockResolvedValue(null);
+
+    expect(await codeOf(addLink({ ...PAGE_TO_QUIZ }))).toBe('target_not_found');
+    expectNoWrites();
+  });
+
+  it('maps the partial unique index (a racing duplicate) to already_linked', async () => {
+    // For quiz links the database DOES refuse the duplicate: the
+    // quiz_source_material migration adds a partial unique index on
+    // (page_id, quiz_id) WHERE quiz_id IS NOT NULL.
+    pageLinkCreate.mockRejectedValue(Object.assign(new Error('unique'), { code: 'P2002' }));
+
+    expect(await codeOf(addLink({ ...PAGE_TO_QUIZ }))).toBe('already_linked');
+  });
+
+  it('runs every read and the write on the caller transaction client when given one', async () => {
+    const txQuizFindFirst = vi.fn(async () => ({ id: 'quiz-1' }));
+    const txPageFindFirst = vi.fn(async () => ({ id: 'page-1' }));
+    const txLinkFindFirst = vi.fn(async () => null);
+    const txLinkCreate = vi.fn(async () => ({ id: 'link-tx', order: 0, created_at: CREATED_AT }));
+    const tx = {
+      page: { findFirst: txPageFindFirst },
+      quiz: { findFirst: txQuizFindFirst },
+      pageLink: { findFirst: txLinkFindFirst, create: txLinkCreate },
+    } as unknown as Parameters<typeof addLink>[0]['tx'];
+
+    await expect(addLink({ ...PAGE_TO_QUIZ, tx })).resolves.toMatchObject({ id: 'link-tx' });
+    expect(txPageFindFirst).toHaveBeenCalledOnce();
+    expect(txQuizFindFirst).toHaveBeenCalledOnce();
+    expect(txLinkCreate).toHaveBeenCalledOnce();
+    // Nothing went through the shared client.
+    expect(pageFindFirst).not.toHaveBeenCalled();
+    expect(quizFindFirst).not.toHaveBeenCalled();
+    expectNoWrites();
+  });
+});
+
 describe('removeLink', () => {
   it('deletes a page link through the classroom compound and refreshes the manifest', async () => {
     pageLinkDeleteMany.mockResolvedValue({ count: 1 });
@@ -281,7 +363,22 @@ describe('removeLink', () => {
     expect(pageLinkDeleteMany).toHaveBeenCalledExactlyOnceWith({
       where: { id: 'link-1', page: { classroom_id: CLASSROOM } },
     });
+    // The target is read under the SAME classroom compound before the delete.
+    expect(pageLinkFindFirst).toHaveBeenCalledExactlyOnceWith({
+      where: { id: 'link-1', page: { classroom_id: CLASSROOM } },
+      select: { quiz_id: true },
+    });
     expect(saveManifest).toHaveBeenCalledExactlyOnceWith(CLASSROOM);
+  });
+
+  it('deletes a quiz link without rebuilding the manifest', async () => {
+    pageLinkFindFirst.mockResolvedValue({ quiz_id: 'quiz-1' });
+    pageLinkDeleteMany.mockResolvedValue({ count: 1 });
+
+    await expect(
+      removeLink({ classroomId: CLASSROOM, resourceType: 'page', linkId: 'link-1' })
+    ).resolves.toEqual({ id: 'link-1', resourceType: 'page', manifestSynced: true });
+    expect(saveManifest).not.toHaveBeenCalled();
   });
 
   it('deletes a slide link through the slide classroom compound', async () => {
@@ -444,11 +541,12 @@ describe('listLinks', () => {
   it.each([
     ['repository', { repository_id: { not: null } }],
     ['assignment', { assignment_id: { not: null } }],
+    ['quiz', { quiz_id: { not: null } }],
   ])('narrows to %s targets when no target id is given', async (targetType, expected) => {
     await listLinks({
       classroomId: CLASSROOM,
       resourceType: 'page',
-      targetType: targetType as 'repository' | 'assignment',
+      targetType: targetType as 'repository' | 'assignment' | 'quiz',
     });
 
     expect(pageLinkFindMany.mock.calls[0][0].where).toMatchObject(expected);
@@ -465,20 +563,45 @@ describe('listLinks', () => {
     expect(pageLinkFindMany.mock.calls[0][0].where).toMatchObject({ assignment_id: 'assign-1' });
   });
 
-  it('matches either kind of target when an id is given without a type', async () => {
+  it('matches any kind of target when an id is given without a type', async () => {
     await listLinks({ classroomId: CLASSROOM, resourceType: 'page', targetId: 'repo-1' });
 
     expect(pageLinkFindMany.mock.calls[0][0].where).toMatchObject({
-      OR: [{ repository_id: 'repo-1' }, { assignment_id: 'repo-1' }],
+      OR: [{ repository_id: 'repo-1' }, { assignment_id: 'repo-1' }, { quiz_id: 'repo-1' }],
     });
   });
 
   it('drops a row whose target is gone rather than reporting a hole, and says so', async () => {
-    pageLinkFindMany.mockResolvedValue([{ ...pageRow, repository: null, assignment: null }]);
+    pageLinkFindMany.mockResolvedValue([
+      { ...pageRow, repository: null, assignment: null, quiz: null },
+    ]);
     slideLinkFindMany.mockResolvedValue([]);
 
     await expect(listLinks({ classroomId: CLASSROOM })).resolves.toEqual([]);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('neither a repository'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('no repository, assignment or quiz'));
+  });
+
+  it('reports a quiz target by the quiz name, with no slug', async () => {
+    pageLinkFindMany.mockResolvedValue([
+      {
+        ...pageRow,
+        repository: null,
+        quiz: { id: 'quiz-1', name: 'Week 3 check-in', classroom_id: CLASSROOM },
+      },
+    ]);
+    slideLinkFindMany.mockResolvedValue([]);
+
+    await expect(listLinks({ classroomId: CLASSROOM })).resolves.toEqual([
+      {
+        id: 'link-1',
+        resourceType: 'page',
+        targetType: 'quiz',
+        order: 0,
+        createdAt: CREATED_AT,
+        resource: { id: 'page-1', title: 'Setup', slug: 'setup' },
+        target: { id: 'quiz-1', title: 'Week 3 check-in', slug: null },
+      },
+    ]);
   });
 
   it.each([
@@ -500,6 +623,14 @@ describe('listLinks', () => {
           module: { classroom_id: 'classroom-2' },
           repository: { id: 'repo-9', title: 'Other', classroom_id: 'classroom-2' },
         },
+      },
+    ],
+    [
+      'a quiz',
+      {
+        repository: null,
+        assignment: null,
+        quiz: { id: 'quiz-9', name: 'Other', classroom_id: 'classroom-2' },
       },
     ],
   ])('drops a row pointing at %s in another classroom', async (_label, target) => {

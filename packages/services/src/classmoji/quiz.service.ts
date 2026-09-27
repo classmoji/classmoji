@@ -1,6 +1,12 @@
 import getPrisma from '@classmoji/database';
 import type { Prisma, QuizGradingStrategy, QuizStatus, Role } from '@prisma/client';
 import * as notificationService from './notification.service.ts';
+import {
+  SOURCE_MATERIAL_INCLUDE,
+  setQuizSourceMaterial,
+  sourceMaterialOf,
+  type SourceMaterialRef,
+} from './quizSourceMaterial.service.ts';
 
 interface QuizCreateInput {
   name: string;
@@ -17,6 +23,14 @@ interface QuizCreateInput {
   includeCodeContext?: boolean;
   maxAttempts?: string | number | null;
   gradingStrategy?: QuizGradingStrategy;
+  /**
+   * The documents the quiz is about, ONE ordered list across pages and decks.
+   * Absent leaves the material alone; a list replaces it (an empty list clears
+   * it). Validated by setQuizSourceMaterial, in the quiz's own transaction.
+   */
+  sourceMaterial?: SourceMaterialRef[];
+  /** Let the quiz agent search the whole course, not only the linked material. */
+  courseSearchEnabled?: boolean;
 }
 
 interface QuizUpdateInput {
@@ -33,6 +47,9 @@ interface QuizUpdateInput {
   includeCodeContext?: boolean;
   maxAttempts?: string | number | null;
   gradingStrategy?: QuizGradingStrategy;
+  /** As on QuizCreateInput: absent = unchanged, a list replaces the material. */
+  sourceMaterial?: SourceMaterialRef[];
+  courseSearchEnabled?: boolean;
 }
 
 interface QuizMembership {
@@ -80,8 +97,37 @@ export class QuizAccessError extends Error {
   }
 }
 
+/** What create/update hand back: the row with its repository and attempts, as before. */
+const QUIZ_WRITE_INCLUDE = {
+  repository: true,
+  attempts: {
+    include: {
+      user: true,
+    },
+  },
+} as const;
+
+/**
+ * Create a quiz, and its source material when given, in ONE transaction: an
+ * unknown or foreign document id rolls the quiz back with it.
+ */
 export const create = async (data: QuizCreateInput) => {
-  return getPrisma().quiz.create({
+  return getPrisma().$transaction(async tx => {
+    const quiz = await createQuizRow(tx, data);
+    if (data.sourceMaterial !== undefined) {
+      await setQuizSourceMaterial(tx, {
+        quizId: quiz.id,
+        classroomId: data.classroomId,
+        material: data.sourceMaterial,
+      });
+    }
+    return tx.quiz.findUniqueOrThrow({ where: { id: quiz.id }, include: QUIZ_WRITE_INCLUDE });
+  });
+};
+
+const createQuizRow = (tx: Prisma.TransactionClient, data: QuizCreateInput) =>
+  tx.quiz.create({
+    select: { id: true },
     data: {
       name: data.name,
       classroom_id: data.classroomId,
@@ -97,17 +143,9 @@ export const create = async (data: QuizCreateInput) => {
       include_code_context: data.includeCodeContext || false,
       max_attempts: data.maxAttempts !== undefined ? parseInt(String(data.maxAttempts), 10) : 1,
       grading_strategy: data.gradingStrategy || 'HIGHEST',
-    },
-    include: {
-      repository: true,
-      attempts: {
-        include: {
-          user: true,
-        },
-      },
+      course_search_enabled: data.courseSearchEnabled === true,
     },
   });
-};
 
 export const update = async (quizId: string, data: QuizUpdateInput) => {
   const updateData: Prisma.QuizUpdateInput = {};
@@ -139,18 +177,26 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
   if (data.maxAttempts !== undefined)
     updateData.max_attempts = parseInt(String(data.maxAttempts), 10);
   if (data.gradingStrategy !== undefined) updateData.grading_strategy = data.gradingStrategy;
+  if (data.courseSearchEnabled !== undefined)
+    updateData.course_search_enabled = data.courseSearchEnabled === true;
 
-  return getPrisma().quiz.update({
-    where: { id: quizId },
-    data: updateData,
-    include: {
-      repository: true,
-      attempts: {
-        include: {
-          user: true,
-        },
-      },
-    },
+  // One transaction, as in create: the material is validated against the
+  // quiz's own classroom (read back from the row, not taken from the caller),
+  // and a bad id rolls the field changes back with it.
+  return getPrisma().$transaction(async tx => {
+    const quiz = await tx.quiz.update({
+      where: { id: quizId },
+      data: updateData,
+      select: { id: true, classroom_id: true },
+    });
+    if (data.sourceMaterial !== undefined) {
+      await setQuizSourceMaterial(tx, {
+        quizId: quiz.id,
+        classroomId: quiz.classroom_id,
+        material: data.sourceMaterial,
+      });
+    }
+    return tx.quiz.findUniqueOrThrow({ where: { id: quiz.id }, include: QUIZ_WRITE_INCLUDE });
   });
 };
 
@@ -161,8 +207,13 @@ const deleteQuiz = async (quizId: string) => {
 };
 export { deleteQuiz as delete };
 
+/**
+ * One quiz with its classroom, repository and attempts, plus `source_material`:
+ * the linked pages and decks in material order, drafts included (a staff and
+ * server-side read; the student list below filters drafts out).
+ */
 export const findById = async (quizId: string) => {
-  return getPrisma().quiz.findUnique({
+  const quiz = await getPrisma().quiz.findUnique({
     where: { id: quizId },
     include: {
       repository: true,
@@ -172,8 +223,12 @@ export const findById = async (quizId: string) => {
           user: true,
         },
       },
+      ...SOURCE_MATERIAL_INCLUDE,
     },
   });
+  if (!quiz) return null;
+  const { page_links: _pageLinks, slide_links: _slideLinks, ...rest } = quiz;
+  return { ...rest, source_material: sourceMaterialOf(quiz) };
 };
 
 export const findByClassroom = async (classroomId: string, membership: QuizMembership | null) => {
@@ -216,12 +271,13 @@ export const getQuizzesByOrganization = async (
       _count: {
         select: { attempts: true },
       },
+      ...SOURCE_MATERIAL_INCLUDE,
     },
     orderBy: { created_at: 'desc' },
   });
 
   // Calculate statistics for each quiz
-  return quizzes.map(quiz => {
+  return quizzes.map(({ page_links, slide_links, ...quiz }) => {
     const completedAttempts = quiz.attempts.filter(
       a => a.completed_at !== null && a.partial_credit_percentage !== null
     );
@@ -233,11 +289,39 @@ export const getQuizzesByOrganization = async (
 
     return {
       ...quiz,
+      // Staff list: drafts included, flagged by is_draft.
+      source_material: sourceMaterialOf({
+        classroom_id: quiz.classroom_id,
+        page_links,
+        slide_links,
+      }),
       attemptsCount: quiz._count.attempts,
       avgScore: avgScore !== null ? Math.round(avgScore) : null,
     };
   });
 };
+
+/**
+ * The attempt columns the student quiz list reads (its table, tab filters and
+ * focus metrics) and the scoring below needs. Selected rather than spread:
+ * an attempt row also carries the agent config, the session token and the
+ * codebase path, none of which leave the server.
+ */
+const STUDENT_ATTEMPT_SELECT = {
+  id: true,
+  attempt_number: true,
+  started_at: true,
+  completed_at: true,
+  score: true,
+  feedback: true,
+  session_status: true,
+  questions_asked: true,
+  last_activity: true,
+  partial_credit_percentage: true,
+  first_attempt_percentage: true,
+  total_duration_ms: true,
+  unfocused_duration_ms: true,
+} as const;
 
 export const getQuizzesForStudent = async (
   classroomId: string,
@@ -282,13 +366,15 @@ export const getQuizzesForStudent = async (
       attempts: {
         where: { user_id: userId },
         orderBy: { started_at: 'desc' }, // Most recent first
+        select: STUDENT_ATTEMPT_SELECT,
       },
+      ...SOURCE_MATERIAL_INCLUDE,
     },
     orderBy: { created_at: 'desc' },
   });
 
   // Add attempt metadata for each quiz
-  return quizzes.map(quiz => {
+  return quizzes.map(({ page_links, slide_links, ...quiz }) => {
     const attempts = quiz.attempts || [];
     const attemptCount = attempts.length;
     const maxAttempts = quiz.max_attempts ?? 1;
@@ -400,6 +486,11 @@ export const getQuizzesForStudent = async (
 
     return {
       ...quiz,
+      // The student view names published documents only.
+      source_material: sourceMaterialOf(
+        { classroom_id: quiz.classroom_id, page_links, slide_links },
+        { publishedOnly: true }
+      ),
       attemptCount,
       attempts: processedAttempts,
       attemptsSummary: {
