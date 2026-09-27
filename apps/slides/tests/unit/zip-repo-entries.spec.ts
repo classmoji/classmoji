@@ -84,6 +84,18 @@ test.describe('RepoEntryGate', () => {
     expect(gate.skipped).toEqual([{ path: 'videos/b.mp4', name: 'b.mp4', bytes: CAP + 1 }]);
   });
 
+  test('an entry skipped for a reason of the caller’s own warns with that sentence', () => {
+    const gate = new RepoEntryGate();
+    gate.admit('big.mp4', CAP + 1, 'videos/big.mp4');
+    gate.skip('talk.mp4', 3 * 1024 * 1024, 'videos/talk.mp4', 'Skipped talk.mp4 — no room');
+    // Both are left out: the deck's references to either are removed.
+    expect(gate.skippedPaths()).toEqual(new Set(['videos/big.mp4', 'videos/talk.mp4']));
+    expect(gate.warnings(new Map([['videos/talk.mp4', ['2']]]))).toEqual([
+      'Skipped big.mp4 (35 MB) — larger than the 35 MB your course repository accepts',
+      'Slide 2: Skipped talk.mp4 — no room',
+    ]);
+  });
+
   test('names the slides that used a skipped file in its warning', () => {
     const gate = new RepoEntryGate();
     gate.admit('a.mp4', CAP + 1, 'videos/a.mp4');
@@ -162,7 +174,8 @@ test.describe('slides.com importer', () => {
     // straight from JSZip any more.
     expect(source.match(/await repoGate\.read\(/g)).toHaveLength(3);
     expect(source).not.toMatch(/file\.async\('base64'\)/);
-    // The Cloudinary fallback already holds the bytes, so it asks by size.
+    // A video its header routed to media but whose bytes did not already holds
+    // them, so it asks by size.
     expect(source).toContain('repoGate.admit(filename, buffer.length, filePath)');
   });
 
