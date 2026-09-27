@@ -477,7 +477,14 @@ describe('createUpload', () => {
     ]) {
       prisma.mediaObject.create.mockClear();
       sent.length = 0;
-      const created = await createUpload({ classroom, userId: 'u', filename, sizeBytes: 10 });
+      // `explicit`: small non-video files reach media only from Settings → Media.
+      const created = await createUpload({
+        classroom,
+        userId: 'u',
+        filename,
+        sizeBytes: 10,
+        options: { explicit: true },
+      });
 
       expect(created.contentType).toBe('application/octet-stream');
       expect(prisma.mediaObject.create.mock.calls[0][0].data).toMatchObject({
@@ -490,6 +497,48 @@ describe('createUpload', () => {
         ContentType: 'application/octet-stream',
       });
     }
+  });
+
+  it('keeps a small non-video file in the repository unless the upload is explicit', async () => {
+    // §7.10: media is for video and for what the repository cannot take.
+    getProStateForClassroomId.mockClear();
+    for (const filename of ['notes.pdf', 'diagram.png', 'data.csv']) {
+      await expect(
+        createUpload({ classroom, userId: 'u', filename, sizeBytes: 5 * 1024 * 1024 }),
+        filename
+      ).rejects.toMatchObject({ code: 'USE_REPO' });
+    }
+    // At the cap is still the repository's.
+    await expect(
+      createUpload({ classroom, userId: 'u', filename: 'a.pdf', sizeBytes: 35 * 1024 * 1024 })
+    ).rejects.toMatchObject({ code: 'USE_REPO' });
+    // Refused before anything is looked up, reserved or opened — and before
+    // Pro, since where a file goes is the same answer for every classroom.
+    expect(getProStateForClassroomId).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(0);
+  });
+
+  it('takes a non-video file over the repository cap, and any video, without explicit', async () => {
+    await createUpload({
+      classroom,
+      userId: 'u',
+      filename: 'dataset.zip',
+      sizeBytes: 35 * 1024 * 1024 + 1,
+    });
+    await createUpload({ classroom, userId: 'u', filename: 'clip.mp4', sizeBytes: 10 });
+    expect(prisma.mediaObject.create).toHaveBeenCalledTimes(2);
+  });
+
+  it('takes a small non-video file when the upload is explicit (Settings → Media)', async () => {
+    await createUpload({
+      classroom,
+      userId: 'u',
+      filename: 'notes.pdf',
+      sizeBytes: 10,
+      options: { explicit: true },
+    });
+    expect(prisma.mediaObject.create.mock.calls[0][0].data).toMatchObject({ kind: 'DOCUMENT' });
   });
 
   it('refuses a name with no extension, or one the variant cannot carry', async () => {
@@ -526,7 +575,7 @@ describe('createUpload', () => {
       sizeBytes: 10,
       // A PDF cannot be transcoded, so the video options are ignored rather
       // than stored and later acted on.
-      options: { optimise: true, allowDownload: true },
+      options: { optimise: true, allowDownload: true, explicit: true },
     });
     expect(prisma.mediaObject.create.mock.calls[0][0].data).toMatchObject({
       kind: 'DOCUMENT',
@@ -542,7 +591,7 @@ describe('createUpload', () => {
       userId: 'u',
       filename: 'handout.zip',
       sizeBytes: 10,
-      options: { allowDownload: false },
+      options: { allowDownload: false, explicit: true },
     });
     expect(prisma.mediaObject.create.mock.calls[0][0].data).toMatchObject({
       kind: 'ARCHIVE',

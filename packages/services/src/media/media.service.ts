@@ -11,6 +11,7 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { randomUUID } from 'node:crypto';
 import getPrisma from '@classmoji/database';
+import { REPO_REST_MAX_BYTES } from '@classmoji/utils/repo-limits';
 // The delivery layer's own predicate, not a copy of it: "can this classroom's
 // references be signed" has one definition and media must not grow a second.
 // No cycle — contentDelivery reaches media through `mediaLookup.ts`, which
@@ -107,6 +108,15 @@ export interface MediaOptions {
   optimise?: boolean;
   keepOriginal?: boolean;
   allowDownload?: boolean;
+  /**
+   * A deliberate "store this in media" — Settings → Media's own Upload button,
+   * which sends it for every file. Without it, a file the storage router keeps
+   * in the repository (not a video, within the repository's cap) is refused
+   * `USE_REPO`, so course content stays in git where it is portable. A routing
+   * choice behind the teaching-team gate the route already applies, not a
+   * permission.
+   */
+  explicit?: boolean;
 }
 
 export interface MediaUsage {
@@ -204,6 +214,8 @@ function requireClient(): { client: S3Client; bucket: string } {
  *      is wrong, and saying so first keeps a dev laptop's error honest;
  *   2. extension — any, as long as there is one the store can address; it
  *      decides the kind and fixes the content type;
+ *   2½. routing — a non-video file within the repository's cap is refused
+ *      `USE_REPO` unless the upload is `explicit` (see `MediaOptions`);
  *   3. Pro — before the numbers, so a free classroom is told it needs Pro
  *      rather than that it is 2 GB over a quota of zero;
  *   4. delivery — a classroom whose references cannot be signed has nowhere to
@@ -256,6 +268,23 @@ export async function createUpload({
     throw new MediaError(
       'KIND_NOT_ALLOWED',
       filenameRefusal(filename) ?? `This file cannot be uploaded: ${filename}`
+    );
+  }
+
+  // The storage router's rule (§7.10): media is for video and for what the
+  // repository cannot take. A small non-video file belongs in the repository —
+  // unless the uploader said, from Settings → Media, that it goes here.
+  // Before Pro: this is about WHERE the file goes, true for every classroom.
+  if (
+    !options.explicit &&
+    classified.kind !== 'VIDEO' &&
+    Number.isSafeInteger(sizeBytes) &&
+    sizeBytes > 0 &&
+    sizeBytes <= REPO_REST_MAX_BYTES
+  ) {
+    throw new MediaError(
+      'USE_REPO',
+      'This file is stored in the course repository, not in media storage.'
     );
   }
 

@@ -10,6 +10,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  createUploadOptions,
   DEFAULT_VIDEO_OPTIONS,
   MAX_MEDIA_EXTENSION_LENGTH,
   applyVideoOption,
@@ -104,6 +105,17 @@ describe('the video options', () => {
     expect(warnsWithoutOptimising('screen.mov', off)).toBe(true);
     expect(warnsWithoutOptimising('screen.mov', DEFAULT_VIDEO_OPTIONS)).toBe(false);
     expect(warnsWithoutOptimising('lecture.mp4', off)).toBe(false);
+  });
+});
+
+describe('createUploadOptions', () => {
+  it('marks every upload from this dialog explicit, video options only for a video', () => {
+    expect(createUploadOptions('lecture.mp4', DEFAULT_VIDEO_OPTIONS)).toEqual({
+      ...DEFAULT_VIDEO_OPTIONS,
+      explicit: true,
+    });
+    expect(createUploadOptions('notes.pdf', DEFAULT_VIDEO_OPTIONS)).toEqual({ explicit: true });
+    expect(createUploadOptions('data.csv', DEFAULT_VIDEO_OPTIONS)).toEqual({ explicit: true });
   });
 });
 

@@ -51,7 +51,14 @@ export type MediaErrorCode =
    * when the window closed, so letting it finish would store a file the quota
    * never covered. It has been cancelled; the uploader starts again.
    */
-  | 'UPLOAD_EXPIRED';
+  | 'UPLOAD_EXPIRED'
+  /**
+   * The storage router keeps this file in the course repository — it is not a
+   * video and it fits the repository's cap (decision §7.10) — and the upload
+   * did not say it was a deliberate "store this in media" (`explicit`, which
+   * only Settings → Media's own Upload button sends).
+   */
+  | 'USE_REPO';
 
 export class MediaError extends Error {
   readonly code: MediaErrorCode;

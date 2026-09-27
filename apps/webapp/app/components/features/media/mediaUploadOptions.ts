@@ -83,6 +83,22 @@ export function kindForFilename(filename: string): MediaKind | null {
 export const isVideoFilename = (filename: string) => kindForFilename(filename) === 'video';
 
 /**
+ * The `options` this dialog opens an upload with.
+ *
+ * `explicit` for EVERY file: this is the Media page's own Upload button, the
+ * one surface where "store this in media" is the whole point — without it the
+ * server keeps a small non-video file in the course repository (`USE_REPO`).
+ * The video checkboxes ride along only for a video; for anything else the
+ * server fixes them anyway.
+ */
+export function createUploadOptions(
+  filename: string,
+  options: VideoOptions
+): Partial<VideoOptions> & { explicit: true } {
+  return isVideoFilename(filename) ? { ...options, explicit: true } : { explicit: true };
+}
+
+/**
  * True when the file would very likely play for the uploader and fail for half
  * their class. A `.mov` off a Mac is usually HEVC, which Firefox does not
  * decode and Windows only does with a codec pack — exactly what optimising

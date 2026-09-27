@@ -103,6 +103,9 @@ const STATUS_FOR: Record<string, number> = {
   BAD_STATE: 409,
   SIZE_MISMATCH: 409,
   VERIFY_FAILED: 409,
+  // Routed elsewhere: the storage router keeps this file in the repository,
+  // and the upload was not an explicit "store this in media".
+  USE_REPO: 409,
   // Gone for good: the reservation lapsed and the upload was cancelled, so no
   // retry of the same call can succeed. The client starts over.
   UPLOAD_EXPIRED: 410,
@@ -315,7 +318,12 @@ export async function mediaUploadsAction({ request }: MediaHandlerArgs): Promise
 
     const options =
       body.options && typeof body.options === 'object' && !Array.isArray(body.options)
-        ? (body.options as { optimise?: boolean; keepOriginal?: boolean; allowDownload?: boolean })
+        ? (body.options as {
+            optimise?: boolean;
+            keepOriginal?: boolean;
+            allowDownload?: boolean;
+            explicit?: boolean;
+          })
         : {};
 
     const created = await ClassmojiService.media.createUpload({

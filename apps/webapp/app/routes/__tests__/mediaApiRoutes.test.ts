@@ -185,6 +185,25 @@ describe('POST /api/media/uploads', () => {
     }
   });
 
+  it('passes explicit through, and answers USE_REPO with 409', async () => {
+    mocks.createUpload.mockRejectedValue(new FakeMediaError('USE_REPO'));
+    const response = await createAction(
+      args(
+        post('/api/media/uploads', {
+          classroomId: CLASSROOM_ID,
+          filename: 'notes.pdf',
+          sizeBytes: 1,
+          options: { explicit: true },
+        })
+      )
+    );
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ error: 'USE_REPO' });
+    expect(mocks.createUpload).toHaveBeenCalledWith(
+      expect.objectContaining({ options: { explicit: true } })
+    );
+  });
+
   it('lets an auth refusal through as itself, audit row and all', async () => {
     mocks.assertClassroomAccess.mockRejectedValue(new Response('Forbidden', { status: 403 }));
     const response = await createAction(
