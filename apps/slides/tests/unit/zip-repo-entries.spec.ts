@@ -15,8 +15,10 @@ import { test, expect } from '@playwright/test';
 import JSZip from 'jszip';
 
 import {
+  EntrySizeError,
   RepoEntryGate,
   declaredUncompressedSize,
+  inflateAtMost,
   resolveMediaRef,
   slideNumberLabel,
 } from '../../app/utils/zipRepoEntries.ts';
@@ -166,6 +168,45 @@ test.describe('slideNumberLabel', () => {
   });
 });
 
+test.describe('inflateAtMost', () => {
+  const MB = 1024 * 1024;
+
+  /** A DEFLATE zip whose entry's header claims `declared` bytes. */
+  async function forged(bytes: number, declared: number) {
+    const zip = new JSZip();
+    zip.file('media/big.mp4', new Uint8Array(bytes));
+    const built = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
+    const loaded = await JSZip.loadAsync(built);
+    const entry = loaded.file('media/big.mp4')!;
+    // What an uploader who wrote their own header would hand us.
+    (entry as unknown as { _data: { uncompressedSize: number } })._data.uncompressedSize = declared;
+    return entry;
+  }
+
+  test('hands back the bytes of an honest entry', async () => {
+    const entry = await forged(3 * MB, 3 * MB);
+    expect((await inflateAtMost(entry, 3 * MB)).length).toBe(3 * MB);
+  });
+
+  test('a header that claims less stops at the limit, long before the end', async () => {
+    const entry = await forged(64 * MB, 1024);
+    const error = await inflateAtMost(entry, 1024).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(EntrySizeError);
+    const { inflatedBytes, limitBytes } = error as EntrySizeError;
+    expect(limitBytes).toBe(1024);
+    expect(inflatedBytes).toBeGreaterThan(1024);
+    // One chunk past the limit, not the 64 MB behind it.
+    expect(inflatedBytes).toBeLessThan(4 * MB);
+  });
+
+  test('a header that claims more is a size error too, not a failed import', async () => {
+    const entry = await forged(1 * MB, 2 * MB);
+    const error = await inflateAtMost(entry, 2 * MB).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(EntrySizeError);
+    expect((error as EntrySizeError).limitBytes).toBeNull();
+  });
+});
+
 test.describe('slides.com importer', () => {
   const source = readFileSync(join(here, '../../app/utils/slidesComImporter.server.ts'), 'utf8');
 
@@ -176,7 +217,8 @@ test.describe('slides.com importer', () => {
     // straight from JSZip.
     expect(source.match(/gate: repoGate,/g)).toHaveLength(2);
     expect(source.match(/^\s+limits,$/gm)).toHaveLength(2);
-    expect(source.match(/file\.async\('nodebuffer'\)/g)).toHaveLength(2);
+    expect(source.match(/inflateAtMost\(file, limit\)/g)).toHaveLength(2);
+    expect(source).not.toMatch(/file\.async\('nodebuffer'\)/);
     expect(source).not.toMatch(/file\.async\('base64'\)/);
   });
 

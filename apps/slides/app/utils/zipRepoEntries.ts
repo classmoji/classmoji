@@ -48,6 +48,78 @@ export function declaredUncompressedSize(entry: JSZip.JSZipObject): number | nul
   return typeof size === 'number' && Number.isFinite(size) && size >= 0 ? size : null;
 }
 
+/**
+ * An entry whose bytes are not what the caller was ready for: it inflated past
+ * the most the caller would hold of it, or JSZip found it did not match the
+ * size its header declared.
+ */
+export class EntrySizeError extends Error {
+  constructor(
+    /** How far it got before inflating stopped. */
+    readonly inflatedBytes: number,
+    /** The most the caller would take; null for a header mismatch JSZip found. */
+    readonly limitBytes: number | null
+  ) {
+    super(
+      limitBytes === null
+        ? 'ZIP entry does not match its declared size'
+        : `ZIP entry inflated past ${limitBytes} bytes`
+    );
+    this.name = 'EntrySizeError';
+  }
+}
+
+/** JSZip's own sentence when an inflated entry is not its header's size. */
+const JSZIP_SIZE_MISMATCH = /uncompressed data size mismatch/;
+
+/**
+ * An entry's bytes, inflating no more than `limitBytes` of them.
+ *
+ * `entry.async('nodebuffer')` inflates to the end before anything can look at
+ * the size, and only then compares it with the header — which the uploader
+ * wrote. An entry whose header claims less than it holds would be inflated
+ * whole into memory before anyone noticed. This streams it instead, counts the
+ * bytes as they arrive, destroys the stream the moment they pass the limit, and
+ * rejects with `EntrySizeError` (as it does for JSZip's own size mismatch).
+ */
+export function inflateAtMost(entry: JSZip.JSZipObject, limitBytes: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const stream = entry.nodeStream('nodebuffer') as NodeJS.ReadableStream & {
+      destroy?: () => void;
+    };
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let settled = false;
+
+    stream.on('data', (chunk: Buffer) => {
+      if (settled) return;
+      total += chunk.length;
+      if (total > limitBytes) {
+        settled = true;
+        chunks.length = 0;
+        stream.pause();
+        stream.removeAllListeners('data');
+        stream.destroy?.();
+        reject(new EntrySizeError(total, limitBytes));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    stream.on('end', () => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks, total));
+    });
+    stream.on('error', (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      chunks.length = 0;
+      const mismatch = error instanceof Error && JSZIP_SIZE_MISMATCH.test(error.message);
+      reject(mismatch ? new EntrySizeError(total, null) : error);
+    });
+  });
+}
+
 export class RepoEntryGate {
   /** Every entry left out, in the order they were met. */
   readonly skipped: SkippedEntry[] = [];

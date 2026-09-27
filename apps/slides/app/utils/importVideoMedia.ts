@@ -11,13 +11,22 @@
  * referenced from the deck as `media://{id}`. Everything else keeps the
  * repository path, and with it the per-entry skip for a file over the cap.
  *
- * Memory is the constraint that shapes `placeImportEntry`. A ZIP under the
- * upload cap can hold entries that inflate to gigabytes, so an entry is judged
- * by the size the ZIP declares BEFORE it is inflated, entries are placed one
- * at a time (inflate → store → drop), the whole import has an inflated-bytes
- * budget (`IMPORT_INFLATE_BUDGET_BYTES`), and the files kept for the
- * repository — held until the import's one commit — have a limit of their own
- * (`IMPORT_REPO_HELD_BYTES`). Both live on one `ImportLimits` per import.
+ * Memory is the constraint that shapes `placeImportEntry`, on a 2 GB machine.
+ * A ZIP under the upload cap can hold entries that inflate to gigabytes, and
+ * the size its header declares is the uploader's word, so:
+ *
+ *   - an entry is judged by its DECLARED size before anything is inflated, and
+ *     then inflated as a stream that stops the moment it passes that size
+ *     (`inflateAtMost`) — a forged header costs its own size, no more;
+ *   - entries are placed one at a time (inflate → store → drop);
+ *   - one entry is held whole while it is placed (`putMediaObject` takes a
+ *     Buffer), so a media-bound entry may not be over `IMPORT_ENTRY_MAX_BYTES`,
+ *     and one bound for the repository is already under its 35 MB cap;
+ *   - the files kept for the repository are held until the import's one
+ *     commit, so their total is capped (`IMPORT_REPO_HELD_BYTES`);
+ *   - everything inflated counts against one budget (`IMPORT_INFLATE_BUDGET_BYTES`).
+ *
+ * The limits live on one `ImportLimits` per import.
  *
  * An entry left out — too large, over a limit, or refused by media storage —
  * becomes a warning that names it, through the same gate as an entry over the
@@ -36,10 +45,9 @@ import { formatMegabytes } from '@classmoji/utils/repo-limits';
 import {
   DEFAULT_VIDEO_OPTIONS,
   MEDIA_QUOTA_FULL_MESSAGE,
-  formatGigabytes,
   type VideoOptions,
 } from './mediaUpload.ts';
-import type { RepoEntryGate } from './zipRepoEntries.ts';
+import { EntrySizeError, type RepoEntryGate } from './zipRepoEntries.ts';
 
 /**
  * The three video choices an imported video is stored with: the uploader's own
@@ -135,21 +143,30 @@ export function importAssetType(filePath: string): 'image' | 'video' | null {
 // Placing one entry
 // ─────────────────────────────────────────────────────────────────────────────
 
+const MiB = 1024 * 1024;
+
 /**
  * How many bytes one import may inflate in total, across every entry — the
- * repository's and media's alike. This bounds the work one ZIP can ask for;
- * what is HELD at once is bounded by `IMPORT_REPO_HELD_BYTES`.
+ * repository's and media's alike. Well under the machine's memory: a real
+ * export inflates to about the size of its ZIP (150 MB at most — images and
+ * video barely compress), so only an archive built to inflate gets near it.
  */
-export const IMPORT_INFLATE_BUDGET_BYTES = 3_000_000_000;
+export const IMPORT_INFLATE_BUDGET_BYTES = 512 * MiB;
 
 /**
  * How many bytes of files kept for the course repository one import may hold.
  * Every one of them is held — as base64, a third larger — until the import's
- * single commit, on a 2 GB machine that also holds the uploaded ZIP. Images and
- * video barely compress, so a real export's repository files come to about the
- * size of its ZIP (150 MB at most); only an archive built to inflate gets here.
+ * single commit, beside the uploaded ZIP itself.
  */
-export const IMPORT_REPO_HELD_BYTES = 256 * 1024 * 1024;
+export const IMPORT_REPO_HELD_BYTES = 256 * MiB;
+
+/**
+ * The most one media-bound entry may be. It is held whole while it is written
+ * (`putMediaObject` takes a Buffer, and inflating it peaks near twice its
+ * size), so this — not media's 2 GB per-file ceiling — is what one entry can
+ * cost. A file this large would not fit in the ZIP to begin with.
+ */
+export const IMPORT_ENTRY_MAX_BYTES = 256 * MiB;
 
 /** A running total of bytes against a limit. */
 export class ImportByteBudget {
@@ -189,8 +206,8 @@ export class ImportLimits {
 
 /**
  * The warning for an entry left out because the import has already inflated
- * as much as it may: `Skipped lecture.mp4 (900 MB) — this import is over its
- * 3 GB limit for all files together`.
+ * as much as it may: `Skipped lecture.mp4 (90 MB) — this import is over its
+ * 512 MB limit for all files together`.
  */
 export function importBudgetSkippedWarning(
   name: string,
@@ -199,8 +216,24 @@ export function importBudgetSkippedWarning(
 ): string {
   return (
     `Skipped ${name} (${formatMegabytes(bytes)}) — this import is over its ` +
-    `${formatGigabytes(limitBytes)} limit for all files together`
+    `${formatMegabytes(limitBytes)} limit for all files together`
   );
+}
+
+/**
+ * The warning for one entry too large to import: `Skipped lecture.mp4
+ * (300 MB) — it is over this import's 256 MB limit for one file`.
+ */
+export function importEntryTooLargeWarning(name: string, bytes: number): string {
+  return (
+    `Skipped ${name} (${formatMegabytes(bytes)}) — it is over this import's ` +
+    `${formatMegabytes(IMPORT_ENTRY_MAX_BYTES)} limit for one file`
+  );
+}
+
+/** The warning for an entry whose bytes are not the size the ZIP declared. */
+export function importEntryMisdeclaredWarning(name: string): string {
+  return `Skipped ${name} — its size does not match what the ZIP says`;
 }
 
 /**
@@ -226,8 +259,11 @@ export interface ImportZipEntry {
   filename: string;
   /** The uncompressed size the ZIP declares, or null when it declares none. */
   declared: number | null;
-  /** Decompress it. Called at most once, and only after the checks pass. */
-  inflate(): Promise<Buffer>;
+  /**
+   * Decompress it, stopping past `limitBytes` with an `EntrySizeError`
+   * (`inflateAtMost`). Called at most once, and only after the checks pass.
+   */
+  inflate(limitBytes: number): Promise<Buffer>;
 }
 
 /** Store one file's bytes in the classroom's media (`putMediaObject`). */
@@ -271,10 +307,16 @@ export async function placeImportEntry({
 
   /** Leave the entry out if `bytes` fit nowhere, or not within a limit. */
   const leftOut = (bytes: number): boolean => {
-    // The router says media only within media's own per-file ceiling (the
-    // capability's, never a constant here), so anything it does not send there
-    // has to fit the repository.
-    if (!importEntryGoesToMedia(capability, filename, bytes)) {
+    if (importEntryGoesToMedia(capability, filename, bytes)) {
+      // Held whole while it is written, so it has to fit in memory as one.
+      if (bytes > IMPORT_ENTRY_MAX_BYTES) {
+        gate.skip(filename, bytes, filePath, importEntryTooLargeWarning(filename, bytes));
+        return true;
+      }
+    } else {
+      // The router says media only within media's own per-file ceiling (the
+      // capability's, never a constant here), so anything it does not send
+      // there has to fit the repository.
       const media = capability?.media;
       if (media && bytes > media.perFileMaxBytes) {
         gate.skip(
@@ -312,7 +354,24 @@ export async function placeImportEntry({
 
   if (entry.declared !== null && leftOut(entry.declared)) return { kind: 'skipped' };
 
-  const buffer = await entry.inflate();
+  // Never more than the header declared (every check above passed on that
+  // size), and with no header, never more than one entry or the budget left.
+  const limit =
+    entry.declared ??
+    Math.min(IMPORT_ENTRY_MAX_BYTES, limits.inflated.limitBytes - limits.inflated.usedBytes);
+
+  let buffer: Buffer;
+  try {
+    buffer = await entry.inflate(limit);
+  } catch (error: unknown) {
+    if (!(error instanceof EntrySizeError)) throw error;
+    // Stopped part-way: the header said otherwise, or (with no header) it ran
+    // past a limit, which `leftOut` names.
+    if (entry.declared !== null || !leftOut(error.inflatedBytes)) {
+      gate.skip(filename, error.inflatedBytes, filePath, importEntryMisdeclaredWarning(filename));
+    }
+    return { kind: 'skipped' };
+  }
   if (leftOut(buffer.length)) return { kind: 'skipped' };
   limits.inflated.spend(buffer.length);
 

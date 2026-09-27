@@ -21,6 +21,7 @@ import { getThemeUrls, saveTheme, generateThemeSlug } from './themeService.serve
 import {
   RepoEntryGate,
   declaredUncompressedSize,
+  inflateAtMost,
   resolveMediaRef,
   slideNumberLabel,
 } from './zipRepoEntries.ts';
@@ -91,8 +92,10 @@ const SL_BLOCK_VISIBILITY_CSS = `
  *
  * A ZIP under the upload cap can hold entries that inflate to gigabytes. Each
  * entry is judged by its declared size BEFORE it is inflated (too large for
- * anywhere it could go → left out, never read), entries are placed one at a
- * time (a media file is stored and its bytes dropped before the next is read).
+ * anywhere it could go → left out, never read) and inflated as a stream that
+ * stops past that size, since the header is the uploader's word. Entries are
+ * placed one at a time (a media file is stored and its bytes dropped before the
+ * next is read).
  * The files kept for the repository ARE held until the one commit, so their
  * total has a limit, and the import has a total inflated-bytes budget; an entry
  * past either is left out with a warning. See `importVideoMedia.ts`.
@@ -350,7 +353,7 @@ export async function processZipImport({
             filePath,
             filename,
             declared: declaredUncompressedSize(file),
-            inflate: () => file.async('nodebuffer'),
+            inflate: limit => inflateAtMost(file, limit),
           },
           capability: uploadCapability,
           gate: repoGate,
@@ -429,7 +432,7 @@ export async function processZipImport({
               filePath,
               filename: filePath.split('/').pop() || filePath,
               declared: declaredUncompressedSize(file),
-              inflate: () => file.async('nodebuffer'),
+              inflate: limit => inflateAtMost(file, limit),
             },
             capability: null,
             gate: repoGate,
