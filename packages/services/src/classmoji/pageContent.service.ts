@@ -9,6 +9,7 @@ import {
   canonicalizeMany,
   fetchContentText,
   mappedAssetsBySha,
+  parseMediaRef,
   parseMissingUrl,
   resolveAssetUrl,
   signBlobUrlForClassroom,
@@ -19,6 +20,7 @@ import {
   type WarmContext,
 } from './contentDelivery.service.ts';
 import { assertRepoTarget, type CapabilityClassroom } from '../media/uploadCapability.ts';
+import { lookupReadyMedia } from '../media/mediaLookup.ts';
 import { indexOneFile } from './contentIndex.service.ts';
 import {
   dedupeMergedTreeIds,
@@ -806,7 +808,12 @@ export async function resolvePageAssetUrl(
  * undoes it, and undoes a `/missing/` placeholder the same way.
  *
  * Then require what is left to name ONE file in THIS classroom's content repo,
- * by the plain-path rule in `namesAPlainRepoFile` below. Deliberately stricter
+ * by the plain-path rule in `namesAPlainRepoFile` below — or ONE image in this
+ * classroom's media store: a `media://{id}` reference (or a signed media URL,
+ * which canonicalizes to one) is accepted only when the id is a READY row of
+ * THIS classroom whose kind is IMAGE, looked up with the classroom in the
+ * WHERE clause. A video, a deleted object, or another classroom's id is refused
+ * exactly like a foreign path. Deliberately stricter
  * than the web editor's cover control, which stores whatever URL it is given: a
  * cover is rendered on the public class site, and an agent acting on text it
  * read somewhere is a great deal easier to point at the wrong host than a
@@ -834,6 +841,22 @@ export async function canonicalizePageCoverRef(
       error instanceof Error ? error.message : error
     );
     return null;
+  }
+
+  const mediaId = parseMediaRef(canonical);
+  if (mediaId !== null) {
+    const classroomId = (page.classroom as { id?: unknown }).id;
+    if (typeof classroomId !== 'string') return null;
+    try {
+      const rows = await lookupReadyMedia(classroomId, [mediaId]);
+      return rows.get(mediaId)?.kind === 'IMAGE' ? canonical : null;
+    } catch (error) {
+      console.warn(
+        '[pageContent] Could not look up a media cover reference:',
+        error instanceof Error ? error.message : error
+      );
+      return null;
+    }
   }
 
   return namesAPlainRepoFile(ctx, canonical) ? canonical : null;

@@ -95,8 +95,19 @@ vi.mock('../contentDelivery.service.ts', async () => {
     // nothing under test. (`canonicalizePageCoverRef`'s own path rule is
     // module-private and runs for real either way.)
     parseMissingUrl: actual.parseMissingUrl,
+    parseMediaRef: actual.parseMediaRef,
   };
 });
+
+// The media lookup a `media://` cover is checked against: READY rows of one
+// classroom, by id. Stubbed so the cover rule (IMAGE only, this classroom) is
+// what is under test; mediaLookup.test.ts owns the query.
+const lookupReadyMediaMock = vi.fn(
+  async (..._args: unknown[]) => new Map<string, { kind: string }>()
+);
+vi.mock('../../media/mediaLookup.ts', () => ({
+  lookupReadyMedia: (...args: unknown[]) => lookupReadyMediaMock(...args),
+}));
 
 // The storage router's repository check. Its rule is uploadCapability.test.ts's
 // to pin; what is under test here is that every page upload asks it, with the
@@ -1033,6 +1044,46 @@ describe('pageContent.canonicalizePageCoverRef', () => {
 
   it('refuses an empty reference', async () => {
     await expect(canonicalizePageCoverRef(signablePage, '')).resolves.toBeNull();
+  });
+
+  describe('media references', () => {
+    const MEDIA_ID = '77777777-8888-4999-8aaa-bbbbbbbbbbbb';
+    const MEDIA_REF = `media://${MEDIA_ID}`;
+
+    beforeEach(() => lookupReadyMediaMock.mockReset());
+
+    it('accepts a READY image of this classroom, looked up by classroom and id', async () => {
+      lookupReadyMediaMock.mockResolvedValue(new Map([[MEDIA_ID, { kind: 'IMAGE' }]]));
+      await expect(canonicalizePageCoverRef(signablePage, MEDIA_REF)).resolves.toBe(MEDIA_REF);
+      expect(lookupReadyMediaMock).toHaveBeenCalledWith(CLASSROOM_ID, [MEDIA_ID]);
+    });
+
+    it('accepts a signed media URL, which canonicalizes to the ref', async () => {
+      canonicalizeAssetRefMock.mockResolvedValue(MEDIA_REF);
+      lookupReadyMediaMock.mockResolvedValue(new Map([[MEDIA_ID, { kind: 'IMAGE' }]]));
+      await expect(
+        canonicalizePageCoverRef(
+          signablePage,
+          `https://cdn.classmoji.test/c/${CLASSROOM_ID}/media/${MEDIA_ID}/orig.png?sig=x`
+        )
+      ).resolves.toBe(MEDIA_REF);
+    });
+
+    it('refuses a video, a missing row (deleted, or another classroom), or a failed lookup', async () => {
+      lookupReadyMediaMock.mockResolvedValue(new Map([[MEDIA_ID, { kind: 'VIDEO' }]]));
+      await expect(canonicalizePageCoverRef(signablePage, MEDIA_REF)).resolves.toBeNull();
+
+      lookupReadyMediaMock.mockResolvedValue(new Map());
+      await expect(canonicalizePageCoverRef(signablePage, MEDIA_REF)).resolves.toBeNull();
+
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      lookupReadyMediaMock.mockImplementationOnce(async () => {
+        throw new Error('db down');
+      });
+      await expect(canonicalizePageCoverRef(signablePage, MEDIA_REF)).resolves.toBeNull();
+      expect(lookupReadyMediaMock).toHaveBeenCalledTimes(3);
+      warn.mockRestore();
+    });
   });
 
   it('swallows a resolver failure — a cover read must not fail on a signing error', async () => {
