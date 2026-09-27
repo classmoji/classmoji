@@ -54,6 +54,23 @@ export {
 
 export { isMediaConfigured } from './mediaConfig.ts';
 
+// The storage router: pure, so it is ALSO reachable from the browser through
+// the `@classmoji/services/media/router` subpath, which is this one module.
+export { kindOfFilename, storageTargetFor } from './storageRouter.ts';
+export type { StorageRefusalCode, StorageTarget, UploadCapability } from './storageRouter.ts';
+
+// Its server half — the capability a loader hands an editor, and the check every
+// repository write of a user's file runs. Prisma and the Pro lookup, no S3.
+export { assertRepoTarget, uploadCapabilityFor } from './uploadCapability.ts';
+export type { CapabilityClassroom } from './uploadCapability.ts';
+
+export {
+  MediaRoutingError,
+  isMediaRoutingError,
+  mediaRoutingResponse,
+} from './MediaRoutingError.ts';
+export type { MediaRoutingCode } from './MediaRoutingError.ts';
+
 export {
   findMediaRow,
   lookupReadyMedia,
