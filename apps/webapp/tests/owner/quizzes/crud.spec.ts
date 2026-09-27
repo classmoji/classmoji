@@ -129,7 +129,7 @@ test.describe('Quiz Create Drawer', () => {
 
     await drawer.getByLabel('Quiz Name').fill(newName);
     await drawer.getByLabel('Subject').fill('JavaScript Fundamentals');
-    await drawer.getByLabel('Rubric Prompt').fill('Assess understanding of closures and scope.');
+    await drawer.getByLabel('Grading rubric').fill('Assess understanding of closures and scope.');
 
     const [createResponse] = await Promise.all([
       page.waitForResponse(

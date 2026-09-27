@@ -17,6 +17,11 @@ interface ManifestModuleEntry {
  * Manages the .classmoji/manifest.json file in the GitHub content repo
  */
 
+/** Whether any link places the document on a repository or an assignment. */
+export const isPlaced = (
+  links: ReadonlyArray<{ repository_id: string | null; assignment_id: string | null }>
+): boolean => links.some(link => Boolean(link.repository_id || link.assignment_id));
+
 /**
  * Save the content manifest to GitHub.
  *
@@ -91,12 +96,15 @@ export async function saveManifest(classroomId: string): Promise<boolean> {
     }
   }
 
-  // Find general (unlinked) content
+  // Find general content: whatever is not placed on a repository or an
+  // assignment. A link to a QUIZ (source material) is not a placement — the
+  // manifest has no quiz section — so a page or deck linked only to quizzes
+  // stays general rather than silently dropping out of the manifest.
   manifest.general.pages = allPages
-    .filter(p => p.links.length === 0)
+    .filter(p => !isPlaced(p.links))
     .map(p => p.slug ?? String(p.id));
   manifest.general.slides = allSlides
-    .filter(s => s.links.length === 0)
+    .filter(s => !isPlaced(s.links))
     .map(s => s.slug ?? String(s.id));
 
   // Write to repo

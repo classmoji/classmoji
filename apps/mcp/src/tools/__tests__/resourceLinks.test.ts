@@ -14,6 +14,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import type { ToolContext } from '../../mcp/registry.ts';
 
 const mocks = vi.hoisted(() => ({
@@ -465,5 +466,112 @@ describe('resource_links_list', () => {
     expect(resourceLinksListTool.scope).toBe('read');
     expect(resourceLinksListTool.roles).toEqual(['OWNER', 'TEACHER']);
     expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('quiz target (source material)', () => {
+  const QUIZ_ARGS = {
+    classroom: 'org/w26',
+    resource_type: 'page' as const,
+    resource_id: 'page-1',
+    target_type: 'quiz' as const,
+    target_id: 'quiz-1',
+  };
+
+  it('links a page to a quiz through the service with the ctx classroom', async () => {
+    mocks.addLink.mockResolvedValue({
+      id: 'link-9',
+      resourceType: 'page',
+      resourceId: 'page-1',
+      targetType: 'quiz',
+      targetId: 'quiz-1',
+      order: 0,
+      createdAt: CREATED_AT,
+      manifestSynced: true,
+    });
+
+    const result = parse(await resourceLinkAddTool.handler(QUIZ_ARGS, CTX));
+
+    expect(mocks.addLink).toHaveBeenCalledExactlyOnceWith({
+      classroomId: 'class-1',
+      resourceType: 'page',
+      resourceId: 'page-1',
+      targetType: 'quiz',
+      targetId: 'quiz-1',
+    });
+    expect(result).toMatchObject({ success: true, target_type: 'quiz', target_id: 'quiz-1' });
+    // Not "students will now see it there": a quiz link is material, not a listing.
+    expect(result.message).toContain('source material');
+    expect(result.message).not.toContain('students will now see');
+    expect(auditRow().data).toMatchObject({ target_type: 'quiz', target_id: 'quiz-1' });
+  });
+
+  it('reports a foreign or unknown quiz as the uniform scoped not_found "Quiz"', async () => {
+    mocks.addLink.mockRejectedValue(new ResourceLinkServiceError('target_not_found', 'nope'));
+
+    const error = await failure(resourceLinkAddTool.handler(QUIZ_ARGS, CTX));
+
+    expect(error?.kind).toBe('not_found');
+    expect(error?.message).toBe('Quiz not found in this classroom');
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('accepts quiz as a target_type in the add and list schemas', () => {
+    const addSchema = z.object(resourceLinkAddTool.inputSchema);
+    const listSchema = z.object(resourceLinksListTool.inputSchema);
+    expect(addSchema.safeParse(QUIZ_ARGS).success).toBe(true);
+    expect(listSchema.safeParse({ classroom: 'org/w26', target_type: 'quiz' }).success).toBe(true);
+    expect(addSchema.safeParse({ ...QUIZ_ARGS, target_type: 'module' }).success).toBe(false);
+  });
+
+  it('lists a quiz link with the quiz name as the target title', async () => {
+    mocks.listLinks.mockResolvedValue([
+      {
+        id: 'link-9',
+        resourceType: 'page',
+        targetType: 'quiz',
+        order: 2,
+        createdAt: CREATED_AT,
+        resource: { id: 'page-1', title: 'Semantic HTML', slug: 'semantic-html' },
+        target: { id: 'quiz-1', title: 'Week 3 check-in', slug: null },
+      },
+    ]);
+
+    const result = parse(
+      await resourceLinksListTool.handler({ classroom: 'org/w26', target_type: 'quiz' }, CTX)
+    );
+
+    expect(mocks.listLinks).toHaveBeenCalledWith(
+      expect.objectContaining({ classroomId: 'class-1', targetType: 'quiz' })
+    );
+    expect(result.links[0]).toEqual({
+      id: 'link-9',
+      resource_type: 'page',
+      resource: { id: 'page-1', title: 'Semantic HTML', slug: 'semantic-html' },
+      target_type: 'quiz',
+      target: { id: 'quiz-1', title: 'Week 3 check-in', slug: null },
+      order: 2,
+      created_at: '2026-01-02T03:04:05.000Z',
+    });
+  });
+});
+
+describe('resource link tool definitions', () => {
+  const tools = [resourceLinkAddTool, resourceLinkRemoveTool, resourceLinksListTool];
+
+  it('keep descriptions under the 1,500 bytes a client will keep', () => {
+    for (const tool of tools) {
+      expect(new TextEncoder().encode(tool.description).length, tool.name).toBeLessThan(1500);
+    }
+  });
+
+  it('annotate the two writes, and name the quiz target', () => {
+    expect(resourceLinkAddTool.annotations).toEqual({ destructive: false, openWorld: true });
+    expect(resourceLinkRemoveTool.annotations).toEqual({ destructive: true, openWorld: true });
+    for (const tool of tools) expect(tool.description).toContain('quiz');
+  });
+
+  it('keep the owner/teacher role tier', () => {
+    for (const tool of tools) expect(tool.roles).toEqual(['OWNER', 'TEACHER']);
   });
 });

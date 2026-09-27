@@ -4,6 +4,9 @@
  * the same message a missing assignment gets, so nothing links on to a quiz.
  * Served under /admin, /teacher and /assistant from this one loader.
  *
+ * A form assignment goes to the forms screen under the same prefix, except
+ * under /assistant, which has none: there it answers 404.
+ *
  * A REPO assignment's page also carries the assignment modal's context; where
  * quizzes are hidden that context offers no quiz and names none as bound.
  */
@@ -136,6 +139,32 @@ describe('assignment page — quiz assignments', () => {
     expect(response.status).toBe(302);
     expect(response.headers.get('Location')).toBe(`/admin/${CLASS_SLUG}/forms/exit-ticket`);
     expect(mocks.quizzesVisibleOrThrow).not.toHaveBeenCalled();
+  });
+});
+
+describe('assignment page — form assignments', () => {
+  beforeEach(() => {
+    mocks.findByIdInClassroom.mockResolvedValue({
+      id: 'asg-1',
+      type: 'FORM',
+      quiz: null,
+      form: { id: 'form-1', slug: 'exit-ticket' },
+    });
+  });
+
+  it('sends a teacher to the forms screen under /teacher', async () => {
+    const response = await load('teacher');
+
+    expect(response.headers.get('Location')).toBe(`/teacher/${CLASS_SLUG}/forms/exit-ticket`);
+  });
+
+  it('404s under /assistant, which has no forms screen, rather than redirecting to one', async () => {
+    // Forms are managed by OWNER and TEACHER only; /assistant/:class/forms
+    // does not exist, so a redirect there would land on a missing route.
+    const response = await load('assistant');
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get('Location')).toBeNull();
   });
 });
 

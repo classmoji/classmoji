@@ -74,7 +74,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         const tag = await ClassmojiService.organizationTag.upsert(classroom.id, name);
         return { tag: { id: tag.id, name: tag.name } };
       } catch (error: unknown) {
-        console.error('Tag create error:', error);
+        console.error('[admin.assignments] Tag create error:', error);
         return { error: 'Could not create the tag. Try again.' };
       }
     },
@@ -134,7 +134,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
               });
               templateRef = blank.fullName;
             } catch (error: unknown) {
-              console.error('Blank template creation failed:', error);
+              console.error('[admin.assignments] Blank template creation failed:', error);
               return {
                 error: `Could not create a blank template repository in ${classroom.git_organization.login}. Pick a template repository instead.`,
               };
@@ -165,8 +165,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         );
         return { success: `Assignment "${created.title}" created` };
       } catch (error: unknown) {
-        console.error('Assignment create error:', error);
-        return { error: error instanceof Error ? error.message : 'Failed to create assignment' };
+        console.error('[admin.assignments] Assignment create error:', error);
+        return { error: 'Failed to create assignment. Please try again.' };
       }
     },
     async update() {
@@ -179,8 +179,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         );
         return { success: `Assignment "${updated.title}" updated` };
       } catch (error: unknown) {
-        console.error('Assignment update error:', error);
-        return { error: error instanceof Error ? error.message : 'Failed to update assignment' };
+        console.error('[admin.assignments] Assignment update error:', error);
+        return { error: 'Failed to update assignment. Please try again.' };
       }
     },
     async delete() {
@@ -188,8 +188,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         await ClassmojiService.assignment.deleteInClassroom(data.id, classroom.id);
         return { success: 'Assignment deleted' };
       } catch (error: unknown) {
-        console.error('Assignment delete error:', error);
-        return { error: error instanceof Error ? error.message : 'Failed to delete assignment' };
+        console.error('[admin.assignments] Assignment delete error:', error);
+        return { error: 'Failed to delete assignment. Please try again.' };
       }
     },
   });

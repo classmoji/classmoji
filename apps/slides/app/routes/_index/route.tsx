@@ -131,7 +131,10 @@ export const loader = async ({ request }: { request: Request }) => {
           git_organization: { select: { login: true } },
         },
       },
+      // The card names the deck's repository. A deck can also be linked to a
+      // quiz (source material), so take a repository link, not just any.
       links: {
+        where: { repository_id: { not: null } },
         include: {
           repository: true,
         },

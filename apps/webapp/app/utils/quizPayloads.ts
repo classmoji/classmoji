@@ -14,9 +14,9 @@
  *     staff review, student) and the `QuizAttemptInterface` they render.
  *   - `studentQuizAttemptView` / `studentQuizAttemptsSummaryView` — the
  *     student quiz list's attempts table and per-quiz summary. The service
- *     (`quiz.getQuizzesForStudent`) spreads each attempt row, which carries
- *     the agent config, session and grading columns alongside what the table
- *     shows.
+ *     (`quiz.getQuizzesForStudent`) selects the attempt columns the list and
+ *     its scoring read, which is still more than the table shows (timing and
+ *     grading columns), so the view narrows again here.
  */
 
 /** The attempt fields the student quiz list reads (table columns and tab filters). */

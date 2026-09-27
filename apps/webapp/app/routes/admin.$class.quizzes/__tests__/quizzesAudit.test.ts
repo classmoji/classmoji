@@ -44,6 +44,8 @@ vi.mock('~/utils/helpers', () => ({
   addClassroomAuditLog: (...a: unknown[]) => mocks.addClassroomAuditLog(...a),
 }));
 
+vi.mock('@classmoji/ui-components', () => ({ useCallout: () => ({ show: vi.fn() }) }));
+
 vi.mock('~/utils/classroomProFlag.server', () => ({
   quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a),
 }));

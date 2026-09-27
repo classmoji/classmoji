@@ -37,7 +37,14 @@ interface QuizMessageMetadata {
   isExplorationStep?: boolean;
   toolName?: string;
   toolInput?: unknown;
+  /** A course-material step's document title (content_get), when the ai-agent saved one. */
+  title?: string;
   explorationSteps?: ExplorationStep[];
+  /**
+   * Set on a fixed-copy failure line the server saved in place of a reply
+   * (BUDGET_EXCEEDED, SOURCE_MATERIAL_UNAVAILABLE, AGENT_FAILURE, …).
+   */
+  errorType?: string;
   [key: string]: unknown;
 }
 
@@ -58,6 +65,18 @@ interface QuizMessage {
   timestamp?: string | Date;
 }
 
+/**
+ * Whether the transcript ends in a failure line the server saved in place of
+ * a question. Nothing more is coming for it, so the chat must stop waiting —
+ * a start refused for unavailable source material leaves that line as the
+ * ONLY assistant message, which the welcome-message rules below would
+ * otherwise read as "still waiting for question 1" and poll forever.
+ */
+const endsInFailureLine = (displayMessages: QuizMessage[]): boolean => {
+  const last = displayMessages[displayMessages.length - 1];
+  return last?.role === 'assistant' && Boolean(getMetadata(last.metadata)?.errorType);
+};
+
 /** Focus metrics snapshot from useQuizFocusMetrics */
 interface MetricsSnapshot {
   totalMs: number;
@@ -77,6 +96,7 @@ interface ExplorationStep {
   toolName: string;
   toolInput: unknown;
   timestamp: number;
+  title?: string;
 }
 
 interface QuizAttemptInterfaceProps {
@@ -542,7 +562,8 @@ function QuizAttemptInterface({
       const hasOpeningMessage = assistantMessages.some(
         (m: QuizMessage) => getMetadata(m.metadata)?.isOpeningMessage
       );
-      const hasWelcomeOnly = assistantMessages.length === 1 && !hasOpeningMessage;
+      const hasWelcomeOnly =
+        assistantMessages.length === 1 && !hasOpeningMessage && !endsInFailureLine(displayMessages);
       if (hasWelcomeOnly && !readOnly) {
         setLoading(true);
       }
@@ -690,7 +711,11 @@ function QuizAttemptInterface({
       const lastIsAssistantResponse =
         lastMsg?.role === 'assistant' && !getMetadata(lastMsg?.metadata)?.isWelcomeMessage;
 
-      if (hasOpeningMessage || (assistantMessages.length >= 2 && lastIsAssistantResponse)) {
+      if (
+        hasOpeningMessage ||
+        (assistantMessages.length >= 2 && lastIsAssistantResponse) ||
+        endsInFailureLine(displayMessages)
+      ) {
         setLoading(false);
       }
     }
@@ -886,12 +911,17 @@ function QuizAttemptInterface({
     );
     // During sends, slice off steps that existed before the send started
     const newSteps = sending ? allSteps.slice(explorationStepBaseRef.current) : allSteps;
-    return newSteps.map((m: QuizMessage) => ({
-      action: m.content,
-      toolName: (getMetadata(m.metadata)?.toolName as string) ?? '',
-      toolInput: getMetadata(m.metadata)?.toolInput,
-      timestamp: m.timestamp ? new Date(m.timestamp).getTime() : 0,
-    }));
+    return newSteps.map((m: QuizMessage) => {
+      const metadata = getMetadata(m.metadata);
+      return {
+        action: m.content,
+        toolName: (metadata?.toolName as string) ?? '',
+        toolInput: metadata?.toolInput,
+        timestamp: m.timestamp ? new Date(m.timestamp).getTime() : 0,
+        // Older steps, and every code step, carry none.
+        ...(typeof metadata?.title === 'string' && metadata.title ? { title: metadata.title } : {}),
+      };
+    });
   }, [initialMessages, sending]);
 
   return (

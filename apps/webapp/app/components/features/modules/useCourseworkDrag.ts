@@ -14,7 +14,8 @@ import { dragRowClass, type DropTarget } from '~/hooks';
  * A drop always sends the TARGET module its full new ordering, the moved row
  * included; the server moves the row and reindexes both sides. Until the loader
  * agrees, the move is shown locally, so the row does not jump back to where it
- * started for the length of the round trip.
+ * started for the length of the round trip. A refused move stops being shown,
+ * and the row is back where the server has it.
  */
 export type CourseworkScope = 'content' | 'assignment';
 
@@ -94,10 +95,13 @@ export const useCourseworkDrag = ({
   lists,
   onMove,
   enabled = true,
+  result,
 }: {
   lists: CourseworkList[];
   onMove: (move: CourseworkMove) => void;
   enabled?: boolean;
+  /** How the page's last move went, once it is back. */
+  result?: { error?: string };
 }) => {
   const dragRef = useRef<{ scope: CourseworkScope; id: string; fromModuleId: string } | null>(null);
   const [armedId, setArmedId] = useState<string | null>(null);
@@ -141,6 +145,13 @@ export const useCourseworkDrag = ({
       ids.every((item, i) => item.id === pending.orderedIds[i]);
     if (settled) setPending(null);
   }, [lists, pending]);
+
+  // A refused move never settles: show the rows where the server has them.
+  // Keyed on the result alone, so an older refusal still held when the next
+  // drop lands does not undo that one.
+  useEffect(() => {
+    if (result?.error) setPending(null);
+  }, [result]);
 
   const reset = useCallback(() => {
     dragRef.current = null;

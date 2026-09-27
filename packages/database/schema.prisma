@@ -1277,29 +1277,38 @@ model AuditLog {
 // ============================================================================
 
 model Quiz {
-  id                   String              @id @default(uuid())
-  classroom_id         String
-  repository_id        String?
-  name                 String
-  system_prompt        String?
-  rubric_prompt        String
-  due_date             DateTime?
-  status               QuizStatus          @default(DRAFT)
-  weight               Int                 @default(0)
-  question_count       Int                 @default(5)
-  difficulty_level     String?
-  subject              String?
-  include_code_context Boolean             @default(false)
-  grading_strategy     QuizGradingStrategy @default(HIGHEST)
-  max_attempts         Int                 @default(1)
-  created_at           DateTime            @default(now())
-  updated_at           DateTime            @default(now()) @updatedAt
+  id                    String              @id @default(uuid())
+  classroom_id          String
+  repository_id         String?
+  name                  String
+  system_prompt         String?
+  rubric_prompt         String
+  due_date              DateTime?
+  status                QuizStatus          @default(DRAFT)
+  weight                Int                 @default(0)
+  question_count        Int                 @default(5)
+  difficulty_level      String?
+  subject               String?
+  include_code_context  Boolean             @default(false)
+  grading_strategy      QuizGradingStrategy @default(HIGHEST)
+  max_attempts          Int                 @default(1)
+  /// Lets the quiz agent search the whole classroom's content (content_search
+  /// and content_list), not only the documents linked as source material, to
+  /// check whether the course covers something a student mentions. Off by
+  /// default; independent of the linked material.
+  course_search_enabled Boolean             @default(false)
+  created_at            DateTime            @default(now())
+  updated_at            DateTime            @default(now()) @updatedAt
 
   classroom    Classroom     @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   repository   Repository?   @relation(fields: [repository_id], references: [id])
   attempts     QuizAttempt[]
   module_items ModuleItem[]
   assignment   Assignment?
+  /// Source material: the pages and slide decks the quiz is about, in prompt
+  /// order (`order`). The quiz target of the shared link tables.
+  page_links   PageLink[]
+  slide_links  SlideLink[]
 
   @@index([classroom_id])
   @@index([repository_id])
@@ -1469,16 +1478,21 @@ model PageLink {
   page_id       String
   repository_id String?
   assignment_id String?
+  /// Set when the page is source material for a quiz. Unique per
+  /// (page_id, quiz_id) through a partial index the migration adds by hand.
+  quiz_id       String?
   order         Int      @default(0)
   created_at    DateTime @default(now())
 
   page       Page        @relation(fields: [page_id], references: [id], onDelete: Cascade)
   repository Repository? @relation(fields: [repository_id], references: [id], onDelete: Cascade)
   assignment Assignment? @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+  quiz       Quiz?       @relation(fields: [quiz_id], references: [id], onDelete: Cascade)
 
   @@unique([page_id, repository_id, assignment_id])
   @@index([repository_id])
   @@index([assignment_id])
+  @@index([quiz_id])
   @@map("page_links")
 }
 
@@ -1487,16 +1501,21 @@ model SlideLink {
   slide_id      String
   repository_id String?
   assignment_id String?
+  /// Set when the deck is source material for a quiz. Unique per
+  /// (slide_id, quiz_id) through a partial index the migration adds by hand.
+  quiz_id       String?
   order         Int      @default(0)
   created_at    DateTime @default(now())
 
   slide      Slide       @relation(fields: [slide_id], references: [id], onDelete: Cascade)
   repository Repository? @relation(fields: [repository_id], references: [id], onDelete: Cascade)
   assignment Assignment? @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+  quiz       Quiz?       @relation(fields: [quiz_id], references: [id], onDelete: Cascade)
 
   @@unique([slide_id, repository_id, assignment_id])
   @@index([repository_id])
   @@index([assignment_id])
+  @@index([quiz_id])
   @@map("slide_links")
 }
 

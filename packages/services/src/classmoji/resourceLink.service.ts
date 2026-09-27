@@ -1,40 +1,43 @@
 /**
  * Resource link service.
  *
- * A "resource link" associates a page or a slide deck with either a repository
- * (the assignment container — content shows on the repo page) or one specific
- * assignment inside it. Extracted from the web admin.$class.resources action so
- * that the resources kanban and the MCP resource-link tools share this path —
- * same precedent as roster.service.ts, staff.service.ts and
- * teamAdmin.service.ts. It is not the only writer of these tables: the
- * repository form route, page.service.linkPage and the slides importer all
- * create links of their own and do not come through here.
+ * A "resource link" associates a page or a slide deck with a repository (the
+ * assignment container — content shows on the repo page), one specific
+ * assignment inside it, or a quiz (the quiz's source material: the documents
+ * its questions are generated from, in `order`). The MCP resource-link tools
+ * come through here — same precedent as roster.service.ts, staff.service.ts
+ * and teamAdmin.service.ts. It is not the only writer of these tables: the
+ * repository form route, page.service.linkPage, the slides importer and the
+ * quiz form (quizSourceMaterial.setQuizSourceMaterial) all create links of
+ * their own and do not come through here.
  *
  * Three rules run through every function here:
  *
  * 1. EVERYTHING IS SCOPED TO THE CLASSROOM. `resourceId`, `targetId` and
  *    `linkId` all originate as caller input, so each is proven to live in the
- *    caller's classroom before it is joined or deleted. Page, Slide and
- *    Repository carry `classroom_id` directly; Assignment does not, and is
- *    reached through its Repository. A record that does not exist and a record
+ *    caller's classroom before it is joined or deleted. Page, Slide,
+ *    Repository and Quiz carry `classroom_id` directly; Assignment does not,
+ *    and is reached through its Repository. A record that does not exist and a record
  *    belonging to another classroom raise the SAME typed error, so a probe
  *    cannot tell them apart. Reads apply the same rule to BOTH ends: a row
  *    whose target resolves outside the classroom is dropped rather than
  *    reported, since the writers above are not all classroom-scoped.
  *
- * 2. DUPLICATES ARE CAUGHT BY THE PRE-CHECK, AND ONLY BY THE PRE-CHECK. The
- *    kanban drops a duplicate drag before submitting, but it decides that from
- *    loader data that may be stale, and an API caller has no such check at all.
- *    The @@unique on (page_id, repository_id, assignment_id) cannot stand in
- *    for one either: exactly one of the two target columns is always NULL, and
- *    the Postgres unique index is nulls-distinct (see the migration — no
- *    `NULLS NOT DISTINCT`), so a second identical row inserts happily. The
- *    read-then-write pre-check below is therefore the whole guard, and two
- *    identical adds racing each other can both pass it — a duplicate row from
- *    concurrent adds is an ACCEPTED outcome here, not a prevented one. It is
- *    cosmetic (the manifest keys content by slug, and either row can be
+ * 2. DUPLICATES ARE CAUGHT BY A READ-THEN-WRITE PRE-CHECK. A caller cannot be
+ *    trusted to have checked, so `addLink` looks for an identical row first.
+ *    For REPOSITORY and ASSIGNMENT links that pre-check is the whole guard: the
+ *    @@unique on (page_id, repository_id, assignment_id) cannot stand in for
+ *    it, because at most one of the target columns is ever set and the
+ *    Postgres unique index is nulls-distinct (see the migration — no
+ *    `NULLS NOT DISTINCT`), so a second identical row inserts happily. Two
+ *    identical adds racing each other can both pass the pre-check, and the
+ *    duplicate row that results is an ACCEPTED outcome, not a prevented one: it
+ *    is cosmetic (the manifest keys content by slug, and either row can be
  *    removed), and ruling it out needs an index change the existing rows would
- *    have to be de-duplicated for first.
+ *    have to be de-duplicated for first. QUIZ links do have a database
+ *    backstop: a partial unique index on (page_id|slide_id, quiz_id) WHERE
+ *    quiz_id IS NOT NULL (quiz_source_material migration) refuses the second
+ *    row, and the P2002 below maps it to `already_linked`.
  *
  * 3. THE MANIFEST IS BEST EFFORT, AND SAYS SO. Every successful write rebuilds
  *    `.classmoji/manifest.json` in the classroom content repo. That push talks
@@ -42,7 +45,9 @@
  *    request, so it is wrapped — but the outcome is not hidden: every mutation
  *    reports `manifestSynced`, false when the push was skipped or failed. It
  *    runs ONLY after a write actually happened — a rejected add or a no-op
- *    remove leaves the manifest untouched.
+ *    remove leaves the manifest untouched. A QUIZ link never touches it: the
+ *    manifest has no quiz section, so nothing it describes changed, and the
+ *    write reports `manifestSynced: true` without a push.
  *
  * Authorization is NOT re-checked here. Callers (route auth gates / MCP tool
  * scopes) own that, exactly as in the sibling services above.
@@ -54,11 +59,22 @@ import * as contentManifestService from './contentManifest.service.ts';
 /** Which kind of content is being linked. */
 export type ResourceLinkResourceType = 'page' | 'slide';
 /** What the content is being linked TO. */
-export type ResourceLinkTargetType = 'repository' | 'assignment';
+export type ResourceLinkTargetType = 'repository' | 'assignment' | 'quiz';
 
-/** Thrown for every caller-fixable failure so routes/tools can map it to a message. */
+/**
+ * Thrown for every caller-fixable failure so routes/tools can map it to a message.
+ *
+ * `conflict` comes only from quizSourceMaterial.setQuizSourceMaterial: another
+ * save of the same quiz's material committed first. Nothing of the losing save
+ * was kept; reloading and saving again is the fix.
+ */
 export class ResourceLinkServiceError extends Error {
-  code: 'resource_not_found' | 'target_not_found' | 'already_linked' | 'link_not_found';
+  code:
+    | 'resource_not_found'
+    | 'target_not_found'
+    | 'already_linked'
+    | 'link_not_found'
+    | 'conflict';
 
   constructor(code: ResourceLinkServiceError['code'], message: string) {
     super(message);
@@ -76,7 +92,10 @@ export interface CreatedResourceLink {
   targetId: string;
   order: number;
   createdAt: Date;
-  /** Whether the manifest push that follows the write actually landed. */
+  /**
+   * Whether the manifest push that follows the write actually landed. Always
+   * true for a quiz target, which never touches the manifest (rule 3).
+   */
   manifestSynced: boolean;
 }
 
@@ -130,8 +149,12 @@ function assertUsableId(
 
 /** The resource half of a link row — exactly one of the two id columns. */
 type ResourceColumn = { page_id: string } | { slide_id: string };
-/** The target half — exactly one id, the other written as an explicit NULL. */
-type TargetColumns = { repository_id: string | null; assignment_id: string | null };
+/** The target half — exactly one id, the others written as explicit NULLs. */
+type TargetColumns = {
+  repository_id: string | null;
+  assignment_id: string | null;
+  quiz_id: string | null;
+};
 
 /**
  * Prove the page/slide being linked lives in this classroom, and hand back the
@@ -142,27 +165,37 @@ type TargetColumns = { repository_id: string | null; assignment_id: string | nul
  * write on the same side: a value that is neither literal cannot be validated
  * as one kind and written as the other, it is refused here before any query
  * runs — as the same not-found an unknown id gets.
+ *
+ * `decksOnly` (set for a quiz target) admits only reveal.js DECK slides: a FILE
+ * or LINK slide has no indexed text, so as quiz source material it could never
+ * reach a prompt. It is refused as the same not-found, not written.
  */
 async function resolveResource(
   classroomId: string,
   resourceType: ResourceLinkResourceType,
-  resourceId: string
+  resourceId: string,
+  { decksOnly = false }: { decksOnly?: boolean } = {}
 ): Promise<ResourceColumn> {
+  const db = getPrisma();
   const where = { id: resourceId, classroom_id: classroomId };
   const notFound = () =>
     new ResourceLinkServiceError(
       'resource_not_found',
-      `[resourceLink] ${resourceType} ${resourceId} not found in classroom ${classroomId}`
+      `[resourceLink] ${resourceType} ${resourceId} not found in classroom ${classroomId}` +
+        (decksOnly && resourceType === 'slide' ? ' as a deck' : '')
     );
 
   switch (resourceType) {
     case 'page': {
-      const found = await getPrisma().page.findFirst({ where, select: { id: true } });
+      const found = await db.page.findFirst({ where, select: { id: true } });
       if (!found) throw notFound();
       return { page_id: resourceId };
     }
     case 'slide': {
-      const found = await getPrisma().slide.findFirst({ where, select: { id: true } });
+      const found = await db.slide.findFirst({
+        where: decksOnly ? { ...where, kind: 'DECK' } : where,
+        select: { id: true },
+      });
       if (!found) throw notFound();
       return { slide_id: resourceId };
     }
@@ -175,8 +208,8 @@ async function resolveResource(
 }
 
 /**
- * Prove the link target lives in this classroom, and hand back the pair of
- * target columns the write will use. Repository carries `classroom_id`
+ * Prove the link target lives in this classroom, and hand back the target
+ * columns the write will use. Repository and Quiz carry `classroom_id`
  * directly; Assignment is reached through its Repository.
  *
  * One switch decides both halves, for the same reason as `resolveResource`: an
@@ -188,6 +221,7 @@ async function resolveTarget(
   targetType: ResourceLinkTargetType,
   targetId: string
 ): Promise<TargetColumns> {
+  const db = getPrisma();
   const notFound = () =>
     new ResourceLinkServiceError(
       'target_not_found',
@@ -196,20 +230,28 @@ async function resolveTarget(
 
   switch (targetType) {
     case 'repository': {
-      const found = await getPrisma().repository.findFirst({
+      const found = await db.repository.findFirst({
         where: { id: targetId, classroom_id: classroomId },
         select: { id: true },
       });
       if (!found) throw notFound();
-      return { repository_id: targetId, assignment_id: null };
+      return { repository_id: targetId, assignment_id: null, quiz_id: null };
     }
     case 'assignment': {
-      const found = await getPrisma().assignment.findFirst({
+      const found = await db.assignment.findFirst({
         where: { id: targetId, module: { classroom_id: classroomId } },
         select: { id: true },
       });
       if (!found) throw notFound();
-      return { repository_id: null, assignment_id: targetId };
+      return { repository_id: null, assignment_id: targetId, quiz_id: null };
+    }
+    case 'quiz': {
+      const found = await db.quiz.findFirst({
+        where: { id: targetId, classroom_id: classroomId },
+        select: { id: true },
+      });
+      if (!found) throw notFound();
+      return { repository_id: null, assignment_id: null, quiz_id: targetId };
     }
     default:
       throw new ResourceLinkServiceError(
@@ -217,6 +259,21 @@ async function resolveTarget(
         `[resourceLink] ${String(targetType)} is not a target type`
       );
   }
+}
+
+/**
+ * The `order` for a document added to the END of a quiz's material: one past
+ * the highest `order` across the quiz's page AND slide links (one ordered list
+ * across both tables), 0 when there are none. Two adds racing each other can
+ * land on the same value; every reader breaks that tie by creation time.
+ */
+async function nextQuizMaterialOrder(quizId: string): Promise<number> {
+  const db = getPrisma();
+  const [pages, slides] = await Promise.all([
+    db.pageLink.aggregate({ where: { quiz_id: quizId }, _max: { order: true } }),
+    db.slideLink.aggregate({ where: { quiz_id: quizId }, _max: { order: true } }),
+  ]);
+  return Math.max(pages._max.order ?? -1, slides._max.order ?? -1) + 1;
 }
 
 /**
@@ -242,12 +299,13 @@ async function syncManifest(classroomId: string): Promise<boolean> {
 }
 
 /**
- * Link a page or slide deck to a repository or a specific assignment.
+ * Link a page or slide deck to a repository, a specific assignment, or a quiz.
  *
  * Both ends are proven to be in `classroomId` BEFORE the row is created, and an
  * existing identical link is reported as `already_linked` rather than inserted
  * twice. On success the content manifest is refreshed (best effort — the result
- * comes back as `manifestSynced`).
+ * comes back as `manifestSynced`), except for a quiz target (rule 3). A quiz
+ * target is appended to the END of the quiz's material list.
  */
 export const addLink = async ({
   classroomId,
@@ -262,6 +320,7 @@ export const addLink = async ({
   targetType: ResourceLinkTargetType;
   targetId: string;
 }): Promise<CreatedResourceLink> => {
+  const db = getPrisma();
   assertUsableId(resourceId, 'resource_not_found', 'resourceId');
   assertUsableId(targetId, 'target_not_found', 'targetId');
 
@@ -270,17 +329,19 @@ export const addLink = async ({
   // those return values is what makes the duplicate lookup and the insert
   // describe the same row: the unset target column is an explicit NULL in both,
   // never an `undefined` that Prisma would drop from the `where`.
-  const resourceColumn = await resolveResource(classroomId, resourceType, resourceId);
+  const resourceColumn = await resolveResource(classroomId, resourceType, resourceId, {
+    decksOnly: targetType === 'quiz',
+  });
   const targetColumns = await resolveTarget(classroomId, targetType, targetId);
   const columns = { ...resourceColumn, ...targetColumns };
 
   const existing =
     resourceType === 'page'
-      ? await getPrisma().pageLink.findFirst({
+      ? await db.pageLink.findFirst({
           where: columns as { page_id: string },
           select: { id: true },
         })
-      : await getPrisma().slideLink.findFirst({
+      : await db.slideLink.findFirst({
           where: columns as { slide_id: string },
           select: { id: true },
         });
@@ -292,23 +353,29 @@ export const addLink = async ({
     );
   }
 
+  // Repository and assignment links keep the column default; a quiz link is
+  // placed last in the quiz's material, as the tools describe it.
+  const order = targetType === 'quiz' ? { order: await nextQuizMaterialOrder(targetId) } : {};
+
   let created: { id: string; order: number; created_at: Date };
   try {
     created =
       resourceType === 'page'
-        ? await getPrisma().pageLink.create({
-            data: columns as { page_id: string } & TargetColumns,
+        ? await db.pageLink.create({
+            data: { ...(columns as { page_id: string } & TargetColumns), ...order },
             select: { id: true, order: true, created_at: true },
           })
-        : await getPrisma().slideLink.create({
-            data: columns as { slide_id: string } & TargetColumns,
+        : await db.slideLink.create({
+            data: { ...(columns as { slide_id: string } & TargetColumns), ...order },
             select: { id: true, order: true, created_at: true },
           });
   } catch (error: unknown) {
-    // The nulls-distinct index cannot fire on the rows written here (rule 2
-    // above), so this is not a race backstop — it is cheap insurance for the
-    // day the indexes are tightened, and it keeps a unique violation from
-    // reaching a caller as an opaque database failure either way.
+    // The nulls-distinct index cannot fire on repository/assignment rows
+    // (rule 2 above), so for those this is not a race backstop — it is cheap
+    // insurance for the day the indexes are tightened. For a quiz target the
+    // partial unique index DOES fire, and this is what turns the loser of two
+    // racing adds into `already_linked`. Either way a unique violation never
+    // reaches a caller as an opaque database failure.
     if (!isUniqueViolation(error)) throw error;
     throw new ResourceLinkServiceError(
       'already_linked',
@@ -316,7 +383,7 @@ export const addLink = async ({
     );
   }
 
-  const manifestSynced = await syncManifest(classroomId);
+  const manifestSynced = targetType === 'quiz' ? true : await syncManifest(classroomId);
 
   return {
     id: created.id,
@@ -343,6 +410,10 @@ export const addLink = async ({
  * `resourceType` picks the table, so it is validated in the same switch that
  * issues the delete: an unrecognised value is refused rather than falling
  * through to the slide table and deleting from the wrong one.
+ *
+ * The row's target is read (under the same classroom compound) before the
+ * delete, because a quiz link must not rebuild the manifest (rule 3) and the
+ * caller names only the link id.
  */
 export const removeLink = async ({
   classroomId,
@@ -354,19 +425,25 @@ export const removeLink = async ({
   linkId: string;
 }): Promise<RemovedResourceLink> => {
   assertUsableId(linkId, 'link_not_found', 'linkId');
+  const db = getPrisma();
 
   let count: number;
+  let isQuizLink = false;
   switch (resourceType) {
-    case 'page':
-      ({ count } = await getPrisma().pageLink.deleteMany({
-        where: { id: linkId, page: { classroom_id: classroomId } },
-      }));
+    case 'page': {
+      const where = { id: linkId, page: { classroom_id: classroomId } };
+      const row = await db.pageLink.findFirst({ where, select: { quiz_id: true } });
+      isQuizLink = Boolean(row?.quiz_id);
+      ({ count } = await db.pageLink.deleteMany({ where }));
       break;
-    case 'slide':
-      ({ count } = await getPrisma().slideLink.deleteMany({
-        where: { id: linkId, slide: { classroom_id: classroomId } },
-      }));
+    }
+    case 'slide': {
+      const where = { id: linkId, slide: { classroom_id: classroomId } };
+      const row = await db.slideLink.findFirst({ where, select: { quiz_id: true } });
+      isQuizLink = Boolean(row?.quiz_id);
+      ({ count } = await db.slideLink.deleteMany({ where }));
       break;
+    }
     default:
       throw new ResourceLinkServiceError(
         'link_not_found',
@@ -381,7 +458,7 @@ export const removeLink = async ({
     );
   }
 
-  const manifestSynced = await syncManifest(classroomId);
+  const manifestSynced = isQuizLink ? true : await syncManifest(classroomId);
 
   return { id: linkId, resourceType, manifestSynced };
 };
@@ -403,6 +480,7 @@ const LINK_INCLUDE = {
       repository: { select: { id: true, title: true, classroom_id: true } },
     },
   },
+  quiz: { select: { id: true, name: true, classroom_id: true } },
 } as const;
 
 type LinkRow = {
@@ -417,6 +495,7 @@ type LinkRow = {
     module: { classroom_id: string };
     repository: { id: string; title: string; classroom_id: string } | null;
   } | null;
+  quiz: { id: string; name: string; classroom_id: string } | null;
 };
 
 /**
@@ -493,9 +572,25 @@ function toSummary(
     };
   }
 
-  // Neither column set — the row is corrupt, or the target was deleted
+  if (row.quiz) {
+    if (row.quiz.classroom_id !== classroomId) {
+      return drop('its quiz target is in another classroom');
+    }
+    return {
+      id: row.id,
+      resourceType,
+      targetType: 'quiz',
+      order: row.order,
+      createdAt: row.created_at,
+      resource,
+      // A quiz has a name and no slug.
+      target: { id: row.quiz.id, title: row.quiz.name, slug: null },
+    };
+  }
+
+  // No target column set — the row is corrupt, or the target was deleted
   // mid-read. Dropped rather than reported with a hole in it.
-  return drop('it names neither a repository nor an assignment');
+  return drop('it names no repository, assignment or quiz');
 }
 
 /**
@@ -513,8 +608,13 @@ function targetWhere(
   if (targetType === 'assignment') {
     return targetId ? { assignment_id: targetId } : { assignment_id: { not: null } };
   }
-  // No target type given: an id may name either kind of target.
-  return targetId ? { OR: [{ repository_id: targetId }, { assignment_id: targetId }] } : {};
+  if (targetType === 'quiz') {
+    return targetId ? { quiz_id: targetId } : { quiz_id: { not: null } };
+  }
+  // No target type given: an id may name any kind of target.
+  return targetId
+    ? { OR: [{ repository_id: targetId }, { assignment_id: targetId }, { quiz_id: targetId }] }
+    : {};
 }
 
 /**

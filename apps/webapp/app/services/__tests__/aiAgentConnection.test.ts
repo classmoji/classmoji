@@ -165,3 +165,27 @@ describe('sendRequest: which ERROR text becomes the message', () => {
     expect(error).toMatchObject({ message: AI_AGENT_GENERIC_ERROR, code: 'BUDGET_EXCEEDED' });
   });
 });
+
+describe('sendRequest: source_material_unavailable (quiz source material)', () => {
+  it('keeps the code on the rejection so startQuiz can tell it apart; the text is not shown', async () => {
+    // The ai-agent refuses QUIZ_INIT (and the STUDENT_MESSAGE that triggers a
+    // recovery) when the attempt's user can see none of the quiz's linked
+    // documents. The webapp answers that with its own fixed copy, keyed on the
+    // code; the ai-agent's text stays on `detail` for the log.
+    const error = await sendAndReply({
+      type: 'ERROR',
+      payload: {
+        attemptId: 'attempt-1',
+        error: 'No source material is available for this attempt',
+        code: 'source_material_unavailable',
+      },
+    }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(AIAgentRequestError);
+    expect(error).toMatchObject({
+      code: 'source_material_unavailable',
+      message: AI_AGENT_GENERIC_ERROR,
+      detail: 'No source material is available for this attempt',
+    });
+  });
+});

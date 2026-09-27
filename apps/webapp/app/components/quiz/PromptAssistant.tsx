@@ -4,7 +4,7 @@ import {
   SendOutlined,
   CheckOutlined,
   CopyOutlined,
-  DeleteOutlined,
+  ReloadOutlined,
   CodeOutlined,
   SearchOutlined,
   CloseOutlined,
@@ -75,7 +75,7 @@ export function PromptAssistant({
     isActive,
     initSession,
     sendMessage,
-    clearConversation,
+    restart,
     restartWithCodeExploration,
   } = usePromptAssistant({ classroomSlug });
 
@@ -103,7 +103,8 @@ export function PromptAssistant({
 
   useEffect(() => {
     if (!isActive && !isInitializing) {
-      initSession(formContext, exampleRepoUrl);
+      // A failed start is shown in the panel by the hook.
+      initSession(formContext, exampleRepoUrl).catch(() => {});
     }
   }, []);
 
@@ -139,8 +140,15 @@ export function PromptAssistant({
     setTimeout(() => setCopiedField(null), 2000);
   };
 
-  const handleStartCodeExploration = async () => {
-    await restartWithCodeExploration(formContext, exampleRepoUrl!);
+  const handleStartCodeExploration = () => {
+    // Not mid-turn or mid-start; a failed start is shown in the panel by the hook.
+    if (isStreaming || isInitializing || !exampleRepoUrl) return;
+    restartWithCodeExploration(formContext, exampleRepoUrl).catch(() => {});
+  };
+
+  const handleNewConversation = () => {
+    // A failed start is shown in the panel by the hook.
+    restart(formContext, exampleRepoUrl ?? null).catch(() => {});
   };
 
   return (
@@ -157,13 +165,17 @@ export function PromptAssistant({
           )}
         </div>
         <div className="pa-header-actions">
-          {isActive && (
-            <Tooltip title="Clear chat">
-              <button className="pa-icon-btn" onClick={clearConversation}>
-                <DeleteOutlined />
-              </button>
-            </Tooltip>
-          )}
+          <Tooltip title="New conversation">
+            <button
+              type="button"
+              className="pa-icon-btn"
+              onClick={handleNewConversation}
+              disabled={isStreaming || isInitializing}
+              aria-label="New conversation"
+            >
+              <ReloadOutlined />
+            </button>
+          </Tooltip>
           <Tooltip title="Close">
             <button className="pa-icon-btn" onClick={onClose}>
               <CloseOutlined />
@@ -181,7 +193,12 @@ export function PromptAssistant({
               <strong>Repository available</strong>
               <span>Explore code for better prompts</span>
             </div>
-            <Button size="small" onClick={handleStartCodeExploration} loading={isInitializing}>
+            <Button
+              size="small"
+              onClick={handleStartCodeExploration}
+              loading={isInitializing}
+              disabled={isStreaming}
+            >
               Explore
             </Button>
           </div>
@@ -383,7 +400,7 @@ function SuggestionCard({
               key: 'rubric',
               label: (
                 <div className="pa-collapse-label">
-                  <span>Rubric Prompt</span>
+                  <span>Grading rubric</span>
                   <Button
                     type="text"
                     size="small"

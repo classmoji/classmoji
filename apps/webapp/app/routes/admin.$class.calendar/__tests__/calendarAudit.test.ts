@@ -166,6 +166,10 @@ beforeEach(() => {
   mocks.loadQuizzesVisible.mockResolvedValue(true);
   mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
   mocks.assignmentFindMany.mockResolvedValue([]);
+  mocks.updateEventLinks.mockResolvedValue({
+    success: true,
+    linked: { pages: 1, slides: 0, assignments: 0 },
+  });
 });
 
 describe('calendar action — audit rows', () => {
@@ -251,6 +255,73 @@ describe('calendar action — audit rows', () => {
         new_deadline: '2026-03-05T23:59:00.000Z',
       },
     });
+  });
+
+  it('records the links the service saved on a create, not the ids it was sent', async () => {
+    // The service drops ids it cannot validate without an error, so the
+    // request's own counts would claim links that were never written.
+    mocks.updateEventLinks.mockResolvedValue({
+      success: true,
+      linked: { pages: 1, slides: 0, assignments: 1 },
+    });
+
+    await submit({
+      intent: 'create',
+      eventData: JSON.stringify({
+        title: 'Lecture 4',
+        event_type: 'LECTURE',
+        linkedPageIds: ['p-1', 'p-elsewhere'],
+        linkedSlideIds: ['s-elsewhere'],
+        linkedAssignmentIds: ['a-form'],
+      }),
+    });
+
+    expect(auditEntry().metadata.linked).toEqual({ pages: 1, slides: 0, assignments: 1 });
+  });
+
+  it('records no links on a create that carried none', async () => {
+    await submit({
+      intent: 'create',
+      eventData: JSON.stringify({ title: 'Lecture 4', event_type: 'LECTURE' }),
+    });
+
+    expect(mocks.updateEventLinks).not.toHaveBeenCalled();
+    expect(auditEntry().metadata.linked).toBeNull();
+  });
+
+  it('records the links the service saved on a this-only update', async () => {
+    mocks.updateEventLinks.mockResolvedValue({
+      success: true,
+      linked: { pages: 0, slides: 1, assignments: 2 },
+    });
+
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({
+        title: 'Lecture 3',
+        editScope: 'this_only',
+        occurrenceDate: '2026-09-28T00:00:00.000Z',
+        linkedPageIds: ['p-elsewhere'],
+        linkedSlideIds: ['s-1'],
+        linkedAssignmentIds: ['a-quiz', 'a-form'],
+      }),
+    });
+
+    expect(auditEntry().metadata).toMatchObject({
+      links_updated: true,
+      linked: { pages: 0, slides: 1, assignments: 2 },
+    });
+  });
+
+  it('records no links on an update that wrote none', async () => {
+    await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({ title: 'Renamed' }),
+    });
+
+    expect(auditEntry().metadata).toMatchObject({ links_updated: false, linked: null });
   });
 
   it('writes no row when the event belongs to another classroom', async () => {

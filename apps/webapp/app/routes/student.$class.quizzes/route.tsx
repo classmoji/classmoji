@@ -162,7 +162,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       gradingStrategy: quiz.grading_strategy || 'HIGHEST',
 
       // Attempt metadata from the service, narrowed to what this list reads —
-      // the service spreads each attempt row (see ~/utils/quizPayloads).
+      // the service's attempt columns are wider (see ~/utils/quizPayloads).
       attemptCount: quiz.attemptCount || 0,
       attempts: (quiz.attempts || []).map(studentQuizAttemptView),
       attemptsSummary: studentQuizAttemptsSummaryView(quiz.attemptsSummary, quiz.max_attempts ?? 1),
@@ -301,7 +301,8 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       });
 
       if (!startResponse.ok) {
-        // The new attempt exists even though it didn't start, so the list shows it.
+        // The new attempt may still exist though it didn't start, so the list
+        // shows it. (One refused for its source material has been removed.)
         revalidator.revalidate();
         Modal.error({
           title: 'Cannot Start Quiz',

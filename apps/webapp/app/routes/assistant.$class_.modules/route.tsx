@@ -37,7 +37,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
   // Same shape as the admin loader: the component reads all of it, and the
   // picker data stays harmless on a surface with no pickers. A classroom
-  // without quizzes sends no quiz rows or candidates here either.
+  // without quizzes sends no quiz rows or candidates here either. The one
+  // difference: no `hasUnlistedAssignments`, since this page offers no Delete.
   return {
     modules: quizzesVisible ? modules : modules.map(withoutQuizRows),
     candidates: quizzesVisible ? candidates : { ...candidates, quizzes: [] },

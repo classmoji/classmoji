@@ -66,6 +66,7 @@ const NO_MESSAGES: never[] = [];
 
 const START_FAILED = "The quiz couldn't start. Please try again.";
 const REFUSAL = "Quizzes aren't available in this class.";
+const UNAVAILABLE = "This quiz's source material isn't available yet. Ask your instructor.";
 const OPENING = {
   id: 'msg-1',
   role: 'assistant',
@@ -171,6 +172,33 @@ describe('QuizAttemptInterface — a failed automatic start', () => {
     await mount();
 
     expect(container.textContent).toContain(REFUSAL);
+    expect(actions().filter(a => a === 'startQuiz')).toHaveLength(1);
+  });
+
+  it('shows a source-material refusal and does not poll for a question', async () => {
+    // The start's 409 when nothing linked is available, or when the ai-agent
+    // refused the init and the attempt was removed.
+    replyTo({
+      startQuiz: () =>
+        json(
+          {
+            success: false,
+            code: 'SOURCE_MATERIAL_UNAVAILABLE',
+            message: UNAVAILABLE,
+            error: UNAVAILABLE,
+          },
+          409
+        ),
+    });
+
+    await mount();
+    expect(lines()).toEqual([UNAVAILABLE]);
+
+    // Polling runs every 1.5s while the chat waits; it must not be waiting.
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 1700));
+    });
+    expect(revalidate).not.toHaveBeenCalled();
     expect(actions().filter(a => a === 'startQuiz')).toHaveLength(1);
   });
 

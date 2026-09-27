@@ -280,6 +280,20 @@ describe('syllabus bot — a failed turn tells the browser nothing about why', (
     expect(published).toContain('Could not send your message');
   });
 
+  // The init mint has its own, earlier catch, separate from the ai-agent one
+  // pinned in the init/end describe below. Both must say the same fixed line,
+  // so the feature speaks with one voice whichever step failed.
+  it('gives the init mint failure the same wording, so there is one voice', async () => {
+    mintMcpAccessTokenMock.mockRejectedValue(new Error(LEAKY));
+
+    const res = await post({ _action: 'initConversation' });
+    const body = (await res.json()) as { error: string };
+
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(body)).not.toContain('hunter2');
+    expect(body.error).toBe('Could not start the assistant. Please try again.');
+  });
+
   // The detail must not simply vanish — an operator still has to be able to
   // debug the turn.
   it('still logs the whole error server-side', async () => {
