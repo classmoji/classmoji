@@ -1,6 +1,7 @@
 import {
   contentTypeForMediaExt,
   isClassroomId,
+  isMediaId,
   isMediaVariant,
   mediaKey,
 } from '@classmoji/content-signing';
@@ -56,4 +57,39 @@ export function mediaPrefix(classroomId: string): string {
     throw new TypeError(`media: not a classroom id (got ${classroomId})`);
   }
   return `m/${classroomId}/`;
+}
+
+/**
+ * `stage/{classroomId}/{mediaId}` — where an AGENT upload's bytes wait to be placed.
+ *
+ * MCP `file_upload_start` hands an agent one presigned PUT for this key, and
+ * `file_import_url` streams a fetched URL into it. Nothing is served from here:
+ * the Worker only ever builds `m/…` keys (`mediaKey`), so a staged object is
+ * unreachable until placement copies it into `m/…` or commits it to the
+ * content repo, and then it is deleted. What placement never gets to — a stage
+ * nobody finished — the bucket's own lifecycle rule for this prefix expires
+ * after a day, so there is no sweep job.
+ *
+ * A prefix of its own, OUTSIDE `m/`, so neither the Worker nor anything that
+ * lists a classroom's `m/{classroomId}/` ever mistakes an unverified upload for
+ * a stored object. No extension: the key names a row, and the row knows the
+ * filename. Both ids are checked for the same reason `mediaPrefix` checks its
+ * one — this string is also handed to a delete.
+ */
+export function stageKey(classroomId: string, mediaId: string): string {
+  if (!isClassroomId(classroomId)) {
+    throw new TypeError(`media: not a classroom id (got ${classroomId})`);
+  }
+  if (!isMediaId(mediaId)) {
+    throw new TypeError(`media: not a media id (got ${mediaId})`);
+  }
+  return `stage/${classroomId}/${mediaId}`;
+}
+
+/** `stage/{classroomId}/` — every staged object one classroom has, for the purge. */
+export function stagePrefix(classroomId: string): string {
+  if (!isClassroomId(classroomId)) {
+    throw new TypeError(`media: not a classroom id (got ${classroomId})`);
+  }
+  return `stage/${classroomId}/`;
 }
