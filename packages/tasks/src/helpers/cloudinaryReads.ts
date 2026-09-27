@@ -246,15 +246,13 @@ export function createGitHubReader(
         await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
         continue;
       }
-      const retriable = response.status >= 500 || response.status === 429;
-      if (!retriable || attempt >= 3) return response;
       const after = Number(response.headers.get('retry-after'));
-      await new Promise(resolve =>
-        setTimeout(
-          resolve,
-          Number.isFinite(after) && after > 0 && after <= 60 ? after * 1000 : 1000 * attempt
-        )
-      );
+      const shortWait = Number.isFinite(after) && after > 0 && after <= 60;
+      // A secondary rate limit is a 403 with `retry-after`; worth one short wait.
+      const retriable =
+        response.status >= 500 || response.status === 429 || (response.status === 403 && shortWait);
+      if (!retriable || attempt >= 3) return response;
+      await new Promise(resolve => setTimeout(resolve, shortWait ? after * 1000 : 1000 * attempt));
     }
   }
 
