@@ -172,7 +172,10 @@ describe('applyMaterialBudget', () => {
 
   it('cuts to the per-document limit without spending the total', () => {
     const limits = { maxDocs: 12, maxCharsPerDoc: 100, maxCharsTotal: 1_000, minRoomChars: 10 };
-    const result = applyMaterialBudget([doc('1', 'x'.repeat(250)), doc('2', 'y'.repeat(80))], limits);
+    const result = applyMaterialBudget(
+      [doc('1', 'x'.repeat(250)), doc('2', 'y'.repeat(80))],
+      limits
+    );
 
     expect(result.docs.map(d => [d.id, d.truncated])).toEqual([
       ['1', true],
