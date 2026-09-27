@@ -843,23 +843,44 @@ export async function canonicalizePageCoverRef(
     return null;
   }
 
-  const mediaId = parseMediaRef(canonical);
-  if (mediaId !== null) {
-    const classroomId = (page.classroom as { id?: unknown }).id;
-    if (typeof classroomId !== 'string') return null;
-    try {
-      const rows = await lookupReadyMedia(classroomId, [mediaId]);
-      return rows.get(mediaId)?.kind === 'IMAGE' ? canonical : null;
-    } catch (error) {
-      console.warn(
-        '[pageContent] Could not look up a media cover reference:',
-        error instanceof Error ? error.message : error
-      );
-      return null;
-    }
+  if (parseMediaRef(canonical) !== null) {
+    return (await coverMediaRefAllowed(page, canonical)) ? canonical : null;
   }
 
   return namesAPlainRepoFile(ctx, canonical) ? canonical : null;
+}
+
+/**
+ * May this (canonical) reference be stored as the page's cover, as far as MEDIA
+ * is concerned?
+ *
+ * Anything that is not a `media://` reference answers true — this is only the
+ * media half of the rule, for a caller (the pages editor's `set-header-image`)
+ * that keeps its own policy for repo paths and URLs. A `media://{id}` answers
+ * true only when the id is a READY row of THIS classroom whose kind is IMAGE,
+ * with the classroom in the WHERE clause: a video, a deleted object, another
+ * classroom's id, or a lookup that failed are all "no", and the caller answers
+ * them the way it answers an asset that is not there.
+ */
+export async function coverMediaRefAllowed(
+  page: PageWithContentRepo,
+  ref: string | null | undefined
+): Promise<boolean> {
+  if (typeof ref !== 'string') return true;
+  const mediaId = parseMediaRef(ref);
+  if (mediaId === null) return true;
+  const classroomId = (page.classroom as { id?: unknown }).id;
+  if (typeof classroomId !== 'string') return false;
+  try {
+    const rows = await lookupReadyMedia(classroomId, [mediaId]);
+    return rows.get(mediaId)?.kind === 'IMAGE';
+  } catch (error) {
+    console.warn(
+      '[pageContent] Could not look up a media cover reference:',
+      error instanceof Error ? error.message : error
+    );
+    return false;
+  }
 }
 
 /**

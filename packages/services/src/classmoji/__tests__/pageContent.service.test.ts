@@ -123,6 +123,7 @@ const {
   uploadPageAsset,
   resolvePageAssetUrl,
   canonicalizePageCoverRef,
+  coverMediaRefAllowed,
   ensureBlockIds,
   applyBlockOps,
   normalizeBlockStructure,
@@ -1044,6 +1045,29 @@ describe('pageContent.canonicalizePageCoverRef', () => {
 
   it('refuses an empty reference', async () => {
     await expect(canonicalizePageCoverRef(signablePage, '')).resolves.toBeNull();
+  });
+
+  describe('coverMediaRefAllowed', () => {
+    const MEDIA_ID = '77777777-8888-4999-8aaa-bbbbbbbbbbbb';
+    beforeEach(() => lookupReadyMediaMock.mockReset());
+
+    it('passes anything that is not a media ref without a lookup', async () => {
+      await expect(coverMediaRefAllowed(signablePage, REF)).resolves.toBe(true);
+      await expect(coverMediaRefAllowed(signablePage, null)).resolves.toBe(true);
+      expect(lookupReadyMediaMock).not.toHaveBeenCalled();
+    });
+
+    it('allows only a READY image of this classroom', async () => {
+      lookupReadyMediaMock.mockResolvedValueOnce(new Map([[MEDIA_ID, { kind: 'IMAGE' }]]));
+      await expect(coverMediaRefAllowed(signablePage, `media://${MEDIA_ID}`)).resolves.toBe(true);
+      expect(lookupReadyMediaMock).toHaveBeenCalledWith(CLASSROOM_ID, [MEDIA_ID]);
+
+      lookupReadyMediaMock.mockResolvedValueOnce(new Map([[MEDIA_ID, { kind: 'VIDEO' }]]));
+      await expect(coverMediaRefAllowed(signablePage, `media://${MEDIA_ID}`)).resolves.toBe(false);
+
+      lookupReadyMediaMock.mockResolvedValueOnce(new Map());
+      await expect(coverMediaRefAllowed(signablePage, `media://${MEDIA_ID}`)).resolves.toBe(false);
+    });
   });
 
   describe('media references', () => {
