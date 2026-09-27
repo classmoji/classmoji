@@ -241,8 +241,8 @@ async function insertStagingRow(args: {
     ) {
       throw new MediaError(
         'STAGE_LIMIT',
-        'This class already has too many unfinished agent uploads. Finish or cancel some, ' +
-          'or wait for them to expire (24 hours), then try again.'
+        'This class has too many agent uploads in progress. Finish the pending ones with ' +
+          'file_upload_finish, or try again in a few minutes.'
       );
     }
 

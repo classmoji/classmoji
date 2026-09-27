@@ -257,7 +257,12 @@ describe('startStagedUpload', () => {
         sizeBytes: 4096,
         target,
       })
-    ).rejects.toMatchObject({ code: 'STAGE_LIMIT' });
+    ).rejects.toMatchObject({
+      code: 'STAGE_LIMIT',
+      message:
+        'This class has too many agent uploads in progress. Finish the pending ones with ' +
+        'file_upload_finish, or try again in a few minutes.',
+    });
   });
 
   it('keeps counting a cancelled stage until its PUT URL has expired', async () => {
