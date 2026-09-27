@@ -11,25 +11,18 @@
  * twenty minutes sending it.
  */
 
-/**
- * SOURCE OF TRUTH: `packages/services/src/media/mediaKinds.ts`.
- *
- * The extensions the store has a real type for, grouped by kind. The store
- * takes ANY extension — everything not listed here is kind `other` and is
- * served as a download — so this list no longer decides what may be picked;
- * it only decides which files get the video options. Duplicated rather than
- * imported because it runs in the browser, and the services package is
- * server-side (Prisma, the S3 client).
- */
-export const MEDIA_EXTENSIONS = {
-  video: ['mp4', 'webm', 'mov', 'm4v'],
-  audio: ['mp3', 'm4a', 'wav'],
-  document: ['pdf', 'ppt', 'pptx', 'key'],
-  archive: ['zip'],
-  image: ['png', 'jpg', 'jpeg', 'gif', 'webp'],
-} as const;
+import { kindOfFilename } from '@classmoji/services/media/router';
 
-export type MediaKind = keyof typeof MEDIA_EXTENSIONS | 'other';
+/**
+ * The kinds the store has a real type for, lowercased for this dialog. The
+ * extension lists themselves are the storage router's (`kindOfFilename`, from
+ * the browser-safe `@classmoji/services/media/router` subpath), so there is one
+ * list of what counts as a video — the one the server classifies with. The
+ * store takes ANY extension; everything it has no type for is `other` and is
+ * served as a download, so the kind here only decides which files get the
+ * video options.
+ */
+export type MediaKind = 'video' | 'audio' | 'document' | 'archive' | 'image' | 'other';
 
 /**
  * The longest extension the store can address: its objects are keyed
@@ -72,12 +65,8 @@ export function extensionOf(filename: string): string {
 
 /** The file's kind, `other` for an extension the store has no type for, null for none. */
 export function kindForFilename(filename: string): MediaKind | null {
-  const ext = extensionOf(filename);
-  if (!ext) return null;
-  for (const [kind, extensions] of Object.entries(MEDIA_EXTENSIONS)) {
-    if ((extensions as readonly string[]).includes(ext)) return kind as MediaKind;
-  }
-  return 'other';
+  if (!extensionOf(filename)) return null;
+  return kindOfFilename(filename).toLowerCase() as MediaKind;
 }
 
 export const isVideoFilename = (filename: string) => kindForFilename(filename) === 'video';

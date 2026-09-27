@@ -33,6 +33,8 @@ describe('kinds', () => {
     ['screen.MOV', 'video'],
     ['clip.m4v', 'video'],
     ['clip.webm', 'video'],
+    ['recording.mkv', 'video'],
+    ['old-lecture.AVI', 'video'],
     ['intro.mp3', 'audio'],
     ['notes.pdf', 'document'],
     ['deck.pptx', 'document'],
@@ -76,6 +78,13 @@ describe('the video options', () => {
     expect(isVideoFilename('lecture.mp4')).toBe(true);
     expect(isVideoFilename('syllabus.pdf')).toBe(false);
     expect(isVideoFilename('podcast.mp3')).toBe(false);
+  });
+
+  it('reads video by the storage router, so mkv and avi get the options too', () => {
+    // One list: the router's. A container the server processes as video but
+    // this dialog did not know would upload with no options at all.
+    expect(isVideoFilename('capture.mkv')).toBe(true);
+    expect(isVideoFilename('capture.avi')).toBe(true);
   });
 
   it('forces the original to be kept the moment optimising is turned off', () => {
