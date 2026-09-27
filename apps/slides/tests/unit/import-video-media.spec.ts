@@ -352,7 +352,56 @@ test.describe('placing ZIP entries (media storage mocked)', () => {
     expect(gate.warnings()).toEqual([
       'Skipped forged.mp4 — its size does not match what the ZIP says',
     ]);
-    expect(limits.inflated.usedBytes).toBe(0);
+    // What it inflated before it was stopped is charged, though it was left out.
+    expect(limits.inflated.usedBytes).toBe(1025);
+  });
+
+  test('entries left out after inflating are charged, so a run of them trips the budget', async () => {
+    const log: string[] = [];
+    const gate = new RepoEntryGate();
+    const limits = new ImportLimits({ inflateBytes: 10 * MB });
+    // Each declares 1 MB — within every limit on its own — and holds 2 MB.
+    for (let i = 0; i < 20; i++) {
+      const placed = await placeImportEntry({
+        entry: fakeEntry(log, `img/forged-${i}.png`, 1 * MB, 2 * MB),
+        capability: FREE,
+        gate,
+        limits,
+        put: mockPut(log)(`forged-${i}.png`),
+      });
+      expect(placed).toEqual({ kind: 'skipped' });
+    }
+    // Nine are inflated (and stopped at their declared size); from the tenth on,
+    // the budget is spent and every later entry is left out on its declared
+    // size, never inflated.
+    const inflated = log.filter(line => line.startsWith('inflate '));
+    expect(inflated).toHaveLength(9);
+    expect(log).not.toContain('inflate forged-9.png');
+    expect(log).not.toContain('inflate forged-19.png');
+    expect(limits.inflated.usedBytes).toBe(9 * (MB + 1));
+    expect(limits.inflated.usedBytes).toBeLessThanOrEqual(10 * MB);
+    expect(gate.warnings()[9]).toBe(
+      'Skipped forged-9.png (1 MB) — this import is over its 10 MB limit for all files together'
+    );
+  });
+
+  test('an entry left out on the bytes it inflated is charged for them', async () => {
+    const log: string[] = [];
+    const gate = new RepoEntryGate();
+    const limits = new ImportLimits();
+    // No declared size: inflated whole, then too large for the repository.
+    const placed = await placeImportEntry({
+      entry: fakeEntry(log, 'img/huge.png', null, 40 * MB),
+      capability: FREE,
+      gate,
+      limits,
+      put: mockPut(log)('huge.png'),
+    });
+    expect(placed).toEqual({ kind: 'skipped' });
+    expect(gate.warnings()[0]).toContain('course repository');
+    expect(limits.inflated.usedBytes).toBe(40 * MB);
+    // Never held for the commit.
+    expect(limits.repoHeld.usedBytes).toBe(0);
   });
 
   test('with no declared size, inflating stops at one entry’s limit or the budget left', async () => {

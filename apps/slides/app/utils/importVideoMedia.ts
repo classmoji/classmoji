@@ -24,7 +24,8 @@
  *     and one bound for the repository is already under its 35 MB cap;
  *   - the files kept for the repository are held until the import's one
  *     commit, so their total is capped (`IMPORT_REPO_HELD_BYTES`);
- *   - everything inflated counts against one budget (`IMPORT_INFLATE_BUDGET_BYTES`).
+ *   - everything inflated counts against one budget (`IMPORT_INFLATE_BUDGET_BYTES`),
+ *     an entry left out after inflating included.
  *
  * The limits live on one `ImportLimits` per import.
  *
@@ -433,6 +434,10 @@ export async function placeImportEntry({
     entry.declared ??
     Math.min(IMPORT_ENTRY_MAX_BYTES, limits.inflated.limitBytes - limits.inflated.usedBytes);
 
+  // Every byte inflated is charged to the budget, the entry kept or not: one
+  // left out after inflating still cost what it inflated, and a run of them
+  // must trip the budget like anything else. Charged AFTER the checks that read
+  // the budget, so an entry is never measured against its own bytes.
   let buffer: Buffer;
   try {
     buffer = await entry.inflate(limit);
@@ -443,10 +448,12 @@ export async function placeImportEntry({
     if (entry.declared !== null || !leftOut(error.inflatedBytes)) {
       gate.skip(filename, error.inflatedBytes, filePath, importEntryMisdeclaredWarning(filename));
     }
+    limits.inflated.spend(error.inflatedBytes);
     return { kind: 'skipped' };
   }
-  if (leftOut(buffer.length) || mediaIsFull(buffer.length)) return { kind: 'skipped' };
+  const refused = leftOut(buffer.length) || mediaIsFull(buffer.length);
   limits.inflated.spend(buffer.length);
+  if (refused) return { kind: 'skipped' };
 
   if (!importEntryGoesToMedia(capability, filename, buffer.length)) {
     limits.repoHeld.spend(buffer.length);
