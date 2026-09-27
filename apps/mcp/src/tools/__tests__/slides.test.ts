@@ -387,19 +387,18 @@ describe('slide_update', () => {
 // ─── slide_delete ────────────────────────────────────────────────────────────
 
 describe('slide_delete', () => {
-  it('wraps the orchestrated delete WITHOUT a cloudinary callback and says videos were skipped', async () => {
+  it('wraps the orchestrated delete and never deletes shared themes', async () => {
     const payload = parse(
       await slideDeleteTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID }, TEACHER_CTX)
     );
 
-    // No onDeleteVideos, no deleteTheme — MCP has no cloudinary client and
-    // never deletes shared themes.
+    // No deleteTheme — MCP never deletes shared themes.
     expect(mocks.deleteSlide).toHaveBeenCalledWith({ slideId: SLIDE_ID });
     expect(payload).toMatchObject({
       success: true,
       deleted: { id: SLIDE_ID, title: 'Intro Week' },
-      note: expect.stringContaining('Cloudinary'),
     });
+    expect(payload.note).toBeUndefined();
     expect(payload.shared_theme).toBeUndefined();
 
     const audit = mocks.auditCreate.mock.calls[0][0] as {
@@ -410,8 +409,8 @@ describe('slide_delete', () => {
     expect(audit.data).toMatchObject({
       tool: 'slide_delete',
       title: 'Intro Week',
-      video_cleanup: 'skipped',
     });
+    expect(audit.data).not.toHaveProperty('video_cleanup');
   });
 
   it('reports a shared theme the deck used (kept, never deleted)', async () => {
