@@ -13,7 +13,8 @@
  *   - `countStartableSourceMaterial` (`countStartable`) — the cheap pre-check the
  *     webapp runs before creating an attempt: how many linked documents would
  *     reach the prompt for this user, without reading any text.
- *   - `applyMaterialBudget` — the pure budget/truncation step `load` ends with.
+ *   - `applyMaterialBudget` — the pure budget/truncation fold, over a list; `load`
+ *     runs the same fold one document at a time and stops reading when it is full.
  *   - `listSourceMaterialOptions` — what the quiz form's picker offers.
  *
  * ── Visibility is the viewer's, never a fixed role ─────────────────────────
@@ -358,8 +359,14 @@ const hasText = (text: string): boolean => /\S/.test(text);
  * Each linked document is, in order: `not_visible` when the user may not see
  * the live record; `not_indexed` when it has no indexed text (the index is
  * warmed on every save and reconciled nightly, so this is rare); `empty` when
- * the indexed text is blank; otherwise a candidate for the budget, which may
- * cut it or leave it out (`budget`).
+ * the indexed text is blank; otherwise offered to the budget, which may cut it
+ * or leave it out (`budget`).
+ *
+ * Documents are read one at a time, in material order, and only while the
+ * budget can still take one: once `MAX_DOCS` are in or the total is spent, a
+ * visible document is `budget` WITHOUT its text being read, however many are
+ * linked. (Such a document is reported `budget` even if it has no indexed
+ * text; below the budget's limits the result is what reading them all gave.)
  */
 export async function loadQuizSourceMaterial({
   quizId,
@@ -375,58 +382,53 @@ export async function loadQuizSourceMaterial({
     linkedDocuments(quizId, classroomId),
   ]);
   const visibility = contentVisibility(role);
-
-  type Outcome = { doc: SourceDoc } | { omitted: OmittedDoc };
-  const outcomes: Outcome[] = await Promise.all(
-    linked.map(async (record): Promise<Outcome> => {
-      const base = { kind: record.kind, id: record.id, title: record.title };
-      if (!visibility.allows(record)) return { omitted: { ...base, reason: 'not_visible' } };
-
-      try {
-        const document = await getContentText({
-          classroomId,
-          role,
-          docKind: record.kind,
-          docId: record.id,
-        });
-        if (!hasText(document.text)) return { omitted: { ...base, reason: 'empty' } };
-        return {
-          doc: {
-            ...base,
-            text: document.text,
-            truncated: false,
-            sourceSha: document.sourceSha ?? null,
-          },
-        };
-      } catch (error) {
-        if (error instanceof ContentNotFoundError) {
-          return { omitted: { ...base, reason: 'not_indexed' } };
-        }
-        throw error;
-      }
-    })
-  );
-
-  const candidates = outcomes.flatMap(outcome => ('doc' in outcome ? [outcome.doc] : []));
-  const budgeted = applyMaterialBudget(candidates);
-
+  const budget = materialBudgetFold(DEFAULT_MATERIAL_BUDGET);
   // Omissions in material order, whichever step decided them.
-  const budgetOmitted = new Set(budgeted.omitted.map(doc => `${doc.kind}:${doc.id}`));
-  const omitted = outcomes.flatMap(outcome => {
-    if ('omitted' in outcome) return [outcome.omitted];
-    const key = `${outcome.doc.kind}:${outcome.doc.id}`;
-    return budgetOmitted.has(key)
-      ? [
-          {
-            kind: outcome.doc.kind,
-            id: outcome.doc.id,
-            title: outcome.doc.title,
-            reason: 'budget' as const,
-          },
-        ]
-      : [];
-  });
+  const omitted: OmittedDoc[] = [];
 
+  // Sequential on purpose: the budget decides after each document whether the
+  // next one is worth reading at all.
+  for (const record of linked) {
+    const base = { kind: record.kind, id: record.id, title: record.title };
+    if (!visibility.allows(record)) {
+      omitted.push({ ...base, reason: 'not_visible' });
+      continue;
+    }
+    if (budget.isFull()) {
+      omitted.push(budget.omit(base));
+      continue;
+    }
+
+    let document: Awaited<ReturnType<typeof getContentText>>;
+    try {
+      document = await getContentText({
+        classroomId,
+        role,
+        docKind: record.kind,
+        docId: record.id,
+      });
+    } catch (error) {
+      if (error instanceof ContentNotFoundError) {
+        omitted.push({ ...base, reason: 'not_indexed' });
+        continue;
+      }
+      throw error;
+    }
+    if (!hasText(document.text)) {
+      omitted.push({ ...base, reason: 'empty' });
+      continue;
+    }
+
+    const left = budget.offer({
+      ...base,
+      text: document.text,
+      truncated: false,
+      sourceSha: document.sourceSha ?? null,
+    });
+    if (left) omitted.push(left);
+  }
+
+  const budgeted = budget.result();
   return {
     configured: linked.length,
     docs: budgeted.docs,

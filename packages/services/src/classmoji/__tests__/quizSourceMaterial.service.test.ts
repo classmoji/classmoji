@@ -233,6 +233,73 @@ describe('loadQuizSourceMaterial', () => {
     expect(material.truncated).toBe(true);
   });
 
+  it('reads in material order and never reads past the document cap', async () => {
+    const pages: Array<[number, ReturnType<typeof record>]> = Array.from({ length: 15 }, (_, i) => [
+      i,
+      record(`p${i}`),
+    ]);
+    pages.push([15, record('late-draft', { is_draft: true })]);
+    linkRows({ pages });
+
+    const material = await loadQuizSourceMaterial(ARGS);
+
+    // Twelve documents have text: link 13 onward is never read.
+    expect(getContentText.mock.calls.map(([args]) => args.docId)).toEqual(
+      Array.from({ length: 12 }, (_, i) => `p${i}`)
+    );
+    expect(material.docs).toHaveLength(12);
+    // Visibility still decides for every link, read or not.
+    expect(material.omitted.map(d => `${d.id}:${d.reason}`)).toEqual([
+      'p12:budget',
+      'p13:budget',
+      'p14:budget',
+      'late-draft:not_visible',
+    ]);
+    expect(material.truncated).toBe(true);
+  });
+
+  it('does not spend a slot on a document with no text, and reads on to fill it', async () => {
+    const pages: Array<[number, ReturnType<typeof record>]> = Array.from({ length: 13 }, (_, i) => [
+      i,
+      record(`p${i}`),
+    ]);
+    linkRows({ pages });
+    getContentText.mockImplementation(async ({ docId }: { docId: string }) => {
+      if (docId === 'p0') throw new ContentNotFoundError();
+      return indexed(`text of ${docId}`);
+    });
+
+    const material = await loadQuizSourceMaterial(ARGS);
+
+    expect(getContentText).toHaveBeenCalledTimes(13);
+    expect(material.docs.map(d => d.id)).toEqual(Array.from({ length: 12 }, (_, i) => `p${i + 1}`));
+    expect(material.omitted).toEqual([
+      { kind: 'page', id: 'p0', title: 'Doc p0', reason: 'not_indexed' },
+    ]);
+    expect(material.truncated).toBe(false);
+  });
+
+  it('stops reading once the total is spent', async () => {
+    // 60,000 + 60,000, then the third is cut to the 40,000 left: the total is
+    // spent, so the fourth and fifth are budget without being read.
+    const pages: Array<[number, ReturnType<typeof record>]> = Array.from({ length: 5 }, (_, i) => [
+      i,
+      record(`p${i}`),
+    ]);
+    linkRows({ pages });
+    getContentText.mockImplementation(async () => indexed('x'.repeat(60_000)));
+
+    const material = await loadQuizSourceMaterial(ARGS);
+
+    expect(getContentText).toHaveBeenCalledTimes(3);
+    expect(material.docs.map(d => [d.id, d.truncated])).toEqual([
+      ['p0', false],
+      ['p1', false],
+      ['p2', true],
+    ]);
+    expect(material.omitted.map(d => `${d.id}:${d.reason}`)).toEqual(['p3:budget', 'p4:budget']);
+  });
+
   it.each([
     ['quizId', { ...ARGS, quizId: undefined }],
     ['classroomId', { ...ARGS, classroomId: '' }],
