@@ -341,17 +341,6 @@ export async function mapWithConcurrency<T, R>(
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
-/**
- * Content-creating requests one `uploadBatch` sends per rolling minute.
- *
- * GitHub's secondary limit is 80 a minute per installation, and the
- * installation is shared by every classroom in the org. 60 leaves the rest of
- * the org 20 while a large import runs. `BLOB_CONCURRENCY` does not bound
- * this: four requests in flight that each answer in 200 ms is 1,200 a minute.
- */
-const BATCH_WRITES_PER_MINUTE = 60;
-const WRITE_WINDOW_MS = 60_000;
-
 /** Rate-limit retries per request before the refusal is thrown. */
 const RATE_LIMIT_MAX_RETRIES = 3;
 /**
@@ -364,50 +353,6 @@ const RATE_LIMIT_MAX_WAIT_MS = 120_000;
 const RATE_LIMIT_BACKOFF_MS = 60_000;
 /** 5xx retries per request — what the Octokit retry plugin gave these calls. */
 const SERVER_ERROR_MAX_RETRIES = 3;
-
-/**
- * Sliding-window pacer for the content-creating requests of ONE batch.
- *
- * Every attempt takes a slot, retries included: GitHub counts each request, not
- * each success. The first `limit` requests in any window go straight through,
- * so a batch that fits in a minute's budget is never slowed; the next one waits
- * until the oldest slot is a full window old.
- *
- * `close()` is for a batch that has already failed: a worker still waiting for
- * a slot (or sleeping out a rate limit) throws instead of spending the org's
- * budget on a blob nobody will commit.
- */
-class WritePacer {
-  readonly #limit: number;
-  readonly #windowMs: number;
-  #stamps: number[] = [];
-  #closed = false;
-
-  constructor(limit: number, windowMs: number) {
-    this.#limit = limit;
-    this.#windowMs = windowMs;
-  }
-
-  close(): void {
-    this.#closed = true;
-  }
-
-  async acquire(): Promise<void> {
-    for (;;) {
-      if (this.#closed) throw new Error('Upload batch already failed');
-      const now = Date.now();
-      while (this.#stamps.length > 0 && this.#stamps[0]! <= now - this.#windowMs) {
-        this.#stamps.shift();
-      }
-      if (this.#stamps.length < this.#limit) {
-        this.#stamps.push(now);
-        return;
-      }
-      // Several workers can wake on the same freed slot; the loop re-checks.
-      await sleep(this.#stamps[0]! + this.#windowMs - now);
-    }
-  }
-}
 
 /** A header value as Octokit hands it over (string, or number in some fetch shims). */
 const headerNumber = (value: unknown): number | null => {
@@ -459,8 +404,9 @@ function rateLimitWait(error: unknown, retry: number, now: number): number | 'to
 }
 
 /**
- * One content-creating request of an `uploadBatch`: paced, and retried on a
- * rate limit or a 5xx.
+ * One content-creating request of an `uploadBatch`, retried on a rate limit or
+ * a 5xx. Pacing is not done here: the Octokit throttling plugin already sends
+ * the process's writes one a second, which is inside GitHub's 80 a minute.
  *
  * `retries: 0` switches off the Octokit retry plugin for this request so this
  * loop is the one retry policy. Left on, the plugin answers a 429 with three
@@ -469,9 +415,10 @@ function rateLimitWait(error: unknown, retry: number, now: number): number | 'to
  * the plugin gave these calls is kept here, on the same 1/4/9 s schedule.
  * Other 4xx (409, 413, …) are not retried; they will not change on a retry.
  *
- * On a 403 rate limit the umbrella client's throttling plugin has already
- * waited and retried once before this sees the error — that plugin cannot be
- * turned off per request.
+ * On a 403 rate limit the throttling plugin may have waited and retried once
+ * before this sees the error — only when GitHub asked for 60 s or less (see
+ * `throttleHandlers` in GitHubProvider). A longer wait reaches this loop at
+ * once, which waits it out up to `RATE_LIMIT_MAX_WAIT_MS` or throws.
  *
  * Kept apart from `#withGitRetry`: that one retries the whole ref-read → tree
  * → commit → ref sequence when the branch moved underneath it; this retries a
@@ -479,14 +426,12 @@ function rateLimitWait(error: unknown, retry: number, now: number): number | 'to
  */
 async function sendBatchWrite(
   octokit: Awaited<ReturnType<typeof getOctokit>>,
-  pacer: WritePacer,
   route: string,
   params: Record<string, unknown>
 ): Promise<any> {
   let rateLimitRetries = 0;
   let serverRetries = 0;
   for (;;) {
-    await pacer.acquire();
     try {
       return await octokit.request(route, { ...params, request: { retries: 0 } });
     } catch (error: unknown) {
@@ -1555,9 +1500,6 @@ export class ContentService {
 
     const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
     const octokit = await getOctokit(resolvedOrg);
-    // Every content-creating request below — seed, blobs, tree, commit, ref —
-    // goes through this, so the whole batch stays inside one minute's budget.
-    const writes = new WritePacer(BATCH_WRITES_PER_MINUTE, WRITE_WINDOW_MS);
 
     // Step 0 (opt-in): give an EMPTY repository its initial commit, because
     // every Git Data API call below — starting with blob creation — answers
@@ -1581,7 +1523,7 @@ export class ContentService {
       if (repositoryIsEmpty) {
         const seed = files[0]!;
         try {
-          await sendBatchWrite(octokit, writes, 'PUT /repos/{owner}/{repo}/contents/{path}', {
+          await sendBatchWrite(octokit, 'PUT /repos/{owner}/{repo}/contents/{path}', {
             owner: resolvedOrg.login,
             repo,
             path: seed.path,
@@ -1606,8 +1548,10 @@ export class ContentService {
     // a minute and 500 an hour — shared by every classroom in the org. A
     // 50-image import fired in parallel spends most of a minute's budget in one
     // burst and trips the secondary rate limit for everyone else. Concurrency
-    // bounds the burst; `writes` bounds the RATE, so a 200-file import is
-    // spread over minutes instead of refused part-way through.
+    // bounds the burst; the RATE is bounded by the Octokit throttling plugin,
+    // whose write limiter (one write a second, shared by every client in the
+    // process) spreads a 200-file import over minutes instead of letting it be
+    // refused part-way through.
     // Track progress as each blob completes
     let completedCount = 0;
     const totalFiles = files.length;
@@ -1620,17 +1564,12 @@ export class ContentService {
         // too-large answer arrives here, on the blob, never on the commit.
         let data;
         try {
-          ({ data } = await sendBatchWrite(
-            octokit,
-            writes,
-            'POST /repos/{owner}/{repo}/git/blobs',
-            {
-              owner: resolvedOrg.login,
-              repo,
-              content: encoding === 'base64' ? content : Buffer.from(content).toString('base64'),
-              encoding: 'base64',
-            }
-          ));
+          ({ data } = await sendBatchWrite(octokit, 'POST /repos/{owner}/{repo}/git/blobs', {
+            owner: resolvedOrg.login,
+            repo,
+            content: encoding === 'base64' ? content : Buffer.from(content).toString('base64'),
+            encoding: 'base64',
+          }));
         } catch (error: unknown) {
           throw asRepoTooLarge(error, basenameOf(path));
         }
@@ -1647,12 +1586,7 @@ export class ContentService {
 
         return { path, sha: data.sha };
       }
-    ).catch((error: unknown) => {
-      // The workers still waiting on a slot or a rate limit stop here instead
-      // of creating blobs for a batch that will not be committed.
-      writes.close();
-      throw error;
-    });
+    );
 
     // Git Trees operation wrapped in retry logic for race condition handling
     const gitOperation = async () => {
@@ -1700,7 +1634,6 @@ export class ContentService {
       // Step 4: Create a new tree with all blobs
       const { data: treeData } = await sendBatchWrite(
         octokit,
-        writes,
         'POST /repos/{owner}/{repo}/git/trees',
         {
           owner: resolvedOrg.login,
@@ -1718,7 +1651,6 @@ export class ContentService {
       // Step 5: Create a new commit pointing to the new tree
       const { data: newCommit } = await sendBatchWrite(
         octokit,
-        writes,
         'POST /repos/{owner}/{repo}/git/commits',
         {
           owner: resolvedOrg.login,
@@ -1730,7 +1662,7 @@ export class ContentService {
       );
 
       // Step 6: Update the branch reference (this is where race condition can occur)
-      await sendBatchWrite(octokit, writes, 'PATCH /repos/{owner}/{repo}/git/refs/{ref}', {
+      await sendBatchWrite(octokit, 'PATCH /repos/{owner}/{repo}/git/refs/{ref}', {
         owner: resolvedOrg.login,
         repo,
         ref: `heads/${branch}`,
