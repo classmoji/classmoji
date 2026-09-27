@@ -40,7 +40,9 @@ test.describe('every reader of a member’s role asks the same helper', () => {
 
   test('the page loader and its save action', () => {
     expect(PAGE_ROUTE).not.toContain('findByClassroomAndUser');
-    expect(PAGE_ROUTE.match(/await findClassroomRole\(\{/g)).toHaveLength(2);
+    // The loader's role, its save action's, and the download map's (accepted only).
+    expect(PAGE_ROUTE.match(/await findClassroomRole\(\{/g)).toHaveLength(3);
+    expect(PAGE_ROUTE.match(/acceptedOnly: true,/g)).toHaveLength(1);
   });
 
   test('assertPageAccess, which the download route reads its role from', () => {

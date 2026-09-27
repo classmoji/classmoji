@@ -33,7 +33,7 @@ import { schema } from '~/components/editor/blocks/index.tsx';
 import type { PageForContent } from '~/types/pages.ts';
 import type { UploadCapability } from '@classmoji/services/media/router';
 import { loadMediaDownloads } from '~/utils/mediaDownloads.server.ts';
-import type { MediaDownloads } from '~/utils/mediaDownloads.ts';
+import { downloadMapRole, type MediaDownloads } from '~/utils/mediaDownloads.ts';
 import {
   assetResolveContext,
   canonicalizeAssetRef,
@@ -132,7 +132,7 @@ export const loader = async ({
 
   if (authData?.userId) {
     // The highest of their roles here: an owner also enrolled as a student
-    // edits, and the download map and route read the same role.
+    // edits. (The download map reads the accepted-only role, below.)
     userRole = await findClassroomRole({
       userId: authData.userId,
       classroomId: page.classroom.id,
@@ -286,11 +286,25 @@ export const loader = async ({
   // download buttons, and an anonymous reader of a public page gets none. Only
   // where the classroom can sign at all (`assetCtx`), because the button's
   // route can mint nothing otherwise. The URL itself is minted on click.
+  //
+  // Drawn for the role that route reads — ACCEPTED memberships only — not the
+  // one that opened this page, so a pending invite draws no button that would
+  // 404 (`downloadMapRole`).
   const viewerShown = !canEdit || previewActive;
-  const mediaDownloads: MediaDownloads =
-    userRole && viewerShown && assetCtx
-      ? await loadMediaDownloads(page.classroom.id, viewerContent, userRole)
-      : {};
+  const downloadRole =
+    authData?.userId && userRole && viewerShown && assetCtx
+      ? downloadMapRole(
+          await findClassroomRole({
+            userId: authData.userId,
+            classroomId: page.classroom.id,
+            acceptedOnly: true,
+          }),
+          page.is_draft
+        )
+      : null;
+  const mediaDownloads: MediaDownloads = downloadRole
+    ? await loadMediaDownloads(page.classroom.id, viewerContent, downloadRole)
+    : {};
 
   // Where this editor's uploads go (`storageTargetFor` on the client): the
   // repository, media, or a refusal it can state before a byte is sent. Staff

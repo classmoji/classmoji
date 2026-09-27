@@ -1,5 +1,6 @@
 import { ClassmojiService } from '~/utils/db.server.ts';
 import {
+  TEACHING_TEAM_ROLES,
   collectMediaDownloadRefs,
   downloadableByRef,
   type MediaDownloads,
@@ -7,7 +8,7 @@ import {
 import { parseMediaRef } from './mediaRefs.ts';
 
 /** Roles that download any media file, whatever its uploader chose for students. */
-export const TEACHING_TEAM_ROLES: ReadonlySet<string> = new Set(['OWNER', 'TEACHER', 'ASSISTANT']);
+export { TEACHING_TEAM_ROLES };
 
 /** Whether this role downloads under the student rule (`allow_download` on videos). */
 export const downloadsAsStudent = (role: string): boolean => !TEACHING_TEAM_ROLES.has(role);
