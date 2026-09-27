@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   findMediaRow: vi.fn(),
   toMediaRecord: vi.fn(),
   mediaDownloadUrl: vi.fn(),
+  mediaPosterUrl: vi.fn(),
   canServeSignedContent: vi.fn(),
   userFindMany: vi.fn(),
 }));
@@ -49,6 +50,7 @@ vi.mock('@classmoji/services', () => ({
     },
     contentDelivery: {
       mediaDownloadUrl: (...a: unknown[]) => mocks.mediaDownloadUrl(...a),
+      mediaPosterUrl: (...a: unknown[]) => mocks.mediaPosterUrl(...a),
       canServeSignedContent: (...a: unknown[]) => mocks.canServeSignedContent(...a),
     },
   },
@@ -57,7 +59,13 @@ vi.mock('@classmoji/services', () => ({
 const { loader, action } = await import('../route');
 
 const CLASS_SLUG = 'cs52-26w';
-const CLASSROOM = { id: 'class-1', content_key_version: 1 };
+const CLASSROOM = {
+  id: 'class-1',
+  content_key_version: 1,
+  content_repo: 'content-org-cs52',
+  content_delivery_enabled: true,
+  git_organization: { login: 'org' },
+};
 const MEDIA_ID = '77777777-8888-4999-8aaa-bbbbbbbbbbbb';
 const GiB = 1024 ** 3;
 
@@ -74,6 +82,7 @@ const record = (over: Record<string, unknown> = {}) => ({
   status: 'READY',
   processing: 'NONE',
   processingError: null,
+  posterKey: null,
   optimise: true,
   keepOriginal: true,
   allowDownload: false,
@@ -163,6 +172,49 @@ describe('loader', () => {
 
     expect(data.items).toEqual([]);
     expect(mocks.userFindMany).not.toHaveBeenCalled();
+  });
+
+  it('passes the processing state and its error through for the row label', async () => {
+    mocks.listMedia.mockResolvedValue([
+      record({ processing: 'FAILED', processingError: 'The video could not be read.' }),
+    ]);
+    const data = await loader(args(get()));
+    expect(data.items[0]).toMatchObject({
+      processing: 'FAILED',
+      processingError: 'The video could not be read.',
+      posterUrl: null,
+    });
+  });
+
+  it('signs a poster thumbnail only for rows that have one', async () => {
+    const POSTER_KEY = `m/class-1/${MEDIA_ID}/poster-0123456789ab.webp`;
+    mocks.listMedia.mockResolvedValue([
+      record({ id: 'a', processing: 'DONE', posterKey: POSTER_KEY }),
+      record({ id: 'b' }),
+    ]);
+    mocks.mediaPosterUrl.mockResolvedValue('https://content.test/poster');
+
+    const data = await loader(args(get()));
+
+    expect(mocks.mediaPosterUrl).toHaveBeenCalledTimes(1);
+    expect(mocks.mediaPosterUrl).toHaveBeenCalledWith({
+      classroom: {
+        id: 'class-1',
+        content_key_version: 1,
+        content_repo: 'content-org-cs52',
+        git_organization: { login: 'org' },
+        content_delivery_enabled: true,
+      },
+      record: expect.objectContaining({ id: 'a' }),
+    });
+    expect(data.items.map(item => item.posterUrl)).toEqual(['https://content.test/poster', null]);
+  });
+
+  it('a poster that cannot be signed is a missing thumbnail, not a failed page', async () => {
+    mocks.listMedia.mockResolvedValue([record({ posterKey: 'x' })]);
+    mocks.mediaPosterUrl.mockRejectedValue(new Error('no secret'));
+    const data = await loader(args(get()));
+    expect(data.items[0].posterUrl).toBeNull();
   });
 
   it('shows the rendition size once the original has been dropped', async () => {

@@ -4,31 +4,43 @@ import type { MediaProcessing, MediaRecord, MediaStatus } from '@classmoji/servi
  * What the media page SHOWS about a row, derived rather than stored.
  *
  * The database keeps two independent facts — `status` (is the object there)
- * and `processing` (did the rendition job run) — and the page has one column.
- * Deriving the column here rather than in the table means the four states have
- * one definition, and that a row which is READY but still encoding cannot be
- * drawn as plain "ready" in one place and "optimising" in another.
+ * and `processing` (did the video job run) — and the page has one label.
+ * Deriving it here rather than in the table means the states have one
+ * definition, and that a row which is READY but still being optimised cannot be
+ * drawn one way in one place and another way somewhere else.
+ *
+ * A READY row with no processing to report (`NONE`: not a video, not marked
+ * optimise, or uploaded before optimising existed) shows NOTHING — null — and
+ * that is most rows.
  *
  * Kept away from the markup so it can be tested as the truth table it is.
  */
 
-export type MediaState = 'uploading' | 'optimising' | 'ready' | 'failed';
+export type MediaState = 'uploading' | 'optimising' | 'optimised' | 'failed';
 
 export function mediaState(record: {
   status: MediaStatus;
   processing: MediaProcessing;
-}): MediaState {
+}): MediaState | null {
   // STAGING is an agent's upload waiting to be placed: in flight, like a
   // browser upload, and holding its reservation the same way.
   if (record.status === 'UPLOADING' || record.status === 'STAGING') return 'uploading';
 
   // A READY row is already playable; processing only ever adds a better copy.
-  // So FAILED is reported without pretending the object is unusable, and
-  // PENDING says what is happening rather than leaving a silent delay.
+  // So FAILED is reported without pretending the object is unusable.
   if (record.processing === 'PENDING') return 'optimising';
+  if (record.processing === 'DONE') return 'optimised';
   if (record.processing === 'FAILED') return 'failed';
-  return 'ready';
+  return null;
 }
+
+/** The words each state is shown as. */
+export const MEDIA_STATE_LABEL: Record<MediaState, string> = {
+  uploading: 'Uploading',
+  optimising: 'Optimising',
+  optimised: 'Optimised',
+  failed: 'Couldn’t optimise — the original is shown',
+};
 
 /**
  * The chip classes for each state, spelled out rather than built from a tone
@@ -41,7 +53,7 @@ export function mediaState(record: {
 export const MEDIA_STATE_CHIP: Record<MediaState, string> = {
   uploading: 'bg-sky-bg text-sky-ink !border-sky-bord',
   optimising: 'bg-amber-bg text-amber-ink !border-amber-bord',
-  ready: 'bg-mint-bg text-mint-ink !border-mint-bord',
+  optimised: 'bg-mint-bg text-mint-ink !border-mint-bord',
   failed: 'bg-peach-bg text-peach-ink !border-peach-bord',
 };
 

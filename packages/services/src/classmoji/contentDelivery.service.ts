@@ -1185,6 +1185,34 @@ export async function resolveMediaPoster(ctx: ResolveContext, ref: string): Prom
 }
 
 /**
+ * The poster frame's URL for a media row already in hand, or null when it has
+ * none (the video job has not produced one) or the layer cannot sign.
+ *
+ * For a list that already READ its rows scoped to the classroom — Settings →
+ * Media — so there is nothing to look up again; `mintMedia` still refuses a
+ * record from another classroom. `resolveMediaPoster` is the same answer for a
+ * `media://` reference. The `edit` tier by default: the list is a staff view.
+ */
+export async function mediaPosterUrl({
+  classroom,
+  record,
+  tier = 'edit',
+}: {
+  classroom: ResolveClassroom;
+  record: MediaRecord;
+  tier?: ResolveTier;
+}): Promise<string | null> {
+  const poster = posterVariantOf(record);
+  if (!poster || record.status !== 'READY') return null;
+
+  const ctx: ResolveContext = { classroom, tier };
+  const env = deliveryEnvFor(ctx);
+  if (!env) return null;
+
+  return mintMedia(ctx, env, record, poster, tier, undefined);
+}
+
+/**
  * The save-to-disk URL for one media object, or null when there is not one.
  *
  * Two separate reasons for null, and they are not the same thing:

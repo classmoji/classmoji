@@ -40,6 +40,7 @@ const {
   canonicalizeAssetRef,
   isOwnAssetRef,
   mediaDownloadUrl,
+  mediaPosterUrl,
   parseMediaRef,
   resolveAssetUrl,
   resolveDelivery,
@@ -345,6 +346,47 @@ describe('resolveMediaPoster', () => {
 
   it('is null for anything that is not a media reference', async () => {
     await expect(resolveMediaPoster(ctx, 'pages/lab-1/hero.png')).resolves.toBeNull();
+  });
+});
+
+describe('mediaPosterUrl', () => {
+  it('signs the poster the row names, on the edit tier by default, with no lookup', async () => {
+    const url = await mediaPosterUrl({
+      classroom: ctx.classroom,
+      record: record({ posterKey: POSTER_KEY, processing: 'DONE' }),
+    });
+    expect(url).toContain(`/media/${MEDIA_ID}/${POSTER}?`);
+    expect(new URL(url!).searchParams.get('p')).toBe('edit');
+    expect(lookupReadyMedia).not.toHaveBeenCalled();
+    await expect(verifyContentUrl(MASTER, url!)).resolves.toMatchObject({
+      ok: true,
+      variant: POSTER,
+    });
+  });
+
+  it('is null with no poster, an unparseable one, or a row that is not READY', async () => {
+    for (const over of [
+      {},
+      { posterKey: 'poster.webp' },
+      { posterKey: POSTER_KEY, status: 'DELETED' as const },
+    ]) {
+      await expect(
+        mediaPosterUrl({ classroom: ctx.classroom, record: record(over) })
+      ).resolves.toBeNull();
+    }
+  });
+
+  it('refuses a row from another classroom', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(
+      mediaPosterUrl({
+        classroom: ctx.classroom,
+        record: record({
+          posterKey: POSTER_KEY,
+          classroomId: 'c1a55c0d-0000-4000-8000-000000000009',
+        }),
+      })
+    ).resolves.toBeNull();
   });
 });
 
