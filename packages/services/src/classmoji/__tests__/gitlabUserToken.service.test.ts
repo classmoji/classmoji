@@ -91,6 +91,7 @@ describe('getGitLabTokenForUser', () => {
       client_id: 'school-cid',
       client_secret: encryptSecret('school-cs'),
       disabled_at: null,
+      approved_at: new Date('2026-01-01'),
     });
     const fetchMock = vi.fn().mockResolvedValueOnce({
       ok: true,

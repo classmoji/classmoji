@@ -28,6 +28,9 @@ const hostLabel = (host: string) => new URL(host).host;
 
 type Status = { kind: 'unknown'; host: string } | { kind: 'error'; text: string } | null;
 
+const pendingText = (host: string) =>
+  `${hostLabel(host)} is waiting for Classmoji's approval. You can sign in once it is approved.`;
+
 /**
  * "Continue with Gitlab" for gitlab.com and self-managed instances.
  *
@@ -56,13 +59,19 @@ export default function GitLabSignIn({
     : null;
   const target = options.preselected ?? remembered ?? defaultChoice;
 
-  const [choosing, setChoosing] = useState(Boolean(options.unknownHost));
+  const [choosing, setChoosing] = useState(Boolean(options.unknownHost || options.pendingHost));
   useEffect(() => onChoosingChange?.(choosing), [choosing, onChoosingChange]);
   const [hostInput, setHostInput] = useState(
-    options.unknownHost ? hostLabel(options.unknownHost) : ''
+    options.unknownHost || options.pendingHost
+      ? hostLabel((options.unknownHost || options.pendingHost) as string)
+      : ''
   );
   const [status, setStatus] = useState<Status>(
-    options.unknownHost ? { kind: 'unknown', host: options.unknownHost } : null
+    options.pendingHost
+      ? { kind: 'error', text: pendingText(options.pendingHost) }
+      : options.unknownHost
+        ? { kind: 'unknown', host: options.unknownHost }
+        : null
   );
   const [busy, setBusy] = useState(false);
 
@@ -111,7 +120,7 @@ export default function GitLabSignIn({
       );
       const body = (await response.json().catch(() => null)) as
         | { status: 'ok'; instance: GitLabChoice }
-        | { status: 'unknown' | 'disabled'; host: string }
+        | { status: 'unknown' | 'disabled' | 'pending'; host: string }
         | { status: 'invalid' }
         | null;
       if (body?.status === 'ok') {
@@ -119,6 +128,8 @@ export default function GitLabSignIn({
         return;
       }
       if (body?.status === 'unknown') setStatus({ kind: 'unknown', host: body.host });
+      else if (body?.status === 'pending')
+        setStatus({ kind: 'error', text: pendingText(body.host) });
       else if (body?.status === 'disabled') {
         setStatus({ kind: 'error', text: `Sign-in with ${hostLabel(body.host)} is turned off.` });
       } else

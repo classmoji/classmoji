@@ -64,6 +64,7 @@ describe('oauthClient', () => {
       client_id: 'school-cid',
       client_secret: svc.encryptSecret('school-cs'),
       disabled_at: null,
+      approved_at: new Date('2026-01-01'),
     });
     await expect(svc.oauthClient('i1')).resolves.toEqual({
       instanceId: 'i1',
@@ -80,11 +81,27 @@ describe('oauthClient', () => {
       client_id: 'c',
       client_secret: svc.encryptSecret('s'),
       disabled_at: new Date(),
+      approved_at: new Date('2026-01-01'),
     };
     findUniqueMock.mockResolvedValue(row);
     await expect(svc.oauthClient('i1')).rejects.toMatchObject({ code: 'disabled' });
     await expect(svc.oauthClient('i1', { allowDisabled: true })).resolves.toMatchObject({
       instanceId: 'i1',
+    });
+  });
+
+  it('refuses a pending instance, even for a refresh', async () => {
+    findUniqueMock.mockResolvedValue({
+      id: 'i1',
+      host: 'https://gitlab.school.edu',
+      client_id: 'c',
+      client_secret: svc.encryptSecret('s'),
+      disabled_at: null,
+      approved_at: null,
+    });
+    await expect(svc.oauthClient('i1')).rejects.toMatchObject({ code: 'pending' });
+    await expect(svc.oauthClient('i1', { allowDisabled: true })).rejects.toMatchObject({
+      code: 'pending',
     });
   });
 

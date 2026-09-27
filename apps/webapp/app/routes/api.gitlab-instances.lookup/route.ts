@@ -16,6 +16,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
   const found = await svc.findByHost(host);
   if (!found) return { status: 'unknown' as const, host };
+  if (found.pending) return { status: 'pending' as const, host };
   if (found.disabled) return { status: 'disabled' as const, host };
   return { status: 'ok' as const, instance: { id: found.id, host: found.host } };
 };

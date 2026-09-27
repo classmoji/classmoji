@@ -140,8 +140,98 @@ const InstanceActions = ({ row }: { row: InstanceRow }) => {
   );
 };
 
+const Signal = ({ ok, children }: { ok: boolean; children: React.ReactNode }) => (
+  <li className={ok ? 'text-ink-2' : 'text-amber-700 dark:text-amber-400'}>
+    {ok ? '✓' : '!'} {children}
+  </li>
+);
+
+/** A request waiting for approval, with what an admin needs to vet it. */
+const PendingRequest = ({ row }: { row: InstanceRow }) => {
+  const decide = useFetcher<{ error?: string; ok?: boolean }>();
+  const r = row.requester;
+  const hostname = new URL(row.host).hostname;
+  const ageDays = r.since
+    ? Math.floor((Date.now() - new Date(r.since).getTime()) / 86_400_000)
+    : null;
+  const busy = decide.state !== 'idle';
+  return (
+    <div className="rounded-xl ring-1 ring-line p-4 flex flex-col gap-3 sm:flex-row sm:justify-between">
+      <div className="min-w-0">
+        <a
+          href={row.host}
+          target="_blank"
+          rel="noreferrer"
+          className="text-ink-0 font-medium hover:underline"
+        >
+          {hostname}
+        </a>
+        <div className="text-xs text-ink-3">
+          requested {new Date(row.createdAt).toLocaleString()} by{' '}
+          {[r.name, r.username ? `@${r.username}` : null].filter(Boolean).join(' ') || 'unknown'}
+          {r.email ? ` (${r.email})` : ''}
+        </div>
+        {r.note ? (
+          <p className="mt-2 text-sm text-ink-1 whitespace-pre-wrap">&ldquo;{r.note}&rdquo;</p>
+        ) : null}
+        <ul className="mt-2 space-y-0.5 text-xs">
+          <Signal ok={r.emailMatchesHost}>
+            {r.emailMatchesHost
+              ? 'Email domain matches the Gitlab host'
+              : 'Email domain does not match the Gitlab host'}
+          </Signal>
+          <Signal ok={r.emailConfirmed}>
+            {r.emailConfirmed ? 'Email confirmed by Gitlab' : 'Email not confirmed by Gitlab'}
+          </Signal>
+          <Signal ok={ageDays !== null && ageDays >= 30}>
+            {ageDays === null
+              ? 'Gitlab account age unknown'
+              : `Gitlab account ${ageDays} day${ageDays === 1 ? '' : 's'} old`}
+          </Signal>
+          {r.isAdmin ? <Signal ok>Administrator of this Gitlab</Signal> : null}
+        </ul>
+        <p className="mt-2 text-[11px] text-ink-3">
+          Check the host is the school&apos;s own Gitlab and the requester is staff there
+          (directory, or email them). Once approved, everyone on this Gitlab signs in through the
+          requester&apos;s OAuth application.
+        </p>
+      </div>
+      <div className="flex sm:flex-col items-end gap-2 shrink-0">
+        <decide.Form method="post" className="flex gap-2">
+          <input type="hidden" name="instanceId" value={row.id} />
+          <button
+            type="submit"
+            name="intent"
+            value="approve"
+            disabled={busy}
+            className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
+          >
+            Approve
+          </button>
+          <button
+            type="submit"
+            name="intent"
+            value="reject"
+            disabled={busy}
+            className="rounded-md border border-line px-3 py-1.5 text-xs font-medium text-ink-2 hover:bg-nav-hover disabled:opacity-40"
+          >
+            Decline
+          </button>
+        </decide.Form>
+        {decide.data?.error ? (
+          <span role="alert" className="text-[11px] text-red-600 dark:text-red-400">
+            {decide.data.error}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+};
+
 const GitLabInstances = () => {
-  const { rows, defaultHost } = useLoaderData<typeof loader>();
+  const { rows: allRows, defaultHost } = useLoaderData<typeof loader>();
+  const pending = allRows.filter(row => row.pending);
+  const rows = allRows.filter(row => !row.pending);
 
   return (
     <>
@@ -150,6 +240,19 @@ const GitLabInstances = () => {
       </div>
 
       <div className="rounded-2xl bg-panel ring-1 ring-line px-3 py-4 sm:px-4 min-h-[calc(100vh-14rem)]">
+        {pending.length > 0 ? (
+          <div className="mb-6">
+            <h2 className="text-sm font-semibold text-ink-1 mb-2 px-1">
+              Waiting for approval ({pending.length})
+            </h2>
+            <div className="space-y-3">
+              {pending.map(row => (
+                <PendingRequest key={row.id} row={row} />
+              ))}
+            </div>
+          </div>
+        ) : null}
+
         <p className="text-xs text-ink-3 mb-3 px-1">
           Self-managed Gitlabs connected at /gitlab/setup. The default instance ({defaultHost}) is
           configured from env and not listed. Turning one off stops sign-in and new connections;
@@ -189,7 +292,9 @@ const GitLabInstances = () => {
                         since {new Date(row.createdAt).toLocaleDateString()}
                       </div>
                     </td>
-                    <td className="py-2.5 pr-4 text-ink-2">{row.createdBy ?? 'Unknown'}</td>
+                    <td className="py-2.5 pr-4 text-ink-2">
+                      {row.createdBy ?? row.requester.name ?? row.requester.email ?? 'Unknown'}
+                    </td>
                     <td className="py-2.5 pr-4 text-ink-2">{row.groups}</td>
                     <td className="py-2.5 pr-4 text-ink-2">{row.connections}</td>
                     <td className="py-2.5">

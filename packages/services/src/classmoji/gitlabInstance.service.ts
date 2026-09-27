@@ -12,7 +12,9 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { tasks } from '@trigger.dev/sdk';
 import getPrisma from '@classmoji/database';
+import { escapeHtml, appUrl } from '../emails/escape.ts';
 import { GITLAB_COM, GITLAB_PROJECTS_SUBGROUP, normalizeGitlabHost } from '@classmoji/utils';
 
 export interface GitLabOAuthClient {
@@ -24,7 +26,14 @@ export interface GitLabOAuthClient {
 }
 
 export class GitLabInstanceError extends Error {
-  code: 'not_configured' | 'not_found' | 'disabled' | 'invalid_host' | 'unreachable' | 'exists';
+  code:
+    | 'not_configured'
+    | 'not_found'
+    | 'disabled'
+    | 'pending'
+    | 'invalid_host'
+    | 'unreachable'
+    | 'exists';
   constructor(code: GitLabInstanceError['code'], message: string) {
     super(message);
     this.name = 'GitLabInstanceError';
@@ -125,6 +134,9 @@ export async function oauthClient(
   }
   const row = await getPrisma().gitLabInstance.findUnique({ where: { id: instanceId } });
   if (!row) throw new GitLabInstanceError('not_found', 'That Gitlab instance no longer exists');
+  if (!row.approved_at) {
+    throw new GitLabInstanceError('pending', `${row.host} is waiting for Classmoji's approval`);
+  }
   if (row.disabled_at && !allowDisabled) {
     throw new GitLabInstanceError('disabled', `Sign-in with ${row.host} is turned off`);
   }
@@ -142,26 +154,33 @@ export async function oauthClient(
  */
 export async function findByHost(
   input: string | null | undefined
-): Promise<{ id: string | null; host: string; disabled: boolean } | null> {
+): Promise<{ id: string | null; host: string; disabled: boolean; pending: boolean } | null> {
   const host = normalizeHost(input);
   if (!host) return null;
   if (host === defaultHost()) {
-    return defaultConfigured() ? { id: null, host, disabled: false } : null;
+    return defaultConfigured() ? { id: null, host, disabled: false, pending: false } : null;
   }
   const row = await getPrisma().gitLabInstance.findUnique({
     where: { host },
-    select: { id: true, host: true, disabled_at: true },
+    select: { id: true, host: true, disabled_at: true, approved_at: true },
   });
-  return row ? { id: row.id, host: row.host, disabled: Boolean(row.disabled_at) } : null;
+  return row
+    ? {
+        id: row.id,
+        host: row.host,
+        disabled: Boolean(row.disabled_at),
+        pending: !row.approved_at,
+      }
+    : null;
 }
 
 /** An instance's public face (never its secret), for the sign-in page. */
 export async function findPublic(instanceId: string) {
   const row = await getPrisma().gitLabInstance.findUnique({
     where: { id: instanceId },
-    select: { id: true, host: true, disabled_at: true },
+    select: { id: true, host: true, disabled_at: true, approved_at: true },
   });
-  return row && !row.disabled_at ? { id: row.id, host: row.host } : null;
+  return row && row.approved_at && !row.disabled_at ? { id: row.id, host: row.host } : null;
 }
 
 // ─── Registering an instance ─────────────────────────────────────────────────
@@ -259,15 +278,34 @@ export async function probe(input: string): Promise<string> {
   return host;
 }
 
+/** Who asked for an instance, from their Gitlab profile at setup. */
+export interface InstanceRequester {
+  name: string | null;
+  username: string | null;
+  email: string | null;
+  emailConfirmed: boolean;
+  isAdmin: boolean;
+  since: Date | null;
+  note: string | null;
+}
+
 /**
- * Store a new instance. Called only after an OAuth round trip with these
- * credentials succeeded, which proves they work.
+ * Store a new instance, PENDING: nobody can sign in through it until a
+ * platform admin approves it (never automatic). Called only after an OAuth
+ * round trip with these credentials succeeded, which proves they work and
+ * that the requester has an account on that Gitlab.
+ *
+ * Why approval: the OAuth application belongs to whoever made it on that
+ * Gitlab, and everyone at the school signs in through it. Its owner can
+ * revoke it (breaking sign-in) or add a redirect address of their own and
+ * collect people's tokens, so a platform admin vets the requester first.
  */
 export async function create(input: {
   host: string;
   clientId: string;
   clientSecret: string;
   createdByUserId: string | null;
+  requester?: InstanceRequester;
 }) {
   const host = normalizeHost(input.host);
   if (!host) throw new GitLabInstanceError('invalid_host', 'Invalid Gitlab address');
@@ -281,6 +319,13 @@ export async function create(input: {
         client_id: input.clientId,
         client_secret: encryptSecret(input.clientSecret),
         created_by_user_id: input.createdByUserId,
+        requester_name: input.requester?.name ?? null,
+        requester_username: input.requester?.username ?? null,
+        requester_email: input.requester?.email ?? null,
+        requester_email_confirmed: input.requester?.emailConfirmed ?? false,
+        requester_is_admin: input.requester?.isAdmin ?? false,
+        requester_since: input.requester?.since ?? null,
+        request_note: input.requester?.note ?? null,
       },
       select: { id: true, host: true },
     });
@@ -302,7 +347,15 @@ export function list() {
       host: true,
       client_id: true,
       disabled_at: true,
+      approved_at: true,
       created_at: true,
+      requester_name: true,
+      requester_username: true,
+      requester_email: true,
+      requester_email_confirmed: true,
+      requester_is_admin: true,
+      requester_since: true,
+      request_note: true,
       created_by: { select: { id: true, name: true, login: true, email: true } },
       _count: { select: { git_organizations: true, connections: true } },
     },
@@ -315,6 +368,107 @@ export function setDisabled(instanceId: string, disabled: boolean) {
     data: { disabled_at: disabled ? new Date() : null },
     select: { id: true },
   });
+}
+
+/** Approve a pending instance: sign-in through it opens, and the requester is told. */
+export async function approve(instanceId: string) {
+  const row = await getPrisma().gitLabInstance.update({
+    where: { id: instanceId },
+    data: { approved_at: new Date() },
+    select: { host: true, requester_email: true, requester_name: true },
+  });
+  await emailRequester(row, true);
+  return row;
+}
+
+/**
+ * Decline a pending instance. The row is deleted (a pending instance has no
+ * users, connections or classrooms), so the host can be requested again, and
+ * the requester is told. An approved instance is turned off instead.
+ */
+export async function reject(instanceId: string) {
+  const row = await getPrisma().gitLabInstance.findUnique({
+    where: { id: instanceId },
+    select: { host: true, approved_at: true, requester_email: true, requester_name: true },
+  });
+  if (!row) return null;
+  if (row.approved_at) {
+    throw new GitLabInstanceError('exists', `${row.host} is approved; turn it off instead`);
+  }
+  await getPrisma().gitLabInstance.delete({ where: { id: instanceId } });
+  await emailRequester(row, false);
+  return row;
+}
+
+// ─── Approval emails ─────────────────────────────────────────────────────────
+
+function platformAdminIds(): string[] {
+  return (process.env.PLATFORM_ADMIN_USER_IDS ?? '')
+    .split(',')
+    .map(id => id.trim())
+    .filter(Boolean);
+}
+
+/** Queue an email; best-effort (approval never hinges on mail). */
+async function sendEmail(to: string, subject: string, html: string): Promise<void> {
+  try {
+    await tasks.trigger('send_email', { to, subject, html });
+  } catch (error: unknown) {
+    console.error('[gitlabInstance] could not queue email', error);
+  }
+}
+
+/** Tell every platform admin a Gitlab is waiting for approval. */
+export async function notifyAdminsOfRequest(host: string, requester: InstanceRequester) {
+  const ids = platformAdminIds();
+  if (ids.length === 0) {
+    console.warn(`[gitlabInstance] ${host} awaits approval, but PLATFORM_ADMIN_USER_IDS is empty`);
+    return;
+  }
+  const admins = await getPrisma().user.findMany({
+    where: { id: { in: ids }, email: { not: null } },
+    select: { email: true },
+  });
+  const adminUrl = (process.env.ADMIN_URL || '').replace(/\/+$/, '');
+  const who = [requester.name, requester.username ? `@${requester.username}` : null]
+    .filter(Boolean)
+    .join(' ');
+  const html = [
+    `<p>A Gitlab is waiting for your approval before anyone can sign in through it.</p>`,
+    `<p><b>${escapeHtml(host)}</b><br/>`,
+    `Requested by ${escapeHtml(who || 'unknown')}`,
+    requester.email
+      ? ` (${escapeHtml(requester.email)}${requester.emailConfirmed ? ', confirmed' : ', not confirmed'})`
+      : '',
+    requester.isAdmin ? `<br/>They are an administrator of this Gitlab.` : '',
+    `</p>`,
+    requester.note ? `<p>Their note: ${escapeHtml(requester.note)}</p>` : '',
+    adminUrl
+      ? `<p><a href="${escapeHtml(adminUrl)}/gitlab-instances">Review it in Classmoji Admin</a></p>`
+      : '',
+  ].join('');
+  for (const admin of admins) {
+    await sendEmail(admin.email as string, `Gitlab approval needed: ${host}`, html);
+  }
+}
+
+async function emailRequester(
+  row: { host: string; requester_email: string | null; requester_name: string | null },
+  approved: boolean
+) {
+  if (!row.requester_email) return;
+  const hello = row.requester_name ? `Hi ${escapeHtml(row.requester_name)},` : 'Hi,';
+  const html = approved
+    ? (() => {
+        const link = `${appUrl()}/?gitlab=${encodeURIComponent(new URL(row.host).host)}`;
+        return `<p>${hello}</p><p>${escapeHtml(row.host)} is now connected to Classmoji, and anyone with an account on it can sign in.</p><p>Share this sign-in link with your students (on the syllabus or course site) so they land on the right Gitlab without typing anything:<br/><a href="${escapeHtml(link)}">${escapeHtml(link)}</a></p><p>Classroom invite links pick your Gitlab automatically too.</p>`;
+      })()
+    : `<p>${hello}</p><p>We could not approve connecting ${escapeHtml(row.host)} to Classmoji. Reply to this email or write to hello@classmoji.io and we will sort it out with you.</p>`;
+  await sendEmail(
+    row.requester_email,
+    approved ? `${row.host} is ready on Classmoji` : `About your Gitlab request for ${row.host}`,
+    html
+  );
 }
 
 /** Replace an instance's OAuth application (e.g. after the old one was deleted). */

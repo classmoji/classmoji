@@ -424,17 +424,33 @@ model GitLabConnection {
 /// instance, so ids from a row here are stored as `<instance id>:<id>` in every
 /// provider id column (see scopeGitlabId in @classmoji/utils).
 model GitLabInstance {
-  id                 String    @id @default(uuid())
+  id                        String    @id @default(uuid())
   /// Normalized origin, e.g. `https://gitlab.example.edu`.
-  host               String    @unique
-  client_id          String
+  host                      String    @unique
+  client_id                 String
   /// Encrypted (see gitlabInstance.service.ts).
-  client_secret      String
-  created_by_user_id String?
+  client_secret             String
+  created_by_user_id        String?
   /// Set by a platform admin: no sign-in, no new connections.
-  disabled_at        DateTime?
-  created_at         DateTime  @default(now())
-  updated_at         DateTime  @default(now()) @updatedAt
+  disabled_at               DateTime?
+  /// Set when a platform admin approves the request. Until then the instance
+  /// is pending: nobody can sign in through it. Never set automatically.
+  approved_at               DateTime?
+  /// Who asked for it, from their Gitlab profile at setup (no Classmoji user
+  /// exists yet for a pending instance). Shown to the approving admin.
+  requester_name            String?
+  requester_username        String?
+  requester_email           String?
+  /// Gitlab confirmed the requester's email.
+  requester_email_confirmed Boolean   @default(false)
+  /// The requester is an administrator of this Gitlab.
+  requester_is_admin        Boolean   @default(false)
+  /// When the requester's Gitlab account was created.
+  requester_since           DateTime?
+  /// What the requester wrote about themselves and their course.
+  request_note              String?
+  created_at                DateTime  @default(now())
+  updated_at                DateTime  @default(now()) @updatedAt
 
   created_by        User?              @relation(fields: [created_by_user_id], references: [id], onDelete: SetNull)
   connections       GitLabConnection[]

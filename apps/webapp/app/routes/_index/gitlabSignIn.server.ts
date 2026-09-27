@@ -17,6 +17,8 @@ export interface GitLabSignInOptions {
   preselected: GitLabChoice | null;
   /** `?gitlab=<host>` named a GitLab that isn't set up yet. */
   unknownHost: string | null;
+  /** `?gitlab=<host>` named a GitLab still waiting for Classmoji's approval. */
+  pendingHost: string | null;
 }
 
 /** The instance of the classroom a roster invite (inside `?redirect=`) is for. */
@@ -51,23 +53,28 @@ export async function loadGitLabSignIn(
   const svc = ClassmojiService.gitlabInstance;
   const defaultHost = svc.defaultConfigured() ? svc.defaultHost() : null;
   const hasInstances =
-    (await getPrisma().gitLabInstance.count({ where: { disabled_at: null } })) > 0;
+    (await getPrisma().gitLabInstance.count({
+      where: { disabled_at: null, approved_at: { not: null } },
+    })) > 0;
 
   let preselected: GitLabChoice | null = null;
   let unknownHost: string | null = null;
+  let pendingHost: string | null = null;
   const requested = url.searchParams.get('gitlab');
   if (requested) {
     const found = await svc.findByHost(requested);
-    if (found && !found.disabled) preselected = { id: found.id, host: found.host };
+    if (found?.pending) pendingHost = found.host;
+    else if (found && !found.disabled) preselected = { id: found.id, host: found.host };
     else unknownHost = svc.normalizeHost(requested);
   } else {
     preselected = await instanceFromInvite(redirectPath).catch(() => null);
   }
 
   return {
-    enabled: Boolean(defaultHost) || hasInstances || Boolean(unknownHost),
+    enabled: Boolean(defaultHost) || hasInstances || Boolean(unknownHost || pendingHost),
     defaultHost,
     preselected,
     unknownHost,
+    pendingHost,
   };
 }

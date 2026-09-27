@@ -58,6 +58,9 @@ interface GitLabProfile {
   state?: string;
   locked?: boolean;
   confirmed_at?: string | null;
+  /** Only present when the token's user is an administrator. */
+  is_admin?: boolean;
+  created_at?: string | null;
 }
 
 /** What rides in the OAuth state for a setup round trip (secret encrypted). */
@@ -65,6 +68,8 @@ interface PendingSetup {
   host: string;
   clientId: string;
   clientSecret: string;
+  /** The requester's note for the approving admin. */
+  note?: string | null;
 }
 
 const redirectBody = {
@@ -164,6 +169,7 @@ export const gitlabInstances = () =>
             host: z.string().min(1).max(255),
             clientId: z.string().trim().min(1).max(255),
             clientSecret: z.string().trim().min(1).max(255),
+            note: z.string().trim().max(500).optional(),
             ...redirectBody,
           }),
         },
@@ -174,15 +180,19 @@ export const gitlabInstances = () =>
           } catch (error: unknown) {
             refuse(error);
           }
-          if (await svc().findByHost(host)) {
+          const existing = await svc().findByHost(host);
+          if (existing) {
             throw new APIError('BAD_REQUEST', {
-              message: `${host} is already set up. Sign in with it instead.`,
+              message: existing.pending
+                ? `${host} has already been requested and is waiting for Classmoji's approval.`
+                : `${host} is already set up. Sign in with it instead.`,
             });
           }
           const setup: PendingSetup = {
             host,
             clientId: ctx.body.clientId,
             clientSecret: svc().encryptSecret(ctx.body.clientSecret),
+            note: ctx.body.note || null,
           };
           const url = await authorizeUrl(
             ctx,
@@ -227,7 +237,7 @@ export const gitlabInstances = () =>
               clientId: setup.clientId,
               clientSecret: svc().decryptSecret(setup.clientSecret),
             };
-            instanceId = null; // assigned once the instance is stored below
+            instanceId = null; // setup stores a pending instance and signs nobody in
           } else if (state.gitlabInstanceId) {
             try {
               const resolved = await svc().oauthClient(state.gitlabInstanceId);
@@ -265,25 +275,40 @@ export const gitlabInstances = () =>
           // Sign-in needs an email for the new user; linking an existing one doesn't.
           if (!email && !state.link) return fail('email_is_missing');
 
-          // Setup: the credentials just worked, so the instance is real.
+          // Setup: the credentials just worked, so the instance is real. It
+          // is stored PENDING and nobody is signed in: a platform admin
+          // approves it first (never automatically), because everyone at the
+          // school would sign in through the requester's OAuth application.
           if (setup) {
+            const requester = {
+              name: profile.name || null,
+              username: profile.username || null,
+              email: email || null,
+              emailConfirmed: Boolean(profile.confirmed_at),
+              isAdmin: profile.is_admin === true,
+              since: profile.created_at ? new Date(profile.created_at) : null,
+              note: setup.note ?? null,
+            };
             try {
-              const created = await svc().create({
+              await svc().create({
                 host: setup.host,
                 clientId: setup.clientId,
                 clientSecret: client.clientSecret,
                 createdByUserId: null,
+                requester,
               });
-              instanceId = created.id;
             } catch (error: unknown) {
-              // Someone else finished setting it up first: use theirs.
-              const existing = await svc().findByHost(setup.host);
-              if (!existing?.id) {
-                ctx.context.logger.error('Gitlab instance setup failed', error);
-                return fail('gitlab_setup_failed');
-              }
-              instanceId = existing.id;
+              ctx.context.logger.error('Gitlab instance setup failed', error);
+              return fail(
+                (error as { code?: string }).code === 'exists'
+                  ? 'gitlab_setup_exists'
+                  : 'gitlab_setup_failed'
+              );
             }
+            await svc().notifyAdminsOfRequest(setup.host, requester);
+            const next = new URL(state.callbackURL, ctx.context.baseURL);
+            next.searchParams.set('gitlab_setup', 'pending');
+            throw ctx.redirect(next.toString());
           }
 
           const accountId = scopeGitlabId(instanceId, profile.id);
@@ -345,18 +370,8 @@ export const gitlabInstances = () =>
             );
           }
 
-          if (setup && instanceId) {
-            await getPrisma()
-              .gitLabInstance.updateMany({
-                where: { id: instanceId, created_by_user_id: null },
-                data: { created_by_user_id: result.data.user.id },
-              })
-              .catch(() => {});
-          }
-
           await setSessionCookie(ctx, result.data);
           const next = new URL(state.callbackURL, ctx.context.baseURL);
-          if (setup) next.searchParams.set('gitlab_setup', 'done');
           throw ctx.redirect(next.toString());
         }
       ),

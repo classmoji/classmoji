@@ -1,7 +1,5 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
-import { auth } from '@classmoji/auth/server';
-import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
 import { Emoji } from '~/components';
 import GitLabIcon from '~/components/ui/display/gitlab.svg';
@@ -15,6 +13,7 @@ const ERRORS: Record<string, string> = {
   gitlab_setup_credentials:
     'Gitlab rejected that Application ID or Secret, or the callback URLs on the application do not match the ones above.',
   gitlab_setup_failed: 'Could not save that Gitlab. Try again.',
+  gitlab_setup_exists: 'That Gitlab has already been requested or set up.',
   access_denied: 'You cancelled on Gitlab. Nothing was saved.',
   email_is_missing: 'Your Gitlab account has no email address Classmoji can read.',
   account_not_linked:
@@ -26,37 +25,21 @@ const ERRORS: Record<string, string> = {
  *
  * PUBLIC: whoever sets it up (an instructor, or the school's GitLab admin)
  * usually has no Classmoji account yet. They register an OAuth application on
- * their GitLab and paste its credentials here; Classmoji then signs them in
- * through it, and only a successful round trip saves the instance.
+ * their GitLab and paste its credentials here. A successful OAuth round trip
+ * saves the instance as a REQUEST: a Classmoji platform admin approves it
+ * before anyone can sign in through it, and the requester is emailed.
  */
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const url = new URL(request.url);
   const webappUrl = (process.env.WEBAPP_URL ?? url.origin).replace(/\/+$/, '');
   const svc = ClassmojiService.gitlabInstance;
 
-  // Back from a successful setup: show the class sign-in link.
-  let done: { id: string; host: string; signInLink: string } | null = null;
-  if (url.searchParams.get('gitlab_setup') === 'done') {
-    const session = await auth.api.getSession({ headers: request.headers });
-    const created = session?.user
-      ? await getPrisma().gitLabInstance.findFirst({
-          where: { created_by_user_id: session.user.id },
-          orderBy: { created_at: 'desc' },
-          select: { id: true, host: true },
-        })
-      : null;
-    if (created) {
-      done = {
-        id: created.id,
-        host: created.host,
-        signInLink: `${webappUrl}/?gitlab=${encodeURIComponent(new URL(created.host).host)}`,
-      };
-    }
-  }
+  // Back from a successful setup: the request is waiting for approval.
+  const pending = url.searchParams.get('gitlab_setup') === 'pending';
 
   const error = url.searchParams.get('error');
   return {
-    done,
+    pending,
     host: svc.normalizeHost(url.searchParams.get('host')) ?? '',
     error: error ? (ERRORS[error] ?? 'Setup failed. Check the details and try again.') : null,
     callbackUrls: [
@@ -95,23 +78,12 @@ const inputClass =
   'w-full rounded-md px-2.5 py-1.5 text-sm bg-white dark:bg-neutral-950 text-gray-900 dark:text-white ring-1 ring-stone-200 dark:ring-neutral-700 focus:outline-none focus:ring-2 focus:ring-primary';
 
 export default function GitLabSetup({ loaderData }: Route.ComponentProps) {
-  const { done, callbackUrls, scopes, egressIps } = loaderData;
+  const { pending, callbackUrls, scopes, egressIps } = loaderData;
 
-  // Remember this Gitlab for the sign-in page, as signing in through it would.
-  useEffect(() => {
-    if (!done) return;
-    try {
-      localStorage.setItem(
-        'classmoji:gitlab-instance',
-        JSON.stringify({ id: done.id, host: done.host })
-      );
-    } catch {
-      // Storage blocked: the sign-in page falls back to its chooser.
-    }
-  }, [done]);
   const [host, setHost] = useState(loaderData.host);
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
+  const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(loaderData.error);
   const [busy, setBusy] = useState(false);
 
@@ -128,7 +100,8 @@ export default function GitLabSetup({ loaderData }: Route.ComponentProps) {
           host,
           clientId,
           clientSecret,
-          callbackURL: '/gitlab/setup',
+          note,
+          callbackURL: `/gitlab/setup?host=${encodeURIComponent(host.trim())}`,
           errorCallbackURL: '/gitlab/setup',
         }),
       });
@@ -156,28 +129,17 @@ export default function GitLabSetup({ loaderData }: Route.ComponentProps) {
           <img src={GitLabIcon} alt="Gitlab" className="w-9 h-9" />
         </div>
 
-        {done ? (
+        {pending ? (
           <div className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-6">
             <h1 className="text-lg font-semibold text-gray-900 dark:text-white">
-              {new URL(done.host).host} is connected
+              Request sent{loaderData.host ? ` for ${new URL(loaderData.host).host}` : ''}
             </h1>
             <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
-              Anyone with an account on your Gitlab can now sign in to Classmoji with it. Share this
-              link with your students (on the syllabus or course site) so they land on the right
-              Gitlab without typing anything:
+              Your credentials work. The Classmoji team reviews every new Gitlab before anyone can
+              sign in through it, usually within a day. We&apos;ll email you at the address on your
+              Gitlab account as soon as it is approved, with a sign-in link to share with your
+              students.
             </p>
-            <div className="mt-3">
-              <CopyField value={done.signInLink} />
-            </div>
-            <p className="mt-3 text-xs text-ink-3">
-              Classroom invite links pick your Gitlab automatically too.
-            </p>
-            <Link
-              to="/select-organization"
-              className="mt-5 inline-block rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90"
-            >
-              Continue to Classmoji
-            </Link>
           </div>
         ) : (
           <div className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-6">
@@ -186,7 +148,9 @@ export default function GitLabSetup({ loaderData }: Route.ComponentProps) {
             </h1>
             <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
               A one-time step per Gitlab server. After this, instructors and students on it sign in
-              with one click. Best done by your Gitlab admin; any instructor can do it too.
+              with one click. Best done by your Gitlab admin, so the application belongs to the
+              school rather than one person; any instructor can request it too. The Classmoji team
+              approves each new Gitlab before it can be used.
             </p>
 
             <ol className="mt-5 space-y-5 text-sm text-gray-800 dark:text-gray-200">
@@ -271,6 +235,22 @@ export default function GitLabSetup({ loaderData }: Route.ComponentProps) {
                     />
                   </div>
 
+                  <div>
+                    <label htmlFor="note" className="block text-xs text-ink-3 mb-1">
+                      Your role and course
+                    </label>
+                    <textarea
+                      id="note"
+                      value={note}
+                      onChange={e => setNote(e.target.value)}
+                      required
+                      maxLength={500}
+                      rows={2}
+                      placeholder="Instructor for CS 10, Fall 2026 (or: Gitlab admin at the CS department)"
+                      className={inputClass}
+                    />
+                  </div>
+
                   {error && (
                     <p className="rounded-lg bg-amber-50 dark:bg-amber-900/20 ring-1 ring-amber-200 dark:ring-amber-800 px-3 py-2 text-sm text-amber-900 dark:text-amber-200">
                       {error}
@@ -282,11 +262,12 @@ export default function GitLabSetup({ loaderData }: Route.ComponentProps) {
                     disabled={busy}
                     className="w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-white hover:bg-primary/90 disabled:opacity-50 cursor-pointer"
                   >
-                    {busy ? 'Checking…' : 'Connect and sign in'}
+                    {busy ? 'Checking…' : 'Check and send for approval'}
                   </button>
                   <p className="text-xs text-ink-3">
                     You&apos;ll approve Classmoji on your Gitlab once; that proves the credentials
-                    work. Your Gitlab must be reachable from the internet.
+                    work. Nobody can sign in through it until the Classmoji team approves it. Your
+                    Gitlab must be reachable from the internet.
                   </p>
                   {egressIps.length > 0 && (
                     <p className="text-xs text-ink-3">

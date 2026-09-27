@@ -89,7 +89,9 @@ async function instanceFromPayload(webUrl: string | undefined): Promise<string |
   if (!host) return undefined;
   if (host === svc.defaultHost()) return null;
   const found = await svc.findByHost(host);
-  return found?.id ?? undefined;
+  // A pending instance has no classrooms; nothing from it is trusted.
+  if (!found || found.pending) return undefined;
+  return found.id ?? undefined;
 }
 
 /** A deleted branch reports an all-zero `after`. */
