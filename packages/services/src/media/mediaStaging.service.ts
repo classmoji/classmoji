@@ -101,10 +101,19 @@ export const STAGE_EXPIRED_REASON = 'This upload expired before it was placed.';
 /**
  * How long the staged PUT URL lives. Short: it is a reusable write until it
  * expires — and it cannot be revoked, so an agent upload keeps counting toward
- * the outstanding caps for this long even once it is cancelled (see
- * `insertStagingRow`).
+ * the outstanding caps for this long (plus `STAGE_URL_GRACE_SECONDS`) even once
+ * it is cancelled (see `insertStagingRow`).
  */
 export const STAGE_URL_TTL_SECONDS = 10 * 60;
+
+/**
+ * Slack on top of `STAGE_URL_TTL_SECONDS` for how long a stage keeps counting.
+ * The row's `created_at` is stamped by the database when it is inserted; the
+ * URL is signed after that commit, on this process's clock. The URL can
+ * therefore outlive `created_at + TTL` by the gap between the two plus any
+ * skew between the clocks, and a minute covers both.
+ */
+export const STAGE_URL_GRACE_SECONDS = 60;
 
 const GIB = 1024 * 1024 * 1024;
 
@@ -205,8 +214,12 @@ async function insertStagingRow(args: {
     // once, but a presigned URL cannot be revoked: until it expires, the stage
     // key can still be written — up to the declared size — so the outstanding
     // caps keep counting it. Without this, "start 2 GB, cancel, start again"
-    // would open unbounded writable stage keys, however low the caps.
-    const urlLiveSince = new Date(Date.now() - STAGE_URL_TTL_SECONDS * 1000);
+    // would open unbounded writable stage keys, however low the caps. The
+    // window is the URL's life plus `STAGE_URL_GRACE_SECONDS`: it is measured
+    // from the row's `created_at`, and the URL is signed a little later.
+    const urlLiveSince = new Date(
+      Date.now() - (STAGE_URL_TTL_SECONDS + STAGE_URL_GRACE_SECONDS) * 1000
+    );
     const liveWhere = liveRowsWhere(args.classroomId);
     const rows = (await tx.mediaObject.findMany({
       where: {

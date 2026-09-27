@@ -290,8 +290,15 @@ describe('startStagedUpload', () => {
     });
     expect(prisma.mediaObject.create).not.toHaveBeenCalled();
 
-    // Once the URL window has passed, the cancelled stage no longer counts.
+    // Just past the URL's own life it still counts: the URL was signed after
+    // the row was stamped, so the window carries a grace period.
     cancelled.created_at = new Date(Date.now() - (staging.STAGE_URL_TTL_SECONDS + 1) * 1000);
+    await expect(start()).rejects.toMatchObject({ code: 'STAGE_LIMIT' });
+
+    // Once the URL window and its grace have passed, it no longer counts.
+    cancelled.created_at = new Date(
+      Date.now() - (staging.STAGE_URL_TTL_SECONDS + staging.STAGE_URL_GRACE_SECONDS + 1) * 1000
+    );
     await expect(start()).resolves.toMatchObject({ destination: 'media' });
   });
 
