@@ -230,8 +230,18 @@ export default async function gitlabRoutes(fastify: FastifyInstance): Promise<vo
       // claiming to come from one Gitlab must carry that Gitlab's token: one
       // instance can't speak for another.
       const expected = ClassmojiService.gitlabInstance.webhookSecret(instanceId);
-      if (!expected || !tokenMatches(request.headers['x-gitlab-token'], expected)) {
-        return reply.status(401).send('Unauthorized');
+      const received = request.headers['x-gitlab-token'];
+      if (!expected || !tokenMatches(received, expected)) {
+        // Hooks made before per-instance tokens carry the shared secret until
+        // the webhook repair rewrites them. Accepted only while
+        // GITLAB_LEGACY_WEBHOOK_SECRET_UNTIL (an ISO date) is in the future:
+        // set it for the rollout, run the repair, and let it lapse.
+        const until = Date.parse(process.env.GITLAB_LEGACY_WEBHOOK_SECRET_UNTIL ?? '');
+        const legacy = process.env.GITLAB_WEBHOOK_SECRET;
+        if (!(until > Date.now() && legacy && tokenMatches(received, legacy))) {
+          return reply.status(401).send('Unauthorized');
+        }
+        request.log.warn({ instanceId }, 'Gitlab webhook with the legacy shared secret');
       }
       const event = request.headers['x-gitlab-event'];
       if (event === 'Push Hook') {

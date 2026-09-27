@@ -149,7 +149,10 @@ export async function pollGitlabPushes(): Promise<{
       },
     },
     take: POLL_MAX_REPOS,
-    orderBy: { last_push_at: { sort: 'asc', nulls: 'first' } },
+    // Least recently polled first, so every active repo gets its turn however
+    // many there are (ordering by last push would starve a repo that was
+    // just pushed to, exactly the one whose webhook may have broken since).
+    orderBy: [{ push_polled_at: { sort: 'asc', nulls: 'first' } }, { id: 'asc' }],
     select: {
       id: true,
       name: true,
@@ -195,6 +198,10 @@ export async function pollGitlabPushes(): Promise<{
         error: error instanceof Error ? error.message : String(error),
       });
     }
+    // Its turn is over either way: it goes to the back of the queue.
+    await getPrisma()
+      .gitRepo.update({ where: { id: repo.id }, data: { push_polled_at: new Date() } })
+      .catch(() => {});
   }
   logger.info('Gitlab push poll done', result);
   return result;

@@ -507,6 +507,9 @@ model Classroom {
   // it is not the org itself. GitLab: the class subgroup (group/cs10-fall26).
   // Null for Github, where repos sit directly in the org.
   git_namespace                String?
+  /// Classmoji created the class subgroup (never adopted an existing group).
+  /// Deleting the classroom on Gitlab removes the whole subgroup only when set.
+  git_namespace_created        Boolean         @default(false)
   // GitHub Classroom course id, set on import; null for classrooms created
   // directly in Classmoji. Unique because one GitHub Classroom course maps to at
   // most one Classmoji classroom, which makes it the stable idempotency key for
@@ -998,6 +1001,8 @@ model GitRepo {
   // receipt time). Independent of any assignment's submission time, which
   // freezes at the deadline; this is what "Last push" shows.
   last_push_at   DateTime?
+  /// When the Gitlab push poll last read this repo (it rotates through all).
+  push_polled_at DateTime?
   created_at     DateTime    @default(now())
   updated_at     DateTime    @default(now()) @updatedAt
 

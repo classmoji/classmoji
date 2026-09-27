@@ -556,6 +556,7 @@ async function gitlabArtifactPlan(classroom: {
   id: string;
   git_org_id: string;
   git_namespace: string | null;
+  git_namespace_created: boolean;
   content_repo: string | null;
   git_organization: { login: string | null };
   git_repos: Array<{ name: string }>;
@@ -622,12 +623,17 @@ async function gitlabArtifactPlan(classroom: {
   for (const name of templateNames) {
     artifacts.push({ kind: 'repo', org: templatesGroup, name, label: 'template repo' });
   }
-  artifacts.push({
-    kind: 'team',
-    org: orgLogin,
-    name: namespace.slice(orgLogin.length + 1),
-    label: 'class subgroup',
-  });
+  // The whole subgroup only when Classmoji created it. A classroom that
+  // adopted an existing group (older classrooms could) gets its own projects
+  // and team subgroups removed one by one, and the group is left alone.
+  if (classroom.git_namespace_created) {
+    artifacts.push({
+      kind: 'team',
+      org: orgLogin,
+      name: namespace.slice(orgLogin.length + 1),
+      label: 'class subgroup',
+    });
+  }
   for (const team of teams) {
     artifacts.push({
       kind: 'team',
@@ -710,7 +716,29 @@ async function deleteGitLabArtifacts(
   }
 
   const subgroup = artifacts.find(a => a.label === 'class subgroup');
-  if (!subgroup) return summary;
+  if (!subgroup) {
+    // Not Classmoji's subgroup: only what Classmoji made in it goes.
+    for (const artifact of artifacts.filter(a => a.label !== 'template repo')) {
+      try {
+        if (artifact.kind === 'repo') {
+          await provider.deleteRepository(artifact.org, artifact.name);
+          summary.deleted_repos += 1;
+        } else if ((await provider.deleteGroup(`${artifact.org}/${artifact.name}`)) === 'missing') {
+          summary.skipped += 1;
+        } else {
+          summary.deleted_teams += 1;
+        }
+      } catch (error: unknown) {
+        if ((error as { status?: number })?.status === 404) {
+          summary.skipped += 1;
+          continue;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        summary.failures.push(`${artifact.label} ${artifact.name}: ${message}`);
+      }
+    }
+    return summary;
+  }
   const inside = artifacts.filter(a => a.label !== 'template repo' && a !== subgroup);
   try {
     const outcome = await provider.deleteGroup(`${subgroup.org}/${subgroup.name}`);

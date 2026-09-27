@@ -153,7 +153,9 @@ export async function createGitLabClassroom(
     });
     await getPrisma().classroom.update({
       where: { id: classroom.id },
-      data: { git_namespace: subgroup.full_path },
+      // Created fresh above (adopt: false), so deleting the classroom may
+      // remove the whole subgroup.
+      data: { git_namespace: subgroup.full_path, git_namespace_created: true },
     });
   } catch (error: unknown) {
     await getPrisma()

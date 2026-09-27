@@ -63,7 +63,9 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   // self-managed instance set up at /gitlab/setup.
   const gitlabDefaultHost = instances.defaultConfigured() ? instances.defaultHost() : null;
   const hasInstances =
-    (await getPrisma().gitLabInstance.count({ where: { disabled_at: null } })) > 0;
+    (await getPrisma().gitLabInstance.count({
+      where: { disabled_at: null, approved_at: { not: null } },
+    })) > 0;
 
   return {
     connected,
@@ -232,7 +234,7 @@ const GitLabConnectChooser = ({
     );
     const body = (await response.json().catch(() => null)) as
       | { status: 'ok'; instance: { id: string | null; host: string } }
-      | { status: 'unknown' | 'disabled'; host: string }
+      | { status: 'unknown' | 'disabled' | 'pending'; host: string }
       | { status: 'invalid' }
       | null;
     if (body?.status === 'ok') {
@@ -244,9 +246,11 @@ const GitLabConnectChooser = ({
     setMessage(
       body?.status === 'unknown'
         ? `${new URL(body.host).host} isn't connected to Classmoji yet. It can be set up at /gitlab/setup.`
-        : body?.status === 'disabled'
-          ? 'Sign-in with that Gitlab is turned off.'
-          : 'Enter your Gitlab address, like gitlab.school.edu'
+        : body?.status === 'pending'
+          ? `${new URL(body.host).host} is waiting for Classmoji's approval. You can connect it once it is approved.`
+          : body?.status === 'disabled'
+            ? 'Sign-in with that Gitlab is turned off.'
+            : 'Enter your Gitlab address, like gitlab.school.edu'
     );
   };
 
