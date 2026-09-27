@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 
 import {
   getClassroomIdBySlug,
@@ -38,16 +38,25 @@ import {
  * runs with SITE_BASE_DOMAIN unset (see `forms-site-link.spec.ts`), so on this
  * server no site serves and the link is the request-origin one these
  * assertions expect.
+ *
+ * The third part is the Edit · Responses · Teams switcher on the builder and
+ * the responses page, and the Teams link on the list. Teams exists only for a
+ * CLASSROOM form (team sets are built from a roster), so both access modes get
+ * a fixture, and the switcher marks the screen being shown with
+ * `aria-current="page"`.
  */
 
 const CLASS = getTestClassroomSlug();
 const FORM_SLUG = 'zz-e2e-chrome';
+const CLASSROOM_FORM_SLUG = 'zz-e2e-chrome-classroom';
+const CLASSROOM_FORM_TITLE = 'ZZ E2E Chrome Classroom';
 const WEBAPP = getDevPort('webapp') || 'http://localhost:3000';
 const PAGES = getPagesBaseURL();
 
 const BACK_LINK = `a[title="Back to this classroom's forms in Classmoji"]`;
 
 let formId: string | null = null;
+let classroomFormId: string | null = null;
 
 test.use({ permissions: ['clipboard-read', 'clipboard-write'] });
 
@@ -62,7 +71,9 @@ test.beforeAll(async () => {
   if (!owner) throw new Error('no OWNER membership — is the dev database seeded?');
 
   // Left over from an interrupted run.
-  await prisma.form.deleteMany({ where: { classroom_id: classroomId, slug: FORM_SLUG } });
+  await prisma.form.deleteMany({
+    where: { classroom_id: classroomId, slug: { in: [FORM_SLUG, CLASSROOM_FORM_SLUG] } },
+  });
 
   const form = await prisma.form.create({
     data: {
@@ -86,12 +97,36 @@ test.beforeAll(async () => {
     },
   });
   formId = form.id;
+
+  const classroomForm = await prisma.form.create({
+    data: {
+      classroom_id: classroomId,
+      title: CLASSROOM_FORM_TITLE,
+      slug: CLASSROOM_FORM_SLUG,
+      access: 'CLASSROOM',
+      status: 'DRAFT',
+      created_by: owner.user_id,
+      draft_fields: {
+        definition_version: 1,
+        fields: [
+          {
+            id: '55555555-5555-4555-8555-555555555555',
+            type: 'short_text',
+            label: 'Anything',
+            required: false,
+          },
+        ],
+      },
+    },
+  });
+  classroomFormId = classroomForm.id;
 });
 
 test.afterAll(async () => {
-  if (!formId) return;
   const prisma = await getTestPrisma();
-  await prisma.form.delete({ where: { id: formId } }).catch(() => {});
+  for (const id of [formId, classroomFormId]) {
+    if (id) await prisma.form.delete({ where: { id } }).catch(() => {});
+  }
 });
 
 test.describe('the way back to Classmoji', () => {
@@ -145,8 +180,83 @@ test.describe('Copy link, from the builder', () => {
     const expected = `${PAGES}/${CLASS}/forms/${FORM_SLUG}`;
 
     await loginAs(page, 'owner', `/${CLASS}/forms`);
-    await page.getByRole('button', { name: 'Copy link to ZZ E2E Chrome' }).click();
+    // Exact: the classroom form's "ZZ E2E Chrome Classroom" starts the same way.
+    await page.getByRole('button', { name: 'Copy link to ZZ E2E Chrome', exact: true }).click();
 
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(expected);
+  });
+});
+
+test.describe('the Edit · Responses · Teams switcher', () => {
+  /** The switcher itself: `FormAdminTabs` renders `<nav aria-label="Form">`. */
+  const switcher = (page: Page) => page.getByRole('navigation', { name: 'Form', exact: true });
+
+  test('on the builder of a classroom form: all three, Edit current', async ({ page }) => {
+    await loginAs(page, 'owner', `/${CLASS}/forms/${CLASSROOM_FORM_SLUG}/edit`);
+
+    const nav = switcher(page);
+    await expect(nav.getByRole('link')).toHaveCount(3);
+    await expect(nav.getByRole('link', { name: 'Edit' })).toHaveAttribute('aria-current', 'page');
+    await expect(nav.getByRole('link', { name: /^Responses/ })).not.toHaveAttribute(
+      'aria-current',
+      'page'
+    );
+    await expect(nav.getByRole('link', { name: 'Teams' })).toHaveAttribute(
+      'href',
+      `/${CLASS}/forms/${CLASSROOM_FORM_SLUG}/teams`
+    );
+    await expect(nav.locator('[aria-current="page"]')).toHaveCount(1);
+  });
+
+  test('on the builder of a public form: no Teams', async ({ page }) => {
+    await loginAs(page, 'owner', `/${CLASS}/forms/${FORM_SLUG}/edit`);
+
+    const nav = switcher(page);
+    await expect(nav.getByRole('link', { name: 'Edit' })).toHaveAttribute('aria-current', 'page');
+    await expect(nav.getByRole('link', { name: /^Responses/ })).toBeVisible();
+    await expect(nav.getByRole('link', { name: 'Teams' })).toHaveCount(0);
+  });
+
+  test('on the responses page: Responses current, Teams only for a classroom form', async ({
+    page,
+  }) => {
+    await loginAs(page, 'owner', `/${CLASS}/forms/${CLASSROOM_FORM_SLUG}/responses`);
+
+    let nav = switcher(page);
+    await expect(nav.getByRole('link', { name: /^Responses/ })).toHaveAttribute(
+      'aria-current',
+      'page'
+    );
+    await expect(nav.getByRole('link', { name: 'Edit' })).toHaveAttribute(
+      'href',
+      `/${CLASS}/forms/${CLASSROOM_FORM_SLUG}/edit`
+    );
+    await expect(nav.getByRole('link', { name: 'Teams' })).toBeVisible();
+    await expect(nav.locator('[aria-current="page"]')).toHaveCount(1);
+
+    await page.goto(`/${CLASS}/forms/${FORM_SLUG}/responses`);
+    nav = switcher(page);
+    await expect(nav.getByRole('link', { name: /^Responses/ })).toHaveAttribute(
+      'aria-current',
+      'page'
+    );
+    await expect(nav.getByRole('link', { name: 'Teams' })).toHaveCount(0);
+  });
+
+  test('the forms list links Teams for a classroom form only', async ({ page }) => {
+    await loginAs(page, 'owner', `/${CLASS}/forms`);
+
+    await expect(
+      page.getByRole('link', { name: `Teams from ${CLASSROOM_FORM_TITLE}` })
+    ).toHaveAttribute('href', `/${CLASS}/forms/${CLASSROOM_FORM_SLUG}/teams`);
+
+    const publicRow = page
+      .getByRole('row')
+      .filter({ hasText: `/${FORM_SLUG}` })
+      .filter({
+        hasNotText: `/${CLASSROOM_FORM_SLUG}`,
+      });
+    await expect(publicRow).toHaveCount(1);
+    await expect(publicRow.getByRole('link', { name: /^Teams from/ })).toHaveCount(0);
   });
 });

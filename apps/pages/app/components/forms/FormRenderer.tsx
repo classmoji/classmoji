@@ -21,6 +21,7 @@ import {
   answerableFields,
   coerceAnswers,
   defaultAnswers,
+  exclusiveSelection,
   friendlyErrorMap,
   identityPlan,
   type IdentityPlan,
@@ -1033,10 +1034,43 @@ function Control({ field, name, register, watch, setValue, invalid }: ControlPro
           </div>
         );
 
-      case 'multiselect':
+      case 'multiselect': {
+        const options = optionsOf(field);
+        const registration = register(name);
+        /**
+         * `exclusive` options ("Prefer not to say") can't be combined with any
+         * other choice; the contract refuses the combination and the server
+         * re-checks it. Ticking one unticks the rest, and ticking anything else
+         * unticks it.
+         *
+         * The sibling boxes are updated in the DOM BEFORE react-hook-form's own
+         * handler runs, because that handler reads the group's value from its
+         * registered checkboxes. Doing it this way round means the value RHF
+         * stores, and the re-validation it runs after a failed submit, both see
+         * the final selection rather than the combination for one tick.
+         */
+        const onChange: typeof registration.onChange = event => {
+          const box = event.target as HTMLInputElement;
+          if (box.checked && options.some(option => option.exclusive)) {
+            const boxes = Array.from(
+              box
+                .closest('fieldset')
+                ?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]') ?? []
+            );
+            const keep = new Set(
+              exclusiveSelection(
+                options,
+                boxes.filter(other => other.checked).map(other => other.value),
+                box.value
+              )
+            );
+            for (const other of boxes) other.checked = keep.has(other.value);
+          }
+          return registration.onChange(event);
+        };
         return (
           <fieldset {...labelled} aria-describedby={described} className="flex flex-col gap-2">
-            {optionsOf(field).map(option => (
+            {options.map(option => (
               <label
                 key={option.id}
                 className="flex items-start gap-2 text-sm text-gray-800 dark:text-gray-100"
@@ -1044,7 +1078,8 @@ function Control({ field, name, register, watch, setValue, invalid }: ControlPro
                 <input
                   type="checkbox"
                   value={option.id}
-                  {...register(name)}
+                  {...registration}
+                  onChange={onChange}
                   className="mt-1 h-4 w-4 shrink-0"
                 />
                 <span>
@@ -1055,6 +1090,7 @@ function Control({ field, name, register, watch, setValue, invalid }: ControlPro
             ))}
           </fieldset>
         );
+      }
 
       case 'switch':
         return (

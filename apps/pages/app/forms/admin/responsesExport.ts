@@ -7,6 +7,8 @@ import {
 } from './responsesCsv.server.ts';
 import {
   auditResponses,
+  exportAuditValue,
+  identityAudit,
   loadResponseRows,
   requireFormForResponses,
   scopeResponseIds,
@@ -26,6 +28,12 @@ import {
  * exports would be pre-fetchable and would leak into browser history as a
  * download), but it still authenticates before answering 405 — a probe must not
  * learn from the status code whether a form exists.
+ *
+ * Identity questions are never exported: the wide sheet omits their columns,
+ * as it omits every hidden answer, and its audit row records
+ * `identity_answers: false`. The long sheet never has them (the flag is refused
+ * inside a repeat group). Their answers are shown for one response at a time,
+ * in the responses drawer, and nowhere in bulk.
  */
 
 const GATE_ACTION = 'export_responses';
@@ -69,7 +77,9 @@ export const action = async ({
   const allowed =
     requested.length > 0 ? new Set(await scopeResponseIds(context.form.id, requested)) : null;
 
-  const rows = await loadResponseRows(context.form.id);
+  const identityIds = new Set(context.identityFieldIds);
+
+  const rows = await loadResponseRows(context.form.id, identityIds);
   const chosen = allowed ? rows.filter(row => allowed.has(row.id)) : rows;
 
   const exportable: ExportableResponse[] = chosen.map(row => ({
@@ -90,13 +100,20 @@ export const action = async ({
   const csv =
     kind === 'long'
       ? buildLongCsv(context.currentFields, exportable)
-      : buildWideCsv(context.currentFields, exportable);
+      : buildWideCsv(context.currentFields, exportable, identityIds);
 
   await auditResponses({
     context,
     tool: 'forms.responses.export',
     action: 'VIEW',
-    data: { kind, count: exportable.length, selection: allowed ? allowed.size : null },
+    data: {
+      kind,
+      count: exportable.length,
+      selection: allowed ? allowed.size : null,
+      // Joins the dedup key: two different exports inside the window are two rows.
+      value: exportAuditValue(kind, allowed),
+      ...identityAudit(context, false),
+    },
   });
 
   return csvResponse(
