@@ -73,6 +73,7 @@ export type { MediaRoutingCode } from './MediaRoutingError.ts';
 
 export {
   findMediaRow,
+  listReadyMedia,
   lookupReadyMedia,
   mediaRef,
   servedVariant,
@@ -80,6 +81,7 @@ export {
 } from './mediaLookup.ts';
 export type {
   MediaClassroom,
+  MediaListItem,
   MediaProcessing,
   MediaRecord,
   MediaRow,

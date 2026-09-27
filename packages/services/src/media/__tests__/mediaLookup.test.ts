@@ -9,9 +9,14 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('@classmoji/database', () => ({ default: () => ({}) }));
+const findMany = vi.hoisted(() => vi.fn());
+vi.mock('@classmoji/database', () => ({
+  default: () => ({ mediaObject: { findMany: (...a: unknown[]) => findMany(...a) } }),
+}));
 
-const { billedBytes, liveRowsWhere, reservationCutoff } = await import('../mediaLookup.ts');
+const { billedBytes, listReadyMedia, liveRowsWhere, reservationCutoff } = await import(
+  '../mediaLookup.ts'
+);
 const { RESERVATION_WINDOW_MS } = await import('../mediaQuota.ts');
 
 describe('liveRowsWhere', () => {
@@ -62,5 +67,34 @@ describe('billedBytes', () => {
     expect(
       billedBytes({ size_bytes: 100n, rendition_bytes: null, original_deleted_at: new Date() })
     ).toBe(100);
+  });
+});
+
+describe('listReadyMedia', () => {
+  it('asks for READY rows of the one classroom, newest first, as picker items', async () => {
+    const created = new Date('2026-09-26T12:00:00Z');
+    findMany.mockResolvedValue([
+      { id: 'm-1', filename: 'intro.mp4', kind: 'VIDEO', size_bytes: 2048n, created_at: created },
+    ]);
+
+    await expect(listReadyMedia('class-1', { kind: 'VIDEO' })).resolves.toEqual([
+      {
+        id: 'm-1',
+        filename: 'intro.mp4',
+        kind: 'VIDEO',
+        sizeBytes: 2048,
+        ref: 'media://m-1',
+        createdAt: created,
+      },
+    ]);
+    const query = findMany.mock.calls[0][0];
+    expect(query.where).toEqual({ classroom_id: 'class-1', status: 'READY', kind: 'VIDEO' });
+    expect(query.orderBy).toEqual({ created_at: 'desc' });
+  });
+
+  it('does not narrow by kind unless asked', async () => {
+    findMany.mockReset().mockResolvedValue([]);
+    await listReadyMedia('class-1');
+    expect(findMany.mock.calls[0][0].where).toEqual({ classroom_id: 'class-1', status: 'READY' });
   });
 });

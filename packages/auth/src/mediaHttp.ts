@@ -5,7 +5,12 @@ import {
   declaredBodyTooLarge,
   readLimitedBody,
 } from '@classmoji/utils/upload-limit';
-import { assertClassroomAccess, assertClassroomMutationAllowed, requireAuth } from './server.ts';
+import {
+  assertClassroomAccess,
+  assertClassroomEntryAllowed,
+  assertClassroomMutationAllowed,
+  requireAuth,
+} from './server.ts';
 
 /**
  * The media HTTP API, once, for every app that mounts it.
@@ -171,8 +176,10 @@ export async function readJsonBody(request: Request): Promise<Record<string, unk
  * such media object" about their own locked classroom would go looking for a
  * file nobody deleted.
  *
- * `mutation: false` skips the locked/unpublished gate: that gate is about
- * WRITES, and listing what a classroom already holds changes nothing.
+ * `mutation: false` applies the ENTRY gate instead of the write gate: listing
+ * what a classroom holds changes nothing, so a locked classroom's staff may
+ * still do it, while an unpublished classroom stays closed to everyone but its
+ * owner exactly as it is for browsing.
  */
 export async function requireMediaAccess(
   request: Request,
@@ -202,6 +209,8 @@ export async function requireMediaAccess(
   const { classroom, userId, membership } = granted;
   if (mutation) {
     assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+  } else {
+    assertClassroomEntryAllowed({ status: classroom.status, role: membership!.role });
   }
   return { userId, classroom: { id: classroom.id } };
 }
@@ -464,6 +473,55 @@ export async function mediaDeleteAction({ params, request }: MediaHandlerArgs): 
     await ClassmojiService.media.deleteMedia({ classroom, mediaId });
 
     return new Response(null, { status: 204 });
+  } catch (error) {
+    return mediaErrorResponse(error);
+  }
+}
+
+/** The kinds `GET /api/media/list?kind=` accepts — the `MediaKind` enum. */
+const LISTABLE_KINDS = ['VIDEO', 'AUDIO', 'DOCUMENT', 'ARCHIVE', 'IMAGE', 'OTHER'] as const;
+type ListableKind = (typeof LISTABLE_KINDS)[number];
+
+/**
+ * `GET /api/media/list?classroomId=…[&kind=VIDEO]` — the classroom's finished
+ * media, for the editors' "choose from media" pickers.
+ *
+ * Teaching team, like every other media route; a READ, so a locked classroom's
+ * staff can still see what it holds. READY rows only, newest first, scoped to
+ * the classroom in the query itself (`listReadyMedia`), so another classroom's
+ * object is never in hand. `kind` narrows to one `MediaKind`; anything else in
+ * it is a 400 rather than an empty list, so a typo is not read as "no videos".
+ *
+ * 200 `{ items: [{ id, filename, kind, sizeBytes, ref, createdAt }] }` —
+ * `createdAt` an ISO string, `ref` the `media://{id}` to store.
+ */
+export async function mediaListLoader({ request }: MediaHandlerArgs): Promise<Response> {
+  try {
+    requireMethod(request, 'GET');
+
+    const url = new URL(request.url);
+    const classroomId = url.searchParams.get('classroomId') ?? '';
+    if (!classroomId) {
+      return mediaError('BAD_REQUEST', 400, { message: 'classroomId is required.' });
+    }
+    const kindParam = url.searchParams.get('kind');
+    if (kindParam !== null && !(LISTABLE_KINDS as readonly string[]).includes(kindParam)) {
+      return mediaError('BAD_REQUEST', 400, {
+        message: `kind must be one of ${LISTABLE_KINDS.join(', ')}.`,
+      });
+    }
+
+    const { classroom } = await requireMediaAccess(request, classroomId, 'list_media', {
+      mutation: false,
+    });
+
+    const items = await ClassmojiService.media.listReadyMedia(classroom.id, {
+      kind: (kindParam as ListableKind | null) ?? undefined,
+    });
+
+    return Response.json({
+      items: items.map(item => ({ ...item, createdAt: item.createdAt.toISOString() })),
+    });
   } catch (error) {
     return mediaErrorResponse(error);
   }

@@ -262,3 +262,42 @@ export async function lookupReadyMedia(
 
   return new Map(rows.map(row => [row.id, toMediaRecord(row)]));
 }
+
+/** One row of the "choose from media" picker — what it shows and what it stores. */
+export interface MediaListItem {
+  id: string;
+  filename: string;
+  kind: MediaKind;
+  sizeBytes: number;
+  /** `media://{id}` — the reference the picker puts into content. */
+  ref: string;
+  createdAt: Date;
+}
+
+/**
+ * A classroom's finished media, newest first, optionally of one kind — the
+ * "choose from media" picker's read (`GET /api/media/list`).
+ *
+ * READY only: an upload still in flight, or an agent upload not yet placed,
+ * cannot be referenced. Scoped to the classroom in the WHERE clause, for the
+ * same reason as `findMediaRow` — another classroom's object is never in hand.
+ */
+export async function listReadyMedia(
+  classroomId: string,
+  { kind }: { kind?: MediaKind } = {}
+): Promise<MediaListItem[]> {
+  const rows = (await getPrisma().mediaObject.findMany({
+    where: { classroom_id: classroomId, status: 'READY', ...(kind ? { kind } : {}) },
+    orderBy: { created_at: 'desc' },
+    select: { id: true, filename: true, kind: true, size_bytes: true, created_at: true },
+  })) as { id: string; filename: string; kind: MediaKind; size_bytes: bigint; created_at: Date }[];
+
+  return rows.map(row => ({
+    id: row.id,
+    filename: row.filename,
+    kind: row.kind,
+    sizeBytes: Number(row.size_bytes),
+    ref: mediaRef(row.id),
+    createdAt: row.created_at,
+  }));
+}
