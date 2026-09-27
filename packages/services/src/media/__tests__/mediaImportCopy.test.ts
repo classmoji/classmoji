@@ -379,8 +379,11 @@ describe('createMediaImportCopier: success', () => {
       poster_key: `m/${TARGET}/${newId}/poster.webp`,
       duration_ms: 60_000,
     });
+    // The insert writes its own created_at — the attempt's marker — and the
+    // flip matches on it, so it can only ever flip the row this run inserted.
+    expect(created.created_at).toBeInstanceOf(Date);
     expect(prisma.mediaObject.updateMany).toHaveBeenCalledWith({
-      where: { id: newId, status: 'UPLOADING' },
+      where: { id: newId, status: 'UPLOADING', created_at: created.created_at },
       data: expect.objectContaining({ status: 'READY', processing: 'DONE' }),
     });
 
@@ -607,6 +610,7 @@ describe('createMediaImportCopier: what is not copied', () => {
     await copier.prepare([text]);
 
     const videoCopy = prisma.mediaObject.create.mock.calls[0][0].data.id as string;
+    const videoMarker = prisma.mediaObject.create.mock.calls[0][0].data.created_at as Date;
     // Both destination keys of the failed object are deleted — the one that
     // landed and the one that may have.
     expect(sent.filter(s => s.name === 'DeleteObject').map(s => s.input.Key)).toEqual([
@@ -614,7 +618,7 @@ describe('createMediaImportCopier: what is not copied', () => {
       `m/${TARGET}/${videoCopy}/poster.webp`,
     ]);
     expect(prisma.mediaObject.deleteMany).toHaveBeenCalledWith({
-      where: { id: videoCopy, status: 'UPLOADING' },
+      where: { id: videoCopy, status: 'UPLOADING', created_at: videoMarker },
     });
     // A random id is this attempt's alone: nothing is re-read before the delete.
     expect(prisma.mediaObject.findFirst).not.toHaveBeenCalled();
@@ -1068,7 +1072,12 @@ describe('createMediaImportCopier: two attempts writing one derived id', () => {
   // none of its objects, and never count it as its own to discard.
   const JOB = 'job-123';
   const derived = () => importCopyId(JOB, VIDEO);
-  const readyRow = () => row({ id: derived(), classroom_id: TARGET, status: 'READY' });
+  /** Another attempt's marker: never the one this attempt writes. */
+  const OTHER_MARKER = new Date('2026-01-01T00:00:00.000Z');
+  const readyRow = () =>
+    row({ id: derived(), classroom_id: TARGET, status: 'READY', created_at: OTHER_MARKER });
+  const inFlightRow = () =>
+    row({ id: derived(), classroom_id: TARGET, status: 'UPLOADING', created_at: OTHER_MARKER });
 
   function destination({ live = [] as ReturnType<typeof row>[] } = {}) {
     prisma.mediaObject.findMany.mockImplementation(
@@ -1210,7 +1219,11 @@ describe('createMediaImportCopier: two attempts writing one derived id', () => {
       `m/${TARGET}/${derived()}/orig.mp4`,
     ]);
     expect(prisma.mediaObject.deleteMany).toHaveBeenCalledWith({
-      where: { id: derived(), status: 'UPLOADING' },
+      where: {
+        id: derived(),
+        status: 'UPLOADING',
+        created_at: prisma.mediaObject.create.mock.calls[0][0].data.created_at,
+      },
     });
     expect(copier.copiedIdFor(VIDEO)).toBeNull();
     expect(list).toEqual([
@@ -1281,6 +1294,132 @@ describe('createMediaImportCopier: two attempts writing one derived id', () => {
     expect(prisma.mediaObject.findFirst).not.toHaveBeenCalled();
     expect(sent.filter(s => s.name === 'DeleteObject')).toHaveLength(1);
     expect(copier.copiedIdFor(VIDEO)).toBeNull();
+  });
+
+  it('A’s flip matches only its own row: B took it over and is still copying', async () => {
+    // A reserved the derived id; B then took that reservation over and
+    // inserted its own row under the same id. A's flip must not land on B's
+    // row — it would make B's reservation A's copy, and A's discard would
+    // delete what B's content names.
+    destination();
+    prisma.mediaObject.updateMany.mockImplementation(
+      async ({ where }: { where: { created_at?: Date } }) => ({
+        // B's row carries B's marker, so only an unscoped flip would match it.
+        count: where.created_at && where.created_at.getTime() !== OTHER_MARKER.getTime() ? 0 : 1,
+      })
+    );
+    prisma.mediaObject.findFirst.mockResolvedValue(inFlightRow());
+    const { list, warn } = warnings();
+    const { copier, onCopied } = attemptB(warn);
+
+    await copier.prepare([`media://${VIDEO}`]);
+
+    expect(copier.copiedIdFor(VIDEO)).toBeNull();
+    expect(onCopied).not.toHaveBeenCalled();
+    expect(sent.filter(s => s.name === 'DeleteObject')).toEqual([]);
+    expect(list).toEqual([
+      'Could not copy video "lecture.mp4" into this class: could not confirm the copy',
+    ]);
+    deleteMedia.mockResolvedValue({});
+    await copier.discard();
+    expect(deleteMedia).not.toHaveBeenCalled();
+  });
+
+  it('A’s flip matches only its own row: B took it over and already flipped it', async () => {
+    destination();
+    prisma.mediaObject.updateMany.mockImplementation(
+      async ({ where }: { where: { created_at?: Date } }) => ({
+        count: where.created_at && where.created_at.getTime() !== OTHER_MARKER.getTime() ? 0 : 1,
+      })
+    );
+    prisma.mediaObject.findFirst.mockResolvedValue(readyRow());
+    const { list, warn } = warnings();
+    const { copier, onCopied } = attemptB(warn);
+
+    await copier.prepare([`media://${VIDEO}`]);
+
+    expect(list).toEqual([]);
+    await expectReusedNotOwned(copier, onCopied);
+  });
+
+  it('a takeover writes a marker strictly after the row it replaces', async () => {
+    destination();
+    const replaced = new Date(Date.now() + 60_000);
+    prisma.mediaObject.findUnique.mockResolvedValue({
+      classroom_id: TARGET,
+      status: 'UPLOADING',
+      created_at: replaced,
+    });
+    const { copier } = attemptB();
+
+    await copier.prepare([`media://${VIDEO}`]);
+
+    const marker = prisma.mediaObject.create.mock.calls[0][0].data.created_at as Date;
+    expect(marker.getTime()).toBe(replaced.getTime() + 1);
+    expect(prisma.mediaObject.updateMany.mock.calls[0][0].where).toEqual({
+      id: derived(),
+      status: 'UPLOADING',
+      created_at: marker,
+    });
+    expect(copier.copiedIdFor(VIDEO)).toBe(derived());
+  });
+
+  it('a READY write that throws while B holds the id: left to B, nothing deleted', async () => {
+    destination();
+    prisma.mediaObject.updateMany.mockRejectedValue(new Error('connection reset'));
+    prisma.mediaObject.findFirst.mockResolvedValue(inFlightRow());
+    const { list, warn } = warnings();
+    const { copier } = attemptB(warn);
+
+    await copier.prepare([`media://${VIDEO}`]);
+
+    expect(afterFailedReadyFlip).not.toHaveBeenCalled();
+    expect(sent.filter(s => s.name === 'DeleteObject')).toEqual([]);
+    expect(copier.copiedIdFor(VIDEO)).toBeNull();
+    expect(list).toEqual([
+      'Could not copy video "lecture.mp4" into this class: could not confirm the copy',
+    ]);
+  });
+
+  it('a READY write that throws but landed: the copy is this attempt’s', async () => {
+    destination();
+    prisma.mediaObject.updateMany.mockRejectedValue(new Error('connection reset'));
+    prisma.mediaObject.findFirst.mockImplementation(async () =>
+      row({
+        id: derived(),
+        classroom_id: TARGET,
+        status: 'READY',
+        created_at: prisma.mediaObject.create.mock.calls[0][0].data.created_at,
+      })
+    );
+    const { list, warn } = warnings();
+    const { copier, onCopied } = attemptB(warn);
+
+    await copier.prepare([`media://${VIDEO}`]);
+
+    expect(afterFailedReadyFlip).not.toHaveBeenCalled();
+    expect(copier.copiedIdFor(VIDEO)).toBe(derived());
+    expect(onCopied).toHaveBeenCalledWith(VIDEO, derived());
+    expect(list).toEqual([]);
+  });
+
+  it('a lost takeover whose re-read fails says it could not confirm, not that it was removed', async () => {
+    destination();
+    prisma.mediaObject.findUnique.mockResolvedValue({ classroom_id: TARGET, status: 'UPLOADING' });
+    prisma.mediaObject.deleteMany.mockResolvedValue({ count: 0 });
+    prisma.mediaObject.findFirst.mockRejectedValue(new Error('connection reset'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { list, warn } = warnings();
+    const { copier } = attemptB(warn);
+
+    await copier.prepare([`media://${VIDEO}`]);
+
+    expect(copier.copiedIdFor(VIDEO)).toBeNull();
+    expect(sent).toEqual([]);
+    expect(list).toEqual([
+      'Could not copy video "lecture.mp4" into this class: could not confirm the copy',
+    ]);
+    warnSpy.mockRestore();
   });
 
   it('discard removes a copy this attempt made under the derived id', async () => {
