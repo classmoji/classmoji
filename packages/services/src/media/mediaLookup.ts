@@ -136,6 +136,8 @@ export function toMediaRecord(row: MediaRow): MediaRecord {
  * uploaded.
  */
 export function servedVariant(row: { ext: string; renditionKey?: string | null }): string {
+  // TODO(P4): the rendition job writes content-derived names (`web-{hex}.mp4`);
+  // serve the variant the row's `rendition_key` names, not a fixed `web.mp4`.
   if (row.renditionKey) return 'web.mp4';
   // The ext was checked against the variant grammar at create time, so the fallback
   // is unreachable for a row this codebase wrote — and if it ever is reached,
