@@ -257,7 +257,12 @@ describe('startStagedUpload', () => {
         sizeBytes: 4096,
         target,
       })
-    ).rejects.toMatchObject({ code: 'STAGE_LIMIT' });
+    ).rejects.toMatchObject({
+      code: 'STAGE_LIMIT',
+      message:
+        'This class has too many agent uploads in progress. Finish the pending ones with ' +
+        'file_upload_finish, or try again in a few minutes.',
+    });
   });
 
   it('keeps counting a cancelled stage until its PUT URL has expired', async () => {
@@ -290,8 +295,15 @@ describe('startStagedUpload', () => {
     });
     expect(prisma.mediaObject.create).not.toHaveBeenCalled();
 
-    // Once the URL window has passed, the cancelled stage no longer counts.
+    // Just past the URL's own life it still counts: the URL was signed after
+    // the row was stamped, so the window carries a grace period.
     cancelled.created_at = new Date(Date.now() - (staging.STAGE_URL_TTL_SECONDS + 1) * 1000);
+    await expect(start()).rejects.toMatchObject({ code: 'STAGE_LIMIT' });
+
+    // Once the URL window and its grace have passed, it no longer counts.
+    cancelled.created_at = new Date(
+      Date.now() - (staging.STAGE_URL_TTL_SECONDS + staging.STAGE_URL_GRACE_SECONDS + 1) * 1000
+    );
     await expect(start()).resolves.toMatchObject({ destination: 'media' });
   });
 
@@ -661,6 +673,52 @@ describe('placeIntoMedia: the READY flip fails after the copy', () => {
       staging.finishStagedUpload({ classroom, userId: USER, uploadId: MEDIA_ID })
     ).rejects.toThrow('connection reset');
     expect(sent.some(call => call.name === 'DeleteObject')).toBe(false);
+  });
+});
+
+describe('placeIntoMedia: the row expires while it is being placed', () => {
+  it('writes READY only inside the reservation window, and records an expired row', async () => {
+    const stage = stagedRow({
+      kind: 'VIDEO',
+      filename: 'lecture.mp4',
+      ext: 'mp4',
+      content_type: 'video/mp4',
+      destination: 'media',
+    });
+    const expired = { ...stage, created_at: new Date(Date.now() - 25 * 60 * 60 * 1000) };
+    // Fresh at finish's entry; past the window by the time the copy is done.
+    prisma.mediaObject.findFirst.mockResolvedValueOnce(stage).mockResolvedValue(expired);
+    prisma.mediaObject.findUnique.mockResolvedValue(expired);
+    sendImpl.mockImplementation(async (name: string) =>
+      name === 'HeadObject' ? { ContentLength: 4096 } : {}
+    );
+    prisma.mediaObject.updateMany.mockImplementation(
+      async ({ data }: { data: { status?: string } }) => ({
+        count: data.status === 'READY' ? 0 : 1,
+      })
+    );
+
+    await expect(
+      staging.finishStagedUpload({ classroom, userId: USER, uploadId: MEDIA_ID })
+    ).rejects.toMatchObject({ code: 'UPLOAD_EXPIRED' });
+
+    const [readyWrite, tombstone] = prisma.mediaObject.updateMany.mock.calls.map(([arg]) => arg);
+    expect(readyWrite).toMatchObject({
+      where: { id: MEDIA_ID, status: 'STAGING', created_at: { gte: expect.any(Date) } },
+      data: expect.objectContaining({ status: 'READY' }),
+    });
+    expect(tombstone).toMatchObject({
+      where: { id: MEDIA_ID, status: 'STAGING' },
+      data: expect.objectContaining({
+        status: 'DELETED',
+        placement_error: staging.STAGE_EXPIRED_REASON,
+      }),
+    });
+    // The staged bytes and the copy both go.
+    expect(sent.filter(call => call.name === 'DeleteObject').map(call => call.input.Key)).toEqual([
+      STAGE_KEY,
+      `m/${CLASSROOM_ID}/${MEDIA_ID}/orig.mp4`,
+    ]);
   });
 });
 

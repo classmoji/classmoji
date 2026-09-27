@@ -44,7 +44,11 @@ const SLIDES_DIR = 'slides';
  */
 const MANIFEST_PATH = path.join('.classmoji', 'manifest.json');
 
-/** Cap on a single file's in-memory URL rewrite. Content files are text, not datasets. */
+/**
+ * Cap on a single file's in-memory repo-URL rewrite. Content files are text,
+ * not datasets. The MEDIA rewrite has no cap: a file over it still has its
+ * media references copied and repointed (see `rewriteAssetUrls`).
+ */
 const MAX_REWRITE_BYTES = 5 * 1024 * 1024;
 
 export interface ContentRepoCoordinates {
@@ -113,7 +117,7 @@ export type CloneSkipReason =
 export type CloneContentRepoResult =
   | {
       pushed: true;
-      /** Files whose absolute source-repo URLs were repointed at the target repo. */
+      /** Files rewritten: source-repo URLs repointed at the target repo, or media refs at the copies. */
       rewritten: number;
       /** Files in the pushed tree (excluding .git). */
       files: number;
@@ -222,13 +226,18 @@ function listFilesRecursive(dir: string): string[] {
  * ## Media, in two passes
  *
  * Media objects live in R2, not in the tree, so the push cannot carry them.
- * The first pass reads every rewritable text file that could hold a media
+ * The first pass reads every text file that could hold a media
  * reference (`mayReferenceMedia` — a substring test) and hands those texts to
  * the run's media copy, which copies the objects into the target classroom
  * BEFORE anything is pushed. The second pass is the rewrite below, with the
  * copy's `rewrite` as the first step. A tree with no media reference reads
  * nothing extra and asks R2 nothing. Only files that pass the marker test are
  * held in memory between the passes; the rest are re-read, as before.
+ *
+ * The size cap applies to the repo-URL rewrite only. A text file over it is
+ * still handed to the media copy and gets the media rewrite — nothing else —
+ * because a signed media URL left in it would keep serving the SOURCE's bytes
+ * from the copy, and its `media://` references would render as missing.
  *
  * What cannot be copied (Free target, no room, a failed copy, an object that
  * is not the source's) is left byte-for-byte as it was and named in the import
@@ -258,24 +267,19 @@ async function rewriteAssetUrls({
     uncopiedRefs++;
   };
   let rewritten = 0;
-  /** Text files over the rewrite cap, copied verbatim — named in one warning. */
+  /** Text files over the rewrite cap, their repo links left as they were — named in one warning. */
   const oversized: { file: string; size: number }[] = [];
-
-  /** The text files the rewrite may touch — the same gate both passes use. */
-  const rewritable = (file: string): boolean => {
-    if (!isTextContentPath(path.relative(root, file))) return false;
-    try {
-      return fs.statSync(file).size <= MAX_REWRITE_BYTES;
-    } catch {
-      return false;
-    }
-  };
 
   if (media) {
     const mediaTexts: string[] = [];
     for (const file of files) {
-      if (!rewritable(file)) continue;
-      const text = fs.readFileSync(file, 'utf8');
+      if (!isTextContentPath(path.relative(root, file))) continue;
+      let text: string;
+      try {
+        text = fs.readFileSync(file, 'utf8');
+      } catch {
+        continue;
+      }
       if (mayReferenceMedia(text)) mediaTexts.push(text);
     }
     await media.prepare(mediaTexts);
@@ -296,6 +300,16 @@ async function rewriteAssetUrls({
         size: stat.size,
       });
       oversized.push({ file: relative.split(path.sep).join('/'), size: stat.size });
+      // The media rewrite still runs: it is a plain scan, and it is what keeps
+      // the source's signed media URLs out of the copy.
+      if (media) {
+        const text = fs.readFileSync(file, 'utf8');
+        const mediaOnly = media.rewrite(text);
+        if (mediaOnly !== text) {
+          fs.writeFileSync(file, mediaOnly, 'utf8');
+          rewritten++;
+        }
+      }
       continue;
     }
 
@@ -335,9 +349,10 @@ async function rewriteAssetUrls({
 const OVERSIZED_NAMED_MAX = 5;
 
 /**
- * One warning for every text file the rewrite skipped for size. Its links —
- * repo links and media references alike — still point where the SOURCE's did,
- * which an instructor has to know to fix by hand. Exported for tests.
+ * One warning for every text file the repo-URL rewrite skipped for size. Its
+ * links into the source's repository still point there, which an instructor
+ * has to know to fix by hand; its media references were handled (the media
+ * rewrite has no cap). Exported for tests.
  */
 export function oversizedWarning(files: readonly { file: string; size: number }[]): string {
   const mb = (bytes: number) => `${Math.round((bytes / (1024 * 1024)) * 10) / 10} MB`;
@@ -349,7 +364,7 @@ export function oversizedWarning(files: readonly { file: string; size: number }[
   const noun = files.length === 1 ? 'text file' : `${files.length} text files`;
   return (
     `Copied ${noun} over ${mb(MAX_REWRITE_BYTES)} without updating ${files.length === 1 ? 'its' : 'their'} ` +
-    `links, so links in ${files.length === 1 ? 'it' : 'them'} (media included) still point at the source class: ${list}`
+    `links to the source class's repository: ${list}`
   );
 }
 

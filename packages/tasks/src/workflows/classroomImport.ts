@@ -464,10 +464,15 @@ export const importContentTask = task({
         importedBy: job.requested_by,
         warn: detail => writer.addWarnings([`media: ${detail}`]),
         // Resume: copies an earlier attempt made are reused while still READY,
-        // and every copy this attempt makes is recorded the moment it lands.
+        // and every copy this attempt makes is recorded as it lands. That record
+        // is a debounced, best-effort write, so it is not what a retry relies
+        // on: each copy's id is derived from this job's id and the source id,
+        // and a retry finds the copy by that id even when the pair never
+        // reached the row.
         knownCopies: job.progress.id_maps?.media ?? {},
         onCopied: (sourceMediaId, copyMediaId) =>
           writer.mergeIdMaps({ media: { [sourceMediaId]: copyMediaId } }),
+        copyIdSeed: job.id,
       });
 
       const clone = await cloneContentRepo({
