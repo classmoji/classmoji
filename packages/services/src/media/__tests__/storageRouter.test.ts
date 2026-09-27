@@ -83,6 +83,12 @@ describe('storageTargetFor — with media', () => {
     expect(storageTargetFor(full, { name: 'intro.mp4', size: 5 * MB })).toEqual({
       kind: 'media',
     });
+    // Nor does a full store send a file over the repository's cap back to the
+    // repository: the server refuses it with the full-storage sentence
+    // (Tim, 2026-09-27 — no repo fallback for a full Pro class).
+    expect(storageTargetFor(full, { name: 'data.zip', size: 100 * MB })).toEqual({
+      kind: 'media',
+    });
   });
 
   it('refuses a media-bound file with no extension, with the media store’s sentence', () => {
