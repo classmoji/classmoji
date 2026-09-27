@@ -89,7 +89,7 @@ async function downloadOnTier(dl: string, tier: Tier): Promise<string> {
 
 const HEX = '0123456789ab';
 const WEB = `web-${HEX}.mp4`;
-const POSTER = `poster-${HEX}.webp`;
+const POSTER = `poster-${HEX}.jpg`;
 
 describe('renditionVariant / posterVariant', () => {
   it('names the content-derived rendition and poster', () => {
@@ -117,7 +117,7 @@ describe('renditionVariant / posterVariant', () => {
       `m/${CLASSROOM_A}/${MEDIA_ID}/web-ffffffffffff.mp4`
     );
     expect(mediaKey(CLASSROOM_A, MEDIA_ID, posterVariant('000000000000'))).toBe(
-      `m/${CLASSROOM_A}/${MEDIA_ID}/poster-000000000000.webp`
+      `m/${CLASSROOM_A}/${MEDIA_ID}/poster-000000000000.jpg`
     );
   });
 });
@@ -159,6 +159,9 @@ describe('contentTypeForMediaExt', () => {
     expect(contentTypeForMediaExt('zip')).toBe('application/zip');
     expect(contentTypeForMediaExt('key')).toBe('application/zip');
     expect(contentTypeForMediaExt('jpeg')).toBe('image/jpeg');
+    // The poster frame (`poster-{hex12}.jpg`) and the rendition (`web-{hex12}.mp4`).
+    expect(contentTypeForMediaExt('jpg')).toBe('image/jpeg');
+    expect(contentTypeForMediaExt('mp4')).toBe('video/mp4');
     expect(contentTypeForMediaExt('mkv')).toBe('video/x-matroska');
     expect(contentTypeForMediaExt('avi')).toBe('video/x-msvideo');
     expect(contentTypeForMediaExt('ogv')).toBe('video/ogg');
@@ -306,7 +309,9 @@ describe('mint-side refusals', () => {
     'web-0123456789a.mp4',
     'web-0123456789abc.mp4',
     'poster-0123456789ab.png',
-    'poster-0123456789ab.webp/x',
+    'poster-0123456789ab.webp',
+    'poster-0123456789ab.jpeg',
+    'poster-0123456789ab.jpg/x',
     `${WEB}/../orig.mov`,
     '../orig.mov',
     'orig.mov?x=1',

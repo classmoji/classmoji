@@ -30,7 +30,7 @@ const { RESERVATION_WINDOW_MS } = await import('../mediaQuota.ts');
 const C = '11111111-2222-4333-8444-555555555555';
 const M = '77777777-8888-4999-8aaa-bbbbbbbbbbbb';
 const WEB = 'web-0123456789ab.mp4';
-const POSTER = 'poster-0123456789ab.webp';
+const POSTER = 'poster-0123456789ab.jpg';
 
 describe('servedVariant', () => {
   it('serves the original until a rendition is recorded', () => {

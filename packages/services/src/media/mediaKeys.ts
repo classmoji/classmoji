@@ -97,7 +97,7 @@ export function storedRenditionVariant(key: string | null | undefined): string |
   return isRenditionVariant(tail) ? tail : null;
 }
 
-/** As `storedRenditionVariant`, for `poster_key` (`poster-{hex12}.webp`). */
+/** As `storedRenditionVariant`, for `poster_key` (`poster-{hex12}.jpg`). */
 export function storedPosterVariant(key: string | null | undefined): string | null {
   if (typeof key !== 'string' || key.length === 0) return null;
   const tail = key.slice(key.lastIndexOf('/') + 1);

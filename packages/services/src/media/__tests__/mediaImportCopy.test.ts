@@ -311,7 +311,7 @@ describe('createMediaImportCopier: success', () => {
           processing: 'DONE',
           rendition_key: `m/${SOURCE}/${VIDEO}/web-0123456789ab.mp4`,
           rendition_bytes: BigInt(400),
-          poster_key: `m/${SOURCE}/${VIDEO}/poster-0123456789ab.webp`,
+          poster_key: `m/${SOURCE}/${VIDEO}/poster-0123456789ab.jpg`,
         }),
       ],
     });
@@ -347,8 +347,8 @@ describe('createMediaImportCopier: success', () => {
       },
       {
         Bucket: 'media-bucket',
-        Key: `m/${TARGET}/${newId}/poster-0123456789ab.webp`,
-        CopySource: `media-bucket/m/${SOURCE}/${VIDEO}/poster-0123456789ab.webp`,
+        Key: `m/${TARGET}/${newId}/poster-0123456789ab.jpg`,
+        CopySource: `media-bucket/m/${SOURCE}/${VIDEO}/poster-0123456789ab.jpg`,
         MetadataDirective: 'COPY',
       },
     ]);
@@ -378,7 +378,7 @@ describe('createMediaImportCopier: success', () => {
       size_bytes: BigInt(1000),
       rendition_key: `m/${TARGET}/${newId}/web-0123456789ab.mp4`,
       rendition_bytes: BigInt(400),
-      poster_key: `m/${TARGET}/${newId}/poster-0123456789ab.webp`,
+      poster_key: `m/${TARGET}/${newId}/poster-0123456789ab.jpg`,
       duration_ms: 60_000,
     });
     // The insert writes its own created_at — the attempt's marker — and the
@@ -595,7 +595,7 @@ describe('createMediaImportCopier: what is not copied', () => {
           original_deleted_at: new Date(),
           rendition_key: `m/${SOURCE}/${VIDEO}/web-0123456789ab.mp4`,
           rendition_bytes: BigInt(400),
-          poster_key: `m/${SOURCE}/${VIDEO}/poster-0123456789ab.webp`,
+          poster_key: `m/${SOURCE}/${VIDEO}/poster-0123456789ab.jpg`,
         }),
         row({ id: PDF, kind: 'DOCUMENT', filename: 'notes.pdf', ext: 'pdf' }),
       ],
@@ -603,7 +603,7 @@ describe('createMediaImportCopier: what is not copied', () => {
     // The video's poster copy fails; the PDF copies fine.
     sendImpl.mockImplementation(async (name: string, input: { Key: string }) => {
       order.push(name);
-      if (name === 'CopyObject' && input.Key.endsWith('/poster-0123456789ab.webp')) {
+      if (name === 'CopyObject' && input.Key.endsWith('/poster-0123456789ab.jpg')) {
         throw new Error('R2 is having a moment');
       }
       return {};
@@ -624,7 +624,7 @@ describe('createMediaImportCopier: what is not copied', () => {
     // landed and the one that may have.
     expect(sent.filter(s => s.name === 'DeleteObject').map(s => s.input.Key)).toEqual([
       `m/${TARGET}/${videoCopy}/web-0123456789ab.mp4`,
-      `m/${TARGET}/${videoCopy}/poster-0123456789ab.webp`,
+      `m/${TARGET}/${videoCopy}/poster-0123456789ab.jpg`,
     ]);
     expect(prisma.mediaObject.deleteMany).toHaveBeenCalledWith({
       where: { id: videoCopy, status: 'UPLOADING', created_at: videoMarker },
@@ -1535,7 +1535,7 @@ describe('createMediaImportCopier: discard', () => {
 
 describe('createMediaImportCopier: video processing state', () => {
   const WEB = 'web-0123456789ab.mp4';
-  const POSTER = 'poster-0123456789ab.webp';
+  const POSTER = 'poster-0123456789ab.jpg';
 
   function copier() {
     const { list, warn } = warnings();

@@ -68,7 +68,7 @@ const ctx = {
 };
 
 const WEB = 'web-0123456789ab.mp4';
-const POSTER = 'poster-0123456789ab.webp';
+const POSTER = 'poster-0123456789ab.jpg';
 const WEB_KEY = `m/${CLASSROOM_ID}/${MEDIA_ID}/${WEB}`;
 const POSTER_KEY = `m/${CLASSROOM_ID}/${MEDIA_ID}/${POSTER}`;
 

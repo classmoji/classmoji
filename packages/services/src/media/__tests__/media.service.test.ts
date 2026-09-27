@@ -1538,7 +1538,7 @@ describe('abortUpload', () => {
 describe('deleteMedia', () => {
   const PREFIX = `m/${CLASSROOM_ID}/${MEDIA_ID}/`;
   const WEB_KEY = `${PREFIX}web-0123456789ab.mp4`;
-  const POSTER_KEY = `${PREFIX}poster-0123456789ab.webp`;
+  const POSTER_KEY = `${PREFIX}poster-0123456789ab.jpg`;
   /** A replay's pair the row never recorded — the reason the prefix is listed. */
   const STRAY_KEY = `${PREFIX}web-ffffffffffff.mp4`;
 

@@ -187,7 +187,7 @@ describe('loader', () => {
   });
 
   it('signs a poster thumbnail only for rows that have one', async () => {
-    const POSTER_KEY = `m/class-1/${MEDIA_ID}/poster-0123456789ab.webp`;
+    const POSTER_KEY = `m/class-1/${MEDIA_ID}/poster-0123456789ab.jpg`;
     mocks.listMedia.mockResolvedValue([
       record({ id: 'a', processing: 'DONE', posterKey: POSTER_KEY }),
       record({ id: 'b' }),

@@ -177,7 +177,7 @@ export function downloadVariant(row: {
   return storedRenditionVariant(row.renditionKey);
 }
 
-/** The poster frame's variant (`poster-{hex12}.webp`), or null when there is none. */
+/** The poster frame's variant (`poster-{hex12}.jpg`), or null when there is none. */
 export function posterVariantOf(row: { posterKey?: string | null }): string | null {
   return storedPosterVariant(row.posterKey);
 }

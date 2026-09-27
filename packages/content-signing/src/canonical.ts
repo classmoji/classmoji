@@ -51,7 +51,7 @@ const THEME_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 /**
  * The three objects one media upload can produce: the original as it was
  * uploaded (`orig.{ext}`), the streaming rendition (`web-{hex12}.mp4`), and the
- * poster frame (`poster-{hex12}.webp`).
+ * poster frame (`poster-{hex12}.jpg`).
  *
  * A closed grammar rather than a free filename, because this string is BOTH a
  * URL segment and the tail of an R2 key. Nothing here can hold a slash, a dot
@@ -68,9 +68,9 @@ const THEME_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
  */
 const HEX12_PATTERN = /^[0-9a-f]{12}$/;
 const RENDITION_VARIANT_PATTERN = /^web-[0-9a-f]{12}\.mp4$/;
-const POSTER_VARIANT_PATTERN = /^poster-[0-9a-f]{12}\.webp$/;
+const POSTER_VARIANT_PATTERN = /^poster-[0-9a-f]{12}\.jpg$/;
 const MEDIA_VARIANT_PATTERN = new RegExp(
-  `^(?:orig\\.[a-z0-9]{1,${MAX_EXT_LENGTH}}|web-[0-9a-f]{12}\\.mp4|poster-[0-9a-f]{12}\\.webp)$`
+  `^(?:orig\\.[a-z0-9]{1,${MAX_EXT_LENGTH}}|web-[0-9a-f]{12}\\.mp4|poster-[0-9a-f]{12}\\.jpg)$`
 );
 
 /** A lowercase RFC-4122 UUID. Classroom ids and slide ids are the same shape. */
@@ -108,7 +108,7 @@ export function isRenditionVariant(value: unknown): value is string {
   return typeof value === 'string' && RENDITION_VARIANT_PATTERN.test(value);
 }
 
-/** `poster-{hex12}.webp` — a poster frame's variant name. */
+/** `poster-{hex12}.jpg` — a poster frame's variant name. */
 export function isPosterVariant(value: unknown): value is string {
   return typeof value === 'string' && POSTER_VARIANT_PATTERN.test(value);
 }
@@ -135,13 +135,13 @@ export function renditionVariant(hex12: string): string {
 }
 
 /**
- * `poster-{hex12}.webp` — the poster frame's variant name, from the first 12 hex
+ * `poster-{hex12}.jpg` — the poster frame's variant name, from the first 12 hex
  * digits of the SHA-256 of the poster's bytes. Stored and recorded
  * (`poster_key`) exactly as `renditionVariant` describes.
  */
 export function posterVariant(hex12: string): string {
   assertHex12(hex12, 'poster');
-  return `poster-${hex12}.webp`;
+  return `poster-${hex12}.jpg`;
 }
 
 export function isTier(value: unknown): value is Tier {
@@ -186,7 +186,7 @@ export function assertMediaId(value: string): void {
 export function assertMediaVariant(value: string): void {
   assert(
     isMediaVariant(value),
-    `content-signing: variant must be orig.{ext}, web-{hex12}.mp4 or poster-{hex12}.webp (got ${value})`
+    `content-signing: variant must be orig.{ext}, web-{hex12}.mp4 or poster-{hex12}.jpg (got ${value})`
   );
 }
 

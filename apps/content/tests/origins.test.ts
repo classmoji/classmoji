@@ -142,12 +142,15 @@ describe('MediaOrigin', () => {
 
   it('falls back to the variant when the object has no stored type', async () => {
     const bucket = fakeBucket({
-      [`m/${CLASSROOM}/${MEDIA_ID}/poster-0123456789ab.webp`]: { body: 'bytes' },
+      [`m/${CLASSROOM}/${MEDIA_ID}/poster-0123456789ab.jpg`]: { body: 'bytes' },
     });
     const env = fakeEnv({ MEDIA: bucket as unknown as R2Bucket });
 
-    const head = await new MediaOrigin().head(env, { ...mediaRef, variant: 'poster-0123456789ab.webp' });
-    expect(head?.contentType).toBe('image/webp');
+    const head = await new MediaOrigin().head(env, {
+      ...mediaRef,
+      variant: 'poster-0123456789ab.jpg',
+    });
+    expect(head?.contentType).toBe('image/jpeg');
   });
 
   it('passes a range straight to R2', async () => {
