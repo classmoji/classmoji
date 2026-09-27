@@ -189,6 +189,14 @@ test.describe('the three video choices', () => {
     );
   });
 
+  test('say what each choice does, in the wording every surface shares', () => {
+    // The shared ui-components copy of these fields uses the same sentences, so
+    // swapping this local one for it later changes nothing on screen.
+    const fields = source('../../app/components/media/VideoOptionsFields.tsx');
+    expect(fields).toContain('help="Converts it to a format that plays in every browser."');
+    expect(fields).toContain('help="Show students a download button."');
+  });
+
   test('knows a video by the store’s own kind table', () => {
     expect(isVideoFile({ name: 'a.mp4' })).toBe(true);
     expect(isVideoFile({ name: 'a.pdf' })).toBe(false);
