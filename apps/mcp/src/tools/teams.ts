@@ -47,6 +47,20 @@ import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import { ok, OWNER_ONLY, requireClassroomCtx, scopedNotFound, writeAudit } from './shared.ts';
 
 /**
+ * The fixed sentences for the service's `tag_required` refusal, by the call
+ * that met it. The service's own message is never forwarded.
+ */
+export const TAG_REQUIRED_MESSAGES = {
+  create:
+    'None of tag_ids is a tag of this classroom, and every team needs at least one. Nothing was created.',
+  /** A tag deleted between the service's check and the team's write (a foreign-key violation). */
+  create_tag_gone:
+    'A tag in tag_ids was deleted while the team was being created. Nothing was created; call again with tags from list_tags.',
+  remove: "This is the team's only tag, and every team keeps at least one. Nothing was removed.",
+  rule: 'Every team needs at least one tag of this classroom.',
+} as const;
+
+/**
  * Map the service's caller-fixable failures onto tool errors.
  *
  * - `team_not_found` / `tag_not_found` → the uniform scopedNotFound: an unknown
@@ -59,12 +73,29 @@ import { ok, OWNER_ONLY, requireClassroomCtx, scopedNotFound, writeAudit } from 
  *   → invalid_params carrying the service's own message (minus its log prefix):
  *   it names the offending team/organization, which is what the caller needs to
  *   fix the call, and every one of those checks already ran classroom-scoped.
+ * - `tag_required` → invalid_params with code `tag_required` and a fixed
+ *   sentence. The service raises it on two paths that mean different things (a
+ *   create with no tag of this classroom, the removal of a team's last tag), so
+ *   the calling tool names which one it is.
  * - `classroom_not_found` is unreachable (the id comes from a resolved ctx) and
- *   anything else is returned unchanged for the registry's generic wrapper.
+ *   anything else is returned unchanged for the registry's generic wrapper —
+ *   except, on a create, a Prisma foreign-key violation (P2003): a chosen tag
+ *   deleted after the service checked it fails the team's write, and the
+ *   service has removed the GitHub team again. That is `tag_required` too,
+ *   with its own sentence (the webapp's create form maps it the same way).
  */
-function mapTeamError(error: unknown): unknown {
+function mapTeamError(error: unknown, tagRequired?: keyof typeof TAG_REQUIRED_MESSAGES): unknown {
+  if (tagRequired === 'create' && isForeignKeyViolation(error)) {
+    return new ToolError('invalid_params', TAG_REQUIRED_MESSAGES.create_tag_gone, 'tag_required');
+  }
   if (!(error instanceof TeamServiceError)) return error;
   switch (error.code) {
+    case 'tag_required':
+      return new ToolError(
+        'invalid_params',
+        TAG_REQUIRED_MESSAGES[tagRequired ?? 'rule'],
+        'tag_required'
+      );
     case 'team_not_found':
       return scopedNotFound('Team');
     case 'tag_not_found':
@@ -85,6 +116,10 @@ function mapTeamError(error: unknown): unknown {
       return error;
   }
 }
+
+/** A Prisma foreign-key violation (P2003), matched by code (the client class isn't imported here). */
+const isForeignKeyViolation = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2003';
 
 // ─── Shared shapes + helpers ────────────────────────────────────────────────
 
@@ -173,7 +208,7 @@ interface TeamCreateArgs {
   classroom: string;
   name: string;
   is_visible?: boolean;
-  tag_ids?: string[];
+  tag_ids: string[];
 }
 
 export const teamCreateTool: ToolDefinition<TeamCreateArgs> = {
@@ -187,9 +222,10 @@ export const teamCreateTool: ToolDefinition<TeamCreateArgs> = {
     "collide with an existing org team, or that end in '-students' / '-assistants' (reserved for " +
     "the classroom's own membership teams), are refused before anything is created. is_visible " +
     'is recorded on the team but no read path currently varies on it: in list_teams a student ' +
-    'sees the teams they belong to and the teaching team sees them all, either way. tag_ids ' +
-    '(from list_tags; create one with tag_create) attach classroom tags at creation time; a tag id ' +
-    'from another classroom is reported in tags_failed and the team is still created. Add members ' +
+    'sees the teams they belong to and the teaching team sees them all, either way. tag_ids is ' +
+    'required: every team is created under at least one tag of this classroom (list_tags; make ' +
+    'one with tag_create). A tag id from another classroom is reported in tags_failed and the ' +
+    'rest are used; if none is a tag of this classroom, nothing is created. Add members ' +
     'afterwards with team_members_add.',
   scope: 'write',
   roles: OWNER_ONLY,
@@ -206,7 +242,11 @@ export const teamCreateTool: ToolDefinition<TeamCreateArgs> = {
         'Stored on the team as a visibility hint (default false). No read path reads it today: ' +
           'list_teams shows a student their own teams regardless of this flag.'
       ),
-    tag_ids: tagIdsSchema.optional(),
+    tag_ids: tagIdsSchema
+      .min(1)
+      .describe(
+        'At least one tag id from list_tags; every team is created under a tag of this classroom'
+      ),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
@@ -214,14 +254,16 @@ export const teamCreateTool: ToolDefinition<TeamCreateArgs> = {
     let result;
     try {
       // classroomId is ALWAYS the authorized classroom, never request input.
+      // The service refuses a create with no tag of this classroom
+      // (`tag_required`) before anything reaches GitHub.
       result = await ClassmojiService.teamAdmin.createTeam({
         classroomId: classroom.classroomId,
         name: args.name,
         isVisible: args.is_visible ?? false,
-        tagIds: args.tag_ids ?? [],
+        tagIds: args.tag_ids,
       });
     } catch (error) {
-      throw mapTeamError(error);
+      throw mapTeamError(error, 'create');
     }
 
     // Audit right after the service call: the GitHub team and the local row are
@@ -796,7 +838,8 @@ export const teamTagRemoveTool: ToolDefinition<TeamTagRemoveArgs> = {
     'Detaches a tag from a team (Classmoji only — nothing is written to GitHub). Owner only. ' +
     'Identify the tag by tag_name (as shown in list_teams) or tag_id; the tag itself is not ' +
     'deleted, only its link to this team. A tag that is not on this team is reported as not ' +
-    'found.',
+    "found. Every team keeps at least one tag, so removing a team's only tag is refused " +
+    '(code tag_required); attach another with team_tag_add first.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
@@ -854,7 +897,7 @@ export const teamTagRemoveTool: ToolDefinition<TeamTagRemoveArgs> = {
         teamTagId: matches[0].id,
       });
     } catch (error) {
-      throw mapTeamError(error);
+      throw mapTeamError(error, 'remove');
     }
 
     await writeAudit(ctx, {
