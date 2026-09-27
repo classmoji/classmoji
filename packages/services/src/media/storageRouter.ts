@@ -34,7 +34,13 @@
 
 import { formatMegabytes } from '@classmoji/utils';
 import { validateFile, type FileTypePolicy } from '../content/utils/validateFile.ts';
-import { extensionOf, filenameRefusal, kindForExt, type MediaKind } from './mediaKinds.ts';
+import {
+  extensionOf,
+  extensionsOfKind,
+  filenameRefusal,
+  kindForExt,
+  type MediaKind,
+} from './mediaKinds.ts';
 import { PER_FILE_MAX_BYTES } from './mediaQuota.ts';
 
 // For client code on the router subpath: the full-storage sentence the server
@@ -84,6 +90,10 @@ const GB = 1_000_000_000;
 export function formatGigabytes(bytes: number): string {
   return `${Math.round((bytes / GB) * 10) / 10} GB`;
 }
+
+// For client code on the router subpath: the store's own extension list for a
+// kind — what a file picker offers — so no surface keeps a copy of it.
+export { extensionsOfKind };
 
 /** A filename's kind by its extension; `OTHER` when it has none. */
 export function kindOfFilename(name: string): MediaKind {

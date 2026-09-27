@@ -18,9 +18,11 @@ import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 
 import {
+  IMPORT_ENTRY_MAX_BYTES,
   IMPORT_INFLATE_BUDGET_BYTES,
+  IMPORT_REPO_HELD_BYTES,
   IMPORT_VIDEO_OPTIONS,
-  ImportInflateBudget,
+  ImportLimits,
   importAssetType,
   importEntryGoesToMedia,
   importMediaOptions,
@@ -30,7 +32,7 @@ import {
   type PutImportMedia,
 } from '../../app/utils/importVideoMedia.ts';
 import { MEDIA_QUOTA_FULL_MESSAGE, type UploadCapability } from '../../app/utils/mediaUpload.ts';
-import { RepoEntryGate, resolveMediaRef } from '../../app/utils/zipRepoEntries.ts';
+import { EntrySizeError, RepoEntryGate, resolveMediaRef } from '../../app/utils/zipRepoEntries.ts';
 
 const path = (relative: string) => fileURLToPath(new URL(relative, import.meta.url));
 const source = (relative: string) => readFileSync(path(relative), 'utf8');
@@ -81,7 +83,8 @@ test.describe('which ZIP entries go to media', () => {
 
 /**
  * A fake ZIP entry: records when it is inflated, and hands back `actual` bytes
- * (a lying header is `declared` ≠ `actual`).
+ * (a lying header is `declared` ≠ `actual`) — or stops past the limit it is
+ * given, as `inflateAtMost` does, without producing them.
  */
 function fakeEntry(
   log: string[],
@@ -94,14 +97,21 @@ function fakeEntry(
     filePath,
     filename,
     declared,
-    inflate: async () => {
+    inflate: async limitBytes => {
       log.push(`inflate ${filename}`);
+      if (actual > limitBytes) {
+        log.push(`stopped ${filename} at ${limitBytes}`);
+        throw new EntrySizeError(limitBytes + 1, limitBytes);
+      }
       return Buffer.alloc(actual);
     },
   };
 }
 
-/** Stores everything but `lecture.mp4`, which the quota refuses. */
+/**
+ * Stores everything but `lecture.mp4`, which the quota refuses, and
+ * `broken.mp4`, whose write fails for another reason.
+ */
 function mockPut(log: string[]) {
   const put =
     (filename: string): PutImportMedia =>
@@ -113,6 +123,7 @@ function mockPut(log: string[]) {
           code: 'QUOTA_EXCEEDED',
         });
       }
+      if (filename === 'broken.mp4') throw new Error('socket hang up');
       const mediaId = filename === 'intro.mp4' ? ID_A : ID_C;
       return { mediaId, ref: `media://${mediaId}` };
     };
@@ -124,11 +135,11 @@ test.describe('placing ZIP entries (media storage mocked)', () => {
     const log: string[] = [];
     const put = mockPut(log);
     const gate = new RepoEntryGate();
-    const budget = new ImportInflateBudget();
+    const limits = new ImportLimits();
     const errors: string[] = [];
     const entries = [
       fakeEntry(log, 'media/a/intro.mp4', 3 * MB),
-      fakeEntry(log, 'media/b/lecture.mp4', 5 * MB),
+      fakeEntry(log, 'media/b/broken.mp4', 5 * MB),
       fakeEntry(log, 'media/c/outro.mp4', 1 * MB),
     ];
 
@@ -139,7 +150,7 @@ test.describe('placing ZIP entries (media storage mocked)', () => {
           entry,
           capability: PRO,
           gate,
-          budget,
+          limits,
           put: put(entry.filename),
           onError: filename => errors.push(filename),
         })
@@ -152,8 +163,8 @@ test.describe('placing ZIP entries (media storage mocked)', () => {
     expect(log).toEqual([
       'inflate intro.mp4',
       `put intro.mp4 ${3 * MB}`,
-      'inflate lecture.mp4',
-      `put lecture.mp4 ${5 * MB}`,
+      'inflate broken.mp4',
+      `put broken.mp4 ${5 * MB}`,
       'inflate outro.mp4',
       `put outro.mp4 ${1 * MB}`,
     ]);
@@ -165,19 +176,55 @@ test.describe('placing ZIP entries (media storage mocked)', () => {
     ]);
 
     // Refused: through the gate, so the deck drops its references and the
-    // warning names the slides that used it.
-    expect(errors).toEqual(['lecture.mp4']);
-    expect(gate.skippedPaths()).toEqual(new Set(['media/b/lecture.mp4']));
-    const [warning] = gate.warnings(new Map([['media/b/lecture.mp4', ['4']]]));
-    // A full quota says what the server says: who to contact.
-    expect(warning).toBe(
-      "Slide 4: Skipped lecture.mp4 (5 MB) — This class's media storage is full. Contact hello@classmoji.io to upgrade."
-    );
-    expect(warning).not.toContain('QUOTA_EXCEEDED');
-    expect(resolveMediaRef('media/b/lecture.mp4', new Map(), gate.skippedPaths())).toEqual({
+    // warning names the slides that used it — never the upstream message.
+    expect(errors).toEqual(['broken.mp4']);
+    expect(gate.skippedPaths()).toEqual(new Set(['media/b/broken.mp4']));
+    expect(gate.warnings(new Map([['media/b/broken.mp4', ['4']]]))).toEqual([
+      'Slide 4: Skipped broken.mp4 (5 MB) — media storage could not take it (the upload failed)',
+    ]);
+    expect(resolveMediaRef('media/b/broken.mp4', new Map(), gate.skippedPaths())).toEqual({
       kind: 'skipped',
-      path: 'media/b/lecture.mp4',
+      path: 'media/b/broken.mp4',
     });
+  });
+
+  test('a full media store: every later media-bound entry is left out uninflated, in one warning', async () => {
+    const log: string[] = [];
+    const put = mockPut(log);
+    const gate = new RepoEntryGate();
+    const limits = new ImportLimits();
+    const entries = [
+      fakeEntry(log, 'media/a/lecture.mp4', 5 * MB),
+      fakeEntry(log, 'media/b/outro.mp4', 1 * MB),
+      // Not bound for media: the repository still takes it.
+      fakeEntry(log, 'img/logo.png', 1 * MB),
+      fakeEntry(log, 'media/c/intro.mp4', 2 * MB),
+    ];
+
+    const placed = [];
+    for (const entry of entries) {
+      placed.push(
+        await placeImportEntry({ entry, capability: PRO, gate, limits, put: put(entry.filename) })
+      );
+    }
+
+    expect(placed.map(p => p.kind)).toEqual(['skipped', 'skipped', 'repo', 'skipped']);
+    expect(log).toEqual(['inflate lecture.mp4', `put lecture.mp4 ${5 * MB}`, 'inflate logo.png']);
+    expect(gate.skippedPaths()).toEqual(
+      new Set(['media/a/lecture.mp4', 'media/b/outro.mp4', 'media/c/intro.mp4'])
+    );
+    // One warning, saying what the server says: who to contact.
+    const warnings = gate.warnings(
+      new Map([
+        ['media/a/lecture.mp4', ['4']],
+        ['media/c/intro.mp4', ['1', '4']],
+      ])
+    );
+    expect(warnings).toEqual([
+      'Slides 4, 1: Skipped lecture.mp4 (5 MB), outro.mp4 (1 MB), intro.mp4 (2 MB) — ' +
+        "This class's media storage is full. Contact hello@classmoji.io to upgrade.",
+    ]);
+    expect(warnings[0]).not.toContain('QUOTA_EXCEEDED');
   });
 
   test('an entry declared over the per-file media cap is never inflated', async () => {
@@ -192,7 +239,7 @@ test.describe('placing ZIP entries (media storage mocked)', () => {
       entry: fakeEntry(log, 'media/huge.mp4', 2_000_000_001),
       capability: capped,
       gate,
-      budget: new ImportInflateBudget(),
+      limits: new ImportLimits(),
       put: mockPut(log)('huge.mp4'),
     });
     expect(placed).toEqual({ kind: 'skipped' });
@@ -207,7 +254,7 @@ test.describe('placing ZIP entries (media storage mocked)', () => {
       entry: fakeEntry(log, 'media/lecture.mp4', 80 * MB),
       capability: FREE,
       gate,
-      budget: new ImportInflateBudget(),
+      limits: new ImportLimits(),
       put: mockPut(log)('lecture.mp4'),
     });
     expect(placed).toEqual({ kind: 'skipped' });
@@ -218,47 +265,130 @@ test.describe('placing ZIP entries (media storage mocked)', () => {
   test('the import budget: an entry past it is left out, named, and never inflated', async () => {
     const log: string[] = [];
     const gate = new RepoEntryGate();
-    const budget = new ImportInflateBudget(100 * MB);
+    const limits = new ImportLimits({ inflateBytes: 100 * MB });
     const put = mockPut(log);
     const first = await placeImportEntry({
       entry: fakeEntry(log, 'media/intro.mp4', 80 * MB),
       capability: PRO,
       gate,
-      budget,
+      limits,
       put: put('intro.mp4'),
     });
     const second = await placeImportEntry({
       entry: fakeEntry(log, 'media/outro.mp4', 30 * MB),
       capability: PRO,
       gate,
-      budget,
+      limits,
       put: put('outro.mp4'),
     });
     expect(first.kind).toBe('media');
     expect(second).toEqual({ kind: 'skipped' });
     expect(log).toEqual(['inflate intro.mp4', `put intro.mp4 ${80 * MB}`]);
-    expect(budget.usedBytes).toBe(80 * MB);
+    expect(limits.inflated.usedBytes).toBe(80 * MB);
     expect(gate.warnings()).toEqual([
-      'Skipped outro.mp4 (30 MB) — this import is over its 0.1 GB limit for all files together',
+      'Skipped outro.mp4 (30 MB) — this import is over its 100 MB limit for all files together',
     ]);
-    // The real budget is 3 GB (decimal, like the per-file ceiling).
-    expect(IMPORT_INFLATE_BUDGET_BYTES).toBe(3_000_000_000);
+    // Well under the slides machine's 2 GB.
+    expect(IMPORT_INFLATE_BUDGET_BYTES).toBe(512 * MB);
   });
 
-  test('a lying header is judged again on the bytes', async () => {
+  test('repository files are held until the commit: past their limit, left out, never inflated', async () => {
     const log: string[] = [];
     const gate = new RepoEntryGate();
-    // Declared small, inflates past the repository cap on a Free classroom.
+    const limits = new ImportLimits({ repoHeldBytes: 50 * MB });
+    const put = mockPut(log);
+    const place = (filePath: string, bytes: number, capability: UploadCapability) =>
+      placeImportEntry({
+        entry: fakeEntry(log, filePath, bytes),
+        capability,
+        gate,
+        limits,
+        put: put(filePath.split('/').pop()!),
+      });
+
+    expect((await place('img/a.png', 30 * MB, PRO)).kind).toBe('repo');
+    // Media is not held — a video on Pro is stored and dropped, whatever the total.
+    expect((await place('media/intro.mp4', 30 * MB, PRO)).kind).toBe('media');
+    expect(await place('img/b.png', 30 * MB, PRO)).toEqual({ kind: 'skipped' });
+    // The theme's files count too: the same limits, with no capability at all.
+    expect((await place('lib/fonts/a.woff', 20 * MB, FREE)).kind).toBe('repo');
+    expect(await place('lib/fonts/b.woff', 1 * MB, FREE)).toEqual({ kind: 'skipped' });
+
+    expect(log).not.toContain('inflate b.png');
+    expect(log).not.toContain('inflate b.woff');
+    expect(limits.repoHeld.usedBytes).toBe(50 * MB);
+    expect(gate.warnings()).toEqual([
+      'Skipped b.png (30 MB) — this import is over its 50 MB limit for files kept in the course repository',
+      'Skipped b.woff (1 MB) — this import is over its 50 MB limit for files kept in the course repository',
+    ]);
+    expect(IMPORT_REPO_HELD_BYTES).toBe(256 * MB);
+  });
+
+  test('a lying header costs its own size: inflating stops there, and the entry is left out', async () => {
+    const log: string[] = [];
+    const gate = new RepoEntryGate();
+    const limits = new ImportLimits();
+    // Declared 1 KB — passes every check — and holds 1.5 GB.
     const placed = await placeImportEntry({
-      entry: fakeEntry(log, 'img/photo.png', 1 * MB, 40 * MB),
-      capability: FREE,
+      entry: fakeEntry(log, 'media/forged.mp4', 1024, 1500 * MB),
+      capability: PRO,
       gate,
-      budget: new ImportInflateBudget(),
-      put: mockPut(log)('photo.png'),
+      limits,
+      put: mockPut(log)('forged.mp4'),
     });
     expect(placed).toEqual({ kind: 'skipped' });
-    expect(log).toEqual(['inflate photo.png']);
-    expect(gate.skippedPaths()).toEqual(new Set(['img/photo.png']));
+    expect(log).toEqual(['inflate forged.mp4', 'stopped forged.mp4 at 1024']);
+    expect(gate.skippedPaths()).toEqual(new Set(['media/forged.mp4']));
+    expect(gate.warnings()).toEqual([
+      'Skipped forged.mp4 — its size does not match what the ZIP says',
+    ]);
+    expect(limits.inflated.usedBytes).toBe(0);
+  });
+
+  test('with no declared size, inflating stops at one entry’s limit or the budget left', async () => {
+    const log: string[] = [];
+    const gate = new RepoEntryGate();
+    const limits = new ImportLimits({ inflateBytes: 100 * MB });
+    const put = mockPut(log);
+    await placeImportEntry({
+      entry: fakeEntry(log, 'media/intro.mp4', 80 * MB),
+      capability: PRO,
+      gate,
+      limits,
+      put: put('intro.mp4'),
+    });
+    const placed = await placeImportEntry({
+      entry: fakeEntry(log, 'media/outro.mp4', null, 30 * MB),
+      capability: PRO,
+      gate,
+      limits,
+      put: put('outro.mp4'),
+    });
+    expect(placed).toEqual({ kind: 'skipped' });
+    expect(log).toContain(`stopped outro.mp4 at ${20 * MB}`);
+    expect(gate.warnings()).toEqual([
+      'Skipped outro.mp4 (20 MB) — this import is over its 100 MB limit for all files together',
+    ]);
+  });
+
+  test('a media-bound entry too large to hold in memory is left out, never inflated', async () => {
+    const log: string[] = [];
+    const gate = new RepoEntryGate();
+    const placed = await placeImportEntry({
+      entry: fakeEntry(log, 'media/lecture.mp4', IMPORT_ENTRY_MAX_BYTES + 1),
+      capability: PRO,
+      gate,
+      limits: new ImportLimits(),
+      put: mockPut(log)('lecture.mp4'),
+    });
+    expect(placed).toEqual({ kind: 'skipped' });
+    expect(log).toEqual([]);
+    expect(gate.warnings()).toEqual([
+      "Skipped lecture.mp4 (256 MB) — it is over this import's 256 MB limit for one file",
+    ]);
+    // Far below media's own 2 GB per-file ceiling, which is not what one
+    // entry of an import may cost.
+    expect(IMPORT_ENTRY_MAX_BYTES).toBe(256 * MB);
   });
 
   test('an image over the repository cap goes to media on Pro, and stays out on Free', async () => {
@@ -267,7 +397,7 @@ test.describe('placing ZIP entries (media storage mocked)', () => {
       entry: fakeEntry(log, 'img/poster.png', 40 * MB),
       capability: PRO,
       gate: new RepoEntryGate(),
-      budget: new ImportInflateBudget(),
+      limits: new ImportLimits(),
       put: mockPut(log)('poster.png'),
     });
     expect(pro).toEqual({ kind: 'media', mediaId: ID_C, ref: `media://${ID_C}` });
@@ -276,7 +406,7 @@ test.describe('placing ZIP entries (media storage mocked)', () => {
       entry: fakeEntry(log, 'img/poster.png', 40 * MB),
       capability: FREE,
       gate: new RepoEntryGate(),
-      budget: new ImportInflateBudget(),
+      limits: new ImportLimits(),
       put: mockPut(log)('poster.png'),
     });
     expect(free).toEqual({ kind: 'skipped' });
@@ -288,7 +418,7 @@ test.describe('placing ZIP entries (media storage mocked)', () => {
       entry: fakeEntry(log, 'img/a.png', 2 * MB),
       capability: PRO,
       gate: new RepoEntryGate(),
-      budget: new ImportInflateBudget(),
+      limits: new ImportLimits(),
       put: mockPut(log)('a.png'),
     });
     expect(image.kind).toBe('repo');
@@ -298,7 +428,7 @@ test.describe('placing ZIP entries (media storage mocked)', () => {
       entry: fakeEntry(log, 'media/clip.mkv', 20 * MB),
       capability: FREE,
       gate: new RepoEntryGate(),
-      budget: new ImportInflateBudget(),
+      limits: new ImportLimits(),
       put: mockPut(log)('clip.mkv'),
     });
     expect(video.kind).toBe('repo');
@@ -332,6 +462,20 @@ test.describe('which ZIP entries are assets, by the store’s kind table', () =>
     expect(importAssetType('media/a/theme.mp3')).toBe('video');
   });
 
+  test('Ogg, AAC and FLAC are placed with the videos, so a background using one is rewritten', () => {
+    for (const file of ['bg.ogv', 'bg.ogg', 'bg.oga', 'bg.aac', 'bg.flac']) {
+      expect(importAssetType(`media/a/${file}`), file).toBe('video');
+    }
+    // `data-background-video` is resolved against the videos' map — every
+    // VIDEO and AUDIO entry the import placed, media or repository.
+    const importer = source('../../app/utils/slidesComImporter.server.ts');
+    const background = importer.slice(
+      importer.indexOf("$slides.find('section[data-background-video]')")
+    );
+    expect(background).toContain('resolveMediaRef(val, videoMap, skippedVideos)');
+    expect(importer).toContain("const videoFiles = mediaFiles.filter(f => f.type === 'video');");
+  });
+
   test('images, SVG, and anything else in an asset folder but css/js are images', () => {
     expect(importAssetType('img/photo.webp')).toBe('image');
     expect(importAssetType('logo.svg')).toBe('image');
@@ -355,7 +499,10 @@ test.describe('the importer’s wiring', () => {
   const RULES = source('../../app/utils/importVideoMedia.ts');
 
   test('routes every asset with the classroom’s own capability, by the store’s kinds', () => {
-    expect(IMPORTER).toContain('ClassmojiService.media.uploadCapabilityFor(classroom)');
+    // Through the degrading lookup: a failed capability read is the repository
+    // path, not a failed import.
+    expect(IMPORTER).toContain("await loadUploadCapability(classroom, 'slides.com import')");
+    expect(IMPORTER).not.toContain('media.uploadCapabilityFor(');
     expect(IMPORTER).toContain('const type = importAssetType(filePath);');
     // No extension list of its own any more.
     expect(IMPORTER).not.toMatch(/const (image|video)Extensions = \[/);
@@ -363,15 +510,19 @@ test.describe('the importer’s wiring', () => {
     // its declared size and a lazy inflate.
     expect(IMPORTER).toContain('await placeImportEntry({');
     expect(IMPORTER).toContain('declared: declaredUncompressedSize(file),');
-    expect(IMPORTER).toContain("inflate: () => file.async('nodebuffer'),");
+    expect(IMPORTER).toContain('inflate: limit => inflateAtMost(file, limit),');
     expect(IMPORTER).toContain('capability: uploadCapability,');
-    expect(IMPORTER).toContain('budget: inflateBudget,');
+    expect(IMPORTER).toContain('limits,');
+    // One set of limits per import, shared by the assets and the theme's files.
+    expect(IMPORTER.match(/new ImportLimits\(/g)).toHaveLength(1);
+    expect(IMPORTER.match(/^\s+limits,$/gm)).toHaveLength(2);
     // Nothing is inflated anywhere else in the asset pass.
     const assets = IMPORTER.slice(
       IMPORTER.indexOf('// 7b.'),
       IMPORTER.indexOf('// 8. Handle theme')
     );
-    expect(assets.match(/\.async\('nodebuffer'\)/g)).toHaveLength(1);
+    expect(assets.match(/inflateAtMost\(/g)).toHaveLength(1);
+    expect(IMPORTER).not.toMatch(/\.async\('nodebuffer'\)/);
   });
 
   test('writes with putMediaObject and each file’s own options', () => {
@@ -416,7 +567,9 @@ test.describe('the importer’s wiring', () => {
     }
     expect(existsSync(path('../../app/components/VideoSelectionModal.tsx'))).toBe(false);
     expect(existsSync(path('../../app/utils/zipAnalyzer.ts'))).toBe(false);
-    expect(PROGRESS).toContain('uploading_media');
+    // Media writes happen inside the processing steps, one entry at a time,
+    // so there is no separate step to show.
+    expect(PROGRESS).not.toContain('uploading_media');
   });
 
   test('the rules module stays off the services barrel', () => {

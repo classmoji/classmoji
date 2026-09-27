@@ -25,7 +25,7 @@ const mocks = vi.hoisted(() => ({
   findMediaRow: vi.fn(),
   toMediaRecord: vi.fn(),
   mediaDownloadUrl: vi.fn(),
-  canDeliverContent: vi.fn(),
+  canServeSignedContent: vi.fn(),
   userFindMany: vi.fn(),
 }));
 
@@ -49,7 +49,7 @@ vi.mock('@classmoji/services', () => ({
     },
     contentDelivery: {
       mediaDownloadUrl: (...a: unknown[]) => mocks.mediaDownloadUrl(...a),
-      canDeliverContent: (...a: unknown[]) => mocks.canDeliverContent(...a),
+      canServeSignedContent: (...a: unknown[]) => mocks.canServeSignedContent(...a),
     },
   },
 }));
@@ -104,7 +104,7 @@ beforeEach(() => {
   });
   mocks.listMedia.mockResolvedValue([record()]);
   mocks.isMediaConfigured.mockReturnValue(true);
-  mocks.canDeliverContent.mockReturnValue(true);
+  mocks.canServeSignedContent.mockReturnValue(true);
   mocks.userFindMany.mockResolvedValue([{ id: 'user-1', name: 'Tim', login: 'tregubov' }]);
 });
 
@@ -218,12 +218,26 @@ describe('loader', () => {
     // 2 GB upload finding out.
     const data = await loader(args(get()));
 
-    expect(mocks.canDeliverContent).toHaveBeenCalledWith(CLASSROOM);
+    expect(mocks.canServeSignedContent).toHaveBeenCalledWith(CLASSROOM);
     expect(data.canDeliver).toBe(true);
   });
 
+  it('offers nothing new on a deployment that cannot sign, bucket and Pro or not', async () => {
+    // The symptom state: R2 is configured and the class is Pro, but the
+    // deployment has no signing secret or delivery origin. The class half
+    // alone would say yes; the service refuses every upload.
+    mocks.isMediaConfigured.mockReturnValue(true);
+    mocks.canServeSignedContent.mockReturnValue(false);
+
+    const data = await loader(args(get()));
+
+    expect(data.configured).toBe(true);
+    expect(data.usage.isPro).toBe(true);
+    expect(data.canDeliver).toBe(false);
+  });
+
   it('reports a class the layer cannot sign for, with the list intact', async () => {
-    mocks.canDeliverContent.mockReturnValue(false);
+    mocks.canServeSignedContent.mockReturnValue(false);
 
     const data = await loader(args(get()));
 

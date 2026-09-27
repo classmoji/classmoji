@@ -4,6 +4,7 @@ import { IconPlayerPlay } from '@tabler/icons-react';
 import { useResolvedFileUrl } from './useResolvedFileUrl.ts';
 import { usePageMedia } from '../media/PageMedia.tsx';
 import { toast } from 'react-toastify';
+import { extensionsOfKind } from '@classmoji/services/media/router';
 import { isMediaRef, playsAsNativeVideo } from '~/utils/mediaRefs.ts';
 import { UploadCancelled, UploadRefused } from '../media/uploadRouting.ts';
 import { MediaDownloadLink } from '~/components/viewer/MediaDownloadLink.tsx';
@@ -31,8 +32,12 @@ function getEmbedUrl(url: string): string {
   return url;
 }
 
-/** Formats the upload picker offers; the router, not this list, decides where each goes. */
-const VIDEO_ACCEPT = 'video/*,.mp4,.webm,.mov,.m4v,.mkv,.avi';
+/**
+ * Formats the upload picker offers: `video/*`, plus every video extension the
+ * store knows by name (several have no `video/` type a browser matches on).
+ * The store's own list, through the router — which also decides where each goes.
+ */
+const VIDEO_ACCEPT = ['video/*', ...extensionsOfKind('VIDEO').map(ext => `.${ext}`)].join(',');
 
 /** A small text button in the empty state, matching the input beside it. */
 const EMPTY_STATE_BUTTON =

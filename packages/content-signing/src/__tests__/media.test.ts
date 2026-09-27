@@ -113,6 +113,11 @@ describe('contentTypeForMediaExt', () => {
     expect(contentTypeForMediaExt('jpeg')).toBe('image/jpeg');
     expect(contentTypeForMediaExt('mkv')).toBe('video/x-matroska');
     expect(contentTypeForMediaExt('avi')).toBe('video/x-msvideo');
+    expect(contentTypeForMediaExt('ogv')).toBe('video/ogg');
+    expect(contentTypeForMediaExt('ogg')).toBe('audio/ogg');
+    expect(contentTypeForMediaExt('oga')).toBe('audio/ogg');
+    expect(contentTypeForMediaExt('aac')).toBe('audio/aac');
+    expect(contentTypeForMediaExt('FLAC')).toBe('audio/flac');
   });
 
   it('has no type for anything a browser could be talked into executing', () => {

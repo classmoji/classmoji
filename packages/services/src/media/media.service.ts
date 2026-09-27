@@ -17,10 +17,7 @@ import { REPO_REST_MAX_BYTES } from '@classmoji/utils';
 // references be signed" has one definition and media must not grow a second.
 // No cycle — contentDelivery reaches media through `mediaLookup.ts`, which
 // imports nothing from here.
-import {
-  canDeliverContent,
-  isContentDeliveryConfigured,
-} from '../classmoji/contentDelivery.service.ts';
+import { canServeSignedContent } from '../classmoji/contentDelivery.service.ts';
 import { getProStateForClassroomId } from '../classmoji/subscription.service.ts';
 import { MediaError } from './MediaError.ts';
 import { mediaKey, mediaPrefix, stageKey, stagePrefix } from './mediaKeys.ts';
@@ -293,7 +290,7 @@ async function reserveUpload({
   });
   // The deployment half too: R2 credentials without the signing secret and the
   // delivery origin would store bytes nothing can mint a URL for.
-  if (!isContentDeliveryConfigured() || !canDeliverContent(deliverable)) {
+  if (!canServeSignedContent(deliverable)) {
     throw new MediaError(
       'DELIVERY_REQUIRED',
       'Media uploads need content delivery, which this class cannot use yet'

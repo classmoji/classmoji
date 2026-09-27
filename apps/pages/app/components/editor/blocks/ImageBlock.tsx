@@ -33,7 +33,8 @@ import { imageSizesFor, responsiveImageAttrs } from '~/utils/imageSizes.ts';
  * the resize handles, the upload placeholder, the caption, the "showPreview
  * off" filename view and every formatting-toolbar file button still work,
  * because they all live in the wrapper or key off the block TYPE, which is
- * still `image`. `parse` and `toExternalHTML` are BlockNote's, untouched. The
+ * still `image` — and off its `meta`, which is BlockNote's own (see below).
+ * `parse` and `toExternalHTML` are BlockNote's, untouched. The
  * one visible difference is the add-image button's icon, which is the app's
  * Tabler `IconPhoto` instead of the react-icons glyph BlockNote ships.
  */
@@ -92,6 +93,14 @@ function ResponsiveImagePreview(props: ImageRenderProps) {
 type FileWrapperProps = Parameters<typeof ResizableFileBlockWrapper>[0];
 
 export const ResponsiveImage = createReactBlockSpec(createImageBlockConfig, options => ({
+  // BlockNote's own for its image block, and not optional: `fileBlockAccept` is
+  // what marks the block as a file block — `data-file-block` on its DOM, which
+  // every file-block style is scoped under, the upload tab's `accept`, and the
+  // MIME matching that turns a dropped or pasted image into an image block
+  // rather than a generic file. `runsBefore` keeps its HTML parse ahead of the
+  // file block's, as BlockNote orders them.
+  meta: { fileBlockAccept: ['image/*'] },
+  runsBefore: ['file'],
   parse: imageParse(options),
   render: props => (
     <ResizableFileBlockWrapper

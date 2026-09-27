@@ -264,6 +264,20 @@ export function canDeliverContent(
 }
 
 /**
+ * Will this classroom's content actually be served SIGNED, on this deployment?
+ *
+ * Both halves: the deployment can sign (`isContentDeliveryConfigured` — the
+ * secret and the origin) AND the classroom is one the layer delivers
+ * (`canDeliverContent`). The classroom half alone says yes on a deployment
+ * that cannot mint a single URL. Anything that is only ever served signed —
+ * media above all, which has no legacy path — asks this, so an upload is never
+ * offered where `createUpload` would refuse it.
+ */
+export function canServeSignedContent(classroom: Parameters<typeof canDeliverContent>[0]): boolean {
+  return isContentDeliveryConfigured() && canDeliverContent(classroom);
+}
+
+/**
  * Which file types an upload into this classroom's content repo may be.
  *
  * `'any'` exactly when this layer serves the classroom: the deployment can sign
@@ -281,7 +295,7 @@ export function canDeliverContent(
 export function uploadFileTypes(
   classroom: Parameters<typeof canDeliverContent>[0]
 ): FileTypePolicy {
-  return isContentDeliveryConfigured() && canDeliverContent(classroom) ? 'any' : 'allowlist';
+  return canServeSignedContent(classroom) ? 'any' : 'allowlist';
 }
 
 /**
@@ -969,7 +983,14 @@ function isOwnDeliveryHost(host: string | null | undefined): boolean {
   }
 }
 
-function parseMediaUrl(ctx: ResolveContext, ref: string): string | null {
+/**
+ * A signed media URL of OURS — this deployment's delivery host, this
+ * classroom — → the media id in it, lowercased; null for anything else. The
+ * one definition of "ours" for a media URL: `canonicalizeAssetRef` asks it, and
+ * so does the deck save's no-lookup fallback.
+ */
+export function parseMediaUrl(ctx: ResolveContext, ref: string): string | null {
+  if (typeof ref !== 'string') return null;
   const match = MEDIA_URL.exec(ref);
   if (!match || match[1].toLowerCase() !== ctx.classroom.id.toLowerCase()) return null;
 
@@ -982,6 +1003,38 @@ function parseMediaUrl(ctx: ResolveContext, ref: string): string | null {
   if (!isOwnDeliveryHost(host)) return null;
 
   return match[2].toLowerCase();
+}
+
+/**
+ * A signed media URL anywhere in a text — a candidate only: whether it is OURS
+ * is `parseMediaUrl`'s call, per match.
+ *
+ * Needs a scheme and host (ours are always absolute). The query stops at a
+ * comma (a `srcset` or `data-background-video` list), at a backslash (a `\"`
+ * inside JSON) and before an HTML-escaped quote (`&quot;`, `&#34;`, `&#39;`);
+ * signed query values are base64url and numbers, so none of those occur inside
+ * one. It runs through `&` and `;`, so an `&amp;`-escaped query is taken whole.
+ */
+const SIGNED_MEDIA_URL_IN_TEXT = new RegExp(
+  String.raw`https?:\/\/[^\s"'()<>\/\\]+\/c\/[0-9a-fA-F-]{36}\/media\/[0-9a-fA-F-]{36}\/[A-Za-z0-9._-]+` +
+    String.raw`(?:\?(?:(?!&(?:quot|#34|#39);)[^\s"'()<>,\\])*)?`,
+  'g'
+);
+
+/**
+ * Every signed media URL of OURS in `text` → `media://{id}`; everything else
+ * untouched. For a whole serialized document (a deck's JSON) when the
+ * structured pass could not run: it never inserts a quote or a backslash, so a
+ * JSON text stays JSON.
+ */
+export function stripSignedMediaUrls(ctx: ResolveContext, text: string): string {
+  if (typeof text !== 'string' || text.length === 0) return text;
+  return text.replace(SIGNED_MEDIA_URL_IN_TEXT, url => {
+    // The anchored parse wants the URL alone; an `&amp;` in its query is
+    // still one URL.
+    const mediaId = parseMediaUrl(ctx, url.replace(/&amp;/g, '&'));
+    return mediaId !== null ? mediaRef(mediaId) : url;
+  });
 }
 
 /**

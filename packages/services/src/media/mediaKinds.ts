@@ -55,8 +55,9 @@ interface KindSpec {
  * variant needs.
  */
 export const MEDIA_KINDS: readonly KindSpec[] = [
-  { kind: 'VIDEO', exts: ['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi'] },
-  { kind: 'AUDIO', exts: ['mp3', 'm4a', 'wav'] },
+  { kind: 'VIDEO', exts: ['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi', 'ogv'] },
+  // `.ogg` is audio by convention (Ogg Vorbis/Opus); Ogg video is `.ogv`.
+  { kind: 'AUDIO', exts: ['mp3', 'm4a', 'wav', 'ogg', 'oga', 'aac', 'flac'] },
   { kind: 'DOCUMENT', exts: ['pdf', 'ppt', 'pptx', 'key'] },
   { kind: 'ARCHIVE', exts: ['zip'] },
   { kind: 'IMAGE', exts: ['png', 'jpg', 'jpeg', 'webp', 'gif'] },
@@ -133,6 +134,11 @@ export function classifyFilename(
   if (filenameRefusal(filename) !== null) return null;
   const ext = extensionOf(filename)!;
   return { ext, kind: kindForExt(ext), contentType: contentTypeForExt(ext) };
+}
+
+/** The extensions of one kind, lowercase and dotless — `MEDIA_KINDS`' own list. */
+export function extensionsOfKind(kind: MediaKind): string[] {
+  return [...(MEDIA_KINDS.find(spec => spec.kind === kind)?.exts ?? [])];
 }
 
 /** The extensions this store has a real type for — the named kinds. */

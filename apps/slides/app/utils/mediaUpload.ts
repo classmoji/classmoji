@@ -13,11 +13,19 @@
 
 import {
   MEDIA_QUOTA_FULL_MESSAGE,
+  extensionsOfKind,
   kindOfFilename,
   storageTargetFor,
   type StorageTarget,
   type UploadCapability,
 } from '@classmoji/services/media/router';
+import {
+  DEFAULT_VIDEO_OPTIONS,
+  applyVideoOption,
+  canDropOriginal,
+  warnsWithoutOptimising,
+  type VideoOptions,
+} from '@classmoji/ui-components/media-options';
 import { REPO_REST_MAX_BYTES, repoFileTooLargeMessage } from '@classmoji/utils/repo-limits';
 
 export type { UploadCapability };
@@ -83,15 +91,8 @@ export function isVideoFile(file: Pick<FileFacts, 'name'>): boolean {
   return kindOfFilename(file.name) === 'VIDEO';
 }
 
-/**
- * The video extensions the store knows (`MEDIA_KINDS` in the services' kind
- * table, which the router subpath does not export). Filtered through the
- * router's own `kindOfFilename`, so one the store stops calling a video drops
- * out on its own; a test pins that this list covers every VIDEO extension.
- */
-const VIDEO_EXTENSIONS = ['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi'].filter(
-  ext => kindOfFilename(`video.${ext}`) === 'VIDEO'
-);
+/** The video extensions the store knows — its own kind table, through the router. */
+const VIDEO_EXTENSIONS = extensionsOfKind('VIDEO');
 
 /**
  * What a video file picker offers: `video/*`, plus every extension by name —
@@ -108,46 +109,11 @@ export { formatGigabytes, MEDIA_QUOTA_FULL_MESSAGE } from '@classmoji/services/m
 // Video upload options (plan §3.10 — the uploader's three choices, once)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export interface VideoOptions {
-  optimise: boolean;
-  keepOriginal: boolean;
-  allowDownload: boolean;
-}
-
-/** Optimise on, keep the original on, no student download. */
-export const DEFAULT_VIDEO_OPTIONS: VideoOptions = {
-  optimise: true,
-  keepOriginal: true,
-  allowDownload: false,
-};
-
-/**
- * Apply one checkbox, keeping the pair that cannot disagree in step: with
- * optimising off the original is the only copy, so "Keep the original" is
- * forced on (and shown disabled) rather than hidden.
- */
-export function applyVideoOption(
-  options: VideoOptions,
-  field: keyof VideoOptions,
-  next: boolean
-): VideoOptions {
-  const updated = { ...options, [field]: next };
-  if (!updated.optimise) updated.keepOriginal = true;
-  return updated;
-}
-
-/** Whether "Keep the original" can be unticked in the state it is in now. */
-export const canDropOriginal = (options: VideoOptions): boolean => options.optimise;
-
-/** Containers whose usual codecs a browser may refuse when served untouched. */
-const FRAGILE_VIDEO_EXTENSIONS = ['mov'];
-
-/** True when an un-optimised upload would likely not play for part of the class. */
-export function warnsWithoutOptimising(filename: string, options: VideoOptions): boolean {
-  const dot = filename.lastIndexOf('.');
-  const ext = dot > 0 ? filename.slice(dot + 1).toLowerCase() : '';
-  return !options.optimise && FRAGILE_VIDEO_EXTENSIONS.includes(ext);
-}
+// The rules live once, with the component every upload dialog shows
+// (`@classmoji/ui-components/media-options`); re-exported so this app's
+// modules keep one import for everything an upload decides.
+export { DEFAULT_VIDEO_OPTIONS, applyVideoOption, canDropOriginal, warnsWithoutOptimising };
+export type { VideoOptions };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // What a failed upload says

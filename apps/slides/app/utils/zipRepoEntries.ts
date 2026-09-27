@@ -18,7 +18,11 @@
  */
 
 import type JSZip from 'jszip';
-import { REPO_REST_MAX_BYTES, repoFileSkippedWarning } from '@classmoji/utils/repo-limits';
+import {
+  REPO_REST_MAX_BYTES,
+  formatMegabytes,
+  repoFileSkippedWarning,
+} from '@classmoji/utils/repo-limits';
 
 /** An entry the import left out. `path` is its path inside the ZIP. */
 export interface SkippedEntry {
@@ -28,9 +32,15 @@ export interface SkippedEntry {
   /**
    * The warning, when the entry was left out for something other than the
    * repository's size cap — a video media storage refused (`skip`). Absent for
-   * the cap, whose sentence is built from the size.
+   * the cap, whose sentence is built from the size. For an entry in a `group`,
+   * only the sentence after the dash, shared by the whole group.
    */
   reason?: string;
+  /**
+   * Entries left out for the same reason, reported as ONE warning that names
+   * them all — every file a full media store turned away.
+   */
+  group?: string;
 }
 
 /**
@@ -46,6 +56,78 @@ export function declaredUncompressedSize(entry: JSZip.JSZipObject): number | nul
   const data = (entry as unknown as { _data?: { uncompressedSize?: unknown } })._data;
   const size = data?.uncompressedSize;
   return typeof size === 'number' && Number.isFinite(size) && size >= 0 ? size : null;
+}
+
+/**
+ * An entry whose bytes are not what the caller was ready for: it inflated past
+ * the most the caller would hold of it, or JSZip found it did not match the
+ * size its header declared.
+ */
+export class EntrySizeError extends Error {
+  constructor(
+    /** How far it got before inflating stopped. */
+    readonly inflatedBytes: number,
+    /** The most the caller would take; null for a header mismatch JSZip found. */
+    readonly limitBytes: number | null
+  ) {
+    super(
+      limitBytes === null
+        ? 'ZIP entry does not match its declared size'
+        : `ZIP entry inflated past ${limitBytes} bytes`
+    );
+    this.name = 'EntrySizeError';
+  }
+}
+
+/** JSZip's own sentence when an inflated entry is not its header's size. */
+const JSZIP_SIZE_MISMATCH = /uncompressed data size mismatch/;
+
+/**
+ * An entry's bytes, inflating no more than `limitBytes` of them.
+ *
+ * `entry.async('nodebuffer')` inflates to the end before anything can look at
+ * the size, and only then compares it with the header — which the uploader
+ * wrote. An entry whose header claims less than it holds would be inflated
+ * whole into memory before anyone noticed. This streams it instead, counts the
+ * bytes as they arrive, destroys the stream the moment they pass the limit, and
+ * rejects with `EntrySizeError` (as it does for JSZip's own size mismatch).
+ */
+export function inflateAtMost(entry: JSZip.JSZipObject, limitBytes: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const stream = entry.nodeStream('nodebuffer') as NodeJS.ReadableStream & {
+      destroy?: () => void;
+    };
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let settled = false;
+
+    stream.on('data', (chunk: Buffer) => {
+      if (settled) return;
+      total += chunk.length;
+      if (total > limitBytes) {
+        settled = true;
+        chunks.length = 0;
+        stream.pause();
+        stream.removeAllListeners('data');
+        stream.destroy?.();
+        reject(new EntrySizeError(total, limitBytes));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    stream.on('end', () => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks, total));
+    });
+    stream.on('error', (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      chunks.length = 0;
+      const mismatch = error instanceof Error && JSZIP_SIZE_MISMATCH.test(error.message);
+      reject(mismatch ? new EntrySizeError(total, null) : error);
+    });
+  });
 }
 
 export class RepoEntryGate {
@@ -81,8 +163,8 @@ export class RepoEntryGate {
    * same road as one over the cap: its references are removed from the deck
    * (`skippedPaths`) and its warning names the slides that used it.
    */
-  skip(name: string, bytes: number, path: string, sentence: string): void {
-    this.skipped.push({ path, name, bytes, reason: sentence });
+  skip(name: string, bytes: number, path: string, sentence: string, group?: string): void {
+    this.skipped.push({ path, name, bytes, reason: sentence, ...(group ? { group } : {}) });
   }
 
   /** The zip paths of the entries left out so far. */
@@ -91,16 +173,37 @@ export class RepoEntryGate {
   }
 
   /**
-   * One sentence per entry left out, naming the slides that used it where the
-   * importer found any: `Slide 3: Skipped lecture.mp4 (40 MB) — …`.
+   * One sentence per entry left out — or per group, naming every entry in it —
+   * with the slides that used it where the importer found any:
+   * `Slide 3: Skipped lecture.mp4 (40 MB) — …`, or
+   * `Slides 2, 5: Skipped a.mp4 (5 MB), b.mp4 (1 MB) — …`.
    */
   warnings(slidesByPath: ReadonlyMap<string, readonly string[]> = new Map()): string[] {
-    return this.skipped.map(entry => {
-      const sentence = entry.reason ?? repoFileSkippedWarning(entry.name, entry.bytes);
-      const slides = slidesByPath.get(entry.path) ?? [];
-      if (slides.length === 0) return sentence;
-      return `${slides.length === 1 ? 'Slide' : 'Slides'} ${slides.join(', ')}: ${sentence}`;
-    });
+    const withSlides = (sentence: string, slides: readonly string[]) =>
+      slides.length === 0
+        ? sentence
+        : `${slides.length === 1 ? 'Slide' : 'Slides'} ${slides.join(', ')}: ${sentence}`;
+
+    const groups = new Map<string, SkippedEntry[]>();
+    for (const entry of this.skipped) {
+      if (entry.group) groups.set(entry.group, [...(groups.get(entry.group) ?? []), entry]);
+    }
+
+    const warnings: string[] = [];
+    for (const entry of this.skipped) {
+      if (!entry.group) {
+        const sentence = entry.reason ?? repoFileSkippedWarning(entry.name, entry.bytes);
+        warnings.push(withSlides(sentence, slidesByPath.get(entry.path) ?? []));
+        continue;
+      }
+      const members = groups.get(entry.group);
+      // The whole group is one warning, where its first member was met.
+      if (!members || members[0] !== entry) continue;
+      const names = members.map(m => `${m.name} (${formatMegabytes(m.bytes)})`).join(', ');
+      const slides = [...new Set(members.flatMap(m => slidesByPath.get(m.path) ?? []))];
+      warnings.push(withSlides(`Skipped ${names} — ${entry.reason ?? ''}`, slides));
+    }
+    return warnings;
   }
 }
 

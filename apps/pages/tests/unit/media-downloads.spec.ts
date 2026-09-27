@@ -15,6 +15,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
+import { createImageBlockSpec } from '@blocknote/core';
 
 import {
   collectMediaDownloadRefs,
@@ -190,6 +191,20 @@ test.describe('/api/media-download', () => {
     }
   });
 
+  test('a membership counts only once its invite was accepted, as on the class site', () => {
+    // An invited-but-never-joined user is anonymous on the site; the route that
+    // mints the site's download links must not treat them as a member either.
+    expect(loader).toMatch(/accessType: 'view',\s+acceptedOnly: true,/);
+    const auth = source('../../app/utils/auth.server.ts');
+    expect(auth).toContain('acceptedOnly = false,');
+    // The filter itself lives in the one role lookup assertPageAccess uses.
+    expect(source('../../app/utils/classroomRole.server.ts')).toContain(
+      '...(acceptedOnly ? { has_accepted_invite: true } : {}),'
+    );
+    // Without one, it is the same 404 as every other refusal.
+    expect(loader).toContain('if (!access.membership) return notFound();');
+  });
+
   test('a page the reader cannot view is the same 404 as everything else', () => {
     expect(loader).toContain('if (thrown instanceof Response) return notFound();');
   });
@@ -303,6 +318,18 @@ test.describe('the viewer schema', () => {
         editorSpecs[type].implementation?.meta?.fileBlockAccept
       );
     }
+  });
+
+  test('the image block is still a file block, with BlockNote’s own accept and order', () => {
+    // The app overrides BlockNote's image block for responsive candidates. The
+    // override must keep what makes it a file block: `data-file-block` styling,
+    // the upload tab's accept, and drop/paste matching an image to it.
+    type Spec = { implementation?: { meta?: unknown; runsBefore?: unknown } };
+    const ours = editorSchema.blockSpecs.image as unknown as Spec;
+    const blocknote = createImageBlockSpec() as unknown as Spec;
+    expect(ours.implementation?.meta).toEqual(blocknote.implementation?.meta);
+    expect(ours.implementation?.meta).toEqual({ fileBlockAccept: ['image/*'] });
+    expect(ours.implementation?.runsBefore).toEqual(blocknote.implementation?.runsBefore);
   });
 
   test('reads documents with the same props as the editor', () => {

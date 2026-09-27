@@ -15,6 +15,7 @@ import {
 import { uploadRefusalStatus } from '@classmoji/services';
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
 import { pageMutationBlocked } from '~/utils/auth.server.ts';
+import { findClassroomRole } from '~/utils/classroomRole.server.ts';
 import {
   loadPageContent,
   savePageContent,
@@ -130,14 +131,13 @@ export const loader = async ({
   let canEdit = false;
 
   if (authData?.userId) {
-    const membership = await ClassmojiService.classroomMembership.findByClassroomAndUser(
-      page.classroom.id,
-      authData.userId
-    );
-    if (membership) {
-      userRole = membership.role;
-      canEdit = ['OWNER', 'TEACHER'].includes(userRole);
-    }
+    // The highest of their roles here: an owner also enrolled as a student
+    // edits, and the download map and route read the same role.
+    userRole = await findClassroomRole({
+      userId: authData.userId,
+      classroomId: page.classroom.id,
+    });
+    canEdit = userRole !== null && ['OWNER', 'TEACHER'].includes(userRole);
   }
 
   // Block access to draft pages (teaching team can view drafts)
@@ -423,19 +423,20 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const membership = await ClassmojiService.classroomMembership.findByClassroomAndUser(
-    page.classroom.id,
-    authData.userId
-  );
+  // The same role the loader read, so a page it opened for editing saves.
+  const role = await findClassroomRole({
+    userId: authData.userId,
+    classroomId: page.classroom.id,
+  });
 
-  if (!membership || !['OWNER', 'TEACHER'].includes(membership.role)) {
+  if (!role || !['OWNER', 'TEACHER'].includes(role)) {
     return Response.json({ error: 'Unauthorized' }, { status: 403 });
   }
 
   // SEC4: every intent this action handles mutates (GitHub content, preview
   // branches, or page rows) — enforce the platform-wide classroom status gate
   // (owners always may mutate; LOCKED/UNPUBLISHED are read-only for others).
-  const blocked = pageMutationBlocked(page.classroom, membership.role);
+  const blocked = pageMutationBlocked(page.classroom, role);
   if (blocked) return blocked;
 
   // Support both JSON and multipart form data (for file uploads)

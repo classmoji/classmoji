@@ -18,14 +18,16 @@ import {
 } from '@classmoji/services/slides';
 import { getContentRepoName } from '@classmoji/utils';
 import { getThemeUrls, saveTheme, generateThemeSlug } from './themeService.server.ts';
+import { loadUploadCapability } from './uploadCapability.server.ts';
 import {
   RepoEntryGate,
   declaredUncompressedSize,
+  inflateAtMost,
   resolveMediaRef,
   slideNumberLabel,
 } from './zipRepoEntries.ts';
 import {
-  ImportInflateBudget,
+  ImportLimits,
   importAssetType,
   importMediaOptions,
   placeImportEntry,
@@ -91,10 +93,13 @@ const SL_BLOCK_VISIBILITY_CSS = `
  *
  * A ZIP under the upload cap can hold entries that inflate to gigabytes. Each
  * entry is judged by its declared size BEFORE it is inflated (too large for
- * anywhere it could go → left out, never read), entries are placed one at a
- * time (a media file is stored and its bytes dropped before the next is read),
- * and the import has a total inflated-bytes budget; an entry past it is left
- * out with a warning. See `importVideoMedia.ts`.
+ * anywhere it could go → left out, never read) and inflated as a stream that
+ * stops past that size, since the header is the uploader's word. Entries are
+ * placed one at a time (a media file is stored and its bytes dropped before the
+ * next is read).
+ * The files kept for the repository ARE held until the one commit, so their
+ * total has a limit, and the import has a total inflated-bytes budget; an entry
+ * past either is left out with a warning. See `importVideoMedia.ts`.
  */
 export async function processZipImport({
   zipFile,
@@ -202,8 +207,10 @@ export async function processZipImport({
 
   // Where this classroom's uploads can go — the same capability the editors
   // route against, re-derived here from the classroom row. Media on it means
-  // the router sends videos to media storage instead of the repository.
-  const uploadCapability = await ClassmojiService.media.uploadCapabilityFor(classroom);
+  // the router sends videos to media storage instead of the repository. A
+  // lookup that fails degrades to null — every asset takes the repository path
+  // within its cap — rather than failing the import.
+  const uploadCapability = await loadUploadCapability(classroom, 'slides.com import');
 
   // 7. Collect files for batch upload
   const files: Array<{ path: string; content: string; encoding: 'utf-8' | 'base64' }> = [];
@@ -299,8 +306,9 @@ export async function processZipImport({
     /** @type {Map<string, string>} Maps old video path to new absolute URL */
     const videoMap = new Map();
     const videoBaseUrl = `${baseUrl}/videos`;
-    // Every byte this import inflates counts, repository and media alike.
-    const inflateBudget = new ImportInflateBudget();
+    // What this import has inflated (repository and media alike) and what it
+    // holds for the commit (assets and theme files) — one set, every entry.
+    const limits = new ImportLimits();
 
     // 7c. First pass: identify images and videos for progress tracking
     const mediaFiles: Array<{
@@ -348,11 +356,11 @@ export async function processZipImport({
             filePath,
             filename,
             declared: declaredUncompressedSize(file),
-            inflate: () => file.async('nodebuffer'),
+            inflate: limit => inflateAtMost(file, limit),
           },
           capability: uploadCapability,
           gate: repoGate,
-          budget: inflateBudget,
+          limits,
           put: bytes =>
             ClassmojiService.media.putMediaObject({
               classroom,
@@ -421,17 +429,17 @@ export async function processZipImport({
       for (const [filePath, file] of Object.entries(zip.files)) {
         if (filePath.startsWith('lib/') && !file.dir) {
           // The repository only (no capability, so never media), through the
-          // same gate and the same inflate budget as every other entry.
+          // same gate and the same limits as every other entry.
           const placed = await placeImportEntry({
             entry: {
               filePath,
               filename: filePath.split('/').pop() || filePath,
               declared: declaredUncompressedSize(file),
-              inflate: () => file.async('nodebuffer'),
+              inflate: limit => inflateAtMost(file, limit),
             },
             capability: null,
             gate: repoGate,
-            budget: inflateBudget,
+            limits,
             put: async () => {
               throw new Error('Theme files are never stored in media.');
             },

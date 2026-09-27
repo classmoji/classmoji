@@ -20,12 +20,14 @@ vi.mock('@classmoji/database', () => ({
 }));
 
 const canonicalizeManyMock = vi.fn();
+const canonicalizeAssetRefMock = vi.fn();
 vi.mock('../../classmoji/contentDelivery.service.ts', async importOriginal => {
   const actual =
     await importOriginal<typeof import('../../classmoji/contentDelivery.service.ts')>();
   return {
     ...actual,
     canonicalizeMany: (...args: unknown[]) => canonicalizeManyMock(...args),
+    canonicalizeAssetRef: (...args: unknown[]) => canonicalizeAssetRefMock(...args),
   };
 });
 
@@ -69,6 +71,8 @@ beforeEach(() => {
   // be rewritten — a test passing for the wrong reason.
   process.env.CONTENT_DELIVERY_ORIGIN = ORIGIN;
   canonicalizeManyMock.mockRejectedValue(new Error('asset map unavailable'));
+  // The full pass's per-ref resolver, which the fallback must not depend on.
+  canonicalizeAssetRefMock.mockRejectedValue(new Error('asset map unavailable'));
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 afterEach(() => {
@@ -89,6 +93,18 @@ describe('canonicalizeDeckForSave — the full pass throws', () => {
     const html = out.slides[0].html ?? '';
     expect(html).not.toContain(ORIGIN);
     expect(html.split(`media://${MEDIA_ID}`).length - 1).toBe(2);
+  });
+
+  it('undoes a media url by parseMediaUrl alone, never through the full resolver', async () => {
+    const upper = SIGNED_MEDIA.replace(MEDIA_ID, MEDIA_ID.toUpperCase());
+    const out = await canonicalizeDeckForSave(
+      slide,
+      deckWith(`<video src="${upper}"></video>`, `see ${SIGNED_MEDIA}`)
+    );
+    // Its answer does not depend on how the resolver orders its checks, or on
+    // the resolver answering at all.
+    expect(canonicalizeAssetRefMock).not.toHaveBeenCalled();
+    expect(out.slides[0].html).toContain(`src="media://${MEDIA_ID}"`);
   });
 
   it('turns a /missing/ placeholder back into its reference', async () => {

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Button, ConfigProvider, Modal, theme } from 'antd';
+import { MediaVideoOptions } from '@classmoji/ui-components/media-options';
 import type { MultipartUploadResult } from '@classmoji/ui-components/upload';
 import { useIsDarkMode } from '~/hooks/useIsDarkMode';
 import { useMediaUpload } from '~/hooks/useMediaUpload';
@@ -8,12 +9,12 @@ import {
   afterMediaFailure,
   applyVideoOption,
   formatSize,
+  isVideoFile,
   mediaUploadMessage,
   type UploadCapability,
   type VideoOptions,
 } from '~/utils/mediaUpload';
 import { MediaUploadProgress } from './MediaUploadProgress';
-import { VideoOptionsFields } from './VideoOptionsFields';
 
 /**
  * Upload one video to the classroom's media: the three choices, then the
@@ -62,9 +63,12 @@ export function VideoUploadDialog({
     onClose();
   };
 
+  // The three choices are a video's; any other file has nothing to choose.
+  const isVideo = file !== null && isVideoFile(file);
+
   const begin = async () => {
     if (!file) return;
-    const result = await upload.start(file, options, failure => {
+    const result = await upload.start(file, isVideo ? options : {}, failure => {
       const outcome = afterMediaFailure(failure, file, capability);
       if (outcome.kind === 'repo' && onUseRepo) {
         onUseRepo(file);
@@ -121,11 +125,16 @@ export function VideoUploadDialog({
                 onCancel={upload.cancel}
               />
             ) : (
-              <VideoOptionsFields
-                filename={file.name}
-                value={options}
-                onChange={(field, next) => setOptions(prev => applyVideoOption(prev, field, next))}
-              />
+              isVideo && (
+                <MediaVideoOptions
+                  filename={file.name}
+                  value={options}
+                  onChange={(field, next) =>
+                    setOptions(prev => applyVideoOption(prev, field, next))
+                  }
+                  idPrefix="slides-media"
+                />
+              )
             )}
           </div>
         )}
