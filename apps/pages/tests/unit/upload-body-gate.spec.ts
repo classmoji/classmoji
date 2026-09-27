@@ -19,6 +19,7 @@ const source = (relative: string) =>
 const UPLOAD_SOURCE = source('../../app/routes/api.upload/route.ts');
 const PAGE_ACTION_SOURCE = source('../../app/routes/$classroomSlug.$pageId/route.server.ts');
 const EDITOR_SOURCE = source('../../app/components/editor/PageEditor.tsx');
+const MEDIA_UPLOAD_SOURCE = source('../../app/components/editor/media/mediaUpload.ts');
 
 test.describe('page uploads read the body after the gate', () => {
   test('api.upload names the page in the URL and authorizes before reading', () => {
@@ -45,12 +46,25 @@ test.describe('page uploads read the body after the gate', () => {
     expect(upload).toContain(
       'if (error instanceof UploadRefused) toast.error(error.message);\n        throw error;'
     );
+    // The repository route's sentence (its `message` beside a code), never
+    // the bare code.
     expect(upload).toContain(
-      "throw new UploadRefused(typeof body?.error === 'string' ? body.error : 'Upload failed');"
+      'throw new UploadRefused(actionFailureMessage(body) ?? UPLOAD_FAILED);'
     );
-    expect(upload).toContain(
-      'throw new UploadRefused(mediaUploadMessage(error, capabilityRef.current));'
+    // Media's refusals are turned into sentences by the shared media sender,
+    // which the editor's media port goes through.
+    expect(upload).toContain('await sendToMedia({');
+    expect(MEDIA_UPLOAD_SOURCE).toContain(
+      'throw new UploadRefused(mediaUploadMessage(error, capability));'
     );
+    // A stale capability's refusal goes to the repository when it fits, and
+    // is decided before the refusal is turned into a sentence.
+    const reroute = MEDIA_UPLOAD_SOURCE.indexOf(
+      "if (mediaRefusalGoesToRepo(error.code, file, capability)) throw new UploadReroute('repo');"
+    );
+    const refuse = MEDIA_UPLOAD_SOURCE.indexOf('throw new UploadRefused(mediaUploadMessage(');
+    expect(reroute).toBeGreaterThan(-1);
+    expect(reroute).toBeLessThan(refuse);
     // The size cap is refused before a byte is sent (the router, via
     // `placeUpload`), never after a large file has spent a minute uploading.
     expect(upload).toContain('await placeUpload(file, capabilityRef.current, ports)');

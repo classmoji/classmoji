@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import { messageFor } from '../MediaUploadDialog';
 import type { MultipartUploadError } from '@classmoji/ui-components';
+import { MEDIA_QUOTA_FULL_MESSAGE } from '@classmoji/services/media/router';
 import type { QuotaSummary } from '../mediaUploadOptions';
 
 const GiB = 1024 ** 3;
@@ -18,7 +19,8 @@ const GiB = 1024 ** 3;
 const quota: QuotaSummary = {
   usedBytes: 2 * GiB,
   quotaBytes: 10 * GiB,
-  perFileBytes: 2 * GiB,
+  // The media per-file ceiling: a DECIMAL 2 GB (`PER_FILE_MAX_BYTES`).
+  perFileBytes: 2_000_000_000,
 };
 
 /** A `MultipartUploadError` as the dialog receives it — only `code` is read. */
@@ -52,7 +54,9 @@ describe('messageFor', () => {
   });
 
   it('leaves every other code saying what it already said', () => {
-    expect(messageFor(failure('NOT_CONFIGURED'), quota)).toContain('not configured');
+    expect(messageFor(failure('NOT_CONFIGURED'), quota)).toBe(
+      "Uploading here isn't available right now."
+    );
     expect(messageFor(failure('PRO_REQUIRED'), quota)).toContain('Pro');
     expect(messageFor(failure('KIND_NOT_ALLOWED'), quota)).toContain("can't be uploaded");
     expect(messageFor(failure('SIZE_MISMATCH'), quota)).toContain('discarded');
@@ -60,10 +64,27 @@ describe('messageFor', () => {
     expect(messageFor(failure('BAD_STATE'), quota)).toContain('no longer valid');
   });
 
-  it('puts the server numbers in the quota message, and the page numbers when it has none', () => {
+  it('shows the server sentence for a full quota, verbatim', () => {
+    const server = 'Your class media is full. Contact hello@classmoji.io to upgrade your storage.';
     expect(
-      messageFor(failure('QUOTA_EXCEEDED', { usedBytes: 9 * GiB, quotaBytes: 10 * GiB }), quota)
-    ).toContain('9.0 GB of 10 GB');
-    expect(messageFor(failure('QUOTA_EXCEEDED'), quota)).toContain('2.0 GB of 10 GB');
+      messageFor(
+        failure('QUOTA_EXCEEDED', {
+          serverMessage: server,
+          usedBytes: 9 * GiB,
+          quotaBytes: 10 * GiB,
+        }),
+        quota
+      )
+    ).toBe(server);
+  });
+
+  it('says what the server would for a full quota it did not word', () => {
+    expect(messageFor(failure('QUOTA_EXCEEDED'), quota)).toBe(MEDIA_QUOTA_FULL_MESSAGE);
+  });
+
+  it('quotes the per-file limit in decimal gigabytes', () => {
+    expect(messageFor(failure('FILE_TOO_LARGE'), quota)).toBe(
+      'That file is over the 2 GB limit for a single upload.'
+    );
   });
 });

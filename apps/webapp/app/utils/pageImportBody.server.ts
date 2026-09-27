@@ -13,7 +13,8 @@
 
 import {
   REPO_REST_MAX_BYTES,
-  formatMegabytes,
+  SLIDES_IMPORT_MAX_BYTES,
+  SLIDES_IMPORT_MAX_LABEL,
   repoFileTooLargeMessage,
 } from '@classmoji/utils/repo-limits';
 import {
@@ -23,16 +24,17 @@ import {
 } from '@classmoji/utils/upload-limit';
 
 /**
- * The most one page import may send: 150 MB, the same bound as the slides.com
- * ZIP import. A page's markdown and images arrive in one request, so this is a
- * cap on the whole page, while each image separately stays under
- * `REPO_REST_MAX_BYTES`.
+ * The most one page import may send: the shared import upload cap
+ * (`SLIDES_IMPORT_MAX_BYTES`, 150 MiB), the same bound as the slides.com ZIP
+ * import — one number, so the two imports can never drift apart. A page's
+ * markdown and images arrive in one request, so this is a cap on the whole
+ * page, while each image separately stays under `REPO_REST_MAX_BYTES`.
  */
-export const PAGE_IMPORT_BODY_MAX_BYTES = 150 * 1024 * 1024;
+export const PAGE_IMPORT_BODY_MAX_BYTES = SLIDES_IMPORT_MAX_BYTES;
 
 /** What a person reads when the whole import is over the body cap. */
 export const PAGE_IMPORT_TOO_LARGE_MESSAGE =
-  `This import is larger than ${formatMegabytes(PAGE_IMPORT_BODY_MAX_BYTES)}. ` +
+  `This import is larger than ${SLIDES_IMPORT_MAX_LABEL}. ` +
   'Split it into smaller pages and try again.';
 
 /**

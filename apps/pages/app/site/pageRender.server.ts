@@ -13,6 +13,10 @@ import type { PageLinkResolver } from './viewerSchema.server.ts';
 import { collectBlockAssetRefs, mapBlockAssetRefs } from '@classmoji/utils';
 import { assetResolveContext } from '~/utils/assetRefs.server.ts';
 import { coverWithoutUnresolvedMediaRef, withoutUnresolvedMediaRefs } from './siteMedia.server.ts';
+import { isMember } from './tenant.server.ts';
+import { pagesUrl } from './env.server.ts';
+import { loadMediaDownloads } from '~/utils/mediaDownloads.server.ts';
+import { siteDownloadsFor } from '~/utils/mediaDownloads.ts';
 
 /**
  * The shared "render one page of this site" path.
@@ -129,7 +133,25 @@ export async function renderPageForViewer(
     context.site.classroom as unknown as Parameters<typeof assetResolveContext>[0],
     ClassmojiService.contentDelivery.tierFor({ canEdit: false, isPublic: page.is_public })
   );
-  const { blocks: resolvedBlocks, srcSets } = await resolveSiteAssets(assetCtx, content.blocks);
+  const {
+    blocks: resolvedBlocks,
+    srcSets,
+    urlFor,
+  } = await resolveSiteAssets(assetCtx, content.blocks);
+
+  // A signed-in member's Download buttons, for the media files they may
+  // download. None for anyone else, so an anonymous render — the one a shared
+  // cache may hold — is unchanged. Keyed by signed URL, like `srcSets`.
+  const role = context.viewer.role;
+  const downloads =
+    assetCtx && role && isMember(context.viewer)
+      ? siteDownloadsFor(
+          await loadMediaDownloads(context.site.classroom_id, content.blocks, role),
+          urlFor,
+          page.id,
+          pagesUrl()
+        )
+      : {};
 
   let rendered;
   try {
@@ -143,6 +165,7 @@ export async function renderPageForViewer(
       // The site's setting, not the viewer's: `/schedule` 404s for everyone
       // when it is off, so a directory tile pointing at it is dropped.
       showSchedule: context.site.show_schedule === true,
+      downloads,
     });
   } catch (error) {
     if (error instanceof SiteRenderError) {
@@ -184,11 +207,17 @@ export async function renderPageForViewer(
 async function resolveSiteAssets(
   ctx: ReturnType<typeof assetResolveContext>,
   blocks: unknown[]
-): Promise<{ blocks: unknown[]; srcSets: Record<string, string> }> {
-  if (!ctx) return { blocks, srcSets: {} };
+): Promise<{
+  blocks: unknown[];
+  srcSets: Record<string, string>;
+  /** The signed URL a stored ref became, or undefined when it was not rewritten. */
+  urlFor: (ref: string) => string | undefined;
+}> {
+  const unresolved = { blocks, srcSets: {}, urlFor: () => undefined };
+  if (!ctx) return unresolved;
 
   const refs = collectBlockAssetRefs(blocks);
-  if (refs.length === 0) return { blocks, srcSets: {} };
+  if (refs.length === 0) return unresolved;
 
   try {
     // ONE pass: the URLs and the candidate lists come out of the same map read
@@ -202,10 +231,11 @@ async function resolveSiteAssets(
     return {
       blocks: mapBlockAssetRefs(blocks, ref => urls.get(ref) ?? ref),
       srcSets: bySignedUrl,
+      urlFor: ref => urls.get(ref),
     };
   } catch (error) {
     console.warn('[site] asset resolution failed, rendering stored refs:', error);
-    return { blocks, srcSets: {} };
+    return unresolved;
   }
 }
 

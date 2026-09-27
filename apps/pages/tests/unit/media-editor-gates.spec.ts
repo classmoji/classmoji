@@ -17,6 +17,8 @@ const source = (relative: string) =>
 
 const LOADER_SOURCE = source('../../app/routes/$classroomSlug.$pageId/route.server.ts');
 const MEDIA_URL_SOURCE = source('../../app/routes/api.media-url/route.ts');
+const VIDEO_BLOCK_SOURCE = source('../../app/components/editor/blocks/VideoBlock.tsx');
+const PAGE_MEDIA_SOURCE = source('../../app/components/editor/media/PageMedia.tsx');
 
 test.describe('the upload capability', () => {
   test('is handed only to someone editing, never in read-only preview', () => {
@@ -77,5 +79,21 @@ test.describe('/api/media-url', () => {
     // A loader (GET), with no action: it changes nothing.
     expect(MEDIA_URL_SOURCE).toContain('export const loader');
     expect(MEDIA_URL_SOURCE).not.toContain('export const action');
+  });
+});
+
+test.describe('failures the uploader has to hear about', () => {
+  test('the video block toasts a failure that is neither a refusal nor a cancel', () => {
+    const upload = VIDEO_BLOCK_SOURCE.slice(VIDEO_BLOCK_SOURCE.indexOf('const upload = async'));
+    expect(upload).toContain(
+      'if (!(error instanceof UploadRefused) && !(error instanceof UploadCancelled)) {\n            toast.error(UPLOAD_INTERRUPTED);'
+    );
+    // Nothing is swallowed silently any more.
+    expect(upload).not.toContain('// Already toasted by the upload handler.');
+  });
+
+  test('the picker takes one pick at a time, by keyboard as well as pointer', () => {
+    expect(PAGE_MEDIA_SOURCE).toContain('if (!request || placingRef.current) return;');
+    expect(PAGE_MEDIA_SOURCE).toContain('inert={busy}');
   });
 });

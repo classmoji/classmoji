@@ -1,35 +1,30 @@
 /**
  * The decisions the upload dialog makes before a single byte moves.
  *
- * Pure on purpose. The dialog is the only place a video's processing options
- * can ever be set — there is no per-video control afterwards for anyone — so
- * the rules about which boxes appear and which of them may be unticked are
- * worth reading and testing on their own, away from any markup.
+ * Pure on purpose, so the rules can be read and tested away from any markup.
+ * The video choices themselves (the three boxes and how they are tied) are
+ * shared by every upload surface and live in
+ * `@classmoji/ui-components/media-options`; what is here is which files get
+ * them and what the dialog checks before sending.
  *
  * The server checks every one of these again. What is here is only so an
  * instructor finds out that a 4 GB export is too big before they have spent
  * twenty minutes sending it.
  */
 
-/**
- * SOURCE OF TRUTH: `packages/services/src/media/mediaKinds.ts`.
- *
- * The extensions the store has a real type for, grouped by kind. The store
- * takes ANY extension — everything not listed here is kind `other` and is
- * served as a download — so this list no longer decides what may be picked;
- * it only decides which files get the video options. Duplicated rather than
- * imported because it runs in the browser, and the services package is
- * server-side (Prisma, the S3 client).
- */
-export const MEDIA_EXTENSIONS = {
-  video: ['mp4', 'webm', 'mov', 'm4v'],
-  audio: ['mp3', 'm4a', 'wav'],
-  document: ['pdf', 'ppt', 'pptx', 'key'],
-  archive: ['zip'],
-  image: ['png', 'jpg', 'jpeg', 'gif', 'webp'],
-} as const;
+import { formatGigabytes, kindOfFilename } from '@classmoji/services/media/router';
+import type { VideoOptions } from '@classmoji/ui-components/media-options';
 
-export type MediaKind = keyof typeof MEDIA_EXTENSIONS | 'other';
+/**
+ * The kinds the store has a real type for, lowercased for this dialog. The
+ * extension lists themselves are the storage router's (`kindOfFilename`, from
+ * the browser-safe `@classmoji/services/media/router` subpath), so there is one
+ * list of what counts as a video — the one the server classifies with. The
+ * store takes ANY extension; everything it has no type for is `other` and is
+ * served as a download, so the kind here only decides which files get the
+ * video options.
+ */
+export type MediaKind = 'video' | 'audio' | 'document' | 'archive' | 'image' | 'other';
 
 /**
  * The longest extension the store can address: its objects are keyed
@@ -38,22 +33,6 @@ export type MediaKind = keyof typeof MEDIA_EXTENSIONS | 'other';
  * move.
  */
 export const MAX_MEDIA_EXTENSION_LENGTH = 8;
-
-/** Containers whose usual codecs a browser may refuse when served untouched. */
-const FRAGILE_VIDEO_EXTENSIONS = ['mov'];
-
-export interface VideoOptions {
-  optimise: boolean;
-  keepOriginal: boolean;
-  allowDownload: boolean;
-}
-
-/** §3.10: optimise on, keep the original on, no student download. */
-export const DEFAULT_VIDEO_OPTIONS: VideoOptions = {
-  optimise: true,
-  keepOriginal: true,
-  allowDownload: false,
-};
 
 /**
  * A filename's extension by the server's rule (`sanitizedExtension`): the text
@@ -72,12 +51,8 @@ export function extensionOf(filename: string): string {
 
 /** The file's kind, `other` for an extension the store has no type for, null for none. */
 export function kindForFilename(filename: string): MediaKind | null {
-  const ext = extensionOf(filename);
-  if (!ext) return null;
-  for (const [kind, extensions] of Object.entries(MEDIA_EXTENSIONS)) {
-    if ((extensions as readonly string[]).includes(ext)) return kind as MediaKind;
-  }
-  return 'other';
+  if (!extensionOf(filename)) return null;
+  return kindOfFilename(filename).toLowerCase() as MediaKind;
 }
 
 export const isVideoFilename = (filename: string) => kindForFilename(filename) === 'video';
@@ -97,37 +72,6 @@ export function createUploadOptions(
 ): Partial<VideoOptions> & { explicit: true } {
   return isVideoFilename(filename) ? { ...options, explicit: true } : { explicit: true };
 }
-
-/**
- * True when the file would very likely play for the uploader and fail for half
- * their class. A `.mov` off a Mac is usually HEVC, which Firefox does not
- * decode and Windows only does with a codec pack — exactly what optimising
- * fixes, which is why this only matters when they have turned optimising off.
- */
-export const warnsWithoutOptimising = (filename: string, options: VideoOptions) =>
-  !options.optimise && FRAGILE_VIDEO_EXTENSIONS.includes(extensionOf(filename));
-
-/**
- * Apply one checkbox toggle, keeping the pair that cannot disagree in step.
- *
- * "Keep the original" only means anything when there is a second copy to keep
- * it alongside. With optimising off the original IS the only copy, so the box
- * is forced on and disabled rather than hidden: an instructor who unticks
- * Optimise should see that their file is still safe, not watch a control
- * vanish and wonder what it did.
- */
-export function applyVideoOption(
-  options: VideoOptions,
-  field: keyof VideoOptions,
-  next: boolean
-): VideoOptions {
-  const updated = { ...options, [field]: next };
-  if (!updated.optimise) updated.keepOriginal = true;
-  return updated;
-}
-
-/** Whether "Keep the original" can be unticked in the state it is now in. */
-export const canDropOriginal = (options: VideoOptions) => options.optimise;
 
 /**
  * Sizes are counted in binary units and labelled in decimal ones, which is what
@@ -169,7 +113,9 @@ export function precheck(file: { name: string; size: number }, quota: QuotaSumma
     return `File extensions can be at most ${MAX_MEDIA_EXTENSION_LENGTH} letters or digits (.${ext} is ${ext.length}).`;
   }
   if (file.size > quota.perFileBytes) {
-    return `This file is ${formatBytes(file.size)}. The limit is ${formatBytes(quota.perFileBytes)} per file.`;
+    // Both in decimal gigabytes, the unit the ceiling is set in (`2 GB`), so
+    // the two numbers compare the way they read.
+    return `This file is ${formatGigabytes(file.size)}. The limit is ${formatGigabytes(quota.perFileBytes)} per file.`;
   }
   const free = Math.max(0, quota.quotaBytes - quota.usedBytes);
   if (file.size > free) {

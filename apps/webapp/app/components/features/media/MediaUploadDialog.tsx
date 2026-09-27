@@ -7,10 +7,13 @@ import type {
   uploadMultipart,
 } from '@classmoji/ui-components';
 
-import MediaVideoOptions from './MediaVideoOptions';
+import { MEDIA_QUOTA_FULL_MESSAGE, formatGigabytes } from '@classmoji/services/media/router';
+import { MediaVideoOptions } from '@classmoji/ui-components/media-options';
+import '@classmoji/ui-components/styles/media-options.css';
 import {
   createUploadOptions,
   formatBytes,
+  isVideoFilename,
   precheck,
   type QuotaSummary,
 } from './mediaUploadOptions';
@@ -49,18 +52,19 @@ interface MediaUploadDialogProps {
 export function messageFor(error: MultipartUploadError, quota: QuotaSummary): string {
   switch (error.code) {
     case 'NOT_CONFIGURED':
-      return 'Media storage is not configured in this environment.';
+      return "Uploading here isn't available right now.";
     case 'PRO_REQUIRED':
       return 'Uploading media needs a Pro classroom.';
     case 'DELIVERY_REQUIRED':
       return "This class isn't set up to serve content yet, so media can't be uploaded.";
-    case 'QUOTA_EXCEEDED': {
-      const used = error.usedBytes ?? quota.usedBytes;
-      const total = error.quotaBytes ?? quota.quotaBytes;
-      return `Not enough storage — ${formatBytes(used)} of ${formatBytes(total)} is already in use. Delete something and try again.`;
-    }
+    case 'QUOTA_EXCEEDED':
+      // The server's own sentence, verbatim: it says what to do about a full
+      // store (who to contact to upgrade), which is not this dialog's to word.
+      // The same sentence, from the same module, when it sent none.
+      return error.serverMessage ?? MEDIA_QUOTA_FULL_MESSAGE;
     case 'FILE_TOO_LARGE':
-      return `That file is over the ${formatBytes(quota.perFileBytes)} limit for a single upload.`;
+      // A decimal ceiling, read as the router reads it (`2 GB`).
+      return `That file is over the ${formatGigabytes(quota.perFileBytes)} limit for a single upload.`;
     case 'KIND_NOT_ALLOWED':
       return "That file can't be uploaded. It needs an extension of at most 8 letters or digits.";
     case 'SIZE_MISMATCH':
@@ -191,7 +195,7 @@ const MediaUploadDialog = ({
         <h2 className="mb-1 text-lg font-semibold text-ink-0">Upload media</h2>
         <p className="mb-5 text-sm text-ink-3">
           Video, audio, documents, archives — any file with an extension. {formatBytes(free)} free
-          of {formatBytes(quota.quotaBytes)}, up to {formatBytes(quota.perFileBytes)} per file.
+          of {formatBytes(quota.quotaBytes)}, up to {formatGigabytes(quota.perFileBytes)} per file.
         </p>
       </div>
 
@@ -228,7 +232,10 @@ const MediaUploadDialog = ({
           </p>
         )}
 
-        {file && !refusal && (
+        {/* The three video choices, for a video only: a pdf or an mp3 has
+            nothing to decide, and an empty options area would only invite a
+            search for settings that are not there. */}
+        {file && !refusal && isVideoFilename(file.name) && (
           <MediaVideoOptions
             filename={file.name}
             value={options}

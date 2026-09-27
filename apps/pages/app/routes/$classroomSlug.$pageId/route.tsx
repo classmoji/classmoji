@@ -9,6 +9,8 @@ import Header from '~/components/layout/Header.tsx';
 import HeaderImage from '~/components/editor/HeaderImage.tsx';
 import { PageMediaProvider, usePageMedia } from '~/components/editor/media/PageMedia.tsx';
 import { fetchMediaDisplayUrl } from '~/components/editor/media/mediaDisplayUrl.ts';
+import { useCoverUpload } from '~/components/editor/media/useCoverUpload.ts';
+import type { UploadCapability } from '@classmoji/services/media/router';
 import {
   PreviewBar,
   PendingPreviewBanner,
@@ -65,6 +67,68 @@ function ChooseCoverFromMedia({ onChoose }: { onChoose: (ref: string) => void })
   );
 }
 
+/**
+ * "Add cover" (and "Choose from media") for a page with no cover yet.
+ *
+ * A component of its own, rendered inside `PageMediaProvider`, because the
+ * upload goes through the storage router with the classroom's media — a hook
+ * called in `PageRoute` itself would sit above the provider and see none.
+ * It owns `coverFetcher`'s failure toast for the same reason.
+ */
+function CoverAdder({
+  fetcher,
+  capability,
+}: {
+  fetcher: ReturnType<typeof useFetcher>;
+  capability: UploadCapability | null;
+}) {
+  const cover = useCoverUpload(fetcher, capability);
+
+  return (
+    <div className="flex items-center gap-2 mb-2">
+      {cover.uploading ? (
+        <div className="flex items-center gap-1.5 px-2 py-1 text-sm text-gray-500 dark:text-gray-400">
+          <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+          Uploading...
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = 'image/*';
+            input.onchange = (e: Event) => {
+              const file = (e.target as HTMLInputElement).files?.[0];
+              if (file) cover.upload(file);
+            };
+            input.click();
+          }}
+          className="
+            flex items-center gap-1.5
+            px-2 py-1 text-sm text-gray-500 dark:text-gray-400
+            hover:bg-gray-100 dark:hover:bg-gray-800
+            rounded transition-colors
+          "
+        >
+          <IconPhoto size={16} />
+          Add cover
+        </button>
+      )}
+      {fetcher.state === 'idle' && !cover.uploading && (
+        <ChooseCoverFromMedia
+          onChoose={ref =>
+            fetcher.submit(
+              { intent: 'set-header-image', url: ref, position: 50 },
+              { method: 'POST', encType: 'application/json' }
+            )
+          }
+        />
+      )}
+    </div>
+  );
+}
+
 const PageRoute = () => {
   const {
     page,
@@ -78,6 +142,7 @@ const PageRoute = () => {
     contentSha,
     resolvedAssets,
     resolvedSrcSets,
+    mediaDownloads,
     uploadCapability,
   } = useLoaderData<typeof import('./route.server.ts').loader>();
   // Stored refs stay in the document; these are the URLs to display them with.
@@ -489,9 +554,6 @@ const PageRoute = () => {
     }
   }, [fetcher.state, fetcher.data, page.id, assets]);
 
-  // Surface cover-image failures (incl. the F5 409 "page changed — try again") —
-  // the cover flow has no inline status indicator of its own.
-  //
   // NOTE (P1): we deliberately do NOT advance the conflict token to the cover
   // write's sha. savePageCoverImage folds the cover into main's CURRENT blocks,
   // which may include a concurrent editor's edits this session never saw;
@@ -500,12 +562,10 @@ const PageRoute = () => {
   // Leaving the token at the loaded sha makes the next save a 3-way merge
   // (base = what this editor loaded), which folds the cover in AND preserves
   // the concurrent edits — the cover is already committed to main regardless.
-  useEffect(() => {
-    if (coverFetcher.state !== 'idle') return;
-    if (coverFetcher.data?.error) {
-      toast.error(coverFetcher.data.error);
-    }
-  }, [coverFetcher.state, coverFetcher.data]);
+  //
+  // Cover-image failures (incl. the F5 409 "page changed — try again") are
+  // toasted by `CoverAdder`'s upload hook, which owns `coverFetcher` — the
+  // cover flow has no inline status indicator of its own.
 
   // Cmd/Ctrl+S to save
   useEffect(() => {
@@ -656,6 +716,7 @@ const PageRoute = () => {
           position={coverImage.position ?? 50}
           editMode={canEdit}
           pageId={page.id}
+          uploadCapability={uploadCapability}
         />
       )}
 
@@ -665,55 +726,7 @@ const PageRoute = () => {
         <div>
           {/* "Add cover" button — always visible in edit mode when no image */}
           {!coverImage?.url && canEdit && (
-            <div className="flex items-center gap-2 mb-2">
-              {coverFetcher.state !== 'idle' &&
-              coverFetcher.formData?.get('intent') === 'upload-header-image' ? (
-                <div className="flex items-center gap-1.5 px-2 py-1 text-sm text-gray-500 dark:text-gray-400">
-                  <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-                  Uploading...
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const input = document.createElement('input');
-                    input.type = 'file';
-                    input.accept = 'image/*';
-                    input.onchange = (e: Event) => {
-                      const file = (e.target as HTMLInputElement).files?.[0];
-                      if (!file) return;
-                      const formData = new FormData();
-                      formData.append('intent', 'upload-header-image');
-                      formData.append('file', file);
-                      coverFetcher.submit(formData, {
-                        method: 'POST',
-                        encType: 'multipart/form-data',
-                      });
-                    };
-                    input.click();
-                  }}
-                  className="
-                    flex items-center gap-1.5
-                    px-2 py-1 text-sm text-gray-500 dark:text-gray-400
-                    hover:bg-gray-100 dark:hover:bg-gray-800
-                    rounded transition-colors
-                  "
-                >
-                  <IconPhoto size={16} />
-                  Add cover
-                </button>
-              )}
-              {coverFetcher.state === 'idle' && (
-                <ChooseCoverFromMedia
-                  onChoose={ref =>
-                    coverFetcher.submit(
-                      { intent: 'set-header-image', url: ref, position: 50 },
-                      { method: 'POST', encType: 'application/json' }
-                    )
-                  }
-                />
-              )}
-            </div>
+            <CoverAdder fetcher={coverFetcher} capability={uploadCapability} />
           )}
 
           {canEdit && isEditingTitle ? (
@@ -801,6 +814,8 @@ const PageRoute = () => {
                 resolveFileUrl={assets.resolveFileUrl}
                 srcSets={srcSets}
                 displayUrl={assets.displayUrl}
+                pageId={page.id}
+                mediaDownloads={mediaDownloads}
               />
             </Suspense>
           )}

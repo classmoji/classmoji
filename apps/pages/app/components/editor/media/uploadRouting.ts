@@ -1,4 +1,6 @@
 import {
+  MEDIA_QUOTA_FULL_MESSAGE,
+  formatGigabytes,
   kindOfFilename,
   storageTargetFor,
   type UploadCapability,
@@ -68,22 +70,18 @@ export interface UploadPorts {
     file: File,
     options: MediaUploadOptions | undefined
   ): Promise<Omit<PlacedUpload, 'destination'>>;
+  /**
+   * Ask the uploader for a video's three options (media plan §3.10) — the
+   * shared dialog. Null when they cancelled. Asked only for a video that is
+   * about to go to media, and only then: those choices mean nothing for a
+   * repository file or for any other kind.
+   */
+  askVideoOptions(file: File): Promise<MediaUploadOptions | null>;
 }
 
-/**
- * The per-video choices the editor makes without asking (decision §7.4's
- * defaults): optimise for playback, keep the original, no student download.
- * Only videos carry them — the server ignores them for every other kind.
- */
-export const EDITOR_VIDEO_OPTIONS: MediaUploadOptions = Object.freeze({
-  optimise: true,
-  keepOriginal: true,
-  allowDownload: false,
-});
-
-export function mediaOptionsFor(file: { name: string }): MediaUploadOptions | undefined {
-  return kindOfFilename(file.name) === 'VIDEO' ? { ...EDITOR_VIDEO_OPTIONS } : undefined;
-}
+/** Whether a file is one the three video options apply to. */
+export const takesVideoOptions = (file: { name: string }): boolean =>
+  kindOfFilename(file.name) === 'VIDEO';
 
 /** The first destination for a file, before any server has seen it. */
 export function firstDestination(
@@ -104,6 +102,20 @@ export function firstDestination(
   return target;
 }
 
+/** What a failed page action or upload route answers with: a code, and maybe the sentence. */
+export type ActionFailure = { error?: unknown; message?: unknown };
+
+/**
+ * The sentence to show for a failed action: its `message` when it sent one,
+ * else its `error` — never a bare code like `USE_MEDIA` or `CLASSROOM_LOCKED`
+ * when the server said something a person can read.
+ */
+export function actionFailureMessage(data: ActionFailure | null | undefined): string | null {
+  if (!data || !data.error) return null;
+  if (typeof data.message === 'string' && data.message) return data.message;
+  return typeof data.error === 'string' ? data.error : null;
+}
+
 /** The sentence when the two stores keep handing the file back to each other. */
 const NOWHERE_MESSAGE = 'This file could not be stored. Reload the page and try again.';
 
@@ -117,9 +129,16 @@ export async function placeUpload(
   if (first.kind === 'refused') throw new UploadRefused(first.message);
 
   const send = async (to: 'repo' | 'media'): Promise<PlacedUpload> => {
-    const placed =
-      to === 'repo' ? await ports.toRepo(file) : await ports.toMedia(file, mediaOptionsFor(file));
-    return { ...placed, destination: to };
+    if (to === 'repo') return { ...(await ports.toRepo(file)), destination: to };
+    // A video's options are the uploader's to choose, right before the bytes
+    // go — including a video the repository has just sent here.
+    let options: MediaUploadOptions | undefined;
+    if (takesVideoOptions(file)) {
+      const chosen = await ports.askVideoOptions(file);
+      if (!chosen) throw new UploadCancelled();
+      options = chosen;
+    }
+    return { ...(await ports.toMedia(file, options)), destination: to };
   };
 
   try {
@@ -135,15 +154,66 @@ export async function placeUpload(
   }
 }
 
+/**
+ * The line a media upload's progress toast reads: where the file is going and
+ * how much room there was before it left. The room is the loader's figure
+ * (`capability.media.remainingBytes`) — the server enforces the quota, this
+ * only tells the uploader where they stand.
+ */
+export function mediaProgressLabel(
+  file: { name: string },
+  capability: UploadCapability | null | undefined
+): string {
+  const remaining = capability?.media?.remainingBytes;
+  const free = typeof remaining === 'number' ? formatBytes(remaining) : '';
+  return free
+    ? `Saving ${file.name} to your class media — ${free} free`
+    : `Saving ${file.name} to your class media`;
+}
+
 const GB = 1024 * 1024 * 1024;
 const MB = 1024 * 1024;
 
 /** `1.2 GB`, `35 MB`, `640 KB` — sizes as a person reads them. */
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return '';
+  if (bytes === 0) return '0 KB';
   if (bytes >= GB) return `${Math.round((bytes / GB) * 10) / 10} GB`;
   if (bytes >= MB) return `${Math.round((bytes / MB) * 10) / 10} MB`;
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+/**
+ * Media refusals that mean the capability the editor routed with was stale:
+ * the classroom is no longer on Pro, can no longer serve content, or media is
+ * not available right now. A file the repository can take goes there instead
+ * — the upload the uploader asked for, in the other store. A full quota is
+ * NOT one of these: a Pro class whose media is full is refused, with the
+ * server's message, and never quietly put in the repository (Tim, 2026-09-27).
+ */
+const STALE_MEDIA_CODES = new Set(['PRO_REQUIRED', 'DELIVERY_REQUIRED', 'NOT_CONFIGURED']);
+
+/**
+ * Could the course repository take this file instead? The router's own rule
+ * with media taken away — its size cap AND the classroom's type policy — so
+ * this cannot promise a file the repository route would then refuse. With no
+ * capability, the repository's size cap is all there is to go on.
+ */
+export function fitsRepoInstead(
+  file: { name: string; size: number },
+  capability: UploadCapability | null | undefined
+): boolean {
+  if (!capability) return file.size <= REPO_REST_MAX_BYTES;
+  return storageTargetFor({ ...capability, media: null }, file).kind === 'repo';
+}
+
+/** Whether a media refusal should send the file to the repository instead. */
+export function mediaRefusalGoesToRepo(
+  code: string,
+  file: { name: string; size: number },
+  capability: UploadCapability | null | undefined
+): boolean {
+  return STALE_MEDIA_CODES.has(code) && fitsRepoInstead(file, capability);
 }
 
 /**
@@ -153,26 +223,26 @@ export function formatBytes(bytes: number): string {
  * upload dialog so the same refusal reads the same on every surface.
  */
 export function mediaUploadMessage(
-  error: Pick<MultipartUploadError, 'code' | 'usedBytes' | 'quotaBytes'>,
+  error: Pick<MultipartUploadError, 'code' | 'usedBytes' | 'quotaBytes' | 'serverMessage'>,
   capability: UploadCapability | null | undefined
 ): string {
   switch (error.code) {
     case 'NOT_CONFIGURED':
-      return 'Media storage is not configured in this environment.';
+      return "Uploading here isn't available right now.";
     case 'PRO_REQUIRED':
       return 'Uploading media needs a Pro classroom.';
     case 'DELIVERY_REQUIRED':
       return "This class isn't set up to serve content yet, so media can't be uploaded.";
-    case 'QUOTA_EXCEEDED': {
-      if (typeof error.usedBytes === 'number' && typeof error.quotaBytes === 'number') {
-        return `Not enough storage — ${formatBytes(error.usedBytes)} of ${formatBytes(error.quotaBytes)} is already in use. Delete something and try again.`;
-      }
-      return 'Not enough storage for this file. Delete something and try again.';
-    }
+    case 'QUOTA_EXCEEDED':
+      // The server's own sentence, verbatim: it says what to do about a full
+      // store (who to contact to upgrade), which is not this client's to word.
+      // The same sentence, from the same module, when it sent none.
+      return error.serverMessage ?? MEDIA_QUOTA_FULL_MESSAGE;
     case 'FILE_TOO_LARGE': {
+      // A decimal ceiling, read as the router reads it (`2 GB`).
       const limit = capability?.media?.perFileMaxBytes;
       return limit
-        ? `That file is over the ${formatBytes(limit)} limit for a single upload.`
+        ? `That file is over the ${formatGigabytes(limit)} limit for a single upload.`
         : 'That file is over the limit for a single upload.';
     }
     case 'KIND_NOT_ALLOWED':

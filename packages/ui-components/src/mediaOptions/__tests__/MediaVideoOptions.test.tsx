@@ -1,32 +1,44 @@
 /**
  * The options block, asserted against the markup it renders.
  *
- * Two claims a pure-logic test cannot make: that a pdf gets no options area at
- * all rather than an empty one, and that a locked "Keep the original" is drawn
- * ticked AND disabled — a box that merely refused to change when clicked would
- * pass every reducer test and still read as "your original is being deleted".
+ * Claims a pure-logic test cannot make: that a locked "Keep the original" is
+ * drawn ticked AND disabled — a box that merely refused to change when clicked
+ * would pass every reducer test and still read as "your original is being
+ * deleted" — and that the copy says what each box does in the words the
+ * uploader reads.
  *
- * `renderToStaticMarkup` in the ordinary node-environment suite, matching the
- * other component tests here; the component is controlled, so every state worth
- * asserting is reachable by passing it in.
+ * `renderToStaticMarkup` in this package's node-environment suite; the
+ * component is controlled, so every state worth asserting is reachable by
+ * passing it in.
  */
 
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import MediaVideoOptions from '../MediaVideoOptions';
-import { DEFAULT_VIDEO_OPTIONS, applyVideoOption } from '../mediaUploadOptions';
+import MediaVideoOptions from '../MediaVideoOptions.tsx';
+import { DEFAULT_VIDEO_OPTIONS, applyVideoOption, type VideoOptions } from '../videoOptions.ts';
 
-const render = (filename: string, value = DEFAULT_VIDEO_OPTIONS, disabled = false) =>
+const render = (
+  filename: string,
+  value: VideoOptions = DEFAULT_VIDEO_OPTIONS,
+  disabled = false,
+  idPrefix?: string
+) =>
   renderToStaticMarkup(
-    <MediaVideoOptions filename={filename} value={value} disabled={disabled} onChange={() => {}} />
+    <MediaVideoOptions
+      filename={filename}
+      value={value}
+      disabled={disabled}
+      onChange={() => {}}
+      idPrefix={idPrefix}
+    />
   );
 
 /** The `<input>` tag for one option, so its attributes can be read. */
 const inputFor = (html: string, id: string) =>
   html.match(new RegExp(`<input[^>]*id="${id}"[^>]*>`))?.[0] ?? '';
 
-describe('which options are shown', () => {
-  it('gives a video exactly the three checkboxes from the plan', () => {
+describe('the three options', () => {
+  it('draws exactly the three checkboxes from the plan', () => {
     const html = render('lecture.mp4');
 
     expect(html).toContain('Optimise for streaming');
@@ -35,19 +47,27 @@ describe('which options are shown', () => {
     expect(html.match(/type="checkbox"/g)).toHaveLength(3);
   });
 
-  it.each(['syllabus.pdf', 'starter.zip', 'podcast.mp3', 'diagram.png'])(
-    'gives %s no options area at all',
-    filename => {
-      expect(render(filename)).toBe('');
-    }
-  );
-
-  it('explains each one in a line, since there is no second chance to set them', () => {
+  it('says what each one does, in the uploader’s words', () => {
     const html = render('lecture.mp4');
 
-    expect(html).toContain('works in every browser');
-    expect(html).toContain('Only the original counts towards your storage');
-    expect(html).toContain('Teaching staff can always download');
+    expect(html).toContain('Converts it to a format that plays in every browser.');
+    expect(html).toContain(
+      'Also store the file you uploaded. Only the original counts toward storage.'
+    );
+    expect(html).toContain('Show students a download button.');
+  });
+
+  it('narrates no mechanics', () => {
+    const html = render('lecture.mp4');
+
+    expect(html).not.toContain('in the background');
+    expect(html).not.toContain('straight away');
+  });
+
+  it('takes an id prefix, for a page with two of these', () => {
+    const html = render('lecture.mp4', DEFAULT_VIDEO_OPTIONS, false, 'deck');
+    expect(inputFor(html, 'deck-optimise')).not.toBe('');
+    expect(inputFor(html, 'media-optimise')).toBe('');
   });
 });
 
@@ -68,11 +88,13 @@ describe('the defaults, as drawn', () => {
 describe('the Keep-the-original coupling', () => {
   const unoptimised = applyVideoOption(DEFAULT_VIDEO_OPTIONS, 'optimise', false);
 
-  it('draws the original as kept AND locked once optimising is off', () => {
-    const input = inputFor(render('lecture.mp4', unoptimised), 'media-keep-original');
+  it('draws the original as kept AND locked once optimising is off, and says why', () => {
+    const html = render('lecture.mp4', unoptimised);
+    const input = inputFor(html, 'media-keep-original');
 
     expect(input).toContain('checked');
     expect(input).toContain('disabled');
+    expect(html).toContain('Without optimising, the file you uploaded is the only copy.');
   });
 
   it('re-locks the box even if the original had been dropped first', () => {

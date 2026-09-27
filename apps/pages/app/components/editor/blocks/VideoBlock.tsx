@@ -3,7 +3,13 @@ import { createReactBlockSpec } from '@blocknote/react';
 import { IconPlayerPlay } from '@tabler/icons-react';
 import { useResolvedFileUrl } from './useResolvedFileUrl.ts';
 import { usePageMedia } from '../media/PageMedia.tsx';
+import { toast } from 'react-toastify';
 import { isMediaRef, playsAsNativeVideo } from '~/utils/mediaRefs.ts';
+import { UploadCancelled, UploadRefused } from '../media/uploadRouting.ts';
+import { MediaDownloadLink } from '~/components/viewer/MediaDownloadLink.tsx';
+
+/** What a failed upload says when there is no refusal sentence to show. */
+const UPLOAD_INTERRUPTED = 'The upload could not finish. Check your connection and try again.';
 
 /**
  * Convert YouTube/Vimeo URLs to embeddable URLs
@@ -26,7 +32,7 @@ function getEmbedUrl(url: string): string {
 }
 
 /** Formats the upload picker offers; the router, not this list, decides where each goes. */
-const VIDEO_ACCEPT = 'video/*,.mp4,.webm,.mov,.m4v,.mkv';
+const VIDEO_ACCEPT = 'video/*,.mp4,.webm,.mov,.m4v,.mkv,.avi';
 
 /** A small text button in the empty state, matching the input beside it. */
 const EMPTY_STATE_BUTTON =
@@ -96,8 +102,13 @@ export const Video = createReactBlockSpec(
               ? result
               : (result as { props?: { url?: unknown } })?.props?.url;
           if (typeof next === 'string' && next) setUrl(next);
-        } catch {
-          // Already toasted by the upload handler.
+        } catch (error) {
+          // A refusal was toasted by the upload handler with its reason, and a
+          // cancel says nothing. Anything else (the network dropped, the
+          // server fell over) would otherwise vanish without a word.
+          if (!(error instanceof UploadRefused) && !(error instanceof UploadCancelled)) {
+            toast.error(UPLOAD_INTERRUPTED);
+          }
         } finally {
           setUploading(null);
         }
@@ -233,6 +244,11 @@ export const Video = createReactBlockSpec(
               ) : (
                 caption && <p className="media-block-caption-view">{caption}</p>
               )}
+
+              {/* A reader's Download button — only in the viewer, and only
+                  for a media video its uploader let students download (the
+                  teaching team always). No provider in the editor: none. */}
+              {!isEditable && <MediaDownloadLink fileRef={url} />}
             </>
           )}
         </div>

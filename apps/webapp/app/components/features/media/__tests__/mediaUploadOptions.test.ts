@@ -1,31 +1,29 @@
 /**
  * The rules behind the upload dialog's options and pre-checks.
  *
- * Worth their own suite because they are the only chance an instructor gets:
- * the three video choices are made once, at upload time, and the media page
- * shows the result read-only. A default that quietly flipped, or a coupling
- * that let "Keep the original" be unticked when there is no second copy to
- * keep it beside, would delete someone's only lecture recording.
+ * The three video choices and their coupling are tested where they live, in
+ * `@classmoji/ui-components/media-options`. What is here is which files get
+ * them, what an upload from this dialog asks the server for, and the checks
+ * made before any bytes move.
  */
 
 import { describe, expect, it } from 'vitest';
 import {
   createUploadOptions,
-  DEFAULT_VIDEO_OPTIONS,
   MAX_MEDIA_EXTENSION_LENGTH,
-  applyVideoOption,
-  canDropOriginal,
   extensionOf,
   formatBytes,
   isVideoFilename,
   kindForFilename,
   precheck,
-  warnsWithoutOptimising,
   type QuotaSummary,
 } from '../mediaUploadOptions';
+import { DEFAULT_VIDEO_OPTIONS } from '@classmoji/ui-components/media-options';
 
 const GiB = 1024 ** 3;
-const quota: QuotaSummary = { usedBytes: 0, quotaBytes: 10 * GiB, perFileBytes: 2 * GiB };
+/** The media per-file ceiling: a DECIMAL 2 GB (`PER_FILE_MAX_BYTES`). */
+const PER_FILE = 2_000_000_000;
+const quota: QuotaSummary = { usedBytes: 0, quotaBytes: 10 * GiB, perFileBytes: PER_FILE };
 
 describe('kinds', () => {
   it.each([
@@ -33,6 +31,8 @@ describe('kinds', () => {
     ['screen.MOV', 'video'],
     ['clip.m4v', 'video'],
     ['clip.webm', 'video'],
+    ['recording.mkv', 'video'],
+    ['old-lecture.AVI', 'video'],
     ['intro.mp3', 'audio'],
     ['notes.pdf', 'document'],
     ['deck.pptx', 'document'],
@@ -63,48 +63,18 @@ describe('kinds', () => {
   });
 });
 
-describe('the video options', () => {
-  it('starts optimised, keeping the original, with no student download', () => {
-    expect(DEFAULT_VIDEO_OPTIONS).toEqual({
-      optimise: true,
-      keepOriginal: true,
-      allowDownload: false,
-    });
-  });
-
+describe('which files get the video options', () => {
   it('shows options for a video and nothing for anything else', () => {
     expect(isVideoFilename('lecture.mp4')).toBe(true);
     expect(isVideoFilename('syllabus.pdf')).toBe(false);
     expect(isVideoFilename('podcast.mp3')).toBe(false);
   });
 
-  it('forces the original to be kept the moment optimising is turned off', () => {
-    const dropped = applyVideoOption(DEFAULT_VIDEO_OPTIONS, 'keepOriginal', false);
-    expect(dropped.keepOriginal).toBe(false);
-
-    const unoptimised = applyVideoOption(dropped, 'optimise', false);
-    expect(unoptimised.keepOriginal).toBe(true);
-    expect(canDropOriginal(unoptimised)).toBe(false);
-  });
-
-  it('lets the original be dropped again once optimising is back on', () => {
-    const unoptimised = applyVideoOption(DEFAULT_VIDEO_OPTIONS, 'optimise', false);
-    const reoptimised = applyVideoOption(unoptimised, 'optimise', true);
-
-    expect(canDropOriginal(reoptimised)).toBe(true);
-    expect(applyVideoOption(reoptimised, 'keepOriginal', false).keepOriginal).toBe(false);
-  });
-
-  it('leaves the download choice alone whichever way the other two go', () => {
-    const allowed = applyVideoOption(DEFAULT_VIDEO_OPTIONS, 'allowDownload', true);
-    expect(applyVideoOption(allowed, 'optimise', false).allowDownload).toBe(true);
-  });
-
-  it('warns about a .mov only while optimising is off', () => {
-    const off = applyVideoOption(DEFAULT_VIDEO_OPTIONS, 'optimise', false);
-    expect(warnsWithoutOptimising('screen.mov', off)).toBe(true);
-    expect(warnsWithoutOptimising('screen.mov', DEFAULT_VIDEO_OPTIONS)).toBe(false);
-    expect(warnsWithoutOptimising('lecture.mp4', off)).toBe(false);
+  it('reads video by the storage router, so mkv and avi get the options too', () => {
+    // One list: the router's. A container the server processes as video but
+    // this dialog did not know would upload with no options at all.
+    expect(isVideoFilename('capture.mkv')).toBe(true);
+    expect(isVideoFilename('capture.avi')).toBe(true);
   });
 });
 
@@ -139,10 +109,15 @@ describe('pre-checks', () => {
     expect(precheck({ name: 'a.abcdefgh', size: 10 }, quota)).toBeNull();
   });
 
-  it('quotes the per-file ceiling', () => {
-    const message = precheck({ name: 'huge.mp4', size: 3 * GiB }, quota);
-    expect(message).toContain('3.0 GB');
-    expect(message).toContain('2.0 GB');
+  it('quotes the per-file ceiling, in the decimal gigabytes it is set in', () => {
+    const message = precheck({ name: 'huge.mp4', size: 3_000_000_000 }, quota);
+    expect(message).toBe('This file is 3 GB. The limit is 2 GB per file.');
+  });
+
+  it('a file just over the ceiling does not read as under it', () => {
+    // In binary units 2,050,000,000 bytes is "1.9 GB" — under a "2 GB" limit.
+    const message = precheck({ name: 'big.mp4', size: 2_050_000_000 }, quota);
+    expect(message).toContain('This file is 2.1 GB');
   });
 
   it('quotes what is actually free, not the whole quota', () => {
@@ -153,7 +128,7 @@ describe('pre-checks', () => {
   });
 
   it('refuses everything once the quota is zero, which is where a free classroom sits', () => {
-    const free = { usedBytes: 0, quotaBytes: 0, perFileBytes: 2 * GiB };
+    const free = { usedBytes: 0, quotaBytes: 0, perFileBytes: PER_FILE };
     expect(precheck({ name: 'lecture.mp4', size: 1 }, free)).toContain('0 bytes');
   });
 });

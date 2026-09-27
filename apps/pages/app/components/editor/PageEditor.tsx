@@ -27,9 +27,8 @@ import {
   getMultiColumnSlashMenuItems,
   locales as multiColumnLocales,
 } from '@blocknote/xl-multi-column';
-import { toast, type Id as ToastId } from 'react-toastify';
+import { toast } from 'react-toastify';
 import { kindOfFilename, type UploadCapability } from '@classmoji/services/media/router';
-import { MultipartUploadError, uploadMultipart } from '@classmoji/ui-components/upload';
 
 import {
   schema,
@@ -47,14 +46,18 @@ import {
 import { MediaFilePanel } from './media/MediaFilePanel.tsx';
 import { usePageMedia } from './media/PageMedia.tsx';
 import { fetchMediaDisplayUrl } from './media/mediaDisplayUrl.ts';
+import { sendToMedia } from './media/mediaUpload.ts';
 import {
-  UploadCancelled,
   UploadRefused,
   UploadReroute,
-  mediaUploadMessage,
+  actionFailureMessage,
   placeUpload,
+  type ActionFailure,
   type UploadPorts,
 } from './media/uploadRouting.ts';
+
+/** A repository upload refused with nothing more specific to say. */
+const UPLOAD_FAILED = 'The upload could not finish. Try again.';
 
 // Custom drag handle menu — extends default with block-specific actions
 const CustomDragHandleMenu = () => (
@@ -136,6 +139,9 @@ const PageEditor = forwardRef(function PageEditor(
 ) {
   const media = usePageMedia();
   const classroomId = media.classroomId;
+  // Read at upload time for the same reason as the capability below.
+  const mediaRef = useRef(media);
+  mediaRef.current = media;
   // Read at upload time, not captured: BlockNote holds the `uploadFile` it was
   // created with for the editor's whole life, and every loader revalidation
   // (each save) hands down a fresher capability — the quota left, a classroom
@@ -153,6 +159,9 @@ const PageEditor = forwardRef(function PageEditor(
   //   - repo  → POST /api/upload?pageId=…, which answers with the repo path;
   //   - media → a multipart upload straight to storage over /api/media, which
   //             answers with `media://{id}`.
+  //
+  // A video headed for media first asks the uploader for its three options
+  // (Upload / Cancel); a cancel sends nothing and says nothing.
   //
   // Either way what goes INTO the block is the reference that keeps following
   // the file — a repo path or `media://{id}` — and never a signed URL: that
@@ -175,54 +184,34 @@ const PageEditor = forwardRef(function PageEditor(
             body: formData,
           });
           if (!response.ok) {
-            const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+            const body = (await response.json().catch(() => null)) as ActionFailure | null;
             // The capability was stale: this file belongs in media.
             if (response.status === 409 && body?.error === 'USE_MEDIA') {
               throw new UploadReroute('media');
             }
-            throw new UploadRefused(typeof body?.error === 'string' ? body.error : 'Upload failed');
+            // The route's sentence (`message` when it sent a code with it,
+            // e.g. a locked classroom), never the bare code.
+            throw new UploadRefused(actionFailureMessage(body) ?? UPLOAD_FAILED);
           }
           const result = await response.json();
           return { ref: result.url, displayUrl: result.displayUrl ?? null };
         },
 
         async toMedia(mediaFile, options) {
-          if (!classroomId) throw new UploadRefused('Upload failed');
-          // BlockNote's own "loading" state says nothing about how far a
-          // two-gigabyte upload has got, so a media upload carries a progress
-          // toast of its own.
-          const progressToast: ToastId = toast(`Uploading ${mediaFile.name}`, {
-            progress: 0,
-            autoClose: false,
-            closeButton: false,
-            closeOnClick: false,
-            draggable: false,
+          // Progress, destination and room left are the toast's; the
+          // failures come back as the routing errors `placeUpload` follows.
+          const { ref } = await sendToMedia({
+            file: mediaFile,
+            classroomId,
+            options,
+            capability: capabilityRef.current,
           });
-          try {
-            const { ref } = await uploadMultipart({
-              file: mediaFile,
-              classroomId,
-              options,
-              endpoints: { base: '/api/media' },
-              onProgress: ({ sentBytes, totalBytes }) => {
-                // Held under 1: `done` is what completes the bar and closes it.
-                const progress = totalBytes > 0 ? Math.min(0.99, sentBytes / totalBytes) : 0;
-                toast.update(progressToast, { progress });
-              },
-            });
-            toast.done(progressToast);
-            return { ref, displayUrl: await fetchMediaDisplayUrl(pageId, ref) };
-          } catch (error) {
-            toast.dismiss(progressToast);
-            if (error instanceof MultipartUploadError) {
-              // The router keeps this one in the repository after all.
-              if (error.code === 'USE_REPO') throw new UploadReroute('repo');
-              if (error.code === 'ABORTED') throw new UploadCancelled();
-              throw new UploadRefused(mediaUploadMessage(error, capabilityRef.current));
-            }
-            throw error;
-          }
+          return { ref, displayUrl: await fetchMediaDisplayUrl(pageId, ref) };
         },
+
+        // A video bound for media is set up by the uploader, in the same
+        // three-option dialog every other surface shows, before it is sent.
+        askVideoOptions: videoFile => mediaRef.current.askVideoOptions(videoFile),
       };
 
       let placed;
