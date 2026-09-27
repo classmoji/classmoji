@@ -87,7 +87,9 @@ describe('Gitlab webhook tokens', () => {
 
   it('accepts the old shared secret while the rollout window is open', async () => {
     const app = await buildApp();
-    process.env.GITLAB_LEGACY_WEBHOOK_SECRET_UNTIL = new Date(Date.now() + 86_400_000).toISOString();
+    process.env.GITLAB_LEGACY_WEBHOOK_SECRET_UNTIL = new Date(
+      Date.now() + 86_400_000
+    ).toISOString();
     expect((await send(app, 'shared')).statusCode).toBe(200);
     expect((await send(app, 'wrong')).statusCode).toBe(401);
   });
