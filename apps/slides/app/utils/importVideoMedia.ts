@@ -1,27 +1,37 @@
 /**
- * importVideoMedia.ts — the slides.com import's videos on a classroom with
- * media storage.
+ * importVideoMedia.ts — where each asset of a slides.com import goes, and how
+ * it gets there without holding the ZIP's contents in memory.
  *
- * Where a classroom has media (Pro, a bucket on this deployment, and content
- * that can be served signed), the storage router sends every video there, and
- * anything over the repository's cap too. The import asks the same router the
- * editors ask, per entry, and a video it sends to media is written with
- * `putMediaObject` — the server-side twin of the browser's upload, with the
- * same Pro, delivery, per-file and quota rules — and referenced from the deck
- * as `media://{id}`. Everything else keeps the repository path, and with it the
- * per-entry skip for a file over the cap.
+ * Every image and video is routed by the storage router the editors ask
+ * (`storageTargetFor`): on a classroom with media (Pro, a bucket on this
+ * deployment, and content that can be served signed) every video goes there,
+ * and so does anything over the repository's cap — an image included. A file
+ * bound for media is written with `putMediaObject` (the server-side twin of the
+ * browser's upload, with the same Pro, delivery, per-file and quota rules) and
+ * referenced from the deck as `media://{id}`. Everything else keeps the
+ * repository path, and with it the per-entry skip for a file over the cap.
  *
- * One video media storage refuses (a full quota, a failed write) is left out
- * with a warning that names it, through the same gate and the same warning
- * channel as an entry over the repository's cap. It never fails the import.
+ * Memory is the constraint that shapes `placeImportEntry`. A ZIP under the
+ * upload cap can hold entries that inflate to gigabytes, so an entry is judged
+ * by the size the ZIP declares BEFORE it is inflated, entries are placed one
+ * at a time (inflate → store → drop), and the whole import has an inflated-bytes
+ * budget (`IMPORT_INFLATE_BUDGET_BYTES`).
+ *
+ * An entry left out — too large, over the budget, or refused by media storage —
+ * becomes a warning that names it, through the same gate as an entry over the
+ * repository's cap. It never fails the import.
  *
  * Pure, with the write injected: nothing here imports `@classmoji/services`, so
  * the rules run in the unit runner without a database or an S3 client.
  */
 
-import { storageTargetFor, type UploadCapability } from '@classmoji/services/media/router';
+import {
+  kindOfFilename,
+  storageTargetFor,
+  type UploadCapability,
+} from '@classmoji/services/media/router';
 import { formatMegabytes } from '@classmoji/utils/repo-limits';
-import { DEFAULT_VIDEO_OPTIONS, type VideoOptions } from './mediaUpload.ts';
+import { DEFAULT_VIDEO_OPTIONS, formatGigabytes, type VideoOptions } from './mediaUpload.ts';
 import type { RepoEntryGate } from './zipRepoEntries.ts';
 
 /**
@@ -46,20 +56,6 @@ export function importEntryGoesToMedia(
   if (!capability?.media) return false;
   return storageTargetFor(capability, { name, size }).kind === 'media';
 }
-
-/** A video read out of the ZIP and bound for media. */
-export interface QueuedMediaVideo {
-  /** Its path inside the ZIP — what the deck's references name. */
-  filePath: string;
-  filename: string;
-  buffer: Buffer;
-}
-
-/** Store one video's bytes in the classroom's media (`putMediaObject`). */
-export type PutImportVideo = (video: {
-  filename: string;
-  bytes: Buffer;
-}) => Promise<{ mediaId: string; ref: string }>;
 
 /** What a media refusal means, as the end of an import warning. Never a code. */
 function mediaRefusalPhrase(error: unknown): string {
@@ -92,53 +88,180 @@ export function importMediaSkippedWarning(name: string, bytes: number, error: un
   );
 }
 
+/** The options an imported file is stored with: the video choices for a video, none otherwise. */
+export function importMediaOptions(filename: string): Partial<VideoOptions> {
+  return kindOfFilename(filename) === 'VIDEO' ? { ...IMPORT_VIDEO_OPTIONS } : {};
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Which ZIP entries are assets at all
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
- * Write every queued video to media, in order.
- *
- * A stored video is mapped — under its zip path AND its bare filename, the
- * importer's convention — to its `media://{id}` reference in `videoMap`. One
- * that fails is recorded on `gate` with its warning, so the deck's references
- * to it are removed and the warning names the slides that used it; the rest
- * carry on.
- *
- * Returns the ids written, for the importer to delete if the import itself
- * fails afterwards.
+ * An entry's role in the deck, by the store's own kind table: a video or an
+ * audio file is placed with the videos (the deck plays it from a `<video>` /
+ * `<source>`), an image with the images. SVG is an image the store's table
+ * leaves out on purpose (it is not a kind media serves), and anything else in
+ * one of the export's asset folders — other than its css and js — is carried as
+ * an image, as the importer always did. Null for everything else.
  */
-export async function storeImportVideosInMedia({
-  queue,
-  put,
+export function importAssetType(filePath: string): 'image' | 'video' | null {
+  const filename = filePath.split('/').pop() ?? '';
+  if (!filename) return null;
+  const kind = kindOfFilename(filename);
+  if (kind === 'VIDEO' || kind === 'AUDIO') return 'video';
+  if (kind === 'IMAGE' || /\.svg$/i.test(filename)) return 'image';
+  const inAssetFolder = filePath.includes('/') && !filePath.startsWith('lib/');
+  if (inAssetFolder && !/\.(css|js)$/i.test(filename)) return 'image';
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Placing one entry
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * How many bytes one import may inflate in total, across every entry. The
+ * slides VM has 2 GB of memory and an import's repository files are all held
+ * until its single commit; this bounds the work one ZIP can ask for.
+ */
+export const IMPORT_INFLATE_BUDGET_BYTES = 3 * 1024 * 1024 * 1024;
+
+/** The import's running total of inflated bytes. */
+export class ImportInflateBudget {
+  private used = 0;
+  constructor(readonly limitBytes: number = IMPORT_INFLATE_BUDGET_BYTES) {}
+
+  fits(bytes: number): boolean {
+    return this.used + bytes <= this.limitBytes;
+  }
+
+  spend(bytes: number): void {
+    this.used += bytes;
+  }
+
+  get usedBytes(): number {
+    return this.used;
+  }
+}
+
+/**
+ * The warning for an entry left out because the import has already inflated
+ * as much as it may: `Skipped lecture.mp4 (900 MB) — this import is over its
+ * 3 GB limit for all files together`.
+ */
+export function importBudgetSkippedWarning(
+  name: string,
+  bytes: number,
+  limitBytes: number
+): string {
+  return (
+    `Skipped ${name} (${formatMegabytes(bytes)}) — this import is over its ` +
+    `${formatGigabytes(limitBytes)} limit for all files together`
+  );
+}
+
+/** One ZIP entry, as much of it as placing it needs. */
+export interface ImportZipEntry {
+  /** Its path inside the ZIP — what the deck's references name. */
+  filePath: string;
+  filename: string;
+  /** The uncompressed size the ZIP declares, or null when it declares none. */
+  declared: number | null;
+  /** Decompress it. Called at most once, and only after the checks pass. */
+  inflate(): Promise<Buffer>;
+}
+
+/** Store one file's bytes in the classroom's media (`putMediaObject`). */
+export type PutImportMedia = (bytes: Buffer) => Promise<{ mediaId: string; ref: string }>;
+
+export type ImportPlacement =
+  /** The repository takes it: the caller commits these bytes. */
+  | { kind: 'repo'; buffer: Buffer }
+  /** Stored in media; the bytes are gone, only the reference is left. */
+  | { kind: 'media'; mediaId: string; ref: string }
+  /** Left out, recorded on the gate with its warning. */
+  | { kind: 'skipped' };
+
+/**
+ * Place one entry: the repository, media, or nowhere (with a named warning).
+ *
+ * Checked by the DECLARED size first, so an entry too large for anywhere it
+ * could go, or one the import's budget cannot cover, is never inflated at all.
+ * The same checks run again on the bytes, because a header is only a claim.
+ * A file bound for media is written before this returns and its bytes are not
+ * kept — the caller places the next entry with this one's memory released.
+ */
+export async function placeImportEntry({
+  entry,
+  capability,
   gate,
-  videoMap,
-  onEach = () => {},
+  budget,
+  put,
   onError = () => {},
 }: {
-  queue: readonly QueuedMediaVideo[];
-  put: PutImportVideo;
+  entry: ImportZipEntry;
+  capability: UploadCapability | null | undefined;
   gate: RepoEntryGate;
-  videoMap: Map<string, string>;
-  /** Before each write: 1-based position, total, filename. */
-  onEach?: (current: number, total: number, filename: string) => void;
-  /** A refused write, for the server log — the warning never carries it. */
+  budget: ImportInflateBudget;
+  put: PutImportMedia;
+  /** A refused media write, for the server log — the warning never carries it. */
   onError?: (filename: string, error: unknown) => void;
-}): Promise<string[]> {
-  const stored: string[] = [];
-  for (let i = 0; i < queue.length; i++) {
-    const { filePath, filename, buffer } = queue[i];
-    onEach(i + 1, queue.length, filename);
-    try {
-      const { mediaId, ref } = await put({ filename, bytes: buffer });
-      stored.push(mediaId);
-      videoMap.set(filePath, ref);
-      videoMap.set(filename, ref);
-    } catch (error: unknown) {
-      onError(filename, error);
+}): Promise<ImportPlacement> {
+  const { filePath, filename } = entry;
+
+  /** Leave the entry out if `bytes` fit nowhere, or not in the budget. */
+  const leftOut = (bytes: number): boolean => {
+    // The router says media only within media's own per-file ceiling (the
+    // capability's, never a constant here), so anything it does not send there
+    // has to fit the repository.
+    if (!importEntryGoesToMedia(capability, filename, bytes)) {
+      const media = capability?.media;
+      if (media && bytes > media.perFileMaxBytes) {
+        gate.skip(
+          filename,
+          bytes,
+          filePath,
+          importMediaSkippedWarning(filename, bytes, { code: 'FILE_TOO_LARGE' })
+        );
+        return true;
+      }
+      // The repository's own skip, with its own sentence.
+      if (!gate.admit(filename, bytes, filePath)) return true;
+    }
+    if (!budget.fits(bytes)) {
       gate.skip(
         filename,
-        buffer.length,
+        bytes,
         filePath,
-        importMediaSkippedWarning(filename, buffer.length, error)
+        importBudgetSkippedWarning(filename, bytes, budget.limitBytes)
       );
+      return true;
     }
+    return false;
+  };
+
+  if (entry.declared !== null && leftOut(entry.declared)) return { kind: 'skipped' };
+
+  const buffer = await entry.inflate();
+  if (leftOut(buffer.length)) return { kind: 'skipped' };
+  budget.spend(buffer.length);
+
+  if (!importEntryGoesToMedia(capability, filename, buffer.length)) {
+    return { kind: 'repo', buffer };
   }
-  return stored;
+
+  try {
+    const { mediaId, ref } = await put(buffer);
+    return { kind: 'media', mediaId, ref };
+  } catch (error: unknown) {
+    onError(filename, error);
+    gate.skip(
+      filename,
+      buffer.length,
+      filePath,
+      importMediaSkippedWarning(filename, buffer.length, error)
+    );
+    return { kind: 'skipped' };
+  }
 }
