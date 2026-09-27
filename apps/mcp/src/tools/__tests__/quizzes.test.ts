@@ -262,8 +262,8 @@ describe('course_search_enabled (quiz source material, Stage 2 tier)', () => {
     }
   });
 
-  it('keeps both descriptions under 1,500 bytes and points at the link tool for material', () => {
-    for (const tool of [quizCreateTool, quizUpdateTool]) {
+  it('keeps the descriptions under 1,500 bytes and points at the link tool for material', () => {
+    for (const tool of [quizCreateTool, quizUpdateTool, quizPublishTool]) {
       expect(new TextEncoder().encode(tool.description).length, tool.name).toBeLessThan(1500);
     }
     expect(quizCreateTool.description).toContain('resource_link_add');
@@ -425,6 +425,46 @@ describe('quiz_publish', () => {
     expect(payload.students_notified).toBe(false);
     expect(payload.previous_status).toBe('PUBLISHED');
     expect(quizPublishTool.annotations?.idempotent).toBe(true);
+  });
+
+  describe('source material all draft', () => {
+    const WARNING =
+      'All source material is still draft; students will not be able to start this quiz.';
+    const doc = (id: string, is_draft: boolean, order: number) => ({
+      kind: 'page',
+      id,
+      title: `Doc ${id}`,
+      is_draft,
+      order,
+    });
+
+    // The material rides on the loaded row only: quiz.publish returns the bare
+    // row, so the warning must be decided from the findById read.
+    async function publishWith(source_material: unknown[]) {
+      mocks.quizFindById.mockResolvedValue({ ...QUIZ_ROW, source_material });
+      mocks.quizPublish.mockResolvedValue({ ...QUIZ_ROW, status: 'PUBLISHED' });
+      return parse(await quizPublishTool.handler(ARGS, CTX));
+    }
+
+    it('warns, in the payload and the message, when every linked doc is a draft', async () => {
+      const payload = await publishWith([doc('p1', true, 0), doc('p2', true, 1)]);
+      expect(payload.success).toBe(true);
+      expect(payload.warning).toBe(WARNING);
+      expect(payload.message).toContain(WARNING);
+      expect(mocks.quizPublish).toHaveBeenCalledWith('quiz-1');
+    });
+
+    it('does not warn when at least one linked doc is published', async () => {
+      const payload = await publishWith([doc('p1', true, 0), doc('p2', false, 1)]);
+      expect(payload).not.toHaveProperty('warning');
+      expect(payload.message).not.toContain('Warning');
+    });
+
+    it('does not warn when the quiz has no source material', async () => {
+      const payload = await publishWith([]);
+      expect(payload).not.toHaveProperty('warning');
+      expect(payload.message).not.toContain('Warning');
+    });
   });
 
   it('refuses a quiz from another classroom (S1) and never publishes', async () => {

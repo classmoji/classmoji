@@ -61,6 +61,22 @@ async function assertQuizSurfaceEnabled(ctx: ToolContext): Promise<void> {
   }
 }
 
+/**
+ * Said alongside a successful publish while every document linked as the
+ * quiz's source material is still a draft: students cannot start it until one
+ * is published. Same text as the web quizzes screen.
+ */
+const SOURCE_MATERIAL_DRAFT_WARNING =
+  'All source material is still draft; students will not be able to start this quiz.';
+
+/** At least one linked document, and every one of them a draft. */
+function allSourceMaterialDraft(
+  quiz: { source_material?: ReadonlyArray<{ is_draft: boolean }> } | null | undefined
+): boolean {
+  const material = quiz?.source_material ?? [];
+  return material.length > 0 && material.every(doc => doc.is_draft);
+}
+
 /** Row shape the quiz service returns (only the fields we echo are named). */
 interface QuizRow {
   id: string;
@@ -427,7 +443,9 @@ export const quizPublishTool: ToolDefinition<QuizPublishArgs> = {
     'and quizzes enabled. This is the ONLY path that notifies students — they get a "Quiz ' +
     'published" notification, but only on the transition INTO published, so republishing an ' +
     'already-published quiz notifies nobody. The response reports whether students were ' +
-    'notified. Use quiz_update with status DRAFT to unpublish.',
+    'notified. If every linked source document is still a draft, it also carries a warning: ' +
+    'students cannot start the quiz until one is published. Use quiz_update with status DRAFT ' +
+    'to unpublish.',
   scope: 'write',
   roles: QUIZ_STAFF,
   inputSchema: {
@@ -444,6 +462,9 @@ export const quizPublishTool: ToolDefinition<QuizPublishArgs> = {
     const notified = quiz.status !== 'PUBLISHED';
 
     const published = (await ClassmojiService.quiz.publish(quiz.id)) as QuizRow;
+    // Publishing does not change the material, so the row loaded above says;
+    // quiz.publish returns the bare row without it.
+    const warning = allSourceMaterialDraft(quiz) ? SOURCE_MATERIAL_DRAFT_WARNING : null;
 
     await writeAudit(ctx, {
       resource_type: 'QUIZ',
@@ -461,9 +482,12 @@ export const quizPublishTool: ToolDefinition<QuizPublishArgs> = {
       quiz: quizSummary(published),
       previous_status: quiz.status,
       students_notified: notified,
-      message: notified
-        ? 'Quiz published — students have been notified.'
-        : 'Quiz was already published — nothing changed and no notifications were sent.',
+      ...(warning ? { warning } : {}),
+      message:
+        (notified
+          ? 'Quiz published — students have been notified.'
+          : 'Quiz was already published — nothing changed and no notifications were sent.') +
+        (warning ? ` Warning: ${warning}` : ''),
     });
   },
 };
