@@ -18,7 +18,9 @@ export function mediaState(record: {
   status: MediaStatus;
   processing: MediaProcessing;
 }): MediaState {
-  if (record.status === 'UPLOADING') return 'uploading';
+  // STAGING is an agent's upload waiting to be placed: in flight, like a
+  // browser upload, and holding its reservation the same way.
+  if (record.status === 'UPLOADING' || record.status === 'STAGING') return 'uploading';
 
   // A READY row is already playable; processing only ever adds a better copy.
   // So FAILED is reported without pretending the object is unusable, and

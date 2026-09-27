@@ -26,7 +26,7 @@ export interface MediaClassroom {
   id: string;
 }
 
-export type MediaStatus = 'UPLOADING' | 'READY' | 'DELETED';
+export type MediaStatus = 'UPLOADING' | 'READY' | 'DELETED' | 'STAGING';
 export type MediaProcessing = 'NONE' | 'PENDING' | 'DONE' | 'FAILED';
 
 /** The raw row shape this folder reads. A Prisma row satisfies it structurally. */
@@ -55,6 +55,12 @@ export interface MediaRow {
   created_at: Date;
   ready_at: Date | null;
   original_deleted_at: Date | null;
+  /** STAGING rows only — see the schema. Null on every normal upload. */
+  destination: string | null;
+  stage_target_type: string | null;
+  stage_target_id: string | null;
+  placed_ref: string | null;
+  placement_error: string | null;
 }
 
 /** A media row as everything outside this folder sees it. Numbers, not bigints. */
@@ -137,14 +143,52 @@ export function servedVariant(row: { ext: string; renditionKey?: string | null }
   return origVariant(row.ext) ?? `orig.${row.ext}`;
 }
 
-/** The cutoff an UPLOADING row must be newer than to count, and to be listed. */
+/**
+ * What one row costs against the quota.
+ *
+ * The original's bytes while it is there; the rendition's once it has been
+ * dropped. A row mid-processing still has its original, so it is still billed
+ * for it — the job only deletes the original after the rendition is verified,
+ * and the swap is a single moment rather than a window where both or neither
+ * counts.
+ *
+ * A rendition-only row with no `rendition_bytes` recorded would read as free,
+ * which cannot happen (the job writes both or neither) but falls back to the
+ * original's size rather than to zero, because a quota that undercounts is the
+ * failure worth avoiding.
+ *
+ * Here, in the read half, so the upload capability a loader hands the editor
+ * can sum a classroom's usage without loading the write half's S3 client.
+ */
+export function billedBytes(row: {
+  size_bytes: bigint;
+  rendition_bytes: bigint | null;
+  original_deleted_at: Date | null;
+}): number {
+  if (row.original_deleted_at !== null && row.rendition_bytes !== null) {
+    return Number(row.rendition_bytes);
+  }
+  return Number(row.size_bytes);
+}
+
+/** The bytes a classroom's live rows (`liveRows`) cost, summed. */
+export async function usedBytesFor(classroomId: string): Promise<number> {
+  const rows = await liveRows(classroomId);
+  return rows.reduce((total, row) => total + billedBytes(row), 0);
+}
+
+/**
+ * The cutoff a reservation (an UPLOADING or STAGING row) must be newer than to
+ * count, and to be listed.
+ */
 export function reservationCutoff(now: number = Date.now()): Date {
   return new Date(now - RESERVATION_WINDOW_MS);
 }
 
 /**
  * Every row that currently costs the classroom something: READY, plus the
- * reservations still inside their window.
+ * reservations still inside their window — UPLOADING (a browser multipart) and
+ * STAGING (an agent upload waiting to be placed) alike.
  *
  * ONE query — the usage sum and the media list want the same set, and splitting
  * them into per-status aggregates would be three round trips for arithmetic
@@ -172,7 +216,10 @@ export function liveRowsWhere(classroomId: string) {
     classroom_id: classroomId,
     OR: [
       { status: 'READY' as const },
-      { status: 'UPLOADING' as const, created_at: { gte: reservationCutoff() } },
+      {
+        status: { in: ['UPLOADING' as const, 'STAGING' as const] },
+        created_at: { gte: reservationCutoff() },
+      },
     ],
   };
 }

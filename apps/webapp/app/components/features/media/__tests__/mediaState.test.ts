@@ -20,6 +20,7 @@ describe('mediaState', () => {
   it.each([
     ['UPLOADING', 'NONE', 'uploading'],
     ['UPLOADING', 'PENDING', 'uploading'],
+    ['STAGING', 'NONE', 'uploading'],
     ['READY', 'NONE', 'ready'],
     ['READY', 'DONE', 'ready'],
     ['READY', 'PENDING', 'optimising'],

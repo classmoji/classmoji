@@ -268,7 +268,8 @@ describe('usage', () => {
     expect(where.classroom_id).toBe(CLASSROOM_ID);
     const [ready, uploading] = where.OR;
     expect(ready).toEqual({ status: 'READY' });
-    expect(uploading.status).toBe('UPLOADING');
+    // A browser upload and an agent's staged upload reserve alike.
+    expect(uploading.status).toEqual({ in: ['UPLOADING', 'STAGING'] });
     // 24h back, give or take the milliseconds the call itself took.
     const cutoff = uploading.created_at.gte.getTime();
     expect(Date.now() - cutoff).toBeGreaterThan(23.9 * HOUR);

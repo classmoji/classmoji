@@ -21,6 +21,7 @@ import { MediaError } from './MediaError.ts';
 import { mediaKey, mediaPrefix } from './mediaKeys.ts';
 import { classifyFilename, filenameRefusal } from './mediaKinds.ts';
 import {
+  billedBytes,
   findMediaRow,
   liveRows,
   liveRowsWhere,
@@ -138,27 +139,6 @@ export async function onMediaReady(_row: MediaRecord): Promise<void> {
 // ─────────────────────────────────────────────────────────────────────────────
 // Reads
 // ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * What one row costs against the quota.
- *
- * The original's bytes while it is there; the rendition's once it has been
- * dropped. A row mid-processing still has its original, so it is still billed
- * for it — the job only deletes the original after the rendition is verified,
- * and the swap is a single moment rather than a window where both or neither
- * counts.
- *
- * A rendition-only row with no `rendition_bytes` recorded would read as free,
- * which cannot happen (the job writes both or neither) but falls back to the
- * original's size rather than to zero, because a quota that undercounts is the
- * failure worth avoiding.
- */
-function billedBytes(row: MediaRow): number {
-  if (row.original_deleted_at !== null && row.rendition_bytes !== null) {
-    return Number(row.rendition_bytes);
-  }
-  return Number(row.size_bytes);
-}
 
 /**
  * How much of a classroom's quota is used, and what the quota is.
