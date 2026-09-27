@@ -294,9 +294,10 @@ describe("the ai-agent's refusal at init (source_material_unavailable)", () => {
 
     await post({ _action: 'sendMessage', attemptId: ATTEMPT_ID, content: 'my answer' });
 
+    // Its own errorType, as a refused start saves it: an AGENT_FAILURE row
+    // would read back as the generic reply-failed line (transcriptReadBack).
     expect(addMessageMock).toHaveBeenCalledWith(ATTEMPT_ID, 'ASSISTANT', UNAVAILABLE, false, {
-      errorType: 'AGENT_FAILURE',
-      code: 'source_material_unavailable',
+      errorType: 'SOURCE_MATERIAL_UNAVAILABLE',
     });
   });
 });

@@ -94,8 +94,14 @@ const RESTART_FAILED_MESSAGE = "Couldn't start a new attempt. Please try again."
 /**
  * ai-agent codes whose text is fixed copy meant for the student (see
  * aiAgentConnection's USER_FACING_ERROR_CODES), so a failed reply may show it.
- * Every other code, API_ERROR included, gets REPLY_FAILED_MESSAGE — except
- * source_material_unavailable, which gets SOURCE_MATERIAL_UNAVAILABLE_MESSAGE.
+ * Every other code, API_ERROR included, gets REPLY_FAILED_MESSAGE.
+ *
+ * This decides what an AGENT_FAILURE row is SAVED with. What the transcript
+ * SHOWS is decided by the list of the same name in @classmoji/services
+ * (quizAttempt.service.ts, toTranscriptFields), which rewrites any
+ * AGENT_FAILURE row whose code is not on it to the fixed line. That list is the
+ * one that counts, and this one must match it. A refused source-material
+ * recovery is therefore not saved as an AGENT_FAILURE at all (see sendMessage).
  */
 const STUDENT_FACING_AGENT_CODES = ['BUDGET_EXCEEDED'];
 
@@ -837,7 +843,13 @@ export async function action({ request }: Route.ActionArgs) {
             // timeout included). The real error is in the log above.
             const agentCode = (agentError as { code?: unknown } | null)?.code;
             const code = typeof agentCode === 'string' ? agentCode : null;
-            aiResponse = isSourceMaterialUnavailable(agentError)
+            // A recovery refused for source material is saved exactly as a
+            // refused start is: under its own errorType, which the transcript
+            // shows as saved. As an AGENT_FAILURE its code would have to be on
+            // the services' STUDENT_FACING_AGENT_CODES, or the student reads
+            // "That reply couldn't be finished" instead of why.
+            const sourceMaterialRefused = isSourceMaterialUnavailable(agentError);
+            aiResponse = sourceMaterialRefused
               ? SOURCE_MATERIAL_UNAVAILABLE_MESSAGE
               : code && STUDENT_FACING_AGENT_CODES.includes(code) && agentError instanceof Error
                 ? agentError.message || REPLY_FAILED_MESSAGE
@@ -848,7 +860,9 @@ export async function action({ request }: Route.ActionArgs) {
               'ASSISTANT',
               aiResponse,
               false,
-              { errorType: 'AGENT_FAILURE', code }
+              sourceMaterialRefused
+                ? { errorType: 'SOURCE_MATERIAL_UNAVAILABLE' }
+                : { errorType: 'AGENT_FAILURE', code }
             );
 
             return new Response(JSON.stringify({ success: false, error: 'Agent failure' }), {
