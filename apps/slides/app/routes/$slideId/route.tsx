@@ -178,7 +178,9 @@ export const loader = async ({
         headers: nonDeckHeaders({ Location: signed.url }),
       });
     }
-    if (signed.reason === 'delivery_off') {
+    // The GitHub stream behind `/download` exists only for a document that is
+    // IN GitHub; a media-backed one has nothing there to stream.
+    if (signed.reason === 'delivery_off' && !slide.media_id) {
       return new Response(null, {
         status: 302,
         headers: nonDeckHeaders({ Location: `/${encodeURIComponent(slideId)}/download` }),
