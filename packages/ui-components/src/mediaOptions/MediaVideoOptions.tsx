@@ -24,6 +24,9 @@ interface OptionRowProps {
   onChange: (next: boolean) => void;
 }
 
+// The label's text sits directly inside it (no wrapper span), so the label
+// names its checkbox for assistive tech; the grid in the stylesheet lays the
+// two lines out beside the box.
 const OptionRow = ({ id, label, help, checked, disabled, onChange }: OptionRowProps) => (
   <label htmlFor={id} className={`cm-media-option${disabled ? ' cm-media-option--disabled' : ''}`}>
     <input
@@ -33,10 +36,11 @@ const OptionRow = ({ id, label, help, checked, disabled, onChange }: OptionRowPr
       disabled={disabled}
       onChange={event => onChange(event.target.checked)}
       className="cm-media-option__input"
+      aria-describedby={`${id}-help`}
     />
-    <span className="cm-media-option__text">
-      <span className="cm-media-option__label">{label}</span>
-      <span className="cm-media-option__help">{help}</span>
+    <span className="cm-media-option__label">{label}</span>
+    <span id={`${id}-help`} className="cm-media-option__help">
+      {help}
     </span>
   </label>
 );

@@ -35,8 +35,9 @@
 }
 
 .cm-media-option {
-  display: flex;
-  gap: 0.75rem;
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr);
+  column-gap: 0.75rem;
   padding: 0.625rem 0.75rem;
   border-radius: 0.75rem;
   box-shadow: inset 0 0 0 1px var(--cmo-line);
@@ -59,18 +60,15 @@
 }
 
 .cm-media-option__input {
-  flex-shrink: 0;
+  grid-row: span 2;
   width: 1rem;
   height: 1rem;
   margin: 0.125rem 0 0;
   accent-color: var(--cmo-accent);
 }
 
-.cm-media-option__text {
-  min-width: 0;
-}
-
 .cm-media-option__label {
+  grid-column: 2;
   display: block;
   font-size: 0.875rem;
   line-height: 1.25rem;
@@ -79,6 +77,7 @@
 }
 
 .cm-media-option__help {
+  grid-column: 2;
   display: block;
   font-size: 0.75rem;
   line-height: 1rem;
