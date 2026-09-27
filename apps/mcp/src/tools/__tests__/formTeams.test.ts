@@ -2570,6 +2570,20 @@ describe('form_teams_get — compare_with', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
+  it('passes a free run’s side of projects running as null, with no change and no same-set', async () => {
+    mocks.compareRuns.mockResolvedValue({
+      ...COMPARISON,
+      grouped: false,
+      metrics: [
+        { key: 'options_open', run: 5, other: null, delta: null, of: { run: 8, other: null } },
+      ],
+    });
+    const payload = parse(await formTeamsGetTool.handler({ ...BASE, compare_with: 2 }, CTX));
+    expect(payload.comparison.metrics).toEqual([
+      { key: 'options_open', run: 5, other: null, delta: null, of: { run: 8, other: null } },
+    ]);
+  });
+
   it('needs run, and takes compare_with or person, not both — before anything is read', async () => {
     const withoutRun = (await formTeamsGetTool
       .handler({ classroom: 'org/w26', form_id: FORM_ID, compare_with: 2 }, CTX)
@@ -3396,6 +3410,21 @@ describe('team-set tools — how people who didn’t answer are placed', () => {
     expect(error.code).toBe('set_busy');
     expect(error.kind).toBe('invalid_params');
     expect(error.message).toMatch(/not saved/);
+    expect(error.message).toMatch(/same arguments/);
+  });
+
+  it('asks for the same call again when a revert was the busy part (it has no patch)', async () => {
+    mocks.getSet.mockResolvedValue(SET_ROW);
+    mocks.revertToRun.mockRejectedValueOnce(
+      teamSetError('set_busy', 'Another save or run held this set; this change was not saved.')
+    );
+    const error = (await formTeamsRunTool
+      .handler({ ...BASE, revert_to_run: 2 }, CTX)
+      .catch(e => e)) as ToolError;
+    expect(error).toBeInstanceOf(ToolError);
+    expect(error.code).toBe('set_busy');
+    expect(error.message).toMatch(/not saved; call again with the same arguments/);
+    expect(error.message).not.toMatch(/patch/);
   });
 
   it('says no run was started when the run’s start was the busy part', async () => {

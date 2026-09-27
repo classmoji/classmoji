@@ -115,6 +115,24 @@ describe('runChecks', () => {
     const capacity = bidding.find(issue => issue.code === 'capacity')!;
     expect(capacity.message).toContain('5 usable team slots, no team count fits');
     expect(capacity.message).not.toMatch(/team count \d+–\d+/);
+    // Group too: the set's own count doesn't fit the usable slots, so it is
+    // not the teams kept for the people who didn't answer that leave none.
+    const grouped = applyConfigPatch(six, { non_respondents: 'group' });
+    const withGroup = checks(grouped, biddingInput({ config: grouped }));
+    const groupCapacity = withGroup.find(issue => issue.code === 'capacity')!;
+    expect(groupCapacity.message).toContain('5 usable team slots, no team count fits');
+    expect(groupCapacity.message).not.toContain('left after');
+    // One team at most, and it is theirs: none is left after it.
+    const one = applyConfigPatch(biddingConfig(), {
+      team_count: { max: 1 },
+      non_respondents: 'group',
+    });
+    const oneCapacity = checks(one, biddingInput({ config: one })).find(
+      issue => issue.code === 'capacity'
+    )!;
+    expect(oneCapacity.message).toContain(
+      "no team count left after the 1 team for the people who didn't answer"
+    );
   });
 
   it('flags a person with every option ruled out', () => {
@@ -939,6 +957,45 @@ describe("runChecks: people who didn't answer, grouped", () => {
     expect(find(passedToo(two), 'group_ok')!.message).toBe(
       "5 people who didn't answer fit 1 team of 4–6."
     );
+  });
+
+  it('leaves them no team on an option that runs only with a pitcher placed first', () => {
+    // Owner rule at Must: Atlas runs only with one of its pitchers, and its
+    // one pitcher (0) answered, so the group can't open it itself.
+    const owned = grouped([15, 16, 17, 18, 19], [0, null, null, null, null], {
+      hard: [owner(0, [0])],
+    });
+    const withRule = (problem: TeamSetProblem) => ctx(problem, { rules: [OWNER_RULE] });
+    expect(find(check(owned, withRule(owned)), 'group_no_option')).toEqual({
+      level: 'error',
+      code: 'group_no_option',
+      message:
+        "5 people didn't answer, and every option that can open runs only with one of its pitchers.",
+      srcs: ['non_respondents', OWNER],
+      user_ids: PEOPLE.slice(15, 20),
+      option_ids: [ATLAS],
+    });
+    // Beside an option that always runs with its one team: both reasons.
+    const both = grouped([15, 16, 17, 18, 19], [0, 1, null, null, null], {
+      options: options({}, { 0: 'open' }),
+      hard: [owner(1, [0])],
+    });
+    expect(find(check(both, withRule(both)), 'group_no_option')!.message).toBe(
+      "5 people didn't answer, and every option that can open has no team left for them or runs only with one of its pitchers."
+    );
+    // Opened by the people placed first (it always runs, or one of them must
+    // be on it), its second team is theirs; so is its team when one of them
+    // pitched it too.
+    const second = {
+      ...owned,
+      options: options({}, { 0: 'open' }),
+      slots: [{ option: 0 }, ...owned.slots],
+    };
+    expect(find(check(second, withRule(second)), 'group_no_option')).toBeUndefined();
+    const due = { ...second, options: owned.options, hard: [owner(0, [0]), on(1, 0, 'pin:p1')] };
+    expect(find(check(due, withRule(due)), 'group_no_option')).toBeUndefined();
+    const theirs = { ...owned, hard: [owner(0, [0, 15])] };
+    expect(find(check(theirs, withRule(theirs)), 'group_no_option')).toBeUndefined();
   });
 
   it("refuses a group the teams can't split", () => {

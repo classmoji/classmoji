@@ -22,8 +22,8 @@ import type { CoreItem, RunViewModel } from './types.ts';
  * Each conflict shows the service's label. A per-student Must rule's item
  * names its students in `people` (one rule's students on one line), and its
  * label is then the rule part alone: the names are set in bold before it
- * ("Ana Ruiz and Ben Osei", or "Ana Ruiz with Ben Osei, Cleo Park with Dev
- * Rao" for pairs, from `corePeopleText`), and the label is never taken
+ * ("Ana Ruiz, Ben Osei and Cleo Park", or "Ana Ruiz and Ben Osei; Cleo Park
+ * and Dev Rao" for pairs, from `corePeopleText`), and the label is never taken
  * apart. Then, for an option: who closed it and since
  * which run, and the option's typed note as that run had it. Each links to its
  * Setup row (`#q-…`, `#opt-…`, `#pin-…`, `#nr`, `#shape`, from

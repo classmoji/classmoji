@@ -489,7 +489,7 @@ export interface RunComparison {
 export type CreateTeamState = 'done' | 'live' | 'queued' | 'failed';
 
 export interface CreateTeamProgress {
-  /** 1-based position in the run. */
+  /** 1-based: the team's `n` in the run's views (describeRun), the order the teams are listed in. */
   n: number;
   name: string;
   state: CreateTeamState;
@@ -526,7 +526,7 @@ export interface CreateProgressView {
   /** The tag the teams go under. */
   tag: { id: string | null; name: string };
   teams: CreateTeamProgress[];
-  /** Teams whose planned name was taken, and the name they got. */
+  /** Teams whose planned name was taken, and the name they got (`n` as in `teams`). */
   renamed: { n: number; from: string; to: string }[];
   /**
    * `team` is the team's name, or '*' for a failure that stopped the whole
@@ -2004,7 +2004,8 @@ function openOptionIds(run: ExplainRun, ix: RunIndex): Set<string> {
  * `run` compared with `other` (usually the run before it): the setup changes
  * from other's config to run's, the metric rows (delta = run − other; the
  * pick rows only when both runs group by a question — free teams have no
- * picks), and who moved — a person in both runs whose option changed (free
+ * picks; projects running when either does, null on a free run's side), and
+ * who moved — a person in both runs whose option changed (free
  * mode, when either run is free, or with `byTeammates`: whose teammates
  * changed) — with only pin and request facts: the pin in run's setup that
  * names them (one added since `other` first) and each together request
@@ -2036,18 +2037,29 @@ export function compareAssignments(
     of: { run: m?.requests.total ?? null, other: o?.requests.total ?? null },
   });
   row('must_broken', m?.must_broken ?? null, o?.must_broken ?? null);
-  const grouped =
-    run.config.grouping.mode === 'by_option' || other.config.grouping.mode === 'by_option';
-  if (grouped) {
-    const both = run.result !== null && other.result !== null;
+  // Projects running: only a run grouped by a question runs any. A free run's
+  // side is null (its stored count is its one pseudo-option), and then there
+  // is no delta and no same-set comparison.
+  const runGrouped = run.config.grouping.mode === 'by_option';
+  const otherGrouped = other.config.grouping.mode === 'by_option';
+  if (runGrouped || otherGrouped) {
+    const both = runGrouped && otherGrouped && run.result !== null && other.result !== null;
     const mine = openOptionIds(run, ix);
     const theirs = openOptionIds(other, ox);
-    row('options_open', m?.options_open ?? null, o?.options_open ?? null, {
-      of: { run: m?.options_total ?? null, other: o?.options_total ?? null },
-      ...(both
-        ? { same_set: mine.size === theirs.size && [...mine].every(id => theirs.has(id)) }
-        : {}),
-    });
+    row(
+      'options_open',
+      runGrouped ? (m?.options_open ?? null) : null,
+      otherGrouped ? (o?.options_open ?? null) : null,
+      {
+        of: {
+          run: runGrouped ? (m?.options_total ?? null) : null,
+          other: otherGrouped ? (o?.options_total ?? null) : null,
+        },
+        ...(both
+          ? { same_set: mine.size === theirs.size && [...mine].every(id => theirs.has(id)) }
+          : {}),
+      }
+    );
   }
   const ruleIds = [
     ...new Set([

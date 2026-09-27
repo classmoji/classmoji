@@ -1690,9 +1690,10 @@ export function cantSolveIntro(): string {
 
 /**
  * The students a Can't-solve item names, set before its label; null when it
- * names no one.
- *   pairs      "Ana Ruiz with Ben Osei, Cleo Park with Dev Rao"
- *   + others   "Ana Ruiz with Ben Osei, Cleo Park" (anyone in no pair, after)
+ * names no one. A pair comes from any rule on pairs (together or apart), so
+ * its two names are joined with "and", and pairs are set apart by ";".
+ *   pairs      "Ana Ruiz and Ben Osei; Cleo Park and Dev Rao"
+ *   + others   "Ana Ruiz and Ben Osei; Cleo Park, Eli Diaz" (anyone in no pair, after)
  *   no pairs   "Ana Ruiz", "Ana Ruiz, Ben Osei and Cleo Park"
  * A pair whose positions aren't both in `people` is skipped; with none left
  * the names are listed as for no pairs.
@@ -1705,10 +1706,11 @@ export function corePeopleText(item: Pick<CoreItem, 'people' | 'pairs'>): string
   );
   if (pairs.length === 0) return listJoin(people.map(personName));
   const paired = new Set(pairs.flat());
+  const others = people.filter((_, i) => !paired.has(i)).map(personName);
   return [
-    ...pairs.map(([a, b]) => `${personName(people[a])} with ${personName(people[b])}`),
-    ...people.filter((_, i) => !paired.has(i)).map(personName),
-  ].join(', ');
+    ...pairs.map(([a, b]) => `${personName(people[a])} and ${personName(people[b])}`),
+    ...(others.length > 0 ? [others.join(', ')] : []),
+  ].join('; ');
 }
 
 // ─── Fixed labels ───────────────────────────────────────────────────────────

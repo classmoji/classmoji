@@ -547,8 +547,9 @@ export interface CreateState {
   done: number;
   failed: CreateFailure[];
   /**
-   * `n` is the team's 1-based position in the run (absent on rows written
-   * before it existed). `adopted`: the team was found on the set's tag under
+   * `n` is the team's 1-based position in the run's result (absent on rows
+   * written before it existed); reads number the teams as the run's views do
+   * (shownCreateState). `adopted`: the team was found on the set's tag under
    * its planned name without having been recorded (its attempt died between
    * making it and writing it down); the retry that adopted it re-adds its
    * members, which is idempotent, and then drops the flag. `members_added`
@@ -565,7 +566,8 @@ export interface CreateState {
   /**
    * The names planned at claim time, index-aligned with the run's teams.
    * applyCreate uses these rather than recomputing, so a team made elsewhere
-   * between the claim and the apply cannot rename anything.
+   * between the claim and the apply cannot rename anything. Reads list these,
+   * `sizes` and `renamed` in the order of the run's views (shownCreateState).
    */
   names?: string[];
   /** Members per team at claim time, index-aligned with `names`, so progress reads never load the run. */
@@ -2669,9 +2671,17 @@ export async function listRuns({
     classroomId,
     rows.map(row => row.created_by)
   );
+  // The form's mask, read once: a run grouped by a question in it lists its
+  // metrics as its view does (shownMetrics), with nothing per option.
+  const grouped = rows.some(
+    row => (row.config as Partial<TeamSetConfig> | null)?.grouping?.mode === 'by_option'
+  );
+  const mask = grouped ? await identityMaskForForm({ formId: set.form_id }) : new Set<string>();
   const items: TeamSetRunListItem[] = rows.map(row => {
     const solver = (row.solver as unknown as SolverSummary | null) ?? null;
     const free = isFreeSnapshot(row.config);
+    const config = row.config as unknown as TeamSetConfig | null;
+    const metrics = (row.metrics as unknown as TeamSetMetrics | null) ?? null;
     return {
       id: row.id,
       number: row.number,
@@ -2683,7 +2693,10 @@ export async function listRuns({
       gap_pct: gapPct(solver),
       ...metricCounts(row.metrics, free),
       created_by: personRefOf(row.created_by, names),
-      metrics: metricsView((row.metrics as unknown as TeamSetMetrics | null) ?? null, free),
+      metrics:
+        config?.grouping && groupingMasked({ config }, mask)
+          ? shownMetrics({ config, metrics }, true)
+          : metricsView(metrics, free),
     };
   });
   if (!withStaleness) return items;
@@ -3125,48 +3138,123 @@ async function namesWithoutOptionNow(
 }
 
 /**
- * A create's state as reads show it. A FAILED create of a run whose grouping
- * question is masked now still holds the names planned at its claim, and
- * those can carry `{option}`: until a retry is claimed, every team it did
+ * A create's state as reads take it, still in result order, and `order`: the
+ * run's teams in the order its views list them (shownOrder) when the run's
+ * grouping question is masked now, else null (views list them as stored).
+ *
+ * With `order`, `sizes` is filled from the run when the state has none. A
+ * FAILED create of such a run still holds the names planned at its claim,
+ * and those can carry `{option}`: until a retry is claimed, every team it did
  * not make goes by the name that retry gives it (namesWithoutOptionNow) — in
  * `names`, in its failures, and with no earlier rename of it listed. The
- * teams it made keep their names. Any other state is shown as stored.
+ * teams it made keep their names. Any other state is taken as stored.
+ *
+ * Reads: the run's config, then (grouped by a question) the form's mask, and
+ * the run's result only when the mask covers the grouping question.
+ */
+async function createStateForReads(
+  set: Pick<TeamSetDbRow, 'classroom_id' | 'form_id' | 'name'>,
+  state: CreateState
+): Promise<{ state: CreateState; order: number[] | null }> {
+  const planned = state.names;
+  if (!planned?.length) return { state, order: null };
+  const prisma = getPrisma();
+  const configRow = await prisma.teamSetRun.findUnique({
+    where: { id: state.run_id },
+    select: { config: true },
+  });
+  const config = (configRow?.config as unknown as TeamSetConfig | null) ?? null;
+  if (config?.grouping?.mode !== 'by_option') return { state, order: null };
+  if (!groupingMasked({ config }, await identityMaskForForm({ formId: set.form_id }))) {
+    return { state, order: null };
+  }
+  const resultRow = await prisma.teamSetRun.findUnique({
+    where: { id: state.run_id },
+    select: { result: true },
+  });
+  const run = { config, result: (resultRow?.result as unknown as RunResult | null) ?? null };
+  const teams = run.result?.teams ?? [];
+  if (planned.length !== teams.length) return { state, order: null };
+
+  const order = shownOrder(teams, true);
+  const sizes =
+    state.sizes?.length === planned.length
+      ? state.sizes
+      : teams.map(team => team.member_user_ids.length);
+  if (state.status !== 'FAILED') return { state: { ...state, sizes }, order };
+
+  const names = await namesWithoutOptionNow(set, run, state);
+  const made = indexesOf(createdPositions(state));
+  const shownName = new Map<string, string>();
+  planned.forEach((name, i) => {
+    if (!made.has(i)) shownName.set(name, names[i]!);
+  });
+  const renamed = (state.renamed ?? []).filter(entry => made.has(entry.n - 1));
+  const { renamed: _stored, ...rest } = state;
+  return {
+    state: {
+      ...rest,
+      names,
+      sizes,
+      failed: state.failed.map(failure =>
+        shownName.has(failure.team) ? { ...failure, team: shownName.get(failure.team)! } : failure
+      ),
+      ...(renamed.length > 0 ? { renamed } : {}),
+    },
+    order,
+  };
+}
+
+/**
+ * `state` (result order) with its teams in `order` (result indices in the
+ * order the run's views list them): `names` and `sizes` in that order, each
+ * made team's and each rename's `n` its position there, teams and renames
+ * sorted by it, and failures by the position of the team they name (a
+ * failure of the whole create, or of no listed team, last). For reads only:
+ * the stored state stays in result order, which the apply, a retry's
+ * adoption and createdPositions go by.
+ */
+function inShownOrder(state: CreateState, order: readonly number[]): CreateState {
+  const names = state.names ?? [];
+  const shownN = new Map(order.map((i, k) => [i + 1, k + 1]));
+  const positionOf = new Map(names.map((name, i) => [name, shownN.get(i + 1)]));
+  const LAST = Number.MAX_SAFE_INTEGER;
+  const byN = (a: { n?: number }, b: { n?: number }) => (a.n ?? LAST) - (b.n ?? LAST);
+  return {
+    ...state,
+    names: order.map(i => names[i]!),
+    ...(state.sizes?.length === names.length ? { sizes: order.map(i => state.sizes![i]!) } : {}),
+    teams: state.teams
+      .map(team => {
+        const n = shownN.get(team.n ?? names.indexOf(team.name) + 1);
+        return n === undefined ? team : { ...team, n };
+      })
+      .sort(byN),
+    ...(state.renamed
+      ? {
+          renamed: state.renamed
+            .map(entry => ({ ...entry, n: shownN.get(entry.n) ?? entry.n }))
+            .sort(byN),
+        }
+      : {}),
+    failed: state.failed
+      .map((failure, i) => ({ failure, i, at: positionOf.get(failure.team) ?? LAST }))
+      .sort((a, b) => a.at - b.at || a.i - b.i)
+      .map(({ failure }) => failure),
+  };
+}
+
+/**
+ * A create's state as reads show it (createStateForReads): with the run's
+ * grouping question masked now, its teams numbered and listed as the run's
+ * views list them (inShownOrder), so a team's `n` here is its `n` there.
  */
 async function shownCreateState(
   set: Pick<TeamSetDbRow, 'classroom_id' | 'form_id' | 'name'>,
   state: CreateState
 ): Promise<CreateState> {
-  if (state.status !== 'FAILED' || !state.names) return state;
-  const row = await getPrisma().teamSetRun.findUnique({
-    where: { id: state.run_id },
-    select: { config: true, result: true },
-  });
-  const run = row
-    ? {
-        config: row.config as unknown as TeamSetConfig,
-        result: row.result as unknown as RunResult | null,
-      }
-    : null;
-  if (!run || run.config?.grouping?.mode !== 'by_option') return state;
-  if (!groupingMasked(run, await identityMaskForForm({ formId: set.form_id }))) return state;
-  if (state.names.length !== (run.result?.teams ?? []).length) return state;
-
-  const names = await namesWithoutOptionNow(set, run, state);
-  const made = indexesOf(createdPositions(state));
-  const shownName = new Map<string, string>();
-  state.names.forEach((planned, i) => {
-    if (!made.has(i)) shownName.set(planned, names[i]!);
-  });
-  const renamed = (state.renamed ?? []).filter(entry => made.has(entry.n - 1));
-  const { renamed: _stored, ...rest } = state;
-  return {
-    ...rest,
-    names,
-    failed: state.failed.map(failure =>
-      shownName.has(failure.team) ? { ...failure, team: shownName.get(failure.team)! } : failure
-    ),
-    ...(renamed.length > 0 ? { renamed } : {}),
-  };
+  const read = await createStateForReads(set, state);
+  return read.order ? inShownOrder(read.state, read.order) : read.state;
 }
 
 /** A set row with its create state as reads show it (shownCreateState). */
@@ -5068,12 +5156,18 @@ function renamedOnRetry(
  * A team that failed `name_collision` is true when a team of the classroom
  * holds its name (every classroom team is mirrored from a GitHub team — the
  * create that collided found it there), false otherwise.
+ *
+ * The rows are worked out in result order, the order the apply makes the
+ * teams in (so 'live' is the team being made now), then listed and numbered
+ * as reads show the state (shownCreateState): a row's `n` is its team's `n`
+ * in the run's views, and so are `renamed[].n`.
  */
 async function createProgress(
   set: Pick<TeamSetDbRow, 'classroom_id' | 'form_id' | 'name' | 'tag_id'>,
   stored: CreateState
 ): Promise<CreateProgressView> {
-  const state = await shownCreateState(set, stored);
+  const { state, order } = await createStateForReads(set, stored);
+  const shown = order ? inShownOrder(state, order) : state;
   const planned = state.names ?? [];
   let sizes = state.sizes;
   if (!sizes || sizes.length !== planned.length) {
@@ -5121,7 +5215,7 @@ async function createProgress(
   );
 
   let next = state.status === 'RUNNING';
-  const teams: CreateTeamProgress[] = planned.map((name, i) => {
+  const rows: CreateTeamProgress[] = planned.map((name, i) => {
     const n = i + 1;
     const size = sizes![i] ?? 0;
     const team = made.get(n);
@@ -5164,6 +5258,7 @@ async function createProgress(
       failure: stopped,
     };
   });
+  const teams = order ? order.map((i, k) => ({ ...rows[i]!, n: k + 1 })) : rows;
 
   const names = await namesFor(set.classroom_id, [
     state.claimed_by,
@@ -5182,8 +5277,8 @@ async function createProgress(
     finished_at: state.finished_at,
     tag: { id: set.tag_id, name: set.name },
     teams,
-    renamed: state.renamed ?? [],
-    failures: state.failed.map(failure => ({
+    renamed: shown.renamed ?? [],
+    failures: shown.failed.map(failure => ({
       team: failure.team,
       reason: failure.reason,
       ...(failure.members

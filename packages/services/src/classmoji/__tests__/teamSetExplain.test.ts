@@ -1690,6 +1690,25 @@ describe('compareAssignments', () => {
       expect(rows.map(r => r.key)).not.toContain('first_choice');
       expect(rows.map(r => r.key)).not.toContain('top3');
     }
+    // Projects running against a free run: the free run runs none, so its
+    // side has no count (not its stored 1 of 1), no change and no same-set.
+    const freeStored = { ...a, metrics: metrics({ options_open: 1, options_total: 1 }) };
+    const openRow = (x: ExplainRun, y: ExplainRun) =>
+      compareAssignments(x, y, LABELS).metrics.find(r => r.key === 'options_open');
+    expect(openRow(RUN4, freeStored)).toEqual({
+      key: 'options_open',
+      run: 3,
+      other: null,
+      delta: null,
+      of: { run: 5, other: null },
+    });
+    expect(openRow(freeStored, RUN4)).toEqual({
+      key: 'options_open',
+      run: null,
+      other: 3,
+      delta: null,
+      of: { run: null, other: 5 },
+    });
   });
 
   it('byTeammates: movers are the people whose teammates changed, whatever their option', () => {

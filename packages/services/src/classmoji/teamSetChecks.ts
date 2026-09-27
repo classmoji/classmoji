@@ -68,7 +68,8 @@
  * the ones that hold whatever it leaves: the people placed first fit the
  * team counts left after the group's (groupTeamCounts), and the group fits
  * the options that can open, less one team of each option the people placed
- * first surely open (groupSlotIndices).
+ * first surely open and every option only a pitcher placed first can open
+ * (groupSlotIndices, ownerOnlyOptions).
  */
 
 import type { FormField } from './formContract.ts';
@@ -80,6 +81,7 @@ import {
   groupTeamCounts,
   groupSlotIndices,
   hardStructure,
+  ownerOnlyOptions,
   parseSrc,
   type TeamSetContext,
   type TeamSetHard,
@@ -175,10 +177,13 @@ export function runChecks(
       const kept = reserved
         ? ` after the ${reserved[0] === reserved[1] ? plural(reserved[0], 'team') : `${reserved[0]}–${reserved[1]} teams`} for the people who didn't answer`
         : '';
-      // An empty range is said as such, never as "team count 6–5".
+      // An empty range is said as such, never as "team count 6–5". It is
+      // "left after" the group's teams only when the set's own team count
+      // has room in the usable slots; otherwise no count fits either way.
+      const setRoom = problem.team_count.min <= problem.team_count.max;
       const counts =
         teamCount.min > teamCount.max
-          ? reserved
+          ? reserved && setRoom
             ? `no team count left${kept}`
             : 'no team count fits'
           : `team count ${teamCount.min}–${teamCount.max}${kept}`;
@@ -470,14 +475,29 @@ export function runChecks(
     const members = userIds(group.members);
     if (eligible.length === 0) {
       const takesOptions = uniq(takes.map(optionId));
+      // Each option they could take is either surely opened by the people
+      // placed first with its only team, or runs only with one of its
+      // pitchers and none of them is among these people (ownerOnlyOptions).
+      const ownerOnly = ownerOnlyOptions(problem, group);
+      const owned = takes.filter(o => ownerOnly.has(o));
+      const ownerSrcs = uniq(
+        problem.hard.flatMap(h =>
+          h.kind === 'owner_if_open' && owned.includes(h.o) ? [h.src] : []
+        )
+      );
+      const why =
+        takes.length === 0
+          ? 'no option can open'
+          : owned.length === 0
+            ? 'the options that can open have no team left for them'
+            : owned.length === takes.length
+              ? 'every option that can open runs only with one of its pitchers'
+              : 'every option that can open has no team left for them or runs only with one of its pitchers';
       issues.push({
         level: 'error',
         code: 'group_no_option',
-        message:
-          takes.length === 0
-            ? `${didnt}, and no option can open.`
-            : `${didnt}, and the options that can open have no team left for them.`,
-        srcs,
+        message: `${didnt}, and ${why}.`,
+        srcs: [...srcs, ...ownerSrcs],
         user_ids: members,
         ...(takesOptions.length ? { option_ids: takesOptions } : {}),
       });

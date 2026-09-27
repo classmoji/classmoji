@@ -155,9 +155,12 @@ Before either stage: a `require_pair` with one person in G and one in R can neve
 result is `INFEASIBLE` with core `[its src, group.src]` (`complete`) and no solve runs. Compile
 never emits one; it places such people in R.
 
-**Reservation.** Let the eligible options be those with a non-null `option_cost`, `gmax` the largest
-max and `gmin` the smallest min of their sizes (own size, else the set's), and L / S the group's own
-caps (`group.larger`, `group.smaller`). Then:
+**Reservation.** Let the eligible options be those with a non-null `option_cost`, less the
+owner-only ones: an `owner_if_open` on the option names nobody in G, and stage 1 doesn't surely open
+it (it isn't forced open, and no `require_place` puts someone outside G on it), so it opens in stage
+2 only if stage 1 happened to open it (see Stage 2). Let `gmax` be the largest max and `gmin` the
+smallest min of their sizes (own size, else the set's), and L / S the group's own caps
+(`group.larger`, `group.smaller`). Then:
 
 ```
 k2_min = max(ceil(|G| / (gmax + 1)), ceil((|G| − L) / gmax))      k2_max = floor((|G| + S) / gmin)
@@ -167,7 +170,7 @@ stage-1 teams ∈ [max(0, team_count.min − k2_max), team_count.max − k2_min]
 
 k2_min is the fewest teams that hold G with L of them one over; k2_max is wide on purpose (it only
 loosens the reservation). With L = S = 0 this is `ceil(|G| / gmax)` and `floor(|G| / gmin)`.
-`compileProblem` (`groupTeamCounts`) and the TypeScript cross-check use the same formula. With R non-empty,
+`compileProblem` (`groupTeamCounts`, `ownerOnlyOptions`) and the TypeScript cross-check use the same formula. With R non-empty,
 `max(1, …)` as the lower bound is equivalent (any stage-1 solution has at least one team);
 `max(0, …)` also covers an empty R. The reservation is enforced under `group.src`
 (stage 1's unconditional range is `0 … team_count.max`), so when the reservation is what makes stage
@@ -213,8 +216,9 @@ several optimal answers, which one CP-SAT returns can decide whether stage 2 fit
 two narrower cases. The group's caps (`group.larger`, `group.smaller`) are the fewest teams off their
 size over the slots G can take as far as compile can tell (`groupSlotIndices`: the slots of options
 with an `option_cost` that can open, less one slot of each option stage 1 surely opens — forced open,
-or a `require_place`), so the slots stage 1 actually leaves can need a different flex than the caps
-allow. And an `owner_if_open` option stage 1 didn't open can't open in stage 2 (above). The service's
+or a `require_place` — and less every slot of an owner-only option), so the slots stage 1 actually
+leaves can need a different flex than the caps allow. An owner-only option keeps its `option_cost`:
+when stage 1 does open it, stage 2 may take a slot it left there. The service's
 stage-2 sentence says what holds in every case: G can't be seated within the size and count limits
 on the options that can still take a team.
 

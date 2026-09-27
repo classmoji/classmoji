@@ -140,7 +140,10 @@
  * pitchers can be on it). Free mode: [0], and one slot more than
  * ceil(N / min), since the two stages round up apart. The group's flex is
  * sized over the slots it can take (groupSlotIndices): one slot of each
- * option stage 1 surely opens is not among them.
+ * option stage 1 surely opens is not among them, nor any slot of an option
+ * whose owner rule at Must names none of them as a pitcher and that stage 1
+ * doesn't surely open (ownerOnlyOptions) — it opens in stage 2 only if stage
+ * 1 opened it. Such an option keeps its option_cost.
  *
  * ── Remainder flex (teamSetFlex.ts) ────────────────────────────────────────
  * When the team sizes don't fit a population's count, minimalFlex allows the
@@ -651,9 +654,51 @@ function demandCosts(
 }
 
 /**
+ * The options the people placed first surely open: forced open, or one of
+ * them (anyone outside `inGroup`) must be on it.
+ */
+function surelyOpened(
+  problem: Pick<TeamSetProblem, 'options' | 'hard'>,
+  inGroup: ReadonlySet<number>
+): Set<number> {
+  const opened = new Set(
+    problem.options.flatMap((option, o) => (option.open === 'open' ? [o] : []))
+  );
+  for (const h of problem.hard) {
+    if (h.kind === 'require_place' && !inGroup.has(h.p)) opened.add(h.o);
+  }
+  return opened;
+}
+
+/**
+ * The options the people who didn't answer can't open themselves: an owner
+ * rule at Must (owner_if_open) names none of them among its pitchers, and the
+ * people placed first don't surely open it (surelyOpened). The engine's
+ * stage 2 keeps such an entry with only its members in the group, so the
+ * option opens there only if stage 1 opened it. Their slots are not counted
+ * as the group's room (groupSlotIndices, groupTeamCounts; the engine's
+ * `group_team_counts` leaves them out too); their option_cost stays, so
+ * stage 2 may still take a slot left on one stage 1 did open.
+ */
+export function ownerOnlyOptions(
+  problem: Pick<TeamSetProblem, 'options' | 'hard'>,
+  group: Pick<TeamSetProblemGroup, 'members'>
+): Set<number> {
+  const inGroup = new Set(group.members);
+  const opened = surelyOpened(problem, inGroup);
+  const owned = new Set<number>();
+  for (const h of problem.hard) {
+    if (h.kind !== 'owner_if_open' || opened.has(h.o)) continue;
+    if (!h.members.some(m => inGroup.has(m))) owned.add(h.o);
+  }
+  return owned;
+}
+
+/**
  * [k2_min, k2_max]: how many teams the people who didn't answer can take in
  * stage 2, the engine's `group_team_counts` (python/README.md
- * "Reservation"): over the options with an option_cost, gmax / gmin = the
+ * "Reservation"): over the options with an option_cost, less those only a
+ * pitcher placed first can open (ownerOnlyOptions), gmax / gmin = the
  * largest max and the smallest min of their sizes (own size, else the
  * set's); k2_min = max(ceil(G / (gmax + 1)), ceil((G − larger) / gmax)),
  * the fewest teams that hold G with `larger` of them one over; k2_max =
@@ -661,12 +706,15 @@ function demandCosts(
  * using the teams stage 2 surely needs. [0, 0] without members or options.
  */
 export function groupTeamCounts(
-  problem: Pick<TeamSetProblem, 'options' | 'size'>,
+  problem: Pick<TeamSetProblem, 'options' | 'size' | 'hard'>,
   group: Pick<TeamSetProblemGroup, 'members' | 'option_cost' | 'larger' | 'smaller'>
 ): [number, number] {
   const G = group.members.length;
+  const ownerOnly = ownerOnlyOptions(problem, group);
   const sizes = problem.options
-    .map((option, o) => (group.option_cost[o] === null ? null : (option.size ?? problem.size)))
+    .map((option, o) =>
+      group.option_cost[o] === null || ownerOnly.has(o) ? null : (option.size ?? problem.size)
+    )
     .filter((size): size is { min: number; max: number } => size !== null);
   if (G === 0 || sizes.length === 0) return [0, 0];
   const gmax = Math.max(...sizes.map(size => size.max));
@@ -767,28 +815,25 @@ export function hardStructure(problem: Pick<TeamSetProblem, 'people' | 'options'
 
 /**
  * The slots the people who didn't answer can take (stage 2), as indices into
- * `slots`: those of usable options (option_cost not null), less one slot of
- * each option the people placed first surely open — it always runs, or one
- * of them must be on it — since stage 2 only takes slots stage 1 left empty.
- * Which other slots stage 1 takes is known only once it is solved.
+ * `slots`: those of usable options (option_cost not null) they can open —
+ * not an owner-Must option only a pitcher placed first can open
+ * (ownerOnlyOptions) — less one slot of each option the people placed first
+ * surely open — it always runs, or one of them must be on it — since stage 2
+ * only takes slots stage 1 left empty. Which other slots stage 1 takes is
+ * known only once it is solved.
  */
 export function groupSlotIndices(
   problem: Pick<TeamSetProblem, 'options' | 'slots' | 'hard'>,
   group: Pick<TeamSetProblemGroup, 'members' | 'option_cost'>,
   usable: (o: number) => boolean
 ): number[] {
-  const inGroup = new Set(group.members);
-  const opened = new Set(
-    problem.options.flatMap((option, o) => (option.open === 'open' ? [o] : []))
-  );
-  for (const h of problem.hard) {
-    if (h.kind === 'require_place' && !inGroup.has(h.p)) opened.add(h.o);
-  }
+  const opened = surelyOpened(problem, new Set(group.members));
+  const ownerOnly = ownerOnlyOptions(problem, group);
   const taken = new Set<number>();
   return problem.slots.flatMap((slot, s) => {
     const o = slot.option;
     const cost = group.option_cost[o];
-    if (!usable(o) || cost === null || cost === undefined) return [];
+    if (!usable(o) || cost === null || cost === undefined || ownerOnly.has(o)) return [];
     if (opened.has(o) && !taken.has(o)) {
       taken.add(o);
       return [];
@@ -1330,7 +1375,7 @@ export function compileProblem(input: CompileInput): {
 
   // ── Remainder flex of everyone (of stage 1 with a group) ──
   const flexWith = (seated: TeamSetProblemGroup | undefined) => {
-    const [k2Min, k2Max] = seated ? groupTeamCounts({ options, size }, seated) : [0, 0];
+    const [k2Min, k2Max] = seated ? groupTeamCounts({ options, size, hard }, seated) : [0, 0];
     return minimalFlex(N - (seated?.members.length ?? 0), everyone, {
       kMin: Math.max(1, teamCount.min - k2Max),
       kMax: teamCount.max - k2Min,

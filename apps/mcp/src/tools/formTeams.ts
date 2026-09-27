@@ -288,12 +288,13 @@ const TEAM_SET_ERRORS: ReadonlyMap<string, { kind: MappedKind; message: string }
     },
   ],
   [
-    // A save waited for the set past its limit (another save or a run's start held it).
+    // A save or a revert waited for the set past its limit (another save or a
+    // run's start held it). Nothing was written either way.
     'set_busy',
     {
       kind: 'invalid_params',
       message:
-        'Another save or run held this set, so this change was not saved; call again with the same patch',
+        'Another save or run held this set, so this change was not saved; call again with the same arguments',
     },
   ],
 ]);
@@ -542,9 +543,9 @@ const CHECK_HINTS: Readonly<Record<string, string>> = {
   group_too_small:
     'Too few people didn’t answer to fill a team of their own: choose Spread (non_respondents: include) or Leave out (non_respondents: exclude).',
   group_no_option:
-    'People who didn’t answer are seated only on teams left after everyone else: set a closed option back to auto, give an option that always runs a second team (grouping.teams_per_option), or choose Spread (include) or Leave out (exclude).',
+    'People who didn’t answer are seated only on teams left after everyone else: set a closed option back to auto, give an option that always runs a second team (grouping.teams_per_option), make the owner rule prefer (at must, an option runs only with one of its pitchers, who answered), or choose Spread (include) or Leave out (exclude).',
   group_split:
-    'Change team_size, or open more options (set a closed one back to auto, or raise grouping.teams_per_option), so the people who didn’t answer can form teams of their own, or choose Spread (non_respondents: include) or Leave out (exclude).',
+    'Change team_size, or open more options (set a closed one back to auto, raise grouping.teams_per_option, or make a must owner rule prefer), so the people who didn’t answer can form teams of their own, or choose Spread (non_respondents: include) or Leave out (exclude).',
   no_response:
     'Remind them to answer, or choose how they are placed: non_respondents include (spread over the teams), group (seated with each other after everyone else) or exclude (left out).',
   forced_open_unranked:

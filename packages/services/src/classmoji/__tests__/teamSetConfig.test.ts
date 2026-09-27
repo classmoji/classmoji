@@ -257,6 +257,28 @@ describe('normalizeTeamSetName', () => {
     expect(normalizeTeamSetName('́')).toBe('');
   });
 
+  it('drops an emoji’s variation selector and keycap mark after a letter or digit too', () => {
+    expect(normalizeTeamSetName('team❤️')).toBe('team');
+    expect(normalizeTeamSetName('team\u2764\uFE0F')).toBe('team');
+    expect(normalizeTeamSetName('a😀️b')).toBe('ab');
+    expect(normalizeTeamSetName('a\u{1F600}\uFE0Fb')).toBe('ab');
+    expect(normalizeTeamSetName('1️⃣')).toBe('1');
+    expect(normalizeTeamSetName('1\uFE0F\u20E3')).toBe('1');
+    expect(normalizeTeamSetName('x\u{E0100}')).toBe('x');
+  });
+
+  it('is NFC after a dropped character brings a letter and its accent together', () => {
+    const name = normalizeTeamSetName('a!\u0301');
+    expect(name).toBe('\u00e1');
+    expect(name).toBe(name.normalize('NFC'));
+    expect(name).toBe(normalizeTeamSetName('\u00e1'));
+    for (const typed of ['team❤️', 'a😀️b', '1️⃣', 'हिंदी टीम', 'தமிழ்', 'E\u0301quipe 2']) {
+      const stored = normalizeTeamSetName(typed);
+      expect(stored).toBe(stored.normalize('NFC'));
+      expect(normalizeTeamSetName(stored)).toBe(stored);
+    }
+  });
+
   it('leaves nothing of a name without a letter or digit', () => {
     expect(normalizeTeamSetName('!!!')).toBe('');
     expect(normalizeTeamSetName('🙂🙂')).toBe('');

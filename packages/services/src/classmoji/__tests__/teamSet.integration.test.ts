@@ -3830,6 +3830,289 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
       }
     });
 
+    it('numbers and lists a flagged grouping’s create as the run view does, in every state, and stores it unchanged', async () => {
+      const set = await setOnC('masked create order', {
+        grouping: { mode: 'by_option', field_id: colorC, teams_per_option: 2 },
+        non_respondents: 'exclude',
+        team_size: { min: 2, max: 2 },
+        team_name_template: '{set}-{option}',
+        rules: {
+          remove: await dropSuggested(),
+          upsert: [{ field_id: colorC, job: 'rank', strength: 'prefer' }],
+        },
+      });
+      // Three pairs on slots 0-2, the pair with the smallest user id on slot
+      // 2: listed by members, result team 2 comes first, then 0, then 1.
+      const { run: started } = await teamSetService.startRun({
+        classroomId,
+        teamSetId: set.id,
+        userId: ownerId,
+        seed: 7,
+      });
+      const byId = started!.problem.people
+        .map((id, p) => ({ id, p }))
+        .sort((a, b) => (a.id < b.id ? -1 : 1))
+        .map(entry => entry.p);
+      const pairOf = (k: number) => [byId[2 * k]!, byId[2 * k + 1]!].sort((a, b) => a - b);
+      const assignment = [
+        { slot: 0, members: pairOf(1) },
+        { slot: 1, members: pairOf(2) },
+        { slot: 2, members: pairOf(0) },
+      ];
+      const scored = scoreAssignment(started!.problem, assignment);
+      expect(scored.violations).toEqual([]);
+      const run = await teamSetService.completeRun(started!.id, {
+        status: 'OPTIMAL',
+        teams: assignment,
+        objective: scored.objective,
+        bound: scored.objective,
+        wall_s: 0.1,
+        core: [],
+      });
+      const stored = run.result!.teams;
+      expect(stored).toHaveLength(3);
+      const shownIndex = stored
+        .map((team, i) => ({ i, key: [...team.member_user_ids].sort()[0]! }))
+        .sort((a, b) => (a.key < b.key ? -1 : 1))
+        .map(entry => entry.i);
+      expect(shownIndex).toEqual([2, 0, 1]);
+      const shownN = (i: number) => shownIndex.indexOf(i) + 1;
+      const membersOf = (i: number) => [...stored[i]!.member_user_ids].sort();
+
+      // Before the flag the view lists the teams as stored: the names a create plans.
+      const planned = (
+        await teamSetService.describeRun({ classroomId, run, includePeople: false })
+      ).teams.map(team => team.name);
+      expect(new Set(planned).size).toBe(3);
+      const teamIds: string[] = planned.map(() => randomUUID());
+      const now = new Date().toISOString();
+      const base = {
+        run_id: run.id,
+        run_number: run.number,
+        total: 3,
+        names: planned,
+        sizes: [2, 2, 2],
+        attempt: 1,
+        attempt_id: randomUUID(),
+        claimed_by: ownerId,
+        started_at: now,
+        task_started_at: now,
+        heartbeat_at: now,
+      };
+      const madeTeam = (i: number) => ({
+        team_id: teamIds[i]!,
+        name: planned[i]!,
+        n: i + 1,
+        members_added: 2,
+      });
+      const states: Record<'done' | 'running' | 'failed', CreateState> = {
+        done: {
+          ...base,
+          status: 'DONE',
+          done: 3,
+          failed: [],
+          teams: [0, 1, 2].map(madeTeam),
+          renamed: [{ n: 1, from: `${planned[0]}-earlier`, to: planned[0]! }],
+          finished_at: now,
+        } as CreateState,
+        // The apply makes the teams in result order: team 0 is made, team 1 is being made.
+        running: {
+          ...base,
+          status: 'RUNNING',
+          done: 1,
+          failed: [],
+          teams: [madeTeam(0)],
+          finished_at: null,
+        } as CreateState,
+        // Team 0 was made; teams 1 and 2 failed, in that order.
+        failed: {
+          ...base,
+          status: 'FAILED',
+          done: 1,
+          failed: [
+            { team: planned[1]!, reason: 'name_collision' },
+            { team: planned[2]!, reason: 'name_collision' },
+          ],
+          teams: [madeTeam(0)],
+          renamed: [{ n: 1, from: `${planned[0]}-earlier`, to: planned[0]! }],
+          finished_at: now,
+        } as CreateState,
+      };
+      const write = (state: CreateState) =>
+        prisma.teamSet.update({
+          where: { id: set.id },
+          data: {
+            created_run_id: run.id,
+            create_state: state as unknown as Prisma.InputJsonValue,
+          },
+        });
+
+      await prisma.form.update({
+        where: { id: formC },
+        data: { draft_fields: withFlag(storedFieldsC, colorC) as Prisma.InputJsonValue },
+      });
+      try {
+        for (const [label, state] of Object.entries(states)) {
+          await write(state);
+          // The run view with this create (a made team keeps its name there).
+          const view = await teamSetService.describeRun({ classroomId, run, includePeople: true });
+          expect(view.teams.map(team => team.n)).toEqual([1, 2, 3]);
+          view.teams.forEach((team, k) => {
+            expect(team.members.map(m => m.user_id).sort()).toEqual(membersOf(shownIndex[k]!));
+          });
+          const viewName = (n: number) => view.teams.find(team => team.n === n)!.name;
+          for (const i of state.teams.map(team => team.n! - 1)) {
+            expect(viewName(shownN(i)), label).toBe(planned[i]);
+          }
+
+          const progress = (await teamSetService.getCreateProgress({
+            classroomId,
+            teamSetId: set.id,
+          }))!;
+          const polled = (await teamSetService.pollStatus({ classroomId, teamSetId: set.id }))
+            .create!;
+          const shownSet = (await teamSetService.getSet({
+            classroomId,
+            formId: formC,
+            setRef: set.id,
+          }))!;
+          const shownState = shownSet.create_state!;
+
+          // Every read lists and numbers the teams as the view does: team n is
+          // the view's team n. The names are the view's, except that a
+          // running create makes its teams under the names planned at its claim.
+          const expectedNames =
+            label === 'running'
+              ? shownIndex.map(i => planned[i]!)
+              : view.teams.map(team => team.name);
+          for (const read of [progress, polled]) {
+            expect(
+              read.teams.map(team => team.n),
+              label
+            ).toEqual([1, 2, 3]);
+            expect(
+              read.teams.map(team => team.name),
+              label
+            ).toEqual(expectedNames);
+          }
+          expect(shownState.names, label).toEqual(expectedNames);
+          expect(shownState.sizes, label).toEqual([2, 2, 2]);
+          // A made team: joined to the view by n, it is the stored team's members.
+          const made = state.teams.map(team => team.n! - 1);
+          expect(
+            shownState.teams.map(team => [team.n, team.team_id]),
+            label
+          ).toEqual(
+            made
+              .map(i => [shownN(i), teamIds[i]])
+              .sort((a, b) => (a[0] as number) - (b[0] as number))
+          );
+          for (const team of shownState.teams) {
+            const i = teamIds.indexOf(team.team_id);
+            expect(team.name, label).toBe(viewName(team.n!));
+            expect(membersOf(i), label).toEqual(
+              view.teams[team.n! - 1]!.members.map(m => m.user_id).sort()
+            );
+          }
+          const rowStates = progress.teams.map(team => team.state);
+          if (label === 'done') {
+            expect(rowStates).toEqual(['done', 'done', 'done']);
+            expect(progress.renamed).toEqual([{ ...state.renamed![0]!, n: shownN(0) }]);
+            expect(shownState.renamed).toEqual(progress.renamed);
+          } else if (label === 'running') {
+            // Live is the team being made (result team 1), wherever it is listed.
+            expect(rowStates).toEqual(['queued', 'done', 'live']);
+            expect(progress.teams.find(team => team.state === 'live')!.n).toBe(shownN(1));
+          } else {
+            expect(rowStates).toEqual(['failed', 'done', 'failed']);
+            // Failures follow the listed order, under the names the view gives.
+            expect(progress.failures.map(failure => failure.team)).toEqual([
+              viewName(shownN(2)),
+              viewName(shownN(1)),
+            ]);
+            expect(shownState.failed.map(failure => failure.team)).toEqual(
+              progress.failures.map(failure => failure.team)
+            );
+            expect(progress.renamed).toEqual([{ ...state.renamed![0]!, n: shownN(0) }]);
+          }
+
+          // Stored, the state is unchanged: result order, result positions.
+          const kept = (await prisma.teamSet.findUniqueOrThrow({ where: { id: set.id } }))
+            .create_state as unknown as CreateState;
+          expect(kept, label).toEqual(state);
+        }
+      } finally {
+        await prisma.form.update({ where: { id: formC }, data: { draft_fields: Prisma.DbNull } });
+        await prisma.teamSet.update({
+          where: { id: set.id },
+          data: { created_run_id: null, create_state: Prisma.DbNull },
+        });
+      }
+    });
+
+    it('lists a flagged grouping’s runs with no per-option rows for the people who didn’t answer', async () => {
+      // s6 and s7 didn't answer this form: grouped, they share the last pair.
+      const set = await setOnC('masked list', {
+        grouping: { mode: 'by_option', field_id: colorC, teams_per_option: 2 },
+        non_respondents: 'group',
+        team_size: { min: 2, max: 2 },
+        rules: {
+          remove: await dropSuggested(),
+          upsert: [{ field_id: colorC, job: 'rank', strength: 'prefer' }],
+        },
+      });
+      const { run: started } = await teamSetService.startRun({
+        classroomId,
+        teamSetId: set.id,
+        userId: ownerId,
+        seed: 7,
+      });
+      const problem = started!.problem;
+      const group = new Set(problem.group!.members);
+      expect(group.size).toBe(2);
+      const answered = problem.people.map((_, p) => p).filter(p => !group.has(p));
+      const assignment = [
+        { slot: 0, members: answered.slice(0, 2) },
+        { slot: 1, members: answered.slice(2, 4) },
+        { slot: 2, members: answered.slice(4, 6) },
+        { slot: 3, members: [...group].sort((a, b) => a - b) },
+      ];
+      const scored = scoreAssignment(problem, assignment);
+      expect(scored.violations).toEqual([]);
+      const run = await teamSetService.completeRun(started!.id, {
+        status: 'OPTIMAL',
+        teams: assignment,
+        objective: scored.objective,
+        bound: scored.objective,
+        wall_s: 0.1,
+        core: [],
+        stages: {
+          first: { status: 'OPTIMAL', objective: scored.parts.first, bound: scored.parts.first },
+          second: { status: 'OPTIMAL', objective: scored.parts.second },
+        },
+      });
+      expect(run.status).toBe('SOLVED');
+      const listedMetrics = async () =>
+        (await teamSetService.listRuns({ classroomId, teamSetId: set.id })).find(
+          entry => entry.number === run.number
+        )!.metrics!;
+      expect((await listedMetrics()).non_respondents!.options).toHaveLength(1);
+
+      await prisma.form.update({
+        where: { id: formC },
+        data: { draft_fields: withFlag(storedFieldsC, colorC) as Prisma.InputJsonValue },
+      });
+      try {
+        const metrics = await listedMetrics();
+        expect(metrics.non_respondents).toMatchObject({ mode: 'group', people: 2, options: [] });
+        const view = await teamSetService.describeRun({ classroomId, run, includePeople: false });
+        expect(metrics.non_respondents).toEqual(view.metrics!.non_respondents);
+      } finally {
+        await prisma.form.update({ where: { id: formC }, data: { draft_fields: Prisma.DbNull } });
+      }
+      expect((await listedMetrics()).non_respondents!.options).toHaveLength(1);
+    });
+
     it('names the teams of a failed create that made none as a retry will, in what a save returns', async () => {
       const set = await setOnC('masked save', {
         grouping: { mode: 'by_option', field_id: colorC, teams_per_option: 1 },

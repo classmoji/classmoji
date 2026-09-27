@@ -263,16 +263,32 @@ function expectCoreIsReal(
 /**
  * [k2_min, k2_max]: how many teams the group's members need in stage 2 —
  * python/README.md "Reservation", the engine's `group_team_counts`. Eligible
- * options have a non-null option_cost; gmax / gmin = the largest max and the
- * smallest min of their sizes (own size, else the set's); L / S = the group's
- * own caps. k2_min = max(ceil(G / (gmax + 1)), ceil((G − L) / gmax)), k2_max
- * = floor((G + S) / gmin). Both 0 when the group is empty or no option is
- * eligible.
+ * options have a non-null option_cost and are not owner-only (an
+ * owner_if_open on the option names nobody in the group, and stage 1 doesn't
+ * surely open it: not forced open, no require_place for someone outside the
+ * group on it); gmax / gmin = the largest max and the smallest min of their
+ * sizes (own size, else the set's); L / S = the group's own caps. k2_min =
+ * max(ceil(G / (gmax + 1)), ceil((G − L) / gmax)), k2_max = floor((G + S) /
+ * gmin). Both 0 when the group is empty or no option is eligible.
  */
 function groupTeamCounts(problem: TeamSetProblem): [number, number] {
   const group = problem.group!;
+  const inGroup = new Set(group.members);
+  const opened = new Set(
+    problem.options.flatMap((option, o) => (option.open === 'open' ? [o] : []))
+  );
+  for (const h of problem.hard) {
+    if (h.kind === 'require_place' && !inGroup.has(h.p)) opened.add(h.o);
+  }
+  const ownerOnly = new Set(
+    problem.hard.flatMap(h =>
+      h.kind === 'owner_if_open' && !opened.has(h.o) && !h.members.some(m => inGroup.has(m))
+        ? [h.o]
+        : []
+    )
+  );
   const sizes = problem.options.flatMap((option, o) =>
-    group.option_cost[o] === null || group.option_cost[o] === undefined
+    group.option_cost[o] === null || group.option_cost[o] === undefined || ownerOnly.has(o)
       ? []
       : [option.size ?? problem.size]
   );

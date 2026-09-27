@@ -567,6 +567,18 @@ test.describe('compare', () => {
       'same count, different projects'
     );
     expect(deltaText(row({ key: 'options_open', delta: 0, same_set: true }))).toBe('same');
+    // Projects running against a free run: that side has no count and there is no change.
+    const mixed = row({
+      key: 'options_open',
+      run: 5,
+      other: null,
+      delta: null,
+      of: { run: 8, other: null },
+    });
+    expect(compareValueText(mixed, 'run')).toBe('5 of 8');
+    expect(compareValueText(mixed, 'other')).toBe('—');
+    expect(deltaText(mixed)).toBe('');
+    expect(deltaTone(mixed)).toBeNull();
   });
 
   test('pick rows show only when both runs are grouped', () => {
@@ -1279,10 +1291,11 @@ test.describe("run links, the stale chip, Can't solve, fixed labels", () => {
     expect(cantSolveIntro()).toBe('No teams were formed. These settings conflict:');
   });
 
-  test("Can't solve names: who is with whom for pairs, else the list", () => {
+  test("Can't solve names: each pair on its own, else the list", () => {
     const dev = person('u-dev', 'Dev Rao');
-    // One pair.
-    expect(corePeopleText({ people: [ana, ben], pairs: [[0, 1]] })).toBe('Ana Ruiz with Ben Osei');
+    const eli = person('u-eli', 'Eli Diaz');
+    // One pair (from a together or an apart rule: joined the same way).
+    expect(corePeopleText({ people: [ana, ben], pairs: [[0, 1]] })).toBe('Ana Ruiz and Ben Osei');
     // One rule's pairs, merged: each pair reads on its own.
     expect(
       corePeopleText({
@@ -1292,7 +1305,7 @@ test.describe("run links, the stale chip, Can't solve, fixed labels", () => {
           [2, 3],
         ],
       })
-    ).toBe('Ana Ruiz with Ben Osei, Cleo Park with Dev Rao');
+    ).toBe('Ana Ruiz and Ben Osei; Cleo Park and Dev Rao');
     // Someone in two pairs is named in each.
     expect(
       corePeopleText({
@@ -1302,14 +1315,27 @@ test.describe("run links, the stale chip, Can't solve, fixed labels", () => {
           [0, 2],
         ],
       })
-    ).toBe('Ana Ruiz with Ben Osei, Ana Ruiz with Cleo Park');
-    // Anyone in no pair follows the pairs.
+    ).toBe('Ana Ruiz and Ben Osei; Ana Ruiz and Cleo Park');
+    // Anyone in no pair follows the pairs, comma-joined.
     expect(corePeopleText({ people: [ana, ben, cleo], pairs: [[0, 1]] })).toBe(
-      'Ana Ruiz with Ben Osei, Cleo Park'
+      'Ana Ruiz and Ben Osei; Cleo Park'
+    );
+    expect(corePeopleText({ people: [ana, ben, cleo, dev, eli], pairs: [[0, 1]] })).toBe(
+      'Ana Ruiz and Ben Osei; Cleo Park, Dev Rao, Eli Diaz'
     );
     expect(corePeopleText({ people: [nameless, ben], pairs: [[0, 1]] })).toBe(
-      `${UNNAMED} with Ben Osei`
+      `${UNNAMED} and Ben Osei`
     );
+    // Never "with": a pair may be two people kept apart.
+    expect(
+      corePeopleText({
+        people: [ana, ben, cleo, dev],
+        pairs: [
+          [0, 1],
+          [2, 3],
+        ],
+      })
+    ).not.toMatch(/\bwith\b/);
     // No pairs: the names as a list, as before.
     expect(corePeopleText({ people: [ana] })).toBe('Ana Ruiz');
     expect(corePeopleText({ people: [ana, ben, cleo] })).toBe('Ana Ruiz, Ben Osei and Cleo Park');
@@ -1324,7 +1350,7 @@ test.describe("run links, the stale chip, Can't solve, fixed labels", () => {
           [1, 9],
         ],
       })
-    ).toBe('Ana Ruiz with Ben Osei, Cleo Park');
+    ).toBe('Ana Ruiz and Ben Osei; Cleo Park');
     // No one named: nothing, pairs or not.
     expect(corePeopleText({})).toBeNull();
     expect(corePeopleText({ people: [] })).toBeNull();

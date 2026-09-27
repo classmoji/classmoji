@@ -152,25 +152,31 @@ const firstChars = (text: string, max: number): string => Array.from(text).slice
 
 /**
  * A typed team set name as it is stored: in Unicode NFC (so "é" typed as one
- * character or as "e" plus an accent is the same name), lower case, letters,
- * their combining marks (the vowel signs some scripts need) and digits of any
- * script plus spaces and hyphens only, spaces turned into hyphens, one hyphen
- * at a time and none at either end, at most TEAM_SET_NAME_MAX characters
- * (code points). '' when no letter or digit is left ("!!!"), which a save
- * refuses. The Teams page checks a typed name with this same function.
+ * character or as "e" plus an accent is the same name, also once something
+ * between the two was dropped), lower case, letters, their combining marks
+ * (the vowel signs some scripts need) and digits of any script plus spaces
+ * and hyphens only, spaces turned into hyphens, one hyphen at a time and none
+ * at either end, at most TEAM_SET_NAME_MAX characters (code points). An
+ * emoji's variation selectors and keycap mark go wherever they are. '' when
+ * no letter or digit is left ("!!!"), which a save refuses. The Teams page
+ * checks a typed name with this same function.
  */
 export function normalizeTeamSetName(raw: string): string {
   const slug = raw
     .normalize('NFC')
     .toLowerCase()
+    // Variation selectors (U+FE00–FE0F, U+E0100–E01EF) and the combining
+    // keycap (U+20E3): marks that only style the symbol before them.
+    .replace(/[\u{FE00}-\u{FE0F}\u{E0100}-\u{E01EF}\u{20E3}]/gu, '')
     .replace(/[^\p{L}\p{M}\p{N} -]/gu, '')
-    // A mark only belongs after a letter, digit or mark (e.g. not the
-    // variation selector left behind by a removed emoji).
+    // A mark only belongs after a letter, digit or mark.
     .replace(/(^|[ -])\p{M}+/gu, '$1')
     .replace(/ +/g, '-')
     .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-  const name = firstChars(slug, TEAM_SET_NAME_MAX).replace(/-+$/, '');
+    .replace(/^-|-$/g, '')
+    // A letter and a mark that a dropped character kept apart compose now.
+    .normalize('NFC');
+  const name = firstChars(slug, TEAM_SET_NAME_MAX).replace(/-+$/, '').normalize('NFC');
   return /[\p{L}\p{N}]/u.test(name) ? name : '';
 }
 

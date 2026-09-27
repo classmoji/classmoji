@@ -24,7 +24,9 @@ import {
   compileProblem,
   fairnessCurve,
   groupSlotIndices,
+  groupTeamCounts,
   hardStructure,
+  ownerOnlyOptions,
   parseSrc,
   rankCostTable,
   type CompileInput,
@@ -1482,6 +1484,69 @@ describe('compileProblem — remainder flex (teamSetFlex)', () => {
     };
     expect(slotsFor(1)).toEqual([]);
     expect(slotsFor(2)).toEqual([1]);
+  });
+
+  it('counts no room for the group on an option only a pitcher placed first can open', () => {
+    // Owner rule at Must: P3 runs only with its pitcher (p2), who answered.
+    // P1 and P2 always run, each with its one team for the people who
+    // answered, so the two who didn't have no team of their own: the default
+    // spreads them, and a Group someone chose stays Group (the checks refuse it).
+    const patch = (non_respondents: 'group' | null): TeamSetConfigPatchInput => ({
+      non_respondents,
+      options: {
+        [P1]: { open: 'open' },
+        [P2]: { open: 'open' },
+        [P4]: { open: 'closed' },
+        [P5]: { open: 'closed' },
+      },
+      rules: { upsert: [{ field_id: B.pitched, job: 'owner', strength: 'must' }] },
+    });
+    const byDefault = compileProblem(biddingInput({ config: bidding(patch(null)) }));
+    expect(byDefault.non_respondents).toBe('include');
+    expect(byDefault.problem).not.toHaveProperty('group');
+    const chosen = compileProblem(biddingInput({ config: bidding(patch('group')) })).problem;
+    expect(chosen.group!.members).toEqual([6, 7]);
+    const p3 = chosen.options.findIndex(option => option.id === P3);
+    // Its option_cost stays: stage 2 may still take a team on it if stage 1 opens it.
+    expect(chosen.group!.option_cost[p3]).not.toBeNull();
+    expect(ownerOnlyOptions(chosen, chosen.group!)).toEqual(new Set([p3]));
+    expect(groupSlotIndices(chosen, chosen.group!, hardStructure(chosen).usable)).toEqual([]);
+  });
+
+  it('groupTeamCounts leaves out an owner-only option, as the engine does', () => {
+    // X (teams of 2–4) was pitched by 0 alone, who answered; Y takes pairs.
+    // A group of 4 counts on Y only: at least 4 / 2 = 2 teams. Counted again
+    // (4 / 4 = 1) once X always runs, once someone placed first must be on
+    // it, or once a group member pitched it too.
+    const base: Pick<TeamSetProblem, 'options' | 'size' | 'hard' | 'slots'> = {
+      options: [
+        { id: 'x', open: 'auto', size: { min: 2, max: 4 } },
+        { id: 'y', open: 'auto' },
+      ],
+      slots: [{ option: 0 }, { option: 0 }, { option: 1 }, { option: 1 }],
+      size: { min: 2, max: 2, larger: 0 },
+      hard: [{ kind: 'owner_if_open', src: 'f:owner', o: 0, members: [0] }],
+    };
+    const group = { members: [2, 3, 4, 5], option_cost: [0, 1], larger: 0, smaller: 0 };
+    expect(groupTeamCounts(base, group)).toEqual([2, 2]);
+    expect(groupSlotIndices(base, group, () => true)).toEqual([2, 3]);
+    const always = {
+      ...base,
+      options: [{ ...base.options[0]!, open: 'open' as const }, base.options[1]!],
+    };
+    expect(groupTeamCounts(always, group)).toEqual([1, 2]);
+    expect(groupSlotIndices(always, group, () => true)).toEqual([1, 2, 3]);
+    const due = {
+      ...base,
+      hard: [...base.hard, { kind: 'require_place' as const, src: 'pin:p1', p: 1, o: 0 }],
+    };
+    expect(groupTeamCounts(due, group)).toEqual([1, 2]);
+    const pitched = {
+      ...base,
+      hard: [{ kind: 'owner_if_open' as const, src: 'f:owner', o: 0, members: [0, 2] }],
+    };
+    expect(groupTeamCounts(pitched, group)).toEqual([1, 2]);
+    expect(groupSlotIndices(pitched, group, () => true)).toEqual([0, 1, 2, 3]);
   });
 
   it('a default Group whose people who answered can’t fit the teams left is Spread', () => {

@@ -12,7 +12,7 @@ import type { CreateProgressView, PersonRef, ResultTeam } from './types.ts';
  */
 
 export interface CreatedTeamCard {
-  /** 1-based position in the run. */
+  /** The team's `n` in the run's views (1-based); the create numbers it the same. */
   n: number;
   /** The name the team got. */
   name: string;

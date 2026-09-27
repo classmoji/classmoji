@@ -584,6 +584,10 @@ function renderedTemplates(): string[] {
     view.cantSolveHeading(),
     view.cantSolveIntro(),
     view.corePeopleText({ people: [ana, ben], pairs: [[0, 1]] }) ?? '',
+    view.corePeopleText({
+      people: [ana, ben, { user_id: 'c', name: 'Cleo Park' }, { user_id: 'd', name: 'Dev Rao' }],
+      pairs: [[0, 1]],
+    }) ?? '',
     view.corePeopleText({ people: [ana, ben] }) ?? '',
     view.FORM_NOT_PUBLISHED_TEXT,
     view.checkLineText({ message: 'Two pins conflict.', names: ['Ana Ruiz', 'Ben Osei'] }),

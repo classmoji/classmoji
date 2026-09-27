@@ -852,15 +852,22 @@ def explain_infeasible(pb, budget_s):
 
 def group_team_counts(pb):
     """(k2_min, k2_max): how many teams stage 2 can need. G = group.members; the eligible options are
-    those with a non-null option_cost; gmax / gmin = the largest max / smallest min of their sizes
-    (own size, else the set's). With stage 2's own flex (group.larger L, group.smaller S):
-    k2_min = max(ceil(|G| / (gmax + 1)), ceil((|G| - L) / gmax)), the fewest teams that hold G with
-    L of them one over, and k2_max = floor((|G| + S) / gmin) (wide on purpose: it only loosens the
-    reservation); (0, 0) when G is empty or no option is eligible. compileProblem
-    (groupTeamCounts) and the TypeScript cross-check apply the same formula, so any change here is a
-    change there too."""
+    those with a non-null option_cost, less the owner-only ones: an owner_if_open on o names nobody
+    in G, and stage 1 doesn't surely open o (not forced open, and no require_place for someone
+    outside G puts anyone on it), so o opens in stage 2 only if stage 1 happened to open it. gmax /
+    gmin = the largest max / smallest min of their sizes (own size, else the set's). With stage 2's
+    own flex (group.larger L, group.smaller S): k2_min = max(ceil(|G| / (gmax + 1)),
+    ceil((|G| - L) / gmax)), the fewest teams that hold G with L of them one over, and
+    k2_max = floor((|G| + S) / gmin) (wide on purpose: it only loosens the reservation); (0, 0) when
+    G is empty or no option is eligible. compileProblem (groupTeamCounts, ownerOnlyOptions) and the
+    TypeScript cross-check apply the same formula, so any change here is a change there too."""
     _src, members, costs = pb.group
-    eligible = [o for o, c in enumerate(costs) if c is not None]
+    in_group = set(members)
+    opened = set(pb.forced_open) | {h[3] for h in pb.hard
+                                    if h[0] == 'require_place' and h[2] not in in_group}
+    owner_only = {h[2] for h in pb.hard
+                  if h[0] == 'owner_if_open' and h[2] not in opened and not in_group.intersection(h[3])}
+    eligible = [o for o, c in enumerate(costs) if c is not None and o not in owner_only]
     if not members or not eligible:
         return 0, 0
     gmax = max(pb.tight(o)[1] for o in eligible)
@@ -1706,8 +1713,14 @@ def stage1_problem(problem):
     out['soft_counts'] = [dict(e, members=[new[v] for v in e['members'] if v in new])
                           for e in problem['soft_counts']]
     out['balance'] = [dict(e, values=[e['values'][p] for p in keep]) for e in problem['balance']]
+    # Owner-only options (an owner_if_open naming nobody in the group, on an option stage 1 doesn't
+    # surely open: not forced open, no require_place for a respondent on it) don't count.
+    opened = {o for o, opt in enumerate(problem['options']) if opt['open'] == 'open'}
+    opened |= {h['o'] for h in problem['hard'] if h['kind'] == 'require_place' and h['p'] not in gone}
+    owner_only = {h['o'] for h in problem['hard'] if h['kind'] == 'owner_if_open'
+                  and h['o'] not in opened and not gone.intersection(h['members'])}
     sizes = [problem['options'][o].get('size') or problem['size']
-             for o, c in enumerate(g['option_cost']) if c is not None]
+             for o, c in enumerate(g['option_cost']) if c is not None and o not in owner_only]
     k = len(g['members'])
     if k and sizes:
         gmax, gmin = max(s['max'] for s in sizes), min(s['min'] for s in sizes)
@@ -2123,6 +2136,28 @@ def selftest():
     r = run(fw, name='group-owner')
     check(r['stages']['second']['objective'] == 0 and {'slot': 1, 'members': [2, 3]} in r['teams'],
           f'group-owner: {r["teams"]} {r["stages"]}')
+
+    # group_team_counts leaves out an owner-only option: X (teams of 2-4) was pitched by 0 alone,
+    # who answered, and nothing makes stage 1 open it, so a group of 4 counts on Y (pairs) only:
+    # k2_min = 4 / 2 = 2. Counted again (k2_min = 4 / 4 = 1) once X always runs, once a respondent
+    # must be on it, or once a group member pitched it too.
+    fk = _base(6, ['X', 'Y'], [0, 0, 1, 1], 2, 2)
+    fk['version'] = 2
+    fk['options'][0]['size'] = {'min': 2, 'max': 4}
+    fk['hard'] = [{'kind': 'owner_if_open', 'src': 'f7:owner', 'o': 0, 'members': [0]}]
+    fk['group'] = {'src': 'non_respondents', 'members': [2, 3, 4, 5], 'option_cost': [0, 1]}
+    k2 = group_team_counts(Problem(copy(fk)))
+    check(k2 == (2, 2), f'group-counts owner-only: {k2}')
+    for label, change in [
+        ('always runs', lambda raw: raw['options'][0].update(open='open')),
+        ('respondent due on it',
+         lambda raw: raw['hard'].append({'kind': 'require_place', 'src': 'pin:p1', 'p': 1, 'o': 0})),
+        ('group member pitched it', lambda raw: raw['hard'][0].update(members=[0, 2])),
+    ]:
+        raw = copy(fk)
+        change(raw)
+        k2 = group_team_counts(Problem(raw))
+        check(k2 == (1, 2), f'group-counts {label}: {k2}')
 
     fc, want = fixture_group_cross()
     r = run(fc, name='group-cross')

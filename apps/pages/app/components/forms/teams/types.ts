@@ -274,7 +274,7 @@ export interface CreatePollView {
   members_total: number;
   /** ISO time. */
   finished_at: string | null;
-  /** One per team, by its 1-based position in the run. */
+  /** One per team, by its `n` in the run's views (1-based). */
   teams: Omit<CreateTeamProgress, 'name'>[];
 }
 
