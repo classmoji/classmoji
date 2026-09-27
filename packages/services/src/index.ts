@@ -195,6 +195,8 @@ export type {
 export {
   TeamSetError,
   isTeamSetError,
+  isSetLocked,
+  gapPct,
   teamNamesFor,
   TEAM_SET_ENGINE,
   TEAM_SET_RUN_ERRORS,
@@ -203,8 +205,10 @@ export type {
   TeamSetErrorCode,
   TeamSetRunErrorCode,
   TeamSetRow,
+  TeamSetRowView,
   TeamSetRunRow,
   TeamSetSummary,
+  TeamSetStatusPoll,
   TeamSetRunListItem,
   RunInputs,
   RunResult,
@@ -212,6 +216,13 @@ export type {
   RunView,
   RunViewTeam,
   RunViewMember,
+  IdentityRuleView,
+  OptionStatusRow,
+  SetupChanges,
+  SetupView,
+  SetupQuestionView,
+  SetupOptionView,
+  RunComparisonView,
   SolverOutput,
   SolverSummary,
   SolverCoreStatus,
@@ -230,6 +241,9 @@ export {
   TeamSetConfigPatchSchema,
   TeamSetConfigError,
   applyConfigPatch,
+  normalizeTeamSetName,
+  resolveNonRespondents,
+  stampProvenance,
   suggestConfig,
   validateConfigAgainstForm,
 } from './classmoji/teamSetConfig.ts';
@@ -238,20 +252,69 @@ export type {
   TeamSetConfigPatch,
   TeamSetConfigPatchInput,
   TeamSetJob,
+  TeamSetNonRespondents,
+  TeamSetStampVia,
 } from './classmoji/teamSetConfig.ts';
-export { compileProblem, FREE_OPTION_ID } from './classmoji/teamSetProblem.ts';
+export { compileProblem, parseSrc, baseSrc, FREE_OPTION_ID } from './classmoji/teamSetProblem.ts';
 export type {
   TeamSetProblem,
   TeamSetContext,
   TeamSetHard,
+  TeamSetSolveStages,
+  TeamSetSolveStatus,
+  ParsedSrc,
   CompileInput,
 } from './classmoji/teamSetProblem.ts';
 export { scoreAssignment } from './classmoji/teamSetScore.ts';
-export type { TeamSetAssignment, TeamSetViolation } from './classmoji/teamSetScore.ts';
+export type {
+  TeamSetAssignment,
+  TeamSetViolation,
+  TeamSetScore,
+  TeamSetScoreParts,
+} from './classmoji/teamSetScore.ts';
 export { runChecks } from './classmoji/teamSetChecks.ts';
 export type { CheckIssue } from './classmoji/teamSetChecks.ts';
-export { computeMetrics } from './classmoji/teamSetMetrics.ts';
-export type { TeamSetMetrics, PersonPlacement } from './classmoji/teamSetMetrics.ts';
+export { computeMetrics, metricsView, ruleMissedSlots } from './classmoji/teamSetMetrics.ts';
+export type {
+  TeamSetMetrics,
+  TeamSetMetricsView,
+  TeamSetRuleMetric,
+  TeamSetNonRespondentMetrics,
+  PersonPlacement,
+} from './classmoji/teamSetMetrics.ts';
+// What a setup and a run mean to a reader (pure; also the browser-safe
+// `./team-set-explain` subpath).
+export {
+  setStatus,
+  ruleMustLabel,
+  diffConfigs,
+  closedProvenance,
+  compareAssignments,
+  placementFacts,
+  teamSignals,
+  labelSrc,
+  coreItems,
+  infeasibleSummary,
+} from './classmoji/teamSetExplain.ts';
+export type {
+  TeamSetStatus,
+  TeamSetVia,
+  PersonRef,
+  OptionRef,
+  OptionStatus,
+  PinView,
+  CoreItem,
+  SetupChange,
+  PlacementFacts,
+  PriorityFact,
+  TeamSignals,
+  RunComparison,
+  RunMover,
+  CompareMetricRow,
+  ClosedProvenanceView,
+  CreateProgressView,
+  CreateTeamProgress,
+} from './classmoji/teamSetExplain.ts';
 
 // Course-content search: the permission-joined vector query behind the MCP's
 // `content_search` / `content_list` / `content_get`, plus the ONE draft-

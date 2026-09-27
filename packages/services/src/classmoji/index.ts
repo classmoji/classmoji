@@ -21,6 +21,7 @@ import * as calendarService from './calendar.service.ts';
 import * as icsGeneratorService from './icsGenerator.service.ts';
 import * as formService from './form.service.ts';
 import * as formResponseService from './formResponse.service.ts';
+import * as formIdentityService from './formIdentity.service.ts';
 import * as formTeamResolverService from './formTeamResolver.ts';
 import * as pageService from './page.service.ts';
 import * as pageContentService from './pageContent.service.ts';
@@ -122,6 +123,8 @@ const ClassmojiService = {
   icsGenerator: icsGeneratorService,
   form: formService,
   formResponse: formResponseService,
+  // Which questions' answers are hidden by default: one rule for every surface.
+  formIdentity: formIdentityService,
   formTeam: formTeamResolverService,
   page: pageService,
   pageContent: pageContentService,
@@ -207,6 +210,7 @@ export {
   icsGeneratorService,
   formService,
   formResponseService,
+  formIdentityService,
   formTeamResolverService,
   pageService,
   pageContentService,
