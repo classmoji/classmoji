@@ -607,11 +607,13 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                 >
                   <TextArea
                     autoSize={{ minRows: 8, maxRows: 20 }}
-                    placeholder={`Core Concepts to Assess:
+                    placeholder={`How to grade each answer, for example:
 
-1. **[Topic 1]** - Understanding of [specific aspect]
-2. **[Topic 2]** - Ability to [specific skill]
-3. **[Topic 3]** - Application of [pattern/principle]`}
+Full credit: explains the idea correctly, in their own words, with an example where one fits.
+Partial credit: the right idea, but incomplete or with a small mistake.
+No credit: incorrect, or restates the question without explaining it.
+
+Weigh understanding over wording; don't penalize minor syntax slips.`}
                   />
                 </Form.Item>
 

@@ -383,7 +383,7 @@ function SuggestionCard({
               key: 'rubric',
               label: (
                 <div className="pa-collapse-label">
-                  <span>Rubric Prompt</span>
+                  <span>Grading rubric</span>
                   <Button
                     type="text"
                     size="small"
