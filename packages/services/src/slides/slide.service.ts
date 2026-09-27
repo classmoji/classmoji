@@ -648,8 +648,12 @@ export async function deleteSlide({
   const isDeck = isDeckSlide(slide);
   // A LINK owns nothing in the repo — no folder was ever created for it, so
   // every GitHub call below would be a request whose only possible answer is a
-  // 404 logged as an error on an otherwise clean delete.
-  const ownsRepoContent = slide.kind !== 'LINK';
+  // 404 logged as an error on an otherwise clean delete. Neither does a FILE
+  // whose document lives in the media store: it was never committed. (Its media
+  // object stays — it is in the classroom's media library, and removing it from
+  // there is a separate decision.)
+  const ownsRepoContent =
+    slide.kind !== 'LINK' && !(slide.kind === 'FILE' && slide.media_id && !slide.source_path);
 
   // Check if this slide uses a shared theme (deck.json-first). Decks only: a
   // theme is something a deck's `deck.json` names, and a file slide's folder

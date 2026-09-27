@@ -7,6 +7,7 @@ import {
   useRef,
   type ReactNode,
 } from 'react';
+import type { UploadCapability } from '~/utils/mediaUpload';
 import { reHighlightCode } from './utils/codeBlockUtils';
 
 /**
@@ -106,8 +107,14 @@ interface ElementSelectionProviderProps {
   onDeleteTheme?: (id: string) => void;
   customThemes?: SlideCustomTheme[];
   sharedThemes?: SlideSharedTheme[];
-  /** Whether the slide's classroom is on the Pro tier (gates Cloudinary video hosting). */
-  isPro?: boolean;
+  /** What this classroom's uploads can do. Null for a reader, who uploads nothing. */
+  uploadCapability?: UploadCapability | null;
+  /** The deck's classroom — where a media upload is stored. */
+  classroomId?: string | null;
+  /** The deck — what a media reference is resolved for. */
+  slideId?: string | null;
+  /** Commit a file into the deck's folder in the course repository → its URL. */
+  onUploadAsset?: (file: File) => Promise<string>;
 }
 
 /** Value provided by the ElementSelectionContext */
@@ -134,14 +141,17 @@ export interface ElementSelectionContextValue {
   customThemes: SlideCustomTheme[];
   sharedThemes: SlideSharedTheme[];
   /**
-   * Whether the slide's classroom is on the Pro tier. Read by VideoProperties
-   * to decide whether to offer Cloudinary upload. Presentation only — the
-   * api.video.upload-cloudinary route re-decides on every request.
+   * What this classroom's uploads can do — where a video or a large file goes
+   * (`storageTargetFor`). Presentation only: every upload route re-derives it
+   * from the file it receives.
    *
-   * Defaults to false, so a provider that forgets to pass it hides the paid
-   * feature rather than offering an upload the server will refuse.
+   * Null when the provider was not given one, which offers no upload at all
+   * rather than one the server will refuse.
    */
-  isPro: boolean;
+  uploadCapability: UploadCapability | null;
+  classroomId: string | null;
+  slideId: string | null;
+  onUploadAsset?: (file: File) => Promise<string>;
 }
 
 const ElementSelectionContext = createContext<ElementSelectionContextValue | null>(null);
@@ -288,7 +298,10 @@ export function ElementSelectionProvider({
   onDeleteTheme,
   customThemes = [],
   sharedThemes = [],
-  isPro = false,
+  uploadCapability = null,
+  classroomId = null,
+  slideId = null,
+  onUploadAsset,
 }: ElementSelectionProviderProps) {
   const [selectedElement, setSelectedElement] = useState<HTMLElement | null>(null);
   const [elementType, setElementType] = useState<SlideElementType>(null);
@@ -639,8 +652,11 @@ export function ElementSelectionProvider({
     customThemes,
     // Shared themes (folder-based themes from slides.com imports)
     sharedThemes,
-    // Plan tier — gates the Cloudinary upload button in VideoProperties
-    isPro,
+    // Uploads — where a video or a large file goes, and the two ends it can go to
+    uploadCapability,
+    classroomId,
+    slideId,
+    onUploadAsset,
   };
 
   return (

@@ -41,6 +41,7 @@ const ORG = 'cs98-org';
 const REPO = 'cs98-content';
 const CLASSROOM = '11111111-2222-3333-4444-555555555555';
 const OTHER_CLASSROOM = '99999999-8888-7777-6666-555555555555';
+const MEDIA_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 const ORIGIN = 'https://content-staging.classmoji.io';
 
 /**
@@ -281,11 +282,58 @@ test.describe('the render input for a classroom with the gate OFF', () => {
       '<img src="https://example.com/b.png">',
     ].join('');
 
-    const out = await resolveDeckAssetsPublic(html, ORG, REPO);
+    const out = await resolveDeckAssetsPublic(html, ORG, REPO, CLASSROOM);
 
     expect(out).toContain(`https://${ORG}.github.io/${REPO}/slides/week-1/img/a.png`);
     expect(out).toContain('https://example.com/b.png');
     expect(out).not.toContain(`/content/${ORG}/${REPO}/`);
+  });
+
+  test('never echoes a media reference — it has no public form', () => {
+    expect(publicContentUrl(`media://${MEDIA_ID}`, ORG, REPO)).toBeNull();
+  });
+
+  test('a rendered document’s media references become the resolver’s placeholder', async () => {
+    const previous = process.env.CONTENT_DELIVERY_ORIGIN;
+    process.env.CONTENT_DELIVERY_ORIGIN = 'https://content.example.test';
+    try {
+      const html = [
+        `<video src="media://${MEDIA_ID}"></video>`,
+        `<section data-background-video="media://${MEDIA_ID}"></section>`,
+        `<video><source src="media://${MEDIA_ID}"></video>`,
+        `<img src="/content/${ORG}/${REPO}/slides/week-1/img/a.png">`,
+      ].join('');
+
+      const out = (await resolveDeckAssetsPublic(html, ORG, REPO, CLASSROOM)) ?? '';
+
+      expect(out).not.toContain('media://');
+      const placeholder = `https://content.example.test/c/${CLASSROOM}/missing/${encodeURIComponent(
+        `media://${MEDIA_ID}`
+      )}`;
+      expect(out.split(placeholder).length - 1).toBe(3);
+      expect(out).toContain(`https://${ORG}.github.io/${REPO}/slides/week-1/img/a.png`);
+    } finally {
+      if (previous === undefined) delete process.env.CONTENT_DELIVERY_ORIGIN;
+      else process.env.CONTENT_DELIVERY_ORIGIN = previous;
+    }
+  });
+
+  test('with no delivery origin at all, a media reference still never leaves as itself', async () => {
+    const previous = process.env.CONTENT_DELIVERY_ORIGIN;
+    delete process.env.CONTENT_DELIVERY_ORIGIN;
+    try {
+      const out =
+        (await resolveDeckAssetsPublic(
+          `<video src="media://${MEDIA_ID}"></video>`,
+          ORG,
+          REPO,
+          CLASSROOM
+        )) ?? '';
+      expect(out).not.toContain('media://');
+      expect(out).toContain('src="about:blank"');
+    } finally {
+      if (previous !== undefined) process.env.CONTENT_DELIVERY_ORIGIN = previous;
+    }
   });
 
   test('moves the shared theme’s BASE and keeps the filenames it resolved', () => {
