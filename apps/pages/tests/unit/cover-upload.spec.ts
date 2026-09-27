@@ -59,6 +59,13 @@ test.describe('the cover uploaders', () => {
     expect(ROUTE_SOURCE).not.toContain("formData.append('intent', 'upload-header-image')");
   });
 
+  test('an answer left on the fetcher by an earlier mount is not toasted again', () => {
+    const effect = HOOK_SOURCE.slice(
+      HOOK_SOURCE.indexOf('const dataAtMountRef = useRef(fetcher.data);')
+    );
+    expect(effect).toContain('if (fetcher.data === dataAtMountRef.current) return;');
+  });
+
   test('neither toasts a raw code any more', () => {
     for (const src of [HEADER_SOURCE, ROUTE_SOURCE]) {
       expect(src).not.toContain('toast.error(fetcher.data.error)');

@@ -109,9 +109,15 @@ export function useCoverUpload(
     [submitToMedia, submitToRepo]
   );
 
+  // The answer already on the fetcher when this mounted belongs to an earlier
+  // mount — `coverFetcher` outlives "Add cover" across page navigations — and
+  // was shown then; it is not shown again.
+  const dataAtMountRef = useRef(fetcher.data);
+
   // The action's answer: one redirect to media, or the sentence to show.
   useEffect(() => {
     if (fetcher.state !== 'idle' || !fetcher.data) return;
+    if (fetcher.data === dataAtMountRef.current) return;
     const data = fetcher.data as ActionFailure | undefined;
     const file = repoFileRef.current;
     repoFileRef.current = null;
