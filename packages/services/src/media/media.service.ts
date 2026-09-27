@@ -749,7 +749,11 @@ const HEAD_RETRY_DELAY_MS = 250;
  * nobody had managed to measure. Unverified is unverified: it falls through to
  * the retry and then to null, and the caller says VERIFY_FAILED.
  */
-export async function verifiedSize(client: S3Client, bucket: string, key: string): Promise<number | null> {
+export async function verifiedSize(
+  client: S3Client,
+  bucket: string,
+  key: string
+): Promise<number | null> {
   for (let attempt = 1; attempt <= HEAD_ATTEMPTS; attempt += 1) {
     if (attempt > 1) {
       await new Promise(resolve => setTimeout(resolve, HEAD_RETRY_DELAY_MS));

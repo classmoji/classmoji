@@ -39,7 +39,11 @@ import {
   type MediaRow,
 } from './mediaLookup.ts';
 import { PER_FILE_MAX_BYTES, quotaBytesFor } from './mediaQuota.ts';
-import { assertRepoTarget, uploadCapabilityFor, type CapabilityClassroom } from './uploadCapability.ts';
+import {
+  assertRepoTarget,
+  uploadCapabilityFor,
+  type CapabilityClassroom,
+} from './uploadCapability.ts';
 import { kindOfFilename, storageTargetFor } from './storageRouter.ts';
 
 /**
@@ -321,10 +325,16 @@ function assertImportUrlShape(raw: string): URL {
     throw new MediaError('STORAGE_REFUSED', 'Only https:// URLs can be imported.');
   }
   if (url.username || url.password) {
-    throw new MediaError('STORAGE_REFUSED', 'A URL carrying a username or password cannot be imported.');
+    throw new MediaError(
+      'STORAGE_REFUSED',
+      'A URL carrying a username or password cannot be imported.'
+    );
   }
   if (url.port && url.port !== '443') {
-    throw new MediaError('STORAGE_REFUSED', 'Only URLs on the standard https port (443) can be imported.');
+    throw new MediaError(
+      'STORAGE_REFUSED',
+      'Only URLs on the standard https port (443) can be imported.'
+    );
   }
   return url;
 }
@@ -418,7 +428,11 @@ export async function startUrlImport({
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** The caller's own agent upload in this classroom, or NOT_FOUND. */
-async function ownStagedRow(classroomId: string, userId: string, mediaId: string): Promise<MediaRow> {
+async function ownStagedRow(
+  classroomId: string,
+  userId: string,
+  mediaId: string
+): Promise<MediaRow> {
   const row = await findMediaRow(classroomId, mediaId);
   // `destination` is set on every agent upload and on no other row, so a
   // browser upload's id is not something these calls answer for.
@@ -515,14 +529,23 @@ async function placeIntoMedia(client: S3Client, bucket: string, row: MediaRow): 
   const copied = await verifiedSize(client, bucket, target);
   if (copied !== Number(row.size_bytes)) {
     await deleteObjectsQuietly(client, bucket, [target]);
-    throw new MediaError('VERIFY_FAILED', 'The file could not be verified after copying; try again');
+    throw new MediaError(
+      'VERIFY_FAILED',
+      'The file could not be verified after copying; try again'
+    );
   }
 
   const ref = mediaRef(row.id);
   const readyAt = new Date();
   const { count } = await getPrisma().mediaObject.updateMany({
     where: { id: row.id, status: 'STAGING' },
-    data: { status: 'READY', ready_at: readyAt, placed_ref: ref, processing: 'NONE', upload_id: null },
+    data: {
+      status: 'READY',
+      ready_at: readyAt,
+      placed_ref: ref,
+      processing: 'NONE',
+      upload_id: null,
+    },
   });
   if (count === 0) {
     const fresh = await findMediaRow(row.classroom_id, row.id);
@@ -636,7 +659,9 @@ export async function finishStagedUpload({
  * `file_upload_status` hands the agent, so it is a sentence, not a stack.
  */
 export async function failStagedPlacement(mediaId: string, reason: string): Promise<void> {
-  const row = (await getPrisma().mediaObject.findUnique({ where: { id: mediaId } })) as MediaRow | null;
+  const row = (await getPrisma().mediaObject.findUnique({
+    where: { id: mediaId },
+  })) as MediaRow | null;
   if (!row) return;
   const { count } = await getPrisma().mediaObject.updateMany({
     where: { id: mediaId, status: 'STAGING' },
@@ -697,7 +722,11 @@ async function commitToRepo(row: MediaRow, buffer: Buffer): Promise<string> {
     if (!page || page.classroom_id !== row.classroom_id) {
       throw new PlacementRefused('The page this file was being added to no longer exists.');
     }
-    const uploaded = await uploadPageAsset(page as unknown as PageWithContentRepo, buffer, row.filename);
+    const uploaded = await uploadPageAsset(
+      page as unknown as PageWithContentRepo,
+      buffer,
+      row.filename
+    );
     return uploaded.url;
   }
 
@@ -880,7 +909,10 @@ export async function streamIntoStage(
     for await (const piece of body) {
       total += piece.byteLength;
       if (total > maxBytes) {
-        throw new MediaError('FILE_TOO_LARGE', 'The file at that URL is larger than this class can store.');
+        throw new MediaError(
+          'FILE_TOO_LARGE',
+          'The file at that URL is larger than this class can store.'
+        );
       }
       let offset = 0;
       while (offset < piece.byteLength) {
@@ -904,7 +936,9 @@ export async function streamIntoStage(
     );
   } catch (error) {
     try {
-      await client.send(new AbortMultipartUploadCommand({ Bucket: bucket, Key: key, UploadId: uploadId }));
+      await client.send(
+        new AbortMultipartUploadCommand({ Bucket: bucket, Key: key, UploadId: uploadId })
+      );
     } catch {
       // R2's own abort-incomplete-multipart rule covers a failed abort.
     }
@@ -949,10 +983,14 @@ export async function settleStagedImport(mediaId: string, sizeBytes: number): Pr
         .reduce((total, other) => total + billedBytes(other), 0);
       const quotaBytes = quotaBytesFor(true);
       if (usedBytes + sizeBytes > quotaBytes) {
-        throw new MediaError('QUOTA_EXCEEDED', 'This file would put the class over its storage quota', {
-          usedBytes,
-          quotaBytes,
-        });
+        throw new MediaError(
+          'QUOTA_EXCEEDED',
+          'This file would put the class over its storage quota',
+          {
+            usedBytes,
+            quotaBytes,
+          }
+        );
       }
     }
     await tx.mediaObject.updateMany({

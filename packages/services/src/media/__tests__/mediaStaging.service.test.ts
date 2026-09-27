@@ -565,7 +565,10 @@ describe('failStagedPlacement', () => {
     await staging.failStagedPlacement(MEDIA_ID, 'The URL answered 404.');
     expect(prisma.mediaObject.updateMany.mock.calls[0][0]).toMatchObject({
       where: { id: MEDIA_ID, status: 'STAGING' },
-      data: expect.objectContaining({ status: 'DELETED', placement_error: 'The URL answered 404.' }),
+      data: expect.objectContaining({
+        status: 'DELETED',
+        placement_error: 'The URL answered 404.',
+      }),
     });
     expect(sent.map(call => call.name)).toEqual(['AbortMultipartUpload', 'DeleteObject']);
   });
@@ -673,7 +676,12 @@ describe('startUrlImport', () => {
 
   it('needs an extension from the filename or the URL', async () => {
     await expect(
-      staging.startUrlImport({ classroom, userId: USER, url: 'https://example.com/download', target })
+      staging.startUrlImport({
+        classroom,
+        userId: USER,
+        url: 'https://example.com/download',
+        target,
+      })
     ).rejects.toMatchObject({ code: 'STORAGE_REFUSED' });
   });
 });
