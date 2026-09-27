@@ -141,10 +141,13 @@ export default function VideoProperties({ element }: { element: HTMLVideoElement
     [onUploadAsset, applySrc, toast]
   );
 
-  // A file was picked: route it, then upload it where it belongs.
+  // A file was picked: route it, then upload it where it belongs. Without a
+  // capability (its lookup failed) the router's fallback sends a file that
+  // fits to the repository, whose route redirects one that belongs in media —
+  // the server's answer decides, as it does in the page editor.
   const handleFileChosen = useCallback(
     async (file: File | undefined) => {
-      if (!file || !uploadCapability) return;
+      if (!file) return;
       const target = deckAssetTarget(uploadCapability, file);
 
       if (target.kind === 'refused') {
@@ -277,7 +280,7 @@ export default function VideoProperties({ element }: { element: HTMLVideoElement
             </div>
           )}
 
-          {uploadCapability && (
+          {(onUploadAsset || (uploadCapability?.media && classroomId)) && (
             <>
               <input
                 ref={fileInputRef}
@@ -300,7 +303,7 @@ export default function VideoProperties({ element }: { element: HTMLVideoElement
               >
                 {repoUploading ? 'Uploading…' : 'Upload video'}
               </Button>
-              {uploadCapability.media && classroomId && (
+              {uploadCapability?.media && classroomId && (
                 <Button
                   icon={<FolderOpenOutlined />}
                   onClick={() => setPickerOpen(true)}

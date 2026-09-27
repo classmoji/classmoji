@@ -12,7 +12,7 @@
  * the browser.
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 
@@ -220,12 +220,33 @@ test.describe('the three video choices', () => {
     );
   });
 
-  test('say what each choice does, in the wording every surface shares', () => {
-    // The shared ui-components copy of these fields uses the same sentences, so
-    // swapping this local one for it later changes nothing on screen.
-    const fields = source('../../app/components/media/VideoOptionsFields.tsx');
-    expect(fields).toContain('help="Converts it to a format that plays in every browser."');
-    expect(fields).toContain('help="Show students a download button."');
+  test('the dialog shows the shared choices, and only for a video', () => {
+    // One component for every upload dialog (webapp, pages, slides), with its
+    // own stylesheet imported by the app.
+    const dialog = source('../../app/components/media/VideoUploadDialog.tsx');
+    expect(dialog).toContain(
+      "import { MediaVideoOptions } from '@classmoji/ui-components/media-options';"
+    );
+    expect(dialog).toContain('const isVideo = file !== null && isVideoFile(file);');
+    expect(dialog).toMatch(/isVideo && \(\s*<MediaVideoOptions/);
+    expect(dialog).toContain('upload.start(file, isVideo ? options : {},');
+    expect(
+      existsSync(
+        fileURLToPath(new URL('../../app/components/media/VideoOptionsFields.tsx', import.meta.url))
+      )
+    ).toBe(false);
+    expect(source('../../app/styles/tailwind.css')).toContain(
+      "@import '@classmoji/ui-components/styles/media-options.css';"
+    );
+  });
+
+  test('the panel keeps Upload video without a capability; the server decides', () => {
+    const panel = source('../../app/components/properties/editors/VideoProperties.tsx');
+    expect(panel).toContain('{(onUploadAsset || (uploadCapability?.media && classroomId)) && (');
+    expect(panel).not.toContain('if (!file || !uploadCapability) return;');
+    // Routed with whatever capability there is — null falls back to the repository.
+    expect(panel).toContain('const target = deckAssetTarget(uploadCapability, file);');
+    expect(deckAssetTarget(null, { name: 'talk.mp4', size: 3 * MB })).toEqual({ kind: 'repo' });
   });
 
   test('the video picker offers every video the store takes', () => {
@@ -529,7 +550,6 @@ test.describe('the video element, structurally', () => {
       '../../app/hooks/useMediaUpload.ts',
       '../../app/components/media/VideoUploadDialog.tsx',
       '../../app/components/media/MediaPickerDialog.tsx',
-      '../../app/components/media/VideoOptionsFields.tsx',
       '../../app/components/media/MediaUploadProgress.tsx',
       '../../app/components/properties/editors/VideoProperties.tsx',
     ]) {
