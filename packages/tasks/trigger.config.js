@@ -2,7 +2,7 @@ import { defineConfig } from '@trigger.dev/sdk';
 // eslint-disable-next-line import/no-unresolved
 import { prismaExtension } from '@trigger.dev/build/extensions/prisma';
 // eslint-disable-next-line import/no-unresolved
-import { aptGet, syncEnvVars } from '@trigger.dev/build/extensions/core';
+import { aptGet, ffmpeg, syncEnvVars } from '@trigger.dev/build/extensions/core';
 // eslint-disable-next-line import/no-unresolved
 import { pythonExtension } from '@trigger.dev/python/extension';
 import { InfisicalSDK } from '@infisical/sdk';
@@ -101,6 +101,11 @@ export default defineConfig({
       aptGet({
         packages: ['bash', 'git'],
       }),
+      // For `media-video-process`. Sets FFMPEG_PATH / FFPROBE_PATH in deployed
+      // images (it does nothing for `trigger dev`, which uses ffmpeg on PATH).
+      // NOTE: in @trigger.dev/build 4.6.3, version '7' installs johnvansickle's
+      // static `ffmpeg-git` build — current git master, not a 7.x release.
+      ffmpeg({ version: '7' }),
       pythonExtension(teamSetSolverPythonOptions()),
       syncEnvVars(async ctx => {
         // Skip sync if credentials not available (allows local dev without Infisical)
