@@ -4,6 +4,7 @@ import {
   readLimitedFormData,
   uploadBodyLimit,
 } from '@classmoji/utils/upload-limit';
+import { uploadRefusalStatus } from '@classmoji/services';
 import { ClassmojiService } from '~/utils/db.server.ts';
 import { assertPageAccess, pageMutationBlocked } from '~/utils/auth.server.ts';
 import { uploadPageAsset } from '~/utils/content.server.ts';
@@ -95,10 +96,12 @@ async function receiveUpload(
     const { url, path, displayUrl } = await uploadPageAsset(page, file);
     return Response.json({ success: true, url, path, displayUrl });
   } catch (error: unknown) {
-    // `RepoFileTooLargeError` — GitHub refused the commit as too large, or the
-    // service refused it first. Its message is the sentence to show.
-    if ((error as { code?: unknown } | null)?.code === 'REPO_FILE_TOO_LARGE') {
-      return Response.json({ error: (error as Error).message }, { status: 413 });
+    // A refusal the uploader can act on — too large (413), a type or extension
+    // this classroom does not take (415), a name that is not one (400). Its
+    // message is the sentence to show, and it is not a fault worth logging.
+    const refused = uploadRefusalStatus(error);
+    if (refused) {
+      return Response.json({ error: (error as Error).message }, { status: refused });
     }
     console.error('[upload] Failed:', error);
     return Response.json(

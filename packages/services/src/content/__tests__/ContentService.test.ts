@@ -31,6 +31,7 @@ vi.mock('@classmoji/database', () => ({
 
 const { ContentService } = await import('../ContentService.ts');
 const { RepoFileTooLargeError, isCommitTooLargeRefusal } = await import('../repoLimits.ts');
+const { FileRefusedError } = await import('../utils/validateFile.ts');
 
 const gitOrganization = { provider: 'GITHUB', login: 'test-org' };
 
@@ -1335,15 +1336,17 @@ describe('upload — one entry point, two transports', () => {
   });
 
   it('keeps the image/PDF allowlist by default and widens it only when asked', async () => {
-    await expect(
-      ContentService.upload({
-        gitOrganization,
-        repo: 'upload-type-default',
-        file: Buffer.from('x'),
-        filename: 'notes.ipynb',
-        folder: 'f',
-      })
-    ).rejects.toThrow('Invalid file type');
+    const refused = await ContentService.upload({
+      gitOrganization,
+      repo: 'upload-type-default',
+      file: Buffer.from('x'),
+      filename: 'notes.ipynb',
+      folder: 'f',
+    }).catch((e: unknown) => e);
+    // Typed, so a route answers 415 rather than the 500 a bare Error became.
+    expect(refused).toBeInstanceOf(FileRefusedError);
+    expect(refused).toMatchObject({ code: 'FILE_REFUSED', reason: 'type', status: 415 });
+    expect((refused as Error).message).toMatch(/^Invalid file type\. Allowed: /);
     expect(requestMock).not.toHaveBeenCalled();
 
     requestMock.mockResolvedValue({ data: { content: { sha: 's' } } });
@@ -1356,6 +1359,19 @@ describe('upload — one entry point, two transports', () => {
       fileTypes: 'any',
     });
     expect(result.path).toMatch(/^f\/\d+-notes\.ipynb$/);
+  });
+
+  it('refuses a name that is not one as a 400, and still before any request', async () => {
+    const refused = await ContentService.upload({
+      gitOrganization,
+      repo: 'upload-bad-name',
+      file: Buffer.from('x'),
+      filename: 'images/a.png',
+      folder: 'f',
+    }).catch((e: unknown) => e);
+
+    expect(refused).toMatchObject({ code: 'FILE_REFUSED', reason: 'name', status: 400 });
+    expect(requestMock).not.toHaveBeenCalled();
   });
 });
 

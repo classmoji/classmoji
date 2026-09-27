@@ -115,3 +115,31 @@ test.describe('page uploads take an upload slot', () => {
     expect(PAGE_ACTION_SOURCE).toContain('} finally {\n    if (slot.held) releaseUploadSlot();');
   });
 });
+
+test.describe('page uploads answer a refusal as a 4xx', () => {
+  // `ContentService.upload` throws `FileRefusedError` for a type, extension or
+  // name it will not take, and `RepoFileTooLargeError` for size. Both are the
+  // uploader's to fix; `uploadRefusalStatus` is the one mapping (415/400/413),
+  // and it has to run before the catch-all that answers 500 and logs a fault.
+  test('api.upload maps refusals before its 500', () => {
+    const handler = UPLOAD_SOURCE.slice(UPLOAD_SOURCE.indexOf('await uploadPageAsset(page, file)'));
+    const refusal = handler.indexOf('const refused = uploadRefusalStatus(error);');
+    const fault = handler.indexOf("console.error('[upload] Failed:', error);");
+
+    expect(refusal).toBeGreaterThan(-1);
+    expect(fault).toBeGreaterThan(refusal);
+    expect(handler).toContain('{ status: refused }');
+    expect(handler).not.toContain("code === 'REPO_FILE_TOO_LARGE'");
+  });
+
+  test('the cover upload maps them the same way', () => {
+    const cover = PAGE_ACTION_SOURCE.slice(
+      PAGE_ACTION_SOURCE.indexOf("intent === 'upload-header-image'")
+    );
+    const refusal = cover.indexOf('const refused = uploadRefusalStatus(error);');
+    const fault = cover.indexOf("console.error('Failed to upload header image:', error);");
+
+    expect(refusal).toBeGreaterThan(-1);
+    expect(fault).toBeGreaterThan(refusal);
+  });
+});

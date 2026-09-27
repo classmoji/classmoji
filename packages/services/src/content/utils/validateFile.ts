@@ -58,6 +58,62 @@ export type FileTypePolicy = 'allowlist' | 'any';
 const MAX_EXTENSION_LENGTH = 16;
 
 /**
+ * Why a file was refused on its name or type — the three refusals that are the
+ * uploader's to fix, and never a fault of ours.
+ *
+ * - `'type'`: the extension is not one this classroom's policy takes.
+ * - `'extension'`: under `'any'`, no extension survives sanitizing, or it is
+ *   longer than a signed URL can carry.
+ * - `'name'`: not a name at all — a path, or empty, or only dots.
+ *
+ * Size is not here: a file too large for a repository is
+ * `RepoFileTooLargeError` (`../repoLimits.ts`), which GitHub can raise as well
+ * as we can.
+ */
+export type FileRefusalReason = 'type' | 'extension' | 'name';
+
+/**
+ * `validateFile`'s refusal, thrown — so a route or a tool maps it by its type
+ * rather than by reading the sentence.
+ *
+ * `status` is the HTTP answer it deserves: 415 for a type or an extension (the
+ * name is fine; what it is, is not accepted here), 400 for a name that is not
+ * one. `code` is what `uploadRefusalStatus` and the MCP registry match on, the
+ * way they match `RepoFileTooLargeError`'s, so an error that crossed a module
+ * boundary is still recognised.
+ */
+export class FileRefusedError extends Error {
+  readonly code = 'FILE_REFUSED' as const;
+  readonly reason: FileRefusalReason;
+  readonly status: 400 | 415;
+
+  // No constructor parameter properties: see `RepoFileTooLargeError`.
+  constructor(message: string, reason: FileRefusalReason) {
+    super(message);
+    this.name = 'FileRefusedError';
+    this.reason = reason;
+    this.status = reason === 'name' ? 400 : 415;
+  }
+}
+
+/**
+ * The HTTP status for an upload refusal, or null for anything that is not one.
+ *
+ * The one place that decides it for every upload boundary: 413 for a file too
+ * large for the repository (`RepoFileTooLargeError`, ours or GitHub's), 415 or
+ * 400 for a `FileRefusedError`. Anything else is a genuine failure and stays
+ * the caller's 500. Matched on `code`, like `isCommitTooLargeRefusal`, rather
+ * than `instanceof`, so it holds for an error re-created across a boundary.
+ */
+export function uploadRefusalStatus(error: unknown): 400 | 413 | 415 | null {
+  if (!error || typeof error !== 'object') return null;
+  const { code, status } = error as { code?: unknown; status?: unknown };
+  if (code === 'REPO_FILE_TOO_LARGE') return 413;
+  if (code === 'FILE_REFUSED') return status === 400 ? 400 : 415;
+  return null;
+}
+
+/**
  * Validate a file for upload.
  *
  * `fileTypes` defaults to `'allowlist'`; pass `'any'` only for a classroom
@@ -74,17 +130,19 @@ export function validateFile({
 }): {
   valid: boolean;
   error?: string;
+  /** Why it was refused; `'too_large'` is the one `FileRefusedError` does not carry. */
+  reason?: FileRefusalReason | 'too_large';
 } {
   if (size > MAX_FILE_SIZE) {
-    return { valid: false, error: repoFileTooLargeMessage() };
+    return { valid: false, error: repoFileTooLargeMessage(), reason: 'too_large' };
   }
 
   const name = typeof filename === 'string' ? filename.trim() : '';
   if (/[/\\]/.test(name)) {
-    return { valid: false, error: 'File names cannot contain "/" or "\\".' };
+    return { valid: false, error: 'File names cannot contain "/" or "\\".', reason: 'name' };
   }
   if (!name || /^\.+$/.test(name)) {
-    return { valid: false, error: 'That file needs a name.' };
+    return { valid: false, error: 'That file needs a name.', reason: 'name' };
   }
 
   if (fileTypes === 'any') {
@@ -94,13 +152,21 @@ export function validateFile({
     // than stored as an untyped blob.
     const ext = sanitizedExtension(name);
     if (!ext) {
-      return { valid: false, error: 'This file needs an extension, e.g. notes.txt' };
+      return {
+        valid: false,
+        error: 'This file needs an extension, e.g. notes.txt',
+        reason: 'extension',
+      };
     }
     // A name that keeps an extension longer than the signer will ever sign
     // would commit fine but could never be served via a signed URL — refuse
     // it here instead, with the message the media store also uses.
     if (ext.length > MAX_EXT_LENGTH) {
-      return { valid: false, error: extensionTooLongMessage(ext, extensionLength(name)) };
+      return {
+        valid: false,
+        error: extensionTooLongMessage(ext, extensionLength(name)),
+        reason: 'extension',
+      };
     }
     return { valid: true };
   }
@@ -110,6 +176,7 @@ export function validateFile({
     return {
       valid: false,
       error: `Invalid file type. Allowed: ${ALLOWED_EXTENSIONS.join(', ')}`,
+      reason: 'type',
     };
   }
 

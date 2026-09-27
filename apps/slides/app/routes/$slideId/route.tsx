@@ -4,7 +4,11 @@ import { Tooltip, Popconfirm } from 'antd';
 import getPrisma from '@classmoji/database';
 import { ContentService } from '@classmoji/content';
 import { assertSlideAccess } from '@classmoji/auth/server';
-import { ClassmojiService, isCommitTooLargeRefusal } from '@classmoji/services';
+import {
+  ClassmojiService,
+  isCommitTooLargeRefusal,
+  uploadRefusalStatus,
+} from '@classmoji/services';
 import {
   DeckConflictError,
   DeckOpsBaseMismatchError,
@@ -1092,15 +1096,18 @@ export const action = async ({
         path: result.path,
       };
     } catch (error: unknown) {
-      console.error('Failed to upload image:', error);
-      // A file over the repository's cap — refused by the service, or by
-      // GitHub — keeps its own sentence and a 413, like the body cap above.
+      // A refusal keeps the service's sentence and its own status: 413 for a
+      // file over the repository's cap (ours, or GitHub's), 415 for a type or
+      // extension this classroom does not take, 400 for a bad name. Only a
+      // real failure is logged and answers 500.
+      const refused = uploadRefusalStatus(error) ?? (isCommitTooLargeRefusal(error) ? 413 : null);
+      if (!refused) console.error('Failed to upload image:', error);
       return data(
         {
           intent: 'upload-image' as const,
           error: error instanceof Error ? error.message : String(error),
         },
-        { status: isCommitTooLargeRefusal(error) ? 413 : 500 }
+        { status: refused ?? 500 }
       );
     }
   }
