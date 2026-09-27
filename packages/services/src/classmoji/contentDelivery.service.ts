@@ -969,7 +969,14 @@ function isOwnDeliveryHost(host: string | null | undefined): boolean {
   }
 }
 
-function parseMediaUrl(ctx: ResolveContext, ref: string): string | null {
+/**
+ * A signed media URL of OURS — this deployment's delivery host, this
+ * classroom — → the media id in it, lowercased; null for anything else. The
+ * one definition of "ours" for a media URL: `canonicalizeAssetRef` asks it, and
+ * so does the deck save's no-lookup fallback.
+ */
+export function parseMediaUrl(ctx: ResolveContext, ref: string): string | null {
+  if (typeof ref !== 'string') return null;
   const match = MEDIA_URL.exec(ref);
   if (!match || match[1].toLowerCase() !== ctx.classroom.id.toLowerCase()) return null;
 

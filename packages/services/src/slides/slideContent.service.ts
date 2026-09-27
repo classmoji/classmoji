@@ -23,15 +23,16 @@ import { canonicalizeDeckAssets } from './deckAssets.ts';
 import { recordContentAssets, resolveContentBranch } from '../classmoji/contentAssets.service.ts';
 import { enqueueDeckThumbnail } from '../classmoji/deckThumbnail.service.ts';
 import {
-  canonicalizeAssetRef,
   canonicalizeMany,
   isOwnAssetRef,
+  parseMediaUrl,
   parseMissingUrl,
   warmContentText,
   type ResolveContext,
   type WarmContext,
 } from '../classmoji/contentDelivery.service.ts';
 import { indexOneFile } from '../classmoji/contentIndex.service.ts';
+import { mediaRef } from '../media/mediaLookup.ts';
 
 // Structural type compatible with ContentService's (unexported) git org record.
 interface GitOrgRecord {
@@ -289,35 +290,19 @@ export function deckWarmContext(slide: SlideContentTarget): WarmContext | null {
 }
 
 /**
- * A signed MEDIA url's shape: `/c/{classroom}/media/{id}/{variant}`. The same
- * shape `contentDelivery`'s own parse matches (host and classroom are checked
- * there, not here).
- */
-const SIGNED_MEDIA_URL_SHAPE =
-  /^https?:\/\/[^/]+\/c\/[0-9a-f-]{36}\/media\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[^/?#]+(?:\?|$)/i;
-
-/**
  * One ref canonicalized with NO database read: a `/missing/` placeholder back
  * to its reference, and a signed media URL of ours back to `media://{id}`.
  * Everything else — a signed blob url, which needs the asset map to find its
  * path — comes back unchanged.
  *
- * `canonicalizeAssetRef` is only called for the media shape, where it answers
- * before its map lookup: its own media parse (host- and classroom-checked)
- * comes first, and its structural fallback returns for `kind === 'media'`
- * before the blob branch. Calling it rather than re-deriving the host check
- * keeps "ours" meaning one thing. (Exporting `contentDelivery`'s
- * `parseMediaUrl` would let this drop the ordering dependency.)
+ * "Ours" is `parseMediaUrl`'s answer (the delivery host and this classroom),
+ * the same one `canonicalizeAssetRef` asks, so it means one thing on both paths.
  */
-async function canonicalizeRefWithoutLookup(ctx: ResolveContext, ref: string): Promise<string> {
+function canonicalizeRefWithoutLookup(ctx: ResolveContext, ref: string): string {
   const missing = parseMissingUrl(ctx, ref);
   if (missing !== null) return missing;
-  if (!SIGNED_MEDIA_URL_SHAPE.test(ref)) return ref;
-  try {
-    return await canonicalizeAssetRef(ctx, ref);
-  } catch {
-    return ref;
-  }
+  const mediaId = parseMediaUrl(ctx, ref);
+  return mediaId !== null ? mediaRef(mediaId) : ref;
 }
 
 /**
@@ -362,12 +347,7 @@ export async function canonicalizeDeckForSave(
     try {
       return await canonicalizeDeckAssets(
         deck,
-        async refs =>
-          new Map(
-            await Promise.all(
-              refs.map(async ref => [ref, await canonicalizeRefWithoutLookup(ctx, ref)] as const)
-            )
-          ),
+        async refs => new Map(refs.map(ref => [ref, canonicalizeRefWithoutLookup(ctx, ref)])),
         ref => isOwnAssetRef(ctx, ref)
       );
     } catch (fallbackError) {
