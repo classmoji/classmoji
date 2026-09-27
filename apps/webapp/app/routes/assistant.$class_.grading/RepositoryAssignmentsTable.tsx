@@ -1,5 +1,5 @@
 import { Switch, Table, Tooltip, Skeleton, Alert } from 'antd';
-import { useParams } from 'react-router';
+import { Link, useLocation, useParams } from 'react-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   IconCircleCheck,
@@ -81,6 +81,8 @@ interface RepositoryAssignmentsTableProps {
   emojiMappings:
     | Record<string, number>
     | { emoji: string; grade: number; [key: string]: unknown }[];
+  /** Each assignment's first linked page, keyed by assignment id. */
+  instructionPages?: Record<string, { id: string; title: string }>;
 }
 
 /**
@@ -154,6 +156,7 @@ const RepositoryAssignmentsTable = ({
   repositoryAssignments,
   repositories,
   emojiMappings,
+  instructionPages = {},
 }: RepositoryAssignmentsTableProps) => {
   const [userQuery, setUserQuery] = useState('');
   const [showMyAssignments, setShowMyAssignments] = useState(true);
@@ -161,6 +164,8 @@ const RepositoryAssignmentsTable = ({
   const { classroom } = useStore();
   const params = useParams();
   const classSlug = params.class as string | undefined;
+  // Served under /assistant and /teacher; links stay under the same prefix.
+  const rolePrefix = useLocation().pathname.split('/')[1] || 'assistant';
 
   // Inline GitHub-analytics drawer — row-level lazy load + cache.
   type AnalyticsData = {
@@ -379,6 +384,20 @@ const RepositoryAssignmentsTable = ({
       title: 'Assignment',
       dataIndex: ['assignment', 'title'],
       key: 'assignment',
+      render: (title: string, record: RepoAssignment) => {
+        const page = instructionPages[record.assignment_id];
+        if (!page || !classSlug) return title;
+        return (
+          <Tooltip title={`Open instructions: ${page.title}`}>
+            <Link
+              to={`/${rolePrefix}/${classSlug}/pages/${page.id}`}
+              className="text-primary-600 hover:underline dark:text-primary-300"
+            >
+              {title}
+            </Link>
+          </Tooltip>
+        );
+      },
     },
     {
       title: 'Grade',
