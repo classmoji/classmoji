@@ -114,8 +114,52 @@ vi.mock('../../classmoji/page.service.ts', () => ({
 // suite from opening a queue connection because `slide.service` imports it.
 vi.mock('@trigger.dev/sdk', () => ({ tasks: { trigger: vi.fn(), batchTrigger: vi.fn() } }));
 
+// ─── The media store ─────────────────────────────────────────────────────────
+
+/** Rows by id, as the SQL-scoped lookups would see them for THIS classroom. */
+const mediaRows = new Map<string, Record<string, unknown>>();
+const findMediaRow = vi.fn(async (classroomId: string, mediaId: string) => {
+  const row = mediaRows.get(mediaId);
+  return row && row.classroom_id === classroomId ? row : null;
+});
+vi.mock('../../media/mediaLookup.ts', async importActual => {
+  const actual = await importActual<typeof import('../../media/mediaLookup.ts')>();
+  return {
+    ...actual,
+    findMediaRow: (...args: unknown[]) => findMediaRow(...(args as [string, string])),
+    // The real query's WHERE: this classroom, READY only.
+    lookupReadyMedia: async (classroomId: string, ids: string[]) =>
+      new Map(
+        ids
+          .map(id => mediaRows.get(id))
+          .filter(
+            (row): row is Record<string, unknown> =>
+              Boolean(row) && row!.classroom_id === classroomId && row!.status === 'READY'
+          )
+          .map(row => [row.id as string, actual.toMediaRecord(row as never)])
+      ),
+  };
+});
+
+const GIB = 1024 * 1024 * 1024;
+/** Pro with media, unless a test says otherwise. */
+const uploadCapabilityFor = vi.fn(async () => ({
+  repoMaxBytes: 35 * 1024 * 1024,
+  repoFileTypes: 'any' as const,
+  isPro: true,
+  media: { perFileMaxBytes: 2 * GIB, remainingBytes: 10 * GIB } as null | {
+    perFileMaxBytes: number;
+    remainingBytes: number;
+  },
+}));
+vi.mock('../../media/uploadCapability.ts', () => ({
+  uploadCapabilityFor: () => uploadCapabilityFor(),
+}));
+
 const {
   createFileSlide,
+  createFileSlideFromMedia,
+  replaceSlideFileWithMedia,
   createLinkSlide,
   openSlideFile,
   readSlideFileBytes,
@@ -684,6 +728,202 @@ describe('opening a file slide', () => {
       classroom: { ...classroom, content_delivery_enabled: false },
     });
     expect(bytes).toBeNull();
+    expect(getLargeContent).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Media-backed FILE slides ────────────────────────────────────────────────
+
+const MEDIA_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+const BIG = 80 * 1024 * 1024;
+
+function mediaRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: MEDIA_ID,
+    classroom_id: CLASSROOM_ID,
+    kind: 'DOCUMENT',
+    filename: 'Week 3 — Lecture.pdf',
+    ext: 'pdf',
+    content_type: 'application/pdf',
+    size_bytes: BigInt(BIG),
+    status: 'READY',
+    upload_id: null,
+    uploaded_by: 'user-1',
+    optimise: false,
+    keep_original: true,
+    allow_download: false,
+    processing: 'NONE',
+    processing_error: null,
+    rendition_key: null,
+    rendition_bytes: null,
+    poster_key: null,
+    duration_ms: null,
+    width: null,
+    height: null,
+    created_at: new Date('2026-09-26T00:00:00Z'),
+    ready_at: new Date('2026-09-26T00:01:00Z'),
+    original_deleted_at: null,
+    destination: null,
+    stage_target_type: null,
+    stage_target_id: null,
+    placed_ref: null,
+    placement_error: null,
+    ...overrides,
+  };
+}
+
+const mediaSlide = {
+  id: 'slide-9',
+  kind: 'FILE',
+  title: 'Week 3',
+  slug: 'week-3',
+  content_path: 'slides/week-3',
+  classroom_id: CLASSROOM_ID,
+  source_path: null,
+  source_filename: 'Week 3 — Lecture.pdf',
+  source_mime: 'application/pdf',
+  source_size: BIG,
+  media_id: MEDIA_ID,
+  classroom,
+};
+
+describe('media-backed file slides', () => {
+  beforeEach(() => {
+    mediaRows.clear();
+    mediaRows.set(MEDIA_ID, mediaRow());
+  });
+
+  it('creates a slide over a finished upload, with no commit and no repo folder', async () => {
+    const { slide } = await createFileSlideFromMedia({
+      classroomId: CLASSROOM_ID,
+      title: 'Week 3',
+      createdBy: 'user-1',
+      mediaId: MEDIA_ID,
+    });
+
+    expect(slide).toMatchObject({
+      kind: 'FILE',
+      content_path: 'slides/week-3',
+      media_id: MEDIA_ID,
+      source_filename: 'Week 3 — Lecture.pdf',
+      source_mime: 'application/pdf',
+      source_size: BIG,
+    });
+    expect(slideCreate.mock.calls[0][0].data).not.toHaveProperty('source_path');
+    expect(uploadBatch).not.toHaveBeenCalled();
+    expect(ensureContentRepo).not.toHaveBeenCalled();
+    expect(events).toEqual(['manifest']);
+  });
+
+  it('takes nothing the browser said about the file — only the row', async () => {
+    const refuse = async (message: RegExp) =>
+      expect(
+        createFileSlideFromMedia({
+          classroomId: CLASSROOM_ID,
+          title: 'Week 3',
+          createdBy: 'user-1',
+          mediaId: MEDIA_ID,
+        })
+      ).rejects.toThrow(message);
+
+    // Another classroom's object is the same absence as an unknown one.
+    mediaRows.set(MEDIA_ID, mediaRow({ classroom_id: 'another-classroom' }));
+    await refuse(/not available/);
+    // Not finished, or deleted from the library.
+    mediaRows.set(MEDIA_ID, mediaRow({ status: 'UPLOADING' }));
+    await refuse(/not available/);
+    mediaRows.set(MEDIA_ID, mediaRow({ status: 'DELETED' }));
+    await refuse(/not available/);
+    // Not a slide document.
+    mediaRows.set(MEDIA_ID, mediaRow({ filename: 'lecture.mp4', ext: 'mp4', kind: 'VIDEO' }));
+    await refuse(/Slide files must be one of/);
+    // Small enough for the repository: it goes there, not to media.
+    mediaRows.set(MEDIA_ID, mediaRow({ size_bytes: BigInt(4 * 1024 * 1024) }));
+    await refuse(/Upload this file to the slide directly/);
+
+    expect(slideCreate).not.toHaveBeenCalled();
+    expect(findMediaRow).toHaveBeenCalledWith(CLASSROOM_ID, MEDIA_ID);
+  });
+
+  it('refuses when the classroom has no media, with the router’s sentence', async () => {
+    uploadCapabilityFor.mockResolvedValueOnce({
+      repoMaxBytes: 35 * 1024 * 1024,
+      repoFileTypes: 'any',
+      isPro: false,
+      media: null,
+    });
+    await expect(
+      createFileSlideFromMedia({
+        classroomId: CLASSROOM_ID,
+        title: 'Week 3',
+        createdBy: 'user-1',
+        mediaId: MEDIA_ID,
+      })
+    ).rejects.toThrow(/Pro stores files up to 2 GB/);
+    expect(slideCreate).not.toHaveBeenCalled();
+  });
+
+  it('replacing a repository file with media repoints the row, then removes the old file', async () => {
+    slideFindUnique.mockResolvedValue({
+      ...mediaSlide,
+      media_id: null,
+      source_path: 'slides/week-3/week-3.pdf',
+      classroom: { ...classroom },
+    });
+
+    const { slide } = await replaceSlideFileWithMedia({ slideId: 'slide-9', mediaId: MEDIA_ID });
+
+    expect(slide).toMatchObject({ media_id: MEDIA_ID, source_path: null, source_size: BIG });
+    expect(uploadBatch).not.toHaveBeenCalled();
+    expect(events).toEqual(['delete:slides/week-3/week-3.pdf', 'forget:slides/week-3/week-3.pdf']);
+  });
+
+  it('replacing one media document with another deletes nothing', async () => {
+    slideFindUnique.mockResolvedValue({ ...mediaSlide, classroom: { ...classroom } });
+    await replaceSlideFileWithMedia({ slideId: 'slide-9', mediaId: MEDIA_ID });
+    expect(deleteFile).not.toHaveBeenCalled();
+    expect(removeContentAssets).not.toHaveBeenCalled();
+  });
+
+  it('replacing a media document with a repository file clears media_id', async () => {
+    slideFindUnique.mockResolvedValue({ ...mediaSlide, classroom: { ...classroom } });
+    const { slide } = await replaceSlideFile({ slideId: 'slide-9', filename: 'w3.pdf', file: PDF });
+    expect(slide).toMatchObject({ media_id: null, source_path: 'slides/week-3/w3.pdf' });
+    // There was no previous repository file to remove.
+    expect(deleteFile).not.toHaveBeenCalled();
+  });
+
+  it('downloads through a signed media URL under the original name', async () => {
+    const result = await slideDownloadUrl(mediaSlide);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.url).toContain(`/c/${CLASSROOM_ID}/media/${MEDIA_ID}/orig.pdf`);
+    expect(result.filename).toBe('Week 3 — Lecture.pdf');
+    expect(await openSlideFile(mediaSlide)).toMatchObject({ mode: 'redirect', url: result.url });
+    expect(lookupContentAsset).not.toHaveBeenCalled();
+  });
+
+  it('a document deleted from the media library has nothing to serve — and never a URL', async () => {
+    // Media deletion is soft: the row stays with status DELETED, and the
+    // slide's `media_id` is not nulled.
+    mediaRows.set(MEDIA_ID, mediaRow({ status: 'DELETED' }));
+    expect(await slideDownloadUrl(mediaSlide)).toEqual({ ok: false, reason: 'not_in_map' });
+    expect(await openSlideFile(mediaSlide)).toEqual({ mode: 'unavailable', reason: 'not_in_map' });
+
+    mediaRows.clear();
+    expect(await openSlideFile(mediaSlide)).toEqual({ mode: 'unavailable', reason: 'not_in_map' });
+    expect(getLargeContent).not.toHaveBeenCalled();
+  });
+
+  it('another classroom’s media id is the same absence', async () => {
+    mediaRows.set(MEDIA_ID, mediaRow({ classroom_id: 'another-classroom' }));
+    expect(await slideDownloadUrl(mediaSlide)).toEqual({ ok: false, reason: 'not_in_map' });
+  });
+
+  it('with the delivery layer off there is nothing to stream instead', async () => {
+    const off = { ...mediaSlide, classroom: { ...classroom, content_delivery_enabled: false } };
+    expect(await slideDownloadUrl(off)).toEqual({ ok: false, reason: 'delivery_off' });
+    expect(await openSlideFile(off)).toEqual({ mode: 'unavailable', reason: 'delivery_off' });
     expect(getLargeContent).not.toHaveBeenCalled();
   });
 });

@@ -523,6 +523,34 @@ describe('deleteSlide', () => {
     slideFindUniqueMock.mockResolvedValue(null);
     await expect(deleteSlide({ slideId: 'nope' })).rejects.toThrow('Slide not found');
   });
+
+  it('a file slide whose document is in media has no repo folder to delete', async () => {
+    slideFindUniqueMock.mockResolvedValue({
+      ...dbSlide,
+      kind: 'FILE',
+      source_path: null,
+      media_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    });
+    const result = await deleteSlide({ slideId: 'slide-1' });
+    expect(result.success).toBe(true);
+    // Never committed, so no GitHub delete — and the media object is left in
+    // the classroom's library (nothing here reaches the media store).
+    expect(deleteFolderMock).not.toHaveBeenCalled();
+    expect(slideDeleteMock).toHaveBeenCalledWith({ where: { id: 'slide-1' } });
+  });
+
+  it('a repository-backed file slide still deletes its folder', async () => {
+    slideFindUniqueMock.mockResolvedValue({
+      ...dbSlide,
+      kind: 'FILE',
+      source_path: 'slides/doomed/doomed.pdf',
+      media_id: null,
+    });
+    await deleteSlide({ slideId: 'slide-1' });
+    expect(deleteFolderMock).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'slides/doomed' })
+    );
+  });
 });
 
 describe('updateSlide', () => {
