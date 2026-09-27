@@ -54,10 +54,15 @@ vi.mock('@classmoji/services', async () => {
   const files = await vi.importActual<
     typeof import('../../../../../packages/services/src/content/utils/validateFile.ts')
   >('../../../../../packages/services/src/content/utils/validateFile.ts');
+  // The routing refusal's own guard, real: the tool recognises it by it.
+  const routing = await vi.importActual<
+    typeof import('../../../../../packages/services/src/media/MediaRoutingError.ts')
+  >('../../../../../packages/services/src/media/MediaRoutingError.ts');
   return {
     validateFile: files.validateFile,
     MAX_FILE_SIZE: files.MAX_FILE_SIZE,
     ClassmojiService: {
+      media: { isMediaRoutingError: routing.isMediaRoutingError },
       contentDelivery: {
         uploadFileTypes: (...a: unknown[]) => mocks.uploadFileTypes(...a),
       },
@@ -1305,6 +1310,22 @@ describe('page_asset_upload', () => {
       sha: 'blob-sha',
       size: buffer.length,
     });
+  });
+
+  it('points a file the storage router sends to media at file_upload_start', async () => {
+    const { MediaRoutingError } =
+      await import('../../../../../packages/services/src/media/MediaRoutingError.ts');
+    // Media is only ever on for a classroom the delivery layer serves, which is
+    // one whose repository takes any file type.
+    mocks.uploadFileTypes.mockReturnValueOnce('any');
+    mocks.uploadPageAsset.mockRejectedValueOnce(
+      new MediaRoutingError('USE_MEDIA', 'Videos in this class are stored in media storage.')
+    );
+
+    const thrown = await upload({ filename: 'intro.mp4' }).catch(error => error);
+    expect(thrown).toMatchObject({ kind: 'invalid_params', code: 'USE_MEDIA' });
+    expect(thrown.message).toContain('file_upload_start');
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('audits the upload against the page', async () => {

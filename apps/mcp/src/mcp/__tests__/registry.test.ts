@@ -709,7 +709,8 @@ describe('coded service refusals are reported, not swallowed (S5)', () => {
 
   // `FileRefusedError` (a content-repo upload's type, extension or name) and
   // `RepoFileTooLargeError` — the refusals the HTTP routes answer 415/400/413.
-  it.each(['FILE_REFUSED', 'REPO_FILE_TOO_LARGE'])(
+  // …and `MediaRoutingError` (`USE_MEDIA`), a file the storage router sends to media.
+  it.each(['FILE_REFUSED', 'REPO_FILE_TOO_LARGE', 'USE_MEDIA'])(
     'maps a refused content upload (%s) to invalid_params',
     async code => {
       const client = await connectClient(makeViewer(['read']));

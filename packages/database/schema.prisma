@@ -1405,14 +1405,22 @@ model Slide {
   source_size     Int?
   source_url      String?
 
+  // FILE only, and only on a Pro classroom whose document was too large for the
+  // repository: the media object the file lives in, instead of `source_path`.
+  // SET NULL on delete, so removing the media object leaves a FILE slide with
+  // nothing to download rather than taking the slide with it.
+  media_id String?
+
   classroom          Classroom                @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   creator            User                     @relation(fields: [created_by], references: [id])
+  media              MediaObject?             @relation(fields: [media_id], references: [id], onDelete: SetNull)
   links              SlideLink[]
   calendarEventLinks CalendarEventSlideLink[]
   module_items       ModuleItem[]
 
   @@unique([classroom_id, slug])
   @@index([classroom_id])
+  @@index([media_id])
   @@map("slides")
 }
 
@@ -2271,10 +2279,15 @@ model DocsIndex {
 /// exists and the multipart upload is open, but no bytes are addressable yet;
 /// READY means the object is complete and its size verified; DELETED means the
 /// R2 objects are gone and every reference to it now resolves to `/missing/`.
+/// STAGING is an agent upload (MCP `file_upload_start` / `file_import_url`)
+/// whose bytes sit under the bucket's `stage/` prefix until they are placed —
+/// in the course repository or in media. It holds a reservation exactly like
+/// UPLOADING and expires with the same window.
 enum MediaStatus {
   UPLOADING
   READY
   DELETED
+  STAGING
 }
 
 /// What KIND of file this is, decided from the extension at create time. It
@@ -2370,7 +2383,23 @@ model MediaObject {
   /// rendition's bytes are what this row costs against the quota.
   original_deleted_at DateTime?
 
+  /// STAGING rows only (agent uploads) — all five NULL for a normal upload.
+  /// `destination` is where the staged bytes are going, decided by the storage
+  /// router when the stage opens: 'repo' (committed to the content repo) or
+  /// 'media' (copied into this store). `stage_target_type` ('page' | 'slide')
+  /// and `stage_target_id` name what the file is being added to.
+  /// `placed_ref` is the reference the placement produced (a repo path or
+  /// `media://{id}`), `placement_error` the refusal when it failed — what a
+  /// status poll answers with.
+  destination       String?
+  stage_target_type String?
+  stage_target_id   String?
+  placed_ref        String?
+  placement_error   String?
+
   classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  /// FILE slides whose document lives here rather than in the content repo.
+  slides    Slide[]
 
   /// Every read is classroom-scoped and status-filtered: the usage sum, the
   /// media list, and the resolver's own lookup.

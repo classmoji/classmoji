@@ -132,6 +132,26 @@ test.describe('page uploads answer a refusal as a 4xx', () => {
     expect(handler).not.toContain("code === 'REPO_FILE_TOO_LARGE'");
   });
 
+  test('api.upload answers a file the router sends to media with 409 USE_MEDIA, first', () => {
+    const handler = UPLOAD_SOURCE.slice(UPLOAD_SOURCE.indexOf('await uploadPageAsset(page, file)'));
+    const routed = handler.indexOf('ClassmojiService.media.mediaRoutingResponse(error)');
+    const refusal = handler.indexOf('const refused = uploadRefusalStatus(error);');
+
+    expect(routed).toBeGreaterThan(-1);
+    expect(routed).toBeLessThan(refusal);
+  });
+
+  test('the cover upload checks USE_MEDIA before its own 409', () => {
+    const cover = PAGE_ACTION_SOURCE.slice(
+      PAGE_ACTION_SOURCE.indexOf("intent === 'upload-header-image'")
+    );
+    const routed = cover.indexOf('ClassmojiService.media.mediaRoutingResponse(error)');
+    const conflict = cover.indexOf('?.status === 409');
+
+    expect(routed).toBeGreaterThan(-1);
+    expect(conflict).toBeGreaterThan(routed);
+  });
+
   test('the cover upload maps them the same way', () => {
     const cover = PAGE_ACTION_SOURCE.slice(
       PAGE_ACTION_SOURCE.indexOf("intent === 'upload-header-image'")

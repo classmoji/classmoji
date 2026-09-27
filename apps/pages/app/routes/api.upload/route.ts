@@ -96,6 +96,11 @@ async function receiveUpload(
     const { url, path, displayUrl } = await uploadPageAsset(page, file);
     return Response.json({ success: true, url, path, displayUrl });
   } catch (error: unknown) {
+    // A file the storage router sends to media (a Pro video, or one over the
+    // repository's cap on a classroom with media): 409 `USE_MEDIA`, which the
+    // editor answers by sending it through the media upload instead.
+    const routed = ClassmojiService.media.mediaRoutingResponse(error);
+    if (routed) return routed;
     // A refusal the uploader can act on — too large (413), a type or extension
     // this classroom does not take (415), a name that is not one (400). Its
     // message is the sentence to show, and it is not a fault worth logging.

@@ -513,6 +513,22 @@ test.describe('the upload endpoints', () => {
     );
   });
 
+  test('a deck image upload asks the storage router before it commits anything', () => {
+    const start = VIEWER_SOURCE.indexOf("if (intent === 'upload-image') {");
+    const intent = VIEWER_SOURCE.slice(
+      start,
+      VIEWER_SOURCE.indexOf("if (intent === 'save-snippet')")
+    );
+    const routed = intent.indexOf('ClassmojiService.media.assertRepoTarget(slide.classroom');
+    const commit = intent.indexOf('ContentService.upload(');
+
+    expect(routed).toBeGreaterThan(-1);
+    expect(commit).toBeGreaterThan(routed);
+    // Answered 409 `{ error: 'USE_MEDIA' }`, still tagged with the intent.
+    expect(intent).toContain('ClassmojiService.media.isMediaRoutingError(error)');
+    expect(intent).toContain('{ status: 409 }');
+  });
+
   test('every answer to a deck image upload names its intent, failures included', () => {
     // The image dialog's promise settles only on `intent: 'upload-image'`; an
     // error without it leaves the dialog spinning with no message.
@@ -523,7 +539,8 @@ test.describe('the upload endpoints', () => {
     const answers = VIEWER_SOURCE.slice(start, end)
       .split(/\breturn\b/)
       .slice(1);
-    expect(answers).toHaveLength(3);
+    // No file, USE_MEDIA (the storage router), success, and the refusal/fault.
+    expect(answers).toHaveLength(4);
     for (const answer of answers) {
       expect(answer.slice(0, 120)).toContain("intent: 'upload-image'");
     }

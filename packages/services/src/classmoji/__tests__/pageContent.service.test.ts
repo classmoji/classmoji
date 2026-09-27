@@ -98,6 +98,14 @@ vi.mock('../contentDelivery.service.ts', async () => {
   };
 });
 
+// The storage router's repository check. Its rule is uploadCapability.test.ts's
+// to pin; what is under test here is that every page upload asks it, with the
+// page's classroom and the file actually received, before anything is written.
+const assertRepoTargetMock = vi.fn(async (..._args: unknown[]) => {});
+vi.mock('../../media/uploadCapability.ts', () => ({
+  assertRepoTarget: (...args: unknown[]) => assertRepoTargetMock(...args),
+}));
+
 const {
   loadPageContent,
   savePageContent,
@@ -695,6 +703,27 @@ describe('pageContent.uploadPageAsset', () => {
     expect(arg.filename).toBe('a.png');
     expect(arg.branch).toBe('main');
     expect(arg.fileTypes).toBe('allowlist');
+  });
+
+  it('asks the storage router first, with the classroom and the file received', async () => {
+    const buffer = Buffer.from('image-bytes');
+    await uploadPageAsset(page, buffer, 'a.png');
+    expect(assertRepoTargetMock).toHaveBeenCalledWith(page.classroom, {
+      name: 'a.png',
+      size: buffer.length,
+    });
+  });
+
+  it('writes nothing when the router sends the file to media', async () => {
+    const { MediaRoutingError } = await import('../../media/MediaRoutingError.ts');
+    assertRepoTargetMock.mockRejectedValueOnce(new MediaRoutingError('USE_MEDIA'));
+
+    await expect(uploadPageAsset(page, Buffer.from('x'), 'intro.mp4')).rejects.toMatchObject({
+      code: 'USE_MEDIA',
+    });
+    expect(resolveContentBranchMock).not.toHaveBeenCalled();
+    expect(uploadMock).not.toHaveBeenCalled();
+    expect(recordContentAssetMock).not.toHaveBeenCalled();
   });
 
   it("uploads under the classroom's file-type policy", async () => {

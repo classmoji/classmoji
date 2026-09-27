@@ -19,6 +19,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
+  assertClassroomEntryAllowed: vi.fn(),
   requireAuth: vi.fn(),
   findUnique: vi.fn(),
   createUpload: vi.fn(),
@@ -26,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   completeUpload: vi.fn(),
   deleteMedia: vi.fn(),
   abortUpload: vi.fn(),
+  listReadyMedia: vi.fn(),
 }));
 
 class FakeMediaError extends Error {
@@ -42,6 +44,7 @@ class FakeMediaError extends Error {
 vi.mock('@classmoji/auth/server', () => ({
   assertClassroomAccess: (...a: unknown[]) => mocks.assertClassroomAccess(...a),
   assertClassroomMutationAllowed: (...a: unknown[]) => mocks.assertClassroomMutationAllowed(...a),
+  assertClassroomEntryAllowed: (...a: unknown[]) => mocks.assertClassroomEntryAllowed(...a),
   requireAuth: (...a: unknown[]) => mocks.requireAuth(...a),
 }));
 
@@ -58,6 +61,7 @@ vi.mock('@classmoji/services', () => ({
       completeUpload: (...a: unknown[]) => mocks.completeUpload(...a),
       deleteMedia: (...a: unknown[]) => mocks.deleteMedia(...a),
       abortUpload: (...a: unknown[]) => mocks.abortUpload(...a),
+      listReadyMedia: (...a: unknown[]) => mocks.listReadyMedia(...a),
     },
   },
 }));
@@ -67,6 +71,7 @@ const { action: partsAction } = await import('../api.media.uploads_.$mediaId.par
 const { action: completeAction } = await import('../api.media.uploads_.$mediaId.complete/route');
 const { action: deleteAction } = await import('../api.media.$mediaId/route');
 const { action: abortAction } = await import('../api.media.uploads_.$mediaId.abort/route');
+const { loader: listLoader } = await import('../api.media.list/route');
 
 const CLASSROOM_ID = '11111111-2222-4333-8444-555555555555';
 const MEDIA_ID = '77777777-8888-4999-8aaa-bbbbbbbbbbbb';
@@ -178,6 +183,25 @@ describe('POST /api/media/uploads', () => {
       expect(response.status, code).toBe(status);
       await expect(response.json()).resolves.toMatchObject({ error: code });
     }
+  });
+
+  it('passes explicit through, and answers USE_REPO with 409', async () => {
+    mocks.createUpload.mockRejectedValue(new FakeMediaError('USE_REPO'));
+    const response = await createAction(
+      args(
+        post('/api/media/uploads', {
+          classroomId: CLASSROOM_ID,
+          filename: 'notes.pdf',
+          sizeBytes: 1,
+          options: { explicit: true },
+        })
+      )
+    );
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ error: 'USE_REPO' });
+    expect(mocks.createUpload).toHaveBeenCalledWith(
+      expect.objectContaining({ options: { explicit: true } })
+    );
   });
 
   it('lets an auth refusal through as itself, audit row and all', async () => {
@@ -539,5 +563,81 @@ describe('an id in a classroom the caller cannot edit', () => {
     );
 
     expect(response.status).toBe(403);
+  });
+});
+
+describe('GET /api/media/list', () => {
+  const get = (query: string) =>
+    new Request(`https://app.test/api/media/list${query}`, { method: 'GET' });
+
+  it('lists the classroom’s READY media for the teaching team, as JSON', async () => {
+    mocks.listReadyMedia.mockResolvedValue([
+      {
+        id: MEDIA_ID,
+        filename: 'intro.mp4',
+        kind: 'VIDEO',
+        sizeBytes: 2048,
+        ref: `media://${MEDIA_ID}`,
+        createdAt: new Date('2026-09-26T12:00:00Z'),
+      },
+    ]);
+
+    const response = await listLoader(args(get(`?classroomId=${CLASSROOM_ID}&kind=VIDEO`)));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      items: [
+        {
+          id: MEDIA_ID,
+          filename: 'intro.mp4',
+          kind: 'VIDEO',
+          sizeBytes: 2048,
+          ref: `media://${MEDIA_ID}`,
+          createdAt: '2026-09-26T12:00:00.000Z',
+        },
+      ],
+    });
+    expect(mocks.assertClassroomAccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        classroomId: CLASSROOM_ID,
+        allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
+        attemptedAction: 'list_media',
+      })
+    );
+    // Scoped to the classroom the gate granted, never to anything else.
+    expect(mocks.listReadyMedia).toHaveBeenCalledWith(CLASSROOM_ID, { kind: 'VIDEO' });
+  });
+
+  it('lists every kind when none is asked for', async () => {
+    mocks.listReadyMedia.mockResolvedValue([]);
+    const response = await listLoader(args(get(`?classroomId=${CLASSROOM_ID}`)));
+    expect(response.status).toBe(200);
+    expect(mocks.listReadyMedia).toHaveBeenCalledWith(CLASSROOM_ID, { kind: undefined });
+  });
+
+  it('is a read: a locked classroom’s staff may list, an unpublished one’s entry gate applies', async () => {
+    mocks.listReadyMedia.mockResolvedValue([]);
+    await listLoader(args(get(`?classroomId=${CLASSROOM_ID}`)));
+    expect(mocks.assertClassroomMutationAllowed).not.toHaveBeenCalled();
+    expect(mocks.assertClassroomEntryAllowed).toHaveBeenCalled();
+  });
+
+  it('refuses a kind that is not one with a 400, before authorizing', async () => {
+    const response = await listLoader(args(get(`?classroomId=${CLASSROOM_ID}&kind=video`)));
+    expect(response.status).toBe(400);
+    expect(mocks.assertClassroomAccess).not.toHaveBeenCalled();
+    expect(mocks.listReadyMedia).not.toHaveBeenCalled();
+  });
+
+  it('refuses a request with no classroom', async () => {
+    const response = await listLoader(args(get('')));
+    expect(response.status).toBe(400);
+  });
+
+  it('lets an auth refusal through as itself', async () => {
+    mocks.assertClassroomAccess.mockRejectedValue(new Response('Forbidden', { status: 403 }));
+    const response = await listLoader(args(get(`?classroomId=${CLASSROOM_ID}`)));
+    expect(response.status).toBe(403);
+    expect(mocks.listReadyMedia).not.toHaveBeenCalled();
   });
 });

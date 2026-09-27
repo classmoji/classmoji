@@ -494,6 +494,21 @@ describe('uploadMultipart — server error codes', () => {
     ).rejects.toMatchObject({ code: 'DELIVERY_REQUIRED', status: 409 });
   });
 
+  it('sends explicit with the create, and surfaces USE_REPO as its own code', async () => {
+    const server = makeServer({ create: () => json(409, { error: 'USE_REPO' }) });
+
+    await expect(
+      uploadMultipart({
+        file: videoFile(),
+        classroomId: 'class-1',
+        options: { explicit: true },
+        endpoints: { base: BASE },
+      })
+    ).rejects.toMatchObject({ code: 'USE_REPO', status: 409 });
+
+    expect(server.calls[0].body).toMatchObject({ options: { explicit: true } });
+  });
+
   it('carries the numbers with QUOTA_EXCEEDED so the dialog can say how much is left', async () => {
     makeServer({
       create: () =>

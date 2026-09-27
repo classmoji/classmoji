@@ -8,7 +8,12 @@ import type {
 } from '@classmoji/ui-components';
 
 import MediaVideoOptions from './MediaVideoOptions';
-import { formatBytes, isVideoFilename, precheck, type QuotaSummary } from './mediaUploadOptions';
+import {
+  createUploadOptions,
+  formatBytes,
+  precheck,
+  type QuotaSummary,
+} from './mediaUploadOptions';
 import { INITIAL_UPLOAD_DIALOG_STATE, uploadDialogReducer } from './uploadDialogState';
 
 /**
@@ -145,7 +150,7 @@ const MediaUploadDialog = ({
       const result = await upload({
         file,
         classroomId,
-        options: isVideoFilename(file.name) ? options : undefined,
+        options: createUploadOptions(file.name, options),
         endpoints: { base: '/api/media' },
         onProgress: progress => dispatch({ type: 'progress', run, sentBytes: progress.sentBytes }),
         signal: controller.signal,

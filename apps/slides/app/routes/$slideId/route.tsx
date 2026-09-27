@@ -1059,6 +1059,14 @@ export const action = async ({
         return { intent: 'upload-image' as const, error: 'No file provided' };
       }
 
+      // The storage router first: a file it sends to media (a Pro video, or one
+      // over the repository's cap on a classroom with media) is refused with
+      // `USE_MEDIA` before anything is committed.
+      await ClassmojiService.media.assertRepoTarget(slide.classroom, {
+        name: file.name,
+        size: file.size,
+      });
+
       // Convert File to Buffer for ContentService
       const arrayBuffer = await file.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
@@ -1096,6 +1104,14 @@ export const action = async ({
         path: result.path,
       };
     } catch (error: unknown) {
+      // 409 `USE_MEDIA`: the file belongs in media, and the editor re-sends it
+      // there. Tagged like every other answer from this intent.
+      if (ClassmojiService.media.isMediaRoutingError(error)) {
+        return data(
+          { intent: 'upload-image' as const, error: error.code, message: error.message },
+          { status: 409 }
+        );
+      }
       // A refusal keeps the service's sentence and its own status: 413 for a
       // file over the repository's cap (ours, or GitHub's), 415 for a type or
       // extension this classroom does not take, 400 for a bad name. Only a

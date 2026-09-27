@@ -57,6 +57,12 @@ export interface MediaUploadOptions {
   optimise?: boolean;
   keepOriginal?: boolean;
   allowDownload?: boolean;
+  /**
+   * "Store this in media" on purpose — Settings → Media's Upload button. Without
+   * it the server refuses a non-video file that fits the course repository
+   * (`USE_REPO`); an editor routes those to the repository itself.
+   */
+  explicit?: boolean;
 }
 
 export type MultipartUploadErrorCode =
@@ -85,6 +91,11 @@ export type MultipartUploadErrorCode =
    * uploaded again from the start.
    */
   | 'UPLOAD_EXPIRED'
+  /**
+   * The storage router keeps this file in the course repository (not a video,
+   * within the repository's cap) and the upload was not `explicit`.
+   */
+  | 'USE_REPO'
   /** The upload row is gone, or no longer in a state that accepts parts. */
   | 'NOT_FOUND'
   | 'BAD_STATE'
@@ -199,6 +210,7 @@ const KNOWN_CODES = new Set<string>([
   'SIZE_MISMATCH',
   'VERIFY_FAILED',
   'UPLOAD_EXPIRED',
+  'USE_REPO',
   'NOT_FOUND',
   'BAD_STATE',
 ]);
