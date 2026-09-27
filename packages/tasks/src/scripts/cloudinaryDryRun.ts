@@ -19,9 +19,10 @@
  *     repo call is a GET. Cloudinary: Admin API list (GET) only.
  *   - prints the database HOST it connected to, never the URL.
  *
- * Usage:
+ * Usage (from the repo root; `npx tsx …` works the same):
  *   CLASSMOJI_DRY_RUN_ACK=read-only infisical run --env=prod -- \
- *     npx tsx packages/tasks/src/scripts/cloudinaryDryRun.ts [--limit N] > plan.json
+ *     node --experimental-strip-types --no-warnings \
+ *     packages/tasks/src/scripts/cloudinaryDryRun.ts [--limit N] > plan.json
  *
  * Env: DATABASE_URL_UNPOOLED, CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY,
  * CLOUDINARY_API_SECRET, GITHUB_APP_ID, GITHUB_PRIVATE_KEY_BASE64,
