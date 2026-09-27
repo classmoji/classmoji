@@ -4,7 +4,13 @@ import getPrisma from '@classmoji/database';
 import { isMediaConfigured, mediaBucket } from './mediaConfig.ts';
 import { mediaKey } from './mediaKeys.ts';
 import type { MediaKind } from './mediaKinds.ts';
-import { billedBytes, liveRowsWhere, mediaRef, type MediaRow } from './mediaLookup.ts';
+import {
+  billedBytes,
+  findMediaRow,
+  liveRowsWhere,
+  mediaRef,
+  type MediaRow,
+} from './mediaLookup.ts';
 import { quotaBytesFor } from './mediaQuota.ts';
 import { r2Client } from './r2Client.ts';
 import { uploadCapabilityFor } from './uploadCapability.ts';
@@ -69,6 +75,15 @@ import { uploadCapabilityFor } from './uploadCapability.ts';
  * same, so the copy overwrites whatever half landed); an id whose row is gone
  * for good (a discarded copy, tombstoned) is not reused, and the copy gets a
  * fresh random id.
+ *
+ * Because two attempts of one job write the SAME keys under a derived id, no
+ * attempt treats those keys as its own to delete. Before any cleanup under a
+ * derived id the row is read again, and when another attempt has already
+ * flipped it READY its objects are left alone and the copy is REUSED — it is
+ * the same source object, byte for byte. A reused copy is not this run's to
+ * `discard`, exactly like one from `knownCopies`. A reservation this attempt
+ * meant to take over but found already gone from UPLOADING is never counted as
+ * taken over.
  *
  * A caller whose commit of the rewritten content FAILED calls `discard`: the
  * copies this run made are deleted (`deleteMedia` — tombstone, then the
@@ -169,7 +184,8 @@ export interface MediaImportCopier {
   copiedIdFor(sourceMediaId: string): string | null;
   /**
    * Delete every copy THIS run made since the last `keep` (never one reused
-   * from `knownCopies`), for a caller whose content never landed — see the
+   * from `knownCopies`, nor one found READY under its derived id that another
+   * attempt made), for a caller whose content never landed — see the
    * header. Afterwards `rewrite` no longer repoints at them, and a later
    * `prepare` copies those objects again. Never throws.
    */
@@ -411,12 +427,23 @@ async function deleteQuietly(client: S3Client, bucket: string, keys: string[]): 
   }
 }
 
-type Reservation = { ok: true } | { ok: false; usedBytes: number; quotaBytes: number };
+type Reservation =
+  | { ok: true }
+  | { ok: false; full: true; usedBytes: number; quotaBytes: number }
+  /** The reservation to take over had already left UPLOADING (READY, or deleted). */
+  | { ok: false; full: false };
+
+/**
+ * What `copyOne` settled on: the destination id, and whether THIS attempt made
+ * the copy (`made`) or found another attempt's copy READY under the derived id
+ * and reused it — which, like a known copy, is not this run's to discard.
+ */
+type CopyOutcome = { id: string; made: boolean };
 
 /**
  * One object: reserve, copy, READY — or back out and say why.
  *
- * Returns the new id, or null when the object was not copied (already warned).
+ * Returns the outcome, or null when the object was not copied (already warned).
  */
 async function copyOne({
   client,
@@ -431,20 +458,25 @@ async function copyOne({
   opts: MediaImportCopyOptions;
   /** The destination had no room for this object; the caller warns. */
   onQuotaFull: (row: MediaRow) => void;
-}): Promise<string | null> {
+}): Promise<CopyOutcome | null> {
   const { sourceClassroomId, targetClassroomId, warn } = opts;
 
   // The copy's id: derived when the run has a seed, so a retry finds it (see
   // the header), unless a row that cannot be taken over already holds it.
   let newId: string = randomUUID();
+  /**
+   * The id is the derived one, so another attempt of this import can be
+   * writing the same keys and may flip the row READY at any point.
+   */
+  let derived = false;
   /** An earlier attempt's UPLOADING reservation under this id, to take over. */
   let takeOver = false;
   if (opts.copyIdSeed) {
-    const derived = importCopyId(opts.copyIdSeed, row.id);
+    const derivedId = importCopyId(opts.copyIdSeed, row.id);
     let holder: { classroom_id: string; status: string } | null;
     try {
       holder = (await getPrisma().mediaObject.findUnique({
-        where: { id: derived },
+        where: { id: derivedId },
         select: { classroom_id: true, status: true },
       })) as { classroom_id: string; status: string } | null;
     } catch (error) {
@@ -452,12 +484,35 @@ async function copyOne({
       return null;
     }
     if (!holder) {
-      newId = derived;
+      newId = derivedId;
+      derived = true;
     } else if (holder.classroom_id === targetClassroomId && holder.status === 'UPLOADING') {
-      newId = derived;
+      newId = derivedId;
+      derived = true;
       takeOver = true;
     }
   }
+
+  /**
+   * Whose the keys under `newId` are, asked before any cleanup. A random id is
+   * this attempt's alone ('free'). A derived one is shared with every other
+   * attempt of the import, so the row is read again: 'ready' is another
+   * attempt's finished copy — its objects are the ones those keys name, and
+   * they are reused, never deleted. A read that fails is 'unknown': nothing is
+   * deleted (a stray object costs little; deleting a served one does not) and
+   * nothing is reused (a reference must never point at a copy not proven
+   * READY).
+   */
+  const keysState = async (): Promise<'free' | 'ready' | 'unknown'> => {
+    if (!derived) return 'free';
+    try {
+      const fresh = await findMediaRow(targetClassroomId, newId);
+      return fresh?.status === 'READY' ? 'ready' : 'free';
+    } catch (error) {
+      console.warn(`[media] Could not re-read import copy ${newId}:`, errText(error));
+      return 'unknown';
+    }
+  };
 
   // Every key is built — and validated by `mediaKey` — before anything is
   // written, so a variant the grammar does not accept is a refusal for this
@@ -508,18 +563,22 @@ async function copyOne({
       await tx.$queryRaw`SELECT id FROM classrooms WHERE id = ${targetClassroomId} FOR UPDATE`;
 
       // An earlier attempt's reservation under this id stops counting, and the
-      // one made below replaces it (same id, same keys).
+      // one made below replaces it (same id, same keys). When it is no longer
+      // there to remove, that attempt got further (READY) or the row was
+      // deleted; either way it was not taken over, and there is nothing to
+      // reserve — the id is taken.
       if (takeOver) {
-        await tx.mediaObject.deleteMany({
+        const { count } = await tx.mediaObject.deleteMany({
           where: { id: newId, classroom_id: targetClassroomId, status: 'UPLOADING' },
         });
+        if (count === 0) return { ok: false, full: false };
       }
 
       const live = (await tx.mediaObject.findMany({
         where: liveRowsWhere(targetClassroomId),
       })) as MediaRow[];
       const usedBytes = live.reduce((total, other) => total + billedBytes(other), 0);
-      if (usedBytes + bytes > quotaBytes) return { ok: false, usedBytes, quotaBytes };
+      if (usedBytes + bytes > quotaBytes) return { ok: false, full: true, usedBytes, quotaBytes };
 
       await tx.mediaObject.create({
         data: {
@@ -556,11 +615,20 @@ async function copyOne({
     return null;
   }
 
+  if (!reserved.ok && !reserved.full) {
+    // The reservation to take over left UPLOADING before this attempt's lock:
+    // another attempt flipped it READY (its copy is whole — reuse it), or it
+    // was deleted. Nothing was written, so nothing is cleaned up.
+    if ((await keysState()) === 'ready') return { id: newId, made: false };
+    warn(`Could not copy ${describe(row)} into this class: the copy was removed while it ran`);
+    return null;
+  }
+
   if (!reserved.ok) {
-    // A taken-over reservation is gone either way (the transaction removed it
-    // before the sum), so whatever the earlier attempt half-copied under these
-    // keys has no row left to reach it through.
-    if (takeOver) {
+    // Only a reservation THIS attempt took over (the transaction removed it
+    // before the sum) leaves keys with no row to reach them through — and even
+    // then, not if another attempt has since made the id READY again.
+    if (takeOver && (await keysState()) === 'free') {
       await deleteQuietly(
         client,
         bucket,
@@ -592,14 +660,21 @@ async function copyOne({
       landed.push(to);
     }
   } catch (error) {
+    // Another attempt of this import finished the same copy and flipped the
+    // row READY: its objects are whole (a failed CopyObject replaces nothing),
+    // so they stay, the row stays, and the copy is reused.
+    const state = await keysState();
+    if (state === 'ready') return { id: newId, made: false };
     // Every destination key, not just the ones that answered: a copy that
     // timed out may still have landed, and with the row gone nothing would
     // ever find it. R2 answers a delete of a missing key with success.
-    await deleteQuietly(
-      client,
-      bucket,
-      copies.map(copy => copy.to)
-    );
+    if (state === 'free') {
+      await deleteQuietly(
+        client,
+        bucket,
+        copies.map(copy => copy.to)
+      );
+    }
     await releaseReservation(newId);
     warn(`Could not copy ${describe(row)} into this class: ${errText(error)}`);
     return null;
@@ -636,19 +711,25 @@ async function copyOne({
     count = 1;
   }
   if (count === 0) {
+    // Under a derived id, another attempt of this import may have flipped the
+    // row first: the same source object, identical bytes — reuse it, and leave
+    // its objects alone.
+    const state = await keysState();
+    if (state === 'ready') return { id: newId, made: false };
     // Somebody deleted the reservation underneath us (the media page lists
     // UPLOADING rows and can delete them). Nothing will serve these bytes.
-    await deleteQuietly(client, bucket, landed);
+    if (state === 'free') await deleteQuietly(client, bucket, landed);
     warn(`Could not copy ${describe(row)} into this class: the copy was removed while it ran`);
     return null;
   }
-  return newId;
+  return { id: newId, made: true };
 }
 
 /**
  * Drop a reservation whose copy failed. Best effort: a row this cannot remove
  * is an UPLOADING row, which leaves the quota sum when its window passes and is
- * never served.
+ * never served. UPLOADING only, in the WHERE clause: a READY row is never
+ * removed here, whoever flipped it.
  */
 async function releaseReservation(mediaId: string): Promise<void> {
   try {
@@ -772,17 +853,20 @@ export function createMediaImportCopier(opts: MediaImportCopyOptions): MediaImpo
     const noRoom: MediaRow[] = [];
     for (const row of rows) {
       settled.add(row.id);
-      const newId = await copyOne({
+      const outcome = await copyOne({
         client,
         bucket,
         row,
         opts,
         onQuotaFull: full => noRoom.push(full),
       });
-      if (newId) {
-        copied.set(row.id, newId);
-        created.set(row.id, newId);
-        opts.onCopied?.(row.id, newId);
+      if (!outcome) continue;
+      copied.set(row.id, outcome.id);
+      // A copy another attempt made is reused like a known one: not this run's
+      // to discard, and findable by its derived id, so there is no pair to add.
+      if (outcome.made) {
+        created.set(row.id, outcome.id);
+        opts.onCopied?.(row.id, outcome.id);
       }
     }
     if (noRoom.length > 0) warn(skippedSummary(noRoom, DESTINATION_FULL_REASON));
