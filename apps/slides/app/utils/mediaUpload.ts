@@ -62,6 +62,23 @@ export function isVideoFile(file: Pick<FileFacts, 'name'>): boolean {
   return kindOfFilename(file.name) === 'VIDEO';
 }
 
+/**
+ * The video extensions the store knows (`MEDIA_KINDS` in the services' kind
+ * table, which the router subpath does not export). Filtered through the
+ * router's own `kindOfFilename`, so one the store stops calling a video drops
+ * out on its own; a test pins that this list covers every VIDEO extension.
+ */
+const VIDEO_EXTENSIONS = ['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi'].filter(
+  ext => kindOfFilename(`video.${ext}`) === 'VIDEO'
+);
+
+/**
+ * What a video file picker offers: `video/*`, plus every extension by name —
+ * several (.mkv, .avi, .mov on some systems) have no `video/` type a browser
+ * will match on.
+ */
+export const VIDEO_FILE_ACCEPT = ['video/*', ...VIDEO_EXTENSIONS.map(ext => `.${ext}`)].join(',');
+
 /** `2 GB` — the per-file ceiling as a person reads it. */
 export function formatGigabytes(bytes: number): string {
   return `${Math.round((bytes / (1024 * 1024 * 1024)) * 10) / 10} GB`;

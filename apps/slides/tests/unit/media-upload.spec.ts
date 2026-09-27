@@ -16,8 +16,10 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 
+import { MEDIA_KINDS } from '../../../../packages/services/src/media/mediaKinds.ts';
 import {
   DEFAULT_VIDEO_OPTIONS,
+  VIDEO_FILE_ACCEPT,
   applyVideoOption,
   canDropOriginal,
   deckAssetTarget,
@@ -195,6 +197,17 @@ test.describe('the three video choices', () => {
     const fields = source('../../app/components/media/VideoOptionsFields.tsx');
     expect(fields).toContain('help="Converts it to a format that plays in every browser."');
     expect(fields).toContain('help="Show students a download button."');
+  });
+
+  test('the video picker offers every video the store takes', () => {
+    const offered = VIDEO_FILE_ACCEPT.split(',');
+    expect(offered[0]).toBe('video/*');
+    const videoExts = MEDIA_KINDS.find(spec => spec.kind === 'VIDEO')?.exts ?? [];
+    expect(videoExts.length).toBeGreaterThan(0);
+    for (const ext of videoExts) expect(offered, ext).toContain(`.${ext}`);
+    for (const ext of ['.webm', '.mkv', '.avi', '.mov', '.m4v']) expect(offered).toContain(ext);
+    const panel = source('../../app/components/properties/editors/VideoProperties.tsx');
+    expect(panel).toContain('accept={VIDEO_FILE_ACCEPT}');
   });
 
   test('knows a video by the store’s own kind table', () => {
