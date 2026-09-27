@@ -64,8 +64,10 @@ vi.mock('../uploadCapability.ts', () => ({
 }));
 
 const deleteMedia = vi.fn();
+const afterFailedReadyFlip = vi.fn();
 vi.mock('../media.service.ts', () => ({
   deleteMedia: (...args: unknown[]) => deleteMedia(...args),
+  afterFailedReadyFlip: (...args: unknown[]) => afterFailedReadyFlip(...args),
 }));
 
 const { collectMediaRefs, createMediaImportCopier, rewriteMediaRefs, skippedSummary } =
@@ -613,6 +615,119 @@ describe('createMediaImportCopier: what is not copied', () => {
     expect(list).toEqual([
       'Could not copy video "lecture.mp4" into this class: R2 is having a moment',
     ]);
+  });
+});
+
+describe('createMediaImportCopier: the READY write fails', () => {
+  const twoRows = () =>
+    database({
+      sourceRows: [row(), row({ id: PDF, kind: 'DOCUMENT', filename: 'notes.pdf', ext: 'pdf' })],
+    });
+
+  /** The READY write for the FIRST reservation throws; every other one lands. */
+  function failFirstReadyWrite() {
+    let first = true;
+    prisma.mediaObject.updateMany.mockImplementation(async () => {
+      order.push('ready');
+      if (first) {
+        first = false;
+        throw new Error('connection reset');
+      }
+      return { count: 1 };
+    });
+  }
+
+  it('released: deletes what landed, warns, and copies the rest of the pass', async () => {
+    twoRows();
+    failFirstReadyWrite();
+    afterFailedReadyFlip.mockResolvedValue('released');
+    const { list, warn } = warnings();
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn,
+    });
+    const text = `media://${VIDEO} media://${PDF}`;
+
+    await expect(copier.prepare([text])).resolves.toBeUndefined();
+
+    const videoCopy = prisma.mediaObject.create.mock.calls[0][0].data.id as string;
+    expect(afterFailedReadyFlip).toHaveBeenCalledWith(TARGET, videoCopy, 'UPLOADING');
+    expect(sent.filter(s => s.name === 'DeleteObject').map(s => s.input.Key)).toEqual([
+      `m/${TARGET}/${videoCopy}/orig.mp4`,
+    ]);
+    expect(copier.copiedIdFor(VIDEO)).toBeNull();
+    // The PDF after it was still copied and repointed.
+    const pdfCopy = copier.copiedIdFor(PDF);
+    expect(pdfCopy).not.toBeNull();
+    expect(sent.filter(s => s.name === 'CopyObject')).toHaveLength(2);
+    expect(copier.rewrite(text)).toBe(`media://${VIDEO} media://${pdfCopy}`);
+    expect(list).toEqual(['Could not copy video "lecture.mp4" into this class: connection reset']);
+  });
+
+  it('the write landed after all: the copy counts', async () => {
+    database();
+    failFirstReadyWrite();
+    afterFailedReadyFlip.mockResolvedValue('ready');
+    const onCopied = vi.fn();
+    const { list, warn } = warnings();
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn,
+      onCopied,
+    });
+
+    await copier.prepare([`media://${VIDEO}`]);
+
+    const copy = copier.copiedIdFor(VIDEO);
+    expect(copy).not.toBeNull();
+    expect(onCopied).toHaveBeenCalledWith(VIDEO, copy);
+    expect(sent.filter(s => s.name === 'DeleteObject')).toEqual([]);
+    expect(list).toEqual([]);
+  });
+
+  it('unknown: keeps the objects (a READY row may serve them) and warns', async () => {
+    database();
+    failFirstReadyWrite();
+    afterFailedReadyFlip.mockResolvedValue('unknown');
+    const { list, warn } = warnings();
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn,
+    });
+
+    await copier.prepare([`media://${VIDEO}`]);
+
+    expect(copier.copiedIdFor(VIDEO)).toBeNull();
+    expect(sent.filter(s => s.name === 'DeleteObject')).toEqual([]);
+    expect(list).toHaveLength(1);
+  });
+
+  it('a reservation that throws is one warning, and the pass goes on', async () => {
+    twoRows();
+    let first = true;
+    prisma.mediaObject.create.mockImplementation(async ({ data }: { data: { id: string } }) => {
+      if (first) {
+        first = false;
+        throw new Error('deadlock detected');
+      }
+      return data;
+    });
+    const { list, warn } = warnings();
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn,
+    });
+
+    await expect(copier.prepare([`media://${VIDEO} media://${PDF}`])).resolves.toBeUndefined();
+
+    expect(copier.copiedIdFor(VIDEO)).toBeNull();
+    expect(copier.copiedIdFor(PDF)).not.toBeNull();
+    expect(sent.filter(s => s.name === 'CopyObject')).toHaveLength(1);
+    expect(list).toEqual(['Could not copy video "lecture.mp4" into this class: deadlock detected']);
   });
 });
 

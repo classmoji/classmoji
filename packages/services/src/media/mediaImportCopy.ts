@@ -428,43 +428,51 @@ async function copyOne({
   // whose original was dropped costs its rendition, and so does its copy.
   const bytes = billedBytes(row);
   const quotaBytes = quotaBytesFor(true);
-  const reserved: Reservation = await getPrisma().$transaction(async tx => {
-    await tx.$queryRaw`SELECT id FROM classrooms WHERE id = ${targetClassroomId} FOR UPDATE`;
+  let reserved: Reservation;
+  try {
+    reserved = await getPrisma().$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM classrooms WHERE id = ${targetClassroomId} FOR UPDATE`;
 
-    const live = (await tx.mediaObject.findMany({
-      where: liveRowsWhere(targetClassroomId),
-    })) as MediaRow[];
-    const usedBytes = live.reduce((total, other) => total + billedBytes(other), 0);
-    if (usedBytes + bytes > quotaBytes) return { ok: false, usedBytes, quotaBytes };
+      const live = (await tx.mediaObject.findMany({
+        where: liveRowsWhere(targetClassroomId),
+      })) as MediaRow[];
+      const usedBytes = live.reduce((total, other) => total + billedBytes(other), 0);
+      if (usedBytes + bytes > quotaBytes) return { ok: false, usedBytes, quotaBytes };
 
-    await tx.mediaObject.create({
-      data: {
-        id: newId,
-        classroom_id: targetClassroomId,
-        kind: row.kind,
-        filename: row.filename,
-        ext: row.ext,
-        content_type: row.content_type,
-        size_bytes: row.size_bytes,
-        // A reservation until every copy has landed: counted by the quota sum
-        // (`liveRowsWhere`), invisible to the resolver (READY only), and aged
-        // out of the sum on its own if this process dies before the flip.
-        status: 'UPLOADING',
-        uploaded_by: opts.importedBy || row.uploaded_by,
-        optimise: row.optimise,
-        keep_original: row.keep_original,
-        allow_download: row.allow_download,
-        rendition_key: renditionKey,
-        rendition_bytes: row.rendition_bytes,
-        poster_key: posterKey,
-        duration_ms: row.duration_ms,
-        width: row.width,
-        height: row.height,
-        original_deleted_at: row.original_deleted_at,
-      },
+      await tx.mediaObject.create({
+        data: {
+          id: newId,
+          classroom_id: targetClassroomId,
+          kind: row.kind,
+          filename: row.filename,
+          ext: row.ext,
+          content_type: row.content_type,
+          size_bytes: row.size_bytes,
+          // A reservation until every copy has landed: counted by the quota sum
+          // (`liveRowsWhere`), invisible to the resolver (READY only), and aged
+          // out of the sum on its own if this process dies before the flip.
+          status: 'UPLOADING',
+          uploaded_by: opts.importedBy || row.uploaded_by,
+          optimise: row.optimise,
+          keep_original: row.keep_original,
+          allow_download: row.allow_download,
+          rendition_key: renditionKey,
+          rendition_bytes: row.rendition_bytes,
+          poster_key: posterKey,
+          duration_ms: row.duration_ms,
+          width: row.width,
+          height: row.height,
+          original_deleted_at: row.original_deleted_at,
+        },
+      });
+      return { ok: true };
     });
-    return { ok: true };
-  });
+  } catch (error) {
+    // Nothing is in R2 yet, so there is nothing to clean up; the rest of the
+    // pass carries on without this object.
+    warn(`Could not copy ${describe(row)} into this class: ${errText(error)}`);
+    return null;
+  }
 
   if (!reserved.ok) {
     // Named by the caller, in one summary for the whole pass.
@@ -508,14 +516,33 @@ async function copyOne({
   // READY only FROM the reservation. The copy mirrors the source's processing
   // state: DONE stays DONE (the rendition came along), anything else is NONE —
   // PENDING would claim a job is queued for the copy, and none is.
-  const { count } = await getPrisma().mediaObject.updateMany({
-    where: { id: newId, status: 'UPLOADING' },
-    data: {
-      status: 'READY',
-      ready_at: new Date(),
-      processing: row.processing === 'DONE' ? 'DONE' : 'NONE',
-    },
-  });
+  let count: number;
+  try {
+    ({ count } = await getPrisma().mediaObject.updateMany({
+      where: { id: newId, status: 'UPLOADING' },
+      data: {
+        status: 'READY',
+        ready_at: new Date(),
+        processing: row.processing === 'DONE' ? 'DONE' : 'NONE',
+      },
+    }));
+  } catch (error) {
+    // The copies are in place and the flip to READY failed. Whether it landed
+    // is asked, not assumed — a lost response looks exactly like a failed
+    // write — the way `putMediaObject` asks. Loaded here, not at the top, for
+    // the reason `discard` gives.
+    const { afterFailedReadyFlip } = await import('./media.service.ts');
+    const outcome = await afterFailedReadyFlip(targetClassroomId, newId, 'UPLOADING');
+    if (outcome !== 'ready') {
+      // 'released': the row is tombstoned and nothing will ever serve these
+      // keys. 'unknown': a READY row might be serving them, so they stay —
+      // `deleteMedia` and the classroom purge still reach them through it.
+      if (outcome === 'released') await deleteQuietly(client, bucket, landed);
+      warn(`Could not copy ${describe(row)} into this class: ${errText(error)}`);
+      return null;
+    }
+    count = 1;
+  }
   if (count === 0) {
     // Somebody deleted the reservation underneath us (the media page lists
     // UPLOADING rows and can delete them). Nothing will serve these bytes.
