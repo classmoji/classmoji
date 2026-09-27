@@ -196,6 +196,19 @@ test.describe('the importer’s wiring', () => {
     );
   });
 
+  test('the media goes first, and a failing slide delete cannot strand it', () => {
+    const start = IMPORTER.indexOf('const cleanupFailedImport');
+    const cleanup = IMPORTER.slice(start, IMPORTER.indexOf('\n  };', start));
+    const media = cleanup.indexOf('ClassmojiService.media.deleteMedia(');
+    const slide = cleanup.indexOf('getPrisma().slide.delete(');
+    expect(media).toBeGreaterThan(-1);
+    expect(slide).toBeGreaterThan(media);
+    // The slide delete is guarded on its own, so its failure is logged rather
+    // than replacing the import's error.
+    expect(cleanup.lastIndexOf('try {', slide)).toBeGreaterThan(media);
+    expect(cleanup.slice(slide)).toContain('catch (cleanupErr: unknown)');
+  });
+
   test('Cloudinary is gone from the import flow', () => {
     for (const text of [IMPORTER, START, PAGE, PROGRESS]) {
       expect(text).not.toMatch(/cloudinary/i);

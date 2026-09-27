@@ -680,15 +680,16 @@ export async function processZipImport({
   }
 
   /**
-   * Delete the slide record, and the media objects this import wrote, after a
+   * Delete the media objects this import wrote, then the slide record, after a
    * failed import. Nothing references those objects once the commit is gone,
-   * and they would otherwise count against the class's quota. Best-effort per
-   * object: a delete that fails is logged, and the import's own error is the
-   * one the uploader sees.
+   * and they would otherwise count against the class's quota.
+   *
+   * Media FIRST, and each step on its own: a slide delete that fails must not
+   * leave billed media behind, and a media delete that fails must not keep the
+   * rest from going. Every failure is logged and swallowed, so the import's own
+   * error is the one the uploader sees.
    */
   const cleanupFailedImport = async () => {
-    await getPrisma().slide.delete({ where: { id: slide.id } });
-
     for (const mediaId of storedMediaIds) {
       try {
         await ClassmojiService.media.deleteMedia({ classroom, mediaId });
@@ -696,6 +697,13 @@ export async function processZipImport({
         const message = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
         console.error(`Failed to delete media ${mediaId} after a failed import:`, message);
       }
+    }
+
+    try {
+      await getPrisma().slide.delete({ where: { id: slide.id } });
+    } catch (cleanupErr: unknown) {
+      const message = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+      console.error(`Failed to delete slide ${slide.id} after a failed import:`, message);
     }
   };
 
