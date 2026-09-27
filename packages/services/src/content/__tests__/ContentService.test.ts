@@ -1146,6 +1146,75 @@ describe('copyFolder', () => {
   });
 });
 
+describe('upload with a storedName — idempotent by path', () => {
+  const notFound = () => Object.assign(new Error('Not Found'), { status: 404 });
+
+  it('stores under the exact name after checking the branch for it', async () => {
+    requestMock.mockImplementation(async (route: string) => {
+      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') throw notFound();
+      return { data: { content: { sha: 'put-sha' } } };
+    });
+
+    const result = await ContentService.upload({
+      gitOrganization,
+      repo: 'upload-stored-new',
+      file: Buffer.from('png-bytes'),
+      filename: 'Diagram.PNG',
+      folder: 'pages/lab/assets',
+      branch: 'main',
+      storedName: 'diagram-77777777.png',
+    });
+
+    const routes = requestMock.mock.calls.map(([route]) => route);
+    expect(routes).toEqual([
+      'GET /repos/{owner}/{repo}/contents/{path}',
+      'PUT /repos/{owner}/{repo}/contents/{path}',
+    ]);
+    const [, check] = requestMock.mock.calls[0] as [string, RequestParams];
+    expect(check.path).toBe('pages/lab/assets/diagram-77777777.png');
+    expect(check.ref).toBe('main');
+    expect(result).toMatchObject({ path: 'pages/lab/assets/diagram-77777777.png', sha: 'put-sha' });
+  });
+
+  it('writes nothing when the file is already there — a retry after a landed commit', async () => {
+    requestMock.mockResolvedValue({ data: { sha: 'existing-sha', size: 9 } });
+
+    const result = await ContentService.upload({
+      gitOrganization,
+      repo: 'upload-stored-exists',
+      file: Buffer.from('png-bytes'),
+      filename: 'Diagram.PNG',
+      folder: 'pages/lab/assets',
+      branch: 'main',
+      storedName: 'diagram-77777777.png',
+    });
+
+    expect(requestMock.mock.calls.map(([route]) => route)).toEqual([
+      'GET /repos/{owner}/{repo}/contents/{path}',
+    ]);
+    expect(result).toEqual({
+      path: 'pages/lab/assets/diagram-77777777.png',
+      sha: 'existing-sha',
+      url: 'https://raw.githubusercontent.com/test-org/upload-stored-exists/main/pages/lab/assets/diagram-77777777.png',
+    });
+  });
+
+  it('refuses a storedName outside the sanitized alphabet', async () => {
+    await expect(
+      ContentService.upload({
+        gitOrganization,
+        repo: 'upload-stored-bad',
+        file: Buffer.from('x'),
+        filename: 'a.png',
+        folder: 'f',
+        branch: 'main',
+        storedName: '../a.png',
+      })
+    ).rejects.toThrow(/storedName/);
+    expect(requestMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('upload — one entry point, two transports', () => {
   const tooLarge = () =>
     Object.assign(new Error('Sorry, your input was too large to process.'), { status: 413 });

@@ -479,6 +479,8 @@ describe('placeStagedObject', () => {
       ref: 'pages/lab-1/assets/1-diagram.png',
     });
     expect(uploadPageAsset.mock.calls[0][2]).toBe('diagram.png');
+    // Deterministic per upload, so a retried placement finds its own file.
+    expect(uploadPageAsset.mock.calls[0][3]).toEqual({ storedName: 'diagram-77777777.png' });
     expect((uploadPageAsset.mock.calls[0][1] as Buffer).length).toBe(4096);
     expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
       where: { id: MEDIA_ID, status: 'STAGING' },
@@ -525,6 +527,7 @@ describe('placeStagedObject', () => {
       repo: 'content-repo',
       folder: 'slides/week-1/images',
       filename: 'diagram.png',
+      storedName: 'diagram-77777777.png',
     });
     expect(recordContentAsset).toHaveBeenCalledWith(CLASSROOM_ID, {
       path: 'slides/week-1/images/1-diagram.png',
@@ -556,6 +559,38 @@ describe('placeStagedObject', () => {
     expect(
       staging.isPermanentPlacementError(Object.assign(new Error('x'), { code: 'FILE_REFUSED' }))
     ).toBe(true);
+  });
+});
+
+describe('placeStagedObject: a retry after the commit landed', () => {
+  it('asks for the same stored name on every attempt', async () => {
+    prisma.mediaObject.findUnique.mockResolvedValue(stagedRow());
+    prisma.page.findUnique.mockResolvedValue({
+      id: PAGE_ID,
+      classroom_id: CLASSROOM_ID,
+      title: 'Lab 1',
+      content_path: 'pages/lab-1',
+      classroom: { id: CLASSROOM_ID },
+    });
+    sendImpl.mockImplementation(async (name: string) =>
+      name === 'GetObject'
+        ? { Body: { transformToByteArray: async () => new Uint8Array(4096) } }
+        : {}
+    );
+    // First attempt: the commit lands, then the tombstone write fails.
+    uploadPageAsset.mockResolvedValue({ url: 'pages/lab-1/assets/diagram-77777777.png' });
+    prisma.mediaObject.updateMany.mockRejectedValueOnce(new Error('db blinked'));
+    await expect(staging.placeStagedObject(MEDIA_ID)).rejects.toThrow('db blinked');
+
+    // The retry: same name — `ContentService.upload` finds the file and writes nothing.
+    await expect(staging.placeStagedObject(MEDIA_ID)).resolves.toEqual({
+      status: 'placed',
+      ref: 'pages/lab-1/assets/diagram-77777777.png',
+    });
+    expect(uploadPageAsset.mock.calls.map(call => call[3])).toEqual([
+      { storedName: 'diagram-77777777.png' },
+      { storedName: 'diagram-77777777.png' },
+    ]);
   });
 });
 

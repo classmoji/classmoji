@@ -14,6 +14,7 @@ import { randomUUID } from 'node:crypto';
 import getPrisma from '@classmoji/database';
 import { REPO_REST_MAX_BYTES } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
+import { stableFilename } from '../content/utils/validateFile.ts';
 import { recordContentAsset } from '../classmoji/contentAssets.service.ts';
 import { uploadFileTypes } from '../classmoji/contentDelivery.service.ts';
 import { uploadPageAsset, type PageWithContentRepo } from '../classmoji/pageContent.service.ts';
@@ -729,9 +730,15 @@ async function readStagedObject(client: S3Client, bucket: string, key: string): 
  *   - slide → the deck's `images/` folder, the deck editor's own upload
  *             convention (`{content_path}/images`), with its asset-map row; the
  *             ref is the repo path.
+ *
+ * Both store the file as `{sanitized-name}-{upload id's first 8}.{ext}`
+ * (`stagedRepoName`) and write only if nothing is there yet: the job is retried,
+ * and a retry after a commit that landed — but whose tombstone did not — finds
+ * its own file and records it, rather than committing a second copy.
  */
 async function commitToRepo(row: MediaRow, buffer: Buffer): Promise<string> {
   const prisma = getPrisma();
+  const storedName = stagedRepoName(row);
   if (row.stage_target_type === 'page') {
     const page = await prisma.page.findUnique({
       where: { id: row.stage_target_id ?? '' },
@@ -743,7 +750,8 @@ async function commitToRepo(row: MediaRow, buffer: Buffer): Promise<string> {
     const uploaded = await uploadPageAsset(
       page as unknown as PageWithContentRepo,
       buffer,
-      row.filename
+      row.filename,
+      { storedName }
     );
     return uploaded.url;
   }
@@ -772,6 +780,7 @@ async function commitToRepo(row: MediaRow, buffer: Buffer): Promise<string> {
       folder: `${slide.content_path}/images`,
       message: `Upload image for slides: ${slide.title}`,
       fileTypes: uploadFileTypes(classroom as never),
+      storedName,
     });
     await recordContentAsset(row.classroom_id, {
       path: result.path,
@@ -782,6 +791,14 @@ async function commitToRepo(row: MediaRow, buffer: Buffer): Promise<string> {
   }
 
   throw new PlacementRefused('This upload has no page or slide to be added to.');
+}
+
+/**
+ * The repository name a staged file is placed under: deterministic per upload,
+ * so every attempt of the same placement writes — or finds — the same path.
+ */
+export function stagedRepoName(row: Pick<MediaRow, 'id' | 'filename'>): string {
+  return stableFilename(row.filename, row.id.slice(0, 8));
 }
 
 /** A placement that cannot succeed on retry — recorded, not rethrown. */
