@@ -50,9 +50,14 @@ import { sendToMedia } from './media/mediaUpload.ts';
 import {
   UploadRefused,
   UploadReroute,
+  actionFailureMessage,
   placeUpload,
+  type ActionFailure,
   type UploadPorts,
 } from './media/uploadRouting.ts';
+
+/** A repository upload refused with nothing more specific to say. */
+const UPLOAD_FAILED = 'The upload could not finish. Try again.';
 
 // Custom drag handle menu — extends default with block-specific actions
 const CustomDragHandleMenu = () => (
@@ -179,12 +184,14 @@ const PageEditor = forwardRef(function PageEditor(
             body: formData,
           });
           if (!response.ok) {
-            const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+            const body = (await response.json().catch(() => null)) as ActionFailure | null;
             // The capability was stale: this file belongs in media.
             if (response.status === 409 && body?.error === 'USE_MEDIA') {
               throw new UploadReroute('media');
             }
-            throw new UploadRefused(typeof body?.error === 'string' ? body.error : 'Upload failed');
+            // The route's sentence (`message` when it sent a code with it,
+            // e.g. a locked classroom), never the bare code.
+            throw new UploadRefused(actionFailureMessage(body) ?? UPLOAD_FAILED);
           }
           const result = await response.json();
           return { ref: result.url, displayUrl: result.displayUrl ?? null };

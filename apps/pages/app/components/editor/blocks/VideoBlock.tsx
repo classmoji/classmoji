@@ -3,7 +3,12 @@ import { createReactBlockSpec } from '@blocknote/react';
 import { IconPlayerPlay } from '@tabler/icons-react';
 import { useResolvedFileUrl } from './useResolvedFileUrl.ts';
 import { usePageMedia } from '../media/PageMedia.tsx';
+import { toast } from 'react-toastify';
 import { isMediaRef, playsAsNativeVideo } from '~/utils/mediaRefs.ts';
+import { UploadCancelled, UploadRefused } from '../media/uploadRouting.ts';
+
+/** What a failed upload says when there is no refusal sentence to show. */
+const UPLOAD_INTERRUPTED = 'The upload could not finish. Check your connection and try again.';
 
 /**
  * Convert YouTube/Vimeo URLs to embeddable URLs
@@ -96,8 +101,13 @@ export const Video = createReactBlockSpec(
               ? result
               : (result as { props?: { url?: unknown } })?.props?.url;
           if (typeof next === 'string' && next) setUrl(next);
-        } catch {
-          // Already toasted by the upload handler.
+        } catch (error) {
+          // A refusal was toasted by the upload handler with its reason, and a
+          // cancel says nothing. Anything else (the network dropped, the
+          // server fell over) would otherwise vanish without a word.
+          if (!(error instanceof UploadRefused) && !(error instanceof UploadCancelled)) {
+            toast.error(UPLOAD_INTERRUPTED);
+          }
         } finally {
           setUploading(null);
         }

@@ -9,7 +9,7 @@ import {
   UploadCancelled,
   UploadRefused,
   UploadReroute,
-  coverFailureMessage,
+  actionFailureMessage,
   firstDestination,
   type ActionFailure,
 } from './uploadRouting.ts';
@@ -119,7 +119,7 @@ export function useCoverUpload(
       void submitToMedia(file, true);
       return;
     }
-    const message = coverFailureMessage(data);
+    const message = actionFailureMessage(data);
     if (message) toast.error(message);
     // Only a fresh answer: `submitToMedia` changing identity is not one.
     // eslint-disable-next-line react-hooks/exhaustive-deps

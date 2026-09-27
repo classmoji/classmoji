@@ -17,7 +17,9 @@ import {
   UploadRefused,
   UploadReroute,
   firstDestination,
+  fitsRepoInstead,
   mediaProgressLabel,
+  mediaRefusalGoesToRepo,
   mediaUploadMessage,
   placeUpload,
   type UploadPorts,
@@ -182,6 +184,32 @@ test.describe('media refusals read as sentences', () => {
     ).toContain('9 GB of 10 GB');
   });
 
+  test('a full quota shows the server sentence verbatim', () => {
+    const server = 'Your class media is full. Contact hello@classmoji.io to upgrade your storage.';
+    expect(
+      mediaUploadMessage(
+        { code: 'QUOTA_EXCEEDED', message: server, usedBytes: 9 * GIB, quotaBytes: 10 * GIB },
+        PRO
+      )
+    ).toBe(server);
+  });
+
+  test('a quota refusal with no server sentence still names the numbers', () => {
+    // `Upload failed (409).` is what the client synthesizes for a bodyless
+    // answer — a status, not a sentence to show.
+    expect(
+      mediaUploadMessage(
+        {
+          code: 'QUOTA_EXCEEDED',
+          message: 'Upload failed (409).',
+          usedBytes: 9 * GIB,
+          quotaBytes: 10 * GIB,
+        },
+        PRO
+      )
+    ).toContain('9 GB of 10 GB');
+  });
+
   test('the per-file limit comes from the capability', () => {
     expect(mediaUploadMessage({ code: 'FILE_TOO_LARGE' }, PRO)).toContain('2 GB');
   });
@@ -211,5 +239,41 @@ test.describe('the media progress toast', () => {
     const message = mediaUploadMessage({ code: 'NOT_CONFIGURED' }, PRO);
     expect(message).toBe("Uploading here isn't available right now.");
     expect(message).not.toMatch(/configured|environment/);
+  });
+});
+
+test.describe('a stale capability falls back to the repository', () => {
+  const SMALL_PDF = file('notes.pdf', 1024 * 1024);
+
+  test('no longer Pro, not delivering, or media down: a file that fits goes to the repository', () => {
+    for (const code of ['PRO_REQUIRED', 'DELIVERY_REQUIRED', 'NOT_CONFIGURED']) {
+      expect(mediaRefusalGoesToRepo(code, SMALL_VIDEO, PRO), code).toBe(true);
+      expect(mediaRefusalGoesToRepo(code, SMALL_PDF, PRO), code).toBe(true);
+    }
+  });
+
+  test('a full quota never falls back: a Pro class whose media is full is refused', () => {
+    expect(mediaRefusalGoesToRepo('QUOTA_EXCEEDED', SMALL_VIDEO, PRO)).toBe(false);
+  });
+
+  test('a file the repository cannot take is refused, not bounced', () => {
+    expect(mediaRefusalGoesToRepo('PRO_REQUIRED', BIG_PDF, PRO)).toBe(false);
+  });
+
+  test("the repository's type policy counts too, not only its size", () => {
+    const imagesOnly: UploadCapability = { ...PRO, repoFileTypes: 'allowlist' };
+    expect(fitsRepoInstead(file('notes.pdf', 1024), imagesOnly)).toBe(true);
+    expect(fitsRepoInstead(file('lecture.mp4', 1024), imagesOnly)).toBe(false);
+  });
+
+  test('with no capability, the repository size cap is all there is', () => {
+    expect(fitsRepoInstead(SMALL_VIDEO, null)).toBe(true);
+    expect(fitsRepoInstead(BIG_PDF, null)).toBe(false);
+  });
+
+  test('every other refusal stays a refusal', () => {
+    for (const code of ['FILE_TOO_LARGE', 'KIND_NOT_ALLOWED', 'SIZE_MISMATCH', 'NETWORK']) {
+      expect(mediaRefusalGoesToRepo(code, SMALL_PDF, PRO), code).toBe(false);
+    }
   });
 });

@@ -11,6 +11,7 @@ import {
   UploadRefused,
   UploadReroute,
   mediaProgressLabel,
+  mediaRefusalGoesToRepo,
   mediaUploadMessage,
 } from './uploadRouting.ts';
 
@@ -23,7 +24,9 @@ import {
  * is this module's: where the file is going, the room there was, and a bar.
  *
  * Failures come back as the routing errors `placeUpload` understands:
- * `UploadReroute('repo')` when the server keeps the file in the repository,
+ * `UploadReroute('repo')` when the server keeps the file in the repository —
+ * or refuses media in a way that means the capability was stale and the
+ * repository can take the file (`mediaRefusalGoesToRepo`),
  * `UploadCancelled` for an abort (said nothing about), and `UploadRefused`
  * with the sentence to show for everything the server refused. Anything else
  * (a thrown `TypeError` from the network) is passed through untouched.
@@ -68,6 +71,9 @@ export async function sendToMedia({
       // The router keeps this one in the repository after all.
       if (error.code === 'USE_REPO') throw new UploadReroute('repo');
       if (error.code === 'ABORTED') throw new UploadCancelled();
+      // The capability was stale (no longer Pro, no longer delivering, media
+      // down): a file the repository can take goes there instead.
+      if (mediaRefusalGoesToRepo(error.code, file, capability)) throw new UploadReroute('repo');
       throw new UploadRefused(mediaUploadMessage(error, capability));
     }
     throw error;

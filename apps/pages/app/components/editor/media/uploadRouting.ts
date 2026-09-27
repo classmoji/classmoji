@@ -108,7 +108,7 @@ export type ActionFailure = { error?: unknown; message?: unknown };
  * else its `error` — never a bare code like `USE_MEDIA` or `CLASSROOM_LOCKED`
  * when the server said something a person can read.
  */
-export function coverFailureMessage(data: ActionFailure | null | undefined): string | null {
+export function actionFailureMessage(data: ActionFailure | null | undefined): string | null {
   if (!data || !data.error) return null;
   if (typeof data.message === 'string' && data.message) return data.message;
   return typeof data.error === 'string' ? data.error : null;
@@ -182,13 +182,57 @@ export function formatBytes(bytes: number): string {
 }
 
 /**
+ * The sentence the server sent with a refusal, or null when there was none —
+ * `MultipartUploadError` synthesizes `Upload failed (409).` for a body with no
+ * `message`, and that is a status, not a sentence.
+ */
+function serverSentence(message: string | undefined): string | null {
+  if (typeof message !== 'string' || !message.trim()) return null;
+  if (/^Upload failed \(\d+\)\.$/.test(message)) return null;
+  return message;
+}
+
+/**
+ * Media refusals that mean the capability the editor routed with was stale:
+ * the classroom is no longer on Pro, can no longer serve content, or media is
+ * not available right now. A file the repository can take goes there instead
+ * — the upload the uploader asked for, in the other store. A full quota is
+ * NOT one of these: a Pro class whose media is full is refused, with the
+ * server's message, and never quietly put in the repository (Tim, 2026-09-27).
+ */
+const STALE_MEDIA_CODES = new Set(['PRO_REQUIRED', 'DELIVERY_REQUIRED', 'NOT_CONFIGURED']);
+
+/**
+ * Could the course repository take this file instead? The router's own rule
+ * with media taken away — its size cap AND the classroom's type policy — so
+ * this cannot promise a file the repository route would then refuse. With no
+ * capability, the repository's size cap is all there is to go on.
+ */
+export function fitsRepoInstead(
+  file: { name: string; size: number },
+  capability: UploadCapability | null | undefined
+): boolean {
+  if (!capability) return file.size <= REPO_REST_MAX_BYTES;
+  return storageTargetFor({ ...capability, media: null }, file).kind === 'repo';
+}
+
+/** Whether a media refusal should send the file to the repository instead. */
+export function mediaRefusalGoesToRepo(
+  code: string,
+  file: { name: string; size: number },
+  capability: UploadCapability | null | undefined
+): boolean {
+  return STALE_MEDIA_CODES.has(code) && fitsRepoInstead(file, capability);
+}
+
+/**
  * A media upload's failure, in a sentence.
  *
  * Codes come from the shared media routes; the wording follows the webapp's
  * upload dialog so the same refusal reads the same on every surface.
  */
 export function mediaUploadMessage(
-  error: Pick<MultipartUploadError, 'code' | 'usedBytes' | 'quotaBytes'>,
+  error: Pick<MultipartUploadError, 'code' | 'usedBytes' | 'quotaBytes'> & { message?: string },
   capability: UploadCapability | null | undefined
 ): string {
   switch (error.code) {
@@ -199,6 +243,10 @@ export function mediaUploadMessage(
     case 'DELIVERY_REQUIRED':
       return "This class isn't set up to serve content yet, so media can't be uploaded.";
     case 'QUOTA_EXCEEDED': {
+      // The server's own sentence, verbatim: it says what to do about a full
+      // store (who to contact to upgrade), which is not this client's to word.
+      const serverMessage = serverSentence(error.message);
+      if (serverMessage) return serverMessage;
       if (typeof error.usedBytes === 'number' && typeof error.quotaBytes === 'number') {
         return `Not enough storage — ${formatBytes(error.usedBytes)} of ${formatBytes(error.quotaBytes)} is already in use. Delete something and try again.`;
       }

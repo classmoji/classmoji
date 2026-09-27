@@ -57,6 +57,12 @@ export function messageFor(error: MultipartUploadError, quota: QuotaSummary): st
     case 'DELIVERY_REQUIRED':
       return "This class isn't set up to serve content yet, so media can't be uploaded.";
     case 'QUOTA_EXCEEDED': {
+      // The server's own sentence, verbatim: it says what to do about a full
+      // store (who to contact to upgrade), which is not this dialog's to word.
+      // `Upload failed (409).` is the client's stand-in for a bodyless answer.
+      if (error.message && !/^Upload failed \(\d+\)\.$/.test(error.message)) {
+        return error.message;
+      }
       const used = error.usedBytes ?? quota.usedBytes;
       const total = error.quotaBytes ?? quota.quotaBytes;
       return `Not enough storage — ${formatBytes(used)} of ${formatBytes(total)} is already in use. Delete something and try again.`;

@@ -62,10 +62,24 @@ describe('messageFor', () => {
     expect(messageFor(failure('BAD_STATE'), quota)).toContain('no longer valid');
   });
 
-  it('puts the server numbers in the quota message, and the page numbers when it has none', () => {
+  it('shows the server sentence for a full quota, verbatim', () => {
+    const server = 'Your class media is full. Contact hello@classmoji.io to upgrade your storage.';
     expect(
-      messageFor(failure('QUOTA_EXCEEDED', { usedBytes: 9 * GiB, quotaBytes: 10 * GiB }), quota)
+      messageFor(
+        failure('QUOTA_EXCEEDED', { message: server, usedBytes: 9 * GiB, quotaBytes: 10 * GiB }),
+        quota
+      )
+    ).toBe(server);
+  });
+
+  it('puts the server numbers in the quota message when there is no server sentence, and the page numbers when it has none', () => {
+    const bodyless = { message: 'Upload failed (409).' };
+    expect(
+      messageFor(
+        failure('QUOTA_EXCEEDED', { ...bodyless, usedBytes: 9 * GiB, quotaBytes: 10 * GiB }),
+        quota
+      )
     ).toContain('9.0 GB of 10 GB');
-    expect(messageFor(failure('QUOTA_EXCEEDED'), quota)).toContain('2.0 GB of 10 GB');
+    expect(messageFor(failure('QUOTA_EXCEEDED', bodyless), quota)).toContain('2.0 GB of 10 GB');
   });
 });

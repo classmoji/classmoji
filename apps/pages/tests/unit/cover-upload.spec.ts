@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 
-import { coverFailureMessage } from '~/components/editor/media/uploadRouting.ts';
+import { actionFailureMessage } from '~/components/editor/media/uploadRouting.ts';
 
 const source = (relative: string) =>
   readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
@@ -23,10 +23,10 @@ const ROUTE_SOURCE = source('../../app/routes/$classroomSlug.$pageId/route.tsx')
 test.describe('a failed cover action is shown as a sentence', () => {
   test('the server message wins over its code', () => {
     expect(
-      coverFailureMessage({ error: 'USE_MEDIA', message: 'This file belongs in media.' })
+      actionFailureMessage({ error: 'USE_MEDIA', message: 'This file belongs in media.' })
     ).toBe('This file belongs in media.');
     expect(
-      coverFailureMessage({
+      actionFailureMessage({
         error: 'CLASSROOM_LOCKED',
         message: 'This classroom is locked.',
       })
@@ -35,16 +35,16 @@ test.describe('a failed cover action is shown as a sentence', () => {
 
   test('an action that only sent a sentence as `error` is shown as it is', () => {
     expect(
-      coverFailureMessage({
+      actionFailureMessage({
         error: 'This page changed while updating the cover image — please try again.',
       })
     ).toContain('please try again');
   });
 
   test('success, and a body with no error, show nothing', () => {
-    expect(coverFailureMessage({ success: true } as never)).toBeNull();
-    expect(coverFailureMessage(undefined)).toBeNull();
-    expect(coverFailureMessage({ error: { nested: true } })).toBeNull();
+    expect(actionFailureMessage({ success: true } as never)).toBeNull();
+    expect(actionFailureMessage(undefined)).toBeNull();
+    expect(actionFailureMessage({ error: { nested: true } })).toBeNull();
   });
 });
 
@@ -64,7 +64,7 @@ test.describe('the cover uploaders', () => {
       expect(src).not.toContain('toast.error(fetcher.data.error)');
       expect(src).not.toContain('toast.error(coverFetcher.data.error)');
     }
-    expect(HOOK_SOURCE).toContain('const message = coverFailureMessage(data);');
+    expect(HOOK_SOURCE).toContain('const message = actionFailureMessage(data);');
   });
 
   test('the router picks the store before any byte is sent', () => {

@@ -126,13 +126,20 @@ export function PageMediaProvider({
     });
   }, []);
 
+  // A ref as well as state: a keyboard pick lands through the list's own
+  // handler, not a click the overlay can swallow, and two quick Enters must
+  // not both start placing — the second would read the state before the
+  // first had re-rendered it.
+  const placingRef = useRef(false);
   const pick = useCallback(
     async (item: MediaLibraryItem) => {
-      if (!request) return;
+      if (!request || placingRef.current) return;
+      placingRef.current = true;
       setPlacing(true);
       try {
         await place(item.ref);
       } finally {
+        placingRef.current = false;
         setPlacing(false);
       }
       request.resolve(item);
@@ -253,7 +260,9 @@ function MediaPickerDialog({
             Choose from media
           </h2>
         </div>
-        <div className={`px-2 pb-2 ${busy ? 'pointer-events-none opacity-60' : ''}`}>
+        {/* `inert` while placing: no pointer AND no keyboard pick of a second
+            item while the first is being placed. */}
+        <div className={`px-2 pb-2 ${busy ? 'pointer-events-none opacity-60' : ''}`} inert={busy}>
           <MediaLibraryList classroomId={classroomId} kind={kind} onPick={onPick} autoFocus />
         </div>
         <div className="flex justify-end border-t border-gray-200 px-5 py-3 dark:border-gray-700">
