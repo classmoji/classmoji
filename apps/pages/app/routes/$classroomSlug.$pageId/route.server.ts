@@ -31,6 +31,8 @@ import {
 import { schema } from '~/components/editor/blocks/index.tsx';
 import type { PageForContent } from '~/types/pages.ts';
 import type { UploadCapability } from '@classmoji/services/media/router';
+import { loadMediaDownloads } from '~/utils/mediaDownloads.server.ts';
+import type { MediaDownloads } from '~/utils/mediaDownloads.ts';
 import {
   assetResolveContext,
   canonicalizeAssetRef,
@@ -279,6 +281,17 @@ export const loader = async ({
     [coverImage?.url]
   );
 
+  // Which media files the READER may download (`ref → boolean`, nothing
+  // else): a signed-in member looking at the viewer — the editor draws no
+  // download buttons, and an anonymous reader of a public page gets none. Only
+  // where the classroom can sign at all (`assetCtx`), because the button's
+  // route can mint nothing otherwise. The URL itself is minted on click.
+  const viewerShown = !canEdit || previewActive;
+  const mediaDownloads: MediaDownloads =
+    userRole && viewerShown && assetCtx
+      ? await loadMediaDownloads(page.classroom.id, viewerContent, userRole)
+      : {};
+
   // Where this editor's uploads go (`storageTargetFor` on the client): the
   // repository, media, or a refusal it can state before a byte is sent. Staff
   // who can edit only — a reader never uploads, and the capability carries the
@@ -335,6 +348,8 @@ export const loader = async ({
     // An absent key means "one size only", which is the right answer for a gif,
     // an svg, and anything that is not an image.
     resolvedSrcSets,
+    // `{ storedRef: downloadable }` for the media files a member may download.
+    mediaDownloads,
     userRole,
     canEdit,
     uploadCapability,

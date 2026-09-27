@@ -149,6 +149,38 @@ export type PageLinkResolver = (pageId: string) => SitePageLink | null;
  */
 export type SiteSrcSets = Record<string, string>;
 
+/**
+ * `{ signedUrl: downloadHref }` — the media files this viewer may download.
+ * Keyed by the signed URL for the same reason `SiteSrcSets` is: the document
+ * has been rewritten to signed URLs by the time it is rendered.
+ */
+export type SiteDownloads = Record<string, string>;
+
+/**
+ * A reader's Download button: a plain link, because the site ships no
+ * JavaScript. It goes to the canonical pages host's `/api/media-download`,
+ * which mints the file's URL at the moment of the click.
+ */
+function downloadLink(href: string) {
+  return h('a', { key: 'dl', className: 'media-download-link', href, rel: 'nofollow' }, 'Download');
+}
+
+/** BlockNote's file glyph (`FILE_ICON_SVG` in @blocknote/core, not exported). */
+const FILE_ICON_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M3 8L9.00319 2H19.9978C20.5513 2 21 2.45531 21 2.9918V21.0082C21 21.556 20.5551 22 20.0066 22H3.9934C3.44476 22 3 21.5501 3 20.9932V8ZM10 4V9H5V20H19V4H10Z"></path></svg>';
+
+/** The name-with-icon row BlockNote draws for a file with no preview. */
+function fileNameWithIcon(name: string) {
+  return h('div', { key: 'f', className: 'bn-file-name-with-icon' }, [
+    h('div', {
+      key: 'i',
+      className: 'bn-file-icon',
+      dangerouslySetInnerHTML: { __html: FILE_ICON_SVG },
+    }),
+    h('p', { key: 'n', className: 'bn-file-name' }, name),
+  ]);
+}
+
 /* ------------------------------------------------------------------ *
  * Static block implementations
  * ------------------------------------------------------------------ */
@@ -345,7 +377,14 @@ function contentDeliveryOrigin(): string | null {
   return process.env.CONTENT_DELIVERY_ORIGIN || null;
 }
 
-function StaticVideo(props: RenderProps) {
+/** The video block, statically; `downloads` adds a member's Download button. */
+function makeStaticVideo(downloads: SiteDownloads) {
+  return function StaticVideo(props: RenderProps) {
+    return staticVideo(props, downloads);
+  };
+}
+
+function staticVideo(props: RenderProps, downloads: SiteDownloads) {
   const url = String(props.block.props.url || '');
   const caption = String(props.block.props.caption || '');
   const captionNode = caption
@@ -366,7 +405,12 @@ function StaticVideo(props: RenderProps) {
     return h('div', { className: 'bn-site-empty' });
   }
   if (isMediaUrl(url, deliveryOrigin)) {
-    return h('div', null, [h('div', { key: 'm' }, nativeVideo(url)), captionNode]);
+    const download = downloads[url];
+    return h('div', null, [
+      h('div', { key: 'm' }, nativeVideo(url)),
+      captionNode,
+      download ? downloadLink(download) : null,
+    ]);
   }
 
   if (!isHttpsUrl(url)) return h('div', null, [plainLink(url), captionNode]);
@@ -386,6 +430,55 @@ function StaticVideo(props: RenderProps) {
       );
 
   return h('div', null, [h('div', { key: 'm' }, media), captionNode]);
+}
+
+/**
+ * The `file` block with a Download button — BlockNote's own markup for a
+ * populated file (name with icon, caption) plus the link when this viewer may
+ * download it. Only swapped in for a render that HAS downloads (see
+ * `createViewerSchema`); every other render keeps BlockNote's block.
+ */
+function makeStaticFile(downloads: SiteDownloads) {
+  return function StaticFile(props: RenderProps) {
+    const url = String(props.block.props.url || '');
+    if (!url) return h('div', { className: 'bn-site-empty' });
+    const name = String(props.block.props.name || '');
+    const caption = String(props.block.props.caption || '');
+    const download = downloads[url];
+    return h(
+      'div',
+      { className: `bn-file-block-content-wrapper${download ? ' media-download-block' : ''}` },
+      [
+        fileNameWithIcon(name),
+        caption ? h('p', { key: 'c', className: 'bn-file-caption' }, caption) : null,
+        download ? downloadLink(download) : null,
+      ]
+    );
+  };
+}
+
+/** The `audio` block with a Download button; see `makeStaticFile`. */
+function makeStaticAudio(downloads: SiteDownloads) {
+  return function StaticAudio(props: RenderProps) {
+    const url = String(props.block.props.url || '');
+    if (!url) return h('div', { className: 'bn-site-empty' });
+    const name = String(props.block.props.name || '');
+    const caption = String(props.block.props.caption || '');
+    const download = downloads[url];
+    const preview =
+      props.block.props.showPreview === false
+        ? fileNameWithIcon(name)
+        : h('audio', { key: 'a', className: 'bn-audio', src: url, controls: true });
+    return h(
+      'div',
+      { className: `bn-file-block-content-wrapper${download ? ' media-download-block' : ''}` },
+      [
+        preview,
+        caption ? h('p', { key: 'c', className: 'bn-file-caption' }, caption) : null,
+        download ? downloadLink(download) : null,
+      ]
+    );
+  };
 }
 
 function makeStaticPageLink(resolve: PageLinkResolver) {
@@ -539,6 +632,13 @@ function StaticToggleListItem(props: RenderProps) {
  * Schema assembly
  * ------------------------------------------------------------------ */
 
+/**
+ * Block types replaced only for a render that shows Download buttons (a
+ * signed-in member, with at least one downloadable media file). Everyone
+ * else — every anonymous, cacheable render — keeps BlockNote's own block.
+ */
+export const DOWNLOAD_BLOCK_TYPES = ['file', 'audio'] as const;
+
 /** Block types this module replaces with a static, viewer-safe render. */
 export const OVERRIDDEN_BLOCK_TYPES = [
   'image',
@@ -554,7 +654,9 @@ export const OVERRIDDEN_BLOCK_TYPES = [
   'toggleListItem',
 ] as const;
 
-type OverriddenBlockType = (typeof OVERRIDDEN_BLOCK_TYPES)[number];
+type OverriddenBlockType =
+  | (typeof OVERRIDDEN_BLOCK_TYPES)[number]
+  | (typeof DOWNLOAD_BLOCK_TYPES)[number];
 
 /**
  * Rebuild one spec with a static implementation, reusing the ORIGINAL config.
@@ -593,10 +695,12 @@ function staticSpec(type: OverriddenBlockType, render: (props: never) => React.R
  */
 export function createViewerSchema(
   resolveLink: PageLinkResolver,
-  options: { showSchedule?: boolean; srcSets?: SiteSrcSets } = {}
+  options: { showSchedule?: boolean; srcSets?: SiteSrcSets; downloads?: SiteDownloads } = {}
 ) {
   const showSchedule = options.showSchedule === true;
   const srcSets = options.srcSets ?? {};
+  const downloads = options.downloads ?? {};
+  const hasDownloads = Object.keys(downloads).length > 0;
 
   const blockSpecs = {
     ...editorSchema.blockSpecs,
@@ -606,7 +710,13 @@ export function createViewerSchema(
     profile: staticSpec('profile', makeStaticProfile(srcSets)),
     divider: staticSpec('divider', StaticDivider),
     embed: staticSpec('embed', StaticEmbed),
-    video: staticSpec('video', StaticVideo),
+    video: staticSpec('video', makeStaticVideo(downloads)),
+    ...(hasDownloads
+      ? {
+          file: staticSpec('file', makeStaticFile(downloads)),
+          audio: staticSpec('audio', makeStaticAudio(downloads)),
+        }
+      : {}),
     pageLink: staticSpec('pageLink', makeStaticPageLink(resolveLink)),
     navGrid: staticSpec('navGrid', makeStaticNavGrid(resolveLink, showSchedule)),
     codeBlock: staticSpec('codeBlock', StaticCodeBlock),

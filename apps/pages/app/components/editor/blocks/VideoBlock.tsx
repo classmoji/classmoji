@@ -6,6 +6,7 @@ import { usePageMedia } from '../media/PageMedia.tsx';
 import { toast } from 'react-toastify';
 import { isMediaRef, playsAsNativeVideo } from '~/utils/mediaRefs.ts';
 import { UploadCancelled, UploadRefused } from '../media/uploadRouting.ts';
+import { MediaDownloadLink } from '~/components/viewer/MediaDownloadLink.tsx';
 
 /** What a failed upload says when there is no refusal sentence to show. */
 const UPLOAD_INTERRUPTED = 'The upload could not finish. Check your connection and try again.';
@@ -243,6 +244,11 @@ export const Video = createReactBlockSpec(
               ) : (
                 caption && <p className="media-block-caption-view">{caption}</p>
               )}
+
+              {/* A reader's Download button — only in the viewer, and only
+                  for a media video its uploader let students download (the
+                  teaching team always). No provider in the editor: none. */}
+              {!isEditable && <MediaDownloadLink fileRef={url} />}
             </>
           )}
         </div>

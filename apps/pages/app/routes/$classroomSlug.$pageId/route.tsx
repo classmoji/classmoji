@@ -142,6 +142,7 @@ const PageRoute = () => {
     contentSha,
     resolvedAssets,
     resolvedSrcSets,
+    mediaDownloads,
     uploadCapability,
   } = useLoaderData<typeof import('./route.server.ts').loader>();
   // Stored refs stay in the document; these are the URLs to display them with.
@@ -813,6 +814,8 @@ const PageRoute = () => {
                 resolveFileUrl={assets.resolveFileUrl}
                 srcSets={srcSets}
                 displayUrl={assets.displayUrl}
+                pageId={page.id}
+                mediaDownloads={mediaDownloads}
               />
             </Suspense>
           )}
