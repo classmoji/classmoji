@@ -49,3 +49,16 @@ export async function playableMediaUrl(slideId: string, ref: string): Promise<st
     return ref;
   }
 }
+
+/**
+ * Delete a media object this browser uploaded for a slide that was then
+ * refused. Best-effort and silent: the media route checks who may delete, and
+ * a failure leaves the object in the class's media, where it can be removed.
+ */
+export async function discardUploadedMedia(mediaId: string): Promise<void> {
+  try {
+    await fetch(`/api/media/${encodeURIComponent(mediaId)}`, { method: 'DELETE' });
+  } catch {
+    // Nothing to tell the author: the refusal they are reading is the news.
+  }
+}

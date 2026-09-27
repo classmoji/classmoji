@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { handleCodeBlockTab, handleCodeBlockEnter } from './properties/utils/codeBlockUtils';
+import { stripMediaRefs } from '~/utils/mediaRefs';
 
 // Built-in Reveal.js themes (exported for use in SlideToolbar)
 export const BUILTIN_THEMES = [
@@ -318,7 +319,12 @@ const RevealSlides = forwardRef(function RevealSlides(
         }
 
         const html = await response.text();
-        parseContent(html);
+        // The stored index.html, unresolved: its `media://` references have no
+        // URL here, and a browser cannot load that scheme — so a read blanks
+        // them. Never in the editor, whose document goes back through a save:
+        // it keeps what it loaded (and edit mode always has `initialContent`
+        // from fetch-latest, so this fallback does not run there anyway).
+        parseContent(isEditing ? html : stripMediaRefs(html));
       } catch (err: unknown) {
         console.error('Error loading slides:', err);
         setError(err instanceof Error ? err.message : String(err));

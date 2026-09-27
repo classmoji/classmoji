@@ -22,7 +22,9 @@
  * signed and `saveDeck` turns it back into the reference — see there.
  *
  * Every failure degrades to the stored URLs, which still work through the
- * content proxy. Nothing here is allowed to break a deck read.
+ * content proxy — except `media://`, which has no proxy and no URL of its own:
+ * a failed pass hands back `about:blank` in its place (`stripMediaRefs`). Nothing
+ * here is allowed to break a deck read, or to put a `media://` into a page.
  */
 
 import { createHash } from 'node:crypto';
@@ -33,6 +35,7 @@ import {
   type DeckThemeUrls,
 } from '@classmoji/services/slides';
 import { getThemeUrls } from '~/utils/themeService.server';
+import { NO_MEDIA_URL, stripMediaRefs } from '~/utils/mediaRefs';
 
 /** Where shared slide themes live in a content repo. Mirrors contentDelivery. */
 const THEMES_FOLDER = '.slidesthemes';
@@ -352,7 +355,9 @@ export async function resolveDeckDelivery(
   if (!html) return { html, themeBase: null };
   if (!ctx) {
     return {
-      html: opts.classroomId ? await resolveUnservedMedia(html, opts.classroomId) : html,
+      html: opts.classroomId
+        ? await resolveUnservedMedia(html, opts.classroomId)
+        : stripMediaRefs(html),
       themeBase: null,
     };
   }
@@ -408,7 +413,7 @@ export async function resolveDeckDelivery(
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn('[slides] Asset resolution failed, serving stored URLs:', message);
-    return { html, themeBase };
+    return { html: stripMediaRefs(html), themeBase };
   }
 }
 
@@ -483,9 +488,6 @@ export async function resolveDeckMedia(
   }
 }
 
-/** What stands in for a media reference that has no URL at all. Never `media://`. */
-const NO_MEDIA_URL = 'about:blank';
-
 /**
  * The placeholder URL for each media reference, for a read with no context.
  *
@@ -531,7 +533,8 @@ async function unservedMediaUrls(
  * For every READ surface when there is no delivery context — the layer is off
  * for the classroom, or this deployment cannot sign. Cheap when there is
  * nothing to do: a document with no `media://` in it is returned without a
- * parse. Every failure returns the input, as everywhere in this module.
+ * parse. A failure returns the input with its references blanked — never
+ * `media://`, which no browser can load.
  */
 export async function resolveUnservedMedia(html: string, classroomId: string): Promise<string> {
   if (!html.includes('media://')) return html;
@@ -540,7 +543,7 @@ export async function resolveUnservedMedia(html: string, classroomId: string): P
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn('[slides] Media placeholder pass failed:', message);
-    return html;
+    return stripMediaRefs(html);
   }
 }
 
@@ -676,7 +679,7 @@ export async function resolveDeckAssetsPublic(
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn('[slides] Public asset rewrite failed, serving stored URLs:', message);
-    return html;
+    return stripMediaRefs(html);
   }
 }
 

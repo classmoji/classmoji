@@ -23,8 +23,10 @@ import { canonicalizeDeckAssets } from './deckAssets.ts';
 import { recordContentAssets, resolveContentBranch } from '../classmoji/contentAssets.service.ts';
 import { enqueueDeckThumbnail } from '../classmoji/deckThumbnail.service.ts';
 import {
+  canonicalizeAssetRef,
   canonicalizeMany,
   isOwnAssetRef,
+  parseMissingUrl,
   warmContentText,
   type ResolveContext,
   type WarmContext,
@@ -287,11 +289,47 @@ export function deckWarmContext(slide: SlideContentTarget): WarmContext | null {
 }
 
 /**
+ * A signed MEDIA url's shape: `/c/{classroom}/media/{id}/{variant}`. The same
+ * shape `contentDelivery`'s own parse matches (host and classroom are checked
+ * there, not here).
+ */
+const SIGNED_MEDIA_URL_SHAPE =
+  /^https?:\/\/[^/]+\/c\/[0-9a-f-]{36}\/media\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[^/?#]+(?:\?|$)/i;
+
+/**
+ * One ref canonicalized with NO database read: a `/missing/` placeholder back
+ * to its reference, and a signed media URL of ours back to `media://{id}`.
+ * Everything else — a signed blob url, which needs the asset map to find its
+ * path — comes back unchanged.
+ *
+ * `canonicalizeAssetRef` is only called for the media shape, where it answers
+ * before its map lookup: its own media parse (host- and classroom-checked)
+ * comes first, and its structural fallback returns for `kind === 'media'`
+ * before the blob branch. Calling it rather than re-deriving the host check
+ * keeps "ours" meaning one thing. (Exporting `contentDelivery`'s
+ * `parseMediaUrl` would let this drop the ordering dependency.)
+ */
+async function canonicalizeRefWithoutLookup(ctx: ResolveContext, ref: string): Promise<string> {
+  const missing = parseMissingUrl(ctx, ref);
+  if (missing !== null) return missing;
+  if (!SIGNED_MEDIA_URL_SHAPE.test(ref)) return ref;
+  try {
+    return await canonicalizeAssetRef(ctx, ref);
+  } catch {
+    return ref;
+  }
+}
+
+/**
  * A deck with every signed URL of ours replaced by the repo path behind it.
  *
  * Failure is swallowed on purpose. The asset map lives in Postgres, and a
  * database hiccup must not turn a save into a lost edit — the worst case of
- * skipping this pass is the state the deck was already in before it existed.
+ * skipping the full pass is the state the deck was already in before it
+ * existed. With one exception: a signed MEDIA url is never committed. The
+ * editor holds every `media://` reference signed, so skipping the pass would
+ * freeze an expiring signature into the deck for every video on it — and
+ * undoing that one needs no database at all (`canonicalizeRefWithoutLookup`).
  *
  * Exported for the editor's merge save, which runs it on the editor's side of
  * the 3-way merge BEFORE comparing: the editor holds its `media://` references
@@ -321,7 +359,24 @@ export async function canonicalizeDeckForSave(
       '[slideContent] Could not canonicalize deck asset refs on save:',
       error instanceof Error ? error.message : error
     );
-    return deck;
+    try {
+      return await canonicalizeDeckAssets(
+        deck,
+        async refs =>
+          new Map(
+            await Promise.all(
+              refs.map(async ref => [ref, await canonicalizeRefWithoutLookup(ctx, ref)] as const)
+            )
+          ),
+        ref => isOwnAssetRef(ctx, ref)
+      );
+    } catch (fallbackError) {
+      console.warn(
+        '[slideContent] Could not canonicalize media refs on save either:',
+        fallbackError instanceof Error ? fallbackError.message : fallbackError
+      );
+      return deck;
+    }
   }
 }
 
