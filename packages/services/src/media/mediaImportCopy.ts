@@ -1,5 +1,5 @@
 import { CopyObjectCommand, DeleteObjectCommand, type S3Client } from '@aws-sdk/client-s3';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import getPrisma from '@classmoji/database';
 import { isMediaConfigured, mediaBucket } from './mediaConfig.ts';
 import { mediaKey } from './mediaKeys.ts';
@@ -58,6 +58,17 @@ import { uploadCapabilityFor } from './uploadCapability.ts';
  * as the source proof — and copies again when the copy is gone (deleted, or
  * never finished). So a retry never bills the destination twice for one
  * object, and never repoints a reference at a copy that does not exist.
+ *
+ * The pair can be lost — the rollover's progress writes are debounced and
+ * best effort, and a hard kill loses the last one — so a run that has a stable
+ * id of its own (the import job's) passes it as `copyIdSeed`, and every copy's
+ * id is DERIVED from it and the source id (`importCopyId`, a name-based uuid).
+ * A retry of the same job then finds a copy by id alone, READY in the
+ * destination, whether or not the pair was ever written down. A reservation an
+ * earlier attempt left UPLOADING under that id is taken over (its keys are the
+ * same, so the copy overwrites whatever half landed); an id whose row is gone
+ * for good (a discarded copy, tombstoned) is not reused, and the copy gets a
+ * fresh random id.
  *
  * A caller whose commit of the rewritten content FAILED calls `discard`: the
  * copies this run made are deleted (`deleteMedia` — tombstone, then the
@@ -134,6 +145,12 @@ export interface MediaImportCopyOptions {
   knownCopies?: Readonly<Record<string, string>> | null;
   /** Called once per object this run copies, so the caller can persist the pair. */
   onCopied?: (sourceMediaId: string, copyMediaId: string) => void;
+  /**
+   * A stable id for the whole import (the job's), so each copy's id is derived
+   * from it and the source id and a retry finds its copies without the
+   * persisted map. See the header. Absent: every copy gets a random id.
+   */
+  copyIdSeed?: string | null;
 }
 
 export interface MediaImportCopier {
@@ -275,6 +292,30 @@ export function rewriteMediaRefs(
 // Copying objects
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * The namespace `importCopyId` hashes under. Fixed forever: changing it would
+ * make every retry of a job started before the change miss its own copies.
+ */
+const IMPORT_COPY_NAMESPACE = '6f1c6a52-0f3e-4f8e-9b7a-3c2d8e4a1b90';
+
+/** An RFC 4122 version-5 (SHA-1, name-based) uuid, lowercase. */
+export function uuidV5(namespace: string, name: string): string {
+  const bytes = createHash('sha1')
+    .update(Buffer.from(namespace.replace(/-/g, ''), 'hex'))
+    .update(name, 'utf8')
+    .digest()
+    .subarray(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/** The id an import with this seed gives its copy of `sourceMediaId`. See the header. */
+export function importCopyId(seed: string, sourceMediaId: string): string {
+  return uuidV5(IMPORT_COPY_NAMESPACE, `${seed}:${sourceMediaId}`);
+}
+
 /** How a kind reads in a warning: `Skipped video "lecture.mp4": …`. */
 const KIND_LABEL: Record<MediaKind, string> = {
   VIDEO: 'video',
@@ -383,7 +424,31 @@ async function copyOne({
   onQuotaFull: (row: MediaRow) => void;
 }): Promise<string | null> {
   const { sourceClassroomId, targetClassroomId, warn } = opts;
-  const newId = randomUUID();
+
+  // The copy's id: derived when the run has a seed, so a retry finds it (see
+  // the header), unless a row that cannot be taken over already holds it.
+  let newId: string = randomUUID();
+  /** An earlier attempt's UPLOADING reservation under this id, to take over. */
+  let takeOver = false;
+  if (opts.copyIdSeed) {
+    const derived = importCopyId(opts.copyIdSeed, row.id);
+    let holder: { classroom_id: string; status: string } | null;
+    try {
+      holder = (await getPrisma().mediaObject.findUnique({
+        where: { id: derived },
+        select: { classroom_id: true, status: true },
+      })) as { classroom_id: string; status: string } | null;
+    } catch (error) {
+      warn(`Could not copy ${describe(row)} into this class: ${errText(error)}`);
+      return null;
+    }
+    if (!holder) {
+      newId = derived;
+    } else if (holder.classroom_id === targetClassroomId && holder.status === 'UPLOADING') {
+      newId = derived;
+      takeOver = true;
+    }
+  }
 
   // Every key is built — and validated by `mediaKey` — before anything is
   // written, so a variant the grammar does not accept is a refusal for this
@@ -433,6 +498,14 @@ async function copyOne({
     reserved = await getPrisma().$transaction(async tx => {
       await tx.$queryRaw`SELECT id FROM classrooms WHERE id = ${targetClassroomId} FOR UPDATE`;
 
+      // An earlier attempt's reservation under this id stops counting, and the
+      // one made below replaces it (same id, same keys).
+      if (takeOver) {
+        await tx.mediaObject.deleteMany({
+          where: { id: newId, classroom_id: targetClassroomId, status: 'UPLOADING' },
+        });
+      }
+
       const live = (await tx.mediaObject.findMany({
         where: liveRowsWhere(targetClassroomId),
       })) as MediaRow[];
@@ -475,6 +548,16 @@ async function copyOne({
   }
 
   if (!reserved.ok) {
+    // A taken-over reservation is gone either way (the transaction removed it
+    // before the sum), so whatever the earlier attempt half-copied under these
+    // keys has no row left to reach it through.
+    if (takeOver) {
+      await deleteQuietly(
+        client,
+        bucket,
+        copies.map(copy => copy.to)
+      );
+    }
     // Named by the caller, in one summary for the whole pass.
     onQuotaFull(row);
     return null;
@@ -592,22 +675,31 @@ export function createMediaImportCopier(opts: MediaImportCopyOptions): MediaImpo
    * still READY in the destination; those leave `wanted`.
    */
   async function reuseKnownCopies(wanted: Set<string>): Promise<void> {
-    const candidates = [...wanted].filter(
-      id => typeof knownCopies[id] === 'string' && knownCopies[id].length > 0
-    );
-    if (candidates.length === 0) return;
+    /** source id → the ids its copy may have, in order of preference. */
+    const candidates = new Map<string, string[]>();
+    for (const id of wanted) {
+      const ids: string[] = [];
+      const known = knownCopies[id];
+      if (typeof known === 'string' && known.length > 0) ids.push(known);
+      if (opts.copyIdSeed) {
+        const derived = importCopyId(opts.copyIdSeed, id);
+        if (!ids.includes(derived)) ids.push(derived);
+      }
+      if (ids.length > 0) candidates.set(id, ids);
+    }
+    if (candidates.size === 0) return;
     const live = (await getPrisma().mediaObject.findMany({
       where: {
         classroom_id: targetClassroomId,
         status: 'READY',
-        id: { in: candidates.map(id => knownCopies[id]) },
+        id: { in: [...candidates.values()].flat() },
       },
       select: { id: true },
     })) as { id: string }[];
     const ready = new Set(live.map(row => row.id));
-    for (const id of candidates) {
-      const copy = knownCopies[id];
-      if (!ready.has(copy)) continue;
+    for (const [id, ids] of candidates) {
+      const copy = ids.find(candidate => ready.has(candidate));
+      if (!copy) continue;
       settled.add(id);
       copied.set(id, copy);
       wanted.delete(id);

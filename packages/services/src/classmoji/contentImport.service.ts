@@ -764,6 +764,7 @@ export function openImportMediaCopy({
   warn,
   knownCopies,
   onCopied,
+  copyIdSeed,
 }: {
   sourceClassroomId: string;
   targetClassroomId: string;
@@ -778,6 +779,11 @@ export function openImportMediaCopy({
   knownCopies?: Readonly<Record<string, string>> | null;
   /** Each pair this run copies, as it lands — for the caller to persist. */
   onCopied?: (sourceMediaId: string, copyMediaId: string) => void;
+  /**
+   * A stable id for the import (its job's): each copy's id is derived from it,
+   * so a retry finds its copies even when the persisted pair was lost.
+   */
+  copyIdSeed?: string | null;
 }): ImportMediaCopy {
   let copier: ReturnType<MediaCopyModule['createMediaImportCopier']> | null = null;
 
@@ -794,6 +800,7 @@ export function openImportMediaCopy({
           warn,
           knownCopies,
           onCopied,
+          copyIdSeed,
         });
       }
       await copier.prepare(candidates);
