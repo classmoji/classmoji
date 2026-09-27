@@ -485,7 +485,10 @@ test.describe('the importer’s wiring', () => {
   const RULES = source('../../app/utils/importVideoMedia.ts');
 
   test('routes every asset with the classroom’s own capability, by the store’s kinds', () => {
-    expect(IMPORTER).toContain('ClassmojiService.media.uploadCapabilityFor(classroom)');
+    // Through the degrading lookup: a failed capability read is the repository
+    // path, not a failed import.
+    expect(IMPORTER).toContain("await loadUploadCapability(classroom, 'slides.com import')");
+    expect(IMPORTER).not.toContain('media.uploadCapabilityFor(');
     expect(IMPORTER).toContain('const type = importAssetType(filePath);');
     // No extension list of its own any more.
     expect(IMPORTER).not.toMatch(/const (image|video)Extensions = \[/);

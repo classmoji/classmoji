@@ -18,6 +18,7 @@ import {
 } from '@classmoji/services/slides';
 import { getContentRepoName } from '@classmoji/utils';
 import { getThemeUrls, saveTheme, generateThemeSlug } from './themeService.server.ts';
+import { loadUploadCapability } from './uploadCapability.server.ts';
 import {
   RepoEntryGate,
   declaredUncompressedSize,
@@ -206,8 +207,10 @@ export async function processZipImport({
 
   // Where this classroom's uploads can go — the same capability the editors
   // route against, re-derived here from the classroom row. Media on it means
-  // the router sends videos to media storage instead of the repository.
-  const uploadCapability = await ClassmojiService.media.uploadCapabilityFor(classroom);
+  // the router sends videos to media storage instead of the repository. A
+  // lookup that fails degrades to null — every asset takes the repository path
+  // within its cap — rather than failing the import.
+  const uploadCapability = await loadUploadCapability(classroom, 'slides.com import');
 
   // 7. Collect files for batch upload
   const files: Array<{ path: string; content: string; encoding: 'utf-8' | 'base64' }> = [];
