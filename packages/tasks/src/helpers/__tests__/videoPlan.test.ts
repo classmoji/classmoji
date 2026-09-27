@@ -8,19 +8,24 @@ import { describe, expect, it } from 'vitest';
 
 import {
   FORMAT_WHITELIST,
+  MIN_VIDEO_BITRATE,
   OUTPUT_CAP_CEILING,
   OUTPUT_CAP_FLOOR,
+  TONEMAP_FILTERS,
   VideoRefusal,
   decideVideo,
   evenFloor,
   isCompleteOutput,
+  mappedDurationSec,
   outputSizeCap,
   parseProbe,
   posterArgs,
   posterTime,
   probeArgs,
+  rateCeiling,
   renditionArgs,
-  transcodeSize,
+  scaleBounds,
+  transcodeFilter,
   type ProbeJson,
   type ProbeStream,
 } from '../videoPlan.ts';
@@ -157,6 +162,33 @@ describe('decideVideo — remux only what browsers play as-is', () => {
     expect(d.video.index).toBe(1);
   });
 
+  it('refuses more pixels than 8192×4320 (TOO_LARGE), in either orientation', () => {
+    for (const [width, height] of [
+      [8192, 4321],
+      [4321, 8192],
+      [10000, 4000],
+    ]) {
+      expect(() => decideVideo(facts(probe([h264({ width, height })])), 'mp4')).toThrow(
+        expect.objectContaining({ code: 'TOO_LARGE' })
+      );
+    }
+    expect(decideVideo(facts(probe([h264({ width: 8192, height: 4320 })])), 'mp4').mode).toBe(
+      'transcode'
+    );
+    expect(new VideoRefusal('TOO_LARGE').userMessage).toBe('The video is larger than 8K.');
+  });
+
+  it('transcodes HDR (HLG, PQ) even when it would otherwise remux', () => {
+    for (const color_transfer of ['arib-std-b67', 'smpte2084']) {
+      const d = decideVideo(facts(probe([h264({ color_transfer }), AAC])), 'mp4');
+      expect(d.mode).toBe('transcode');
+      expect(d.reasons).toEqual([`hdr ${color_transfer}`]);
+    }
+    expect(decideVideo(facts(probe([h264({ color_transfer: 'bt709' })])), 'mp4').mode).toBe(
+      'remux'
+    );
+  });
+
   it('refuses over 6 hours', () => {
     const long = probe([h264(), AAC], { duration: String(6 * 3600 + 1) });
     expect(() => decideVideo(facts(long), 'mp4')).toThrow(/longer than 6 hours/);
@@ -188,6 +220,15 @@ describe('parseProbe', () => {
     expect(flip.video).toMatchObject({ displayWidth: 1280, displayHeight: 720 });
   });
 
+  it('reads the frame rate from avg_frame_rate, r_frame_rate only when there is no average', () => {
+    const rate = (over: Partial<ProbeStream>) =>
+      parseProbe(probe([h264(over)]), 1).video?.frameRate;
+    expect(rate({ avg_frame_rate: '30000/1001', r_frame_rate: '120/1' })).toBeCloseTo(29.97, 2);
+    expect(rate({ avg_frame_rate: '0/0', r_frame_rate: '120/1' })).toBe(120);
+    expect(rate({ avg_frame_rate: '0/0', r_frame_rate: '0/0' })).toBeNull();
+    expect(rate({ avg_frame_rate: '1e9/1' })).toBeNull();
+  });
+
   it('refuses a picture track with no size or a non-integer index', () => {
     expect(() => parseProbe(probe([h264({ width: 0 })]), 1)).toThrow(VideoRefusal);
     expect(() => parseProbe(probe([h264({ index: '0; rm -rf /' })]), 1)).toThrow(VideoRefusal);
@@ -202,36 +243,73 @@ describe('numbers', () => {
     ]);
   });
 
-  it('transcodeSize fits 1080p from the DISPLAY size, keeps aspect, even, never upscales', () => {
+  it('scaleBounds: the 1080p box in the DISPLAY orientation, never past the picture', () => {
     const at = (width: number, height: number, rotation = 0) =>
-      transcodeSize(
+      scaleBounds(
         decideVideo(facts(probe([h264({ width, height, side_data_list: [{ rotation }] })])), 'mp4')
           .video
       );
-    expect(at(2560, 1440)).toEqual({ width: 1920, height: 1080 });
     expect(at(3840, 2160)).toEqual({ width: 1920, height: 1080 });
     expect(at(1440, 2560)).toEqual({ width: 1080, height: 1920 });
     // A phone clip stored landscape, displayed portrait.
     expect(at(3840, 2160, -90)).toEqual({ width: 1080, height: 1920 });
+    // Smaller than the box: the box is the picture, so nothing is upscaled.
     expect(at(1280, 720)).toEqual({ width: 1280, height: 720 });
-    expect(at(641, 481)).toEqual({ width: 640, height: 480 });
-    // Ultra-wide: the long side binds.
-    expect(at(5120, 1440)).toEqual({ width: 1920, height: 540 });
+    expect(at(641, 481)).toEqual({ width: 641, height: 481 });
+    // Ultra-wide: the filter fits 5120×1440 into 1920×1080 → 1920×540.
+    expect(at(5120, 1440)).toEqual({ width: 1920, height: 1080 });
   });
 
-  it('outputSizeCap = max(1.5 × input, 500 MiB), at most 3 GiB', () => {
-    expect(outputSizeCap(10_000_000)).toBe(OUTPUT_CAP_FLOOR);
-    expect(outputSizeCap(1_000_000_000)).toBe(1_500_000_000);
+  it('outputSizeCap: remux max(1.5 × input, 500 MiB) ≤ 3 GiB; transcode a flat 3 GiB', () => {
+    expect(outputSizeCap('remux', 10_000_000)).toBe(OUTPUT_CAP_FLOOR);
+    expect(outputSizeCap('remux', 1_000_000_000)).toBe(1_500_000_000);
     // The 2 GB per-file maximum lands under the ceiling; it binds only past it.
-    expect(outputSizeCap(2_000_000_000)).toBe(3_000_000_000);
-    expect(outputSizeCap(2_500_000_000)).toBe(OUTPUT_CAP_CEILING);
+    expect(outputSizeCap('remux', 2_000_000_000)).toBe(3_000_000_000);
+    expect(outputSizeCap('remux', 2_500_000_000)).toBe(OUTPUT_CAP_CEILING);
+    expect(outputSizeCap('transcode', 1)).toBe(OUTPUT_CAP_CEILING);
+    expect(outputSizeCap('transcode', 2_000_000_000)).toBe(OUTPUT_CAP_CEILING);
     expect(OUTPUT_CAP_FLOOR).toBe(500 * 1024 * 1024);
     expect(OUTPUT_CAP_CEILING).toBe(3 * 1024 * 1024 * 1024);
+  });
+
+  it('rateCeiling = min(8 Mbps, floor(0.9 × (cap × 8 / duration − 128k)))', () => {
+    // Short: the 8 Mb/s ceiling.
+    expect(rateCeiling(OUTPUT_CAP_CEILING, 600)).toBe(8_000_000);
+    // Two hours in 3 GiB: 0.9 × (3 GiB × 8 / 7200 − 128k).
+    expect(rateCeiling(OUTPUT_CAP_CEILING, 7200)).toBe(
+      Math.floor(0.9 * ((OUTPUT_CAP_CEILING * 8) / 7200 - 128_000))
+    );
+    // The 6-hour maximum stays well above the floor.
+    expect(rateCeiling(OUTPUT_CAP_CEILING, 6 * 3600)).toBeGreaterThan(900_000);
+    // Everything fits: video + audio over the duration is under the cap.
+    for (const sec of [1800, 7200, 6 * 3600]) {
+      const bytes = ((rateCeiling(OUTPUT_CAP_CEILING, sec) + 128_000) * sec) / 8;
+      expect(bytes).toBeLessThan(OUTPUT_CAP_CEILING);
+    }
+    // Degenerate inputs clamp rather than produce a bad argument.
+    expect(rateCeiling(1000, 3600)).toBe(MIN_VIDEO_BITRATE);
+    expect(rateCeiling(OUTPUT_CAP_CEILING, 0)).toBe(8_000_000);
   });
 
   it('posterTime = min(1 s, duration / 2)', () => {
     expect(posterTime(60)).toBe(1);
     expect(posterTime(1.2)).toBe(0.6);
+  });
+});
+
+describe('mappedDurationSec — what the rendition should last', () => {
+  it('is the longest MAPPED stream, not a longer data track in the container', () => {
+    // Container says 65 s because of a timecode track; picture and sound are 60 s.
+    const json = probe([h264({ duration: '60.0' }), { ...AAC, duration: '60.02' }], {
+      duration: '65',
+    });
+    expect(mappedDurationSec(parseProbe(json, 1))).toBe(60.02);
+    expect(decideVideo(parseProbe(json, 1), 'mp4').durationSec).toBe(60.02);
+  });
+
+  it('falls back to the container when a mapped stream has no duration (mkv)', () => {
+    const json = probe([h264(), { ...AAC, duration: '59' }], { duration: '60' });
+    expect(mappedDurationSec(parseProbe(json, 1))).toBe(60);
   });
 });
 
@@ -307,7 +385,7 @@ describe('argument lists — arrays, fixed shape, numbers only', () => {
     ]);
   });
 
-  it('transcode: libx264 veryfast crf 23 yuv420p High, scaled, aac 128k', () => {
+  it('transcode: libx264 veryfast crf 23 capped, yuv420p High, scaled, aac 128k stereo', () => {
     const d = decideVideo(
       facts(probe([h264({ width: 2560, height: 1440, pix_fmt: 'yuv444p' }), AAC])),
       'mp4'
@@ -321,17 +399,94 @@ describe('argument lists — arrays, fixed shape, numbers only', () => {
     });
     fenced(args);
     const after = (flag: string) => args[args.indexOf(flag) + 1];
-    expect(after('-vf')).toBe('scale=1920:1080');
+    expect(after('-vf')).toBe(
+      'scale=w=1920:h=1080:force_original_aspect_ratio=decrease:force_divisible_by=2'
+    );
     expect(after('-c:v')).toBe('libx264');
     expect(after('-preset')).toBe('veryfast');
     expect(after('-crf')).toBe('23');
+    // 60 s in 3 GiB: the 8 Mb/s ceiling, bufsize twice that.
+    expect(after('-maxrate')).toBe('8000000');
+    expect(after('-bufsize')).toBe('16000000');
     expect(after('-pix_fmt')).toBe('yuv420p');
     expect(after('-profile:v')).toBe('high');
     expect(after('-c:a')).toBe('aac');
     expect(after('-b:a')).toBe('128k');
+    expect(after('-ac')).toBe('2');
     expect(after('-movflags')).toBe('+faststart');
-    expect(after('-fs')).toBe(String(OUTPUT_CAP_FLOOR));
+    expect(after('-fs')).toBe(String(OUTPUT_CAP_CEILING));
+    // SDR keeps its own colour tags.
+    expect(args).not.toContain('-color_trc');
     expect(args.at(-1)).toBe(OUT);
+  });
+
+  it('transcode: a long recording gets the rate that fits it under the cap', () => {
+    const long = probe([h264({ pix_fmt: 'yuv444p' }), AAC], { duration: String(4 * 3600) });
+    const args = renditionArgs({
+      input: IN,
+      output: OUT,
+      decision: decideVideo(facts(long), 'mp4'),
+      audioIndex: 1,
+      inputBytes: 1,
+    });
+    const rate = rateCeiling(OUTPUT_CAP_CEILING, 4 * 3600);
+    expect(args[args.indexOf('-maxrate') + 1]).toBe(String(rate));
+    expect(args[args.indexOf('-bufsize') + 1]).toBe(String(2 * rate));
+  });
+
+  it('outputCapBytes replaces both -fs and the rate ceiling (scratch proofs)', () => {
+    const d = decideVideo(facts(probe([h264({ pix_fmt: 'yuv444p' }), AAC])), 'mp4');
+    const args = renditionArgs({
+      input: IN,
+      output: OUT,
+      decision: d,
+      audioIndex: 1,
+      inputBytes: 1,
+      outputCapBytes: 4_000_000,
+    });
+    expect(args[args.indexOf('-fs') + 1]).toBe('4000000');
+    expect(args[args.indexOf('-maxrate') + 1]).toBe(String(rateCeiling(4_000_000, 60)));
+  });
+
+  it('transcode filter: fps=60 only above 60, the fixed-shape scale, then HDR tone-mapping', () => {
+    const video = (over: Partial<ProbeStream>) =>
+      decideVideo(facts(probe([h264({ pix_fmt: 'yuv444p', ...over })])), 'mp4').video;
+    expect(transcodeFilter(video({ avg_frame_rate: '120/1' }))).toBe(
+      'fps=60,scale=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2'
+    );
+    expect(transcodeFilter(video({ avg_frame_rate: '60/1' }))).not.toContain('fps=');
+    expect(
+      transcodeFilter(video({ avg_frame_rate: '30000/1001', r_frame_rate: '120/1' }))
+    ).not.toContain('fps=');
+    expect(transcodeFilter(video({ color_transfer: 'arib-std-b67' }))).toBe(
+      'scale=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2,' +
+        TONEMAP_FILTERS
+    );
+    expect(TONEMAP_FILTERS).toBe(
+      'zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,' +
+        'zscale=t=bt709:m=bt709:r=tv,format=yuv420p'
+    );
+  });
+
+  it('HDR transcode tags the output bt709', () => {
+    const d = decideVideo(
+      facts(probe([h264({ codec_name: 'hevc', color_transfer: 'smpte2084' }), AAC])),
+      'mp4'
+    );
+    const args = renditionArgs({
+      input: IN,
+      output: OUT,
+      decision: d,
+      audioIndex: 1,
+      inputBytes: 1,
+    });
+    const after = (flag: string) => args[args.indexOf(flag) + 1];
+    expect(after('-vf')).toContain('tonemap=hable');
+    expect(after('-color_primaries')).toBe('bt709');
+    expect(after('-color_trc')).toBe('bt709');
+    expect(after('-colorspace')).toBe('bt709');
+    expect(after('-color_range')).toBe('tv');
+    expect(args.indexOf('-color_trc')).toBeLessThan(args.indexOf(OUT));
   });
 
   it('no audio → -an and no audio map', () => {

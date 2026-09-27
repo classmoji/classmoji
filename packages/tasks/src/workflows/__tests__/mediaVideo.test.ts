@@ -1,8 +1,9 @@
 /**
  * `media-video-process` against a fake database, bucket and ffmpeg: the
- * eligibility gate, the fenced DONE write and its zero-row cleanup, the
- * keep_original drop order, what is retried vs recorded, and that the tmp dir
- * goes whatever happens. The pure rules are in `videoPlan.test.ts`.
+ * eligibility gate and the claim, the fenced DONE write and its zero-row
+ * cleanup, the keep_original drop order, the best-effort poster, what is
+ * retried vs recorded, the deadline, and that the tmp dir goes whatever
+ * happens. The pure rules are in `videoPlan.test.ts`.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,13 +19,20 @@ vi.mock('@trigger.dev/sdk', () => {
     AbortTaskRunError,
     task: (config: object) => config,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    usage: { getCurrent: vi.fn() },
   };
 });
 vi.mock('@classmoji/database', () => ({ default: () => ({}) }));
 
 const { AbortTaskRunError } = await import('@trigger.dev/sdk');
-const { mediaVideoProcess, processVideo, runVideoAttempt, VIDEO_MAX_ATTEMPTS } =
-  await import('../mediaVideo.ts');
+const {
+  DEADLINE_MARGIN_MS,
+  deadlineInMs,
+  mediaVideoProcess,
+  processVideo,
+  runVideoAttempt,
+  VIDEO_MAX_ATTEMPTS,
+} = await import('../mediaVideo.ts');
 type Deps = import('../mediaVideo.ts').VideoJobDeps;
 type Row = import('../mediaVideo.ts').VideoRow;
 const { VideoRefusal, GENERIC_FAILURE_MESSAGE } = await import('../../helpers/videoPlan.ts');
@@ -80,9 +88,25 @@ function world(rowOver: Partial<Row> = {}) {
     tmpDirs: new Set<string>(),
     removed: [] as string[],
     outputDuration: '60',
+    processingError: null as string | null,
   };
   const deps: Deps = {
     findRow: vi.fn(async () => (state.row ? { ...state.row } : null)),
+    claim: vi.fn(async (_id, classroomId) => {
+      state.events.push('claim');
+      const r = state.row;
+      if (
+        !r ||
+        r.classroom_id !== classroomId ||
+        r.status !== 'READY' ||
+        !['PENDING', 'FAILED'].includes(r.processing)
+      ) {
+        return 0;
+      }
+      state.row = { ...r, processing: 'PENDING' };
+      state.processingError = null;
+      return 1;
+    }),
     commitDone: vi.fn(async (_id, fields) => {
       state.events.push('commitDone');
       const r = state.row;
@@ -105,6 +129,7 @@ function world(rowOver: Partial<Row> = {}) {
       const r = state.row;
       if (!r || r.status !== 'READY' || r.processing !== 'PENDING') return 0;
       state.row = { ...r, processing: 'FAILED' };
+      state.processingError = reason;
       return 1;
     }),
     download: vi.fn(async key => {
@@ -162,14 +187,34 @@ describe('eligibility', () => {
     [{ status: 'DELETED' }, 'not-ready'],
     [{ kind: 'AUDIO' }, 'not-video'],
     [{ optimise: false }, 'not-optimised'],
-    [{ processing: 'DONE' }, 'not-pending'],
-    [{ processing: 'NONE' }, 'not-pending'],
+    [{ processing: 'DONE' }, 'not-queued'],
+    [{ processing: 'NONE' }, 'not-queued'],
     [{ classroom_id: '99999999-2222-4333-8444-555555555555' }, 'wrong-classroom'],
   ])('skips a row with %o quietly', async (over, reason) => {
     const { state, deps } = world(over as Partial<Row>);
     expect(await processVideo(PAYLOAD, deps)).toEqual({ status: 'skipped', reason });
     expect(deps.makeTmpDir).not.toHaveBeenCalled();
+    expect(deps.claim).not.toHaveBeenCalled();
     expect(state.events).toEqual([]);
+  });
+
+  it('a FAILED row is a retry: claimed back to PENDING, error cleared, processed', async () => {
+    const { state, deps } = world({ processing: 'FAILED' });
+    state.processingError = 'The video could not be optimised.';
+    const result = await processVideo(PAYLOAD, deps);
+    expect(result).toMatchObject({ status: 'done' });
+    expect(state.events[0]).toBe('claim');
+    expect(deps.claim).toHaveBeenCalledWith(MEDIA, CLASSROOM);
+    expect(state.processingError).toBeNull();
+    expect(state.row?.processing).toBe('DONE');
+  });
+
+  it('claims before any work, and a lost claim is a quiet skip', async () => {
+    const { deps } = world();
+    (deps.claim as ReturnType<typeof vi.fn>).mockResolvedValue(0);
+    expect(await processVideo(PAYLOAD, deps)).toEqual({ status: 'skipped', reason: 'claim-lost' });
+    expect(deps.makeTmpDir).not.toHaveBeenCalled();
+    expect(deps.download).not.toHaveBeenCalled();
   });
 
   it('skips a missing row', async () => {
@@ -185,10 +230,11 @@ describe('the happy path', () => {
     const result = await processVideo(PAYLOAD, deps);
     expect(result).toEqual({ status: 'done', mode: 'remux', renditionKey: WEB, posterKey: POSTER });
     expect(state.events).toEqual([
+      'claim',
       `download:${ORIG}`,
       'ffmpeg:web.mp4',
-      'ffmpeg:poster.jpg',
       `upload:${WEB}`,
+      'ffmpeg:poster.jpg',
       `upload:${POSTER}`,
       'commitDone',
     ]);
@@ -216,14 +262,60 @@ describe('the happy path', () => {
     );
   });
 
-  it('a poster ffmpeg cannot make leaves poster_key null, not a failed job', async () => {
+  it.each([
+    ['a refusal', new VideoRefusal('CONVERT_FAILED', 'mjpeg')],
+    ['a crash', new Error('ffmpeg was stopped by SIGKILL')],
+  ])('a poster ffmpeg cannot make (%s) leaves poster_key null, not a failed job', async (_, e) => {
     const { state, deps } = world();
     (deps.ffmpeg as ReturnType<typeof vi.fn>).mockImplementation(async (args: string[]) => {
-      if (args.at(-1)?.endsWith('.jpg')) throw new VideoRefusal('CONVERT_FAILED', 'mjpeg');
+      if (args.at(-1)?.endsWith('.jpg')) throw e;
     });
     const result = await processVideo(PAYLOAD, deps);
     expect(result).toMatchObject({ status: 'done', posterKey: null });
     expect(state.row?.poster_key).toBeNull();
+    expect(deps.upload).toHaveBeenCalledTimes(1);
+  });
+
+  it('a poster upload that fails is deleted and left out; the job still finishes', async () => {
+    const { state, deps } = world();
+    (deps.upload as ReturnType<typeof vi.fn>).mockImplementation(async (key: string) => {
+      state.bucket.add(key); // half-written, say
+      if (key === POSTER) throw new Error('R2 503');
+    });
+    const result = await processVideo(PAYLOAD, deps);
+    expect(result).toMatchObject({ status: 'done', renditionKey: WEB, posterKey: null });
+    expect(deps.deleteObject).toHaveBeenCalledWith(POSTER);
+    expect(state.bucket.has(POSTER)).toBe(false);
+    expect(deps.commitDone).toHaveBeenCalledWith(
+      MEDIA,
+      expect.objectContaining({ poster_key: null })
+    );
+  });
+
+  it('a poster stored at the wrong size is deleted and left out', async () => {
+    const { state, deps } = world();
+    (deps.headBytes as ReturnType<typeof vi.fn>).mockImplementation(async (key: string) =>
+      key === POSTER ? 7 : state.bucket.has(key) ? 1000 : null
+    );
+    const result = await processVideo(PAYLOAD, deps);
+    expect(result).toMatchObject({ status: 'done', posterKey: null });
+    expect(state.bucket.has(POSTER)).toBe(false);
+  });
+
+  it('measures completeness against the mapped streams, not a longer data track', async () => {
+    const { deps } = world();
+    const withTimecode = {
+      streams: [
+        { ...PROBE_IN.streams[0], duration: '60.0' },
+        { ...PROBE_IN.streams[1], duration: '60.0' },
+        { index: 2, codec_type: 'data', duration: '75.0' },
+      ],
+      format: { ...PROBE_IN.format, duration: '75' },
+    };
+    (deps.probe as ReturnType<typeof vi.fn>).mockImplementation(async (file: string) =>
+      file.endsWith('input') ? withTimecode : PROBE_IN
+    );
+    await expect(processVideo(PAYLOAD, deps)).resolves.toMatchObject({ status: 'done' });
   });
 });
 
@@ -295,7 +387,7 @@ describe('keep_original off', () => {
   it('never touches the original when the job fails', async () => {
     const { state, deps } = world({ keep_original: false });
     state.outputDuration = '20'; // truncated
-    await expect(runVideoAttempt(PAYLOAD, 1, deps)).rejects.toBeInstanceOf(AbortTaskRunError);
+    await expect(runVideoAttempt(PAYLOAD, 1, 3, deps)).rejects.toBeInstanceOf(AbortTaskRunError);
     expect(state.bucket.has(ORIG)).toBe(true);
     expect(deps.markOriginalDropped).not.toHaveBeenCalled();
     expect(deps.deleteObject).not.toHaveBeenCalledWith(ORIG);
@@ -306,7 +398,7 @@ describe('failure: refused, retried, recorded', () => {
   it('a truncated output is a refusal: recorded at once, run aborted, outputs never uploaded', async () => {
     const { state, deps } = world();
     state.outputDuration = '20';
-    const error = await runVideoAttempt(PAYLOAD, 1, deps).catch(e => e);
+    const error = await runVideoAttempt(PAYLOAD, 1, 3, deps).catch(e => e);
     expect(error).toBeInstanceOf(AbortTaskRunError);
     expect(deps.recordFailure).toHaveBeenCalledWith(MEDIA, 'The optimised copy was incomplete.');
     expect(deps.upload).not.toHaveBeenCalled();
@@ -319,7 +411,7 @@ describe('failure: refused, retried, recorded', () => {
       streams: [PROBE_IN.streams[1]],
       format: PROBE_IN.format,
     });
-    await expect(runVideoAttempt(PAYLOAD, 1, audioOnly.deps)).rejects.toBeInstanceOf(
+    await expect(runVideoAttempt(PAYLOAD, 1, 3, audioOnly.deps)).rejects.toBeInstanceOf(
       AbortTaskRunError
     );
     expect(audioOnly.deps.recordFailure).toHaveBeenCalledWith(
@@ -332,7 +424,9 @@ describe('failure: refused, retried, recorded', () => {
       ...PROBE_IN,
       format: { ...PROBE_IN.format, duration: String(7 * 3600) },
     });
-    await expect(runVideoAttempt(PAYLOAD, 1, long.deps)).rejects.toBeInstanceOf(AbortTaskRunError);
+    await expect(runVideoAttempt(PAYLOAD, 1, 3, long.deps)).rejects.toBeInstanceOf(
+      AbortTaskRunError
+    );
     expect(long.deps.recordFailure).toHaveBeenCalledWith(
       MEDIA,
       'The video is longer than 6 hours.'
@@ -344,7 +438,7 @@ describe('failure: refused, retried, recorded', () => {
     const { state, deps } = world();
     const blip = new Error('R2 503');
     (deps.headBytes as ReturnType<typeof vi.fn>).mockRejectedValueOnce(blip);
-    const error = await runVideoAttempt(PAYLOAD, 1, deps).catch(e => e);
+    const error = await runVideoAttempt(PAYLOAD, 1, 3, deps).catch(e => e);
     expect(error).toBe(blip);
     expect(error).not.toBeInstanceOf(AbortTaskRunError);
     expect(deps.recordFailure).not.toHaveBeenCalled();
@@ -356,9 +450,9 @@ describe('failure: refused, retried, recorded', () => {
   it('the same transient error on the last attempt is recorded with the generic sentence', async () => {
     const { state, deps } = world();
     (deps.download as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('socket hang up'));
-    await expect(runVideoAttempt(PAYLOAD, VIDEO_MAX_ATTEMPTS, deps)).rejects.toThrow(
-      'socket hang up'
-    );
+    await expect(
+      runVideoAttempt(PAYLOAD, VIDEO_MAX_ATTEMPTS, VIDEO_MAX_ATTEMPTS, deps)
+    ).rejects.toThrow('socket hang up');
     expect(deps.recordFailure).toHaveBeenCalledWith(MEDIA, GENERIC_FAILURE_MESSAGE);
     expect(state.row?.processing).toBe('FAILED');
   });
@@ -366,15 +460,48 @@ describe('failure: refused, retried, recorded', () => {
   it('a stored-size mismatch after upload is retried and cleans up', async () => {
     const { state, deps } = world();
     (deps.headBytes as ReturnType<typeof vi.fn>).mockResolvedValueOnce(999);
-    await expect(runVideoAttempt(PAYLOAD, 1, deps)).rejects.toThrow(/stored as 999/);
+    await expect(runVideoAttempt(PAYLOAD, 1, 3, deps)).rejects.toThrow(/stored as 999/);
     expect(state.bucket.has(WEB)).toBe(false);
     expect(deps.recordFailure).not.toHaveBeenCalled();
+  });
+
+  it("the last attempt is the run's own maxAttempts, not the task default", async () => {
+    const { state, deps } = world();
+    (deps.download as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('socket hang up'));
+    await expect(runVideoAttempt(PAYLOAD, 2, 5, deps)).rejects.toThrow('socket hang up');
+    expect(deps.recordFailure).not.toHaveBeenCalled();
+    await expect(runVideoAttempt(PAYLOAD, 2, 2, deps)).rejects.toThrow('socket hang up');
+    expect(deps.recordFailure).toHaveBeenCalledWith(MEDIA, GENERIC_FAILURE_MESSAGE);
+    expect(state.row?.processing).toBe('FAILED');
+  });
+
+  it('the deadline killing ffmpeg is recorded as FAILED with its own sentence, not retried', async () => {
+    const { state, deps } = world({ keep_original: false });
+    (deps.ffmpeg as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new VideoRefusal('TIMED_OUT', 'ffmpeg stopped at the deadline')
+    );
+    await expect(runVideoAttempt(PAYLOAD, 1, 3, deps)).rejects.toBeInstanceOf(AbortTaskRunError);
+    expect(deps.recordFailure).toHaveBeenCalledWith(MEDIA, 'The video took too long to optimise.');
+    expect(state.row?.processing).toBe('FAILED');
+    expect(state.bucket.has(ORIG)).toBe(true);
+    expect(deps.upload).not.toHaveBeenCalled();
   });
 
   it('onFailure records only a row still PENDING', async () => {
     const { state, deps } = world({ processing: 'FAILED' });
     expect(await deps.recordFailure(MEDIA, GENERIC_FAILURE_MESSAGE)).toBe(0);
     expect(state.row?.processing).toBe('FAILED');
+  });
+});
+
+describe('the deadline', () => {
+  it('is what is left of maxDuration after the compute used, less 15 minutes', () => {
+    expect(DEADLINE_MARGIN_MS).toBe(15 * 60 * 1000);
+    expect(deadlineInMs(4 * 3600, 0)).toBe(4 * 3600 * 1000 - DEADLINE_MARGIN_MS);
+    // Earlier attempts used 3 h: an hour left, 45 minutes before the kill.
+    expect(deadlineInMs(4 * 3600, 3 * 3600 * 1000)).toBe(45 * 60 * 1000);
+    // Nothing left: already past, never negative.
+    expect(deadlineInMs(4 * 3600, 4 * 3600 * 1000)).toBe(0);
   });
 });
 

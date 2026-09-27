@@ -22,8 +22,15 @@
  * REMUX — copy the streams into an mp4 with the index at the front — only
  * when browsers play the file as it is: H.264 in yuv420p at a profile no
  * higher than High, AAC or no audio, at most 1080p, at most 8 Mbps, in an
- * mp4/mov/m4v container. Anything else is TRANSCODED to H.264 High/yuv420p,
- * scaled to fit 1080p with even dimensions, AAC 128k, `+faststart`.
+ * mp4/mov/m4v container, not HDR. Anything else is TRANSCODED to H.264
+ * High/yuv420p, scaled to fit 1080p with even dimensions, at most 60 fps,
+ * HDR tone-mapped to SDR bt709, AAC 128k stereo, `+faststart`.
+ *
+ * ## Size (plan §12.7 M1)
+ *
+ * A transcode's `-fs` is a flat 3 GiB and its bitrate is capped so the whole
+ * duration fits under it (`rateCeiling`): CRF alone would let a long, busy
+ * recording run into `-fs` and fail as incomplete.
  */
 
 /** The demuxers the job will open: what the media store accepts as VIDEO. */
@@ -31,6 +38,27 @@ export const FORMAT_WHITELIST = 'mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,avi,ogg';
 
 /** Longer than this is refused: a lecture is hours, not days. */
 export const MAX_DURATION_SEC = 6 * 60 * 60;
+
+/** More pixels than 8K UHD (8192×4320) is refused: no camera a class uses records it. */
+export const MAX_PIXELS = 8192 * 4320;
+
+/** A transcode's frame rate is capped here (`fps=60` only above it). */
+export const MAX_FRAME_RATE = 60;
+
+/** The transcode's AAC bitrate, which `rateCeiling` leaves room for. */
+export const AUDIO_BITRATE = 128_000;
+
+/** A transcode's video bitrate ceiling never exceeds this (the remux limit). */
+export const MAX_VIDEO_BITRATE = 8_000_000;
+
+/**
+ * Nor drops under this. It cannot bind with the real cap: 3 GiB over the
+ * 6-hour maximum is ~957 kb/s.
+ */
+export const MIN_VIDEO_BITRATE = 250_000;
+
+/** Transfer characteristics that mean HDR (HLG and PQ): tone-mapped to SDR. */
+export const HDR_TRANSFERS: ReadonlySet<string> = new Set(['arib-std-b67', 'smpte2084']);
 
 /** Remux only at or under this overall bitrate (bits per second). */
 export const MAX_REMUX_BITRATE = 8_000_000;
@@ -63,6 +91,8 @@ const REMUX_EXTS = new Set(['mp4', 'mov', 'm4v']);
 export type VideoRefusalCode =
   | 'NO_VIDEO'
   | 'TOO_LONG'
+  | 'TOO_LARGE'
+  | 'TIMED_OUT'
   | 'UNREADABLE'
   | 'CONVERT_FAILED'
   | 'INCOMPLETE'
@@ -77,6 +107,8 @@ export type VideoRefusalCode =
 export const REFUSAL_MESSAGES: Readonly<Record<VideoRefusalCode, string>> = {
   NO_VIDEO: 'The file has no video track.',
   TOO_LONG: 'The video is longer than 6 hours.',
+  TOO_LARGE: 'The video is larger than 8K.',
+  TIMED_OUT: 'The video took too long to optimise.',
   UNREADABLE: "The video's format could not be read.",
   CONVERT_FAILED: 'The video could not be converted.',
   INCOMPLETE: 'The optimised copy was incomplete.',
@@ -123,6 +155,9 @@ export interface ProbeStream {
   width?: unknown;
   height?: unknown;
   duration?: unknown;
+  avg_frame_rate?: unknown;
+  r_frame_rate?: unknown;
+  color_transfer?: unknown;
   disposition?: { attached_pic?: unknown } | null;
   tags?: { rotate?: unknown } | null;
   side_data_list?: Array<{ rotation?: unknown }> | null;
@@ -150,6 +185,12 @@ export interface VideoStreamFacts {
   /** What a viewer sees: coded size with w/h swapped for a quarter turn. */
   displayWidth: number;
   displayHeight: number;
+  /** Average frames per second, or null when the probe has no usable rate. */
+  frameRate: number | null;
+  /** `color_transfer` as ffprobe names it ('' when untagged). */
+  colorTransfer: string;
+  /** The stream's own duration, when the container records one. */
+  durationSec: number | null;
 }
 
 export interface VideoFacts {
@@ -158,7 +199,7 @@ export interface VideoFacts {
   /** Overall bits per second (see `overallBitrate`). */
   bitRate: number;
   video: VideoStreamFacts | null;
-  audio: { index: number; codec: string } | null;
+  audio: { index: number; codec: string; durationSec: number | null } | null;
 }
 
 function finiteNumber(value: unknown): number | null {
@@ -173,6 +214,29 @@ function wholeNumber(value: unknown): number | null {
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+function positiveNumber(value: unknown): number | null {
+  const n = finiteNumber(value);
+  return n !== null && n > 0 ? n : null;
+}
+
+/** An ffprobe rational ("30000/1001", "0/0") as a number, or null. */
+function rational(value: unknown): number | null {
+  const match = /^(\d+)\/(\d+)$/.exec(text(value));
+  if (!match) return null;
+  const den = Number(match[2]);
+  return den > 0 ? positiveNumber(Number(match[1]) / den) : null;
+}
+
+/**
+ * Frames per second: `avg_frame_rate`, falling back to `r_frame_rate` only
+ * when there is no average. A variable-rate phone clip reports an inflated
+ * `r_frame_rate` (120/1 for a ~30 fps clip); capping on that would force a
+ * constant 60 and duplicate frames.
+ */
+function frameRateOf(stream: ProbeStream): number | null {
+  return rational(stream.avg_frame_rate) ?? rational(stream.r_frame_rate);
 }
 
 /** Rotation from the display matrix (ffmpeg ≥ 5) or the legacy `rotate` tag. */
@@ -240,6 +304,9 @@ export function parseProbe(json: ProbeJson, fileBytes: number): VideoFacts {
       rotation,
       displayWidth: quarterTurn ? height : width,
       displayHeight: quarterTurn ? width : height,
+      frameRate: frameRateOf(picture),
+      colorTransfer: text(picture.color_transfer),
+      durationSec: positiveNumber(picture.duration),
     };
   }
 
@@ -247,7 +314,7 @@ export function parseProbe(json: ProbeJson, fileBytes: number): VideoFacts {
   if (sound) {
     const index = wholeNumber(sound.index);
     if (index === null) throw new VideoRefusal('UNREADABLE', 'audio stream without index');
-    audio = { index, codec: text(sound.codec_name) };
+    audio = { index, codec: text(sound.codec_name), durationSec: positiveNumber(sound.duration) };
   }
 
   let durationSec = finiteNumber(json?.format?.duration);
@@ -281,6 +348,29 @@ export interface VideoDecision {
   /** Why it is not a remux (empty for a remux). For the run log. */
   reasons: string[];
   video: VideoStreamFacts;
+  /** What the rendition should last: `mappedDurationSec`. */
+  durationSec: number;
+}
+
+/**
+ * How long the rendition should be: the longest of the streams it carries
+ * (the picture and the first audio track), when each records its own
+ * duration; otherwise the container's. A mov's timecode or data track can
+ * outlast the picture, and the rendition leaves those behind — measuring it
+ * against the container would call a whole copy short.
+ */
+export function mappedDurationSec(facts: VideoFacts): number {
+  const mapped = [facts.video, facts.audio].filter(s => s !== null);
+  const durations = mapped.map(s => s.durationSec);
+  if (mapped.length && durations.every(d => d !== null)) {
+    return Math.max(...(durations as number[]));
+  }
+  return facts.durationSec;
+}
+
+/** HLG or PQ: the picture needs tone-mapping to look right on an SDR screen. */
+export function isHdr(video: VideoStreamFacts): boolean {
+  return HDR_TRANSFERS.has(video.colorTransfer);
 }
 
 function fitsIn1080p(width: number, height: number): boolean {
@@ -296,6 +386,10 @@ export function decideVideo(facts: VideoFacts, ext: string): VideoDecision {
   if (facts.durationSec > MAX_DURATION_SEC) throw new VideoRefusal('TOO_LONG');
   const video = facts.video;
   if (!video) throw new VideoRefusal('NO_VIDEO');
+  // Area, so the rule is the same in either orientation.
+  if (video.width * video.height > MAX_PIXELS) {
+    throw new VideoRefusal('TOO_LARGE', `${video.width}x${video.height}`);
+  }
 
   const reasons: string[] = [];
   if (video.codec !== 'h264') reasons.push(`codec ${video.codec || 'unknown'}`);
@@ -303,6 +397,7 @@ export function decideVideo(facts: VideoFacts, ext: string): VideoDecision {
   if (!REMUX_PROFILES.has(video.profile.toLowerCase())) {
     reasons.push(`profile ${video.profile || 'unknown'}`);
   }
+  if (isHdr(video)) reasons.push(`hdr ${video.colorTransfer}`);
   if (facts.audio && facts.audio.codec !== 'aac') reasons.push(`audio ${facts.audio.codec}`);
   if (!fitsIn1080p(video.width, video.height)) {
     reasons.push(`size ${video.displayWidth}x${video.displayHeight}`);
@@ -315,7 +410,12 @@ export function decideVideo(facts: VideoFacts, ext: string): VideoDecision {
     reasons.push(`container ${ext}/${facts.formatName}`);
   }
 
-  return { mode: reasons.length ? 'transcode' : 'remux', reasons, video };
+  return {
+    mode: reasons.length ? 'transcode' : 'remux',
+    reasons,
+    video,
+    durationSec: mappedDurationSec(facts),
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -328,20 +428,50 @@ export function evenFloor(value: number): number {
 }
 
 /**
- * The transcode's output size: the DISPLAY size (ffmpeg autorotates before our
- * filter runs) scaled down to fit the 1080p box, never up, keeping the aspect,
- * with both sides even.
+ * The box the transcode's picture must fit: the 1080p box turned to the
+ * DISPLAY orientation (ffmpeg autorotates before our filter runs), and no
+ * larger than the picture itself on either side, so the filter's
+ * `force_original_aspect_ratio=decrease` never upscales.
+ *
+ * The filter keeps the aspect of the frames it is actually given. If the
+ * probe's idea of the rotation and ffmpeg's disagree (a rotation carried only
+ * in a legacy tag), the picture comes out smaller than it could be, never
+ * squashed — which a fixed `scale=W:H` from the probe's numbers would do.
  */
-export function transcodeSize(video: VideoStreamFacts): { width: number; height: number } {
+export function scaleBounds(video: VideoStreamFacts): { width: number; height: number } {
   const w = video.displayWidth;
   const h = video.displayHeight;
-  const factor = Math.min(1, MAX_LONG_SIDE / Math.max(w, h), MAX_SHORT_SIDE / Math.min(w, h));
-  return { width: evenFloor(w * factor), height: evenFloor(h * factor) };
+  const portrait = h > w;
+  return {
+    width: Math.min(w, portrait ? MAX_SHORT_SIDE : MAX_LONG_SIDE),
+    height: Math.min(h, portrait ? MAX_LONG_SIDE : MAX_SHORT_SIDE),
+  };
 }
 
-/** `-fs` for the rendition: max(1.5 × input, 500 MiB), at most 3 GiB. */
-export function outputSizeCap(inputBytes: number): number {
+/**
+ * `-fs` for the rendition. A remux is about the input's size: max(1.5 × input,
+ * 500 MiB), at most 3 GiB. A transcode is a flat 3 GiB, and `rateCeiling`
+ * makes the encode fit under it.
+ */
+export function outputSizeCap(mode: VideoMode, inputBytes: number): number {
+  if (mode === 'transcode') return OUTPUT_CAP_CEILING;
   return Math.min(OUTPUT_CAP_CEILING, Math.max(Math.ceil(1.5 * inputBytes), OUTPUT_CAP_FLOOR));
+}
+
+/**
+ * The transcode's `-maxrate` (bits per second): what fills `capBytes` over
+ * `durationSec` after the audio's share, with 10% headroom for the container
+ * and the rate control's overshoot, at most 8 Mb/s:
+ *
+ *     min(8 Mbps, floor(0.9 × (cap × 8 / duration − 128k)))
+ *
+ * `-bufsize` is twice this. Short clips get the 8 Mb/s ceiling; only long
+ * recordings are held down by the cap.
+ */
+export function rateCeiling(capBytes: number, durationSec: number): number {
+  const fill = Math.floor(0.9 * ((capBytes * 8) / durationSec - AUDIO_BITRATE));
+  const rate = Number.isFinite(fill) ? fill : MAX_VIDEO_BITRATE;
+  return Math.max(MIN_VIDEO_BITRATE, Math.min(MAX_VIDEO_BITRATE, rate));
 }
 
 /** The poster frame's time: one second in, or halfway through a shorter clip. */
@@ -351,7 +481,8 @@ export function posterTime(durationSec: number): number {
 
 /**
  * The rendition is complete when it has a picture track and its duration is
- * within 1% of the input's, or within half a second for a short clip. A
+ * within 1% of what it should last (`mappedDurationSec` of the input), or
+ * within half a second for a short clip. A
  * shortfall means `-fs` cut it off, the disk filled, or ffmpeg stopped early
  * and still exited 0 — in every case the copy must not replace the original.
  */
@@ -412,6 +543,39 @@ export interface RenditionArgsInput {
   decision: VideoDecision;
   audioIndex: number | null;
   inputBytes: number;
+  /**
+   * Replaces `outputSizeCap` — both `-fs` and the rate ceiling follow it. For
+   * the scratch scripts that prove a tiny cap is met; the job never sets it.
+   */
+  outputCapBytes?: number;
+}
+
+/**
+ * HLG/PQ → SDR bt709 (zimg): to linear light, into bt709 primaries, Hable
+ * tone curve, back to the bt709 transfer in limited range, 4:2:0. zscale reads
+ * the input's transfer, primaries and matrix from the frames, which carry the
+ * source's tags through `fps` and `scale`. Verified on Debian bookworm's
+ * ffmpeg 5.1.9 (what the Trigger image installs), which is built with libzimg;
+ * Homebrew's ffmpeg is not, so an HDR clip fails to convert under a local
+ * `trigger dev`.
+ */
+export const TONEMAP_FILTERS =
+  'zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,' +
+  'zscale=t=bt709:m=bt709:r=tv,format=yuv420p';
+
+/** The transcode's `-vf`: frame-rate cap, the fixed-shape scale, tone-mapping. */
+export function transcodeFilter(video: VideoStreamFacts): string {
+  const filters: string[] = [];
+  if (video.frameRate !== null && video.frameRate > MAX_FRAME_RATE) {
+    filters.push(`fps=${MAX_FRAME_RATE}`);
+  }
+  const box = scaleBounds(video);
+  filters.push(
+    `scale=w=${assertPositive(box.width)}:h=${assertPositive(box.height)}` +
+      ':force_original_aspect_ratio=decrease:force_divisible_by=2'
+  );
+  if (isHdr(video)) filters.push(TONEMAP_FILTERS);
+  return filters.join(',');
 }
 
 /**
@@ -425,7 +589,9 @@ export function renditionArgs({
   decision,
   audioIndex,
   inputBytes,
+  outputCapBytes,
 }: RenditionArgsInput): string[] {
+  const cap = outputCapBytes ?? outputSizeCap(decision.mode, inputBytes);
   const args = [...inputOptions(), '-i', input, '-map', `0:${assertIndex(decision.video.index)}`];
   if (audioIndex !== null) args.push('-map', `0:${assertIndex(audioIndex)}`);
 
@@ -433,35 +599,43 @@ export function renditionArgs({
     args.push('-c', 'copy');
     if (audioIndex === null) args.push('-an');
   } else {
-    const size = transcodeSize(decision.video);
+    const maxrate = rateCeiling(cap, decision.durationSec);
     args.push(
       '-vf',
-      `scale=${assertPositive(size.width)}:${assertPositive(size.height)}`,
+      transcodeFilter(decision.video),
       '-c:v',
       'libx264',
       '-preset',
       'veryfast',
       '-crf',
       '23',
+      '-maxrate',
+      assertPositive(maxrate),
+      '-bufsize',
+      assertPositive(2 * maxrate),
       '-pix_fmt',
       'yuv420p',
       '-profile:v',
       'high'
     );
+    if (isHdr(decision.video)) {
+      // What the tone-mapped picture now is; SDR sources keep their own tags.
+      args.push(
+        '-color_primaries',
+        'bt709',
+        '-color_trc',
+        'bt709',
+        '-colorspace',
+        'bt709',
+        '-color_range',
+        'tv'
+      );
+    }
     if (audioIndex === null) args.push('-an');
-    else args.push('-c:a', 'aac', '-b:a', '128k');
+    else args.push('-c:a', 'aac', '-b:a', '128k', '-ac', '2');
   }
 
-  args.push(
-    '-movflags',
-    '+faststart',
-    '-fs',
-    assertPositive(outputSizeCap(inputBytes)),
-    '-f',
-    'mp4',
-    '-y',
-    output
-  );
+  args.push('-movflags', '+faststart', '-fs', assertPositive(cap), '-f', 'mp4', '-y', output);
   return args;
 }
 
