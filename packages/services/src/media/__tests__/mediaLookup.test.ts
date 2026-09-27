@@ -158,6 +158,8 @@ describe('listReadyMedia', () => {
         filename: 'intro.mp4',
         kind: 'VIDEO',
         size_bytes: 2048n,
+        rendition_bytes: null,
+        original_deleted_at: null,
         created_at: created,
         processing: 'FAILED',
         processing_error: 'The video could not be read.',
@@ -167,9 +169,34 @@ describe('listReadyMedia', () => {
         filename: 'b.mp4',
         kind: 'VIDEO',
         size_bytes: 1n,
+        rendition_bytes: null,
+        original_deleted_at: null,
         created_at: created,
         processing: 'DONE',
         processing_error: 'stale',
+      },
+      {
+        id: 'm-3',
+        filename: 'dropped.mp4',
+        kind: 'VIDEO',
+        size_bytes: 5000n,
+        // Kept original: the rendition does not count yet.
+        rendition_bytes: 800n,
+        original_deleted_at: null,
+        created_at: created,
+        processing: 'DONE',
+        processing_error: null,
+      },
+      {
+        id: 'm-4',
+        filename: 'gone.mp4',
+        kind: 'VIDEO',
+        size_bytes: 5000n,
+        rendition_bytes: 800n,
+        original_deleted_at: created,
+        created_at: created,
+        processing: 'DONE',
+        processing_error: null,
       },
     ]);
 
@@ -195,6 +222,27 @@ describe('listReadyMedia', () => {
         // A reason is only ever reported beside FAILED.
         processingError: null,
       },
+      {
+        id: 'm-3',
+        filename: 'dropped.mp4',
+        kind: 'VIDEO',
+        sizeBytes: 5000,
+        ref: 'media://m-3',
+        createdAt: created,
+        processing: 'DONE',
+        processingError: null,
+      },
+      {
+        id: 'm-4',
+        filename: 'gone.mp4',
+        kind: 'VIDEO',
+        // The billed size: the rendition, once the original is dropped.
+        sizeBytes: 800,
+        ref: 'media://m-4',
+        createdAt: created,
+        processing: 'DONE',
+        processingError: null,
+      },
     ]);
     const query = findMany.mock.calls[0][0];
     expect(query.where).toEqual({ classroom_id: 'class-1', status: 'READY', kind: 'VIDEO' });
@@ -202,6 +250,7 @@ describe('listReadyMedia', () => {
     // Bounded: the newest 200, never every row a classroom ever kept. READY
     // only, so a STAGING agent upload never appears in a picker.
     expect(query.take).toBe(200);
+    expect(query.select).toMatchObject({ rendition_bytes: true, original_deleted_at: true });
   });
 
   it('does not narrow by kind unless asked', async () => {
