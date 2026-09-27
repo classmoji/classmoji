@@ -190,6 +190,17 @@ test.describe('/api/media-download', () => {
     }
   });
 
+  test('a membership counts only once its invite was accepted, as on the class site', () => {
+    // An invited-but-never-joined user is anonymous on the site; the route that
+    // mints the site's download links must not treat them as a member either.
+    expect(loader).toMatch(/accessType: 'view',\s+acceptedOnly: true,/);
+    const auth = source('../../app/utils/auth.server.ts');
+    expect(auth).toContain('...(acceptedOnly ? { has_accepted_invite: true } : {}),');
+    expect(auth).toContain('acceptedOnly = false,');
+    // Without one, it is the same 404 as every other refusal.
+    expect(loader).toContain('if (!access.membership) return notFound();');
+  });
+
   test('a page the reader cannot view is the same 404 as everything else', () => {
     expect(loader).toContain('if (thrown instanceof Response) return notFound();');
   });

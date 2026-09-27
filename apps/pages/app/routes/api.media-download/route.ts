@@ -19,9 +19,11 @@ import { downloadsAsStudent } from '~/utils/mediaDownloads.server.ts';
  * a plain link to this route on the canonical pages host, which the shared
  * session cookie authenticates.
  *
- * Who: a signed-in MEMBER of the page's classroom who can view the page
+ * Who: a signed-in MEMBER of the page's classroom — one who accepted their
+ * invite, as the class site counts members — who can view the page
  * (`assertPageAccess`, which also keeps drafts to the teaching team). A
- * reader of a public page who is not a member gets nothing. What: a READY
+ * reader of a public page who is not a member, or who was invited and never
+ * joined, gets nothing. What: a READY
  * media object of the page's own classroom (the lookup is scoped in SQL, so
  * another classroom's id is simply absent), under `mediaDownloadUrl`'s rule —
  * a video only when its uploader allowed downloads, unless the member is on
@@ -46,6 +48,7 @@ export const loader = async ({ request }: { request: Request }) => {
       request,
       page: page as unknown as Parameters<typeof assertPageAccess>[0]['page'],
       accessType: 'view',
+      acceptedOnly: true,
     });
   } catch (thrown) {
     if (thrown instanceof Response) return notFound();

@@ -33,6 +33,13 @@ interface AssertPageAccessOptions {
   request: Request;
   page: PageForContent;
   accessType?: 'view' | 'edit';
+  /**
+   * Count only a membership whose invite was accepted, as the class site does
+   * (`resolveViewer`): an invited-but-never-joined user is not a member there,
+   * and must not be one here either. Off by default for the callers that
+   * predate it.
+   */
+  acceptedOnly?: boolean;
 }
 
 interface PageAccessResult {
@@ -54,6 +61,7 @@ export async function assertPageAccess({
   request,
   page,
   accessType = 'view',
+  acceptedOnly = false,
 }: AssertPageAccessOptions): Promise<PageAccessResult> {
   const result: PageAccessResult = {
     canView: false,
@@ -78,6 +86,7 @@ export async function assertPageAccess({
       where: {
         user_id: authData.userId,
         classroom_id: page.classroom_id,
+        ...(acceptedOnly ? { has_accepted_invite: true } : {}),
       },
       include: { classroom: true },
     });
