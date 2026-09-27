@@ -104,7 +104,35 @@ function encryptTokenData(fields: readonly string[], data: unknown): unknown {
   return out;
 }
 
+/**
+ * Refuse a query that filters on a token column: the stored value is
+ * encrypted with a random IV, so such a filter can never match and would fail
+ * silently (a compare-and-swap that never writes, a clear that clears
+ * nothing). Compare decrypted values in code instead.
+ */
+function assertNoTokenFilter(fields: readonly string[], where: unknown) {
+  if (!where || typeof where !== 'object') return;
+  for (const [key, value] of Object.entries(where as Record<string, unknown>)) {
+    // Presence checks (`null`, `{ not: null }`) are fine; comparing to a value is not.
+    const comparesValue =
+      typeof value === 'string' ||
+      (value !== null &&
+        typeof value === 'object' &&
+        Object.values(value as Record<string, unknown>).some(
+          v => typeof v === 'string' || Array.isArray(v)
+        ));
+    if (fields.includes(key) && comparesValue) {
+      throw new Error(`Cannot filter on the encrypted column ${key}; compare it in code`);
+    }
+    if ((key === 'AND' || key === 'OR' || key === 'NOT') && value) {
+      for (const inner of Array.isArray(value) ? value : [value])
+        assertNoTokenFilter(fields, inner);
+    }
+  }
+}
+
 function encryptTokenArgs(fields: readonly string[], args: Record<string, unknown>) {
+  assertNoTokenFilter(fields, args.where);
   const next = { ...args };
   if ('data' in next) next.data = encryptTokenData(fields, next.data);
   if ('create' in next) next.create = encryptTokenData(fields, next.create);

@@ -150,9 +150,11 @@ async function refreshConnection(connectionId: string): Promise<string | null> {
       grant_type: 'refresh_token',
       refresh_token: row.refresh_token,
     });
-    // Only write if nobody else rotated the refresh token meanwhile.
+    // Only write if nobody else refreshed meanwhile. Keyed on the expiry, not
+    // the token: tokens are stored encrypted (random IV), so a token value can
+    // never be matched in a query.
     const { count } = await prisma.gitLabConnection.updateMany({
-      where: { id: connectionId, refresh_token: row.refresh_token },
+      where: { id: connectionId, access_token_expires_at: row.access_token_expires_at },
       data: {
         access_token: tokens.accessToken,
         refresh_token: tokens.refreshToken ?? row.refresh_token,
