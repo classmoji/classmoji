@@ -989,7 +989,7 @@ export const pageAssetUploadTool: ToolDefinition<PageAssetUploadArgs> = {
     'is a signed, expiring address for VIEWING the file; never store that one. File types: any ' +
     'extension in a classroom whose content Classmoji serves; elsewhere only .png .jpg .jpeg ' +
     '.gif .webp .svg .pdf — a refusal names the allowed list. Page covers must be images. ' +
-    `Larger files (up to ${formatMegabytes(REPO_REST_MAX_BYTES)}) go through the page editor.`,
+    'Larger files, and Pro videos: file_upload_start (no base64) or file_import_url.',
   scope: 'write',
   roles: OWNER_TEACHER,
   inputSchema: {
@@ -1024,8 +1024,8 @@ export const pageAssetUploadTool: ToolDefinition<PageAssetUploadArgs> = {
         `The file is ${formatMegabytes(buffer.length)} decoded; page_asset_upload takes up to ` +
           `${PAGE_ASSET_MAX_LABEL}. ` +
           (buffer.length > REPO_REST_MAX_BYTES
-            ? repoFileTooLargeMessage()
-            : 'Add a file this size through the page editor instead.')
+            ? `${repoFileTooLargeMessage()} On Pro, file_upload_start stores it in media.`
+            : 'Upload a file this size with file_upload_start instead.')
       );
     }
 
@@ -1128,10 +1128,11 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
   annotations: { destructive: false, idempotent: true, openWorld: true },
   title: "Set a page's cover image",
   description:
-    "Sets, repositions, or removes a page's cover (header) image. The cover must be an asset in " +
-    "this classroom's own content repo — upload one with page_asset_upload and pass the `url` it " +
-    'returns, or reuse the cover_image.url a content read gave you. External image URLs are ' +
-    'refused. Pass url: null to remove the cover; omit url and pass position alone to reposition ' +
+    "Sets, repositions, or removes a page's cover (header) image. The cover must be an image in " +
+    "this classroom's own content repo — upload one with page_asset_upload (or file_upload_start) " +
+    'and pass the `url`/ref it returns, or reuse the cover_image.url a content read gave you — or ' +
+    'a media://… image ref from media_list. External image URLs are refused. Pass url: null to ' +
+    'remove the cover; omit url and pass position alone to reposition ' +
     'the current image. position is the vertical focal point, 0 (top) to 100 (bottom), default ' +
     '50. Unlike page_content_apply this always writes the LIVE page — never a preview branch — ' +
     'exactly as the web editor does, so students see it immediately.',
@@ -1147,9 +1148,9 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
       .optional()
       .describe(
         "Reference to an image in this classroom's content repo (from page_asset_upload, or " +
-          'the cover_image.url a content read returned). null removes the cover; omit it to ' +
-          'keep the current image and change only position. Must end in .png .jpg .jpeg .gif ' +
-          '.webp or .svg'
+          'the cover_image.url a content read returned), or a media://… image ref. null removes ' +
+          'the cover; omit it to keep the current image and change only position. A repo ' +
+          'reference must end in .png .jpg .jpeg .gif .webp or .svg'
       ),
     position: z
       .number()
@@ -1173,7 +1174,11 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
         'Pass url to set or remove the cover, position to reposition it, or both'
       );
     }
-    if (typeof args.url === 'string') {
+    // A `media://` reference has no extension to read — it names a row, and
+    // whether that row is an IMAGE of this classroom is the canonicalization's
+    // question below. A signed media URL does carry one (its `orig.{ext}`
+    // variant), so it is held to the image list here like any other URL.
+    if (typeof args.url === 'string' && !args.url.startsWith('media://')) {
       const ext = extensionOf(args.url);
       if (!ext || !COVER_IMAGE_EXTENSIONS.includes(ext)) {
         throw new ToolError(
@@ -1238,7 +1243,8 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
         throw new ToolError(
           'invalid_params',
           `A cover must be an image in this classroom's content repo — upload one with ` +
-            `page_asset_upload. '${args.url}' does not name one.`
+            `page_asset_upload, or pass a media://… image ref from media_list. '${args.url}' ` +
+            'does not name one.'
         );
       }
       nextUrl = canonical;

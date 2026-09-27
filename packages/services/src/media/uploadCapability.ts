@@ -15,7 +15,7 @@
 
 import getPrisma from '@classmoji/database';
 import { REPO_REST_MAX_BYTES } from '@classmoji/utils';
-import { canDeliverContent, uploadFileTypes } from '../classmoji/contentDelivery.service.ts';
+import { uploadFileTypes } from '../classmoji/contentDelivery.service.ts';
 import { getProStateForClassroomId } from '../classmoji/subscription.service.ts';
 import { isMediaConfigured } from './mediaConfig.ts';
 import { usedBytesFor } from './mediaLookup.ts';
@@ -75,8 +75,14 @@ async function buildCapability(
   const repoFileTypes = uploadFileTypes(full);
   const { isPro } = await getProStateForClassroomId(classroom.id);
 
+  // `repoFileTypes === 'any'` is `isContentDeliveryConfigured() &&
+  // canDeliverContent(classroom)` — the deployment can SIGN delivery URLs and
+  // this classroom is served through them. Media is only ever served signed,
+  // so a deployment with a bucket but no signing secret (or no delivery
+  // origin) must not offer it: the upload would succeed and every reference to
+  // it would render as a placeholder.
   let media: UploadCapability['media'] = null;
-  if (isPro && isMediaConfigured() && canDeliverContent(full)) {
+  if (isPro && isMediaConfigured() && repoFileTypes === 'any') {
     const remainingBytes = withUsage
       ? Math.max(0, quotaBytesFor(true) - (await usedBytesFor(classroom.id)))
       : PER_FILE_MAX_BYTES;

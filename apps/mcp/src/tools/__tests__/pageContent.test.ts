@@ -1655,6 +1655,26 @@ describe('page_cover_set', () => {
     expect(payload.cover_image.url).toBe(STORED_COVER.url);
   });
 
+  it('accepts a media:// image ref, which has no extension, and lets the service decide', async () => {
+    const ref = 'media://77777777-8888-4999-8aaa-bbbbbbbbbbbb';
+    mocks.canonicalizePageCoverRef.mockResolvedValue(ref);
+
+    const payload = parse(await setCover({ url: ref }));
+
+    expect(mocks.canonicalizePageCoverRef).toHaveBeenCalledWith(PAGE, ref);
+    expect(savedCover()).toEqual({ url: ref, position: 50 });
+    expect(payload.success).toBe(true);
+  });
+
+  it('still refuses a signed media URL whose variant is not an image', async () => {
+    await expect(
+      setCover({
+        url: 'https://content.classmoji.io/c/class-1/media/77777777-8888-4999-8aaa-bbbbbbbbbbbb/orig.mp4?sig=x',
+      })
+    ).rejects.toMatchObject({ kind: 'invalid_params' });
+    expect(mocks.canonicalizePageCoverRef).not.toHaveBeenCalled();
+  });
+
   it('refuses a ref the service will not claim for this classroom', async () => {
     // An external host in a cover beacons every class-site visitor, so a
     // prompt-injected agent must not be able to point one there.

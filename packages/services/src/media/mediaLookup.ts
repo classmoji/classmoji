@@ -274,9 +274,15 @@ export interface MediaListItem {
   createdAt: Date;
 }
 
+/** The most rows one picker read returns — the newest ones. */
+export const MEDIA_LIST_LIMIT = 200;
+
 /**
  * A classroom's finished media, newest first, optionally of one kind — the
- * "choose from media" picker's read (`GET /api/media/list`).
+ * "choose from media" picker's read (`GET /api/media/list`). At most
+ * `MEDIA_LIST_LIMIT` rows: a picker is for choosing something recent, and a
+ * term of media is far under that; an unbounded read would grow with every
+ * upload a classroom ever kept.
  *
  * READY only: an upload still in flight, or an agent upload not yet placed,
  * cannot be referenced. Scoped to the classroom in the WHERE clause, for the
@@ -289,6 +295,7 @@ export async function listReadyMedia(
   const rows = (await getPrisma().mediaObject.findMany({
     where: { classroom_id: classroomId, status: 'READY', ...(kind ? { kind } : {}) },
     orderBy: { created_at: 'desc' },
+    take: MEDIA_LIST_LIMIT,
     select: { id: true, filename: true, kind: true, size_bytes: true, created_at: true },
   })) as { id: string; filename: string; kind: MediaKind; size_bytes: bigint; created_at: Date }[];
 

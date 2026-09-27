@@ -10,7 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import worker, { clearRotationLog } from '../src/index.ts';
 import { clearOriginCache } from '../src/token.ts';
-import { nowSeconds } from '../src/verify.ts';
+import { mediaKey, nowSeconds } from '../src/verify.ts';
 import {
   BLOB_SHA,
   CLASSROOM,
@@ -575,6 +575,64 @@ describe('media downloads', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('Content-Disposition')).toBeNull();
     expect(response.headers.get('Content-Security-Policy')).toBe(STRICT_CSP);
+  });
+});
+
+describe('staged agent uploads are never served', () => {
+  // An agent upload (MCP `file_upload_start`, `file_import_url`) lands in this
+  // same bucket under `stage/{classroomId}/{mediaId}` before it is placed. Those
+  // bytes are unverified until placement copies them into `m/…`, so nothing
+  // here may ever read a `stage/` key: the only key this Worker builds is
+  // `mediaKey`, which is `m/{classroomId}/{mediaId}/{variant}` by construction.
+  const STAGE_KEY = `stage/${CLASSROOM}/${MEDIA_ID}`;
+
+  function stagedBucket() {
+    return fakeBucket({
+      [STAGE_KEY]: { body: VIDEO, contentType: 'video/mp4' },
+    });
+  }
+
+  it('reads only m/ keys for a validly signed media URL, and 404s the staged bytes', async () => {
+    // The row exists (it is STAGING) and its id is real, so a signed URL for it
+    // is exactly what a caller would try. The Worker asks for `m/…` and nothing
+    // else, and the staged object behind it is never touched.
+    const media = stagedBucket();
+    const { response } = await fetchMedia(media, { variant: 'orig.mp4' });
+
+    expect(response.status).toBe(404);
+    expect([...media.gets, ...media.heads].every(k => k.startsWith('m/'))).toBe(true);
+    expect(media.gets).not.toContain(STAGE_KEY);
+    expect(media.heads).not.toContain(STAGE_KEY);
+  });
+
+  it('403s a stage-shaped path, which is not a route', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const media = stagedBucket();
+    for (const path of [
+      `/c/${CLASSROOM}/stage/${MEDIA_ID}`,
+      `/stage/${CLASSROOM}/${MEDIA_ID}`,
+      `/c/${CLASSROOM}/media/${MEDIA_ID}/..%2F..%2Fstage%2F${CLASSROOM}%2F${MEDIA_ID}`,
+    ]) {
+      const response = await worker.fetch(
+        new Request(`${ORIGIN}${path}`),
+        fakeEnv({ MEDIA: media as unknown as R2Bucket }),
+        fakeContext()
+      );
+      expect(response.status, path).toBeGreaterThanOrEqual(400);
+      expect(response.status, path).toBeLessThan(500);
+    }
+    expect(media.gets).toEqual([]);
+    expect(media.heads).toEqual([]);
+  });
+
+  it('cannot be made to build a stage/ key', () => {
+    // The key builder asserts every part: a classroom id that is not a uuid, a
+    // media id carrying a slash, or a variant outside the grammar all throw, so
+    // no input reaches a `stage/` key through it.
+    expect(() => mediaKey('stage', MEDIA_ID, 'orig.mp4')).toThrow(TypeError);
+    expect(() => mediaKey(CLASSROOM, `../../stage/${CLASSROOM}`, 'orig.mp4')).toThrow(TypeError);
+    expect(() => mediaKey(CLASSROOM, MEDIA_ID, '../stage')).toThrow(TypeError);
+    expect(mediaKey(CLASSROOM, MEDIA_ID, 'orig.mp4').startsWith('m/')).toBe(true);
   });
 });
 

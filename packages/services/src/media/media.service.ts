@@ -5,6 +5,7 @@ import {
   DeleteObjectCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
+  PutObjectCommand,
   S3Client,
   UploadPartCommand,
 } from '@aws-sdk/client-s3';
@@ -16,10 +17,13 @@ import { REPO_REST_MAX_BYTES } from '@classmoji/utils';
 // references be signed" has one definition and media must not grow a second.
 // No cycle — contentDelivery reaches media through `mediaLookup.ts`, which
 // imports nothing from here.
-import { canDeliverContent } from '../classmoji/contentDelivery.service.ts';
+import {
+  canDeliverContent,
+  isContentDeliveryConfigured,
+} from '../classmoji/contentDelivery.service.ts';
 import { getProStateForClassroomId } from '../classmoji/subscription.service.ts';
 import { MediaError } from './MediaError.ts';
-import { mediaKey, mediaPrefix } from './mediaKeys.ts';
+import { mediaKey, mediaPrefix, stageKey, stagePrefix } from './mediaKeys.ts';
 import { classifyFilename, filenameRefusal } from './mediaKinds.ts';
 import {
   billedBytes,
@@ -174,13 +178,17 @@ export async function usage(classroom: MediaClassroom): Promise<MediaUsage> {
 /**
  * The classroom's media, newest first.
  *
- * READY rows and the reservations still inside their window — the same set the
- * quota is summed over, so the meter and the list can never disagree about what
- * a classroom is holding. Abandoned reservations age out of both together.
+ * READY rows and the browser uploads still inside their window — the set the
+ * quota is summed over, minus one kind of reservation: an agent upload waiting
+ * to be placed (STAGING). Those count against the quota exactly like an
+ * UPLOADING row (see `liveRowsWhere`), but they are not media yet — most of
+ * them are on their way into the course repository — and a row the Settings
+ * list showed would offer a delete for bytes the placement is about to move.
+ * Abandoned reservations age out of the meter and the list together.
  */
 export async function listMedia(classroom: MediaClassroom): Promise<MediaRecord[]> {
   const rows = await liveRows(classroom.id);
-  return rows.map(toMediaRecord);
+  return rows.filter(row => row.status !== 'STAGING').map(toMediaRecord);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -196,7 +204,7 @@ export async function listMedia(classroom: MediaClassroom): Promise<MediaRecord[
  * were never set. Returning a non-nullable client is the point — the callers
  * below never have to assert it away.
  */
-function requireClient(): { client: S3Client; bucket: string } {
+export function requireClient(): { client: S3Client; bucket: string } {
   const client = r2Client();
   const bucket = mediaBucket();
   if (!client || !bucket) {
@@ -206,61 +214,31 @@ function requireClient(): { client: S3Client; bucket: string } {
 }
 
 /**
- * Open an upload: everything that can be refused is refused before a byte moves.
+ * Every check `createUpload` makes, and the reservation, in its fixed order —
+ * shared with `putMediaObject`, the server-side single-shot write, so the two
+ * doors into media cannot disagree about who may store what. See
+ * `createUpload` for the order and why it is the contract.
  *
- * The ORDER of the checks is deliberate and is the contract:
- *
- *   1. configured — no credentials means the feature is off, not that this file
- *      is wrong, and saying so first keeps a dev laptop's error honest;
- *   2. extension — any, as long as there is one the store can address; it
- *      decides the kind and fixes the content type;
- *   2½. routing — a non-video file within the repository's cap is refused
- *      `USE_REPO` unless the upload is `explicit` (see `MediaOptions`);
- *   3. Pro — before the numbers, so a free classroom is told it needs Pro
- *      rather than that it is 2 GB over a quota of zero;
- *   4. delivery — a classroom whose references cannot be signed has nowhere to
- *      serve the object from, and finding that out after the bytes have moved
- *      is the expensive way to learn it;
- *   5. per-file ceiling — independent of how much room is left;
- *   6. quota — last, because it is the only one that depends on other rows.
- *
- * The row is written BEFORE the multipart is opened, and that is what the quota
- * reserves against. The quota SUM and that INSERT share one transaction behind
- * a `FOR UPDATE` lock on the classroom, so concurrent creates serialize; see
- * the file header. If `CreateMultipartUpload` then fails there is a row with no
- * upload behind it; it is deleted here, and were that delete to fail too the
- * row ages out of the reservation window on its own.
- *
- * ## The content type is decided here, from the extension
- *
- * Never from `file.type`, which is whatever the uploader's OS guessed and is
- * attacker-controlled in any case. It is set on `CreateMultipartUpload`, so R2
- * stores it as the object's `httpMetadata` and the Worker answers with it — the
- * Worker holds no allowlist of its own, which is exactly why this end must not
- * pass a client value through. It is also returned, because the upload client
- * puts it on the part requests.
+ * Returns the minted id, the `orig.{ext}` key it will be written at, and the
+ * classification. The row is UPLOADING — a reservation counted by the quota.
  */
-export async function createUpload({
+async function reserveUpload({
   classroom,
   userId,
   filename,
   sizeBytes,
-  options = {},
+  options,
 }: {
   classroom: MediaClassroom;
   userId: string;
   filename: string;
   sizeBytes: number;
-  options?: MediaOptions;
+  options: MediaOptions;
 }): Promise<{
   mediaId: string;
-  uploadId: string;
-  contentType: string;
-  partSize: number;
-  partCount: number;
+  key: string;
+  classified: NonNullable<ReturnType<typeof classifyFilename>>;
 }> {
-  const { client, bucket } = requireClient();
-
   // Any extension, as long as there is one the store can address (see
   // mediaKinds.ts). The refusal says which of the two it was.
   const classified = classifyFilename(filename);
@@ -312,7 +290,9 @@ export async function createUpload({
       },
     },
   });
-  if (!canDeliverContent(deliverable)) {
+  // The deployment half too: R2 credentials without the signing secret and the
+  // delivery origin would store bytes nothing can mint a URL for.
+  if (!isContentDeliveryConfigured() || !canDeliverContent(deliverable)) {
     throw new MediaError(
       'DELIVERY_REQUIRED',
       'Media uploads need content delivery, which this class cannot use yet'
@@ -393,6 +373,73 @@ export async function createUpload({
     });
   });
 
+  return { mediaId, key, classified };
+}
+
+/**
+ * Open an upload: everything that can be refused is refused before a byte moves.
+ *
+ * The ORDER of the checks is deliberate and is the contract:
+ *
+ *   1. configured — no credentials means the feature is off, not that this file
+ *      is wrong, and saying so first keeps a dev laptop's error honest;
+ *   2. extension — any, as long as there is one the store can address; it
+ *      decides the kind and fixes the content type;
+ *   2½. routing — a non-video file within the repository's cap is refused
+ *      `USE_REPO` unless the upload is `explicit` (see `MediaOptions`);
+ *   3. Pro — before the numbers, so a free classroom is told it needs Pro
+ *      rather than that it is 2 GB over a quota of zero;
+ *   4. delivery — a classroom whose references cannot be signed has nowhere to
+ *      serve the object from, and finding that out after the bytes have moved
+ *      is the expensive way to learn it;
+ *   5. per-file ceiling — independent of how much room is left;
+ *   6. quota — last, because it is the only one that depends on other rows.
+ *
+ * The row is written BEFORE the multipart is opened, and that is what the quota
+ * reserves against. The quota SUM and that INSERT share one transaction behind
+ * a `FOR UPDATE` lock on the classroom, so concurrent creates serialize; see
+ * the file header. If `CreateMultipartUpload` then fails there is a row with no
+ * upload behind it; it is deleted here, and were that delete to fail too the
+ * row ages out of the reservation window on its own.
+ *
+ * ## The content type is decided here, from the extension
+ *
+ * Never from `file.type`, which is whatever the uploader's OS guessed and is
+ * attacker-controlled in any case. It is set on `CreateMultipartUpload`, so R2
+ * stores it as the object's `httpMetadata` and the Worker answers with it — the
+ * Worker holds no allowlist of its own, which is exactly why this end must not
+ * pass a client value through. It is also returned, because the upload client
+ * puts it on the part requests.
+ */
+export async function createUpload({
+  classroom,
+  userId,
+  filename,
+  sizeBytes,
+  options = {},
+}: {
+  classroom: MediaClassroom;
+  userId: string;
+  filename: string;
+  sizeBytes: number;
+  options?: MediaOptions;
+}): Promise<{
+  mediaId: string;
+  uploadId: string;
+  contentType: string;
+  partSize: number;
+  partCount: number;
+}> {
+  const { client, bucket } = requireClient();
+
+  const { mediaId, key, classified } = await reserveUpload({
+    classroom,
+    userId,
+    filename,
+    sizeBytes,
+    options,
+  });
+
   let uploadId: string | undefined;
   try {
     const created = await client.send(
@@ -464,15 +511,33 @@ async function uploadingRow(
  * `abortUpload` does not ask: cancelling a lapsed upload is exactly what should
  * happen to it, and refusing to would leave its parts in the bucket.
  */
-async function refuseIfExpired(
+export async function refuseIfExpired(
   client: S3Client,
   bucket: string,
   classroom: MediaClassroom,
-  row: MediaRow & { upload_id: string },
+  row: MediaRow,
   now: number = Date.now()
 ): Promise<void> {
   if (row.created_at.getTime() >= reservationCutoff(now).getTime()) return;
 
+  if (row.status === 'STAGING') {
+    // An agent upload: its bytes (or its open multipart, for a URL import
+    // still streaming) live under `stage/`, not `m/`. The staged object is
+    // deleted as well as any multipart aborted — a single presigned PUT has no
+    // multipart to abort, and its object would otherwise wait for the bucket's
+    // `stage/` lifecycle rule.
+    const key = stageKey(classroom.id, row.id);
+    if (row.upload_id) await abortQuietly(client, bucket, key, row.upload_id);
+    if (await markDeleted(row.id, 'STAGING')) {
+      await deleteObjectsQuietly(client, bucket, [key]);
+    }
+    throw new MediaError(
+      'UPLOAD_EXPIRED',
+      'This upload was not finished in time and has been cancelled. Start it again.'
+    );
+  }
+
+  if (!row.upload_id) return;
   const key = mediaKey(classroom.id, row.id, `orig.${row.ext}`);
   await abortQuietly(client, bucket, key, row.upload_id);
   await markDeleted(row.id, 'UPLOADING');
@@ -580,7 +645,7 @@ export async function signParts({
 }
 
 /** Abort the multipart without letting a failure there hide the real error. */
-async function abortQuietly(
+export async function abortQuietly(
   client: S3Client,
   bucket: string,
   key: string,
@@ -605,7 +670,7 @@ async function abortQuietly(
  * is logged and the next key is tried, rather than throwing and leaving the
  * remaining two untouched.
  */
-async function deleteObjectsQuietly(
+export async function deleteObjectsQuietly(
   client: S3Client,
   bucket: string,
   keys: string[]
@@ -636,7 +701,7 @@ async function deleteObjectsQuietly(
  * Returns whether it landed, so a caller that cares can tell "I tombstoned it"
  * from "somebody else got there first".
  */
-async function markDeleted(
+export async function markDeleted(
   mediaId: string,
   expected: MediaStatus | MediaStatus[]
 ): Promise<boolean> {
@@ -722,7 +787,11 @@ const HEAD_RETRY_DELAY_MS = 250;
  * nobody had managed to measure. Unverified is unverified: it falls through to
  * the retry and then to null, and the caller says VERIFY_FAILED.
  */
-async function verifiedSize(client: S3Client, bucket: string, key: string): Promise<number | null> {
+export async function verifiedSize(
+  client: S3Client,
+  bucket: string,
+  key: string
+): Promise<number | null> {
   for (let attempt = 1; attempt <= HEAD_ATTEMPTS; attempt += 1) {
     if (attempt > 1) {
       await new Promise(resolve => setTimeout(resolve, HEAD_RETRY_DELAY_MS));
@@ -760,6 +829,64 @@ async function finishedElsewhere(classroom: MediaClassroom, mediaId: string) {
   return fresh?.status === 'READY' ? fresh : null;
 }
 
+/** The pause before the one retry of a Complete that R2 answered with a 5xx. */
+const COMPLETE_RETRY_DELAY_MS = 500;
+
+/** R2 answered with a server-side failure — worth exactly one more try. */
+function isTransientR2Error(error: unknown): boolean {
+  const status = (error as { $metadata?: { httpStatusCode?: unknown } } | null)?.$metadata
+    ?.httpStatusCode;
+  if (typeof status === 'number') return status >= 500 && status <= 599;
+  const name = (error as { name?: unknown } | null)?.name;
+  return name === 'InternalError' || name === 'ServiceUnavailable' || name === 'SlowDown';
+}
+
+/** The multipart is gone — completed (or aborted) by an earlier request. */
+function isNoSuchUpload(error: unknown): boolean {
+  const e = error as { name?: unknown; Code?: unknown } | null;
+  return e?.name === 'NoSuchUpload' || e?.Code === 'NoSuchUpload';
+}
+
+/**
+ * `CompleteMultipartUpload`, retried ONCE when R2 answers with a 5xx.
+ *
+ * Without the retry, one transient failure at the very last step threw away a
+ * whole upload — the error path aborts the multipart and tombstones the row, so
+ * a 2 GB lecture that R2 hiccupped on had to be sent again from the start.
+ *
+ * Only a 5xx is retried. A 4xx (`InvalidPart`, a bad etag, `EntityTooSmall`) is
+ * the request being wrong, and asking again changes nothing. `NoSuchUpload` is
+ * never retried either — it is the "finished elsewhere" answer the caller's
+ * error path already knows how to read.
+ *
+ * The one subtle case: the FIRST attempt can succeed on R2's side and still
+ * reach us as a 5xx (the answer was lost). The retry then meets a multipart that
+ * no longer exists and gets `NoSuchUpload`. That is treated as success here and
+ * handed to the size check that runs next: if the assembled object is there and
+ * the right size, the upload finished; if it is not (a concurrent abort got
+ * there instead), the size check discards it exactly as it would any other
+ * object it cannot verify.
+ */
+async function assembleWithOneRetry(assemble: () => Promise<unknown>): Promise<void> {
+  try {
+    await assemble();
+    return;
+  } catch (error) {
+    if (!isTransientR2Error(error)) throw error;
+    console.warn(
+      '[media] Complete failed with a server error; retrying once:',
+      error instanceof Error ? error.message : error
+    );
+  }
+  await new Promise(resolve => setTimeout(resolve, COMPLETE_RETRY_DELAY_MS));
+  try {
+    await assemble();
+  } catch (retryError) {
+    if (isNoSuchUpload(retryError)) return;
+    throw retryError;
+  }
+}
+
 export async function completeUpload({
   classroom,
   mediaId,
@@ -782,7 +909,12 @@ export async function completeUpload({
     throw new MediaError('NOT_FOUND', 'No such media object');
   }
   if (current.status === 'READY') return completedResult(current);
-  if (!current.upload_id) throw new MediaError('BAD_STATE', 'This upload is not open');
+  // Positive, not "has an upload id": an agent upload (STAGING) can carry a
+  // multipart id too — a URL import streams through one — and it is finished by
+  // its own placement, never by this browser-upload call.
+  if (current.status !== 'UPLOADING' || !current.upload_id) {
+    throw new MediaError('BAD_STATE', 'This upload is not open');
+  }
 
   const row = current as MediaRow & { upload_id: string };
   await refuseIfExpired(client, bucket, classroom, row);
@@ -805,8 +937,8 @@ export async function completeUpload({
     throw new MediaError('BAD_STATE', 'No parts were supplied');
   }
 
-  try {
-    await client.send(
+  const assemble = () =>
+    client.send(
       new CompleteMultipartUploadCommand({
         Bucket: bucket,
         Key: key,
@@ -819,6 +951,9 @@ export async function completeUpload({
         },
       })
     );
+
+  try {
+    await assembleWithOneRetry(assemble);
   } catch (error) {
     await abortQuietly(client, bucket, key, uploadId);
     // Only from UPLOADING. If the tombstone does not land, the row moved while
@@ -942,6 +1077,18 @@ export async function abortUpload({
   const { client, bucket } = requireClient();
   const row = await findMediaRow(classroom.id, mediaId);
   if (!row) throw new MediaError('NOT_FOUND', 'No such media object');
+
+  // An agent upload not yet placed: cancelling it removes the staged bytes.
+  // Only from STAGING, so a placement that finished first (READY, or a repo
+  // placement already tombstoned with its `placed_ref`) is never undone.
+  if (row.status === 'STAGING') {
+    const staged = stageKey(classroom.id, row.id);
+    if (row.upload_id) await abortQuietly(client, bucket, staged, row.upload_id);
+    const aborted = await markDeleted(row.id, 'STAGING');
+    if (aborted) await deleteObjectsQuietly(client, bucket, [staged]);
+    return { mediaId: row.id, aborted };
+  }
+
   if (row.status !== 'UPLOADING' || !row.upload_id) return { mediaId: row.id, aborted: false };
 
   const key = mediaKey(classroom.id, row.id, `orig.${row.ext}`);
@@ -1009,11 +1156,20 @@ export async function deleteMedia({
   // does not double-tombstone; the loser simply goes on to the object deletes,
   // which are safe to repeat.
   if (row.status !== 'DELETED') {
-    await markDeleted(row.id, ['UPLOADING', 'READY']);
+    await markDeleted(row.id, ['UPLOADING', 'READY', 'STAGING']);
   }
 
   if (row.status === 'UPLOADING' && row.upload_id) {
     await abortQuietly(client, bucket, origKey, row.upload_id);
+  }
+
+  // An agent upload's bytes wait under `stage/` (a URL import may still hold a
+  // multipart there). `destination` is set on every agent upload and on no
+  // other row, so it says whether there can be a staged object at all — a
+  // STAGING row now, or one that was STAGING before it was placed or deleted.
+  const staged = row.destination !== null ? stageKey(classroom.id, row.id) : null;
+  if (staged && row.status === 'STAGING' && row.upload_id) {
+    await abortQuietly(client, bucket, staged, row.upload_id);
   }
 
   // One command per key rather than a batch DeleteObjects: that operation
@@ -1024,6 +1180,7 @@ export async function deleteMedia({
     origKey,
     row.rendition_key ?? mediaKey(classroom.id, row.id, 'web.mp4'),
     row.poster_key ?? mediaKey(classroom.id, row.id, 'poster.webp'),
+    ...(staged ? [staged] : []),
   ]);
 
   return { mediaId: row.id };
@@ -1069,41 +1226,56 @@ export async function purgeClassroomMedia(classroomId: string): Promise<{ delete
   });
   if (!anyRow) return { deleted: 0 };
 
+  // Open multiparts are not objects, so a listing cannot see them: abort each
+  // one from the id its row holds. A browser upload's is at `m/…/orig.{ext}`;
+  // an agent URL import still streaming has one at its `stage/` key.
   const open = (await getPrisma().mediaObject.findMany({
-    where: { classroom_id: classroomId, status: 'UPLOADING', upload_id: { not: null } },
-    select: { id: true, ext: true, upload_id: true },
-  })) as { id: string; ext: string; upload_id: string }[];
+    where: {
+      classroom_id: classroomId,
+      status: { in: ['UPLOADING', 'STAGING'] },
+      upload_id: { not: null },
+    },
+    select: { id: true, ext: true, upload_id: true, status: true },
+  })) as { id: string; ext: string; upload_id: string; status?: MediaStatus }[];
   for (const upload of open) {
-    const key = mediaKey(classroomId, upload.id, `orig.${upload.ext}`);
+    const key =
+      upload.status === 'STAGING'
+        ? stageKey(classroomId, upload.id)
+        : mediaKey(classroomId, upload.id, `orig.${upload.ext}`);
     await abortQuietly(client, bucket, key, upload.upload_id);
   }
 
   let deleted = 0;
   const failed: string[] = [];
-  let continuationToken: string | undefined;
-  do {
-    const page = await client.send(
-      new ListObjectsV2Command({
-        Bucket: bucket,
-        Prefix: prefix,
-        ContinuationToken: continuationToken,
-      })
-    );
-    for (const object of page.Contents ?? []) {
-      if (!object.Key) continue;
-      try {
-        await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: object.Key }));
-        deleted += 1;
-      } catch (error) {
-        failed.push(object.Key);
-        console.warn(
-          `[media] Could not delete ${object.Key}:`,
-          error instanceof Error ? error.message : error
-        );
+  // Both prefixes: the stored objects, and any agent upload still waiting to be
+  // placed. The staged ones would expire under the bucket's lifecycle rule on
+  // their own, but a deleted classroom should not leave bytes behind for a day.
+  for (const listPrefix of [prefix, stagePrefix(classroomId)]) {
+    let continuationToken: string | undefined;
+    do {
+      const page = await client.send(
+        new ListObjectsV2Command({
+          Bucket: bucket,
+          Prefix: listPrefix,
+          ContinuationToken: continuationToken,
+        })
+      );
+      for (const object of page.Contents ?? []) {
+        if (!object.Key) continue;
+        try {
+          await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: object.Key }));
+          deleted += 1;
+        } catch (error) {
+          failed.push(object.Key);
+          console.warn(
+            `[media] Could not delete ${object.Key}:`,
+            error instanceof Error ? error.message : error
+          );
+        }
       }
-    }
-    continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
-  } while (continuationToken);
+      continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (continuationToken);
+  }
 
   if (failed.length > 0) {
     throw new Error(
@@ -1111,4 +1283,158 @@ export async function purgeClassroomMedia(classroomId: string): Promise<{ delete
     );
   }
   return { deleted };
+}
+
+/**
+ * Above this, `putMediaObject` writes in parts rather than one PUT. R2's single
+ * PUT goes to 5 GiB, but a 2 GiB body in one request is a 2 GiB retry when a
+ * connection drops, and the parts reuse the browser path's `PART_SIZE_BYTES`.
+ */
+export const SINGLE_PUT_MAX_BYTES = 100 * 1024 * 1024;
+
+/**
+ * Store bytes the SERVER already holds — the slides.com import's videos on Pro,
+ * where the file arrived inside a ZIP rather than from a browser.
+ *
+ * Every rule `createUpload` applies, in the same order and from the same code
+ * (`reserveUpload`): kind, `USE_REPO` unless `explicit`, Pro, delivery (the
+ * deployment's signing half included), the per-file ceiling, and the quota
+ * reserved under the classroom lock BEFORE a byte is written. Then one
+ * `PutObject` at `m/{classroom}/{id}/orig.{ext}` with the server-assigned type
+ * and the exact length — or a multipart upload in `PART_SIZE_BYTES` parts above
+ * `SINGLE_PUT_MAX_BYTES` — a `HeadObject` size check, and READY only from
+ * UPLOADING, exactly as `completeUpload` ends.
+ *
+ * A write or a verification that fails tombstones the reservation (from
+ * UPLOADING only) and removes whatever may have landed, then throws — the
+ * caller decides what a failed file means for its import.
+ */
+export async function putMediaObject({
+  classroom,
+  userId,
+  filename,
+  bytes,
+  options = {},
+}: {
+  classroom: MediaClassroom;
+  userId: string;
+  filename: string;
+  bytes: Buffer;
+  options?: MediaOptions;
+}): Promise<{ mediaId: string; ref: string }> {
+  const { client, bucket } = requireClient();
+  const sizeBytes = bytes.length;
+  const { mediaId, key, classified } = await reserveUpload({
+    classroom,
+    userId,
+    filename,
+    sizeBytes,
+    options,
+  });
+
+  try {
+    if (sizeBytes <= SINGLE_PUT_MAX_BYTES) {
+      await client.send(
+        new PutObjectCommand({
+          Bucket: bucket,
+          Key: key,
+          Body: bytes,
+          ContentType: classified.contentType,
+          ContentLength: sizeBytes,
+        })
+      );
+    } else {
+      await putInParts(client, bucket, key, mediaId, bytes, classified.contentType);
+    }
+  } catch (error) {
+    if (await markDeleted(mediaId, 'UPLOADING')) {
+      await deleteObjectsQuietly(client, bucket, [key]);
+    }
+    throw error;
+  }
+
+  const actual = await verifiedSize(client, bucket, key);
+  if (actual !== sizeBytes) {
+    if (await markDeleted(mediaId, 'UPLOADING')) {
+      await deleteObjectsQuietly(client, bucket, [key]);
+    }
+    if (actual === null) {
+      throw new MediaError('VERIFY_FAILED', 'The file could not be verified after writing it');
+    }
+    throw new MediaError('SIZE_MISMATCH', `Wrote ${actual} bytes but ${sizeBytes} were expected`);
+  }
+
+  const readyAt = new Date();
+  const { count } = await getPrisma().mediaObject.updateMany({
+    where: { id: mediaId, status: 'UPLOADING' },
+    data: { status: 'READY', ready_at: readyAt, upload_id: null, processing: 'NONE' },
+  });
+  if (count === 0) {
+    // Deleted from Settings → Media while the write ran: nothing will serve it.
+    await deleteObjectsQuietly(client, bucket, [key]);
+    throw new MediaError('NOT_FOUND', 'This file was deleted before it finished writing');
+  }
+
+  const row = await findMediaRow(classroom.id, mediaId);
+  if (row) await onMediaReady(toMediaRecord(row));
+  return { mediaId, ref: mediaRef(mediaId) };
+}
+
+/**
+ * The multipart half of `putMediaObject`. The upload id is written onto the
+ * row while it is open, so a delete or a classroom purge can abort it — the
+ * same bookkeeping a browser upload has.
+ */
+async function putInParts(
+  client: S3Client,
+  bucket: string,
+  key: string,
+  mediaId: string,
+  bytes: Buffer,
+  contentType: string
+): Promise<void> {
+  const created = await client.send(
+    new CreateMultipartUploadCommand({ Bucket: bucket, Key: key, ContentType: contentType })
+  );
+  const uploadId = created.UploadId;
+  if (!uploadId) throw new MediaError('BAD_STATE', 'R2 did not return an upload id');
+  await getPrisma().mediaObject.updateMany({
+    where: { id: mediaId, status: 'UPLOADING' },
+    data: { upload_id: uploadId },
+  });
+
+  try {
+    const parts: { PartNumber: number; ETag: string }[] = [];
+    const partCount = partCountFor(bytes.length);
+    for (let partNumber = 1; partNumber <= partCount; partNumber += 1) {
+      const start = (partNumber - 1) * PART_SIZE_BYTES;
+      const body = bytes.subarray(start, start + partLengthFor(bytes.length, partNumber));
+      const result = await client.send(
+        new UploadPartCommand({
+          Bucket: bucket,
+          Key: key,
+          UploadId: uploadId,
+          PartNumber: partNumber,
+          Body: body,
+          ContentLength: body.length,
+        })
+      );
+      if (!result.ETag)
+        throw new MediaError('BAD_STATE', `R2 returned no etag for part ${partNumber}`);
+      parts.push({ PartNumber: partNumber, ETag: result.ETag });
+    }
+    await assembleWithOneRetry(() =>
+      client.send(
+        new CompleteMultipartUploadCommand({
+          Bucket: bucket,
+          Key: key,
+          UploadId: uploadId,
+          MultipartUpload: { Parts: parts },
+        })
+      )
+    );
+  } catch (error) {
+    await abortQuietly(client, bucket, key, uploadId);
+    throw error;
+  }
 }

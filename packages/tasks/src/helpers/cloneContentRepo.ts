@@ -64,6 +64,24 @@ export interface CloneContentRepoPayload {
   commitMessage: string;
   /** Coarse step reporting for the progress banner. Never awaited by callers. */
   onStep?: (note: string) => void;
+  /**
+   * The import run's media copy (`ClassmojiService.contentImport
+   * .openImportMediaCopy`). The tree's media references are copied into the
+   * target classroom's media and repointed BEFORE the push, through this one
+   * session, so the page rows that follow share its old→new map. Absent means
+   * media references are pushed verbatim.
+   */
+  media?: RolloverMediaCopy;
+}
+
+/**
+ * The part of the services' `ImportMediaCopy` this helper uses, structurally —
+ * the services barrel's types stay out of this module's contract, and a test
+ * can hand in two functions.
+ */
+export interface RolloverMediaCopy {
+  prepare(texts: readonly (string | null | undefined)[]): Promise<void>;
+  rewrite(text: string): string;
 }
 
 /** Why nothing reached the target. Set whenever `pushed` is false. */
@@ -189,17 +207,35 @@ function listFilesRecursive(dir: string): string[] {
  * the chained-import rewrite — a source repo that was itself imported still
  * names the repo it came from, and those references are repointed only where
  * the bytes actually came along. Everything else is counted and left alone.
+ *
+ * ## Media, in two passes
+ *
+ * Media objects live in R2, not in the tree, so the push cannot carry them.
+ * The first pass reads every rewritable text file that could hold a media
+ * reference (`mayReferenceMedia` — a substring test) and hands those texts to
+ * the run's media copy, which copies the objects into the target classroom
+ * BEFORE anything is pushed. The second pass is the rewrite below, with the
+ * copy's `rewrite` as the first step. A tree with no media reference reads
+ * nothing extra and asks R2 nothing. Only files that pass the marker test are
+ * held in memory between the passes; the rest are re-read, as before.
+ *
+ * What cannot be copied (Free target, no room, a failed copy, an object that
+ * is not the source's) is left byte-for-byte as it was and named in the import
+ * warnings — never repointed at a copy that does not exist.
  */
-function rewriteAssetUrls({
+async function rewriteAssetUrls({
   root,
   source,
   target,
+  media,
 }: {
   root: string;
   source: ContentRepoCoordinates;
   target: ContentRepoCoordinates;
-}): { rewritten: number; files: number; copied: ReadonlySet<string> } {
-  const { rewriteContentUrls, isTextContentPath } = ClassmojiService.contentImport;
+  media?: RolloverMediaCopy;
+}): Promise<{ rewritten: number; files: number; copied: ReadonlySet<string> }> {
+  const { rewriteContentUrls, isTextContentPath, mayReferenceMedia } =
+    ClassmojiService.contentImport;
   const files = listFilesRecursive(root);
   // Repo-relative and POSIX-separated, which is how a reference spells a path.
   const copied = new Set(files.map(file => path.relative(root, file).split(path.sep).join('/')));
@@ -209,6 +245,26 @@ function rewriteAssetUrls({
     uncopiedRefs++;
   };
   let rewritten = 0;
+
+  /** The text files the rewrite may touch — the same gate both passes use. */
+  const rewritable = (file: string): boolean => {
+    if (!isTextContentPath(path.relative(root, file))) return false;
+    try {
+      return fs.statSync(file).size <= MAX_REWRITE_BYTES;
+    } catch {
+      return false;
+    }
+  };
+
+  if (media) {
+    const mediaTexts: string[] = [];
+    for (const file of files) {
+      if (!rewritable(file)) continue;
+      const text = fs.readFileSync(file, 'utf8');
+      if (mayReferenceMedia(text)) mediaTexts.push(text);
+    }
+    await media.prepare(mediaTexts);
+  }
 
   for (const file of files) {
     const relative = path.relative(root, file);
@@ -237,6 +293,7 @@ function rewriteAssetUrls({
       targetPath: '',
       targetHasPath,
       onUncopiedRef,
+      ...(media ? { rewriteMedia: (text: string) => media.rewrite(text) } : {}),
     });
     if (updated === original) continue;
     fs.writeFileSync(file, updated, 'utf8');
@@ -267,7 +324,7 @@ function rewriteAssetUrls({
 export const cloneContentRepo = async (
   payload: CloneContentRepoPayload
 ): Promise<CloneContentRepoResult> => {
-  const { source, target, keepPages, keepSlides, commitMessage, onStep } = payload;
+  const { source, target, keepPages, keepSlides, commitMessage, onStep, media } = payload;
 
   // Unique per run: two imports in the same org must never share a directory.
   const localPath = path.join(
@@ -331,7 +388,12 @@ export const cloneContentRepo = async (
     }
     fs.rmSync(path.join(localPath, MANIFEST_PATH), { force: true });
 
-    const { rewritten, files, copied } = rewriteAssetUrls({ root: localPath, source, target });
+    const { rewritten, files, copied } = await rewriteAssetUrls({
+      root: localPath,
+      source,
+      target,
+      media,
+    });
     if (files === 0) {
       logger.warn('content import: nothing left to push after pruning', {
         repo: `${source.orgLogin}/${source.repo}`,

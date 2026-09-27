@@ -44,6 +44,7 @@ vi.mock('@aws-sdk/client-s3', () => ({
   DeleteObjectCommand: command('DeleteObject'),
   HeadObjectCommand: command('HeadObject'),
   ListObjectsV2Command: command('ListObjectsV2'),
+  PutObjectCommand: command('PutObject'),
   UploadPartCommand: command('UploadPart'),
 }));
 
@@ -90,7 +91,9 @@ const {
   deleteMedia,
   listMedia,
   purgeClassroomMedia,
+  putMediaObject,
   signParts,
+  SINGLE_PUT_MAX_BYTES,
   usage,
 } = await import('../media.service.ts');
 const { PART_SIZE_BYTES, PER_FILE_MAX_BYTES, PRO_QUOTA_BYTES, RESERVATION_WINDOW_MS } =
@@ -130,15 +133,27 @@ function row(overrides: Record<string, unknown> = {}) {
     created_at: new Date(),
     ready_at: new Date(),
     original_deleted_at: null,
+    destination: null,
+    stage_target_type: null,
+    stage_target_id: null,
+    placed_ref: null,
+    placement_error: null,
     ...overrides,
   };
 }
+
+/** Where an agent upload's bytes wait (see `stageKey`). */
+const STAGE_KEY_FIXTURE = () => `stage/${CLASSROOM_ID}/${MEDIA_ID}`;
 
 function configure(): void {
   process.env.MEDIA_R2_ACCOUNT_ID = 'acct';
   process.env.MEDIA_R2_ACCESS_KEY_ID = 'key';
   process.env.MEDIA_R2_SECRET_ACCESS_KEY = 'secret';
   process.env.MEDIA_R2_BUCKET = 'classmoji-media-test';
+  // The delivery layer's two env vars: media is only ever served signed, so a
+  // deployment that cannot sign is refused DELIVERY_REQUIRED at the door.
+  process.env.CONTENT_SIGNING_SECRET = 'secret';
+  process.env.CONTENT_DELIVERY_ORIGIN = 'https://content.test';
   resetR2Client();
 }
 
@@ -147,6 +162,8 @@ function unconfigure(): void {
   delete process.env.MEDIA_R2_ACCESS_KEY_ID;
   delete process.env.MEDIA_R2_SECRET_ACCESS_KEY;
   delete process.env.MEDIA_R2_BUCKET;
+  delete process.env.CONTENT_SIGNING_SECRET;
+  delete process.env.CONTENT_DELIVERY_ORIGIN;
   resetR2Client();
 }
 
@@ -292,6 +309,18 @@ describe('listMedia', () => {
     // Must survive the trip to a browser; a bigint here would throw.
     expect(() => JSON.stringify(record)).not.toThrow();
   });
+
+  it('leaves out agent uploads that are still waiting to be placed', async () => {
+    // STAGING rows count against the quota (usage) but are not media yet —
+    // most are on their way into the course repository.
+    prisma.mediaObject.findMany.mockResolvedValue([
+      row({ id: 'a', status: 'READY' }),
+      row({ id: 'b', status: 'STAGING', destination: 'repo' }),
+      row({ id: 'c', status: 'UPLOADING', upload_id: 'u' }),
+    ]);
+    const records = await listMedia(classroom);
+    expect(records.map(record => record.id)).toEqual(['a', 'c']);
+  });
 });
 
 describe('createUpload', () => {
@@ -358,6 +387,15 @@ describe('createUpload', () => {
       ).rejects.toMatchObject({ code: 'DELIVERY_REQUIRED' });
     }
 
+    expect(prisma.mediaObject.create).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(0);
+  });
+
+  it('refuses where R2 is configured but the deployment cannot sign delivery URLs', async () => {
+    delete process.env.CONTENT_SIGNING_SECRET;
+    await expect(
+      createUpload({ classroom, userId: 'u', filename: 'a.mp4', sizeBytes: 10 })
+    ).rejects.toMatchObject({ code: 'DELIVERY_REQUIRED' });
     expect(prisma.mediaObject.create).not.toHaveBeenCalled();
     expect(sent).toHaveLength(0);
   });
@@ -966,6 +1004,102 @@ describe('completeUpload', () => {
     }
   });
 
+  it('retries a Complete that R2 answered with a 5xx once, and finishes', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ status: 'UPLOADING', upload_id: 'up-1', size_bytes: BigInt(4096) })
+    );
+    let completes = 0;
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name === 'CompleteMultipartUpload' && ++completes === 1) {
+        throw Object.assign(new Error('internal'), {
+          name: 'InternalError',
+          $metadata: { httpStatusCode: 500 },
+        });
+      }
+      if (name === 'HeadObject') return { ContentLength: 4096 };
+      return {};
+    });
+
+    await expect(
+      completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
+    ).resolves.toMatchObject({ mediaId: MEDIA_ID, sizeBytes: 4096 });
+
+    expect(completes).toBe(2);
+    expect(sent.some(call => call.name === 'AbortMultipartUpload')).toBe(false);
+    expect(sent.some(call => call.name === 'DeleteObject')).toBe(false);
+  });
+
+  it('reads a NoSuchUpload on the retry as "the first attempt landed" and verifies the size', async () => {
+    // The first Complete assembled the object but its answer was a 5xx. The
+    // retry then meets a multipart that no longer exists; the size check is
+    // what decides, and here the object is there and the right size.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ status: 'UPLOADING', upload_id: 'up-1', size_bytes: BigInt(4096) })
+    );
+    let completes = 0;
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name === 'CompleteMultipartUpload') {
+        completes += 1;
+        throw completes === 1
+          ? Object.assign(new Error('bad gateway'), { $metadata: { httpStatusCode: 502 } })
+          : Object.assign(new Error('gone'), { name: 'NoSuchUpload' });
+      }
+      if (name === 'HeadObject') return { ContentLength: 4096 };
+      return {};
+    });
+
+    await expect(
+      completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
+    ).resolves.toMatchObject({ mediaId: MEDIA_ID });
+    expect(sent.some(call => call.name === 'AbortMultipartUpload')).toBe(false);
+  });
+
+  it('does not retry a 4xx, and aborts after a second 5xx', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ status: 'UPLOADING', upload_id: 'up-1', size_bytes: BigInt(4096) })
+    );
+
+    // A 4xx: the request is wrong, one attempt only.
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name === 'CompleteMultipartUpload') {
+        throw Object.assign(new Error('InvalidPart'), { $metadata: { httpStatusCode: 400 } });
+      }
+      return {};
+    });
+    await expect(
+      completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
+    ).rejects.toThrow('InvalidPart');
+    expect(sent.filter(call => call.name === 'CompleteMultipartUpload')).toHaveLength(1);
+    expect(sent.some(call => call.name === 'AbortMultipartUpload')).toBe(true);
+
+    // Two 5xx in a row: retried once, then the ordinary abort path.
+    sent.length = 0;
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name === 'CompleteMultipartUpload') {
+        throw Object.assign(new Error('unavailable'), { $metadata: { httpStatusCode: 503 } });
+      }
+      return {};
+    });
+    await expect(
+      completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
+    ).rejects.toThrow('unavailable');
+    expect(sent.filter(call => call.name === 'CompleteMultipartUpload')).toHaveLength(2);
+    expect(sent.some(call => call.name === 'AbortMultipartUpload')).toBe(true);
+  });
+
+  it('refuses an agent upload (STAGING), even one holding a multipart id', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ status: 'STAGING', upload_id: 'up-1', destination: 'media' })
+    );
+    await expect(
+      completeUpload({ classroom, mediaId: MEDIA_ID, parts: [{ partNumber: 1, etag: '"a"' }] })
+    ).rejects.toMatchObject({ code: 'BAD_STATE' });
+    expect(sent).toHaveLength(0);
+  });
+
   it('aborts, tombstones, then deletes the object when the assembly itself fails', async () => {
     // A complete that errors may still have assembled the object on R2's side
     // (a timeout, a dropped response). Once the row is DELETED nothing would
@@ -1307,6 +1441,49 @@ describe('abortUpload', () => {
     expect(prisma.mediaObject.updateMany).not.toHaveBeenCalled();
   });
 
+  it('cancels an agent upload: tombstones from STAGING, then deletes the staged object', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ status: 'STAGING', destination: 'repo', upload_id: null })
+    );
+    sendImpl.mockResolvedValue({});
+
+    await expect(abortUpload({ classroom, mediaId: MEDIA_ID })).resolves.toEqual({
+      mediaId: MEDIA_ID,
+      aborted: true,
+    });
+    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
+      where: { id: MEDIA_ID, status: 'STAGING' },
+      data: expect.objectContaining({ status: 'DELETED' }),
+    });
+    expect(sent).toEqual([
+      { name: 'DeleteObject', input: { Bucket: 'classmoji-media-test', Key: STAGE_KEY_FIXTURE() } },
+    ]);
+  });
+
+  it('aborts a URL import still streaming into its staged multipart', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ status: 'STAGING', destination: 'media', upload_id: 'up-7' })
+    );
+    sendImpl.mockResolvedValue({});
+    await abortUpload({ classroom, mediaId: MEDIA_ID });
+    expect(sent[0]).toEqual({
+      name: 'AbortMultipartUpload',
+      input: { Bucket: 'classmoji-media-test', Key: STAGE_KEY_FIXTURE(), UploadId: 'up-7' },
+    });
+  });
+
+  it('leaves the staged object alone when placement won the race', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ status: 'STAGING', destination: 'media', upload_id: null })
+    );
+    prisma.mediaObject.updateMany.mockResolvedValue({ count: 0 });
+    await expect(abortUpload({ classroom, mediaId: MEDIA_ID })).resolves.toEqual({
+      mediaId: MEDIA_ID,
+      aborted: false,
+    });
+    expect(sent).toHaveLength(0);
+  });
+
   it('is NOT_FOUND for an id it has never seen', async () => {
     prisma.mediaObject.findFirst.mockResolvedValue(null);
     await expect(abortUpload({ classroom, mediaId: MEDIA_ID })).rejects.toMatchObject({
@@ -1328,7 +1505,7 @@ describe('deleteMedia', () => {
       `m/${CLASSROOM_ID}/${MEDIA_ID}/poster.webp`,
     ]);
     expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
-      where: { id: MEDIA_ID, status: { in: ['UPLOADING', 'READY'] } },
+      where: { id: MEDIA_ID, status: { in: ['UPLOADING', 'READY', 'STAGING'] } },
       data: expect.objectContaining({ status: 'DELETED' }),
     });
   });
@@ -1433,6 +1610,37 @@ describe('deleteMedia', () => {
     expect(prisma.mediaObject.updateMany).not.toHaveBeenCalled();
   });
 
+  it('deletes a staged agent upload, tombstoning it from STAGING', async () => {
+    prisma.mediaObject.findFirst.mockResolvedValue(
+      row({ status: 'STAGING', destination: 'media', upload_id: 'up-3' })
+    );
+    await deleteMedia({ classroom, mediaId: MEDIA_ID });
+
+    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
+      where: { id: MEDIA_ID, status: { in: ['UPLOADING', 'READY', 'STAGING'] } },
+    });
+    expect(sent[0]).toEqual({
+      name: 'AbortMultipartUpload',
+      input: { Bucket: 'classmoji-media-test', Key: STAGE_KEY_FIXTURE(), UploadId: 'up-3' },
+    });
+    expect(sent.filter(call => call.name === 'DeleteObject').map(call => call.input.Key)).toContain(
+      STAGE_KEY_FIXTURE()
+    );
+  });
+
+  it('also clears the stage key of a media row that began as an agent upload', async () => {
+    // Placed into media (READY) — the stage object should already be gone, but
+    // a placement whose cleanup failed left it, and deleting is idempotent.
+    prisma.mediaObject.findFirst.mockResolvedValue(row({ destination: 'media' }));
+    await deleteMedia({ classroom, mediaId: MEDIA_ID });
+    expect(sent.map(call => call.input.Key)).toEqual([
+      ORIG_KEY,
+      `m/${CLASSROOM_ID}/${MEDIA_ID}/web.mp4`,
+      `m/${CLASSROOM_ID}/${MEDIA_ID}/poster.webp`,
+      STAGE_KEY_FIXTURE(),
+    ]);
+  });
+
   it('is NOT_FOUND for an id this classroom never had', async () => {
     prisma.mediaObject.findFirst.mockResolvedValue(null);
     await expect(deleteMedia({ classroom, mediaId: MEDIA_ID })).rejects.toMatchObject({
@@ -1444,6 +1652,32 @@ describe('deleteMedia', () => {
 
 describe('purgeClassroomMedia', () => {
   const PREFIX = `m/${CLASSROOM_ID}/`;
+  const STAGE_PREFIX = `stage/${CLASSROOM_ID}/`;
+
+  it('deletes staged agent uploads too, and aborts a staged multipart at its stage key', async () => {
+    prisma.mediaObject.findMany.mockResolvedValue([
+      { id: MEDIA_ID, ext: 'mp4', upload_id: 'up-s', status: 'STAGING' },
+    ]);
+    sendImpl.mockImplementation(async (name: string, input: Record<string, unknown>) => {
+      if (name !== 'ListObjectsV2') return {};
+      return input.Prefix === STAGE_PREFIX
+        ? { Contents: [{ Key: STAGE_KEY_FIXTURE() }], IsTruncated: false }
+        : { Contents: [], IsTruncated: false };
+    });
+
+    await expect(purgeClassroomMedia(CLASSROOM_ID)).resolves.toEqual({ deleted: 1 });
+
+    expect(prisma.mediaObject.findMany.mock.calls[0][0].where).toMatchObject({
+      status: { in: ['UPLOADING', 'STAGING'] },
+    });
+    expect(sent[0]).toEqual({
+      name: 'AbortMultipartUpload',
+      input: { Bucket: 'classmoji-media-test', Key: STAGE_KEY_FIXTURE(), UploadId: 'up-s' },
+    });
+    expect(sent.filter(call => call.name === 'DeleteObject').map(call => call.input.Key)).toEqual([
+      STAGE_KEY_FIXTURE(),
+    ]);
+  });
 
   beforeEach(() => {
     // A classroom that has had media: the purge only goes to R2 for one of these.
@@ -1477,6 +1711,7 @@ describe('purgeClassroomMedia', () => {
   it('deletes every object under the classroom prefix, across pages', async () => {
     sendImpl.mockImplementation(async (name: string, input: Record<string, unknown>) => {
       if (name !== 'ListObjectsV2') return {};
+      if (input.Prefix === STAGE_PREFIX) return { Contents: [], IsTruncated: false };
       return input.ContinuationToken === 'page-2'
         ? { Contents: [{ Key: `${PREFIX}c/orig.zip` }], IsTruncated: false }
         : {
@@ -1492,6 +1727,7 @@ describe('purgeClassroomMedia', () => {
     expect(lists.map(call => call.input)).toEqual([
       { Bucket: 'classmoji-media-test', Prefix: PREFIX, ContinuationToken: undefined },
       { Bucket: 'classmoji-media-test', Prefix: PREFIX, ContinuationToken: 'page-2' },
+      { Bucket: 'classmoji-media-test', Prefix: STAGE_PREFIX, ContinuationToken: undefined },
     ]);
     expect(sent.filter(call => call.name === 'DeleteObject').map(call => call.input.Key)).toEqual([
       `${PREFIX}a/orig.mp4`,
@@ -1512,7 +1748,7 @@ describe('purgeClassroomMedia', () => {
 
     expect(prisma.mediaObject.findMany.mock.calls[0][0].where).toMatchObject({
       classroom_id: CLASSROOM_ID,
-      status: 'UPLOADING',
+      status: { in: ['UPLOADING', 'STAGING'] },
     });
     expect(sent[0]).toEqual({
       name: 'AbortMultipartUpload',
@@ -1533,6 +1769,7 @@ describe('purgeClassroomMedia', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     sendImpl.mockImplementation(async (name: string, input: Record<string, unknown>) => {
       if (name === 'ListObjectsV2') {
+        if (input.Prefix === STAGE_PREFIX) return { Contents: [], IsTruncated: false };
         return {
           Contents: [{ Key: `${PREFIX}a/orig.mp4` }, { Key: `${PREFIX}b/orig.pdf` }],
           IsTruncated: false,
@@ -1555,5 +1792,127 @@ describe('purgeClassroomMedia', () => {
     }
     expect(sent).toHaveLength(0);
     expect(prisma.mediaObject.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('putMediaObject', () => {
+  beforeEach(() => {
+    prisma.mediaObject.create.mockImplementation(async ({ data }: { data: object }) =>
+      row({ status: 'UPLOADING', ...data })
+    );
+    prisma.mediaObject.findFirst.mockImplementation(async () => row());
+  });
+
+  const reservedId = (): string =>
+    prisma.mediaObject.create.mock.calls[0][0].data.id as unknown as string;
+
+  it('reserves under the lock, PUTs with the server type and exact length, verifies, READY', async () => {
+    const bytes = Buffer.alloc(4096, 1);
+    sendImpl.mockImplementation(async (name: string) =>
+      name === 'HeadObject' ? { ContentLength: 4096 } : {}
+    );
+
+    const result = await putMediaObject({
+      classroom,
+      userId: 'user-1',
+      filename: 'intro.mp4',
+      bytes,
+    });
+
+    expect(result).toEqual({ mediaId: reservedId(), ref: `media://${reservedId()}` });
+    expect(prisma.$queryRaw).toHaveBeenCalled();
+    expect(prisma.mediaObject.create.mock.calls[0][0].data).toMatchObject({
+      size_bytes: BigInt(4096),
+      content_type: 'video/mp4',
+    });
+    const key = `m/${CLASSROOM_ID}/${reservedId()}/orig.mp4`;
+    expect(sent.map(call => call.name)).toEqual(['PutObject', 'HeadObject']);
+    expect(sent[0].input).toEqual({
+      Bucket: 'classmoji-media-test',
+      Key: key,
+      Body: bytes,
+      ContentType: 'video/mp4',
+      ContentLength: 4096,
+    });
+    expect(prisma.mediaObject.updateMany.mock.calls.at(-1)?.[0]).toMatchObject({
+      where: { id: reservedId(), status: 'UPLOADING' },
+      data: expect.objectContaining({ status: 'READY' }),
+    });
+  });
+
+  it('applies createUpload’s rules: USE_REPO unless explicit, then Pro', async () => {
+    await expect(
+      putMediaObject({ classroom, userId: 'u', filename: 'a.png', bytes: Buffer.alloc(10) })
+    ).rejects.toMatchObject({ code: 'USE_REPO' });
+
+    getProStateForClassroomId.mockResolvedValue({ isPro: false });
+    await expect(
+      putMediaObject({
+        classroom,
+        userId: 'u',
+        filename: 'a.png',
+        bytes: Buffer.alloc(10),
+        options: { explicit: true },
+      })
+    ).rejects.toMatchObject({ code: 'PRO_REQUIRED' });
+    expect(prisma.mediaObject.create).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(0);
+  });
+
+  it('refuses over the quota before writing anything', async () => {
+    prisma.mediaObject.findMany.mockResolvedValue([row({ size_bytes: BigInt(PRO_QUOTA_BYTES) })]);
+    await expect(
+      putMediaObject({ classroom, userId: 'u', filename: 'a.mp4', bytes: Buffer.alloc(10) })
+    ).rejects.toMatchObject({ code: 'QUOTA_EXCEEDED' });
+    expect(sent).toHaveLength(0);
+  });
+
+  it('tombstones and removes the object when the size does not verify', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    sendImpl.mockImplementation(async (name: string) =>
+      name === 'HeadObject' ? { ContentLength: 5 } : {}
+    );
+    await expect(
+      putMediaObject({ classroom, userId: 'u', filename: 'a.mp4', bytes: Buffer.alloc(10) })
+    ).rejects.toMatchObject({ code: 'SIZE_MISMATCH' });
+    expect(prisma.mediaObject.updateMany.mock.calls[0][0]).toMatchObject({
+      where: { status: 'UPLOADING' },
+      data: expect.objectContaining({ status: 'DELETED' }),
+    });
+    expect(sent.at(-1)?.name).toBe('DeleteObject');
+  });
+
+  it('tombstones the reservation when the PUT fails', async () => {
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name === 'PutObject') throw new Error('r2 down');
+      return {};
+    });
+    await expect(
+      putMediaObject({ classroom, userId: 'u', filename: 'a.mp4', bytes: Buffer.alloc(10) })
+    ).rejects.toThrow('r2 down');
+    expect(prisma.mediaObject.updateMany.mock.calls[0][0].data).toMatchObject({
+      status: 'DELETED',
+    });
+  });
+
+  it('writes in parts above the single-PUT limit', async () => {
+    const size = SINGLE_PUT_MAX_BYTES + 5;
+    const bytes = Buffer.allocUnsafe(size);
+    sendImpl.mockImplementation(async (name: string) => {
+      if (name === 'CreateMultipartUpload') return { UploadId: 'up-big' };
+      if (name === 'UploadPart') return { ETag: '"e"' };
+      if (name === 'HeadObject') return { ContentLength: size };
+      return {};
+    });
+
+    await putMediaObject({ classroom, userId: 'u', filename: 'a.mp4', bytes });
+
+    const parts = sent.filter(call => call.name === 'UploadPart');
+    expect(parts.length).toBe(Math.ceil(size / PART_SIZE_BYTES));
+    expect(parts.reduce((total, call) => total + (call.input.ContentLength as number), 0)).toBe(
+      size
+    );
+    expect(sent.some(call => call.name === 'PutObject')).toBe(false);
+    expect(sent.some(call => call.name === 'CompleteMultipartUpload')).toBe(true);
   });
 });
