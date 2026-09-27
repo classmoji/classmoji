@@ -1260,7 +1260,15 @@ export async function mediaDownloadUrl({
   // no `Content-Disposition: attachment`, so the browser NAVIGATES to the file
   // and a click on Download plays a video instead of saving it. The id and the
   // extension are both already validated, so this fallback always normalizes.
-  const filename = normalizeDownloadFilename(record.filename) ?? `${record.id}.${record.ext}`;
+  //
+  // The rendition is an MP4 whatever was uploaded, so a `lecture.mov` whose
+  // original was dropped is saved as `lecture.mp4`: the name has to say what
+  // the bytes are, or the file opens in the wrong player or not at all.
+  const isOriginal = variant.startsWith('orig.');
+  const stem = record.filename.replace(/\.[^./\\]*$/, '');
+  const named = isOriginal ? record.filename : `${stem || record.id}.mp4`;
+  const filename =
+    normalizeDownloadFilename(named) ?? `${record.id}.${isOriginal ? record.ext : 'mp4'}`;
 
   return mintMedia(ctx, env, record, variant, DOWNLOAD_TIER, undefined, filename);
 }

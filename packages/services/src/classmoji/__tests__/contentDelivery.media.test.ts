@@ -475,6 +475,24 @@ describe('mediaDownloadUrl', () => {
     expect(url).toContain(`/${WEB}?`);
   });
 
+  it('names a rendition download .mp4, whatever the original was', async () => {
+    const url = await mediaDownloadUrl({
+      classroom: ctx.classroom,
+      record: record({
+        filename: 'Week 3.mov',
+        ext: 'mov',
+        renditionKey: WEB_KEY,
+        originalDeletedAt: new Date(),
+      }),
+      forStudent: false,
+    });
+    await expect(verifyContentUrl(MASTER, url!)).resolves.toMatchObject({
+      ok: true,
+      variant: WEB,
+      downloadFilename: 'Week 3.mp4',
+    });
+  });
+
   it('hands over the ORIGINAL while it is kept, even with a rendition beside it', async () => {
     const url = await mediaDownloadUrl({
       classroom: ctx.classroom,
