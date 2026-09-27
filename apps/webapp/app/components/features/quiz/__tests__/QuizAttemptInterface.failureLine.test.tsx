@@ -2,12 +2,14 @@
 /**
  * QuizAttemptInterface stops waiting when the transcript ends in a failure line.
  *
- * A start the ai-agent refuses for unavailable source material saves ONE
- * assistant line (metadata.errorType) and no welcome message, because the
- * refusal comes before the agent and its conversation exist. The chat used to
- * read "exactly one assistant message, no opening question" as "welcome shown,
- * question 1 still coming", keep its spinner and poll forever. A line carrying
- * `errorType` is final: nothing more is coming for it.
+ * A start refused for unavailable source material can leave ONE assistant
+ * line (metadata.errorType) and no welcome message: the refusal comes before
+ * the agent and its conversation exist. (A brand-new attempt refused that way
+ * is now removed and its start answers 409 instead; the line is what an
+ * attempt with history gets.) The chat used to read "exactly one assistant
+ * message, no opening question" as "welcome shown, question 1 still coming",
+ * keep its spinner and poll forever. A line carrying `errorType` is final:
+ * nothing more is coming for it.
  */
 
 import { act } from 'react';

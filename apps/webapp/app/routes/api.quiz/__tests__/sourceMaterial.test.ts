@@ -11,8 +11,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  *     startQuiz both answer 409 with fixed copy and create nothing. A quiz with
  *     NO links is untouched: no extra query, today's flow.
  *   - The ai-agent's own refusal (code source_material_unavailable, for a
- *     document unpublished between the check and the init, or on recovery)
- *     saves one fixed line and never an invented first question.
+ *     document unpublished between the check and the init) removes the
+ *     brand-new attempt, which never got a question, and the start answers
+ *     the same 409: a start on a quiz with links waits (bounded) for the
+ *     ai-agent's verdict. An attempt with history, and a refused recovery,
+ *     get one fixed line instead. Never an invented first question.
  *   - The per-call MCP read token (Stage 2): minted on every init and every
  *     turn, sent only to the ai-agent, never logged and never returned; a mint
  *     failure lets the call proceed without it.
@@ -27,6 +30,7 @@ const incrementMock = vi.fn();
 const countStartableMock = vi.fn();
 const gitRepoFindByStudentMock = vi.fn();
 const updateAgentConfigMock = vi.fn();
+const deleteAttemptMock = vi.fn();
 
 const assertAccessMock = vi.fn();
 const quizzesVisibleMock = vi.fn();
@@ -44,6 +48,7 @@ vi.mock('@classmoji/services', () => ({
       findById: (...a: unknown[]) => attemptFindByIdMock(...a),
       incrementQuestionsAsked: (...a: unknown[]) => incrementMock(...a),
       updateAgentConfig: (...a: unknown[]) => updateAgentConfigMock(...a),
+      deleteAttempt: (...a: unknown[]) => deleteAttemptMock(...a),
       completeAttempt: vi.fn(),
     },
     quizSourceMaterial: { countStartable: (...a: unknown[]) => countStartableMock(...a) },
@@ -152,6 +157,7 @@ beforeEach(() => {
   findWithMessagesMock.mockResolvedValue({ attempt: buildAttempt(), messages: [] });
   attemptFindByIdMock.mockResolvedValue(buildAttempt());
   addMessageMock.mockResolvedValue(undefined);
+  deleteAttemptMock.mockResolvedValue(undefined);
   incrementMock.mockResolvedValue(undefined);
   gitRepoFindByStudentMock.mockResolvedValue({ name: 'student-repo' });
   initializeAgentMock.mockResolvedValue({ openingMessage: 'Question 1?' });
@@ -211,7 +217,7 @@ describe('the pre-attempt source-material check', () => {
     expect(initializeAgentMock).not.toHaveBeenCalled();
   });
 
-  it('startQuiz (fresh attempt from a restart): checks again before starting it', async () => {
+  it('startQuiz (fresh attempt from a restart): checks again, and removes the unstarted attempt', async () => {
     countStartableMock.mockResolvedValue({ configured: 2, startable: 0 });
 
     const response = await post({ _action: 'startQuiz', quizId: QUIZ_ID, attemptId: ATTEMPT_ID });
@@ -219,6 +225,26 @@ describe('the pre-attempt source-material check', () => {
     await expectUnavailable409(response);
     await flushBackground();
     expect(initializeAgentMock).not.toHaveBeenCalled();
+    // Nothing happened on it, so it does not count toward max_attempts.
+    expect(deleteAttemptMock).toHaveBeenCalledExactlyOnceWith(ATTEMPT_ID);
+  });
+
+  it('startQuiz naming an attempt that is gone: says why when nothing is startable', async () => {
+    findWithMessagesMock.mockResolvedValue(null);
+    countStartableMock.mockResolvedValue({ configured: 2, startable: 0 });
+
+    await expectUnavailable409(
+      await post({ _action: 'startQuiz', quizId: QUIZ_ID, attemptId: ATTEMPT_ID })
+    );
+  });
+
+  it('startQuiz naming an attempt that is gone: still 404 when the material is startable', async () => {
+    findWithMessagesMock.mockResolvedValue(null);
+
+    const response = await post({ _action: 'startQuiz', quizId: QUIZ_ID, attemptId: ATTEMPT_ID });
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'Attempt not found' });
   });
 
   it('startQuiz (attempt already under way): is never stopped by the check', async () => {
@@ -260,28 +286,61 @@ describe("the ai-agent's refusal at init (source_material_unavailable)", () => {
     });
 
   it.each([
-    ['standard', false, 'startQuiz:standard'],
-    ['code-aware', true, 'startQuiz:codeAware'],
+    ['standard', false],
+    ['code-aware', true],
   ])(
-    '%s: saves the fixed line only — no invented question, no count bump',
+    '%s, brand-new attempt: removes it and the start answers 409 — nothing saved',
     async (_l, codeAware) => {
       findWithMessagesMock.mockResolvedValue({ attempt: buildAttempt(codeAware), messages: [] });
       initializeAgentMock.mockRejectedValue(unavailable());
 
       const response = await post({ _action: 'startQuiz', quizId: QUIZ_ID, attemptId: ATTEMPT_ID });
-      expect(response.status).toBe(200);
-      await flushBackground();
 
-      expect(addMessageMock).toHaveBeenCalledExactlyOnceWith(
-        ATTEMPT_ID,
-        'ASSISTANT',
-        UNAVAILABLE,
-        false,
-        { errorType: 'SOURCE_MATERIAL_UNAVAILABLE' }
-      );
+      await expectUnavailable409(response);
+      expect(deleteAttemptMock).toHaveBeenCalledExactlyOnceWith(ATTEMPT_ID);
+      await flushBackground();
+      expect(addMessageMock).not.toHaveBeenCalled();
       expect(incrementMock).not.toHaveBeenCalled();
     }
   );
+
+  it.each([
+    ['standard', false],
+    ['code-aware', true],
+  ])('%s, attempt with history: keeps it and saves the fixed line only', async (_l, codeAware) => {
+    const empty = { attempt: buildAttempt(codeAware), messages: [] };
+    findWithMessagesMock
+      .mockResolvedValueOnce(empty) // the attempt lookup
+      .mockResolvedValueOnce(empty) // "already started?"
+      .mockResolvedValue({
+        ...empty,
+        // A concurrent start got further before this refusal landed.
+        messages: [{ id: 'm1', role: 'assistant', content: 'Welcome!' }],
+      });
+    initializeAgentMock.mockRejectedValue(unavailable());
+
+    const response = await post({ _action: 'startQuiz', quizId: QUIZ_ID, attemptId: ATTEMPT_ID });
+    expect(response.status).toBe(200);
+    await flushBackground();
+
+    expect(deleteAttemptMock).not.toHaveBeenCalled();
+    expect(addMessageMock).toHaveBeenCalledExactlyOnceWith(
+      ATTEMPT_ID,
+      'ASSISTANT',
+      UNAVAILABLE,
+      false,
+      { errorType: 'SOURCE_MATERIAL_UNAVAILABLE' }
+    );
+    expect(incrementMock).not.toHaveBeenCalled();
+  });
+
+  it('a new-attempt start (no attemptId) refused at init removes the attempt it made', async () => {
+    initializeAgentMock.mockRejectedValue(unavailable());
+
+    await expectUnavailable409(await post({ _action: 'startQuiz', quizId: QUIZ_ID }));
+    expect(createNewMock).toHaveBeenCalledOnce();
+    expect(deleteAttemptMock).toHaveBeenCalledExactlyOnceWith(ATTEMPT_ID);
+  });
 
   it('sendMessage (recovery refused): the transcript gets the same fixed line', async () => {
     findWithMessagesMock.mockResolvedValue({
@@ -302,6 +361,51 @@ describe("the ai-agent's refusal at init (source_material_unavailable)", () => {
   });
 });
 
+describe("a start's wait for the ai-agent's verdict", () => {
+  const never = () => new Promise<never>(() => {});
+
+  it('ends at the welcome, which the ai-agent saves once the material loaded', async () => {
+    initializeAgentMock.mockImplementation(
+      (
+        _id: string,
+        _config: unknown,
+        _code: unknown,
+        callbacks: { onWelcomeMessage: () => void }
+      ) => {
+        callbacks.onWelcomeMessage();
+        return never(); // question 1 is still being written
+      }
+    );
+
+    const response = await post({ _action: 'startQuiz', quizId: QUIZ_ID, attemptId: ATTEMPT_ID });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ attemptId: ATTEMPT_ID });
+    expect(deleteAttemptMock).not.toHaveBeenCalled();
+  });
+
+  it('is bounded: an ai-agent that never answers still gets the attempt id back', async () => {
+    initializeAgentMock.mockImplementation(never);
+
+    const pending = post({ _action: 'startQuiz', quizId: QUIZ_ID, attemptId: ATTEMPT_ID });
+    await vi.waitFor(() => expect(initializeAgentMock).toHaveBeenCalled());
+    await vi.advanceTimersByTimeAsync(5000);
+    const response = await pending;
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ attemptId: ATTEMPT_ID });
+  });
+
+  it('does not apply to a quiz with no links: it answers at once, as before', async () => {
+    quizFindByIdMock.mockResolvedValue(quiz([]));
+    initializeAgentMock.mockImplementation(never);
+
+    const response = await post({ _action: 'startQuiz', quizId: QUIZ_ID, attemptId: ATTEMPT_ID });
+
+    expect(response.status).toBe(200);
+  });
+});
+
 describe('the per-call MCP read token (Stage 2)', () => {
   const minted = { accessToken: TOKEN, expiresAt: EXPIRES.toISOString() };
 
@@ -316,7 +420,7 @@ describe('the per-call MCP read token (Stage 2)', () => {
 
     expect(mintMock).toHaveBeenCalledWith('student-1');
     const call = initializeAgentMock.mock.calls[0];
-    expect(call[3]).toEqual({ mcpToken: minted });
+    expect(call[3]).toEqual({ mcpToken: minted, onWelcomeMessage: expect.any(Function) });
     // Never inside quizConfig, which the ai-agent persists.
     expect(JSON.stringify(call[1])).not.toContain(TOKEN);
   });
@@ -356,7 +460,10 @@ describe('the per-call MCP read token (Stage 2)', () => {
 
     expect(start.status).toBe(200);
     expect(await send.json()).toEqual({ success: true });
-    expect(initializeAgentMock.mock.calls[0][3]).toEqual({ mcpToken: undefined });
+    expect(initializeAgentMock.mock.calls[0][3]).toEqual({
+      mcpToken: undefined,
+      onWelcomeMessage: expect.any(Function),
+    });
     expect(sendMessageToAgentMock).toHaveBeenCalledWith(ATTEMPT_ID, 'hi', {
       mcpToken: undefined,
     });

@@ -301,7 +301,8 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       });
 
       if (!startResponse.ok) {
-        // The new attempt exists even though it didn't start, so the list shows it.
+        // The new attempt may still exist though it didn't start, so the list
+        // shows it. (One refused for its source material has been removed.)
         revalidator.revalidate();
         Modal.error({
           title: 'Cannot Start Quiz',
