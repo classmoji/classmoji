@@ -60,6 +60,15 @@ interface CommonLayoutProps {
    * two seconds.
    */
   importBanner?: ImportProgressBannerProps | null;
+  /**
+   * Whether the classroom is on Pro, from the layout loader — the /teacher and
+   * /assistant layouts pass it. When given it decides the Pro-only nav entries
+   * outright; the store's subscription is only the fallback for layouts that
+   * pass nothing (the admin layout, whose owner can read the subscription).
+   * The store is not usable for the others: its fetch is OWNER-only, so for a
+   * teacher or assistant it holds no tier.
+   */
+  isPro?: boolean;
 }
 
 const CommonLayout = ({
@@ -69,6 +78,7 @@ const CommonLayout = ({
   pagesUrl: _pagesUrl = 'http://localhost:7100',
   navVisibility,
   importBanner = null,
+  isPro,
 }: CommonLayoutProps) => {
   const [collapsed, setCollapsed] = useLocalStorageState('classmoji-collapsed', {
     defaultValue: false,
@@ -101,7 +111,8 @@ const CommonLayout = ({
       }
     | undefined;
   const { user, memberships = [], aiAgentAvailable = false } = rootData ?? {};
-  const { isProTier } = useSubscription();
+  const { isProTier: storeIsProTier } = useSubscription();
+  const isProTier = isPro ?? storeIsProTier;
   const { tokenBalance } = useStore();
   const askMojiEnabled = useStore(s => s.askMojiEnabled);
   const isAskMojiOpen = useStore(s => s.isAskMojiOpen);

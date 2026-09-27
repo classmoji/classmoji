@@ -8,11 +8,13 @@
  * REPOSITORY links a container, not a git repo. Publishing a Module spawns
  * nothing.
  *
- * FORMS ARE THE ONE PRO-GATED ITEM TYPE. The forms surface is a Pro feature
- * everywhere else it appears (apps/pages' `assertFormAdmin`, the whole forms
- * tool batch), so attaching one to a module is gated the same way — but only on
- * that branch: a free-tier classroom keeps adding pages, repos, quizzes and
- * slides exactly as before.
+ * FORMS AND QUIZZES ARE THE GATED ITEM TYPES. The forms surface is a Pro
+ * feature everywhere else it appears (apps/pages' `assertFormAdmin`, the whole
+ * forms tool batch), so attaching a form is gated the same way. Quizzes appear
+ * only where `entitlement.quizzesVisible` holds (Pro, and quizzes switched on),
+ * the predicate list_modules and the web app filter on, so attaching a quiz is
+ * refused anywhere else. Each gate runs on its own branch only: a free-tier
+ * classroom keeps adding pages and slides exactly as before.
  *
  * Tier confirmed against apps/webapp/app/routes/admin.$class.modules/route.tsx:
  * requireClassroomAdmin — OWNER only.
@@ -231,7 +233,8 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
     'A DRAFT form can be attached — the item is created now and simply stays hidden from members ' +
     'until form_publish, exactly as a DRAFT quiz does. A CLOSED form stays ' +
     'visible on purpose, reading as closed. Attaching a form requires a Pro subscription (the ' +
-    'forms surface is Pro everywhere); the other four types do not.',
+    'forms surface is Pro everywhere); attaching a quiz requires Pro with quizzes_enabled on. ' +
+    'Pages and slides need neither.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
@@ -249,11 +252,22 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
     const classroom = requireClassroomCtx(ctx);
 
     // The forms surface is Pro-gated on every other surface it has, so linking
-    // a form from a module is gated too — but ONLY on this branch, outside the
-    // try below so the refusal surfaces as `forbidden` rather than being
-    // rewritten by translateModuleError. Adding a page/repo/quiz/slide is
-    // unchanged for a free-tier classroom.
+    // a form from a module is gated too. A quiz is refused wherever quizzes are
+    // not visible, the same predicate list_modules filters them out on. Both
+    // checks run on their own branch only, outside the try below so a refusal
+    // surfaces as `forbidden` rather than being rewritten by
+    // translateModuleError. Adding a page or slide is unchanged for a free-tier
+    // classroom.
     if (args.item_type === 'FORM') await assertProTier(ctx);
+    if (
+      args.item_type === 'QUIZ' &&
+      !(await ClassmojiService.entitlement.quizzesVisible(classroom.classroomId))
+    ) {
+      throw new ToolError(
+        'forbidden',
+        'Quizzes are not available in this classroom: they require a Pro subscription with quizzes_enabled on'
+      );
+    }
 
     // Repositories are attached to assignments, not placed in modules as
     // content items. Refused before any lookup.

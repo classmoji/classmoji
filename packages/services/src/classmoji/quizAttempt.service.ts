@@ -830,6 +830,48 @@ export const getUserAttemptForQuiz = async (quizId: string, userId: string) => {
   });
 };
 
+/**
+ * Transcript copy for a quiz reply the ai-agent failed to produce, matching
+ * what api.quiz saves for one today.
+ */
+const AGENT_FAILURE_REPLY = "That reply couldn't be finished. Please send your message again.";
+
+/**
+ * ai-agent codes whose saved text is the ai-agent's own copy for students.
+ * Older API_ERROR rows hold lines that describe the upstream failure ("the AI
+ * service is temporarily busy"), so they read as the fixed line.
+ */
+const STUDENT_FACING_AGENT_CODES = ['BUDGET_EXCEEDED'];
+
+type TranscriptFields = { content: string; metadata: Prisma.JsonValue | null };
+
+/**
+ * A failed-reply row as the transcript shows it. Older rows saved the
+ * ai-agent's raw error as `content` and again as `metadata.errorMessage`;
+ * newer ones save fixed copy and `{ errorType, code }`. Both read the same
+ * here: the saved text only for a student-facing code, the fixed line
+ * otherwise, and no metadata beyond the type and code. A GENERAL_FAILURE row
+ * (api.quiz's sendMessage failed outside the ai-agent call) reads as the fixed
+ * line too, whatever older copy it was saved with. Every other row passes
+ * through unchanged.
+ */
+const toTranscriptFields = ({ content, metadata }: TranscriptFields): TranscriptFields => {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return { content, metadata: metadata || null };
+  }
+  if (metadata.errorType === 'GENERAL_FAILURE') {
+    return { content: AGENT_FAILURE_REPLY, metadata: { errorType: 'GENERAL_FAILURE' } };
+  }
+  if (metadata.errorType !== 'AGENT_FAILURE') {
+    return { content, metadata };
+  }
+  const code = typeof metadata.code === 'string' ? metadata.code : null;
+  return {
+    content: code && STUDENT_FACING_AGENT_CODES.includes(code) ? content : AGENT_FAILURE_REPLY,
+    metadata: { errorType: 'AGENT_FAILURE', code },
+  };
+};
+
 // Get attempt with messages for AI processing
 export const findWithMessages = async (attemptId: string) => {
   const attempt = await findById(attemptId);
@@ -847,13 +889,13 @@ export const findWithMessages = async (attemptId: string) => {
     },
   });
 
-  // Format messages for UI display (lowercase roles = industry standard)
+  // Format messages for UI display (lowercase roles = industry standard).
+  // Metadata carries explorationSteps for code-aware quizzes.
   const messages =
     conversation?.messages?.map(msg => ({
       id: msg.id,
       role: msg.role.toLowerCase(),
-      content: msg.content,
-      metadata: msg.metadata || null, // Contains explorationSteps for code-aware quizzes
+      ...toTranscriptFields(msg),
       timestamp: msg.created_at,
     })) || [];
 

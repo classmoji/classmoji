@@ -35,6 +35,9 @@ const mocks = vi.hoisted(() => ({
   findRepositoriesPerStudent: vi.fn(),
   getClassroomSettingsForServer: vi.fn(),
   findLetterGradeMappings: vi.fn(),
+  loadQuizzesVisible: vi.fn(),
+  findAttemptsByQuiz: vi.fn(),
+  listResponsesByFormId: vi.fn(),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -56,6 +59,10 @@ vi.mock(
   async () => await import('../../../utils/studentFields.server.ts')
 );
 
+vi.mock('~/utils/classroomProFlag.server', () => ({
+  loadQuizzesVisible: (...a: unknown[]) => mocks.loadQuizzesVisible(...a),
+}));
+
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     classroomMembership: {
@@ -74,6 +81,8 @@ vi.mock('@classmoji/services', () => ({
     letterGradeMapping: {
       findByClassroomId: (...a: unknown[]) => mocks.findLetterGradeMappings(...a),
     },
+    quizAttempt: { findByQuiz: (...a: unknown[]) => mocks.findAttemptsByQuiz(...a) },
+    formResponse: { listByFormId: (...a: unknown[]) => mocks.listResponsesByFormId(...a) },
   },
 }));
 
@@ -180,6 +189,9 @@ beforeEach(() => {
     quizzes_enabled: true,
   });
   mocks.findLetterGradeMappings.mockResolvedValue([]);
+  mocks.loadQuizzesVisible.mockResolvedValue(true);
+  mocks.findAttemptsByQuiz.mockResolvedValue([]);
+  mocks.listResponsesByFormId.mockResolvedValue([]);
 });
 
 // ─── Loader: exactly what leaves the server ──────────────────────────────────
@@ -297,6 +309,54 @@ describe('grades loader — the contact fields are OWNER-only', () => {
       }
     }
   );
+});
+
+// ─── Loader: quiz columns follow quiz visibility ─────────────────────────────
+
+describe('grades loader — quiz columns appear only where quizzes are visible', () => {
+  const ASSIGNMENT_ROWS = [
+    { id: 'a-repo', title: 'Lab 1', type: 'REPO', repository_id: 'r-1', module: { title: 'W1' } },
+    { id: 'a-quiz', title: 'Recursion', type: 'QUIZ', quiz_id: 'quiz-1', module: { title: 'W1' } },
+    { id: 'a-form', title: 'Survey', type: 'FORM', form_id: 'form-1', module: { title: 'W1' } },
+  ];
+
+  /** The two trailing slots of the deferred payload: the columns and their activity. */
+  const resolveColumns = async () => {
+    const { allData } = await route.loader(loaderArgs());
+    const resolved = (await allData) as unknown[];
+    return {
+      assignments: resolved[6] as Array<{ id: string; type: string }>,
+      activity: resolved[7] as { quiz: Record<string, unknown>; form: Record<string, unknown> },
+    };
+  };
+
+  beforeEach(() => {
+    mocks.listForClassroom.mockResolvedValue(ASSIGNMENT_ROWS);
+    mocks.findAttemptsByQuiz.mockResolvedValue([
+      { user_id: 'student-1', completed_at: new Date(), score: 90 },
+    ]);
+  });
+
+  it('keeps the quiz column and its attempt scores when quizzes are visible', async () => {
+    const { assignments, activity } = await resolveColumns();
+
+    expect(assignments.map(a => a.id)).toEqual(['a-repo', 'a-quiz', 'a-form']);
+    expect(mocks.findAttemptsByQuiz).toHaveBeenCalledWith('quiz-1');
+    expect(activity.quiz['a-quiz']).toEqual({ 'student-1': { completed: true, score: 90 } });
+    expect(mocks.loadQuizzesVisible).toHaveBeenCalledWith('class-1');
+  });
+
+  it('drops the quiz column and never reads its attempts when quizzes are hidden', async () => {
+    mocks.loadQuizzesVisible.mockResolvedValue(false);
+
+    const { assignments, activity } = await resolveColumns();
+
+    expect(assignments.map(a => a.id)).toEqual(['a-repo', 'a-form']);
+    expect(activity.quiz).toEqual({});
+    expect(mocks.findAttemptsByQuiz).not.toHaveBeenCalled();
+    // Form activity is unaffected.
+    expect(mocks.listResponsesByFormId).toHaveBeenCalledWith('form-1');
+  });
 });
 
 // ─── Action: the audit row ───────────────────────────────────────────────────

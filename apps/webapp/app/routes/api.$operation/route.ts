@@ -28,7 +28,8 @@ export const loader = checkAuth(
         });
 
         // The tier the Pro gates use (getProStateForClassroomId): an active PRO
-        // from any accepted owner, else FREE. Drives the Pro-only nav items.
+        // from any accepted owner, else FREE. Drives the owner sidebar's Pro-only
+        // nav items; teachers and assistants get a boolean from their layouts.
         return ClassmojiService.subscription.getClassroomSubscription(classroom.id);
       }
       case 'get-tc-installation-token': {

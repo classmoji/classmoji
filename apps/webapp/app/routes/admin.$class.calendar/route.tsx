@@ -22,6 +22,7 @@ import {
   assertClassroomAccess,
   assertClassroomMutationAllowed,
 } from '~/utils/helpers';
+import { loadQuizzesVisible, quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server';
 import type { Route } from './+types/route';
 import CourseCalendar from '~/components/features/calendar/CourseCalendar';
@@ -101,7 +102,9 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   // Only staff reach this loader (OWNER, TEACHER, ASSISTANT), and the calendar
   // they are already served shows the same drafts with the same Draft pill.
   // Assignments stay published-only: unpublished ones have no student-facing
-  // page to link to at all.
+  // page to link to at all. Quiz assignments are left out where the
+  // classroom's quizzes are hidden.
+  const quizzesVisible = await loadQuizzesVisible(classroom.id);
   const [pages, slides, assignments] = await Promise.all([
     getPrisma().page.findMany({
       where: { classroom_id: classroom.id },
@@ -114,7 +117,11 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       orderBy: { title: 'asc' },
     }),
     getPrisma().assignment.findMany({
-      where: { module: { classroom_id: classroom.id }, is_published: true },
+      where: {
+        module: { classroom_id: classroom.id },
+        is_published: true,
+        ...(quizzesVisible ? {} : { type: { not: 'QUIZ' } }),
+      },
       select: { id: true, title: true, repository: { select: { title: true, slug: true } } },
       orderBy: { title: 'asc' },
     }),
@@ -219,32 +226,28 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     // If links were provided (non-recurring events only), add them
     const hasLinks = linkedPageIds?.length || linkedSlideIds?.length || linkedAssignmentIds?.length;
-    if (hasLinks) {
-      await ClassmojiService.calendar.updateEventLinks(
-        newEvent.id,
-        classroom.id,
-        {
-          pageIds: linkedPageIds || [],
-          slideIds: linkedSlideIds || [],
-          assignmentIds: linkedAssignmentIds || [],
-        },
-        null, // null occurrence_date for non-recurring events
-        toFeaturedLinkRef(featuredKind, featuredId)
-      );
-    }
+    const saved = hasLinks
+      ? await ClassmojiService.calendar.updateEventLinks(
+          newEvent.id,
+          classroom.id,
+          {
+            pageIds: linkedPageIds || [],
+            slideIds: linkedSlideIds || [],
+            assignmentIds: linkedAssignmentIds || [],
+          },
+          null, // null occurrence_date for non-recurring events
+          toFeaturedLinkRef(featuredKind, featuredId)
+        )
+      : null;
 
     await audit('CREATE', 'CALENDAR', newEvent.id, {
       tool: 'web:calendar.create_event',
       title: createData.title ?? null,
       event_type: createData.event_type ?? null,
       is_recurring: Boolean(createData.recurrence_rule),
-      linked: hasLinks
-        ? {
-            pages: linkedPageIds?.length ?? 0,
-            slides: linkedSlideIds?.length ?? 0,
-            assignments: linkedAssignmentIds?.length ?? 0,
-          }
-        : null,
+      // What the service saved, not what was asked for: ids it could not
+      // validate are dropped there without an error.
+      linked: saved?.linked ?? null,
     });
 
     return data({ success: true });
@@ -325,24 +328,23 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       (linkedPageIds !== undefined ||
         linkedSlideIds !== undefined ||
         linkedAssignmentIds !== undefined);
-    if (hasLinkUpdates) {
-      const linkOccurrenceDate =
-        editScope === 'this_only' && occurrenceDate ? new Date(occurrenceDate) : null;
-
-      await ClassmojiService.calendar.updateEventLinks(
-        linkTargetId,
-        classroom.id,
-        {
-          pageIds: linkedPageIds || [],
-          slideIds: linkedSlideIds || [],
-          assignmentIds: linkedAssignmentIds || [],
-        },
-        linkOccurrenceDate,
-        // Ignored wherever the link keys are: a star with no date to sit on is
-        // as meaningless as a link with none.
-        toFeaturedLinkRef(featuredKind, featuredId)
-      );
-    }
+    const linkOccurrenceDate =
+      editScope === 'this_only' && occurrenceDate ? new Date(occurrenceDate) : null;
+    const saved = hasLinkUpdates
+      ? await ClassmojiService.calendar.updateEventLinks(
+          linkTargetId,
+          classroom.id,
+          {
+            pageIds: linkedPageIds || [],
+            slideIds: linkedSlideIds || [],
+            assignmentIds: linkedAssignmentIds || [],
+          },
+          linkOccurrenceDate,
+          // Ignored wherever the link keys are: a star with no date to sit on is
+          // as meaningless as a link with none.
+          toFeaturedLinkRef(featuredKind, featuredId)
+        )
+      : null;
 
     await audit('UPDATE', 'CALENDAR', eventId, {
       tool: 'web:calendar.update_event',
@@ -353,6 +355,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       edit_scope: editScope ?? null,
       occurrence_date: occurrenceDate ?? null,
       links_updated: hasLinkUpdates,
+      // What the link write saved for that date, as on a create.
+      linked: saved?.linked ?? null,
     });
 
     return data({ success: true });
@@ -434,6 +438,12 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         { success: false, error: 'Assignment does not belong to this classroom' },
         { status: 403 }
       );
+    }
+
+    // Where quizzes are hidden, a quiz assignment answers as a missing one does:
+    // its deadline is not on the calendar, and moving it would notify the class.
+    if (assignment.type === 'QUIZ' && !(await quizzesVisibleOrThrow(classroom.id))) {
+      return data({ success: false, error: 'Assignment not found' }, { status: 404 });
     }
 
     const previousDeadline = assignment.student_deadline;

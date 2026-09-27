@@ -4,7 +4,9 @@ import { Drawer, ConfigProvider, theme, Modal } from 'antd';
 import type { Route } from './+types/route';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { QuizAttemptInterface } from '~/components';
-import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
+import { assertClassroomAccess } from '~/utils/helpers';
+import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
+import { attemptDrawerView, quizDrawerView } from '~/utils/quizPayloads';
 
 export async function loader({ params, request }: Route.LoaderArgs) {
   const { ClassmojiService, QuizAttemptNotFoundError } = await import('@classmoji/services');
@@ -21,7 +23,12 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     attemptedAction: 'view',
   });
 
-  await assertProTier(classSlug);
+  // A classroom without quizzes (not Pro, or switched off) has no attempt to
+  // show: the same 404 as the list, before anything is read. A failed lookup
+  // throws to the error page rather than answering 404.
+  if (!(await quizzesVisibleOrThrow(classroom.id))) {
+    throw new Response('Not Found', { status: 404 });
+  }
 
   // 2. Fetch quiz
   const quiz = await ClassmojiService.quiz.findById(quizId);
@@ -72,26 +79,16 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // 6. Determine if read-only (completed attempt)
   const readOnly = Boolean(attemptData.attempt.completed_at);
 
-  // 7. Strip sensitive fields from attempt before sending to client
-  // agent_config may contain API keys - never expose to browser
-  // quiz.classroom.settings contains anthropic_api_key, openai_api_key
-  const { agent_config: _agent_config, ...attemptWithoutConfig } = attemptData.attempt;
-  const safeAttempt = {
-    ...attemptWithoutConfig,
-    quiz: {
-      ...attemptWithoutConfig.quiz,
-      classroom: attemptWithoutConfig.quiz?.classroom
-        ? { ...attemptWithoutConfig.quiz.classroom, settings: undefined }
-        : undefined,
-    },
-  };
-
+  // 7. Send only what the drawer and QuizAttemptInterface read — see
+  // ~/utils/quizPayloads. Both rows arrive joined to much more: the attempt to
+  // its user, quiz and classroom; the quiz to every attempt and its user, and
+  // its prompts.
   return {
-    quiz,
-    attempt: safeAttempt,
+    quiz: quizDrawerView(quiz),
+    attempt: attemptDrawerView(attemptData.attempt),
     // Use unified messages from getAttemptWithMessages (ai-agent owns persistence)
     messages: attemptData.messages || [],
-    userLogin: safeAttempt.user?.login || null,
+    userLogin: attemptData.attempt.user?.login || null,
     isAdmin: isInstructor,
     readOnly,
     showTimestamps: false,

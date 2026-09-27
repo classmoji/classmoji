@@ -10,12 +10,19 @@ import { ClassmojiService } from '@classmoji/services';
 import type { ModuleItemType } from '@prisma/client';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import { assertClassroomMutationAllowed } from '~/utils/helpers';
+import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import ModuleCard, { type ModuleCardData } from '~/components/features/modules/ModuleCard';
 import {
   useCourseworkDrag,
   type CourseworkMove,
 } from '~/components/features/modules/useCourseworkDrag';
 import ModuleFormModal from './ModuleFormModal';
+import {
+  forStaffPage,
+  fullAssignmentOrder,
+  fullItemOrder,
+  ownsUnlistedAssignments,
+} from './quizRows.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -27,17 +34,23 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   });
 
   // Every module with everything it owns, plus what the pickers may add.
-  const [modules, candidates, allAssignments, repositories, tags] = await Promise.all([
-    ClassmojiService.module.listModuleContentsForClassroom(classroom.id),
-    ClassmojiService.module.getCandidateContent(classroom.id),
-    ClassmojiService.assignment.listForClassroom(classroom.id),
-    ClassmojiService.repository.findByClassroomId(classroom.id),
-    ClassmojiService.organizationTag.findByClassroomId(classroom.id),
-  ]);
+  const [modules, candidates, allAssignments, repositories, tags, quizzesVisible] =
+    await Promise.all([
+      ClassmojiService.module.listModuleContentsForClassroom(classroom.id),
+      ClassmojiService.module.getCandidateContent(classroom.id),
+      ClassmojiService.assignment.listForClassroom(classroom.id),
+      ClassmojiService.repository.findByClassroomId(classroom.id),
+      ClassmojiService.organizationTag.findByClassroomId(classroom.id),
+      loadQuizzesVisible(classroom.id),
+    ]);
 
+  // A classroom without quizzes (not Pro, or switched off) shows no trace of
+  // them: its quiz items, quiz assignments and quiz candidates never leave the
+  // loader, and `quizzesVisible` drops the quiz entries from the card menus.
   return {
-    modules,
-    candidates,
+    modules: modules.map(m => forStaffPage(m, quizzesVisible)),
+    candidates: quizzesVisible ? candidates : { ...candidates, quizzes: [] },
+    quizzesVisible,
     // A REPO assignment may submit through any repository in the classroom.
     repositories: repositories.map(r => ({
       id: r.id,
@@ -50,7 +63,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     // Team tags, for an instructor-assigned team assignment created from a card.
     tags: tags.map(t => ({ id: t.id, name: t.name })),
     // A quiz or form binds to at most one assignment in the classroom.
-    boundQuizIds: allAssignments.map(a => a.quiz_id).filter(Boolean) as string[],
+    boundQuizIds: quizzesVisible
+      ? (allAssignments.map(a => a.quiz_id).filter(Boolean) as string[])
+      : [],
     boundFormIds: allAssignments.map(a => a.form_id).filter(Boolean) as string[],
   };
 };
@@ -113,11 +128,21 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       } catch (error: unknown) {
         console.error('Module delete error:', error);
         const message = error instanceof Error ? error.message : '';
-        return {
-          error: message.includes('still has')
-            ? 'Move or delete this module’s assignments first.'
-            : 'Failed to delete module. Please try again.',
-        };
+        const failed = { error: 'Failed to delete module. Please try again.' };
+        if (!message.includes('still has')) return failed;
+        // The page offers Delete only for a module that owns no assignments,
+        // so this is a page loaded before that changed. A module that owns
+        // some the page does not list gets a line naming none.
+        try {
+          return {
+            error: (await ownsUnlistedAssignments(classroom.id, data.id!))
+              ? 'This module can’t be deleted.'
+              : 'Move or delete this module’s assignments first.',
+          };
+        } catch (lookupError: unknown) {
+          console.error('Module delete lookup error:', lookupError);
+          return failed;
+        }
       }
     },
     async setPublished() {
@@ -147,11 +172,16 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       }
     },
     async addItem() {
+      // The picker offers no quiz where the classroom shows none; a page loaded
+      // before that changed is refused here.
+      if (data.itemType === 'QUIZ' && !(await loadQuizzesVisible(classroom.id))) {
+        return { error: "Quizzes aren't available in this class." };
+      }
       try {
         await ClassmojiService.module.addItem(
           data.moduleId!,
-          // Repositories join a module through Repository.module_id, not as
-          // an item; the service refuses REPOSITORY at runtime as well.
+          // A repository reaches a module only through a REPO assignment, not
+          // as an item; the service refuses REPOSITORY at runtime as well.
           data.itemType! as Exclude<ModuleItemType, 'REPOSITORY'>,
           data.targetId!,
           classroom.id
@@ -175,7 +205,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       try {
         await ClassmojiService.module.reorderItems(
           data.moduleId!,
-          data.orderedItemIds ?? [],
+          await fullItemOrder(classroom.id, data.moduleId!, data.orderedItemIds ?? []),
           classroom.id
         );
         return { success: 'Module order updated' };
@@ -188,7 +218,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       try {
         await ClassmojiService.assignment.reorderInModule(
           data.moduleId!,
-          data.orderedAssignmentIds ?? [],
+          await fullAssignmentOrder(classroom.id, data.moduleId!, data.orderedAssignmentIds ?? []),
           classroom.id
         );
         return { success: 'Module order updated' };
@@ -202,7 +232,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         await ClassmojiService.module.moveItemToModule(
           data.moduleItemId!,
           data.toModuleId!,
-          data.orderedItemIds ?? [],
+          await fullItemOrder(classroom.id, data.toModuleId!, data.orderedItemIds ?? []),
           classroom.id
         );
         return { success: 'Item moved' };
@@ -221,7 +251,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         await ClassmojiService.assignment.moveToModule(
           data.assignmentId!,
           data.toModuleId!,
-          data.orderedAssignmentIds ?? [],
+          await fullAssignmentOrder(
+            classroom.id,
+            data.toModuleId!,
+            data.orderedAssignmentIds ?? []
+          ),
           classroom.id
         );
         return { success: 'Assignment moved' };
@@ -248,10 +282,22 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
  * assignments and content in place. Nothing needs the module detail page.
  */
 const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
-  const { modules, candidates, repositories, slidesUrl, boundQuizIds, boundFormIds, tags } =
-    loaderData;
+  const {
+    modules,
+    candidates,
+    repositories,
+    slidesUrl,
+    boundQuizIds,
+    boundFormIds,
+    tags,
+    quizzesVisible,
+  } = loaderData;
   const { class: classSlug } = useParams();
   const orderFetcher = useFetcher<{ success?: string; error?: string }>();
+  // The module the last coursework drag landed in: its card shows how the
+  // move went. A module reorder has no card, so it clears this.
+  const [moveTarget, setMoveTarget] = useState<string | null>(null);
+  const moveResult = orderFetcher.state === 'idle' ? orderFetcher.data : undefined;
   const [query, setQuery] = useState('');
   const [formOpen, setFormOpen] = useState(false);
   // The assistant section renders this same page read-only. The URL is the
@@ -270,12 +316,14 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
   // search hides part of it.
   const drag = useDragReorder(
     cards,
-    orderedModuleIds =>
+    orderedModuleIds => {
+      setMoveTarget(null);
       orderFetcher.submit(JSON.stringify({ orderedModuleIds }), {
         method: 'post',
         action: `/admin/${classSlug}/modules?/reorderModules`,
         encType: 'application/json',
-      }),
+      });
+    },
     !searching && canEdit
   );
 
@@ -301,7 +349,8 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
     [cards]
   );
 
-  const submitMove = ({ scope, rowId, toModuleId, orderedIds }: CourseworkMove) =>
+  const submitMove = ({ scope, rowId, toModuleId, orderedIds }: CourseworkMove) => {
+    setMoveTarget(toModuleId);
     orderFetcher.submit(
       JSON.stringify(
         scope === 'content'
@@ -314,8 +363,14 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
         encType: 'application/json',
       }
     );
+  };
 
-  const coursework = useCourseworkDrag({ lists, onMove: submitMove, enabled: canEdit });
+  const coursework = useCourseworkDrag({
+    lists,
+    onMove: submitMove,
+    enabled: canEdit,
+    result: moveResult,
+  });
   const allCollapsed = filtered.length > 0 && filtered.every(m => collapsed.has(m.id));
 
   const toggle = (id: string) =>
@@ -367,8 +422,10 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
             repositories={repositories}
             boundQuizIds={quizSet}
             boundFormIds={formSet}
+            quizzesVisible={quizzesVisible}
             tags={tags}
             coursework={coursework.forModule(m.id)}
+            moveResult={m.id === moveTarget ? moveResult : undefined}
             canEdit={canEdit}
             dragProps={drag.rowProps(m.id)}
             dragHandleProps={drag.handleProps(m.id)}

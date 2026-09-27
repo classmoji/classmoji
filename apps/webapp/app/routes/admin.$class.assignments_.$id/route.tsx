@@ -16,6 +16,7 @@ import {
   requireClassroomTeachingTeam,
   assertClassroomMutationAllowed,
 } from '~/utils/routeAuth.server';
+import { loadQuizzesVisible, quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import SubmissionsTable, {
   type SubmissionFilter,
   type SubmissionsRepo,
@@ -30,7 +31,9 @@ import type { Route } from './+types/route';
  * list and the gradebook. Served under /admin, /teacher and /assistant.
  *
  * Quiz and form assignments keep their own screens (attempts, responses); a
- * request for one of those redirects there.
+ * request for one of those redirects there, or 404s for a quiz in a classroom
+ * whose quizzes are hidden, and for a form under /assistant, which has no
+ * forms screen.
  */
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug, id } = params;
@@ -44,10 +47,19 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   if (!assignment) throw new Response('Assignment not found', { status: 404 });
 
   const rolePrefix = new URL(request.url).pathname.split('/')[1] || 'admin';
-  if (assignment.type === 'QUIZ' && assignment.quiz) {
-    throw redirect(`/${rolePrefix}/${classSlug}/quizzes/${assignment.quiz.id}`);
+  if (assignment.type === 'QUIZ') {
+    // Where quizzes are hidden, a quiz assignment answers as a missing one does.
+    if (!(await quizzesVisibleOrThrow(classroom.id))) {
+      throw new Response('Assignment not found', { status: 404 });
+    }
+    if (assignment.quiz) {
+      throw redirect(`/${rolePrefix}/${classSlug}/quizzes/${assignment.quiz.id}`);
+    }
   }
   if (assignment.type === 'FORM') {
+    // Forms are managed under /admin and /teacher only (OWNER | TEACHER); there
+    // is no /assistant forms route to send an assistant on to.
+    if (rolePrefix === 'assistant') throw new Response('Assignment not found', { status: 404 });
     const slug = assignment.form?.slug ? `/${encodeURIComponent(assignment.form.slug)}` : '';
     throw redirect(`/${rolePrefix}/${classSlug}/forms${slug}`);
   }
@@ -77,13 +89,15 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   }));
 
   // What the assignment modal needs to edit this assignment.
-  const [allAssignments, modules, repositories, candidates, students] = await Promise.all([
-    ClassmojiService.assignment.listForClassroom(classroom.id),
-    ClassmojiService.module.findByClassroomSlug(classSlug!),
-    ClassmojiService.repository.findByClassroomId(classroom.id),
-    ClassmojiService.module.getCandidateContent(classroom.id),
-    ClassmojiService.classroomMembership.findUsersByRoles(classroom.id, ['STUDENT']),
-  ]);
+  const [allAssignments, modules, repositories, candidates, students, quizzesVisible] =
+    await Promise.all([
+      ClassmojiService.assignment.listForClassroom(classroom.id),
+      ClassmojiService.module.findByClassroomSlug(classSlug!),
+      ClassmojiService.repository.findByClassroomId(classroom.id),
+      ClassmojiService.module.getCandidateContent(classroom.id),
+      ClassmojiService.classroomMembership.findUsersByRoles(classroom.id, ['STUDENT']),
+      loadQuizzesVisible(classroom.id),
+    ]);
 
   return {
     assignment,
@@ -102,8 +116,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       type: r.type,
       is_published: r.is_published,
     })),
-    candidates,
-    boundQuizIds: allAssignments.map(a => a.quiz_id).filter(Boolean) as string[],
+    // Where the classroom's quizzes are hidden the modal is offered no quiz,
+    // and no quiz id leaves as already bound.
+    candidates: quizzesVisible ? candidates : { ...candidates, quizzes: [] },
+    boundQuizIds: quizzesVisible
+      ? (allAssignments.map(a => a.quiz_id).filter(Boolean) as string[])
+      : [],
     boundFormIds: allAssignments.map(a => a.form_id).filter(Boolean) as string[],
   };
 };

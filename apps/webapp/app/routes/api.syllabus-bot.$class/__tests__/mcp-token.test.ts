@@ -280,6 +280,20 @@ describe('syllabus bot — a failed turn tells the browser nothing about why', (
     expect(published).toContain('Could not send your message');
   });
 
+  // The init mint has its own, earlier catch, separate from the ai-agent one
+  // pinned in the init/end describe below. Both must say the same fixed line,
+  // so the feature speaks with one voice whichever step failed.
+  it('gives the init mint failure the same wording, so there is one voice', async () => {
+    mintMcpAccessTokenMock.mockRejectedValue(new Error(LEAKY));
+
+    const res = await post({ _action: 'initConversation' });
+    const body = (await res.json()) as { error: string };
+
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(body)).not.toContain('hunter2');
+    expect(body.error).toBe('Could not start the assistant. Please try again.');
+  });
+
   // The detail must not simply vanish — an operator still has to be able to
   // debug the turn.
   it('still logs the whole error server-side', async () => {
@@ -331,5 +345,61 @@ describe('syllabus bot — a failed turn tells the browser nothing about why', (
     const body = (await res.json()) as { error: string };
 
     expect(body.error).toBe('Could not send your message. Please try again.');
+  });
+
+  /**
+   * A session the ai-agent no longer holds (a deploy drops its in-memory map)
+   * is the other failure the user can act on: the widget's "New conversation"
+   * button. It gets its own fixed line, through both doors.
+   */
+  it('says an ended session plainly, in the body and over SSE', async () => {
+    const ENDED = 'This conversation has ended. Start a new one to keep asking.';
+    sendRequestMock.mockRejectedValue(agentError('SESSION_NOT_FOUND'));
+
+    const res = await post({ _action: 'sendMessage', conversationId: 'conv-mine', content: 'x' });
+    const body = (await res.json()) as { error: string };
+
+    expect(res.status).toBe(500);
+    expect(body.error).toBe(ENDED);
+    const published = JSON.stringify((await streamManager()).publishError.mock.calls);
+    expect(published).toContain(ENDED);
+    expect(JSON.stringify(body) + published).not.toContain('ai-agent.internal');
+  });
+});
+
+describe('syllabus bot — a failed init or end tells the browser nothing about why', () => {
+  const LEAKY = 'Request timeout after 300000ms for requestId: 1f2e ai-agent.internal:8080';
+
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
+  });
+
+  it('answers an ai-agent init failure with fixed copy and logs the real error', async () => {
+    sendRequestMock.mockRejectedValue(new Error(LEAKY));
+
+    const res = await post({ _action: 'initConversation' });
+    const body = (await res.json()) as { error: string };
+
+    expect(res.status).toBe(500);
+    expect(body).toEqual({ error: 'Could not start the assistant. Please try again.' });
+    expect(JSON.stringify(body)).not.toContain('ai-agent.internal');
+    expect(errorSpy.mock.calls.flat().map(String).join('\n')).toContain(LEAKY);
+  });
+
+  it('treats a failed end as done, without echoing the error', async () => {
+    sendRequestMock.mockRejectedValue(new Error(LEAKY));
+
+    const res = await post({ _action: 'endConversation', conversationId: 'conv-mine' });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual({ success: true });
+    expect(errorSpy.mock.calls.flat().map(String).join('\n')).toContain(LEAKY);
   });
 });

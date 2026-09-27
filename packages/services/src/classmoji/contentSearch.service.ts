@@ -553,6 +553,12 @@ export interface ContentDocumentText {
   /** Every chunk, concatenated in `chunk_ix` order. */
   text: string;
   chunkCount: number;
+  /**
+   * The git blob sha of the source file at index time (`content_index.source_sha`,
+   * the same on every chunk of one document). Lets a caller that holds the text
+   * notice later that the document has changed under it.
+   */
+  sourceSha: string;
   /** Staff only. Always null for a student or a non-member. */
   isDraft: boolean | null;
 }
@@ -591,6 +597,7 @@ export async function getContentText({
            (array_agg(ci.source_path ORDER BY ci.chunk_ix))[1] AS "sourcePath",
            string_agg(ci.text, chr(10) || chr(10) ORDER BY ci.chunk_ix) AS "text",
            count(*)::int AS "chunkCount",
+           MIN(ci.source_sha) AS "sourceSha",
            ${draftColumnSql(
              visibility,
              Prisma.sql`bool_or(COALESCE(p.is_draft, s.is_draft))`

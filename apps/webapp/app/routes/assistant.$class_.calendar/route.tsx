@@ -19,6 +19,7 @@ import {
 import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server';
 import CourseCalendar from '~/components/features/calendar/CourseCalendar';
 import CalendarSubscriptionCard from '~/components/features/calendar/CalendarSubscriptionCard';
@@ -85,7 +86,9 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   // What the modals offer to link. Draft pages and decks are in, tagged as
   // drafts — the same list the admin calendar offers, for the same reasons, and
   // to the same set of roles: assistants already SEE those drafts on the
-  // calendar this loader builds. Assignments stay published-only.
+  // calendar this loader builds. Assignments stay published-only, and quiz
+  // assignments are left out where the classroom's quizzes are hidden.
+  const quizzesVisible = await loadQuizzesVisible(classroom.id);
   const [pages, slides, assignments] = await Promise.all([
     getPrisma().page.findMany({
       where: { classroom_id: classroom.id },
@@ -98,7 +101,11 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       orderBy: { title: 'asc' },
     }),
     getPrisma().assignment.findMany({
-      where: { module: { classroom_id: classroom.id }, is_published: true },
+      where: {
+        module: { classroom_id: classroom.id },
+        is_published: true,
+        ...(quizzesVisible ? {} : { type: { not: 'QUIZ' } }),
+      },
       select: { id: true, title: true, repository: { select: { title: true, slug: true } } },
       orderBy: { title: 'asc' },
     }),

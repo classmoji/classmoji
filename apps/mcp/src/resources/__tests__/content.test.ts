@@ -161,6 +161,84 @@ describe('quizzes resource Pro gate (A3)', () => {
   });
 });
 
+describe('quizzes resource source_material (quiz source material)', () => {
+  const MATERIAL = [
+    { kind: 'slide', id: 's1', title: 'Forms', is_draft: false, order: 0, extra: 'x' },
+    { kind: 'page', id: 'p1', title: 'Next week', is_draft: true, order: 1 },
+  ];
+
+  it('staff get every linked document, drafts flagged, and course_search_enabled', async () => {
+    findByClassroom.mockResolvedValue([
+      {
+        id: 'q1',
+        name: 'Quiz 1',
+        status: 'DRAFT',
+        weight: 0,
+        question_count: 3,
+        course_search_enabled: true,
+        source_material: MATERIAL,
+      },
+    ]);
+
+    const result = (await quizzesResource.handler(
+      VARS,
+      ownerCtx({ quizzes_enabled: true }),
+      new URL('classmoji://x')
+    )) as { quizzes: Array<Record<string, unknown>> };
+
+    expect(result.quizzes[0].course_search_enabled).toBe(true);
+    // Allow-listed field by field: `extra` does not survive.
+    expect(result.quizzes[0].source_material).toEqual([
+      { kind: 'slide', id: 's1', title: 'Forms', is_draft: false, order: 0 },
+      { kind: 'page', id: 'p1', title: 'Next week', is_draft: true, order: 1 },
+    ]);
+  });
+
+  it('students get what the student list returns (published only) and no prompts', async () => {
+    getQuizzesForStudent.mockResolvedValue([
+      {
+        id: 'q1',
+        name: 'Quiz 1',
+        status: 'PUBLISHED',
+        weight: 0,
+        question_count: 3,
+        system_prompt: 'secret',
+        source_material: [MATERIAL[0]],
+      },
+    ]);
+
+    // The Pro gate reads the authorized classroom's slug, which studentCtx omits.
+    const ctx = studentCtx();
+    (ctx.classroom as unknown as { classroom: { slug: string } }).classroom.slug =
+      'authorized-slug';
+
+    const result = (await quizzesResource.handler(VARS, ctx, new URL('classmoji://x'))) as {
+      quizzes: Array<Record<string, unknown>>;
+    };
+
+    expect(getQuizzesForStudent).toHaveBeenCalledWith('class-1', 'student-1', expect.anything());
+    expect(result.quizzes[0].source_material).toEqual([
+      { kind: 'slide', id: 's1', title: 'Forms', is_draft: false, order: 0 },
+    ]);
+    expect(result.quizzes[0].course_search_enabled).toBe(false);
+    expect(result.quizzes[0]).not.toHaveProperty('system_prompt');
+  });
+
+  it('an unlinked quiz reports an empty list', async () => {
+    findByClassroom.mockResolvedValue([
+      { id: 'q1', name: 'Quiz 1', status: 'DRAFT', weight: 0, question_count: 3 },
+    ]);
+
+    const result = (await quizzesResource.handler(
+      VARS,
+      ownerCtx({ quizzes_enabled: true }),
+      new URL('classmoji://x')
+    )) as { quizzes: Array<Record<string, unknown>> };
+
+    expect(result.quizzes[0].source_material).toEqual([]);
+  });
+});
+
 describe('calendar resource allowlist shaping (U5)', () => {
   /**
    * An expanded-event row, deliberately built with MORE on it than the service
