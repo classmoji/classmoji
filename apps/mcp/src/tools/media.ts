@@ -235,7 +235,7 @@ export const fileUploadStartTool: ToolDefinition<FileUploadStartArgs> = {
   description:
     'Starts uploading a local file to a page or slide deck without sending its bytes through ' +
     'the conversation. Give the exact size in bytes. Returns upload_url and a curl command: ' +
-    "run `curl -T <file> '<upload_url>'` (a single PUT; the URL expires in 15 minutes and " +
+    "run `curl -T <file> '<upload_url>'` (a single PUT; the URL expires in 10 minutes and " +
     'only accepts exactly `size` bytes), then call file_upload_finish with upload_id. Where the ' +
     'file goes is decided here: small files go into the page/deck folder in the course repo; ' +
     'on Pro, videos and files over the repo limit go to media. A file the class cannot store ' +

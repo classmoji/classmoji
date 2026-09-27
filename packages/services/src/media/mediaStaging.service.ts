@@ -97,8 +97,13 @@ import { kindOfFilename, storageTargetFor } from './storageRouter.ts';
 /** What `file_upload_status` says about a stage that outlived its reservation. */
 export const STAGE_EXPIRED_REASON = 'This upload expired before it was placed.';
 
-/** How long the staged PUT URL lives. Short: it is a reusable write until it expires. */
-export const STAGE_URL_TTL_SECONDS = 15 * 60;
+/**
+ * How long the staged PUT URL lives. Short: it is a reusable write until it
+ * expires — and it cannot be revoked, so an agent upload keeps counting toward
+ * the outstanding caps for this long even once it is cancelled (see
+ * `insertStagingRow`).
+ */
+export const STAGE_URL_TTL_SECONDS = 10 * 60;
 
 const GIB = 1024 * 1024 * 1024;
 
@@ -194,11 +199,27 @@ async function insertStagingRow(args: {
   await getPrisma().$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM classrooms WHERE id = ${args.classroomId} FOR UPDATE`;
 
-    const live = (await tx.mediaObject.findMany({
-      where: liveRowsWhere(args.classroomId),
+    // What costs quota (`liveRowsWhere`), plus every agent upload whose PUT URL
+    // may still be live. Cancelling or failing a stage tombstones the row at
+    // once, but a presigned URL cannot be revoked: until it expires, the stage
+    // key can still be written — up to the declared size — so the outstanding
+    // caps keep counting it. Without this, "start 2 GB, cancel, start again"
+    // would open unbounded writable stage keys, however low the caps.
+    const urlLiveSince = new Date(Date.now() - STAGE_URL_TTL_SECONDS * 1000);
+    const liveWhere = liveRowsWhere(args.classroomId);
+    const rows = (await tx.mediaObject.findMany({
+      where: {
+        classroom_id: args.classroomId,
+        OR: [...liveWhere.OR, { destination: { not: null }, created_at: { gt: urlLiveSince } }],
+      },
     })) as MediaRow[];
+    const live = rows.filter(row => row.status !== 'DELETED');
 
-    const staged = live.filter(row => row.status === 'STAGING');
+    const staged = rows.filter(
+      row =>
+        row.status === 'STAGING' ||
+        (row.destination !== null && row.created_at.getTime() > urlLiveSince.getTime())
+    );
     const stagedBytes = staged.reduce((total, row) => total + Number(row.size_bytes), 0);
     if (
       staged.length >= STAGE_OUTSTANDING_MAX_COUNT ||

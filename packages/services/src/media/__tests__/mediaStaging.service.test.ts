@@ -222,7 +222,7 @@ describe('startStagedUpload', () => {
       Key: `stage/${CLASSROOM_ID}/${started.uploadId}`,
       ContentLength: 4096,
     });
-    expect(options.expiresIn).toBeLessThanOrEqual(15 * 60);
+    expect(options.expiresIn).toBe(10 * 60);
     expect([...options.signableHeaders]).toEqual(['content-length']);
   });
 
@@ -255,6 +255,41 @@ describe('startStagedUpload', () => {
         target,
       })
     ).rejects.toMatchObject({ code: 'STAGE_LIMIT' });
+  });
+
+  it('keeps counting a cancelled stage until its PUT URL has expired', async () => {
+    // A 2 GB stage that was cancelled (tombstoned) seconds ago, and one still
+    // open: the cancelled one's URL can still write 2 GB, so a third is refused.
+    const cancelled = stagedRow({
+      id: 'a',
+      status: 'DELETED',
+      destination: 'media',
+      size_bytes: BigInt(2_000_000_000),
+      created_at: new Date(),
+    });
+    const open = stagedRow({ id: 'b', destination: 'media', size_bytes: BigInt(2_000_000_000) });
+    prisma.mediaObject.findMany.mockResolvedValue([cancelled, open]);
+    const start = () =>
+      staging.startStagedUpload({
+        classroom,
+        userId: USER,
+        filename: 'lecture.mp4',
+        sizeBytes: 2_000_000_000,
+        target,
+      });
+
+    await expect(start()).rejects.toMatchObject({ code: 'STAGE_LIMIT' });
+    // The admission read asks for recent agent rows in any status.
+    const where = prisma.mediaObject.findMany.mock.calls[0][0].where;
+    expect(where.OR).toContainEqual({
+      destination: { not: null },
+      created_at: { gt: expect.any(Date) },
+    });
+    expect(prisma.mediaObject.create).not.toHaveBeenCalled();
+
+    // Once the URL window has passed, the cancelled stage no longer counts.
+    cancelled.created_at = new Date(Date.now() - (staging.STAGE_URL_TTL_SECONDS + 1) * 1000);
+    await expect(start()).resolves.toMatchObject({ destination: 'media' });
   });
 
   it('refuses a size that is not a positive integer, or over 2 GB', async () => {
