@@ -97,6 +97,12 @@ export interface RolloverMediaCopy {
    * them. Optional so a test can hand in two functions.
    */
   discard?(): Promise<void>;
+  /**
+   * The copies made so far are now referenced by pushed content: a later
+   * `discard` (a later step of the same run that fails) leaves them alone.
+   * Called once the push lands. Optional for the same reason as `discard`.
+   */
+  keep?(): void;
 }
 
 /** Why nothing reached the target. Set whenever `pushed` is false. */
@@ -486,6 +492,9 @@ export const cloneContentRepo = async (
     } catch (error: unknown) {
       throw gitFailure('pushing to', target, error);
     }
+    // The pushed tree references these copies now, so a later step of the run
+    // that fails and discards must not remove them.
+    media?.keep?.();
 
     logger.info('content import: pushed content repo copy', {
       from: `${source.orgLogin}/${source.repo}`,
