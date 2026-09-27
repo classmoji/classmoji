@@ -671,6 +671,52 @@ describe('placeIntoMedia: the READY flip fails after the copy', () => {
   });
 });
 
+describe('placeIntoMedia: the row expires while it is being placed', () => {
+  it('writes READY only inside the reservation window, and records an expired row', async () => {
+    const stage = stagedRow({
+      kind: 'VIDEO',
+      filename: 'lecture.mp4',
+      ext: 'mp4',
+      content_type: 'video/mp4',
+      destination: 'media',
+    });
+    const expired = { ...stage, created_at: new Date(Date.now() - 25 * 60 * 60 * 1000) };
+    // Fresh at finish's entry; past the window by the time the copy is done.
+    prisma.mediaObject.findFirst.mockResolvedValueOnce(stage).mockResolvedValue(expired);
+    prisma.mediaObject.findUnique.mockResolvedValue(expired);
+    sendImpl.mockImplementation(async (name: string) =>
+      name === 'HeadObject' ? { ContentLength: 4096 } : {}
+    );
+    prisma.mediaObject.updateMany.mockImplementation(
+      async ({ data }: { data: { status?: string } }) => ({
+        count: data.status === 'READY' ? 0 : 1,
+      })
+    );
+
+    await expect(
+      staging.finishStagedUpload({ classroom, userId: USER, uploadId: MEDIA_ID })
+    ).rejects.toMatchObject({ code: 'UPLOAD_EXPIRED' });
+
+    const [readyWrite, tombstone] = prisma.mediaObject.updateMany.mock.calls.map(([arg]) => arg);
+    expect(readyWrite).toMatchObject({
+      where: { id: MEDIA_ID, status: 'STAGING', created_at: { gte: expect.any(Date) } },
+      data: expect.objectContaining({ status: 'READY' }),
+    });
+    expect(tombstone).toMatchObject({
+      where: { id: MEDIA_ID, status: 'STAGING' },
+      data: expect.objectContaining({
+        status: 'DELETED',
+        placement_error: staging.STAGE_EXPIRED_REASON,
+      }),
+    });
+    // The staged bytes and the copy both go.
+    expect(sent.filter(call => call.name === 'DeleteObject').map(call => call.input.Key)).toEqual([
+      STAGE_KEY,
+      `m/${CLASSROOM_ID}/${MEDIA_ID}/orig.mp4`,
+    ]);
+  });
+});
+
 describe('failStagedPlacement: a media-bound stage', () => {
   it('also removes the media key a failed placement may have copied to', async () => {
     prisma.mediaObject.findUnique.mockResolvedValue(

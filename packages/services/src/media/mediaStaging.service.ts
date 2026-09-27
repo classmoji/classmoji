@@ -535,9 +535,13 @@ async function enqueuePlacement(row: MediaRow): Promise<void> {
  * plain copy would store the object typeless and the Worker would fall back.
  * The type comes from the extension, as it does for every upload.
  *
- * READY only FROM STAGING. A concurrent finish that got there first leaves this
- * one a no-op returning the same ref; a cancel that got there first leaves the
- * copy orphaned, so it is deleted.
+ * READY only FROM STAGING, and only while the row is inside the reservation
+ * window: past it the row no longer holds the quota its bytes need (the same
+ * rule `failIfExpired` applies at entry, checked again at the write because a
+ * copy of a large file takes time). A concurrent finish that got there first
+ * leaves this one a no-op returning the same ref; a cancel that got there first
+ * leaves the copy orphaned, so it is deleted; a row that expired meanwhile is
+ * recorded as expired and its copy removed.
  */
 async function placeIntoMedia(client: S3Client, bucket: string, row: MediaRow): Promise<string> {
   const source = stageKey(row.classroom_id, row.id);
@@ -572,10 +576,11 @@ async function placeIntoMedia(client: S3Client, bucket: string, row: MediaRow): 
 
   const ref = mediaRef(row.id);
   const readyAt = new Date();
+  const cutoff = reservationCutoff();
   let count: number;
   try {
     ({ count } = await getPrisma().mediaObject.updateMany({
-      where: { id: row.id, status: 'STAGING' },
+      where: { id: row.id, status: 'STAGING', created_at: { gte: cutoff } },
       data: {
         status: 'READY',
         ready_at: readyAt,
@@ -600,6 +605,16 @@ async function placeIntoMedia(client: S3Client, bucket: string, row: MediaRow): 
   if (count === 0) {
     const fresh = await findMediaRow(row.classroom_id, row.id);
     if (fresh?.status === 'READY') return fresh.placed_ref ?? ref;
+    if (fresh?.status === 'STAGING' && fresh.created_at.getTime() < cutoff.getTime()) {
+      // Expired while it was being placed. Tombstoned with the reason
+      // `file_upload_status` reports; that also removes the staged bytes and
+      // the copy just made (`failStagedPlacement`).
+      await failStagedPlacement(row.id, STAGE_EXPIRED_REASON);
+      throw new MediaError(
+        'UPLOAD_EXPIRED',
+        'This upload was not finished in time and has been cancelled. Start it again.'
+      );
+    }
     await deleteObjectsQuietly(client, bucket, [target]);
     throw new MediaError('NOT_FOUND', 'This upload was cancelled before it was placed');
   }
