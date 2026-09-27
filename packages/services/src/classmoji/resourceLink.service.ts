@@ -242,6 +242,21 @@ async function resolveTarget(
 }
 
 /**
+ * The `order` for a document added to the END of a quiz's material: one past
+ * the highest `order` across the quiz's page AND slide links (one ordered list
+ * across both tables), 0 when there are none. Two adds racing each other can
+ * land on the same value; every reader breaks that tie by creation time.
+ */
+async function nextQuizMaterialOrder(quizId: string): Promise<number> {
+  const db = getPrisma();
+  const [pages, slides] = await Promise.all([
+    db.pageLink.aggregate({ where: { quiz_id: quizId }, _max: { order: true } }),
+    db.slideLink.aggregate({ where: { quiz_id: quizId }, _max: { order: true } }),
+  ]);
+  return Math.max(pages._max.order ?? -1, slides._max.order ?? -1) + 1;
+}
+
+/**
  * Rebuild and push the content manifest after a successful write.
  *
  * Best effort by contract: the manifest describes the link graph for the
@@ -269,7 +284,8 @@ async function syncManifest(classroomId: string): Promise<boolean> {
  * Both ends are proven to be in `classroomId` BEFORE the row is created, and an
  * existing identical link is reported as `already_linked` rather than inserted
  * twice. On success the content manifest is refreshed (best effort — the result
- * comes back as `manifestSynced`), except for a quiz target (rule 3).
+ * comes back as `manifestSynced`), except for a quiz target (rule 3). A quiz
+ * target is appended to the END of the quiz's material list.
  */
 export const addLink = async ({
   classroomId,
@@ -315,16 +331,20 @@ export const addLink = async ({
     );
   }
 
+  // Repository and assignment links keep the column default; a quiz link is
+  // placed last in the quiz's material, as the tools describe it.
+  const order = targetType === 'quiz' ? { order: await nextQuizMaterialOrder(targetId) } : {};
+
   let created: { id: string; order: number; created_at: Date };
   try {
     created =
       resourceType === 'page'
         ? await db.pageLink.create({
-            data: columns as { page_id: string } & TargetColumns,
+            data: { ...(columns as { page_id: string } & TargetColumns), ...order },
             select: { id: true, order: true, created_at: true },
           })
         : await db.slideLink.create({
-            data: columns as { slide_id: string } & TargetColumns,
+            data: { ...(columns as { slide_id: string } & TargetColumns), ...order },
             select: { id: true, order: true, created_at: true },
           });
   } catch (error: unknown) {

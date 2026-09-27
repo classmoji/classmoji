@@ -26,6 +26,8 @@ const pageLinkDeleteMany = vi.fn();
 const slideLinkDeleteMany = vi.fn();
 const pageLinkFindMany = vi.fn();
 const slideLinkFindMany = vi.fn();
+const pageLinkAggregate = vi.fn();
+const slideLinkAggregate = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
@@ -39,12 +41,14 @@ vi.mock('@classmoji/database', () => ({
       create: (...a: unknown[]) => pageLinkCreate(...a),
       deleteMany: (...a: unknown[]) => pageLinkDeleteMany(...a),
       findMany: (...a: unknown[]) => pageLinkFindMany(...a),
+      aggregate: (...a: unknown[]) => pageLinkAggregate(...a),
     },
     slideLink: {
       findFirst: (...a: unknown[]) => slideLinkFindFirst(...a),
       create: (...a: unknown[]) => slideLinkCreate(...a),
       deleteMany: (...a: unknown[]) => slideLinkDeleteMany(...a),
       findMany: (...a: unknown[]) => slideLinkFindMany(...a),
+      aggregate: (...a: unknown[]) => slideLinkAggregate(...a),
     },
   }),
 }));
@@ -92,6 +96,9 @@ beforeEach(() => {
   slideLinkFindFirst.mockResolvedValue(null);
   pageLinkCreate.mockResolvedValue({ id: 'link-1', order: 0, created_at: CREATED_AT });
   slideLinkCreate.mockResolvedValue({ id: 'link-2', order: 0, created_at: CREATED_AT });
+  // Default: the quiz has no material yet.
+  pageLinkAggregate.mockResolvedValue({ _max: { order: null } });
+  slideLinkAggregate.mockResolvedValue({ _max: { order: null } });
 });
 
 describe('addLink', () => {
@@ -124,13 +131,16 @@ describe('addLink', () => {
       where: { id: 'repo-1', classroom_id: CLASSROOM },
       select: { id: true },
     });
-    // The unset target column is written as an explicit null.
+    // The unset target column is written as an explicit null, and `order` is
+    // left to the column default: only quiz material is an ordered list.
     expect(pageLinkCreate.mock.calls[0][0].data).toEqual({
       page_id: 'page-1',
       repository_id: 'repo-1',
       assignment_id: null,
       quiz_id: null,
     });
+    expect(pageLinkAggregate).not.toHaveBeenCalled();
+    expect(slideLinkAggregate).not.toHaveBeenCalled();
     expect(saveManifest).toHaveBeenCalledExactlyOnceWith(CLASSROOM);
   });
 
@@ -304,7 +314,33 @@ describe('addLink — quiz target (source material)', () => {
       repository_id: null,
       assignment_id: null,
       quiz_id: 'quiz-1',
+      // The quiz had no material: the first document is position 0.
+      order: 0,
     });
+  });
+
+  it('appends after the last document across BOTH link tables', async () => {
+    // One ordered list across pages and decks: the highest order is a deck's.
+    pageLinkAggregate.mockResolvedValue({ _max: { order: 3 } });
+    slideLinkAggregate.mockResolvedValue({ _max: { order: 5 } });
+
+    await addLink({ ...PAGE_TO_QUIZ });
+
+    for (const aggregate of [pageLinkAggregate, slideLinkAggregate]) {
+      expect(aggregate).toHaveBeenCalledExactlyOnceWith({
+        where: { quiz_id: 'quiz-1' },
+        _max: { order: true },
+      });
+    }
+    expect(pageLinkCreate.mock.calls[0][0].data).toMatchObject({ quiz_id: 'quiz-1', order: 6 });
+  });
+
+  it('appends a deck after the last page when the quiz has only pages', async () => {
+    pageLinkAggregate.mockResolvedValue({ _max: { order: 2 } });
+
+    await addLink({ ...PAGE_TO_QUIZ, resourceType: 'slide', resourceId: 'slide-1' });
+
+    expect(slideLinkCreate.mock.calls[0][0].data).toMatchObject({ slide_id: 'slide-1', order: 3 });
   });
 
   it('does NOT rebuild the manifest for a quiz link, and reports it in sync', async () => {
