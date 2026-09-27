@@ -21,7 +21,9 @@ import AssignmentsTable, {
 } from '~/components/features/assignments/AssignmentsTable';
 import AssignmentFormModal from '~/components/features/assignments/AssignmentFormModal';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import ModuleFormModal, { type ModuleFormModule } from '../admin.$class.modules/ModuleFormModal';
+import { forStaffPage } from '../admin.$class.modules/quizRows.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -42,11 +44,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
   // The module with everything it owns, plus the pickers' candidate content
   // and every repository a REPO assignment may submit through.
-  const [module, candidates, repositories, tags] = await Promise.all([
+  const [module, candidates, repositories, tags, quizzesVisible] = await Promise.all([
     ClassmojiService.module.listModuleContents(found.id, classroom.id),
     ClassmojiService.module.getCandidateContent(classroom.id),
     ClassmojiService.repository.findByClassroomId(classroom.id),
     ClassmojiService.organizationTag.findByClassroomId(classroom.id),
+    loadQuizzesVisible(classroom.id),
   ]);
   if (!module) {
     throw data('Module not found', { status: 404 });
@@ -55,9 +58,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   // Quiz/form ids bound anywhere in the classroom (each binds to one assignment).
   const bound = await ClassmojiService.assignment.listForClassroom(classroom.id);
 
+  // A classroom without quizzes (not Pro, or switched off) shows no trace of
+  // them: no quiz item or quiz assignment in the module, no quiz to pick.
   return {
-    module,
-    candidates,
+    module: forStaffPage(module, quizzesVisible),
+    candidates: quizzesVisible ? candidates : { ...candidates, quizzes: [] },
+    quizzesVisible,
     // Team tags, for an instructor-assigned team assignment created here.
     tags: tags.map(t => ({ id: t.id, name: t.name })),
     repositories: repositories.map(r => ({
@@ -67,13 +73,14 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       type: r.type,
       is_published: r.is_published,
     })),
-    boundQuizIds: bound.map(a => a.quiz_id).filter(Boolean) as string[],
+    boundQuizIds: quizzesVisible ? (bound.map(a => a.quiz_id).filter(Boolean) as string[]) : [],
     boundFormIds: bound.map(a => a.form_id).filter(Boolean) as string[],
   };
 };
 
 const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
-  const { module, candidates, repositories, boundQuizIds, boundFormIds, tags } = loaderData;
+  const { module, candidates, repositories, boundQuizIds, boundFormIds, tags, quizzesVisible } =
+    loaderData;
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
   const { isGitLab } = useGitWeb();
@@ -177,6 +184,7 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
           onDelete={deleteAssignment}
           busy={assignmentFetcher.state !== 'idle'}
           emptyText="No assignments in this module yet"
+          quizzesVisible={quizzesVisible}
         />
       ),
     },
@@ -193,7 +201,8 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
           <div className="text-center py-10 text-gray-500">
             <div className="font-medium">No content in this module</div>
             <div className="text-sm">
-              Use “Add item” to place pages, slides, quizzes or forms in reading order.
+              Use “Add item” to place pages, slides
+              {quizzesVisible ? ', quizzes' : ''} or forms in reading order.
             </div>
           </div>
         ) : (
@@ -254,6 +263,10 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
   ];
 
   const ownsCoursework = module.assignments.length > 0;
+  // A module that owns assignments this page does not list cannot be deleted,
+  // and moving the ones it does list would not change that: Delete is not
+  // offered at all.
+  const canOfferDelete = !module.hasUnlistedAssignments;
 
   return (
     <div className="min-h-full relative">
@@ -295,22 +308,26 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
           <Button icon={<IconPencil size={16} />} onClick={() => setEditOpen(true)}>
             Edit
           </Button>
-          <Popconfirm
-            title="Delete module"
-            description={
-              ownsCoursework
-                ? 'Move or delete its assignments first; a module that still owns coursework cannot be deleted.'
-                : 'This removes the module. Its content items (pages, quizzes, slides, forms) are kept.'
-            }
-            okText="Delete"
-            okButtonProps={{ danger: true, disabled: ownsCoursework }}
-            cancelText="Cancel"
-            onConfirm={deleteModule}
-          >
-            <Button danger icon={<IconTrash size={16} />}>
-              Delete
-            </Button>
-          </Popconfirm>
+          {canOfferDelete && (
+            <Popconfirm
+              title="Delete module"
+              description={
+                ownsCoursework
+                  ? 'Move or delete its assignments first; a module that still owns coursework cannot be deleted.'
+                  : `This removes the module. Its content items (${
+                      quizzesVisible ? 'pages, quizzes, slides, forms' : 'pages, slides, forms'
+                    }) are kept.`
+              }
+              okText="Delete"
+              okButtonProps={{ danger: true, disabled: ownsCoursework }}
+              cancelText="Cancel"
+              onConfirm={deleteModule}
+            >
+              <Button danger icon={<IconTrash size={16} />}>
+                Delete
+              </Button>
+            </Popconfirm>
+          )}
         </div>
       </div>
 
@@ -337,7 +354,7 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
         moduleId={module.id}
         modules={[moduleRef]}
         repositories={repositories}
-        quizzes={candidates.quizzes}
+        quizzes={quizzesVisible ? candidates.quizzes : []}
         forms={candidates.forms}
         pages={candidates.pages}
         slides={candidates.slides}
@@ -354,6 +371,7 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
         moduleId={module.id}
         items={items}
         candidates={candidates}
+        quizzesVisible={quizzesVisible}
       />
     </div>
   );

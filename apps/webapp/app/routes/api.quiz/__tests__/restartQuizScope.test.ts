@@ -24,7 +24,7 @@ const createNewMock = vi.fn();
 const updateAgentConfigMock = vi.fn();
 
 const assertAccessMock = vi.fn();
-const assertProTierMock = vi.fn();
+const quizzesVisibleMock = vi.fn();
 const assertMutationMock = vi.fn();
 const getAuthSessionMock = vi.fn();
 const endQuizSessionMock = vi.fn();
@@ -46,7 +46,10 @@ vi.mock('@classmoji/services', () => ({
 
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => assertAccessMock(...a),
-  assertProTier: (...a: unknown[]) => assertProTierMock(...a),
+}));
+
+vi.mock('~/utils/classroomProFlag.server', () => ({
+  quizzesVisibleOrThrow: (...a: unknown[]) => quizzesVisibleMock(...a),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -73,6 +76,15 @@ vi.mock('../../student.$class.quizzes/aiAgent.server', () => ({
 
 vi.mock('@classmoji/auth/server', () => ({
   getAuthSession: (...a: unknown[]) => getAuthSessionMock(...a),
+}));
+
+// The per-call MCP read token (quiz source material, Stage 2). Mocked so no
+// test here mints against a real database.
+vi.mock('@classmoji/auth/mcp-token', () => ({
+  mintMcpAccessToken: vi.fn(async () => ({
+    accessToken: 'mcp-token',
+    expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+  })),
 }));
 
 const { action } = await import('../route.ts');
@@ -130,7 +142,7 @@ describe('api.quiz restartQuiz — writes stay inside the authorized classroom',
       classroom: { status: 'ACTIVE', slug: 'test-class' },
       membership: { role: 'STUDENT' },
     });
-    assertProTierMock.mockResolvedValue(undefined);
+    quizzesVisibleMock.mockResolvedValue(true);
     assertMutationMock.mockReturnValue(undefined);
     getAuthSessionMock.mockResolvedValue({ token: 'ghu_token', session: {} });
   });

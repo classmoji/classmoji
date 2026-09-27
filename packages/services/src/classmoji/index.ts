@@ -77,6 +77,7 @@ import * as tokenService from './token.service.ts';
 import * as userService from './user.service.ts';
 import * as quizService from './quiz.service.ts';
 import * as quizAttemptService from './quizAttempt.service.ts';
+import * as quizSourceMaterialService from './quizSourceMaterial.service.ts';
 import * as repositoryImportService from './repositoryImport.service.ts';
 import * as contentImportService from './contentImport.service.ts';
 import * as templateImportService from './templateImport.service.ts';
@@ -85,6 +86,7 @@ import * as githubClassroomImportService from './githubClassroomImport.service.t
 import * as githubUserTokenService from './githubUserToken.service.ts';
 import * as gitlabConnectionService from './gitlabConnection.service.ts';
 import * as gitlabInstanceService from './gitlabInstance.service.ts';
+import * as orgRepoSettingsService from './orgRepoSettings.service.ts';
 import * as classroomInviteService from './classroomInvite.service.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import * as contentAssetsService from './contentAssets.service.ts';
@@ -148,6 +150,9 @@ const ClassmojiService = {
   user: userService,
   quiz: quizService,
   quizAttempt: quizAttemptService,
+  // A quiz's linked pages and decks: `load` (the prompt text, as the attempt's
+  // user may read it), `countStartable` (the pre-attempt check), the budget.
+  quizSourceMaterial: quizSourceMaterialService,
   repositoryImport: repositoryImportService,
   contentImport: contentImportService,
   templateImport: templateImportService,
@@ -156,6 +161,8 @@ const ClassmojiService = {
   githubUserToken: githubUserTokenService,
   gitlabConnection: gitlabConnectionService,
   gitlabInstance: gitlabInstanceService,
+  // The GitHub organization's repository defaults, changed with the user's own token.
+  orgRepoSettings: orgRepoSettingsService,
   classroomInvite: classroomInviteService,
   contentManifest: contentManifestService,
   contentAssets: contentAssetsService,
@@ -229,6 +236,7 @@ export {
   userService,
   quizService,
   quizAttemptService,
+  quizSourceMaterialService,
   repositoryImportService,
   contentImportService,
   templateImportService,

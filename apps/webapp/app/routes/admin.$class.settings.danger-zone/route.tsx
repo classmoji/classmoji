@@ -11,6 +11,11 @@ import { ClassmojiService } from '@classmoji/services';
 import { getAuthSession } from '@classmoji/auth/server';
 import { ActionTypes } from '~/constants';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import {
+  CLASSROOM_REMOVE_IMPERSONATION_MESSAGE,
+  GITHUB_CLEANUP_IMPERSONATION_MESSAGE,
+  isImpersonatingSession,
+} from '~/utils/impersonationSession';
 import type { Route } from './+types/route';
 
 // DB-only read: the exact cleanup plan the action would execute, so the modal
@@ -24,7 +29,9 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { artifacts, withheld } = await ClassmojiService.classroom.getClassroomGitHubArtifactPlan(
     classroom.id
   );
-  return { artifacts, withheld };
+  // Removal is off while viewing as another user (see the action).
+  const impersonating = isImpersonatingSession(await getAuthSession(request));
+  return { artifacts, withheld, impersonating };
 };
 
 // Any mutation revalidates this loader by default, and the plan is a pure DB read
@@ -37,7 +44,7 @@ export const shouldRevalidate = ({ actionResult }: ShouldRevalidateFunctionArgs)
   Boolean(actionResult?.error);
 
 const DangerZone = ({ loaderData }: Route.ComponentProps) => {
-  const { artifacts, withheld } = loaderData;
+  const { artifacts, withheld, impersonating } = loaderData;
   const { isGitLab } = useGitWeb();
   const repos = artifacts.filter(a => a.kind === 'repo');
   const teams = artifacts.filter(a => a.kind === 'team');
@@ -152,8 +159,8 @@ const DangerZone = ({ loaderData }: Route.ComponentProps) => {
             <div className="text-xs text-gray-500 dark:text-gray-400">
               {isGitLab ? (
                 <>
-                  The class subgroup and everything in it (the content project, all student and
-                  team projects, and the team subgroups), plus any template projects this
+                  The class subgroup and everything in it (the content project, all student and team
+                  projects, and the team subgroups), plus any template projects this
                   classroom&rsquo;s import created. Leave unchecked to keep everything on Gitlab.
                 </>
               ) : (
@@ -225,7 +232,15 @@ const DangerZone = ({ loaderData }: Route.ComponentProps) => {
         <p className="w-1/2 pb-4 pt-1">
           This action will remove the classroom and all its associated data. There is no going back.
         </p>
-        <Button type="primary" danger onClick={show}>
+        {impersonating && (
+          <p
+            className="w-1/2 pb-4 text-sm text-gray-600 dark:text-gray-400"
+            data-testid="classroom-remove-notice"
+          >
+            {CLASSROOM_REMOVE_IMPERSONATION_MESSAGE}
+          </p>
+        )}
+        <Button type="primary" danger onClick={show} disabled={impersonating}>
           Remove
         </Button>
       </div>
@@ -249,7 +264,19 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   // The REQUESTER's GitHub token drives the cleanup (user-to-server: GitHub
   // enforces the human's own permissions per call). Never the app token.
-  const authData = deleteGitHub ? await getAuthSession(request) : null;
+  const authData = await getAuthSession(request);
+
+  // While viewing as another user, the session and its GitHub token are that
+  // user's. Removal cannot be undone, so none of it runs: neither the GitHub
+  // cleanup with their token nor the classroom removal itself.
+  if (isImpersonatingSession(authData)) {
+    return {
+      action: ActionTypes.REMOVE_CLASSROOM,
+      error: deleteGitHub
+        ? GITHUB_CLEANUP_IMPERSONATION_MESSAGE
+        : CLASSROOM_REMOVE_IMPERSONATION_MESSAGE,
+    };
+  }
 
   return namedAction(request, {
     async removeClassroom() {
@@ -257,7 +284,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         classroom,
         classSlug,
         deleteGitHub,
-        authData?.token ?? null,
+        deleteGitHub ? (authData?.token ?? null) : null,
         classroom.git_organization?.provider === 'GITLAB',
         userId
       );

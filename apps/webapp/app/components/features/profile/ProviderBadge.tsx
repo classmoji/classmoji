@@ -3,10 +3,7 @@ import { GithubFilled } from '@ant-design/icons';
 
 type ProviderKey = 'GITHUB' | 'GITLAB';
 
-const PROVIDERS: Record<
-  ProviderKey,
-  { label: string; icon: React.ReactNode; classes: string }
-> = {
+const PROVIDERS: Record<ProviderKey, { label: string; icon: React.ReactNode; classes: string }> = {
   GITHUB: {
     label: 'GitHub',
     icon: <GithubFilled style={{ fontSize: 12 }} />,

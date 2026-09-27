@@ -5,6 +5,7 @@ const calendarMock = vi.fn();
 const findAllAssignmentsMock = vi.fn();
 const regradeRequestsMock = vi.fn();
 const assertAccessMock = vi.fn();
+const loadQuizzesVisibleMock = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
@@ -38,6 +39,10 @@ vi.mock('@classmoji/services', () => ({
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => assertAccessMock(...a),
   assertClassroomMutationAllowed: vi.fn(),
+}));
+
+vi.mock('~/utils/classroomProFlag.server', () => ({
+  loadQuizzesVisible: (...a: unknown[]) => loadQuizzesVisibleMock(...a),
 }));
 
 vi.mock('../WeeklyCalendarCard', () => ({ default: () => null }));
@@ -77,6 +82,7 @@ describe('student dashboard loader — assignment lookup guard', () => {
     calendarMock.mockResolvedValue([]);
     repositoryFindManyMock.mockResolvedValue([buildRepository()]);
     regradeRequestsMock.mockResolvedValue([]);
+    loadQuizzesVisibleMock.mockResolvedValue(true);
   });
 
   it('resolves dashboard data when the student assignment lookup rejects', async () => {
@@ -139,20 +145,25 @@ describe('student dashboard loader — spotlight submitted flag and week', () =>
     });
     calendarMock.mockResolvedValue([]);
     regradeRequestsMock.mockResolvedValue([]);
+    loadQuizzesVisibleMock.mockResolvedValue(true);
     repositoryFindManyMock.mockResolvedValue([
       {
         ...buildRepository(),
         assignments: [
           { id: 'a-closed', title: 'Closed', student_deadline: new Date('2026-09-20T16:00:00Z') },
           { id: 'a-open', title: 'Open', student_deadline: new Date('2026-09-20T16:00:00Z') },
-          { id: 'a-none', title: 'No repo yet', student_deadline: new Date('2026-09-20T16:00:00Z') },
+          {
+            id: 'a-none',
+            title: 'No repo yet',
+            student_deadline: new Date('2026-09-20T16:00:00Z'),
+          },
           { id: 'a-both', title: 'Individual and team', student_deadline: null },
         ],
       },
     ]);
   });
 
-  it('marks an assignment submitted only when the student\'s own repo assignment is CLOSED', async () => {
+  it("marks an assignment submitted only when the student's own repo assignment is CLOSED", async () => {
     findAllAssignmentsMock.mockResolvedValue([
       ra('ra-1', 'a-closed', 'CLOSED'),
       ra('ra-2', 'a-open', 'OPEN'),
@@ -185,5 +196,46 @@ describe('student dashboard loader — spotlight submitted flag and week', () =>
     const weekStart = new Date(`${data.weekStart}T00:00:00`).getTime();
     expect(from.getTime()).toBeLessThan(weekStart);
     expect(to.getTime()).toBeGreaterThan(weekStart + 7 * 86_400_000);
+  });
+});
+
+describe('student dashboard loader — spotlight quizzes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    assertAccessMock.mockResolvedValue({
+      userId: 'student-1',
+      classroom: { id: 'class-1', name: 'Test Class', git_organization: { login: 'test-org' } },
+    });
+    calendarMock.mockResolvedValue([]);
+    regradeRequestsMock.mockResolvedValue([]);
+    findAllAssignmentsMock.mockResolvedValue([]);
+    repositoryFindManyMock.mockResolvedValue([
+      {
+        ...buildRepository(),
+        pages: [{ page: { id: 'page-1', title: 'Reading' } }],
+        quizzes: [{ id: 'quiz-1', name: 'Recursion check' }],
+      },
+    ]);
+  });
+
+  it('lists the module’s quizzes when the classroom has quizzes', async () => {
+    loadQuizzesVisibleMock.mockResolvedValue(true);
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(loadQuizzesVisibleMock).toHaveBeenCalledWith('class-1');
+    expect(data.spotlight?.quizzes).toEqual([{ id: 'quiz-1', title: 'Recursion check' }]);
+  });
+
+  it('sends no quizzes when the classroom has none, leaving the rest of the card alone', async () => {
+    // Not Pro, or switched off: an empty list, so the card draws neither a
+    // QUIZ row nor a quiz count.
+    loadQuizzesVisibleMock.mockResolvedValue(false);
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.spotlight?.quizzes).toEqual([]);
+    expect(data.spotlight?.pages).toEqual([{ page: { id: 'page-1', title: 'Reading' } }]);
+    expect(JSON.stringify(data)).not.toContain('Recursion check');
   });
 });

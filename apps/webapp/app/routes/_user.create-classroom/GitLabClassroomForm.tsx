@@ -37,10 +37,13 @@ const CONNECT_OUTCOMES: Record<string, { type: 'success' | 'error' | 'warning'; 
 const GitLabClassroomForm = ({
   gitlab,
   importableClassrooms,
+  quizzesVisible,
   providerSwitch,
 }: {
   gitlab: GitLabOptions;
   importableClassrooms: ImportableClassroom[];
+  /** Quiz import is offered to Pro creators only (see the route loader). */
+  quizzesVisible: boolean;
   providerSwitch: React.ReactNode;
 }) => {
   const navigate = useNavigate();
@@ -216,6 +219,7 @@ const GitLabClassroomForm = ({
                     setSelectedModules={setSelectedModules}
                     importSelections={importSelections}
                     setImportSelections={setImportSelections}
+                    quizzesVisible={quizzesVisible}
                     isGitLab
                   />
                 </div>

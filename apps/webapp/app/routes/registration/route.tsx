@@ -2,12 +2,7 @@ import { useState, useEffect } from 'react';
 import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 import { Button, Form, Input, Spin, Card, Alert, Space } from 'antd';
 import { redirect, useFetcher, useNavigate } from 'react-router';
-import {
-  UserOutlined,
-  MailOutlined,
-  GithubOutlined,
-  CheckCircleFilled,
-} from '@ant-design/icons';
+import { UserOutlined, MailOutlined, GithubOutlined, CheckCircleFilled } from '@ant-design/icons';
 import { IconId } from '@tabler/icons-react';
 
 import type { Route } from './+types/route';

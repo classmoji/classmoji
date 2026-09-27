@@ -214,9 +214,7 @@ const TweaksSection = () => {
             UI font size
           </div>
           <div className="flex items-center justify-between gap-4">
-            <div className="text-sm text-ink-3">
-              Adjust the base size used for the UI.
-            </div>
+            <div className="text-sm text-ink-3">Adjust the base size used for the UI.</div>
             <div className="flex items-center gap-2 shrink-0">
               <input
                 type="number"

@@ -7,9 +7,10 @@ import * as subscriptionService from './subscription.service.ts';
  * This module does NOT decide what "Pro" means — `getProStateForClassroomId`
  * does, and every gate delegates to it so they cannot disagree. Quizzes reach
  * it through the webapp's `assertProTier` and the MCP's copy in
- * `apps/mcp/src/resources/content.ts`; the syllabus bot reaches it through
- * here. Reimplementing the tier rules (owner resolution, `ends_at`) in this
- * file would recreate the drift those call sites were consolidated to avoid.
+ * `apps/mcp/src/resources/content.ts` (and their settings switch through
+ * `canUseQuizzes` here); the syllabus bot reaches it through here.
+ * Reimplementing the tier rules (owner resolution, `ends_at`) in this file
+ * would recreate the drift those call sites were consolidated to avoid.
  *
  * Entitlement is evaluated at SERVE time, never stored. A feature flag such as
  * `syllabus_bot_enabled` is necessary but not sufficient: a classroom whose
@@ -46,6 +47,39 @@ const NOT_FOUND: EntitlementResult = { allowed: false, reason: 'not_found' };
 export const canUseSyllabusBot = async (classroomId: string): Promise<EntitlementResult> => {
   const { isPro } = await subscriptionService.getProStateForClassroomId(classroomId);
   return isPro ? ALLOWED : PRO_REQUIRED;
+};
+
+/**
+ * Whether AI quizzes may be turned on for this classroom. Same rule as the
+ * syllabus bot, through the same resolver the webapp's `assertProTier` serves
+ * quizzes by, so the settings switch and the quiz routes cannot disagree. A
+ * classroom's own key is not an access path here either.
+ */
+export const canUseQuizzes = async (classroomId: string): Promise<EntitlementResult> => {
+  const { isPro } = await subscriptionService.getProStateForClassroomId(classroomId);
+  return isPro ? ALLOWED : PRO_REQUIRED;
+};
+
+/**
+ * Whether quizzes may appear in this classroom at all: Pro, and not switched
+ * off in its settings. Every surface that lists, counts, links or schedules a
+ * quiz (modules, dashboards, calendars and feeds, gradebook, notifications, the
+ * public course site, MCP reads) filters on this one answer, so a classroom
+ * without it shows no trace of quizzes and nothing links to a refusing route.
+ *
+ * Stored quizzes are untouched; they reappear when the classroom qualifies
+ * again. The webapp wraps this as `loadQuizzesVisible`, which also requires the
+ * AI agent to be configured and answers false on a failed lookup.
+ */
+export const quizzesVisible = async (classroomId: string): Promise<boolean> => {
+  const [{ isPro }, settings] = await Promise.all([
+    subscriptionService.getProStateForClassroomId(classroomId),
+    getPrisma().classroomSettings.findUnique({
+      where: { classroom_id: classroomId },
+      select: { quizzes_enabled: true },
+    }),
+  ]);
+  return isPro === true && settings?.quizzes_enabled !== false;
 };
 
 /**

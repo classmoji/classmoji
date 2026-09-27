@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   selectedSettingsFields,
   remapModuleItem,
+  importModules,
   SETTINGS_FIELD_GROUPS,
 } from '../classroomConfigImport.service.ts';
 import type {
@@ -65,7 +66,11 @@ describe('selectedSettingsFields', () => {
       'llm_max_tokens',
       'code_aware_model',
       'exploration_model',
+      'question_effort',
+      'grading_effort',
+      'exploration_effort',
       'syllabus_bot_model',
+      'syllabus_bot_effort',
     ]);
   });
 
@@ -206,5 +211,63 @@ describe('remapModuleItem', () => {
       emptyMaps({ repositories: { 'r-src': 'r-dst' } })
     );
     expect(result).toBeNull();
+  });
+});
+
+describe('importModules — what counts as a skipped item', () => {
+  // One source module: a repository that came across, a page that did not, and
+  // a quiz that did not. A hand-rolled `tx` records what gets written.
+  const run = (options?: { quizzesImported?: boolean }) => {
+    const moduleItemCreate = vi.fn().mockResolvedValue({});
+    const tx = {
+      module: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'm-src',
+            title: 'Week 1',
+            slug: 'week-1',
+            description: null,
+            position: 0,
+            items: [
+              item({ item_type: 'REPOSITORY', position: 0, repository_id: 'r-src' }),
+              item({ item_type: 'PAGE', position: 1, page_id: 'p-src' }),
+              item({ item_type: 'QUIZ', position: 2, quiz_id: 'q-src' }),
+            ],
+          },
+        ]),
+        // No module of that title yet in the target (see importModules).
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ id: 'm-dst' }),
+      },
+      moduleItem: { create: moduleItemCreate },
+    };
+    const summary = importModules(
+      'source-classroom',
+      'target-classroom',
+      emptyMaps({ repositories: { 'r-src': 'r-dst' } }),
+      options,
+      tx as never
+    );
+    return { summary, moduleItemCreate };
+  };
+
+  it('counts an unmapped quiz item when the import copied quizzes', async () => {
+    const { summary, moduleItemCreate } = run({ quizzesImported: true });
+
+    expect(await summary).toEqual({ modules: 1, items: 1, skipped_items: 2 });
+    expect(moduleItemCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts it by default, as before', async () => {
+    expect(await run().summary).toEqual({ modules: 1, items: 1, skipped_items: 2 });
+  });
+
+  it('leaves quiz items out uncounted when quizzes were not imported, and still counts the page', async () => {
+    const { summary, moduleItemCreate } = run({ quizzesImported: false });
+
+    expect(await summary).toEqual({ modules: 1, items: 1, skipped_items: 1 });
+    expect(moduleItemCreate).toHaveBeenCalledExactlyOnceWith({
+      data: expect.objectContaining({ item_type: 'REPOSITORY', repository_id: 'r-dst' }),
+    });
   });
 });

@@ -25,6 +25,8 @@ interface StepImportModulesProps {
   setImportSelections: (selections: ImportSelections) => void;
   /** Gitlab wording (projects, the group's templates subgroup). */
   isGitLab?: boolean;
+  /** Quiz import is offered to Pro creators only; otherwise quizzes go unmentioned. */
+  quizzesVisible: boolean;
 }
 
 /** One "Also copy" toggle row: key, label, sublabel, and an item count that
@@ -47,6 +49,7 @@ const StepImportModules = ({
   importSelections,
   setImportSelections,
   isGitLab = false,
+  quizzesVisible,
 }: StepImportModulesProps) => {
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -227,7 +230,9 @@ const StepImportModules = ({
 
                   {selectedModules.size > 0 && (
                     <div className="mt-3 text-xs text-gray-500">
-                      Deadlines will be removed. Repositories and quizzes will start unpublished.
+                      Deadlines will be removed.{' '}
+                      {quizzesVisible ? 'Repositories and quizzes' : 'Repositories'} will start
+                      unpublished.
                     </div>
                   )}
                 </div>
@@ -269,8 +274,8 @@ const StepImportModules = ({
                         },
                         {
                           key: 'aiConfig',
-                          label: 'AI & quiz config',
-                          sublabel: 'models, syllabus bot',
+                          label: quizzesVisible ? 'AI & quiz config' : 'AI config',
+                          sublabel: 'models, reasoning effort, Ask Moji',
                         },
                         // Owners only. A teacher may copy a class they teach but
                         // not lift its LLM credentials out of it; the server
@@ -356,6 +361,7 @@ const StepImportModules = ({
                 selectedModules={selectedModules}
                 onModuleToggle={handleModuleToggle}
                 onQuizToggle={handleQuizToggle}
+                quizzesVisible={quizzesVisible}
                 onSelectAll={handleSelectAll}
                 onDeselectAll={handleDeselectAll}
               />

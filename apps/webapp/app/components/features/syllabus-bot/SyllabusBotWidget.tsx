@@ -135,7 +135,7 @@ const SyllabusBotWidget = ({
 
   if (panelState === 'closed') return null;
 
-  const displayName = courseName || orgName || 'Course Assistant';
+  const displayName = courseName || orgName || 'Ask Moji';
 
   return (
     <div

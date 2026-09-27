@@ -136,10 +136,11 @@ describe('HelperService.removeGraderFromGitRepoAssignment (same contract)', () =
 });
 
 describe('grader tool definitions (route-derived tier, S7 scope)', () => {
-  it('both tools are OWNER-only write tools taking a classroom argument', () => {
+  it('both tools are OWNER + TEACHER write tools taking a classroom argument', () => {
+    // The web assignment page's grader action admits OWNER or TEACHER.
     for (const tool of [graderAssignTool, graderUnassignTool]) {
       expect(tool.scope).toBe('write');
-      expect(tool.roles).toEqual(['OWNER']);
+      expect(tool.roles).toEqual(['OWNER', 'TEACHER']);
       expect(tool.inputSchema).toHaveProperty('classroom');
     }
   });

@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   findBySlug: vi.fn(), // classroom.findBySlug
   calculateClassLeaderboard: vi.fn(), // helper.calculateClassLeaderboard
   membershipsByClassroom: vi.fn(), // classroomMembership.findByClassroomId
+  tagsWithCounts: vi.fn(), // organizationTag.findByClassroomIdWithCounts
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -45,6 +46,9 @@ vi.mock('@classmoji/services', () => ({
     classroomMembership: {
       findByClassroomId: (...a: unknown[]) => mocks.membershipsByClassroom(...a),
     },
+    organizationTag: {
+      findByClassroomIdWithCounts: (...a: unknown[]) => mocks.tagsWithCounts(...a),
+    },
   },
 }));
 
@@ -54,6 +58,7 @@ const {
   listTeachingTeamTool,
   gradingReportTool,
   listTeamsTool,
+  listTagsTool,
 } = await import('../reads.ts');
 const { gradingQueueResource, leaderboardResource } = await import('../../resources/grading.ts');
 const { teamsResource } = await import('../../resources/roster.ts');
@@ -237,8 +242,55 @@ describe('list_teaching_team', () => {
     expect(byId.u1.roles).toEqual(['OWNER', 'ASSISTANT']);
     expect(byId.u2.roles).toEqual(['TEACHER']);
     expect(byId.u3).toBeUndefined(); // students are not teaching team
-    // Only id/login/name/roles — no PII (email/school_id) or avatar.
-    expect(Object.keys(byId.u1).sort()).toEqual(['id', 'login', 'name', 'roles']);
+    // Only id/login/name/roles/grader_eligible — no PII (email/school_id) or avatar.
+    expect(Object.keys(byId.u1).sort()).toEqual([
+      'grader_eligible',
+      'id',
+      'login',
+      'name',
+      'roles',
+    ]);
+  });
+
+  it('marks grader_eligible exactly as grader_assign decides it', async () => {
+    const user = (id: string, login: string | null = id) => ({ id, login, name: id });
+    mocks.membershipsByClassroom.mockResolvedValue([
+      // An OWNER flagged is_grader is still not a grader: the role decides.
+      { role: 'OWNER', is_grader: true, user: user('owner') },
+      // A second, grader-flagged ASSISTANT role makes the same person eligible.
+      { role: 'OWNER', is_grader: false, user: user('owner-ta') },
+      { role: 'ASSISTANT', is_grader: true, user: user('owner-ta') },
+      { role: 'ASSISTANT', is_grader: true, user: user('ta') },
+      { role: 'ASSISTANT', is_grader: false, user: user('ta-plain') },
+      { role: 'TEACHER', is_grader: true, user: user('teacher') },
+      { role: 'TEACHER', is_grader: false, user: user('teacher-plain') },
+      { role: 'ASSISTANT', is_grader: true, user: user('ta-nologin', null) },
+    ]);
+
+    const payload = parse(await listTeachingTeamTool.handler({ classroom: CLASSROOM }, staffCtx()));
+    const eligible = Object.fromEntries(
+      (payload.members as Array<{ id: string; grader_eligible: boolean }>).map(m => [
+        m.id,
+        m.grader_eligible,
+      ])
+    );
+    expect(eligible).toEqual({
+      owner: false,
+      'owner-ta': true,
+      ta: true,
+      'ta-plain': false,
+      teacher: true,
+      'teacher-plain': false,
+      'ta-nologin': false,
+    });
+  });
+
+  it('says who can be a grader, under the 1,500-byte client cut', () => {
+    const d = listTeachingTeamTool.description;
+    expect(d).toMatch(/grader_eligible/);
+    expect(d).toMatch(/ASSISTANT or TEACHER/);
+    expect(d).toMatch(/OWNERs cannot be graders/);
+    expect(Buffer.byteLength(d, 'utf8')).toBeLessThan(1500);
   });
 });
 
@@ -275,6 +327,36 @@ describe('list_teams — the description matches the handler policy', () => {
     expect(listTeamsTool.roles).toEqual(teamsResource.roles);
     expect(listTeamsTool.scope).toBe(teamsResource.scope);
     expect(listTeamsTool.description).not.toBe(teamsResource.description);
+  });
+});
+
+describe('list_tags', () => {
+  it('returns every tag with its id, name and counts, scoped to the ctx classroom', async () => {
+    mocks.tagsWithCounts.mockResolvedValue([
+      { id: 'tag-1', name: 'workshop-pairs', _count: { teams: 13, repositories: 1 } },
+      { id: 'tag-2', name: 'unused', _count: { teams: 0, repositories: 0 } },
+    ]);
+
+    const payload = parse(await listTagsTool.handler({ classroom: CLASSROOM }, staffCtx()));
+
+    expect(mocks.tagsWithCounts).toHaveBeenCalledWith('class-1');
+    expect(payload).toEqual({
+      count: 2,
+      tags: [
+        { id: 'tag-1', name: 'workshop-pairs', team_count: 13, repository_count: 1 },
+        { id: 'tag-2', name: 'unused', team_count: 0, repository_count: 0 },
+      ],
+    });
+  });
+
+  it('is a teaching-team read — students have no tool that takes a tag id', () => {
+    expect(listTagsTool.roles).toEqual(['OWNER', 'TEACHER', 'ASSISTANT']);
+    expect(listTagsTool.roles).not.toContain('STUDENT');
+    expect(listTagsTool.scope).toBe('read');
+  });
+
+  it('keeps its description under the 1,500-byte client cut', () => {
+    expect(new TextEncoder().encode(listTagsTool.description).length).toBeLessThan(1500);
   });
 });
 

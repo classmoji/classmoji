@@ -119,6 +119,53 @@ interface AgentResponse {
   payload: Record<string, unknown>;
 }
 
+/**
+ * The ai-agent codes whose `error` text is fixed copy written for the person
+ * using the feature (see apps/ai-agent src/websocket/handlers.js). Every other
+ * code carries text that is not: API_ERROR's lines describe the upstream
+ * failure ("temporarily busy", "a configuration issue"), and the rest carry
+ * whatever the ai-agent caught, which is text for an operator.
+ */
+const USER_FACING_ERROR_CODES = new Set(['BUDGET_EXCEEDED', 'SESSION_NOT_FOUND']);
+
+/** The message an ERROR reply gets when its own text is not user-facing copy. */
+export const AI_AGENT_GENERIC_ERROR = 'Something went wrong. Please try again.';
+
+/**
+ * An ERROR reply from the ai-agent. `code` and `retryable` come over from its
+ * payload, so a caller can tell one failure from another (a BUDGET_EXCEEDED
+ * stop from an API_ERROR, say) without matching on the message text.
+ *
+ * `message` is the ai-agent's text only for the codes in
+ * USER_FACING_ERROR_CODES; anything else gets AI_AGENT_GENERIC_ERROR, and the
+ * ai-agent's own text moves to `detail`, which callers log and never return.
+ * A failure of the connection itself (not configured, connect or request
+ * timeout) rejects with a plain Error written for the log, so callers answer
+ * anything without an allow-listed `code` with their own fixed copy.
+ */
+export class AIAgentRequestError extends Error {
+  code?: string;
+  retryable?: boolean;
+  detail?: string;
+
+  constructor(message: string, code?: string, retryable?: boolean, detail?: string) {
+    super(message);
+    this.name = 'AIAgentRequestError';
+    this.code = code;
+    this.retryable = retryable;
+    this.detail = detail;
+  }
+}
+
+/** Build the rejection for an ai-agent ERROR payload (see AIAgentRequestError). */
+const agentRequestError = (payload?: { error?: string; code?: string; retryable?: boolean }) => {
+  const { error, code, retryable } = payload ?? {};
+  if (error && code && USER_FACING_ERROR_CODES.has(code)) {
+    return new AIAgentRequestError(error, code, retryable);
+  }
+  return new AIAgentRequestError(AI_AGENT_GENERIC_ERROR, code, retryable, error);
+};
+
 export async function sendRequest(
   type: string,
   payload: Record<string, unknown>,
@@ -161,6 +208,8 @@ export async function sendRequest(
         conversationId?: string;
         step?: Record<string, unknown>;
         error?: string;
+        code?: string;
+        retryable?: boolean;
       };
     }) => {
       // SECURITY: Filter by requestId (primary) or sessionId (fallback for legacy)
@@ -217,7 +266,7 @@ export async function sendRequest(
       // Handle errors - must match our request
       if (msg.type === 'ERROR' && (matchesRequest || matchesSession)) {
         cleanup();
-        reject(new Error(msg.payload?.error || 'Request failed'));
+        reject(agentRequestError(msg.payload));
         return;
       }
     };

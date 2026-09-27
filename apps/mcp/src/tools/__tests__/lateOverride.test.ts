@@ -576,6 +576,77 @@ describe('submission_late_override — through the registry', () => {
     expect(parse(result)).toMatchObject({ error: 'invalid_params' });
   });
 
+  it('accepts a numeric (ISSUE-mode) submission id, alone or in a list', async () => {
+    mockClassroom('ACTIVE', 'OWNER');
+    const NUMERIC = '5482151816';
+    mocks.setLateOverride.mockResolvedValue(serviceResult({ updatedIds: [NUMERIC] }));
+
+    const single = await call({ ...ARGS, git_repo_assignment_id: NUMERIC });
+    expect(single.isError).toBeFalsy();
+    expect(mocks.setLateOverride).toHaveBeenLastCalledWith(
+      expect.objectContaining({ classroomId: 'class-1', selector: { ids: [NUMERIC] } })
+    );
+    expect(auditRows()[0]).toMatchObject({ resource_id: NUMERIC });
+
+    const list = await call({
+      classroom: 'org/c',
+      git_repo_assignment_ids: [NUMERIC, SUB_A],
+      is_late_override: true,
+    });
+    expect(list.isError).toBeFalsy();
+    expect(mocks.setLateOverride).toHaveBeenLastCalledWith(
+      expect.objectContaining({ selector: { ids: [NUMERIC, SUB_A] } })
+    );
+  });
+
+  it('accepts a numeric id sent as a JSON number and passes it on as a string', async () => {
+    mockClassroom('ACTIVE', 'OWNER');
+    mocks.setLateOverride.mockResolvedValue(serviceResult({ updatedIds: ['5482151816'] }));
+
+    const single = await call({ ...ARGS, git_repo_assignment_id: 5482151816 });
+    expect(single.isError).toBeFalsy();
+    expect(mocks.setLateOverride).toHaveBeenLastCalledWith(
+      expect.objectContaining({ selector: { ids: ['5482151816'] } })
+    );
+
+    const list = await call({
+      classroom: 'org/c',
+      git_repo_assignment_ids: [5482151816, SUB_A],
+      is_late_override: true,
+    });
+    expect(list.isError).toBeFalsy();
+    expect(mocks.setLateOverride).toHaveBeenLastCalledWith(
+      expect.objectContaining({ selector: { ids: ['5482151816', SUB_A] } })
+    );
+  });
+
+  it.each(['', 'abc', '12-34', '5482151816 ', '1'.repeat(65)])(
+    'rejects %j as a submission id at the schema',
+    async bad => {
+      mockClassroom('ACTIVE', 'OWNER');
+      const single = await call({ ...ARGS, git_repo_assignment_id: bad });
+      expect(single.isError).toBe(true);
+      const list = await call({
+        classroom: 'org/c',
+        git_repo_assignment_ids: [SUB_A, bad],
+        is_late_override: true,
+      });
+      expect(list.isError).toBe(true);
+      expect(mocks.setLateOverride).not.toHaveBeenCalled();
+    }
+  );
+
+  it('keeps assignment_id a uuid: a numeric assignment id is refused at the schema', async () => {
+    mockClassroom('ACTIVE', 'OWNER');
+    const result = await call({
+      classroom: 'org/c',
+      assignment_id: '5482151816',
+      is_late_override: true,
+    });
+    expect(result.isError).toBe(true);
+    expect(mocks.assignmentFindById).not.toHaveBeenCalled();
+  });
+
   it('rejects a list over 500 ids at the schema', async () => {
     mockClassroom('ACTIVE', 'OWNER');
     const tooMany = Array.from(

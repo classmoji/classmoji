@@ -3,7 +3,9 @@ import { useLocation, useNavigate, useParams } from 'react-router';
 import { Drawer, ConfigProvider, theme, Modal } from 'antd';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { QuizAttemptInterface } from '~/components';
-import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
+import { assertClassroomAccess } from '~/utils/helpers';
+import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
+import { attemptDrawerView, quizDrawerView } from '~/utils/quizPayloads';
 import type { Route } from './+types/route';
 
 export async function loader({ params, request }: Route.LoaderArgs) {
@@ -25,7 +27,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     attemptedAction: 'view_student_attempt',
   });
 
-  await assertProTier(classSlug);
+  if (!(await quizzesVisibleOrThrow(classroom.id))) {
+    throw new Response('Not Found', { status: 404 });
+  }
 
   // 2. Fetch quiz
   const quiz = await ClassmojiService.quiz.findById(quizId);
@@ -72,26 +76,15 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const studentName =
     attemptData.attempt.user?.name || attemptData.attempt.user?.login || 'Student';
 
-  // 8. Strip sensitive fields from attempt before sending to client
-  // agent_config may contain API keys - never expose to browser
-  // quiz.classroom.settings contains anthropic_api_key, openai_api_key
-  const { agent_config: _agent_config, ...attemptWithoutConfig } = attemptData.attempt;
-  const safeAttempt = {
-    ...attemptWithoutConfig,
-    quiz: {
-      ...attemptWithoutConfig.quiz,
-      classroom: attemptWithoutConfig.quiz?.classroom
-        ? { ...attemptWithoutConfig.quiz.classroom, settings: undefined }
-        : undefined,
-    },
-  };
-
+  // 8. Send only what the drawer and QuizAttemptInterface read — see
+  // ~/utils/quizPayloads. Both rows arrive joined to much more: the attempt to
+  // its user, quiz and classroom; the quiz to every attempt and its user.
   return {
-    quiz,
-    attempt: safeAttempt,
+    quiz: quizDrawerView(quiz),
+    attempt: attemptDrawerView(attemptData.attempt),
     // Use unified messages from getAttemptWithMessages (ai-agent owns persistence)
     messages: attemptData.messages || [],
-    userLogin: safeAttempt.user?.login || null,
+    userLogin: attemptData.attempt.user?.login || null,
     studentName,
     isAdmin: true,
     readOnly,
@@ -106,7 +99,7 @@ export default function AdminQuizAttemptViewDrawer({ loaderData }: Route.Compone
   const { isDarkMode } = useDarkMode();
   const navigate = useNavigate();
   const { class: classSlug, quizId } = useParams();
-  // Served under every prefix this route's gate allows (/admin and /teacher).
+  // Served under every prefix this route's gate allows (/admin, /teacher and /assistant).
   const rolePrefix = useLocation().pathname.split('/')[1];
   const [showConfirm, setShowConfirm] = useState(false);
 

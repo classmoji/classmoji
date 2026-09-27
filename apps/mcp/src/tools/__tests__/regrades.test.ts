@@ -12,6 +12,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { z } from 'zod';
 import type { ToolContext } from '../../mcp/registry.ts';
 
 const mocks = vi.hoisted(() => ({
@@ -116,6 +117,31 @@ describe('regrade_create idempotency (F1)', () => {
       })
     );
     expect(payload.regrade_request.id).toBe('rr-new');
+  });
+});
+
+describe('regrade_create with a numeric (ISSUE-mode) submission id', () => {
+  const NUMERIC_ID = '5482151816';
+
+  it('accepts the numeric id at the schema and passes it through to the task', async () => {
+    const field = regradeCreateTool.inputSchema.git_repo_assignment_id as z.ZodTypeAny;
+    expect(field.safeParse(NUMERIC_ID).success).toBe(true);
+    expect(field.safeParse('not-an-id').success).toBe(false);
+
+    mocks.findById.mockResolvedValue({ ...GRA, id: NUMERIC_ID });
+    mocks.findOpenByAssignmentId.mockResolvedValue(null);
+    mocks.trigger.mockResolvedValue({ id: 'run-1' });
+    mocks.retrieve.mockResolvedValue({
+      status: 'COMPLETED',
+      output: { id: 'rr-new', status: 'IN_REVIEW', previous_grade: ['🎯', '✅'] },
+    });
+
+    await regradeCreateTool.handler({ ...ARGS, git_repo_assignment_id: NUMERIC_ID }, CTX);
+    expect(mocks.findById).toHaveBeenCalledWith(NUMERIC_ID);
+    expect(mocks.trigger).toHaveBeenCalledWith(
+      'request_regrade',
+      expect.objectContaining({ gitRepoAssignment: expect.objectContaining({ id: NUMERIC_ID }) })
+    );
   });
 });
 

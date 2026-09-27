@@ -16,6 +16,7 @@ import StepImportModules from './StepImportModules';
 import StepReview from './StepReview';
 import { slugify, STEPS } from './utils';
 import { browserTimeZone } from '~/utils/browserTimeZone';
+import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import type { ImportSelections } from './types';
 import { loadGitLabOptions } from './gitlabOptions.server';
 import { loadImportableClassrooms } from './importSources.server';
@@ -35,12 +36,20 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   const gitlab = await loadGitLabOptions(authData.userId);
   if (gitMode === 'GITLAB') {
     // GitLab classrooms import from any class this user owns or teaches,
-    // Github or GitLab.
+    // Github or GitLab. Quiz import follows the same rule as below.
+    const [importableClassrooms, subscription] = await Promise.all([
+      loadImportableClassrooms(authData.userId),
+      ClassmojiService.subscription.getCurrent(authData.userId),
+    ]);
     return {
       requiresGithub: true as const,
       gitMode,
       gitlab,
-      importableClassrooms: await loadImportableClassrooms(authData.userId),
+      importableClassrooms,
+      quizzesVisible:
+        isAIAgentConfigured() &&
+        subscription.tier === 'PRO' &&
+        ClassmojiService.subscription.isSubscriptionActive(subscription),
     };
   }
   if (!authData.token) return { requiresGithub: true as const, gitMode, gitlab };
@@ -74,7 +83,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       (error as { status?: number })?.status === 401 ||
       (error as { message?: string })?.message?.includes('Bad credentials')
     ) {
-      await clearRevokedToken(authData.userId);
+      // Only the token GitHub refused: a token refreshed meanwhile is kept.
+      await clearRevokedToken(authData.userId, authData.token);
       return redirect('/');
     }
     throw error;
@@ -169,7 +179,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   // Fetch the displayable orgs and the classrooms this user may import FROM in
   // parallel. Import sources are OWNER *or* TEACHER — a teacher may copy a class
   // they teach, minus the API keys (see the strip in action.ts).
-  const [gitOrgs, importableClassrooms] = await Promise.all([
+  const [gitOrgs, importableClassrooms, subscription] = await Promise.all([
     getPrisma().gitOrganization.findMany({
       where: {
         provider: 'GITHUB',
@@ -187,7 +197,18 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       },
     }),
     loadImportableClassrooms(user.id),
+    ClassmojiService.subscription.getCurrent(user.id),
   ]);
+
+  // The new classroom is Pro exactly when its creator is (they are its only
+  // owner), so quiz import is offered to Pro creators alone, and only where the
+  // AI agent is configured (as `loadQuizzesVisible` requires). Same Pro test the
+  // classroom resolver applies to each owner's subscription; the action
+  // re-decides on the created classroom.
+  const quizzesVisible =
+    isAIAgentConfigured() &&
+    subscription.tier === 'PRO' &&
+    ClassmojiService.subscription.isSubscriptionActive(subscription);
 
   // Enrich gitOrgs with avatar URLs from GitHub
   const gitOrgsWithAvatars = gitOrgs.map(org => ({
@@ -203,6 +224,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     gitOrgs: gitOrgsWithAvatars,
     importableClassrooms,
     githubAppName: process.env.GITHUB_APP_NAME,
+    quizzesVisible,
   };
 };
 
@@ -238,6 +260,7 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
         importableClassrooms={
           ('importableClassrooms' in loaderData ? loaderData.importableClassrooms : null) ?? []
         }
+        quizzesVisible={'quizzesVisible' in loaderData ? Boolean(loaderData.quizzesVisible) : false}
         providerSwitch={null}
       />
     );
@@ -254,7 +277,7 @@ const CreateClassroomForm = ({
   loaderData: CreateClassroomData;
   providerSwitch: React.ReactNode;
 }) => {
-  const { gitOrgs, importableClassrooms, githubAppName } = loaderData;
+  const { gitOrgs, importableClassrooms, githubAppName, quizzesVisible } = loaderData;
   const navigate = useNavigate();
   const { fetcher, notify } = useGlobalFetcher();
   const { openInstallPopup, isRefreshing } = useGitHubAppInstallPopup(githubAppName);
@@ -524,6 +547,7 @@ const CreateClassroomForm = ({
                 setSelectedModules={setSelectedModules}
                 importSelections={importSelections}
                 setImportSelections={setImportSelections}
+                quizzesVisible={quizzesVisible}
               />
             )}
 
@@ -537,6 +561,7 @@ const CreateClassroomForm = ({
                 sourceClassroom={sourceClassroom}
                 selectedModules={selectedModules}
                 importSelections={importSelections}
+                quizzesVisible={quizzesVisible}
               />
             )}
 

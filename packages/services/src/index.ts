@@ -116,9 +116,66 @@ export type {
 
 // Admin service result/error shapes shared by the web routes and the MCP tools.
 export { StaffServiceError } from './classmoji/staff.service.ts';
-export type { AddStaffResult, RemoveStaffResult, StaffRole } from './classmoji/staff.service.ts';
+export type {
+  AddStaffResult,
+  RemoveStaffResult,
+  StaffRemovalPreview,
+  StaffRole,
+} from './classmoji/staff.service.ts';
+export type { UngradedChoice } from './classmoji/graderReassignPlan.ts';
+export type {
+  MoveGraderSlotPayload,
+  StaffRemovalStart,
+  UngradedSlotsOutcome,
+} from './helper/index.ts';
+export { waitForRunOutcome } from './helper/runWait.ts';
+export type { RunOutcome } from './helper/runWait.ts';
+// GitHub organization repository settings: typed refusal + shared messages.
+export {
+  OrgRepoSettingsError,
+  GITHUB_REFUSED_CHANGE_MESSAGE,
+  GITHUB_RATE_LIMITED_MESSAGE,
+  GITHUB_SIGN_IN_AGAIN_MESSAGE,
+} from './classmoji/orgRepoSettings.service.ts';
+export type {
+  OrgRepoSettingsErrorCode,
+  OrgRepoSettingsResult,
+  OrgOwnerStatus,
+} from './classmoji/orgRepoSettings.service.ts';
 // Quiz authorization refusal, so routes can answer 403 instead of 500.
 export { QuizAccessError, QUIZ_STAFF_ROLES } from './classmoji/quiz.service.ts';
+// Quiz source material: the linked pages and decks a quiz is about. The
+// ai-agent reads them through `ClassmojiService.quizSourceMaterial.load`; the
+// flat names are for callers that want the functions and types directly.
+export {
+  loadQuizSourceMaterial,
+  countStartableSourceMaterial,
+  applyMaterialBudget,
+  setQuizSourceMaterial,
+  normalizeSourceMaterial,
+  sourceMaterialOf,
+  listSourceMaterialOptions,
+  truncationMarker,
+  MAX_DOCS,
+  MAX_CHARS_PER_DOC,
+  MAX_CHARS_TOTAL,
+  MIN_ROOM_CHARS,
+  DEFAULT_MATERIAL_BUDGET,
+} from './classmoji/quizSourceMaterial.service.ts';
+export type {
+  SourceDocKind,
+  SourceMaterialRef,
+  SourceDoc,
+  OmittedReason,
+  OmittedDoc,
+  QuizSourceMaterial,
+  QuizSourceMaterialArgs,
+  StartableSourceMaterial,
+  MaterialBudget,
+  BudgetedMaterial,
+  QuizSourceMaterialEntry,
+  SourceMaterialOption,
+} from './classmoji/quizSourceMaterial.service.ts';
 // "No such attempt", so routes can answer 404 for that and only that — a query
 // that failed for any other reason has to keep its 500 and its log line.
 export { QuizAttemptNotFoundError } from './classmoji/quizAttempt.service.ts';
@@ -383,7 +440,7 @@ export {
 } from './classmoji/classroomSlug.ts';
 
 // Models list (moved from @classmoji/llm)
-export { getAllModels, getAnthropicModels } from './classmoji/modelsList.ts';
+export { getAllModels, getAnthropicModels, getModelLabel } from './classmoji/modelsList.ts';
 
 // Quiz prompts and examples (moved from @classmoji/llm)
 export {

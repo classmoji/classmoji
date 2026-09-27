@@ -17,7 +17,7 @@
  * serializes it with the same `JSON.stringify(payload, null, 2)` the resource
  * read uses. Resource and tool are therefore byte-identical by construction.
  *
- * Three tools are NOT pure mirrors:
+ * Four tools are NOT pure mirrors:
  *   - list_submissions   adds server-side filters over the grading-queue data
  *     (shares loadGradingQueueData + queueRow with the grading-queue resource).
  *   - list_teaching_team is a NEW capability (no resource lists staff-with-ids)
@@ -25,6 +25,9 @@
  *   - grading_report     is a NEW capability (per-TA grading oversight) on a
  *     TIGHTER tier than the rest: OWNER/TEACHER, since it exposes each TA's
  *     throughput and grading patterns to whoever reads it.
+ *   - list_tags          is a NEW capability: list_teams names tags but carries
+ *     no ids, while repo_create/repo_update's tag_id and team_create/
+ *     team_tag_add's tag_ids take ids. Teaching team, like list_teaching_team.
  */
 
 import { UriTemplate } from '@modelcontextprotocol/sdk/shared/uriTemplate.js';
@@ -33,7 +36,13 @@ import { IssueStatus, type Role } from '@prisma/client';
 import { z, type ZodRawShape } from 'zod';
 import type { ResourceDefinition, ToolDefinition } from '../mcp/registry.ts';
 import { parseClassroomRef } from '../authz/pure.ts';
-import { ok, OWNER_TEACHER, requireClassroomCtx, TEACHING_TEAM } from './shared.ts';
+import {
+  ok,
+  OWNER_TEACHER,
+  requireClassroomCtx,
+  submissionIdSchema,
+  TEACHING_TEAM,
+} from './shared.ts';
 import { orgGit, type SubmissionLike } from '../resources/shape.ts';
 import { meResource } from '../resources/me.ts';
 import { classroomInfoResource } from '../resources/classroomInfo.ts';
@@ -166,7 +175,8 @@ export const listReposTool = mirrorResourceTool({
     'Repositories (the storage: a template plus one git repo per student/team) with the ' +
     'assignments that submit through them. A repository has no module or weight of its own; each ' +
     'assignment and submission carries its submission_mode (REPO = push, ISSUE = close the issue) ' +
-    'and repo_url. Staff see all incl. unpublished; students see published-only repositories they ' +
+    'and repo_url. Staff see all incl. unpublished, with the template, team settings, tag_id and ' +
+    'project template repo_update edits; students see published-only repositories they ' +
     'have a git repo for, with their own submission status per assignment (grades only after ' +
     'release). Any member.',
 });
@@ -189,7 +199,7 @@ export const getSubmissionTool = mirrorResourceTool({
     'present. Teaching team only. `submission_id` comes from list_submissions; it is also the ' +
     'id that grade_add, grade_remove, grader_assign, and submission_late_override consume.',
   extraInput: {
-    submission_id: z.string().uuid().describe('Submission (GitRepoAssignment) id'),
+    submission_id: submissionIdSchema().describe('Submission (GitRepoAssignment) id'),
   },
   buildVars: args => ({ submissionId: String(args.submission_id) }),
 });
@@ -226,8 +236,9 @@ export const listQuizzesTool = mirrorResourceTool({
   name: 'list_quizzes',
   title: 'List quizzes',
   description:
-    'AI-graded quizzes. Staff (OWNER/TEACHER/ASSISTANT) see all quizzes incl. drafts and prompts; ' +
-    'students see published quizzes with their own attempt summary. Requires a Pro subscription ' +
+    'AI-graded quizzes with their source material (linked pages and decks, in order). Staff ' +
+    '(OWNER/TEACHER/ASSISTANT) see all quizzes incl. drafts and prompts; students see published ' +
+    'quizzes, published material and their own attempt summary. Requires a Pro subscription ' +
     'and quizzes_enabled.',
 });
 
@@ -390,18 +401,29 @@ interface ListTeachingTeamArgs {
 
 interface TeachingMembershipRow {
   role: Role;
+  is_grader?: boolean | null;
   user?: { id: string; login?: string | null; name?: string | null } | null;
 }
 
 const TEACHING_ROLE_SET: ReadonlySet<Role> = new Set(TEACHING_TEAM);
+
+/**
+ * The roles that can be a grader — gitRepoAssignmentGrader.GRADER_ROLES in
+ * packages/services, which findEligibleGrader (and so grader_assign) checks.
+ * OWNER is not one.
+ */
+const GRADER_ROLE_SET: ReadonlySet<Role> = new Set<Role>(['ASSISTANT', 'TEACHER']);
 
 export const listTeachingTeamTool: ToolDefinition<ListTeachingTeamArgs> = {
   name: 'list_teaching_team',
   title: 'List teaching team',
   description:
     "The classroom's staff — OWNER, TEACHER, and ASSISTANT members — each with { id, login, name, " +
-    'roles[] }. Use a member id as the `grader_id` for grader_assign / grader_unassign. One person ' +
-    'may hold several roles; those are returned in their `roles` array. Teaching team only.',
+    'roles[], grader_eligible }. One person may hold several roles; those are returned in their ' +
+    '`roles` array. grader_eligible is true when they hold ASSISTANT or TEACHER marked as a ' +
+    'grader (is_grader) and have a login: only those can be the `grader_id` for grader_assign. ' +
+    'OWNERs cannot be graders; staff_update sets is_grader. Any currently assigned grader can ' +
+    'be removed with grader_unassign. Teaching team only.',
   scope: 'read',
   roles: TEACHING_TEAM,
   inputSchema: {
@@ -419,25 +441,72 @@ export const listTeachingTeamTool: ToolDefinition<ListTeachingTeamArgs> = {
 
     const byUser = new Map<
       string,
-      { id: string; login: string | null; name: string | null; roles: Role[] }
+      {
+        id: string;
+        login: string | null;
+        name: string | null;
+        roles: Role[];
+        grader_eligible: boolean;
+      }
     >();
     for (const m of memberships) {
       if (!TEACHING_ROLE_SET.has(m.role) || !m.user) continue;
+      // The same test findEligibleGrader applies: a grader-role membership
+      // with is_grader, and a stored login to assign on GitHub.
+      const eligibleHere = GRADER_ROLE_SET.has(m.role) && m.is_grader === true && !!m.user.login;
       const existing = byUser.get(m.user.id);
       if (existing) {
         if (!existing.roles.includes(m.role)) existing.roles.push(m.role);
+        existing.grader_eligible ||= eligibleHere;
       } else {
         byUser.set(m.user.id, {
           id: m.user.id,
           login: m.user.login ?? null,
           name: m.user.name ?? null,
           roles: [m.role],
+          grader_eligible: eligibleHere,
         });
       }
     }
 
     const members = [...byUser.values()];
     return ok({ count: members.length, members });
+  },
+};
+
+// ─── list_tags (NEW — resolves the tag ids the team/repo tools take) ────────
+
+interface ListTagsArgs {
+  classroom: string;
+}
+
+export const listTagsTool: ToolDefinition<ListTagsArgs> = {
+  name: 'list_tags',
+  title: 'List tags',
+  description:
+    "The classroom's team tags, each with { id, name, team_count, repository_count }. Use an id " +
+    'as tag_id for repo_create / repo_update (instructor-assigned GROUP repos) and in tag_ids for ' +
+    'team_create / team_tag_add. list_teams shows tag names only; create a missing tag with ' +
+    'tag_create. Teaching team only.',
+  scope: 'read',
+  // Tags are not sensitive, but only staff tools consume their ids; students
+  // have no call that takes one.
+  roles: TEACHING_TEAM,
+  inputSchema: {
+    classroom: z.string().describe("Classroom reference as 'org/slug'"),
+  },
+  handler: async (_args, ctx) => {
+    const { classroomId } = requireClassroomCtx(ctx);
+    const tags = await ClassmojiService.organizationTag.findByClassroomIdWithCounts(classroomId);
+    return ok({
+      count: tags.length,
+      tags: tags.map(tag => ({
+        id: tag.id,
+        name: tag.name,
+        team_count: tag._count.teams,
+        repository_count: tag._count.repositories,
+      })),
+    });
   },
 };
 
@@ -497,6 +566,7 @@ export const readTools: ToolDefinition<never>[] = [
   getClassroomInfoTool,
   getRosterTool,
   listTeamsTool,
+  listTagsTool,
   listReposTool,
   myGradesTool,
   listSubmissionsTool,

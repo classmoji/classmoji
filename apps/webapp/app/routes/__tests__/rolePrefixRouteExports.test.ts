@@ -49,8 +49,7 @@ const INTENTIONALLY_NO_ACTION: Record<string, Record<string, string>> = {
   assistant: {
     'assistant.$class_.modules':
       'read-only view of the admin modules page; every write stays behind requireClassroomAdmin on /admin',
-    'assistant.$class_.pages':
-      'read-only pages list; writes stay on /admin and /teacher',
+    'assistant.$class_.pages': 'read-only pages list; writes stay on /admin and /teacher',
     'assistant.$class_.repos':
       'read-only repositories view; every write stays behind requireClassroomAdmin on /admin',
     'assistant.$class_.repos_.$title':

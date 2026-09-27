@@ -20,9 +20,7 @@ const UserSettings = () => {
 
   return (
     <div className="min-h-full flex flex-col">
-      <h1 className="mt-2 mb-4 text-lg font-semibold text-ink-1">
-        Account Settings
-      </h1>
+      <h1 className="mt-2 mb-4 text-lg font-semibold text-ink-1">Account Settings</h1>
 
       <div className="flex-1 flex flex-col">
         <div className="flex -mb-px relative overflow-x-auto">

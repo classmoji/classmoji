@@ -25,7 +25,8 @@ export interface ConfigImportSelections {
   features?: boolean;
   /**
    * llm_provider, llm_model, llm_temperature, llm_max_tokens, code_aware_model,
-   * exploration_model, syllabus_bot_model
+   * exploration_model, question_effort, grading_effort, exploration_effort,
+   * syllabus_bot_model, syllabus_bot_effort
    */
   aiConfig?: boolean;
   /** openai_api_key, anthropic_api_key — OPT-IN secrets, never copied unless enabled */
@@ -90,7 +91,11 @@ export const SETTINGS_FIELD_GROUPS: Record<
     'llm_max_tokens',
     'code_aware_model',
     'exploration_model',
+    'question_effort',
+    'grading_effort',
+    'exploration_effort',
     'syllabus_bot_model',
+    'syllabus_bot_effort',
   ],
   apiKeys: ['openai_api_key', 'anthropic_api_key'],
 };
@@ -401,11 +406,14 @@ export function remapModuleItem(
  * target classroom, remapping each item's resource reference through the
  * provided id maps. Modules are forced unpublished. Item ordering (position) is
  * preserved. Items whose referenced resource was not imported are skipped and
- * counted.
+ * counted, except QUIZ items when quizzes were not part of the import at all:
+ * those are left out without being counted, since nothing was asked of them.
  *
  * @param {string} sourceClassroomId - Classroom to copy modules from
  * @param {string} targetClassroomId - Classroom to copy modules into
  * @param {ModuleImportIdMaps} idMaps - Source→target resource id maps
+ * @param {Object} [options]
+ * @param {boolean} [options.quizzesImported=true] - Whether the import copied quizzes
  * @param {Object} [tx] - Optional Prisma transaction client
  * @returns {Promise<{ modules: number; items: number; skipped_items: number }>}
  */
@@ -413,8 +421,10 @@ export const importModules = async (
   sourceClassroomId: string,
   targetClassroomId: string,
   idMaps: ModuleImportIdMaps,
+  options: { quizzesImported?: boolean } = {},
   tx: RepositoryImportClient = getPrisma()
 ): Promise<{ modules: number; items: number; skipped_items: number }> => {
+  const { quizzesImported = true } = options;
   const sourceModules = await tx.module.findMany({
     where: { classroom_id: sourceClassroomId },
     include: { items: { orderBy: { position: 'asc' } } },
@@ -450,12 +460,12 @@ export const importModules = async (
     for (const item of sourceModule.items) {
       const remapped = remapModuleItem(item, idMaps);
       if (!remapped) {
-        skipped_items += 1;
+        if (item.item_type !== ModuleItemType.QUIZ || quizzesImported) skipped_items += 1;
         continue;
       }
       // Already in the reused module (an item per resource per module).
       if (
-        newModule.items.some(
+        (newModule.items ?? []).some(
           existing =>
             (remapped.page_id && existing.page_id === remapped.page_id) ||
             (remapped.repository_id && existing.repository_id === remapped.repository_id) ||

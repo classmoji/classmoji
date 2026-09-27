@@ -9,19 +9,24 @@ import { ClassmojiService, getGitProvider, GitHubProvider } from '@classmoji/ser
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { useDisclosure, useGlobalFetcher } from '~/hooks';
 import { useGitWeb } from '~/hooks/useGitWeb';
+import { parseUpdateRequest } from './updateRequest.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
 
-  await requireClassroomAdmin(request, classSlug!, {
+  const { classroom } = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'REPOSITORIES',
     action: 'view_module_update',
   });
 
   const url = new URL(request.url);
   const repositoryId = url.searchParams.get('id');
-  const repository = await ClassmojiService.repository.findById(repositoryId!);
+  const repository = await ClassmojiService.repository.findByIdInClassroom(
+    repositoryId,
+    classroom.id
+  );
+  if (!repository) throw new Response('Repository not found', { status: 404 });
   return { repository };
 };
 
@@ -62,7 +67,7 @@ const UpdateRepositories = ({ loaderData }: Route.ComponentProps) => {
       .then(() => {
         const values = form.getFieldsValue();
         setSubmitting(true);
-        fetcher!.submit(JSON.stringify({ values, repository }), {
+        fetcher!.submit(JSON.stringify({ values, repository: { id: repository.id } }), {
           method: 'post',
           action: `/admin/${classSlug}/repos/update`,
           encType: 'application/json',
@@ -115,7 +120,27 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
-  const { values, repository } = await request.json();
+  const parsed = await parseUpdateRequest(request);
+  if (!parsed) return { error: 'Invalid request.' };
+  const { values } = parsed;
+
+  // The body names the repository by id only; it is loaded from this classroom,
+  // and the template the student repos are updated from is the stored one. A
+  // bare template name is a repository in the classroom's own organization.
+  const repository = await ClassmojiService.repository.findByIdInClassroom(
+    parsed.repositoryId,
+    classroom.id
+  );
+  if (!repository) return { error: 'Repository not found.' };
+  const templateRef = resolveTemplateRef(repository.template, classroom.git_organization?.login);
+  if (!templateRef) {
+    return {
+      error: isGitLabClassroom(classroom)
+        ? 'This project has no template project to update from.'
+        : 'This repository has no template repository to update from.',
+    };
+  }
+
   const sessionId = nanoid();
   const accessToken = await auth.createPublicToken({
     scopes: {
@@ -152,13 +177,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   }
 
   const repositories = await ClassmojiService.gitRepo.findByRepository(classSlug!, repository.id);
-  // Split on the LAST slash: a GitLab template can sit in a nested group.
-  const templateRef = resolveTemplateRef(repository.template, gitOrgLogin);
-  if (!templateRef) {
-    return {
-      error: `This ${isGitLabClassroom(classroom) ? 'project' : 'repository'} has no template.`,
-    };
-  }
   const { owner: templateOwner, repo: templateRepo } = templateRef;
 
   const payloads = repositories.map(repo => {

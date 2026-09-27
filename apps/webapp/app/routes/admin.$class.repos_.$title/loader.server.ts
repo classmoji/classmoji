@@ -8,6 +8,7 @@
 // the whole module drops out of the client build with their `loader` export.
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomAdmin, requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
+import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import type { LinkedPage } from './LinkedPages';
 import { gitTerms } from '~/utils/gitWeb';
 
@@ -65,13 +66,15 @@ export const buildLoader =
     // The assignments that submit through this repository (with their module),
     // plus what the assignment modal needs to edit one, and the roster size so
     // the header can say how many students have a copy.
-    const [allAssignments, modules, repositories, candidates, students] = await Promise.all([
-      ClassmojiService.assignment.listForClassroom(classroom.id),
-      ClassmojiService.module.findByClassroomSlug(classSlug!),
-      ClassmojiService.repository.findByClassroomId(classroom.id),
-      ClassmojiService.module.getCandidateContent(classroom.id),
-      ClassmojiService.classroomMembership.findUsersByRoles(classroom.id, ['STUDENT']),
-    ]);
+    const [allAssignments, modules, repositories, candidates, students, quizzesVisible] =
+      await Promise.all([
+        ClassmojiService.assignment.listForClassroom(classroom.id),
+        ClassmojiService.module.findByClassroomSlug(classSlug!),
+        ClassmojiService.repository.findByClassroomId(classroom.id),
+        ClassmojiService.module.getCandidateContent(classroom.id),
+        ClassmojiService.classroomMembership.findUsersByRoles(classroom.id, ['STUDENT']),
+        loadQuizzesVisible(classroom.id),
+      ]);
     const assignments = allAssignments.filter(a => a.repository_id === repository!.id);
 
     // Linked pages = pages linked to the repository unit + to any of its assignments.
@@ -129,8 +132,12 @@ export const buildLoader =
         type: r.type,
         is_published: r.is_published,
       })),
-      candidates,
-      boundQuizIds: allAssignments.map(a => a.quiz_id).filter(Boolean) as string[],
+      // Where the classroom's quizzes are hidden the modal is offered no quiz,
+      // and no quiz id leaves as already bound.
+      candidates: quizzesVisible ? candidates : { ...candidates, quizzes: [] },
+      boundQuizIds: quizzesVisible
+        ? (allAssignments.map(a => a.quiz_id).filter(Boolean) as string[])
+        : [],
       boundFormIds: allAssignments.map(a => a.form_id).filter(Boolean) as string[],
     };
   };

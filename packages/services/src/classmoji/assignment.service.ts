@@ -10,6 +10,7 @@
 import getPrisma from '@classmoji/database';
 import { titleToIdentifier } from '@classmoji/utils';
 import type { Prisma } from '@prisma/client';
+import * as entitlementService from './entitlement.service.ts';
 import * as notificationService from './notification.service.ts';
 
 /**
@@ -413,12 +414,19 @@ type AssignmentNotificationSnapshot = { student_deadline: Date | null; grades_re
  * Due-date-changed and graded notifications, shared by every update path.
  * The classroom comes from the module, which every assignment has; the
  * repository is null for quiz/form assignments.
+ *
+ * A quiz assignment's due date change notifies nobody where the classroom's
+ * quizzes are hidden (`entitlement.quizzesVisible`): no bell row, and so no
+ * email, names a quiz there. Asked for QUIZ rows only; a failed lookup is
+ * caught by `runSafely` and sends nothing. The graded branch needs no check:
+ * its recipients are graded repository submissions, which a quiz never has.
  */
 const notifyAfterUpdate = async (
   id: string,
   updates: Prisma.AssignmentUpdateInput | Prisma.AssignmentUncheckedUpdateInput,
   previous: AssignmentNotificationSnapshot | null,
   updated: AssignmentNotificationSnapshot & {
+    type: string;
     title: string;
     module: { classroom_id: string };
   }
@@ -427,19 +435,24 @@ const notifyAfterUpdate = async (
     await notificationService.runSafely('assignment due date notification', async () => {
       const newDeadline = updated.student_deadline?.toISOString() ?? null;
       const oldDeadline = previous?.student_deadline?.toISOString() ?? null;
-      if (newDeadline !== oldDeadline) {
-        const { studentIds, classroomId } = await notificationService.getStudentsForAssignment(id);
-        if (studentIds.length > 0) {
-          await notificationService.createNotifications({
-            type: 'ASSIGNMENT_DUE_DATE_CHANGED',
-            classroomId,
-            recipientUserIds: studentIds,
-            resourceType: 'assignment',
-            resourceId: id,
-            title: `Due date changed: ${updated.title}`,
-            metadata: { previous_deadline: oldDeadline, new_deadline: newDeadline },
-          });
-        }
+      if (newDeadline === oldDeadline) return;
+      if (
+        updated.type === 'QUIZ' &&
+        !(await entitlementService.quizzesVisible(updated.module.classroom_id))
+      ) {
+        return;
+      }
+      const { studentIds, classroomId } = await notificationService.getStudentsForAssignment(id);
+      if (studentIds.length > 0) {
+        await notificationService.createNotifications({
+          type: 'ASSIGNMENT_DUE_DATE_CHANGED',
+          classroomId,
+          recipientUserIds: studentIds,
+          resourceType: 'assignment',
+          resourceId: id,
+          title: `Due date changed: ${updated.title}`,
+          metadata: { previous_deadline: oldDeadline, new_deadline: newDeadline },
+        });
       }
     });
   }

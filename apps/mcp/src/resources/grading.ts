@@ -28,7 +28,6 @@ import {
   gradeRefs,
   graderRefs,
   issueUrl,
-  orgLogin,
   orgGit,
   publicUser,
   repoUrl,
@@ -144,7 +143,6 @@ export const gradingQueueResource: ResourceDefinition = {
   roles: TEACHING_TEAM,
   handler: async (_vars, ctx) => {
     const { classroomId } = classroomCtx(ctx);
-    const org = orgLogin(ctx);
     const git = orgGit(ctx);
     const [assignedToMe, { emoji_scale, all }] = await Promise.all([
       // Rows are GitRepoAssignmentGrader records wrapping the submission.
@@ -181,8 +179,9 @@ export const submissionResource: ResourceDefinition = {
     const { classroomId } = classroomCtx(ctx);
     // Mirrors the admin.$class.submissions.$id loader, which is itself a raw
     // Prisma read (no service accessor includes analytics_snapshot). S1: the
-    // classroom scope is enforced IN the query — a UUID from another
-    // classroom simply doesn't match.
+    // classroom scope is enforced IN the query — an id from another
+    // classroom simply doesn't match. Ids are compared as plain strings
+    // (a uuid, or the numeric GitHub issue id of an ISSUE-mode submission).
     const submission = (await getPrisma().gitRepoAssignment.findFirst({
       where: { id: vars.submissionId, git_repo: { classroom_id: classroomId } },
       include: {
@@ -198,7 +197,6 @@ export const submissionResource: ResourceDefinition = {
       throw new ToolError('not_found', `Submission '${vars.submissionId}' not found`);
     }
 
-    const org = orgLogin(ctx);
     const git = orgGit(ctx);
     return {
       ...queueRow(submission, git),
@@ -277,7 +275,6 @@ export const regradeQueueResource: ResourceDefinition = {
     const requests = (await ClassmojiService.regradeRequest.findMany({
       classroom_id: classroomId,
     })) as RegradeRow[];
-    const org = orgLogin(ctx);
     const git = orgGit(ctx);
     return {
       count: requests.length,
@@ -301,7 +298,6 @@ export const regradeMineResource: ResourceDefinition = {
       classroom_id: classroomId,
       student_id: ctx.viewer.userId,
     })) as RegradeRow[];
-    const org = orgLogin(ctx);
     const git = orgGit(ctx);
     return {
       count: requests.length,

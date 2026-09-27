@@ -23,6 +23,7 @@
 import { ClassmojiService } from '@classmoji/services';
 import { slideService } from '@classmoji/services/slides';
 import type { AuditLogAction, Prisma } from '@prisma/client';
+import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolResult } from '../mcp/registry.ts';
 import type { ClassroomContext } from '../authz/classroomContext.ts';
@@ -51,6 +52,53 @@ export const QUIZ_STAFF = ['OWNER', 'TEACHER', 'ASSISTANT'] as const;
  * which route it was derived from.
  */
 export const FORMS_STAFF = OWNER_TEACHER;
+
+// ─── Submission ids ──────────────────────────────────────────────────────────
+
+/**
+ * The shape of a submission (GitRepoAssignment) id. The schema default is a
+ * uuid, but ISSUE-mode provisioning (packages/tasks
+ * cf-create_git_repo_assignment) sets the row id to the GitHub issue id, a
+ * string of digits (id == provider_id, e.g. "5482151816"). REPO-mode rows,
+ * seeds and the example classroom keep the generated uuid. An id is one or the
+ * other, so `.uuid()` alone would reject every ISSUE-mode submission.
+ */
+export const SUBMISSION_ID_PATTERN =
+  /^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9]+)$/;
+
+/**
+ * A submission id argument: a non-empty string of at most 64 characters, a
+ * uuid or all digits. Every tool input naming a GitRepoAssignment uses this;
+ * ids of other records (users, assignments, grades, regrade requests) are
+ * uuids and keep `.uuid()`. Lookups compare the id as a plain string inside the
+ * classroom scope, so the shape changes nothing downstream.
+ *
+ * A numeric id looks like a number, so a client may send it as a JSON number
+ * (5482151816) rather than a string. A non-negative safe integer is turned
+ * into its digit string before validation; anything else (negative, fractional,
+ * past 2^53, where the digits would already be wrong) is left as is and fails
+ * the string check. The preprocess is invisible in the published JSON Schema,
+ * which still advertises a string with the pattern — the form ids come back in
+ * from list_submissions, and the one clients should send.
+ *
+ * A function, not a shared constant: the JSON Schema converter publishes a
+ * zod instance met twice in one tool as a `$ref` to its first use
+ * (submission_late_override's single id and its id list), which not every
+ * MCP client resolves. A fresh schema per use keeps every one inline.
+ */
+export function submissionIdSchema() {
+  return z.preprocess(
+    value =>
+      typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+        ? String(value)
+        : value,
+    z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(SUBMISSION_ID_PATTERN, 'Must be a submission id: a uuid or a numeric id')
+  );
+}
 
 // ─── Results & errors ────────────────────────────────────────────────────────
 

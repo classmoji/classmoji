@@ -21,6 +21,7 @@ import {
 } from '@classmoji/services/import-progress';
 import Tasks from '@classmoji/tasks';
 import getPrisma from '@classmoji/database';
+import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { resolveSourceAccess, SOURCE_ROLES, API_KEYS_STRIPPED_WARNING } from './sourceAccess';
 
 /** Background work needs Trigger.dev; without it the async phases can't run. */
@@ -317,6 +318,20 @@ export async function runClassroomImport({
       repoConfigs = requestedRepos.filter(r => sourceRepoIds.has(r.id));
       if (repoConfigs.length !== requestedRepos.length) {
         importWarnings.push('repositories outside the source classroom were skipped');
+      }
+      // Quizzes are copied only into a classroom that shows them: Pro, quizzes
+      // not switched off, and the AI agent configured; the wizard offers them on
+      // the same terms. Decided on the classroom just created, after its owner
+      // membership exists and after the settings copy above, so a copied
+      // `quizzes_enabled: false` counts. A failed lookup copies none and the
+      // classroom is still created. Cleared on `repoConfigs` itself, which the
+      // job row also keeps, so nothing later can bring the flag back.
+      if (repoConfigs.some(r => r.includeQuizzes)) {
+        const copyQuizzes = await quizzesVisibleOrThrow(classroom.id).catch((error: unknown) => {
+          console.error('Quiz visibility lookup failed; copying no quizzes:', error);
+          return false;
+        });
+        if (!copyQuizzes) repoConfigs = repoConfigs.map(r => ({ ...r, includeQuizzes: false }));
       }
       if (repoConfigs.length > 0) {
         try {

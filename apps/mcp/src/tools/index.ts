@@ -51,7 +51,13 @@ import {
 import { contentSearchTool, contentListTool, contentGetTool } from './contentSearch.ts';
 import { tokenGrantTool } from './tokens.ts';
 import { extensionPurchaseTool } from './extensions.ts';
-import { repoCreateTool, repoPublishTool, repoUnpublishTool } from './repos.ts';
+import {
+  repoCreateTool,
+  repoUpdateTool,
+  repoDeleteTool,
+  repoPublishTool,
+  repoUnpublishTool,
+} from './repos.ts';
 import { rosterAddStudentTool, rosterRemoveStudentTool } from './roster.ts';
 import { staffAddTool, staffUpdateTool, staffRemoveTool } from './staff.ts';
 import { quizCreateTool, quizUpdateTool, quizPublishTool, quizDeleteTool } from './quizzes.ts';
@@ -86,6 +92,7 @@ import {
   teamMemberRemoveTool,
   teamTagAddTool,
   teamTagRemoveTool,
+  tagCreateTool,
 } from './teams.ts';
 
 export function registerAllTools(): void {
@@ -106,8 +113,9 @@ export function registerAllTools(): void {
   // submission, a list, or every submission of an assignment.
   registerToolDefinition(submissionLateOverrideTool);
 
-  // Grader assignment (OWNER — route-derived); bulk distributes across a whole
-  // assignment in one call.
+  // Grader assignment: single add/remove OWNER+TEACHER (the web assignment
+  // page); bulk (OWNER, the web assign-graders route) distributes across a
+  // whole assignment in one call.
   registerToolDefinition(graderAssignTool);
   registerToolDefinition(graderUnassignTool);
   registerToolDefinition(graderAssignBulkTool);
@@ -204,8 +212,12 @@ export function registerAllTools(): void {
   // Extensions (STUDENT self)
   registerToolDefinition(extensionPurchaseTool);
 
-  // Repos: create container + publish/unpublish + provisioning (OWNER)
+  // Repos: create/update/delete container + publish/unpublish + provisioning
+  // (OWNER). update freezes structural fields once student repos exist; delete
+  // is destructive, confirm-gated, and refuses published/provisioned repos.
   registerToolDefinition(repoCreateTool);
+  registerToolDefinition(repoUpdateTool);
+  registerToolDefinition(repoDeleteTool);
   registerToolDefinition(repoPublishTool);
   registerToolDefinition(repoUnpublishTool);
 
@@ -226,12 +238,13 @@ export function registerAllTools(): void {
 
   // Teams (OWNER — the write surface behind list_teams). create/rename/members
   // touch real GitHub teams; delete is destructive and confirm-gated; the tag
-  // tools are Classmoji-only links.
+  // tools are Classmoji-only links, and tag_create mints the tags they attach.
   registerToolDefinition(teamCreateTool);
   registerToolDefinition(teamDeleteTool);
   registerToolDefinition(teamRenameTool);
   registerToolDefinition(teamMembersAddTool);
   registerToolDefinition(teamMemberRemoveTool);
+  registerToolDefinition(tagCreateTool);
   registerToolDefinition(teamTagAddTool);
   registerToolDefinition(teamTagRemoveTool);
 

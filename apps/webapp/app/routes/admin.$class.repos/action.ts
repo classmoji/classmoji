@@ -19,8 +19,19 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const terms = gitTerms(isGitLabClassroom(classroom));
-  const data = await request.json();
-  const assignmentId = data.assignment_id;
+  // Every action here names one record by `assignment_id`; anything else is
+  // answered in the route's error shape rather than failing further down.
+  let data: unknown;
+  try {
+    data = await request.json();
+  } catch {
+    return { error: 'Invalid request.' };
+  }
+  const assignmentId =
+    typeof data === 'object' && data !== null
+      ? (data as { assignment_id?: unknown }).assignment_id
+      : undefined;
+  if (typeof assignmentId !== 'string' || !assignmentId) return { error: 'Invalid request.' };
 
   return namedAction(request, {
     async delete() {
@@ -65,7 +76,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     // Group repos only: fan out one contribution-stats task per team repo.
     async calculateContributions() {
-      return calculateContributions({ id: assignmentId }, classSlug);
+      const repository = await ClassmojiService.repository.findByIdInClassroom(
+        assignmentId,
+        classroom.id
+      );
+      if (!repository) {
+        return { action: 'CALCULATE_REPO_CONTRIBUTIONS', error: 'Repository not found.' };
+      }
+      return calculateContributions({ id: repository.id }, classSlug);
     },
   });
 };

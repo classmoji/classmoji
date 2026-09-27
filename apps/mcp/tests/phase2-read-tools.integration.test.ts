@@ -113,11 +113,20 @@ describe('list_teaching_team (teaching team; NEW capability)', () => {
   it('lists staff with ids for teaching team; STUDENT denied', async () => {
     const allowed = await callTool(ta, 'list_teaching_team', { classroom: DEV_REF });
     expect(allowed.isError).toBe(false);
-    const members = allowed.payload.members as Array<{ id: string; roles: string[] }>;
-    // fake-ta is resolvable as a grader_id for grader_assign.
+    const members = allowed.payload.members as Array<{
+      id: string;
+      roles: string[];
+      grader_eligible: boolean;
+    }>;
+    // fake-ta is listed with an id; whether it can be a grader_id for
+    // grader_assign is reported by grader_eligible (ASSISTANT/TEACHER + is_grader).
     const taRow = members.find(m => m.id === fx.users['fake-ta'].id);
     expect(taRow).toBeDefined();
     expect(taRow!.roles).toContain('ASSISTANT');
+    expect(typeof taRow!.grader_eligible).toBe('boolean');
+    // An owner-only member is never grader-eligible.
+    const ownerOnly = members.filter(m => m.roles.length === 1 && m.roles[0] === 'OWNER');
+    for (const m of ownerOnly) expect(m.grader_eligible).toBe(false);
     // No STUDENT appears in the teaching-team listing.
     const studentRow = members.find(m => m.id === fx.users['fake-student-1'].id);
     expect(studentRow).toBeUndefined();

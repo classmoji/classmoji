@@ -7,6 +7,7 @@ import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
 import type { Route } from './+types/route';
 import { assertClassroomAccess } from '~/utils/helpers';
+import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import WeeklyCalendarCard, { type WeekEvent } from './WeeklyCalendarCard';
 import ModuleSpotlightCard, { type SpotlightModule } from './ModuleSpotlightCard';
 import { eventFetchWindow, startOfWeek } from './week';
@@ -50,6 +51,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const web = gitWeb(gitContextFor(classroom));
 
   const dataPromise = (async (): Promise<DashboardData> => {
+    // Started alongside the reads below. It never rejects: a failed lookup
+    // answers false.
+    const quizzesVisiblePromise = loadQuizzesVisible(classroom.id);
     const [weekEventsRaw, repositories, regradeRequests, allRepoAssignments] = await Promise.all([
       ClassmojiService.calendar
         .getClassroomCalendar(
@@ -103,6 +107,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
             [] as Awaited<ReturnType<typeof ClassmojiService.helper.findAllAssignmentsForStudent>>
         ),
     ]);
+    const quizzesVisible = await quizzesVisiblePromise;
 
     const weekEvents: WeekEvent[] = (weekEventsRaw as Array<Record<string, unknown>>).map(e => ({
       id: String(e.id),
@@ -169,7 +174,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
           })),
           pages: spotlightSrc.pages,
           slides: spotlightSrc.slides,
-          quizzes: spotlightSrc.quizzes.map(q => ({ id: q.id, title: q.name })),
+          // Without quizzes (not Pro, or switched off) the card gets none, so it
+          // draws neither a quiz row nor a quiz count.
+          quizzes: quizzesVisible
+            ? spotlightSrc.quizzes.map(q => ({ id: q.id, title: q.name }))
+            : [],
         }
       : null;
 

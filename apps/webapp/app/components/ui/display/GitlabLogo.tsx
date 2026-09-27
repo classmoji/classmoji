@@ -4,7 +4,13 @@ import gitlabLogo from './gitlab.svg';
  * Gitlab's official tanuki logo (the same file the sign-in button uses). Use
  * this for every Gitlab mark in the app, never an outline icon-set glyph.
  */
-export const GitlabLogo = ({ size = 16, className = '' }: { size?: number; className?: string }) => (
+export const GitlabLogo = ({
+  size = 16,
+  className = '',
+}: {
+  size?: number;
+  className?: string;
+}) => (
   <img
     src={gitlabLogo}
     alt=""

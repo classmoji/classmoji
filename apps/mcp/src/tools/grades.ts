@@ -28,6 +28,7 @@ import {
   OWNER_ONLY,
   requireClassroomCtx,
   scopedNotFound,
+  submissionIdSchema,
   TEACHING_TEAM,
   writeAudit,
 } from './shared.ts';
@@ -63,7 +64,7 @@ export const gradeAddTool: ToolDefinition<GradeAddArgs> = {
   title: 'Add a grade',
   description:
     'Adds a grade to a submission (a GitRepoAssignment — one assignment on one student/team ' +
-    'repo). Use a submission id from the grading queue. The value must be in the classroom\'s ' +
+    "repo). Use a submission id from the grading queue. The value must be in the classroom's " +
     'grading scale: on an emoji scale, one of the configured emojis (a grader may stack several; ' +
     'the submission grade is their mean); on the numeric scale, a `score-N` emoji (score-0 … ' +
     "score-100), where the call replaces the caller's previous score on that submission (its " +
@@ -74,7 +75,7 @@ export const gradeAddTool: ToolDefinition<GradeAddArgs> = {
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    git_repo_assignment_id: z.string().uuid().describe('Submission (GitRepoAssignment) id'),
+    git_repo_assignment_id: submissionIdSchema().describe('Submission (GitRepoAssignment) id'),
     emoji: z.string().min(1).max(16).describe('Emoji grade (must be in the grading scale)'),
   },
   handler: async (args, ctx) => {
@@ -134,7 +135,7 @@ export const gradeRemoveTool: ToolDefinition<GradeRemoveArgs> = {
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    git_repo_assignment_id: z.string().uuid().describe('Submission (GitRepoAssignment) id'),
+    git_repo_assignment_id: submissionIdSchema().describe('Submission (GitRepoAssignment) id'),
     grade_id: z.string().uuid().describe('AssignmentGrade id to remove'),
   },
   handler: async (args, ctx) => {
@@ -184,7 +185,7 @@ export const gradeRemoveAllTool: ToolDefinition<GradeRemoveAllArgs> = {
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    git_repo_assignment_id: z.string().uuid().describe('Submission (GitRepoAssignment) id'),
+    git_repo_assignment_id: submissionIdSchema().describe('Submission (GitRepoAssignment) id'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);

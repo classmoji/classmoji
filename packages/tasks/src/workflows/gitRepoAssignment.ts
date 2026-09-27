@@ -6,6 +6,7 @@ import {
   getGitProvider,
   type GitLabProvider,
 } from '@classmoji/services';
+import type { MoveGraderSlotPayload } from '@classmoji/services';
 import {
   GITLAB_PROJECTS_SUBGROUP,
   gitTerms,
@@ -504,6 +505,37 @@ export const removeGraderFromRepositoryAssignmentTask = task({
   id: 'remove_grader_from_git_repo_assignment',
   run: async (payload: GitRepoAssignmentGraderTaskPayload) => {
     return HelperService.removeGraderFromGitRepoAssignment(payload);
+  },
+});
+
+/**
+ * Move one ungraded slot off a departing grader (staff removal with more slots
+ * than UNGRADED_INLINE_LIMIT in packages/services/src/helper). Ids only: the classroom's git
+ * organization, the repo, the issue and both logins are read from stored rows
+ * by the classroom-scoped helpers, and the new grader is re-checked against the
+ * pool when the run executes. Add-then-remove inside one run. The project
+ * default is a single attempt, so this task sets its own retry: a provider
+ * error throws and the run is retried up to MOVE_GRADER_SLOT_RETRY.maxAttempts
+ * times with exponential backoff — safe because a repeated add reports
+ * already_assigned and a repeated removal reports already_removed.
+ */
+const MOVE_GRADER_SLOT_RETRY = {
+  maxAttempts: 3,
+  factor: 2,
+  minTimeoutInMs: 2_000,
+  maxTimeoutInMs: 30_000,
+  randomize: true,
+};
+
+export const moveGraderSlotTask = task({
+  id: 'move_grader_slot',
+  retry: MOVE_GRADER_SLOT_RETRY,
+  run: async (payload: MoveGraderSlotPayload) => {
+    const result = await HelperService.moveGraderSlot(payload);
+    if (result.status !== 'moved' && result.status !== 'unassigned') {
+      logger.info('move_grader_slot finished without a move', { ...payload, ...result });
+    }
+    return result;
   },
 });
 

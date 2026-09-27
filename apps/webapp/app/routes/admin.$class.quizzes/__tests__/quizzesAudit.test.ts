@@ -27,7 +27,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
-  assertProTier: vi.fn(),
+  quizzesVisibleOrThrow: vi.fn(),
   addClassroomAuditLog: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
@@ -41,8 +41,13 @@ const mocks = vi.hoisted(() => ({
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => mocks.assertClassroomAccess(...a),
   assertClassroomMutationAllowed: (...a: unknown[]) => mocks.assertClassroomMutationAllowed(...a),
-  assertProTier: (...a: unknown[]) => mocks.assertProTier(...a),
   addClassroomAuditLog: (...a: unknown[]) => mocks.addClassroomAuditLog(...a),
+}));
+
+vi.mock('@classmoji/ui-components', () => ({ useCallout: () => ({ show: vi.fn() }) }));
+
+vi.mock('~/utils/classroomProFlag.server', () => ({
+  quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a),
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -125,6 +130,7 @@ beforeEach(() => {
     classroom: CLASSROOM,
     membership: { id: 'm-1', role: 'TEACHER' },
   });
+  mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
   mocks.create.mockResolvedValue({ id: 'quiz-new', name: 'Week 1', repository_id: 'repo-1' });
   mocks.update.mockResolvedValue({});
   mocks.remove.mockResolvedValue({});
@@ -228,6 +234,42 @@ describe('admin quizzes action — audit rows', () => {
     await expect(submit({ _action: 'deleteQuiz', id: 'quiz-1' })).rejects.toBeInstanceOf(Response);
     expect(mocks.remove).not.toHaveBeenCalled();
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The loader 404s a classroom whose quizzes are hidden, but a tab opened
+ * before that can still post here — and publishQuiz emails the class. The
+ * action carries its own check, so none of its branches writes.
+ */
+describe('admin quizzes action — hidden quizzes', () => {
+  it.each([
+    ['createQuiz', { _action: 'createQuiz', name: 'Week 1' }],
+    ['updateQuiz', { _action: 'updateQuiz', id: OWN_QUIZ, name: 'Renamed' }],
+    ['deleteQuiz', { _action: 'deleteQuiz', id: OWN_QUIZ }],
+    ['publishQuiz', { _action: 'publishQuiz', id: OWN_QUIZ }],
+    ['updateWeight', { _action: 'updateWeight', id: OWN_QUIZ, weight: 40 }],
+    ['clearMyAttempts', { _action: 'clearMyAttempts' }],
+  ])('%s answers 404 and writes nothing', async (_name, body) => {
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(false);
+
+    const thrown = await submit(body).catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(Response);
+    expect((thrown as Response).status).toBe(404);
+    expect(mocks.quizzesVisibleOrThrow).toHaveBeenCalledWith('class-1');
+    for (const write of [mocks.create, mocks.update, mocks.remove, mocks.publish]) {
+      expect(write).not.toHaveBeenCalled();
+    }
+    expect(mocks.clearForUser).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('asks only after the access gate has passed', async () => {
+    mocks.assertClassroomAccess.mockRejectedValue(new Response('Forbidden', { status: 403 }));
+
+    await expect(submit({ _action: 'publishQuiz', id: OWN_QUIZ })).rejects.toBeInstanceOf(Response);
+    expect(mocks.quizzesVisibleOrThrow).not.toHaveBeenCalled();
   });
 });
 
