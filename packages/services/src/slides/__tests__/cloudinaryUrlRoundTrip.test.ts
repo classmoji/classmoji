@@ -211,6 +211,9 @@ describe('a Cloudinary video URL in a deck', () => {
     );
     expect(served).toBe(indexHtml);
 
+    // The map was asked about the deck's own references (so the check below
+    // is not vacuous), and never about any piece of a Cloudinary URL.
+    expect(lookedUp.length).toBeGreaterThan(0);
     expect(mapSawCloudinary()).toBe(false);
   });
 
