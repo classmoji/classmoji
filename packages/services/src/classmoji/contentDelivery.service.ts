@@ -1166,6 +1166,8 @@ export async function mediaDownloadUrl({
 
   // The original is gone once the rendition replaced it, so that is what there
   // is to hand over. Same rule the player uses, for the one row where it differs.
+  // TODO(P4): content-derived rendition names (`web-{hex}.mp4`) — take the
+  // variant from the row's rendition key (as `servedVariant` will), not `web.mp4`.
   const variant = record.originalDeletedAt ? 'web.mp4' : `orig.${record.ext}`;
 
   // A name that does not survive normalization (all-bidi, all-separator, far

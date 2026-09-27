@@ -63,7 +63,12 @@ vi.mock('../uploadCapability.ts', () => ({
   uploadCapabilityFor: (...args: unknown[]) => uploadCapabilityFor(...args),
 }));
 
-const { collectMediaRefs, createMediaImportCopier, rewriteMediaRefs } =
+const deleteMedia = vi.fn();
+vi.mock('../media.service.ts', () => ({
+  deleteMedia: (...args: unknown[]) => deleteMedia(...args),
+}));
+
+const { collectMediaRefs, createMediaImportCopier, rewriteMediaRefs, skippedSummary } =
   await import('../mediaImportCopy.ts');
 const { PRO_QUOTA_BYTES } = await import('../mediaQuota.ts');
 const { resetR2Client } = await import('../r2Client.ts');
@@ -253,6 +258,33 @@ describe('rewriteMediaRefs', () => {
     const inJson = `"<video src=\\"${signed(SOURCE, VIDEO)}\\">"`;
     expect(rewriteMediaRefs(inJson, SOURCE, new Map([[VIDEO, NEW]]))).toBe(
       `"<video src=\\"media://${NEW}\\">"`
+    );
+  });
+});
+
+describe('rewriteMediaRefs: HTML-escaped quotes', () => {
+  const NEW = '44444444-4444-4444-8444-444444444444';
+
+  it('stops an &amp;-escaped query before &quot; — the closing quote survives', () => {
+    const style = `<div style="background: url(&quot;${signed(SOURCE, VIDEO, 'orig.png', '&amp;')}&quot;)">`;
+    expect(rewriteMediaRefs(style, SOURCE, new Map([[VIDEO, NEW]]))).toBe(
+      `<div style="background: url(&quot;media://${NEW}&quot;)">`
+    );
+  });
+
+  it('stops before &#34; and &#39; too', () => {
+    for (const quote of ['&#34;', '&#39;']) {
+      const text = `url(${quote}${signed(SOURCE, VIDEO, 'orig.png', '&amp;')}${quote})`;
+      expect(rewriteMediaRefs(text, SOURCE, new Map([[VIDEO, NEW]]))).toBe(
+        `url(${quote}media://${NEW}${quote})`
+      );
+    }
+  });
+
+  it('still takes an &amp;-escaped query whole when nothing follows it', () => {
+    const text = `<video src="${signed(SOURCE, VIDEO, 'web.mp4', '&amp;')}">`;
+    expect(rewriteMediaRefs(text, SOURCE, new Map([[VIDEO, NEW]]))).toBe(
+      `<video src="media://${NEW}">`
     );
   });
 });
@@ -458,6 +490,35 @@ describe('createMediaImportCopier: what is not copied', () => {
     ]);
   });
 
+  it('collapses many skipped objects into ONE warning with a count', async () => {
+    uploadCapabilityFor.mockResolvedValue({ isPro: false, media: null });
+    const ids = Array.from({ length: 7 }, (_, i) => `7777777${i}-8888-4999-8aaa-bbbbbbbbbbbb`);
+    database({
+      sourceRows: ids.map((id, i) => row({ id, filename: `lecture-${i}.mp4` })),
+    });
+    const { list, warn } = warnings();
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn,
+    });
+
+    await copier.prepare([ids.map(id => `media://${id}`).join(' ')]);
+
+    expect(sent).toEqual([]);
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatch(/^Skipped 7 media files \(video "lecture-0\.mp4", /);
+    expect(list[0]).toContain('video "lecture-4.mp4", and 2 more');
+    expect(list[0]).not.toContain('lecture-5.mp4');
+    expect(list[0]).toMatch(/: the destination class has no media storage \(Pro\)$/);
+  });
+
+  it('skippedSummary: one object reads as before', () => {
+    expect(skippedSummary([{ kind: 'IMAGE', filename: 'a.png' }], 'why')).toBe(
+      'Skipped image "a.png": why'
+    );
+  });
+
   it('names an unconfigured deployment without asking for a capability', async () => {
     unconfigure();
     const { list, warn } = warnings();
@@ -503,7 +564,8 @@ describe('createMediaImportCopier: what is not copied', () => {
     expect(sent).toEqual([]);
     expect(copier.rewrite(text)).toBe(text);
     expect(list).toEqual([
-      'Skipped video "lecture.mp4": the destination class is over its media storage quota',
+      'Skipped video "lecture.mp4": the destination class\'s media storage is full ' +
+        '(contact hello@classmoji.io to upgrade)',
     ]);
   });
 
@@ -551,5 +613,213 @@ describe('createMediaImportCopier: what is not copied', () => {
     expect(list).toEqual([
       'Could not copy video "lecture.mp4" into this class: R2 is having a moment',
     ]);
+  });
+});
+
+describe('createMediaImportCopier: a partial copy never leaks a source signature', () => {
+  it('one copied, one refused for quota: new ref, bare source ref, one summary warning', async () => {
+    const BIG = row({
+      id: PDF,
+      kind: 'DOCUMENT',
+      filename: 'huge.pdf',
+      ext: 'pdf',
+      size_bytes: BigInt(PRO_QUOTA_BYTES + 1),
+    });
+    database({ sourceRows: [row(), BIG] });
+    const { list, warn } = warnings();
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn,
+    });
+    const html =
+      `<video src="${signed(SOURCE, VIDEO, 'web.mp4', '&amp;')}"></video>` +
+      `<a href="${signed(SOURCE, PDF, 'orig.pdf', '&amp;')}">notes</a>` +
+      `<img src="${signed(THIRD, FOREIGN, 'orig.png')}">`;
+
+    await copier.prepare([html]);
+    const out = copier.rewrite(html);
+
+    const copy = copier.copiedIdFor(VIDEO)!;
+    expect(copier.copiedIdFor(PDF)).toBeNull();
+    expect(out).toBe(
+      `<video src="media://${copy}"></video>` +
+        `<a href="media://${PDF}">notes</a>` +
+        `<img src="${signed(THIRD, FOREIGN, 'orig.png')}">`
+    );
+    // No signature naming the SOURCE survives anywhere in the copy.
+    expect(out).not.toContain(`/c/${SOURCE}/`);
+    expect(list.filter(line => line.includes('storage is full'))).toEqual([
+      'Skipped document "huge.pdf": the destination class\'s media storage is full ' +
+        '(contact hello@classmoji.io to upgrade)',
+    ]);
+  });
+
+  it('canonicalizes a source signed URL even when nothing was copied', () => {
+    const text = `url(&quot;${signed(SOURCE, VIDEO, 'orig.png', '&amp;')}&quot;)`;
+    expect(rewriteMediaRefs(text, SOURCE, new Map())).toBe(`url(&quot;media://${VIDEO}&quot;)`);
+  });
+});
+
+describe('createMediaImportCopier: resuming from a persisted map', () => {
+  const COPY = '55555555-5555-4555-8555-555555555555';
+
+  /** The destination answers READY for the ids in `readyCopies` only. */
+  function withReadyCopies(readyCopies: string[]) {
+    prisma.mediaObject.findMany.mockImplementation(
+      async ({
+        where,
+      }: {
+        where: { classroom_id: string; status?: string; id?: { in: string[] } };
+      }) => {
+        if (where.classroom_id === SOURCE) {
+          order.push('findMany:source');
+          return [row()].filter(r => where.id?.in.includes(r.id));
+        }
+        if (where.status === 'READY') {
+          order.push('findMany:known');
+          return readyCopies.filter(id => where.id?.in.includes(id)).map(id => ({ id }));
+        }
+        order.push('findMany:target');
+        return [];
+      }
+    );
+  }
+
+  it('reuses a copy still READY in the destination: no lookup, no reservation, no copy', async () => {
+    withReadyCopies([COPY]);
+    const onCopied = vi.fn();
+    const { list, warn } = warnings();
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn,
+      knownCopies: { [VIDEO]: COPY },
+      onCopied,
+    });
+
+    await copier.prepare([`media://${VIDEO}`]);
+
+    // Proven in SQL scoped to the DESTINATION and READY.
+    const known = prisma.mediaObject.findMany.mock.calls[0][0];
+    expect(known.where).toEqual({ classroom_id: TARGET, status: 'READY', id: { in: [COPY] } });
+    expect(order).toEqual(['findMany:known']);
+    expect(sent).toEqual([]);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(copier.copiedIdFor(VIDEO)).toBe(COPY);
+    expect(copier.rewrite(`media://${VIDEO}`)).toBe(`media://${COPY}`);
+    expect(onCopied).not.toHaveBeenCalled();
+    expect(list).toEqual([]);
+  });
+
+  it('copies again when the known copy is gone, and records the new pair', async () => {
+    withReadyCopies([]); // deleted, or never finished
+    const onCopied = vi.fn();
+    const { warn } = warnings();
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn,
+      knownCopies: { [VIDEO]: COPY },
+      onCopied,
+    });
+
+    await copier.prepare([`media://${VIDEO}`]);
+
+    const fresh = copier.copiedIdFor(VIDEO);
+    expect(fresh).not.toBeNull();
+    expect(fresh).not.toBe(COPY);
+    expect(sent.filter(s => s.name === 'CopyObject')).toHaveLength(1);
+    expect(onCopied).toHaveBeenCalledWith(VIDEO, fresh);
+  });
+
+  it('a retry after a failed run copies nothing twice', async () => {
+    // Run 1 copies the video and records the pair; the run then fails later.
+    const persisted: Record<string, string> = {};
+    const first = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn: () => {},
+      knownCopies: persisted,
+      onCopied: (source, copy) => {
+        persisted[source] = copy;
+      },
+    });
+    await first.prepare([`media://${VIDEO}`]);
+    const copy = first.copiedIdFor(VIDEO)!;
+    expect(persisted).toEqual({ [VIDEO]: copy });
+    expect(sent.filter(s => s.name === 'CopyObject')).toHaveLength(1);
+
+    // Run 2 (the retry) starts from the persisted map; the copy is READY.
+    sent.length = 0;
+    withReadyCopies([copy]);
+    const second = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn: () => {},
+      knownCopies: { ...persisted },
+      onCopied: (source, next) => {
+        persisted[source] = next;
+      },
+    });
+    await second.prepare([`media://${VIDEO}`, `"${signed(SOURCE, VIDEO)}"`]);
+
+    expect(sent.filter(s => s.name === 'CopyObject')).toHaveLength(0);
+    expect(second.copiedIdFor(VIDEO)).toBe(copy);
+    expect(persisted).toEqual({ [VIDEO]: copy });
+  });
+});
+
+describe('createMediaImportCopier: discard', () => {
+  const KEPT = '66666666-6666-4666-8666-666666666666';
+
+  it('deletes only the copies this run made, and stops repointing at them', async () => {
+    deleteMedia.mockResolvedValue({});
+    // The PDF has a copy from an earlier run, still READY; the video is new.
+    prisma.mediaObject.findMany.mockImplementation(
+      async ({
+        where,
+      }: {
+        where: { classroom_id: string; status?: string; id?: { in: string[] } };
+      }) => {
+        if (where.classroom_id === SOURCE) return [row()].filter(r => where.id?.in.includes(r.id));
+        if (where.status === 'READY') return where.id?.in.includes(KEPT) ? [{ id: KEPT }] : [];
+        return [];
+      }
+    );
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn: () => {},
+      knownCopies: { [PDF]: KEPT },
+    });
+    const text = `media://${VIDEO} media://${PDF}`;
+    await copier.prepare([text]);
+    const made = copier.copiedIdFor(VIDEO)!;
+
+    await copier.discard();
+
+    expect(deleteMedia).toHaveBeenCalledTimes(1);
+    expect(deleteMedia).toHaveBeenCalledWith({ classroom: { id: TARGET }, mediaId: made });
+    expect(copier.copiedIdFor(VIDEO)).toBeNull();
+    expect(copier.copiedIdFor(PDF)).toBe(KEPT);
+    expect(copier.rewrite(text)).toBe(`media://${VIDEO} media://${KEPT}`);
+
+    // A second discard has nothing left to do.
+    await copier.discard();
+    expect(deleteMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it('never throws when a delete fails', async () => {
+    deleteMedia.mockRejectedValue(new Error('R2 is down'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn: () => {},
+    });
+    await copier.prepare([`media://${VIDEO}`]);
+    await expect(copier.discard()).resolves.toBeUndefined();
+    warnSpy.mockRestore();
   });
 });

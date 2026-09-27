@@ -65,6 +65,11 @@ export interface CloneContentRepoPayload {
   /** Coarse step reporting for the progress banner. Never awaited by callers. */
   onStep?: (note: string) => void;
   /**
+   * Something the user should see in the import's warnings — a file whose links
+   * were left as they were. Unscoped; the caller adds its prefix.
+   */
+  warn?: (detail: string) => void;
+  /**
    * The import run's media copy (`ClassmojiService.contentImport
    * .openImportMediaCopy`). The tree's media references are copied into the
    * target classroom's media and repointed BEFORE the push, through this one
@@ -82,6 +87,12 @@ export interface CloneContentRepoPayload {
 export interface RolloverMediaCopy {
   prepare(texts: readonly (string | null | undefined)[]): Promise<void>;
   rewrite(text: string): string;
+  /**
+   * Delete the copies this run made. Called when the clone fails before its
+   * push lands: nothing references them, and the target should not pay for
+   * them. Optional so a test can hand in two functions.
+   */
+  discard?(): Promise<void>;
 }
 
 /** Why nothing reached the target. Set whenever `pushed` is false. */
@@ -228,11 +239,13 @@ async function rewriteAssetUrls({
   source,
   target,
   media,
+  warn,
 }: {
   root: string;
   source: ContentRepoCoordinates;
   target: ContentRepoCoordinates;
   media?: RolloverMediaCopy;
+  warn?: (detail: string) => void;
 }): Promise<{ rewritten: number; files: number; copied: ReadonlySet<string> }> {
   const { rewriteContentUrls, isTextContentPath, mayReferenceMedia } =
     ClassmojiService.contentImport;
@@ -245,6 +258,8 @@ async function rewriteAssetUrls({
     uncopiedRefs++;
   };
   let rewritten = 0;
+  /** Text files over the rewrite cap, copied verbatim — named in one warning. */
+  const oversized: { file: string; size: number }[] = [];
 
   /** The text files the rewrite may touch — the same gate both passes use. */
   const rewritable = (file: string): boolean => {
@@ -280,6 +295,7 @@ async function rewriteAssetUrls({
         file: relative,
         size: stat.size,
       });
+      oversized.push({ file: relative.split(path.sep).join('/'), size: stat.size });
       continue;
     }
 
@@ -310,7 +326,31 @@ async function rewriteAssetUrls({
     });
   }
 
+  if (oversized.length > 0) warn?.(oversizedWarning(oversized));
+
   return { rewritten, files: files.length, copied };
+}
+
+/** How many oversized files one warning names before it summarizes the rest. */
+const OVERSIZED_NAMED_MAX = 5;
+
+/**
+ * One warning for every text file the rewrite skipped for size. Its links —
+ * repo links and media references alike — still point where the SOURCE's did,
+ * which an instructor has to know to fix by hand. Exported for tests.
+ */
+export function oversizedWarning(files: readonly { file: string; size: number }[]): string {
+  const mb = (bytes: number) => `${Math.round((bytes / (1024 * 1024)) * 10) / 10} MB`;
+  const named = files
+    .slice(0, OVERSIZED_NAMED_MAX)
+    .map(({ file, size }) => `${file} (${mb(size)})`);
+  const more = files.length - named.length;
+  const list = named.join(', ') + (more > 0 ? `, and ${more} more` : '');
+  const noun = files.length === 1 ? 'text file' : `${files.length} text files`;
+  return (
+    `Copied ${noun} over ${mb(MAX_REWRITE_BYTES)} without updating ${files.length === 1 ? 'its' : 'their'} ` +
+    `links, so links in ${files.length === 1 ? 'it' : 'them'} (media included) still point at the source class: ${list}`
+  );
 }
 
 /**
@@ -324,7 +364,7 @@ async function rewriteAssetUrls({
 export const cloneContentRepo = async (
   payload: CloneContentRepoPayload
 ): Promise<CloneContentRepoResult> => {
-  const { source, target, keepPages, keepSlides, commitMessage, onStep, media } = payload;
+  const { source, target, keepPages, keepSlides, commitMessage, onStep, media, warn } = payload;
 
   // Unique per run: two imports in the same org must never share a directory.
   const localPath = path.join(
@@ -332,6 +372,10 @@ export const cloneContentRepo = async (
     'repos',
     `content-import-${target.repo}-${Date.now()}`
   );
+
+  // Set once the push has returned. Until then, media copies made for this
+  // tree are referenced by nothing that exists, and a failure removes them.
+  let pushed = false;
 
   try {
     if (fs.existsSync(localPath)) {
@@ -393,6 +437,7 @@ export const cloneContentRepo = async (
       source,
       target,
       media,
+      warn,
     });
     if (files === 0) {
       logger.warn('content import: nothing left to push after pruning', {
@@ -422,6 +467,7 @@ export const cloneContentRepo = async (
       await freshGit.addRemote('origin', cloneUrl(target));
       // Overwrites ONLY the auto-init scaffold ensureContentRepo just created.
       await freshGit.push('origin', 'main', ['--force']);
+      pushed = true;
     } catch (error: unknown) {
       throw gitFailure('pushing to', target, error);
     }
@@ -434,6 +480,19 @@ export const cloneContentRepo = async (
     });
 
     return { pushed: true, rewritten, files, copied };
+  } catch (error: unknown) {
+    // Nothing reached the target, so the media copies made for this tree are
+    // referenced by nothing. A push that failed AFTER the remote took it is
+    // indistinguishable from here; the retry this failure invites pushes the
+    // tree again and copies what it needs again, so that case converges too.
+    if (!pushed && media?.discard) {
+      await media.discard().catch((discardError: unknown) => {
+        logger.warn('content import: could not remove unused media copies', {
+          error: discardError instanceof Error ? discardError.message : String(discardError),
+        });
+      });
+    }
+    throw error;
   } finally {
     if (fs.existsSync(localPath)) {
       fs.rmSync(localPath, { recursive: true, force: true });

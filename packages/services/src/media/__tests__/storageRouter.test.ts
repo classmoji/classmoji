@@ -24,7 +24,8 @@ const { storageTargetFor, kindOfFilename } = await import('../storageRouter.ts')
 type UploadCapability = import('../storageRouter.ts').UploadCapability;
 
 const MB = 1024 * 1024;
-const GB = 1024 * MB;
+/** Decimal: the per-file ceiling is a decimal 2 GB (`PER_FILE_MAX_BYTES`). */
+const GB = 1_000_000_000;
 const REPO_MAX = 35 * MB;
 
 const free: UploadCapability = {
@@ -80,6 +81,12 @@ describe('storageTargetFor — with media', () => {
   it('does not refuse on remaining quota — the upload itself enforces that', () => {
     const full = { ...pro, media: { perFileMaxBytes: 2 * GB, remainingBytes: 0 } };
     expect(storageTargetFor(full, { name: 'intro.mp4', size: 5 * MB })).toEqual({
+      kind: 'media',
+    });
+    // Nor does a full store send a file over the repository's cap back to the
+    // repository: the server refuses it with the full-storage sentence
+    // (Tim, 2026-09-27 — no repo fallback for a full Pro class).
+    expect(storageTargetFor(full, { name: 'data.zip', size: 100 * MB })).toEqual({
       kind: 'media',
     });
   });

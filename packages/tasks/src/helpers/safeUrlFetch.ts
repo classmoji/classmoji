@@ -25,6 +25,8 @@
  *     one that hands back the pre-validated address without asking DNS. The
  *     hostname itself is untouched — undici still derives SNI and the `Host`
  *     header from the URL, so TLS verifies the real site's certificate.
+ *     A host that does not resolve and one that resolves somewhere private
+ *     get the SAME message (`HOST_NOT_PUBLIC_MESSAGE`).
  *  4. `fetchImportUrl` — no redirects (a 3xx is refused as `REDIRECT_REFUSED`,
  *     because following one would need steps 1–3 again for a URL the caller
  *     never showed us; the message tells them to pass the final URL instead),
@@ -40,7 +42,10 @@
  *  - `request` does not decompress. We send `accept-encoding: identity`, and
  *    whatever the server sends is what we store, byte for byte — so the cap
  *    counts the bytes that will occupy storage. With `fetch`, a small gzip
- *    body would be inflated before the cap saw it.
+ *    body would be inflated before the cap saw it. A response that comes back
+ *    with any other `content-encoding` anyway is refused
+ *    (`UNSUPPORTED_ENCODING`): it would be stored compressed, as a file no
+ *    player or viewer could open.
  * It is undici's OWN `request` with undici's OWN `Agent`; Node's global
  * `fetch` bundles a different undici build whose dispatcher interface need
  * not match the installed package.
@@ -78,10 +83,22 @@ export type UrlImportErrorCode =
   | 'HTTP_ERROR'
   /** Declared or actual body size exceeds the cap. */
   | 'TOO_LARGE'
+  /** The server compressed the body (`content-encoding` other than identity). */
+  | 'UNSUPPORTED_ENCODING'
   /** Connect, headers, body-idle, or overall deadline exceeded. */
   | 'TIMEOUT'
   /** The connection itself failed: refused, reset, TLS verification, etc. */
   | 'FETCH_FAILED';
+
+/**
+ * The ONE sentence for a host that did not resolve and for one that resolved
+ * somewhere private. Two different sentences would let a caller map our
+ * network from outside — "could not resolve" versus "private address" answers
+ * whether an internal name exists. The codes stay distinct (`DNS_FAILED` is
+ * worth a retry, `BLOCKED_ADDRESS` is not); only what is SAID is the same.
+ */
+export const HOST_NOT_PUBLIC_MESSAGE =
+  "That URL's host does not resolve to a public internet address.";
 
 /** A URL import that was refused or failed. `message` is safe to show the caller. */
 export class UrlImportError extends Error {
@@ -318,10 +335,7 @@ export async function resolvePublicAddress(
   const literal = isIP(host);
   if (literal !== 0) {
     if (isBlockedAddress(host)) {
-      throw new UrlImportError(
-        'BLOCKED_ADDRESS',
-        'The URL points at a private or reserved address.'
-      );
+      throw new UrlImportError('BLOCKED_ADDRESS', HOST_NOT_PUBLIC_MESSAGE);
     }
     return { address: host, family: literal === 6 ? 6 : 4 };
   }
@@ -330,16 +344,13 @@ export async function resolvePublicAddress(
   try {
     records = await resolveAll(host);
   } catch {
-    throw new UrlImportError('DNS_FAILED', `Could not resolve ${host}.`);
+    throw new UrlImportError('DNS_FAILED', HOST_NOT_PUBLIC_MESSAGE);
   }
   if (!Array.isArray(records) || records.length === 0) {
-    throw new UrlImportError('DNS_FAILED', `Could not resolve ${host}.`);
+    throw new UrlImportError('DNS_FAILED', HOST_NOT_PUBLIC_MESSAGE);
   }
   if (records.some(r => isBlockedAddress(r.address))) {
-    throw new UrlImportError(
-      'BLOCKED_ADDRESS',
-      `${host} resolves to a private or reserved address.`
-    );
+    throw new UrlImportError('BLOCKED_ADDRESS', HOST_NOT_PUBLIC_MESSAGE);
   }
   return records.find(r => r.family === 4) ?? records[0];
 }
@@ -642,6 +653,19 @@ export async function fetchImportUrl(
     }
     if (status < 200 || status >= 300) {
       throw new UrlImportError('HTTP_ERROR', `The server answered HTTP ${status}.`, status);
+    }
+
+    // Stored byte for byte, so a compressed body would be stored compressed —
+    // and the cap would count the compressed size. We asked for `identity`;
+    // a server that compresses anyway is refused rather than trusted. No header
+    // means identity.
+    const encoding = header(res.headers, 'content-encoding')?.trim().toLowerCase() ?? '';
+    if (encoding !== '' && encoding !== 'identity') {
+      const named = encoding.replace(/[^a-z0-9,\s-]/g, '').slice(0, 40);
+      throw new UrlImportError(
+        'UNSUPPORTED_ENCODING',
+        `The server sent the file compressed (${named}); only uncompressed downloads can be imported.`
+      );
     }
 
     const lengthHeader = header(res.headers, 'content-length');

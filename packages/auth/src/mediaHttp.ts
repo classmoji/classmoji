@@ -100,6 +100,10 @@ const STATUS_FOR: Record<string, number> = {
   DELIVERY_REQUIRED: 409,
   FILE_TOO_LARGE: 413,
   KIND_NOT_ALLOWED: 422,
+  // The body carries the service's sentence — "This class's media storage is
+  // full. Contact hello@classmoji.io to upgrade." (`MEDIA_QUOTA_FULL_MESSAGE`)
+  // — plus `usedBytes` / `quotaBytes`. No repository fallback: a full Pro
+  // class is refused, not rerouted.
   QUOTA_EXCEEDED: 409,
   NOT_FOUND: 404,
   BAD_STATE: 409,
@@ -454,9 +458,15 @@ export async function mediaAbortAction({ params, request }: MediaHandlerArgs): P
     requireMethod(request, 'POST');
 
     const mediaId = requireMediaId(params.mediaId);
-    const { classroom } = await requireMediaAccessForObject(request, mediaId, 'abort_upload');
+    const { classroom, userId } = await requireMediaAccessForObject(
+      request,
+      mediaId,
+      'abort_upload'
+    );
 
-    await ClassmojiService.media.abortUpload({ classroom, mediaId });
+    // `userId` binds an agent upload still staging to whoever opened it; a
+    // browser upload (UPLOADING) is cancelled exactly as before.
+    await ClassmojiService.media.abortUpload({ classroom, mediaId, userId });
 
     return new Response(null, { status: 204 });
   } catch (error) {
@@ -483,9 +493,13 @@ export async function mediaDeleteAction({ params, request }: MediaHandlerArgs): 
     requireMethod(request, 'DELETE');
 
     const mediaId = requireMediaId(params.mediaId);
-    const { classroom } = await requireMediaAccessForObject(request, mediaId, 'delete_media');
+    const { classroom, userId } = await requireMediaAccessForObject(
+      request,
+      mediaId,
+      'delete_media'
+    );
 
-    await ClassmojiService.media.deleteMedia({ classroom, mediaId });
+    await ClassmojiService.media.deleteMedia({ classroom, mediaId, userId });
 
     return new Response(null, { status: 204 });
   } catch (error) {

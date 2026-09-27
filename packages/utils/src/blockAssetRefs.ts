@@ -16,8 +16,22 @@
  * only the tree walk — which is the part worth testing in isolation.
  */
 
-/** Props that hold a reference to a file in the content repo. */
-const REF_PROPS = ['url', 'imageUrl'] as const;
+/**
+ * The props that hold a reference to a stored file — a repo path or a
+ * `media://` reference — on ANY block.
+ *
+ * THE RULE: a block prop that stores a file reference must be named `url` or
+ * `imageUrl`. This list is the whole of what the walk reads: a reference kept
+ * under any other prop name is never resolved on the way out (it renders
+ * unsigned — broken for a private repo, a `/missing/` for media) and never
+ * canonicalized on the way in (a signed URL is frozen into content.json and
+ * dies when its signature expires). A custom block that needs a second file
+ * gets a second block, or this list grows — deliberately, with the test that
+ * pins it. The pages app registers the custom blocks and is where every
+ * registered propSchema can be enumerated against this list.
+ */
+export const BLOCK_ASSET_REF_PROPS = ['url', 'imageUrl'] as const;
+const REF_PROPS = BLOCK_ASSET_REF_PROPS;
 
 export type BlockLike = {
   props?: Record<string, unknown>;

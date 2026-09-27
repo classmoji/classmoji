@@ -200,7 +200,12 @@ export const mediaDeleteTool: ToolDefinition<MediaDeleteArgs> = {
   handler: async (args, ctx) => {
     const { classroomId } = requireClassroomCtx(ctx);
     const result = await callMedia(() =>
-      ClassmojiService.media.deleteMedia({ classroom: { id: classroomId }, mediaId: args.media_id })
+      ClassmojiService.media.deleteMedia({
+        classroom: { id: classroomId },
+        mediaId: args.media_id,
+        // An agent upload still staging is its uploader's to delete.
+        userId: ctx.viewer.userId,
+      })
     );
     await writeAudit(ctx, {
       resource_type: 'MEDIA',
@@ -230,7 +235,7 @@ export const fileUploadStartTool: ToolDefinition<FileUploadStartArgs> = {
   description:
     'Starts uploading a local file to a page or slide deck without sending its bytes through ' +
     'the conversation. Give the exact size in bytes. Returns upload_url and a curl command: ' +
-    "run `curl -T <file> '<upload_url>'` (a single PUT; the URL expires in 15 minutes and " +
+    "run `curl -T <file> '<upload_url>'` (a single PUT; the URL expires in 10 minutes and " +
     'only accepts exactly `size` bytes), then call file_upload_finish with upload_id. Where the ' +
     'file goes is decided here: small files go into the page/deck folder in the course repo; ' +
     'on Pro, videos and files over the repo limit go to media. A file the class cannot store ' +
@@ -369,6 +374,20 @@ interface FileImportUrlArgs {
   filename?: string;
 }
 
+/** A URL as the audit log records it: scheme, host and path only. Exported for tests. */
+export function auditableUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    url.search = '';
+    url.hash = '';
+    url.username = '';
+    url.password = '';
+    return url.toString();
+  } catch {
+    return raw.split(/[?#]/)[0];
+  }
+}
+
 export const fileImportUrlTool: ToolDefinition<FileImportUrlArgs> = {
   name: 'file_import_url',
   annotations: { destructive: false, idempotent: false, openWorld: true },
@@ -379,7 +398,8 @@ export const fileImportUrlTool: ToolDefinition<FileImportUrlArgs> = {
     'places it like file_upload_start would (course repo for small files; media on Pro for ' +
     'videos and large files). For agents without a shell. The URL must be https on port 443, ' +
     'with no login, redirects or private addresses; size is capped by the class plan (the ' +
-    'repo limit on Free, 2 GB on Pro). Returns upload_id with status "placing" — poll ' +
+    'repo limit on Free, 2 GB on Pro). Large files need a reasonably fast host: the download ' +
+    'must finish within about 13 minutes. Returns upload_id with status "placing" — poll ' +
     'file_upload_status for the ref. Pass filename if the URL does not end in one.',
   scope: 'write',
   roles: TEACHING_TEAM,
@@ -418,7 +438,10 @@ export const fileImportUrlTool: ToolDefinition<FileImportUrlArgs> = {
         tool: 'file_import_url',
         target_type: target.type,
         target_id: target.id,
-        url: args.url,
+        // Without its query string or fragment: a pre-signed download link
+        // carries its credential there, and the audit log is not the place
+        // to keep one.
+        url: auditableUrl(args.url),
         filename: started.filename,
       } as Prisma.InputJsonValue,
     });

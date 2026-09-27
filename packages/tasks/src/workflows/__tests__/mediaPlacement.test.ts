@@ -215,3 +215,82 @@ describe('media-import-url', () => {
     expect(cancel).toHaveBeenCalled();
   });
 });
+
+type Hooked<P> = { onFailure: (params: { payload: P; error: unknown }) => Promise<void> };
+
+describe('review fixes: retry decisions and the final-failure backstop', () => {
+  const row = { id: MEDIA_ID, classroom_id: CLASSROOM_ID };
+
+  it('treats a far-end 408 or 429 as retryable, like a 5xx', async () => {
+    for (const status of [408, 429]) {
+      failStagedPlacement.mockReset();
+      stagedImportContext.mockResolvedValue({ row, maxBytes: 10 });
+      fetchImportUrl.mockRejectedValue(
+        new UrlImportError('HTTP_ERROR', `The server answered HTTP ${status}.`, status)
+      );
+      await expect(
+        run(mediaImportUrl, { mediaId: MEDIA_ID, url: 'https://x.test/a.mp4' }, 1)
+      ).rejects.toThrow(String(status));
+      expect(failStagedPlacement).not.toHaveBeenCalled();
+    }
+  });
+
+  it('still records a 404 at once', async () => {
+    stagedImportContext.mockResolvedValue({ row, maxBytes: 10 });
+    fetchImportUrl.mockRejectedValue(
+      new UrlImportError('HTTP_ERROR', 'The server answered HTTP 404.', 404)
+    );
+    await expect(
+      run(mediaImportUrl, { mediaId: MEDIA_ID, url: 'https://x.test/a.mp4' }, 1)
+    ).resolves.toEqual({ status: 'failed', reason: 'The server answered HTTP 404.' });
+  });
+
+  it('a hand-off that cannot be queued is retried, then recorded on the last attempt', async () => {
+    stagedImportContext.mockResolvedValue({ row, maxBytes: 10 });
+    fetchImportUrl.mockResolvedValue({ body: [], cancel: vi.fn(async () => {}) });
+    streamIntoStage.mockResolvedValue(5);
+    settleStagedImport.mockResolvedValue({});
+    placeTrigger.mockRejectedValue(new Error('trigger API 503'));
+
+    await expect(
+      run(mediaImportUrl, { mediaId: MEDIA_ID, url: 'https://x.test/a.mp4' }, 1)
+    ).rejects.toThrow('trigger API 503');
+    expect(failStagedPlacement).not.toHaveBeenCalled();
+
+    await expect(
+      run(mediaImportUrl, { mediaId: MEDIA_ID, url: 'https://x.test/a.mp4' }, 2)
+    ).resolves.toMatchObject({ status: 'failed' });
+    expect(failStagedPlacement).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports an expired import as skipped: expired', async () => {
+    stagedImportContext.mockResolvedValue({ expired: true });
+    await expect(
+      run(mediaImportUrl, { mediaId: MEDIA_ID, url: 'https://x.test/a.mp4' })
+    ).resolves.toEqual({ status: 'skipped', reason: 'expired' });
+    expect(fetchImportUrl).not.toHaveBeenCalled();
+  });
+
+  it('both tasks record the row on final failure (onFailure), with a safe sentence', async () => {
+    for (const t of [mediaPlaceStaged, mediaImportUrl]) {
+      failStagedPlacement.mockReset();
+      await (t as unknown as Hooked<{ mediaId: string }>).onFailure({
+        payload: { mediaId: MEDIA_ID },
+        error: new Error('connect ECONNREFUSED 10.1.2.3:5432'),
+      });
+      expect(failStagedPlacement).toHaveBeenCalledTimes(1);
+      expect(failStagedPlacement.mock.calls[0][0]).toBe(MEDIA_ID);
+      expect(failStagedPlacement.mock.calls[0][1]).not.toContain('10.1.2.3');
+    }
+  });
+
+  it('onFailure never throws, even when recording fails', async () => {
+    failStagedPlacement.mockRejectedValue(new Error('db down'));
+    await expect(
+      (mediaPlaceStaged as unknown as Hooked<{ mediaId: string }>).onFailure({
+        payload: { mediaId: MEDIA_ID },
+        error: new Error('x'),
+      })
+    ).resolves.toBeUndefined();
+  });
+});
