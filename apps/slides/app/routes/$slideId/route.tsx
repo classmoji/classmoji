@@ -53,6 +53,7 @@ import {
   deckDeliveryContext,
   readDeckText,
   resolveDeckAssets,
+  resolveDeckMedia,
   resolveDeliveryThemeUrls,
   resolveReadThemeUrls,
   gitBlobSha,
@@ -448,11 +449,19 @@ export const loader = async ({
 
     // Sign the deck's image references — but never for the document the editor
     // is about to load. Entering edit mode always re-reads through
-    // `fetch-latest` (which does no image pass), so restricting this to
-    // non-edit reads is what guarantees a signed URL can never be posted back
-    // and committed into deck.json.
+    // `fetch-latest` (which signs nothing but `media://` references), so
+    // restricting this to non-edit reads keeps repo references unsigned in the
+    // editor. A media reference is the one exception, because it has no proxy
+    // to load through; `saveDeck` turns a signed media URL back into the
+    // reference on the way to the commit.
     if (mode !== 'edit') {
-      slideContent = await resolveDeckAssets(slideContent, deliveryCtx);
+      slideContent = await resolveDeckAssets(slideContent, deliveryCtx, {
+        classroomId: slide.classroom_id,
+      });
+    } else {
+      // The editor's one exception: `media://` references are signed, because
+      // they have no proxy to load through. See `resolveDeckMedia`.
+      slideContent = await resolveDeckMedia(slideContent, deliveryCtx);
     }
 
     // Strip speaker notes from content if user doesn't have permission to view them
@@ -942,6 +951,14 @@ export const action = async ({
   // `/content/...` ones — a signed URL that round-tripped through the editor
   // would be committed into deck.json.
   if (intent === 'fetch-latest') {
+    // The edit tier, as the editor's own loader read uses: only an editor
+    // reaches this action.
+    const editorDeliveryCtx = deckDeliveryContext(
+      slide,
+      gitOrgLogin,
+      repo,
+      deckAccessFor('viewer', { canEdit: true }, slide)
+    );
     try {
       // Phase 4c: deck.json-first, mirroring the edit-mode loader. skipCache:
       // this read refreshes the editor's conflict token — it must not serve
@@ -959,20 +976,20 @@ export const action = async ({
             loaded.deck,
             gitOrgLogin,
             repo,
-            deckDeliveryContext(
-              slide,
-              gitOrgLogin,
-              repo,
-              deckAccessFor('viewer', { canEdit: true }, slide)
-            )
+            editorDeliveryCtx
           );
           return {
             intent: 'fetch-latest',
-            content: generateDeckHtml(loaded.deck, {
-              title: slide.title,
-              themeUrls,
-              includeNotes: true,
-            }),
+            // Media references are the exception: signed, because they have no
+            // proxy to load through. See `resolveDeckMedia`.
+            content: await resolveDeckMedia(
+              generateDeckHtml(loaded.deck, {
+                title: slide.title,
+                themeUrls,
+                includeNotes: true,
+              }),
+              editorDeliveryCtx
+            ),
             content_sha: loaded.sha,
             sha_source: 'deck' as const,
           };
@@ -1032,7 +1049,7 @@ export const action = async ({
 
       return {
         intent: 'fetch-latest',
-        content: result.content,
+        content: await resolveDeckMedia(result.content, editorDeliveryCtx),
         content_sha: contentSha,
         sha_source: shaSource,
       };

@@ -292,8 +292,13 @@ export function deckWarmContext(slide: SlideContentTarget): WarmContext | null {
  * Failure is swallowed on purpose. The asset map lives in Postgres, and a
  * database hiccup must not turn a save into a lost edit — the worst case of
  * skipping this pass is the state the deck was already in before it existed.
+ *
+ * Exported for the editor's merge save, which runs it on the editor's side of
+ * the 3-way merge BEFORE comparing: the editor holds its `media://` references
+ * signed (they have no proxy to load through), and a signed URL compared with
+ * the stored reference would read as an edit to every slide with a video on it.
  */
-async function canonicalizeDeckForSave(
+export async function canonicalizeDeckForSave(
   slide: SlideContentTarget,
   deck: DeckJson
 ): Promise<DeckJson> {
