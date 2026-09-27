@@ -262,6 +262,33 @@ describe('rewriteMediaRefs', () => {
   });
 });
 
+describe('rewriteMediaRefs: HTML-escaped quotes', () => {
+  const NEW = '44444444-4444-4444-8444-444444444444';
+
+  it('stops an &amp;-escaped query before &quot; — the closing quote survives', () => {
+    const style = `<div style="background: url(&quot;${signed(SOURCE, VIDEO, 'orig.png', '&amp;')}&quot;)">`;
+    expect(rewriteMediaRefs(style, SOURCE, new Map([[VIDEO, NEW]]))).toBe(
+      `<div style="background: url(&quot;media://${NEW}&quot;)">`
+    );
+  });
+
+  it('stops before &#34; and &#39; too', () => {
+    for (const quote of ['&#34;', '&#39;']) {
+      const text = `url(${quote}${signed(SOURCE, VIDEO, 'orig.png', '&amp;')}${quote})`;
+      expect(rewriteMediaRefs(text, SOURCE, new Map([[VIDEO, NEW]]))).toBe(
+        `url(${quote}media://${NEW}${quote})`
+      );
+    }
+  });
+
+  it('still takes an &amp;-escaped query whole when nothing follows it', () => {
+    const text = `<video src="${signed(SOURCE, VIDEO, 'web.mp4', '&amp;')}">`;
+    expect(rewriteMediaRefs(text, SOURCE, new Map([[VIDEO, NEW]]))).toBe(
+      `<video src="media://${NEW}">`
+    );
+  });
+});
+
 describe('createMediaImportCopier: success', () => {
   it('reserves under the lock, copies orig + rendition + poster, then READY', async () => {
     database({

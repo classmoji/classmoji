@@ -177,12 +177,14 @@ const MEDIA_REF_PATTERN = new RegExp(`media://(${UUID})(?![0-9A-Za-z-])`, 'g');
  * a backslash (a `\"` inside deck.json's HTML-in-JSON); signed query values are
  * base64url and numbers, so neither can occur inside one. It runs THROUGH `&`
  * and `;`, which is what lets an `&amp;`-escaped query in `index.html` be taken
- * whole.
+ * whole — but it stops before an HTML-escaped quote (`&quot;`, `&#34;`,
+ * `&#39;`), so `url(&quot;…?p=x&amp;sig=y&quot;)` in an inline style loses only
+ * the URL, never the closing quote.
  */
 const SIGNED_MEDIA_URL_PATTERN = new RegExp(
   `(?:https?:\\/\\/[^\\s"'()<>\\/\\\\]+|(?<![^\\s"'(<>,;]))` +
     `\\/c\\/([0-9a-fA-F-]{36})\\/media\\/(${UUID})\\/[A-Za-z0-9._-]+` +
-    `(?:\\?[^\\s"'()<>,\\\\]*)?`,
+    `(?:\\?(?:(?!&(?:quot|#34|#39);)[^\\s"'()<>,\\\\])*)?`,
   'gi'
 );
 
