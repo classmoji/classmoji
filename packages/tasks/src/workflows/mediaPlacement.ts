@@ -28,8 +28,10 @@ import { UrlImportError, fetchImportUrl, type SafeFetchResult } from '../helpers
  * — is recorded on the row at once (`failStagedPlacement`), which is what
  * `file_upload_status` reports. Anything else (GitHub 5xx, an R2 blip) rethrows
  * for the retry policy, and is recorded only when the last attempt fails too.
- * The recorded reason is a sentence for the agent; the raw error goes to the
- * run's log.
+ * Each task's `onFailure` hook is the backstop: whatever escapes `run` on the
+ * final attempt is recorded there, so no row is left `placing` once Trigger
+ * has given up. The recorded reason is a sentence for the agent; the raw error
+ * goes to the run's log.
  */
 
 /** Attempts for a placement: a GitHub commit is worth a couple of retries. */
@@ -89,7 +91,12 @@ function isPermanentImportError(error: unknown, steps: StagingSteps): boolean {
     if (error.code === 'TIMEOUT' || error.code === 'FETCH_FAILED' || error.code === 'DNS_FAILED') {
       return false;
     }
-    if (error.code === 'HTTP_ERROR') return !(error.status !== undefined && error.status >= 500);
+    if (error.code === 'HTTP_ERROR') {
+      // 408 (the far end timed out waiting) and 429 (it is rate limiting us)
+      // are about the moment, like a 5xx; every other 4xx is about the URL.
+      const status = error.status;
+      return !(status !== undefined && (status >= 500 || status === 408 || status === 429));
+    }
     return true;
   }
   return steps.isPermanentPlacementError(error);
@@ -98,6 +105,39 @@ function isPermanentImportError(error: unknown, steps: StagingSteps): boolean {
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+/**
+ * The last word on a run that failed for good: record it on the row, so no
+ * agent upload is left `placing` with nothing behind it.
+ *
+ * `run` already records every failure it DECIDES is final; this covers the
+ * ones it cannot — a throw on the last attempt from outside its own catch (the
+ * services failing to load, the context lookup, the record itself), or a retry
+ * budget that ran out on a path `run` believed would be retried. Trigger calls
+ * it once, after the final attempt. `failStagedPlacement` acts only on a row
+ * still STAGING, so a row `run` already settled is untouched.
+ */
+async function recordFinalFailure(
+  task: string,
+  mediaId: string,
+  error: unknown,
+  fallback: string
+): Promise<void> {
+  try {
+    const steps = await ClassmojiService.media.stagingTaskSteps();
+    await steps.failStagedPlacement(mediaId, failureReason(error, fallback));
+  } catch (recordError) {
+    logger.error('Could not record a failed agent upload', {
+      task,
+      mediaId,
+      error: describeError(recordError),
+    });
+  }
+}
+
+const PLACE_FAILED_REASON =
+  'The file could not be added to the course repository. Upload it again.';
+const IMPORT_FAILED_REASON = 'The file at that URL could not be imported. Try again.';
 
 export const mediaPlaceStaged = task({
   id: 'media-place-staged',
@@ -137,13 +177,13 @@ export const mediaPlaceStaged = task({
         error: describeError(error),
       });
       if (!final) throw error;
-      const reason = failureReason(
-        error,
-        'The file could not be added to the course repository. Upload it again.'
-      );
+      const reason = failureReason(error, PLACE_FAILED_REASON);
       await steps.failStagedPlacement(payload.mediaId, reason);
       return { status: 'failed', reason };
     }
+  },
+  onFailure: async ({ payload, error }) => {
+    await recordFinalFailure('media-place-staged', payload.mediaId, error, PLACE_FAILED_REASON);
   },
 });
 
@@ -170,6 +210,8 @@ export const mediaImportUrl = task({
     const context = await steps.stagedImportContext(payload.mediaId);
     // Cancelled, deleted or already done — a duplicate or late run.
     if (!context) return { status: 'skipped', reason: 'not-staging' };
+    // Past the reservation window; the service has recorded it as failed.
+    if ('expired' in context) return { status: 'skipped', reason: 'expired' };
 
     let fetched: SafeFetchResult | null = null;
     try {
@@ -179,6 +221,20 @@ export const mediaImportUrl = task({
       });
       const size = await steps.streamIntoStage(context.row, fetched.body, context.maxBytes);
       await steps.settleStagedImport(payload.mediaId, size);
+
+      // Placement is its own task, with its own retries: a GitHub hiccup after
+      // a 2 GiB fetch must not mean fetching it again. Inside the try so a
+      // hand-off that cannot be queued is retried like any other transient
+      // failure — and recorded on the last attempt rather than leaving the row
+      // `placing` with no job behind it. (A retry re-fetches the URL; the
+      // staged object is simply overwritten.)
+      await mediaPlaceStaged.trigger(
+        { mediaId: payload.mediaId },
+        {
+          idempotencyKey: `media-place:${payload.mediaId}`,
+          concurrencyKey: context.row.classroom_id,
+        }
+      );
     } catch (error) {
       await fetched?.cancel().catch(() => {});
       const final =
@@ -190,20 +246,14 @@ export const mediaImportUrl = task({
         error: describeError(error),
       });
       if (!final) throw error;
-      const reason = failureReason(error, 'The file at that URL could not be imported. Try again.');
+      const reason = failureReason(error, IMPORT_FAILED_REASON);
       await steps.failStagedPlacement(payload.mediaId, reason);
       return { status: 'failed', reason };
     }
 
-    // Placement is its own task, with its own retries: a GitHub hiccup after a
-    // 2 GiB fetch must not mean fetching it again.
-    await mediaPlaceStaged.trigger(
-      { mediaId: payload.mediaId },
-      {
-        idempotencyKey: `media-place:${payload.mediaId}`,
-        concurrencyKey: context.row.classroom_id,
-      }
-    );
     return { status: 'queued' };
+  },
+  onFailure: async ({ payload, error }) => {
+    await recordFinalFailure('media-import-url', payload.mediaId, error, IMPORT_FAILED_REASON);
   },
 });

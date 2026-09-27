@@ -559,6 +559,71 @@ describe('placeStagedObject', () => {
   });
 });
 
+describe('isPermanentPlacementError: MediaErrors a retry can change', () => {
+  it('retries VERIFY_FAILED and NOT_CONFIGURED; other MediaErrors stay final', async () => {
+    const { MediaError } = await import('../MediaError.ts');
+    expect(staging.isPermanentPlacementError(new MediaError('VERIFY_FAILED', 'x'))).toBe(false);
+    expect(staging.isPermanentPlacementError(new MediaError('NOT_CONFIGURED', 'x'))).toBe(false);
+    // Wrapped as a cause, too.
+    expect(
+      staging.isPermanentPlacementError(
+        new Error('outer', { cause: new MediaError('VERIFY_FAILED', 'x') })
+      )
+    ).toBe(false);
+    expect(staging.isPermanentPlacementError(new MediaError('QUOTA_EXCEEDED', 'x'))).toBe(true);
+    expect(staging.isPermanentPlacementError(new MediaError('STORAGE_REFUSED', 'x'))).toBe(true);
+  });
+});
+
+describe('rows past the reservation window', () => {
+  const old = () => stagedRow({ created_at: new Date(Date.now() - 25 * 60 * 60 * 1000) });
+
+  function expectRecordedExpired() {
+    expect(prisma.mediaObject.updateMany).toHaveBeenCalledWith({
+      where: { id: MEDIA_ID, status: 'STAGING' },
+      data: expect.objectContaining({
+        status: 'DELETED',
+        placement_error: staging.STAGE_EXPIRED_REASON,
+      }),
+    });
+  }
+
+  it('placeStagedObject refuses and records it, placing nothing', async () => {
+    prisma.mediaObject.findUnique.mockResolvedValue(old());
+    await expect(staging.placeStagedObject(MEDIA_ID)).resolves.toEqual({
+      status: 'skipped',
+      reason: 'expired',
+    });
+    expectRecordedExpired();
+    expect(sent.some(call => call.name === 'GetObject' || call.name === 'CopyObject')).toBe(false);
+    expect(uploadPageAsset).not.toHaveBeenCalled();
+  });
+
+  it('stagedImportContext says expired, and records it', async () => {
+    prisma.mediaObject.findUnique.mockResolvedValue(old());
+    await expect(staging.stagedImportContext(MEDIA_ID)).resolves.toEqual({ expired: true });
+    expectRecordedExpired();
+    expect(capability).not.toHaveBeenCalled();
+  });
+
+  it('settleStagedImport refuses permanently, and records it', async () => {
+    prisma.mediaObject.findUnique.mockResolvedValue(old());
+    const error = await staging.settleStagedImport(MEDIA_ID, 100).catch(e => e);
+    expect(error.message).toBe(staging.STAGE_EXPIRED_REASON);
+    expect(staging.isPermanentPlacementError(error)).toBe(true);
+    expectRecordedExpired();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('a fresh row is not touched by the check', async () => {
+    prisma.mediaObject.findUnique.mockResolvedValue(stagedRow());
+    await expect(staging.stagedImportContext(MEDIA_ID)).resolves.toMatchObject({
+      row: expect.objectContaining({ id: MEDIA_ID }),
+    });
+    expect(prisma.mediaObject.updateMany).not.toHaveBeenCalled();
+  });
+});
+
 describe('failStagedPlacement', () => {
   it('tombstones from STAGING with the reason and removes the staged bytes', async () => {
     prisma.mediaObject.findUnique.mockResolvedValue(stagedRow({ upload_id: 'up-1' }));

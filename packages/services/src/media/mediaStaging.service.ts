@@ -93,6 +93,9 @@ import { kindOfFilename, storageTargetFor } from './storageRouter.ts';
  * same answer as an id that does not exist.
  */
 
+/** What `file_upload_status` says about a stage that outlived its reservation. */
+export const STAGE_EXPIRED_REASON = 'This upload expired before it was placed.';
+
 /** How long the staged PUT URL lives. Short: it is a reusable write until it expires. */
 export const STAGE_URL_TTL_SECONDS = 15 * 60;
 
@@ -456,7 +459,7 @@ function statusOf(row: MediaRow, now: number = Date.now()): StagedStatus {
     };
   }
   if (row.created_at.getTime() < reservationCutoff(now).getTime()) {
-    return { ...base, status: 'failed', error: 'This upload expired before it was placed.' };
+    return { ...base, status: 'failed', error: STAGE_EXPIRED_REASON };
   }
   return { ...base, status: row.processing === 'PENDING' ? 'placing' : 'awaiting_upload' };
 }
@@ -688,6 +691,21 @@ function requireClientOrNull(): { client: S3Client; bucket: string } | null {
   }
 }
 
+/**
+ * Refuse a row older than the reservation window, recording why.
+ *
+ * Past `reservationCutoff()` the row no longer counts toward the quota sum, so
+ * placing it now would put bytes in media — or in the repository — that no
+ * reservation paid for, and a queued job that ran a day late (a stalled queue,
+ * a long backoff) would do exactly that. The row is tombstoned with the reason
+ * `statusOf` already reports for it. True when refused.
+ */
+async function failIfExpired(row: MediaRow): Promise<boolean> {
+  if (row.created_at.getTime() >= reservationCutoff().getTime()) return false;
+  await failStagedPlacement(row.id, STAGE_EXPIRED_REASON);
+  return true;
+}
+
 /** A staged row by id alone — for the tasks, which are handed nothing else. */
 async function stagedRowById(mediaId: string): Promise<MediaRow | null> {
   return (await getPrisma().mediaObject.findUnique({ where: { id: mediaId } })) as MediaRow | null;
@@ -775,13 +793,24 @@ export class PlacementRefused extends Error {
 }
 
 /**
+ * `MediaError` codes a later attempt CAN change: a copy whose size check
+ * disagreed (a read racing R2's own consistency), and a deployment briefly
+ * missing its media configuration (a secret rotated mid-deploy). Every other
+ * `MediaError` is about the file or the classroom and says the same thing next
+ * time.
+ */
+const RETRYABLE_MEDIA_CODES: ReadonlySet<unknown> = new Set(['VERIFY_FAILED', 'NOT_CONFIGURED']);
+
+/**
  * Is this a refusal a retry cannot change? The repository's own typed
- * refusals (type, name, size), the router's `USE_MEDIA`, and our own.
+ * refusals (type, name, size), the router's `USE_MEDIA`, and our own — but
+ * not the `MediaError`s in `RETRYABLE_MEDIA_CODES`.
  */
 export function isPermanentPlacementError(error: unknown): boolean {
   let current: unknown = error;
   while (current instanceof Error) {
     const code = (current as { code?: unknown }).code;
+    if (current.name === 'MediaError' && RETRYABLE_MEDIA_CODES.has(code)) return false;
     if (
       current instanceof PlacementRefused ||
       current.name === 'PlacementRefused' ||
@@ -808,6 +837,7 @@ export async function placeStagedObject(
 ): Promise<{ status: 'placed'; ref: string } | { status: 'skipped'; reason: string }> {
   const row = await stagedRowById(mediaId);
   if (!row || row.status !== 'STAGING') return { status: 'skipped', reason: 'not-staging' };
+  if (await failIfExpired(row)) return { status: 'skipped', reason: 'expired' };
   const { client, bucket } = requireClient();
 
   if (row.destination === 'media') {
@@ -843,12 +873,17 @@ export async function placeStagedObject(
 // URL imports (the `media-import-url` task's service half)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** What the import task needs to know before it fetches. */
+/**
+ * What the import task needs to know before it fetches — or null for a row no
+ * longer STAGING (cancelled, deleted, done), or `{ expired: true }` for one
+ * past the reservation window (recorded as failed here).
+ */
 export async function stagedImportContext(
   mediaId: string
-): Promise<{ row: MediaRow; maxBytes: number } | null> {
+): Promise<{ row: MediaRow; maxBytes: number } | { expired: true } | null> {
   const row = await stagedRowById(mediaId);
   if (!row || row.status !== 'STAGING') return null;
+  if (await failIfExpired(row)) return { expired: true };
   return { row, maxBytes: await importByteCapFor({ id: row.classroom_id }) };
 }
 
@@ -970,6 +1005,7 @@ export async function settleStagedImport(mediaId: string, sizeBytes: number): Pr
   if (!row || row.status !== 'STAGING') {
     throw new PlacementRefused('This import was cancelled.');
   }
+  if (await failIfExpired(row)) throw new PlacementRefused(STAGE_EXPIRED_REASON);
   const destination = await routeAgentFile({ id: row.classroom_id }, row.filename, sizeBytes);
 
   await getPrisma().$transaction(async tx => {
