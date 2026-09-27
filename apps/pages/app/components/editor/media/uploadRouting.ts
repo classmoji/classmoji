@@ -1,0 +1,192 @@
+import {
+  kindOfFilename,
+  storageTargetFor,
+  type UploadCapability,
+} from '@classmoji/services/media/router';
+import type { MediaUploadOptions, MultipartUploadError } from '@classmoji/ui-components/upload';
+import { REPO_REST_MAX_BYTES, repoFileTooLargeMessage } from '@classmoji/utils/repo-limits';
+
+/**
+ * Where one file the page editor was handed goes, and what happens when the
+ * server disagrees.
+ *
+ * The decision is the storage router's (`storageTargetFor`, decision §7.10):
+ * a Pro video, or anything over the repository's cap on a classroom with media,
+ * goes to media; everything else that fits goes to the repository; the rest is
+ * refused with the router's own sentence. The capability comes from the page
+ * loader and can be stale — the classroom may have gone Pro, or lapsed, since
+ * the page was opened — and every server entry re-derives the target from the
+ * file it receives. So the server's answer wins: a repository upload told
+ * `USE_MEDIA`, or a media upload told `USE_REPO`, is sent to the other side
+ * ONCE. A second disagreement is not chased back; it is refused.
+ *
+ * Pure, with the two transports passed in (`UploadPorts`), so the whole
+ * decision table is testable without a network.
+ */
+
+/** Where a file was stored, and the URL to show it with right now. */
+export interface PlacedUpload {
+  /** What goes into the block: a repo path, or `media://{id}`. */
+  ref: string;
+  /** The signed URL for this session's display map, or null. */
+  displayUrl: string | null;
+  /** Where it went. */
+  destination: 'repo' | 'media';
+}
+
+/** The server sent the file to the other store. */
+export class UploadReroute extends Error {
+  readonly to: 'repo' | 'media';
+  constructor(to: 'repo' | 'media') {
+    super(`Upload belongs in ${to}.`);
+    this.name = 'UploadReroute';
+    this.to = to;
+  }
+}
+
+/** A refusal the uploader reads. The message is the sentence to show. */
+export class UploadRefused extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UploadRefused';
+  }
+}
+
+/** The person cancelled. Not a failure — nothing is shown. */
+export class UploadCancelled extends Error {
+  constructor() {
+    super('Upload cancelled.');
+    this.name = 'UploadCancelled';
+  }
+}
+
+export interface UploadPorts {
+  /** POST to the repository route. Throws `UploadReroute('media')` on `USE_MEDIA`. */
+  toRepo(file: File): Promise<Omit<PlacedUpload, 'destination'>>;
+  /** Multipart to media. Throws `UploadReroute('repo')` on `USE_REPO`. */
+  toMedia(
+    file: File,
+    options: MediaUploadOptions | undefined
+  ): Promise<Omit<PlacedUpload, 'destination'>>;
+}
+
+/**
+ * The per-video choices the editor makes without asking (decision §7.4's
+ * defaults): optimise for playback, keep the original, no student download.
+ * Only videos carry them — the server ignores them for every other kind.
+ */
+export const EDITOR_VIDEO_OPTIONS: MediaUploadOptions = Object.freeze({
+  optimise: true,
+  keepOriginal: true,
+  allowDownload: false,
+});
+
+export function mediaOptionsFor(file: { name: string }): MediaUploadOptions | undefined {
+  return kindOfFilename(file.name) === 'VIDEO' ? { ...EDITOR_VIDEO_OPTIONS } : undefined;
+}
+
+/** The first destination for a file, before any server has seen it. */
+export function firstDestination(
+  capability: UploadCapability | null | undefined,
+  file: { name: string; size: number }
+): { kind: 'repo' | 'media' } | { kind: 'refused'; message: string } {
+  if (!capability) {
+    // No capability (a lookup failed): the editor's behaviour before routing
+    // existed. The repository route still redirects a media file, so a Pro
+    // video is not lost — it takes one extra round trip.
+    if (file.size > REPO_REST_MAX_BYTES) {
+      return { kind: 'refused', message: repoFileTooLargeMessage(file.name) };
+    }
+    return { kind: 'repo' };
+  }
+  const target = storageTargetFor(capability, file);
+  if (target.kind === 'refused') return { kind: 'refused', message: target.message };
+  return target;
+}
+
+/** The sentence when the two stores keep handing the file back to each other. */
+const NOWHERE_MESSAGE = 'This file could not be stored. Reload the page and try again.';
+
+/** Route, send, and follow at most one redirect. */
+export async function placeUpload(
+  file: File,
+  capability: UploadCapability | null | undefined,
+  ports: UploadPorts
+): Promise<PlacedUpload> {
+  const first = firstDestination(capability, file);
+  if (first.kind === 'refused') throw new UploadRefused(first.message);
+
+  const send = async (to: 'repo' | 'media'): Promise<PlacedUpload> => {
+    const placed =
+      to === 'repo' ? await ports.toRepo(file) : await ports.toMedia(file, mediaOptionsFor(file));
+    return { ...placed, destination: to };
+  };
+
+  try {
+    return await send(first.kind);
+  } catch (error) {
+    if (!(error instanceof UploadReroute) || error.to === first.kind) throw error;
+    try {
+      return await send(error.to);
+    } catch (second) {
+      if (second instanceof UploadReroute) throw new UploadRefused(NOWHERE_MESSAGE);
+      throw second;
+    }
+  }
+}
+
+const GB = 1024 * 1024 * 1024;
+const MB = 1024 * 1024;
+
+/** `1.2 GB`, `35 MB`, `640 KB` — sizes as a person reads them. */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '';
+  if (bytes >= GB) return `${Math.round((bytes / GB) * 10) / 10} GB`;
+  if (bytes >= MB) return `${Math.round((bytes / MB) * 10) / 10} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+/**
+ * A media upload's failure, in a sentence.
+ *
+ * Codes come from the shared media routes; the wording follows the webapp's
+ * upload dialog so the same refusal reads the same on every surface.
+ */
+export function mediaUploadMessage(
+  error: Pick<MultipartUploadError, 'code' | 'usedBytes' | 'quotaBytes'>,
+  capability: UploadCapability | null | undefined
+): string {
+  switch (error.code) {
+    case 'NOT_CONFIGURED':
+      return 'Media storage is not configured in this environment.';
+    case 'PRO_REQUIRED':
+      return 'Uploading media needs a Pro classroom.';
+    case 'DELIVERY_REQUIRED':
+      return "This class isn't set up to serve content yet, so media can't be uploaded.";
+    case 'QUOTA_EXCEEDED': {
+      if (typeof error.usedBytes === 'number' && typeof error.quotaBytes === 'number') {
+        return `Not enough storage — ${formatBytes(error.usedBytes)} of ${formatBytes(error.quotaBytes)} is already in use. Delete something and try again.`;
+      }
+      return 'Not enough storage for this file. Delete something and try again.';
+    }
+    case 'FILE_TOO_LARGE': {
+      const limit = capability?.media?.perFileMaxBytes;
+      return limit
+        ? `That file is over the ${formatBytes(limit)} limit for a single upload.`
+        : 'That file is over the limit for a single upload.';
+    }
+    case 'KIND_NOT_ALLOWED':
+      return "That file can't be uploaded. It needs an extension of at most 8 letters or digits.";
+    case 'SIZE_MISMATCH':
+      return 'The upload did not arrive intact and was discarded. Please try again.';
+    case 'VERIFY_FAILED':
+      return "The upload couldn't be verified. Try again.";
+    case 'UPLOAD_EXPIRED':
+      return 'This upload took too long. Start it again.';
+    case 'NOT_FOUND':
+    case 'BAD_STATE':
+      return 'This upload is no longer valid. Please start it again.';
+    default:
+      return 'The upload could not finish. Check your connection and try again.';
+  }
+}

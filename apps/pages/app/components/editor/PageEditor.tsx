@@ -1,4 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useImperativeHandle, forwardRef } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useImperativeHandle,
+  useRef,
+  forwardRef,
+} from 'react';
 import {
   useCreateBlockNote,
   SuggestionMenuController,
@@ -7,6 +14,7 @@ import {
   FormattingToolbar,
   SideMenu,
   SideMenuController,
+  FilePanelController,
   DragHandleMenu,
   RemoveBlockItem,
   BlockColorsItem,
@@ -19,8 +27,9 @@ import {
   getMultiColumnSlashMenuItems,
   locales as multiColumnLocales,
 } from '@blocknote/xl-multi-column';
-import { toast } from 'react-toastify';
-import { REPO_REST_MAX_BYTES, repoFileTooLargeMessage } from '@classmoji/utils/repo-limits';
+import { toast, type Id as ToastId } from 'react-toastify';
+import { kindOfFilename, type UploadCapability } from '@classmoji/services/media/router';
+import { MultipartUploadError, uploadMultipart } from '@classmoji/ui-components/upload';
 
 import {
   schema,
@@ -35,6 +44,17 @@ import {
   IDENTITY_DISPLAY_URL,
   type DisplayUrlLookup,
 } from '~/hooks/useAssetDisplayUrl.ts';
+import { MediaFilePanel } from './media/MediaFilePanel.tsx';
+import { usePageMedia } from './media/PageMedia.tsx';
+import { fetchMediaDisplayUrl } from './media/mediaDisplayUrl.ts';
+import {
+  UploadCancelled,
+  UploadRefused,
+  UploadReroute,
+  mediaUploadMessage,
+  placeUpload,
+  type UploadPorts,
+} from './media/uploadRouting.ts';
 
 // Custom drag handle menu — extends default with block-specific actions
 const CustomDragHandleMenu = () => (
@@ -51,7 +71,8 @@ const CustomDragHandleMenu = () => (
  *
  * Wraps BlockNote with:
  * - Custom schema (all custom blocks including pageLink)
- * - File upload to GitHub via /api/upload
+ * - File upload through the storage router: the course repository via
+ *   /api/upload, or media via the multipart routes on /api/media
  * - Custom slash menu items
  * - Dark mode support
  *
@@ -89,6 +110,12 @@ interface PageEditorProps {
   onReady?: (document: unknown) => void;
   /** When false, the editor is read-only (e.g. while a save-merge chooser is open). */
   editable?: boolean;
+  /**
+   * Where this classroom's uploads can go (`storageTargetFor`). Null when the
+   * loader could not work it out: uploads then go to the repository within its
+   * cap, and the server still redirects a file that belongs in media.
+   */
+  uploadCapability?: UploadCapability | null;
 }
 
 const PageEditor = forwardRef(function PageEditor(
@@ -103,52 +130,121 @@ const PageEditor = forwardRef(function PageEditor(
     srcSets,
     displayUrl,
     onAssetUploaded,
+    uploadCapability = null,
   }: PageEditorProps,
   ref: React.Ref<{ getContent: () => unknown }>
 ) {
-  // Upload handler: POSTs to the page's upload action. The page travels in the
-  // query string so the server can authorize before it reads the body.
+  const media = usePageMedia();
+  const classroomId = media.classroomId;
+  // `uploadFile` is handed to BlockNote once, at creation, so it reads the
+  // editor through a ref rather than closing over a value that does not exist
+  // yet.
+  const editorRef = useRef<PageBlockEditor | null>(null);
+
+  // Upload handler — BlockNote's `uploadFile`, and the video block's Upload
+  // button. The storage router decides where the file goes (`placeUpload`):
+  //
+  //   - repo  → POST /api/upload?pageId=…, which answers with the repo path;
+  //   - media → a multipart upload straight to storage over /api/media, which
+  //             answers with `media://{id}`.
+  //
+  // Either way what goes INTO the block is the reference that keeps following
+  // the file — a repo path or `media://{id}` — and never a signed URL: that
+  // only ever goes into the display map, so a save can never commit it.
   //
   // A refusal is TOASTED before it is thrown: BlockNote's upload tab catches
   // the error and shows its own generic "Upload failed", so the sentence that
-  // says why (the size cap, a type the classroom does not accept) would
-  // otherwise never reach the person.
+  // says why (the size cap, a type the classroom does not accept, a full
+  // quota) would otherwise never reach the person.
   const uploadFile = useCallback(
-    async (file: File) => {
-      const refuse = (message: string): never => {
-        toast.error(message);
-        throw new Error(message);
+    async (file: File, blockId?: string) => {
+      const ports: UploadPorts = {
+        // The page travels in the query string so the server can authorize
+        // before it reads the body.
+        async toRepo(repoFile) {
+          const formData = new FormData();
+          formData.append('file', repoFile);
+          const response = await fetch(`/api/upload?pageId=${encodeURIComponent(pageId)}`, {
+            method: 'POST',
+            body: formData,
+          });
+          if (!response.ok) {
+            const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+            // The capability was stale: this file belongs in media.
+            if (response.status === 409 && body?.error === 'USE_MEDIA') {
+              throw new UploadReroute('media');
+            }
+            throw new UploadRefused(typeof body?.error === 'string' ? body.error : 'Upload failed');
+          }
+          const result = await response.json();
+          return { ref: result.url, displayUrl: result.displayUrl ?? null };
+        },
+
+        async toMedia(mediaFile, options) {
+          if (!classroomId) throw new UploadRefused('Upload failed');
+          // BlockNote's own "loading" state says nothing about how far a
+          // two-gigabyte upload has got, so a media upload carries a progress
+          // toast of its own.
+          const progressToast: ToastId = toast(`Uploading ${mediaFile.name}`, {
+            progress: 0,
+            autoClose: false,
+            closeButton: false,
+            closeOnClick: false,
+            draggable: false,
+          });
+          try {
+            const { ref } = await uploadMultipart({
+              file: mediaFile,
+              classroomId,
+              options,
+              endpoints: { base: '/api/media' },
+              onProgress: ({ sentBytes, totalBytes }) => {
+                // Held under 1: `done` is what completes the bar and closes it.
+                const progress = totalBytes > 0 ? Math.min(0.99, sentBytes / totalBytes) : 0;
+                toast.update(progressToast, { progress });
+              },
+            });
+            toast.done(progressToast);
+            return { ref, displayUrl: await fetchMediaDisplayUrl(pageId, ref) };
+          } catch (error) {
+            toast.dismiss(progressToast);
+            if (error instanceof MultipartUploadError) {
+              // The router keeps this one in the repository after all.
+              if (error.code === 'USE_REPO') throw new UploadReroute('repo');
+              if (error.code === 'ABORTED') throw new UploadCancelled();
+              throw new UploadRefused(mediaUploadMessage(error, uploadCapability));
+            }
+            throw error;
+          }
+        },
       };
 
-      // The same ceiling the server enforces — refused here before a large
-      // file spends a minute uploading only to be turned away.
-      if (file.size > REPO_REST_MAX_BYTES) {
-        refuse(repoFileTooLargeMessage(file.name));
+      let placed;
+      try {
+        placed = await placeUpload(file, uploadCapability, ports);
+      } catch (error) {
+        if (error instanceof UploadRefused) toast.error(error.message);
+        throw error;
       }
 
-      const formData = new FormData();
-      formData.append('file', file);
+      // The display URL goes into the map BEFORE the block gets the reference,
+      // so the render that first sees the reference already has its URL.
+      onAssetUploaded?.(placed.ref, placed.displayUrl);
 
-      const response = await fetch(`/api/upload?pageId=${encodeURIComponent(pageId)}`, {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
-        refuse(typeof body?.error === 'string' ? body.error : 'Upload failed');
+      // A video dropped on the page, or uploaded through a generic file
+      // block, becomes a video block: BlockNote makes a `file` block for any
+      // type no block in the schema claims, and a lecture shown as a filename
+      // is not what anyone dropping one meant.
+      if (blockId && kindOfFilename(file.name) === 'VIDEO') {
+        const block = editorRef.current?.getBlock(blockId);
+        if (block?.type === 'file') {
+          return { type: 'video', props: { url: placed.ref } };
+        }
       }
-
-      const result = await response.json();
-      // What goes INTO the block is the repo path — the reference that keeps
-      // following the file. The signed URL only ever goes into the display map,
-      // so a save can never commit it.
-      onAssetUploaded?.(result.url, result.displayUrl);
-      return result.url;
+      return placed.ref;
     },
-    [pageId, onAssetUploaded]
+    [pageId, onAssetUploaded, classroomId, uploadCapability]
   );
-
   const typedInitialContent =
     Array.isArray(initialContent) && initialContent.length > 0
       ? (initialContent as PageBlockInsertions)
@@ -168,6 +264,8 @@ const PageEditor = forwardRef(function PageEditor(
     },
     [onChange]
   );
+
+  editorRef.current = editor;
 
   // Expose getContent() to parent via ref
   useImperativeHandle(
@@ -350,12 +448,15 @@ const PageEditor = forwardRef(function PageEditor(
             slashMenu={false}
             formattingToolbar={false}
             sideMenu={false}
+            filePanel={false}
             onChange={() => onChange?.(editor.document)}
           >
             <SideMenuController
               sideMenu={props => <SideMenu {...props} dragHandleMenu={CustomDragHandleMenu} />}
             />
             <FormattingToolbarController formattingToolbar={() => <FormattingToolbar />} />
+            {/* BlockNote's file panel plus a Media tab for file and audio blocks. */}
+            <FilePanelController filePanel={MediaFilePanel} />
             <SuggestionMenuController
               triggerCharacter="/"
               getItems={async query => filterSuggestionItems(getAllSlashMenuItems(editor), query)}
