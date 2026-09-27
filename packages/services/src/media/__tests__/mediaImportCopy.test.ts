@@ -49,6 +49,7 @@ const order: string[] = [];
 const prisma = {
   mediaObject: {
     findMany: vi.fn(),
+    findUnique: vi.fn(),
     create: vi.fn(),
     updateMany: vi.fn(),
     deleteMany: vi.fn(),
@@ -64,12 +65,20 @@ vi.mock('../uploadCapability.ts', () => ({
 }));
 
 const deleteMedia = vi.fn();
+const afterFailedReadyFlip = vi.fn();
 vi.mock('../media.service.ts', () => ({
   deleteMedia: (...args: unknown[]) => deleteMedia(...args),
+  afterFailedReadyFlip: (...args: unknown[]) => afterFailedReadyFlip(...args),
 }));
 
-const { collectMediaRefs, createMediaImportCopier, rewriteMediaRefs, skippedSummary } =
-  await import('../mediaImportCopy.ts');
+const {
+  collectMediaRefs,
+  createMediaImportCopier,
+  importCopyId,
+  rewriteMediaRefs,
+  skippedSummary,
+  uuidV5,
+} = await import('../mediaImportCopy.ts');
 const { PRO_QUOTA_BYTES } = await import('../mediaQuota.ts');
 const { resetR2Client } = await import('../r2Client.ts');
 
@@ -193,6 +202,7 @@ beforeEach(() => {
     return { count: 1 };
   });
   prisma.mediaObject.deleteMany.mockResolvedValue({ count: 1 });
+  prisma.mediaObject.findUnique.mockResolvedValue(null);
   database();
 });
 
@@ -616,6 +626,119 @@ describe('createMediaImportCopier: what is not copied', () => {
   });
 });
 
+describe('createMediaImportCopier: the READY write fails', () => {
+  const twoRows = () =>
+    database({
+      sourceRows: [row(), row({ id: PDF, kind: 'DOCUMENT', filename: 'notes.pdf', ext: 'pdf' })],
+    });
+
+  /** The READY write for the FIRST reservation throws; every other one lands. */
+  function failFirstReadyWrite() {
+    let first = true;
+    prisma.mediaObject.updateMany.mockImplementation(async () => {
+      order.push('ready');
+      if (first) {
+        first = false;
+        throw new Error('connection reset');
+      }
+      return { count: 1 };
+    });
+  }
+
+  it('released: deletes what landed, warns, and copies the rest of the pass', async () => {
+    twoRows();
+    failFirstReadyWrite();
+    afterFailedReadyFlip.mockResolvedValue('released');
+    const { list, warn } = warnings();
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn,
+    });
+    const text = `media://${VIDEO} media://${PDF}`;
+
+    await expect(copier.prepare([text])).resolves.toBeUndefined();
+
+    const videoCopy = prisma.mediaObject.create.mock.calls[0][0].data.id as string;
+    expect(afterFailedReadyFlip).toHaveBeenCalledWith(TARGET, videoCopy, 'UPLOADING');
+    expect(sent.filter(s => s.name === 'DeleteObject').map(s => s.input.Key)).toEqual([
+      `m/${TARGET}/${videoCopy}/orig.mp4`,
+    ]);
+    expect(copier.copiedIdFor(VIDEO)).toBeNull();
+    // The PDF after it was still copied and repointed.
+    const pdfCopy = copier.copiedIdFor(PDF);
+    expect(pdfCopy).not.toBeNull();
+    expect(sent.filter(s => s.name === 'CopyObject')).toHaveLength(2);
+    expect(copier.rewrite(text)).toBe(`media://${VIDEO} media://${pdfCopy}`);
+    expect(list).toEqual(['Could not copy video "lecture.mp4" into this class: connection reset']);
+  });
+
+  it('the write landed after all: the copy counts', async () => {
+    database();
+    failFirstReadyWrite();
+    afterFailedReadyFlip.mockResolvedValue('ready');
+    const onCopied = vi.fn();
+    const { list, warn } = warnings();
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn,
+      onCopied,
+    });
+
+    await copier.prepare([`media://${VIDEO}`]);
+
+    const copy = copier.copiedIdFor(VIDEO);
+    expect(copy).not.toBeNull();
+    expect(onCopied).toHaveBeenCalledWith(VIDEO, copy);
+    expect(sent.filter(s => s.name === 'DeleteObject')).toEqual([]);
+    expect(list).toEqual([]);
+  });
+
+  it('unknown: keeps the objects (a READY row may serve them) and warns', async () => {
+    database();
+    failFirstReadyWrite();
+    afterFailedReadyFlip.mockResolvedValue('unknown');
+    const { list, warn } = warnings();
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn,
+    });
+
+    await copier.prepare([`media://${VIDEO}`]);
+
+    expect(copier.copiedIdFor(VIDEO)).toBeNull();
+    expect(sent.filter(s => s.name === 'DeleteObject')).toEqual([]);
+    expect(list).toHaveLength(1);
+  });
+
+  it('a reservation that throws is one warning, and the pass goes on', async () => {
+    twoRows();
+    let first = true;
+    prisma.mediaObject.create.mockImplementation(async ({ data }: { data: { id: string } }) => {
+      if (first) {
+        first = false;
+        throw new Error('deadlock detected');
+      }
+      return data;
+    });
+    const { list, warn } = warnings();
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn,
+    });
+
+    await expect(copier.prepare([`media://${VIDEO} media://${PDF}`])).resolves.toBeUndefined();
+
+    expect(copier.copiedIdFor(VIDEO)).toBeNull();
+    expect(copier.copiedIdFor(PDF)).not.toBeNull();
+    expect(sent.filter(s => s.name === 'CopyObject')).toHaveLength(1);
+    expect(list).toEqual(['Could not copy video "lecture.mp4" into this class: deadlock detected']);
+  });
+});
+
 describe('createMediaImportCopier: a partial copy never leaks a source signature', () => {
   it('one copied, one refused for quota: new ref, bare source ref, one summary warning', async () => {
     const BIG = row({
@@ -770,6 +893,171 @@ describe('createMediaImportCopier: resuming from a persisted map', () => {
   });
 });
 
+describe('createMediaImportCopier: copy ids derived from the import', () => {
+  const JOB = 'job-123';
+
+  /** The destination answers READY for the ids in `readyCopies` only. */
+  function withReadyCopies(readyCopies: string[]) {
+    prisma.mediaObject.findMany.mockImplementation(
+      async ({
+        where,
+      }: {
+        where: { classroom_id: string; status?: string; id?: { in: string[] } };
+      }) => {
+        if (where.classroom_id === SOURCE) return [row()].filter(r => where.id?.in.includes(r.id));
+        if (where.status === 'READY') {
+          return readyCopies.filter(id => where.id?.in.includes(id)).map(id => ({ id }));
+        }
+        return [];
+      }
+    );
+  }
+
+  it('uuidV5 matches the RFC 4122 construction', () => {
+    expect(uuidV5('6ba7b810-9dad-11d1-80b4-00c04fd430c8', 'www.example.com')).toBe(
+      '2ed6657d-e927-568b-95e1-2665a8aea6a2'
+    );
+    const id = importCopyId(JOB, VIDEO);
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(importCopyId(JOB, VIDEO)).toBe(id);
+    expect(importCopyId('job-456', VIDEO)).not.toBe(id);
+    expect(importCopyId(JOB, PDF)).not.toBe(id);
+  });
+
+  it('a retry whose pair was never persisted finds the copy by id: nothing copied twice', async () => {
+    withReadyCopies([]);
+    const onCopied = vi.fn();
+    const first = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn: () => {},
+      copyIdSeed: JOB,
+      onCopied,
+    });
+    await first.prepare([`media://${VIDEO}`]);
+    const derived = importCopyId(JOB, VIDEO);
+    expect(first.copiedIdFor(VIDEO)).toBe(derived);
+    expect(prisma.mediaObject.create.mock.calls[0][0].data.id).toBe(derived);
+    expect(sent.filter(s => s.name === 'CopyObject').map(s => s.input.Key)).toEqual([
+      `m/${TARGET}/${derived}/orig.mp4`,
+    ]);
+
+    // The retry: the progress write carrying the pair was lost, so the persisted
+    // map is empty — but the copy is READY under its derived id.
+    sent.length = 0;
+    vi.mocked(prisma.$transaction).mockClear();
+    withReadyCopies([derived]);
+    const second = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn: () => {},
+      knownCopies: {},
+      copyIdSeed: JOB,
+    });
+    await second.prepare([`media://${VIDEO}`]);
+
+    const reuse = prisma.mediaObject.findMany.mock.calls.at(-1)![0];
+    expect(reuse.where).toEqual({ classroom_id: TARGET, status: 'READY', id: { in: [derived] } });
+    expect(sent).toEqual([]);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(second.copiedIdFor(VIDEO)).toBe(derived);
+    expect(second.rewrite(`media://${VIDEO}`)).toBe(`media://${derived}`);
+  });
+
+  it('takes over a reservation an earlier attempt left UPLOADING under the id', async () => {
+    withReadyCopies([]);
+    const derived = importCopyId(JOB, VIDEO);
+    prisma.mediaObject.findUnique.mockResolvedValue({ classroom_id: TARGET, status: 'UPLOADING' });
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn: () => {},
+      copyIdSeed: JOB,
+    });
+
+    await copier.prepare([`media://${VIDEO}`]);
+
+    expect(prisma.mediaObject.findUnique).toHaveBeenCalledWith({
+      where: { id: derived },
+      select: { classroom_id: true, status: true },
+    });
+    // The stale reservation goes inside the same locked transaction, before the
+    // sum, and the new one reuses the id.
+    expect(prisma.mediaObject.deleteMany).toHaveBeenCalledWith({
+      where: { id: derived, classroom_id: TARGET, status: 'UPLOADING' },
+    });
+    expect(prisma.mediaObject.create.mock.calls[0][0].data.id).toBe(derived);
+    expect(copier.copiedIdFor(VIDEO)).toBe(derived);
+  });
+
+  it('a taken-over reservation refused for quota: its half-copied keys are removed', async () => {
+    const derived = importCopyId(JOB, VIDEO);
+    prisma.mediaObject.findUnique.mockResolvedValue({ classroom_id: TARGET, status: 'UPLOADING' });
+    prisma.mediaObject.findMany.mockImplementation(
+      async ({
+        where,
+      }: {
+        where: { classroom_id: string; status?: string; id?: { in: string[] } };
+      }) => {
+        if (where.classroom_id === SOURCE) return [row()].filter(r => where.id?.in.includes(r.id));
+        if (where.status === 'READY') return [];
+        return [row({ id: PDF, classroom_id: TARGET, size_bytes: BigInt(PRO_QUOTA_BYTES) })];
+      }
+    );
+    const { list, warn } = warnings();
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn,
+      copyIdSeed: JOB,
+    });
+
+    await copier.prepare([`media://${VIDEO}`]);
+
+    expect(copier.copiedIdFor(VIDEO)).toBeNull();
+    expect(prisma.mediaObject.create).not.toHaveBeenCalled();
+    expect(sent.filter(s => s.name === 'CopyObject')).toEqual([]);
+    expect(sent.filter(s => s.name === 'DeleteObject').map(s => s.input.Key)).toEqual([
+      `m/${TARGET}/${derived}/orig.mp4`,
+    ]);
+    expect(list).toHaveLength(1);
+    expect(list[0]).toContain('storage is full');
+  });
+
+  it('an id whose row is gone for good (a discarded copy) is not reused', async () => {
+    withReadyCopies([]);
+    const derived = importCopyId(JOB, VIDEO);
+    prisma.mediaObject.findUnique.mockResolvedValue({ classroom_id: TARGET, status: 'DELETED' });
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn: () => {},
+      copyIdSeed: JOB,
+    });
+
+    await copier.prepare([`media://${VIDEO}`]);
+
+    const fresh = copier.copiedIdFor(VIDEO)!;
+    expect(fresh).not.toBeNull();
+    expect(fresh).not.toBe(derived);
+    expect(prisma.mediaObject.deleteMany).not.toHaveBeenCalled();
+    expect(sent.filter(s => s.name === 'CopyObject').map(s => s.input.Key)).toEqual([
+      `m/${TARGET}/${fresh}/orig.mp4`,
+    ]);
+  });
+
+  it('without a seed, ids stay random and nothing is looked up by id', async () => {
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn: () => {},
+    });
+    await copier.prepare([`media://${VIDEO}`]);
+    expect(prisma.mediaObject.findUnique).not.toHaveBeenCalled();
+    expect(copier.copiedIdFor(VIDEO)).not.toBe(importCopyId(JOB, VIDEO));
+  });
+});
+
 describe('createMediaImportCopier: discard', () => {
   const KEPT = '66666666-6666-4666-8666-666666666666';
 
@@ -808,6 +1096,41 @@ describe('createMediaImportCopier: discard', () => {
     // A second discard has nothing left to do.
     await copier.discard();
     expect(deleteMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it('after keep, discards only the copies made since, and a later pass copies again', async () => {
+    deleteMedia.mockResolvedValue({});
+    database({
+      sourceRows: [row(), row({ id: PDF, kind: 'DOCUMENT', filename: 'notes.pdf', ext: 'pdf' })],
+    });
+    const copier = createMediaImportCopier({
+      sourceClassroomId: SOURCE,
+      targetClassroomId: TARGET,
+      warn: () => {},
+    });
+
+    // Pass 1 (the pages) copies the video, and its commit lands.
+    await copier.prepare([`media://${VIDEO}`]);
+    const video = copier.copiedIdFor(VIDEO)!;
+    copier.keep();
+
+    // Pass 2 (the decks) copies the PDF, and its commit fails.
+    await copier.prepare([`media://${VIDEO} media://${PDF}`]);
+    const pdf = copier.copiedIdFor(PDF)!;
+    await copier.discard();
+
+    expect(deleteMedia).toHaveBeenCalledTimes(1);
+    expect(deleteMedia).toHaveBeenCalledWith({ classroom: { id: TARGET }, mediaId: pdf });
+    expect(copier.copiedIdFor(VIDEO)).toBe(video);
+    expect(copier.copiedIdFor(PDF)).toBeNull();
+
+    // A later pass that references the PDF copies it afresh.
+    sent.length = 0;
+    await copier.prepare([`media://${PDF}`]);
+    const again = copier.copiedIdFor(PDF);
+    expect(again).not.toBeNull();
+    expect(again).not.toBe(pdf);
+    expect(sent.filter(s => s.name === 'CopyObject')).toHaveLength(1);
   });
 
   it('never throws when a delete fails', async () => {

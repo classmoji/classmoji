@@ -188,23 +188,54 @@ describe('cloneContentRepo — a push that fails', () => {
 });
 
 describe('cloneContentRepo — text files too large to rewrite', () => {
-  it('pushes them verbatim and names them in ONE import warning', async () => {
-    const big = `{"v":"media://${OLD}","pad":"${'x'.repeat(5 * 1024 * 1024)}"}`;
+  it('rewrites only their media refs, and names them in ONE import warning', async () => {
+    const pad = 'x'.repeat(5 * 1024 * 1024);
+    const repoLink = 'https://github.com/uniglos/content-25/blob/main/pages/a.png';
+    const big = `{"v":"media://${OLD}","link":"${repoLink}","pad":"${pad}"}`;
     mocks.seed.set('pages/huge/content.json', big);
     mocks.seed.set('slides/huge/index.html', big);
+    const rewriteContentUrls = vi.fn(
+      (text: string, ctx: { rewriteMedia?: (t: string) => string }) =>
+        ctx.rewriteMedia ? ctx.rewriteMedia(text) : text
+    );
+    const { ClassmojiService } = await import('@classmoji/services');
+    const real = ClassmojiService.contentImport.rewriteContentUrls;
+    ClassmojiService.contentImport.rewriteContentUrls = rewriteContentUrls as never;
     const media = fakeMedia();
     const warnings: string[] = [];
 
-    await run(media, detail => warnings.push(detail));
+    try {
+      await run(media, detail => warnings.push(detail));
+    } finally {
+      ClassmojiService.contentImport.rewriteContentUrls = real;
+    }
 
-    // Not handed to the media copy, not rewritten.
-    expect(media.prepared[0].some(text => text.length > 5 * 1024 * 1024)).toBe(false);
-    expect(mocks.pushedTree.get('pages/huge/content.json')).toBe(big);
+    // Handed to the media copy in the same single call, and media-rewritten.
+    expect(media.prepare).toHaveBeenCalledTimes(1);
+    expect(media.prepared[0].filter(text => text.length > 5 * 1024 * 1024)).toHaveLength(2);
+    const expected = `{"v":"media://${NEW}","link":"${repoLink}","pad":"${pad}"}`;
+    expect(mocks.pushedTree.get('pages/huge/content.json')).toBe(expected);
+    expect(mocks.pushedTree.get('slides/huge/index.html')).toBe(expected);
+    // The repo-URL rewrite ran on the small files and never saw these.
+    expect(rewriteContentUrls).toHaveBeenCalled();
+    for (const [text] of rewriteContentUrls.mock.calls) {
+      expect(text.length).toBeLessThan(5 * 1024 * 1024);
+    }
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('2 text files over 5 MB');
     expect(warnings[0]).toContain('pages/huge/content.json (5 MB)');
     expect(warnings[0]).toContain('slides/huge/index.html (5 MB)');
-    expect(warnings[0]).toContain('media included');
+    expect(warnings[0]).toContain("links to the source class's repository");
+    expect(warnings[0]).not.toContain('media');
+  });
+
+  it('without a media copy, pushes them verbatim', async () => {
+    const big = `{"v":"media://${OLD}","pad":"${'x'.repeat(5 * 1024 * 1024)}"}`;
+    mocks.seed.set('pages/huge/content.json', big);
+
+    await run();
+
+    expect(mocks.pushedTree.get('pages/huge/content.json')).toBe(big);
   });
 
   it('warns about nothing when every text file was rewritable', async () => {

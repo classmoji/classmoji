@@ -41,6 +41,7 @@ const COPIES: Record<string, string> = {
 /** What the fake copier was asked to prepare, per call. */
 const prepared: string[][] = [];
 const created: unknown[] = [];
+const discarded = vi.hoisted(() => ({ count: 0 }));
 
 vi.mock('../../media/mediaImportCopy.ts', () => {
   loads.copier += 1;
@@ -63,6 +64,13 @@ vi.mock('../../media/mediaImportCopy.ts', () => {
             copied.has(id) ? `media://${copied.get(id)}` : ref
           ),
         copiedIdFor: (id: string) => copied.get(id) ?? null,
+        keep: () => {
+          order.push('keep');
+        },
+        discard: async () => {
+          order.push('discard');
+          discarded.count += 1;
+        },
       };
     },
   };
@@ -203,6 +211,7 @@ beforeEach(() => {
   prepared.length = 0;
   created.length = 0;
   order.length = 0;
+  discarded.count = 0;
   classroomFindUnique.mockImplementation(({ where }: { where: { id: string } }) =>
     where.id === 'source-class'
       ? classroomRow('source-class', 'cs52-24')
@@ -280,8 +289,8 @@ describe('pages with media', () => {
     });
 
     expect(summary.pages).toBe(1);
-    // The copy happens before anything is committed.
-    expect(order).toEqual(['prepare', 'commit']);
+    // The copy happens before anything is committed, and is kept once it is.
+    expect(order).toEqual(['prepare', 'commit', 'keep']);
     // One call for the whole pass: the file texts AND the cover.
     expect(prepared).toHaveLength(1);
     expect(prepared[0].some(text => text.includes(SOURCE_VIDEO))).toBe(true);
@@ -357,5 +366,57 @@ describe('slides with media', () => {
     ]);
     // Nothing of a media document is read from, or committed to, the repo.
     expect(uploadBatch).not.toHaveBeenCalled();
+  });
+});
+
+describe('a commit that fails', () => {
+  it('pages: the copies made for them are discarded', async () => {
+    repo.set('pages/lab-1/content.json', `{"v":"media://${SOURCE_VIDEO}"}`);
+    uploadBatch.mockImplementation(async () => {
+      order.push('commit');
+      throw new Error('GitHub said no');
+    });
+
+    const summary = await importClassroomContent('source-class', 'target-class', 'user-1', {
+      pages: true,
+      slides: false,
+    });
+
+    expect(summary.pages).toBe(0);
+    expect(order).toEqual(['prepare', 'commit', 'discard']);
+    expect(discarded.count).toBe(1);
+    expect(pageCreate).not.toHaveBeenCalled();
+  });
+
+  it('slides after pages that landed: the pages are kept, then the slides discarded', async () => {
+    repo.set('pages/lab-1/content.json', `{"v":"media://${SOURCE_VIDEO}"}`);
+    repo.set('slides/week-1/deck.json', `{"v":"media://${SOURCE_VIDEO}"}`);
+    repo.set('slides/week-1/index.html', '<p>week 1</p>');
+    slideFindMany.mockImplementation(({ where }: { where: { classroom_id: string } }) =>
+      where.classroom_id === 'source-class' ? [deck] : []
+    );
+    let commits = 0;
+    uploadBatch.mockImplementation(async ({ files }: { files: Array<{ path: string }> }) => {
+      order.push('commit');
+      commits += 1;
+      if (commits === 2) throw new Error('GitHub said no');
+      return {
+        commit: 'c1',
+        filesUploaded: files.length,
+        files: files.map((file, index) => ({ path: file.path, sha: `sha-${index}` })),
+      };
+    });
+
+    const summary = await importClassroomContent('source-class', 'target-class', 'user-1', {
+      pages: true,
+      slides: true,
+    });
+
+    expect(summary.pages).toBe(1);
+    expect(summary.slides).toBe(0);
+    // `keep` lands between the page commit and the slides' copy, so the discard
+    // after the failed deck commit cannot reach what the pages reference.
+    expect(order).toEqual(['prepare', 'commit', 'keep', 'prepare', 'commit', 'discard']);
+    expect(discarded.count).toBe(1);
   });
 });
