@@ -74,6 +74,26 @@ export function autogradeCallbackUrl(env: NodeJS.ProcessEnv = process.env): stri
 
 type GitOrganizationLike = Parameters<typeof getGitProvider>[0];
 
+/**
+ * Gitlab: true when no CI runner can pick up pipelines under `owner`, so a
+ * committed .gitlab-ci.yml would only leave pipelines pending forever. Only a
+ * definite "none" counts; offline or unknown still provisions.
+ */
+async function gitlabHasNoRunner(
+  gitOrganization: GitOrganizationLike,
+  owner: string
+): Promise<boolean> {
+  if ((gitOrganization as { provider?: string }).provider !== 'GITLAB') return false;
+  try {
+    const provider = getGitProvider(gitOrganization) as unknown as {
+      ciRunnerAvailability(group: string): Promise<string>;
+    };
+    return (await provider.ciRunnerAvailability(owner)) === 'none';
+  } catch {
+    return false;
+  }
+}
+
 /** Commit the workflow, turning the App-permission 403 into an actionable error. */
 export async function commitWorkflow(
   gitProvider: GitProvider,
@@ -151,6 +171,12 @@ export async function provisionAutogradeWorkflowForRepo(params: {
   try {
     const tests = await ClassmojiService.autogradingTest.findByRepositoryId(params.repositoryId);
     if (!tests.length) return;
+    if (await gitlabHasNoRunner(params.gitOrganization, login)) {
+      logger.warn('autograde: no Gitlab CI runner for this class; workflow not added', {
+        repoName: params.repoName,
+      });
+      return;
+    }
     const yaml = await buildClassroomWorkflowYaml(
       tests as WorkflowTestInput[],
       params.classroomSlug,
@@ -203,6 +229,13 @@ export const provisionAutogradeWorkflowTask = task({
     const tests = repository.autograding_tests as WorkflowTestInput[];
     // GitLab student projects live in the class subgroup's `projects`.
     const owner = repoNamespace(repository.classroom) || orgLogin;
+    if (await gitlabHasNoRunner(gitOrganization, owner)) {
+      logger.warn('autograde: no Gitlab CI runner for this class; workflows not added', {
+        classroomSlug,
+        repositoryId,
+      });
+      return { testCount: tests.length, repoCount: 0, skipped: 'no_gitlab_runner' as const };
+    }
     const triggerToken = autogradeCallbackUrl() ? undefined : await mintIngestTriggerToken();
 
     // Fan out to existing student repos. We deliberately do NOT write the

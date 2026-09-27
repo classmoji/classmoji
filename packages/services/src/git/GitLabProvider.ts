@@ -845,6 +845,34 @@ export class GitLabProvider extends GitProvider {
     }
   }
 
+  /**
+   * Can CI run for projects under `group`? Group runners (its own and its
+   * ancestors') count, and instance (shared) runners count unless the group
+   * turned them off. 'offline': runners exist but none is online right now.
+   * 'unknown': Gitlab would not say (permissions, an old version), so callers
+   * should hedge rather than warn.
+   */
+  async ciRunnerAvailability(group: string): Promise<'available' | 'offline' | 'none' | 'unknown'> {
+    const [runners, groupInfo] = await Promise.all([
+      this.request(`/api/v4/groups/${encodeURIComponent(group)}/runners?per_page=100`),
+      this.request(`/api/v4/groups/${encodeURIComponent(group)}`),
+    ]);
+    if (!runners.ok || !Array.isArray(runners.body)) return 'unknown';
+    const sharedSetting = (groupInfo.body as { shared_runners_setting?: string } | null)
+      ?.shared_runners_setting;
+    const sharedOff = typeof sharedSetting === 'string' && sharedSetting.startsWith('disabled');
+    const usable = (
+      runners.body as Array<{ runner_type?: string; active?: boolean; paused?: boolean }>
+    )
+      .filter(r => r.active !== false && r.paused !== true)
+      .filter(r => !(sharedOff && r.runner_type === 'instance_type'));
+    if (usable.length === 0) return 'none';
+    const online = (usable as Array<{ status?: string; online?: boolean }>).some(
+      r => r.status === 'online' || r.online === true
+    );
+    return online ? 'available' : 'offline';
+  }
+
   /** An open merge request from `source` into `target`, if any. */
   async findOpenMergeRequest(
     group: string,

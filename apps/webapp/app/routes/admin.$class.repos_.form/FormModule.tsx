@@ -85,11 +85,13 @@ interface FormModuleProps {
   hasReposWithProjects?: boolean;
   /** Repos already exist on GitHub: type and team formation are frozen. */
   hasProvisionedRepos?: boolean;
-  /**
-   * GitLab classroom: autograding (Github Actions) is not supported there yet,
-   * so it isn't offered. Team repositories are (team subgroups).
-   */
+  /** Gitlab classroom: Gitlab wording, and autograding runs in Gitlab CI. */
   isGitLab?: boolean;
+  /**
+   * Gitlab only: whether a CI runner can pick up this class's pipelines
+   * (see GitLabProvider.ciRunnerAvailability). Null on Github.
+   */
+  gitlabRunner?: 'available' | 'offline' | 'none' | 'unknown' | null;
 }
 
 const FormModule = ({
@@ -103,6 +105,7 @@ const FormModule = ({
   hasReposWithProjects = false,
   hasProvisionedRepos = false,
   isGitLab = false,
+  gitlabRunner = null,
 }: FormModuleProps) => {
   const { template, setTemplate } = useRepositoryFormStore();
   const terms = gitTerms(isGitLab);
@@ -642,6 +645,26 @@ const FormModule = ({
                   </Button>
                 </Tooltip>
               </div>
+
+              {isGitLab && gitlabRunner && gitlabRunner !== 'available' && (
+                <Alert
+                  className="mb-4"
+                  showIcon
+                  type={gitlabRunner === 'unknown' ? 'info' : 'warning'}
+                  message={
+                    gitlabRunner === 'none'
+                      ? 'No CI runner is available to this class on your Gitlab, so the tests will not run.'
+                      : gitlabRunner === 'offline'
+                        ? 'The CI runners available to this class are offline right now, so tests will wait until one is back.'
+                        : 'Autograding needs a CI runner on your Gitlab. Classmoji could not check whether this class has one.'
+                  }
+                  description={
+                    gitlabRunner === 'none'
+                      ? 'Ask your Gitlab admin to enable shared runners or register a runner for your group. Classmoji adds the tests to student projects once a runner is available (use Autograde on the repository to push them).'
+                      : undefined
+                  }
+                />
+              )}
 
               <AutogradingTestsTable
                 tests={autogradingTests}

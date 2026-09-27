@@ -5,7 +5,7 @@ import { IconChevronLeft, IconFolder } from '@tabler/icons-react';
 
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import FormModule from './FormModule';
-import { ClassmojiService } from '@classmoji/services';
+import { ClassmojiService, getGitProvider, type GitLabProvider } from '@classmoji/services';
 import getPrisma from '@classmoji/database';
 import { ActionTypes } from '~/constants';
 import { gitTerms } from '~/utils/gitWeb';
@@ -70,6 +70,19 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     orderBy: { title: 'asc' },
   });
 
+  // Gitlab: can CI run for this class at all? Without a runner the
+  // autograding pipelines never start, so the form says so up front.
+  const isGitLab = classroom.git_organization?.provider === 'GITLAB';
+  const gitlabRunner =
+    isGitLab && classroom.git_namespace
+      ? await Promise.race([
+          (getGitProvider(classroom.git_organization) as GitLabProvider)
+            .ciRunnerAvailability(classroom.git_namespace)
+            .catch(() => 'unknown' as const),
+          new Promise<'unknown'>(resolve => setTimeout(() => resolve('unknown'), 4000)),
+        ])
+      : null;
+
   return {
     repository,
     isNew: !repository,
@@ -79,7 +92,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     slides,
     hasReposWithProjects,
     hasProvisionedRepos,
-    isGitLab: classroom.git_organization?.provider === 'GITLAB',
+    isGitLab,
+    gitlabRunner,
   };
 };
 
@@ -111,6 +125,7 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
     hasReposWithProjects,
     hasProvisionedRepos,
     isGitLab,
+    gitlabRunner,
   } = loaderData;
   const navigate = useNavigate();
   const terms = gitTerms(!!isGitLab);
@@ -154,6 +169,7 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
         hasReposWithProjects={hasReposWithProjects}
         hasProvisionedRepos={hasProvisionedRepos}
         isGitLab={isGitLab}
+        gitlabRunner={gitlabRunner}
       />
     </div>
   );
