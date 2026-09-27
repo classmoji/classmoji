@@ -126,7 +126,7 @@ export const slideCreateTool: ToolDefinition<SlideCreateArgs> = {
   title: 'Create a slide deck',
   description:
     'Creates a new reveal.js slide deck: the canonical 4-slide starter deck committed to the ' +
-    "classroom's shared content repo on GitHub (deck.json + generated index.html in one " +
+    "classroom's shared content repo on Github or Gitlab (deck.json + generated index.html in one " +
     'commit), the database record (created as a draft), and a content-manifest refresh. Edit ' +
     'its content with deck_apply; publish it with slide_update (is_draft: false).',
   scope: 'write',
@@ -285,7 +285,7 @@ export const slideDeleteTool: ToolDefinition<SlideDeleteArgs> = {
   title: 'Delete a slide deck',
   description:
     "Permanently deletes a slide deck: removes its folder from the classroom's content repo " +
-    'on GitHub, deletes the database record, and refreshes the content manifest. This cannot ' +
+    '(Github or Gitlab), deletes the database record, and refreshes the content manifest. This cannot ' +
     'be undone. Shared themes the deck used are kept, and any Cloudinary-hosted slide videos ' +
     'are NOT removed (delete those from the web app). OWNER/TEACHER may delete any deck; an ' +
     'ASSISTANT only decks they created or decks with allow_team_edit.',

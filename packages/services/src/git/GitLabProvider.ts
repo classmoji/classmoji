@@ -722,6 +722,7 @@ export class GitLabProvider extends GitProvider {
     }>;
     return contributors.map(c => ({
       login: c.name || c.email,
+      email: c.email || null,
       user_id: null,
       commits: c.commits ?? 0,
       additions: c.additions ?? 0,

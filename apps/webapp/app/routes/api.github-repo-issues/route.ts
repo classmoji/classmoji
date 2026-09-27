@@ -46,6 +46,15 @@ export async function loader({ request }: Route.LoaderArgs) {
     );
   }
 
+  // Github only: this reads issues through the Github App. Nothing calls it
+  // for a Gitlab classroom; refuse rather than send a Gitlab token to Github.
+  if (classroom.git_organization.provider !== 'GITHUB') {
+    return new Response(JSON.stringify({ error: 'Only available for Github classrooms' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
   try {
     const token = await getInstallationToken(classroom.git_organization);
     const octokit = new Octokit({ auth: token });
@@ -63,8 +72,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     });
   } catch (error: unknown) {
     console.error('[api.github-repo-issues] Error fetching issues:', error);
-    const repoWord = classroom.git_organization.provider === 'GITLAB' ? 'project' : 'repository';
-    return new Response(JSON.stringify({ error: `Failed to fetch ${repoWord} issues` }), {
+    return new Response(JSON.stringify({ error: 'Failed to fetch repository issues' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });

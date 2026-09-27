@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { useNavigate, useLocation, useFetcher } from 'react-router';
+import { useNavigate, useLocation, useFetcher, useRouteLoaderData } from 'react-router';
 import { Tour, Button } from 'antd';
 import type { TourProps } from 'antd';
 import useStore from '~/store';
@@ -39,6 +39,34 @@ interface FeatureStep {
   title: string;
   description: string;
 }
+
+/**
+ * Gitlab wording for the steps that describe Github specifics, by title. The
+ * example course is always a Github one, but a Gitlab user's real classes
+ * work the Gitlab way, so the tour describes that (as OnboardingTour does).
+ */
+const GITLAB_DESCRIPTIONS: Record<string, string> = {
+  'Add an assignment':
+    'Use Add item to place a page or slide deck in the module, or to create an assignment. An assignment is what gets graded: it has a weight and a due date, and students submit through a project (their last push before the deadline, or closing its issue), a quiz, or a form.',
+  Repositories:
+    'A project is a Gitlab template that Classmoji copies to every student, or every team for group work, when you publish it. Copies live in your class subgroup, under Projects. Assignments in any module can submit through the same project, so a semester-long project can carry several of them.',
+  'Name the repository':
+    'Type the project title, which becomes the Gitlab project name in lowercase with dashes.',
+  'Your roster':
+    'The roster lists everyone enrolled. On Gitlab there is no invite to accept: students with a Gitlab account are active right away and get their projects. This is where you review enrollment and remove students or revoke invites.',
+  'Add students':
+    'Add Students lets you paste a list of names and emails, one per line, often straight from your school’s system. Existing Classmoji users are enrolled right away, while new users get an email to join and are set up when they first sign in with Gitlab.',
+  'Team name': 'Type the name for the new team, which becomes its Gitlab subgroup under Teams.',
+  'Team visibility':
+    'Choose whether the team is secret (members only) or visible to the rest of the class.',
+  'Create team':
+    'Click to create the team as a Gitlab subgroup in your class and add it to the classroom.',
+  'Teaching staff':
+    'Your teaching staff help you run and grade the class. You add someone by Gitlab username, and they get access to every project in the class subgroup. Then assign them specific submissions to grade. This spreads grading across your staff so it scales even in a large course.',
+  'Add staff': 'Invite an assistant, a teacher or a co-owner to this classroom by Gitlab username.',
+  Pages:
+    'Pages are course material you write and publish for students, such as the syllabus, lecture notes, assignment specs, or reference guides. They are stored in your class’s Content project on Gitlab, so your content lives in the same Git-native setup as the rest of the class.',
+};
 
 const OWNER_STEPS: FeatureStep[] = [
   {
@@ -80,7 +108,7 @@ const OWNER_STEPS: FeatureStep[] = [
     link: '/repos',
     title: 'Repositories',
     description:
-      'A repository is a GitHub template that Classmoji copies to every student, or every team for group work, when you publish it. Assignments in any module can submit through the same repository, so a semester-long project repo can carry several of them.',
+      'A repository is a Github template that Classmoji copies to every student, or every team for group work, when you publish it. Assignments in any module can submit through the same repository, so a semester-long project repo can carry several of them.',
   },
   {
     link: '/repos/form',
@@ -88,7 +116,7 @@ const OWNER_STEPS: FeatureStep[] = [
     placement: 'bottom',
     title: 'Name the repository',
     description:
-      'Type the repository title, which becomes the GitHub repo name in lowercase with dashes.',
+      'Type the repository title, which becomes the Github repo name in lowercase with dashes.',
   },
   {
     link: '/repos/form',
@@ -109,7 +137,7 @@ const OWNER_STEPS: FeatureStep[] = [
     link: '/students',
     title: 'Your roster',
     description:
-      'The roster lists everyone enrolled along with their status. Students show as Pending until they accept the GitHub organization invite, then become Active with full access to their repos. This is where you review enrollment and remove students or revoke invites.',
+      'The roster lists everyone enrolled along with their status. Students show as Pending until they accept the Github organization invite, then become Active with full access to their repos. This is where you review enrollment and remove students or revoke invites.',
   },
   {
     link: '/students',
@@ -117,7 +145,7 @@ const OWNER_STEPS: FeatureStep[] = [
     placement: 'bottom',
     title: 'Add students',
     description:
-      'Add Students lets you paste a list of names and emails, one per line, often straight from your school’s system. Existing Classmoji users are enrolled right away, while new users get an email to join first, and on their first visit students accept a GitHub org invite to get repo access.',
+      'Add Students lets you paste a list of names and emails, one per line, often straight from your school’s system. Existing Classmoji users are enrolled right away, while new users get an email to join first, and on their first visit students accept a Github org invite to get repo access.',
   },
   {
     link: '/students/add',
@@ -158,7 +186,7 @@ const OWNER_STEPS: FeatureStep[] = [
     selector: '[data-tour="teams-new-name"]',
     placement: 'bottom',
     title: 'Team name',
-    description: 'Type the name for the new team, which GitHub turns into the team slug.',
+    description: 'Type the name for the new team, which Github turns into the team slug.',
   },
   {
     link: '/teams/new',
@@ -174,13 +202,13 @@ const OWNER_STEPS: FeatureStep[] = [
     placement: 'top',
     title: 'Create team',
     description:
-      'Click to create the team in your GitHub organization and add it to the classroom.',
+      'Click to create the team in your Github organization and add it to the classroom.',
   },
   {
     link: '/staff',
     title: 'Teaching staff',
     description:
-      'Your teaching staff help you run and grade the class. You add someone by GitHub username, then assign them specific submissions to grade from the repository view. This spreads grading across your staff so it scales even in a large course.',
+      'Your teaching staff help you run and grade the class. You add someone by Github username, then assign them specific submissions to grade from the repository view. This spreads grading across your staff so it scales even in a large course.',
   },
   {
     link: '/staff',
@@ -188,7 +216,7 @@ const OWNER_STEPS: FeatureStep[] = [
     placement: 'bottom',
     title: 'Add staff',
     description:
-      'Invite an assistant, a teacher or a co-owner to this classroom by GitHub username.',
+      'Invite an assistant, a teacher or a co-owner to this classroom by Github username.',
   },
   {
     link: '/grades',
@@ -264,7 +292,7 @@ const OWNER_STEPS: FeatureStep[] = [
     link: '/pages',
     title: 'Pages',
     description:
-      'Pages are course material you write and publish for students, such as the syllabus, lecture notes, assignment specs, or reference guides. They are served through GitHub Pages, so your content lives in the same Git-native setup as the rest of the class.',
+      'Pages are course material you write and publish for students, such as the syllabus, lecture notes, assignment specs, or reference guides. They are served through Github Pages, so your content lives in the same Git-native setup as the rest of the class.',
   },
   {
     link: '/pages',
@@ -491,6 +519,8 @@ const STUDENT_STEPS: FeatureStep[] = [
 ];
 
 export function InClassroomTour() {
+  const gitMode = (useRouteLoaderData('root') as { gitMode?: string } | undefined)?.gitMode;
+  const isGitLab = gitMode === 'GITLAB';
   const classroom = useStore(s => s.classroom);
   const tourPhase = useStore(s => s.tourPhase);
   const tourStep = useStore(s => s.tourStep);
@@ -702,7 +732,7 @@ export function InClassroomTour() {
     const hasTarget = !!target;
     return {
       title: s.title,
-      description: s.description,
+      description: (isGitLab && GITLAB_DESCRIPTIONS[s.title]) || s.description,
       target,
       placement: s.placement ?? (hasTarget ? 'right' : undefined),
       // Informational steps with nothing to anchor get a darker full-screen mask

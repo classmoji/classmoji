@@ -1137,13 +1137,13 @@ describe('TeamSetError mapping', () => {
     expect(done.message).not.toMatch(/retried/);
   });
 
-  it('says GitHub only to a classroom that is not on GitHub', async () => {
+  it('says Github or Gitlab is needed to a classroom on neither', async () => {
     mocks.previewCreate.mockRejectedValueOnce(
-      teamSetError('provider_unsupported', 'raw GITLAB text', { provider: 'GITLAB' })
+      teamSetError('provider_unsupported', 'raw GITEA text', { provider: 'GITEA' })
     );
     const error = (await formTeamsCreateTool.handler(BASE, CTX).catch(e => e)) as ToolError;
     expect(error).toMatchObject({ kind: 'invalid_params', code: 'provider_unsupported' });
-    expect(error.message).toMatch(/GitHub only/);
+    expect(error.message).toMatch(/needs a Github or Gitlab classroom/);
     expect(error.message).not.toMatch(/cannot be reached/);
     expect(error.data).toBeUndefined();
   });

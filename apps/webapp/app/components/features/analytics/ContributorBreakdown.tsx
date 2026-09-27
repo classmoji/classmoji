@@ -300,7 +300,7 @@ const ContributorBreakdown = ({
       {unmatched.length > 0 && (
         <div data-testid="unmatched-contributors">
           <div className="text-xs uppercase tracking-wide text-ink-3 font-semibold mb-2">
-            Unmatched {web.isGitLab ? 'Gitlab usernames' : 'Github logins'}
+            Unmatched {web.isGitLab ? 'commit authors' : 'Github logins'}
           </div>
           <div className="rounded-lg border border-gray-100 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700">
             {unmatched.map(u => (

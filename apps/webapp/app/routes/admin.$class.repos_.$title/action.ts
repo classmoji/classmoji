@@ -75,6 +75,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
 
     async createProjects() {
+      // Github Projects only: Gitlab has no counterpart, and the task would
+      // fail on every repo.
+      if (classroom.git_organization?.provider !== 'GITHUB') {
+        return {
+          action: 'CREATE_PROJECTS',
+          error: 'Project boards are only available for Github classrooms.',
+        };
+      }
       // Trigger the backfill task to create projects for repos without them
       const handle = await tasks.trigger('gh-create_projects_for_repository', {
         repositoryId: data.repositoryId,

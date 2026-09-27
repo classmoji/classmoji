@@ -360,6 +360,18 @@ export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
       );
     }
 
+    // Github Projects have no Gitlab counterpart: refuse rather than store a
+    // template nothing will ever use.
+    if (args.project_template_id !== undefined) {
+      const row = await ClassmojiService.classroom.findById(classroom.classroomId);
+      if (row?.git_organization?.provider === 'GITLAB') {
+        throw new ToolError(
+          'invalid_params',
+          'project_template_id is for Github classrooms only; Gitlab has no Github Projects.'
+        );
+      }
+    }
+
     let created;
     try {
       created = await ClassmojiService.repository.create({

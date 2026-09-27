@@ -558,30 +558,33 @@ const FormModule = ({
                 )}
               </div>
 
-              {/* GitHub Project Template */}
-              <div className="mt-4 pt-4 border-t border-gray-200 dark:border-neutral-700">
-                <SectionHeader
-                  title="GitHub Project"
-                  subtitle="Optionally create a GitHub Project board for each team"
-                  size="sm"
-                  className="mb-3"
-                />
-                <FormItem control={control} name="project_template_id" label="Project Template">
-                  <ProjectTemplateSelect
-                    disabled={hasReposWithProjects}
-                    onChange={(value, option) => {
-                      setValue('project_template_id', value || null);
-                      const opt = option as { title?: string } | undefined;
-                      setValue('project_template_title', opt?.title || null);
-                    }}
+              {/* Github Project template: Github Projects have no Gitlab
+                  counterpart, so Gitlab classrooms don't get the section. */}
+              {!isGitLab && (
+                <div className="mt-4 pt-4 border-t border-gray-200 dark:border-neutral-700">
+                  <SectionHeader
+                    title="Github Project"
+                    subtitle="Optionally create a Github Project board for each team"
+                    size="sm"
+                    className="mb-3"
                   />
-                </FormItem>
-                {hasReposWithProjects && (
-                  <p className="text-sm text-amber-600 mt-1">
-                    Project template cannot be changed after repos have projects.
-                  </p>
-                )}
-              </div>
+                  <FormItem control={control} name="project_template_id" label="Project Template">
+                    <ProjectTemplateSelect
+                      disabled={hasReposWithProjects}
+                      onChange={(value, option) => {
+                        setValue('project_template_id', value || null);
+                        const opt = option as { title?: string } | undefined;
+                        setValue('project_template_title', opt?.title || null);
+                      }}
+                    />
+                  </FormItem>
+                  {hasReposWithProjects && (
+                    <p className="text-sm text-amber-600 mt-1">
+                      Project template cannot be changed after repos have projects.
+                    </p>
+                  )}
+                </div>
+              )}
             </Card>
           )}
 
@@ -626,7 +629,11 @@ const FormModule = ({
               <div className="flex justify-between items-start mb-4">
                 <SectionHeader
                   title="Autograding tests"
-                  subtitle="Run tests on every push using GitHub Actions"
+                  subtitle={
+                    isGitLab
+                      ? 'Run tests on every push in a Gitlab CI pipeline'
+                      : 'Run tests on every push using Github Actions'
+                  }
                   size="md"
                 />
                 <Tooltip title="Add autograding test">
