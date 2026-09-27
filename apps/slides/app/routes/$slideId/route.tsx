@@ -45,6 +45,9 @@ import {
   uploadBodyLimit,
 } from '@classmoji/utils/upload-limit';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
+import { uploadMultipart } from '@classmoji/ui-components/upload';
+import { deckAssetTarget, deckUploadErrorMessage, mediaUploadMessage } from '~/utils/mediaUpload';
+import { playableMediaUrl } from '~/utils/mediaClient';
 import { useToast, useUser } from '~/hooks';
 import { diffDeckSnapshots, extractDeckSnapshot, type DeckSnapshot } from '~/utils/deckOpsDiff';
 import { getThemeUrls } from '~/utils/themeService.server';
@@ -518,18 +521,18 @@ export const loader = async ({
     }
   }
 
-  // Cloudinary video hosting is Pro-only, and the properties panel offers an
-  // "Upload to Cloudinary" button. Resolved ONLY for editors: viewers never see
-  // that button, and this loader is on the hot path for every student opening
-  // every slide, so a tier query for them would be pure cost. The real gate is
-  // in api.video.upload-cloudinary, which re-decides per request.
-  const isPro = canEdit
-    ? (await ClassmojiService.subscription.getProStateForClassroomId(slide.classroom_id)).isPro
-    : false;
+  // What this classroom's uploads can do — where the editor sends a video or a
+  // file too large for the repository (`storageTargetFor`). Resolved ONLY for
+  // editors: nobody else uploads, and this loader is on the hot path for every
+  // student opening every slide, so the Pro and usage reads would be pure cost
+  // for them. Every upload route re-derives it from the file it receives.
+  const uploadCapability = canEdit
+    ? await ClassmojiService.media.uploadCapabilityFor(slide.classroom)
+    : null;
 
   return {
     slide,
-    isPro,
+    uploadCapability,
     contentUrl,
     slideContent,
     contentError,
@@ -1981,7 +1984,7 @@ export default function SlideViewer() {
   const toast = useToast();
   const {
     slide,
-    isPro,
+    uploadCapability,
     contentUrl,
     slideContent,
     deckSha,
@@ -2584,9 +2587,32 @@ export default function SlideViewer() {
     if (outcome.viewFromLoader) setViewFromLoader(true);
   }, [fetcher.state, deckSha]);
 
-  // Handle image upload - returns a promise that resolves with the image URL
+  // Handle image upload - returns a promise that resolves with the image URL.
+  //
+  // Routed first: a file the storage router sends to media (a Pro video, or
+  // anything over the repository's cap on a classroom with media) goes straight
+  // there from the browser and is placed by its playable URL; a refusal is the
+  // router's own sentence. Everything else takes the deck's repository upload,
+  // which asks the router again and answers `USE_MEDIA` if this was wrong.
   const handleImageUpload = useCallback(
     async (file: File): Promise<string> => {
+      const target = uploadCapability
+        ? deckAssetTarget(uploadCapability, file)
+        : ({ kind: 'repo' } as const);
+      if (target.kind === 'refused') throw new Error(target.message);
+      if (target.kind === 'media') {
+        try {
+          const { ref } = await uploadMultipart({
+            file,
+            classroomId: slide.classroom_id,
+            endpoints: { base: '/api/media' },
+          });
+          return await playableMediaUrl(slide.id, ref);
+        } catch (error: unknown) {
+          throw new Error(mediaUploadMessage(error as { code?: string }) ?? 'Upload cancelled.');
+        }
+      }
+
       return new Promise<string>((resolve, reject) => {
         const formData = new FormData();
         formData.append('intent', 'upload-image');
@@ -2603,7 +2629,7 @@ export default function SlideViewer() {
         window.__imageUploadReject = reject;
       });
     },
-    [fetcher]
+    [fetcher, uploadCapability, slide.classroom_id, slide.id]
   );
 
   // Handle image upload response
@@ -2612,7 +2638,9 @@ export default function SlideViewer() {
       if (fetcher.data.success && fetcher.data.url) {
         window.__imageUploadResolve?.(fetcher.data.url);
       } else if (fetcher.data.error) {
-        window.__imageUploadReject?.(new Error(fetcher.data.error));
+        // The server's sentence, never its code: a `USE_MEDIA` refusal carries
+        // what it means in `message`.
+        window.__imageUploadReject?.(new Error(deckUploadErrorMessage(fetcher.data)));
       }
       // Clean up
       delete window.__imageUploadResolve;
@@ -2899,7 +2927,10 @@ export default function SlideViewer() {
       onDeleteTheme={handleDeleteTheme}
       customThemes={customThemes}
       sharedThemes={sharedThemes}
-      isPro={isPro}
+      uploadCapability={uploadCapability}
+      classroomId={slide.classroom_id}
+      slideId={slide.id}
+      onUploadAsset={handleImageUpload}
     >
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
         {/* Navbar - uses grid layout to center toolbar when editing */}
