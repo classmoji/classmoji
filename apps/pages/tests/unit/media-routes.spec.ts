@@ -82,6 +82,10 @@ const MOUNTS: Array<{ pathname: string; dir: string; exported: string }> = [
   },
 ];
 
+test("/api/media-url, the pages app's own resolve, is mounted beside them", () => {
+  expect(leafFor('/api/media-url')).toBe('routes/api.media-url/route.ts');
+});
+
 test.describe('the media routes on the pages origin', () => {
   for (const mount of MOUNTS) {
     test(`${mount.pathname} reaches ${mount.dir}`, () => {
