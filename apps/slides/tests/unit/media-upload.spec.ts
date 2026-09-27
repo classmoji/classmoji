@@ -234,7 +234,11 @@ test.describe('the three video choices', () => {
     const videoExts = MEDIA_KINDS.find(spec => spec.kind === 'VIDEO')?.exts ?? [];
     expect(videoExts.length).toBeGreaterThan(0);
     for (const ext of videoExts) expect(offered, ext).toContain(`.${ext}`);
-    for (const ext of ['.webm', '.mkv', '.avi', '.mov', '.m4v']) expect(offered).toContain(ext);
+    for (const ext of ['.webm', '.mkv', '.avi', '.mov', '.m4v', '.ogv']) {
+      expect(offered).toContain(ext);
+    }
+    // Videos only — `.ogg` is audio.
+    expect(offered).not.toContain('.ogg');
     const panel = source('../../app/components/properties/editors/VideoProperties.tsx');
     expect(panel).toContain('accept={VIDEO_FILE_ACCEPT}');
   });

@@ -13,6 +13,7 @@
 
 import {
   MEDIA_QUOTA_FULL_MESSAGE,
+  extensionsOfKind,
   kindOfFilename,
   storageTargetFor,
   type StorageTarget,
@@ -83,15 +84,8 @@ export function isVideoFile(file: Pick<FileFacts, 'name'>): boolean {
   return kindOfFilename(file.name) === 'VIDEO';
 }
 
-/**
- * The video extensions the store knows (`MEDIA_KINDS` in the services' kind
- * table, which the router subpath does not export). Filtered through the
- * router's own `kindOfFilename`, so one the store stops calling a video drops
- * out on its own; a test pins that this list covers every VIDEO extension.
- */
-const VIDEO_EXTENSIONS = ['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi'].filter(
-  ext => kindOfFilename(`video.${ext}`) === 'VIDEO'
-);
+/** The video extensions the store knows — its own kind table, through the router. */
+const VIDEO_EXTENSIONS = extensionsOfKind('VIDEO');
 
 /**
  * What a video file picker offers: `video/*`, plus every extension by name —

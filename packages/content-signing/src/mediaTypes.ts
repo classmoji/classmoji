@@ -31,10 +31,15 @@ const MEDIA_CONTENT_TYPES: Readonly<Record<string, string>> = {
   m4v: 'video/x-m4v',
   mkv: 'video/x-matroska',
   avi: 'video/x-msvideo',
+  ogv: 'video/ogg',
   // audio
   mp3: 'audio/mpeg',
   m4a: 'audio/mp4',
   wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  oga: 'audio/ogg',
+  aac: 'audio/aac',
+  flac: 'audio/flac',
   // documents
   pdf: 'application/pdf',
   ppt: 'application/vnd.ms-powerpoint',

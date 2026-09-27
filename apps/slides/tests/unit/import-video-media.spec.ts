@@ -462,6 +462,20 @@ test.describe('which ZIP entries are assets, by the store’s kind table', () =>
     expect(importAssetType('media/a/theme.mp3')).toBe('video');
   });
 
+  test('Ogg, AAC and FLAC are placed with the videos, so a background using one is rewritten', () => {
+    for (const file of ['bg.ogv', 'bg.ogg', 'bg.oga', 'bg.aac', 'bg.flac']) {
+      expect(importAssetType(`media/a/${file}`), file).toBe('video');
+    }
+    // `data-background-video` is resolved against the videos' map — every
+    // VIDEO and AUDIO entry the import placed, media or repository.
+    const importer = source('../../app/utils/slidesComImporter.server.ts');
+    const background = importer.slice(
+      importer.indexOf("$slides.find('section[data-background-video]')")
+    );
+    expect(background).toContain('resolveMediaRef(val, videoMap, skippedVideos)');
+    expect(importer).toContain("const videoFiles = mediaFiles.filter(f => f.type === 'video');");
+  });
+
   test('images, SVG, and anything else in an asset folder but css/js are images', () => {
     expect(importAssetType('img/photo.webp')).toBe('image');
     expect(importAssetType('logo.svg')).toBe('image');

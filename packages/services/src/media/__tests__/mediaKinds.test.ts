@@ -13,9 +13,11 @@ import {
   classifyFilename,
   contentTypeForExt,
   extensionOf,
+  extensionsOfKind,
   filenameRefusal,
   kindForExt,
   knownExtensions,
+  MEDIA_KINDS,
 } from '../mediaKinds.ts';
 
 describe('extensionOf', () => {
@@ -60,6 +62,19 @@ describe('kinds and types', () => {
     expect(kindForExt('AVI')).toBe('VIDEO');
     expect(contentTypeForExt('mkv')).toBe('video/x-matroska');
     expect(contentTypeForExt('avi')).toBe('video/x-msvideo');
+  });
+
+  it('takes Ogg video as video, and Ogg, AAC and FLAC as audio', () => {
+    // `.ogg` is audio by convention (Vorbis/Opus); Ogg video is `.ogv`. As
+    // named kinds they are served with their real types, so a browser plays
+    // them rather than saving them.
+    expect(kindForExt('ogv')).toBe('VIDEO');
+    for (const ext of ['ogg', 'oga', 'aac', 'flac']) expect(kindForExt(ext), ext).toBe('AUDIO');
+    expect(contentTypeForExt('ogv')).toBe('video/ogg');
+    expect(contentTypeForExt('ogg')).toBe('audio/ogg');
+    expect(contentTypeForExt('oga')).toBe('audio/ogg');
+    expect(contentTypeForExt('aac')).toBe('audio/aac');
+    expect(contentTypeForExt('flac')).toBe('audio/flac');
   });
 
   it('serves anything a browser could be talked into running as a download', () => {
@@ -136,5 +151,19 @@ describe('knownExtensions', () => {
     expect(list).toContain('mp4');
     expect(list).toContain('zip');
     expect(list).not.toContain('svg');
+  });
+});
+
+describe('extensionsOfKind', () => {
+  it('is the kind table itself, for a picker to offer', () => {
+    expect(extensionsOfKind('VIDEO')).toEqual(MEDIA_KINDS.find(k => k.kind === 'VIDEO')?.exts);
+    expect(extensionsOfKind('AUDIO')).toContain('flac');
+    expect(extensionsOfKind('OTHER')).toEqual([]);
+  });
+
+  it('hands back a copy the caller cannot use to edit the table', () => {
+    extensionsOfKind('VIDEO').push('exe');
+    expect(kindForExt('exe')).toBe('OTHER');
+    expect(extensionsOfKind('VIDEO')).not.toContain('exe');
   });
 });
