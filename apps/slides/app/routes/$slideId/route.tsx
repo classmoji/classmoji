@@ -1138,8 +1138,10 @@ export const action = async ({
         path: result.path,
       };
     } catch (error: unknown) {
-      // 409 `USE_MEDIA`: the file belongs in media, and the editor re-sends it
-      // there. Tagged like every other answer from this intent.
+      // 409 `USE_MEDIA`: the file belongs in media (the editor's capability was
+      // stale). The editor sends it there once, to media's multipart upload,
+      // and places it by reference. Tagged like every other answer from this
+      // intent.
       if (ClassmojiService.media.isMediaRoutingError(error)) {
         return data(
           { intent: 'upload-image' as const, error: error.code, message: error.message },

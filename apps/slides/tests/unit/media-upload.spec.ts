@@ -463,6 +463,8 @@ test.describe('the reroute, structurally', () => {
     expect(VIEWER).toContain("fetcher.data.error === 'USE_MEDIA'");
     expect(VIEWER).toContain("window.__imageUploadReject?.(new UploadReroute('media'));");
     expect(VIEWER).toContain("if (outcome.kind === 'repo') throw new UploadReroute('repo');");
+    // Its comment on the 409 says what now happens.
+    expect(VIEWER).toContain('The editor sends it there once');
   });
 
   test('the video dialog hands a file media turned away to the repository', () => {
