@@ -75,7 +75,7 @@ export default function GitLabSignIn({
   );
   const [busy, setBusy] = useState(false);
 
-  const signIn = async (choice: GitLabChoice) => {
+  const signIn = async (choice: GitLabChoice, { retried = false } = {}) => {
     setBusy(true);
     setStatus(null);
     remember(choice);
@@ -98,10 +98,16 @@ export default function GitLabSignIn({
         window.location.href = body.url;
         return;
       }
-      // A remembered instance that was removed or turned off: forget it.
+      // A remembered instance that was removed, re-registered, turned off or
+      // is waiting for approval: forget it and say where its host stands now.
       remember(null);
       setRemembered(null);
       setChoosing(true);
+      setHostInput(hostLabel(choice.host));
+      if (!retried) {
+        await checkHost(choice.host, { retried: true });
+        return;
+      }
       setStatus({ kind: 'error', text: body?.message ?? 'Could not start Gitlab sign-in.' });
     } catch {
       setStatus({ kind: 'error', text: 'Could not start Gitlab sign-in.' });
@@ -109,22 +115,19 @@ export default function GitLabSignIn({
     setBusy(false);
   };
 
-  const lookUp = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!hostInput.trim()) return;
+  /** Where a host stands with Classmoji; signs in when it is ready. */
+  const checkHost = async (host: string, { retried = false } = {}) => {
     setBusy(true);
     setStatus(null);
     try {
-      const response = await fetch(
-        `/api/gitlab-instances/lookup?host=${encodeURIComponent(hostInput.trim())}`
-      );
+      const response = await fetch(`/api/gitlab-instances/lookup?host=${encodeURIComponent(host)}`);
       const body = (await response.json().catch(() => null)) as
         | { status: 'ok'; instance: GitLabChoice }
         | { status: 'unknown' | 'disabled' | 'pending'; host: string }
         | { status: 'invalid' }
         | null;
       if (body?.status === 'ok') {
-        await signIn(body.instance);
+        await signIn(body.instance, { retried });
         return;
       }
       if (body?.status === 'unknown') setStatus({ kind: 'unknown', host: body.host });
@@ -138,6 +141,12 @@ export default function GitLabSignIn({
       setStatus({ kind: 'error', text: 'Could not check that address. Try again.' });
     }
     setBusy(false);
+  };
+
+  const lookUp = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!hostInput.trim()) return;
+    await checkHost(hostInput.trim());
   };
 
   if (!choosing && target) {
