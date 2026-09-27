@@ -839,7 +839,7 @@ describe('media-backed file slides', () => {
     await refuse(/Slide files must be one of/);
     // Small enough for the repository: it goes there, not to media.
     mediaRows.set(MEDIA_ID, mediaRow({ size_bytes: BigInt(4 * 1024 * 1024) }));
-    await refuse(/Upload this file to the slide directly/);
+    await refuse(/fits in the course repository/);
 
     expect(slideCreate).not.toHaveBeenCalled();
     expect(findMediaRow).toHaveBeenCalledWith(CLASSROOM_ID, MEDIA_ID);

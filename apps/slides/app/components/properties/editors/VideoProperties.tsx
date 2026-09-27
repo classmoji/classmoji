@@ -12,7 +12,7 @@ import { playableMediaUrl, type MediaPickItem } from '~/utils/mediaClient';
 import { deckAssetTarget, deckUploadErrorMessage, isMediaSource } from '~/utils/mediaUpload';
 
 /** What the file picker offers: videos, including the containers `video/*` misses. */
-const VIDEO_ACCEPT = 'video/*,.mov,.m4v,.mkv';
+const VIDEO_ACCEPT = 'video/*,.mov,.m4v';
 
 /** The stored `src` — `element.src` would hand back an absolute URL instead. */
 const readSrc = (el: HTMLVideoElement | null) => el?.getAttribute('src') ?? el?.src ?? '';

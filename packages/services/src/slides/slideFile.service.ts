@@ -415,14 +415,20 @@ async function mediaSlideSource(
     );
   }
 
+  // A document that fits the repository is committed there, like every other
+  // slide file — decided before the router, whose repository branch would judge
+  // a `.pptx` by the page-asset type rule rather than the slide's own.
   const size = Number(row.size_bytes);
-  const target = storageTargetFor(await uploadCapabilityFor(classroom), {
-    name: row.filename,
-    size,
-  });
+  const capability = await uploadCapabilityFor(classroom);
+  if (size <= capability.repoMaxBytes) {
+    throw new SlideSourceError(
+      'This file fits in the course repository. Upload it to the slide directly.'
+    );
+  }
+  const target = storageTargetFor(capability, { name: row.filename, size });
   if (target.kind !== 'media') {
     throw new SlideSourceError(
-      target.kind === 'refused' ? target.message : 'Upload this file to the slide directly.'
+      target.kind === 'refused' ? target.message : 'This file cannot be stored in media.'
     );
   }
 
