@@ -97,7 +97,10 @@ export class QuizAccessError extends Error {
   }
 }
 
-/** What create/update hand back: the row with its repository and attempts, as before. */
+/**
+ * What create hands back: the row with its repository and attempts, as before
+ * (a new quiz has no attempts, so this is one join).
+ */
 const QUIZ_WRITE_INCLUDE = {
   repository: true,
   attempts: {
@@ -183,12 +186,13 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
   // One transaction, as in create: the material is validated against the
   // quiz's own classroom (read back from the row, not taken from the caller),
   // and a bad id rolls the field changes back with it.
+  //
+  // Returns the quiz's own columns, which is all any caller reads (the MCP
+  // quiz_update summary; the web action ignores it). Attempts and their users
+  // are not loaded: an interactive transaction holds its connection and has a
+  // time limit, and a long-running quiz can have hundreds of attempts.
   return getPrisma().$transaction(async tx => {
-    const quiz = await tx.quiz.update({
-      where: { id: quizId },
-      data: updateData,
-      select: { id: true, classroom_id: true },
-    });
+    const quiz = await tx.quiz.update({ where: { id: quizId }, data: updateData });
     if (data.sourceMaterial !== undefined) {
       await setQuizSourceMaterial(tx, {
         quizId: quiz.id,
@@ -196,7 +200,7 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
         material: data.sourceMaterial,
       });
     }
-    return tx.quiz.findUniqueOrThrow({ where: { id: quiz.id }, include: QUIZ_WRITE_INCLUDE });
+    return quiz;
   });
 };
 

@@ -186,6 +186,22 @@ describe('quiz.update', () => {
     expect(tx.quiz.update.mock.calls[1][0].data).toEqual({ name: 'N' });
   });
 
+  it('returns the updated row without loading attempts inside the transaction', async () => {
+    const row = { id: 'quiz-1', classroom_id: CLASSROOM, name: 'N', weight: 10 };
+    tx.quiz.update.mockResolvedValue(row);
+
+    await expect(
+      quizService.update('quiz-1', { name: 'N', sourceMaterial: [{ kind: 'page', id: 'p1' }] })
+    ).resolves.toBe(row);
+
+    // A plain scalar update: no include pulls every attempt with its user.
+    expect(tx.quiz.update.mock.calls[0][0]).toEqual({
+      where: { id: 'quiz-1' },
+      data: { name: 'N' },
+    });
+    expect(tx.quiz.findUniqueOrThrow).not.toHaveBeenCalled();
+  });
+
   it('rolls back on a foreign document: the error escapes the transaction', async () => {
     tx.slide.findMany.mockResolvedValue([]);
 
