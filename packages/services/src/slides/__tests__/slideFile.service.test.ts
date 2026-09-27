@@ -926,4 +926,28 @@ describe('media-backed file slides', () => {
     expect(await openSlideFile(off)).toEqual({ mode: 'unavailable', reason: 'delivery_off' });
     expect(getLargeContent).not.toHaveBeenCalled();
   });
+
+  // A class-to-class import copies the media object and remaps a `source_path`
+  // it never commits, so a row can carry both. Media wins, on every reader.
+  describe('a row with BOTH media_id and source_path', () => {
+    const both = { ...mediaSlide, source_path: 'slides/week-3/w3.pdf' };
+
+    it('downloads and opens from media, never from the repository', async () => {
+      const result = await slideDownloadUrl(both);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.url).toContain(`/c/${CLASSROOM_ID}/media/${MEDIA_ID}/orig.pdf`);
+      expect(await openSlideFile(both)).toMatchObject({ mode: 'redirect', url: result.url });
+      expect(getLargeContent).not.toHaveBeenCalled();
+    });
+
+    it('a deleted media document is unavailable — the repository path is not a fallback', async () => {
+      mediaRows.set(MEDIA_ID, mediaRow({ status: 'DELETED' }));
+      expect(await slideDownloadUrl(both)).toEqual({ ok: false, reason: 'not_in_map' });
+      expect(await openSlideFile(both)).toEqual({ mode: 'unavailable', reason: 'not_in_map' });
+      const off = { ...both, classroom: { ...classroom, content_delivery_enabled: false } };
+      expect(await openSlideFile(off)).toEqual({ mode: 'unavailable', reason: 'delivery_off' });
+      expect(getLargeContent).not.toHaveBeenCalled();
+    });
+  });
 });

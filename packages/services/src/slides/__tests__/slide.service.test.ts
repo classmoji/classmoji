@@ -539,6 +539,21 @@ describe('deleteSlide', () => {
     expect(slideDeleteMock).toHaveBeenCalledWith({ where: { id: 'slide-1' } });
   });
 
+  it('media wins when a file slide carries BOTH media_id and source_path', async () => {
+    // A class-imported media slide: the copied object, and a remapped
+    // `source_path` that was never committed.
+    slideFindUniqueMock.mockResolvedValue({
+      ...dbSlide,
+      kind: 'FILE',
+      source_path: 'slides/doomed/doomed.pdf',
+      media_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    });
+    const result = await deleteSlide({ slideId: 'slide-1' });
+    expect(result.success).toBe(true);
+    expect(deleteFolderMock).not.toHaveBeenCalled();
+    expect(slideDeleteMock).toHaveBeenCalledWith({ where: { id: 'slide-1' } });
+  });
+
   it('a repository-backed file slide still deletes its folder', async () => {
     slideFindUniqueMock.mockResolvedValue({
       ...dbSlide,

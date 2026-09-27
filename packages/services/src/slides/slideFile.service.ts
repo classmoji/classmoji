@@ -65,6 +65,7 @@ import {
   assertFileSlide,
   assertLinkSlide,
   isCommitTooLargeRefusal,
+  isMediaBackedFileSlide,
   slideFileExtension,
   slideFileSourceProblem,
   slideFileStorageName,
@@ -582,8 +583,10 @@ export async function slideDownloadUrl(slide: SlideFileTarget): Promise<SlideDow
     return { ok: false, reason: 'delivery_off' };
   }
   // Media-backed first: such a row has no `source_path`, and the repository
-  // checks below would call it broken (`no_source`).
-  if (slide.kind === 'FILE' && slide.media_id) {
+  // checks below would call it broken (`no_source`). And media WINS when a row
+  // carries both (`isMediaBackedFileSlide`): the repository path of a
+  // class-imported media slide was remapped, never committed.
+  if (isMediaBackedFileSlide(slide) && slide.media_id) {
     return mediaSlideDownloadUrl(slide.media_id, classroom, login);
   }
   // The two the type now demands, asked again at the boundary. A row built by a

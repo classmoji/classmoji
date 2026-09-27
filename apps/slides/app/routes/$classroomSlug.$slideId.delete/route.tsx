@@ -9,7 +9,7 @@
 import { useState } from 'react';
 import { useLoaderData, useNavigation, Form, redirect, useActionData } from 'react-router';
 import { assertSlideAccess } from '@classmoji/auth/server';
-import { slideService } from '@classmoji/services/slides';
+import { isMediaBackedFileSlide, slideService } from '@classmoji/services/slides';
 import { useUser } from '~/root';
 import { deleteSlideVideos } from '~/utils/cloudinaryService.server';
 import { webappClassUrl } from '~/utils/webappLinks';
@@ -56,9 +56,8 @@ export const loader = async ({
   // A file slide whose document is in the classroom's media was never
   // committed: nothing is deleted from GitHub, and the document itself stays
   // in the media library. The confirm copy has to say that, not the opposite.
-  const mediaBacked = Boolean(
-    slideInfo.slide.kind === 'FILE' && slideInfo.slide.media_id && !slideInfo.slide.source_path
-  );
+  // `media_id` wins over a `source_path`, the same rule the delete itself uses.
+  const mediaBacked = isMediaBackedFileSlide(slideInfo.slide);
 
   return {
     classroomSlug,

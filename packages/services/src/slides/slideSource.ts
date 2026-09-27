@@ -348,6 +348,24 @@ export function isDeckSlide(slide: { kind?: string | null } | null | undefined):
 }
 
 /**
+ * True for a FILE slide whose document lives in the classroom's media store.
+ *
+ * `media_id` alone decides it, whatever `source_path` says. Every reader already
+ * treats it that way — `slideDownloadUrl` signs the media object before it
+ * looks at the repository, and `openSlideFile` never streams a media-backed
+ * slide from GitHub — so the delete path must agree, or a row carrying both
+ * would download from media but be deleted as if its document were in git. No
+ * writer in the app leaves both set (a replace clears the other one); the one
+ * place a row can arrive with both is a class-to-class import, which copies the
+ * media object and remaps a `source_path` it never commits.
+ */
+export function isMediaBackedFileSlide(
+  slide: { kind?: string | null; media_id?: string | null } | null | undefined
+): boolean {
+  return slide?.kind === 'FILE' && Boolean(slide.media_id);
+}
+
+/**
  * "That operation does not apply to this kind of slide."
  *
  * 409 rather than 404 or 400: the slide exists and the caller may see it — what
