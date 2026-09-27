@@ -168,6 +168,41 @@ async function fetchMultipleFiles(
 }
 
 /**
+ * Which repository paths exploration may show or read.
+ *
+ * The same rule the ai-agent's secure file tools apply
+ * (apps/ai-agent src/llm/utils/pathValidator.js, `isVisiblePath`): any path
+ * with a dot-prefixed component is left out, with two exceptions a code quiz
+ * can use — `.gitignore` as the file itself, and `.github/workflows/...` at the
+ * repository root. Two dotted components are always left out.
+ */
+export function isVisiblePath(path: string): boolean {
+  const parts = path.split(/[\\/]+/).filter(part => part !== '' && part !== '.');
+  const dotted = parts.filter(part => part.startsWith('.'));
+  if (dotted.length === 0) return true;
+  if (dotted.length > 1) return false;
+
+  // `.gitignore`, and only as the file itself.
+  if (dotted[0] === '.gitignore' && parts[parts.length - 1] === '.gitignore') return true;
+
+  // `.github/workflows/...`, and only with `workflows` actually under it.
+  return dotted[0] === '.github' && parts[0] === '.github' && parts[1] === 'workflows';
+}
+
+/**
+ * The picker's paths that may be read: each must name a file in the (already
+ * filtered) tree, so a path the model made up, or one the tree left out, is
+ * never fetched.
+ */
+export function readablePickedPaths(
+  picked: string[],
+  tree: ReadonlyArray<{ path: string }>
+): string[] {
+  const inTree = new Set(tree.map(entry => entry.path));
+  return picked.filter(path => inTree.has(path) && isVisiblePath(path));
+}
+
+/**
  * Build a compact tree listing for Claude to analyze.
  * Filters out common noise (node_modules, .git, etc.) and formats
  * as a simple path listing with file sizes.
@@ -1299,7 +1334,10 @@ export const exploreRepoTask = task({
     ]);
     await metadata.flush();
 
-    const tree = await fetchRepoTree(owner, repo, accessToken);
+    // Only paths exploration may read are listed, picked or fetched.
+    const tree = (await fetchRepoTree(owner, repo, accessToken)).filter(entry =>
+      isVisiblePath(entry.path)
+    );
     console.log(`[explore-repo] Step 1 done: ${tree.length} files in tree`);
     logger.info(`GitRepo has ${tree.length} files`);
 
@@ -1316,15 +1354,18 @@ export const exploreRepoTask = task({
     });
     await metadata.flush();
 
-    const filePaths = await pickRelevantFiles(
-      client,
-      model,
-      treeListing,
-      focusArea,
-      depth,
-      previousFindings,
-      specificQuestion,
-      previouslyReadFiles
+    const filePaths = readablePickedPaths(
+      await pickRelevantFiles(
+        client,
+        model,
+        treeListing,
+        focusArea,
+        depth,
+        previousFindings,
+        specificQuestion,
+        previouslyReadFiles
+      ),
+      tree
     );
     console.log(
       `[explore-repo] Step 2 done: picked ${filePaths.length} files: ${filePaths.join(', ')}`
