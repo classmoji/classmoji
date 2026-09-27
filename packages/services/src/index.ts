@@ -159,6 +159,7 @@ export {
   MAX_DOCS,
   MAX_CHARS_PER_DOC,
   MAX_CHARS_TOTAL,
+  MIN_ROOM_CHARS,
   DEFAULT_MATERIAL_BUDGET,
 } from './classmoji/quizSourceMaterial.service.ts';
 export type {

@@ -110,17 +110,25 @@ export const MAX_DOCS = 12;
 export const MAX_CHARS_PER_DOC = 60_000;
 /** Most characters of document text across the whole material. */
 export const MAX_CHARS_TOTAL = 160_000;
+/**
+ * Least room left under the total that a document is cut into. With less left,
+ * the total counts as spent: a sliver of a document costs more than it tells.
+ */
+export const MIN_ROOM_CHARS = 2_000;
 
 export interface MaterialBudget {
   maxDocs: number;
   maxCharsPerDoc: number;
   maxCharsTotal: number;
+  /** Below this much room under `maxCharsTotal`, no further document is taken. */
+  minRoomChars: number;
 }
 
 export const DEFAULT_MATERIAL_BUDGET: MaterialBudget = {
   maxDocs: MAX_DOCS,
   maxCharsPerDoc: MAX_CHARS_PER_DOC,
   maxCharsTotal: MAX_CHARS_TOTAL,
+  minRoomChars: MIN_ROOM_CHARS,
 };
 
 export interface BudgetedMaterial {
@@ -144,8 +152,9 @@ export const truncationMarker = (cut: number, total: number): string =>
  * Cut `text` to at most `limit` characters of content.
  *
  * At the last blank line inside the final 20% before the limit, so the cut
- * lands between paragraphs; otherwise exactly at the limit. Returns how many
- * characters were cut (0 when the text already fits).
+ * lands between paragraphs; otherwise at the limit, one character short of it
+ * when the limit would split a surrogate pair (half an emoji is not text).
+ * Returns how many characters were cut (0 when the text already fits).
  */
 export function cutText(text: string, limit: number): { kept: string; cut: number } {
   if (text.length <= limit) return { kept: text, cut: 0 };
@@ -158,39 +167,63 @@ export function cutText(text: string, limit: number): { kept: string; cut: numbe
   for (let match = blankLine.exec(head); match; match = blankLine.exec(head)) {
     if (match.index >= windowStart) cutAt = match.index;
   }
-  if (cutAt < 0) cutAt = limit;
+  if (cutAt < 0) {
+    cutAt = limit;
+    const last = text.charCodeAt(cutAt - 1);
+    if (last >= 0xd800 && last <= 0xdbff) cutAt -= 1;
+  }
 
   return { kept: text.slice(0, cutAt), cut: text.length - cutAt };
 }
 
+/** The budget as a running fold over documents offered in material order. */
+interface MaterialBudgetFold {
+  /** True once nothing more will be taken: the document cap is reached or the total is spent. */
+  isFull(): boolean;
+  /** Take the next document, cut if need be; returns its `budget` omission when it is left out. */
+  offer(doc: SourceDoc): OmittedDoc | null;
+  /** Leave out a document for budget without its text (the fold is already full). */
+  omit(doc: Pick<SourceDoc, 'kind' | 'id' | 'title'>): OmittedDoc;
+  result(): BudgetedMaterial;
+}
+
 /**
- * Fit the material to the prompt budget. Pure: no database, no clock.
+ * One fold shared by `applyMaterialBudget` and `load`, so the loader can stop
+ * reading exactly where the budget stops taking.
  *
- * Documents are taken in order. Each is cut to `maxCharsPerDoc`, then to what
- * is left of `maxCharsTotal`; a cut document ends with one marker line naming
- * how many characters were cut. Once `maxDocs` documents are in, or the total
- * is spent, every remaining document is omitted with reason `budget`. The
- * limits count document text only; marker lines ride on top.
+ * The total is SPENT once less than `minRoomChars` is left, or as soon as a
+ * document has been cut to fit what was left of it: every later document is
+ * then `budget`, never a sliver. A cut to `maxCharsPerDoc` alone does not
+ * spend it.
  */
-export function applyMaterialBudget(
-  docs: readonly SourceDoc[],
-  limits: MaterialBudget = DEFAULT_MATERIAL_BUDGET
-): BudgetedMaterial {
+function materialBudgetFold(limits: MaterialBudget): MaterialBudgetFold {
   const kept: SourceDoc[] = [];
   const omitted: OmittedDoc[] = [];
   let contentChars = 0;
   let truncated = false;
+  let totalSpent = limits.maxCharsTotal <= 0;
 
-  for (const doc of docs) {
+  const isFull = () => kept.length >= limits.maxDocs || totalSpent;
+  const omit = (doc: Pick<SourceDoc, 'kind' | 'id' | 'title'>): OmittedDoc => {
+    const entry: OmittedDoc = { kind: doc.kind, id: doc.id, title: doc.title, reason: 'budget' };
+    omitted.push(entry);
+    truncated = true;
+    return entry;
+  };
+
+  const offer = (doc: SourceDoc): OmittedDoc | null => {
+    if (isFull()) return omit(doc);
+
     const room = limits.maxCharsTotal - contentChars;
-    if (kept.length >= limits.maxDocs || room <= 0) {
-      omitted.push({ kind: doc.kind, id: doc.id, title: doc.title, reason: 'budget' });
-      truncated = true;
-      continue;
-    }
-
     const { kept: text, cut } = cutText(doc.text, Math.min(limits.maxCharsPerDoc, room));
     contentChars += text.length;
+    const left = limits.maxCharsTotal - contentChars;
+    // Cut to the room that was left (not to the per-document limit): the
+    // total is used up, and so is any room under the minimum.
+    if ((cut > 0 && room <= limits.maxCharsPerDoc) || left <= 0 || left < limits.minRoomChars) {
+      totalSpent = true;
+    }
+
     if (cut > 0) {
       truncated = true;
       kept.push({
@@ -201,14 +234,39 @@ export function applyMaterialBudget(
     } else {
       kept.push({ ...doc, text, truncated: doc.truncated });
     }
-  }
+    return null;
+  };
 
   return {
-    docs: kept,
-    omitted,
-    truncated,
-    totalChars: kept.reduce((sum, doc) => sum + doc.text.length, 0),
+    isFull,
+    offer,
+    omit,
+    result: () => ({
+      docs: kept,
+      omitted,
+      truncated,
+      totalChars: kept.reduce((sum, doc) => sum + doc.text.length, 0),
+    }),
   };
+}
+
+/**
+ * Fit the material to the prompt budget. Pure: no database, no clock.
+ *
+ * Documents are taken in order. Each is cut to `maxCharsPerDoc`, then to what
+ * is left of `maxCharsTotal`; a cut document ends with one marker line naming
+ * how many characters were cut. Once `maxDocs` documents are in, or the total
+ * is spent (a document was cut to what was left of it, or less than
+ * `minRoomChars` remains), every remaining document is omitted with reason
+ * `budget`. The limits count document text only; marker lines ride on top.
+ */
+export function applyMaterialBudget(
+  docs: readonly SourceDoc[],
+  limits: MaterialBudget = DEFAULT_MATERIAL_BUDGET
+): BudgetedMaterial {
+  const fold = materialBudgetFold(limits);
+  for (const doc of docs) fold.offer(doc);
+  return fold.result();
 }
 
 // ─── Shared reads ──────────────────────────────────────────────────────────

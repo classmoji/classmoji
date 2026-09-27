@@ -5,7 +5,9 @@
  * Pinned: the paragraph cut (last blank line inside the final 20% before the
  * limit), the hard cut when there is none, the one marker line and its text,
  * the running total across documents (a document crossing it is cut to what is
- * left; anything after it is `budget`), the document cap, and zero documents.
+ * left; anything after it is `budget`, never a sliver), the minimum room below
+ * which nothing more is cut, the exact edges of both limits, surrogate-pair
+ * safety, the document cap, and zero documents.
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -21,6 +23,7 @@ const {
   MAX_DOCS,
   MAX_CHARS_PER_DOC,
   MAX_CHARS_TOTAL,
+  MIN_ROOM_CHARS,
 } = await import('../quizSourceMaterial.service.ts');
 
 type Doc = Parameters<typeof applyMaterialBudget>[0][number];
@@ -35,14 +38,16 @@ const doc = (id: string, text: string, kind: 'page' | 'slide' = 'page'): Doc => 
 });
 
 describe('budget constants (Tim, 2026-09-26)', () => {
-  it('are 12 documents, 60,000 characters each, 160,000 in all', () => {
+  it('are 12 documents, 60,000 characters each, 160,000 in all, no cut into under 2,000', () => {
     expect(MAX_DOCS).toBe(12);
     expect(MAX_CHARS_PER_DOC).toBe(60_000);
     expect(MAX_CHARS_TOTAL).toBe(160_000);
+    expect(MIN_ROOM_CHARS).toBe(2_000);
     expect(DEFAULT_MATERIAL_BUDGET).toEqual({
       maxDocs: 12,
       maxCharsPerDoc: 60_000,
       maxCharsTotal: 160_000,
+      minRoomChars: 2_000,
     });
   });
 });
@@ -86,6 +91,14 @@ describe('cutText', () => {
     const text = 'x'.repeat(250);
     expect(cutText(text, 100)).toEqual({ kept: 'x'.repeat(100), cut: 150 });
   });
+
+  it('never splits a surrogate pair on a hard cut', () => {
+    // Each emoji is two UTF-16 code units; an odd limit lands between them.
+    const text = '😀'.repeat(60);
+    expect(cutText(text, 51)).toEqual({ kept: '😀'.repeat(25), cut: 70 });
+    expect(cutText(text, 50)).toEqual({ kept: '😀'.repeat(25), cut: 70 });
+    expect(cutText(`a${text}`, 51)).toEqual({ kept: `a${'😀'.repeat(25)}`, cut: 70 });
+  });
 });
 
 describe('applyMaterialBudget', () => {
@@ -114,6 +127,7 @@ describe('applyMaterialBudget', () => {
       maxDocs: 12,
       maxCharsPerDoc: 100,
       maxCharsTotal: 1_000,
+      minRoomChars: 10,
     });
 
     const [only] = result.docs;
@@ -126,7 +140,7 @@ describe('applyMaterialBudget', () => {
   });
 
   it('cuts the document that crosses the total to what is left, and omits the rest as budget', () => {
-    const limits = { maxDocs: 12, maxCharsPerDoc: 100, maxCharsTotal: 150 };
+    const limits = { maxDocs: 12, maxCharsPerDoc: 100, maxCharsTotal: 150, minRoomChars: 10 };
     const result = applyMaterialBudget(
       [doc('1', 'a'.repeat(100)), doc('2', 'b'.repeat(100)), doc('3', 'c'.repeat(10))],
       limits
@@ -138,6 +152,76 @@ describe('applyMaterialBudget', () => {
     expect(result.docs[1].text).toBe(`${'b'.repeat(50)}\n\n[… 50 of 100 characters omitted]`);
     expect(result.omitted).toEqual([{ kind: 'page', id: '3', title: 'Title 3', reason: 'budget' }]);
     expect(result.truncated).toBe(true);
+  });
+
+  it('takes nothing after a document cut to fit the total, even what would fit whole', () => {
+    // Doc 3 crosses the total (50 left) and is cut at its blank line after 42
+    // characters, leaving 8. Doc 4 would fit whole in those 8, but the total is
+    // spent: a sliver of material is not worth its place.
+    const limits = { maxDocs: 12, maxCharsPerDoc: 100, maxCharsTotal: 250, minRoomChars: 5 };
+    const third = `${'c'.repeat(42)}\n\n${'c'.repeat(80)}`;
+    const result = applyMaterialBudget(
+      [doc('1', 'a'.repeat(100)), doc('2', 'b'.repeat(100)), doc('3', third), doc('4', 'tiny')],
+      limits
+    );
+
+    expect(result.docs.map(d => d.id)).toEqual(['1', '2', '3']);
+    expect(result.docs[2].text.startsWith(`${'c'.repeat(42)}\n\n[… `)).toBe(true);
+    expect(result.omitted).toEqual([{ kind: 'page', id: '4', title: 'Title 4', reason: 'budget' }]);
+  });
+
+  it('cuts to the per-document limit without spending the total', () => {
+    const limits = { maxDocs: 12, maxCharsPerDoc: 100, maxCharsTotal: 1_000, minRoomChars: 10 };
+    const result = applyMaterialBudget([doc('1', 'x'.repeat(250)), doc('2', 'y'.repeat(80))], limits);
+
+    expect(result.docs.map(d => [d.id, d.truncated])).toEqual([
+      ['1', true],
+      ['2', false],
+    ]);
+    expect(result.omitted).toEqual([]);
+  });
+
+  it('leaves a document out rather than cutting it into less than the minimum room', () => {
+    // 60,000 + 60,000 + 39,000 leaves 1,000: under MIN_ROOM_CHARS, so the next
+    // document is budget instead of a 1,000-character sliver.
+    const result = applyMaterialBudget([
+      doc('1', 'a'.repeat(60_000)),
+      doc('2', 'b'.repeat(60_000)),
+      doc('3', 'c'.repeat(39_000)),
+      doc('4', 'd'.repeat(50_000)),
+    ]);
+
+    expect(result.docs.map(d => d.id)).toEqual(['1', '2', '3']);
+    expect(result.docs.every(d => !d.truncated)).toBe(true);
+    expect(result.omitted).toEqual([{ kind: 'page', id: '4', title: 'Title 4', reason: 'budget' }]);
+    expect(result.truncated).toBe(true);
+    expect(result.totalChars).toBe(159_000);
+  });
+
+  it('keeps a document of exactly the per-document limit whole, with no marker', () => {
+    const [only] = applyMaterialBudget([doc('1', 'z'.repeat(MAX_CHARS_PER_DOC))]).docs;
+
+    expect(only.truncated).toBe(false);
+    expect(only.text).toBe('z'.repeat(MAX_CHARS_PER_DOC));
+  });
+
+  it('keeps documents that land exactly on the total whole, and takes nothing after', () => {
+    const docs = [
+      doc('1', 'a'.repeat(60_000)),
+      doc('2', 'b'.repeat(60_000)),
+      doc('3', 'c'.repeat(40_000)),
+    ];
+    const exact = applyMaterialBudget(docs);
+
+    expect(exact.docs.map(d => d.truncated)).toEqual([false, false, false]);
+    expect(exact.totalChars).toBe(MAX_CHARS_TOTAL);
+    expect(exact.omitted).toEqual([]);
+    expect(exact.truncated).toBe(false);
+
+    const over = applyMaterialBudget([...docs, doc('4', 'd')]);
+    expect(over.docs).toHaveLength(3);
+    expect(over.omitted).toEqual([{ kind: 'page', id: '4', title: 'Title 4', reason: 'budget' }]);
+    expect(over.truncated).toBe(true);
   });
 
   it('stops at the document cap and omits the rest as budget', () => {
