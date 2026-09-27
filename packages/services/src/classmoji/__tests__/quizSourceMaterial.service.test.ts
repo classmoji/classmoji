@@ -496,6 +496,44 @@ describe('setQuizSourceMaterial', () => {
     expect(tx.slideLink.deleteMany).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['page', 'pageLink'],
+    ['slide', 'slideLink'],
+  ] as const)(
+    'maps a racing save (unique violation on a %s link) to a conflict',
+    async (kind, table) => {
+      const tx = makeTx();
+      tx[table].createMany.mockRejectedValue(
+        Object.assign(new Error('Unique constraint failed'), { code: 'P2002' })
+      );
+
+      const error = await setQuizSourceMaterial(tx as never, {
+        quizId: 'quiz-1',
+        classroomId: CLASSROOM,
+        material: [{ kind, id: 'd1' }],
+      }).catch(e => e);
+
+      expect(error).toBeInstanceOf(ResourceLinkServiceError);
+      expect((error as InstanceType<typeof ResourceLinkServiceError>).code).toBe('conflict');
+    }
+  );
+
+  it('rethrows any other write failure unchanged', async () => {
+    const tx = makeTx();
+    tx.pageLink.createMany.mockRejectedValue(
+      Object.assign(new Error('connection lost'), { code: 'P1001' })
+    );
+
+    const error = await setQuizSourceMaterial(tx as never, {
+      quizId: 'quiz-1',
+      classroomId: CLASSROOM,
+      material: [{ kind: 'page', id: 'p1' }],
+    }).catch(e => e);
+
+    expect(error).not.toBeInstanceOf(ResourceLinkServiceError);
+    expect((error as Error).message).toBe('connection lost');
+  });
+
   it('refuses a FILE or LINK slide as resource_not_found BEFORE deleting anything', async () => {
     const tx = makeTx();
     // The classroom has a deck and a FILE slide; the kind filter admits the deck only.

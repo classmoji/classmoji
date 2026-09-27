@@ -61,9 +61,20 @@ export type ResourceLinkResourceType = 'page' | 'slide';
 /** What the content is being linked TO. */
 export type ResourceLinkTargetType = 'repository' | 'assignment' | 'quiz';
 
-/** Thrown for every caller-fixable failure so routes/tools can map it to a message. */
+/**
+ * Thrown for every caller-fixable failure so routes/tools can map it to a message.
+ *
+ * `conflict` comes only from quizSourceMaterial.setQuizSourceMaterial: another
+ * save of the same quiz's material committed first. Nothing of the losing save
+ * was kept; reloading and saving again is the fix.
+ */
 export class ResourceLinkServiceError extends Error {
-  code: 'resource_not_found' | 'target_not_found' | 'already_linked' | 'link_not_found';
+  code:
+    | 'resource_not_found'
+    | 'target_not_found'
+    | 'already_linked'
+    | 'link_not_found'
+    | 'conflict';
 
   constructor(code: ResourceLinkServiceError['code'], message: string) {
     super(message);

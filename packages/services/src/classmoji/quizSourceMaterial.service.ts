@@ -490,6 +490,10 @@ export async function countStartableSourceMaterial({
 const refusal = (message: string) =>
   new ResourceLinkServiceError('resource_not_found', `[quizSourceMaterial] ${message}`);
 
+/** A Prisma unique-constraint violation. */
+const isUniqueViolation = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2002';
+
 /**
  * Validate a caller's material list: an array of `{ kind: 'page' | 'slide',
  * id: string }`. Anything else is refused as the same not-found an unknown id
@@ -524,6 +528,11 @@ export function normalizeSourceMaterial(input: unknown): SourceMaterialRef[] {
  * prompt, so it is refused the same way. The quiz itself must already
  * be proven to be in `classroomId` by the caller. The content manifest is not
  * rebuilt: it has no quiz section.
+ *
+ * Two saves of the same quiz at once can both delete the old links; the second
+ * insert then meets the first one's rows on the partial unique index. That
+ * surfaces as `ResourceLinkServiceError('conflict')`, and the caller's
+ * transaction rolls this save back whole.
  */
 export async function setQuizSourceMaterial(
   tx: Prisma.TransactionClient,
@@ -559,15 +568,25 @@ export async function setQuizSourceMaterial(
   const rows = refs.map((ref, order) => ({ ...ref, order }));
   const pageRows = rows.filter(row => row.kind === 'page');
   const slideRows = rows.filter(row => row.kind === 'slide');
-  if (pageRows.length > 0) {
-    await tx.pageLink.createMany({
-      data: pageRows.map(row => ({ page_id: row.id, quiz_id: quizId, order: row.order })),
-    });
-  }
-  if (slideRows.length > 0) {
-    await tx.slideLink.createMany({
-      data: slideRows.map(row => ({ slide_id: row.id, quiz_id: quizId, order: row.order })),
-    });
+  try {
+    if (pageRows.length > 0) {
+      await tx.pageLink.createMany({
+        data: pageRows.map(row => ({ page_id: row.id, quiz_id: quizId, order: row.order })),
+      });
+    }
+    if (slideRows.length > 0) {
+      await tx.slideLink.createMany({
+        data: slideRows.map(row => ({ slide_id: row.id, quiz_id: quizId, order: row.order })),
+      });
+    }
+  } catch (error) {
+    // The input is de-duplicated above, so the partial unique index can only
+    // fire on another save's rows.
+    if (!isUniqueViolation(error)) throw error;
+    throw new ResourceLinkServiceError(
+      'conflict',
+      `[quizSourceMaterial] quiz ${quizId}'s source material was saved by another request at the same time`
+    );
   }
 
   return refs;
