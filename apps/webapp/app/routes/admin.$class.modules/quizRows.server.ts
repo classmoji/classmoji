@@ -18,6 +18,42 @@ export const withoutQuizRows = <
 });
 
 /**
+ * A module as the admin modules loaders hand it over: as stored, or
+ * `withoutQuizRows` in a classroom that does not show quizzes. Deleting a
+ * module that owns any assignment is refused, so `hasUnlistedAssignments` says
+ * when the module owns assignments the page does not list — the page then
+ * offers no Delete, since moving the listed ones could never unblock it. It
+ * says nothing more: not which rows, what they are or how many.
+ */
+export const forStaffPage = <
+  M extends { items: Array<{ item_type: string }>; assignments: Array<{ type: string }> },
+>(
+  module: M,
+  quizzesVisible: boolean
+): M & { hasUnlistedAssignments: boolean } => {
+  if (quizzesVisible) return { ...module, hasUnlistedAssignments: false };
+  const listed = withoutQuizRows(module);
+  return {
+    ...listed,
+    hasUnlistedAssignments: listed.assignments.length < module.assignments.length,
+  };
+};
+
+/**
+ * Whether `moduleId` owns assignments the page does not list, for the copy of
+ * a refused delete: the page offers no Delete for such a module, so one refused
+ * on a page loaded before that changed gets a line that names none.
+ */
+export const ownsUnlistedAssignments = async (
+  classroomId: string,
+  moduleId: string
+): Promise<boolean> => {
+  if (await loadQuizzesVisible(classroomId)) return false;
+  const module = await ClassmojiService.module.listModuleContents(moduleId, classroomId);
+  return Boolean(module?.assignments.some(a => a.type === 'QUIZ'));
+};
+
+/**
  * An ordering the page sent, with the rows it never saw put back. Each hidden
  * row the list does not name follows the row it follows now — the nearest
  * earlier row the page did send — and one with no such row stays at the front.

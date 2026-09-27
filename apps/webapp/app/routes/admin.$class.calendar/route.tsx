@@ -226,32 +226,28 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     // If links were provided (non-recurring events only), add them
     const hasLinks = linkedPageIds?.length || linkedSlideIds?.length || linkedAssignmentIds?.length;
-    if (hasLinks) {
-      await ClassmojiService.calendar.updateEventLinks(
-        newEvent.id,
-        classroom.id,
-        {
-          pageIds: linkedPageIds || [],
-          slideIds: linkedSlideIds || [],
-          assignmentIds: linkedAssignmentIds || [],
-        },
-        null, // null occurrence_date for non-recurring events
-        toFeaturedLinkRef(featuredKind, featuredId)
-      );
-    }
+    const saved = hasLinks
+      ? await ClassmojiService.calendar.updateEventLinks(
+          newEvent.id,
+          classroom.id,
+          {
+            pageIds: linkedPageIds || [],
+            slideIds: linkedSlideIds || [],
+            assignmentIds: linkedAssignmentIds || [],
+          },
+          null, // null occurrence_date for non-recurring events
+          toFeaturedLinkRef(featuredKind, featuredId)
+        )
+      : null;
 
     await audit('CREATE', 'CALENDAR', newEvent.id, {
       tool: 'web:calendar.create_event',
       title: createData.title ?? null,
       event_type: createData.event_type ?? null,
       is_recurring: Boolean(createData.recurrence_rule),
-      linked: hasLinks
-        ? {
-            pages: linkedPageIds?.length ?? 0,
-            slides: linkedSlideIds?.length ?? 0,
-            assignments: linkedAssignmentIds?.length ?? 0,
-          }
-        : null,
+      // What the service saved, not what was asked for: ids it could not
+      // validate are dropped there without an error.
+      linked: saved?.linked ?? null,
     });
 
     return data({ success: true });
@@ -332,24 +328,23 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       (linkedPageIds !== undefined ||
         linkedSlideIds !== undefined ||
         linkedAssignmentIds !== undefined);
-    if (hasLinkUpdates) {
-      const linkOccurrenceDate =
-        editScope === 'this_only' && occurrenceDate ? new Date(occurrenceDate) : null;
-
-      await ClassmojiService.calendar.updateEventLinks(
-        linkTargetId,
-        classroom.id,
-        {
-          pageIds: linkedPageIds || [],
-          slideIds: linkedSlideIds || [],
-          assignmentIds: linkedAssignmentIds || [],
-        },
-        linkOccurrenceDate,
-        // Ignored wherever the link keys are: a star with no date to sit on is
-        // as meaningless as a link with none.
-        toFeaturedLinkRef(featuredKind, featuredId)
-      );
-    }
+    const linkOccurrenceDate =
+      editScope === 'this_only' && occurrenceDate ? new Date(occurrenceDate) : null;
+    const saved = hasLinkUpdates
+      ? await ClassmojiService.calendar.updateEventLinks(
+          linkTargetId,
+          classroom.id,
+          {
+            pageIds: linkedPageIds || [],
+            slideIds: linkedSlideIds || [],
+            assignmentIds: linkedAssignmentIds || [],
+          },
+          linkOccurrenceDate,
+          // Ignored wherever the link keys are: a star with no date to sit on is
+          // as meaningless as a link with none.
+          toFeaturedLinkRef(featuredKind, featuredId)
+        )
+      : null;
 
     await audit('UPDATE', 'CALENDAR', eventId, {
       tool: 'web:calendar.update_event',
@@ -360,6 +355,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       edit_scope: editScope ?? null,
       occurrence_date: occurrenceDate ?? null,
       links_updated: hasLinkUpdates,
+      // What the link write saved for that date, as on a create.
+      linked: saved?.linked ?? null,
     });
 
     return data({ success: true });

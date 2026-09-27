@@ -9,6 +9,7 @@ import { MemoryRouter } from 'react-router';
 import { describe, expect, it } from 'vitest';
 import ResourceLink, {
   PAGES_URL_FALLBACK,
+  featuredResource,
   resourceDestination,
   resourceKey,
   resourcesForEvent,
@@ -42,6 +43,24 @@ const STAFF: ResourceLinkContext = {
   rolePrefix: 'admin',
   pagesUrl: 'https://pages.test',
   slidesUrl: 'https://slides.test',
+};
+
+const TEACHER: ResourceLinkContext = { ...STAFF, rolePrefix: 'teacher' };
+const ASSISTANT: ResourceLinkContext = { ...STAFF, rolePrefix: 'assistant' };
+
+const formAssignment: CalendarResource = {
+  kind: 'assignment',
+  id: 'a-form',
+  title: 'Exit ticket',
+  is_draft: false,
+  repoSlug: null,
+  assignmentType: 'FORM',
+};
+const quizAssignment: CalendarResource = {
+  ...formAssignment,
+  id: 'a-quiz',
+  title: 'Recursion quiz',
+  assignmentType: 'QUIZ',
 };
 
 describe('resourceDestination', () => {
@@ -118,6 +137,30 @@ describe('resourceDestination', () => {
   it('defaults to the student prefix when a caller names no role', () => {
     expect(resourceDestination(assignment, { classSlug: 'cs52-26f' })).toMatchObject({
       to: '/student/cs52-26f/assignments',
+    });
+  });
+
+  it('sends an owner or a teacher to a form assignment’s page, which hands on to the form', () => {
+    expect(resourceDestination(formAssignment, STAFF)).toEqual({
+      kind: 'internal',
+      to: '/admin/cs52-26f/assignments/a-form',
+    });
+    expect(resourceDestination(formAssignment, TEACHER)).toEqual({
+      kind: 'internal',
+      to: '/teacher/cs52-26f/assignments/a-form',
+    });
+  });
+
+  it('sends an assistant nowhere for a form assignment, since /assistant has no forms screen', () => {
+    // The assignment page 404s a form assignment under /assistant; a link
+    // there would only lead to that.
+    expect(resourceDestination(formAssignment, ASSISTANT)).toEqual({ kind: 'none' });
+  });
+
+  it('still links an assistant to a quiz assignment, which /assistant does serve', () => {
+    expect(resourceDestination(quizAssignment, ASSISTANT)).toEqual({
+      kind: 'internal',
+      to: '/assistant/cs52-26f/assignments/a-quiz',
     });
   });
 });
@@ -223,6 +266,22 @@ describe('resourcesForEvent', () => {
     expect(resources[0].featured).toBe(true);
   });
 
+  it('carries an assignment’s type, on the list and on the starred line alike', () => {
+    const withForm: CalendarEventWithLinks = {
+      ...event,
+      assignments: [
+        {
+          assignment: { id: 'a-form', title: 'Exit ticket', is_published: true, type: 'FORM' },
+          repository: null,
+        },
+      ],
+    };
+    const star = { kind: 'assignment' as const, id: 'a-form', title: 'Exit ticket', is_draft: false };
+
+    expect(resourcesForEvent(withForm).find(r => r.id === 'a-form')?.assignmentType).toBe('FORM');
+    expect(featuredResource(star, withForm).assignmentType).toBe('FORM');
+  });
+
   it('is empty for an event with nothing linked to it', () => {
     expect(resourcesForEvent({ ...event, pages: null, slides: null, assignments: null })).toEqual(
       []
@@ -303,6 +362,37 @@ describe('ResourceLink', () => {
       expect(html).toContain('text-blue-600!');
       expect(html).toContain('dark:text-blue-400!');
     }
+  });
+
+  it('draws a form assignment as a label for an assistant, in every variant', () => {
+    for (const variant of ['list', 'row', 'chip'] as const) {
+      const html = render(formAssignment, ASSISTANT, variant);
+      expect(html).not.toContain('<a');
+      expect(html).not.toContain('href=');
+      // A label is not a control, so it is not named as one.
+      expect(html).not.toContain('aria-label="Open');
+      expect(html).toContain('Exit ticket');
+      expect(html).toContain('title="Exit ticket"');
+      // The plain text colour, and no link colour, underline or hover on it.
+      expect(html).toContain('text-ink-2');
+      expect(html).not.toContain('text-blue-600');
+      expect(html).not.toContain('underline');
+      expect(html).not.toContain('hover:');
+    }
+    // Still pressable on a week block, so its truncated title shows on hover.
+    expect(render(formAssignment, ASSISTANT, 'chip')).toContain('pointer-events-auto');
+  });
+
+  it('links a form assignment for an owner and a teacher as before', () => {
+    expect(render(formAssignment, STAFF, 'chip')).toContain(
+      'href="/admin/cs52-26f/assignments/a-form"'
+    );
+    expect(render(formAssignment, TEACHER, 'chip')).toContain(
+      'href="/teacher/cs52-26f/assignments/a-form"'
+    );
+    expect(render(formAssignment, TEACHER, 'chip')).toContain(
+      'aria-label="Open assignment Exit ticket"'
+    );
   });
 
   it('stars the featured resource only where a caller asks for it', () => {

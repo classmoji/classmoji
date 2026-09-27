@@ -56,7 +56,16 @@ export interface ModuleCardData {
   is_public: boolean;
   items: ModuleItemLike[];
   assignments: AssignmentRowData[];
+  /**
+   * True when the module owns assignments the page does not list
+   * (`forStaffPage`), whether or not it lists others. It cannot be deleted,
+   * and moving the listed ones would not change that, so it offers no Delete.
+   */
+  hasUnlistedAssignments?: boolean;
 }
+
+/** What a write from the card, or a drag into it, came back with. */
+type WriteResult = { success?: string; error?: string };
 
 interface ModuleCardProps {
   module: ModuleCardData;
@@ -94,6 +103,11 @@ interface ModuleCardProps {
    * within this module or into another one.
    */
   coursework: CourseworkCardDrag;
+  /**
+   * How the page's last coursework drag went, once it is back; absent unless
+   * this card is the module it landed in.
+   */
+  moveResult?: WriteResult;
 }
 
 // antd's Dropdown clones its trigger child to attach its own onClick and ref,
@@ -282,6 +296,7 @@ const ModuleCard = ({
   quizzesVisible = false,
   tags = [],
   coursework,
+  moveResult,
   canEdit = true,
   dragProps,
   dragHandleProps,
@@ -298,8 +313,8 @@ const ModuleCard = ({
     `/${rolePrefix}/${classSlug}/repos`
   );
   const { modal } = App.useApp();
-  const moduleFetcher = useFetcher<{ success?: string; error?: string }>();
-  const assignmentFetcher = useFetcher<{ success?: string; error?: string }>();
+  const moduleFetcher = useFetcher<WriteResult>();
+  const assignmentFetcher = useFetcher<WriteResult>();
 
   const [editOpen, setEditOpen] = useState(false);
   const [contentOpen, setContentOpen] = useState(false);
@@ -318,11 +333,21 @@ const ModuleCard = ({
   const ownsCoursework = assignments.length > 0;
   const itemCount = assignments.length + contentItems.length;
 
+  // The line shows the latest write to come back, whichever fetcher sent it —
+  // the card's own two, or the page's drag into this card: an error stays up
+  // until a later write succeeds. Each result is watched on its own, so an
+  // older one never overrides a newer one.
+  const moduleResult = moduleFetcher.state === 'idle' ? moduleFetcher.data : undefined;
+  const assignmentResult = assignmentFetcher.state === 'idle' ? assignmentFetcher.data : undefined;
   useEffect(() => {
-    if (moduleFetcher.state === 'idle' && moduleFetcher.data?.error) {
-      setError(moduleFetcher.data.error);
-    }
-  }, [moduleFetcher.state, moduleFetcher.data]);
+    if (moduleResult) setError(moduleResult.error ?? null);
+  }, [moduleResult]);
+  useEffect(() => {
+    if (assignmentResult) setError(assignmentResult.error ?? null);
+  }, [assignmentResult]);
+  useEffect(() => {
+    if (moveResult) setError(moveResult.error ?? null);
+  }, [moveResult]);
 
   const post = (action: string, payload: Record<string, unknown>) =>
     moduleFetcher.submit(JSON.stringify(payload), {
@@ -389,22 +414,43 @@ const ModuleCard = ({
     position: module.position,
   };
 
+  const confirmDelete = () =>
+    modal.confirm({
+      title: 'Delete module',
+      content: `This removes the module. Its content items (${
+        quizzesVisible ? 'pages, quizzes, slides, forms' : 'pages, slides, forms'
+      }) are kept.`,
+      okText: 'Delete',
+      okButtonProps: { danger: true },
+      cancelText: 'Cancel',
+      onOk: () => post('delete', { id: module.id }),
+    });
+
+  // A module that owns assignments cannot be deleted. When all of them are
+  // listed the entry stays, disabled, saying to move them; when it owns some
+  // the page does not list (`hasUnlistedAssignments`), moving the listed ones
+  // would never unblock it, so there is no entry.
+  const offerDelete = !module.hasUnlistedAssignments;
   const menuItems: MenuProps['items'] = [
     { key: 'edit', label: 'Edit title & description', icon: <IconPencil size={15} /> },
-    { type: 'divider' },
-    {
-      key: 'delete',
-      label: ownsCoursework ? 'Delete (move its items first)' : 'Delete module',
-      icon: <IconTrash size={15} />,
-      danger: true,
-      disabled: ownsCoursework,
-    },
+    ...(offerDelete
+      ? [
+          { type: 'divider' as const },
+          {
+            key: 'delete',
+            label: ownsCoursework ? 'Delete (move its assignments first)' : 'Delete module',
+            icon: <IconTrash size={15} />,
+            danger: true,
+            disabled: ownsCoursework,
+          },
+        ]
+      : []),
   ];
 
   const onMenuClick: MenuProps['onClick'] = ({ key, domEvent }) => {
     domEvent.stopPropagation();
     if (key === 'edit') setEditOpen(true);
-    if (key === 'delete') post('delete', { id: module.id });
+    if (key === 'delete') confirmDelete();
   };
 
   // "Add item" asks which kind. An assignment picks how students submit
@@ -459,10 +505,11 @@ const ModuleCard = ({
   };
   // What the assignment submits through, unless that is just its own title
   // again (a quiz assignment usually carries the quiz's name); then the kind.
-  // The form's page in the forms app (builder + responses); the admin splat
-  // route hands off to it. Falls back to the Forms list for a form with no slug.
+  // The form's page in the forms app (builder + responses); the section's
+  // splat route hands off to it. Falls back to the Forms list for a form with
+  // no slug.
   const formHref = (a: AssignmentRowData) =>
-    `/admin/${classSlug}/forms${a.form?.slug ? `/${encodeURIComponent(a.form.slug)}` : ''}`;
+    `/${rolePrefix}/${classSlug}/forms${a.form?.slug ? `/${encodeURIComponent(a.form.slug)}` : ''}`;
 
   // Clicking an assignment row shows its submissions: the assignment page
   // (one roster with submission state and grades), the quiz's attempts, or
@@ -602,9 +649,16 @@ const ModuleCard = ({
         )}
       </div>
 
+      {/* Under the header, so a collapsed card shows it too: a refused delete
+          is posted from the header's menu. */}
+      {error && (
+        <div role="alert" className="px-4 sm:px-5 pb-3 text-sm text-rose-600 dark:text-rose-400">
+          {error}
+        </div>
+      )}
+
       {expanded && (
         <div className="border-t border-line px-4 sm:px-5 pb-3">
-          {error && <div className="mt-3 text-sm text-rose-600 dark:text-rose-400">{error}</div>}
           {module.description && (
             <p className="mt-3 mb-1 text-sm text-ink-2 whitespace-pre-wrap">{module.description}</p>
           )}
@@ -622,9 +676,10 @@ const ModuleCard = ({
                 } else if (item.item_type === 'QUIZ' && quizzesVisible) {
                   navigate(`/${rolePrefix}/${classSlug}/quizzes`);
                 } else if (item.item_type === 'FORM' && canEdit) {
-                  // Forms live in the admin section only; there is nowhere to
-                  // send a read-only viewer, so the row simply does not open.
-                  navigate(`/admin/${classSlug}/forms`);
+                  // Forms live in the owner's and teacher's sections only;
+                  // there is nowhere to send a read-only viewer, so the row
+                  // simply does not open.
+                  navigate(`/${rolePrefix}/${classSlug}/forms`);
                 }
               };
               return (

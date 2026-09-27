@@ -95,6 +95,12 @@ export interface CalendarLinkedAssignment {
      * "published" wherever a producer forgot it.
      */
     is_published: boolean;
+    /**
+     * Where the link goes: a form assignment has no screen under /assistant,
+     * so an assistant is shown it without a link. Optional because nothing is
+     * hidden by its absence; an assignment without it draws a link as before.
+     */
+    type?: 'REPO' | 'QUIZ' | 'FORM';
   };
   repository?: {
     slug?: string | null;
