@@ -24,7 +24,8 @@ const { storageTargetFor, kindOfFilename } = await import('../storageRouter.ts')
 type UploadCapability = import('../storageRouter.ts').UploadCapability;
 
 const MB = 1024 * 1024;
-const GB = 1024 * MB;
+/** Decimal: the per-file ceiling is a decimal 2 GB (`PER_FILE_MAX_BYTES`). */
+const GB = 1_000_000_000;
 const REPO_MAX = 35 * MB;
 
 const free: UploadCapability = {

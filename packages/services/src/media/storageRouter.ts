@@ -71,11 +71,14 @@ export interface UploadCapability {
   };
 }
 
-const GIB = 1024 * 1024 * 1024;
+const GB = 1_000_000_000;
 
-/** `2 GB` — the per-file ceiling as a person reads it. */
-function formatGigabytes(bytes: number): string {
-  return `${Math.round((bytes / GIB) * 10) / 10} GB`;
+/**
+ * `2 GB` — the per-file ceiling as a person reads it. Decimal gigabytes: the
+ * ceiling is a decimal 2 GB (see `PER_FILE_MAX_BYTES`).
+ */
+export function formatGigabytes(bytes: number): string {
+  return `${Math.round((bytes / GB) * 10) / 10} GB`;
 }
 
 /** A filename's kind by its extension; `OTHER` when it has none. */

@@ -106,7 +106,7 @@ const PRO_CAP = {
   repoMaxBytes: 35 * MB,
   repoFileTypes: 'any',
   isPro: true,
-  media: { perFileMaxBytes: 2 * GIB, remainingBytes: 10 * GIB },
+  media: { perFileMaxBytes: 2_000_000_000, remainingBytes: 10 * GIB },
 };
 
 function stagedRow(overrides: Record<string, unknown> = {}) {
@@ -258,7 +258,7 @@ describe('startStagedUpload', () => {
   });
 
   it('refuses a size that is not a positive integer, or over 2 GB', async () => {
-    for (const sizeBytes of [0, -1, 1.5, 2 * GIB + 1]) {
+    for (const sizeBytes of [0, -1, 1.5, 2_000_000_001]) {
       await expect(
         staging.startStagedUpload({ classroom, userId: USER, filename: 'a.mp4', sizeBytes, target })
       ).rejects.toMatchObject({ code: 'FILE_TOO_LARGE' });
@@ -829,7 +829,7 @@ describe('startUrlImport', () => {
       target,
     });
     expect(started.filename).toBe('Lecture 1.mp4');
-    expect(started.maxBytes).toBe(2 * GIB);
+    expect(started.maxBytes).toBe(2_000_000_000);
     expect(prisma.mediaObject.create.mock.calls[0][0].data).toMatchObject({
       status: 'STAGING',
       processing: 'PENDING',

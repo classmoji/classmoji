@@ -16,7 +16,7 @@ import { RESERVATION_WINDOW_MS } from './mediaQuota.ts';
  *
  * `size_bytes` and `rendition_bytes` are BIGINT, so Prisma hands back `bigint`,
  * which `JSON.stringify` refuses. `toMediaRecord` converts both to `number`:
- * the per-file ceiling is 2 GiB and the quota 10 GiB, both an order of
+ * the per-file ceiling is 2 GB and the quota 10 GiB, both an order of
  * magnitude under `Number.MAX_SAFE_INTEGER`, so nothing is lost. The column
  * keeps the wider type because it outlives this phase's limits.
  */

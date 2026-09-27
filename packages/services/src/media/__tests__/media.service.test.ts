@@ -451,7 +451,7 @@ describe('createUpload', () => {
   it('refuses a file that would not fit, and says by how much', async () => {
     prisma.mediaObject.findMany.mockResolvedValue([row({ size_bytes: BigInt(9 * GIB) })]);
     await expect(
-      createUpload({ classroom, userId: 'u', filename: 'a.mp4', sizeBytes: 2 * GIB })
+      createUpload({ classroom, userId: 'u', filename: 'a.mp4', sizeBytes: PER_FILE_MAX_BYTES })
     ).rejects.toMatchObject({
       code: 'QUOTA_EXCEEDED',
       usedBytes: 9 * GIB,

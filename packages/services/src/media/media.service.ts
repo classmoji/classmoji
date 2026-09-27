@@ -103,7 +103,7 @@ import { r2Client } from './r2Client.ts';
  *
  * `size_bytes` and `rendition_bytes` are BIGINT, so Prisma hands back `bigint`,
  * which `JSON.stringify` refuses. Every function here returns plain `number`s:
- * the per-file ceiling is 2 GiB and the quota 10 GiB, both an order of
+ * the per-file ceiling is 2 GB and the quota 10 GiB, both an order of
  * magnitude under `Number.MAX_SAFE_INTEGER`, so nothing is lost. The database
  * keeps the wider type because the column outlives this phase's limits.
  */
