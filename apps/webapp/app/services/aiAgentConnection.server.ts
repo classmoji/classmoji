@@ -126,10 +126,25 @@ interface AgentResponse {
  * failure ("temporarily busy", "a configuration issue"), and the rest carry
  * whatever the ai-agent caught, which is text for an operator.
  */
-const USER_FACING_ERROR_CODES = new Set(['BUDGET_EXCEEDED', 'SESSION_NOT_FOUND']);
+const USER_FACING_ERROR_CODES = new Set([
+  'BUDGET_EXCEEDED',
+  'SESSION_NOT_FOUND',
+  // A quiz message sent while the attempt's previous turn is still running:
+  // "Your last message is still being answered."
+  'turn_in_progress',
+]);
 
 /** The message an ERROR reply gets when its own text is not user-facing copy. */
 export const AI_AGENT_GENERIC_ERROR = 'Something went wrong. Please try again.';
+
+/**
+ * The code a request is rejected with when its connection to the ai-agent
+ * drops before the reply: the ai-agent exited (a deploy), crashed or was
+ * killed. Nothing can answer it on that connection any more, so it fails at
+ * once instead of at its timeout (up to 300 s). Retryable: the next request
+ * opens a new connection.
+ */
+export const AGENT_DISCONNECTED = 'AGENT_DISCONNECTED';
 
 /**
  * An ERROR reply from the ai-agent. `code` and `retryable` come over from its
@@ -196,6 +211,22 @@ export async function sendRequest(
       settled = true;
       clearTimeout(timeoutHandle);
       socket.off('message', messageHandler);
+      socket.off('disconnect', disconnectHandler);
+    };
+
+    // The connection this request went out on dropped: its reply can never
+    // arrive. Only requests sent on THIS socket are listening here.
+    const disconnectHandler = (reason?: string) => {
+      if (settled) return;
+      cleanup();
+      reject(
+        new AIAgentRequestError(
+          AI_AGENT_GENERIC_ERROR,
+          AGENT_DISCONNECTED,
+          true,
+          `ai-agent connection closed before the reply (${reason ?? 'unknown reason'})`
+        )
+      );
     };
 
     // Create a unique handler for this request
@@ -271,8 +302,14 @@ export async function sendRequest(
       }
     };
 
+    // Fire-and-forget messages (session ends) wait for nothing, so a dropped
+    // connection is not a failure for them: they resolve as they always have.
+    const fireAndForgetTypes = ['QUIZ_END', 'SYLLABUS_BOT_END', 'PROMPT_ASSISTANT_END'];
+    const fireAndForget = fireAndForgetTypes.includes(type) && responseTypes.length === 0;
+
     // Register message handler
     socket.on('message', messageHandler);
+    if (!fireAndForget) socket.on('disconnect', disconnectHandler);
 
     // Set timeout
     timeoutHandle = setTimeout(() => {
@@ -289,8 +326,7 @@ export async function sendRequest(
     });
 
     // Special handling for fire-and-forget messages (no response expected)
-    const fireAndForgetTypes = ['QUIZ_END', 'SYLLABUS_BOT_END', 'PROMPT_ASSISTANT_END'];
-    if (fireAndForgetTypes.includes(type) && responseTypes.length === 0) {
+    if (fireAndForget) {
       // Give it a moment to send, then resolve
       setTimeout(() => {
         cleanup();

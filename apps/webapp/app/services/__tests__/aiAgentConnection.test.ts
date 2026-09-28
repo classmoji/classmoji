@@ -125,6 +125,7 @@ describe('sendRequest: which ERROR text becomes the message', () => {
   it.each([
     ['SESSION_NOT_FOUND', 'Session not found. Please restart the assistant.'],
     ['BUDGET_EXCEEDED', "That reply couldn't be finished. Please send your message again."],
+    ['turn_in_progress', 'Your last message is still being answered.'],
   ])('keeps the ai-agent text for %s', async (code, text) => {
     const error = await sendAndReply({
       type: 'ERROR',

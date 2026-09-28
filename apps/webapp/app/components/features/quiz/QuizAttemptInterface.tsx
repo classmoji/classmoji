@@ -77,6 +77,25 @@ const endsInFailureLine = (displayMessages: QuizMessage[]): boolean => {
   return last?.role === 'assistant' && Boolean(getMetadata(last.metadata)?.errorType);
 };
 
+/**
+ * How long a send the server answered with `awaitingReply` keeps the input
+ * locked and the transcript polling. That answer means the message was not
+ * taken because the attempt's previous turn is still running (another tab, a
+ * reload mid-reply); its reply is what the student is waiting for. The
+ * ai-agent stops any turn at 240 s, so this bound is only a backstop.
+ */
+const AWAIT_RUNNING_REPLY_MS = 300_000;
+
+/**
+ * Saved assistant lines that end a turn: a reply, or a failure line for it —
+ * every one but the "still being answered" line of a refused message itself.
+ */
+const countTurnEndings = (displayMessages: QuizMessage[]): number =>
+  displayMessages.filter(
+    m =>
+      m.role?.toLowerCase() === 'assistant' && getMetadata(m.metadata)?.code !== 'turn_in_progress'
+  ).length;
+
 /** Focus metrics snapshot from useQuizFocusMetrics */
 interface MetricsSnapshot {
   totalMs: number;
@@ -161,6 +180,12 @@ function QuizAttemptInterface({
   const savedCountRef = useRef(0); // Saved messages shown, as of the last transcript sync
   const welcomeInjectedRef = useRef(false);
   const pendingUserMessageRef = useRef<string | null>(null); // Tracks optimistic user message content during sends
+  // Set while a refused send waits for the running turn's reply (see
+  // AWAIT_RUNNING_REPLY_MS): the turn endings saved before it, and the backstop.
+  const awaitingReplyRef = useRef<{
+    endingsBefore: number;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
   const explorationStepBaseRef = useRef(0); // Count of exploration steps before current send/load started
   const finalizeRef = useRef<(() => MetricsSnapshot) | null>(null); // Store finalize function for unmount cleanup
   const { isDarkMode } = useDarkMode();
@@ -637,6 +662,23 @@ function QuizAttemptInterface({
     }
   }, [messages, quiz.id, attemptId, readOnly]);
 
+  /** Stop waiting for a running turn's reply, and unlock the input. */
+  const stopAwaitingReply = useCallback(() => {
+    const awaiting = awaitingReplyRef.current;
+    if (!awaiting) return;
+    clearTimeout(awaiting.timer);
+    awaitingReplyRef.current = null;
+    setSending(false);
+  }, []);
+
+  // The backstop timer does not outlive the chat.
+  useEffect(
+    () => () => {
+      if (awaitingReplyRef.current) clearTimeout(awaitingReplyRef.current.timer);
+    },
+    []
+  );
+
   // Poll DB for real-time updates while loading OR sending (replaces SSE streaming)
   // The ai-agent saves all messages to the DB — we just revalidate to pick them up.
   // This works reliably across multiple Fly.io machines since all read from the same DB.
@@ -661,6 +703,13 @@ function QuizAttemptInterface({
     // Filter out SYSTEM messages (exploration steps) from display messages
     const displayMessages = updatedMessages.filter((m: QuizMessage) => m.role !== 'system');
     savedCountRef.current = displayMessages.length;
+
+    // A refused send was waiting for the running turn: its reply (or its
+    // failure line) is in.
+    const awaiting = awaitingReplyRef.current;
+    if (awaiting && countTurnEndings(displayMessages) > awaiting.endingsBefore) {
+      stopAwaitingReply();
+    }
 
     // Smart merge: during sends, preserve the optimistic user message until DB catches up
     if (sending && pendingUserMessageRef.current) {
@@ -783,7 +832,33 @@ function QuizAttemptInterface({
     readOnly,
     loading,
     sending,
+    stopAwaitingReply,
   ]);
+
+  /**
+   * After a send the server answered: unlock the input, or — when the answer
+   * says the attempt's previous turn is still running (`awaitingReply`) —
+   * keep it locked and the transcript polling until that turn ends. The
+   * server has saved the "still being answered" line; it shows as usual.
+   */
+  const settleSend = async (response: Response, endingsBefore: number) => {
+    pendingUserMessageRef.current = null;
+    const body = (await response.json().catch(() => null)) as { awaitingReply?: unknown } | null;
+    if (body?.awaitingReply === true) {
+      if (awaitingReplyRef.current) clearTimeout(awaitingReplyRef.current.timer);
+      awaitingReplyRef.current = {
+        endingsBefore,
+        timer: setTimeout(stopAwaitingReply, AWAIT_RUNNING_REPLY_MS),
+      };
+    } else {
+      setSending(false);
+    }
+    revalidateRef.current();
+  };
+
+  /** The turn endings the transcript has now, before a send goes out. */
+  const turnEndingsNow = () =>
+    countTurnEndings((initialMessages || []).filter((m: QuizMessage) => m.role !== 'system'));
 
   const handleSend = async (messageContent: string) => {
     if (!messageContent || !attemptId) {
@@ -806,6 +881,7 @@ function QuizAttemptInterface({
     ).length;
     setSending(true);
     let failureCopy = SEND_FAILED;
+    const endingsBefore = turnEndingsNow();
 
     try {
       const response = await fetch('/api/quiz', {
@@ -824,9 +900,7 @@ function QuizAttemptInterface({
       }
 
       // The POST blocks until ai-agent saves the response, so it's in DB now.
-      pendingUserMessageRef.current = null;
-      setSending(false);
-      revalidateRef.current();
+      await settleSend(response, endingsBefore);
     } catch (error: unknown) {
       console.error('Error sending message:', error);
       const errorMessage: QuizMessage = {
@@ -864,6 +938,7 @@ function QuizAttemptInterface({
     ).length;
     setSending(true);
     let failureCopy = SEND_FAILED;
+    const endingsBefore = turnEndingsNow();
 
     try {
       const response = await fetch('/api/quiz', {
@@ -881,9 +956,7 @@ function QuizAttemptInterface({
         throw new Error(`sendMessage failed (${response.status})`);
       }
 
-      pendingUserMessageRef.current = null;
-      setSending(false);
-      revalidateRef.current();
+      await settleSend(response, endingsBefore);
     } catch (error: unknown) {
       console.error('Error sending quick action:', error);
       const errorMessage: QuizMessage = {
