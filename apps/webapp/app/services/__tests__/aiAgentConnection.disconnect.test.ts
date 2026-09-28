@@ -140,6 +140,24 @@ describe('sendRequest: the connection drops before the reply', () => {
     expect(count(second.socket, 'disconnect')).toBe(0);
   });
 
+  it('does not fail a fire-and-forget session end on a dropped connection', async () => {
+    // A connected socket to send on (the previous tests left theirs dropped).
+    const warm = await send('attempt-warm');
+    warm.socket.fire('message', {
+      type: 'AGENT_RESPONSE',
+      requestId: warm.requestId,
+      payload: { attemptId: 'attempt-warm', content: 'ok' },
+    });
+    await warm.pending;
+
+    const ending = sendRequest('QUIZ_END', { attemptId: 'attempt-4' }, { responseTypes: [] });
+    await vi.waitFor(() => expect(count(warm.socket, 'message')).toBe(1));
+    expect(count(warm.socket, 'disconnect')).toBe(0);
+    warm.socket.fire('disconnect', 'transport close');
+
+    await expect(ending).resolves.toMatchObject({ type: 'QUIZ_END' });
+  });
+
   it('leaves a request that already has its reply alone', async () => {
     const { pending, socket, requestId } = await send('attempt-3');
     socket.fire('message', {

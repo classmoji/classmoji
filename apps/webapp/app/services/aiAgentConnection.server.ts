@@ -302,9 +302,14 @@ export async function sendRequest(
       }
     };
 
+    // Fire-and-forget messages (session ends) wait for nothing, so a dropped
+    // connection is not a failure for them: they resolve as they always have.
+    const fireAndForgetTypes = ['QUIZ_END', 'SYLLABUS_BOT_END', 'PROMPT_ASSISTANT_END'];
+    const fireAndForget = fireAndForgetTypes.includes(type) && responseTypes.length === 0;
+
     // Register message handler
     socket.on('message', messageHandler);
-    socket.on('disconnect', disconnectHandler);
+    if (!fireAndForget) socket.on('disconnect', disconnectHandler);
 
     // Set timeout
     timeoutHandle = setTimeout(() => {
@@ -321,8 +326,7 @@ export async function sendRequest(
     });
 
     // Special handling for fire-and-forget messages (no response expected)
-    const fireAndForgetTypes = ['QUIZ_END', 'SYLLABUS_BOT_END', 'PROMPT_ASSISTANT_END'];
-    if (fireAndForgetTypes.includes(type) && responseTypes.length === 0) {
+    if (fireAndForget) {
       // Give it a moment to send, then resolve
       setTimeout(() => {
         cleanup();
