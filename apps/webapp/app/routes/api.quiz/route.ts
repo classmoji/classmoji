@@ -60,17 +60,35 @@ const isBudgetExceeded = (error: unknown) =>
   (error as { code?: unknown } | null)?.code === 'BUDGET_EXCEEDED';
 
 /**
- * Saved in place of a first question when the budget guard stopped the opening
- * turn. It does not say "restart the quiz", because a student can't: createNew
- * refuses a new attempt while this one is incomplete (the quiz list offers to
- * resume it instead), and resuming doesn't re-run startQuiz, since the ai-agent
- * already saved the welcome message. Sending a message does work: the ai-agent
- * recovers the session it dropped and, with questions_asked still 0, presents
- * Question 1. That is also why nothing here invents a question or advances
- * questions_asked.
+ * Saved in place of a first question when the opening turn was stopped before
+ * it produced one: by the budget guard, or for one of the
+ * START_INTERRUPTED_CODES below. It does not say "restart the quiz", because a
+ * student can't: createNew refuses a new attempt while this one is incomplete
+ * (the quiz list offers to resume it instead), and resuming doesn't re-run
+ * startQuiz, since the attempt now has messages. Sending a message does work:
+ * the ai-agent recovers the session it dropped and, with questions_asked still
+ * 0, presents Question 1. That is also why nothing here invents a question or
+ * advances questions_asked.
  */
-const BUDGET_STOPPED_START_MESSAGE =
+const START_STOPPED_MESSAGE =
   "Your first question couldn't be prepared. Send any message to try again.";
+
+/**
+ * ai-agent codes that end a start before its first question, with nothing of
+ * the question done: the turn's deadline stopped it (TURN_DEADLINE), the
+ * ai-agent was shutting down (SHUTTING_DOWN), or the connection to it dropped
+ * (AGENT_DISCONNECTED, from aiAgentConnection). Answered like a budget stop,
+ * with START_STOPPED_MESSAGE and no question counted, never with the invented
+ * fallback question below. Saved under their own errorType, which the
+ * transcript shows as saved (quizAttempt.service.ts, toTranscriptFields).
+ */
+const START_INTERRUPTED_CODES = ['TURN_DEADLINE', 'SHUTTING_DOWN', 'AGENT_DISCONNECTED'];
+
+/** The start-interrupting code on an ai-agent error, if it carries one. */
+const startInterruptedCode = (error: unknown): string | null => {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && START_INTERRUPTED_CODES.includes(code) ? code : null;
+};
 
 /**
  * The refusal for a classroom whose quizzes are not visible (not on Pro, or
@@ -741,9 +759,23 @@ export async function action({ request }: Route.ActionArgs) {
                   await ClassmojiService.aiConversation.addMessage(
                     attempt.id,
                     'ASSISTANT',
-                    BUDGET_STOPPED_START_MESSAGE,
+                    START_STOPPED_MESSAGE,
                     false,
                     { errorType: 'BUDGET_EXCEEDED' }
+                  );
+                  return;
+                }
+
+                // Stopped before its first question for another reason:
+                // the same line, and no question.
+                const interrupted = startInterruptedCode(error);
+                if (interrupted) {
+                  await ClassmojiService.aiConversation.addMessage(
+                    attempt.id,
+                    'ASSISTANT',
+                    START_STOPPED_MESSAGE,
+                    false,
+                    { errorType: 'START_INTERRUPTED', code: interrupted }
                   );
                   return;
                 }
@@ -826,9 +858,23 @@ export async function action({ request }: Route.ActionArgs) {
                   await ClassmojiService.aiConversation.addMessage(
                     attempt.id,
                     'ASSISTANT',
-                    BUDGET_STOPPED_START_MESSAGE,
+                    START_STOPPED_MESSAGE,
                     false,
                     { errorType: 'BUDGET_EXCEEDED' }
+                  );
+                  return;
+                }
+
+                // Stopped before its first question for another reason:
+                // the same line, and no question.
+                const interrupted = startInterruptedCode(llmError);
+                if (interrupted) {
+                  await ClassmojiService.aiConversation.addMessage(
+                    attempt.id,
+                    'ASSISTANT',
+                    START_STOPPED_MESSAGE,
+                    false,
+                    { errorType: 'START_INTERRUPTED', code: interrupted }
                   );
                   return;
                 }
