@@ -126,7 +126,13 @@ interface AgentResponse {
  * failure ("temporarily busy", "a configuration issue"), and the rest carry
  * whatever the ai-agent caught, which is text for an operator.
  */
-const USER_FACING_ERROR_CODES = new Set(['BUDGET_EXCEEDED', 'SESSION_NOT_FOUND']);
+const USER_FACING_ERROR_CODES = new Set([
+  'BUDGET_EXCEEDED',
+  'SESSION_NOT_FOUND',
+  // A quiz message sent while the attempt's previous turn is still running:
+  // "Your last message is still being answered."
+  'turn_in_progress',
+]);
 
 /** The message an ERROR reply gets when its own text is not user-facing copy. */
 export const AI_AGENT_GENERIC_ERROR = 'Something went wrong. Please try again.';

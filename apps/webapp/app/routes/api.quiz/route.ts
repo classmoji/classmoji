@@ -103,7 +103,7 @@ const RESTART_FAILED_MESSAGE = "Couldn't start a new attempt. Please try again."
  * one that counts, and this one must match it. A refused source-material
  * recovery is therefore not saved as an AGENT_FAILURE at all (see sendMessage).
  */
-const STUDENT_FACING_AGENT_CODES = ['BUDGET_EXCEEDED'];
+const STUDENT_FACING_AGENT_CODES = ['BUDGET_EXCEEDED', 'turn_in_progress'];
 
 /**
  * A quiz that links source material (pages and decks) is built from it, so a
