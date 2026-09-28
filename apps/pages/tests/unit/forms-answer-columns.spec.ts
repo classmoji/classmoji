@@ -1,8 +1,11 @@
 import { test, expect } from '@playwright/test';
 import type { FormField } from '@classmoji/services/form-contract';
 
+import { identityQuestionIds } from '@classmoji/services/form-contract';
+
 import { identityPlan } from '../../app/components/forms/answerCoerce.ts';
 import { answerColumnFields } from '../../app/components/forms/answerFormat.ts';
+import { tableAnswerColumns } from '../../app/forms/admin/responsesCsv.server.ts';
 
 /**
  * Which of a form's questions become COLUMNS in the staff responses table.
@@ -106,5 +109,79 @@ test.describe('answerColumnFields', () => {
       'Anything else?',
     ]);
     expect(answerColumnFields([...form.fields, extra], 2)).toHaveLength(2);
+  });
+});
+
+/**
+ * Identity questions (`identity_question: true`) are a different thing from the
+ * respondent's name and email above: their answers are staff-only and hidden
+ * by default, and even when staff ask to see them they belong to one response
+ * in the drawer, never to a column beside the whole roster.
+ */
+test.describe('tableAnswerColumns — identity questions are never columns', () => {
+  const surveyed = () => {
+    const self = field({ type: 'short_text', label: 'Self-description', identity_question: true });
+    const scale = field({
+      type: 'opinion_scale',
+      label: 'How familiar are you with the material?',
+      scale: { min: 1, max: 10 },
+    });
+    const choice = field({
+      type: 'dropdown',
+      label: 'Which describes you?',
+      identity_question: true,
+      options: [],
+    });
+    const hopes = field({ type: 'long_text', label: 'What are you hoping to get out of it?' });
+    const terms = field({ type: 'number', label: 'How many terms?' });
+    return { self, choice, fields: [self, scale, choice, hopes, terms] };
+  };
+
+  test('the flagged questions come out before the cap is applied', () => {
+    const form = surveyed();
+    const columns = tableAnswerColumns(form.fields, identityQuestionIds(form.fields), 3);
+
+    expect(columns.map(column => column.label)).toEqual([
+      'How familiar are you with the material?',
+      'What are you hoping to get out of it?',
+      'How many terms?',
+    ]);
+  });
+
+  test('the rule keys on the ids it is given, not on the field in hand', () => {
+    // The page passes the ids flagged in the current revision OR the draft, so
+    // a question flagged only in the draft has no flag on the current field.
+    const form = surveyed();
+    const unflagged = form.fields.map(item => ({ ...item, identity_question: undefined }));
+    const columns = tableAnswerColumns(unflagged, new Set([form.self.id, form.choice.id]), 5);
+
+    expect(columns.map(column => column.id)).not.toContain(form.self.id);
+    expect(columns.map(column => column.id)).not.toContain(form.choice.id);
+  });
+
+  test('a flagged "Preferred name" is never a column, though no identity rule claims it', () => {
+    const preferred = field({
+      type: 'short_text',
+      label: 'Preferred name',
+      identity_question: true,
+    });
+    const email = field({ type: 'email', label: 'School email' });
+    const terms = field({ type: 'number', label: 'How many terms?' });
+    const fields = [preferred, email, terms];
+
+    // `identityPlan` skips identity questions, so the name-column rule leaves
+    // this one in play: the explicit exclusion is what keeps it out.
+    expect(identityPlan(fields).nameFieldId).toBeNull();
+    expect(answerColumnFields(fields, 3).map(column => column.id)).toContain(preferred.id);
+
+    const columns = tableAnswerColumns(fields, identityQuestionIds(fields), 3);
+    expect(columns.map(column => column.label)).toEqual(['How many terms?']);
+  });
+
+  test('with no identity questions it is exactly answerColumnFields', () => {
+    const form = waitlist();
+    expect(tableAnswerColumns(form.fields, new Set(), 3)).toEqual(
+      answerColumnFields(form.fields, 3)
+    );
   });
 });
