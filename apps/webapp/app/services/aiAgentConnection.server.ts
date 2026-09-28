@@ -138,6 +138,15 @@ const USER_FACING_ERROR_CODES = new Set([
 export const AI_AGENT_GENERIC_ERROR = 'Something went wrong. Please try again.';
 
 /**
+ * The code a request is rejected with when its connection to the ai-agent
+ * drops before the reply: the ai-agent exited (a deploy), crashed or was
+ * killed. Nothing can answer it on that connection any more, so it fails at
+ * once instead of at its timeout (up to 300 s). Retryable: the next request
+ * opens a new connection.
+ */
+export const AGENT_DISCONNECTED = 'AGENT_DISCONNECTED';
+
+/**
  * An ERROR reply from the ai-agent. `code` and `retryable` come over from its
  * payload, so a caller can tell one failure from another (a BUDGET_EXCEEDED
  * stop from an API_ERROR, say) without matching on the message text.
@@ -202,6 +211,22 @@ export async function sendRequest(
       settled = true;
       clearTimeout(timeoutHandle);
       socket.off('message', messageHandler);
+      socket.off('disconnect', disconnectHandler);
+    };
+
+    // The connection this request went out on dropped: its reply can never
+    // arrive. Only requests sent on THIS socket are listening here.
+    const disconnectHandler = (reason?: string) => {
+      if (settled) return;
+      cleanup();
+      reject(
+        new AIAgentRequestError(
+          AI_AGENT_GENERIC_ERROR,
+          AGENT_DISCONNECTED,
+          true,
+          `ai-agent connection closed before the reply (${reason ?? 'unknown reason'})`
+        )
+      );
     };
 
     // Create a unique handler for this request
@@ -279,6 +304,7 @@ export async function sendRequest(
 
     // Register message handler
     socket.on('message', messageHandler);
+    socket.on('disconnect', disconnectHandler);
 
     // Set timeout
     timeoutHandle = setTimeout(() => {
