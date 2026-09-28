@@ -991,10 +991,20 @@ export async function action({ request }: Route.ActionArgs) {
                 : { errorType: 'AGENT_FAILURE', code }
             );
 
-            return new Response(JSON.stringify({ success: false, error: 'Agent failure' }), {
-              status: 200,
-              headers: { 'Content-Type': 'application/json' },
-            });
+            // `awaitingReply`: this message was refused because the attempt's
+            // previous turn is still running, and that turn's reply is still
+            // coming. The chat keeps waiting for it instead of unlocking.
+            return new Response(
+              JSON.stringify({
+                success: false,
+                error: 'Agent failure',
+                ...(code === 'turn_in_progress' ? { awaitingReply: true } : {}),
+              }),
+              {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              }
+            );
           }
 
           // Ensure we have a response
