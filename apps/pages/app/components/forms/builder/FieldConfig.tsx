@@ -15,7 +15,13 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { IconGripVertical, IconPlus, IconTrash } from '@tabler/icons-react';
-import { FORM_LIMITS, type FormField, type FormOption } from '@classmoji/services/form-contract';
+import {
+  FORM_LIMITS,
+  IDENTITY_QUESTION_TYPES,
+  isIdentityQuestion,
+  type FormField,
+  type FormOption,
+} from '@classmoji/services/form-contract';
 
 import {
   NESTABLE_FIELD_TYPE_META,
@@ -51,6 +57,12 @@ interface FieldConfigProps {
   scopes: ScopeChoices;
   /** Inner fields of a repeat group: no nesting, no group-only controls. */
   nested?: boolean;
+  /**
+   * The form's top-level fields, this one included. A dropdown lists the
+   * ranked-choice and dropdown questions among them as `options_from` sources.
+   * Not passed for a repeat group's inner fields, which can't link.
+   */
+  siblings?: FormField[];
 }
 
 const inputClass =
@@ -215,14 +227,139 @@ function DisplayConfig({ field, onChange }: Pick<FieldConfigProps, 'field' | 'on
   );
 }
 
-function TypeSpecific({ field, onChange, scopes, nested }: FieldConfigProps) {
+/** A question's label for a control or a sentence, with a fixed fallback. */
+const questionName = (field: FormField): string =>
+  String(field.label ?? '').trim() || 'Untitled question';
+
+/** A copy of a field's options, ids kept, as `options_from` copies them. */
+const copyOptions = (from: FormField): FormOption[] =>
+  ((from.options as FormOption[] | undefined) ?? []).map(option => ({ ...option }));
+
+/**
+ * A dropdown's options: its own list, or a live link (`options_from`) to a
+ * top-level ranked-choice or dropdown question whose options it shares, ids
+ * included.
+ *
+ * The rules are the contract's (`resolveSharedOptions`): the source is
+ * top-level, not this field, and not itself linked; a repeat group's child
+ * can't link. The select offers only sources the save will accept, and a
+ * dropdown that other questions take their options from can't link itself —
+ * that would be a chain, which the save refuses.
+ *
+ * While linked, the list shown is the SOURCE's current options, read-only:
+ * the field's own copy is refreshed from the source on every save, so it can
+ * lag behind an unsaved edit of the source. Unlinking keeps the source's
+ * current options as this question's own.
+ */
+function DropdownOptions({
+  field,
+  onChange,
+  siblings,
+  nested,
+}: Pick<FieldConfigProps, 'field' | 'onChange' | 'siblings' | 'nested'>) {
+  const options = field.options as FormOption[];
+  const editor = (
+    <OptionsEditor
+      options={options}
+      onChange={next => onChange({ options: next })}
+      maximum={FORM_LIMITS.MAX_OPTIONS}
+    />
+  );
+  if (nested || !siblings) return <div className="mb-3">{editor}</div>;
+
+  const linkedId = field.options_from as string | undefined;
+  const source = linkedId ? siblings.find(other => other.id === linkedId) : undefined;
+  const sources = siblings.filter(
+    other =>
+      other.id !== field.id &&
+      (other.type === 'ranked_choice' || other.type === 'dropdown') &&
+      other.options_from === undefined
+  );
+  const dependents = siblings.filter(other => other.options_from === field.id);
+
+  const unlink = () =>
+    onChange({ options_from: undefined, options: source ? copyOptions(source) : options });
+
+  const link = (id: string) => {
+    if (id === '') return unlink();
+    const next = sources.find(other => other.id === id);
+    if (next) onChange({ options_from: id, options: copyOptions(next) });
+  };
+
+  return (
+    <div className="mb-3">
+      {sources.length > 0 || linkedId ? (
+        <Row label="Options from another question">
+          <select
+            aria-label="Options from another question"
+            value={linkedId ?? ''}
+            disabled={!linkedId && dependents.length > 0}
+            onChange={event => link(event.target.value)}
+            className={`${inputClass} disabled:opacity-50`}
+          >
+            <option value="">Its own options</option>
+            {sources.map(other => (
+              <option key={other.id} value={other.id}>
+                {questionName(other)}
+              </option>
+            ))}
+            {linkedId && !source ? <option value={linkedId}>Not in this form</option> : null}
+          </select>
+          {!linkedId && dependents.length > 0 ? (
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {`${dependents.map(other => `“${questionName(other)}”`).join(', ')} ${
+                dependents.length === 1 ? 'takes its' : 'take their'
+              } options from this question.`}
+            </p>
+          ) : null}
+        </Row>
+      ) : null}
+
+      {linkedId ? (
+        <div data-testid={`linked-options-${field.id}`}>
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+              Options
+            </span>
+            <button
+              type="button"
+              onClick={unlink}
+              className="text-xs font-medium text-blue-600 hover:underline dark:text-blue-400"
+            >
+              Unlink
+            </button>
+          </div>
+          <p className="mb-1.5 text-xs text-gray-500 dark:text-gray-400">
+            {source
+              ? `Same options as “${questionName(source)}”`
+              : 'The question these options came from is not in this form.'}
+          </p>
+          <ul className="space-y-1">
+            {(source ? copyOptions(source) : options).map(option => (
+              <li
+                key={option.id}
+                className="rounded-md border border-gray-200 bg-gray-50 px-2 py-1.5 text-sm text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+              >
+                {option.label}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        editor
+      )}
+    </div>
+  );
+}
+
+function TypeSpecific({ field, onChange, scopes, nested, siblings }: FieldConfigProps) {
   switch (field.type) {
     case 'email':
       return (
         <Row label="Restrict to a domain (optional)">
           <input
             value={(field.domain as string) ?? ''}
-            placeholder="dartmouth.edu"
+            placeholder="example.edu"
             data-testid="forms-field-domain"
             onChange={event =>
               onChange({
@@ -283,6 +420,10 @@ function TypeSpecific({ field, onChange, scopes, nested }: FieldConfigProps) {
       );
 
     case 'dropdown':
+      return (
+        <DropdownOptions field={field} onChange={onChange} siblings={siblings} nested={nested} />
+      );
+
     case 'multiselect':
       return (
         <div className="mb-3">
@@ -290,6 +431,7 @@ function TypeSpecific({ field, onChange, scopes, nested }: FieldConfigProps) {
             options={field.options as FormOption[]}
             onChange={options => onChange({ options })}
             maximum={FORM_LIMITS.MAX_OPTIONS}
+            allowExclusive
           />
         </div>
       );
@@ -769,6 +911,29 @@ export default function FieldConfig(props: FieldConfigProps) {
           ) : null}
         </label>
       )}
+
+      {/* Offered only where the contract accepts the flag: the allowed types,
+          at the top level. `undefined` rather than `false` when off, because
+          the contract stores the flag only when it is on. */}
+      {!props.nested && IDENTITY_QUESTION_TYPES.includes(field.type) ? (
+        <div className="mt-2">
+          <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+            <input
+              type="checkbox"
+              checked={isIdentityQuestion(field)}
+              aria-describedby={`identity-hint-${field.id}`}
+              onChange={event => onChange({ identity_question: event.target.checked || undefined })}
+            />
+            Identity question
+          </label>
+          <p
+            id={`identity-hint-${field.id}`}
+            className="ml-6 text-xs text-gray-500 dark:text-gray-400"
+          >
+            Answers are for course staff only, shown one response at a time on request.
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }

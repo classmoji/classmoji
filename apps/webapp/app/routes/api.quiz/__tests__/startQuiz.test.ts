@@ -499,6 +499,39 @@ describe('api.quiz startQuiz — budget-stopped opening turn', () => {
     expectRetryMessageOnly();
   });
 
+  // Stopped before its first question for another reason: the turn deadline
+  // (TURN_DEADLINE), a shutting-down ai-agent (SHUTTING_DOWN), or a dropped
+  // connection (AGENT_DISCONNECTED). Same line, no question — never the
+  // invented fallback question a later grade would be measured against.
+  for (const code of ['TURN_DEADLINE', 'SHUTTING_DOWN', 'AGENT_DISCONNECTED']) {
+    for (const mode of ['standard', 'codeAware'] as const) {
+      it(`${mode}: answers ${code} with the retry line, no question, no questions_asked bump`, async () => {
+        initializeAgentMock.mockRejectedValue(
+          Object.assign(new Error('Something went wrong. Please try again.'), {
+            code,
+            retryable: true,
+          })
+        );
+
+        await start(
+          mode === 'standard'
+            ? buildAttempt()
+            : buildAttempt({ repository_id: 'repository-1', include_code_context: true })
+        );
+
+        expect(addMessageMock).toHaveBeenCalledTimes(1);
+        expect(addMessageMock).toHaveBeenCalledWith(
+          ATTEMPT_ID,
+          'ASSISTANT',
+          "Your first question couldn't be prepared. Send any message to try again.",
+          false,
+          { errorType: 'START_INTERRUPTED', code }
+        );
+        expect(incrementMock).not.toHaveBeenCalled();
+      });
+    }
+  }
+
   it('keeps the fallback question for any other coded error', async () => {
     initializeAgentMock.mockRejectedValue(
       Object.assign(new Error('The AI service is temporarily busy.'), {

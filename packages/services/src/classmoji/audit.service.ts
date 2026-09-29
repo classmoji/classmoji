@@ -97,12 +97,21 @@ export const create = async (data: AuditLogData) => {
   const isScalar = (v: unknown): v is string | number | boolean =>
     typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean';
 
+  // Whether answers to identity questions were disclosed (data.identity_answers).
+  // A view with them hidden followed within the window by the same view with
+  // them shown is a reveal, and it must be recorded, so the flag joins the key.
+  // The same state twice still dedups.
+  const payloadIdentityAnswers = payload?.identity_answers;
+
   // Each extra JSON-path filter needs its own `data` clause, and two cannot sit
   // beside each other in one object — they go under `AND`, which Prisma
   // combines conjunctively with the rest.
   const payloadFilters = [
     ...(typeof payloadRole === 'string' ? [{ data: { path: ['role'], equals: payloadRole } }] : []),
     ...(isScalar(payloadValue) ? [{ data: { path: ['value'], equals: payloadValue } }] : []),
+    ...(typeof payloadIdentityAnswers === 'boolean'
+      ? [{ data: { path: ['identity_answers'], equals: payloadIdentityAnswers } }]
+      : []),
   ];
 
   const recentLog = await getPrisma().auditLog.findFirst({

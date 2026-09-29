@@ -1,23 +1,25 @@
-import type { FormField } from '@classmoji/services/form-contract';
+import type { FormField, FormOption } from '@classmoji/services/form-contract';
 import { makeField, makeOption, newId } from './fieldTypes.ts';
 
 /**
- * Template presets for the New Form drawer.
+ * Presets: whole-form templates for the New Form drawer (`FORM_PRESETS`), and
+ * question groups the builder appends to an existing form (`QUESTION_PRESETS`).
  *
- * These are the three live forms this feature replaces, plus a blank. They are
- * plain field-set builders — no template machinery, no stored template records:
- * a preset produces a field list, `form.service.create` validates and
- * normalizes it through the same contract a hand-built form goes through, and
- * from that moment the form is an ordinary draft with no memory of where it
- * came from.
+ * The form templates are the three live forms this feature replaced, Project
+ * bidding, and a blank. Both kinds are plain field-set builders — no template
+ * machinery, no stored template records: a preset produces a field list,
+ * `form.service.create` / `update` validates and normalizes it through the same
+ * contract a hand-built form goes through, and from that moment the form is an
+ * ordinary draft with no memory of where it came from. Team-set defaults come
+ * from `suggestConfig` recognizing question shapes, not from a preset marker.
  *
  * Each preset is a FUNCTION, not a constant, because every call must mint fresh
  * ids — two forms created from the same template must not share field ids.
  *
- * `access` on a preset is the mode the drawer preselects. Team Review REQUIRES
- * Classroom: `repeat_group` and `roster_select` are `classroomOnly` in the
- * registry and the server rejects them on a PUBLIC form, so offering the choice
- * would only produce a save error.
+ * `access` on a preset is the mode the drawer preselects. Team Review and
+ * Project bidding REQUIRE Classroom: `repeat_group` and `roster_select` are
+ * `classroomOnly` in the registry and the server rejects them on a PUBLIC form,
+ * so offering the choice would only produce a save error.
  */
 
 export type FormAccessMode = 'PUBLIC' | 'CLASSROOM';
@@ -167,7 +169,143 @@ const TEAM_REVIEW: FormPreset = {
   },
 };
 
-export const FORM_PRESETS: FormPreset[] = [BLANK, WAITLIST, PLANNING_SURVEY, TEAM_REVIEW];
+// ─── Question presets ───────────────────────────────────────────────────────
+
+/**
+ * The Gender question and its self-description.
+ *
+ * Both are identity questions: their answers are hidden on staff surfaces
+ * until someone asks, and team sets use the multiselect only for "don't leave
+ * anyone as the only one". "Prefer not to say" is exclusive, so picking it
+ * clears the other choices. The self-description label avoids the word "name"
+ * so the fill path's name heuristic (`identityPlan`) can never pick it up.
+ */
+const genderFields = (): FormField[] => [
+  field('multiselect', {
+    label: 'How do you describe your gender?',
+    required: false,
+    help:
+      'Optional. Used only so no one is placed as the only person of their gender on a team. ' +
+      'Only course staff can see it; teammates never do. Skipping it changes nothing about ' +
+      'your placement.',
+    options: [
+      makeOption('Woman'),
+      makeOption('Man'),
+      makeOption('Non-binary'),
+      makeOption('Prefer to self-describe'),
+      { ...makeOption('Prefer not to say'), exclusive: true },
+    ],
+    identity_question: true,
+  }),
+  field('short_text', {
+    label: "If you'd like, describe it in your own words",
+    required: false,
+    identity_question: true,
+  }),
+];
+
+/**
+ * The project-bidding questions, in the order students answer them.
+ *
+ * The pitched-idea dropdown takes its options from the ranked question through
+ * `options_from`, so the two share option ids however the instructor edits the
+ * project list: the team-set owner rule needs the pitched project to be one of
+ * the ranked ones. The options are copied in here too, so the field is
+ * complete before the first save re-copies them.
+ *
+ * "What matters more to you?" carries exactly these three option labels;
+ * `suggestConfig` recognizes them to pre-set the Shifts priority rule.
+ */
+const projectBiddingFields = (): FormField[] => {
+  const projects: FormOption[] = [
+    makeOption('Project A'),
+    makeOption('Project B'),
+    makeOption('Project C'),
+    makeOption('Project D'),
+  ];
+  const ranked = field('ranked_choice', {
+    label: "Rank the projects you'd like to work on",
+    required: true,
+    options: projects,
+    ranks: 3,
+  });
+
+  return [
+    field('dropdown', {
+      label: 'Did you pitch one of these projects? If so, which one?',
+      required: false,
+      options: projects.map(option => ({ ...option })),
+      options_from: ranked.id,
+    }),
+    ranked,
+    field('roster_select', {
+      label: 'Who would you like to work with?',
+      required: false,
+      optionSource: 'roster',
+      multiple: true,
+    }),
+    field('roster_select', {
+      label: "Anyone you'd rather not work with?",
+      required: false,
+      optionSource: 'roster',
+      multiple: true,
+      help: 'Only course staff see this.',
+    }),
+    field('dropdown', {
+      label: 'What matters more to you?',
+      required: false,
+      options: [makeOption('The project'), makeOption('The people'), makeOption('Both equally')],
+    }),
+    field('long_text', { label: 'Anything else we should know?', required: false }),
+  ];
+};
+
+const PROJECT_BIDDING: FormPreset = {
+  key: 'project-bidding',
+  label: 'Project bidding',
+  blurb:
+    'Pitched idea, ranked projects, who to work with and who not to, what matters more, and anything else. Classroom only.',
+  access: 'CLASSROOM',
+  requiresClassroom: true,
+  suggestedTitle: 'Project Bidding',
+  fields: projectBiddingFields,
+};
+
+export const FORM_PRESETS: FormPreset[] = [
+  BLANK,
+  WAITLIST,
+  PLANNING_SURVEY,
+  TEAM_REVIEW,
+  PROJECT_BIDDING,
+];
 
 export const presetByKey = (key: string): FormPreset =>
   FORM_PRESETS.find(preset => preset.key === key) ?? BLANK;
+
+/** A group of questions the builder's "Add a preset" row appends to a form. */
+export interface QuestionPreset {
+  key: string;
+  label: string;
+  /** The button's tooltip. */
+  hint: string;
+  /** True when the questions cannot exist on a PUBLIC form (roster fields). */
+  requiresClassroom: boolean;
+  fields: () => FormField[];
+}
+
+export const QUESTION_PRESETS: QuestionPreset[] = [
+  {
+    key: 'gender',
+    label: 'Gender',
+    hint: 'An optional gender question and a self-description, both identity questions.',
+    requiresClassroom: false,
+    fields: genderFields,
+  },
+  {
+    key: 'project-bidding',
+    label: 'Project bidding',
+    hint: 'Pitched idea, ranked projects, who to work with and who not to, what matters more, and anything else.',
+    requiresClassroom: true,
+    fields: projectBiddingFields,
+  },
+];

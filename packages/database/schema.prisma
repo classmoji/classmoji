@@ -2026,7 +2026,10 @@ model TeamSet {
   form_id        String
   /// Slug-like; becomes the Tag name on create. Unique per form.
   name           String
-  /// TeamSetConfig (version 1) — see teamSetConfig.ts.
+  /// TeamSetConfig (version 1) — see teamSetConfig.ts. Carries provenance
+  /// stamps the service writes on save (pins: added_by/_via/_at; Closed
+  /// options: closed_by/_via/_at). Fixed once a create is claimed (the set is
+  /// locked; teamSet.service isSetLocked).
   config         Json
   /// Set by create: the Tag every created team carries.
   tag_id         String?
@@ -2034,8 +2037,11 @@ model TeamSet {
   /// claim is an `updateMany … WHERE created_run_id IS NULL`, which is what
   /// makes a double-confirm create one set of teams rather than two.
   created_run_id String?
-  /// { status: 'RUNNING'|'DONE'|'FAILED', total, done, failed: [{team, reason}],
-  ///   teams: [{team_id, name}], started_at, finished_at }
+  /// CreateState (teamSet.service.ts): { status: 'RUNNING'|'DONE'|'PARTIAL'|'FAILED',
+  ///   run_id, run_number, total, done, failed: [{team, reason, members?}],
+  ///   teams: [{team_id, name, n, members_added?}], names, sizes, renamed?,
+  ///   counts, attempt, attempt_id, claimed_by, started_at, task_started_at,
+  ///   heartbeat_at, finished_at }
   create_state   Json?
   created_by     String
   created_at     DateTime @default(now())
@@ -2058,12 +2064,17 @@ model TeamSetRun {
   /// 1..n per set, shown to humans ("run 3"). Allocated under the set's row lock.
   number         Int
   status         TeamSetRunStatus @default(QUEUED)
-  /// Snapshot of TeamSet.config at start.
+  /// Snapshot of TeamSet.config at start, with non_respondents resolved
+  /// (always explicit on runs started since 'group' existed).
   config         Json
   /// TeamSetProblem — ids and integers only, no names or free text. This exact
-  /// JSON is what the solver reads.
+  /// JSON is what the solver reads. Version 2 adds options[].size and group.
+  /// Its soft counts and groups are sets of people built from answers, an
+  /// identity question's included: it never leaves the server.
   problem        Json
-  /// TeamSetContext — ids only; what metrics and explanations need.
+  /// TeamSetContext — ids and integers only; what metrics and explanations
+  /// need (plus clipped numeric answers of balance rules). Never identity
+  /// answers.
   context        Json
   /// Staleness snapshot: { revision_id, responses: [{id, user_id, updated_at,
   /// answers_hash}], roster_user_ids }.
@@ -2073,11 +2084,14 @@ model TeamSetRun {
   engine         String
   /// { teams: [{ slot, option_id, member_user_ids }] }
   result         Json?
-  /// TeamSetMetrics
+  /// TeamSetMetrics (incl. top3, per-rule team counts, non_respondents). Never
+  /// which teams an identity rule missed.
   metrics        Json?
-  /// { status, objective, bound, wall_s }
+  /// SolverSummary: { status, objective, bound, wall_s, core_status?, stats?,
+  ///   stages? (two-stage solves) }
   solver         Json?
-  /// { issues?: CheckIssue[], core?: [{src, label}] }
+  /// { issues?: CheckIssue[], core?: [{src, label}] (labels name no one),
+  ///   core_status?, summary? (a facts sentence), mismatch? }
   diagnostics    Json?
   /// Closed-vocabulary code, never raw exception text.
   error          String?
