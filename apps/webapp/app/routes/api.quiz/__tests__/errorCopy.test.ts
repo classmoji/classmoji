@@ -327,6 +327,19 @@ describe('api.quiz sendMessage — a failed reply in the transcript', () => {
     expect(metadata).toEqual({ errorType: 'AGENT_FAILURE', code: 'BUDGET_EXCEEDED' });
   });
 
+  it("keeps the ai-agent's own text for a message sent while the last turn still runs", async () => {
+    const stillAnswering = 'Your last message is still being answered.';
+    sendMessageToAgentMock.mockRejectedValue(
+      Object.assign(new Error(stillAnswering), { code: 'turn_in_progress', retryable: true })
+    );
+
+    await post({ _action: 'sendMessage', attemptId: ATTEMPT_ID, content: 'hi' });
+
+    const { content, metadata } = savedReply();
+    expect(content).toBe(stillAnswering);
+    expect(metadata).toEqual({ errorType: 'AGENT_FAILURE', code: 'turn_in_progress' });
+  });
+
   it('saves and answers the reply-failed line when saving the ai-agent failure fails', async () => {
     sendMessageToAgentMock.mockRejectedValue(
       Object.assign(new Error('Something went wrong. Please try again.'), {

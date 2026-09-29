@@ -59,6 +59,13 @@ export default () => {
       // production server never constructs vite at all, but the list is kept
       // for a prod-shaped run rather than shipping the check switched off.
       allowedHosts: process.env.NODE_ENV === 'production' ? ['.lvh.me', '.localhost'] : true,
+      // Playwright writes its HTML report and per-test artifacts inside this
+      // app while specs run against this server; a watched write there makes
+      // Vite reload the page under test. Vite 6 already ignores
+      // `**/test-results/**`; the report directory it does not.
+      watch: {
+        ignored: ['**/playwright-report/**', '**/tests/test-results/**'],
+      },
     },
     build: {
       sourcemap: process.env.NODE_ENV === 'production' ? 'hidden' : true,

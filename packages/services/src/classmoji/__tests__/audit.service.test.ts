@@ -233,4 +233,43 @@ describe('audit.create dedup key', () => {
       expect((findFirstMock.mock.calls[0][0] as WhereArg).where).not.toHaveProperty('AND');
     });
   });
+
+  /**
+   * A responses view with identity answers hidden, followed inside the window
+   * by the same view with them shown, is a reveal. It has to be its own row.
+   */
+  describe('whether identity answers were disclosed joins the key', () => {
+    const responsesView = (identity_answers: boolean) => ({
+      ...baseEntry,
+      resource_type: 'FORMS',
+      data: {
+        tool: 'forms.responses.view',
+        identity_answers,
+        ...(identity_answers ? { identity_field_ids: ['f-1'] } : {}),
+      },
+    });
+
+    it('records a reveal that follows a hidden view', async () => {
+      await audit.create(responsesView(false));
+      await audit.create(responsesView(true));
+
+      const first = (findFirstMock.mock.calls[0][0] as WhereArg).where.AND;
+      const second = (findFirstMock.mock.calls[1][0] as WhereArg).where.AND;
+      expect(first).toEqual([{ data: { path: ['identity_answers'], equals: false } }]);
+      expect(second).toEqual([{ data: { path: ['identity_answers'], equals: true } }]);
+      expect(createMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('still dedups the same state twice', async () => {
+      findFirstMock.mockResolvedValue({ id: 'existing-row' });
+
+      expect(await audit.create(responsesView(true))).toBeNull();
+      expect(createMock).not.toHaveBeenCalled();
+    });
+
+    it('a non-boolean identity_answers does not join the key', async () => {
+      await audit.create({ ...baseEntry, data: { tool: 't', identity_answers: 'yes' } });
+      expect((findFirstMock.mock.calls[0][0] as WhereArg).where).not.toHaveProperty('AND');
+    });
+  });
 });

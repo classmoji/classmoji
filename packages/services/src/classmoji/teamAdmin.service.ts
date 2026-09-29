@@ -50,6 +50,7 @@ export class TeamServiceError extends Error {
     | 'reserved_name'
     | 'name_collision'
     | 'tag_not_found'
+    | 'tag_required'
     | 'user_not_found';
 
   constructor(code: TeamServiceError['code'], message: string) {
@@ -93,8 +94,9 @@ export interface RepoRenameFailure {
 
 export interface CreateTeamResult {
   team: TeamSummary;
-  /** Tag ids now attached to the team (includes tags that were already attached). */
+  /** Tag ids attached to the team, written together with its row. */
   tagsAdded: string[];
+  /** Requested ids that are not tags of this classroom; they were not attached. */
   tagsFailed: TagFailure[];
 }
 
@@ -366,19 +368,23 @@ const toSummary = (team: { id: string; name: string; slug: string; is_visible: b
  * whatever the flag says. Whether it should drive a read path again is an open
  * product question, which is why the column stays.
  *
- * Tags are attached individually and reported per tag: creating the team
- * succeeds even if some tags could not be attached.
+ * Every team is created under at least one tag of this classroom. The rule is
+ * checked in the pre-flight pass, so a request with no valid tag is refused
+ * with `tag_required` before the provider is called. Ids from another classroom
+ * are reported in `tagsFailed` and the rest are used. The tags are written in
+ * the same create as the local row: if that write fails the provider team is
+ * deleted again and the error is thrown, so a team never exists untagged.
  */
 export const createTeam = async ({
   classroomId,
   name,
   isVisible = false,
-  tagIds = [],
+  tagIds,
 }: {
   classroomId: string;
   name: string;
   isVisible?: boolean;
-  tagIds?: string[];
+  tagIds: string[];
 }): Promise<CreateTeamResult> => {
   const trimmedName = requireName(name);
   const { gitOrganization, orgLogin } = await loadClassroomOrg(classroomId);
@@ -395,6 +401,12 @@ export const createTeam = async ({
     classroomId,
     tagIds
   );
+  if (validTagIds.length === 0) {
+    throw new TeamServiceError(
+      'tag_required',
+      '[team] a team needs at least one tag of this classroom'
+    );
+  }
 
   const gitProvider = getGitProvider(gitOrganization);
 
@@ -435,21 +447,36 @@ export const createTeam = async ({
     );
   }
 
-  const team = await teamService.create({
-    providerId: providerTeam.id,
-    provider: gitOrganization.provider as GitProviderEnum,
-    name: providerTeam.name,
-    slug: providerTeam.slug,
-    classroomId,
-    isVisible,
-  });
-
-  const { added, failed } = await attachTags(team.id, validTagIds);
+  let team;
+  try {
+    team = await teamService.create({
+      providerId: providerTeam.id,
+      provider: gitOrganization.provider as GitProviderEnum,
+      name: providerTeam.name,
+      slug: providerTeam.slug,
+      classroomId,
+      isVisible,
+      tagIds: validTagIds,
+    });
+  } catch (error: unknown) {
+    // A unique violation means another local row already holds this slug or
+    // this provider team. The provider create adopts an existing team of the
+    // same name, so two requests racing on one name both get the same provider
+    // team, and it belongs to the row that was written: it is not deleted.
+    if (isUniqueViolation(error)) {
+      throw new TeamServiceError(
+        'name_collision',
+        `[team] a team with slug "${authoritativeSlug}" already exists`
+      );
+    }
+    await rollbackProviderTeam(gitProvider, orgLogin, authoritativeSlug);
+    throw error;
+  }
 
   return {
     team: toSummary(team),
-    tagsAdded: added,
-    tagsFailed: [...tagsFailed, ...failed],
+    tagsAdded: validTagIds,
+    tagsFailed,
   };
 };
 
@@ -780,6 +807,10 @@ export const addTeamTags = async ({
  * The TeamTag row is resolved THROUGH its team's classroom, so an id that
  * belongs to another classroom simply does not resolve (the plain delete it
  * replaces took any id at all).
+ *
+ * A team keeps at least one tag: removing its last one is refused with
+ * `tag_required`. Deleting a whole Tag still cascades to its TeamTag rows;
+ * that is a different act and is not covered here.
  */
 export const removeTeamTag = async ({
   classroomId,
@@ -788,20 +819,32 @@ export const removeTeamTag = async ({
   classroomId: string;
   teamTagId: string;
 }): Promise<RemoveTeamTagResult> => {
-  const teamTag = await getPrisma().teamTag.findFirst({
-    where: { id: teamTagId, team: { classroom_id: classroomId } },
-    select: { id: true, team_id: true, tag_id: true },
+  // The count and the delete it authorizes must see the same state, so they run
+  // in ONE transaction behind a row lock on the team. Two removals of the
+  // team's last two tags serialize on that lock, and the second one counts the
+  // tags the first one left behind.
+  return getPrisma().$transaction(async tx => {
+    const teamTag = await tx.teamTag.findFirst({
+      where: { id: teamTagId, team: { classroom_id: classroomId } },
+      select: { id: true, team_id: true, tag_id: true },
+    });
+    if (!teamTag) {
+      throw new TeamServiceError(
+        'tag_not_found',
+        `[team] no team tag ${teamTagId} in classroom ${classroomId}`
+      );
+    }
+
+    await tx.$queryRaw`SELECT id FROM teams WHERE id = ${teamTag.team_id} FOR UPDATE`;
+    const tagCount = await tx.teamTag.count({ where: { team_id: teamTag.team_id } });
+    if (tagCount <= 1) {
+      throw new TeamServiceError('tag_required', "[team] a team's last tag cannot be removed");
+    }
+
+    await tx.teamTag.delete({ where: { id: teamTag.id } });
+
+    return { teamTagId: teamTag.id, teamId: teamTag.team_id, tagId: teamTag.tag_id };
   });
-  if (!teamTag) {
-    throw new TeamServiceError(
-      'tag_not_found',
-      `[team] no team tag ${teamTagId} in classroom ${classroomId}`
-    );
-  }
-
-  await teamTagService.delete(teamTag.id);
-
-  return { teamTagId: teamTag.id, teamId: teamTag.team_id, tagId: teamTag.tag_id };
 };
 
 /**

@@ -32,9 +32,24 @@ import { FieldShell } from './FormPreview.tsx';
  *    snapshot marks as removed (or that appear only in the answers) are greyed
  *    and labelled: the review still happened and the instructor must still see
  *    it, but the person is no longer on the team.
+ *
+ * An identity question's answer is stripped on the server. The staff drawer
+ * passes those field ids as `hiddenFieldIds` until staff ask to see this one
+ * response's answers, and each renders a "Hidden" chip rather than "No answer":
+ * the two mean different things, and the chip says nothing about whether the
+ * question was answered. The respondent's own views pass nothing.
  */
 
 const blank = <span className="italic text-gray-400 dark:text-gray-500">No answer</span>;
+
+const hiddenChip = (
+  <span
+    data-testid="forms-answer-hidden"
+    className="inline-block rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-300"
+  >
+    Hidden
+  </span>
+);
 
 function ScalarAnswer({ field, value }: { field: FormField; value: unknown }) {
   const text = formatAnswer(field, value);
@@ -189,10 +204,13 @@ export function AnswerField({
   field,
   value,
   resolvedContext,
+  hidden = false,
 }: {
   field: FormField;
   value: unknown;
   resolvedContext?: unknown;
+  /** The answer was withheld (an identity question): show the chip. */
+  hidden?: boolean;
 }) {
   // A heading or a banner is part of the form's prose, not of the response.
   // Keeping them out is what makes the drawer a list of answers rather than a
@@ -201,7 +219,9 @@ export function AnswerField({
 
   return (
     <FieldShell field={field}>
-      {field.type === 'matrix' ? (
+      {hidden ? (
+        hiddenChip
+      ) : field.type === 'matrix' ? (
         <MatrixAnswer field={field} value={value} />
       ) : field.type === 'repeat_group' ? (
         <RepeatGroupAnswer field={field} value={value} resolvedContext={resolvedContext} />
@@ -217,12 +237,16 @@ export default function AnswerView({
   fields,
   answers,
   resolvedContext,
+  hiddenFieldIds,
 }: {
   fields: FormField[];
   answers: Record<string, unknown>;
   resolvedContext?: unknown;
+  /** Fields whose answers were withheld; each shows a "Hidden" chip. */
+  hiddenFieldIds?: readonly string[];
 }) {
   const answerable = fields.filter(field => !isDisplayOnly(field));
+  const hidden = new Set(hiddenFieldIds ?? []);
 
   if (answerable.length === 0) {
     return (
@@ -240,6 +264,7 @@ export default function AnswerView({
           field={field}
           value={answers?.[field.id]}
           resolvedContext={resolvedContext}
+          hidden={hidden.has(field.id)}
         />
       ))}
       {/* An answer whose field is gone from this revision is not shown by the

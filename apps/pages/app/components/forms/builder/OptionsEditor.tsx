@@ -24,6 +24,11 @@ interface OptionsEditorProps {
   label?: string;
   /** Rubric text is meaningful on matrix axes, noise on a plain dropdown. */
   withDescriptions?: boolean;
+  /**
+   * Multi-select only: a per-row "Only this choice" checkbox (`exclusive`).
+   * The contract refuses the flag on any other option list.
+   */
+  allowExclusive?: boolean;
 }
 
 export default function OptionsEditor({
@@ -33,6 +38,7 @@ export default function OptionsEditor({
   maximum = 30,
   label = 'Options',
   withDescriptions = false,
+  allowExclusive = false,
 }: OptionsEditorProps) {
   const update = (id: string, patch: Partial<FormOption>) =>
     onChange(options.map(option => (option.id === id ? { ...option, ...patch } : option)));
@@ -76,6 +82,20 @@ export default function OptionsEditor({
                   className="w-full rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-xs text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
                 />
               ) : null}
+              {allowExclusive ? (
+                <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-300">
+                  <input
+                    type="checkbox"
+                    checked={option.exclusive === true}
+                    // Stored only when on, as the contract stores it.
+                    onChange={event =>
+                      update(option.id, { exclusive: event.target.checked ? true : undefined })
+                    }
+                    aria-label={`Only this choice: ${option.label}`}
+                  />
+                  Only this choice
+                </label>
+              ) : null}
             </div>
             <button
               type="button"
@@ -98,6 +118,11 @@ export default function OptionsEditor({
       >
         <IconPlus size={13} /> Add option
       </button>
+      {allowExclusive ? (
+        <p className="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+          Picking an option marked Only this choice clears the other choices.
+        </p>
+      ) : null}
     </div>
   );
 }
