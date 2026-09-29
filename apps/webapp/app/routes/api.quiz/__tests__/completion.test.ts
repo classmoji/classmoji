@@ -253,6 +253,28 @@ describe('api.quiz sendMessage — completing after the last reply', () => {
   });
 });
 
+describe('api.quiz sendMessage — completion follows the evaluation, not question numbers', () => {
+  it('does not complete on a reply that only names the last question', async () => {
+    sendMessageToAgentMock.mockResolvedValue({ content: '**Question 5 of 5** What is a closure?' });
+
+    const response = await post({ _action: 'sendMessage', attemptId: ATTEMPT_ID, content: 'hi' });
+
+    expect(response.status).toBe(200);
+    expect(completeAttemptMock).not.toHaveBeenCalled();
+  });
+
+  it('asks the services to complete on a reply carrying the evaluation', async () => {
+    // questions_asked is 1 here: the services decide whether it is finished.
+    sendMessageToAgentMock.mockResolvedValue({
+      content: 'Done!\n\n[QUIZ_EVALUATION]\n```json\n{"quiz_complete": true}\n```',
+    });
+
+    await post({ _action: 'sendMessage', attemptId: ATTEMPT_ID, content: 'hi' });
+
+    expect(completeAttemptMock).toHaveBeenCalledWith(ATTEMPT_ID);
+  });
+});
+
 describe('api.quiz — viewing as a student', () => {
   beforeEach(() => {
     signInAs(STUDENT, { viewingAs: true });

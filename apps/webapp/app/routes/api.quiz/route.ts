@@ -1059,11 +1059,10 @@ export async function action({ request }: Route.ActionArgs) {
               'I apologize, but I encountered an issue generating a response. Please try again.';
           }
 
-          const questionProgress = getQuestionProgressFromMessage(aiResponse);
-          const currentQuestionsAsked = attemptData!.questionsAsked || 0;
-          const hasQuestion = Boolean(questionProgress);
-          const isNewQuestion =
-            hasQuestion && questionProgress!.questionNumber > currentQuestionsAsked;
+          // Whether the reply shows a question — for the buttons below only.
+          // questions_asked is the ai-agent's to keep, from the questions
+          // present_question accepted; nothing here reads it from the reply.
+          const hasQuestion = Boolean(getQuestionProgressFromMessage(aiResponse));
 
           const completionData = checkForCompletion(aiResponse);
 
@@ -1072,28 +1071,14 @@ export async function action({ request }: Route.ActionArgs) {
             aiResponse = `${aiResponse.trim()}\n\n[BUTTON:TRY_AGAIN] [BUTTON:NEXT]`;
           }
 
-          // Note: ai-agent already saved assistant response and questions_asked via conversationStorage
-          // ai-agent sets absolute value, so no increment needed here
-
-          const updatedQuestionsAsked = isNewQuestion
-            ? questionProgress!.questionNumber
-            : currentQuestionsAsked;
-
-          // Check for quiz completion
-          const newQuestionsAsked = Math.max(
-            updatedQuestionsAsked,
-            questionProgress?.questionNumber || 0
-          );
-          if (newQuestionsAsked >= (attemptData!.questionCount || 5)) {
-            const completion = completionData || checkForCompletion(aiResponse);
-            if (completion) {
-              // Left open when a question has no recorded result yet.
-              await ClassmojiService.quizAttempt
-                .completeAttempt(data.attemptId)
-                .catch((error: unknown) => {
-                  if (!isAttemptNotFinished(error)) throw error;
-                });
-            }
+          // A reply carrying the evaluation completes the attempt. The
+          // services leave it open while a question has no recorded result.
+          if (completionData) {
+            await ClassmojiService.quizAttempt
+              .completeAttempt(data.attemptId)
+              .catch((error: unknown) => {
+                if (!isAttemptNotFinished(error)) throw error;
+              });
           }
 
           return new Response(JSON.stringify({ success: true }), {
