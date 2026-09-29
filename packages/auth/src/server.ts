@@ -638,8 +638,10 @@ export const auth = betterAuth({
    * caller we have: apps/mcp/src/auth/resolveViewer.ts:42. Nothing in the OAuth
    * flow uses this endpoint; it exists for better-auth's own `withMcpAuth`
    * helper, which we do not use.
+   *
+   * `/list-sessions` is off too: no app lists a user's own sessions.
    */
-  disabledPaths: ['/mcp/get-session'],
+  disabledPaths: ['/mcp/get-session', '/list-sessions'],
   plugins: [
     admin({
       impersonationSessionDuration: 60 * 60, // 1 hour
