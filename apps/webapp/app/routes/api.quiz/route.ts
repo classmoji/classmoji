@@ -6,7 +6,10 @@
  * 2. Authorization: Users can only access their own quiz attempts
  * 3. Attempt Ownership Verification:
  *    - sendMessage: Verifies user owns the attempt before allowing messages
- *    - completeQuiz: Verifies user owns the attempt before marking complete
+ *    - completeQuiz: Verifies user owns the attempt before marking complete,
+ *      and completes it only once every question has a recorded result
+ *    - While viewing as another user, "the user" is that user: only their own
+ *      attempts are reachable
  *    - restartQuiz: Ends the prior ai-agent session only when the named attempt
  *      is the caller's own attempt on the quiz being restarted
  * 4. Audit Logging: All unauthorized access attempts are logged
@@ -16,7 +19,7 @@
  * ACTIONS:
  * - startQuiz: Creates or resumes a quiz attempt for the authenticated user
  * - sendMessage: Adds a message to a quiz attempt (ownership verified)
- * - completeQuiz: Marks a quiz attempt as complete (ownership verified)
+ * - completeQuiz: Marks a finished quiz attempt as complete (ownership verified)
  * - updateMetrics: Updates duration metrics for a quiz attempt
  * - recordModalClose: Records when the quiz modal is closed
  * - recordModalOpen: Calculates gap time and adds to unfocused duration when modal reopens
@@ -100,6 +103,31 @@ const QUIZZES_UNAVAILABLE_BODY = {
   code: 'QUIZZES_UNAVAILABLE',
   message: "Quizzes aren't available in this class.",
 };
+
+/**
+ * The refusal for completing an attempt that is not finished: some question
+ * has no recorded result yet. Fixed copy; the attempt is left as it was, and
+ * the quiz page reopens the chat (QuizAttemptInterface) so the quiz goes on.
+ */
+const QUIZ_NOT_FINISHED_BODY = {
+  success: false,
+  code: 'QUIZ_NOT_FINISHED',
+  message: "This quiz isn't finished yet. Send a message to continue.",
+};
+
+/**
+ * The refusal for a message to an attempt that is already complete. Fixed
+ * copy; nothing is sent to the ai-agent.
+ */
+const QUIZ_ALREADY_COMPLETE_BODY = {
+  success: false,
+  code: 'QUIZ_COMPLETE',
+  message: 'This quiz is already complete.',
+};
+
+/** The services' refusal to complete an unfinished attempt (by its code). */
+const isAttemptNotFinished = (error: unknown) =>
+  (error as { code?: unknown } | null)?.code === 'QUIZ_ATTEMPT_INCOMPLETE';
 
 /**
  * Fixed copy for failures. Whatever went wrong is logged here and never sent to
@@ -501,12 +529,22 @@ export async function action({ request }: Route.ActionArgs) {
       }
     };
 
-    // Check if admin is impersonating a student (for "View As" feature)
-    // Impersonating admins can interact with quiz attempts on behalf of students
+    // The caller's session, for the GitHub user token a code-aware start
+    // prefers. While an admin views as a student ("View As"), the session and
+    // `userId` above are that student's, so the ownership checks below admit
+    // the student's own attempts and nobody else's.
     const { getAuthSession } = await import('@classmoji/auth/server');
     const authData = await getAuthSession(request);
-    const isImpersonating = !!(authData as { session?: { session?: { impersonatedBy?: string } } })
-      ?.session?.session?.impersonatedBy;
+
+    // Recorded on a refused attempt action: the caller's own role here, and
+    // the admin behind a "View As" session when there is one.
+    const viewingAsBy = (
+      authData as { session?: { session?: { impersonatedBy?: unknown } } } | null
+    )?.session?.session?.impersonatedBy;
+    const refusalContext = {
+      caller_role: access.membership!.role,
+      ...(typeof viewingAsBy === 'string' && viewingAsBy ? { impersonated_by: viewingAsBy } : {}),
+    };
 
     switch (data._action) {
       case 'startQuiz': {
@@ -916,8 +954,7 @@ export async function action({ request }: Route.ActionArgs) {
           }
 
           // SECURITY CHECK: Verify the authenticated user owns this quiz attempt
-          // Allow if admin is impersonating (View As feature)
-          if (attemptData!.attempt.user_id.toString() !== userId.toString() && !isImpersonating) {
+          if (attemptData!.attempt.user_id.toString() !== userId.toString()) {
             console.error(
               `[sendMessage] Security violation: User ${userId} tried to send message to attempt ${data.attemptId} owned by ${attemptData!.attempt.user_id}`
             );
@@ -926,7 +963,7 @@ export async function action({ request }: Route.ActionArgs) {
             await ClassmojiService.audit.create({
               classroom_id: attemptData!.attempt.quiz.classroom_id,
               user_id: userId.toString(),
-              role: 'STUDENT',
+              role: access.membership!.role,
               resource_id: data.attemptId,
               resource_type: 'QUIZ_ATTEMPT_MESSAGE_UNAUTHORIZED',
               action: 'ACCESS_DENIED',
@@ -935,6 +972,7 @@ export async function action({ request }: Route.ActionArgs) {
                 attempted_attempt_id: data.attemptId,
                 owner_user_id: attemptData!.attempt.user_id.toString(),
                 attempted_action: 'sendMessage',
+                ...refusalContext,
               },
             });
 
@@ -945,6 +983,14 @@ export async function action({ request }: Route.ActionArgs) {
           }
 
           ownsAttempt = true;
+
+          // A complete attempt takes no more messages.
+          if (attemptData!.attempt.completed_at) {
+            return new Response(JSON.stringify(QUIZ_ALREADY_COMPLETE_BODY), {
+              status: 409,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
 
           // Note: ai-agent saves user message via conversationStorage in handleStudentMessage
           // No need to save here - avoiding duplicate writes
@@ -1041,7 +1087,12 @@ export async function action({ request }: Route.ActionArgs) {
           if (newQuestionsAsked >= (attemptData!.questionCount || 5)) {
             const completion = completionData || checkForCompletion(aiResponse);
             if (completion) {
-              await ClassmojiService.quizAttempt.completeAttempt(data.attemptId);
+              // Left open when a question has no recorded result yet.
+              await ClassmojiService.quizAttempt
+                .completeAttempt(data.attemptId)
+                .catch((error: unknown) => {
+                  if (!isAttemptNotFinished(error)) throw error;
+                });
             }
           }
 
@@ -1099,8 +1150,7 @@ export async function action({ request }: Route.ActionArgs) {
           }
 
           // SECURITY CHECK: Verify the authenticated user owns this quiz attempt
-          // Allow if admin is impersonating (View As feature)
-          if (attempt.user_id.toString() !== userId.toString() && !isImpersonating) {
+          if (attempt.user_id.toString() !== userId.toString()) {
             console.error(
               `[completeQuiz] Security violation: User ${userId} tried to complete attempt ${data.attemptId} owned by ${attempt.user_id}`
             );
@@ -1109,7 +1159,7 @@ export async function action({ request }: Route.ActionArgs) {
             await ClassmojiService.audit.create({
               classroom_id: attempt.quiz.classroom_id,
               user_id: userId.toString(),
-              role: 'STUDENT',
+              role: access.membership!.role,
               resource_id: data.attemptId,
               resource_type: 'QUIZ_ATTEMPT_COMPLETE_UNAUTHORIZED',
               action: 'ACCESS_DENIED',
@@ -1118,6 +1168,7 @@ export async function action({ request }: Route.ActionArgs) {
                 attempted_attempt_id: data.attemptId,
                 owner_user_id: attempt.user_id.toString(),
                 attempted_action: 'completeQuiz',
+                ...refusalContext,
               },
             });
 
@@ -1129,8 +1180,18 @@ export async function action({ request }: Route.ActionArgs) {
 
           const metrics = extractDurationMetrics(data);
 
-          // Complete the attempt after ownership verification
-          await ClassmojiService.quizAttempt.completeAttempt(data.attemptId, metrics);
+          // Complete the attempt after ownership verification. The services
+          // refuse one that is not finished (a question without a recorded
+          // result) and change nothing; that answers 409 with fixed copy.
+          try {
+            await ClassmojiService.quizAttempt.completeAttempt(data.attemptId, metrics);
+          } catch (error: unknown) {
+            if (!isAttemptNotFinished(error)) throw error;
+            return new Response(JSON.stringify(QUIZ_NOT_FINISHED_BODY), {
+              status: 409,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
 
           // Cleanup via ai-agent service
           await endQuizSession(data.attemptId);
@@ -1162,7 +1223,7 @@ export async function action({ request }: Route.ActionArgs) {
             });
           }
 
-          if (attempt.user_id.toString() !== userId.toString() && !isImpersonating) {
+          if (attempt.user_id.toString() !== userId.toString()) {
             return new Response(JSON.stringify({ error: 'Forbidden' }), {
               status: 403,
               headers: { 'Content-Type': 'application/json' },
@@ -1230,7 +1291,7 @@ export async function action({ request }: Route.ActionArgs) {
             });
           }
 
-          if (attempt.user_id.toString() !== userId.toString() && !isImpersonating) {
+          if (attempt.user_id.toString() !== userId.toString()) {
             return new Response(JSON.stringify({ error: 'Forbidden' }), {
               status: 403,
               headers: { 'Content-Type': 'application/json' },
@@ -1279,7 +1340,7 @@ export async function action({ request }: Route.ActionArgs) {
             });
           }
 
-          if (attempt.user_id.toString() !== userId.toString() && !isImpersonating) {
+          if (attempt.user_id.toString() !== userId.toString()) {
             return new Response(JSON.stringify({ error: 'Forbidden' }), {
               status: 403,
               headers: { 'Content-Type': 'application/json' },
@@ -1330,7 +1391,7 @@ export async function action({ request }: Route.ActionArgs) {
           const isCallersAttemptOnThisQuiz =
             !!previousAttempt &&
             previousAttempt.quiz_id.toString() === data.quizId.toString() &&
-            (previousAttempt.user_id.toString() === userId.toString() || isImpersonating);
+            previousAttempt.user_id.toString() === userId.toString();
 
           if (isCallersAttemptOnThisQuiz) {
             await endQuizSession(data.attemptId);
@@ -1350,9 +1411,11 @@ export async function action({ request }: Route.ActionArgs) {
             });
           }
 
-          // If repoName provided (instructor preview), save to agent_config immediately
-          // This ensures it's available when QuizAttemptInterface auto-starts the quiz
-          if (data.repoName) {
+          // A teaching-team preview of a code-aware quiz names the repository
+          // to test with; save it to agent_config so the auto-start uses it.
+          // Taken from OWNER, TEACHER and ASSISTANT only, as in startQuiz.
+          const isInstructor = ['OWNER', 'ASSISTANT', 'TEACHER'].includes(access.membership!.role);
+          if (isInstructor && typeof data.repoName === 'string' && data.repoName) {
             await ClassmojiService.quizAttempt.updateAgentConfig(result.attemptId!, {
               instructorRepoName: data.repoName,
             });
