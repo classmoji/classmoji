@@ -9,7 +9,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildPlan, type ClassroomFacts, type CloudinaryAsset } from '../cloudinaryPlan.ts';
-import { COMMIT_TRIES, executeMigration, type ExecuteDeps } from '../cloudinaryExecute.ts';
+import {
+  COMMIT_TRIES,
+  DeploymentNotReadyError,
+  executeMigration,
+  type ExecuteDeps,
+} from '../cloudinaryExecute.ts';
 
 const CLOUD = 'classmoji-test';
 const A = 'classmoji/slides/s1/aaaa';
@@ -111,6 +116,7 @@ interface World {
   canServe: Set<string>;
   /** Media id → rendition bytes, once the (fake) video job has run. */
   renditions: Map<string, number>;
+  deploymentProblems: string[];
 }
 
 function world(): World {
@@ -123,6 +129,7 @@ function world(): World {
     headStatus: 200,
     canServe: new Set(['room-1', 'room-2']),
     renditions: new Map(),
+    deploymentProblems: [],
   };
 }
 
@@ -133,6 +140,7 @@ function fakeDeps(w: World): ExecuteDeps {
     mediaIdFor: (publicId, classroomId) => `id(${publicId}@${classroomId})`,
     mediaKey: (classroomId, mediaId, variant) => `m/${classroomId}/${mediaId}/${variant}`,
     contentTypeFor: ext => (ext === 'mp4' ? 'video/mp4' : 'application/octet-stream'),
+    deploymentProblems: async () => w.deploymentProblems,
     canServeMedia: async classroomId => w.canServe.has(classroomId),
     findMediaRow: async id => w.rows.get(id) ?? null,
     reserveRow: async row => {
@@ -376,6 +384,18 @@ describe('executeMigration', () => {
     expect(trimmed.knownPublicIds).toContain(B);
     await executeMigration(trimmed, fakeDeps(w));
     expect(w.repo.get('room-1:slides/d1/index.html')!.text).toContain(url(B));
+  });
+
+  it('refuses before any write when the deployment is not configured', async () => {
+    const w = world();
+    w.deploymentProblems = ['media storage is not configured (MEDIA_R2_*)'];
+    const run = executeMigration(planFor(w.repo), fakeDeps(w));
+    await expect(run).rejects.toBeInstanceOf(DeploymentNotReadyError);
+    await expect(executeMigration(planFor(w.repo), fakeDeps(w))).rejects.toThrow(
+      /cannot run on this deployment: media storage is not configured/
+    );
+    expect(w.events).toEqual([]);
+    expect(w.repo.get('room-1:slides/d1/deck.json')!.sha).toBe('j1');
   });
 
   it('skips a classroom that cannot serve media, leaving its decks alone', async () => {

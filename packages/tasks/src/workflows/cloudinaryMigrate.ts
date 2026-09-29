@@ -216,13 +216,21 @@ function liveWriteDeps(cloudName: string): ExecuteDeps {
     mediaIdFor: migratedMediaId,
     mediaKey,
     contentTypeFor: ext => ClassmojiService.media.contentTypeForExt(ext),
-    canServeMedia: async classroomId => {
-      const row = await classroom(classroomId);
-      return (
-        ClassmojiService.media.isMediaConfigured() &&
-        ClassmojiService.contentDelivery.canServeSignedContent(row)
-      );
+    deploymentProblems: async () => {
+      const problems: string[] = [];
+      if (!ClassmojiService.media.isMediaConfigured() || !mediaStore()) {
+        problems.push('media storage is not configured (MEDIA_R2_*)');
+      }
+      if (!ClassmojiService.contentDelivery.isContentDeliveryConfigured()) {
+        problems.push(
+          'content delivery is not configured (CONTENT_SIGNING_SECRET, CONTENT_DELIVERY_ORIGIN)'
+        );
+      }
+      return problems;
     },
+    // The classroom half only; the deployment half is `deploymentProblems`.
+    canServeMedia: async classroomId =>
+      ClassmojiService.contentDelivery.canDeliverContent(await classroom(classroomId)),
 
     findMediaRow: async mediaId =>
       (await getPrisma().mediaObject.findUnique({

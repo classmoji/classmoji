@@ -62,7 +62,12 @@ export interface ExecuteDeps {
   /** The R2 key of a variant (`mediaKey` from content-signing). */
   mediaKey(classroomId: string, mediaId: string, variant: string): string;
   contentTypeFor(ext: string): string;
-  /** Deployment AND classroom can serve signed media (else refs render missing). */
+  /**
+   * What is missing on THIS DEPLOYMENT for the migration to work at all (media
+   * storage, content delivery). Non-empty → the run refuses before any write.
+   */
+  deploymentProblems(): Promise<string[]>;
+  /** This CLASSROOM's content is served signed (else `media://` renders missing). */
   canServeMedia(classroomId: string): Promise<boolean>;
 
   findMediaRow(mediaId: string): Promise<ExistingMediaRow | null>;
@@ -141,6 +146,16 @@ export interface ExecuteReport {
     decksUnchanged: number;
     decksFailed: number;
   };
+}
+
+/** The deployment cannot run the migration; nothing was written. */
+export class DeploymentNotReadyError extends Error {
+  readonly problems: string[];
+  constructor(problems: string[]) {
+    super(`The migration cannot run on this deployment: ${problems.join('; ')}`);
+    this.name = 'DeploymentNotReadyError';
+    this.problems = problems;
+  }
 }
 
 export const COMMIT_MESSAGE = 'Move Cloudinary videos to media storage';
@@ -232,6 +247,11 @@ export async function executeMigration(
   deps: ExecuteDeps
 ): Promise<ExecuteReport> {
   const log = deps.log ?? (() => {});
+  // Deployment first, and fatal: a missing bucket or signing secret is not a
+  // per-classroom skip — every item would fail the same way.
+  const problems = await deps.deploymentProblems();
+  if (problems.length > 0) throw new DeploymentNotReadyError(problems);
+
   const assets = new Map<string, CloudinaryAsset>(
     plan.assets.map(asset => [
       asset.publicId,
@@ -300,7 +320,7 @@ export async function executeMigration(
       record(
         'skipped',
         null,
-        'this classroom cannot serve media; its decks keep the Cloudinary URL'
+        'content delivery is off for this classroom; its decks keep the Cloudinary URL'
       );
       continue;
     }
