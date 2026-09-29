@@ -230,6 +230,7 @@ describe('buildPlan', () => {
       backgroundVideoReferences: 2,
       otherReferences: 2,
       previewBranchesWithReferences: 1,
+      nonDeckReferences: 0,
     });
   });
 

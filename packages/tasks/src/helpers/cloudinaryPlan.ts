@@ -12,6 +12,14 @@
 import { createHash } from 'node:crypto';
 
 import {
+  sweepNonDeck,
+  type NonDeckReference,
+  type NonDeckSweep,
+  type NonDeckTable,
+  type PageRead,
+  type PageRecord,
+} from './cloudinaryNonDeck.ts';
+import {
   candidatePublicIds,
   findCloudinaryCandidates,
   resolveCandidate,
@@ -95,6 +103,13 @@ export interface PlanReadDeps {
   listDecks(): Promise<DeckRecord[]>;
   classroomFacts(classroomIds: string[]): Promise<ClassroomFacts[]>;
   readDeck(deck: DeckRecord, classroom: ClassroomFacts | undefined): Promise<DeckRead>;
+  /**
+   * The report-only non-deck sweep (`cloudinaryNonDeck.ts`). All three or none;
+   * without them the plan says the sweep did not run.
+   */
+  listPages?(): Promise<PageRecord[]>;
+  readPage?(page: PageRecord, classroom: ClassroomFacts | undefined): Promise<PageRead>;
+  queryTable?(table: NonDeckTable): Promise<Record<string, unknown>[]>;
   /** Deck reads in flight at once. */
   concurrency?: number;
   log?: (message: string, detail?: Record<string, unknown>) => void;
@@ -244,6 +259,12 @@ export interface MigrationPlan {
   otherReferences: OtherReference[];
   /** Preview-branch decks that reference Cloudinary. Scanned, never rewritten. */
   previewReferences: PreviewReference[];
+  /**
+   * REPORT-ONLY: URLs of our cloud outside decks (page files, database text).
+   * Never migrated or rewritten. Null when the sweep did not run.
+   */
+  nonDeckReferences: NonDeckReference[] | null;
+  nonDeckUnscanned: NonDeckSweep['unscanned'];
   /** Decks that could not be read. */
   unscannedDecks: { slideId: string; classroomId: string; reason: string }[];
   /** Work in classrooms whose media cannot render — skipped by the execute path. */
@@ -273,6 +294,7 @@ export interface MigrationPlan {
     backgroundVideoReferences: number;
     otherReferences: number;
     previewBranchesWithReferences: number;
+    nonDeckReferences: number;
   };
 }
 
@@ -300,6 +322,7 @@ export function buildPlan(input: {
   /** public_id → why it could not be resolved, for the unknown references. */
   unresolved?: ReadonlyMap<string, string>;
   lookups?: number;
+  nonDeck?: NonDeckSweep | null;
   scanned: ScannedDeck[];
   classrooms: ClassroomFacts[];
   limit?: number;
@@ -509,6 +532,8 @@ export function buildPlan(input: {
     workDeferredByLimit: allWork.length - work.length,
     videoReferences: videoRefs,
     otherReferences: other,
+    nonDeckReferences: input.nonDeck?.references ?? null,
+    nonDeckUnscanned: input.nonDeck?.unscanned ?? [],
     previewReferences: preview,
     unscannedDecks: unscanned,
     blockedClassrooms: classrooms.filter(c => !c.canServeMedia).map(c => c.classroomId),
@@ -533,6 +558,7 @@ export function buildPlan(input: {
       videoReferences: allSites.reduce((total, site) => total + site.count, 0),
       backgroundVideoReferences: allSites.reduce((total, site) => total + site.background, 0),
       otherReferences: other.length,
+      nonDeckReferences: input.nonDeck?.references.length ?? 0,
       previewBranchesWithReferences: new Set(preview.map(p => p.slideId)).size,
     },
   };
@@ -670,8 +696,10 @@ export async function planMigration(
 
   const decks = await deps.listDecks();
   log('Listed deck slides', { count: decks.length });
+  const sweeping = Boolean(deps.listPages && deps.readPage && deps.queryTable);
+  const pages = sweeping ? await deps.listPages!() : [];
 
-  const classroomIds = [...new Set(decks.map(deck => deck.classroomId))].sort();
+  const classroomIds = [...new Set([...decks, ...pages].map(record => record.classroomId))].sort();
   const classrooms = await deps.classroomFacts(classroomIds);
   const factsById = new Map(classrooms.map(facts => [facts.classroomId, facts]));
 
@@ -693,6 +721,24 @@ export async function planMigration(
     return { deck, read };
   });
 
+  let nonDeck: NonDeckSweep | null = null;
+  if (sweeping) {
+    nonDeck = await sweepNonDeck(
+      {
+        cloudName: deps.cloudName,
+        readPage: page => deps.readPage!(page, factsById.get(page.classroomId)),
+        queryTable: table => deps.queryTable!(table),
+        concurrency: deps.concurrency,
+      },
+      pages
+    );
+    log('Swept non-deck content (report only)', {
+      pages: pages.length,
+      references: nonDeck.references.length,
+      unscanned: nonDeck.unscanned.length,
+    });
+  }
+
   const unlisted = await resolveUnlisted(deps, assets, scanned);
   log('Looked up unlisted Cloudinary URLs', {
     lookups: unlisted.lookups,
@@ -707,6 +753,7 @@ export async function planMigration(
     lookedUp: unlisted.found,
     unresolved: unlisted.unresolved,
     lookups: unlisted.lookups,
+    nonDeck,
     scanned,
     classrooms,
     limit: opts.limit,

@@ -226,6 +226,14 @@ describe('dry run makes no writes', () => {
           memberships: [{ user: { subscriptions: [{ tier: 'PRO', ends_at: null }] } }],
         },
       ]),
+      page: model([
+        {
+          id: 'page-1',
+          classroom_id: CLASSROOM,
+          title: 'Syllabus',
+          content_path: 'pages/syllabus',
+        },
+      ]),
       mediaObject: model([
         {
           classroom_id: CLASSROOM,
@@ -240,6 +248,19 @@ describe('dry run makes no writes', () => {
           original_deleted_at: new Date(),
         },
       ]),
+      $queryRawUnsafe: vi.fn(async (query: string, _pattern?: unknown) =>
+        query.includes('"modules"')
+          ? [
+              {
+                row: {
+                  id: 'module-1',
+                  classroom_id: CLASSROOM,
+                  description: `Watch https://res.cloudinary.com/${CLOUD}/image/upload/v1/intro.png first`,
+                },
+              },
+            ]
+          : []
+      ),
       $executeRaw: vi.fn(),
       $executeRawUnsafe: vi.fn(),
       $transaction: vi.fn(),
@@ -273,6 +294,17 @@ describe('dry run makes no writes', () => {
       }
       if (url.endsWith('/access_tokens')) return json({ token: 't' });
       if (url.includes('ref=preview')) return json({}, 404);
+      if (url.includes('pages/syllabus/content.json')) {
+        const text = JSON.stringify({
+          src: `https://res.cloudinary.com/${CLOUD}/video/upload/v1/x/y.mp4`,
+        });
+        return json({
+          type: 'file',
+          sha: 'p1',
+          encoding: 'base64',
+          content: Buffer.from(text).toString('base64'),
+        });
+      }
       if (url.includes('deck.json')) {
         const text = JSON.stringify({
           attrs: { 'data-background-video': VIDEO_URL },
@@ -326,6 +358,33 @@ describe('dry run makes no writes', () => {
     expect(plan.assets.find(a => a.publicId === 'cs52-projects/team-a')?.source).toBe(
       'other-folder'
     );
+    // The non-deck sweep: report only, SELECTs only, one per allowlisted table.
+    for (const [query, pattern] of prisma.$queryRawUnsafe.mock.calls) {
+      expect(query).toMatch(
+        /^SELECT to_jsonb\(t\) AS row FROM "[a-z_]+" t WHERE to_jsonb\(t\)::text ILIKE \$1$/
+      );
+      expect(pattern).toBe('%cloudinary.com%');
+    }
+    expect(plan.nonDeckReferences).toEqual([
+      {
+        source: 'page-file',
+        classroomId: CLASSROOM,
+        pageId: 'page-1',
+        title: 'Syllabus',
+        path: 'pages/syllabus/content.json',
+        urls: [`https://res.cloudinary.com/${CLOUD}/video/upload/v1/x/y.mp4`],
+      },
+      {
+        source: 'db',
+        table: 'modules',
+        column: 'description',
+        rowId: 'module-1',
+        classroomId: CLASSROOM,
+        urls: [`https://res.cloudinary.com/${CLOUD}/image/upload/v1/intro.png`],
+      },
+    ]);
+    // Never migrated: the non-deck video is not an asset or a work item.
+    expect(plan.work.every(w => w.publicId !== 'x/y')).toBe(true);
     // The select never names the GitLab token column.
     const classroomArgs = JSON.stringify(prisma.classroom.findMany.mock.calls[0]);
     expect(classroomArgs).not.toContain('access_token');

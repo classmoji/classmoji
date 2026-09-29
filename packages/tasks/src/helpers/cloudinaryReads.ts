@@ -15,7 +15,9 @@
  *
  * ## Every call here is a read
  *
- * - Prisma: `slide.findMany`, `classroom.findMany`, `mediaObject.findMany`.
+ * - Prisma: `slide.findMany`, `page.findMany`, `classroom.findMany`,
+ *   `mediaObject.findMany`, and one `$queryRawUnsafe` SELECT per swept table
+ *   (`cloudinaryNonDeck.ts`, report only).
  * - Cloudinary (Admin API, basic auth): `GET /v1_1/{cloud}/resources/video/upload`
  *   (the `classmoji/slides/` listing) and `GET …/resources/video/upload/{public_id}`
  *   for a deck URL of our cloud outside that listing.
@@ -28,6 +30,13 @@
 
 import jwt from 'jsonwebtoken';
 
+import {
+  NON_DECK_ILIKE,
+  nonDeckQuery,
+  type NonDeckTable,
+  type PageRead,
+  type PageRecord,
+} from './cloudinaryNonDeck.ts';
 import {
   CLOUDINARY_PREFIX,
   type ClassroomFacts,
@@ -324,6 +333,44 @@ export function previewBranchFor(contentPath: string): string {
   return `preview/${contentPath}`;
 }
 
+/** Why a classroom's repo cannot be read, or null when it can. */
+function repoProblem(
+  classroom: ClassroomFacts | undefined,
+  installationId: string | null
+): string | null {
+  if (!classroom) return 'classroom not found';
+  if (classroom.gitProvider !== 'GITHUB') return `provider ${classroom.gitProvider ?? 'none'}`;
+  if (!installationId) return 'no GitHub App installation';
+  if (!classroom.gitOrgLogin || !classroom.contentRepo) return 'no content repo';
+  return null;
+}
+
+/**
+ * A page's body files on the default branch: `content.json` and/or the legacy
+ * `index.html` — for the report-only sweep.
+ */
+export async function readPageFiles(
+  reader: GitHubReader,
+  page: PageRecord,
+  classroom: ClassroomFacts | undefined,
+  installationId: string | null
+): Promise<PageRead> {
+  const problem = repoProblem(classroom, installationId);
+  if (problem) return { files: [], unscanned: problem };
+  const files: PageRead['files'] = [];
+  for (const name of ['content.json', 'index.html']) {
+    const path = `${page.contentPath}/${name}`;
+    const file = await reader.readFile(
+      installationId!,
+      classroom!.gitOrgLogin!,
+      classroom!.contentRepo!,
+      path
+    );
+    if (file) files.push({ path, text: file.text });
+  }
+  return { files, unscanned: null };
+}
+
 /**
  * A deck's files: `deck.json` and `index.html` on the default branch, and
  * `deck.json` on its preview branch (preview branches carry source only).
@@ -340,14 +387,11 @@ export async function readDeckFiles(
     previewBranch: null,
     unscanned: reason,
   });
-  if (!classroom) return none('classroom not found');
-  if (classroom.gitProvider !== 'GITHUB')
-    return none(`provider ${classroom.gitProvider ?? 'none'}`);
-  if (!installationId) return none('no GitHub App installation');
-  if (!classroom.gitOrgLogin || !classroom.contentRepo) return none('no content repo');
+  const problem = repoProblem(classroom, installationId);
+  if (problem || !classroom || !installationId) return none(problem ?? 'no content repo');
 
-  const owner = classroom.gitOrgLogin;
-  const repo = classroom.contentRepo;
+  const owner = classroom.gitOrgLogin!;
+  const repo = classroom.contentRepo!;
   const files: DeckFile[] = [];
   for (const name of ['deck.json', 'index.html']) {
     const path = `${deck.contentPath}/${name}`;
@@ -372,14 +416,41 @@ export async function readDeckFiles(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * The Prisma surface these reads use — three `findMany`s, nothing else. A
+ * The Prisma surface these reads use — four `findMany`s and a raw SELECT. A
  * PrismaClient satisfies it; tests pass fakes. No write method is reachable
  * through this type.
  */
 export interface ReadPrisma {
   slide: { findMany(args: unknown): Promise<unknown[]> };
+  page: { findMany(args: unknown): Promise<unknown[]> };
   classroom: { findMany(args: unknown): Promise<unknown[]> };
   mediaObject: { findMany(args: unknown): Promise<unknown[]> };
+  /** SELECT only — the non-deck sweep's `nonDeckQuery`. */
+  $queryRawUnsafe(query: string, ...values: unknown[]): Promise<unknown>;
+}
+
+export async function listPageRecords(prisma: ReadPrisma): Promise<PageRecord[]> {
+  const rows = (await prisma.page.findMany({
+    select: { id: true, classroom_id: true, title: true, content_path: true },
+    orderBy: [{ classroom_id: 'asc' }, { id: 'asc' }],
+  })) as { id: string; classroom_id: string; title: string; content_path: string }[];
+  return rows.map(row => ({
+    pageId: row.id,
+    classroomId: row.classroom_id,
+    title: row.title,
+    contentPath: row.content_path,
+  }));
+}
+
+/** One swept table's matching rows (`to_jsonb` objects). A SELECT, nothing else. */
+export async function queryNonDeckTable(
+  prisma: ReadPrisma,
+  table: NonDeckTable
+): Promise<Record<string, unknown>[]> {
+  const rows = (await prisma.$queryRawUnsafe(nonDeckQuery(table), NON_DECK_ILIKE)) as {
+    row: Record<string, unknown>;
+  }[];
+  return rows.map(entry => entry.row);
 }
 
 /** `RESERVATION_WINDOW_MS` in services `mediaQuota.ts` (pinned by a test). */
@@ -595,5 +666,9 @@ export function createLiveReadDeps(opts: {
     },
     readDeck: (deck, classroom) =>
       readDeckFiles(reader, deck, classroom, installations.get(deck.classroomId) ?? null),
+    listPages: () => listPageRecords(opts.prisma),
+    readPage: (page, classroom) =>
+      readPageFiles(reader, page, classroom, installations.get(page.classroomId) ?? null),
+    queryTable: table => queryNonDeckTable(opts.prisma, table),
   };
 }
