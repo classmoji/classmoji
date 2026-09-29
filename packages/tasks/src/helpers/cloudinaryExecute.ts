@@ -296,6 +296,23 @@ export async function executeMigration(
 
   /** The first verified copy of each asset — the CopyObject source for the rest. */
   const firstCopy = new Map<string, Verified>();
+  const classroomsOf = new Map(plan.assets.map(asset => [asset.publicId, asset.classroomIds]));
+  /**
+   * A copy an EARLIER run made in another classroom (READY under that
+   * classroom's derived id), so a later, `limit`ed batch copies it in R2
+   * instead of fetching the asset from Cloudinary again.
+   */
+  const earlierCopy = async (item: WorkItem, ext: string): Promise<Verified | undefined> => {
+    for (const classroomId of classroomsOf.get(item.publicId) ?? []) {
+      if (classroomId === item.classroomId) continue;
+      const mediaId = deps.mediaIdFor(item.publicId, classroomId);
+      const row = await deps.findMediaRow(mediaId);
+      if (row?.status === 'READY' && row.classroom_id === classroomId) {
+        return { classroomId, mediaId, ext };
+      }
+    }
+    return undefined;
+  };
   /** classroomId → publicId → media id, verified through the delivery origin. */
   const verified = new Map<string, Map<string, string>>();
   const servable = new Map<string, boolean>();
@@ -349,7 +366,8 @@ export async function executeMigration(
         continue;
       } else {
         if (existing) await deps.releaseRow(mediaId);
-        outcome = await transferOne(deps, item, asset, mediaId, ext, firstCopy.get(item.publicId));
+        const source = firstCopy.get(item.publicId) ?? (await earlierCopy(item, ext));
+        outcome = await transferOne(deps, item, asset, mediaId, ext, source);
       }
 
       const url = await deps.originalUrl(item.classroomId, mediaId);

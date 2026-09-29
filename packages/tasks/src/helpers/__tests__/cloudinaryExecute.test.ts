@@ -404,6 +404,24 @@ describe('executeMigration', () => {
     expect(conflictBackoffMs(() => 0.999)).toBe(2998);
   });
 
+  it('a later limited batch copies from an earlier run\u2019s copy instead of re-downloading', async () => {
+    const w = world();
+    const plan = planFor(w.repo);
+    await executeMigration({ ...plan, work: plan.work.slice(0, 1) }, fakeDeps(w));
+    expect(w.events.filter(e => e.startsWith('download'))).toEqual([`download ${A}`]);
+
+    w.events.length = 0;
+    const later = await executeMigration({ ...plan, work: plan.work.slice(1) }, fakeDeps(w));
+    expect(later.items.find(i => i.publicId === A)).toMatchObject({
+      classroomId: 'room-2',
+      outcome: 'copied',
+    });
+    expect(w.events.filter(e => e.startsWith('download'))).toEqual([`download ${B}`]);
+    expect(w.events).toContain(
+      `copy m/room-1/id(${A}@room-1)/orig.mp4 -> m/room-2/id(${A}@room-2)/orig.mp4`
+    );
+  });
+
   it('refuses before any write when the deployment is not configured', async () => {
     const w = world();
     w.deploymentProblems = ['media storage is not configured (MEDIA_R2_*)'];
