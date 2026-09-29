@@ -8,14 +8,15 @@ import {
   teamSetRuleId,
   type TeamSetPriorityAnswer,
 } from '@classmoji/services/team-set-config';
-import { TEAM_SET_JOB_WORDS } from '@classmoji/services/team-set-explain';
 
 import { metaFor } from '../fieldTypes.ts';
 import { ActionErrorNote, type CreateFlowError } from './CreatingProgress.tsx';
 import { IdentityQuestionBlock } from './IdentityQuestionBlock.tsx';
+import { JobMenu } from './JobMenu.tsx';
 import {
   answerCountText,
   JOB_LABELS,
+  jobFactText,
   jobHintText,
   mustLabelFor,
   ON_OFF_LABELS,
@@ -41,10 +42,13 @@ import type {
 
 /**
  * One question of Setup's Questions card: its type and label, the job it does
- * in the set (a select, or the fixed "Makes the teams" chip on the question
- * the teams are made from), its counts, and the controls of its rule:
- * strength (Off / Prefer / Must, or Off / On for jobs without a weight),
- * weight, the Must sentence, a one-line hint, and per job:
+ * in the set (the Job menu, each job with its name and its fact, or the fixed
+ * "Makes the teams" chip on the question the teams are made from), its
+ * counts, and the controls of its rule: strength (Off / Prefer / Must, or
+ * Off / On for jobs without a weight), weight, a line for the rule (jobFactText:
+ * the job's aim; at Must the Must sentence; at Off, or an identity rule when
+ * the teams are pairs, that it isn't used), a detail line (rank's costs, the
+ * shift), and per job:
  *   - identity question (no_one_alone): IdentityQuestionBlock — "Don't leave
  *     anyone as the only:" checkboxes with class counts, the checks about it,
  *     "Students see"; Must is never offered;
@@ -53,8 +57,8 @@ import type {
  *     change with class counts, and the shift (10–90%);
  *   - note: Read notes (the Responses page).
  *
- * Autosave, one patch per change, as the builder does it: buttons, selects
- * and checkboxes post on change, sliders when let go. A control keeps its own
+ * Autosave, one patch per change, as the builder does it: buttons, selects,
+ * the Job menu and checkboxes post on change, sliders when let go. A control keeps its own
  * draft from the click until the saved setup comes back (so two quick clicks
  * on the answers or the checkboxes, whose lists a patch replaces whole, don't
  * lose the first), and goes back to the stored value when a save is refused.
@@ -64,7 +68,7 @@ import type {
  *     it On sends rule A and rule B with it when either is unset;
  *   - changing the job removes the old rule and adds the new one in the same
  *     patch, keeping the strength (Must becomes Prefer where the new job has
- *     no Must) and the weight; "None" removes the question's rules.
+ *     no Must) and the weight; "Not used" removes the question's rules.
  *
  * The row's element id is `SETUP_ROW_IDS.question(field_id)`, so a Can't-solve
  * link lands on it; the page sets `data-highlight` on the target.
@@ -106,10 +110,10 @@ export function priorityTargets(
   );
 }
 
-/** The select's text for a target: the question, and the job when two share a question. */
+/** The select's text for a target: the question, and the job's name when two share a question. */
 function targetText(target: PriorityTarget, all: readonly PriorityTarget[]): string {
   const shared = all.filter(other => other.label === target.label).length > 1;
-  return shared ? `${target.label} (${TEAM_SET_JOB_WORDS[target.job]})` : target.label;
+  return shared ? `${target.label} (${JOB_LABELS[target.job]})` : target.label;
 }
 
 // ─── Pieces ─────────────────────────────────────────────────────────────────
@@ -479,8 +483,15 @@ function RuleControls({
     upsert({ strength: next });
   };
 
-  const hint = jobHintText(question, job, params);
   const identity = question.identity && job === 'no_one_alone';
+  // The identity_rule_pairs check names this rule: it is off when the teams are pairs.
+  const ruleId = teamSetRuleId({ field_id: question.field_id, job });
+  const offForPairs =
+    identity &&
+    checks.some(check => check.code === 'identity_rule_pairs' && check.srcs?.includes(ruleId));
+  // The line under the controls follows the drafted strength (jobFactText).
+  const fact = jobFactText(question, job, params, strength, offForPairs);
+  const hint = jobHintText(question, job, params);
 
   return (
     <div className="mt-2">
@@ -520,14 +531,6 @@ function RuleControls({
             onCommit={shift => upsert({ params: { shift } })}
           />
         ) : null}
-        {strength === 'must' && mustLabel ? (
-          <span
-            data-testid={`${idPrefix}-must-label`}
-            className="text-xs font-medium text-gray-800 dark:text-gray-100"
-          >
-            {mustLabel}
-          </span>
-        ) : null}
         {question.identity ? (
           <span
             data-testid={`${idPrefix}-no-must`}
@@ -545,6 +548,18 @@ function RuleControls({
           </Link>
         ) : null}
       </div>
+
+      <p data-testid={`${idPrefix}-fact`} className="mt-2 text-xs text-gray-700 dark:text-gray-300">
+        {fact}
+      </p>
+      {hint ? (
+        <p
+          data-testid={`${idPrefix}-hint`}
+          className="mt-1 text-xs text-gray-500 dark:text-gray-400"
+        >
+          {hint}
+        </p>
+      ) : null}
 
       {job === 'priority' ? (
         <PriorityControls
@@ -572,15 +587,6 @@ function RuleControls({
             upsert({ params: { wildcard_option_ids: next.length > 0 ? next : null } });
           }}
         />
-      ) : null}
-
-      {hint ? (
-        <p
-          data-testid={`${idPrefix}-hint`}
-          className="mt-2 text-xs text-gray-500 dark:text-gray-400"
-        >
-          {hint}
-        </p>
       ) : null}
     </div>
   );
@@ -630,8 +636,22 @@ export function QuestionRow({
   const extras = rules.filter(rule => rule !== primary);
   const [jobDraft, setJobDraft] = useDraft<string>(job ?? '', job ?? '', error);
 
-  const jobChoices = [...question.jobs_allowed];
+  // An email question's answers are never shown as notes: the menu doesn't
+  // offer Show as note there (a stored note rule still shows as the job).
+  const jobChoices = question.jobs_allowed.filter(
+    choice => !(choice === 'note' && question.type === 'email')
+  );
   if (job && !jobChoices.includes(job)) jobChoices.unshift(job);
+  // Each choice's fact reads the params of the question's rule for that job,
+  // if it has one (a job chosen here starts without params).
+  const menuChoices = [
+    { value: '', name: QUESTION_ROW_LABELS.noJob, fact: jobFactText(question, null) },
+    ...jobChoices.map(choice => ({
+      value: choice,
+      name: JOB_LABELS[choice],
+      fact: jobFactText(question, choice, rules.find(rule => rule.job === choice)?.params),
+    })),
+  ];
 
   const changeJob = (next: string) => {
     if (next === (job ?? '')) return;
@@ -709,24 +729,18 @@ export function QuestionRow({
               {QUESTION_ROW_LABELS.makesTheTeams}
             </span>
           ) : jobChoices.length > 0 ? (
-            <label className="inline-flex items-center gap-1.5">
-              <span>{QUESTION_ROW_LABELS.job}</span>
-              <select
+            <div className="inline-flex items-center gap-1.5">
+              {/* The button's own name starts with "Job: <question>". */}
+              <span aria-hidden="true">{QUESTION_ROW_LABELS.job}</span>
+              <JobMenu
                 id={`${rowId}-job`}
-                aria-label={questionControlLabel(QUESTION_ROW_LABELS.job, question.label)}
+                label={questionControlLabel(QUESTION_ROW_LABELS.job, question.label)}
+                choices={menuChoices}
                 value={jobDraft}
                 disabled={locked}
-                onChange={event => changeJob(event.target.value)}
-                className="max-w-[16rem] rounded-md border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
-              >
-                <option value="">{QUESTION_ROW_LABELS.noJob}</option>
-                {jobChoices.map(choice => (
-                  <option key={choice} value={choice}>
-                    {JOB_LABELS[choice]}
-                  </option>
-                ))}
-              </select>
-            </label>
+                onChange={changeJob}
+              />
+            </div>
           ) : null}
           <span data-testid={`${rowId}-counts`} className="tabular-nums">
             {questionCountsText(question.counts)}
@@ -747,6 +761,10 @@ export function QuestionRow({
           error={error}
           onPatch={onPatch}
         />
+      ) : jobChoices.length > 0 ? (
+        <p data-testid={`${rowId}-fact`} className="mt-2 text-xs text-gray-700 dark:text-gray-300">
+          {jobFactText(question, null)}
+        </p>
       ) : null}
 
       {identityWithoutRule ? (

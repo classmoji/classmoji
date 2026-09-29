@@ -1,11 +1,14 @@
 import { test, expect } from '@playwright/test';
 
+import { TEAM_SET_JOB_FIELD_TYPES, TEAM_SET_JOBS } from '@classmoji/services/team-set-config';
+
 import type {
   ClosedProvenanceView,
   CompareMetricRow,
   CreatePollView,
   CreateProgressView,
   CreateTeamProgress,
+  FormFieldType,
   PersonRef,
   PinView,
   PlacementFacts,
@@ -23,6 +26,7 @@ import {
   NON_RESPONDENT_MODE_NOTES_FREE,
   PAIRS_IDENTITY_NOTE,
   PROJECTS_FOOTNOTE,
+  QUESTION_ROW_LABELS,
   TEAMS_LABELS,
   UNNAMED,
   backToRunText,
@@ -67,6 +71,7 @@ import {
   higherPickLine,
   identityHeldText,
   isRunActive,
+  jobFactText,
   jobHintText,
   joinedLeftText,
   layoutPollActive,
@@ -611,8 +616,8 @@ test.describe('compare', () => {
 
   const mover: RunMover = {
     user: ana,
-    from: { option: { id: 'o-ledger', label: 'Ledger' }, team_n: 5, rank: 1 },
-    to: { option: studio, team_n: 3, rank: 2 },
+    from: { option: { id: 'o-ledger', label: 'Ledger' }, team_n: 5, rank: 1, responded: true },
+    to: { option: studio, team_n: 3, rank: 2, responded: true },
     pin: { pin_id: 'p2', kind: 'on_option', reason: 'has a makerspace badge' },
     requests: [
       { kind: 'now_kept', asker: ben, asked: cleo },
@@ -622,14 +627,31 @@ test.describe('compare', () => {
 
   test('movers, their pin and their requests', () => {
     expect(moverLine(mover)).toBe('Ana Ruiz · Ledger (1st) → Studio (2nd)');
-    expect(moverLine({ ...mover, to: { option: canopy, team_n: 4, rank: null } })).toBe(
-      'Ana Ruiz · Ledger (1st) → Canopy (not ranked)'
-    );
+    // Answered, but not this option: not ranked. Didn't answer: no answer, as on a team card.
+    expect(
+      moverLine({ ...mover, to: { option: canopy, team_n: 4, rank: null, responded: true } })
+    ).toBe('Ana Ruiz · Ledger (1st) → Canopy (not ranked)');
     expect(
       moverLine({
         ...mover,
-        from: { option: null, team_n: 2, rank: null },
-        to: { option: null, team_n: 4, rank: null },
+        from: { option: studio, team_n: 3, rank: null, responded: false },
+        to: { option: canopy, team_n: 4, rank: null, responded: false },
+      })
+    ).toBe('Ana Ruiz · Studio (no answer) → Canopy (no answer)');
+    // Answered between the two runs: each seat as that run had it.
+    expect(
+      moverLine({
+        ...mover,
+        from: { option: studio, team_n: 3, rank: null, responded: false },
+        to: { option: canopy, team_n: 4, rank: 1, responded: true },
+      })
+    ).toBe('Ana Ruiz · Studio (no answer) → Canopy (1st)');
+    // No option on either seat (free teams, or a grouping question in the mask): the team only.
+    expect(
+      moverLine({
+        ...mover,
+        from: { option: null, team_n: 2, rank: null, responded: false },
+        to: { option: null, team_n: 4, rank: null, responded: true },
       })
     ).toBe('Ana Ruiz · team 2 → team 4');
     expect(moverPinLine(mover.pin!)).toBe('Pinned: has a makerspace badge');
@@ -738,7 +760,7 @@ test.describe('status, runs and results', () => {
       'Job: Who would you like to work with?'
     );
     expect(questionControlLabel('Strength', 'Who would you like to work with?', 'together')).toBe(
-      'Strength · Together: Who would you like to work with?'
+      'Strength · Work with: Who would you like to work with?'
     );
   });
 
@@ -1198,7 +1220,7 @@ test.describe('setup', () => {
     );
   });
 
-  test("a question row's hints: rank costs, the shift, owner and together", () => {
+  test("a question row's detail lines: rank costs and the shift", () => {
     // The service's defaults: 0, 10, 30, 60, 80, 90; anything else 100.
     expect(rankCostsText({}, 3, false)).toBe('1st 0 · 2nd 10 · 3rd 30 · anything else 100');
     expect(rankCostsText({ rank_costs: [0, 5], unranked_cost: 50 }, 3, false)).toBe(
@@ -1210,12 +1232,241 @@ test.describe('setup', () => {
     );
     const ranked = { type: 'ranked_choice' as const, type_facts: { options: 8, ranks: 2 } };
     expect(jobHintText(ranked, 'rank', {})).toBe('1st 0 · 2nd 10 · anything else 100');
-    expect(jobHintText(ranked, 'owner', {})).toBe('Pitchers go on their own project when it runs.');
-    expect(jobHintText(ranked, 'together', {})).toBe('Mutual requests count double.');
     expect(jobHintText(ranked, 'priority', {})).toBe(priorityHintText(50));
     expect(jobHintText(ranked, 'priority', { shift: 70 })).toBe(priorityHintText(70));
-    expect(jobHintText(ranked, 'mix', {})).toBeNull();
-    expect(JOB_LABELS.no_one_alone).toBe("A team won't have exactly one of these");
+    // The owner and together facts say what their old hints said: no second line.
+    for (const job of ['owner', 'together', 'apart', 'match', 'mix', 'note'] as const) {
+      expect(jobHintText(ranked, job, {}), job).toBeNull();
+    }
+  });
+
+  test('the Job menu names every job', () => {
+    expect(JOB_LABELS).toEqual({
+      rank: 'Their picks',
+      fallback: 'Backup categories',
+      owner: 'Pitchers',
+      together: 'Work with',
+      apart: 'Keep apart',
+      match: 'Same answer',
+      mix: 'Different answers',
+      balance: 'Balanced average',
+      no_one_alone: 'No one alone',
+      note: 'Show as note',
+      priority: 'Shifts priority',
+    });
+    expect(QUESTION_ROW_LABELS.noJob).toBe('Not used');
+    // Every job the service knows has a name.
+    for (const job of TEAM_SET_JOBS) expect(JOB_LABELS[job], job).toBeTruthy();
+  });
+
+  test("each job's aim, by the question's type: the Job menu, and the line at Prefer", () => {
+    const q = (type: FormFieldType, identity = false) => ({ type, identity, must_labels: {} });
+    expect(jobFactText(q('dropdown'), null)).toBe("This question doesn't affect the teams.");
+    expect(jobFactText(q('ranked_choice'), 'rank')).toBe(
+      'Puts people on an option they ranked, where it can; higher picks count more.'
+    );
+    expect(jobFactText(q('dropdown'), 'rank')).toBe(
+      'Puts people on the option they chose, where it can.'
+    );
+    // What a category counts for, with no claim about where it comes after the ranked picks.
+    expect(jobFactText(q('multiselect'), 'fallback')).toBe(
+      "An option they didn't rank counts more when it's in a category they chose."
+    );
+    expect(jobFactText(q('dropdown'), 'owner')).toBe(
+      'Puts someone who pitched a project on it when it runs, where it can.'
+    );
+    expect(jobFactText(q('roster_select'), 'together')).toBe(
+      'Puts people with those they asked for, where it can; mutual requests count double.'
+    );
+    expect(jobFactText(q('roster_select'), 'apart')).toBe(
+      'Keeps people apart from anyone they listed, where it can.'
+    );
+    expect(jobFactText(q('dropdown'), 'match')).toBe(
+      'Puts people with teammates who gave the same answer, where it can; a blank answer matches anyone.'
+    );
+    expect(jobFactText(q('switch'), 'match')).toBe(
+      'Puts people with teammates who gave the same answer, where it can; a blank answer matches anyone.'
+    );
+    // A multiselect match needs one shared answer, not the same set.
+    expect(jobFactText(q('multiselect'), 'match')).toBe(
+      'Puts people with teammates who share an answer, where it can; a blank answer matches anyone.'
+    );
+    expect(jobFactText(q('dropdown'), 'mix')).toBe(
+      'Puts people with teammates who gave different answers, where it can.'
+    );
+    expect(jobFactText(q('switch'), 'mix')).toBe(
+      'Puts people with teammates who gave different answers, where it can.'
+    );
+    expect(jobFactText(q('opinion_scale'), 'mix')).toBe(
+      "Spreads out teammates' values, where it can."
+    );
+    expect(jobFactText(q('number'), 'mix')).toBe("Spreads out teammates' values, where it can.");
+    expect(jobFactText(q('opinion_scale'), 'balance')).toBe(
+      "Keeps each team's average close to the class average, where it can."
+    );
+    expect(jobFactText(q('number'), 'balance')).toBe(
+      "Keeps each team's average close to the class average, where it can."
+    );
+    expect(jobFactText(q('dropdown'), 'priority')).toBe(
+      "Each person's answer makes one rule count more for them and another less."
+    );
+    // The Job menu passes no strength: the same line as the rule at Prefer (On).
+    for (const job of TEAM_SET_JOBS) {
+      for (const type of TEAM_SET_JOB_FIELD_TYPES[job]) {
+        expect(jobFactText(q(type), job, {}, 'prefer'), `${job} ${type}`).toBe(
+          jobFactText(q(type), job)
+        );
+      }
+    }
+  });
+
+  test('Show as note: where a note shows, and never an email answer', () => {
+    const q = (type: FormFieldType) => ({ type, identity: false, must_labels: {} });
+    // The page shows notes only in the why panel, for the person chosen.
+    expect(jobFactText(q('long_text'), 'note')).toBe(
+      "Shown when you select a person; doesn't affect placement."
+    );
+    expect(jobFactText(q('short_text'), 'note')).toBe(
+      "Shown when you select a person; doesn't affect placement."
+    );
+    // A stored note rule on an email question (the menu doesn't offer one there).
+    expect(jobFactText(q('email'), 'note')).toBe("Email answers aren't shown as notes.");
+    expect(jobFactText(q('email'), 'note', {}, 'off')).toBe("Off: this rule isn't used.");
+  });
+
+  test('No one alone counts each answer on its own; max_per_team caps it', () => {
+    const q = (type: FormFieldType, identity = false) => ({ type, identity, must_labels: {} });
+    expect(jobFactText(q('multiselect', true), 'no_one_alone')).toBe(
+      'Avoids leaving anyone as the only person on their team with a ticked answer, where it can.'
+    );
+    expect(jobFactText(q('dropdown', true), 'no_one_alone')).toBe(
+      'Avoids leaving anyone as the only person on their team with a ticked answer, where it can.'
+    );
+    expect(jobFactText(q('dropdown'), 'no_one_alone')).toBe(
+      'Avoids leaving anyone as the only person on their team with their answer, where it can.'
+    );
+    expect(jobFactText(q('switch'), 'no_one_alone')).toBe(
+      'Avoids leaving anyone who said yes as the only one on their team, where it can.'
+    );
+    expect(jobFactText(q('multiselect', true), 'no_one_alone', { max_per_team: 2 })).toBe(
+      'Keeps no more than 2 people with the same ticked answer on a team, where it can.'
+    );
+    expect(jobFactText(q('dropdown'), 'no_one_alone', { max_per_team: 1 })).toBe(
+      'Keeps no more than 1 person with the same answer on a team, where it can.'
+    );
+    expect(jobFactText(q('switch'), 'no_one_alone', { max_per_team: 3 })).toBe(
+      'Keeps no more than 3 people who said yes on a team, where it can.'
+    );
+  });
+
+  test("at Must, a job's line is what Must guarantees", () => {
+    // The sentences as ruleMustLabel writes them for these questions.
+    const field = (type: FormFieldType, extra: object = {}) => ({
+      id: 'f',
+      type,
+      options: [],
+      ...extra,
+    });
+    const withMust = (
+      type: FormFieldType,
+      job: Parameters<typeof ruleMustLabel>[0]['job'],
+      params = {}
+    ) => {
+      const label = ruleMustLabel({ job, params }, field(type, { ranks: 3 }) as never);
+      return { type, identity: false, must_labels: label ? { [job]: label } : {} };
+    };
+    expect(jobFactText(withMust('dropdown', 'owner'), 'owner', {}, 'must')).toBe(
+      'A project runs only with one of its pitchers on it.'
+    );
+    expect(jobFactText(withMust('roster_select', 'together'), 'together', {}, 'must')).toBe(
+      'Mutual requests always together.'
+    );
+    expect(
+      jobFactText(
+        withMust('roster_select', 'together', { mutual_only: false }),
+        'together',
+        { mutual_only: false },
+        'must'
+      )
+    ).toBe('Every requested pair always together.');
+    // Keep apart words its own guarantee (its Must sentence still decides that Must is offered).
+    expect(jobFactText(withMust('roster_select', 'apart'), 'apart', {}, 'must')).toBe(
+      'People are never placed with anyone they listed.'
+    );
+    expect(
+      jobFactText({ type: 'roster_select', identity: false, must_labels: {} }, 'apart', {}, 'must')
+    ).toBe('Keeps people apart from anyone they listed, where it can.');
+    expect(jobFactText(withMust('ranked_choice', 'rank'), 'rank', {}, 'must')).toBe(
+      'Everyone gets one of the options they ranked.'
+    );
+    expect(jobFactText(withMust('dropdown', 'rank'), 'rank', {}, 'must')).toBe(
+      'Everyone gets the option they picked.'
+    );
+    expect(jobFactText(withMust('multiselect', 'fallback'), 'fallback', {}, 'must')).toBe(
+      'Everyone gets an option they ranked or one in a category they chose.'
+    );
+    expect(jobFactText(withMust('dropdown', 'match'), 'match', {}, 'must')).toBe(
+      'Teammates always gave the same answer.'
+    );
+    expect(jobFactText(withMust('multiselect', 'match'), 'match', {}, 'must')).toBe(
+      'Teammates always share an answer.'
+    );
+    expect(jobFactText(withMust('dropdown', 'mix'), 'mix', {}, 'must')).toBe(
+      'No two teammates gave the same answer.'
+    );
+    expect(jobFactText(withMust('dropdown', 'no_one_alone'), 'no_one_alone', {}, 'must')).toBe(
+      'No one is the only person on their team with their answer.'
+    );
+    expect(
+      jobFactText(
+        withMust('switch', 'no_one_alone', { max_per_team: 2 }),
+        'no_one_alone',
+        { max_per_team: 2 },
+        'must'
+      )
+    ).toBe('At most 2 people who said yes on a team.');
+    // Prefer states the aim, not the guarantee.
+    expect(jobFactText(withMust('dropdown', 'owner'), 'owner', {}, 'prefer')).toBe(
+      'Puts someone who pitched a project on it when it runs, where it can.'
+    );
+    // A job with no Must sentence keeps its aim even when the rule says Must.
+    expect(jobFactText(withMust('opinion_scale', 'balance'), 'balance', {}, 'must')).toBe(
+      "Keeps each team's average close to the class average, where it can."
+    );
+  });
+
+  test("at Off, every job's line says the rule isn't used", () => {
+    for (const job of TEAM_SET_JOBS) {
+      for (const type of TEAM_SET_JOB_FIELD_TYPES[job]) {
+        for (const identity of [false, true]) {
+          const question = { type, identity, must_labels: { [job]: 'A Must sentence' } };
+          expect(jobFactText(question, job, {}, 'off'), `${job} ${type}`).toBe(
+            "Off: this rule isn't used."
+          );
+        }
+      }
+    }
+    // "Not used" is not a rule: its own line.
+    expect(
+      jobFactText({ type: 'dropdown', identity: false, must_labels: {} }, null, {}, 'off')
+    ).toBe("This question doesn't affect the teams.");
+  });
+
+  test('an identity rule when the teams are pairs says it is off for teams of two', () => {
+    const identity = { type: 'multiselect' as const, identity: true, must_labels: {} };
+    expect(jobFactText(identity, 'no_one_alone', {}, 'prefer', true)).toBe(
+      "Off for teams of two: this rule isn't used."
+    );
+    expect(jobFactText(identity, 'no_one_alone', { max_per_team: 2 }, 'prefer', true)).toBe(
+      "Off for teams of two: this rule isn't used."
+    );
+    // At Off it is off whatever the team size; without pairs it states its aim.
+    expect(jobFactText(identity, 'no_one_alone', {}, 'off', true)).toBe(
+      "Off: this rule isn't used."
+    );
+    expect(jobFactText(identity, 'no_one_alone', {}, 'prefer', false)).toBe(
+      'Avoids leaving anyone as the only person on their team with a ticked answer, where it can.'
+    );
   });
 
   test('a check line names its people after the sentence', () => {

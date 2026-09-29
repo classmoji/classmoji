@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 
 import { teamsErrorSentence } from '../../app/components/forms/teams/teamsErrors.ts';
 import {
+  JOB_LABELS,
   NON_RESPONDENT_MODE_NOTES,
   NON_RESPONDENT_MODE_NOTES_FREE,
 } from '../../app/components/forms/teams/teamsView.ts';
@@ -60,6 +61,7 @@ interface StoredRule {
 }
 
 interface StoredConfig {
+  team_size: { min: number; max: number };
   rules: StoredRule[];
   options: Record<string, { size?: { min?: number; max?: number }; note?: string }>;
   pins: { id: string; kind: string; user_ids?: string[]; reason?: string }[];
@@ -78,6 +80,16 @@ async function storedRule(fieldId: string, job: string): Promise<StoredRule | un
   return (await storedConfig()).rules.find(rule => rule.field_id === fieldId && rule.job === job);
 }
 
+/** Writes the main set's team size straight into its stored config. */
+async function writeTeamSize(size: StoredConfig['team_size']) {
+  const prisma = await getTestPrisma();
+  const config = await storedConfig();
+  await prisma.teamSet.update({
+    where: { id: set.id },
+    data: { config: { ...config, team_size: size } as unknown as object },
+  });
+}
+
 const row = (page: Page, fieldId: string) => page.locator(`#q-${fieldId}`);
 
 async function openSetup(page: Page, role: 'owner' | 'teacher' = 'owner', path = set.paths.set) {
@@ -89,6 +101,38 @@ async function openSetup(page: Page, role: 'owner' | 'teacher' = 'owner', path =
 /** Clicks and key presses before hydration reach no handler, so wait for the live page. */
 async function hydrated(page: Page) {
   await expect(page.locator('[data-testid="setup-page"][data-hydrated="true"]')).toBeVisible();
+}
+
+/** A question's Job menu: its button and its list. */
+function jobMenu(page: Page, fieldId: string) {
+  return {
+    button: page.locator(`#q-${fieldId}-job`),
+    list: row(page, fieldId).getByRole('listbox', { includeHidden: true }),
+  };
+}
+
+/** Choose a job from a question's Job menu ('' = Not used). */
+async function chooseJob(page: Page, fieldId: string, job: string) {
+  const menu = jobMenu(page, fieldId);
+  await menu.button.click();
+  await expect(menu.list).toBeVisible();
+  await menu.list.locator(`[role="option"][data-value="${job}"]`).click();
+  await expect(menu.list).toBeHidden();
+}
+
+/** The job values a question's Job menu offers, in order. */
+async function jobValues(page: Page, fieldId: string): Promise<string[]> {
+  return jobMenu(page, fieldId)
+    .list.locator('[role="option"]')
+    .evaluateAll(options => options.map(option => (option as HTMLElement).dataset.value ?? ''));
+}
+
+/** The value of the option the open list has active (aria-activedescendant). */
+async function activeJob(page: Page, fieldId: string): Promise<string | undefined> {
+  return jobMenu(page, fieldId).list.evaluate(list => {
+    const id = list.getAttribute('aria-activedescendant');
+    return id ? document.getElementById(id)?.dataset.value : undefined;
+  });
 }
 
 // ─── Questions ──────────────────────────────────────────────────────────────
@@ -113,18 +157,25 @@ test('a weight and a strength autosave, and the header counts the change', async
     'aria-pressed',
     'true'
   );
-  // A screen reader hears which question a control belongs to.
+  // A screen reader hears which question a control belongs to, and the job chosen.
   const togetherLabel = (await page.getByTestId(`q-${together}-label`).textContent())!;
   await expect(
-    page.getByRole('combobox', { name: `Job: ${togetherLabel}`, exact: true })
+    page.getByRole('button', {
+      name: `Job: ${togetherLabel} ${JOB_LABELS.together}`,
+      exact: true,
+    })
   ).toHaveAttribute('id', `q-${together}-job`);
   await expect(
-    page.getByRole('group', { name: `Strength · Together: ${togetherLabel}`, exact: true })
+    page.getByRole('group', { name: `Strength · Work with: ${togetherLabel}`, exact: true })
   ).toBeVisible();
+  // The line under the row: the job's aim at Prefer, the Must sentence at Must.
+  await expect(page.getByTestId(`q-${together}-fact`)).toHaveText(
+    'Puts people with those they asked for, where it can; mutual requests count double.'
+  );
   await page.locator(`#q-${together}-strength-must`).click();
   await expect.poll(async () => (await storedRule(together, 'together'))?.strength).toBe('must');
-  await expect(page.getByTestId(`q-${together}-must-label`)).toHaveText(
-    'Mutual requests always together'
+  await expect(page.getByTestId(`q-${together}-fact`)).toHaveText(
+    'Mutual requests always together.'
   );
   // The weight has no meaning at Must.
   await expect(page.locator(`#q-${together}-weight`)).toHaveCount(0);
@@ -154,16 +205,37 @@ test('an identity question offers no Must, and ticking an answer saves the wildc
   await expect(page.getByTestId(`q-${identity}-no-must`)).toHaveText(
     "Must isn't offered for identity questions."
   );
-  // Its only job is no-one-alone (or none).
-  const jobs = await page
-    .locator(`#q-${identity}-job option`)
-    .evaluateAll(options => options.map(option => (option as HTMLOptionElement).value));
-  expect(jobs).toEqual(['', 'no_one_alone']);
+  // Its only job is no-one-alone (or none), and its line names the ticked answers.
+  expect(await jobValues(page, identity)).toEqual(['', 'no_one_alone']);
+  await expect(page.getByTestId(`q-${identity}-fact`)).toHaveText(
+    'Avoids leaving anyone as the only person on their team with a ticked answer, where it can.'
+  );
 
   await expect(identityRow).toContainText("Don't leave anyone as the only:");
   // One answer has a single student: the check's fact line sits in the row.
   await expect(page.getByTestId(`q-${identity}-identity-check`).first()).toContainText(
     'a single student'
+  );
+
+  // Teams of two: the rule is off, and its line says so, as the check does.
+  const size = (await storedConfig()).team_size;
+  await writeTeamSize({ min: 2, max: 2 });
+  try {
+    await page.reload();
+    await hydrated(page);
+    await expect(page.getByTestId(`q-${identity}-fact`)).toHaveText(
+      "Off for teams of two: this rule isn't used."
+    );
+    await expect(page.getByTestId(`q-${identity}-identity-check`).first()).toContainText(
+      'is off for teams of two'
+    );
+  } finally {
+    await writeTeamSize(size);
+  }
+  await page.reload();
+  await hydrated(page);
+  await expect(page.getByTestId(`q-${identity}-fact`)).toHaveText(
+    'Avoids leaving anyone as the only person on their team with a ticked answer, where it can.'
   );
 
   // "Prefer not to say" starts as a wildcard (unticked); tick it.
@@ -208,7 +280,7 @@ test('the Shifts priority row saves rule B, an answer and the shift', async ({ p
   const apartRule = `${fx.fields.apart}:apart`;
 
   // The preset question starts as Shifts priority: A = the ranking, B = the together requests.
-  await expect(page.locator(`#q-${priority}-job`)).toHaveValue('priority');
+  await expect(page.locator(`#q-${priority}-job`)).toHaveText(JOB_LABELS.priority);
   await expect(page.locator(`#q-${priority}-strength-prefer`)).toHaveText('On');
   await expect(page.locator(`#q-${priority}-strength-must`)).toHaveCount(0);
   await expect(page.locator(`#q-${priority}-rule-a`)).toHaveValue(rankRule);
@@ -257,13 +329,16 @@ test('a new Shifts priority rule starts Off, and On sends rule A and rule B with
 }) => {
   await openSetup(page);
   const priority = fx.fields.priority;
-  const job = page.locator(`#q-${priority}-job`);
 
   // Another job, then back: the priority rule is new, so it is added Off with no A or B.
-  await job.selectOption('match');
+  await chooseJob(page, priority, 'match');
   await expect.poll(async () => (await storedRule(priority, 'match'))?.strength).toBe('prefer');
   expect(await storedRule(priority, 'priority')).toBeUndefined();
-  await job.selectOption('priority');
+  // The row shows the saved job's fact once the saved setup is back.
+  await expect(page.getByTestId(`q-${priority}-fact`)).toHaveText(
+    'Puts people with teammates who gave the same answer, where it can; a blank answer matches anyone.'
+  );
+  await chooseJob(page, priority, 'priority');
   await expect.poll(async () => (await storedRule(priority, 'priority'))?.strength).toBe('off');
   expect(await storedRule(priority, 'match')).toBeUndefined();
   expect((await storedRule(priority, 'priority'))?.params).toEqual({});
@@ -278,6 +353,179 @@ test('a new Shifts priority rule starts Off, and On sends rule A and rule B with
   expect(params.rule_a).not.toBe(params.rule_b);
   await expect(page.locator(`#q-${priority}-rule-a`)).toHaveValue(params.rule_a as string);
   await expect(page.locator(`#q-${priority}-rule-b`)).toHaveValue(params.rule_b as string);
+});
+
+test('the Job menu: each job with its fact, a check on the chosen one, and a save', async ({
+  page,
+}) => {
+  await openSetup(page);
+  const notes = fx.fields.notes;
+  const { button, list } = jobMenu(page, notes);
+  const notesLabel = (await page.getByTestId(`q-${notes}-label`).textContent())!;
+
+  await expect(button).toHaveAttribute('aria-haspopup', 'listbox');
+  await expect(button).toHaveAttribute('aria-expanded', 'false');
+  await expect(button).toHaveText(JOB_LABELS.note);
+  await expect(page.getByTestId(`q-${notes}-fact`)).toHaveText(
+    "Shown when you select a person; doesn't affect placement."
+  );
+
+  // Open: only the jobs a text question takes, each with its fact; the chosen one is checked.
+  await button.click();
+  await expect(list).toBeVisible();
+  await expect(button).toHaveAttribute('aria-expanded', 'true');
+  await expect(list).toHaveAccessibleName(`Job: ${notesLabel}`);
+  expect(await jobValues(page, notes)).toEqual(['', 'note']);
+  const none = list.getByRole('option', { name: 'Not used', exact: true });
+  const note = list.getByRole('option', { name: JOB_LABELS.note, exact: true });
+  await expect(none).toHaveAccessibleDescription("This question doesn't affect the teams.");
+  await expect(note).toHaveAccessibleDescription(
+    "Shown when you select a person; doesn't affect placement."
+  );
+  await expect(note).toHaveAttribute('aria-selected', 'true');
+  await expect(note.locator('svg')).toHaveCount(1);
+  await expect(none).toHaveAttribute('aria-selected', 'false');
+  await expect(none.locator('svg')).toHaveCount(0);
+
+  // A click elsewhere closes it and saves nothing.
+  await page.getByTestId(`q-${notes}-label`).click();
+  await expect(list).toBeHidden();
+
+  // Choosing a job saves it, as the select did.
+  await chooseJob(page, notes, '');
+  await expect.poll(async () => storedRule(notes, 'note')).toBeUndefined();
+  await expect(button).toHaveText('Not used');
+  await expect(page.getByTestId(`q-${notes}-fact`)).toHaveText(
+    "This question doesn't affect the teams."
+  );
+  await expect(page.locator(`#q-${notes}-strength-off`)).toHaveCount(0);
+
+  await chooseJob(page, notes, 'note');
+  await expect.poll(async () => (await storedRule(notes, 'note'))?.strength).toBe('prefer');
+  await expect(button).toHaveText(JOB_LABELS.note);
+  await expect(page.getByTestId(`q-${notes}-fact`)).toHaveText(
+    "Shown when you select a person; doesn't affect placement."
+  );
+
+  // At Off the line says the rule isn't used; the menu still says what the job does.
+  await page.locator(`#q-${notes}-strength-off`).click();
+  await expect.poll(async () => (await storedRule(notes, 'note'))?.strength).toBe('off');
+  await expect(page.getByTestId(`q-${notes}-fact`)).toHaveText("Off: this rule isn't used.");
+  await button.click();
+  await expect(note).toHaveAccessibleDescription(
+    "Shown when you select a person; doesn't affect placement."
+  );
+  await page.keyboard.press('Escape');
+  await expect(list).toBeHidden();
+  await page.locator(`#q-${notes}-strength-prefer`).click();
+  await expect.poll(async () => (await storedRule(notes, 'note'))?.strength).toBe('prefer');
+
+  await page.reload();
+  await hydrated(page);
+  await expect(button).toHaveText(JOB_LABELS.note);
+});
+
+test('the Job menu by keyboard: arrows, Home and End, Escape, Enter', async ({ page }) => {
+  await openSetup(page);
+  const priority = fx.fields.priority;
+  const { button, list } = jobMenu(page, priority);
+  const before = await storedConfig();
+
+  // Down on the button opens the list on the chosen job; focus moves into it.
+  await button.focus();
+  await button.press('ArrowDown');
+  await expect(list).toBeVisible();
+  await expect(list).toBeFocused();
+  // A dropdown takes every choice job, the chosen one last.
+  expect(await jobValues(page, priority)).toEqual([
+    '',
+    'rank',
+    'owner',
+    'match',
+    'mix',
+    'no_one_alone',
+    'priority',
+  ]);
+  expect(await activeJob(page, priority)).toBe('priority');
+  await expect(
+    list.getByRole('option', { name: JOB_LABELS.mix, exact: true })
+  ).toHaveAccessibleDescription(
+    'Puts people with teammates who gave different answers, where it can.'
+  );
+
+  await page.keyboard.press('Home');
+  expect(await activeJob(page, priority)).toBe('');
+  await page.keyboard.press('ArrowUp');
+  expect(await activeJob(page, priority)).toBe('');
+  await page.keyboard.press('ArrowDown');
+  expect(await activeJob(page, priority)).toBe('rank');
+  await page.keyboard.press('End');
+  expect(await activeJob(page, priority)).toBe('priority');
+  await page.keyboard.press('ArrowDown');
+  expect(await activeJob(page, priority)).toBe('priority');
+  await page.keyboard.press('ArrowUp');
+  expect(await activeJob(page, priority)).toBe('no_one_alone');
+
+  // Escape closes and puts focus back on the button; nothing is saved.
+  await page.keyboard.press('Escape');
+  await expect(list).toBeHidden();
+  await expect(button).toBeFocused();
+  await expect(button).toHaveText(JOB_LABELS.priority);
+
+  // Tab closes it and goes on from the button, to the row's first strength button.
+  await button.press('ArrowDown');
+  await expect(list).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(list).toBeHidden();
+  await expect(page.locator(`#q-${priority}-strength-off`)).toBeFocused();
+  await button.focus();
+
+  // Enter on the button opens it; Enter on the chosen job closes it without a save.
+  await page.keyboard.press('Enter');
+  await expect(list).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(list).toBeHidden();
+  await expect(button).toBeFocused();
+  expect((await storedConfig()).rules).toEqual(before.rules);
+
+  // On the notes question, Space picks a job and the save goes out.
+  const notes = fx.fields.notes;
+  const notesMenu = jobMenu(page, notes);
+  await notesMenu.button.focus();
+  await notesMenu.button.press('ArrowUp');
+  await expect(notesMenu.list).toBeFocused();
+  expect(await activeJob(page, notes)).toBe('note');
+  await page.keyboard.press('Home');
+  await page.keyboard.press(' ');
+  await expect(notesMenu.list).toBeHidden();
+  await expect(notesMenu.button).toBeFocused();
+  await expect.poll(async () => storedRule(notes, 'note')).toBeUndefined();
+  await expect(page.getByTestId(`q-${notes}-fact`)).toHaveText(
+    "This question doesn't affect the teams."
+  );
+  await notesMenu.button.press('ArrowDown');
+  await page.keyboard.press('End');
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await storedRule(notes, 'note'))?.strength).toBe('prefer');
+
+  // Space on the button opens it too (on keydown); Escape closes it.
+  await notesMenu.button.focus();
+  await page.keyboard.press(' ');
+  await expect(notesMenu.list).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(notesMenu.list).toBeHidden();
+  await expect(notesMenu.button).toBeFocused();
+});
+
+test('on a phone the Job menu stays on screen', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openSetup(page);
+  const { button, list } = jobMenu(page, fx.fields.priority);
+  await button.click();
+  await expect(list).toBeVisible();
+  const box = (await list.boundingBox())!;
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(390);
 });
 
 // ─── Projects and pins ──────────────────────────────────────────────────────
