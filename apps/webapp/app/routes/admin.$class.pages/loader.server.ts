@@ -8,6 +8,7 @@
 // out of the client build with their `loader` export.
 import { assertClassroomAccess } from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
+import { classroomForClient } from '~/utils/classroomForClient';
 
 type LoaderArgs = { params: Record<string, string | undefined>; request: Request };
 
@@ -53,7 +54,7 @@ export const buildLoader =
 
     return {
       classSlug,
-      classroom,
+      classroom: classroomForClient(classroom),
       pages,
       pageViewers,
     };

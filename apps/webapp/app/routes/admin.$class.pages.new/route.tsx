@@ -28,6 +28,7 @@ import CreateBlankTab from './CreateBlankTab';
 import BatchImportTab from './BatchImportTab';
 import { useRouteDrawer } from '~/hooks';
 import type { Route } from './+types/route';
+import { classroomForClient } from '~/utils/classroomForClient';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
@@ -43,7 +44,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   // Include slug for navigation and gitOrgLogin for API calls
   return {
     classroom: {
-      ...classroom,
+      ...classroomForClient(classroom),
       slug: classroom.slug, // For navigation URLs
       gitOrgLogin: classroom.git_organization?.login, // For GitHub API calls via batch endpoint
     },

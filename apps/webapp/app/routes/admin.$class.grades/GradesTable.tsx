@@ -47,7 +47,6 @@ interface Student {
 interface Membership {
   id: string | number;
   user_id: string | number;
-  comment?: string | null;
   letter_grade?: string | null;
 }
 

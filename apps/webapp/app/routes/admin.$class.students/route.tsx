@@ -18,6 +18,7 @@ import {
 import { SearchInput } from '~/components';
 import { pickOwnerOnlyContactFields } from '~/utils/studentFields.server';
 import type { Route } from './+types/route';
+import { classroomForClient } from '~/utils/classroomForClient';
 
 /**
  * A roster row as it leaves the loader.
@@ -133,7 +134,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
   return {
     students: rosterStudents,
-    classroom,
+    classroom: classroomForClient(classroom),
     invitations: rosterInvitations,
     isOwner,
     canManage,
