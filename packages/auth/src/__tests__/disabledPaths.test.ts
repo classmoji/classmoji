@@ -56,6 +56,32 @@ describe('disabled better-auth paths', () => {
     expect(res.status).toBe(404);
   });
 
+  it.each([['/get-access-token'], ['/refresh-token']])('answers POST %s with 404', async path => {
+    const res = await auth.handler(
+      new Request(`${BASE}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: 'classmoji.session_token=x' },
+        body: JSON.stringify({ providerId: 'github' }),
+      })
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('leaves the in-process auth.api.getAccessToken and refreshToken in place', async () => {
+    // Router-only: the endpoint still runs in-process and answers as it would
+    // without a session, not with the router's 404.
+    expect(typeof auth.api.getAccessToken).toBe('function');
+    expect(typeof auth.api.refreshToken).toBe('function');
+    const error = await auth.api
+      .getAccessToken({ body: { providerId: 'github' }, headers: new Headers() })
+      .then(
+        () => null,
+        (e: unknown) => e
+      );
+    // No session in this call: the endpoint's own 401, not the router's 404.
+    expect(error).toMatchObject({ statusCode: 401 });
+  });
+
   it('still serves /get-session', async () => {
     const res = await auth.handler(new Request(`${BASE}/get-session`));
     expect(res.status).toBe(200);
