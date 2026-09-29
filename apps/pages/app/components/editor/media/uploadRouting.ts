@@ -102,6 +102,26 @@ export function firstDestination(
   return target;
 }
 
+/**
+ * What to reset on a file block whose upload did not finish, or null when
+ * there is nothing to reset.
+ *
+ * BlockNote's drop and paste handlers insert the block with the file's `name`
+ * already set, before the upload starts, and only fill in `url` once it
+ * succeeds. When it fails, that leaves an empty block still carrying the name
+ * of a file it never held. Clearing it makes the block the same as a freshly
+ * inserted one. A block that has a `url` holds a file (an earlier upload, or
+ * one picked from media) and is left alone, as is any block without a `name`.
+ */
+export function unfinishedUploadReset(
+  block: { props?: Record<string, unknown> } | null | undefined
+): { props: { name: '' } } | null {
+  const props = block?.props;
+  if (!props || props.url !== '') return null;
+  if (typeof props.name !== 'string' || props.name === '') return null;
+  return { props: { name: '' } };
+}
+
 /** What a failed page action or upload route answers with: a code, and maybe the sentence. */
 export type ActionFailure = { error?: unknown; message?: unknown };
 
