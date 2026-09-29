@@ -111,6 +111,8 @@ export interface ExecuteDeps {
   ): Promise<'conflict' | 'committed'>;
 
   log?(message: string, detail?: Record<string, unknown>): void;
+  /** Wait between conflict retries (tests pass a recorder). */
+  sleep?(ms: number): Promise<void>;
 }
 
 export type ItemOutcome = 'uploaded' | 'copied' | 'reused' | 'skipped' | 'failed';
@@ -163,6 +165,11 @@ export const COMMIT_MESSAGE = 'Move Cloudinary videos to media storage';
 export const COMMIT_TRIES = 3;
 
 const EXT = /^[a-z0-9]{1,8}$/;
+
+/** 1–3 s, jittered, between a sha conflict and the re-read. */
+export function conflictBackoffMs(random: () => number = Math.random): number {
+  return 1000 + Math.floor(random() * 2000);
+}
 
 function errText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -247,6 +254,8 @@ export async function executeMigration(
   deps: ExecuteDeps
 ): Promise<ExecuteReport> {
   const log = deps.log ?? (() => {});
+  const sleep =
+    deps.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
   // Deployment first, and fatal: a missing bucket or signing secret is not a
   // per-classroom skip — every item would fail the same way.
   const problems = await deps.deploymentProblems();
@@ -430,6 +439,10 @@ export async function executeMigration(
         if (attempt === COMMIT_TRIES) {
           entry.outcome = 'failed';
           entry.detail = `still conflicting after ${COMMIT_TRIES} tries`;
+        } else {
+          // Somebody is saving this deck right now; give their save a moment
+          // to land instead of racing it again immediately.
+          await sleep(conflictBackoffMs());
         }
       }
     } catch (error) {

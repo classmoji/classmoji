@@ -12,6 +12,7 @@ import { buildPlan, type ClassroomFacts, type CloudinaryAsset } from '../cloudin
 import {
   COMMIT_TRIES,
   DeploymentNotReadyError,
+  conflictBackoffMs,
   executeMigration,
   type ExecuteDeps,
 } from '../cloudinaryExecute.ts';
@@ -141,6 +142,9 @@ function fakeDeps(w: World): ExecuteDeps {
     mediaKey: (classroomId, mediaId, variant) => `m/${classroomId}/${mediaId}/${variant}`,
     contentTypeFor: ext => (ext === 'mp4' ? 'video/mp4' : 'application/octet-stream'),
     deploymentProblems: async () => w.deploymentProblems,
+    sleep: async ms => {
+      w.events.push(`sleep ${ms}`);
+    },
     canServeMedia: async classroomId => w.canServe.has(classroomId),
     findMediaRow: async id => w.rows.get(id) ?? null,
     reserveRow: async row => {
@@ -330,12 +334,21 @@ describe('executeMigration', () => {
     w.conflicts = 1;
     const report = await executeMigration(planFor(w.repo), fakeDeps(w));
     expect(report.decks[0]).toMatchObject({ slideId: 'd1', outcome: 'rewritten', attempts: 2 });
+    // One jittered 1–3 s pause between the conflict and the re-read.
+    const sleeps = w.events.filter(e => e.startsWith('sleep ')).map(e => Number(e.slice(6)));
+    expect(sleeps).toHaveLength(1);
+    expect(sleeps[0]).toBeGreaterThanOrEqual(1000);
+    expect(sleeps[0]).toBeLessThan(3000);
     expect(w.repo.get('room-1:slides/d1/deck.json')!.text).not.toContain('cloudinary');
 
     const w2 = world();
     w2.conflicts = 99;
     const stuck = await executeMigration(planFor(w2.repo), fakeDeps(w2));
     expect(stuck.decks[0]).toMatchObject({ outcome: 'failed', attempts: COMMIT_TRIES });
+    // No pause after the last try.
+    expect(w2.events.filter(e => e.startsWith('sleep ')).length).toBe(
+      (COMMIT_TRIES - 1) * stuck.decks.length
+    );
   });
 
   it('is idempotent: a second run transfers nothing and commits nothing', async () => {
@@ -384,6 +397,11 @@ describe('executeMigration', () => {
     expect(trimmed.knownPublicIds).toContain(B);
     await executeMigration(trimmed, fakeDeps(w));
     expect(w.repo.get('room-1:slides/d1/index.html')!.text).toContain(url(B));
+  });
+
+  it('backs off 1–3 s between conflict retries', () => {
+    expect(conflictBackoffMs(() => 0)).toBe(1000);
+    expect(conflictBackoffMs(() => 0.999)).toBe(2998);
   });
 
   it('refuses before any write when the deployment is not configured', async () => {
