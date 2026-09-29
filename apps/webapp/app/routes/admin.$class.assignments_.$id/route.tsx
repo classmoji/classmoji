@@ -23,6 +23,7 @@ import SubmissionsTable, {
   matchesFilter,
 } from './SubmissionsTable';
 import type { Route } from './+types/route';
+import { classroomForClient } from '~/utils/classroomForClient';
 
 /**
  * The assignment page: one REPO assignment, every student (or team) copy of
@@ -102,9 +103,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   return {
     assignment,
     repos,
-    assistants: graderPool.filter(({ is_grader }) => is_grader),
+    // What the grader picker reads of each grader: id, login and name.
+    assistants: graderPool
+      .filter(({ is_grader }) => is_grader)
+      .map(({ id, login, name }) => ({ id, login, name })),
     emojiMappings,
-    classroom,
+    classroom: classroomForClient(classroom),
     rolePrefix,
     autogradingTestCount: autogradingTests.length,
     studentCount: students.length,

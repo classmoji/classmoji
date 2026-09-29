@@ -118,6 +118,13 @@ export function useQuizFocusMetrics({
     // Only set up event listeners if tracking is active
     if (!isActive) return undefined;
 
+    // Tracking resumed after a stop (the quiz reopened after the server would
+    // not complete it): time counts again from now. The stopped segment is
+    // already in the base, so nothing is counted twice.
+    if (sessionStartRef.current === null) {
+      sessionStartRef.current = Date.now();
+    }
+
     const doc = typeof document !== 'undefined' ? document : null;
 
     if (doc) {

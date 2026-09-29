@@ -30,6 +30,32 @@ const serverMessage = async (res: Response): Promise<string | null> => {
   return typeof message === 'string' && message ? message : null;
 };
 
+/**
+ * api.quiz's answer to completeQuiz while some question has no recorded
+ * result yet (a 409): the attempt stays open. The line is the server's own
+ * `message`; this one stands in if it sent none.
+ */
+const QUIZ_NOT_FINISHED = 'QUIZ_NOT_FINISHED';
+const QUIZ_NOT_FINISHED_LINE = "This quiz isn't finished yet. Send a message to continue.";
+
+/**
+ * The latest assistant message carrying an evaluation, skipping those the
+ * server would not complete the attempt on (`skip`), with its parsed
+ * evaluation; null when there is none.
+ */
+const lastEvaluationIn = (
+  displayMessages: QuizMessage[],
+  skip: Set<number | string>
+): { message: QuizMessage; completion: QuizEvaluation } | null => {
+  for (let i = displayMessages.length - 1; i >= 0; i--) {
+    const msg = displayMessages[i];
+    if (msg.role?.toLowerCase() !== 'assistant' || skip.has(msg.id)) continue;
+    const completion = checkForCompletion(msg.content);
+    if (completion) return { message: msg, completion };
+  }
+  return null;
+};
+
 /** Metadata shape for quiz messages */
 interface QuizMessageMetadata {
   isOpeningMessage?: boolean;
@@ -95,6 +121,35 @@ const countTurnEndings = (displayMessages: QuizMessage[]): number =>
     m =>
       m.role?.toLowerCase() === 'assistant' && getMetadata(m.metadata)?.code !== 'turn_in_progress'
   ).length;
+
+/**
+ * The evaluation card's data for a completed attempt: the feedback text from
+ * the evaluation message, and the scores and per-question results the attempt
+ * has stored (see ~/utils/quizPayloads, attemptDrawerView). No number in the
+ * message itself is shown.
+ */
+const evaluationWithStoredScores = (
+  completion: QuizEvaluation,
+  attempt: Record<string, unknown>
+): QuizEvaluation => {
+  const {
+    partial_credit_percentage: _partial,
+    first_attempt_percentage: _firstAttempt,
+    raw_percentage: _raw,
+    percentage: _percentage,
+    total_questions: _total,
+    question_results: _results,
+    ...feedback
+  } = completion as QuizEvaluation & Record<string, unknown>;
+  const results = Array.isArray(attempt.question_results) ? attempt.question_results : [];
+  return {
+    ...feedback,
+    partial_credit_percentage: Number(attempt.partial_credit_percentage ?? 0),
+    first_attempt_percentage: Number(attempt.first_attempt_percentage ?? 0),
+    question_results: results,
+    total_questions: results.length,
+  } as unknown as QuizEvaluation;
+};
 
 /** Focus metrics snapshot from useQuizFocusMetrics */
 interface MetricsSnapshot {
@@ -166,7 +221,6 @@ function QuizAttemptInterface({
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false); // True while waiting for AI response after user sends
   const [isQuizComplete, setIsQuizComplete] = useState(false);
-  const [evaluationData, setEvaluationData] = useState<QuizEvaluation | null>(null);
   const [completionFocusMetrics, setCompletionFocusMetrics] = useState<FocusMetrics | null>(null);
   const revalidator = useRevalidator();
   const revalidateRef = useRef(() => revalidator.revalidate());
@@ -188,6 +242,10 @@ function QuizAttemptInterface({
   } | null>(null);
   const explorationStepBaseRef = useRef(0); // Count of exploration steps before current send/load started
   const finalizeRef = useRef<(() => MetricsSnapshot) | null>(null); // Store finalize function for unmount cleanup
+  // Evaluation messages the server would not complete the attempt on (see
+  // QUIZ_NOT_FINISHED). They no longer mark the quiz complete, so the chat
+  // stays open for the rest of the quiz instead of asking again.
+  const notFinishedEvaluationsRef = useRef<Set<number | string>>(new Set());
   const { isDarkMode } = useDarkMode();
 
   const attemptId = attempt?.id;
@@ -594,15 +652,8 @@ function QuizAttemptInterface({
       }
 
       // Check if quiz is already complete from loaded messages
-      for (const msg of displayMessages) {
-        if (msg.role === 'assistant') {
-          const completion = checkForCompletion(msg.content);
-          if (completion) {
-            setIsQuizComplete(true);
-            setEvaluationData(completion);
-            break;
-          }
-        }
+      if (lastEvaluationIn(displayMessages, notFinishedEvaluationsRef.current)) {
+        setIsQuizComplete(true);
       }
     }
   }, [initialMessages, readOnly]);
@@ -769,66 +820,84 @@ function QuizAttemptInterface({
       }
     }
 
-    // Check for completion in updated messages
-    if (!isQuizComplete) {
-      for (const msg of displayMessages) {
-        if (msg.role === 'assistant') {
-          const completion = checkForCompletion(msg.content);
-          if (completion) {
-            setIsQuizComplete(true);
-            setEvaluationData(completion);
+    // Check for completion in updated messages: the latest evaluation the
+    // server has not already turned down.
+    const latest = !isQuizComplete
+      ? lastEvaluationIn(displayMessages, notFinishedEvaluationsRef.current)
+      : null;
+    if (latest) {
+      setIsQuizComplete(true);
 
-            const completionMetrics = finalizeCurrentSession();
-            lastMetricsRef.current = completionMetrics;
+      // CRITICAL: Immediately stop periodic timers to prevent further updates
+      if (periodicTimersRef.current.timeout) {
+        clearTimeout(periodicTimersRef.current.timeout);
+      }
+      if (periodicTimersRef.current.interval) {
+        clearInterval(periodicTimersRef.current.interval);
+      }
+      periodicTimersRef.current = { timeout: null, interval: null };
 
-            // Calculate focus metrics for display
-            const totalMs = completionMetrics.totalMs;
-            const unfocusedMs = completionMetrics.unfocusedMs;
-            const focusedMs = Math.max(0, totalMs - unfocusedMs);
-            const focusPercentage = totalMs > 0 ? Math.round((focusedMs / totalMs) * 100) : 100;
+      if (!attempt?.completed_at) {
+        // The time so far goes with the request; the session is closed only
+        // once the server has completed the attempt (a refusal resumes it).
+        const completionMetrics = getMetricsSnapshot();
+        lastMetricsRef.current = completionMetrics;
 
-            setCompletionFocusMetrics({
-              totalMs,
-              focusedMs,
-              percentage: focusPercentage,
-            });
-
-            // CRITICAL: Immediately stop periodic timers to prevent further updates
-            if (periodicTimersRef.current.timeout) {
-              clearTimeout(periodicTimersRef.current.timeout);
-            }
-            if (periodicTimersRef.current.interval) {
-              clearInterval(periodicTimersRef.current.interval);
-            }
-            periodicTimersRef.current = { timeout: null, interval: null };
-
-            // Complete the quiz in the backend
-            fetch('/api/quiz', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                _action: 'completeQuiz',
-                attemptId: attemptId,
-                totalDurationMs: completionMetrics.totalMs,
-                unfocusedDurationMs: completionMetrics.unfocusedMs,
-              }),
-            })
-              .then(() => {
-                revalidateRef.current();
-              })
-              .catch(error => {
-                console.error('Error completing quiz:', error);
+        // Complete the quiz in the backend
+        fetch('/api/quiz', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            _action: 'completeQuiz',
+            attemptId: attemptId,
+            totalDurationMs: completionMetrics.totalMs,
+            unfocusedDurationMs: completionMetrics.unfocusedMs,
+          }),
+        })
+          .then(async response => {
+            if (response.ok) {
+              const finalMetrics = finalizeCurrentSession();
+              const focusedMs = Math.max(0, finalMetrics.totalMs - finalMetrics.unfocusedMs);
+              setCompletionFocusMetrics({
+                totalMs: finalMetrics.totalMs,
+                focusedMs,
+                percentage:
+                  finalMetrics.totalMs > 0
+                    ? Math.round((focusedMs / finalMetrics.totalMs) * 100)
+                    : 100,
               });
-            break;
-          }
-        }
+            } else {
+              const body = response.status === 409 ? await response.json().catch(() => null) : null;
+              if ((body as { code?: unknown } | null)?.code === QUIZ_NOT_FINISHED) {
+                // Not finished after all: reopen the chat, with the server's
+                // line after the transcript until the transcript grows.
+                notFinishedEvaluationsRef.current.add(latest.message.id);
+                setIsQuizComplete(false);
+                const message = (body as { message?: unknown }).message;
+                const notice: QuizMessage = {
+                  id: `not-finished-${latest.message.id}`,
+                  role: 'ASSISTANT',
+                  content:
+                    typeof message === 'string' && message ? message : QUIZ_NOT_FINISHED_LINE,
+                };
+                sendFailureRef.current = { lines: [notice], savedCount: savedCountRef.current };
+                setMessages(prev => [...prev, notice]);
+              }
+            }
+            revalidateRef.current();
+          })
+          .catch(error => {
+            console.error('Error completing quiz:', error);
+          });
       }
     }
   }, [
     initialMessages,
     attemptId,
+    attempt?.completed_at,
     isQuizComplete,
     finalizeCurrentSession,
+    getMetricsSnapshot,
     readOnly,
     loading,
     sending,
@@ -996,6 +1065,17 @@ function QuizAttemptInterface({
       };
     });
   }, [initialMessages, sending]);
+
+  // The evaluation card, for a completed attempt only: the latest evaluation's
+  // feedback with the attempt's stored scores.
+  const evaluationData = useMemo(() => {
+    if (!attempt?.completed_at) return null;
+    const latest = lastEvaluationIn(
+      (initialMessages || []).filter((m: QuizMessage) => m.role !== 'system'),
+      notFinishedEvaluationsRef.current
+    );
+    return latest ? evaluationWithStoredScores(latest.completion, attempt) : null;
+  }, [attempt, initialMessages]);
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>

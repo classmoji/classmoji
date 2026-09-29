@@ -10,6 +10,7 @@ import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomAdmin, requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import type { LinkedPage } from './LinkedPages';
+import { classroomForClient } from '~/utils/classroomForClient';
 
 type LoaderArgs = { params: Record<string, string | undefined>; request: Request };
 
@@ -52,13 +53,16 @@ export const buildLoader =
     // ASSISTANT and TEACHER — the same pair the RANDOM bulk assignment draws from.
     // Listing only assistants here would offer a narrower set of options than the
     // graders actually assigned to these repos.
+    // What the grader picker reads of each grader: id, login and name.
     const assistants = (
       await ClassmojiService.classroomMembership.findUsersByRoles(
         classroom.id,
         ['ASSISTANT', 'TEACHER'],
         { is_grader: true }
       )
-    ).filter(({ is_grader }) => is_grader);
+    )
+      .filter(({ is_grader }) => is_grader)
+      .map(({ id, login, name }) => ({ id, login, name }));
 
     const emojiMappings = await ClassmojiService.emojiMapping.findByClassroomId(classroom.id);
 
@@ -119,7 +123,7 @@ export const buildLoader =
       assignments,
       assistants,
       emojiMappings,
-      classroom,
+      classroom: classroomForClient(classroom),
       linkedPages,
       autogradingTestCount,
       studentCount: students.length,

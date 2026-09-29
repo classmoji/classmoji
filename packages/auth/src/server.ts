@@ -638,8 +638,14 @@ export const auth = betterAuth({
    * caller we have: apps/mcp/src/auth/resolveViewer.ts:42. Nothing in the OAuth
    * flow uses this endpoint; it exists for better-auth's own `withMcpAuth`
    * helper, which we do not use.
+   *
+   * `/list-sessions` is off too: no app lists a user's own sessions. So are
+   * `/get-access-token` and `/refresh-token`: no client calls them, and the
+   * GitHub token the server uses comes from getValidGitHubToken (the
+   * githubUserToken service), not from these endpoints. Like every entry
+   * here, they are off for HTTP only; in-process `auth.api.*` is unchanged.
    */
-  disabledPaths: ['/mcp/get-session'],
+  disabledPaths: ['/mcp/get-session', '/list-sessions', '/get-access-token', '/refresh-token'],
   plugins: [
     admin({
       impersonationSessionDuration: 60 * 60, // 1 hour

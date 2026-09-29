@@ -1,5 +1,6 @@
 import { auth } from '@classmoji/auth/server';
 import { rejectUnsafeDynamicClientRegistration } from '@classmoji/auth/oauth-redirect';
+import { withoutSessionTokens } from '@classmoji/auth/session-response';
 import type { LoaderFunctionArgs, ActionFunctionArgs } from 'react-router';
 
 /**
@@ -14,16 +15,19 @@ import type { LoaderFunctionArgs, ActionFunctionArgs } from 'react-router';
  * `ADMIN_URL` must be in better-auth's `trustedOrigins` (see
  * packages/auth/src/server.ts) or every request here is rejected on origin.
  *
+ * Session responses leave without their rows' `token` field (see
+ * @classmoji/auth/session-response).
+ *
  * The DCR guard is NOT optional: this handler inherits the mcp plugin's
  * `/mcp/register` and `/oauth2/register` endpoints, so without it this origin
  * reopens the `javascript:` redirect_uri XSS the webapp closed.
  */
 export async function loader({ request }: LoaderFunctionArgs) {
-  return auth.handler(request);
+  return withoutSessionTokens(request, await auth.handler(request));
 }
 
 export async function action({ request }: ActionFunctionArgs) {
   const rejection = await rejectUnsafeDynamicClientRegistration(request);
   if (rejection) return rejection;
-  return auth.handler(request);
+  return withoutSessionTokens(request, await auth.handler(request));
 }

@@ -17,7 +17,7 @@ import { slugify, STEPS } from './utils';
 import { browserTimeZone } from '~/utils/browserTimeZone';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import { SOURCE_ROLES } from './sourceAccess';
-import type { ImportSelections } from './types';
+import type { GitOrganizationOption, ImportSelections } from './types';
 import type { Route } from './+types/route';
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
@@ -157,7 +157,12 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         provider_id: { in: providerIds },
         ...(useInstalledFilter ? { github_installation_id: { not: null } } : {}),
       },
-      include: {
+      // What the org picker shows (id, login, its classrooms), plus the
+      // provider id the avatar is looked up by.
+      select: {
+        id: true,
+        login: true,
+        provider_id: true,
         classrooms: {
           select: {
             id: true,
@@ -237,10 +242,13 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     subscription.tier === 'PRO' &&
     ClassmojiService.subscription.isSubscriptionActive(subscription);
 
-  // Enrich gitOrgs with avatar URLs from GitHub
-  const gitOrgsWithAvatars = gitOrgs.map(org => ({
-    ...org,
+  // Enrich gitOrgs with avatar URLs from GitHub. Each org leaves as exactly
+  // what the picker reads (GitOrganizationOption).
+  const gitOrgsWithAvatars: GitOrganizationOption[] = gitOrgs.map(org => ({
+    id: org.id,
+    login: org.login,
     avatar_url: avatarByProviderId.get(org.provider_id) ?? null,
+    classrooms: org.classrooms,
   }));
 
   // Collapse the viewer's membership rows to a single flag and DROP the rows —
@@ -253,7 +261,6 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   }));
 
   return {
-    user,
     gitOrgs: gitOrgsWithAvatars,
     importableClassrooms: importSources,
     githubAppName: process.env.GITHUB_APP_NAME,
