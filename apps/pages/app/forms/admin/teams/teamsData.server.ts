@@ -657,6 +657,7 @@ const seat = (where: RunSeat): RunSeat => ({
   option: optionRef(where.option),
   team_n: where.team_n,
   rank: where.rank,
+  responded: where.responded,
 });
 
 /** Someone who moved between two runs, with the pin and requests behind it. */

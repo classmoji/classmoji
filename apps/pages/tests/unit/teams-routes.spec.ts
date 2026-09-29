@@ -617,15 +617,15 @@ test.describe('people-bearing shapes are rebuilt key by key', () => {
   test('a mover keeps its seats, pin and requests', () => {
     const mover = toRunMover({
       user: { ...ana, ...extra },
-      from: { option: opt, team_n: 1, rank: 1 },
-      to: { option: null, team_n: 2, rank: null },
+      from: { option: opt, team_n: 1, rank: 1, responded: true },
+      to: { option: null, team_n: 2, rank: null, responded: false },
       pin: { pin_id: 'p1', kind: 'on_option', reason: null },
       requests: [{ kind: 'now_kept', asker: { ...ana, ...extra }, asked: { ...ben, ...extra } }],
     } as never);
     expect(mover).toEqual({
       user: ana,
-      from: { option: opt, team_n: 1, rank: 1 },
-      to: { option: null, team_n: 2, rank: null },
+      from: { option: opt, team_n: 1, rank: 1, responded: true },
+      to: { option: null, team_n: 2, rank: null, responded: false },
       pin: { pin_id: 'p1', kind: 'on_option', reason: null },
       requests: [{ kind: 'now_kept', asker: ana, asked: ben }],
     });

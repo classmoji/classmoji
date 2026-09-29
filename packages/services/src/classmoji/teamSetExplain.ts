@@ -451,6 +451,8 @@ export interface RunSeat {
   team_n: number;
   /** 1-based rank of that option in their answer; null = not ranked. */
   rank: number | null;
+  /** They had answered the form in that run (false: no answer, and rank is null). */
+  responded: boolean;
 }
 
 /**
@@ -2086,6 +2088,7 @@ export function compareAssignments(
       option: optionId === null ? null : optionRef(optionId, labels),
       team_n: t + 1,
       rank: x.free ? null : rankOf(x.person.get(userId), optionId),
+      responded: x.person.get(userId)?.responded ?? false,
     };
   };
   const mates = (x: RunIndex, userId: string) =>

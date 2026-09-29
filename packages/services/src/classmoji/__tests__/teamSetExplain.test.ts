@@ -1591,8 +1591,8 @@ describe('compareAssignments', () => {
     expect(comparison.moved).toEqual([
       {
         user: { user_id: U[1], name: 'Ben Osei' },
-        from: { option: { id: O.ledger, label: 'Ledger' }, team_n: 3, rank: 1 },
-        to: { option: { id: O.studio, label: 'Studio' }, team_n: 1, rank: 2 },
+        from: { option: { id: O.ledger, label: 'Ledger' }, team_n: 3, rank: 1, responded: true },
+        to: { option: { id: O.studio, label: 'Studio' }, team_n: 1, rank: 2, responded: true },
         pin: { pin_id: 'p1', kind: 'on_option', reason: 'Has a makerspace badge' },
         requests: [
           {
@@ -1604,8 +1604,13 @@ describe('compareAssignments', () => {
       },
       {
         user: { user_id: U[7], name: 'Hugo Vidal' },
-        from: { option: { id: O.studio, label: 'Studio' }, team_n: 1, rank: null },
-        to: { option: { id: O.ledger, label: 'Ledger' }, team_n: 3, rank: 1 },
+        from: {
+          option: { id: O.studio, label: 'Studio' },
+          team_n: 1,
+          rank: null,
+          responded: true,
+        },
+        to: { option: { id: O.ledger, label: 'Ledger' }, team_n: 3, rank: 1, responded: true },
         requests: [
           {
             kind: 'no_longer_kept',
@@ -1644,6 +1649,32 @@ describe('compareAssignments', () => {
     ]);
   });
 
+  it('a mover who did not answer: responded false and no rank; each seat reads its own run', () => {
+    // Run 3 again, with the unnamed person (no answer) on Studio instead of Hugo.
+    const other = {
+      ...RUN3,
+      result: { teams: [team(0, [0, 2, 6]), team(3, [3, 4]), team(4, [1, 5, 7])] },
+    };
+    const seats = (x: ExplainRun) => {
+      const mover = compareAssignments(x, other, LABELS).moved.find(m => m.user.user_id === U[6]);
+      return [mover?.from, mover?.to];
+    };
+    expect(seats(RUN4)).toEqual([
+      { option: { id: O.studio, label: 'Studio' }, team_n: 1, rank: null, responded: false },
+      { option: { id: O.ledger, label: 'Ledger' }, team_n: 3, rank: null, responded: false },
+    ]);
+    // They answered before run 4: that seat is theirs as answered, run 3's is not.
+    const answered = context({
+      people: context().people.map(p =>
+        p.user_id === U[6] ? { ...p, responded: true, ranked: [O.ledger] } : p
+      ),
+    });
+    expect(seats({ ...RUN4, context: answered })).toEqual([
+      { option: { id: O.studio, label: 'Studio' }, team_n: 1, rank: null, responded: false },
+      { option: { id: O.ledger, label: 'Ledger' }, team_n: 3, rank: 1, responded: true },
+    ]);
+  });
+
   it('a different set of options open', () => {
     const other = {
       ...RUN3,
@@ -1674,13 +1705,13 @@ describe('compareAssignments', () => {
     expect(free.moved.map(m => [m.user.name, m.from, m.to])).toEqual([
       [
         'Cleo Park',
-        { option: null, team_n: 2, rank: null },
-        { option: null, team_n: 2, rank: null },
+        { option: null, team_n: 2, rank: null, responded: true },
+        { option: null, team_n: 2, rank: null, responded: true },
       ],
       [
         'Dev Shah',
-        { option: null, team_n: 2, rank: null },
-        { option: null, team_n: 2, rank: null },
+        { option: null, team_n: 2, rank: null, responded: true },
+        { option: null, team_n: 2, rank: null, responded: true },
       ],
     ]);
     expect([free.unchanged, free.joined, free.left]).toEqual([2, 1, 1]);
