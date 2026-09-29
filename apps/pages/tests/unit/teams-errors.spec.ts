@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 
 import { test, expect } from '@playwright/test';
 
+import { TEAM_SET_JOB_FIELD_TYPES } from '@classmoji/services/team-set-config';
+
 import {
   CREATE_FAILURE_REASONS,
   MEMBER_FAILURE_REASONS,
@@ -547,8 +549,8 @@ function renderedTemplates(): string[] {
     view.peopleMovedText({ moved: [], unchanged: 3 }),
     view.moverLine({
       user: ana,
-      from: { option: opt, team_n: 1, rank: 1 },
-      to: { option: null, team_n: 2, rank: null },
+      from: { option: opt, team_n: 1, rank: 1, responded: true },
+      to: { option: null, team_n: 2, rank: null, responded: true },
       requests: [],
     }),
     view.moverPinLine({ pin_id: 'p', kind: 'on_option', reason: null }),
@@ -609,6 +611,27 @@ function renderedTemplates(): string[] {
           job,
           {}
         ) ?? ''
+    ),
+    // Every job's line on every type it takes: plain, identity, capped; at
+    // Prefer (the menu's), Must and Off, and off for teams of two.
+    view.jobFactText({ type: 'dropdown', identity: false, must_labels: {} }, null),
+    ...(Object.keys(TEAM_SET_JOB_FIELD_TYPES) as (keyof typeof TEAM_SET_JOB_FIELD_TYPES)[]).flatMap(
+      job =>
+        TEAM_SET_JOB_FIELD_TYPES[job].flatMap(type =>
+          [false, true].flatMap(identity =>
+            [{}, { max_per_team: 2 }].flatMap(params => {
+              const field = { id: 'f', type, ranks: 3, options: [] } as never;
+              const must = view.ruleMustLabel({ job, params }, field);
+              const question = { type, identity, must_labels: must ? { [job]: must } : {} };
+              return [
+                view.jobFactText(question, job, params),
+                view.jobFactText(question, job, params, 'must'),
+                view.jobFactText(question, job, params, 'off'),
+                view.jobFactText(question, job, params, 'prefer', true),
+              ];
+            })
+          )
+        )
     ),
     ...Object.values(view.TEAMS_LABELS),
   ];

@@ -913,10 +913,14 @@ function statusText(status: OptionStatus): string {
   }
 }
 
-/** Where a person sat in one run: "'Ledger', team 2, 1st pick", or "team 3" in free mode. */
+/**
+ * Where a person sat in one run: "'Ledger', team 2, 1st pick" ("not ranked";
+ * "no answer" when they hadn't answered the form), or "team 3" in free mode.
+ */
 function seatText(seat: RunMover['from']): string {
   if (!seat.option) return `team ${seat.team_n}`;
-  const rank = seat.rank !== null ? `${ordinal(seat.rank)} pick` : 'not ranked';
+  let rank = 'no answer';
+  if (seat.responded) rank = seat.rank !== null ? `${ordinal(seat.rank)} pick` : 'not ranked';
   return `${optionText(seat.option)}, team ${seat.team_n}, ${rank}`;
 }
 

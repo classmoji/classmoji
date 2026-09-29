@@ -829,25 +829,25 @@ export const QUESTIONS_CARD_LABELS = {
   emptyText: 'This form has no questions to make teams from.',
 } as const;
 
-/** What each job is called in a question row's job select. */
+/** What each job is called: the Job menu's choices and the heading of a question's other rules. */
 export const JOB_LABELS: Readonly<Record<TeamSetJob, string>> = {
-  rank: 'Rank',
-  fallback: 'Fallback categories',
-  owner: 'Owner',
-  together: 'Together',
-  apart: 'Apart',
-  match: 'Match',
-  mix: 'Mix',
-  balance: 'Balance',
-  no_one_alone: "A team won't have exactly one of these",
-  note: 'Note',
+  rank: 'Their picks',
+  fallback: 'Backup categories',
+  owner: 'Pitchers',
+  together: 'Work with',
+  apart: 'Keep apart',
+  match: 'Same answer',
+  mix: 'Different answers',
+  balance: 'Balanced average',
+  no_one_alone: 'No one alone',
+  note: 'Show as note',
   priority: 'Shifts priority',
 };
 
 /** A question row's fixed words. */
 export const QUESTION_ROW_LABELS = {
   job: 'Job',
-  noJob: 'None',
+  noJob: 'Not used',
   makesTheTeams: 'Makes the teams',
   identityChip: 'Identity question',
   strength: 'Strength',
@@ -864,7 +864,7 @@ export const QUESTION_ROW_LABELS = {
 /**
  * A question row control's accessible name, with the question it belongs to
  * (and the rule's job, when given): "Job: Who would you like to work with?",
- * "Strength · Together: Who would you like to work with?".
+ * "Strength · Work with: Who would you like to work with?".
  */
 export function questionControlLabel(
   control: string,
@@ -918,7 +918,108 @@ export function rankCostsText(
   return [...parts, `anything else ${unranked}`].join(' · ');
 }
 
-/** The one-line hint under a rule; null = none for this job. */
+/** The fact of the "Not used" job choice. */
+export const NO_JOB_FACT = "This question doesn't affect the teams.";
+
+/** The line under a rule at Off. */
+export const RULE_OFF_FACT = "Off: this rule isn't used.";
+
+/** The line under an identity rule when the teams are pairs (the identity_rule_pairs check). */
+export const RULE_OFF_FOR_PAIRS_FACT = "Off for teams of two: this rule isn't used.";
+
+/**
+ * Must sentences the page words itself instead of the question's
+ * `must_labels` sentence (which still decides whether Must is offered).
+ */
+const PAGE_MUST_FACTS: Partial<Record<TeamSetJob, string>> = {
+  apart: 'People are never placed with anyone they listed.',
+};
+
+/**
+ * No one alone's aim. The engine counts each answer on its own (a count per
+ * answer per team); with `max_per_team` it caps that count instead. A switch
+ * counts only a yes; an identity question only its ticked answers.
+ */
+function noOneAloneFact(
+  question: Pick<SetupQuestion, 'type' | 'identity'>,
+  max: number | undefined
+): string {
+  const yes = question.type === 'switch';
+  if (max !== undefined) {
+    const people = plural(max, 'person', 'people');
+    if (yes) return `Keeps no more than ${people} who said yes on a team, where it can.`;
+    return question.identity
+      ? `Keeps no more than ${people} with the same ticked answer on a team, where it can.`
+      : `Keeps no more than ${people} with the same answer on a team, where it can.`;
+  }
+  if (yes) return 'Avoids leaving anyone who said yes as the only one on their team, where it can.';
+  return question.identity
+    ? 'Avoids leaving anyone as the only person on their team with a ticked answer, where it can.'
+    : 'Avoids leaving anyone as the only person on their team with their answer, where it can.';
+}
+
+/**
+ * What a job does, in one line: each choice of the Job menu, and the line
+ * under a question's rule. `null` = the question has no job.
+ *
+ * The menu passes no strength and gets the job's aim, which the solver
+ * weighs against the other rules ("…, where it can"). Under a rule the line
+ * follows the rule:
+ *   - Off: RULE_OFF_FACT;
+ *   - `offForPairs` (an identity rule when the teams are pairs): RULE_OFF_FOR_PAIRS_FACT;
+ *   - Must, for a job with a Must sentence: PAGE_MUST_FACTS, else the
+ *     question's `must_labels` sentence (ruleMustLabel);
+ *   - Prefer (On): the aim.
+ * Show as note and Shifts priority are only On or Off: a plain fact at On.
+ * Notes appear only in the why panel, and never an email question's.
+ */
+export function jobFactText(
+  question: Pick<SetupQuestion, 'type' | 'identity' | 'must_labels'>,
+  job: TeamSetJob | null,
+  params: TeamSetRule['params'] = {},
+  strength: TeamSetStrength = 'prefer',
+  offForPairs = false
+): string {
+  if (job === null) return NO_JOB_FACT;
+  if (strength === 'off') return RULE_OFF_FACT;
+  if (offForPairs) return RULE_OFF_FOR_PAIRS_FACT;
+  const must = strength === 'must' ? mustLabelFor(question, job) : null;
+  if (must) return PAGE_MUST_FACTS[job] ?? `${must}.`;
+  switch (job) {
+    case 'rank':
+      return question.type === 'dropdown'
+        ? 'Puts people on the option they chose, where it can.'
+        : 'Puts people on an option they ranked, where it can; higher picks count more.';
+    case 'fallback':
+      return "An option they didn't rank counts more when it's in a category they chose.";
+    case 'owner':
+      return 'Puts someone who pitched a project on it when it runs, where it can.';
+    case 'together':
+      return 'Puts people with those they asked for, where it can; mutual requests count double.';
+    case 'apart':
+      return 'Keeps people apart from anyone they listed, where it can.';
+    case 'match':
+      return question.type === 'multiselect'
+        ? 'Puts people with teammates who share an answer, where it can; a blank answer matches anyone.'
+        : 'Puts people with teammates who gave the same answer, where it can; a blank answer matches anyone.';
+    case 'mix':
+      return question.type === 'opinion_scale' || question.type === 'number'
+        ? "Spreads out teammates' values, where it can."
+        : 'Puts people with teammates who gave different answers, where it can.';
+    case 'balance':
+      return "Keeps each team's average close to the class average, where it can.";
+    case 'no_one_alone':
+      return noOneAloneFact(question, params.max_per_team);
+    case 'note':
+      return question.type === 'email'
+        ? "Email answers aren't shown as notes."
+        : "Shown when you select a person; doesn't affect placement.";
+    case 'priority':
+      return "Each person's answer makes one rule count more for them and another less.";
+  }
+}
+
+/** The detail line under a rule's fact (rank's costs, the shift); null = none for this job. */
 export function jobHintText(
   question: Pick<SetupQuestion, 'type' | 'type_facts'>,
   job: TeamSetJob,
@@ -927,10 +1028,6 @@ export function jobHintText(
   switch (job) {
     case 'rank':
       return rankCostsText(params, question.type_facts.ranks ?? 1, question.type === 'dropdown');
-    case 'owner':
-      return 'Pitchers go on their own project when it runs.';
-    case 'together':
-      return 'Mutual requests count double.';
     case 'priority':
       return priorityHintText(params.shift ?? DEFAULT_PRIORITY_SHIFT);
     default:
@@ -1480,13 +1577,18 @@ export function peopleMovedText(comparison: Pick<RunComparison, 'moved' | 'uncha
   return `${moved} of ${moved + comparison.unchanged}`;
 }
 
+/** "Ledger (1st)", "Ledger (not ranked)", "Ledger (no answer)"; "team 2" with no option. */
 function seatText(seat: RunSeat): string {
   if (!seat.option) return `team ${seat.team_n}`;
-  const rank = seat.rank !== null ? ordinal(seat.rank) : 'not ranked';
+  let rank = 'no answer';
+  if (seat.responded) rank = seat.rank !== null ? ordinal(seat.rank) : 'not ranked';
   return `${optionLabel(seat.option)} (${rank})`;
 }
 
-/** "Kofi Mensah · Ledger (1st) → Studio (2nd)" / "Ana Ruiz · team 2 → team 4". */
+/**
+ * "Kofi Mensah · Ledger (1st) → Studio (2nd)" / "Ana Ruiz · Ledger (no answer)
+ * → Studio (no answer)" / "Ana Ruiz · team 2 → team 4".
+ */
 export function moverLine(mover: RunMover): string {
   return `${personName(mover.user)} · ${seatText(mover.from)} → ${seatText(mover.to)}`;
 }

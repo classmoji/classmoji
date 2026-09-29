@@ -33,6 +33,7 @@ import {
   compareRowLabel,
   compareValueText,
   deltaText,
+  moverLine,
 } from '../../app/components/forms/teams/teamsView.ts';
 import type { RunComparison } from '../../app/components/forms/teams/types.ts';
 import {
@@ -223,6 +224,22 @@ test('who moved: the pinned mover with its reason, the request now kept, and who
   expect(comparison.grouped).toBe(true);
   expect(comparison.moved.length).toBeGreaterThan(0);
   await expect(card.getByRole('listitem')).toHaveCount(comparison.moved.length);
+
+  // Each mover's line, from the service's seats: whoever didn't answer reads
+  // "no answer" on both seats (as on a team card), never "not ranked".
+  for (const mover of comparison.moved) {
+    const line = moverLine(mover);
+    await expect(card.getByRole('listitem').filter({ hasText: line })).toHaveCount(1);
+    const student = fixture!.students.find(person => person.id === mover.user.user_id)!;
+    expect([mover.from.responded, mover.to.responded]).toEqual([
+      student.responded,
+      student.responded,
+    ]);
+    if (!student.responded) {
+      expect(line).toContain('(no answer)');
+      expect(line).not.toContain('not ranked');
+    }
+  }
 
   // At least one of the pinned pair changed project; each that did carries
   // run 2's pin and its reason, and both requests read Now kept.
