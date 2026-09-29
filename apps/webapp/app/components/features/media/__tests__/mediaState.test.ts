@@ -17,6 +17,7 @@ import {
   mediaState,
   meterReading,
   orderForDisplay,
+  usageLine,
 } from '../mediaState';
 
 describe('mediaState', () => {
@@ -102,6 +103,37 @@ describe('meterReading', () => {
     // storage they never had, and used/0 is not a number.
     expect(meterReading(0, 0)).toEqual({ percent: 0, isFull: false });
     expect(meterReading(5, 0)).toEqual({ percent: 0, isFull: false });
+  });
+});
+
+describe('usageLine', () => {
+  const MiB = 1024 ** 2;
+  const GiB = 1024 ** 3;
+
+  it('reads a Pro classroom as a share of its quota, with the meter', () => {
+    expect(usageLine({ usedBytes: 152 * MiB, quotaBytes: 10 * GiB })).toEqual({
+      text: '152 MB of 10 GB used',
+      meter: meterReading(152 * MiB, 10 * GiB),
+    });
+  });
+
+  it('reads an empty Pro classroom as nothing used of its quota', () => {
+    const line = usageLine({ usedBytes: 0, quotaBytes: 10 * GiB });
+    expect(line?.text).toMatch(/ of 10 GB used$/);
+    expect(line?.meter).toEqual({ percent: 0, isFull: false });
+  });
+
+  it('reads a classroom with no quota as what it stores, with no meter', () => {
+    // A free classroom, or one whose Pro lapsed with files still stored:
+    // "152 MB of 0 bytes used" is not a share of anything.
+    expect(usageLine({ usedBytes: 152 * MiB, quotaBytes: 0 })).toEqual({
+      text: '152 MB stored',
+      meter: null,
+    });
+  });
+
+  it('says nothing when there is no quota and nothing stored', () => {
+    expect(usageLine({ usedBytes: 0, quotaBytes: 0 })).toBeNull();
   });
 });
 

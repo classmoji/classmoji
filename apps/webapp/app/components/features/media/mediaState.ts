@@ -1,5 +1,7 @@
 import type { MediaProcessing, MediaRecord, MediaStatus } from '@classmoji/services';
 
+import { formatBytes } from './mediaUploadOptions';
+
 /**
  * What the media page SHOWS about a row, derived rather than stored.
  *
@@ -98,6 +100,32 @@ export function meterReading(usedBytes: number, quotaBytes: number): MeterReadin
   if (!(quotaBytes > 0)) return { percent: 0, isFull: false };
   const percent = Math.min(100, Math.max(0, (usedBytes / quotaBytes) * 100));
   return { percent, isFull: percent >= 90 };
+}
+
+export interface UsageLine {
+  /** What the page says about the classroom's storage. */
+  text: string;
+  /** The bar and percentage, only when there is a quota to measure against. */
+  meter: MeterReading | null;
+}
+
+/**
+ * The line above the media table.
+ *
+ * With a quota (Pro) it is `X of Y used` and the meter. Without one (a free
+ * classroom, or one whose Pro has lapsed) there is nothing to be a share of,
+ * so it is only what is stored — `X stored`, no bar — and nothing at all when
+ * nothing is stored.
+ */
+export function usageLine(usage: { usedBytes: number; quotaBytes: number }): UsageLine | null {
+  if (usage.quotaBytes > 0) {
+    return {
+      text: `${formatBytes(usage.usedBytes)} of ${formatBytes(usage.quotaBytes)} used`,
+      meter: meterReading(usage.usedBytes, usage.quotaBytes),
+    };
+  }
+  if (usage.usedBytes > 0) return { text: `${formatBytes(usage.usedBytes)} stored`, meter: null };
+  return null;
 }
 
 /**
