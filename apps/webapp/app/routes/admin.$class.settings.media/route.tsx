@@ -16,8 +16,8 @@ import {
   ORIGINAL_NOT_KEPT_LABEL,
   isActionable,
   mediaState,
-  meterReading,
   orderForDisplay,
+  usageLine,
 } from '~/components/features/media/mediaState';
 import { useRevalidateWhilePending } from '~/components/features/media/useRevalidateWhilePending';
 import { readJsonBody } from '~/utils/mediaApi.server';
@@ -96,42 +96,42 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   return url ? { url } : { error: "Downloading isn't available right now." };
 };
 
-/** used / quota, and the bar that turns red before an owner is surprised. */
-const UsageMeter = ({
-  usedBytes,
-  quotaBytes,
-  isPro,
-}: {
-  usedBytes: number;
-  quotaBytes: number;
-  isPro: boolean;
-}) => {
-  const { percent, isFull } = meterReading(usedBytes, quotaBytes);
+/**
+ * What the classroom is storing: `X of Y used` and the bar that turns red
+ * before an owner is surprised, or `X stored` with no bar when there is no
+ * quota, or nothing when nothing is stored.
+ */
+const UsageMeter = ({ usedBytes, quotaBytes }: { usedBytes: number; quotaBytes: number }) => {
+  const line = usageLine({ usedBytes, quotaBytes });
+  if (!line) return null;
+  const { meter } = line;
 
   return (
     <div className="mb-6">
       <div className="mb-1.5 flex items-baseline justify-between gap-3">
-        <span className="text-sm font-semibold text-ink-0">
-          {formatBytes(usedBytes)} of {formatBytes(quotaBytes)} used
-        </span>
-        {isPro && (
-          <span className={`text-xs ${isFull ? 'text-red-600 dark:text-red-400' : 'text-ink-3'}`}>
-            {Math.round(percent)}%
+        <span className="text-sm font-semibold text-ink-0">{line.text}</span>
+        {meter && (
+          <span
+            className={`text-xs ${meter.isFull ? 'text-red-600 dark:text-red-400' : 'text-ink-3'}`}
+          >
+            {Math.round(meter.percent)}%
           </span>
         )}
       </div>
-      <div
-        role="progressbar"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={Math.round(percent)}
-        className="h-2 w-full overflow-hidden rounded-full bg-line"
-      >
+      {meter && (
         <div
-          className={`h-full rounded-full ${isFull ? 'bg-red-500' : 'bg-primary'}`}
-          style={{ width: `${percent}%` }}
-        />
-      </div>
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(meter.percent)}
+          className="h-2 w-full overflow-hidden rounded-full bg-line"
+        >
+          <div
+            className={`h-full rounded-full ${meter.isFull ? 'bg-red-500' : 'bg-primary'}`}
+            style={{ width: `${meter.percent}%` }}
+          />
+        </div>
+      )}
     </div>
   );
 };
@@ -335,7 +335,7 @@ export default function MediaSettings({ loaderData }: Route.ComponentProps) {
         )}
       </div>
 
-      <UsageMeter usedBytes={usage.usedBytes} quotaBytes={usage.quotaBytes} isPro={usage.isPro} />
+      <UsageMeter usedBytes={usage.usedBytes} quotaBytes={usage.quotaBytes} />
 
       {!usage.isPro && (
         <p className="mb-5 rounded-xl bg-sky-bg px-4 py-3 text-sm text-sky-ink ring-1 ring-sky-bord">

@@ -31,11 +31,11 @@ import { toast } from 'react-toastify';
 import { kindOfFilename, type UploadCapability } from '@classmoji/services/media/router';
 
 import {
-  schema,
   customSlashMenuItems,
   type PageBlockEditor,
   type PageBlockInsertions,
 } from './blocks/index.tsx';
+import { editingSchema } from './blocks/editingSchema.ts';
 import { ReplaceUrlItem, RemoveProfileImageItem } from './ReplaceUrlItem.tsx';
 import { AssetSrcSetContext, NO_SRC_SETS, type AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
 import {
@@ -52,6 +52,7 @@ import {
   UploadReroute,
   actionFailureMessage,
   placeUpload,
+  unfinishedUploadReset,
   type ActionFailure,
   type UploadPorts,
 } from './media/uploadRouting.ts';
@@ -218,6 +219,17 @@ const PageEditor = forwardRef(function PageEditor(
       try {
         placed = await placeUpload(file, capabilityRef.current, ports);
       } catch (error) {
+        // A block BlockNote inserted for a dropped or pasted file already
+        // carries the file's name; it goes back to a plain empty block.
+        const editor = editorRef.current;
+        const reset = blockId ? unfinishedUploadReset(editor?.getBlock(blockId)) : null;
+        if (editor && blockId && reset) {
+          try {
+            editor.updateBlock(blockId, reset as Parameters<PageBlockEditor['updateBlock']>[1]);
+          } catch {
+            // The block was deleted while the upload ran; nothing to reset.
+          }
+        }
         if (error instanceof UploadRefused) toast.error(error.message);
         throw error;
       }
@@ -248,7 +260,9 @@ const PageEditor = forwardRef(function PageEditor(
   // Create the BlockNote editor with multi-column drop cursor + dictionary
   const editor = useCreateBlockNote(
     {
-      schema,
+      // The shared schema with BlockNote's React file and audio blocks, whose
+      // "Loading..." ends when a refused upload does (see editingSchema.ts).
+      schema: editingSchema,
       initialContent: typedInitialContent,
       uploadFile,
       // The one place a stored reference becomes a signed URL. BlockNote calls
