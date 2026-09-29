@@ -9,6 +9,8 @@
  * Prisma client from `DATABASE_URL`).
  */
 
+import { createHash } from 'node:crypto';
+
 import {
   candidatePublicIds,
   findCloudinaryCandidates,
@@ -189,6 +191,13 @@ export interface PreviewReference {
 
 export interface MigrationPlan {
   generatedAt: string;
+  /**
+   * What an execute run must confirm: `confirm: 'MIGRATE:<planHash>'`. Covers
+   * the work items, every deck file's path and sha, and the resolution set, so
+   * an execute whose freshly computed plan differs from the reviewed dry run —
+   * a deck edited since, a replay after the migration already ran — refuses.
+   */
+  planHash: string;
   cloudName: string;
   prefix: string;
   assets: PlanAsset[];
@@ -448,6 +457,7 @@ export function buildPlan(input: {
 
   return {
     generatedAt: input.generatedAt,
+    planHash: planHashOf({ cloudName, work, decks: planDecks, known }),
     cloudName,
     prefix: CLOUDINARY_PREFIX,
     assets,
@@ -481,6 +491,30 @@ export function buildPlan(input: {
       previewBranchesWithReferences: new Set(preview.map(p => p.slideId)).size,
     },
   };
+}
+
+/**
+ * 16 hex of SHA-256 over the plan's decisive parts, in a fixed order: the
+ * cloud, the work list (asset, classroom, bytes), each deck's files (path and
+ * sha — a save since the dry run changes the sha), and the known public_ids.
+ */
+export function planHashOf(input: {
+  cloudName: string;
+  work: WorkItem[];
+  decks: PlanDeck[];
+  known: Iterable<string>;
+}): string {
+  const canonical = JSON.stringify([
+    input.cloudName,
+    input.work.map(item => [item.publicId, item.classroomId, item.bytes]),
+    input.decks.map(deck => [
+      deck.slideId,
+      deck.classroomId,
+      deck.files.map(file => [file.path, file.sha]),
+    ]),
+    [...input.known].sort(),
+  ]);
+  return createHash('sha256').update(canonical).digest('hex').slice(0, 16);
 }
 
 /** `fn` over `items`, at most `limit` in flight; results in input order. */

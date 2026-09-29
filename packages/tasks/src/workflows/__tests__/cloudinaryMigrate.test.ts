@@ -22,6 +22,7 @@ const {
   CLOUDINARY_MIGRATION_NAMESPACE,
   cloudinaryMigrate,
   migratedMediaId,
+  PlanMismatchError,
   parseMigratePayload,
   runCloudinaryMigrate,
 } = await import('../cloudinaryMigrate.ts');
@@ -33,11 +34,17 @@ describe('parseMigratePayload', () => {
     expect(parseMigratePayload({ limit: 3 })).toEqual({ dryRun: true, limit: 3 });
   });
 
-  it('refuses dryRun: false without confirm: MIGRATE', () => {
-    expect(() => parseMigratePayload({ dryRun: false })).toThrow(/confirm: 'MIGRATE'/);
-    expect(() => parseMigratePayload({ dryRun: false, confirm: 'migrate' })).toThrow(/confirm/);
-    expect(() => parseMigratePayload({ dryRun: false, confirm: true })).toThrow(/confirm/);
-    expect(parseMigratePayload({ dryRun: false, confirm: 'MIGRATE' })).toEqual({ dryRun: false });
+  it('refuses dryRun: false without confirm: MIGRATE:<planHash>', () => {
+    expect(() => parseMigratePayload({ dryRun: false })).toThrow(/confirm: 'MIGRATE:<planHash/);
+    for (const confirm of ['MIGRATE', 'migrate:0123456789abcdef', 'MIGRATE:0123', true]) {
+      expect(() => parseMigratePayload({ dryRun: false, confirm })).toThrow(/confirm/);
+    }
+    expect(parseMigratePayload({ dryRun: false, confirm: 'MIGRATE:0123456789abcdef' })).toEqual({
+      dryRun: false,
+      confirmPlanHash: '0123456789abcdef',
+    });
+    // A confirm on a dry run is harmless and ignored.
+    expect(parseMigratePayload({ confirm: 'MIGRATE:0123456789abcdef' })).toEqual({ dryRun: true });
   });
 
   it('refuses unknown keys, a non-boolean dryRun and a bad limit', () => {
@@ -59,7 +66,7 @@ describe('parseMigratePayload', () => {
 });
 
 describe('runCloudinaryMigrate', () => {
-  const plan = { totals: {} } as never;
+  const plan = { totals: {}, planHash: 'aaaaaaaaaaaaaaaa' } as never;
 
   it('a dry run plans and never calls execute', async () => {
     const execute = vi.fn();
@@ -77,11 +84,22 @@ describe('runCloudinaryMigrate', () => {
     const report = { counts: {} } as never;
     const execute = vi.fn(async () => report);
     const result = await runCloudinaryMigrate(
-      { dryRun: false },
+      { dryRun: false, confirmPlanHash: 'aaaaaaaaaaaaaaaa' },
       { plan: async () => plan, execute }
     );
     expect(execute).toHaveBeenCalledWith(plan);
     expect(result).toEqual({ mode: 'execute', plan, report });
+  });
+
+  it('refuses to execute a plan that is not the confirmed one (drift, or a replay)', async () => {
+    const execute = vi.fn();
+    await expect(
+      runCloudinaryMigrate(
+        { dryRun: false, confirmPlanHash: 'bbbbbbbbbbbbbbbb' },
+        { plan: async () => plan, execute }
+      )
+    ).rejects.toBeInstanceOf(PlanMismatchError);
+    expect(execute).not.toHaveBeenCalled();
   });
 });
 

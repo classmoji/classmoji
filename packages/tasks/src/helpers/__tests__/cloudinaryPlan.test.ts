@@ -238,6 +238,20 @@ describe('buildPlan', () => {
     expect(buildPlan(input).blockedClassrooms).toEqual(['room-2']);
   });
 
+  it('hashes the plan: stable, and moved by a deck save, a limit or a new asset', () => {
+    const plan = buildPlan(fixture());
+    expect(plan.planHash).toMatch(/^[0-9a-f]{16}$/);
+    expect(buildPlan({ ...fixture(), generatedAt: 'later' }).planHash).toBe(plan.planHash);
+
+    const saved = fixture();
+    saved.scanned[0]!.read.files[0]!.sha = 'edited-since';
+    expect(buildPlan(saved).planHash).not.toBe(plan.planHash);
+    expect(buildPlan({ ...fixture(), limit: 1 }).planHash).not.toBe(plan.planHash);
+    const more = fixture();
+    more.assets.push(asset('classmoji/slides/s9/new', 1));
+    expect(buildPlan(more).planHash).not.toBe(plan.planHash);
+  });
+
   it('applies limit to the work list only', () => {
     const plan = buildPlan({ ...fixture(), limit: 1 });
     expect(plan.work).toHaveLength(1);

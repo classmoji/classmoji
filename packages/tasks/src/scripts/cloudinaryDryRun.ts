@@ -81,6 +81,11 @@ async function main(): Promise<void> {
   await assertReadOnly(prisma);
   process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
   console.error(`[cloudinary-dry-run] totals ${JSON.stringify(plan.totals)}`);
+  console.error(
+    `[cloudinary-dry-run] planHash ${plan.planHash} — to execute THIS plan: ` +
+      `{ "dryRun": false, "confirm": "MIGRATE:${plan.planHash}"` +
+      `${limit === undefined ? '' : `, "limit": ${limit}`} }`
+  );
   await prisma.$disconnect();
 }
 

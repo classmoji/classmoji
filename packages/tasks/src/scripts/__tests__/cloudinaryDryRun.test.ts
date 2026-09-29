@@ -55,6 +55,7 @@ describe('cloudinaryDryRun import graph', () => {
   });
 
   it('imports no package that opens its own database client or writes', () => {
-    expect(packages).toEqual(['@prisma/client', 'jsonwebtoken']);
+    // node:crypto hashes the plan (planHash); it opens nothing.
+    expect(packages).toEqual(['@prisma/client', 'jsonwebtoken', 'node:crypto']);
   });
 });

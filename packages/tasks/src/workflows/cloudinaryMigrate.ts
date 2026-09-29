@@ -36,10 +36,13 @@ import {
  *
  * Payload `{ dryRun = true, limit?, confirm? }`:
  *   - dry run (the default): `planMigration` with live READ deps, the plan as
- *     the run's output. No writes of any kind.
- *   - `{ dryRun: false, confirm: 'MIGRATE' }`: plan, then `executeMigration`.
- *     `dryRun: false` without that exact `confirm` is refused before `run`, so
- *     replaying an old payload or a typo cannot migrate anything.
+ *     the run's output (its `planHash` included). No writes of any kind.
+ *   - `{ dryRun: false, confirm: 'MIGRATE:<planHash>' }`: plan again, refuse
+ *     unless the fresh plan's hash is the confirmed one, then
+ *     `executeMigration`. The hash binds the run to the dry run that was
+ *     reviewed: a deck saved since, a different `limit`, or a replay after the
+ *     migration already ran (its commits changed the deck shas) all refuse.
+ *     `dryRun: false` without a well-formed confirm is refused before `run`.
  *   - `limit`: at most this many (asset, classroom) copies in the run.
  *
  * Not in `src/index.ts` (Trigger finds it through `dirs`): nothing in the apps
@@ -68,9 +71,23 @@ export function migratedMediaId(publicId: string, classroomId: string): string {
 export interface CloudinaryMigratePayload {
   dryRun: boolean;
   limit?: number;
+  /** The `planHash` the operator confirmed (execute only). */
+  confirmPlanHash?: string;
 }
 
-export const CONFIRM_EXECUTE = 'MIGRATE';
+export const CONFIRM_PREFIX = 'MIGRATE:';
+const CONFIRM = /^MIGRATE:([0-9a-f]{16})$/;
+
+/** The fresh plan is not the one that was confirmed; nothing was written. */
+export class PlanMismatchError extends Error {
+  constructor(confirmed: string, current: string) {
+    super(
+      `The plan changed since the confirmed dry run (confirmed ${confirmed}, now ${current}). ` +
+        'Run a new dry run, review it, and confirm its planHash.'
+    );
+    this.name = 'PlanMismatchError';
+  }
+}
 const PAYLOAD_KEYS = ['dryRun', 'limit', 'confirm'] as const;
 
 const reject = (message: string): never => {
@@ -101,11 +118,13 @@ export function parseMigratePayload(input: unknown): CloudinaryMigratePayload {
     reject('dryRun must be a boolean');
   }
   const dryRun = raw.dryRun !== false;
-  if (!dryRun && raw.confirm !== CONFIRM_EXECUTE) {
-    reject(`dryRun: false also needs confirm: '${CONFIRM_EXECUTE}'`);
+  const confirmed = typeof raw.confirm === 'string' ? CONFIRM.exec(raw.confirm) : null;
+  if (!dryRun && !confirmed) {
+    reject(`dryRun: false also needs confirm: '${CONFIRM_PREFIX}<planHash from the dry run>'`);
   }
 
   const payload: CloudinaryMigratePayload = { dryRun };
+  if (!dryRun && confirmed) payload.confirmPlanHash = confirmed[1];
   if (raw.limit !== undefined) {
     const value = raw.limit;
     if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
@@ -383,6 +402,9 @@ export async function runCloudinaryMigrate(
 ): Promise<CloudinaryMigrateResult> {
   const plan = await halves.plan(payload.limit === undefined ? {} : { limit: payload.limit });
   if (payload.dryRun) return { mode: 'dry-run', plan };
+  if (plan.planHash !== payload.confirmPlanHash) {
+    throw new PlanMismatchError(payload.confirmPlanHash ?? '(none)', plan.planHash);
+  }
   const report = await halves.execute(plan);
   return { mode: 'execute', plan, report };
 }
@@ -393,6 +415,9 @@ export const cloudinaryMigrate = schemaTask({
   machine: { preset: 'medium-1x' },
   maxDuration: 6 * 60 * 60,
   queue: { concurrencyLimit: 1 },
+  // `maxAttempts: 1` IS "retry 1" in the plan (§13.2, Tim): one attempt, no
+  // automatic retry. An operator run that fails is looked at, re-planned and
+  // re-confirmed — a blind retry would execute against a plan nobody reviewed.
   retry: { maxAttempts: 1 },
   run: async (payload: CloudinaryMigratePayload) => {
     const cloudinary = cloudinaryCredentialsFromEnv();
