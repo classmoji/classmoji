@@ -281,25 +281,23 @@ function liveWriteDeps(cloudName: string): ExecuteDeps {
     headObject: key => headBytes(requireStore(), key),
     deleteObject: key => deleteObject(requireStore(), key),
 
-    servedUrl: async (classroomId, mediaId) => {
+    originalUrl: async (classroomId, mediaId) => {
       const row = await requireClassroom(classroomId);
-      const ref = `media://${mediaId}`;
-      const url = await ClassmojiService.contentDelivery.resolveAssetUrl(
-        {
-          classroom: {
-            id: row.id,
-            content_key_version: row.content_key_version,
-            content_repo: row.content_repo,
-            git_organization: { login: row.git_organization.login },
-            content_delivery_enabled: row.content_delivery_enabled,
-          },
-          tier: 'edit',
+      const media = await ClassmojiService.media.findMediaRow(classroomId, mediaId);
+      if (!media || media.status !== 'READY') return null;
+      // Staff download URL = the ORIGINAL while it is kept (migrated rows keep
+      // it), signed for this classroom and served by the same Worker route.
+      return ClassmojiService.contentDelivery.mediaDownloadUrl({
+        classroom: {
+          id: row.id,
+          content_key_version: row.content_key_version,
+          content_repo: row.content_repo,
+          git_organization: { login: row.git_organization.login },
+          content_delivery_enabled: row.content_delivery_enabled,
         },
-        ref
-      );
-      // The resolver answers an unresolvable ref with the ref or a placeholder.
-      if (!url || url === ref || url.includes('/missing/')) return null;
-      return url;
+        record: ClassmojiService.media.toMediaRecord(media),
+        forStudent: false,
+      });
     },
     headUrl: async url => {
       const response = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(60_000) });

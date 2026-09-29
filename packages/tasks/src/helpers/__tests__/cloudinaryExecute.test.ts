@@ -109,6 +109,8 @@ interface World {
   conflicts: number;
   headStatus: number;
   canServe: Set<string>;
+  /** Media id → rendition bytes, once the (fake) video job has run. */
+  renditions: Map<string, number>;
 }
 
 function world(): World {
@@ -120,6 +122,7 @@ function world(): World {
     conflicts: 0,
     headStatus: 200,
     canServe: new Set(['room-1', 'room-2']),
+    renditions: new Map(),
   };
 }
 
@@ -149,6 +152,9 @@ function fakeDeps(w: World): ExecuteDeps {
     },
     onMediaReady: async id => {
       w.events.push(`onMediaReady ${id}`);
+      // The P4 job, finishing at once: from now on the row SERVES a rendition
+      // whose length is not the original's.
+      w.renditions.set(id, 7);
     },
     makeTmpDir: async () => '/tmp/fake',
     removeTmpDir: async () => {},
@@ -170,13 +176,19 @@ function fakeDeps(w: World): ExecuteDeps {
       w.events.push(`delete ${key}`);
       w.objects.delete(key);
     },
-    servedUrl: async (classroomId, id) =>
-      `https://content.test/c/${classroomId}/media/${encodeURIComponent(id)}`,
+    originalUrl: async (classroomId, id) =>
+      `https://content.test/c/${classroomId}/media/${encodeURIComponent(id)}/orig.mp4`,
     headUrl: async u => {
       w.events.push(`HEAD ${u}`);
-      const id = decodeURIComponent(u.slice(u.lastIndexOf('/') + 1));
+      const [, encoded, variant] = /\/media\/([^/]+)\/([^/]+)$/.exec(u)!;
+      const id = decodeURIComponent(encoded!);
       const row = w.rows.get(id) as { row?: { sizeBytes: number } } | undefined;
-      return { status: w.headStatus, length: row?.row?.sizeBytes ?? null };
+      // The served variant is the rendition once there is one; orig.* is always
+      // the original.
+      const length = variant!.startsWith('orig.')
+        ? (row?.row?.sizeBytes ?? null)
+        : (w.renditions.get(id) ?? row?.row?.sizeBytes ?? null);
+      return { status: w.headStatus, length };
     },
     readDeckFile: async (classroomId, path) => w.repo.get(`${classroomId}:${path}`) ?? null,
     commitDeckFiles: async (classroomId, files, expected) => {
@@ -263,9 +275,36 @@ describe('executeMigration', () => {
     // And each copy was READY before its HEAD.
     expect(w.events.indexOf(`ready id(${A}@room-1)`)).toBeLessThan(
       w.events.indexOf(
-        `HEAD https://content.test/c/room-1/media/${encodeURIComponent(`id(${A}@room-1)`)}`
+        `HEAD https://content.test/c/room-1/media/${encodeURIComponent(`id(${A}@room-1)`)}/orig.mp4`
       )
     );
+  });
+
+  it('verifies the original even after the video job made a rendition, and queues the job only after', async () => {
+    const w = world();
+    const plan = planFor(w.repo);
+    await executeMigration(plan, fakeDeps(w));
+    // Every copy now has a rendition (the fake job ran on onMediaReady).
+    expect(w.renditions.size).toBe(3);
+    const id = `id(${A}@room-1)`;
+    const head = w.events.findIndex(
+      e => e.startsWith('HEAD') && e.includes(encodeURIComponent(id))
+    );
+    expect(w.events.indexOf(`onMediaReady ${id}`)).toBeGreaterThan(head);
+
+    // A re-run verifies the reused copies against the original, not the
+    // rendition — and queues the job again (a no-op past the first claim).
+    w.events.length = 0;
+    const again = await executeMigration(plan, fakeDeps(w));
+    expect(again.items.map(i => i.outcome)).toEqual(['reused', 'reused', 'reused']);
+    expect(w.events.filter(e => e.startsWith('onMediaReady'))).toHaveLength(3);
+  });
+
+  it('never queues the job for a copy that failed verification', async () => {
+    const w = world();
+    w.headStatus = 404;
+    await executeMigration(planFor(w.repo), fakeDeps(w));
+    expect(w.events.some(e => e.startsWith('onMediaReady'))).toBe(false);
   });
 
   it('leaves the Cloudinary URL when the delivery check fails', async () => {

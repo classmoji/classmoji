@@ -83,8 +83,13 @@ export interface ExecuteDeps {
   headObject(key: string): Promise<number | null>;
   deleteObject(key: string): Promise<void>;
 
-  /** The served URL a viewer of this classroom would load `media://{id}` from. */
-  servedUrl(classroomId: string, mediaId: string): Promise<string | null>;
+  /**
+   * A signed delivery URL for the copy's ORIGINAL (`orig.{ext}`), through the
+   * same Worker viewers load from. Not the served variant: once the P4 job has
+   * made a rendition, `media://{id}` serves `web-{hex}.mp4`, whose length is not
+   * the asset's — the original's always is (migrated rows keep it).
+   */
+  originalUrl(classroomId: string, mediaId: string): Promise<string | null>;
   headUrl(url: string): Promise<{ status: number; length: number | null }>;
 
   /** A deck file from the default branch, uncached. */
@@ -219,7 +224,6 @@ async function transferOne(
     await deps.releaseRow(mediaId).catch(() => {});
     throw error;
   }
-  await deps.onMediaReady(mediaId, item.classroomId);
   return how;
 }
 
@@ -319,14 +323,18 @@ export async function executeMigration(
         outcome = await transferOne(deps, item, asset, mediaId, ext, firstCopy.get(item.publicId));
       }
 
-      const url = await deps.servedUrl(item.classroomId, mediaId);
-      if (!url) throw new Error('no served URL could be signed');
+      const url = await deps.originalUrl(item.classroomId, mediaId);
+      if (!url) throw new Error('no delivery URL could be signed');
       const head = await deps.headUrl(url);
       if (head.status !== 200 || head.length !== asset.bytes) {
         throw new Error(
           `delivery check failed: HTTP ${head.status}, ${head.length ?? '?'} of ${asset.bytes} bytes`
         );
       }
+      // Only a verified copy is queued for the video job — and a reused one is
+      // queued again, which is a no-op past the first time (the job's claim
+      // only takes a row whose processing is still NONE).
+      await deps.onMediaReady(mediaId, item.classroomId);
     } catch (error) {
       record('failed', mediaId, errText(error));
       log('Migration item failed', {
