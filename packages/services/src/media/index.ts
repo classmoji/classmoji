@@ -55,6 +55,9 @@ export {
 
 export { isMediaConfigured } from './mediaConfig.ts';
 
+// Pure (node:crypto only): the copy's derived ids and the Cloudinary migration's.
+export { uuidV5 } from './uuidV5.ts';
+
 // The storage router: pure, so it is ALSO reachable from the browser through
 // the `@classmoji/services/media/router` subpath, which is this one module.
 export { formatGigabytes, kindOfFilename, storageTargetFor } from './storageRouter.ts';
