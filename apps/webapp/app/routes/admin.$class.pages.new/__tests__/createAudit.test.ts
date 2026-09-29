@@ -177,7 +177,7 @@ describe('api.pages.batch — audit rows', () => {
   const submit = (body: Record<string, string | Blob>) =>
     batchRoute.action({
       params: {},
-      request: formRequest('http://localhost/api/pages/batch', body),
+      request: formRequest(`http://localhost/api/pages/batch?classSlug=${CLASS_SLUG}`, body),
     } as unknown as Parameters<typeof batchRoute.action>[0]);
 
   it('audits each batch-imported page as its own CREATE', async () => {

@@ -3,6 +3,7 @@ import { marked } from 'marked';
 import { io } from 'socket.io-client';
 import { IconUsers } from '@tabler/icons-react';
 import QRCodeOverlay from './QRCodeOverlay';
+import { stripMediaRefs } from '~/utils/mediaRefs';
 
 /**
  * A signed delivery theme folder: `/c/{classroomId}/theme/{name}/{treeSha}/...`.
@@ -318,7 +319,9 @@ export default function RevealPresenter({
         }
 
         const html = await response.text();
-        parseContent(html);
+        // The stored index.html, unresolved: its `media://` references have no
+        // URL here, and a browser cannot load that scheme.
+        parseContent(stripMediaRefs(html));
       } catch (err: unknown) {
         console.error('Error loading slides:', err);
         setError(err instanceof Error ? err.message : String(err));

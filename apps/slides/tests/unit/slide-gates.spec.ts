@@ -34,10 +34,7 @@ import {
   slideDocumentDecision,
   slideDocumentRedirect,
 } from '../../app/utils/slideDocumentAccess.ts';
-import {
-  assertSlideInClassroom,
-  assertSlideKind,
-} from '../../app/utils/slideRouteGuards.ts';
+import { assertSlideInClassroom, assertSlideKind } from '../../app/utils/slideRouteGuards.ts';
 
 const source = (relative: string) =>
   readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
@@ -241,13 +238,13 @@ test.describe('a file slide’s document reached through the proxy', () => {
     // The proxy serves fonts, stylesheets and images by the dozen per page and
     // caches memberships for eight hours so that none of them touches the
     // database. A query per asset would undo exactly that.
-    expect(couldBeSlideDocument('slides/week-3/week-3-lecture.pdf', SLIDE_DOCUMENT_EXTENSIONS)).toBe(
-      true
-    );
+    expect(
+      couldBeSlideDocument('slides/week-3/week-3-lecture.pdf', SLIDE_DOCUMENT_EXTENSIONS)
+    ).toBe(true);
     expect(couldBeSlideDocument('slides/week-3/index.html', SLIDE_DOCUMENT_EXTENSIONS)).toBe(false);
-    expect(couldBeSlideDocument('.slidesthemes/x/lib/offline-v2.css', SLIDE_DOCUMENT_EXTENSIONS)).toBe(
-      false
-    );
+    expect(
+      couldBeSlideDocument('.slidesthemes/x/lib/offline-v2.css', SLIDE_DOCUMENT_EXTENSIONS)
+    ).toBe(false);
     expect(couldBeSlideDocument('slides/week-3/images/diagram', SLIDE_DOCUMENT_EXTENSIONS)).toBe(
       false
     );
@@ -418,7 +415,9 @@ test.describe('the upload endpoints', () => {
     for (const routeSource of [NEW_SOURCE, REPLACE_SOURCE]) {
       expect(routeSource).toContain('if (!acquireUploadSlot())');
       expect(routeSource).toContain('} finally {\n    releaseUploadSlot();');
-      expect(routeSource).toContain("headers: { 'Retry-After': String(UPLOAD_RETRY_AFTER_SECONDS) }");
+      expect(routeSource).toContain(
+        "headers: { 'Retry-After': String(UPLOAD_RETRY_AFTER_SECONDS) }"
+      );
       expect(routeSource).toContain('status: 503');
     }
   });
@@ -444,6 +443,90 @@ test.describe('the upload endpoints', () => {
     // And nothing reads the body the unmetered way. (The header comment names
     // `request.formData()` to explain why, so this looks for the CALL.)
     expect(IMPORT_SOURCE).not.toContain('await request.formData()');
+  });
+
+  test('the deck editor action authorizes before it reads the body, and meters it', () => {
+    // The slide comes from the URL, so the whole edit gate can run first: a
+    // caller who may not edit this deck never gets a byte of their body read.
+    const action = VIEWER_SOURCE.slice(VIEWER_SOURCE.indexOf('export const action'));
+    const gate = action.indexOf('await assertSlideAccess(');
+    const read = action.indexOf('await readLimitedFormData(request, deckActionBodyLimit(request))');
+
+    expect(gate).toBeGreaterThan(-1);
+    expect(read).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(read);
+    expect(action).not.toContain('await request.formData()');
+  });
+
+  test('a duplicated deck records every copied file in the asset map, rewrites last', () => {
+    const duplicate = INDEX_SOURCE.slice(INDEX_SOURCE.indexOf("if (intent === 'duplicate')"));
+    expect(duplicate).toContain('for (const entry of [...(copiedEntries ?? []), ...written])');
+    expect(duplicate).not.toContain('it reports no shas');
+  });
+
+  test('a deck save over the body cap gets the deck sentence and a one-shot fallback flag', () => {
+    const action = VIEWER_SOURCE.slice(VIEWER_SOURCE.indexOf('export const action'));
+    expect(VIEWER_SOURCE).toContain(
+      'const DECK_TOO_LARGE_MESSAGE = `This deck is larger than the ${REPO_REST_MAX_LABEL} your course repository accepts`;'
+    );
+    // `tooLarge`, never `code`: the client answers any `code` with a whole-deck
+    // re-submit, so a whole-deck save that carried one would loop.
+    expect(action).toContain(
+      'return data({ error: DECK_TOO_LARGE_MESSAGE, tooLarge: true }, { status: 413 });'
+    );
+    expect(action).not.toMatch(/DECK_TOO_LARGE_MESSAGE,\s*code:/);
+    // GitHub's own refusal carries no flag — a retry would be refused again.
+    expect(
+      action.match(/return data\(\{ error: DECK_TOO_LARGE_MESSAGE \}, \{ status: 413 \}\);/g)
+    ).toHaveLength(2);
+  });
+
+  test('the editor retries a too-large changes-only save once, as a whole deck', () => {
+    const branch = VIEWER_SOURCE.slice(VIEWER_SOURCE.indexOf('fetcher.data?.tooLarge &&'));
+    expect(
+      branch.startsWith(
+        'fetcher.data?.tooLarge && lastPostedOpsRef.current && lastPostedContentRef.current'
+      )
+    ).toBe(true);
+    // Clearing the posted ops is what makes it once.
+    const body = branch.slice(0, branch.indexOf('} else if'));
+    expect(body).toContain('lastPostedOpsRef.current = null;');
+    expect(body).toContain(
+      'const payload: Record<string, string> = { content: lastPostedContentRef.current };'
+    );
+  });
+
+  test('a deck image upload asks the storage router before it commits anything', () => {
+    const start = VIEWER_SOURCE.indexOf("if (intent === 'upload-image') {");
+    const intent = VIEWER_SOURCE.slice(
+      start,
+      VIEWER_SOURCE.indexOf("if (intent === 'save-snippet')")
+    );
+    const routed = intent.indexOf('ClassmojiService.media.assertRepoTarget(slide.classroom');
+    const commit = intent.indexOf('ContentService.upload(');
+
+    expect(routed).toBeGreaterThan(-1);
+    expect(commit).toBeGreaterThan(routed);
+    // Answered 409 `{ error: 'USE_MEDIA' }`, still tagged with the intent.
+    expect(intent).toContain('ClassmojiService.media.isMediaRoutingError(error)');
+    expect(intent).toContain('{ status: 409 }');
+  });
+
+  test('every answer to a deck image upload names its intent, failures included', () => {
+    // The image dialog's promise settles only on `intent: 'upload-image'`; an
+    // error without it leaves the dialog spinning with no message.
+    const start = VIEWER_SOURCE.indexOf("if (intent === 'upload-image') {");
+    const end = VIEWER_SOURCE.indexOf("if (intent === 'save-snippet')", start);
+    expect(start).toBeGreaterThan(-1);
+
+    const answers = VIEWER_SOURCE.slice(start, end)
+      .split(/\breturn\b/)
+      .slice(1);
+    // No file, USE_MEDIA (the storage router), success, and the refusal/fault.
+    expect(answers).toHaveLength(4);
+    for (const answer of answers) {
+      expect(answer.slice(0, 120)).toContain("intent: 'upload-image'");
+    }
   });
 });
 

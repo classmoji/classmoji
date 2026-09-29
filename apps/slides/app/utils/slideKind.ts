@@ -39,6 +39,20 @@ export const NON_DECK_HEADERS: Readonly<Record<string, string>> = Object.freeze(
   'Referrer-Policy': 'no-referrer',
 });
 
+/**
+ * The pair that stops bytes served from THIS origin being rendered as a page.
+ *
+ * `nosniff` makes the browser take the declared type at its word; the CSP
+ * sandboxes and strips anything that does get rendered, with `allow-downloads`
+ * so that the `attachment` sent alongside still saves the file. The same two
+ * the content Worker sends. Used by the streamed file-slide download below and
+ * by the legacy `/content/...` proxy (`contentProxyHeaders.ts`).
+ */
+export const DOWNLOAD_HARDENING_HEADERS: Readonly<Record<string, string>> = Object.freeze({
+  'X-Content-Type-Options': 'nosniff',
+  'Content-Security-Policy': "default-src 'none'; sandbox allow-downloads",
+});
+
 /** `NON_DECK_HEADERS` plus whatever this particular response adds. */
 export function nonDeckHeaders(extra: Record<string, string> = {}): Headers {
   return new Headers({ ...NON_DECK_HEADERS, ...extra });
@@ -132,8 +146,7 @@ export function slideFileResponse(delivery: SlideFileDeliveryLike): Response {
         'Content-Type': delivery.contentType,
         'Content-Disposition': delivery.disposition,
         'Content-Length': String(delivery.body.byteLength),
-        'X-Content-Type-Options': 'nosniff',
-        'Content-Security-Policy': "default-src 'none'; sandbox allow-downloads",
+        ...DOWNLOAD_HARDENING_HEADERS,
       }),
     });
   }

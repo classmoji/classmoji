@@ -27,7 +27,13 @@
  * classroom_id before touching GitHub (loadPageWithRepoInClassroom).
  */
 
-import { ClassmojiService, MAX_FILE_SIZE, validateFile } from '@classmoji/services';
+import { ClassmojiService, validateFile } from '@classmoji/services';
+import {
+  REPO_REST_MAX_BYTES,
+  formatMegabytes,
+  repoFileTooLargeMessage,
+} from '@classmoji/utils/repo-limits';
+import { MCP_BODY_LIMIT_BYTES } from '../bodyLimit.ts';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
@@ -70,7 +76,8 @@ function contentConflict(at: 'main' | 'preview' = 'main'): ToolError {
 const DEFAULT_COVER_POSITION = 50;
 
 /**
- * Extensions a cover may have. `validateFile` also allows `.pdf` — fine for a
+ * Extensions a cover may have. `validateFile` also allows `.pdf` — and any
+ * extension at all where the delivery layer serves the classroom — fine for a
  * generic page asset, not for something rendered as a page's header image.
  */
 const COVER_IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'];
@@ -902,22 +909,38 @@ export const pagePreviewDiscardTool: ToolDefinition<PagePreviewArgs> = {
 // ─── page_asset_upload ───────────────────────────────────────────────────────
 
 /**
- * The outer cap on the `content_base64` STRING, generous on purpose.
+ * What this tool can carry, derived from the request body it arrives in.
  *
- * Base64 spends four characters on every three bytes, so a maximum-size file
- * arrives about a third larger than it is. The slack on top covers the two
- * things a caller legitimately sends that are not payload: a
- * `data:<mime>;base64,` prefix, and the line breaks of 76-column wrapping
- * (~2.6% of a 6.7 MB body). Without it a perfectly legal 5 MB image, wrapped or
- * sent as a data URL, would be refused for being too big when it is not.
+ * The file rides in the JSON-RPC body as base64, so the tool can take only what
+ * fits in `MCP_BODY_LIMIT_BYTES` (8 MiB) — well under the repository's own
+ * per-file ceiling (`REPO_REST_MAX_BYTES`, 35 MB), which the page editor's
+ * upload reaches. The cap is the smaller of the two, so it follows the
+ * repository's number if that ever drops below what the body can carry.
  *
- * So this is a sanity ceiling, not the limit: the real one is `validateFile` on
- * the DECODED bytes, which is the number the error message quotes. Its job is
- * to turn an absurd payload into an invalid_params the agent can read, instead
- * of a transfer that runs to completion — or, past Fastify's bodyLimit, a bare
- * HTTP 413 with no MCP error in it at all.
+ * `ENVELOPE_RESERVE_BYTES` is the room kept for everything in the body that is
+ * not the file: the JSON-RPC envelope, the other arguments, a `data:` prefix.
  */
-const MAX_CONTENT_BASE64_CHARS = Math.ceil(MAX_FILE_SIZE / 3) * 4 + 256 * 1024;
+const ENVELOPE_RESERVE_BYTES = 64 * 1024;
+
+/**
+ * The cap on the `content_base64` STRING: the body less the envelope. A string
+ * cannot be longer in characters than it is in JSON bytes, so anything past
+ * this could not have arrived in a legal body — it turns an absurd payload into
+ * an invalid_params the agent can read, instead of a bare HTTP 413.
+ */
+export const MAX_CONTENT_BASE64_CHARS = MCP_BODY_LIMIT_BYTES - ENVELOPE_RESERVE_BYTES;
+
+/**
+ * The largest DECODED file whose base64 still fits the body when an encoder
+ * wraps it at 76 columns with CRLF — which JSON escapes to four bytes per line
+ * break, so 80 body bytes for every 76 of payload. The generous case, so a
+ * legal file is never refused for how it was encoded.
+ */
+const BODY_FIT_MAX_BYTES = Math.floor((MAX_CONTENT_BASE64_CHARS * (76 / 80)) / 4) * 3;
+
+/** The most one page_asset_upload may carry, decoded — about 5.6 MB. */
+export const PAGE_ASSET_MAX_BYTES = Math.min(REPO_REST_MAX_BYTES, BODY_FIT_MAX_BYTES);
+const PAGE_ASSET_MAX_LABEL = formatMegabytes(PAGE_ASSET_MAX_BYTES);
 
 /**
  * Whitespace and an optional `data:<mime>;base64,` wrapper are transport, not
@@ -960,11 +983,13 @@ export const pageAssetUploadTool: ToolDefinition<PageAssetUploadArgs> = {
   rateLimit: { capacity: 5, refillPerSecond: 0.05 },
   title: 'Upload a page asset',
   description:
-    "Commits a file (image or PDF, ≤5 MB) into the page's assets folder in the classroom " +
-    'content repo and returns the reference to use for it. Store the returned `url` — pass it ' +
-    'to page_cover_set, or put it in an image block via page_content_apply. `display_url` is a ' +
-    'signed, expiring address for VIEWING the file; never store that one. Allowed extensions: ' +
-    '.png .jpg .jpeg .gif .webp .svg .pdf (page covers accept every one but .pdf).',
+    `Commits a file (≤${PAGE_ASSET_MAX_LABEL} decoded) into the page's assets folder in the ` +
+    'classroom content repo and returns the reference to use for it. Store the returned `url` ' +
+    '— pass it to page_cover_set, or put it in a block via page_content_apply. `display_url` ' +
+    'is a signed, expiring address for VIEWING the file; never store that one. File types: any ' +
+    'extension in a classroom whose content Classmoji serves; elsewhere only .png .jpg .jpeg ' +
+    '.gif .webp .svg .pdf — a refusal names the allowed list. Page covers must be images. ' +
+    'Larger files, and Pro videos: file_upload_start (no base64) or file_import_url.',
   scope: 'write',
   roles: OWNER_TEACHER,
   inputSchema: {
@@ -983,27 +1008,58 @@ export const pageAssetUploadTool: ToolDefinition<PageAssetUploadArgs> = {
       .min(1)
       .max(MAX_CONTENT_BASE64_CHARS)
       .describe(
-        'The file bytes, base64-encoded and "="-padded (≤5 MB decoded). Line breaks and a ' +
-          'whole data: URL wrapper are both accepted.'
+        `The file bytes, base64-encoded and "="-padded (≤${PAGE_ASSET_MAX_LABEL} decoded). ` +
+          'Line breaks and a whole data: URL wrapper are both accepted.'
       ),
   },
   handler: async (args, ctx) => {
     const page = await loadPageWithRepoInClassroom(args.page_id, ctx);
     const buffer = decodeBase64(args.content_base64);
 
-    // The same check ContentService.upload runs, run BEFORE it: uploadPageAsset
-    // asks GitHub for the content repo's default branch first, so leaving this
-    // to the service would spend a round trip to learn the extension is wrong.
-    const validation = validateFile({ filename: args.filename, size: buffer.length });
-    if (!validation.valid) {
-      throw new ToolError('invalid_params', validation.error ?? 'Invalid file');
+    // This tool's own ceiling — what fits in the request body — before the
+    // repository's, which is higher.
+    if (buffer.length > PAGE_ASSET_MAX_BYTES) {
+      throw new ToolError(
+        'invalid_params',
+        `The file is ${formatMegabytes(buffer.length)} decoded; page_asset_upload takes up to ` +
+          `${PAGE_ASSET_MAX_LABEL}. ` +
+          (buffer.length > REPO_REST_MAX_BYTES
+            ? `${repoFileTooLargeMessage()} On Pro, file_upload_start stores it in media.`
+            : 'Upload a file this size with file_upload_start instead.')
+      );
     }
 
-    const uploaded = await ClassmojiService.pageContent.uploadPageAsset(
-      page,
-      buffer,
-      args.filename
-    );
+    // The same check ContentService.upload runs, with the same classroom type
+    // policy, run BEFORE it: uploadPageAsset asks GitHub for the content repo's
+    // default branch first, so leaving this to the service would spend a round
+    // trip to learn the extension is wrong.
+    const validation = validateFile({
+      filename: args.filename,
+      size: buffer.length,
+      fileTypes: ClassmojiService.contentDelivery.uploadFileTypes(page.classroom),
+    });
+    if (!validation.valid) {
+      // An agent tends to send the path it read the file from; say what to send.
+      const hint = /[/\\]/.test(args.filename) ? ' Send just the file name, without folders.' : '';
+      throw new ToolError('invalid_params', (validation.error ?? 'Invalid file') + hint);
+    }
+
+    let uploaded: Awaited<ReturnType<typeof ClassmojiService.pageContent.uploadPageAsset>>;
+    try {
+      uploaded = await ClassmojiService.pageContent.uploadPageAsset(page, buffer, args.filename);
+    } catch (error) {
+      // The storage router sends this file to media (a Pro video, or a file
+      // over the repository's cap): not a commit this tool can make. Say which
+      // tool can, rather than a bare refusal the agent cannot act on.
+      if (ClassmojiService.media.isMediaRoutingError(error)) {
+        throw new ToolError(
+          'invalid_params',
+          `${error.message} Upload it with file_upload_start instead.`,
+          'USE_MEDIA'
+        );
+      }
+      throw error;
+    }
 
     await writeAudit(ctx, {
       resource_type: 'PAGES',
@@ -1072,10 +1128,11 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
   annotations: { destructive: false, idempotent: true, openWorld: true },
   title: "Set a page's cover image",
   description:
-    "Sets, repositions, or removes a page's cover (header) image. The cover must be an asset in " +
-    "this classroom's own content repo — upload one with page_asset_upload and pass the `url` it " +
-    'returns, or reuse the cover_image.url a content read gave you. External image URLs are ' +
-    'refused. Pass url: null to remove the cover; omit url and pass position alone to reposition ' +
+    "Sets, repositions, or removes a page's cover (header) image. The cover must be an image in " +
+    "this classroom's own content repo — upload one with page_asset_upload (or file_upload_start) " +
+    'and pass the `url`/ref it returns, or reuse the cover_image.url a content read gave you — or ' +
+    'a media://… image ref from media_list. External image URLs are refused. Pass url: null to ' +
+    'remove the cover; omit url and pass position alone to reposition ' +
     'the current image. position is the vertical focal point, 0 (top) to 100 (bottom), default ' +
     '50. Unlike page_content_apply this always writes the LIVE page — never a preview branch — ' +
     'exactly as the web editor does, so students see it immediately.',
@@ -1091,9 +1148,9 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
       .optional()
       .describe(
         "Reference to an image in this classroom's content repo (from page_asset_upload, or " +
-          'the cover_image.url a content read returned). null removes the cover; omit it to ' +
-          'keep the current image and change only position. Must end in .png .jpg .jpeg .gif ' +
-          '.webp or .svg'
+          'the cover_image.url a content read returned), or a media://… image ref. null removes ' +
+          'the cover; omit it to keep the current image and change only position. A repo ' +
+          'reference must end in .png .jpg .jpeg .gif .webp or .svg'
       ),
     position: z
       .number()
@@ -1117,7 +1174,11 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
         'Pass url to set or remove the cover, position to reposition it, or both'
       );
     }
-    if (typeof args.url === 'string') {
+    // A `media://` reference has no extension to read — it names a row, and
+    // whether that row is an IMAGE of this classroom is the canonicalization's
+    // question below. A signed media URL does carry one (its `orig.{ext}`
+    // variant), so it is held to the image list here like any other URL.
+    if (typeof args.url === 'string' && !args.url.startsWith('media://')) {
       const ext = extensionOf(args.url);
       if (!ext || !COVER_IMAGE_EXTENSIONS.includes(ext)) {
         throw new ToolError(
@@ -1182,7 +1243,8 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
         throw new ToolError(
           'invalid_params',
           `A cover must be an image in this classroom's content repo — upload one with ` +
-            `page_asset_upload. '${args.url}' does not name one.`
+            `page_asset_upload, or pass a media://… image ref from media_list. '${args.url}' ` +
+            'does not name one.'
         );
       }
       nextUrl = canonical;

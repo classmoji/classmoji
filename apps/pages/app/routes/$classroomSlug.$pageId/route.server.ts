@@ -1,6 +1,21 @@
 import { redirect } from 'react-router';
+import {
+  REPO_REST_MAX_BYTES,
+  REPO_REST_MAX_LABEL,
+  repoFileTooLargeMessage,
+} from '@classmoji/utils/repo-limits';
+import {
+  MULTIPART_OVERHEAD_BYTES,
+  UploadTooLargeError,
+  declaredBodyTooLarge,
+  readLimitedBody,
+  readLimitedFormData,
+  uploadBodyLimit,
+} from '@classmoji/utils/upload-limit';
+import { uploadRefusalStatus } from '@classmoji/services';
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
 import { pageMutationBlocked } from '~/utils/auth.server.ts';
+import { findClassroomRole } from '~/utils/classroomRole.server.ts';
 import {
   loadPageContent,
   savePageContent,
@@ -8,8 +23,17 @@ import {
   uploadPageAsset,
 } from '~/utils/content.server.ts';
 import { migrateHtmlToBlockNote } from '~/utils/migration.server.ts';
+import {
+  UPLOAD_BUSY_MESSAGE,
+  UPLOAD_RETRY_AFTER_SECONDS,
+  acquireUploadSlot,
+  releaseUploadSlot,
+} from '@classmoji/utils/upload-concurrency';
 import { schema } from '~/components/editor/blocks/index.tsx';
 import type { PageForContent } from '~/types/pages.ts';
+import type { UploadCapability } from '@classmoji/services/media/router';
+import { loadMediaDownloads } from '~/utils/mediaDownloads.server.ts';
+import { downloadMapRole, type MediaDownloads } from '~/utils/mediaDownloads.ts';
 import {
   assetResolveContext,
   canonicalizeAssetRef,
@@ -17,6 +41,60 @@ import {
   canonicalizeOpsAssets,
   resolveDocumentAssets,
 } from '~/utils/assetRefs.server.ts';
+
+/**
+ * The most a JSON request to the page action may send.
+ *
+ * The largest one is a whole-document save, which carries the page's
+ * `content.json` — itself at most `REPO_REST_MAX_BYTES`, the most the
+ * repository will commit — as a STRING inside the JSON body. Escaping that
+ * string adds a backslash before every quote, and BlockNote JSON is mostly
+ * quotes and short values, so the body is allowed twice the file plus slack
+ * for the other fields: room for any page the repository could store, and
+ * still a bound.
+ */
+const PAGE_JSON_BODY_MAX_BYTES = 2 * REPO_REST_MAX_BYTES + MULTIPART_OVERHEAD_BYTES;
+
+/** What a person reads when a save is over that. */
+const PAGE_TOO_LARGE_MESSAGE = `This page is larger than the ${REPO_REST_MAX_LABEL} your course repository accepts.`;
+
+/**
+ * The JSON body, read through the byte-counting reader. Throws
+ * `UploadTooLargeError` when it is over `PAGE_JSON_BODY_MAX_BYTES`, and the
+ * parser's own error for anything that is not JSON.
+ */
+async function readPageJsonBody(request: Request): Promise<Record<string, unknown>> {
+  if (declaredBodyTooLarge(request.headers, PAGE_JSON_BODY_MAX_BYTES)) {
+    throw new UploadTooLargeError(PAGE_JSON_BODY_MAX_BYTES);
+  }
+  if (!request.body) return (await request.json()) as Record<string, unknown>;
+  const bytes = await readLimitedBody(request.body, PAGE_JSON_BODY_MAX_BYTES);
+  return JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
+}
+
+/**
+ * The upload capability, or null when it cannot be worked out.
+ *
+ * Null is safe rather than silent: the editor then routes every file the way it
+ * always has (to the repository, within its cap), and a file that belongs in
+ * media is still redirected there by the repository route's own 409
+ * `USE_MEDIA`. A lookup failure must not take the editor down with it.
+ */
+async function loadUploadCapability(page: {
+  classroom: { id: string };
+}): Promise<UploadCapability | null> {
+  try {
+    return await ClassmojiService.media.uploadCapabilityFor(
+      page.classroom as Parameters<typeof ClassmojiService.media.uploadCapabilityFor>[0]
+    );
+  } catch (error) {
+    console.warn('[pages] upload capability unavailable:', error);
+    return null;
+  }
+}
+
+/** Extensions a page cover may have — the image half of the upload allowlist. */
+const COVER_IMAGE_EXTENSION = /\.(png|jpe?g|gif|webp|svg)$/i;
 
 /**
  * Public page viewer route - read-only view for students and public access.
@@ -53,14 +131,13 @@ export const loader = async ({
   let canEdit = false;
 
   if (authData?.userId) {
-    const membership = await ClassmojiService.classroomMembership.findByClassroomAndUser(
-      page.classroom.id,
-      authData.userId
-    );
-    if (membership) {
-      userRole = membership.role;
-      canEdit = ['OWNER', 'TEACHER'].includes(userRole);
-    }
+    // The highest of their roles here: an owner also enrolled as a student
+    // edits. (The download map reads the accepted-only role, below.)
+    userRole = await findClassroomRole({
+      userId: authData.userId,
+      classroomId: page.classroom.id,
+    });
+    canEdit = userRole !== null && ['OWNER', 'TEACHER'].includes(userRole);
   }
 
   // Block access to draft pages (teaching team can view drafts)
@@ -204,6 +281,37 @@ export const loader = async ({
     [coverImage?.url]
   );
 
+  // Which media files the READER may download (`ref → boolean`, nothing
+  // else): a signed-in member looking at the viewer — the editor draws no
+  // download buttons, and an anonymous reader of a public page gets none. Only
+  // where the classroom can sign at all (`assetCtx`), because the button's
+  // route can mint nothing otherwise. The URL itself is minted on click.
+  //
+  // Drawn for the role that route reads — ACCEPTED memberships only — not the
+  // one that opened this page, so a pending invite draws no button that would
+  // 404 (`downloadMapRole`).
+  const viewerShown = !canEdit || previewActive;
+  const downloadRole =
+    authData?.userId && userRole && viewerShown && assetCtx
+      ? downloadMapRole(
+          await findClassroomRole({
+            userId: authData.userId,
+            classroomId: page.classroom.id,
+            acceptedOnly: true,
+          }),
+          page.is_draft
+        )
+      : null;
+  const mediaDownloads: MediaDownloads = downloadRole
+    ? await loadMediaDownloads(page.classroom.id, viewerContent, downloadRole)
+    : {};
+
+  // Where this editor's uploads go (`storageTargetFor` on the client): the
+  // repository, media, or a refusal it can state before a byte is sent. Staff
+  // who can edit only — a reader never uploads, and the capability carries the
+  // classroom's remaining media quota. Not in read-only preview either.
+  const uploadCapability = canEdit && !previewActive ? await loadUploadCapability(page) : null;
+
   // Build GitHub repo info for link
   const gitOrg = (page.classroom as Record<string, unknown>).git_organization as {
     login?: string;
@@ -254,8 +362,11 @@ export const loader = async ({
     // An absent key means "one size only", which is the right answer for a gif,
     // an svg, and anything that is not an image.
     resolvedSrcSets,
+    // `{ storedRef: downloadable }` for the media files a member may download.
+    mediaDownloads,
     userRole,
     canEdit,
+    uploadCapability,
     notice,
     noticeAutoMerged,
     // Conflict token (F2, 4b parity with slides): content.json's blob sha,
@@ -278,16 +389,28 @@ export const loader = async ({
   };
 };
 
-/**
- * Actions for page mutations (edit mode only).
- */
-export const action = async ({
-  params,
-  request,
-}: {
+interface PageActionArgs {
   params: Record<string, string | undefined>;
   request: Request;
-}) => {
+}
+
+/**
+ * Actions for page mutations (edit mode only).
+ *
+ * The cover upload takes an upload slot partway through `pageAction` — after
+ * the gates, before its body is read — and this is where it is given back,
+ * whichever way the action ends.
+ */
+export const action = async (args: PageActionArgs) => {
+  const slot = { held: false };
+  try {
+    return await pageAction(args, slot);
+  } finally {
+    if (slot.held) releaseUploadSlot();
+  }
+};
+
+async function pageAction({ params, request }: PageActionArgs, slot: { held: boolean }) {
   const pageId = params.pageId!;
 
   const page = await ClassmojiService.page.findById(pageId, {
@@ -314,19 +437,20 @@ export const action = async ({
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const membership = await ClassmojiService.classroomMembership.findByClassroomAndUser(
-    page.classroom.id,
-    authData.userId
-  );
+  // The same role the loader read, so a page it opened for editing saves.
+  const role = await findClassroomRole({
+    userId: authData.userId,
+    classroomId: page.classroom.id,
+  });
 
-  if (!membership || !['OWNER', 'TEACHER'].includes(membership.role)) {
+  if (!role || !['OWNER', 'TEACHER'].includes(role)) {
     return Response.json({ error: 'Unauthorized' }, { status: 403 });
   }
 
   // SEC4: every intent this action handles mutates (GitHub content, preview
   // branches, or page rows) — enforce the platform-wide classroom status gate
   // (owners always may mutate; LOCKED/UNPUBLISHED are read-only for others).
-  const blocked = pageMutationBlocked(page.classroom, membership.role);
+  const blocked = pageMutationBlocked(page.classroom, role);
   if (blocked) return blocked;
 
   // Support both JSON and multipart form data (for file uploads)
@@ -334,10 +458,38 @@ export const action = async ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- form/JSON data has dynamic shape
   let data: Record<string, any>, formData: FormData | undefined;
   if (contentType.includes('multipart/form-data')) {
-    formData = await request.formData();
-    data = { intent: formData!.get('intent') };
+    // The one multipart intent is the cover upload: it takes an upload slot
+    // like every other file upload in this app (released by `action`).
+    if (!acquireUploadSlot()) {
+      return Response.json(
+        { error: UPLOAD_BUSY_MESSAGE },
+        { status: 503, headers: { 'Retry-After': String(UPLOAD_RETRY_AFTER_SECONDS) } }
+      );
+    }
+    slot.held = true;
+
+    // Read only now — after the session, the membership and the status gate
+    // above — and through a byte-counting reader: the one multipart intent is
+    // the cover upload, which carries one repository-sized file at most.
+    try {
+      formData = await readLimitedFormData(request, uploadBodyLimit(REPO_REST_MAX_BYTES));
+    } catch (error: unknown) {
+      if (error instanceof UploadTooLargeError) {
+        return Response.json({ error: repoFileTooLargeMessage() }, { status: 413 });
+      }
+      throw error;
+    }
+    data = { intent: formData.get('intent') };
   } else {
-    data = await request.json();
+    // Read capped, and only now, after the same gates. See PAGE_JSON_BODY_MAX_BYTES.
+    try {
+      data = await readPageJsonBody(request);
+    } catch (error: unknown) {
+      if (error instanceof UploadTooLargeError) {
+        return Response.json({ error: PAGE_TOO_LARGE_MESSAGE }, { status: 413 });
+      }
+      throw error;
+    }
   }
   const { intent } = data;
 
@@ -745,6 +897,15 @@ export const action = async ({
   if (intent === 'set-header-image') {
     try {
       const coverUrl = await canonicalizeAssetRef(actionAssetCtx, data.url as string | null);
+      // The media half of the cover rule, judged on the CANONICAL form (a signed
+      // media URL has just become its `media://` reference). A `media://` cover
+      // must name a ready IMAGE of this page's own classroom; a video, a deleted
+      // object or another classroom's id is answered like an asset that is not
+      // there. Repo paths and URLs pass through untouched — this editor keeps
+      // its own policy for those.
+      if (!(await ClassmojiService.pageContent.coverMediaRefAllowed(actionPage, coverUrl))) {
+        return Response.json({ error: 'Image not found' }, { status: 404 });
+      }
       const coverImage = coverUrl
         ? {
             url: coverUrl,
@@ -778,6 +939,14 @@ export const action = async ({
       if (!file || typeof file === 'string') {
         return Response.json({ error: 'No file provided' }, { status: 400 });
       }
+      // A cover is rendered as an image. Page assets may be any file type where
+      // the delivery layer serves the classroom; a cover may not.
+      if (!COVER_IMAGE_EXTENSION.test(file.name)) {
+        return Response.json(
+          { error: 'A cover must be an image (PNG, JPG, GIF, WebP or SVG).' },
+          { status: 400 }
+        );
+      }
       // `url` is the repo path (what gets stored); `displayUrl` is the signed
       // URL for showing it right now — the two are never the same string.
       const { url, displayUrl } = await uploadPageAsset(actionPage, file);
@@ -787,6 +956,17 @@ export const action = async ({
       });
       return Response.json({ success: true, url, displayUrl, sha });
     } catch (error: unknown) {
+      // A cover the storage router sends to media (over the repository's cap on
+      // a classroom with media): 409 `USE_MEDIA`. Checked before the 409 below,
+      // which means something else entirely.
+      const routed = ClassmojiService.media.mediaRoutingResponse(error);
+      if (routed) return routed;
+      // Too large, a type this classroom does not take, a bad name: the
+      // uploader's to fix, so a 4xx with the service's sentence (413/415/400).
+      const refused = uploadRefusalStatus(error);
+      if (refused) {
+        return Response.json({ error: (error as Error).message }, { status: refused });
+      }
       if ((error as { status?: number } | null)?.status === 409) {
         // F5: the asset uploaded fine, but the cover-image metadata write
         // lost to a concurrent content edit. Retrying is safe and cheap.
@@ -804,4 +984,4 @@ export const action = async ({
   }
 
   return Response.json({ error: 'Invalid action' }, { status: 400 });
-};
+}

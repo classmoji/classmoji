@@ -7,7 +7,7 @@ import {
   DeleteOutlined,
   CheckCircleOutlined,
 } from '@ant-design/icons';
-import { extractZipContents, extractTitleFromMarkdown } from './utils';
+import { extractZipContents, extractTitleFromMarkdown, oversizedFileMessage } from './utils';
 
 interface ImportedPage {
   id: string;
@@ -48,6 +48,9 @@ export default function BatchImportTab({ onPagesChange }: BatchImportTabProps) {
         try {
           const { markdownContent, markdownFileName, imageFiles } =
             await extractZipContents(zipFile);
+
+          const oversized = oversizedFileMessage(imageFiles);
+          if (oversized) throw new Error(oversized);
 
           const title =
             extractTitleFromMarkdown(markdownContent) || markdownFileName!.replace('.md', '');

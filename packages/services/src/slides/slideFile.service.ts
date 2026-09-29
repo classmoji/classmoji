@@ -18,13 +18,14 @@
  *
  * ## Why the commit is `uploadBatch` and not `upload`
  *
- * `ContentService.upload` validates against the SHARED policy in
- * `validateFile.ts` — 5 MB, and an extension list built for page images — and
- * would refuse a 30 MB lecture PDF. `uploadBatch` validates nothing, which is
- * why every call below runs `validateSlideFile` explicitly first. It is also
- * the path that routes a >1 MB body through the Git blobs API, which is
- * mandatory here: the Contents API caps at 1 MB and a slide file is usually
- * larger than that.
+ * `ContentService.upload` validates against the SHARED page-asset policy in
+ * `validateFile.ts` — the same 35 MB ceiling, but a file-type rule chosen per
+ * classroom for page images and attachments, and a timestamped, sanitized
+ * name. A slide file has its own narrower extension list and its own storage
+ * name, so it commits through `uploadBatch`, which validates nothing — which
+ * is why every call below runs `validateSlideFile` explicitly first. The blob
+ * path is also one request per file however large it is, and a slide file is
+ * usually well over 1 MB.
  */
 
 import getPrisma from '@classmoji/database';
@@ -39,11 +40,18 @@ import * as contentManifestService from '../classmoji/contentManifest.service.ts
 import { ensureContentRepo } from '../classmoji/page.service.ts';
 import {
   contentDispositionFor,
+  isContentDeliveryConfigured,
+  isContentDeliveryEnabled,
+  mediaDownloadUrl,
   normalizeDownloadFilename,
   resolveSlideDownloadUrl,
+  type ResolveClassroom,
   type SlideDownloadRefusal,
   type SlideDownloadResult,
 } from '../classmoji/contentDelivery.service.ts';
+import { findMediaRow, lookupReadyMedia } from '../media/mediaLookup.ts';
+import { storageTargetFor } from '../media/storageRouter.ts';
+import { uploadCapabilityFor, type CapabilityClassroom } from '../media/uploadCapability.ts';
 import {
   isSlideSlugConflict,
   prepareSlideCreate,
@@ -51,10 +59,14 @@ import {
 } from './slide.service.ts';
 import type { SlideContentTarget } from './slideContent.service.ts';
 import {
+  SLIDE_FILE_EXTENSIONS,
+  SLIDE_FILE_MIME,
   SLIDE_FILE_TOO_LARGE_MESSAGE,
   assertFileSlide,
   assertLinkSlide,
   isCommitTooLargeRefusal,
+  isMediaBackedFileSlide,
+  slideFileExtension,
   slideFileSourceProblem,
   slideFileStorageName,
   validateSlideFile,
@@ -106,6 +118,12 @@ export interface SlideFileTarget extends SlideContentTarget {
   source_mime?: string | null;
   source_size?: number | null;
   source_url?: string | null;
+  /**
+   * Set when the document lives in the classroom's MEDIA store rather than the
+   * content repo — a Pro classroom's file too large for the repository. Such a
+   * row has no `source_path`, and every read below branches on this first.
+   */
+  media_id?: string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -339,6 +357,9 @@ export async function replaceSlideFile({
       source_filename: displayFilename(filename, storageName),
       source_mime: validation.mime,
       source_size: file.length,
+      // A slide that was media-backed is repository-backed from here on. The
+      // media object itself stays in the classroom's library.
+      media_id: null,
       updated_at: new Date(),
     },
   });
@@ -361,6 +382,166 @@ export async function replaceSlideFile({
   }
 
   return { slide: updated, path: sourcePath, sha: commit.sha, commit: commit.commit };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Media-backed FILE slides — Pro, and too large for the repository
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The document a media-backed FILE slide will point at, checked from the ROW.
+ *
+ * The browser uploaded the bytes straight to R2 and hands over only an id, so
+ * nothing it says about the file is trusted: the row is read scoped to this
+ * classroom (a foreign id and an unknown one are the same absence), it has to
+ * be finished, its name has to carry a slide extension, and the storage router
+ * — asked with the classroom's own capability and the row's own size — has to
+ * send it to media. That last question is what keeps this path to Pro
+ * classrooms and to files the repository cannot take: a small PDF belongs in
+ * git, where the rest of the course is.
+ */
+async function mediaSlideSource(
+  classroom: CapabilityClassroom,
+  mediaId: string
+): Promise<{ mediaId: string; filename: string; mime: string; size: number }> {
+  const row = await findMediaRow(classroom.id, mediaId);
+  if (!row || row.status !== 'READY') {
+    throw new SlideSourceError('That upload is not available. Upload the file again.');
+  }
+
+  const extension = slideFileExtension(row.filename);
+  if (!extension) {
+    throw new SlideSourceError(
+      `Slide files must be one of: ${SLIDE_FILE_EXTENSIONS.map(ext => `.${ext}`).join(', ')}`
+    );
+  }
+
+  // A document that fits the repository is committed there, like every other
+  // slide file — decided before the router, whose repository branch would judge
+  // a `.pptx` by the page-asset type rule rather than the slide's own.
+  const size = Number(row.size_bytes);
+  const capability = await uploadCapabilityFor(classroom);
+  if (size <= capability.repoMaxBytes) {
+    throw new SlideSourceError(
+      'This file fits in the course repository. Upload it to the slide directly.'
+    );
+  }
+  const target = storageTargetFor(capability, { name: row.filename, size });
+  if (target.kind !== 'media') {
+    throw new SlideSourceError(
+      target.kind === 'refused' ? target.message : 'This file cannot be stored in media.'
+    );
+  }
+
+  const filename = normalizeDownloadFilename(row.filename) ?? `${row.id}.${extension}`;
+  return { mediaId: row.id, filename, mime: SLIDE_FILE_MIME[extension], size };
+}
+
+/**
+ * Create a FILE slide over a document already in the classroom's media store.
+ *
+ * No commit and no repo folder — the bytes are in R2 already, uploaded by the
+ * browser — so this is `createLinkSlide`'s shape: a collision-checked row and a
+ * manifest refresh. `content_path` is still `slides/<slug>`, the row's identity,
+ * for the reasons given there.
+ */
+export async function createFileSlideFromMedia({
+  classroomId,
+  title,
+  createdBy,
+  mediaId,
+}: {
+  classroomId: string;
+  title: string;
+  createdBy: string;
+  mediaId: string;
+}) {
+  // The upload first: a document that cannot be used is the thing to hear
+  // about, whatever the title.
+  const source = await mediaSlideSource({ id: classroomId }, mediaId);
+  const { slug, contentPath } = await prepareSlideCreate({ classroomId, title });
+
+  let slide;
+  try {
+    slide = await getPrisma().slide.create({
+      data: {
+        title,
+        slug,
+        content_path: contentPath,
+        classroom_id: classroomId,
+        created_by: createdBy,
+        kind: 'FILE',
+        media_id: source.mediaId,
+        source_filename: source.filename,
+        source_mime: source.mime,
+        source_size: source.size,
+      },
+    });
+  } catch (error: unknown) {
+    // Same race as the other creates, with nothing to clean up: the upload is
+    // in the classroom's media library, where it stays either way.
+    if (isSlideSlugConflict(error)) throw slideContentPathConflict(contentPath);
+    throw error;
+  }
+
+  await refreshManifest(classroomId, 'slide file creation');
+
+  return { slide };
+}
+
+/**
+ * Point a FILE slide at a document in the media store, keeping its id and URL.
+ *
+ * The same order as `replaceSlideFile`: the row moves first, and only then is a
+ * previous REPOSITORY document removed — a failure before that leaves the
+ * slide serving what it was already serving. A previous MEDIA document is left
+ * where it is: it is in the classroom's media library, and deleting it from
+ * there is somebody's deliberate decision on the media page.
+ */
+export async function replaceSlideFileWithMedia({
+  slideId,
+  mediaId,
+}: {
+  slideId: string;
+  mediaId: string;
+}) {
+  const slide = await loadSlideWithClassroom(slideId);
+  if (!slide) throw new Error('Slide not found');
+  assertFileSlide(slide, 'Replacing a slide file');
+
+  const source = await mediaSlideSource(slide.classroom, mediaId);
+  const previousPath = slide.source_path;
+
+  const updated = await getPrisma().slide.update({
+    where: { id: slideId },
+    data: {
+      media_id: source.mediaId,
+      source_path: null,
+      source_filename: source.filename,
+      source_mime: source.mime,
+      source_size: source.size,
+      updated_at: new Date(),
+    },
+  });
+
+  const gitOrganization = slide.classroom?.git_organization;
+  const repo = slide.classroom?.content_repo;
+  if (previousPath && gitOrganization?.login && repo) {
+    try {
+      await ContentService.delete({
+        gitOrganization,
+        repo,
+        path: previousPath,
+        message: `Remove replaced slide file: ${slide.title}`,
+      });
+    } catch (error: unknown) {
+      console.error('[slideFile] Could not remove the replaced slide file:', error);
+    }
+    // See `replaceSlideFile`: a map row is all the signer needs.
+    await removeContentAssets(slide.classroom_id, [previousPath]);
+  }
+
+  return { slide: updated };
 }
 
 /** Point a LINK slide at a different destination. Validation is the same one. */
@@ -401,6 +582,13 @@ export async function slideDownloadUrl(slide: SlideFileTarget): Promise<SlideDow
   if (!classroom?.id || !classroom.content_repo || !login) {
     return { ok: false, reason: 'delivery_off' };
   }
+  // Media-backed first: such a row has no `source_path`, and the repository
+  // checks below would call it broken (`no_source`). And media WINS when a row
+  // carries both (`isMediaBackedFileSlide`): the repository path of a
+  // class-imported media slide was remapped, never committed.
+  if (isMediaBackedFileSlide(slide) && slide.media_id) {
+    return mediaSlideDownloadUrl(slide.media_id, classroom, login);
+  }
   // The two the type now demands, asked again at the boundary. A row built by a
   // `select` the compiler never saw can still arrive without them, and the
   // defaults that used to stand in here (`?? 0`, `=== true`) turned that into a
@@ -428,6 +616,57 @@ export async function slideDownloadUrl(slide: SlideFileTarget): Promise<SlideDow
       source_size: slide.source_size ?? null,
     }
   );
+}
+
+/**
+ * The signed download URL for a media-backed FILE slide.
+ *
+ * `lookupReadyMedia` reads the row scoped to the classroom and to READY in the
+ * query, so a media object deleted from the library (a soft delete — the row
+ * stays, `status` DELETED, and `media_id` is NOT nulled), one that never
+ * finished, and another classroom's all come back absent: `not_in_map`, the
+ * same "nothing to serve" every missing repository document gets. There is no
+ * branch that signs a URL for a row that is not this classroom's and READY.
+ *
+ * `forStudent: true` whoever is asking: a slide document is not a video, so
+ * the uploader's "Allow download" setting does not apply to it, and the viewer
+ * does not know here whether it is staff.
+ */
+async function mediaSlideDownloadUrl(
+  mediaId: string,
+  classroom: NonNullable<SlideFileTarget['classroom']>,
+  login: string
+): Promise<SlideDownloadResult> {
+  if (
+    typeof classroom.content_key_version !== 'number' ||
+    typeof classroom.content_delivery_enabled !== 'boolean'
+  ) {
+    return { ok: false, reason: 'incomplete_classroom' };
+  }
+  // Media is only ever served signed; with the layer off there is no Worker to
+  // hand it out and no bytes in GitHub to stream instead.
+  if (!isContentDeliveryConfigured() || !isContentDeliveryEnabled(classroom)) {
+    return { ok: false, reason: 'delivery_off' };
+  }
+
+  const record = (await lookupReadyMedia(classroom.id, [mediaId])).get(mediaId);
+  if (!record) return { ok: false, reason: 'not_in_map' };
+
+  const resolveClassroom: ResolveClassroom = {
+    id: classroom.id,
+    content_key_version: classroom.content_key_version,
+    content_repo: classroom.content_repo ?? '',
+    content_delivery_enabled: classroom.content_delivery_enabled,
+    git_organization: { login },
+  };
+  const url = await mediaDownloadUrl({ classroom: resolveClassroom, record, forStudent: true });
+  if (!url) return { ok: false, reason: 'unsignable' };
+
+  return {
+    ok: true,
+    url,
+    filename: normalizeDownloadFilename(record.filename) ?? `${record.id}.${record.ext}`,
+  };
 }
 
 /**
@@ -510,7 +749,9 @@ export async function openSlideFile(slide: SlideFileTarget): Promise<SlideFileDe
 
   const signed = await slideDownloadUrl(slide);
   if (signed.ok) return { mode: 'redirect', url: signed.url, filename: signed.filename };
-  if (signed.reason !== 'delivery_off') {
+  // A media-backed document has no copy in GitHub to stream instead: every
+  // refusal, `delivery_off` included, is the end of the road.
+  if (signed.reason !== 'delivery_off' || slide.media_id) {
     return { mode: 'unavailable', reason: signed.reason };
   }
 
