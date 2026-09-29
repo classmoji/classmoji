@@ -16,7 +16,9 @@
  * ## Every call here is a read
  *
  * - Prisma: `slide.findMany`, `classroom.findMany`, `mediaObject.findMany`.
- * - Cloudinary: `GET /v1_1/{cloud}/resources/video/upload` (Admin API, basic auth).
+ * - Cloudinary (Admin API, basic auth): `GET /v1_1/{cloud}/resources/video/upload`
+ *   (the `classmoji/slides/` listing) and `GET …/resources/video/upload/{public_id}`
+ *   for a deck URL of our cloud outside that listing.
  * - GitHub: `GET /repos/{o}/{r}/contents/{path}` (default branch and the deck's
  *   preview branch) and `GET /repos/{o}/{r}/git/blobs/{sha}` for files over the
  *   Contents API's 1 MB inline limit. The one non-GET is the token mint,
@@ -78,15 +80,67 @@ interface AdminResource {
 }
 
 /**
+ * One Admin API resource → an asset. A resource missing a field the migration
+ * needs is refused loudly rather than dropped: a silently shorter inventory is
+ * the failure worth avoiding.
+ */
+function toAsset(resource: AdminResource): CloudinaryAsset {
+  const { public_id, format, bytes, version, secure_url, created_at } = resource;
+  if (
+    typeof public_id !== 'string' ||
+    typeof format !== 'string' ||
+    typeof bytes !== 'number' ||
+    typeof secure_url !== 'string'
+  ) {
+    throw new Error(`Cloudinary returned an incomplete resource: ${JSON.stringify(resource)}`);
+  }
+  return {
+    publicId: public_id,
+    format: format.toLowerCase(),
+    bytes,
+    version: typeof version === 'number' ? version : 0,
+    secureUrl: secure_url,
+    createdAt: typeof created_at === 'string' ? created_at : null,
+  };
+}
+
+function basicAuth(creds: CloudinaryCredentials): string {
+  return `Basic ${Buffer.from(`${creds.apiKey}:${creds.apiSecret}`).toString('base64')}`;
+}
+
+/**
+ * One video by public_id: `GET /v1_1/{cloud}/resources/video/upload/{public_id}`
+ * (Admin API, a read). Null on 404 — no video by that id. Each segment of the
+ * id is encoded; the slashes between them are the path.
+ */
+export async function lookupCloudinaryVideo(
+  creds: CloudinaryCredentials,
+  publicId: string,
+  fetchImpl: Fetch = fetch
+): Promise<CloudinaryAsset | null> {
+  const encoded = publicId.split('/').map(encodeURIComponent).join('/');
+  const url = `https://api.cloudinary.com/v1_1/${encodeURIComponent(creds.cloudName)}/resources/video/upload/${encoded}`;
+  const response = await fetchImpl(url, {
+    method: 'GET',
+    headers: { Authorization: basicAuth(creds), Accept: 'application/json' },
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`Cloudinary lookup failed: HTTP ${response.status}`);
+  const asset = toAsset((await response.json()) as AdminResource);
+  if (asset.publicId !== publicId) {
+    throw new Error(`Cloudinary answered ${asset.publicId} for ${publicId}`);
+  }
+  return asset;
+}
+
+/**
  * Every video under `classmoji/slides/`, following `next_cursor` to the end.
- * Resources missing a field the migration needs are refused loudly rather than
- * dropped: a silently shorter inventory is the failure worth avoiding.
  */
 export async function listCloudinaryVideos(
   creds: CloudinaryCredentials,
   fetchImpl: Fetch = fetch
 ): Promise<CloudinaryAsset[]> {
-  const auth = Buffer.from(`${creds.apiKey}:${creds.apiSecret}`).toString('base64');
   const out: CloudinaryAsset[] = [];
   let cursor: string | null = null;
   for (let page = 0; page < MAX_PAGES; page++) {
@@ -99,32 +153,14 @@ export async function listCloudinaryVideos(
 
     const response = await fetchImpl(url, {
       method: 'GET',
-      headers: { Authorization: `Basic ${auth}`, Accept: 'application/json' },
+      headers: { Authorization: basicAuth(creds), Accept: 'application/json' },
       signal: AbortSignal.timeout(60_000),
     });
     if (!response.ok) {
       throw new Error(`Cloudinary list failed: HTTP ${response.status}`);
     }
     const body = (await response.json()) as { resources?: AdminResource[]; next_cursor?: unknown };
-    for (const resource of body.resources ?? []) {
-      const { public_id, format, bytes, version, secure_url, created_at } = resource;
-      if (
-        typeof public_id !== 'string' ||
-        typeof format !== 'string' ||
-        typeof bytes !== 'number' ||
-        typeof secure_url !== 'string'
-      ) {
-        throw new Error(`Cloudinary returned an incomplete resource: ${JSON.stringify(resource)}`);
-      }
-      out.push({
-        publicId: public_id,
-        format: format.toLowerCase(),
-        bytes,
-        version: typeof version === 'number' ? version : 0,
-        secureUrl: secure_url,
-        createdAt: typeof created_at === 'string' ? created_at : null,
-      });
-    }
+    for (const resource of body.resources ?? []) out.push(toAsset(resource));
     cursor = typeof body.next_cursor === 'string' && body.next_cursor ? body.next_cursor : null;
     if (!cursor) return out;
   }
@@ -550,6 +586,7 @@ export function createLiveReadDeps(opts: {
     concurrency: opts.concurrency ?? 4,
     log: opts.log,
     listCloudinaryAssets: () => listCloudinaryVideos(opts.cloudinary, fetchImpl),
+    lookupCloudinaryAsset: publicId => lookupCloudinaryVideo(opts.cloudinary, publicId, fetchImpl),
     listDecks: () => listDeckRecords(opts.prisma),
     classroomFacts: async ids => {
       const result = await readClassroomFacts(opts.prisma, ids);

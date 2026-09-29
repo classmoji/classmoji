@@ -20,6 +20,7 @@ import {
   createLiveReadDeps,
   isProFromOwners,
   listCloudinaryVideos,
+  lookupCloudinaryVideo,
   type ReadPrisma,
 } from '../cloudinaryReads.ts';
 
@@ -101,6 +102,44 @@ describe('listCloudinaryVideos', () => {
     await expect(
       listCloudinaryVideos({ cloudName: CLOUD, apiKey: 'k', apiSecret: 's' }, fetchImpl as never)
     ).rejects.toThrow(/incomplete resource/);
+  });
+});
+
+describe('lookupCloudinaryVideo', () => {
+  const creds = { cloudName: CLOUD, apiKey: 'k', apiSecret: 's' };
+  const resource = {
+    public_id: 'cs52-projects/team a',
+    format: 'mov',
+    bytes: 9,
+    version: 3,
+    secure_url: `https://res.cloudinary.com/${CLOUD}/video/upload/v3/cs52-projects/team%20a.mov`,
+  };
+
+  it('GETs one resource by its path-encoded public_id', async () => {
+    const seen: { url: string; method?: string }[] = [];
+    const fetchImpl = vi.fn(async (input: string, init?: RequestInit) => {
+      seen.push({ url: String(input), method: init?.method });
+      return json(resource);
+    }) as unknown as typeof fetch;
+    const asset = await lookupCloudinaryVideo(creds, 'cs52-projects/team a', fetchImpl);
+    expect(seen).toEqual([
+      {
+        url: `https://api.cloudinary.com/v1_1/${CLOUD}/resources/video/upload/cs52-projects/team%20a`,
+        method: 'GET',
+      },
+    ]);
+    expect(asset).toMatchObject({ publicId: 'cs52-projects/team a', bytes: 9, format: 'mov' });
+  });
+
+  it('answers null on 404 and throws on anything else or a different id', async () => {
+    const answer = (response: Response) => vi.fn(async () => response) as unknown as typeof fetch;
+    expect(await lookupCloudinaryVideo(creds, 'x/y', answer(json({}, 404)))).toBeNull();
+    await expect(lookupCloudinaryVideo(creds, 'x/y', answer(json({}, 500)))).rejects.toThrow(
+      /HTTP 500/
+    );
+    await expect(lookupCloudinaryVideo(creds, 'x/other', answer(json(resource)))).rejects.toThrow(
+      /answered cs52-projects\/team a for x\/other/
+    );
   });
 });
 
@@ -210,6 +249,15 @@ describe('dry run makes no writes', () => {
     const fetchImpl = vi.fn(async (input: URL | string, init?: RequestInit) => {
       const url = String(input);
       methods.push(`${init?.method ?? 'GET'} ${new URL(url).hostname}${new URL(url).pathname}`);
+      if (url.includes('/resources/video/upload/cs52-projects/')) {
+        return json({
+          public_id: 'cs52-projects/team-a',
+          format: 'mp4',
+          bytes: 50,
+          version: 2,
+          secure_url: 'https://x/team-a.mp4',
+        });
+      }
       if (url.includes('api.cloudinary.com')) {
         return json({
           resources: [
@@ -226,7 +274,10 @@ describe('dry run makes no writes', () => {
       if (url.endsWith('/access_tokens')) return json({ token: 't' });
       if (url.includes('ref=preview')) return json({}, 404);
       if (url.includes('deck.json')) {
-        const text = JSON.stringify({ attrs: { 'data-background-video': VIDEO_URL } });
+        const text = JSON.stringify({
+          attrs: { 'data-background-video': VIDEO_URL },
+          src: `https://res.cloudinary.com/${CLOUD}/video/upload/q_auto/cs52-projects/team-a.mp4`,
+        });
         return json({
           type: 'file',
           sha: 's1',
@@ -263,11 +314,18 @@ describe('dry run makes no writes', () => {
         isPro: true,
         isArchived: true,
         usedBytes: 14,
-        bytesToAdd: 1000,
+        bytesToAdd: 1050,
         canServeMedia: true,
       }),
     ]);
     expect(plan.totals.backgroundVideoReferences).toBe(1);
+    // The unlisted URL was looked up by public_id — a GET, like everything else.
+    expect(methods).toContain(
+      `GET api.cloudinary.com/v1_1/${CLOUD}/resources/video/upload/cs52-projects/team-a`
+    );
+    expect(plan.assets.find(a => a.publicId === 'cs52-projects/team-a')?.source).toBe(
+      'other-folder'
+    );
     // The select never names the GitLab token column.
     const classroomArgs = JSON.stringify(prisma.classroom.findMany.mock.calls[0]);
     expect(classroomArgs).not.toContain('access_token');

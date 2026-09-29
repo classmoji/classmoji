@@ -9,7 +9,13 @@
  * Prisma client from `DATABASE_URL`).
  */
 
-import { scanText, type ResolvedReference } from './cloudinaryUrls.ts';
+import {
+  candidatePublicIds,
+  findCloudinaryCandidates,
+  resolveCandidate,
+  scanText,
+  type ResolvedReference,
+} from './cloudinaryUrls.ts';
 
 /** Where every asset this migration covers lives (plan §13.4). */
 export const CLOUDINARY_PREFIX = 'classmoji/slides/';
@@ -78,6 +84,12 @@ export interface PlanReadDeps {
   /** The Pro quota, in bytes (the Trigger task passes the services constant). */
   proQuotaBytes: number;
   listCloudinaryAssets(): Promise<CloudinaryAsset[]>;
+  /**
+   * One video by public_id (Admin API `GET /resources/video/upload/{id}`), or
+   * null when Cloudinary has no such video. For URLs of our cloud outside the
+   * prefix listing — hand-uploaded course videos linked from decks.
+   */
+  lookupCloudinaryAsset(publicId: string): Promise<CloudinaryAsset | null>;
   listDecks(): Promise<DeckRecord[]>;
   classroomFacts(classroomIds: string[]): Promise<ClassroomFacts[]>;
   readDeck(deck: DeckRecord, classroom: ClassroomFacts | undefined): Promise<DeckRead>;
@@ -97,8 +109,16 @@ export interface ReferenceSite {
   background: number;
 }
 
+/**
+ * `classmoji-folder`: under `classmoji/slides/` (the editor and slides.com
+ * import uploads, from the prefix listing). `other-folder`: anywhere else in
+ * our cloud, found because a deck links it and looked up by public_id.
+ */
+export type AssetSource = 'classmoji-folder' | 'other-folder';
+
 export interface PlanAsset {
   publicId: string;
+  source: AssetSource;
   format: string;
   bytes: number;
   version: number;
@@ -155,6 +175,8 @@ export interface OtherReference {
   raw: string;
   kind: 'still' | 'unknown';
   publicId: string | null;
+  /** Why it is not migrated. */
+  reason: string;
 }
 
 export interface PreviewReference {
@@ -197,6 +219,10 @@ export interface MigrationPlan {
     workItems: number;
     bytesToCopy: number;
     overQuotaClassrooms: number;
+    /** Referenced assets outside `classmoji/slides/`, found by lookup. */
+    otherFolderAssets: number;
+    /** Admin API single-resource lookups made (found or not). */
+    lookups: number;
     /** Video references on the default branch (every file, every form). */
     videoReferences: number;
     /** Of those, `data-background-video` values. */
@@ -225,13 +251,21 @@ export function buildPlan(input: {
   cloudName: string;
   proQuotaBytes: number;
   assets: CloudinaryAsset[];
+  /** Assets outside the listing, resolved by public_id (`resolveUnlisted`). */
+  lookedUp?: CloudinaryAsset[];
+  /** public_id → why it could not be resolved, for the unknown references. */
+  unresolved?: ReadonlyMap<string, string>;
+  lookups?: number;
   scanned: ScannedDeck[];
   classrooms: ClassroomFacts[];
   limit?: number;
   generatedAt: string;
 }): MigrationPlan {
   const { cloudName, proQuotaBytes } = input;
-  const assetsById = new Map(input.assets.map(asset => [asset.publicId, asset]));
+  const listed = new Set(input.assets.map(asset => asset.publicId));
+  const assetsById = new Map(
+    [...input.assets, ...(input.lookedUp ?? [])].map(asset => [asset.publicId, asset])
+  );
   const known = new Set(assetsById.keys());
   const factsById = new Map(input.classrooms.map(facts => [facts.classroomId, facts]));
 
@@ -280,6 +314,11 @@ export function buildPlan(input: {
           raw: ref.raw,
           kind: ref.kind,
           publicId: ref.kind === 'still' ? ref.publicId : ref.guess,
+          reason:
+            ref.kind === 'still'
+              ? 'a still frame of the video, not the video; not rewritten'
+              : (input.unresolved?.get(ref.guess ?? '') ??
+                'no Cloudinary video with this public_id'),
         });
       }
       if (refs.length > 0) {
@@ -326,6 +365,9 @@ export function buildPlan(input: {
       const classroomIds = [...new Set(referencedBy.map(site => site.classroomId))].sort();
       return {
         publicId: asset.publicId,
+        source: (asset.publicId.startsWith(CLOUDINARY_PREFIX)
+          ? 'classmoji-folder'
+          : 'other-folder') as AssetSource,
         format: asset.format,
         bytes: asset.bytes,
         version: asset.version,
@@ -334,7 +376,10 @@ export function buildPlan(input: {
         classroomIds,
         unreferenced: referencedBy.length === 0,
       };
-    });
+    })
+    // A looked-up asset is in the plan because a deck plays it; one only a
+    // still frame points at is not something to migrate.
+    .filter(asset => listed.has(asset.publicId) || !asset.unreferenced);
 
   // One work item per (asset, classroom), grouped by asset so a second
   // classroom's copy comes right after the first (an R2 CopyObject of it).
@@ -421,6 +466,8 @@ export function buildPlan(input: {
       workItems: allWork.length,
       bytesToCopy: allWork.reduce((total, item) => total + item.bytes, 0),
       overQuotaClassrooms: classrooms.filter(c => c.overQuota).length,
+      otherFolderAssets: assets.filter(a => a.source === 'other-folder').length,
+      lookups: input.lookups ?? 0,
       videoReferences: allSites.reduce((total, site) => total + site.count, 0),
       backgroundVideoReferences: allSites.reduce((total, site) => total + site.background, 0),
       otherReferences: other.length,
@@ -445,6 +492,79 @@ export async function mapLimited<T, R>(
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
   return out;
+}
+
+/** Admin API single-resource lookups per plan (the Admin API allows 500/hour). */
+export const MAX_LOOKUPS = 200;
+
+/**
+ * Resolve every URL of our cloud that the prefix listing does not name, by
+ * public_id, one Admin API read each (cached, so `.mp4` and `.mov` of one id
+ * cost one lookup). Candidates are tried in `candidatePublicIds` order until
+ * one exists. Ids under `classmoji/slides/` are not looked up — the listing is
+ * complete there, so an unlisted one is gone. A lookup that errors is recorded
+ * as the reason and never fails the plan.
+ */
+export async function resolveUnlisted(
+  deps: Pick<PlanReadDeps, 'cloudName' | 'lookupCloudinaryAsset'>,
+  listing: CloudinaryAsset[],
+  scanned: ScannedDeck[]
+): Promise<{ found: CloudinaryAsset[]; unresolved: Map<string, string>; lookups: number }> {
+  const known = new Set(listing.map(asset => asset.publicId));
+  const results = new Map<string, CloudinaryAsset | string>();
+  const unresolved = new Map<string, string>();
+  let lookups = 0;
+
+  const lookup = async (id: string): Promise<CloudinaryAsset | string> => {
+    const cached = results.get(id);
+    if (cached !== undefined) return cached;
+    let result: CloudinaryAsset | string;
+    if (id.startsWith(CLOUDINARY_PREFIX)) {
+      result = 'not in the classmoji/slides/ listing (deleted from Cloudinary)';
+    } else if (lookups >= MAX_LOOKUPS) {
+      result = `not looked up: over ${MAX_LOOKUPS} lookups in one plan`;
+    } else {
+      lookups++;
+      try {
+        result =
+          (await deps.lookupCloudinaryAsset(id)) ?? 'no Cloudinary video with this public_id';
+      } catch (error) {
+        result = `lookup failed: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+    results.set(id, result);
+    return result;
+  };
+
+  for (const { read } of scanned) {
+    for (const file of [...read.files, ...read.previewFiles]) {
+      for (const candidate of findCloudinaryCandidates(file.text, deps.cloudName)) {
+        const ref = resolveCandidate(candidate, known);
+        if (ref.kind !== 'unknown') continue;
+        const ids = candidatePublicIds(candidate);
+        let firstReason: string | null = null;
+        let hit: CloudinaryAsset | null = null;
+        for (const id of ids) {
+          const result = await lookup(id);
+          if (typeof result !== 'string') {
+            hit = result;
+            break;
+          }
+          firstReason ??= result;
+        }
+        if (hit) {
+          known.add(hit.publicId);
+        } else if (ref.guess) {
+          unresolved.set(ref.guess, firstReason ?? 'no Cloudinary video with this public_id');
+        }
+      }
+    }
+  }
+
+  const found = [...results.values()].filter(
+    (result): result is CloudinaryAsset => typeof result !== 'string'
+  );
+  return { found, unresolved, lookups };
 }
 
 /**
@@ -487,10 +607,20 @@ export async function planMigration(
     return { deck, read };
   });
 
+  const unlisted = await resolveUnlisted(deps, assets, scanned);
+  log('Looked up unlisted Cloudinary URLs', {
+    lookups: unlisted.lookups,
+    found: unlisted.found.length,
+    unresolved: unlisted.unresolved.size,
+  });
+
   return buildPlan({
     cloudName: deps.cloudName,
     proQuotaBytes: deps.proQuotaBytes,
     assets,
+    lookedUp: unlisted.found,
+    unresolved: unlisted.unresolved,
+    lookups: unlisted.lookups,
     scanned,
     classrooms,
     limit: opts.limit,

@@ -12,6 +12,7 @@ import {
   parseCloudinaryUrl,
   parseUploadPath,
   rewriteText,
+  candidatePublicIds,
   scanText,
 } from '../cloudinaryUrls.ts';
 
@@ -145,6 +146,40 @@ describe('scanText', () => {
 
   it('ignores other clouds entirely', () => {
     expect(scanText(SDK_RANDOM.replace(CLOUD, 'demo'), CLOUD, KNOWN)).toEqual([]);
+  });
+});
+
+describe('the extension is a delivery format, not part of the public_id', () => {
+  const TEAM = 'cs52-projects/team-a';
+  const mp4 = `https://res.cloudinary.com/${CLOUD}/video/upload/q_auto/v1712345678/${TEAM}.mp4`;
+  const mov = `https://res.cloudinary.com/${CLOUD}/video/upload/v1712345678/${TEAM}.mov`;
+
+  it('offers the id without the extension first, then with it, deduplicated', () => {
+    expect(candidatePublicIds({ raw: mp4 })).toEqual([TEAM, `${TEAM}.mp4`]);
+    expect(candidatePublicIds({ raw: `${mov}?_a=x` })).toEqual([TEAM, `${TEAM}.mov`]);
+    expect(candidatePublicIds({ raw: SDK_RANDOM })).toEqual([RANDOM_ID]);
+  });
+
+  it('maps .mp4 and .mov of one public_id to one asset and rewrites both', () => {
+    const known = new Set([TEAM]);
+    const text = `<video src="${mp4}"></video><video src="${mov}"></video>`;
+    expect(
+      scanText(text, CLOUD, known).map(ref => [ref.kind, 'publicId' in ref && ref.publicId])
+    ).toEqual([
+      ['video', TEAM],
+      ['video', TEAM],
+    ]);
+    const out = rewriteText(text, CLOUD, known, new Map([[TEAM, 'media://m1']]));
+    expect(out).toEqual({
+      text: '<video src="media://m1"></video><video src="media://m1"></video>',
+      replaced: 2,
+    });
+  });
+
+  it('prefers a public_id that itself ends in the extension only when that is the known one', () => {
+    const dotted = new Set([`${TEAM}.mp4`]);
+    const [ref] = scanText(`<video src="${mp4}">`, CLOUD, dotted);
+    expect(ref).toMatchObject({ kind: 'video', publicId: `${TEAM}.mp4` });
   });
 });
 

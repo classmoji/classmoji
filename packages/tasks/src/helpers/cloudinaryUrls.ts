@@ -14,8 +14,11 @@
  * SDK leaves `'()*!~.` raw), and `?_a=` varies by SDK version. People can also
  * paste other forms of the same asset — another transformation, the real
  * `v{version}`, an extension, `http:` — so the match accepts any of them and
- * resolves each one against the Admin API listing rather than trusting a
- * pattern alone.
+ * resolves each one against public_ids Cloudinary actually has (the
+ * `classmoji/slides/` listing, plus hand-uploaded videos elsewhere in our cloud
+ * looked up one by one — plan §13.5) rather than trusting a pattern alone. An
+ * extension (`.mp4`, `.mov`) is a delivery format, so both forms of one id are
+ * one asset.
  *
  * ## Why resolution is against the listing
  *
@@ -190,28 +193,16 @@ export type ResolvedReference =
     };
 
 /**
- * Cut a candidate back until a prefix names a listed public_id.
- *
- * The full candidate first (query and fragment included), then the path alone,
- * then the path cut at each ambiguous character from the right. For each, the
- * stripped public_id and the with-extension form are both tried.
+ * Cut a candidate back until a prefix names a known public_id (`attemptsOf`).
+ * For each attempt, the public_id without the URL's extension is tried first,
+ * then with it.
  */
 export function resolveCandidate(
   candidate: UrlCandidate,
   known: ReadonlySet<string>
 ): ResolvedReference {
   const { raw, index, context } = candidate;
-  const queryAt = raw.search(/[?#]/);
-  const pathOnly = queryAt === -1 ? raw : raw.slice(0, queryAt);
-  const uploadAt = pathOnly.toLowerCase().indexOf('/video/upload/') + '/video/upload/'.length;
-
-  const tries: string[] = [raw];
-  if (pathOnly !== raw) tries.push(pathOnly);
-  for (let at = pathOnly.length - 1; at > uploadAt; at--) {
-    if (AMBIGUOUS_TAIL.has(pathOnly[at]!)) tries.push(pathOnly.slice(0, at));
-  }
-
-  for (const attempt of tries) {
+  for (const attempt of attemptsOf(raw)) {
     const parsed = parseUploadPath(afterUploadOf(attempt));
     if (!parsed) continue;
     const id = known.has(parsed.publicId)
@@ -225,8 +216,52 @@ export function resolveCandidate(
     const still = id === parsed.publicId && parsed.still;
     return { kind: still ? 'still' : 'video', raw: attempt, index, context, publicId: id };
   }
-  const guess = parseUploadPath(afterUploadOf(pathOnly));
+  const guess = parseUploadPath(afterUploadOf(pathOf(raw)));
   return { kind: 'unknown', raw, index, context, guess: guess?.publicId ?? null };
+}
+
+function pathOf(raw: string): string {
+  const queryAt = raw.search(/[?#]/);
+  return queryAt === -1 ? raw : raw.slice(0, queryAt);
+}
+
+/**
+ * The prefixes `resolveCandidate` tries, longest first: the full candidate
+ * (query and fragment included), the path alone, then the path cut at each
+ * ambiguous character from the right.
+ */
+function attemptsOf(raw: string): string[] {
+  const pathOnly = pathOf(raw);
+  const uploadAt = pathOnly.toLowerCase().indexOf('/video/upload/') + '/video/upload/'.length;
+  const tries: string[] = [raw];
+  if (pathOnly !== raw) tries.push(pathOnly);
+  for (let at = pathOnly.length - 1; at > uploadAt; at--) {
+    if (AMBIGUOUS_TAIL.has(pathOnly[at]!)) tries.push(pathOnly.slice(0, at));
+  }
+  return tries;
+}
+
+/**
+ * The public_ids a candidate could name, in the order `resolveCandidate` would
+ * accept them: for each attempt, the id without the URL's extension (`.mp4`
+ * and `.mov` are delivery formats of ONE public_id), then the id with it (a
+ * public_id may itself contain a dot). Deduplicated. This is what an
+ * unlisted URL is looked up by, one at a time, until one exists.
+ */
+export function candidatePublicIds(candidate: Pick<UrlCandidate, 'raw'>): string[] {
+  const out: string[] = [];
+  const full = parseUploadPath(afterUploadOf(pathOf(candidate.raw)));
+  if (!full) return out;
+  for (const attempt of attemptsOf(candidate.raw)) {
+    const parsed = parseUploadPath(afterUploadOf(attempt));
+    // A cut inside the transformation (`f_auto,q_auto` → `f_auto`) is not a
+    // shorter tail of the same id; only cuts within the public_id are.
+    if (!parsed || !full.publicIdWithExt.startsWith(parsed.publicId)) continue;
+    for (const id of [parsed.publicId, parsed.publicIdWithExt]) {
+      if (!out.includes(id)) out.push(id);
+    }
+  }
+  return out;
 }
 
 /** Every Cloudinary reference of `cloudName` in `text`, resolved. */

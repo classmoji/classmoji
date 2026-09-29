@@ -6,6 +6,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  MAX_LOOKUPS,
   buildPlan,
   planMigration,
   type ClassroomFacts,
@@ -222,6 +223,8 @@ describe('buildPlan', () => {
       workItems: 3,
       bytesToCopy: 400,
       overQuotaClassrooms: 1,
+      otherFolderAssets: 0,
+      lookups: 0,
       videoReferences: 4,
       backgroundVideoReferences: 2,
       otherReferences: 2,
@@ -251,6 +254,7 @@ describe('planMigration', () => {
       cloudName: CLOUD,
       proQuotaBytes: 10 * GIB,
       listCloudinaryAssets: vi.fn(async () => input.assets),
+      lookupCloudinaryAsset: vi.fn(async () => null),
       listDecks: vi.fn(async () => input.scanned.map(s => s.deck)),
       classroomFacts: vi.fn(async () => input.classrooms),
       readDeck: vi.fn(async (d: DeckRecord) => {
@@ -274,5 +278,110 @@ describe('planMigration', () => {
   it('passes limit through', async () => {
     const plan = await planMigration(readDeps(), { limit: 2 });
     expect(plan.work).toHaveLength(2);
+  });
+});
+
+describe('videos outside classmoji/slides/ (plan §13.5)', () => {
+  const HOST = `https://res.cloudinary.com/${CLOUD}/video/upload`;
+  const TEAM = 'cs52-projects/team-a';
+  const team = { ...asset(TEAM, 5000), format: 'mov' };
+
+  function deps(deckText: string, lookup: (id: string) => Promise<CloudinaryAsset | null>) {
+    const d = deck('welcome', 'room-1', 'alice');
+    return {
+      cloudName: CLOUD,
+      proQuotaBytes: 10 * GIB,
+      listCloudinaryAssets: async () => [asset(A, 100)],
+      lookupCloudinaryAsset: vi.fn(lookup),
+      listDecks: async () => [d],
+      classroomFacts: async () => [facts('room-1')],
+      readDeck: async () => ({
+        files: files('welcome', deckText),
+        previewFiles: [],
+        previewBranch: null,
+        unscanned: null,
+      }),
+      now: () => new Date('2026-09-27T00:00:00.000Z'),
+    } satisfies PlanReadDeps;
+  }
+
+  const text = JSON.stringify({
+    slides: [
+      { src: `${HOST}/q_auto/v1712345678/${TEAM}.mp4` },
+      { src: `${HOST}/v1712345678/${TEAM}.mov` },
+      { poster: `${HOST}/so_1/${TEAM}.jpg` },
+      { src: `${HOST}/v1/cs52-projects/missing.mp4` },
+      { src: `${HOST}/v1/cs52-projects/boom.mp4` },
+      { src: `${HOST}/v1/classmoji/slides/zz/gone` },
+      { src: url(A) },
+    ],
+  });
+  const lookup = async (id: string) => {
+    if (id === TEAM) return team;
+    if (id.startsWith('cs52-projects/boom')) throw new Error('Cloudinary lookup failed: HTTP 500');
+    return null;
+  };
+
+  it('resolves an unlisted public_id once and makes it an other-folder asset', async () => {
+    const d = deps(text, lookup);
+    const plan = await planMigration(d);
+    const other = plan.assets.find(a => a.publicId === TEAM);
+    expect(other).toMatchObject({
+      source: 'other-folder',
+      bytes: 5000,
+      format: 'mov',
+      secureUrl: team.secureUrl,
+      unreferenced: false,
+      classroomIds: ['room-1'],
+    });
+    // .mp4 and .mov are two delivery formats of ONE asset: both references count.
+    expect(other?.referencedBy).toEqual([
+      {
+        slideId: 'welcome',
+        classroomId: 'room-1',
+        path: 'slides/welcome/deck.json',
+        count: 2,
+        background: 0,
+      },
+    ]);
+    expect(plan.assets.find(a => a.publicId === A)?.source).toBe('classmoji-folder');
+    expect(plan.work.map(w => w.publicId)).toEqual([A, TEAM]);
+    const calls = d.lookupCloudinaryAsset.mock.calls.map(c => c[0]);
+    expect(calls.filter(id => id === TEAM)).toHaveLength(1);
+    // The listing is complete under the prefix: an unlisted id there is not looked up.
+    expect(calls.some(id => id.startsWith('classmoji/slides/'))).toBe(false);
+    expect(plan.totals).toMatchObject({ otherFolderAssets: 1, lookups: calls.length });
+  });
+
+  it('keeps stills reported and only unfindable ids in otherReferences, each with a reason', async () => {
+    const plan = await planMigration(deps(text, lookup));
+    expect(plan.otherReferences.map(r => [r.kind, r.publicId, r.reason])).toEqual([
+      ['still', TEAM, 'a still frame of the video, not the video; not rewritten'],
+      ['unknown', 'cs52-projects/missing', 'no Cloudinary video with this public_id'],
+      ['unknown', 'cs52-projects/boom', 'lookup failed: Cloudinary lookup failed: HTTP 500'],
+      [
+        'unknown',
+        'classmoji/slides/zz/gone',
+        'not in the classmoji/slides/ listing (deleted from Cloudinary)',
+      ],
+    ]);
+  });
+
+  it('does not add an asset only a still frame points at', async () => {
+    const plan = await planMigration(
+      deps(JSON.stringify({ poster: `${HOST}/so_1/${TEAM}.jpg` }), lookup)
+    );
+    expect(plan.assets.map(a => a.publicId)).toEqual([A]);
+    expect(plan.otherReferences.map(r => r.kind)).toEqual(['still']);
+  });
+
+  it('caps lookups per plan and says so', async () => {
+    const many = JSON.stringify(
+      Array.from({ length: MAX_LOOKUPS + 5 }, (_, i) => `${HOST}/v1/other/v${i}`)
+    );
+    const d = deps(many, async () => null);
+    const plan = await planMigration(d);
+    expect(d.lookupCloudinaryAsset).toHaveBeenCalledTimes(MAX_LOOKUPS);
+    expect(plan.otherReferences.at(-1)?.reason).toMatch(/not looked up: over 200 lookups/);
   });
 });
