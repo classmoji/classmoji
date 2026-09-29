@@ -13,21 +13,36 @@ export const CLASSROOM_SETTINGS_SELECT = {
   updated_at: true,
 } as const satisfies Prisma.ClassroomSettingsSelect;
 
-// The Prisma include shape used in root.tsx loader for User queries
-type UserInclude = {
-  include: {
-    classroom_memberships: {
-      include: {
-        classroom: {
-          include: {
-            git_organization: true;
-            settings: { select: typeof CLASSROOM_SETTINGS_SELECT };
-          };
-        };
-      };
-    };
-  };
-};
+// Git-organization projection for the root loader. The client reads `login`
+// (links to the org on the git host); the loader turns `provider_id` into the
+// org avatar.
+export const ROOT_GIT_ORGANIZATION_SELECT = {
+  id: true,
+  provider: true,
+  provider_id: true,
+  login: true,
+} as const satisfies Prisma.GitOrganizationSelect;
+
+// Membership projection for the root loader: what the client reads of a
+// membership, its `id` and `role`, plus its classroom.
+export const ROOT_MEMBERSHIP_SELECT = {
+  id: true,
+  role: true,
+  classroom: {
+    include: {
+      git_organization: { select: ROOT_GIT_ORGANIZATION_SELECT },
+      settings: { select: CLASSROOM_SETTINGS_SELECT },
+    },
+  },
+} as const satisfies Prisma.ClassroomMembershipSelect;
+
+// The Prisma include used by every root.tsx loader User query. One definition
+// so the three lookups and the types below cannot drift apart.
+export const ROOT_USER_INCLUDE = {
+  classroom_memberships: { select: ROOT_MEMBERSHIP_SELECT },
+} as const satisfies Prisma.UserInclude;
+
+type UserInclude = { include: typeof ROOT_USER_INCLUDE };
 
 // Base user from Prisma with classroom memberships included
 export type UserWithMemberships = Prisma.UserGetPayload<UserInclude>;
@@ -42,7 +57,7 @@ export type ClassroomSettingsSubset = NonNullable<ClassroomWithSettings['setting
 // A single raw membership from the Prisma include
 type RawMembership = UserWithMemberships['classroom_memberships'][number];
 
-// The mapped membership shape produced by root.tsx loader (lines 233-248)
+// The mapped membership shape produced by the root.tsx loader.
 // Adds an `organization` property with classroom fields + avatar_url + login alias
 export interface MembershipOrganization extends ClassroomWithSettings {
   login: string;
