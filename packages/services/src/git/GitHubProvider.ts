@@ -46,6 +46,65 @@ const ImmediateOctokit = Octokit.defaults({
 });
 
 /**
+ * Longest wait, in seconds, the throttling plugin may sleep out on a WRITE
+ * before retrying it itself.
+ */
+export const THROTTLE_MAX_WRITE_RETRY_AFTER_S = 60;
+
+type ThrottleHandler = (
+  retryAfter: number,
+  options: { method?: string; url?: string; request?: { retryCount?: number } },
+  octokit: { log: { warn: (message: string) => void; info: (message: string) => void } },
+  retryCount?: number
+) => boolean;
+
+/**
+ * Whether the throttling plugin should wait `retryAfter` seconds and retry a
+ * request GitHub refused with a 403 rate limit (plugin-throttling 8.x calls
+ * these hooks for 403s only; a 429 goes to the retry plugin instead).
+ *
+ * The umbrella's own hooks retry once, however long GitHub asks for — on a
+ * secondary limit that can be 300 s, on a primary limit up to an hour, all of
+ * it asleep inside a user's request. Writes are capped: retried once, and only
+ * when the wait is at most `THROTTLE_MAX_WRITE_RETRY_AFTER_S`. A longer wait
+ * surfaces the 403 to the caller at once: `uploadBatch` has its own bounded
+ * retry (which throws rather than wait past 120 s), and any other caller gets
+ * the error instead of a stalled request. Reads (GET/HEAD) keep the umbrella's behaviour: retried
+ * once, whatever the wait. GraphQL is a POST and so counts as a write, as it
+ * does in the plugin's own write limiter.
+ */
+const shouldRetryThrottled =
+  (kind: string): ThrottleHandler =>
+  (retryAfter, options, octokit, retryCount) => {
+    octokit.log.warn(`${kind} for request ${options.method} ${options.url}`);
+    const attempts = retryCount ?? options.request?.retryCount ?? 0;
+    if (attempts >= 1) return false;
+    const isRead = options.method === 'GET' || options.method === 'HEAD';
+    if (!isRead && retryAfter > THROTTLE_MAX_WRITE_RETRY_AFTER_S) return false;
+    octokit.log.info(`Retrying after ${retryAfter} seconds!`);
+    return true;
+  };
+
+/** The throttling hooks `CappedOctokit` uses. Exported for tests. */
+export const throttleHandlers: {
+  onRateLimit: ThrottleHandler;
+  onSecondaryRateLimit: ThrottleHandler;
+} = {
+  onRateLimit: shouldRetryThrottled('Request quota exhausted'),
+  onSecondaryRateLimit: shouldRetryThrottled('SecondaryRateLimit detected'),
+};
+
+/**
+ * The Octokit every ordinary client here is built on: the umbrella's, with its
+ * throttling hooks replaced by `throttleHandlers` so a rate-limited write is
+ * never slept on for more than a minute. `defaults` replaces `throttle`
+ * wholesale, so both hooks must be given.
+ */
+export const CappedOctokit = Octokit.defaults({
+  throttle: throttleHandlers,
+});
+
+/**
  * Generate a GitHub App JWT for direct API authentication
  * Used for simple installation token requests without Octokit overhead
  * @returns {string} JWT token (valid for 10 minutes)
@@ -162,6 +221,8 @@ export class GitHubProvider extends GitProvider {
           clientId: process.env.GITHUB_CLIENT_ID!,
           clientSecret: process.env.GITHUB_CLIENT_SECRET!,
         },
+        // A rate-limited write is not slept on past a minute; see `throttleHandlers`.
+        Octokit: CappedOctokit,
       });
 
       const octokit = await app.getInstallationOctokit(Number(this.installationId));
@@ -401,7 +462,7 @@ export class GitHubProvider extends GitProvider {
    * @returns {Promise<Object>} GitHub user data
    */
   async getCurrentUser(token: string): Promise<any> {
-    const octokit = new Octokit({ auth: token });
+    const octokit = new CappedOctokit({ auth: token });
     const { data } = await octokit.request('GET /user');
     return data;
   }
@@ -1833,7 +1894,7 @@ export class GitHubProvider extends GitProvider {
    * @returns {Octokit}
    */
   static getUserOctokit(token: string): Octokit {
-    return new Octokit({ auth: token });
+    return new CappedOctokit({ auth: token });
   }
 
   /**

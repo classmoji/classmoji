@@ -17,14 +17,15 @@
  * (`apps/mcp/src/tools/pageContent.ts:69-82`):
  *   1. `children` is recursed — without it a `columnList` is empty, and so is
  *      every list item nested under another one;
- *   2. `props` are read — 11 of the 21 block types in this app's schema carry
+ *   2. `props` are read — 12 of the 22 block types in this app's schema carry
  *      ALL of their text there and none of it in `content`;
  *   3. blocks are newline-separated, so a heading and the paragraph after it
  *      do not run together.
  *
  * Schema: `apps/pages/app/components/editor/blocks/index.tsx:54-71`
  * (BlockNote 0.46.2 defaults minus audio/video/codeBlock/image, plus
- * `multiColumnSchema.blockSpecs`, plus nine overrides) — 21 distinct types.
+ * `multiColumnSchema.blockSpecs`, plus nine overrides, plus BlockNote's audio
+ * block again) — 22 distinct types.
  *
  * Imports nothing. Takes JSON in, returns text out.
  */
@@ -163,6 +164,7 @@ const PROP_TEXT_KEYS: Record<string, readonly string[]> = {
   file: ['name', 'caption'],
   image: ['caption', 'name'],
   video: ['caption'],
+  audio: ['caption', 'name'],
   terminal: ['code', 'title'],
   profile: ['name', 'title', 'links'],
 };
@@ -182,6 +184,7 @@ export const KNOWN_BLOCK_TYPES = [
   'file',
   'image',
   'video',
+  'audio',
   'divider',
   'embed',
   'columnList',

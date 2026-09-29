@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, useFetcher, useLocation } from 'react-router';
+import { useNavigate, useFetcher, useLocation, data } from 'react-router';
 import { Form, Button, Alert, Modal, Tabs } from 'antd';
 import { FileTextOutlined, UploadOutlined } from '@ant-design/icons';
 import {
@@ -10,7 +10,19 @@ import {
 import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import { processMarkdownImport } from '~/utils/markdownImporter.server';
+import {
+  PAGE_IMPORT_TOO_LARGE_MESSAGE,
+  oversizedImportFileMessage,
+  readPageImportForm,
+} from '~/utils/pageImportBody.server';
 import { wrapHtmlContent } from '~/utils/htmlWrapper';
+import {
+  UPLOAD_BUSY_MESSAGE,
+  UPLOAD_RETRY_AFTER_SECONDS,
+  acquireUploadSlot,
+  releaseUploadSlot,
+} from '@classmoji/utils/upload-concurrency';
+import { batchImportSummary, type BatchImportFailure } from './utils';
 import ImportTab from './ImportTab';
 import CreateBlankTab from './CreateBlankTab';
 import BatchImportTab from './BatchImportTab';
@@ -38,11 +50,24 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   };
 };
 
-export const action = async ({ request, params }: Route.ActionArgs) => {
-  const { class: classSlug } = params;
-  const formData = await request.formData();
-  const intent = formData.get('intent');
+/**
+ * The import takes an upload slot partway through `createPage` — after the
+ * gate, before the body is read — and this gives it back however that ends.
+ */
+export const action = async (args: Route.ActionArgs) => {
+  const slot = { held: false };
+  try {
+    return await createPage(args, slot);
+  } finally {
+    if (slot.held) releaseUploadSlot();
+  }
+};
 
+async function createPage({ request, params }: Route.ActionArgs, slot: { held: boolean }) {
+  const { class: classSlug } = params;
+
+  // The gate first: the classroom is in the URL, so nobody who may not create
+  // pages here gets to send this action a byte.
   const { classroom, userId, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug!,
@@ -51,6 +76,22 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     attemptedAction: 'create_page',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+
+  // One slot per import in flight: the body cap bounds one import, this bounds
+  // how many this process holds at once.
+  if (!acquireUploadSlot()) {
+    return data(
+      { error: UPLOAD_BUSY_MESSAGE },
+      { status: 503, headers: { 'Retry-After': String(UPLOAD_RETRY_AFTER_SECONDS) } }
+    );
+  }
+  slot.held = true;
+
+  const formData = await readPageImportForm(request);
+  if (!formData) {
+    return { error: PAGE_IMPORT_TOO_LARGE_MESSAGE };
+  }
+  const intent = formData.get('intent');
 
   // Use git_organization.login for GitHub API calls, not the classroom slug
   const gitOrgLogin = classroom.git_organization?.login;
@@ -85,6 +126,11 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       if (!markdownFile || typeof markdownFile === 'string') {
         return { error: 'Please select a markdown file to import' };
       }
+
+      // Every image goes to GitHub in one commit with the page — one over the
+      // repository's cap would refuse them all, so it is refused here, by name.
+      const oversized = oversizedImportFileMessage(imageFiles);
+      if (oversized) return { error: oversized };
 
       const markdownText = await markdownFile.text();
       if (!markdownText.trim()) {
@@ -188,12 +234,47 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     console.error('Failed to create page:', error);
     return { error: error instanceof Error ? error.message : 'Failed to create page' };
   }
-};
+}
 
 interface BatchProgress {
   current: number;
   total: number;
-  errors: Array<{ title: string; error: string }>;
+  errors: BatchImportFailure[];
+}
+
+/** A finished batch that left pages out: how many made it, and each that did not. */
+interface BatchResult {
+  total: number;
+  failures: BatchImportFailure[];
+}
+
+/**
+ * Shown in place of the form when a batch finished with failures, so each page
+ * that did not import is named with the reason the server gave — the pages
+ * that did import are already created, and "2 failed" alone leaves nothing to
+ * act on.
+ */
+function BatchImportFailures({ result, onDone }: { result: BatchResult; onDone: () => void }) {
+  return (
+    <div>
+      <div className="text-sm font-semibold text-ink-0">
+        {batchImportSummary(result.total, result.failures)}
+      </div>
+      <ul className="mt-3 rounded-lg bg-red-50 dark:bg-red-950/30 ring-1 ring-red-200 dark:ring-red-900/60 divide-y divide-red-200 dark:divide-red-900/60">
+        {result.failures.map((failure, index) => (
+          <li key={index} className="px-3 py-2 text-sm">
+            <div className="font-medium text-ink-0">{failure.title}</div>
+            <div className="mt-0.5 break-words text-red-700 dark:text-red-300">{failure.error}</div>
+          </li>
+        ))}
+      </ul>
+      <div className="flex justify-end mt-6">
+        <Button type="primary" onClick={onDone}>
+          Go to pages
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 interface BatchPage {
@@ -224,6 +305,8 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
 
   // Batch import progress state
   const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
+  // A finished batch with failures, listed in place of the form
+  const [batchResult, setBatchResult] = useState<BatchResult | null>(null);
 
   // Get progress-based loading message
   const getProgressMessage = () => {
@@ -260,11 +343,13 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
 
     try {
       // Step 1: Initialize (create repo if needed)
+      // The classroom rides in the query string so the server can authorize
+      // before it reads the body.
+      const batchUrl = `/api/pages/batch?classSlug=${encodeURIComponent(classroom.slug)}`;
       const initFormData = new FormData();
       initFormData.append('intent', 'batch-init');
-      initFormData.append('classSlug', classroom.slug);
 
-      const initResponse = await fetch('/api/pages/batch', {
+      const initResponse = await fetch(batchUrl, {
         method: 'POST',
         body: initFormData,
       });
@@ -277,14 +362,13 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
       }
 
       // Step 2: Import each page sequentially
-      const errors = [];
+      const errors: BatchImportFailure[] = [];
       for (let i = 0; i < batchPages.length; i++) {
         const page = batchPages[i];
         setBatchProgress(prev => (prev ? { ...prev, current: i + 1 } : prev));
 
         const formData = new FormData();
         formData.append('intent', 'batch-import-single');
-        formData.append('classSlug', classroom.slug);
         formData.append('title', page.title);
         if (page.repository) formData.append('repository', page.repository);
         if (page.assignmentId) formData.append('assignmentId', page.assignmentId);
@@ -300,7 +384,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
         });
 
         try {
-          const response = await fetch('/api/pages/batch', {
+          const response = await fetch(batchUrl, {
             method: 'POST',
             body: formData,
           });
@@ -321,16 +405,14 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
       setBatchProgress(null);
 
       if (errors.length > 0) {
-        callout.show({
-          variant: 'error',
-          title: `Imported ${total - errors.length} of ${total} pages. ${errors.length} failed.`,
-        });
-      } else {
-        callout.show({
-          variant: 'success',
-          title: `Successfully imported ${total} page${total !== 1 ? 's' : ''}!`,
-        });
+        // Stay here and name each page that did not import, with its reason.
+        setBatchResult({ total, failures: errors });
+        return;
       }
+      callout.show({
+        variant: 'success',
+        title: `Successfully imported ${total} page${total !== 1 ? 's' : ''}!`,
+      });
       navigate(`/${rolePrefix}/${classroom.slug}/pages`);
     } catch (err: unknown) {
       console.error('Batch import failed:', err);
@@ -435,8 +517,16 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
       </div>
 
       <div className="max-h-[75vh] overflow-y-auto px-6 py-5">
+        {/* A finished batch that left pages out */}
+        {!isCreating && batchResult && (
+          <BatchImportFailures
+            result={batchResult}
+            onDone={() => navigate(`/${rolePrefix}/${classroom.slug}/pages`)}
+          />
+        )}
+
         {/* Show form when not loading */}
-        {!isCreating && (
+        {!isCreating && !batchResult && (
           <>
             {createError && (
               <Alert

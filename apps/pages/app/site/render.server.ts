@@ -8,6 +8,7 @@ import { redactDocumentForViewer } from './redact.server.ts';
 import {
   createViewerSchema,
   type PageLinkResolver,
+  type SiteDownloads,
   type SiteSrcSets,
 } from './viewerSchema.server.ts';
 
@@ -171,6 +172,13 @@ export type RenderSitePageOptions = {
    * guess is how a 400px image downloads a 2560px rendition.
    */
   srcSets?: SiteSrcSets;
+  /**
+   * `{ signedUrl: downloadHref }` — the media files this viewer may download,
+   * keyed like `srcSets` because the blocks hold signed URLs by now. Only a
+   * signed-in member's render has any; an anonymous (cacheable) render has
+   * none and its markup is unchanged.
+   */
+  downloads?: SiteDownloads;
 };
 
 /** BlockNote's own wrappers, in the order the client viewer nests them. */
@@ -194,6 +202,7 @@ export async function renderSitePage({
   resolveLink,
   showSchedule,
   srcSets,
+  downloads,
 }: RenderSitePageOptions): Promise<RenderedPage> {
   // Redact BEFORE serializing: BlockNote writes block props onto the wrapper
   // as data-* attributes, so a hidden page's title would ship in the HTML even
@@ -206,7 +215,11 @@ export async function renderSitePage({
     html = await withServerBlockNoteLock(async () => {
       // The schema is per-render because its link resolution is per-viewer.
       const editor = ServerBlockNoteEditor.create({
-        schema: createViewerSchema(resolveLink, { showSchedule, ...(srcSets ? { srcSets } : {}) }),
+        schema: createViewerSchema(resolveLink, {
+          showSchedule,
+          ...(srcSets ? { srcSets } : {}),
+          ...(downloads ? { downloads } : {}),
+        }),
       });
 
       // `editor.isEditable` is `true` inside ServerBlockNoteEditor and setting

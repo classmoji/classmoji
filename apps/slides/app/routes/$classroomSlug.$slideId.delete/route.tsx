@@ -9,9 +9,8 @@
 import { useState } from 'react';
 import { useLoaderData, useNavigation, Form, redirect, useActionData } from 'react-router';
 import { assertSlideAccess } from '@classmoji/auth/server';
-import { slideService } from '@classmoji/services/slides';
+import { isMediaBackedFileSlide, slideService } from '@classmoji/services/slides';
 import { useUser } from '~/root';
-import { deleteSlideVideos } from '~/utils/cloudinaryService.server';
 import { webappClassUrl } from '~/utils/webappLinks';
 
 export const loader = async ({
@@ -53,6 +52,11 @@ export const loader = async ({
   const contentRepo = slideInfo.slide.classroom?.content_repo;
   const repoName = gitOrgLogin && contentRepo ? contentRepo : null;
   const contentPath = slideInfo.slide.content_path;
+  // A file slide whose document is in the classroom's media was never
+  // committed: nothing is deleted from GitHub, and the document itself stays
+  // in the media library. The confirm copy has to say that, not the opposite.
+  // `media_id` wins over a `source_path`, the same rule the delete itself uses.
+  const mediaBacked = isMediaBackedFileSlide(slideInfo.slide);
 
   return {
     classroomSlug,
@@ -62,13 +66,15 @@ export const loader = async ({
       title: slideInfo.slide.title,
       contentPath,
     },
-    github: repoName
-      ? {
-          repo: repoName,
-          folder: contentPath,
-          files: [`${contentPath}/index.html`, `${contentPath}/images/*`],
-        }
-      : null,
+    mediaBacked,
+    github:
+      repoName && !mediaBacked
+        ? {
+            repo: repoName,
+            folder: contentPath,
+            files: [`${contentPath}/index.html`, `${contentPath}/images/*`],
+          }
+        : null,
     classroom: {
       name: slideInfo.slide.classroom?.name,
       slug: slideInfo.slide.classroom?.slug,
@@ -114,10 +120,9 @@ export const action = async ({
     return { error: 'Slide does not belong to this classroom' };
   }
 
-  // Delete the slide. Cloudinary video cleanup stays app-local — supplied as
-  // the service's callback.
+  // Delete the slide.
   try {
-    await slideService.deleteSlide({ slideId, deleteTheme, onDeleteVideos: deleteSlideVideos });
+    await slideService.deleteSlide({ slideId, deleteTheme });
 
     // Redirect back to webapp slides list, in the acting role's own tree: the
     // webapp's /admin routes are OWNER-only, so a teacher or assistant landing
@@ -137,6 +142,7 @@ export default function DeleteSlidePage() {
     slide,
     classroom,
     github,
+    mediaBacked,
     themeName,
     otherSlidesUsingTheme,
     slideList,
@@ -236,7 +242,9 @@ export default function DeleteSlidePage() {
                     This action cannot be undone
                   </p>
                   <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
-                    The slide content will be permanently removed from both the database and GitHub.
+                    {mediaBacked
+                      ? "The slide will be permanently removed. Its file stays in this class's media."
+                      : 'The slide content will be permanently removed from both the database and GitHub.'}
                   </p>
                 </div>
               </div>

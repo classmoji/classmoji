@@ -1,4 +1,27 @@
 import JSZip from 'jszip';
+import { REPO_REST_MAX_BYTES, repoFileTooLargeMessage } from '@classmoji/utils/repo-limits';
+
+/**
+ * The refusal for the first file over the course repository's per-file cap, or
+ * null when every one fits. The server refuses the same file by the same rule;
+ * this only saves uploading it first.
+ */
+export function oversizedFileMessage(files: File[]): string | null {
+  const oversized = files.find(file => file.size > REPO_REST_MAX_BYTES);
+  return oversized ? repoFileTooLargeMessage(oversized.name) : null;
+}
+
+/** One page a batch import could not create, and the server's reason. */
+export interface BatchImportFailure {
+  title: string;
+  error: string;
+}
+
+/** The line above the list of failures: `Imported 3 of 5 pages.` */
+export function batchImportSummary(total: number, failures: BatchImportFailure[]): string {
+  const imported = total - failures.length;
+  return `Imported ${imported} of ${total} page${total === 1 ? '' : 's'}.`;
+}
 
 /**
  * Extract image references from markdown (client-side)

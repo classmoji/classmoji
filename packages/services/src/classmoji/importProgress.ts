@@ -113,6 +113,12 @@ export interface ImportIdMaps {
   pages?: Record<string, string>;
   slides?: Record<string, string>;
   templates?: Record<string, string>;
+  /**
+   * Source media object id → the copy made in the destination, recorded as
+   * each copy lands. A retried content phase reuses a copy that is still READY
+   * instead of copying the object (and billing the destination) a second time.
+   */
+  media?: Record<string, string>;
 }
 
 export interface ImportProgress {
@@ -312,6 +318,7 @@ const ID_MAP_KINDS: readonly (keyof ImportIdMaps)[] = [
   'pages',
   'slides',
   'templates',
+  'media',
 ];
 
 /**

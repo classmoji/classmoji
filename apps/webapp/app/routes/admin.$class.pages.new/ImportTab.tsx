@@ -13,6 +13,7 @@ import {
   extractZipContents,
   extractImageReferencesClient,
   extractTitleFromMarkdown,
+  oversizedFileMessage,
 } from './utils';
 import type { ImageReference } from './utils';
 
@@ -55,6 +56,12 @@ export default function ImportTab({ form, onFilesChange }: ImportTabProps) {
         /\.(png|jpg|jpeg|gif|svg|webp)$/i.test(f.name)
       );
 
+      const oversizedDrop = oversizedFileMessage(droppedImages);
+      if (oversizedDrop) {
+        setExtractError(oversizedDrop);
+        return;
+      }
+
       if (zipFile) {
         setIsExtracting(true);
         setSourceType('zip');
@@ -64,6 +71,9 @@ export default function ImportTab({ form, onFilesChange }: ImportTabProps) {
             markdownFileName,
             imageFiles: extractedImages,
           } = await extractZipContents(zipFile);
+
+          const oversized = oversizedFileMessage(extractedImages);
+          if (oversized) throw new Error(oversized);
 
           const mdBlob = new Blob([content], { type: 'text/markdown' });
           const newMdFile = new File([mdBlob], markdownFileName ?? 'content.md', {

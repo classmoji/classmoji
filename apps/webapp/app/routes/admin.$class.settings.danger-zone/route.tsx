@@ -324,7 +324,19 @@ const removeClassroomHandler = async (
   }
 
   // The GitHub installation is never touched — multiple classrooms share it.
-  await ClassmojiService.classroom.deleteById(classroom.id);
+  // `deleteById` removes the classroom's stored media first and refuses to
+  // delete the classroom when that fails: with the rows gone nothing would name
+  // the files any more. Same answer as a failed GitHub cleanup — nothing
+  // deleted from the classroom, try again.
+  try {
+    await ClassmojiService.classroom.deleteById(classroom.id);
+  } catch (error: unknown) {
+    console.error('Classroom delete failed:', error);
+    return {
+      action: ActionTypes.REMOVE_CLASSROOM,
+      error: `Classroom NOT deleted: removing it failed (see server logs). Try again.${cleanupNote}`,
+    };
+  }
 
   // Success REDIRECTS instead of returning a payload. Returned data was unreadable
   // by the caller: the shared global fetcher consumes `data` the moment the fetcher

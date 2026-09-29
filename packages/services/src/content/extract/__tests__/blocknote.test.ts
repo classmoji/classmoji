@@ -53,7 +53,7 @@ describe('extractText — blocknote', () => {
     for (const type of KNOWN_BLOCK_TYPES) {
       expect(present, `fixture is missing a ${type} block`).toContain(type);
     }
-    expect(KNOWN_BLOCK_TYPES).toHaveLength(21);
+    expect(KNOWN_BLOCK_TYPES).toHaveLength(22);
   });
 
   it('carries the text out of every block type that has its own words', () => {

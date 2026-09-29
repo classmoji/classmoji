@@ -355,7 +355,9 @@ test.describe('it branches on deliverability, not on the delivery flag', () => {
     expect(ROUTE_SOURCE).toContain(
       'ClassmojiService.contentDelivery.canDeliverContent(slide.classroom)'
     );
-    expect(ROUTE_SOURCE).toContain('await resolveDeckAssetsPublic(generated, gitOrgLogin, repo)');
+    expect(ROUTE_SOURCE).toContain(
+      'await resolveDeckAssetsPublic(generated, gitOrgLogin, repo, slide.classroom_id)'
+    );
     expect(ROUTE_SOURCE).toContain('publicDeckThemeUrls(signedThemeUrls, gitOrgLogin, repo)');
   });
 

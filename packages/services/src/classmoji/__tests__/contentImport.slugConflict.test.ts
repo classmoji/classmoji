@@ -39,11 +39,11 @@ vi.mock('@classmoji/database', () => ({
 const uploadBatch = vi.fn();
 vi.mock('../../content/ContentService.ts', () => ({
   ContentService: {
-    // One file, comfortably under the 1MB gate (getMeta null = size unknown,
-    // which the collector treats as fine). Enough to stage a page.
-    listFolder: vi.fn(async () => [{ type: 'file', path: 'pages/lab-1/index.html' }]),
-    getMeta: vi.fn(async () => null),
-    getContent: vi.fn(async () => ({ content: 'aGk=' })),
+    // One small file, read by the sha its listing carries. Enough to stage a page.
+    listFolder: vi.fn(async () => [
+      { type: 'file', path: 'pages/lab-1/index.html', sha: 'a'.repeat(40), size: 2 },
+    ]),
+    getBlobContent: vi.fn(async () => ({ content: 'aGk=', sha: 'a'.repeat(40) })),
     uploadBatch: (...args: unknown[]) => uploadBatch(...args),
   },
 }));

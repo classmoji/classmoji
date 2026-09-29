@@ -92,7 +92,8 @@ export const loader = async ({
     // visibility rather than the 4h `edit` bucket.
     const html = await resolveDeckAssets(
       contentResult.content,
-      deckDeliveryContext(slide, gitOrgLogin, repo, deckAccessFor('speaker', { canEdit }, slide))
+      deckDeliveryContext(slide, gitOrgLogin, repo, deckAccessFor('speaker', { canEdit }, slide)),
+      { classroomId: slide.classroom_id }
     );
 
     // Parse the HTML to extract just the slides content

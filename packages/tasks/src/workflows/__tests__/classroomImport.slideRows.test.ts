@@ -236,3 +236,74 @@ describe('importSlideRows: the behaviour it already had', () => {
     expect(writer.warnings).toEqual([]);
   });
 });
+
+/**
+ * A FILE slide whose document is in MEDIA has nothing in the pushed tree — its
+ * `media_id` names the source classroom's object. The row must name the COPY
+ * in the target's media, and a slide whose object could not be copied is
+ * skipped and said so: a row naming the source's object downloads nothing.
+ */
+describe('importSlideRows: a document in media', () => {
+  const OLD = '77777777-8888-4999-8aaa-bbbbbbbbbbbb';
+  const NEW = '44444444-4444-4444-8444-444444444444';
+  const inMedia = sourceSlide({
+    id: 'src-media',
+    title: 'Big Lecture',
+    slug: 'big-lecture',
+    content_path: 'slides/big-lecture',
+    kind: 'FILE',
+    source_path: null,
+    source_filename: 'Big Lecture.pdf',
+    source_mime: 'application/pdf',
+    source_size: 90_000_000,
+    media_id: OLD,
+  });
+
+  const withMedia = (
+    writer: ReturnType<typeof makeWriter>,
+    copyObject: () => Promise<unknown>,
+    prepare = vi.fn()
+  ) =>
+    importSlideRows({
+      prisma: prisma as unknown as Args['prisma'],
+      job: job as unknown as Args['job'],
+      writer: writer as unknown as Args['writer'],
+      copied: new Set<string>(),
+      media: {
+        prepare,
+        rewrite: (text: string) => text,
+        copyObject: vi.fn(copyObject) as never,
+      },
+    });
+
+  it('names the copy, although its document is not in the tree', async () => {
+    mocks.slideFindMany.mockResolvedValue([inMedia]);
+    const writer = makeWriter();
+
+    const prepare = vi.fn();
+    await expect(withMedia(writer, async () => NEW, prepare)).resolves.toBe(1);
+    // Proven in one pass up front; the per-slide call only looks it up.
+    expect(prepare).toHaveBeenCalledWith([`media://${OLD}`]);
+    expect(createdRows()[0]).toMatchObject({ kind: 'FILE', media_id: NEW, source_path: null });
+    expect(writer.warnings).toEqual([]);
+  });
+
+  it('skips the slide, warned, when its object could not be copied', async () => {
+    mocks.slideFindMany.mockResolvedValue([inMedia, link]);
+    const writer = makeWriter();
+
+    await expect(withMedia(writer, async () => null)).resolves.toBe(1);
+    expect(createdRows().map(row => row.kind)).toEqual(['LINK']);
+    expect(writer.warnings).toEqual([
+      'slides: skipped "Big Lecture" — its file is in media storage and could not be copied into this class',
+    ]);
+  });
+
+  it('skips it too when the caller has no media copy to offer', async () => {
+    mocks.slideFindMany.mockResolvedValue([inMedia]);
+    const writer = makeWriter();
+
+    await expect(run(writer, new Set<string>())).resolves.toBe(0);
+    expect(writer.warnings).toHaveLength(1);
+  });
+});
