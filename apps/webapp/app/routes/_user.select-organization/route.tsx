@@ -39,6 +39,44 @@ interface SelectOrganizationMembership extends MembershipWithOrganization {
   };
 }
 
+/** A membership as this page sends it to the browser (see toLandingMembership). */
+type LandingMembership = Pick<
+  SelectOrganizationMembership,
+  'id' | 'role' | 'has_accepted_invite' | 'organization'
+> & { pin_order: number | null };
+
+/**
+ * What the landing screen reads of a membership: its id, role, invite state
+ * and pin, and its classroom's own fields with the git organization's id,
+ * provider, login and avatar.
+ */
+const toLandingMembership = (m: SelectOrganizationMembership): LandingMembership => {
+  const {
+    memberships: _otherMemberships,
+    git_organization: gitOrganization,
+    ...classroom
+  } = m.organization as SelectOrganizationMembership['organization'] & {
+    memberships?: unknown;
+    git_organization: MembershipOrganization['git_organization'] & { avatar_url?: string | null };
+  };
+  return {
+    id: m.id,
+    role: m.role,
+    has_accepted_invite: m.has_accepted_invite,
+    pin_order: (m as { pin_order?: number | null }).pin_order ?? null,
+    organization: {
+      ...classroom,
+      git_organization: {
+        id: gitOrganization.id,
+        provider: gitOrganization.provider,
+        provider_id: gitOrganization.provider_id,
+        login: gitOrganization.login,
+        avatar_url: gitOrganization.avatar_url ?? null,
+      },
+    } as SelectOrganizationMembership['organization'],
+  };
+};
+
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const authData = await getAuthSession(request);
 
@@ -161,8 +199,9 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         : null;
 
     return {
-      user,
-      memberships: typedUser.memberships as SelectOrganizationMembership[],
+      memberships: (typedUser.memberships as SelectOrganizationMembership[]).map(
+        toLandingMembership
+      ),
       githubAppName: process.env.GITHUB_APP_NAME,
       notifications,
       unreadCount,
@@ -206,9 +245,9 @@ function formatUpdated(d: Date | string | null | undefined): string {
   return `${years}y ago`;
 }
 
-function buildLandingClasses(memberships: SelectOrganizationMembership[]): LandingClass[] {
+function buildLandingClasses(memberships: LandingMembership[]): LandingClass[] {
   const items = memberships.map(m => {
-    const org = m.organization as SelectOrganizationMembership['organization'] & {
+    const org = m.organization as LandingMembership['organization'] & {
       updated_at?: Date | string | null;
     };
     const orgLogin = org.login;
@@ -221,7 +260,7 @@ function buildLandingClasses(memberships: SelectOrganizationMembership[]): Landi
       org.settings?.updated_at ?? (org as { updated_at?: Date | string | null }).updated_at;
     const createdAt = (org as { created_at?: Date | string | null }).created_at;
     const createdTs = createdAt ? new Date(createdAt as string | Date).getTime() || 0 : 0;
-    const pinOrder = (m as { pin_order?: number | null }).pin_order ?? null;
+    const pinOrder = m.pin_order ?? null;
 
     return {
       landing: {
@@ -328,7 +367,7 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inviteEmailMismatch]);
 
-  const memberList = memberships as SelectOrganizationMembership[];
+  const memberList = memberships as LandingMembership[];
   const classes = useMemo(() => buildLandingClasses(memberList), [memberList]);
 
   if (!user) return null;

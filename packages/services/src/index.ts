@@ -9,6 +9,7 @@ export {
   getEmojiMappingsForAttempt,
   calculatePercentagesFromResults,
   getQuestionResults,
+  getQuestionResultCoverage,
 } from './classmoji/quizAttempt.service.ts';
 
 // Content management for GitHub-backed storage (moved from @classmoji/content;
@@ -203,7 +204,12 @@ export type {
 } from './classmoji/quizSourceMaterial.service.ts';
 // "No such attempt", so routes can answer 404 for that and only that — a query
 // that failed for any other reason has to keep its 500 and its log line.
-export { QuizAttemptNotFoundError } from './classmoji/quizAttempt.service.ts';
+// "Not finished yet": completion was asked for before every question has a
+// recorded result.
+export {
+  QuizAttemptNotFoundError,
+  QuizAttemptIncompleteError,
+} from './classmoji/quizAttempt.service.ts';
 // One builder for the remove_user_from_organization payload, so every caller
 // sends the same fields.
 export { buildRemoveUserPayload } from './classmoji/removeUserPayload.ts';

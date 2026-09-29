@@ -542,7 +542,9 @@ export const loader = async ({
     : null;
 
   return {
-    slide,
+    // What the viewer reads of the slide. The classroom's organization is
+    // `gitOrgLogin` below; the present route carries what presenting needs.
+    slide: { id: slide.id, title: slide.title, classroom_id: slide.classroom_id },
     uploadCapability,
     // The host signed media URLs are minted on, for the editor's diff (see
     // `canonicalMediaUrls`). Editors only, like the capability above.
