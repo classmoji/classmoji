@@ -181,6 +181,31 @@ export interface OtherReference {
   reason: string;
 }
 
+/**
+ * One video reference exactly as the execute path would replace it, for a
+ * human to eyeball: `raw` is the span, `context` shows ~20 characters either
+ * side with the span in `[[…]]` (whitespace collapsed).
+ */
+export interface VideoReference {
+  slideId: string;
+  classroomId: string;
+  path: string;
+  publicId: string;
+  background: boolean;
+  raw: string;
+  context: string;
+}
+
+/** Characters of context either side of a reference in `videoReferences`. */
+export const CONTEXT_CHARS = 20;
+
+export function referenceContext(text: string, index: number, raw: string): string {
+  const flat = (value: string) => value.replace(/\s+/g, ' ');
+  const before = text.slice(Math.max(0, index - CONTEXT_CHARS), index);
+  const after = text.slice(index + raw.length, index + raw.length + CONTEXT_CHARS);
+  return `${flat(before)}[[${raw}]]${flat(after)}`;
+}
+
 export interface PreviewReference {
   slideId: string;
   classroomId: string;
@@ -213,6 +238,8 @@ export interface MigrationPlan {
   work: WorkItem[];
   /** Work items past `limit`, not in `work`. */
   workDeferredByLimit: number;
+  /** Every video reference the execute path would rewrite, with context. */
+  videoReferences: VideoReference[];
   /** Stills and URLs of our cloud that match no listed asset. Never rewritten. */
   otherReferences: OtherReference[];
   /** Preview-branch decks that reference Cloudinary. Scanned, never rewritten. */
@@ -230,6 +257,8 @@ export interface MigrationPlan {
     decksScanned: number;
     decksWithReferences: number;
     decksUnscanned: number;
+    /** Why decks were not scanned, e.g. `{ "no GitHub App installation": 3 }`. */
+    unscannedReasons: Record<string, number>;
     classroomsAffected: number;
     workItems: number;
     bytesToCopy: number;
@@ -287,6 +316,7 @@ export function buildPlan(input: {
   const sites = new Map<string, ReferenceSite[]>();
   const planDecks: PlanDeck[] = [];
   const other: OtherReference[] = [];
+  const videoRefs: VideoReference[] = [];
   const preview: PreviewReference[] = [];
   const unscanned: MigrationPlan['unscannedDecks'] = [];
 
@@ -319,6 +349,17 @@ export function buildPlan(input: {
           background: backgrounds.get(publicId) ?? 0,
         });
         sites.set(publicId, list);
+      }
+      for (const ref of videos) {
+        videoRefs.push({
+          slideId: deck.slideId,
+          classroomId: deck.classroomId,
+          path: file.path,
+          publicId: ref.publicId,
+          background: ref.context === 'background',
+          raw: ref.raw,
+          context: referenceContext(file.text, ref.index, ref.raw),
+        });
       }
       for (const ref of refs) {
         if (ref.kind === 'video') continue;
@@ -466,6 +507,7 @@ export function buildPlan(input: {
     decks: planDecks,
     work,
     workDeferredByLimit: allWork.length - work.length,
+    videoReferences: videoRefs,
     otherReferences: other,
     previewReferences: preview,
     unscannedDecks: unscanned,
@@ -479,6 +521,9 @@ export function buildPlan(input: {
       decksScanned: input.scanned.length - unscanned.length,
       decksWithReferences: planDecks.length,
       decksUnscanned: unscanned.length,
+      unscannedReasons: Object.fromEntries(
+        [...countBy(unscanned, entry => entry.reason)].sort(([a], [b]) => a.localeCompare(b))
+      ),
       classroomsAffected: classrooms.length,
       workItems: allWork.length,
       bytesToCopy: allWork.reduce((total, item) => total + item.bytes, 0),

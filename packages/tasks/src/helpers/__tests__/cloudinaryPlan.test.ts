@@ -219,6 +219,7 @@ describe('buildPlan', () => {
       decksScanned: 3,
       decksWithReferences: 3,
       decksUnscanned: 1,
+      unscannedReasons: { 'no deck.json or index.html': 1 },
       classroomsAffected: 2,
       workItems: 3,
       bytesToCopy: 400,
@@ -230,6 +231,25 @@ describe('buildPlan', () => {
       otherReferences: 2,
       previewBranchesWithReferences: 1,
     });
+  });
+
+  it('lists every video reference with its exact span and context', () => {
+    const plan = buildPlan(fixture());
+    expect(plan.videoReferences).toHaveLength(plan.totals.videoReferences);
+    const html = plan.videoReferences.find(
+      r => r.path === 'slides/d1/index.html' && r.publicId === B
+    );
+    expect(html).toEqual({
+      slideId: 'd1',
+      classroomId: 'room-1',
+      path: 'slides/d1/index.html',
+      publicId: B,
+      background: false,
+      raw: url(B),
+      context: `AOGfm0"><video src="[[${url(B)}]]"></video></section>`,
+    });
+    expect(plan.videoReferences.filter(r => r.background)).toHaveLength(2);
+    expect(plan.assets.every(a => a.format === 'mp4')).toBe(true);
   });
 
   it('lists classrooms whose media cannot render as blocked', () => {
