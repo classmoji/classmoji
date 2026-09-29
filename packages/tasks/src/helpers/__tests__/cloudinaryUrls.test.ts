@@ -183,6 +183,32 @@ describe('the extension is a delivery format, not part of the public_id', () => 
   });
 });
 
+describe('rewriteText stops at the markup after a query or fragment', () => {
+  const map = new Map([[RANDOM_ID, 'media://AAA']]);
+  const base = `https://res.cloudinary.com/${CLOUD}/video/upload/f_auto,q_auto/v1/${RANDOM_ID}`;
+  const rewrite = (text: string) => rewriteText(text, CLOUD, KNOWN, map).text;
+
+  it.each([
+    ['a markdown link', `[watch](${base}?_a=X) and more`, '[watch](media://AAA) and more'],
+    [
+      'a CSS url() with escaped quotes',
+      `url(&quot;${base}?_a=X&quot;)`,
+      'url(&quot;media://AAA&quot;)',
+    ],
+    ['a fragment in parens', `(${base}.mp4#t=10)`, '(media://AAA)'],
+    ['&#39; after a query', `x=&#39;${base}?_a=X&#39;`, 'x=&#39;media://AAA&#39;'],
+    ['&apos; after a fragment', `&apos;${base}#t=1&apos;`, '&apos;media://AAA&apos;'],
+    ['a single-quoted attribute', `<video src='${base}?_a=X'>`, "<video src='media://AAA'>"],
+    ['a query followed by a space', `${base}?_a=X next`, 'media://AAA next'],
+  ])('%s', (_label, input, expected) => {
+    expect(rewrite(input)).toBe(expected);
+  });
+
+  it('keeps &amp; between query parameters inside the URL', () => {
+    expect(rewrite(`<video src="${base}?_a=X&amp;b=2">`)).toBe('<video src="media://AAA">');
+  });
+});
+
 describe('rewriteText', () => {
   const replacements = new Map([[RANDOM_ID, 'media://11111111-2222-5333-8444-555555555555']]);
 

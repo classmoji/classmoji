@@ -54,6 +54,9 @@ const EXTENSION = /\.([A-Za-z0-9]{2,5})$/;
  */
 const AMBIGUOUS_TAIL = new Set(["'", ')', '(', '*', '!', '~', ',', ';', '.', '&']);
 
+/** A negative lookahead: not the start of an HTML-escaped quote. */
+const ESCAPED_QUOTE = '(?!&(?:quot|#34|#39|apos);)';
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -63,9 +66,15 @@ function escapeRegExp(value: string): string {
  * `/video/upload/`, then the path, an optional query and fragment.
  *
  * The path stops at whitespace, quotes, angle brackets, a backslash (a JSON
- * escape), a backtick, `?`, `#`, and a comma that starts another URL. `'` and `)` are allowed in the path — the
- * SDK leaves them raw — and cut back by `resolveCandidate`. The query and the
- * fragment stop at `'` too, because nothing we care about lives there.
+ * escape), a backtick, `?`, `#`, and a comma that starts another URL. `'`, `(`
+ * and `)` are allowed in the path — the SDK leaves them raw — and cut back by
+ * `resolveCandidate`.
+ *
+ * The query and the fragment carry nothing of ours (`?_a=…`, `#t=10`), so they
+ * are strict: they also stop at `'`, `(`, `)`, a comma, and an HTML-escaped
+ * quote (`&quot;` `&#34;` `&#39;` `&apos;`) — otherwise a rewrite would swallow
+ * the markup after the URL (`[watch](URL?_a=x)`, `url(&quot;URL&quot;)`).
+ * `&amp;` between query parameters stays part of the URL.
  */
 export function cloudinaryUrlPattern(cloudName: string): RegExp {
   const cloud = escapeRegExp(cloudName);
@@ -74,7 +83,8 @@ export function cloudinaryUrlPattern(cloudName: string): RegExp {
       // A comma belongs to the path (`f_auto,q_auto`) unless it starts the
       // next source of a comma-separated list (`data-background-video`).
       '/video/upload/(?:[^\\s"<>\\\\?#`,]|,(?!(?:https?:)?//))+' +
-      '(?:\\?[^\\s"\'<>\\\\#`,]*)?(?:#[^\\s"\'<>\\\\`,]*)?',
+      `(?:\\?(?:${ESCAPED_QUOTE}[^\\s"'<>\\\\#\`,()])*)?` +
+      `(?:#(?:${ESCAPED_QUOTE}[^\\s"'<>\\\\\`,()])*)?`,
     'gi'
   );
 }
