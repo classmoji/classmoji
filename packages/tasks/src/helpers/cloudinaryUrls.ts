@@ -82,7 +82,7 @@ export function cloudinaryUrlPattern(cloudName: string): RegExp {
     `(?:https?:)?//(?:res(?:-\\d+)?\\.cloudinary\\.com/${cloud}|${cloud}-res\\.cloudinary\\.com)` +
       // A comma belongs to the path (`f_auto,q_auto`) unless it starts the
       // next source of a comma-separated list (`data-background-video`).
-      '/video/upload/(?:[^\\s"<>\\\\?#`,]|,(?!(?:https?:)?//))+' +
+      `/video/upload/(?:${ESCAPED_QUOTE}[^\\s"<>\\\\?#\`,]|,(?!(?:https?:)?//))+` +
       `(?:\\?(?:${ESCAPED_QUOTE}[^\\s"'<>\\\\#\`,()])*)?` +
       `(?:#(?:${ESCAPED_QUOTE}[^\\s"'<>\\\\\`,()])*)?`,
     'gi'
@@ -237,8 +237,8 @@ function pathOf(raw: string): string {
 
 /**
  * The prefixes `resolveCandidate` tries, longest first: the full candidate
- * (query and fragment included), the path alone, then the path cut at each
- * ambiguous character from the right.
+ * (query and fragment included), the path alone, then the path cut back over
+ * trailing punctuation only (`'` `)` `.` `;` …) — never past a letter or digit.
  */
 function attemptsOf(raw: string): string[] {
   const pathOnly = pathOf(raw);
@@ -246,6 +246,9 @@ function attemptsOf(raw: string): string[] {
   const tries: string[] = [raw];
   if (pathOnly !== raw) tries.push(pathOnly);
   for (let at = pathOnly.length - 1; at > uploadAt; at--) {
+    // Only trailing punctuation is cut: a cut that drops a letter or digit
+    // (`x/y.z.mp4` → `x/y`) would name a shorter, different asset.
+    if (/[A-Za-z0-9]/.test(pathOnly.slice(at))) break;
     if (AMBIGUOUS_TAIL.has(pathOnly[at]!)) tries.push(pathOnly.slice(0, at));
   }
   return tries;

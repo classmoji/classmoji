@@ -241,7 +241,9 @@ export async function executeMigration(
       },
     ])
   );
-  const known = new Set(assets.keys());
+  // The plan's own resolution set, not just its assets: a URL must resolve to
+  // the same public_id here as it did in the reviewed plan.
+  const known = new Set(plan.knownPublicIds);
   const report: ExecuteReport = {
     items: [],
     decks: [],

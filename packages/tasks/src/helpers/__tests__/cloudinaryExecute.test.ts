@@ -328,6 +328,17 @@ describe('executeMigration', () => {
     expect(html).toContain(url(B));
   });
 
+  it('resolves against the plan\u2019s known set, not only its assets', async () => {
+    const w = world();
+    const plan = planFor(w.repo);
+    // B leaves the asset list (say, only a still points at it) but stays known:
+    // execute must still resolve B's URLs to B — and, with no copy, leave them.
+    const trimmed = { ...plan, assets: plan.assets.filter(a => a.publicId !== B) };
+    expect(trimmed.knownPublicIds).toContain(B);
+    await executeMigration(trimmed, fakeDeps(w));
+    expect(w.repo.get('room-1:slides/d1/index.html')!.text).toContain(url(B));
+  });
+
   it('skips a classroom that cannot serve media, leaving its decks alone', async () => {
     const w = world();
     w.canServe.delete('room-2');

@@ -192,6 +192,12 @@ export interface MigrationPlan {
   cloudName: string;
   prefix: string;
   assets: PlanAsset[];
+  /**
+   * Every public_id references were resolved against (the listing plus the
+   * looked-up ids). The execute path resolves against exactly this set, so a
+   * URL means the same asset at execute time as in the reviewed plan.
+   */
+  knownPublicIds: string[];
   classrooms: PlanClassroom[];
   /** Decks with at least one Cloudinary reference on the default branch. */
   decks: PlanDeck[];
@@ -445,6 +451,7 @@ export function buildPlan(input: {
     cloudName,
     prefix: CLOUDINARY_PREFIX,
     assets,
+    knownPublicIds: [...known].sort(),
     classrooms,
     decks: planDecks,
     work,

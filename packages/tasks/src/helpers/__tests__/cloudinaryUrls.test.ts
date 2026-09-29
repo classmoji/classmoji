@@ -209,6 +209,32 @@ describe('rewriteText stops at the markup after a query or fragment', () => {
   });
 });
 
+describe('a cut never drops a letter or digit (L1)', () => {
+  const host = `https://res.cloudinary.com/${CLOUD}/video/upload/v1`;
+
+  it('does not resolve x/y.z.mp4 to a known x/y', () => {
+    const known = new Set(['x/y']);
+    const [ref] = scanText(`<video src="${host}/x/y.z.mp4">`, CLOUD, known);
+    expect(ref).toMatchObject({ kind: 'unknown', guess: 'x/y.z' });
+    expect(
+      rewriteText(`<video src="${host}/x/y.z.mp4">`, CLOUD, known, new Map([['x/y', 'media://Y']]))
+        .replaced
+    ).toBe(0);
+  });
+
+  it('still cuts trailing punctuation', () => {
+    const known = new Set(['x/y']);
+    expect(scanText(`(see ${host}/x/y.mp4).`, CLOUD, known)[0]).toMatchObject({
+      kind: 'video',
+      raw: `${host}/x/y.mp4`,
+    });
+  });
+
+  it('never offers the bare prefix as a lookup candidate', () => {
+    expect(candidatePublicIds({ raw: `${host}/x/y.z.mp4` })).toEqual(['x/y.z', 'x/y.z.mp4']);
+  });
+});
+
 describe('rewriteText', () => {
   const replacements = new Map([[RANDOM_ID, 'media://11111111-2222-5333-8444-555555555555']]);
 
