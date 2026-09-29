@@ -15,13 +15,15 @@
 --
 -- ── NO KEY COLUMN ───────────────────────────────────────────────────────────
 -- R2 keys are derived — `m/{classroom_id}/{id}/{variant}` where the variant is
--- `orig.{ext}`, `web.mp4` or `poster.webp`. The app writes those keys and the
+-- `orig.{ext}`, `web-{hex12}.mp4` or `poster-{hex12}.jpg` (content-derived
+-- names, so a re-encode never overwrites bytes an earlier URL pinned). The app
+-- writes those keys and the
 -- Worker reads them, so the two must agree byte for byte; that agreement lives
 -- in ONE function (`mediaKey()` in @classmoji/content-signing) rather than in a
 -- stored string a migration could drift from. `rendition_key` and `poster_key`
 -- are the exception and are stored, because their PRESENCE is the state the
--- phase-2 job reports: a row with a rendition serves `web.mp4`, one without
--- serves the original.
+-- video job reports: a row with a rendition serves it, one without serves
+-- the original.
 --
 -- ── QUOTA WITHOUT A COUNTER ─────────────────────────────────────────────────
 -- Usage is a SUM over these rows, not a column: `size_bytes` for READY rows

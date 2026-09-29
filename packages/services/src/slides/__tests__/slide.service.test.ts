@@ -424,9 +424,8 @@ describe('deleteSlide', () => {
     getContentMock.mockResolvedValue(null); // no theme by default
   });
 
-  it('deletes the content folder, invokes the video callback, deletes the row, refreshes the manifest', async () => {
-    const onDeleteVideos = vi.fn().mockResolvedValue({ deleted: true });
-    const result = await deleteSlide({ slideId: 'slide-1', onDeleteVideos });
+  it('deletes the content folder, deletes the row, refreshes the manifest', async () => {
+    const result = await deleteSlide({ slideId: 'slide-1' });
 
     expect(deleteFolderMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -435,7 +434,6 @@ describe('deleteSlide', () => {
         path: 'slides/doomed',
       })
     );
-    expect(onDeleteVideos).toHaveBeenCalledWith('slide-1');
     expect(slideDeleteMock).toHaveBeenCalledWith({ where: { id: 'slide-1' } });
     expect(saveManifestMock).toHaveBeenCalledWith('class-1');
     expect(result).toEqual({
@@ -444,11 +442,6 @@ describe('deleteSlide', () => {
       themeDeleted: false,
       otherSlidesUsingTheme: 0,
     });
-  });
-
-  it('works without a video callback (cloudinary stays app-local)', async () => {
-    const result = await deleteSlide({ slideId: 'slide-1' });
-    expect(result.success).toBe(true);
   });
 
   it('deletes the preview branch alongside the content folder (404/422-tolerant)', async () => {

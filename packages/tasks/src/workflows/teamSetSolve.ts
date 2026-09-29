@@ -83,6 +83,7 @@ import {
   solverKillAfterMs,
   useLocalVenvIfUnset,
   type EngineFailureReason,
+  type SolvedProblem,
   type SolverOutput,
 } from '../helpers/teamSetEngine.ts';
 
@@ -120,12 +121,14 @@ async function settlesWithin(promise: Promise<unknown>, ms: number): Promise<boo
 
 /**
  * Write the problem to a private temp file, run the solver on it, and parse
- * the final result line. The temp dir is removed on every path; a failure to
- * remove it is logged and swallowed, so a cleanup hiccup never fails a solve.
+ * the final result line. The problem is written exactly as the run row holds
+ * it, whatever its IR version; the engine refuses a version it doesn't know.
+ * The temp dir is removed on every path; a failure to remove it is logged and
+ * swallowed, so a cleanup hiccup never fails a solve.
  */
 async function runSolver(
   runId: string,
-  problem: { time_limit_s: number },
+  problem: SolvedProblem & { time_limit_s: number },
   signal: AbortSignal | undefined
 ): Promise<SolverOutput> {
   const dir = await mkdtemp(join(tmpdir(), 'team-set-'));
@@ -138,7 +141,7 @@ async function runSolver(
       [problemPath, '--workers', String(TEAM_SET_SOLVER_WORKERS)],
       { timeout: solverKillAfterMs(problem.time_limit_s), ...(signal ? { signal } : {}) }
     );
-    return parseSolverOutput(result.stdout);
+    return parseSolverOutput(result.stdout, problem);
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {
       logger.warn('team-set-solve: temp dir cleanup failed', { runId });
@@ -196,6 +199,8 @@ export const teamSetSolveTask = task({
         core_status: output.core_status,
         engine: output.engine,
         stats: output.stats,
+        // Two-stage (group) problems only: statuses and objectives per stage.
+        ...(output.stages ? { stages: output.stages } : {}),
         // MODEL_INVALID only; names IR entries by index, never an id.
         ...(output.message ? { message: output.message } : {}),
       });

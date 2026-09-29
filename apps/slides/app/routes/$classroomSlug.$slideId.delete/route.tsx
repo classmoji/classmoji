@@ -11,7 +11,6 @@ import { useLoaderData, useNavigation, Form, redirect, useActionData } from 'rea
 import { assertSlideAccess } from '@classmoji/auth/server';
 import { isMediaBackedFileSlide, slideService } from '@classmoji/services/slides';
 import { useUser } from '~/root';
-import { deleteSlideVideos } from '~/utils/cloudinaryService.server';
 import { webappClassUrl } from '~/utils/webappLinks';
 
 export const loader = async ({
@@ -121,10 +120,9 @@ export const action = async ({
     return { error: 'Slide does not belong to this classroom' };
   }
 
-  // Delete the slide. Cloudinary video cleanup stays app-local — supplied as
-  // the service's callback.
+  // Delete the slide.
   try {
-    await slideService.deleteSlide({ slideId, deleteTheme, onDeleteVideos: deleteSlideVideos });
+    await slideService.deleteSlide({ slideId, deleteTheme });
 
     // Redirect back to webapp slides list, in the acting role's own tree: the
     // webapp's /admin routes are OWNER-only, so a teacher or assistant landing

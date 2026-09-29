@@ -20,7 +20,12 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { classifyFormsPath, isFormsPath, isPublicFormsPath } from '../../app/utils/formsPaths.ts';
+import {
+  classifyFormsPath,
+  isFormsPath,
+  isPublicFormsPath,
+  siteFormsBridgePath,
+} from '../../app/utils/formsPaths.ts';
 
 test.describe('classifyFormsPath — outside the subtree', () => {
   test('returns null for paths that are not forms paths', () => {
@@ -78,6 +83,43 @@ test.describe('classifyFormsPath — admin surfaces require a session', () => {
     // becomes anonymous the day it is added.
     expect(classifyFormsPath('/cs52/forms/waitlist/edit/deeper/still')).toBe('admin');
     expect(classifyFormsPath('/cs52/forms/waitlist/verify/extra')).toBe('admin');
+  });
+});
+
+test.describe('classifyFormsPath — the Teams pages are admin', () => {
+  // Team sets hold students' answers and make real teams, so every Teams path
+  // needs a session. They are recognized by the fail-closed rule (any shape
+  // under a form that is not a fill surface is admin), asserted here by name
+  // so a change to that rule cannot quietly exempt them. The status route is a
+  // resource route the root gate never sees; it gates itself.
+  const teamsPaths = [
+    '/demo-class/forms/project-bidding/teams',
+    '/demo-class/forms/project-bidding/teams/project-teams',
+    '/demo-class/forms/project-bidding/teams/project-teams/runs/3',
+    '/demo-class/forms/project-bidding/teams/project-teams/runs/3/compare/2',
+    '/demo-class/forms/project-bidding/teams/project-teams/status',
+    '/demo-class/forms/project-bidding/TEAMS',
+  ];
+
+  for (const path of teamsPaths) {
+    test(`${path} → admin`, () => {
+      expect(classifyFormsPath(path)).toBe('admin');
+      expect(isPublicFormsPath(path)).toBe(false);
+      expect(classifyFormsPath(`${path}.data`)).toBe('admin');
+    });
+  }
+
+  test('a form whose slug is "teams" is still a form', () => {
+    expect(classifyFormsPath('/demo-class/forms/teams')).toBe('public');
+    expect(classifyFormsPath('/demo-class/forms/teams/teams')).toBe('admin');
+  });
+
+  test('a course site does not bridge the Teams pages', () => {
+    // The class-site bridge forwards fill surfaces only; a staff screen reached
+    // from a course site could only bounce the visitor to a login.
+    expect(siteFormsBridgePath('project-bidding/teams')).toBeNull();
+    expect(siteFormsBridgePath('project-bidding/teams/project-teams')).toBeNull();
+    expect(siteFormsBridgePath('project-bidding/teams/project-teams/status')).toBeNull();
   });
 });
 

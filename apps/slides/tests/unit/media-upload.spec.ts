@@ -39,6 +39,7 @@ import {
   warnsWithoutOptimising,
   type UploadCapability,
 } from '../../app/utils/mediaUpload.ts';
+import { canonicalMediaUrls, stripMediaRefs } from '../../app/utils/mediaRefs.ts';
 
 const source = (relative: string) =>
   readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
@@ -520,6 +521,22 @@ test.describe('media sources in the video panel', () => {
     expect(isMediaSource('https://res.cloudinary.com/x/video/upload/a.mp4')).toBe(false);
     expect(isMediaSource('/content/org/repo/slides/a/videos/a.mp4')).toBe(false);
     expect(isMediaSource('')).toBe(false);
+  });
+
+  test('a legacy Cloudinary video URL passes through the editor and read helpers unchanged', () => {
+    // The exact shape the removed Cloudinary upload stored (media plan §13.4).
+    const cloudinary =
+      'https://res.cloudinary.com/democloud/video/upload/f_auto,q_auto/v1/classmoji/slides/' +
+      '6c1f0a52-8f4e-4a4b-9d7e-1b2c3d4e5f60/k3j9x2m1qz8w7v6u5t4s?_a=BAMAOGfm0';
+    const html = `<video src="${cloudinary}" controls></video>`;
+    expect(isMediaSource(cloudinary)).toBe(false);
+    expect(stripMediaRefs(html)).toBe(html);
+    expect(
+      canonicalMediaUrls(html, {
+        host: 'content.classmoji.io',
+        classroomId: '11111111-2222-3333-4444-555555555555',
+      })
+    ).toBe(html);
   });
 });
 

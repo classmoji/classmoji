@@ -5,9 +5,6 @@
  * createSlide choreography (repo ensure → starter deck saveDeck → DB row →
  * manifest refresh), deleteSlide/getSlideDeleteInfo ported from
  * apps/slides/app/utils/slideService.server.ts.
- *
- * Cloudinary stays app-local: deleteSlide accepts an optional onDeleteVideos
- * callback instead of importing the cloudinary service.
  */
 
 import getPrisma from '@classmoji/database';
@@ -613,18 +610,13 @@ async function loadSlideWithClassroom(slideId: string) {
 
 /**
  * Delete a slide and its content from GitHub.
- *
- * Cloudinary video cleanup stays app-local: pass onDeleteVideos to run it
- * (videos live under the cloudinary folder `classmoji/slides/{slideId}/`).
  */
 export async function deleteSlide({
   slideId,
   deleteTheme = false,
-  onDeleteVideos,
 }: {
   slideId: string;
   deleteTheme?: boolean;
-  onDeleteVideos?: (slideId: string) => Promise<unknown>;
 }): Promise<{
   success: boolean;
   themeName: string | null;
@@ -699,15 +691,6 @@ export async function deleteSlide({
       contentPath: slide.content_path,
       context: 'slide deleted',
     });
-  }
-
-  // Cloudinary cleanup via the app-provided callback.
-  if (onDeleteVideos) {
-    try {
-      await onDeleteVideos(slideId);
-    } catch (error: unknown) {
-      console.error('Failed to delete slide videos:', error);
-    }
   }
 
   // Handle shared theme deletion if requested.

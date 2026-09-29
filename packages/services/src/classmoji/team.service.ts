@@ -15,7 +15,12 @@ interface TeamCreatePayload {
    */
   isVisible?: boolean;
   classroomId: string;
-  tag?: unknown;
+  /**
+   * Tags to attach, written in the same create as the team row. Ids must
+   * already be checked against the classroom; an unknown id fails the whole
+   * create.
+   */
+  tagIds?: string[];
 }
 
 interface TeamCreateWithMembershipAndTagPayload {
@@ -27,21 +32,22 @@ interface TeamCreateWithMembershipAndTagPayload {
   tagId: string;
 }
 
+/**
+ * Create a team row. The tags are a nested write, so Prisma inserts the row and
+ * its TeamTag rows in one transaction: either all of them exist or none do.
+ */
 export const create = async (payload: TeamCreatePayload) => {
-  const { providerId, provider, name, slug, isVisible = false, classroomId, tag } = payload;
-  const teamCreateData: unknown = {
+  const { providerId, provider, name, slug, isVisible = false, classroomId, tagIds = [] } = payload;
+  const data: Prisma.TeamUncheckedCreateInput = {
     provider_id: providerId ? String(providerId) : null,
     provider: provider || null,
     name: name,
     slug: slug,
-    tag: tag,
     classroom_id: classroomId,
     is_visible: isVisible,
+    tags: { create: tagIds.map(tag_id => ({ tag_id })) },
   };
-  // TODO: narrow further once legacy team relation writes are aligned with generated Prisma input types.
-  return getPrisma().team.create({
-    data: teamCreateData as Prisma.TeamUncheckedCreateInput,
-  });
+  return getPrisma().team.create({ data });
 };
 
 export const deleteBySlug = async (classroomId: string, slug: string) => {

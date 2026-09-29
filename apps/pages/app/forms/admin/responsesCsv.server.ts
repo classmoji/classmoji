@@ -2,6 +2,7 @@ import type { FormField } from '@classmoji/services/form-contract';
 import { toCsv } from '@classmoji/utils';
 
 import {
+  answerColumnFields,
   formatAnswer,
   innerFieldsOf,
   isDisplayOnly,
@@ -37,6 +38,14 @@ import {
  * Cells go through `@classmoji/utils`' shared `toCsv`, which applies the
  * platform's consistent text-cell handling for spreadsheets. Nothing here
  * formats a cell by hand.
+ *
+ * ── Identity questions ─────────────────────────────────────────────────────
+ * The wide sheet takes the set of hidden field ids as a REQUIRED argument and
+ * drops their columns, header and cells: the export passes every identity
+ * question, always. The responses TABLE never shows them either, and its column
+ * rule (`tableAnswerColumns`) lives here too, beside the export's: the page's
+ * loader computes the columns on the server, and a `.server` module is the only
+ * kind the loader and these unit-tested builders can both import.
  */
 
 /** The response shape both builders read. Matches the loader's row. */
@@ -92,6 +101,26 @@ const leadCells = (response: ExportableResponse) => [
 /** Fields that contribute a column: everything that collects an answer. */
 const answerFields = (fields: FormField[]): FormField[] => fields.filter(f => !isDisplayOnly(f));
 
+/**
+ * The definition minus the given top-level fields. Identity questions are only
+ * ever top level (the contract refuses the flag inside a repeat group), so a
+ * nested field never needs removing.
+ */
+export const withoutFields = (fields: FormField[], ids: ReadonlySet<string>): FormField[] =>
+  ids.size === 0 ? fields : fields.filter(field => !ids.has(field.id));
+
+/**
+ * The responses table's answer columns: `answerColumnFields` over the
+ * definition with every identity question removed. Their answers are shown only
+ * for the one response open in the drawer, never in a column beside the whole
+ * roster.
+ */
+export const tableAnswerColumns = (
+  fields: FormField[],
+  identityIds: ReadonlySet<string>,
+  max: number
+): FormField[] => answerColumnFields(withoutFields(fields, identityIds), max);
+
 /** Does this definition need the two-row header at all? */
 export const hasMatrix = (fields: FormField[]): boolean =>
   answerFields(fields).some(field => field.type === 'matrix');
@@ -136,10 +165,18 @@ function cellFor(field: FormField, value: unknown): string | number {
  * knows how to read this one. The group row is emitted ONLY when a matrix is
  * present: adding a blank first line to every waitlist export would be a cost
  * paid by every form for the sake of the few that need it.
+ *
+ * `hidden` names the fields with no column: the export passes the identity
+ * questions. It is required so a new caller can't forget the mask.
  */
-export function buildWideCsv(fields: FormField[], responses: ExportableResponse[]): string {
-  const columns = answerFields(fields);
-  const twoRow = hasMatrix(fields);
+export function buildWideCsv(
+  fields: FormField[],
+  responses: ExportableResponse[],
+  hidden: ReadonlySet<string>
+): string {
+  const shown = withoutFields(fields, hidden);
+  const columns = answerFields(shown);
+  const twoRow = hasMatrix(shown);
 
   const groupRow: string[] = twoRow ? LEAD_HEADERS.map(() => '') : [];
   const headerRow: string[] = [...LEAD_HEADERS];

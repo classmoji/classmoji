@@ -15,20 +15,26 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
-import { IconCopy, IconListDetails, IconLock, IconPlus } from '@tabler/icons-react';
-import type { FormField } from '@classmoji/services/form-contract';
+import { IconCopy, IconLock, IconPlus } from '@tabler/icons-react';
+import {
+  resolveSharedOptions,
+  type FormField,
+  type FormOption,
+} from '@classmoji/services/form-contract';
 
-import { ClassmojiService } from '~/utils/db.server.ts';
+import { ClassmojiService, prisma } from '~/utils/db.server.ts';
 import { assertFormAdmin, formMutationBlocked } from '~/utils/formAuth.server.ts';
 import FormPreview from '~/components/forms/FormPreview.tsx';
 import { FormHeader } from '~/components/forms/FormCanvas.tsx';
 import { ConfirmDialog } from '~/components/forms/ConfirmDialog.tsx';
 import FieldCard from '~/components/forms/builder/FieldCard.tsx';
 import { BackToClassroom } from '~/components/forms/BackToClassroom.tsx';
+import { FormAdminTabs } from '~/components/forms/FormAdminTabs.tsx';
 import { useCopyLink } from '~/components/forms/useCopyLink.ts';
 import { formsListUrl, publicFormUrlFor } from './adminLinks.server.ts';
 import type { ScopeChoices } from '~/components/forms/builder/FieldConfig.tsx';
 import { FIELD_TYPE_META, makeField } from '~/components/forms/fieldTypes.ts';
+import { QUESTION_PRESETS, type QuestionPreset } from '~/components/forms/presets.ts';
 
 /**
  * The builder: a field LIST on the left, a live preview on the right.
@@ -86,6 +92,26 @@ const toLocalInput = (iso: string): string => {
   );
 };
 
+/**
+ * The list without `removed`. A dropdown that took its options from it
+ * (`options_from`) keeps a copy of them as its own, so no link is left
+ * pointing at a question that is gone and the draft stays savable.
+ */
+const withoutField = (fields: FormField[], removed: FormField): FormField[] =>
+  fields
+    .filter(other => other.id !== removed.id)
+    .map(other =>
+      other.options_from === removed.id
+        ? ({
+            ...other,
+            options_from: undefined,
+            options: ((removed.options as FormOption[] | undefined) ?? []).map(option => ({
+              ...option,
+            })),
+          } as FormField)
+        : other
+    );
+
 /** The same cap the MCP tools put on a description. */
 const DESCRIPTION_MAX = 5000;
 
@@ -116,12 +142,15 @@ export const loader = async ({
   // Team-review scopes. Read here rather than in the component because both
   // lists are classroom-scoped data and the picker must never be able to name a
   // tag or an assignment from another classroom.
-  const [tags, repositories, publicUrlFor] = await Promise.all([
+  const [tags, repositories, publicUrlFor, responsesSubmitted] = await Promise.all([
     ClassmojiService.organizationTag.findByClassroomId(classroom.id),
     ClassmojiService.repository.findByClassroomId(classroom.id),
     // The same URL the list copies, built by the same function, so the two
     // surfaces can never hand out two different addresses for one form.
     publicFormUrlFor(classroom, new URL(request.url).origin, classroomSlug),
+    // The count next to "Responses" in the switcher: submitted only, as the
+    // list counts them.
+    prisma.formResponse.count({ where: { form_id: form.id, submission_state: 'SUBMITTED' } }),
   ]);
 
   const revisions = (form as { revisions?: Array<{ version: number }> }).revisions ?? [];
@@ -134,6 +163,7 @@ export const loader = async ({
     // has a course site to shorten the link onto — and the short link is a
     // different PATH, not just a different host.
     publicUrl: publicUrlFor(form.slug),
+    responsesSubmitted,
     form: {
       id: form.id,
       title: form.title,
@@ -391,6 +421,28 @@ export default function FormBuilder() {
     setExpanded(field.id);
   };
 
+  // Appended as a group, closed: a preset is several questions, and opening
+  // one of them would single it out.
+  const addPreset = (preset: QuestionPreset) => {
+    mutate([...fields, ...preset.fields()]);
+    setExpanded(null);
+  };
+
+  /**
+   * What the preview renders: linked dropdowns carry their source's CURRENT
+   * options, as the save will store them. A draft mid-edit can hold a link the
+   * contract refuses; `resolveSharedOptions` throws on it, and the preview
+   * then shows the list as it stands instead of failing. The save reports the
+   * problem.
+   */
+  const previewFields = useMemo(() => {
+    try {
+      return resolveSharedOptions(fields);
+    } catch {
+      return fields;
+    }
+  }, [fields]);
+
   // One cast, here: a normalized field list is `Record<string, unknown>` by
   // design (its shape is per-type), which no structural JSON type can describe.
   // The action re-parses whatever arrives through the contract anyway, so the
@@ -494,12 +546,20 @@ export default function FormBuilder() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* Always rendered, including on a form that has never been published
-              and has no responses yet. The builder is where staff sit, and the
-              responses page owns its own empty state — gating this on a count
-              would hide the link in precisely the case where someone is
-              wondering whether anything has come in. */}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Edit · Responses · Teams. Responses is always there, including on
+              a form that has never been published and has no responses yet:
+              the builder is where staff sit, and the responses page owns its
+              own empty state — gating the link on a count would hide it in
+              precisely the case where someone is wondering whether anything
+              has come in. */}
+          <FormAdminTabs
+            classroomSlug={data.classroomSlug}
+            formSlug={data.form.slug}
+            access={access}
+            active="edit"
+            responses={data.responsesSubmitted}
+          />
           {/* The link a respondent gets — the SHORT one on a classroom that has
               a course site. The builder is where a form is finished, and the
               instructor's next move after publishing it is to send it to
@@ -513,13 +573,6 @@ export default function FormBuilder() {
           >
             <IconCopy size={16} /> {copiedKey ? 'Copied' : 'Copy link'}
           </button>
-          <Link
-            to={`/${data.classroomSlug}/forms/${data.form.slug}/responses`}
-            title="See the responses collected by this form"
-            className="flex items-center gap-1.5 rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:border-gray-400 hover:text-gray-900 dark:border-gray-600 dark:text-gray-200 dark:hover:border-gray-500 dark:hover:text-white"
-          >
-            <IconListDetails size={16} /> Responses
-          </Link>
           {isDraft ? (
             <>
               <button
@@ -745,7 +798,8 @@ export default function FormBuilder() {
                         )
                       )
                     }
-                    onRemove={() => mutate(fields.filter(other => other.id !== field.id))}
+                    siblings={fields}
+                    onRemove={() => mutate(withoutField(fields, field))}
                   />
                 ))}
               </div>
@@ -793,6 +847,40 @@ export default function FormBuilder() {
             </div>
             <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{paletteNote}</p>
           </div>
+
+          <div className="mt-4">
+            <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+              Add a preset
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {QUESTION_PRESETS.map(preset => {
+                // Locked on the same rule as the palette: a preset with a
+                // roster field can't be saved on a PUBLIC form.
+                const locked = preset.requiresClassroom && access === 'PUBLIC';
+                return (
+                  <button
+                    key={preset.key}
+                    type="button"
+                    disabled={locked}
+                    onClick={() => addPreset(preset)}
+                    title={
+                      locked
+                        ? `${preset.label} reads the roster, which only a classroom form can do.`
+                        : preset.hint
+                    }
+                    className={`flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs ${
+                      locked
+                        ? 'cursor-not-allowed border-gray-200 text-gray-300 dark:border-gray-700 dark:text-gray-600'
+                        : 'border-gray-200 text-gray-700 hover:border-gray-400 dark:border-gray-700 dark:text-gray-200'
+                    }`}
+                  >
+                    {locked ? <IconLock size={11} /> : <IconPlus size={11} />}
+                    {preset.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
 
         <aside className="lg:sticky lg:top-6 lg:self-start">
@@ -803,7 +891,7 @@ export default function FormBuilder() {
             {/* The fill page's own header, fed the unsaved values, so the
                 preview opens with what a respondent reads first. */}
             <FormHeader title={title} description={description.trim() || null} as="h2" />
-            <FormPreview fields={fields} />
+            <FormPreview fields={previewFields} />
           </div>
           <p className="mt-2 text-xs text-gray-400">
             An approximation — the controls here do nothing. Open the form itself to fill it in.

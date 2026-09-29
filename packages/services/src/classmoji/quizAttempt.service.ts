@@ -841,7 +841,7 @@ const AGENT_FAILURE_REPLY = "That reply couldn't be finished. Please send your m
  * Older API_ERROR rows hold lines that describe the upstream failure ("the AI
  * service is temporarily busy"), so they read as the fixed line.
  */
-const STUDENT_FACING_AGENT_CODES = ['BUDGET_EXCEEDED'];
+const STUDENT_FACING_AGENT_CODES = ['BUDGET_EXCEEDED', 'turn_in_progress'];
 
 type TranscriptFields = { content: string; metadata: Prisma.JsonValue | null };
 
