@@ -2455,8 +2455,8 @@ const COMPARISON = {
   moved: [
     {
       user: { user_id: AVERY, name: 'Avery Quill' },
-      from: { option: { id: 'opt-1', label: 'Ledger' }, team_n: 1, rank: 1 },
-      to: { option: { id: 'opt-2', label: null }, team_n: 2, rank: 2 },
+      from: { option: { id: 'opt-1', label: 'Ledger' }, team_n: 1, rank: 1, responded: true },
+      to: { option: { id: 'opt-2', label: null }, team_n: 2, rank: 2, responded: true },
       pin: { pin_id: 'p1', kind: 'on_option', reason: 'Asked to move' },
       requests: [
         {
@@ -2551,8 +2551,8 @@ describe('form_teams_get — compare_with', () => {
       moved: [
         {
           user: { user_id: AVERY, name: null },
-          from: { option: null, team_n: 1, rank: null },
-          to: { option: null, team_n: 3, rank: null },
+          from: { option: null, team_n: 1, rank: null, responded: true },
+          to: { option: null, team_n: 3, rank: null, responded: false },
           requests: [],
         },
       ],
@@ -2568,6 +2568,35 @@ describe('form_teams_get — compare_with', () => {
     expect(payload.comparison.moved_count).toBe(1);
     expect(JSON.stringify(payload)).not.toContain(AVERY);
     expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('a seat reads "not ranked" for who answered, "no answer" for who did not', async () => {
+    const ledger = { id: 'opt-1', label: 'Ledger' };
+    mocks.compareRuns.mockResolvedValue({
+      ...COMPARISON,
+      moved: [
+        {
+          user: { user_id: AVERY, name: 'Avery Quill' },
+          from: { option: ledger, team_n: 1, rank: null, responded: false },
+          to: { option: ledger, team_n: 2, rank: null, responded: true },
+          requests: [],
+        },
+        {
+          user: { user_id: BLAIR, name: 'Blair Stone' },
+          from: { option: null, team_n: 1, rank: null, responded: false },
+          to: { option: null, team_n: 3, rank: null, responded: false },
+          requests: [],
+        },
+      ],
+    });
+    const payload = parse(await formTeamsGetTool.handler({ ...BASE, compare_with: 2 }, CTX));
+    expect(
+      payload.comparison.moved.map((m: { from: string; to: string }) => [m.from, m.to])
+    ).toEqual([
+      ["'Ledger', team 1, no answer", "'Ledger', team 2, not ranked"],
+      // No option on the seat: the team only, whether they answered or not.
+      ['team 1', 'team 3'],
+    ]);
   });
 
   it('passes a free run’s side of projects running as null, with no change and no same-set', async () => {
