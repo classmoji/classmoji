@@ -79,6 +79,8 @@ import * as userService from './user.service.ts';
 import * as quizService from './quiz.service.ts';
 import * as quizAttemptService from './quizAttempt.service.ts';
 import * as quizSourceMaterialService from './quizSourceMaterial.service.ts';
+import * as quizChatService from './quizChat.service.ts';
+import * as quizGradingService from './quizGrading.service.ts';
 import * as repositoryImportService from './repositoryImport.service.ts';
 import * as contentImportService from './contentImport.service.ts';
 import * as templateImportService from './templateImport.service.ts';
@@ -160,6 +162,11 @@ const ClassmojiService = {
   // A quiz's linked pages and decks: `load` (the prompt text, as the attempt's
   // user may read it), `countStartable` (the pre-attempt check), the budget.
   quizSourceMaterial: quizSourceMaterialService,
+  // Quiz attempts served as chat agents (`agent_runtime: 'trigger_chat'`):
+  // turn admission and conversation storage, and the locked, fenced,
+  // journaled grading writes their tools make.
+  quizChat: quizChatService,
+  quizGrading: quizGradingService,
   repositoryImport: repositoryImportService,
   contentImport: contentImportService,
   templateImport: templateImportService,

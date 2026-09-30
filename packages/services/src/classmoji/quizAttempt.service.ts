@@ -1,6 +1,7 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import type { MessageRole, Prisma } from '@prisma/client';
 import { DEFAULT_EMOJI_GRADE_MAPPINGS, withLogins } from '@classmoji/utils';
+import { CONTRACT_VERSION } from '@classmoji/utils/quiz-agent';
 
 /**
  * Thrown when an attempt id names no row.
@@ -419,12 +420,19 @@ export const completeAttempt = async (
       first_attempt_percentage: true,
       question_results_json: true, // Progressive grading data
       agent_config: true,
+      agent_runtime: true,
       quiz: { select: { question_count: true } },
     },
   });
 
   if (!currentAttempt) {
     throw new Error(`[completeAttempt] Attempt ${attemptId} not found`);
+  }
+
+  // Chat-runtime attempts complete through their own evaluation tool
+  // (quizGrading.completeWithEvaluation), never through this path.
+  if (currentAttempt.agent_runtime && currentAttempt.agent_runtime !== 'ai_agent') {
+    throw new QuizAttemptIncompleteError();
   }
 
   const durationUpdate = buildDurationUpdate(metrics, currentAttempt);
@@ -1073,10 +1081,14 @@ export const restartQuizAttempt = async (
  * @param {Object} membership - The user's membership object
  * @returns {Promise<Object>} Result object with success status and attempt details
  */
+/** How long a `trigger_chat` attempt can take turns after it is created (Q19). */
+export const TRIGGER_CHAT_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
 export const createNew = async (
   quizId: string,
   userId: string,
-  membership: QuizAttemptMembership
+  membership: QuizAttemptMembership,
+  options: { agentRuntime?: 'ai_agent' | 'trigger_chat' } = {}
 ) => {
   if (!membership) {
     throw new Error('Membership required to create quiz attempt');
@@ -1180,12 +1192,22 @@ export const createNew = async (
   }
   // Instructors can always create attempts (for preview/testing)
 
-  // Create the new attempt
+  // Create the new attempt. The runtime is stamped here, once: a
+  // `trigger_chat` attempt also records the contract version it is graded
+  // under and the deadline after which it takes no more turns.
+  const startedAt = new Date();
   const newAttempt = await getPrisma().quizAttempt.create({
     data: {
       quiz_id: quizId,
       user_id: userId.toString(),
-      started_at: new Date(),
+      started_at: startedAt,
+      ...(options.agentRuntime === 'trigger_chat'
+        ? {
+            agent_runtime: 'trigger_chat',
+            contract_version: CONTRACT_VERSION,
+            session_expires_at: new Date(startedAt.getTime() + TRIGGER_CHAT_SESSION_TTL_MS),
+          }
+        : {}),
     },
   });
 
