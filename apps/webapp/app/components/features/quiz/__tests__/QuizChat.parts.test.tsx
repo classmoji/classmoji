@@ -42,6 +42,7 @@ vi.mock('~/routes/student.$class.quizzes/ChatEditor', () => ({
 const {
   default: QuizChat,
   QuizTranscript,
+  displayOrder,
   drivesSession,
   errorLineFor,
   FIXED_ERROR_COPY,
@@ -336,6 +337,177 @@ describe('QuizTranscript — parts', () => {
       });
     });
   }
+});
+
+describe("QuizTranscript — a question's marker above the next card", () => {
+  const card = (n: number, id = `call-q${n}`) => ({
+    type: 'tool-present_question',
+    toolCallId: id,
+    state: 'output-available',
+    input: { ...CARD, question_number: n, question_text: `Question text ${n}` },
+    output: {
+      card: { ...CARD, question_number: n, question_text: `Question text ${n}` },
+      question_number: n,
+      total_questions: 8,
+    },
+  });
+  const divider = (n: number, revised = false) => ({
+    type: 'data-question-result',
+    id: `question-result-${n}${revised ? '-revised' : ''}`,
+    data: {
+      question_num: n,
+      emoji: 'heart',
+      brief_feedback: `Feedback ${n}${revised ? ' revised' : ''}`,
+      ...(revised ? { revised: true } : {}),
+    },
+  });
+  const recordCall = (n: number) => ({
+    type: 'tool-record_question_result',
+    toolCallId: `call-r${n}`,
+    state: 'output-available',
+    input: { question_num: n, answers: [], brief_feedback: `Feedback ${n}` },
+    output: { question_num: n, emoji: 'heart', brief_feedback: `Feedback ${n}` },
+  });
+  const text = (t: string) => ({ type: 'text', text: t });
+
+  /** Positions of each needle in the markup; every needle must be present. */
+  const positions = (html: string, needles: string[]) =>
+    needles.map(needle => {
+      const at = html.indexOf(needle);
+      expect(at, needle).toBeGreaterThan(-1);
+      return at;
+    });
+  const expectInOrder = (html: string, needles: string[]) => {
+    const at = positions(html, needles);
+    expect(at).toEqual([...at].sort((a, b) => a - b));
+  };
+
+  it('shows the divider before the next card when both come from one step', () => {
+    // The order the parts arrive in: the hidden record call, the new card, then
+    // the divider its record call wrote.
+    const html = renderTranscript([msg('a1', 'assistant', [recordCall(1), card(2), divider(1)])]);
+    expectInOrder(html, ['completed question 1:', 'Question 2 of 8']);
+    expect(html.match(/data-testid="quiz-question-result"/g)).toHaveLength(1);
+    expect(html.match(/data-testid="quiz-question-card"/g)).toHaveLength(1);
+  });
+
+  it('leaves the order alone when the calls came in separate steps', () => {
+    const oneMessage = renderTranscript([
+      msg('a1', 'assistant', [text('Right.'), divider(1), text('Next up.'), card(2)]),
+    ]);
+    expectInOrder(oneMessage, ['Right.', 'completed question 1:', 'Next up.', 'Question 2 of 8']);
+
+    // A card in an earlier message is never passed: the reorder stays within a message.
+    const twoMessages = renderTranscript([
+      msg('a1', 'assistant', [card(2)]),
+      msg('u1', 'user', [text('my answer')]),
+      msg('a2', 'assistant', [divider(1)]),
+    ]);
+    expectInOrder(twoMessages, ['Question 2 of 8', 'my answer', 'completed question 1:']);
+  });
+
+  it('moves a revised divider above a later card, never above its own question', () => {
+    const later = renderTranscript([msg('a1', 'assistant', [card(3), divider(2, true)])]);
+    expectInOrder(later, ['question 2 revised:', 'Feedback 2 revised', 'Question 3 of 8']);
+
+    // Strictly later questions only: a divider for the card's own question stays below it.
+    const same = renderTranscript([msg('a1', 'assistant', [card(2), divider(2, true)])]);
+    expectInOrder(same, ['Question 2 of 8', 'question 2 revised:']);
+    const earlier = renderTranscript([msg('a1', 'assistant', [card(2), divider(3)])]);
+    expectInOrder(earlier, ['Question 2 of 8', 'completed question 3:']);
+  });
+
+  it('keeps text where it was: before the card stays above the divider, after stays below', () => {
+    const html = renderTranscript([
+      msg('a1', 'assistant', [
+        text('That is right.'),
+        card(2),
+        text('Take your time.'),
+        divider(1),
+        text('Good luck.'),
+      ]),
+    ]);
+    expectInOrder(html, [
+      'That is right.',
+      'completed question 1:',
+      'Question 2 of 8',
+      'Take your time.',
+      'Good luck.',
+    ]);
+  });
+
+  it('keeps dividers moved above the same card in their arrival order', () => {
+    expect(
+      displayOrder([card(3), divider(1), divider(2, true)] as never).map(e => e.index)
+    ).toEqual([1, 2, 0]);
+    // Each divider lands above the first later card: 1 above 2, 2 above 3.
+    expect(
+      displayOrder([card(2), card(3), divider(1), divider(2)] as never).map(e => e.index)
+    ).toEqual([2, 0, 3, 1]);
+    // A refused card attracts nothing.
+    const refused = { ...card(2), state: 'output-error', output: undefined, errorText: 'x' };
+    expect(displayOrder([refused, divider(1)] as never).map(e => e.index)).toEqual([0, 1]);
+  });
+
+  it('shows the divider above a card that is still arriving, numbered or not', () => {
+    for (const input of [{ preamble: 'Next' }, { preamble: 'Next', question_number: 2 }]) {
+      const html = renderTranscript(
+        [
+          msg('a1', 'assistant', [
+            recordCall(1),
+            {
+              type: 'tool-present_question',
+              toolCallId: 'call-q2',
+              state: 'input-streaming',
+              input,
+            },
+            divider(1),
+          ]),
+        ],
+        { busy: true, status: 'streaming' }
+      );
+      expectInOrder(html, ['completed question 1:', 'ant-skeleton']);
+    }
+    // An arriving card numbered for the divider's own question stays above it.
+    const own = renderTranscript(
+      [
+        msg('a1', 'assistant', [
+          {
+            type: 'tool-present_question',
+            toolCallId: 'call-q1',
+            state: 'input-available',
+            input: { ...CARD, question_number: 1 },
+          },
+          divider(1),
+        ]),
+      ],
+      { busy: true, status: 'streaming' }
+    );
+    expectInOrder(own, ['ant-skeleton', 'completed question 1:']);
+  });
+
+  it('shows the owner (live) and staff (saved) the same order', () => {
+    const attempt = { id: 'attempt-1', completed_at: null, evaluation_json: null };
+    const quiz = { id: 'quiz-1', question_count: 8 };
+    // Live the record call is in the message; the saved projection drops it.
+    const live = [msg('a1', 'assistant', [text('Right.'), recordCall(1), card(2), divider(1)])];
+    const saved = [msg('a1', 'assistant', [text('Right.'), card(2), divider(1)])];
+    const order = ['Right.', 'completed question 1:', 'Question 2 of 8'];
+
+    const staff = renderToStaticMarkup(
+      <QuizChat quiz={quiz} attempt={attempt} transcript={saved} viewerOwnsAttempt={false} />
+    );
+    expectInOrder(staff, order);
+
+    chatState.messages = live;
+    const owner = renderToStaticMarkup(
+      <QuizChat quiz={quiz} attempt={attempt} transcript={live} viewerOwnsAttempt />
+    );
+    expectInOrder(owner, order);
+
+    // With or without the record call, the transcript is the same markup.
+    expect(renderTranscript(live)).toBe(renderTranscript(saved));
+  });
 });
 
 describe('QuizTranscript — failed tool calls', () => {

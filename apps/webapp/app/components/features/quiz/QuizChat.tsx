@@ -44,7 +44,9 @@ const { Text } = Typography;
  * card from the server-accepted `present_question` output, the per-question
  * marker from `data-question-result`, the Try again / Next buttons from
  * `offer_next_step`, the results panel from the stored evaluation record. Any
- * other part (reasoning, internal tools, unknown data) renders nothing.
+ * other part (reasoning, internal tools, unknown data) renders nothing. Parts
+ * render in arrival order, except that a question's marker renders above a
+ * later question's card in the same message (`displayOrder`).
  */
 
 export type QuizChatStatus = 'streaming' | 'ready' | 'complete';
@@ -242,6 +244,49 @@ const rendersInBubble = (part: QuizPart, streaming: boolean) => {
     default:
       return false;
   }
+};
+
+/**
+ * The question number of a card part, for ordering: the accepted output's
+ * number, or the call input's while the card is still arriving. A card
+ * arriving without a number yet counts as later than any question: a present
+ * is refused unless it is the next number after a recorded result, so an
+ * unnumbered card in the same message as divider n is question n + 1 (or is
+ * refused and never shown). Anything else, a refused card included, is null.
+ */
+const cardNumber = (part: QuizPart): number | null => {
+  if (part.type !== 'tool-present_question' || isFailedToolPart(part)) return null;
+  if (part.state === 'output-available') return part.output.question_number;
+  const n = (part.input as { question_number?: unknown } | undefined)?.question_number;
+  return typeof n === 'number' ? n : Infinity;
+};
+
+/**
+ * The order one assistant message's parts render in. A divider
+ * (`data-question-result`) is written when its record call runs, so when the
+ * model records question n and presents question n + 1 in the same step, the
+ * divider arrives after the new card. Each divider for question n therefore
+ * moves to just before the earliest card in the message for a later question;
+ * nothing else moves. Text keeps its place: text before that card stays above
+ * the divider, text after the card stays below it. Dividers moved before the
+ * same card keep their arrival order. Live and saved messages carry the same
+ * cards and dividers in the same order, so every viewer sees the same.
+ * Each part keeps its index in `parts`, the React key of its element.
+ */
+export const displayOrder = (parts: readonly QuizPart[]): { part: QuizPart; index: number }[] => {
+  const ordered: { part: QuizPart; index: number }[] = [];
+  parts.forEach((part, index) => {
+    if (part.type === 'data-question-result') {
+      const n = part.data.question_num;
+      const at = ordered.findIndex(entry => (cardNumber(entry.part) ?? -Infinity) > n);
+      if (at !== -1) {
+        ordered.splice(at, 0, { part, index });
+        return;
+      }
+    }
+    ordered.push({ part, index });
+  });
+  return ordered;
 };
 
 // ---------------------------------------------------------------------------
@@ -562,9 +607,9 @@ export function QuizTranscript({
               <Space align="start">
                 <AssistantAvatar />
                 <Bubble variant="assistant">
-                  {parts.map((part, i) =>
+                  {displayOrder(parts).map(({ part, index }) =>
                     rendersInBubble(part, isStreamingThis) ? (
-                      <AssistantPart key={i} part={part} ctx={ctx} />
+                      <AssistantPart key={index} part={part} ctx={ctx} />
                     ) : null
                   )}
                 </Bubble>
