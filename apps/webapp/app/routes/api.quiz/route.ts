@@ -31,7 +31,8 @@
  * startQuiz answers its id and touches nothing, sendMessage and completeQuiz
  * answer 409, and restartQuiz ends no ai-agent session for it. The timing
  * actions (updateMetrics, recordModalClose, recordModalOpen) serve both;
- * updateMetrics also takes the final time of a completed chat attempt.
+ * updateMetrics also takes the final time of a chat attempt completed within
+ * the last ten minutes.
  */
 import { assertClassroomAccess } from '~/utils/helpers';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
@@ -1330,7 +1331,8 @@ export async function action({ request }: Route.ActionArgs) {
           // CRITICAL: Reject updates for already-completed attempts. An attempt
           // on the chat runtime is completed by its task after the student's
           // last message, so its drawer sends the time since then once it sees
-          // the completion; the service only ever raises its two durations.
+          // the completion; the service takes it only within ten minutes of
+          // the completion, and only ever raises its two durations.
           if (attempt.completed_at && !isTriggerChatAttempt(attempt)) {
             return new Response(
               JSON.stringify({

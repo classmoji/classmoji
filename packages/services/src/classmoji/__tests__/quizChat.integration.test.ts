@@ -271,6 +271,37 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     expect((await attemptRow(legacyAttempt)).total_duration_ms).toBe(60_000);
   });
 
+  it('takes durations for a completed chat attempt only within ten minutes of its completion', async () => {
+    const attemptId = await newAttempt();
+    await prisma.quizAttempt.update({
+      where: { id: attemptId },
+      data: {
+        completed_at: new Date(Date.now() - 11 * 60 * 1000),
+        total_duration_ms: 60_000,
+        unfocused_duration_ms: 5_000,
+      },
+    });
+
+    const late = await updateAttemptDurations(attemptId, {
+      totalDurationMs: 75_000,
+      unfocusedDurationMs: 6_000,
+    });
+    expect(late).toMatchObject({ skipped: true, reason: 'completed' });
+    const row = await attemptRow(attemptId);
+    expect(row.total_duration_ms).toBe(60_000);
+    expect(row.unfocused_duration_ms).toBe(5_000);
+
+    await prisma.quizAttempt.update({
+      where: { id: attemptId },
+      data: { completed_at: new Date(Date.now() - 9 * 60 * 1000) },
+    });
+    const inTime = await updateAttemptDurations(attemptId, {
+      totalDurationMs: 75_000,
+      unfocusedDurationMs: 6_000,
+    });
+    expect(inTime).toMatchObject({ total_duration_ms: 75_000, unfocused_duration_ms: 6_000 });
+  });
+
   // ─── presentQuestion ──────────────────────────────────────────────────────
 
   it('presents questions in order, returns the original on a re-run, and replays by tool call id', async () => {
@@ -841,6 +872,62 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     // The attempt now refuses as completed.
     expect(await codeOf(say(attemptId, 'more'))).toBe('attempt_completed');
   });
+
+  it('refuses every turn past the ceiling of question_count × 32, begin and buttons included', async () => {
+    expect(chat.TURN_CEILING_PER_QUESTION).toBe(32);
+    const attemptId = await newAttempt({ agent_config: { questionCount: 1 } });
+    await begin(attemptId);
+    for (let i = 1; i < chat.TURN_CEILING_PER_QUESTION; i++) {
+      await say(attemptId, i % 2 === 0 ? BUTTON_TEXT.next : BUTTON_TEXT.try_again);
+    }
+    // One counted turn (begin) of 16, and every turn of the 32.
+    expect(await events(attemptId, 'input_admitted')).toHaveLength(32);
+
+    await expect(say(attemptId, BUTTON_TEXT.try_again)).rejects.toMatchObject({
+      code: 'turn_limit',
+      kind: 'permanent',
+    });
+    await expect(say(attemptId, 'an answer')).rejects.toMatchObject({
+      code: 'turn_limit',
+      kind: 'permanent',
+    });
+    await expect(begin(attemptId)).rejects.toMatchObject({
+      code: 'turn_limit',
+      kind: 'permanent',
+    });
+    expect(await events(attemptId, 'input_admitted')).toHaveLength(32);
+    // Nothing recorded, so nothing to complete.
+    expect((await attemptRow(attemptId)).completed_at).toBeNull();
+  }, 30_000);
+
+  it('completes an attempt from its recorded grades when the ceiling is reached', async () => {
+    const attemptId = await newAttempt({ agent_config: { questionCount: 1 } });
+    const turn = await begin(attemptId);
+    await grading.presentQuestion(call(turn), question(1));
+    const answer = await say(attemptId, 'answer');
+    await grading.finalizeQuestion(
+      call(answer),
+      result(1, [{ level: 'mostly_right', hints_before: 0 }])
+    );
+    // begin + the answer already count: fill up to the ceiling with buttons.
+    for (let i = 2; i < chat.TURN_CEILING_PER_QUESTION; i++) {
+      await say(attemptId, i % 2 === 0 ? BUTTON_TEXT.next : BUTTON_TEXT.try_again);
+    }
+
+    await expect(say(attemptId, BUTTON_TEXT.try_again)).rejects.toMatchObject({
+      code: 'turn_limit',
+      kind: 'permanent',
+    });
+
+    const row = await attemptRow(attemptId);
+    expect(row.completed_at).not.toBeNull();
+    expect(row.session_status).toBe('completed');
+    expect(row.partial_credit_percentage).toBe(70);
+    expect(row.evaluation_json).toMatchObject({ v: 2, source: 'server' });
+    const [journal] = await events(attemptId, 'evaluation_completed');
+    expect(journal.operation_id).toBe(grading.SERVER_COMPLETION_OPERATION_ID);
+    expect(await codeOf(say(attemptId, 'more'))).toBe('attempt_completed');
+  }, 30_000);
 
   it('refuses an expired attempt, a completed one and a legacy one permanently', async () => {
     const expired = await newAttempt({ session_expires_at: new Date(Date.now() - 1000) });

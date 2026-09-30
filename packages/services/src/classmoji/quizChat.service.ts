@@ -89,6 +89,13 @@ export const MAX_STUDENT_MESSAGE_CHARS = 10_000;
  */
 export const TURNS_PER_QUESTION = 16;
 
+/**
+ * Admitted turns of every kind per attempt: `question_count ×
+ * TURN_CEILING_PER_QUESTION`, a second bound over the one above that counts
+ * every admitted turn, `begin` and the buttons' messages included.
+ */
+export const TURN_CEILING_PER_QUESTION = 32;
+
 /** Browser message ids. Server-made ids contain `:` and never match. */
 export const CLIENT_MESSAGE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
@@ -224,9 +231,12 @@ const revalidate = async (
   return attempt;
 };
 
-/** Admitted turns that count toward the cap: every one but the buttons' messages. */
-const countedTurns = async (tx: Tx, attemptId: string) => {
-  const [admitted, buttons] = await Promise.all([
+/**
+ * The attempt's admitted turns: `all` of them, and the `counted` ones (every
+ * one but the buttons' messages).
+ */
+const admittedTurns = async (tx: Tx, attemptId: string) => {
+  const [all, buttons] = await Promise.all([
     tx.quizAttemptEvent.count({ where: { attempt_id: attemptId, type: 'input_admitted' } }),
     tx.quizAttemptEvent.count({
       where: {
@@ -239,21 +249,29 @@ const countedTurns = async (tx: Tx, attemptId: string) => {
       },
     }),
   ]);
-  return admitted - buttons;
+  return { all, counted: all - buttons };
 };
 
 /** What a locked admission returns when the attempt has reached its turn cap. */
 const TURN_LIMIT = Symbol('turn_limit');
 
 /**
- * Whether the attempt has reached its turn cap. When it has and every question
- * already has a recorded result, the attempt is completed from those results
- * first (`source: 'server'`), so reaching the cap never loses a recorded grade.
- * The caller commits, then refuses the turn (`turn_limit`, permanent).
+ * Whether the attempt has reached its turn cap (`TURNS_PER_QUESTION`, counted
+ * turns) or its turn ceiling (`TURN_CEILING_PER_QUESTION`, all turns). When it
+ * has and every question already has a recorded result, the attempt is
+ * completed from those results first (`source: 'server'`), so reaching either
+ * bound never loses a recorded grade. The caller commits, then refuses the
+ * turn (`turn_limit`, permanent).
  */
 const turnCapReached = async (tx: Tx, attempt: LockedAttempt, runId: string) => {
   const questionCount = attemptQuestionCount(attempt);
-  if ((await countedTurns(tx, attempt.id)) < questionCount * TURNS_PER_QUESTION) return false;
+  const { all, counted } = await admittedTurns(tx, attempt.id);
+  if (
+    counted < questionCount * TURNS_PER_QUESTION &&
+    all < questionCount * TURN_CEILING_PER_QUESTION
+  ) {
+    return false;
+  }
   const recorded = readStoredResults(attempt.question_results_json, questionCount).length;
   if (attempt.turn_fence && recorded === questionCount) {
     await completeLocked(
@@ -292,8 +310,9 @@ type AdmittedMessage = {
  *   fence, no new row (`status: 'redelivered'`);
  * - an id already used with different text, or an older admitted id, is
  *   refused (`message_conflict`);
- * - at the turn cap the turn is refused for good (`turn_limit`), after the
- *   attempt is completed from its recorded grades when every question has one;
+ * - at the turn cap or the turn ceiling the turn is refused for good
+ *   (`turn_limit`), after the attempt is completed from its recorded grades
+ *   when every question has one;
  * - otherwise the user row is written with parts `[student text, turn status]`
  *   (`metadata.hiddenPartIndexes: [1]`, and `action` when the text is a
  *   button's), an `input_admitted` journal row, and a fresh fence.
@@ -444,8 +463,8 @@ export const admitStudentMessage = async (i: {
 };
 
 /**
- * Admit the `begin` action: the same revalidation and turn cap, refused once a
- * question has been presented, an `input_admitted` journal row
+ * Admit the `begin` action: the same revalidation, turn cap and turn ceiling,
+ * refused once a question has been presented, an `input_admitted` journal row
  * (`kind: 'action'`), and a fresh fence. No message is written; the caller
  * stores the hidden opening with `storeHiddenOpening`.
  */

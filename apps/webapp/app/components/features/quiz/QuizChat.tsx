@@ -137,6 +137,22 @@ export class QuizChatSessionError extends Error {
   }
 }
 
+/**
+ * The session route's refusals that hold for good: the attempt is complete,
+ * past its deadline, or on another runtime.
+ */
+const PERMANENT_SESSION_CODES: ReadonlySet<string> = new Set([
+  'QUIZ_COMPLETE',
+  'QUIZ_ATTEMPT_EXPIRED',
+  'QUIZ_RUNTIME_MISMATCH',
+]);
+
+/** The error is the session route refusing the attempt for good. */
+export const isPermanentSessionRefusal = (error: unknown) =>
+  error instanceof QuizChatSessionError &&
+  error.code !== null &&
+  PERMANENT_SESSION_CODES.has(error.code);
+
 /** A session token for the attempt, from the session route (start and refresh alike). */
 export const requestSessionToken = async (attemptId: string): Promise<string> => {
   const response = await fetch('/api/quiz-chat/session', {
@@ -865,6 +881,9 @@ function LiveQuizChat({
   const initialMessages = useMemo(() => transcript ?? [], []); // eslint-disable-line react-hooks/exhaustive-deps
   const [persisted] = useState(() => readPersistedSession(attemptId));
   const resuming = persisted?.isStreaming === true && !persisted.closed;
+  // The session closed while this chat was open: the task closes it on every
+  // permanent refusal and once the attempt is complete.
+  const [closedWhileOpen, setClosedWhileOpen] = useState(false);
 
   const transport = useTriggerChatTransport({
     task: QUIZ_CHAT_TASK_ID,
@@ -873,7 +892,10 @@ function LiveQuizChat({
     }),
     accessToken: ({ chatId }) => requestSessionToken(chatId),
     ...(persisted ? { sessions: { [attemptId]: persisted } } : {}),
-    onSessionChange: (chatId, state) => persistSession(chatId, state),
+    onSessionChange: (chatId, state) => {
+      persistSession(chatId, state);
+      if (state?.closed) setClosedWhileOpen(true);
+    },
   });
 
   const { messages, sendMessage, status, error } = useChat<QuizUIMessage>({
@@ -892,8 +914,9 @@ function LiveQuizChat({
   // A session closed without an evaluation (the attempt can no longer take
   // messages) leaves nothing to send to either.
   const sessionClosed =
-    typeof transport.sessionStatus === 'function' &&
-    transport.sessionStatus(attemptId) === 'closed';
+    closedWhileOpen ||
+    (typeof transport.sessionStatus === 'function' &&
+      transport.sessionStatus(attemptId) === 'closed');
   const canSend = !complete && !sessionClosed;
 
   const time = useAttemptTime({
@@ -928,14 +951,18 @@ function LiveQuizChat({
     };
   }, [begin, initialMessages.length, resuming]);
 
-  // Once the evaluation is in and the reply has finished, refresh the drawer
-  // (its title and close prompt read the completed attempt).
-  const completedRef = useRef(false);
+  // Once the evaluation is in, or the attempt can take no more turns (the
+  // session closed, or the session route refused it for good), and the reply
+  // has finished, refresh the drawer once: its title, close prompt and results
+  // panel read the attempt as stored, which a refused turn may have completed.
+  const refusedForGood = status === 'error' && isPermanentSessionRefusal(error);
+  const ended = evaluationSeen || closedWhileOpen || refusedForGood;
+  const refreshedRef = useRef(false);
   useEffect(() => {
-    if (!evaluationSeen || busy || completedRef.current) return;
-    completedRef.current = true;
+    if (!ended || busy || refreshedRef.current) return;
+    refreshedRef.current = true;
     revalidateRef.current();
-  }, [evaluationSeen, busy]);
+  }, [ended, busy]);
 
   const send = useCallback(
     (text: string) => {

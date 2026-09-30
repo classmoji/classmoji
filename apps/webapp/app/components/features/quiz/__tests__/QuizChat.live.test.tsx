@@ -3,7 +3,8 @@
  * The live chat's behaviour: a new attempt starts with the typed `begin`
  * action (through useChat, so its turn renders like any reply), a resumed or
  * started one does not start again, button clicks send the buttons' fixed
- * text, and the transport's two callbacks both ask the session route.
+ * text, the transport's two callbacks both ask the session route, and the
+ * drawer is refreshed once the attempt can take no more turns.
  */
 
 import { act } from 'react';
@@ -12,7 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUTTON_TEXT, type QuizUIMessage } from '@classmoji/utils/quiz-agent';
 
 vi.mock('~/hooks', () => ({ useDarkMode: () => ({ isDarkMode: false }) }));
-vi.mock('react-router', () => ({ useRevalidator: () => ({ revalidate: vi.fn() }) }));
+const revalidateMock = vi.fn();
+vi.mock('react-router', () => ({ useRevalidator: () => ({ revalidate: revalidateMock }) }));
 vi.mock('~/routes/student.$class.quizzes/ChatEditor', () => ({
   default: ({
     onSubmit,
@@ -32,7 +34,10 @@ vi.mock('~/components/features/quiz/useQuizFocusMetrics', () => ({
   useQuizFocusMetrics: () => ({ getMetricsSnapshot: snapshot, finalizeCurrentSession: snapshot }),
 }));
 
-const chatState: { messages: QuizUIMessage[]; status: string } = { messages: [], status: 'ready' };
+const chatState: { messages: QuizUIMessage[]; status: string; error?: unknown } = {
+  messages: [],
+  status: 'ready',
+};
 const sendMessageMock = vi.fn();
 const sendActionMock = vi.fn();
 const useChatOptions: Array<Record<string, unknown>> = [];
@@ -65,7 +70,7 @@ window.matchMedia ??= ((query: string) => ({
 })) as unknown as typeof window.matchMedia;
 Element.prototype.scrollIntoView ??= () => {};
 
-const { default: QuizChat } = await import('../QuizChat');
+const { default: QuizChat, QuizChatSessionError } = await import('../QuizChat');
 
 const ATTEMPT = { id: 'attempt-1', completed_at: null, evaluation_json: null };
 const QUIZ = { id: 'quiz-1', question_count: 8 };
@@ -103,6 +108,8 @@ beforeEach(() => {
   root = createRoot(container);
   chatState.messages = [];
   chatState.status = 'ready';
+  chatState.error = undefined;
+  revalidateMock.mockReset();
   metrics = { totalMs: 0, unfocusedMs: 0 };
   sendMessageMock.mockReset();
   sendActionMock.mockReset().mockResolvedValue(undefined);
@@ -267,6 +274,53 @@ describe('QuizChat live', () => {
         unfocusedDurationMs: 42_000,
       },
     ]);
+  });
+
+  it('refreshes the drawer once, after the reply, when the session closes', async () => {
+    chatState.messages = [buttonsMessage];
+    chatState.status = 'streaming';
+    await mount([buttonsMessage]);
+
+    await act(async () => {
+      transportOptions!.onSessionChange('attempt-1', { publicAccessToken: 'pat' });
+    });
+    expect(revalidateMock).not.toHaveBeenCalled();
+
+    // A permanent refusal: the task closes the session, and the turn ends in an error.
+    await act(async () => {
+      transportOptions!.onSessionChange('attempt-1', { publicAccessToken: 'pat', closed: true });
+    });
+    expect(revalidateMock).not.toHaveBeenCalled();
+    expect(
+      JSON.parse(window.sessionStorage.getItem('classmoji:quiz-chat-session:attempt-1')!)
+    ).toEqual({ publicAccessToken: 'pat', closed: true });
+
+    chatState.status = 'error';
+    chatState.error = new Error('This attempt has reached its message limit.');
+    await mount([buttonsMessage]);
+    expect(revalidateMock).toHaveBeenCalledTimes(1);
+    // Nothing more can be sent.
+    expect(container.querySelector('[data-testid="quiz-editor"]')!.className).toContain(
+      'pointer-events-none'
+    );
+
+    await mount([buttonsMessage]);
+    expect(revalidateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes the drawer when the session route refuses the attempt for good, only then', async () => {
+    chatState.messages = [buttonsMessage];
+    chatState.status = 'error';
+    chatState.error = new QuizChatSessionError(
+      "Quizzes aren't available in this class.",
+      'QUIZZES_UNAVAILABLE'
+    );
+    await mount([buttonsMessage]);
+    expect(revalidateMock).not.toHaveBeenCalled();
+
+    chatState.error = new QuizChatSessionError('This quiz is already complete.', 'QUIZ_COMPLETE');
+    await mount([buttonsMessage]);
+    expect(revalidateMock).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the session state per tab', async () => {
