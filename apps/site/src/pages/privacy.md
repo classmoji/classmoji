@@ -2,7 +2,7 @@
 layout: ../layouts/LegalLayout.astro
 title: Privacy Policy
 description: What Classmoji collects, how it is used, and how long it is kept.
-updated: September 21, 2026
+updated: September 29, 2026
 ---
 
 Classmoji is built and operated by the **DALI Lab** (Digital Applied Learning and Innovation Lab) at Dartmouth College ("we", "us" and "our"). This policy covers the hosted service at **classmoji.io**. If someone runs their own copy of the open-source software, this policy does not apply to it, and whoever operates that copy is responsible for the data in it.
@@ -44,7 +44,7 @@ To run courses; to create and manage the GitHub repositories coursework lives in
 
 ## AI features
 
-Classmoji includes AI features, including AI-assisted quizzes. Where a course uses one, the relevant course content and student work are sent to **Anthropic**, our AI provider, and Anthropic's terms and conditions apply. Course content AI is served by **Cloudflare**, and Cloudflare's terms and conditions apply.
+Classmoji includes AI features, including AI-assisted quizzes. Where a course uses one, the relevant course content and student work are sent to **Anthropic**, our AI provider, and Anthropic's terms and conditions apply. This content may also pass through **Trigger.dev**, which runs our background processing, and Trigger.dev's terms and conditions apply. Course content AI is served by **Cloudflare**, and Cloudflare's terms and conditions apply.
 
 We make no guarantee about the quality or accuracy of AI-generated output. Where an AI feature suggests a grade, we recommend that a human always review the work.
 
