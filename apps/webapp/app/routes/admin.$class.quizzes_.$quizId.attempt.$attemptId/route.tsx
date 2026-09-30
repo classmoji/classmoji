@@ -6,6 +6,7 @@ import { QuizAttemptInterface } from '~/components';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { attemptDrawerView, quizDrawerView } from '~/utils/quizPayloads';
+import { isTriggerChatAttempt } from '~/utils/quizRuntime.server';
 import type { Route } from './+types/route';
 
 export async function loader({ params, request }: Route.LoaderArgs) {
@@ -16,7 +17,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   // 1. Authenticate and authorize (instructors only)
   const {
-    userId: _userId,
+    userId,
     classroom,
     membership: _membership,
   } = await assertClassroomAccess({
@@ -76,14 +77,25 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const studentName =
     attemptData.attempt.user?.name || attemptData.attempt.user?.login || 'Student';
 
-  // 8. Send only what the drawer and QuizAttemptInterface read — see
+  // 8. A chat-runtime attempt's transcript, projected exactly as its student
+  // sees it (hidden rows and internal parts removed). Its raw rows are never
+  // sent. Staff read it; only the attempt's owner drives its chat session.
+  const isChatAttempt = isTriggerChatAttempt(attemptData.attempt);
+  const transcript = isChatAttempt
+    ? await ClassmojiService.quizChat.loadTranscriptForViewer(attemptData.attempt.id)
+    : null;
+  const viewerOwnsAttempt = attemptData.attempt.user_id.toString() === userId.toString();
+
+  // 9. Send only what the drawer and QuizAttemptInterface read — see
   // ~/utils/quizPayloads. Both rows arrive joined to much more: the attempt to
   // its user, quiz and classroom; the quiz to every attempt and its user.
   return {
     quiz: quizDrawerView(quiz),
     attempt: attemptDrawerView(attemptData.attempt),
     // Use unified messages from getAttemptWithMessages (ai-agent owns persistence)
-    messages: attemptData.messages || [],
+    messages: isChatAttempt ? [] : attemptData.messages || [],
+    transcript,
+    viewerOwnsAttempt,
     userLogin: attemptData.attempt.user?.login || null,
     userImage: attemptData.attempt.user?.image || null,
     studentName,

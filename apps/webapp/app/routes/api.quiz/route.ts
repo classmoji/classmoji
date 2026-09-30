@@ -24,12 +24,20 @@
  * - recordModalClose: Records when the quiz modal is closed
  * - recordModalOpen: Calculates gap time and adds to unfocused duration when modal reopens
  * - restartQuiz: Deletes and restarts a quiz attempt (dev mode only)
+ *
+ * RUNTIMES: a new attempt is stamped with the runtime it runs on
+ * (`runtimeFor`, ~/utils/quizRuntime.server). An attempt on the chat runtime
+ * (`trigger_chat`) runs through api.quiz-chat.session and its Trigger task:
+ * startQuiz answers its id and touches nothing, sendMessage and completeQuiz
+ * answer 409, and restartQuiz ends no ai-agent session for it. The timing
+ * actions (updateMetrics, recordModalClose, recordModalOpen) serve both.
  */
 import { assertClassroomAccess } from '~/utils/helpers';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { runBackgroundTask } from '~/utils/backgroundTask.server';
+import { isLegacyRuntimeAttempt, runtimeFor } from '~/utils/quizRuntime.server';
 import { getQuestionProgressFromMessage, checkForCompletion } from '@classmoji/utils';
 import type { Role } from '@prisma/client';
 import type { Route } from './+types/route';
@@ -124,6 +132,23 @@ const QUIZ_ALREADY_COMPLETE_BODY = {
   code: 'QUIZ_COMPLETE',
   message: 'This quiz is already complete.',
 };
+
+/**
+ * The refusal for a legacy action (sendMessage, completeQuiz) on an attempt
+ * that runs on the chat runtime: that attempt takes its messages and completes
+ * through its chat session, never through these actions. Fixed copy.
+ */
+const QUIZ_RUNTIME_MISMATCH_BODY = {
+  success: false,
+  code: 'QUIZ_RUNTIME_MISMATCH',
+  message: 'Reload the page to continue this quiz.',
+};
+
+const runtimeMismatchResponse = () =>
+  new Response(JSON.stringify(QUIZ_RUNTIME_MISMATCH_BODY), {
+    status: 409,
+    headers: { 'Content-Type': 'application/json' },
+  });
 
 /** The services' refusal to complete an unfinished attempt (by its code). */
 const isAttemptNotFinished = (error: unknown) =>
@@ -602,12 +627,23 @@ export async function action({ request }: Route.ActionArgs) {
             if (refusal) return refusal;
             materialChecked = true;
 
-            // Create new attempt with max_attempts validation
-            const result = await ClassmojiService.quizAttempt.createNew(
-              data.quizId,
-              userId,
-              access.membership!
-            );
+            // Create new attempt with max_attempts validation, stamped with
+            // the runtime it runs on (quizRuntime.server). An ai-agent attempt
+            // is created exactly as it always was.
+            const agentRuntime = runtimeFor(context.quiz);
+            const result =
+              agentRuntime === 'ai_agent'
+                ? await ClassmojiService.quizAttempt.createNew(
+                    data.quizId,
+                    userId,
+                    access.membership!
+                  )
+                : await ClassmojiService.quizAttempt.createNew(
+                    data.quizId,
+                    userId,
+                    access.membership!,
+                    { agentRuntime }
+                  );
 
             if (!result.success) {
               return new Response(JSON.stringify(result), {
@@ -621,6 +657,16 @@ export async function action({ request }: Route.ActionArgs) {
               result.attemptId!
             );
             attempt = attemptData.attempt;
+          }
+
+          // An attempt on the chat runtime starts through its own session
+          // (api.quiz-chat.session) when its drawer opens; nothing here
+          // touches it. Its id goes back as for any started attempt, so the
+          // quiz list opens it the same way.
+          if (!isLegacyRuntimeAttempt(attempt)) {
+            return new Response(JSON.stringify({ attemptId: attempt.id }), {
+              headers: { 'Content-Type': 'application/json' },
+            });
           }
 
           // Skip if already started - check AIConversation messages (not attempt.messages)
@@ -984,6 +1030,12 @@ export async function action({ request }: Route.ActionArgs) {
 
           ownsAttempt = true;
 
+          // An attempt on the chat runtime takes its messages through its
+          // chat session only.
+          if (!isLegacyRuntimeAttempt(attemptData!.attempt)) {
+            return runtimeMismatchResponse();
+          }
+
           // A complete attempt takes no more messages.
           if (attemptData!.attempt.completed_at) {
             return new Response(JSON.stringify(QUIZ_ALREADY_COMPLETE_BODY), {
@@ -1161,6 +1213,12 @@ export async function action({ request }: Route.ActionArgs) {
               status: 403,
               headers: { 'Content-Type': 'application/json' },
             });
+          }
+
+          // An attempt on the chat runtime is completed by its own grading
+          // tools, never by this action.
+          if (!isLegacyRuntimeAttempt(attempt)) {
+            return runtimeMismatchResponse();
           }
 
           const metrics = extractDurationMetrics(data);
@@ -1378,16 +1436,29 @@ export async function action({ request }: Route.ActionArgs) {
             previousAttempt.quiz_id.toString() === data.quizId.toString() &&
             previousAttempt.user_id.toString() === userId.toString();
 
-          if (isCallersAttemptOnThisQuiz) {
+          // Only an ai-agent attempt has an ai-agent session to end; one on
+          // the chat runtime has none there.
+          if (isCallersAttemptOnThisQuiz && isLegacyRuntimeAttempt(previousAttempt)) {
             await endQuizSession(data.attemptId);
           }
 
-          // Create a new attempt using the service
-          const result = await ClassmojiService.quizAttempt.createNew(
-            data.quizId,
-            userId,
-            access.membership!
-          );
+          // Create a new attempt using the service, stamped with the runtime
+          // it runs on (quizRuntime.server). An ai-agent attempt is created
+          // exactly as it always was.
+          const agentRuntime = runtimeFor(context.quiz);
+          const result =
+            agentRuntime === 'ai_agent'
+              ? await ClassmojiService.quizAttempt.createNew(
+                  data.quizId,
+                  userId,
+                  access.membership!
+                )
+              : await ClassmojiService.quizAttempt.createNew(
+                  data.quizId,
+                  userId,
+                  access.membership!,
+                  { agentRuntime }
+                );
 
           if (!result.success) {
             return new Response(JSON.stringify(result), {

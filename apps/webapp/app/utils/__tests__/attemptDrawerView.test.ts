@@ -43,6 +43,8 @@ describe('attemptDrawerView', () => {
         { question_num: 2, attempts: 1, credit_earned: 60, eventually_correct: true },
         { question_num: 3, attempts: 1, credit_earned: 40, eventually_correct: true },
       ],
+      agent_runtime: 'ai_agent',
+      evaluation_json: null,
     });
   });
 
@@ -51,5 +53,32 @@ describe('attemptDrawerView', () => {
     expect(view.partial_credit_percentage).toBeNull();
     expect(view.first_attempt_percentage).toBeNull();
     expect(view.question_results).toEqual([]);
+  });
+
+  it('names the runtime the attempt was stamped with', () => {
+    expect(attemptDrawerView(ATTEMPT).agent_runtime).toBe('ai_agent');
+    expect(attemptDrawerView({ ...ATTEMPT, agent_runtime: 'ai_agent' }).agent_runtime).toBe(
+      'ai_agent'
+    );
+    expect(attemptDrawerView({ ...ATTEMPT, agent_runtime: 'trigger_chat' }).agent_runtime).toBe(
+      'trigger_chat'
+    );
+  });
+
+  it("carries a completed chat attempt's stored evaluation record, and nothing else", () => {
+    const record = {
+      v: 2,
+      source: 'server',
+      partial_credit_percentage: 70,
+      first_attempt_percentage: 50,
+      question_results: [],
+    };
+    const chat = { ...ATTEMPT, agent_runtime: 'trigger_chat', evaluation_json: record };
+
+    expect(attemptDrawerView(chat).evaluation_json).toEqual(record);
+    expect(attemptDrawerView({ ...chat, completed_at: null }).evaluation_json).toBeNull();
+    expect(
+      attemptDrawerView({ ...chat, evaluation_json: { quiz_complete: true } }).evaluation_json
+    ).toBeNull();
   });
 });
