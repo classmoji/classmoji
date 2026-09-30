@@ -19,6 +19,13 @@
  * - At most `MAX_EXPLORATIONS_PER_TURN` per turn (the set is built per turn),
  *   failed ones included; after that the call is refused with fixed text, so
  *   a model that keeps exploring moves on to the question instead.
+ * - Every call names its purpose. `check_current` (re-reading code for the
+ *   question the student is on) is always allowed. `prepare_next` (code for
+ *   the next question) is refused while a question is open, i.e. the last
+ *   presented question has no recorded result; the quiz tools say which.
+ *   That check runs in the queue, after the calls the model made before this
+ *   one; a refused call reads nothing and does not count toward the per-turn
+ *   limit.
  * - A failed exploration (token or pipeline) tells the model only
  *   `EXPLORATION_FAILED_TEXT`; the prompt says what to do next.
  */
@@ -52,6 +59,12 @@ export const EXPLORATION_BUSY_TEXT =
 export const EXPLORATION_LIMIT_TEXT =
   'You have explored enough this turn. Continue with what you have.';
 
+export const EXPLORATION_QUESTION_OPEN_TEXT =
+  'Finish the current question first: give your feedback and record the result, then explore for the next question.';
+
+/** The quiz tools' view of the turn: whether a question is open right now. */
+export type ExploreGate = { questionOpen: () => boolean };
+
 /** Explorations one turn may start, successful and failed alike. */
 export const MAX_EXPLORATIONS_PER_TURN = 3;
 
@@ -75,7 +88,8 @@ export function exploreCodebaseTool(
   ctx: AttemptContext,
   exploration: NonNullable<AttemptContext['exploration']>,
   d: QuizToolDeps,
-  services: QuizToolServices
+  services: QuizToolServices,
+  gate?: ExploreGate
 ) {
   let inFlight = false;
   let started = 0;
@@ -94,6 +108,12 @@ export function exploreCodebaseTool(
       try {
         return await d.queue(async () => {
           if (aborted(d.signal, abortSignal)) throw new Error(EXPLORATION_STOPPED_TEXT);
+          // Preparing the next question waits until the current one is
+          // finished; checking the current one never does.
+          if (input.purpose !== 'check_current' && gate?.questionOpen()) {
+            started -= 1;
+            throw new Error(EXPLORATION_QUESTION_OPEN_TEXT);
+          }
           const signal = abortSignal ? AbortSignal.any([d.signal, abortSignal]) : d.signal;
 
           const history = await services.grading

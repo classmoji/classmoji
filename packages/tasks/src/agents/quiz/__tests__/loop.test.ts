@@ -325,6 +325,78 @@ describe('runQuizTurn', () => {
     expect(notices.map(n => n.data.code)).toEqual(['reply_failed']);
   });
 
+  it('does not owe the evaluation when Next on the second-to-last question presents the last one', async () => {
+    const a = fakeAttempt(8, { presented: 7, finalized: [1, 2, 3, 4, 5, 6] });
+    const model = scriptedModel([
+      [
+        toolCall('c1', 'record_question_result', {
+          question_num: 7,
+          answers: [{ level: 'correct', hints_before: 0 }],
+          brief_feedback: 'Right.',
+        }),
+        toolCall('c2', 'present_question', question(8, 8)),
+      ],
+      // What a recovery call would do: rate the unseen last question and finish.
+      [
+        toolCall('c3', 'record_question_result', {
+          question_num: 8,
+          answers: [],
+          brief_feedback: 'Moved on.',
+        }),
+        toolCall('c4', 'submit_quiz_evaluation', evaluationFeedback()),
+      ],
+    ]);
+    const chunks = await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { lastAction: 'next' }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
+    );
+    expect(model.doStreamCalls).toHaveLength(1);
+    expect(a.order).toEqual(['record:7', 'present:8']);
+    expect(a.state.presented).toBe(8);
+    expect([...a.state.finalized].sort((x, y) => x - y)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(a.state.completed).toBe(false);
+    expect(a.serverCompletions()).toBe(0);
+    expect(chunks.some(c => c.type === 'data-evaluation')).toBe(false);
+    expect(chunks.some(c => c.type === 'data-notice')).toBe(false);
+    expect(a.persisted.at(-1)?.final).toBe(true);
+  });
+
+  it('owes the evaluation when Next is clicked on a last question presented in an earlier turn', async () => {
+    const a = fakeAttempt(8, { presented: 8, finalized: [1, 2, 3, 4, 5, 6, 7] });
+    const model = scriptedModel([
+      [...text('t', 'Moving on.')],
+      [
+        toolCall('c1', 'record_question_result', {
+          question_num: 8,
+          answers: [],
+          brief_feedback: 'Skipped.',
+        }),
+        toolCall('c2', 'submit_quiz_evaluation', evaluationFeedback()),
+      ],
+    ]);
+    const chunks = await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { lastAction: 'next' }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
+    );
+    expect(model.doStreamCalls).toHaveLength(2);
+    const lastUser = [...model.doStreamCalls[1].prompt].reverse().find(m => m.role === 'user');
+    expect(JSON.stringify(lastUser)).toContain('SYSTEM NOTICE');
+    expect(a.state.completed).toBe(true);
+    expect([...a.state.finalized]).toContain(8);
+    expect(a.serverCompletions()).toBe(0);
+    expect(chunks.some(c => c.type === 'data-notice')).toBe(false);
+  });
+
   it('treats a text-only reply on the last question as a legitimate ending', async () => {
     const a = fakeAttempt(2, { presented: 2, finalized: [1] });
     const model = scriptedModel([[...text('t', 'Could you say more?')]]);
@@ -641,12 +713,35 @@ describe('runQuizTurn', () => {
 describe('loop helpers', () => {
   it('needsEvaluation follows the recorded state and the Next click', () => {
     const base = { questionCount: 3, presented: 3, completed: false, hasEvaluation: false };
-    expect(needsEvaluation({ ...base, finalized: [1, 2, 3] })).toBe(true);
-    expect(needsEvaluation({ ...base, finalized: [1, 2] })).toBe(false);
-    expect(needsEvaluation({ ...base, finalized: [1, 2] }, 'next')).toBe(true);
-    expect(needsEvaluation({ ...base, finalized: [1, 2] }, 'try_again')).toBe(false);
-    expect(needsEvaluation({ ...base, finalized: [1, 2, 3], completed: true })).toBe(false);
-    expect(needsEvaluation({ ...base, presented: 2, finalized: [1] }, 'next')).toBe(false);
+    const start = { presentedAtStart: 3 };
+    expect(needsEvaluation({ ...base, finalized: [1, 2, 3] }, start)).toBe(true);
+    expect(needsEvaluation({ ...base, finalized: [1, 2] }, start)).toBe(false);
+    expect(needsEvaluation({ ...base, finalized: [1, 2] }, { ...start, lastAction: 'next' })).toBe(
+      true
+    );
+    expect(
+      needsEvaluation({ ...base, finalized: [1, 2] }, { ...start, lastAction: 'try_again' })
+    ).toBe(false);
+    expect(needsEvaluation({ ...base, finalized: [1, 2, 3], completed: true }, start)).toBe(false);
+    expect(
+      needsEvaluation(
+        { ...base, presented: 2, finalized: [1] },
+        { presentedAtStart: 2, lastAction: 'next' }
+      )
+    ).toBe(false);
+  });
+
+  it('needsEvaluation does not count a last question presented during the turn', () => {
+    // Next on question 2 of 3: question 2 recorded, question 3 presented in the same turn.
+    const after = {
+      questionCount: 3,
+      presented: 3,
+      finalized: [1, 2],
+      completed: false,
+      hasEvaluation: false,
+    };
+    expect(needsEvaluation(after, { presentedAtStart: 2, lastAction: 'next' })).toBe(false);
+    expect(needsEvaluation(after, { presentedAtStart: 3, lastAction: 'next' })).toBe(true);
   });
 
   it('keeps exactly one message breakpoint', () => {

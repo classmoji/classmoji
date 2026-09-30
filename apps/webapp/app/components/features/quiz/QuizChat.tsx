@@ -46,7 +46,10 @@ const { Text } = Typography;
  * `offer_next_step`, the results panel from the stored evaluation record. Any
  * other part (reasoning, internal tools, unknown data) renders nothing. Parts
  * render in arrival order, except that a question's marker renders above a
- * later question's card in the same message (`displayOrder`).
+ * later question's card in the same message (`displayOrder`). As in the legacy
+ * chat, a marker is not inside a bubble: it gets its own row with its own
+ * avatar, and what follows it (the files read, the next card) starts a new
+ * bubble (`messageBlocks`).
  */
 
 export type QuizChatStatus = 'streaming' | 'ready' | 'complete';
@@ -241,9 +244,10 @@ export const isFailedToolPart = (part: QuizPart) => {
 };
 
 /**
- * A part that renders inside the assistant's bubble. A question card still
- * arriving shows its placeholder only while its message is streaming, so a
- * turn that ended before the card leaves no empty card behind.
+ * A part of the assistant's reply that renders: inside a bubble, or (a
+ * question's marker) in its own row. A question card still arriving shows its
+ * placeholder only while its message is streaming, so a turn that ended before
+ * the card leaves no empty card behind.
  */
 const rendersInBubble = (part: QuizPart, streaming: boolean) => {
   if (isFailedToolPart(part)) return false;
@@ -303,6 +307,52 @@ export const displayOrder = (parts: readonly QuizPart[]): { part: QuizPart; inde
     ordered.push({ part, index });
   });
   return ordered;
+};
+
+type MessageBlock = {
+  kind: 'result' | 'content';
+  /** The React key: `kind` and the first part's index in `parts`. */
+  key: string;
+  entries: { part: QuizPart; index: number }[];
+};
+
+/**
+ * One assistant message's rendered parts, in display order, cut into blocks:
+ * each run of question markers is a `result` row (its own avatar, outside any
+ * bubble), and everything between them is a `content` block (the files read,
+ * then a bubble). A message without a marker is one content block. The files
+ * read after the last bubble part before a marker were read for what follows
+ * it, so they move below the marker, with the next card. Parts that render
+ * nothing are left out first, so a live message (which still carries the
+ * record call) and its saved copy cut the same way. A block is keyed by its
+ * first part's index, so it keeps its elements while the reply streams, even
+ * when a marker lands above a card already showing.
+ */
+export const messageBlocks = (parts: readonly QuizPart[], streaming: boolean): MessageBlock[] => {
+  const blocks: MessageBlock[] = [];
+  for (const entry of displayOrder(parts)) {
+    if (entry.part.type !== 'data-step' && !rendersInBubble(entry.part, streaming)) continue;
+    const last = blocks[blocks.length - 1];
+    if (entry.part.type !== 'data-question-result') {
+      if (last?.kind === 'content') last.entries.push(entry);
+      else blocks.push({ kind: 'content', key: `content-${entry.index}`, entries: [entry] });
+      continue;
+    }
+    let moved: MessageBlock['entries'] = [];
+    if (last?.kind === 'content') {
+      let cut = last.entries.length;
+      while (cut > 0 && last.entries[cut - 1].part.type === 'data-step') cut--;
+      moved = last.entries.splice(cut);
+      if (last.entries.length === 0) blocks.pop();
+    }
+    const row = blocks[blocks.length - 1];
+    if (row?.kind === 'result') row.entries.push(entry);
+    else blocks.push({ kind: 'result', key: `result-${entry.index}`, entries: [entry] });
+    if (moved.length > 0) {
+      blocks.push({ kind: 'content', key: `content-${moved[0].index}`, entries: moved });
+    }
+  }
+  return blocks;
 };
 
 // ---------------------------------------------------------------------------
@@ -366,13 +416,22 @@ const AssistantAvatar = () => (
   </Avatar>
 );
 
-const Bubble = ({ variant, children }: { variant: 'assistant' | 'user'; children: ReactNode }) => (
+const Bubble = ({
+  variant,
+  testId,
+  children,
+}: {
+  variant: 'assistant' | 'user';
+  testId?: string;
+  children: ReactNode;
+}) => (
   <div
     className={
       variant === 'assistant'
         ? 'min-w-fit max-w-[70%] break-words rounded-lg border border-[#d9d9d9] bg-white px-4 py-3 text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100'
         : 'min-w-fit max-w-[70%] break-words rounded-lg bg-[#f0f2f5] px-4 py-3 text-gray-900 dark:bg-gray-700 dark:text-gray-100'
     }
+    data-testid={testId}
   >
     {children}
   </div>
@@ -599,8 +658,7 @@ export function QuizTranscript({
           buttonsDisabled: answered || busy || status === 'complete' || !onButton,
           onButton,
         };
-        const steps = stepsOf(parts);
-        const inBubble = parts.filter(part => rendersInBubble(part, isStreamingThis));
+        const blocks = messageBlocks(parts, isStreamingThis);
         const evaluationPart = parts.find(isEvaluationPart);
         const evaluationFromPart =
           evaluationPart?.type === 'tool-submit_quiz_evaluation' &&
@@ -610,7 +668,7 @@ export function QuizTranscript({
               ? evaluationPart.data
               : null;
 
-        if (steps.length === 0 && inBubble.length === 0 && !evaluationPart) return null;
+        if (blocks.length === 0 && !evaluationPart) return null;
 
         return (
           <div
@@ -618,19 +676,47 @@ export function QuizTranscript({
             className="mb-4 flex flex-col items-start"
             data-message-role="assistant"
           >
-            {steps.length > 0 && <StepList steps={steps} active={isStreamingThis} />}
-            {inBubble.length > 0 && (
-              <Space align="start">
-                <AssistantAvatar />
-                <Bubble variant="assistant">
-                  {displayOrder(parts).map(({ part, index }) =>
-                    rendersInBubble(part, isStreamingThis) ? (
-                      <AssistantPart key={index} part={part} ctx={ctx} />
-                    ) : null
+            {blocks.map((block, blockIndex) => {
+              const followed = blockIndex < blocks.length - 1;
+              if (block.kind === 'result') {
+                return (
+                  <div
+                    key={block.key}
+                    className={followed ? 'mb-2' : undefined}
+                    data-testid="quiz-result-row"
+                  >
+                    <Space align="start">
+                      <AssistantAvatar />
+                      <div className="rounded-lg border border-[#d9d9d9] bg-white px-4 py-3 text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                        {block.entries.map(({ part, index }) => (
+                          <AssistantPart key={index} part={part} ctx={ctx} />
+                        ))}
+                      </div>
+                    </Space>
+                  </div>
+                );
+              }
+              const steps = stepsOf(block.entries.map(entry => entry.part));
+              const inBubble = block.entries.filter(entry => entry.part.type !== 'data-step');
+              return (
+                <div
+                  key={block.key}
+                  className={`flex w-full flex-col items-start${followed ? ' mb-4' : ''}`}
+                >
+                  {steps.length > 0 && <StepList steps={steps} active={isStreamingThis} />}
+                  {inBubble.length > 0 && (
+                    <Space align="start">
+                      <AssistantAvatar />
+                      <Bubble variant="assistant" testId="quiz-assistant-bubble">
+                        {inBubble.map(({ part, index }) => (
+                          <AssistantPart key={index} part={part} ctx={ctx} />
+                        ))}
+                      </Bubble>
+                    </Space>
                   )}
-                </Bubble>
-              </Space>
-            )}
+                </div>
+              );
+            })}
             {evaluationPart && <div className="w-full">{renderResults(evaluationFromPart)}</div>}
           </div>
         );

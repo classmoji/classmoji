@@ -17,7 +17,9 @@
  *   model corrects in the same turn), or at the step ceiling. Stopping on the
  *   buttons keeps text from trailing after them.
  * - After the stream ends, persisted state decides whether the evaluation is
- *   still owed; if so, up to two more calls carry the evaluation notice. If
+ *   still owed (for a Next click, only when the last question was already out
+ *   before the turn began); if so, up to two more calls carry the evaluation
+ *   notice. If
  *   every result is recorded and the evaluation still did not arrive, the
  *   server completes the attempt from the recorded grades and writes a
  *   `data-evaluation` part. If the last result is missing, a `reply_failed`
@@ -131,18 +133,28 @@ export function allResultsFinalized(p: AttemptProgress): boolean {
   return true;
 }
 
+/** What the turn started from: the student's action and the progress before any call. */
+export type TurnStart = {
+  lastAction?: 'next' | 'try_again';
+  /** `presented` as it was before the turn's first model call. */
+  presentedAtStart: number;
+};
+
 /**
- * Whether the evaluation is owed after the model's reply: every result is
- * recorded and there is no evaluation, or the student moved on (Next) from the
- * last question and its result is still missing. A clarifying question or a
- * retry on the last question is a legitimate text-only ending.
+ * Whether the evaluation is owed after the model's reply (`p` is the progress
+ * read after it): every result is recorded and there is no evaluation, or the
+ * student moved on (Next) from the last question and its result is still
+ * missing. The Next case needs the last question to have been presented
+ * BEFORE this turn: a Next on the second-to-last question presents the last
+ * one in this turn, and the student has not seen it yet. A clarifying
+ * question or a retry on the last question is a legitimate text-only ending.
  */
-export function needsEvaluation(p: AttemptProgress, lastAction?: 'next' | 'try_again'): boolean {
+export function needsEvaluation(p: AttemptProgress, turn: TurnStart): boolean {
   if (p.completed || p.hasEvaluation) return false;
   if (allResultsFinalized(p)) return true;
   return (
-    lastAction === 'next' &&
-    p.presented >= p.questionCount &&
+    turn.lastAction === 'next' &&
+    turn.presentedAtStart >= p.questionCount &&
     !p.finalized.includes(p.questionCount)
   );
 }
@@ -222,6 +234,12 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
         return;
       }
 
+      // `ctx.progress` is the progress read just before this turn: the phase,
+      // the hidden status and the Next check all use this one snapshot.
+      const turnStart: TurnStart = {
+        lastAction: ctx.lastAction,
+        presentedAtStart: ctx.progress.presented,
+      };
       const phase = phaseFor(ctx.progress);
       const effort: Effort = phase === 'evaluation' ? ctx.gradingEffort : ctx.questionEffort;
       const model =
@@ -326,7 +344,7 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
 
         for (let i = 0; i < RECOVERY_CALLS && !deadline.aborted && !sawStreamError; i++) {
           const progress = await deps.getProgress(ctx.attemptId);
-          if (!needsEvaluation(progress, ctx.lastAction)) break;
+          if (!needsEvaluation(progress, turnStart)) break;
           const response = (await result.responseMessages) as ModelMessage[];
           history = [
             ...history,
@@ -340,7 +358,7 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
 
         if (!deadline.aborted && !sawStreamError) {
           const progress = await deps.getProgress(ctx.attemptId);
-          if (needsEvaluation(progress, ctx.lastAction)) {
+          if (needsEvaluation(progress, turnStart)) {
             if (allResultsFinalized(progress)) {
               const record = await deps.completeFromGrades({
                 attemptId: ctx.attemptId,
