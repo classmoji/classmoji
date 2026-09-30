@@ -30,6 +30,32 @@ const serverMessage = async (res: Response): Promise<string | null> => {
   return typeof message === 'string' && message ? message : null;
 };
 
+/**
+ * api.quiz's answer to completeQuiz while some question has no recorded
+ * result yet (a 409): the attempt stays open. The line is the server's own
+ * `message`; this one stands in if it sent none.
+ */
+const QUIZ_NOT_FINISHED = 'QUIZ_NOT_FINISHED';
+const QUIZ_NOT_FINISHED_LINE = "This quiz isn't finished yet. Send a message to continue.";
+
+/**
+ * The latest assistant message carrying an evaluation, skipping those the
+ * server would not complete the attempt on (`skip`), with its parsed
+ * evaluation; null when there is none.
+ */
+const lastEvaluationIn = (
+  displayMessages: QuizMessage[],
+  skip: Set<number | string>
+): { message: QuizMessage; completion: QuizEvaluation } | null => {
+  for (let i = displayMessages.length - 1; i >= 0; i--) {
+    const msg = displayMessages[i];
+    if (msg.role?.toLowerCase() !== 'assistant' || skip.has(msg.id)) continue;
+    const completion = checkForCompletion(msg.content);
+    if (completion) return { message: msg, completion };
+  }
+  return null;
+};
+
 /** Metadata shape for quiz messages */
 interface QuizMessageMetadata {
   isOpeningMessage?: boolean;
@@ -37,7 +63,14 @@ interface QuizMessageMetadata {
   isExplorationStep?: boolean;
   toolName?: string;
   toolInput?: unknown;
+  /** A course-material step's document title (content_get), when the ai-agent saved one. */
+  title?: string;
   explorationSteps?: ExplorationStep[];
+  /**
+   * Set on a fixed-copy failure line the server saved in place of a reply
+   * (BUDGET_EXCEEDED, SOURCE_MATERIAL_UNAVAILABLE, AGENT_FAILURE, …).
+   */
+  errorType?: string;
   [key: string]: unknown;
 }
 
@@ -58,6 +91,66 @@ interface QuizMessage {
   timestamp?: string | Date;
 }
 
+/**
+ * Whether the transcript ends in a failure line the server saved in place of
+ * a question. Nothing more is coming for it, so the chat must stop waiting —
+ * a start refused for unavailable source material leaves that line as the
+ * ONLY assistant message, which the welcome-message rules below would
+ * otherwise read as "still waiting for question 1" and poll forever.
+ */
+const endsInFailureLine = (displayMessages: QuizMessage[]): boolean => {
+  const last = displayMessages[displayMessages.length - 1];
+  return last?.role === 'assistant' && Boolean(getMetadata(last.metadata)?.errorType);
+};
+
+/**
+ * How long a send the server answered with `awaitingReply` keeps the input
+ * locked and the transcript polling. That answer means the message was not
+ * taken because the attempt's previous turn is still running (another tab, a
+ * reload mid-reply); its reply is what the student is waiting for. The
+ * ai-agent stops any turn at 240 s, so this bound is only a backstop.
+ */
+const AWAIT_RUNNING_REPLY_MS = 300_000;
+
+/**
+ * Saved assistant lines that end a turn: a reply, or a failure line for it —
+ * every one but the "still being answered" line of a refused message itself.
+ */
+const countTurnEndings = (displayMessages: QuizMessage[]): number =>
+  displayMessages.filter(
+    m =>
+      m.role?.toLowerCase() === 'assistant' && getMetadata(m.metadata)?.code !== 'turn_in_progress'
+  ).length;
+
+/**
+ * The evaluation card's data for a completed attempt: the feedback text from
+ * the evaluation message, and the scores and per-question results the attempt
+ * has stored (see ~/utils/quizPayloads, attemptDrawerView). No number in the
+ * message itself is shown.
+ */
+const evaluationWithStoredScores = (
+  completion: QuizEvaluation,
+  attempt: Record<string, unknown>
+): QuizEvaluation => {
+  const {
+    partial_credit_percentage: _partial,
+    first_attempt_percentage: _firstAttempt,
+    raw_percentage: _raw,
+    percentage: _percentage,
+    total_questions: _total,
+    question_results: _results,
+    ...feedback
+  } = completion as QuizEvaluation & Record<string, unknown>;
+  const results = Array.isArray(attempt.question_results) ? attempt.question_results : [];
+  return {
+    ...feedback,
+    partial_credit_percentage: Number(attempt.partial_credit_percentage ?? 0),
+    first_attempt_percentage: Number(attempt.first_attempt_percentage ?? 0),
+    question_results: results,
+    total_questions: results.length,
+  } as unknown as QuizEvaluation;
+};
+
 /** Focus metrics snapshot from useQuizFocusMetrics */
 interface MetricsSnapshot {
   totalMs: number;
@@ -77,6 +170,7 @@ interface ExplorationStep {
   toolName: string;
   toolInput: unknown;
   timestamp: number;
+  title?: string;
 }
 
 interface QuizAttemptInterfaceProps {
@@ -127,7 +221,6 @@ function QuizAttemptInterface({
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false); // True while waiting for AI response after user sends
   const [isQuizComplete, setIsQuizComplete] = useState(false);
-  const [evaluationData, setEvaluationData] = useState<QuizEvaluation | null>(null);
   const [completionFocusMetrics, setCompletionFocusMetrics] = useState<FocusMetrics | null>(null);
   const revalidator = useRevalidator();
   const revalidateRef = useRef(() => revalidator.revalidate());
@@ -141,8 +234,18 @@ function QuizAttemptInterface({
   const savedCountRef = useRef(0); // Saved messages shown, as of the last transcript sync
   const welcomeInjectedRef = useRef(false);
   const pendingUserMessageRef = useRef<string | null>(null); // Tracks optimistic user message content during sends
+  // Set while a refused send waits for the running turn's reply (see
+  // AWAIT_RUNNING_REPLY_MS): the turn endings saved before it, and the backstop.
+  const awaitingReplyRef = useRef<{
+    endingsBefore: number;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
   const explorationStepBaseRef = useRef(0); // Count of exploration steps before current send/load started
   const finalizeRef = useRef<(() => MetricsSnapshot) | null>(null); // Store finalize function for unmount cleanup
+  // Evaluation messages the server would not complete the attempt on (see
+  // QUIZ_NOT_FINISHED). They no longer mark the quiz complete, so the chat
+  // stays open for the rest of the quiz instead of asking again.
+  const notFinishedEvaluationsRef = useRef<Set<number | string>>(new Set());
   const { isDarkMode } = useDarkMode();
 
   const attemptId = attempt?.id;
@@ -542,21 +645,15 @@ function QuizAttemptInterface({
       const hasOpeningMessage = assistantMessages.some(
         (m: QuizMessage) => getMetadata(m.metadata)?.isOpeningMessage
       );
-      const hasWelcomeOnly = assistantMessages.length === 1 && !hasOpeningMessage;
+      const hasWelcomeOnly =
+        assistantMessages.length === 1 && !hasOpeningMessage && !endsInFailureLine(displayMessages);
       if (hasWelcomeOnly && !readOnly) {
         setLoading(true);
       }
 
       // Check if quiz is already complete from loaded messages
-      for (const msg of displayMessages) {
-        if (msg.role === 'assistant') {
-          const completion = checkForCompletion(msg.content);
-          if (completion) {
-            setIsQuizComplete(true);
-            setEvaluationData(completion);
-            break;
-          }
-        }
+      if (lastEvaluationIn(displayMessages, notFinishedEvaluationsRef.current)) {
+        setIsQuizComplete(true);
       }
     }
   }, [initialMessages, readOnly]);
@@ -616,6 +713,23 @@ function QuizAttemptInterface({
     }
   }, [messages, quiz.id, attemptId, readOnly]);
 
+  /** Stop waiting for a running turn's reply, and unlock the input. */
+  const stopAwaitingReply = useCallback(() => {
+    const awaiting = awaitingReplyRef.current;
+    if (!awaiting) return;
+    clearTimeout(awaiting.timer);
+    awaitingReplyRef.current = null;
+    setSending(false);
+  }, []);
+
+  // The backstop timer does not outlive the chat.
+  useEffect(
+    () => () => {
+      if (awaitingReplyRef.current) clearTimeout(awaitingReplyRef.current.timer);
+    },
+    []
+  );
+
   // Poll DB for real-time updates while loading OR sending (replaces SSE streaming)
   // The ai-agent saves all messages to the DB — we just revalidate to pick them up.
   // This works reliably across multiple Fly.io machines since all read from the same DB.
@@ -640,6 +754,13 @@ function QuizAttemptInterface({
     // Filter out SYSTEM messages (exploration steps) from display messages
     const displayMessages = updatedMessages.filter((m: QuizMessage) => m.role !== 'system');
     savedCountRef.current = displayMessages.length;
+
+    // A refused send was waiting for the running turn: its reply (or its
+    // failure line) is in.
+    const awaiting = awaitingReplyRef.current;
+    if (awaiting && countTurnEndings(displayMessages) > awaiting.endingsBefore) {
+      stopAwaitingReply();
+    }
 
     // Smart merge: during sends, preserve the optimistic user message until DB catches up
     if (sending && pendingUserMessageRef.current) {
@@ -690,75 +811,123 @@ function QuizAttemptInterface({
       const lastIsAssistantResponse =
         lastMsg?.role === 'assistant' && !getMetadata(lastMsg?.metadata)?.isWelcomeMessage;
 
-      if (hasOpeningMessage || (assistantMessages.length >= 2 && lastIsAssistantResponse)) {
+      if (
+        hasOpeningMessage ||
+        (assistantMessages.length >= 2 && lastIsAssistantResponse) ||
+        endsInFailureLine(displayMessages)
+      ) {
         setLoading(false);
       }
     }
 
-    // Check for completion in updated messages
-    if (!isQuizComplete) {
-      for (const msg of displayMessages) {
-        if (msg.role === 'assistant') {
-          const completion = checkForCompletion(msg.content);
-          if (completion) {
-            setIsQuizComplete(true);
-            setEvaluationData(completion);
+    // Check for completion in updated messages: the latest evaluation the
+    // server has not already turned down.
+    const latest = !isQuizComplete
+      ? lastEvaluationIn(displayMessages, notFinishedEvaluationsRef.current)
+      : null;
+    if (latest) {
+      setIsQuizComplete(true);
 
-            const completionMetrics = finalizeCurrentSession();
-            lastMetricsRef.current = completionMetrics;
+      // CRITICAL: Immediately stop periodic timers to prevent further updates
+      if (periodicTimersRef.current.timeout) {
+        clearTimeout(periodicTimersRef.current.timeout);
+      }
+      if (periodicTimersRef.current.interval) {
+        clearInterval(periodicTimersRef.current.interval);
+      }
+      periodicTimersRef.current = { timeout: null, interval: null };
 
-            // Calculate focus metrics for display
-            const totalMs = completionMetrics.totalMs;
-            const unfocusedMs = completionMetrics.unfocusedMs;
-            const focusedMs = Math.max(0, totalMs - unfocusedMs);
-            const focusPercentage = totalMs > 0 ? Math.round((focusedMs / totalMs) * 100) : 100;
+      if (!attempt?.completed_at) {
+        // The time so far goes with the request; the session is closed only
+        // once the server has completed the attempt (a refusal resumes it).
+        const completionMetrics = getMetricsSnapshot();
+        lastMetricsRef.current = completionMetrics;
 
-            setCompletionFocusMetrics({
-              totalMs,
-              focusedMs,
-              percentage: focusPercentage,
-            });
-
-            // CRITICAL: Immediately stop periodic timers to prevent further updates
-            if (periodicTimersRef.current.timeout) {
-              clearTimeout(periodicTimersRef.current.timeout);
-            }
-            if (periodicTimersRef.current.interval) {
-              clearInterval(periodicTimersRef.current.interval);
-            }
-            periodicTimersRef.current = { timeout: null, interval: null };
-
-            // Complete the quiz in the backend
-            fetch('/api/quiz', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                _action: 'completeQuiz',
-                attemptId: attemptId,
-                totalDurationMs: completionMetrics.totalMs,
-                unfocusedDurationMs: completionMetrics.unfocusedMs,
-              }),
-            })
-              .then(() => {
-                revalidateRef.current();
-              })
-              .catch(error => {
-                console.error('Error completing quiz:', error);
+        // Complete the quiz in the backend
+        fetch('/api/quiz', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            _action: 'completeQuiz',
+            attemptId: attemptId,
+            totalDurationMs: completionMetrics.totalMs,
+            unfocusedDurationMs: completionMetrics.unfocusedMs,
+          }),
+        })
+          .then(async response => {
+            if (response.ok) {
+              const finalMetrics = finalizeCurrentSession();
+              const focusedMs = Math.max(0, finalMetrics.totalMs - finalMetrics.unfocusedMs);
+              setCompletionFocusMetrics({
+                totalMs: finalMetrics.totalMs,
+                focusedMs,
+                percentage:
+                  finalMetrics.totalMs > 0
+                    ? Math.round((focusedMs / finalMetrics.totalMs) * 100)
+                    : 100,
               });
-            break;
-          }
-        }
+            } else {
+              const body = response.status === 409 ? await response.json().catch(() => null) : null;
+              if ((body as { code?: unknown } | null)?.code === QUIZ_NOT_FINISHED) {
+                // Not finished after all: reopen the chat, with the server's
+                // line after the transcript until the transcript grows.
+                notFinishedEvaluationsRef.current.add(latest.message.id);
+                setIsQuizComplete(false);
+                const message = (body as { message?: unknown }).message;
+                const notice: QuizMessage = {
+                  id: `not-finished-${latest.message.id}`,
+                  role: 'ASSISTANT',
+                  content:
+                    typeof message === 'string' && message ? message : QUIZ_NOT_FINISHED_LINE,
+                };
+                sendFailureRef.current = { lines: [notice], savedCount: savedCountRef.current };
+                setMessages(prev => [...prev, notice]);
+              }
+            }
+            revalidateRef.current();
+          })
+          .catch(error => {
+            console.error('Error completing quiz:', error);
+          });
       }
     }
   }, [
     initialMessages,
     attemptId,
+    attempt?.completed_at,
     isQuizComplete,
     finalizeCurrentSession,
+    getMetricsSnapshot,
     readOnly,
     loading,
     sending,
+    stopAwaitingReply,
   ]);
+
+  /**
+   * After a send the server answered: unlock the input, or — when the answer
+   * says the attempt's previous turn is still running (`awaitingReply`) —
+   * keep it locked and the transcript polling until that turn ends. The
+   * server has saved the "still being answered" line; it shows as usual.
+   */
+  const settleSend = async (response: Response, endingsBefore: number) => {
+    pendingUserMessageRef.current = null;
+    const body = (await response.json().catch(() => null)) as { awaitingReply?: unknown } | null;
+    if (body?.awaitingReply === true) {
+      if (awaitingReplyRef.current) clearTimeout(awaitingReplyRef.current.timer);
+      awaitingReplyRef.current = {
+        endingsBefore,
+        timer: setTimeout(stopAwaitingReply, AWAIT_RUNNING_REPLY_MS),
+      };
+    } else {
+      setSending(false);
+    }
+    revalidateRef.current();
+  };
+
+  /** The turn endings the transcript has now, before a send goes out. */
+  const turnEndingsNow = () =>
+    countTurnEndings((initialMessages || []).filter((m: QuizMessage) => m.role !== 'system'));
 
   const handleSend = async (messageContent: string) => {
     if (!messageContent || !attemptId) {
@@ -781,6 +950,7 @@ function QuizAttemptInterface({
     ).length;
     setSending(true);
     let failureCopy = SEND_FAILED;
+    const endingsBefore = turnEndingsNow();
 
     try {
       const response = await fetch('/api/quiz', {
@@ -799,9 +969,7 @@ function QuizAttemptInterface({
       }
 
       // The POST blocks until ai-agent saves the response, so it's in DB now.
-      pendingUserMessageRef.current = null;
-      setSending(false);
-      revalidateRef.current();
+      await settleSend(response, endingsBefore);
     } catch (error: unknown) {
       console.error('Error sending message:', error);
       const errorMessage: QuizMessage = {
@@ -839,6 +1007,7 @@ function QuizAttemptInterface({
     ).length;
     setSending(true);
     let failureCopy = SEND_FAILED;
+    const endingsBefore = turnEndingsNow();
 
     try {
       const response = await fetch('/api/quiz', {
@@ -856,9 +1025,7 @@ function QuizAttemptInterface({
         throw new Error(`sendMessage failed (${response.status})`);
       }
 
-      pendingUserMessageRef.current = null;
-      setSending(false);
-      revalidateRef.current();
+      await settleSend(response, endingsBefore);
     } catch (error: unknown) {
       console.error('Error sending quick action:', error);
       const errorMessage: QuizMessage = {
@@ -886,13 +1053,29 @@ function QuizAttemptInterface({
     );
     // During sends, slice off steps that existed before the send started
     const newSteps = sending ? allSteps.slice(explorationStepBaseRef.current) : allSteps;
-    return newSteps.map((m: QuizMessage) => ({
-      action: m.content,
-      toolName: (getMetadata(m.metadata)?.toolName as string) ?? '',
-      toolInput: getMetadata(m.metadata)?.toolInput,
-      timestamp: m.timestamp ? new Date(m.timestamp).getTime() : 0,
-    }));
+    return newSteps.map((m: QuizMessage) => {
+      const metadata = getMetadata(m.metadata);
+      return {
+        action: m.content,
+        toolName: (metadata?.toolName as string) ?? '',
+        toolInput: metadata?.toolInput,
+        timestamp: m.timestamp ? new Date(m.timestamp).getTime() : 0,
+        // Older steps, and every code step, carry none.
+        ...(typeof metadata?.title === 'string' && metadata.title ? { title: metadata.title } : {}),
+      };
+    });
   }, [initialMessages, sending]);
+
+  // The evaluation card, for a completed attempt only: the latest evaluation's
+  // feedback with the attempt's stored scores.
+  const evaluationData = useMemo(() => {
+    if (!attempt?.completed_at) return null;
+    const latest = lastEvaluationIn(
+      (initialMessages || []).filter((m: QuizMessage) => m.role !== 'system'),
+      notFinishedEvaluationsRef.current
+    );
+    return latest ? evaluationWithStoredScores(latest.completion, attempt) : null;
+  }, [attempt, initialMessages]);
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>

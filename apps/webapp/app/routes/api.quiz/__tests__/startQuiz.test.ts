@@ -97,6 +97,15 @@ vi.mock('@classmoji/auth/server', () => ({
   getAuthSession: (...a: unknown[]) => getAuthSessionMock(...a),
 }));
 
+// The per-call MCP read token (quiz source material, Stage 2). Mocked so no
+// test here mints against a real database.
+vi.mock('@classmoji/auth/mcp-token', () => ({
+  mintMcpAccessToken: vi.fn(async () => ({
+    accessToken: 'mcp-token',
+    expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+  })),
+}));
+
 const { action } = await import('../route.ts');
 
 const postRequest = (body: unknown) =>
@@ -249,7 +258,8 @@ describe('api.quiz startQuiz — background task containment', () => {
     expect(initializeAgentMock).toHaveBeenCalledWith(
       ATTEMPT_ID,
       expect.any(Object),
-      expect.objectContaining({ orgLogin: 'test-org', repoName: 'student-repo' })
+      expect.objectContaining({ orgLogin: 'test-org', repoName: 'student-repo' }),
+      expect.anything()
     );
     expect(unhandled).toEqual([]);
   });
@@ -488,6 +498,39 @@ describe('api.quiz startQuiz — budget-stopped opening turn', () => {
     expect(runBackgroundTaskMock).toHaveBeenCalledWith('startQuiz:codeAware');
     expectRetryMessageOnly();
   });
+
+  // Stopped before its first question for another reason: the turn deadline
+  // (TURN_DEADLINE), a shutting-down ai-agent (SHUTTING_DOWN), or a dropped
+  // connection (AGENT_DISCONNECTED). Same line, no question — never the
+  // invented fallback question a later grade would be measured against.
+  for (const code of ['TURN_DEADLINE', 'SHUTTING_DOWN', 'AGENT_DISCONNECTED']) {
+    for (const mode of ['standard', 'codeAware'] as const) {
+      it(`${mode}: answers ${code} with the retry line, no question, no questions_asked bump`, async () => {
+        initializeAgentMock.mockRejectedValue(
+          Object.assign(new Error('Something went wrong. Please try again.'), {
+            code,
+            retryable: true,
+          })
+        );
+
+        await start(
+          mode === 'standard'
+            ? buildAttempt()
+            : buildAttempt({ repository_id: 'repository-1', include_code_context: true })
+        );
+
+        expect(addMessageMock).toHaveBeenCalledTimes(1);
+        expect(addMessageMock).toHaveBeenCalledWith(
+          ATTEMPT_ID,
+          'ASSISTANT',
+          "Your first question couldn't be prepared. Send any message to try again.",
+          false,
+          { errorType: 'START_INTERRUPTED', code }
+        );
+        expect(incrementMock).not.toHaveBeenCalled();
+      });
+    }
+  }
 
   it('keeps the fallback question for any other coded error', async () => {
     initializeAgentMock.mockRejectedValue(

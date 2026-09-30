@@ -16,7 +16,6 @@ import React, { useEffect } from 'react';
 import dayjs from 'dayjs';
 import { ConfigProvider, theme, App as AntdApp } from 'antd';
 import { IconMoodSad } from '@tabler/icons-react';
-import { auth as triggerAuth } from '@trigger.dev/sdk';
 
 import { GitHubProvider, ClassmojiService } from '@classmoji/services';
 import { CalloutProvider, CalloutSlot } from '@classmoji/ui-components';
@@ -26,7 +25,7 @@ import { COOKIE_DOMAIN } from '@classmoji/auth/secret';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import type { Route } from './+types/root';
 import type { MembershipWithOrganization, AppUser, Role } from '~/types';
-import { CLASSROOM_SETTINGS_SELECT } from '~/types';
+import { ROOT_USER_INCLUDE } from '~/types';
 import type { ThemeConfig } from 'antd';
 import { useNotifiedFetcher, useDarkMode } from './hooks';
 import antdTheme from './config/antd';
@@ -70,6 +69,24 @@ export const meta = () => {
 const startedFromAdminApp = (request: Request): boolean =>
   /(?:^|;\s*)cm_impersonation_origin=admin(?:;|$)/.test(request.headers.get('cookie') ?? '');
 
+/**
+ * The session fields the browser reads: the session id (the impersonation
+ * banner's key), `impersonatedBy` (whether a "View As" is on) and the
+ * signed-in user's name and email (the banner's label).
+ */
+const toClientSession = (source: unknown) => {
+  if (!source || typeof source !== 'object') return null;
+  const { session, user } = source as {
+    session?: { id?: unknown; impersonatedBy?: unknown } | null;
+    user?: { name?: unknown; email?: unknown } | null;
+  };
+  const text = (value: unknown) => (typeof value === 'string' ? value : undefined);
+  return {
+    session: { id: text(session?.id), impersonatedBy: text(session?.impersonatedBy) },
+    user: { name: text(user?.name), email: text(user?.email) },
+  };
+};
+
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const url = new URL(request.url);
 
@@ -78,37 +95,16 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     return redirect('/setup');
   }
 
-  // Setup routes are public - bypass all auth and Trigger.dev logic
+  // Setup routes are public - bypass all auth
   if (url.pathname.startsWith('/setup')) {
     return { user: null };
-  }
-
-  // Create Trigger.dev public token for task monitoring. Only attempt this when a
-  // secret key is actually configured: without it the call cannot mint a usable
-  // token, and running it on every navigation (e.g. across an e2e suite) is pure
-  // waste — and real Trigger.dev API usage wherever a key is present. Gating on
-  // the key keeps production behaviour identical while making CI/e2e a no-op.
-  let publicToken = null;
-  if (process.env.TRIGGER_SECRET_KEY || process.env.TRIGGER_ACCESS_TOKEN) {
-    try {
-      publicToken = await triggerAuth.createPublicToken({
-        expirationTime: '1hr',
-        scopes: {
-          read: {
-            runs: true,
-          },
-        },
-      });
-    } catch {
-      // Trigger.dev not configured correctly - skip public token
-    }
   }
 
   if (url.pathname.endsWith('/invitation')) return { user: null };
 
   // Check if this is a public page route (e.g., /org-name/pages/page-id)
   const isPublicPageRoute = /^\/[^/]+\/pages\/[^/]+$/.test(url.pathname);
-  if (isPublicPageRoute) return { user: null, publicToken };
+  if (isPublicPageRoute) return { user: null };
 
   // Routes that don't require full auth (registration flow).
   //
@@ -142,7 +138,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
   if (!authData?.userId) {
     if (!isPublicRoute) return redirect('/');
-    return { user: null, organizations: [], publicToken, memberships: [] };
+    return { user: null, organizations: [], memberships: [] };
   }
 
   // Check if we're impersonating - if so, fetch the impersonated user directly
@@ -154,18 +150,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     // When impersonating, fetch the impersonated user directly by their session user ID
     user = await getPrisma().user.findUnique({
       where: { id: authData.userId },
-      include: {
-        classroom_memberships: {
-          include: {
-            classroom: {
-              include: {
-                git_organization: true,
-                settings: { select: CLASSROOM_SETTINGS_SELECT },
-              },
-            },
-          },
-        },
-      },
+      include: ROOT_USER_INCLUDE,
     });
 
     // Fetch subscription for impersonated user
@@ -179,18 +164,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     if (authData.userId) {
       user = await getPrisma().user.findUnique({
         where: { id: authData.userId },
-        include: {
-          classroom_memberships: {
-            include: {
-              classroom: {
-                include: {
-                  git_organization: true,
-                  settings: { select: CLASSROOM_SETTINGS_SELECT },
-                },
-              },
-            },
-          },
-        },
+        include: ROOT_USER_INCLUDE,
       });
 
       if (user) {
@@ -220,18 +194,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
         user = await getPrisma().user.findUnique({
           where: { login: githubUser.login },
-          include: {
-            classroom_memberships: {
-              include: {
-                classroom: {
-                  include: {
-                    git_organization: true,
-                    settings: { select: CLASSROOM_SETTINGS_SELECT },
-                  },
-                },
-              },
-            },
-          },
+          include: ROOT_USER_INCLUDE,
         });
 
         // User authenticated with GitHub but not in our DB yet - redirect to registration
@@ -283,9 +246,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   return {
     user,
     organizations,
-    publicToken,
     memberships,
-    session,
+    session: toClientSession(session),
     aiAgentAvailable: isAIAgentConfigured(),
     // Where "Stop viewing" should return to. Only set when apps/admin started
     // this impersonation (it drops the breadcrumb cookie before handing off) —
@@ -510,7 +472,7 @@ const App = ({ loaderData }: Route.ComponentProps) => {
                     <OperationProgress />
                     <NavigationProgress />
                     <ImpersonationBanner
-                      key={(session as Record<string, Record<string, string>>)?.session?.id}
+                      key={session?.session?.id}
                       session={session}
                       returnToAdminUrl={impersonationReturnUrl}
                       impersonationCookieDomain={impersonationCookieDomain}

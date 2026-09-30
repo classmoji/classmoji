@@ -23,6 +23,7 @@ import SubmissionsTable, {
   matchesFilter,
 } from './SubmissionsTable';
 import type { Route } from './+types/route';
+import { classroomForClient } from '~/utils/classroomForClient';
 
 /**
  * The assignment page: one REPO assignment, every student (or team) copy of
@@ -32,7 +33,8 @@ import type { Route } from './+types/route';
  *
  * Quiz and form assignments keep their own screens (attempts, responses); a
  * request for one of those redirects there, or 404s for a quiz in a classroom
- * whose quizzes are hidden.
+ * whose quizzes are hidden, and for a form under /assistant, which has no
+ * forms screen.
  */
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug, id } = params;
@@ -56,6 +58,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     }
   }
   if (assignment.type === 'FORM') {
+    // Forms are managed under /admin and /teacher only (OWNER | TEACHER); there
+    // is no /assistant forms route to send an assistant on to.
+    if (rolePrefix === 'assistant') throw new Response('Assignment not found', { status: 404 });
     const slug = assignment.form?.slug ? `/${encodeURIComponent(assignment.form.slug)}` : '';
     throw redirect(`/${rolePrefix}/${classSlug}/forms${slug}`);
   }
@@ -98,9 +103,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   return {
     assignment,
     repos,
-    assistants: graderPool.filter(({ is_grader }) => is_grader),
+    // What the grader picker reads of each grader: id, login and name.
+    assistants: graderPool
+      .filter(({ is_grader }) => is_grader)
+      .map(({ id, login, name }) => ({ id, login, name })),
     emojiMappings,
-    classroom,
+    classroom: classroomForClient(classroom),
     rolePrefix,
     autogradingTestCount: autogradingTests.length,
     studentCount: students.length,

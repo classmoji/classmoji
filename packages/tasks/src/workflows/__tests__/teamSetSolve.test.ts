@@ -9,6 +9,9 @@
  *    signal);
  *  - the final result line is parsed past progress lines and handed to
  *    completeRun, new optional fields (core_status, engine, stats) included;
+ *  - a version-2 problem is written exactly as the run row holds it, and a
+ *    two-stage (group) problem's `stages` reach completeRun; a group result
+ *    without them (or a non-group result with them) is `bad_result`;
  *  - ANY failure marks the run FAILED with `engine_error` and rethrows a
  *    SANITIZED error — the engine's stdout never reaches a log or the throw;
  *  - a cancel records `canceled`, and onCancel fails only a run function that
@@ -183,6 +186,51 @@ describe('team-set-solve', () => {
     expect(existsSync(problemPath!)).toBe(false);
   });
 
+  it('passes a version-2 group problem through unchanged and completes with its stages', async () => {
+    const problem = {
+      ...PROBLEM,
+      version: 2,
+      people: ['u-1', 'u-2', 'u-3', 'u-4'],
+      options: [{ id: 'o-1', open: 'auto', size: { min: 2, max: 3 } }],
+      group: { src: 'non_respondents', members: [2, 3], option_cost: [0] },
+    };
+    const stages = {
+      first: { status: 'OPTIMAL', objective: 10, bound: 10 },
+      second: { status: 'OPTIMAL', objective: 2 },
+    };
+    loadRunForSolve.mockResolvedValue({ run: { status: 'QUEUED' }, problem });
+    runScript.mockImplementation(async (_script: string, args: string[]) => {
+      problemPath = args[0]!;
+      expect(JSON.parse(readFileSync(problemPath, 'utf8'))).toEqual(problem);
+      return { stdout: `${JSON.stringify({ ...RESULT, stages })}\n`, stderr: '', exitCode: 0 };
+    });
+
+    await expect(run('r10')).resolves.toEqual({ status: 'SOLVED' });
+    expect(completeRun.mock.calls[0]![1]).toMatchObject({ objective: 12, stages });
+    expect(logged()).toContain('"stages"');
+    expect(existsSync(problemPath!)).toBe(false);
+  });
+
+  it('fails a group problem whose result line has no stages', async () => {
+    loadRunForSolve.mockResolvedValue({
+      run: { status: 'QUEUED' },
+      problem: {
+        ...PROBLEM,
+        version: 2,
+        group: { src: 'non_respondents', members: [1], option_cost: [0] },
+      },
+    });
+    runScript.mockImplementation(async (_script: string, args: string[]) => {
+      problemPath = args[0]!;
+      return { stdout: `${JSON.stringify(RESULT)}\n`, stderr: '', exitCode: 0 };
+    });
+
+    await expect(run('r11')).rejects.toThrow('team-set-solve failed at engine: bad_result');
+    expect(failRun).toHaveBeenCalledWith('r11', 'engine_error');
+    expect(completeRun).not.toHaveBeenCalled();
+    expect(existsSync(problemPath!)).toBe(false);
+  });
+
   it('logs a MODEL_INVALID message (indices only) and still completes the run', async () => {
     runScript.mockResolvedValue({
       stdout: `${JSON.stringify({
@@ -230,9 +278,13 @@ describe('team-set-solve', () => {
 
 describe('parseSolverOutput', () => {
   const line = (extra: Record<string, unknown>) => `${JSON.stringify({ ...RESULT, ...extra })}\n`;
-  const reason = (stdout: string) => {
+  /** A problem without a group (versions 1 and 2 alike). */
+  const SINGLE = {};
+  /** A two-stage problem; parseSolverOutput only asks whether it has a group. */
+  const GROUP = { group: { src: 'non_respondents', members: [1], option_cost: [0] } };
+  const reason = (stdout: string, problem: { group?: unknown } = SINGLE) => {
     try {
-      parseSolverOutput(stdout);
+      parseSolverOutput(stdout, problem);
       return null;
     } catch (error) {
       return (error as EngineFailure).reason;
@@ -241,12 +293,13 @@ describe('parseSolverOutput', () => {
 
   it('passes core_status, engine and stats through', () => {
     const { type: _type, ...output } = RESULT;
-    expect(parseSolverOutput(line({}))).toEqual(output);
+    expect(parseSolverOutput(line({}), SINGLE)).toEqual(output);
   });
 
   it('accepts a line from an engine without the optional fields', () => {
     const parsed = parseSolverOutput(
-      line({ core_status: undefined, engine: undefined, stats: undefined })
+      line({ core_status: undefined, engine: undefined, stats: undefined }),
+      SINGLE
     );
     expect(parsed).not.toHaveProperty('core_status');
     expect(parsed).not.toHaveProperty('engine');
@@ -261,7 +314,8 @@ describe('parseSolverOutput', () => {
         objective: null,
         bound: null,
         core_status: 'timeout',
-      })
+      }),
+      SINGLE
     );
     expect(parsed).toMatchObject({ status: 'INFEASIBLE', core: [], core_status: 'timeout' });
   });
@@ -274,5 +328,116 @@ describe('parseSolverOutput', () => {
     ['a non-string message', { message: 42 }],
   ])('rejects %s as bad_result', (_name, extra) => {
     expect(reason(line(extra))).toBe('bad_result');
+  });
+
+  describe('stages (two-stage group problems)', () => {
+    const STAGES = {
+      first: { status: 'OPTIMAL', objective: 10, bound: 10 },
+      second: { status: 'OPTIMAL', objective: 2 },
+    };
+
+    it('passes stages through for a group problem, dropping unknown keys', () => {
+      const parsed = parseSolverOutput(
+        line({
+          stages: {
+            first: { ...STAGES.first, extra: 1 },
+            second: { ...STAGES.second, extra: 2 },
+            third: null,
+          },
+        }),
+        GROUP
+      );
+      expect(parsed.stages).toEqual(STAGES);
+    });
+
+    it('accepts the shapes a group problem can end in', () => {
+      // Stage 2 found no room: INFEASIBLE, no teams, stage 1's numbers kept.
+      const noRoom = parseSolverOutput(
+        line({
+          status: 'INFEASIBLE',
+          teams: [],
+          objective: null,
+          bound: null,
+          core: ['non_respondents'],
+          core_status: 'complete',
+          stages: { first: STAGES.first, second: { status: 'INFEASIBLE', objective: null } },
+        }),
+        GROUP
+      );
+      expect(noRoom.stages?.second).toEqual({ status: 'INFEASIBLE', objective: null });
+      // Stage 1 found nothing: stage 2 never ran.
+      const stageOne = parseSolverOutput(
+        line({
+          status: 'INFEASIBLE',
+          teams: [],
+          objective: null,
+          bound: null,
+          core: ['pin:p1'],
+          core_status: 'complete',
+          stages: { first: { status: 'INFEASIBLE', objective: null, bound: null }, second: null },
+        }),
+        GROUP
+      );
+      expect(stageOne.stages?.second).toBeNull();
+      // Stage 1 timed out with an answer: FEASIBLE overall, bound null.
+      const timedOut = parseSolverOutput(
+        line({
+          status: 'FEASIBLE',
+          bound: null,
+          stages: {
+            first: { ...STAGES.first, status: 'FEASIBLE', bound: 4 },
+            second: STAGES.second,
+          },
+        }),
+        GROUP
+      );
+      expect(timedOut.stages?.first.status).toBe('FEASIBLE');
+    });
+
+    it('treats a null group as no group', () => {
+      expect(reason(line({}), { group: null })).toBeNull();
+      expect(reason(line({ stages: STAGES }), { group: null })).toBe('bad_result');
+    });
+
+    it.each([
+      ['a group problem without stages', {}, GROUP],
+      ['a problem without a group with stages', { stages: STAGES }, SINGLE],
+      ['stages that are not an object', { stages: [STAGES.first] }, GROUP],
+      ['stages without first', { stages: { second: STAGES.second } }, GROUP],
+      ['stages without second', { stages: { first: STAGES.first } }, GROUP],
+      [
+        'an unknown stage status',
+        { stages: { ...STAGES, first: { ...STAGES.first, status: 'DONE' } } },
+        GROUP,
+      ],
+      [
+        'a fractional stage objective',
+        {
+          stages: {
+            first: { ...STAGES.first, objective: 9.5 },
+            second: { ...STAGES.second, objective: 2.5 },
+          },
+        },
+        GROUP,
+      ],
+      [
+        'a stage bound that is a string',
+        { stages: { ...STAGES, first: { ...STAGES.first, bound: '10' } } },
+        GROUP,
+      ],
+      [
+        'stage objectives that do not add up to the objective',
+        { stages: { ...STAGES, second: { ...STAGES.second, objective: 3 } } },
+        GROUP,
+      ],
+      ['an objective without a second stage', { stages: { ...STAGES, second: null } }, GROUP],
+      [
+        'OPTIMAL with a stage that is not',
+        { stages: { ...STAGES, second: { ...STAGES.second, status: 'FEASIBLE' } } },
+        GROUP,
+      ],
+    ])('rejects %s as bad_result', (_name, extra, problem) => {
+      expect(reason(line(extra), problem)).toBe('bad_result');
+    });
   });
 });

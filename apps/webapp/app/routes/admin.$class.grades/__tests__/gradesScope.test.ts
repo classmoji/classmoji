@@ -209,16 +209,14 @@ describe('grades loader — the payload carries only what the table renders', ()
     expect(Object.keys(student).sort()).toEqual(expected.sort());
   });
 
-  it('pins the membership key set — id, user_id, comment, letter_grade', async () => {
+  it('pins the membership key set — id, user_id, letter_grade', async () => {
     grantLoader('TEACHER');
 
     const { memberships } = await resolveLoader();
     const membership = (memberships as Record<string, unknown>[])[0];
 
     // Notably no nested `user`: the table joins these to students by `user_id`.
-    expect(Object.keys(membership).sort()).toEqual(
-      ['comment', 'id', 'letter_grade', 'user_id'].sort()
-    );
+    expect(Object.keys(membership).sort()).toEqual(['id', 'letter_grade', 'user_id'].sort());
   });
 
   it('asks for the STUDENT memberships alone', async () => {

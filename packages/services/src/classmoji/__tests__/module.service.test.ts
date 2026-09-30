@@ -3,22 +3,32 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const classroomFindUnique = vi.fn();
 const moduleFindMany = vi.fn();
 const moduleFindFirst = vi.fn();
+const moduleFindUnique = vi.fn();
 const moduleUpdate = vi.fn();
+const moduleDelete = vi.fn();
 const itemFindFirst = vi.fn();
 const itemFindMany = vi.fn();
 const itemCreate = vi.fn();
 const itemUpdate = vi.fn();
+const itemDeleteMany = vi.fn();
 const transaction = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
     classroom: { findUnique: classroomFindUnique },
-    module: { findMany: moduleFindMany, findFirst: moduleFindFirst, update: moduleUpdate },
+    module: {
+      findMany: moduleFindMany,
+      findFirst: moduleFindFirst,
+      findUnique: moduleFindUnique,
+      update: moduleUpdate,
+      delete: moduleDelete,
+    },
     moduleItem: {
       findFirst: itemFindFirst,
       findMany: itemFindMany,
       create: itemCreate,
       update: itemUpdate,
+      deleteMany: itemDeleteMany,
     },
     $transaction: transaction,
   }),
@@ -33,6 +43,7 @@ const {
   addItem,
   reorderItems,
   listForClassroom,
+  deleteById,
 } = await import('../module.service.ts');
 
 beforeEach(() => {
@@ -139,6 +150,47 @@ describe('setPublic', () => {
       'Module not found in classroom'
     );
     expect(moduleUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('deleteById', () => {
+  it('refuses a module that owns any assignment, of any kind, and deletes nothing', async () => {
+    // One count over every assignment type: the refusal does not care whether
+    // the page listed them (a classroom without quizzes lists no QUIZ ones).
+    moduleFindFirst.mockResolvedValue({ id: 'mod1' });
+    moduleFindUnique.mockResolvedValue({ _count: { assignments: 1 } });
+
+    await expect(deleteById('mod1', 'class-1')).rejects.toThrow('Module still has assignments');
+    expect(moduleFindUnique).toHaveBeenCalledWith({
+      where: { id: 'mod1' },
+      select: { _count: { select: { assignments: true } } },
+    });
+    expect(moduleDelete).not.toHaveBeenCalled();
+  });
+
+  it('deletes a module with no assignments, leaving its items to the cascade', async () => {
+    moduleFindFirst.mockResolvedValue({ id: 'mod1' });
+    moduleFindUnique.mockResolvedValue({ _count: { assignments: 0 } });
+    moduleDelete.mockResolvedValue({ id: 'mod1' });
+
+    await deleteById('mod1', 'class-1');
+
+    expect(moduleFindFirst).toHaveBeenCalledWith({
+      where: { id: 'mod1', classroom_id: 'class-1' },
+      select: { id: true },
+    });
+    expect(moduleDelete).toHaveBeenCalledWith({ where: { id: 'mod1' } });
+    // Its ModuleItem rows go with it through the foreign key (ON DELETE
+    // CASCADE); the pages, quizzes, slides and forms they point at stay.
+    expect(itemDeleteMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses a module from another classroom before looking at it', async () => {
+    moduleFindFirst.mockResolvedValue(null);
+
+    await expect(deleteById('mod1', 'class-2')).rejects.toThrow('Module not found in classroom');
+    expect(moduleFindUnique).not.toHaveBeenCalled();
+    expect(moduleDelete).not.toHaveBeenCalled();
   });
 });
 

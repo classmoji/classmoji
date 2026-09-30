@@ -15,7 +15,15 @@
  */
 
 import { useCallback, useRef, useState, type FormEvent } from 'react';
-import { useLoaderData, useNavigation, Form, redirect, useActionData, data } from 'react-router';
+import {
+  useLoaderData,
+  useNavigation,
+  useSubmit,
+  Form,
+  redirect,
+  useActionData,
+  data,
+} from 'react-router';
 import getPrisma from '@classmoji/database';
 import { assertSlideAccess } from '@classmoji/auth/server';
 import {
@@ -28,19 +36,29 @@ import {
 } from '@classmoji/services/slides';
 import { assertSlideInClassroom, assertSlideKind } from '~/utils/slideRouteGuards';
 import { webappClassUrl } from '~/utils/webappLinks';
-import { UploadTooLargeError, readLimitedFormData, uploadBodyLimit } from '~/utils/uploadLimit';
+import { loadUploadCapability } from '~/utils/uploadCapability.server';
+import { mediaUnusedBySlides } from '~/utils/uploadedMedia.server';
+import {
+  UploadTooLargeError,
+  readLimitedFormData,
+  uploadBodyLimit,
+} from '@classmoji/utils/upload-limit';
 import {
   UPLOAD_BUSY_MESSAGE,
   UPLOAD_RETRY_AFTER_SECONDS,
   acquireUploadSlot,
   releaseUploadSlot,
-} from '~/utils/uploadConcurrency.server';
+} from '@classmoji/utils/upload-concurrency';
 import {
   PendingCancelLink,
   PendingSubmitButton,
   UploadPendingPanel,
 } from '~/components/FormPending';
 import { isSubmissionPending } from '~/utils/pendingSubmission';
+import { MediaUploadProgress } from '~/components/media/MediaUploadProgress';
+import { useMediaUpload } from '~/hooks/useMediaUpload';
+import { useDiscardRefusedUpload } from '~/hooks/useDiscardRefusedUpload';
+import { formatGigabytes, mediaFailureMessage, slideFileTarget } from '~/utils/mediaUpload';
 
 /** Load the slide, prove the caller may edit it, and prove it is a file slide. */
 async function authorizeFileSlide(request: Request, classroomSlug: string, slideId: string) {
@@ -80,8 +98,14 @@ export const loader = async ({
 
   const { slide, membership } = await authorizeFileSlide(request, classroomSlug, slideId);
 
+  // Where a new document goes — see the new-slide screen. Re-derived by the
+  // action from the uploaded row; this is only what the form says.
+  const uploadCapability = await loadUploadCapability(slide.classroom, 'replace slide file');
+
   return {
     classroomSlug,
+    classroomId: slide.classroom_id,
+    uploadCapability,
     slide: {
       id: slide.id,
       title: slide.title,
@@ -100,7 +124,9 @@ export const loader = async ({
     // is what this avoids.
     upload: {
       maxBytes: SLIDE_FILE_MAX_BYTES,
-      maxLabel: SLIDE_FILE_MAX_LABEL,
+      maxLabel: uploadCapability?.media
+        ? formatGigabytes(uploadCapability.media.perFileMaxBytes)
+        : SLIDE_FILE_MAX_LABEL,
       extensions: [...SLIDE_FILE_EXTENSIONS] as string[],
       accept: SLIDE_FILE_EXTENSIONS.map(ext => `.${ext}`).join(','),
     },
@@ -124,9 +150,15 @@ export const action = async ({
   // who is not allowed to make it.
   const { membership } = await authorizeFileSlide(request, classroomSlug, slideId);
 
-  // Every submission here carries a file, so this takes a slot unconditionally.
-  // The cap in `~/utils/uploadLimit` bounds one upload; this bounds how many of
-  // them the process is holding at the same moment.
+  // A document already in the classroom's media arrives as its id alone — a few
+  // bytes of url-encoded form, which holds no upload slot.
+  if (!isMultipartUpload(request)) {
+    return replaceFromMedia({ request, classroomSlug, slideId, membership });
+  }
+
+  // Every multipart submission here carries a file, so it takes a slot. The cap
+  // in `@classmoji/utils/upload-limit` bounds one upload; this bounds how many
+  // of them the process is holding at the same moment.
   if (!acquireUploadSlot()) {
     return data(
       { error: UPLOAD_BUSY_MESSAGE },
@@ -139,6 +171,72 @@ export const action = async ({
     releaseUploadSlot();
   }
 };
+
+/** Only the upload form posts multipart; the media form is its id alone. */
+function isMultipartUpload(request: Request): boolean {
+  return (request.headers.get('content-type') ?? '')
+    .toLowerCase()
+    .startsWith('multipart/form-data');
+}
+
+/**
+ * Repoint the slide at a document the browser already put in the classroom's
+ * media. The service checks everything about it from the row — this
+ * classroom's, finished, a slide document, and one the storage router sends to
+ * media — so nothing in the form is taken on trust but the id.
+ */
+async function replaceFromMedia({
+  request,
+  classroomSlug,
+  slideId,
+  membership,
+}: {
+  request: Request;
+  classroomSlug: string;
+  slideId: string;
+  membership: { role?: string | null } | null | undefined;
+}) {
+  let formData: FormData;
+  try {
+    formData = await readLimitedFormData(request, 64 * 1024);
+  } catch (error: unknown) {
+    if (error instanceof UploadTooLargeError) {
+      return data({ error: 'That request is too large.' }, { status: 413 });
+    }
+    throw error;
+  }
+
+  const mediaId = formData.get('mediaId');
+  if (typeof mediaId !== 'string' || !mediaId) {
+    return data({ error: 'Choose a file to upload.' }, { status: 400 });
+  }
+
+  try {
+    await slideFileService.replaceSlideFileWithMedia({ slideId, mediaId });
+  } catch (error: unknown) {
+    console.error('Failed to replace slide file from media:', error);
+    const ours =
+      error instanceof slideFileService.SlideSourceError || error instanceof SlideKindError;
+    return data(
+      {
+        error: ours ? error.message : "Couldn't save the slide. Please try again.",
+        // Uploaded only for this slide: when nothing points at it (the slide
+        // was not moved onto it), the browser deletes it.
+        discardMedia: await mediaUnusedBySlides(mediaId),
+      },
+      { status: ours ? error.status : 500 }
+    );
+  }
+
+  return redirect(
+    webappClassUrl(
+      process.env.WEBAPP_URL || 'http://localhost:3000',
+      membership?.role,
+      classroomSlug,
+      'slides'
+    )
+  );
+}
 
 /** The upload itself, once the caller has been admitted and holds a slot. */
 async function replaceFromForm({
@@ -217,10 +315,18 @@ const FIELD_CLASS =
   'focus:border-[var(--accent)]';
 
 export default function ReplaceSlideFilePage() {
-  const { slide, classroomName, classroomSlug, slidesListUrl, upload } =
-    useLoaderData<typeof loader>();
+  const {
+    slide,
+    classroomName,
+    classroomSlug,
+    classroomId,
+    uploadCapability,
+    slidesListUrl,
+    upload,
+  } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
-  const actionData = useActionData() as { error?: string } | undefined;
+  const actionData = useActionData() as { error?: string; discardMedia?: boolean } | undefined;
+  const rememberUpload = useDiscardRefusedUpload(actionData);
   const [fileError, setFileError] = useState<string | null>(null);
   // Name and size for the status panel, captured when the file is chosen. The
   // input itself is disabled mid-flight and `files` is not readable from a
@@ -231,7 +337,13 @@ export default function ReplaceSlideFilePage() {
   // True for the whole round trip, not just the bytes going up — see
   // `~/utils/pendingSubmission`. An error settling flips it back to false,
   // which is what clears the panel and hands the form back.
-  const isSubmitting = isSubmissionPending(navigation);
+  const submitting = isSubmissionPending(navigation);
+  // A document bound for media goes up from the browser first, then the form
+  // posts only its id — so "busy" is the upload AND the submission after it.
+  const media = useMediaUpload(classroomId);
+  const submit = useSubmit();
+  const [viaMedia, setViaMedia] = useState(false);
+  const isSubmitting = submitting || media.uploading;
 
   const checkFile = useCallback(
     (file: File | null | undefined): string | null => {
@@ -242,19 +354,47 @@ export default function ReplaceSlideFilePage() {
         return `Slide files must be one of: ${upload.extensions.map(e => `.${e}`).join(', ')}`;
       }
       if (file.size === 0) return 'That file is empty.';
-      if (file.size > upload.maxBytes) {
-        return `That file is too large. The limit is ${upload.maxLabel}.`;
-      }
+      // Over the repository's cap: media on Pro, the router's refusal elsewhere.
+      const target = slideFileTarget(uploadCapability, file);
+      if (target.kind === 'refused') return target.message;
       return null;
     },
-    [upload.extensions, upload.maxBytes, upload.maxLabel]
+    [upload.extensions, uploadCapability]
   );
 
-  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
-    const problem = checkFile(fileInputRef.current?.files?.[0] ?? null);
-    setFileError(problem);
-    if (problem) event.preventDefault();
+  /** Upload to media, then post the form with the uploaded object's id. */
+  const submitViaMedia = async (file: File) => {
+    setViaMedia(true);
+    // A refusal in the router's words for THIS file (what Pro stores, or that
+    // media is unavailable) — or a full quota in the server's.
+    const result = await media.start(file, {}, failure => ({
+      message: mediaFailureMessage(failure, file, uploadCapability),
+    }));
+    if (!result) {
+      setViaMedia(false);
+      return;
+    }
+    rememberUpload(result.mediaId);
+    submit({ mediaId: result.mediaId }, { method: 'post' });
   };
+
+  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
+    const file = fileInputRef.current?.files?.[0] ?? null;
+    const problem = checkFile(file);
+    setFileError(problem);
+    if (problem || !file) {
+      event.preventDefault();
+      return;
+    }
+    if (slideFileTarget(uploadCapability, file).kind === 'media') {
+      event.preventDefault();
+      void submitViaMedia(file);
+      return;
+    }
+    setViaMedia(false);
+  };
+
+  const formError = actionData?.error ?? media.state.error ?? null;
 
   return (
     <div className="min-h-screen bg-[var(--bg-page)] px-4 py-10">
@@ -274,12 +414,12 @@ export default function ReplaceSlideFilePage() {
         </div>
 
         <div className="card p-5 sm:p-6">
-          {actionData?.error && (
+          {formError && (
             <div
               role="alert"
               className="mb-5 rounded-[10px] border border-[var(--rose-bord)] bg-[var(--rose-bg)] px-4 py-3 text-sm text-[var(--rose-ink)]"
             >
-              {actionData.error}
+              {formError}
             </div>
           )}
 
@@ -307,6 +447,7 @@ export default function ReplaceSlideFilePage() {
                 const picked = event.target.files?.[0] ?? null;
                 setChosenFile(picked ? { name: picked.name, size: picked.size } : null);
                 setFileError(checkFile(picked));
+                media.clearError();
               }}
               className={`${FIELD_CLASS} file:mr-3 file:rounded-md file:border-0 file:bg-[var(--accent-soft)] file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-[var(--accent-ink)] disabled:cursor-not-allowed disabled:opacity-60`}
             />
@@ -321,7 +462,20 @@ export default function ReplaceSlideFilePage() {
               {upload.maxLabel}.
             </p>
 
-            {isSubmitting && <UploadPendingPanel file={chosenFile} />}
+            {media.uploading && media.state.file ? (
+              <MediaUploadProgress
+                file={media.state.file}
+                sentBytes={media.state.sentBytes}
+                onCancel={media.cancel}
+              />
+            ) : (
+              isSubmitting && (
+                <UploadPendingPanel
+                  file={chosenFile}
+                  {...(viaMedia ? { message: 'Saving the slide.' } : {})}
+                />
+              )
+            )}
 
             <div className="mt-6 flex justify-end gap-2">
               <PendingCancelLink href={slidesListUrl} pending={isSubmitting} />

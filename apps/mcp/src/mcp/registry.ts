@@ -213,6 +213,14 @@ const CALLER_ERROR_CODES = new Map<string, ToolErrorKind>([
   ['SLIDE_KIND_MISMATCH', 'invalid_params'],
   // An upload or a link the slide source policy refuses.
   ['SLIDE_SOURCE_REJECTED', 'invalid_params'],
+  // A content-repo upload refused for its type, extension or name
+  // (`FileRefusedError`), or for its size (`RepoFileTooLargeError`) — the
+  // same refusals the HTTP routes answer 415/400/413.
+  ['FILE_REFUSED', 'invalid_params'],
+  ['REPO_FILE_TOO_LARGE', 'invalid_params'],
+  // A repository upload the storage router sends to media (a Pro video, or a
+  // file over the repository's cap on a classroom with media).
+  ['USE_MEDIA', 'invalid_params'],
 ]);
 
 /**

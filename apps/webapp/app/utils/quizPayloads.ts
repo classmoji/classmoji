@@ -14,9 +14,9 @@
  *     staff review, student) and the `QuizAttemptInterface` they render.
  *   - `studentQuizAttemptView` / `studentQuizAttemptsSummaryView` — the
  *     student quiz list's attempts table and per-quiz summary. The service
- *     (`quiz.getQuizzesForStudent`) spreads each attempt row, which carries
- *     the agent config, session and grading columns alongside what the table
- *     shows.
+ *     (`quiz.getQuizzesForStudent`) selects the attempt columns the list and
+ *     its scoring read, which is still more than the table shows (timing and
+ *     grading columns), so the view narrows again here.
  */
 
 /** The attempt fields the student quiz list reads (table columns and tab filters). */
@@ -94,25 +94,100 @@ export const quizDrawerView = (quiz: {
   question_count: quiz.question_count ?? null,
 });
 
-/** The attempt fields `QuizAttemptInterface` reads: identity, timing, completion. */
+/** One question's recorded result, as the evaluation card shows it. */
+export interface AttemptQuestionResult {
+  question_num: number;
+  attempts: number;
+  credit_earned: number;
+  eventually_correct: boolean;
+}
+
+/**
+ * The attempt fields `QuizAttemptInterface` reads: identity, timing,
+ * completion, and a completed attempt's stored scores and per-question
+ * results (what the evaluation card shows).
+ */
 export interface AttemptDrawerView {
   id: string;
   completed_at: Date | string | null;
   total_duration_ms: number | null;
   unfocused_duration_ms: number | null;
+  partial_credit_percentage: number | null;
+  first_attempt_percentage: number | null;
+  question_results: AttemptQuestionResult[];
 }
+
+/**
+ * The attempt's recorded results for its questions 1..N, in question order:
+ * N is the count stored when the attempt started (`agent_config.questionCount`),
+ * else the quiz's `question_count` — the same results the attempt is scored on
+ * (quizAttempt.service.ts, scoredQuestionResults).
+ */
+const attemptQuestionResults = (
+  json: unknown,
+  agentConfig: unknown,
+  quizQuestionCount: number | null | undefined
+): AttemptQuestionResult[] => {
+  const started = (agentConfig as { questionCount?: unknown } | null)?.questionCount;
+  const count =
+    typeof started === 'number' && Number.isInteger(started) && started > 0
+      ? started
+      : typeof quizQuestionCount === 'number' && quizQuestionCount > 0
+        ? quizQuestionCount
+        : 5;
+  const byNumber = new Map<number, AttemptQuestionResult>();
+  for (const entry of Array.isArray(json) ? json : []) {
+    const r = entry as Record<string, unknown> | null;
+    if (
+      r &&
+      typeof r.question_num === 'number' &&
+      Number.isInteger(r.question_num) &&
+      r.question_num >= 1 &&
+      r.question_num <= count &&
+      typeof r.attempts === 'number' &&
+      typeof r.credit_earned === 'number' &&
+      typeof r.eventually_correct === 'boolean'
+    ) {
+      byNumber.set(r.question_num, {
+        question_num: r.question_num,
+        attempts: r.attempts,
+        credit_earned: r.credit_earned,
+        eventually_correct: r.eventually_correct,
+      });
+    }
+  }
+  return [...byNumber.values()].sort((a, b) => a.question_num - b.question_num);
+};
 
 export const attemptDrawerView = (attempt: {
   id: string;
   completed_at: Date | string | null;
   total_duration_ms?: number | null;
   unfocused_duration_ms?: number | null;
-}): AttemptDrawerView => ({
-  id: attempt.id,
-  completed_at: attempt.completed_at,
-  total_duration_ms: attempt.total_duration_ms ?? null,
-  unfocused_duration_ms: attempt.unfocused_duration_ms ?? null,
-});
+  partial_credit_percentage?: number | null;
+  first_attempt_percentage?: number | null;
+  question_results_json?: unknown;
+  agent_config?: unknown;
+  quiz?: { question_count?: number | null } | null;
+}): AttemptDrawerView => {
+  // Scores are shown for a completed attempt only.
+  const completed = Boolean(attempt.completed_at);
+  return {
+    id: attempt.id,
+    completed_at: attempt.completed_at,
+    total_duration_ms: attempt.total_duration_ms ?? null,
+    unfocused_duration_ms: attempt.unfocused_duration_ms ?? null,
+    partial_credit_percentage: completed ? (attempt.partial_credit_percentage ?? null) : null,
+    first_attempt_percentage: completed ? (attempt.first_attempt_percentage ?? null) : null,
+    question_results: completed
+      ? attemptQuestionResults(
+          attempt.question_results_json,
+          attempt.agent_config,
+          attempt.quiz?.question_count
+        )
+      : [],
+  };
+};
 
 /** The quiz fields the results page reads. */
 export interface QuizResultsQuizView {

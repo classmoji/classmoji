@@ -58,6 +58,9 @@ jobs:
               - 'packages/database/**'
               - 'packages/services/**'
               - 'packages/utils/**'
+              # The worker bundles services, which signs media and content
+              # URLs with this package.
+              - 'packages/content-signing/**'
 
   deploy-webapp:
     needs: changes

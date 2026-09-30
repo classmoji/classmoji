@@ -28,7 +28,11 @@ import {
   IconPresentation,
   IconStarFilled,
 } from '@tabler/icons-react';
-import type { CalendarEventWithLinks, CalendarFeaturedResource } from './types';
+import type {
+  CalendarEventWithLinks,
+  CalendarFeaturedResource,
+  CalendarLinkedAssignment,
+} from './types';
 import DraftPill from './DraftPill';
 import { PageLink, usePagePeek } from '~/components/features/pages';
 
@@ -47,6 +51,8 @@ export interface CalendarResource {
   is_draft: boolean;
   /** Assignments only: the anchor the repositories page scrolls to. */
   repoSlug?: string | null;
+  /** Assignments only: REPO, QUIZ or FORM, which can change where it goes. */
+  assignmentType?: CalendarLinkedAssignment['assignment']['type'];
   /** The one the instructor starred, i.e. the one month view shows. */
   featured?: boolean;
 }
@@ -95,7 +101,9 @@ export type ResourceDestination =
   /** Off-site or another app: a new tab. */
   | { kind: 'external'; href: string }
   /** Inside this app: a client-side navigation. */
-  | { kind: 'internal'; to: string };
+  | { kind: 'internal'; to: string }
+  /** Nowhere this viewer can open: drawn as a label, not a link. */
+  | { kind: 'none' };
 
 export const resourceDestination = (
   resource: CalendarResource,
@@ -133,6 +141,12 @@ export const resourceDestination = (
   }
 
   const rolePrefix = context.rolePrefix ?? 'student';
+  // Forms are managed under /admin and /teacher only. /assistant has no forms
+  // screen, and the assignment page answers a form assignment there with a
+  // 404, so an assistant gets the title without a link.
+  if (rolePrefix === 'assistant' && resource.assignmentType === 'FORM') {
+    return { kind: 'none' };
+  }
   return {
     kind: 'internal',
     to:
@@ -186,6 +200,7 @@ export const resourcesForEvent = (event: CalendarEventWithLinks): CalendarResour
       title: assignment.title,
       is_draft: assignment.is_published === false || repository?.is_published === false,
       repoSlug: repository?.slug ?? null,
+      assignmentType: assignment.type,
       featured: isFeatured('assignment', assignment.id),
     })),
   ];
@@ -207,21 +222,24 @@ export const resourceKey = (resource: Pick<CalendarResource, 'kind' | 'id'>): st
 
 /**
  * The starred resource as a `CalendarResource`. It carries no repository slug
- * of its own — that is the anchor the repositories page scrolls to, and it
- * lives on the event's assignment list.
+ * or assignment type of its own — both live on the event's assignment list,
+ * which the starred assignment is always in.
  */
 export const featuredResource = (
   featured: CalendarFeaturedResource,
   event: CalendarEventWithLinks
-): CalendarResource => ({
-  ...featured,
-  featured: true,
-  repoSlug:
+): CalendarResource => {
+  const linked =
     featured.kind === 'assignment'
-      ? ((event.assignments ?? []).find(a => a.assignment.id === featured.id)?.repository?.slug ??
-        null)
-      : null,
-});
+      ? (event.assignments ?? []).find(a => a.assignment.id === featured.id)
+      : undefined;
+  return {
+    ...featured,
+    featured: true,
+    repoSlug: linked?.repository?.slug ?? null,
+    assignmentType: linked?.assignment.type,
+  };
+};
 
 /**
  * One icon per kind. Exported because a block too short for chips shows the
@@ -289,6 +307,19 @@ const VARIANT_CLASS: Record<ResourceLinkVariant, string> = {
     'focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent',
 };
 
+/**
+ * The same boxes for a resource this viewer has nowhere to open: the layout
+ * of each variant without its link colour, underline or hover. The chip stays
+ * pointer-active so its truncated title still shows as a tooltip.
+ */
+const LABEL_CLASS: Record<ResourceLinkVariant, string> = {
+  list: 'flex items-center gap-2 text-sm text-ink-2',
+  row: 'flex items-center gap-1 pl-2 pr-1 w-full min-w-0 text-xs text-ink-2',
+  chip:
+    'pointer-events-auto inline-flex items-center gap-1 min-w-0 max-w-full rounded px-1 py-px ' +
+    'leading-none text-[0.6875rem] text-ink-2 bg-white/70 dark:bg-neutral-900/40',
+};
+
 const ICON_SIZE: Record<ResourceLinkVariant, number> = { list: 18, row: 12, chip: 12 };
 
 /**
@@ -336,7 +367,7 @@ const ResourceLink = ({ resource, context = {}, variant, showStar = false }: Res
   const className = VARIANT_CLASS[variant];
   const size = ICON_SIZE[variant];
 
-  const body = (newTab: boolean) => (
+  const body = (newTab: boolean, linked = true) => (
     <>
       <Icon size={size} className={variant === 'list' ? 'text-ink-3' : 'shrink-0'} />
       {showStar && resource.featured && (
@@ -346,7 +377,9 @@ const ResourceLink = ({ resource, context = {}, variant, showStar = false }: Res
           className="shrink-0 text-amber-500/90"
         />
       )}
-      <span className={variant === 'list' ? 'underline' : 'truncate'}>{resource.title}</span>
+      <span className={variant !== 'list' ? 'truncate' : linked ? 'underline' : undefined}>
+        {resource.title}
+      </span>
       {resource.is_draft && <DraftPill />}
       {newTab && (
         <IconExternalLink size={variant === 'list' ? 14 : 11} className="shrink-0 text-ink-3" />
@@ -363,6 +396,16 @@ const ResourceLink = ({ resource, context = {}, variant, showStar = false }: Res
     onMouseDown: (e: React.MouseEvent) => e.stopPropagation(),
     onClick: (e: React.MouseEvent) => e.stopPropagation(),
   };
+
+  // No destination: the title, not a control, so no "Open …" name. It still
+  // stops the press, so a click on a week chip does not arm the drag layer.
+  if (destination.kind === 'none') {
+    return (
+      <span {...stop} title={resource.title} className={LABEL_CLASS[variant]}>
+        {body(false, false)}
+      </span>
+    );
+  }
 
   if (destination.kind === 'page') {
     return (

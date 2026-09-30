@@ -1,6 +1,7 @@
 import { requiresResolvedContext, type FormField } from '@classmoji/services/form-contract';
 
 import { ClassmojiService, getAuthSession, prisma } from '~/utils/db.server.ts';
+import { findClassroomRole } from '~/utils/classroomRole.server.ts';
 import type { ReviewTarget } from '~/components/forms/FormRenderer.tsx';
 import {
   classroomIdentityPlan,
@@ -222,12 +223,9 @@ export async function resolveClassroomForm({
   // the no-email view names the form and the not-member view does not. Deciding
   // them the other way round would hand a members-only form's title to a
   // non-member who happens to have an incomplete account.
-  const membership = await prisma.classroomMembership.findFirst({
-    where: { classroom_id: classroom.id, user_id: account.userId },
-    select: { id: true },
-  });
+  const role = await findClassroomRole({ userId: account.userId, classroomId: classroom.id });
 
-  if (!membership) {
+  if (!role) {
     /**
      * A DIFFERENT state from the anonymous interstitial, on purpose.
      *

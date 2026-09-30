@@ -42,6 +42,10 @@ vi.mock('~/components', async () => ({
     createElement('button', { type: 'button', 'data-testid': 'new-quiz' }, children),
 }));
 
+// The draft-material warning shows through the app's callout, whose provider
+// sits at the app root; the markup under test does not depend on it.
+vi.mock('@classmoji/ui-components', () => ({ useCallout: () => ({ show: vi.fn() }) }));
+
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => mocks.assertClassroomAccess(...a),
   assertClassroomMutationAllowed: vi.fn(),

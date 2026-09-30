@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useLoaderData, Link, useFetcher } from 'react-router';
+import { useLoaderData, Link, useFetcher, data } from 'react-router';
 import { Popconfirm, Modal, Input, Tooltip, Spin } from 'antd';
 
 import { useToast } from '~/hooks';
 import getPrisma from '@classmoji/database';
 import { getAuthSession, assertSlideAccess } from '@classmoji/auth/server';
+import { UploadTooLargeError, readLimitedFormData } from '@classmoji/utils/upload-limit';
 import { ClassmojiService } from '@classmoji/services';
 import { ContentService } from '@classmoji/content';
 import { isDeckSlide, slideService } from '@classmoji/services/slides';
-import { deleteSlideVideos } from '~/utils/cloudinaryService.server';
 import { resolveDeckThumbnailUrls } from '~/utils/deckDelivery.server';
 import { enqueueDeckThumbnail } from '~/utils/deckThumbnailEnqueue.server';
 import { deckOnlyMessage, isDeckKind } from '~/utils/slideKind';
@@ -130,7 +130,10 @@ export const loader = async ({ request }: { request: Request }) => {
           git_organization: { select: { login: true } },
         },
       },
+      // The card names the deck's repository. A deck can also be linked to a
+      // quiz (source material), so take a repository link, not just any.
       links: {
+        where: { repository_id: { not: null } },
         include: {
           repository: true,
         },
@@ -151,12 +154,33 @@ export const loader = async ({ request }: { request: Request }) => {
   };
 };
 
-export const action = async ({ request }: { request: Request }) => {
-  const formData = await request.formData();
-  const intent = formData.get('intent');
+/**
+ * The most this action reads of a body. Every intent posts a few short text
+ * fields (an intent, a slide id, a title), never a file.
+ */
+const INDEX_ACTION_BODY_MAX_BYTES = 64 * 1024;
 
-  // Get auth for actions that need userId
+export const action = async ({ request }: { request: Request }) => {
+  // A session before the body is touched. Every intent needs one — each is
+  // gated by `assertSlideAccess` below, which refuses an anonymous caller — and
+  // this refusal is the same for every slide id, so it tells a caller nothing
+  // about which decks exist.
   const authData = await getAuthSession(request);
+  if (!authData) {
+    return data({ error: 'Sign in to continue.' }, { status: 401 });
+  }
+
+  // Then the body, through the byte-counting reader.
+  let formData: FormData;
+  try {
+    formData = await readLimitedFormData(request, INDEX_ACTION_BODY_MAX_BYTES);
+  } catch (error: unknown) {
+    if (error instanceof UploadTooLargeError) {
+      return data({ error: 'Request body is too large.' }, { status: 413 });
+    }
+    throw error;
+  }
+  const intent = formData.get('intent');
 
   if (intent === 'delete') {
     const slideId = formData.get('slideId') as string | null;
@@ -178,14 +202,9 @@ export const action = async ({ request }: { request: Request }) => {
       return { error: message };
     }
 
-    // Delete the slide (no theme cleanup for simple deletion). Cloudinary
-    // video cleanup stays app-local — supplied as the service's callback.
+    // Delete the slide (no theme cleanup for simple deletion).
     try {
-      await slideService.deleteSlide({
-        slideId,
-        deleteTheme: false,
-        onDeleteVideos: deleteSlideVideos,
-      });
+      await slideService.deleteSlide({ slideId, deleteTheme: false });
       return { success: true, intent: 'delete', deletedSlideId: slideId };
     } catch (error: unknown) {
       console.error('Failed to delete slide:', error);
@@ -201,12 +220,10 @@ export const action = async ({ request }: { request: Request }) => {
     const slideId = formData.get('slideId') as string | null;
     if (!slideId) return { intent: 'thumbnail', outcome: 'invalid' };
 
-    // A SESSION first. This endpoint spends a render — a booted browser, a
-    // commit into a content repo — and the loader that produces the placeholder
-    // cards it answers for is behind a session already. Anonymous callers get
-    // the same `rate-limited` shape as everything else here rather than a 401,
-    // because a distinguishable refusal is an oracle for which slide ids exist.
-    if (!authData) return { intent: 'thumbnail', outcome: 'rate-limited' };
+    // A SESSION first — checked at the top of the action, before the body was
+    // read. This endpoint spends a render — a booted browser, a commit into a
+    // content repo — and the loader that produces the placeholder cards it
+    // answers for is behind a session already.
 
     // Then the same gate the card's own link is behind: a viewer may ask for a
     // picture of a deck they may open, and nothing else. A refusal answers the
@@ -412,17 +429,15 @@ export const action = async ({ request }: { request: Request }) => {
         },
       };
 
-      // Both rewrites below record what they wrote. index.html and deck.json
-      // are READ through the asset map now (fetchContentText), and the copy's
-      // paths are new, so the map has no row for them until the push webhook
-      // lands.
+      // Everything the copy wrote goes into the asset map now, rather than when
+      // the push webhook lands: index.html and deck.json are READ through the
+      // map (fetchContentText), and every path in the copy is new. The files
+      // `copyFolder` committed come with their blob shas; the two rewrites below
+      // then replace index.html's and deck.json's with the rewritten ones.
       //
-      // Only what the REWRITES write, though: `copyFolder` above is what puts
-      // the files there, and it reports no shas, so a deck whose content had no
-      // self-referencing paths to rewrite gets no rows here. That is a missing
-      // row, not a wrong one — the read falls back to the contents API and
-      // serves the right bytes — so it costs one GitHub call per view until the
-      // webhook arrives rather than showing the wrong deck.
+      // `entries` is read defensively: an older `copyFolder` reported paths only,
+      // and a copy without shas simply records nothing until the webhook does.
+      const copiedEntries = (copy as { entries?: Array<{ path: string; sha: string }> }).entries;
       const written: Array<{ path: string; sha: string }> = [];
 
       for (const [path, file] of [
@@ -461,9 +476,13 @@ export const action = async ({ request }: { request: Request }) => {
       }
 
       // Never throws: the copy is already committed, and the next sync writes
-      // the same rows.
+      // the same rows. A rewritten file's sha supersedes the copied one.
       if (slide.classroom_id) {
-        await ClassmojiService.contentAssets.recordContentAssets(slide.classroom_id, written);
+        const rows = new Map<string, { path: string; sha: string }>();
+        for (const entry of [...(copiedEntries ?? []), ...written]) rows.set(entry.path, entry);
+        await ClassmojiService.contentAssets.recordContentAssets(slide.classroom_id, [
+          ...rows.values(),
+        ]);
       }
 
       // Create new database record
@@ -473,7 +492,7 @@ export const action = async ({ request }: { request: Request }) => {
           slug: newSlug,
           content_path: newContentPath,
           classroom_id: slide.classroom_id,
-          created_by: authData?.userId || slide.created_by,
+          created_by: authData.userId || slide.created_by,
           is_draft: slide.is_draft,
           is_public: slide.is_public,
           allow_team_edit: slide.allow_team_edit,

@@ -69,9 +69,14 @@
   transition: all 0.15s;
 }
 
-.pa-icon-btn:hover {
+.pa-icon-btn:hover:not(:disabled) {
   background: var(--border);
   color: var(--text);
+}
+
+.pa-icon-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 /* Messages */

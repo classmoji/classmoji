@@ -102,6 +102,36 @@ describe('findWithMessages — failed replies in the transcript', () => {
     expect(messages[0].metadata).toEqual({ errorType: 'AGENT_FAILURE', code: 'BUDGET_EXCEEDED' });
   });
 
+  it('shows a stopped start as saved, with its code', async () => {
+    const stopped = "Your first question couldn't be prepared. Send any message to try again.";
+    withMessages([
+      message('m1', 'ASSISTANT', stopped, {
+        errorType: 'START_INTERRUPTED',
+        code: 'TURN_DEADLINE',
+      }),
+    ]);
+
+    const { messages } = await findWithMessages('attempt-1');
+
+    expect(messages[0].content).toBe(stopped);
+    expect(messages[0].metadata).toEqual({ errorType: 'START_INTERRUPTED', code: 'TURN_DEADLINE' });
+  });
+
+  it('keeps the saved text for turn_in_progress', async () => {
+    const stillAnswering = 'Your last message is still being answered.';
+    withMessages([
+      message('m1', 'ASSISTANT', stillAnswering, {
+        errorType: 'AGENT_FAILURE',
+        code: 'turn_in_progress',
+      }),
+    ]);
+
+    const { messages } = await findWithMessages('attempt-1');
+
+    expect(messages[0].content).toBe(stillAnswering);
+    expect(messages[0].metadata).toEqual({ errorType: 'AGENT_FAILURE', code: 'turn_in_progress' });
+  });
+
   it('shows an older API_ERROR row as the fixed line, keeping its code', async () => {
     const busy = 'The AI service is temporarily busy. Please wait a moment and try again.';
     withMessages([

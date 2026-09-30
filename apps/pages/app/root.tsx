@@ -60,6 +60,14 @@ const SITE_PATH_PREFIX = '/_site';
 const isSitePath = (pathname: string): boolean =>
   pathname === SITE_PATH_PREFIX || pathname.startsWith(`${SITE_PATH_PREFIX}/`);
 
+/**
+ * The user the root loader returns: each membership as the client reads it,
+ * its id, role and classroom.
+ */
+const ROOT_USER_INCLUDE = {
+  classroom_memberships: { select: { id: true, role: true, classroom: true } },
+} as const;
+
 export const loader = async ({ request }: { request: Request }) => {
   const url = new URL(request.url);
 
@@ -80,7 +88,7 @@ export const loader = async ({ request }: { request: Request }) => {
       if (authData) {
         const user = await prisma.user.findUnique({
           where: { id: authData.userId },
-          include: { classroom_memberships: { include: { classroom: true } } },
+          include: ROOT_USER_INCLUDE,
         });
         return { user, isSite: false };
       }
@@ -118,7 +126,7 @@ export const loader = async ({ request }: { request: Request }) => {
       user = await prisma.user
         .findUnique({
           where: { id: authData.userId },
-          include: { classroom_memberships: { include: { classroom: true } } },
+          include: ROOT_USER_INCLUDE,
         })
         .catch(() => null);
     }
@@ -148,11 +156,7 @@ export const loader = async ({ request }: { request: Request }) => {
         if (authData) {
           user = await prisma.user.findUnique({
             where: { id: authData.userId },
-            include: {
-              classroom_memberships: {
-                include: { classroom: true },
-              },
-            },
+            include: ROOT_USER_INCLUDE,
           });
         }
 
@@ -177,13 +181,7 @@ export const loader = async ({ request }: { request: Request }) => {
   try {
     user = await prisma.user.findUnique({
       where: { id: authData.userId },
-      include: {
-        classroom_memberships: {
-          include: {
-            classroom: true,
-          },
-        },
-      },
+      include: ROOT_USER_INCLUDE,
     });
   } catch (error) {
     console.error('User lookup failed:', error);

@@ -9,6 +9,7 @@ export {
   getEmojiMappingsForAttempt,
   calculatePercentagesFromResults,
   getQuestionResults,
+  getQuestionResultCoverage,
 } from './classmoji/quizAttempt.service.ts';
 
 // Content management for GitHub-backed storage (moved from @classmoji/content;
@@ -20,14 +21,23 @@ export {
   sanitizeFilename,
   MAX_FILE_SIZE,
   ALLOWED_EXTENSIONS,
+  FileRefusedError,
+  uploadRefusalStatus,
 } from './content/utils/validateFile.ts';
+export type { FileTypePolicy, FileRefusalReason } from './content/utils/validateFile.ts';
+export {
+  RepoFileTooLargeError,
+  asRepoTooLarge,
+  isCommitTooLargeRefusal,
+} from './content/repoLimits.ts';
 export { getMimeType, isBinaryFile, isImageFile } from './content/utils/contentType.ts';
 
 // Slide SOURCE policy — what a FILE or LINK slide is allowed to be.
 //
 // Exported from the ROOT barrel although it lives under `src/slides/`, which is
-// otherwise the cheerio-bearing deck engine's territory. `slideSource.ts` has
-// no imports at all: it is constants, a link validator and three kind guards,
+// otherwise the cheerio-bearing deck engine's territory. `slideSource.ts`
+// imports only the two import-light modules that own the repository size cap:
+// it is constants, a link validator and three kind guards,
 // and the webapp needs every one of them to render a kind chip, validate a link
 // in an action and refuse a deck-only toggle. Importing the FILE itself (not
 // the `./slides` barrel) is what keeps the parser out of the webapp's graph —
@@ -56,6 +66,22 @@ export type {
   SlideFileValidation,
   SlideLinkValidation,
 } from './slides/slideSource.ts';
+
+// Media object SHAPES, for the surfaces that render them.
+//
+// Types only, deliberately. The media service reaches R2 through
+// `@aws-sdk/client-s3`, and a VALUE export here would put that package in the
+// import graph of every route that only wanted to know what a media row looks
+// like. `export type` is erased at compile time, so this costs nothing; the
+// operations stay behind `ClassmojiService.media`, which is server-side by
+// construction. Same reasoning as the slide-source note above.
+export type {
+  MediaKind,
+  MediaProcessing,
+  MediaRecord,
+  MediaStatus,
+  MediaUsage,
+} from './media/index.ts';
 
 // Git provider abstraction layer
 export {
@@ -144,9 +170,46 @@ export type {
 } from './classmoji/orgRepoSettings.service.ts';
 // Quiz authorization refusal, so routes can answer 403 instead of 500.
 export { QuizAccessError, QUIZ_STAFF_ROLES } from './classmoji/quiz.service.ts';
+// Quiz source material: the linked pages and decks a quiz is about. The
+// ai-agent reads them through `ClassmojiService.quizSourceMaterial.load`; the
+// flat names are for callers that want the functions and types directly.
+export {
+  loadQuizSourceMaterial,
+  countStartableSourceMaterial,
+  applyMaterialBudget,
+  setQuizSourceMaterial,
+  normalizeSourceMaterial,
+  sourceMaterialOf,
+  listSourceMaterialOptions,
+  truncationMarker,
+  MAX_DOCS,
+  MAX_CHARS_PER_DOC,
+  MAX_CHARS_TOTAL,
+  MIN_ROOM_CHARS,
+  DEFAULT_MATERIAL_BUDGET,
+} from './classmoji/quizSourceMaterial.service.ts';
+export type {
+  SourceDocKind,
+  SourceMaterialRef,
+  SourceDoc,
+  OmittedReason,
+  OmittedDoc,
+  QuizSourceMaterial,
+  QuizSourceMaterialArgs,
+  StartableSourceMaterial,
+  MaterialBudget,
+  BudgetedMaterial,
+  QuizSourceMaterialEntry,
+  SourceMaterialOption,
+} from './classmoji/quizSourceMaterial.service.ts';
 // "No such attempt", so routes can answer 404 for that and only that — a query
 // that failed for any other reason has to keep its 500 and its log line.
-export { QuizAttemptNotFoundError } from './classmoji/quizAttempt.service.ts';
+// "Not finished yet": completion was asked for before every question has a
+// recorded result.
+export {
+  QuizAttemptNotFoundError,
+  QuizAttemptIncompleteError,
+} from './classmoji/quizAttempt.service.ts';
 // One builder for the remove_user_from_organization payload, so every caller
 // sends the same fields.
 export { buildRemoveUserPayload } from './classmoji/removeUserPayload.ts';
@@ -195,6 +258,8 @@ export type {
 export {
   TeamSetError,
   isTeamSetError,
+  isSetLocked,
+  gapPct,
   teamNamesFor,
   TEAM_SET_ENGINE,
   TEAM_SET_RUN_ERRORS,
@@ -203,8 +268,10 @@ export type {
   TeamSetErrorCode,
   TeamSetRunErrorCode,
   TeamSetRow,
+  TeamSetRowView,
   TeamSetRunRow,
   TeamSetSummary,
+  TeamSetStatusPoll,
   TeamSetRunListItem,
   RunInputs,
   RunResult,
@@ -212,6 +279,13 @@ export type {
   RunView,
   RunViewTeam,
   RunViewMember,
+  IdentityRuleView,
+  OptionStatusRow,
+  SetupChanges,
+  SetupView,
+  SetupQuestionView,
+  SetupOptionView,
+  RunComparisonView,
   SolverOutput,
   SolverSummary,
   SolverCoreStatus,
@@ -230,6 +304,9 @@ export {
   TeamSetConfigPatchSchema,
   TeamSetConfigError,
   applyConfigPatch,
+  normalizeTeamSetName,
+  resolveNonRespondents,
+  stampProvenance,
   suggestConfig,
   validateConfigAgainstForm,
 } from './classmoji/teamSetConfig.ts';
@@ -238,20 +315,69 @@ export type {
   TeamSetConfigPatch,
   TeamSetConfigPatchInput,
   TeamSetJob,
+  TeamSetNonRespondents,
+  TeamSetStampVia,
 } from './classmoji/teamSetConfig.ts';
-export { compileProblem, FREE_OPTION_ID } from './classmoji/teamSetProblem.ts';
+export { compileProblem, parseSrc, baseSrc, FREE_OPTION_ID } from './classmoji/teamSetProblem.ts';
 export type {
   TeamSetProblem,
   TeamSetContext,
   TeamSetHard,
+  TeamSetSolveStages,
+  TeamSetSolveStatus,
+  ParsedSrc,
   CompileInput,
 } from './classmoji/teamSetProblem.ts';
 export { scoreAssignment } from './classmoji/teamSetScore.ts';
-export type { TeamSetAssignment, TeamSetViolation } from './classmoji/teamSetScore.ts';
+export type {
+  TeamSetAssignment,
+  TeamSetViolation,
+  TeamSetScore,
+  TeamSetScoreParts,
+} from './classmoji/teamSetScore.ts';
 export { runChecks } from './classmoji/teamSetChecks.ts';
 export type { CheckIssue } from './classmoji/teamSetChecks.ts';
-export { computeMetrics } from './classmoji/teamSetMetrics.ts';
-export type { TeamSetMetrics, PersonPlacement } from './classmoji/teamSetMetrics.ts';
+export { computeMetrics, metricsView, ruleMissedSlots } from './classmoji/teamSetMetrics.ts';
+export type {
+  TeamSetMetrics,
+  TeamSetMetricsView,
+  TeamSetRuleMetric,
+  TeamSetNonRespondentMetrics,
+  PersonPlacement,
+} from './classmoji/teamSetMetrics.ts';
+// What a setup and a run mean to a reader (pure; also the browser-safe
+// `./team-set-explain` subpath).
+export {
+  setStatus,
+  ruleMustLabel,
+  diffConfigs,
+  closedProvenance,
+  compareAssignments,
+  placementFacts,
+  teamSignals,
+  labelSrc,
+  coreItems,
+  infeasibleSummary,
+} from './classmoji/teamSetExplain.ts';
+export type {
+  TeamSetStatus,
+  TeamSetVia,
+  PersonRef,
+  OptionRef,
+  OptionStatus,
+  PinView,
+  CoreItem,
+  SetupChange,
+  PlacementFacts,
+  PriorityFact,
+  TeamSignals,
+  RunComparison,
+  RunMover,
+  CompareMetricRow,
+  ClosedProvenanceView,
+  CreateProgressView,
+  CreateTeamProgress,
+} from './classmoji/teamSetExplain.ts';
 
 // Course-content search: the permission-joined vector query behind the MCP's
 // `content_search` / `content_list` / `content_get`, plus the ONE draft-

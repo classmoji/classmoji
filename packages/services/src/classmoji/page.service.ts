@@ -364,6 +364,12 @@ export async function createPage({
     );
   }
 
+  // The link is made last, after the commit and the row; a target that would
+  // be refused then is refused here, before anything is written.
+  if (linkRepositoryId) {
+    await assertLinkTargetsInClassroom(classroomId, { repositoryId: linkRepositoryId });
+  }
+
   if (ensureRepo) {
     await ensureContentRepoExists(ctx);
   }
@@ -674,7 +680,37 @@ export async function findFirstLinkedByAssignmentIds(assignmentIds: string[]) {
 }
 
 /**
- * Link a page to a repository or assignment
+ * Throw unless every given link target belongs to `classroomId`: the
+ * repository by its own classroom, the assignment through its module (and its
+ * repository, when it has one). A target in another classroom reads exactly
+ * like one that does not exist.
+ */
+export async function assertLinkTargetsInClassroom(
+  classroomId: string,
+  { repositoryId, assignmentId }: { repositoryId?: string | null; assignmentId?: string | null }
+): Promise<void> {
+  if (repositoryId) {
+    const repository = await getPrisma().repository.findFirst({
+      where: { id: repositoryId, classroom_id: classroomId },
+      select: { id: true },
+    });
+    if (!repository) throw new Error('Repository not found');
+  }
+  if (assignmentId) {
+    const assignment = await getPrisma().assignment.findFirst({
+      where: {
+        id: assignmentId,
+        module: { classroom_id: classroomId },
+        OR: [{ repository_id: null }, { repository: { classroom_id: classroomId } }],
+      },
+      select: { id: true },
+    });
+    if (!assignment) throw new Error('Assignment not found');
+  }
+}
+
+/**
+ * Link a page to a repository or assignment — of the page's own classroom.
  */
 export async function linkPage(
   pageId: string,
@@ -684,6 +720,13 @@ export async function linkPage(
     order = 0,
   }: { repositoryId?: string; assignmentId?: string; order?: number }
 ) {
+  const page = await getPrisma().page.findUnique({
+    where: { id: pageId },
+    select: { classroom_id: true },
+  });
+  if (!page) throw new Error('Page not found');
+  await assertLinkTargetsInClassroom(page.classroom_id, { repositoryId, assignmentId });
+
   const link = await getPrisma().pageLink.create({
     data: {
       page_id: pageId,

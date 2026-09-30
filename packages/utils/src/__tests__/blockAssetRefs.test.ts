@@ -11,7 +11,11 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { collectBlockAssetRefs, mapBlockAssetRefs } from '../blockAssetRefs.ts';
+import {
+  BLOCK_ASSET_REF_PROPS,
+  collectBlockAssetRefs,
+  mapBlockAssetRefs,
+} from '../blockAssetRefs.ts';
 
 const doc = () => [
   { id: '1', type: 'paragraph', content: [], children: [] },
@@ -88,5 +92,22 @@ describe('mapBlockAssetRefs', () => {
     expect(mapped[1]).toBe(original[1]);
     // The column chain leading to the rewritten block is copied.
     expect(mapped[2]).not.toBe(original[2]);
+  });
+});
+
+describe('BLOCK_ASSET_REF_PROPS — the rule', () => {
+  // Every block prop that stores a file reference is named one of these. The
+  // list is what the walk reads; a new name is a deliberate change here, and
+  // the pages app pins its registered block propSchemas against this export.
+  it('is exactly url and imageUrl', () => {
+    expect([...BLOCK_ASSET_REF_PROPS]).toEqual(['url', 'imageUrl']);
+  });
+
+  it('reads those props and no other, on any block type', () => {
+    const blocks = [
+      { type: 'video', props: { url: 'media://a', caption: 'media://not-a-ref-prop' } },
+      { type: 'customCard', props: { imageUrl: 'pages/x/assets/card.png', href: 'pages/x/a.pdf' } },
+    ];
+    expect(collectBlockAssetRefs(blocks)).toEqual(['media://a', 'pages/x/assets/card.png']);
   });
 });

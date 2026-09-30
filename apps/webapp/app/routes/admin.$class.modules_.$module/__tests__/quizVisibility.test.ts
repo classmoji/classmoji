@@ -4,6 +4,8 @@
  * "Add item" picker it opens (AddContentItemModal, no preset kind) offers no
  * Quiz type. Adding an item posts to the Modules action, which refuses a quiz
  * item on its own (see admin.$class.modules/__tests__/quizVisibility.test.ts).
+ * A module that owns hidden quiz assignments cannot be deleted, whatever else
+ * it lists: the loader flags it and the page renders no Delete button for it.
  */
 
 import { createElement } from 'react';
@@ -23,8 +25,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock('react-router', async importOriginal => ({
   ...(await importOriginal<typeof import('react-router')>()),
   // The modal posts through a fetcher, which needs a data router; the markup
-  // does not depend on it.
+  // does not depend on it. Nor on the page's params or navigation.
   useFetcher: () => ({ submit: vi.fn(), state: 'idle', data: undefined }),
+  useParams: () => ({ class: 'cs52', module: 'week-1' }),
+  useNavigate: () => vi.fn(),
 }));
 
 // antd's Modal portals its body, which renders nothing on the server. Reduced
@@ -72,7 +76,7 @@ vi.mock('~/components/features/assignments/AssignmentsTable', () => ({ default: 
 vi.mock('~/components/features/assignments/AssignmentFormModal', () => ({ default: () => null }));
 vi.mock('../../admin.$class.modules/ModuleFormModal', () => ({ default: () => null }));
 
-const { loader } = await import('../route');
+const { loader, default: ModuleDetail } = await import('../route');
 const AddContentItemModal = (await import('~/components/features/modules/AddContentItemModal'))
   .default;
 
@@ -134,6 +138,109 @@ describe('module detail loader', () => {
     expect(result.module.assignments.map(a => a.id)).toEqual(['asg-repo', 'asg-quiz']);
     expect(result.candidates.quizzes).toHaveLength(1);
     expect(result.boundQuizIds).toEqual(['q1']);
+  });
+
+  it('flags a module whose only assignments are hidden, and sends nothing else about them', async () => {
+    mocks.loadQuizzesVisible.mockResolvedValue(false);
+    mocks.listModuleContents.mockResolvedValue({
+      id: 'mod-1',
+      title: 'Week 1',
+      items: [],
+      assignments: [{ id: 'asg-quiz', type: 'QUIZ', quiz: { id: 'q1', name: 'Recursion' } }],
+    });
+    const result = await load();
+
+    expect(result.module.hasUnlistedAssignments).toBe(true);
+    expect(result.module.assignments).toEqual([]);
+    expect(JSON.stringify(result)).not.toMatch(/Recursion|asg-quiz|"q1"/);
+  });
+
+  it('flags a module that lists some assignments and owns hidden ones', async () => {
+    mocks.loadQuizzesVisible.mockResolvedValue(false);
+    const result = await load(); // lists asg-repo, owns asg-quiz
+
+    expect(result.module.hasUnlistedAssignments).toBe(true);
+    expect(result.module.assignments.map(a => a.id)).toEqual(['asg-repo']);
+    expect(JSON.stringify(result)).not.toMatch(/Recursion|asg-quiz|"q1"/);
+  });
+
+  it('does not flag a module that lists every assignment, or any module when quizzes show', async () => {
+    mocks.loadQuizzesVisible.mockResolvedValue(false);
+    mocks.listModuleContents.mockResolvedValue({
+      id: 'mod-1',
+      title: 'Week 1',
+      items: [],
+      assignments: [{ id: 'asg-repo', type: 'REPO' }],
+    });
+    expect((await load()).module.hasUnlistedAssignments).toBe(false);
+
+    mocks.loadQuizzesVisible.mockResolvedValue(true);
+    mocks.listModuleContents.mockResolvedValue({
+      id: 'mod-1',
+      title: 'Week 1',
+      items: [],
+      assignments: [{ id: 'asg-quiz', type: 'QUIZ', quiz: { id: 'q1', name: 'Recursion' } }],
+    });
+    expect((await load()).module.hasUnlistedAssignments).toBe(false);
+  });
+});
+
+describe('the module detail page’s Delete button', () => {
+  const renderPage = (module: {
+    assignments: Array<{ id: string; type: string }>;
+    hasUnlistedAssignments: boolean;
+  }) =>
+    renderToStaticMarkup(
+      createElement(ModuleDetail, {
+        loaderData: {
+          module: {
+            id: 'mod-1',
+            title: 'Week 1',
+            slug: 'week-1',
+            description: null,
+            position: 0,
+            is_published: true,
+            items: [],
+            ...module,
+          },
+          candidates: { pages: [], slides: [], quizzes: [], forms: [] },
+          repositories: [],
+          boundQuizIds: [],
+          boundFormIds: [],
+          tags: [],
+          quizzesVisible: false,
+        },
+      } as never)
+    );
+  // antd's Button wraps its label in a span.
+  const hasDelete = (html: string) => />Delete<\/span>/.test(html);
+
+  it('is not rendered for a module that lists no assignments but owns some', () => {
+    const html = renderPage({ assignments: [], hasUnlistedAssignments: true });
+    expect(hasDelete(html)).toBe(false);
+    expect(html).toContain('Week 1');
+    expect(html).not.toMatch(/quiz/i);
+  });
+
+  it('is not rendered for a module that lists some assignments and owns others', () => {
+    const html = renderPage({
+      assignments: [{ id: 'asg-repo', type: 'REPO' }],
+      hasUnlistedAssignments: true,
+    });
+    expect(hasDelete(html)).toBe(false);
+    expect(html).not.toMatch(/quiz/i);
+  });
+
+  it('is rendered for a module with no assignments at all', () => {
+    expect(hasDelete(renderPage({ assignments: [], hasUnlistedAssignments: false }))).toBe(true);
+  });
+
+  it('is rendered for a module that lists assignments (its confirm says to move them first)', () => {
+    const html = renderPage({
+      assignments: [{ id: 'asg-repo', type: 'REPO' }],
+      hasUnlistedAssignments: false,
+    });
+    expect(hasDelete(html)).toBe(true);
   });
 });
 

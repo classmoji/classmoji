@@ -98,6 +98,8 @@ export function workshopConfigInput(): TeamSetConfigInput {
     version: 1,
     grouping: { mode: 'by_option', field_id: F.projects, teams_per_option: 1 },
     team_size: { min: 2, max: 2, allow_one_larger: true },
+    // Phase 1 stored configs say 'include' explicitly; pairs would otherwise resolve to 'group'.
+    non_respondents: 'include',
     options: Object.fromEntries(PROJECT_IDS.map((id, i) => [id, { category: projectCategory(i) }])),
     rules: [
       { field_id: F.projects, job: 'rank', strength: 'prefer', weight: 8 },
@@ -188,6 +190,174 @@ export function workshopInput(overrides: Partial<CompileInput> = {}): CompileInp
     // Deliberately NOT in id order: compile sorts.
     roster: [...USER_IDS].reverse().map(user_id => ({ user_id })),
     seed: 7,
+    ...overrides,
+  };
+}
+
+// ─── Bidding form (hand-checkable: option sizes, group, owner, priority,
+// identity) ──────────────────────────────────────────────────────────────────
+
+export const B = {
+  projects: uuid(31, 1),
+  pitched: uuid(31, 2),
+  partners: uuid(31, 3),
+  identity: uuid(31, 4),
+  matters: uuid(31, 5),
+  timing: uuid(31, 6),
+  lead: uuid(31, 7),
+};
+
+/** Five projects; the pitched dropdown shares their ids. */
+export const BID_PROJECT_IDS = [1, 2, 3, 4, 5].map(i => uuid(32, i));
+/** Answers A, B, C and an exclusive "Prefer not to say" (the last). */
+export const BID_IDENTITY_IDS = [1, 2, 3, 4].map(i => uuid(33, i));
+/** "The project", "The people", "Both equally". */
+export const MATTERS_IDS = [1, 2, 3].map(i => uuid(34, i));
+/** Mornings, Evenings. */
+export const BID_TIMING_IDS = [1, 2].map(i => uuid(35, i));
+/** 8 people; person index p = n − 1. The last two never responded. */
+export const BID_USERS = [1, 2, 3, 4, 5, 6, 7, 8].map(n => uuid(39, n));
+
+export function biddingFields(): FormField[] {
+  const projects = BID_PROJECT_IDS.map((id, i) => ({ id, label: `Project ${i + 1}` }));
+  return parseFormDefinition([
+    {
+      id: B.projects,
+      type: 'ranked_choice',
+      label: 'Rank the projects',
+      ranks: 4,
+      options: projects,
+    },
+    {
+      id: B.pitched,
+      type: 'dropdown',
+      label: 'Did you pitch one of these projects?',
+      options: projects,
+    },
+    {
+      id: B.partners,
+      type: 'roster_select',
+      label: 'Who would you like to work with?',
+      optionSource: 'roster',
+      multiple: true,
+      options: BID_USERS.map((id, i) => ({ id, label: `Person ${i + 1}` })),
+    },
+    {
+      id: B.identity,
+      type: 'multiselect',
+      label: 'Which of these describe you?',
+      identity_question: true,
+      options: [
+        { id: BID_IDENTITY_IDS[0], label: 'Answer A' },
+        { id: BID_IDENTITY_IDS[1], label: 'Answer B' },
+        { id: BID_IDENTITY_IDS[2], label: 'Answer C' },
+        { id: BID_IDENTITY_IDS[3], label: 'Prefer not to say', exclusive: true },
+      ],
+    },
+    {
+      id: B.matters,
+      type: 'dropdown',
+      label: 'What matters more to you?',
+      options: ['The project', 'The people', 'Both equally'].map((label, i) => ({
+        id: MATTERS_IDS[i],
+        label,
+      })),
+    },
+    {
+      id: B.timing,
+      type: 'dropdown',
+      label: 'When can you meet?',
+      options: ['Mornings', 'Evenings'].map((label, i) => ({ id: BID_TIMING_IDS[i], label })),
+    },
+    { id: B.lead, type: 'switch', label: 'Would you like to lead a team?' },
+  ]).fields;
+}
+
+/**
+ * Teams of 2–3 by project, fairness 0 (d is not bent), rank 5 (costs 0, 50,
+ * 150, 300; unranked 500), together 4, match on timing 3 (a mismatched pair
+ * costs round(200 × 3 / 2) = 300). Non-respondents pinned to 'include'.
+ */
+export function biddingConfigInput(): TeamSetConfigInput {
+  return {
+    version: 1,
+    grouping: { mode: 'by_option', field_id: B.projects, teams_per_option: 1 },
+    team_size: { min: 2, max: 3 },
+    non_respondents: 'include',
+    fairness: 0,
+    rules: [
+      { field_id: B.projects, job: 'rank', strength: 'prefer', weight: 5 },
+      { field_id: B.partners, job: 'together', strength: 'prefer', weight: 4 },
+      { field_id: B.timing, job: 'match', strength: 'prefer', weight: 3 },
+    ],
+  };
+}
+
+export const biddingConfig = () => TeamSetConfigSchema.parse(biddingConfigInput());
+
+/**
+ *        projects       pitched  partners  identity  matters  timing  lead
+ *   p0   P1 P2 P3       P1       p1        A         project  M       true
+ *   p1   P2 P1          —        p0 p2     B         people   M       false
+ *   p2   P1 P3          P3       —         A B       both     E       —
+ *   p3   P2             —        p0        C         people   E       —
+ *   p4   P3 P2 P1       —        —         (opt out) —        M       —
+ *   p5   P1             P1       —         B         project  —       —
+ *   p6, p7 never responded.
+ */
+export function biddingResponses(): CompileInput['responses'] {
+  const [P1, P2, P3] = BID_PROJECT_IDS as [string, string, string, string, string];
+  const [A, Bb, C, OPT_OUT] = BID_IDENTITY_IDS as [string, string, string, string];
+  const [PROJECT, PEOPLE, BOTH] = MATTERS_IDS as [string, string, string];
+  const [MORNINGS, EVENINGS] = BID_TIMING_IDS as [string, string];
+  const u = BID_USERS;
+  const answers: Record<string, unknown>[] = [
+    {
+      [B.projects]: [P1, P2, P3],
+      [B.pitched]: P1,
+      [B.partners]: [u[1]],
+      [B.identity]: [A],
+      [B.matters]: PROJECT,
+      [B.timing]: MORNINGS,
+      [B.lead]: true,
+    },
+    {
+      [B.projects]: [P2, P1],
+      [B.partners]: [u[0], u[2]],
+      [B.identity]: [Bb],
+      [B.matters]: PEOPLE,
+      [B.timing]: MORNINGS,
+      [B.lead]: false,
+    },
+    {
+      [B.projects]: [P1, P3],
+      [B.pitched]: P3,
+      [B.partners]: [],
+      [B.identity]: [A, Bb],
+      [B.matters]: BOTH,
+      [B.timing]: EVENINGS,
+    },
+    {
+      [B.projects]: [P2],
+      [B.partners]: [u[0]],
+      [B.identity]: [C],
+      [B.matters]: PEOPLE,
+      [B.timing]: EVENINGS,
+    },
+    { [B.projects]: [P3, P2, P1], [B.identity]: [OPT_OUT], [B.timing]: MORNINGS },
+    { [B.projects]: [P1], [B.pitched]: P1, [B.identity]: [Bb], [B.matters]: PROJECT },
+  ];
+  return answers.map((a, i) => ({ response_id: uuid(38, i + 1), user_id: u[i], answers: a }));
+}
+
+export function biddingInput(overrides: Partial<CompileInput> = {}): CompileInput {
+  return {
+    setName: 'bidding',
+    config: biddingConfig(),
+    fields: biddingFields(),
+    responses: biddingResponses(),
+    roster: [...BID_USERS].reverse().map(user_id => ({ user_id })),
+    seed: 3,
     ...overrides,
   };
 }

@@ -276,3 +276,55 @@ describe('importPageRows: header_image_url rewriting', () => {
     expect(ctx.targetHasPath).toBeUndefined();
   });
 });
+
+/**
+ * A cover can be a media object (`media://{id}`), which the pushed tree does
+ * not carry. The content phase's media copy copies it into the target before
+ * the row is written, and the rewriter repoints it through the same copy — or
+ * leaves it as it was when the copy could not be made.
+ */
+describe('importPageRows: a media cover', () => {
+  const OLD = '77777777-8888-4999-8aaa-bbbbbbbbbbbb';
+  const NEW = '44444444-4444-4444-8444-444444444444';
+
+  it('copies the covers of the pages it is about to write, then repoints them', async () => {
+    mocks.pageFindMany.mockResolvedValue([
+      { ...sourcePage('src-1', 'Lab 1'), header_image_url: `media://${OLD}` },
+      { ...sourcePage('src-2', 'Lab 2'), header_image_url: `media://${OLD}` },
+    ]);
+    mocks.rewriteContentUrls.mockImplementation((...a: unknown[]) => {
+      const [text, ctx] = a as [string, { rewriteMedia?: (t: string) => string }];
+      return ctx.rewriteMedia ? ctx.rewriteMedia(text) : text;
+    });
+    const order: string[] = [];
+    const media = {
+      prepare: vi.fn(async () => {
+        order.push('prepare');
+      }),
+      rewrite: (text: string) => text.replace(OLD, NEW),
+      copyObject: vi.fn(),
+    };
+    mocks.pageCreate.mockImplementation(async () => {
+      order.push('create');
+      return { id: 'new-page' };
+    });
+    const writer = makeWriter();
+    // Resume: src-2 already exists, so its cover is not copied again.
+    writer.progress.id_maps = { pages: { 'src-2': 'already-there' } } as never;
+
+    await expect(
+      importPageRows({
+        prisma: prisma as unknown as Args['prisma'],
+        job: job as unknown as Args['job'],
+        writer: writer as unknown as Args['writer'],
+        source: REPO,
+        target: REPO,
+        media,
+      })
+    ).resolves.toBe(1);
+
+    expect(order).toEqual(['prepare', 'create']);
+    expect(media.prepare).toHaveBeenCalledWith([`media://${OLD}`]);
+    expect(mocks.pageCreate.mock.calls[0][0].data.header_image_url).toBe(`media://${NEW}`);
+  });
+});

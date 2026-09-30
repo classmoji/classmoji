@@ -402,7 +402,8 @@ export const loader = async ({
   const html =
     (deliveryCtx
       ? await resolveDeckAssets(generated, deliveryCtx)
-      : await resolveDeckAssetsPublic(generated, gitOrgLogin, repo)) ?? generated;
+      : await resolveDeckAssetsPublic(generated, gitOrgLogin, repo, slide.classroom_id)) ??
+    generated;
 
   return new Response(withReadinessMarker(html), { headers: RENDER_HEADERS });
 };

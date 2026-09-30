@@ -1,4 +1,5 @@
-import type { FormField } from '@classmoji/services/form-contract';
+import { createHash } from 'node:crypto';
+import { withoutAnswers, type FormField } from '@classmoji/services/form-contract';
 
 import { ClassmojiService, prisma } from '~/utils/db.server.ts';
 import { assertFormAdmin, type FormAdminContext } from '~/utils/formAuth.server.ts';
@@ -18,6 +19,16 @@ import { assertFormAdmin, type FormAdminContext } from '~/utils/formAuth.server.
  * mutation re-checks `form_id` on the row it is about to touch. That is the
  * same cross-classroom hole the MCP audit closed on the list surface, one level
  * down at the response.
+ *
+ * ── Identity questions ─────────────────────────────────────────────────────
+ * Answers to a question flagged `identity_question` are staff-only. They are
+ * removed HERE, before a row leaves the server: every row the page, the table
+ * and the export read has them stripped, and so has its `name` when that name
+ * is one of those answers (`formIdentity.responseNames`). The one path that
+ * shows them is `loadIdentityAnswers`: one response's answers, for the drawer,
+ * on request, with its own audit row. Which fields count is
+ * `formIdentity.identityMaskForForm`, the one rule the MCP response tools and
+ * team sets use too.
  */
 
 export const FORMS_RESOURCE = 'FORMS';
@@ -104,6 +115,8 @@ export interface ResponsesContext extends FormAdminContext {
   currentFields: FormField[];
   /** revisionId → that revision's fields, for rendering a response as filled. */
   fieldsByRevision: Record<string, FormField[]>;
+  /** The identity questions whose answers are hidden by default. */
+  identityFieldIds: string[];
 }
 
 /**
@@ -127,11 +140,16 @@ export async function requireFormForResponses(
     throw new Response('Form not found', { status: 404 });
   }
 
-  const revisions = await prisma.formRevision.findMany({
-    where: { form_id: form.id },
-    orderBy: { version: 'asc' },
-    select: { id: true, fields: true },
-  });
+  const [revisions, identityMask] = await Promise.all([
+    prisma.formRevision.findMany({
+      where: { form_id: form.id },
+      orderBy: { version: 'asc' },
+      select: { id: true, fields: true },
+    }),
+    // Throws on a stored definition it can't read: the page fails rather than
+    // showing answers it could not tell were hidden.
+    ClassmojiService.formIdentity.identityMaskForForm({ formId: form.id }),
+  ]);
 
   const fieldsByRevision: Record<string, FormField[]> = {};
   for (const revision of revisions) {
@@ -141,10 +159,11 @@ export async function requireFormForResponses(
   // Current revision first; then the newest revision (a form taken back to
   // DRAFT keeps its current_revision_id, but belt and braces); then the working
   // draft, which is all a never-published form has.
-  const currentFields =
-    (form.current_revision_id ? fieldsByRevision[form.current_revision_id] : undefined) ??
-    fieldsByRevision[revisions.at(-1)?.id ?? ''] ??
-    ClassmojiService.form.fieldsOf(form.draft_fields);
+  const currentRevision =
+    revisions.find(revision => revision.id === form.current_revision_id) ?? revisions.at(-1);
+  const currentFields = currentRevision
+    ? fieldsByRevision[currentRevision.id]
+    : ClassmojiService.form.fieldsOf(form.draft_fields);
 
   return {
     ...access,
@@ -159,6 +178,7 @@ export async function requireFormForResponses(
     },
     currentFields,
     fieldsByRevision,
+    identityFieldIds: [...identityMask],
   };
 }
 
@@ -191,11 +211,66 @@ async function addedByNames(ids: Array<string | null>): Promise<Map<string, stri
   return new Map(users.map(user => [user.id, user.name || user.login || null] as const));
 }
 
-/** Every response to the form, FIFO, serialized for the client. */
-export async function loadResponseRows(formId: string): Promise<ResponseRow[]> {
+/**
+ * Every response to the form, FIFO, serialized for the client, with the answers
+ * to the identity questions removed (the key, not just the value: a null would
+ * still say whether the question was answered) and each `name` from
+ * `formIdentity.responseNames`, so a name that is one of those answers is not
+ * shown.
+ *
+ * `identityIds` is required so no caller can forget the mask. Pass the
+ * context's identity field ids.
+ */
+export async function loadResponseRows(
+  formId: string,
+  identityIds: ReadonlySet<string>
+): Promise<ResponseRow[]> {
   const rows = await ClassmojiService.formResponse.listByFormId(formId);
-  const names = await addedByNames(rows.map(row => row.added_by));
-  return rows.map(row => toResponseRow(row, names));
+  const [names, displayNames] = await Promise.all([
+    addedByNames(rows.map(row => row.added_by)),
+    ClassmojiService.formIdentity.responseNames(rows, identityIds),
+  ]);
+  return rows.map(row => {
+    const serialized = toResponseRow(row, names);
+    return {
+      ...serialized,
+      name: displayNames.get(row.id) ?? null,
+      answers: withoutAnswers(serialized.answers, identityIds),
+    };
+  });
+}
+
+/**
+ * The answers to `ids` in one response's answers: only the keys it has, so an
+ * unanswered question stays absent rather than null.
+ */
+export function pickAnswers(
+  answers: Record<string, unknown>,
+  ids: ReadonlySet<string>
+): Record<string, unknown> {
+  const picked: Record<string, unknown> = {};
+  for (const id of ids) {
+    if (Object.hasOwn(answers, id)) picked[id] = answers[id];
+  }
+  return picked;
+}
+
+/**
+ * One response's answers to the identity questions, for the drawer. Null when
+ * the id names no response of this form: the lookup is scoped by `form_id`, the
+ * same rule `scopeResponseIds` applies to every mutation.
+ */
+export async function loadIdentityAnswers(
+  formId: string,
+  responseId: string,
+  identityIds: ReadonlySet<string>
+): Promise<Record<string, unknown> | null> {
+  const row = await prisma.formResponse.findFirst({
+    where: { id: responseId, form_id: formId },
+    select: { answers: true },
+  });
+  if (!row) return null;
+  return pickAnswers((row.answers ?? {}) as Record<string, unknown>, identityIds);
 }
 
 export function toResponseRow(
@@ -295,6 +370,52 @@ export async function auditResponses({
     action,
     data: { tool, form_id: context.form.id, form_slug: context.form.slug, ...(data ?? {}) },
   });
+}
+
+/**
+ * The action name the responses action's gate is called with, from the posted
+ * intent: a refused reveal of identity answers (`reveal-identity`, the
+ * drawer's intent in responses.tsx — a route module a `.server` file can't
+ * import) is logged apart from a refused triage edit.
+ */
+export function responsesGateAction(
+  intent: unknown
+): 'reveal_identity_answers' | 'triage_responses' {
+  return intent === 'reveal-identity' ? 'reveal_identity_answers' : 'triage_responses';
+}
+
+/**
+ * An export's audit `value`: the sheet and what it covered — `wide:all`, or
+ * the sheet and a short fingerprint of the chosen response ids — so two
+ * different exports inside the audit dedup window are two rows, and the same
+ * export twice is one.
+ */
+export function exportAuditValue(
+  kind: 'wide' | 'long',
+  selection: ReadonlySet<string> | null
+): string {
+  if (!selection) return `${kind}:all`;
+  const fingerprint = createHash('sha256')
+    .update([...selection].sort().join('\n'))
+    .digest('hex')
+    .slice(0, 12);
+  return `${kind}:${fingerprint}`;
+}
+
+/**
+ * What a responses audit row records about identity answers. `identity_answers`
+ * is true only when they were actually disclosed: one response's answers asked
+ * for in the drawer, on a form that has identity questions. The same keys the
+ * MCP response tools write on their `forms.responses.view` rows, so one query
+ * finds every disclosure from either surface.
+ */
+export function identityAudit(
+  context: ResponsesContext,
+  disclosed: boolean
+): { identity_answers: true; identity_field_ids: string[] } | { identity_answers: false } {
+  return disclosed && context.identityFieldIds.length > 0
+    ? { identity_answers: true, identity_field_ids: context.identityFieldIds }
+    : { identity_answers: false };
 }
 
 /**

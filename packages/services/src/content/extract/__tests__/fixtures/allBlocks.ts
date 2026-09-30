@@ -180,6 +180,16 @@ export const ALL_BLOCKS: unknown[] = [
     props: { url: 'https://youtu.be/NOISE_VIDEO_URL', caption: 'VIDEO_CAPTION' },
     children: [],
   },
+  {
+    id: 'b-audio',
+    type: 'audio',
+    props: {
+      url: 'https://cdn.example.com/NOISE_AUDIO_URL.mp3',
+      name: 'AUDIO_NAME.mp3',
+      caption: 'AUDIO_CAPTION',
+    },
+    children: [],
+  },
   { id: 'b-divider', type: 'divider', props: {}, children: [] },
   {
     id: 'b-embed',
@@ -277,6 +287,8 @@ export const EXPECTED_TEXT = [
   'IMAGE_NAME.png',
   'IMAGE_CAPTION',
   'VIDEO_CAPTION',
+  'AUDIO_NAME.mp3',
+  'AUDIO_CAPTION',
   'COLUMN_HEADING_TEXT',
   'COLUMN_PARAGRAPH_TEXT',
   'TERMINAL_CODE npm run dev',
@@ -309,6 +321,7 @@ export const EXPECTED_ABSENT = [
   'NOISE_FILE_URL',
   'NOISE_IMAGE_URL',
   'NOISE_VIDEO_URL',
+  'NOISE_AUDIO_URL',
   'NOISE_EMBED_URL',
   'NOISE_EMBED_TYPE',
   'NOISE_PROFILE_IMAGE',

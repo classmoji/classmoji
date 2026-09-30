@@ -2,7 +2,7 @@ import { defineConfig } from '@trigger.dev/sdk';
 // eslint-disable-next-line import/no-unresolved
 import { prismaExtension } from '@trigger.dev/build/extensions/prisma';
 // eslint-disable-next-line import/no-unresolved
-import { aptGet, syncEnvVars } from '@trigger.dev/build/extensions/core';
+import { aptGet, ffmpeg, syncEnvVars } from '@trigger.dev/build/extensions/core';
 // eslint-disable-next-line import/no-unresolved
 import { pythonExtension } from '@trigger.dev/python/extension';
 import { InfisicalSDK } from '@infisical/sdk';
@@ -101,6 +101,13 @@ export default defineConfig({
       aptGet({
         packages: ['bash', 'git'],
       }),
+      // For `media-video-process`. No version: the extension installs Debian's
+      // `ffmpeg` package — on the node-22 image (bookworm) that is 5.1.x, a
+      // fixed release with libx264 and the native aac/mjpeg encoders. (Version
+      // '7' would pull johnvansickle's static `ffmpeg-git`, i.e. whatever git
+      // master is on build day.) Sets FFMPEG_PATH / FFPROBE_PATH in deployed
+      // images; it does nothing for `trigger dev`, which uses ffmpeg on PATH.
+      ffmpeg(),
       pythonExtension(teamSetSolverPythonOptions()),
       syncEnvVars(async ctx => {
         // Skip sync if credentials not available (allows local dev without Infisical)

@@ -426,6 +426,9 @@ describe('staff attempt drawer payload', () => {
       completed_at: ADA_SECOND.completed_at,
       total_duration_ms: 1000,
       unfocused_duration_ms: 250,
+      partial_credit_percentage: 60,
+      first_attempt_percentage: 55,
+      question_results: [],
     });
     expect(payload.studentName).toBe('Ada Lovelace');
     expect(payload.userLogin).toBe('ada');
@@ -494,7 +497,15 @@ describe('student attempt drawer payload', () => {
     );
     expect(Object.keys(payload.quiz).sort()).toEqual(['id', 'name', 'question_count']);
     expect(Object.keys(payload.attempt).sort()).toEqual(
-      ['completed_at', 'id', 'total_duration_ms', 'unfocused_duration_ms'].sort()
+      [
+        'completed_at',
+        'first_attempt_percentage',
+        'id',
+        'partial_credit_percentage',
+        'question_results',
+        'total_duration_ms',
+        'unfocused_duration_ms',
+      ].sort()
     );
     expect(Object.keys(payload.focusMetrics).sort()).toEqual([
       'focusedMs',

@@ -3,15 +3,15 @@ import { getAuthSession } from '@classmoji/auth/server';
 import type { Prisma } from '@prisma/client';
 import { redirect } from 'react-router';
 
-type SlidesAppUser = Prisma.UserGetPayload<{
-  include: {
-    classroom_memberships: {
-      include: {
-        classroom: true;
-      };
-    };
-  };
-}>;
+/**
+ * The user the root loader returns: each membership as the client reads it,
+ * its id, role and classroom.
+ */
+const ROOT_USER_INCLUDE = {
+  classroom_memberships: { select: { id: true, role: true, classroom: true } },
+} as const satisfies Prisma.UserInclude;
+
+type SlidesAppUser = Prisma.UserGetPayload<{ include: typeof ROOT_USER_INCLUDE }>;
 
 export const loader = async ({ request }: { request: Request }) => {
   const url = new URL(request.url);
@@ -67,13 +67,7 @@ export const loader = async ({ request }: { request: Request }) => {
   try {
     user = await getPrisma().user.findUnique({
       where: { id: authData.userId },
-      include: {
-        classroom_memberships: {
-          include: {
-            classroom: true,
-          },
-        },
-      },
+      include: ROOT_USER_INCLUDE,
     });
   } catch (error: unknown) {
     console.error('User lookup failed:', error);

@@ -13,9 +13,9 @@ import type { Route } from './+types/route';
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
 
-  // OWNER and TEACHER. Letter grades and comments are a teaching-staff surface
-  // rather than an owner-only one, and this route is served under both the
-  // /admin and /teacher prefixes.
+  // OWNER and TEACHER. Letter grades are a teaching-staff surface rather than
+  // an owner-only one, and this route is served under both the /admin and
+  // /teacher prefixes.
   const { classroom, membership } = await requireClassroomStaff(request, classSlug!, {
     resourceType: 'GRADES',
     action: 'view_grades',
@@ -75,7 +75,6 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
         memberships.map(m => ({
           id: m.id,
           user_id: m.user_id,
-          comment: m.comment,
           letter_grade: m.letter_grade,
         }))
       ),

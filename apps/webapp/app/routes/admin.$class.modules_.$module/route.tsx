@@ -22,7 +22,7 @@ import AssignmentFormModal from '~/components/features/assignments/AssignmentFor
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import ModuleFormModal, { type ModuleFormModule } from '../admin.$class.modules/ModuleFormModal';
-import { withoutQuizRows } from '../admin.$class.modules/quizRows.server';
+import { forStaffPage } from '../admin.$class.modules/quizRows.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -60,7 +60,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   // A classroom without quizzes (not Pro, or switched off) shows no trace of
   // them: no quiz item or quiz assignment in the module, no quiz to pick.
   return {
-    module: quizzesVisible ? module : withoutQuizRows(module),
+    module: forStaffPage(module, quizzesVisible),
     candidates: quizzesVisible ? candidates : { ...candidates, quizzes: [] },
     quizzesVisible,
     // Team tags, for an instructor-assigned team assignment created here.
@@ -261,6 +261,10 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
   ];
 
   const ownsCoursework = module.assignments.length > 0;
+  // A module that owns assignments this page does not list cannot be deleted,
+  // and moving the ones it does list would not change that: Delete is not
+  // offered at all.
+  const canOfferDelete = !module.hasUnlistedAssignments;
 
   return (
     <div className="min-h-full relative">
@@ -302,24 +306,26 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
           <Button icon={<IconPencil size={16} />} onClick={() => setEditOpen(true)}>
             Edit
           </Button>
-          <Popconfirm
-            title="Delete module"
-            description={
-              ownsCoursework
-                ? 'Move or delete its assignments first; a module that still owns coursework cannot be deleted.'
-                : `This removes the module. Its content items (${
-                    quizzesVisible ? 'pages, quizzes, slides, forms' : 'pages, slides, forms'
-                  }) are kept.`
-            }
-            okText="Delete"
-            okButtonProps={{ danger: true, disabled: ownsCoursework }}
-            cancelText="Cancel"
-            onConfirm={deleteModule}
-          >
-            <Button danger icon={<IconTrash size={16} />}>
-              Delete
-            </Button>
-          </Popconfirm>
+          {canOfferDelete && (
+            <Popconfirm
+              title="Delete module"
+              description={
+                ownsCoursework
+                  ? 'Move or delete its assignments first; a module that still owns coursework cannot be deleted.'
+                  : `This removes the module. Its content items (${
+                      quizzesVisible ? 'pages, quizzes, slides, forms' : 'pages, slides, forms'
+                    }) are kept.`
+              }
+              okText="Delete"
+              okButtonProps={{ danger: true, disabled: ownsCoursework }}
+              cancelText="Cancel"
+              onConfirm={deleteModule}
+            >
+              <Button danger icon={<IconTrash size={16} />}>
+                Delete
+              </Button>
+            </Popconfirm>
+          )}
         </div>
       </div>
 

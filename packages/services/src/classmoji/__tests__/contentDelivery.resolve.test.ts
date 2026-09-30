@@ -40,6 +40,7 @@ vi.mock('../contentAssets.service.ts', async importActual => ({
 
 const {
   canDeliverContent,
+  uploadFileTypes,
   canonicalizeAssetRef,
   isContentDeliveryConfigured,
   isContentDeliveryEnabled,
@@ -620,6 +621,31 @@ describe('the per-classroom gate', () => {
       expect(canDeliverContent({ content_delivery_enabled: true })).toBe(false);
       expect(canDeliverContent(null)).toBe(false);
       expect(canDeliverContent(undefined)).toBe(false);
+    });
+
+    describe('uploadFileTypes', () => {
+      it("is 'any' only where the deployment can sign AND the classroom is served", () => {
+        expect(uploadFileTypes(SERVED)).toBe('any');
+      });
+
+      it("is 'allowlist' for a served classroom on a deployment that cannot sign", () => {
+        // The row says yes; the deployment has no Worker behind it, so every
+        // file would be read straight from GitHub. Each env half alone fails.
+        unconfigure();
+        expect(uploadFileTypes(SERVED)).toBe('allowlist');
+
+        process.env.CONTENT_SIGNING_SECRET = MASTER;
+        expect(uploadFileTypes(SERVED)).toBe('allowlist');
+
+        unconfigure();
+        process.env.CONTENT_DELIVERY_ORIGIN = ORIGIN;
+        expect(uploadFileTypes(SERVED)).toBe('allowlist');
+      });
+
+      it("is 'allowlist' for a classroom the layer cannot serve, configured or not", () => {
+        expect(uploadFileTypes({ ...SERVED, content_delivery_enabled: false })).toBe('allowlist');
+        expect(uploadFileTypes(null)).toBe('allowlist');
+      });
     });
   });
 

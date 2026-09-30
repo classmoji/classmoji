@@ -23,6 +23,9 @@
  *                     the list resource does not check it. Students get the
  *                     student route's field allowlist (no
  *                     system_prompt/rubric_prompt); staff get the admin one.
+ *                     `source_material` (the linked pages and decks, in
+ *                     order) is drafts-included for staff and published-only
+ *                     for students — the service decides that per list.
  *   calendar        — any member; calendar.getClassroomCalendar already
  *                     expands recurrence and merges assignment deadlines. The
  *                     parameterless URI covers the current month in the
@@ -217,7 +220,15 @@ interface QuizRow {
   max_attempts: number;
   grading_strategy: string;
   include_code_context: boolean;
+  course_search_enabled?: boolean;
   repository_id?: string | null;
+  source_material?: Array<{
+    kind: string;
+    id: string;
+    title: string;
+    is_draft: boolean;
+    order: number;
+  }>;
   system_prompt?: string | null;
   rubric_prompt?: string;
   subject?: string | null;
@@ -253,8 +264,9 @@ export const quizzesResource: ResourceDefinition = {
   uriTemplate: 'classmoji://{org}/{slug}/quizzes',
   title: 'Quizzes',
   description:
-    'AI-graded quizzes. Staff (OWNER/TEACHER/ASSISTANT) see all quizzes incl. drafts and ' +
-    'prompts; students see published quizzes with their own attempt summary. Requires a Pro ' +
+    'AI-graded quizzes with their source material (linked pages and decks, in order). Staff ' +
+    '(OWNER/TEACHER/ASSISTANT) see all quizzes incl. drafts and prompts; students see ' +
+    'published quizzes, published material and their own attempt summary. Requires a Pro ' +
     'subscription and quizzes_enabled.',
   scope: 'read',
   roles: QUIZ_ROLES,
@@ -277,7 +289,16 @@ export const quizzesResource: ResourceDefinition = {
       max_attempts: q.max_attempts,
       grading_strategy: q.grading_strategy,
       include_code_context: q.include_code_context,
+      course_search_enabled: q.course_search_enabled ?? false,
       repository_id: q.repository_id ?? null,
+      // Field by field. The service already dropped drafts for the student list.
+      source_material: (q.source_material ?? []).map(doc => ({
+        kind: doc.kind,
+        id: doc.id,
+        title: doc.title,
+        is_draft: doc.is_draft,
+        order: doc.order,
+      })),
     });
 
     if (role === 'STUDENT') {
