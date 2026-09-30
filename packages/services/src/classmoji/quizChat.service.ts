@@ -218,10 +218,15 @@ const revalidate = async (
   return attempt;
 };
 
+/**
+ * The action a new message's text names: a button's text, trimmed and in any
+ * case (a typed "Next" is the Next button). A re-delivered message keeps the
+ * action journalled when it was first admitted.
+ */
 const actionFor = (text: string): 'next' | 'try_again' | undefined => {
-  const trimmed = text.trim();
-  if (trimmed === BUTTON_TEXT.try_again) return 'try_again';
-  if (trimmed === BUTTON_TEXT.next) return 'next';
+  const typed = text.trim().toLowerCase();
+  if (typed === BUTTON_TEXT.try_again.toLowerCase()) return 'try_again';
+  if (typed === BUTTON_TEXT.next.toLowerCase()) return 'next';
   return undefined;
 };
 

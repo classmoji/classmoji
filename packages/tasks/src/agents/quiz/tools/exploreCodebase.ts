@@ -36,6 +36,7 @@ import { tool } from 'ai';
 import {
   ExploreCodebaseOutputSchema,
   ExploreCodebaseSchema,
+  TOOL_DESCRIPTIONS,
   type ExploreCodebaseOutput,
 } from '@classmoji/utils/quiz-agent';
 import {
@@ -49,7 +50,6 @@ import {
 import { logDiagnostic, type DiagnosticLog } from '../../shared/sanitize.ts';
 import type { AttemptContext, GitOrgLike } from '../context.ts';
 import { QuoteFileCache } from './codeQuote.ts';
-import { TOOL_DESCRIPTIONS } from './descriptions.ts';
 import { aborted, isGradingRefusal } from './errors.ts';
 import type { QuizToolDeps, QuizToolServices } from './index.ts';
 
@@ -63,7 +63,7 @@ export const EXPLORATION_LIMIT_TEXT =
   'You have explored enough this turn. Continue with what you have.';
 
 export const EXPLORATION_QUESTION_OPEN_TEXT =
-  'Finish the current question first: give your feedback and record the result, then explore for the next question.';
+  'A question is still open. Use purpose check_current for it; explore for the next only after the student moves on and you record its result.';
 
 /** The quiz tools' view of the turn: whether a question is open right now. */
 export type ExploreGate = { questionOpen: () => boolean };

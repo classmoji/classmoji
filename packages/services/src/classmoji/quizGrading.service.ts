@@ -69,6 +69,7 @@ export type QuizGradingErrorCode =
   | 'out_of_order'
   | 'invalid_input'
   | 'revision_refused'
+  | 'already_recorded'
   | 'incomplete'
   | 'operation_conflict';
 
@@ -409,7 +410,7 @@ export const presentQuestion = (f: Fenced, q: QuestionCard): Promise<PresentQues
     if (presented >= questionCount) {
       throw new QuizGradingError(
         'out_of_order',
-        `All ${questionCount} questions have been presented. Record the last result, then submit the evaluation.`
+        `All ${questionCount} questions have been presented. Record the last result once the student moves on from it, then submit the evaluation.`
       );
     }
     if (n !== presented + 1) {
@@ -480,8 +481,13 @@ const writeProjection = async (
  * scores it (`deriveResult`) and picks the emoji from the classroom mapping.
  *
  * - First record → `result_finalized`.
- * - Same admitted turn (same input message, e.g. a re-run) → the stored result.
- * - The same answers again in a later turn → the stored result.
+ * - The same answers again, in any turn (a retried call) → the stored result.
+ * - Different answers in the run of the turn that wrote the result (same
+ *   input message and turn fence) → refused (`already_recorded`): the stored
+ *   result stands, and the model is told so rather than handed it back as if
+ *   its own call had been kept.
+ * - Different answers in a re-run of that turn (a redelivered message: same
+ *   input message, new fence) → the stored result; the earlier run's stands.
  * - Different answers in a later turn, before completion → one revision
  *   (`result_revised`, old and new values); any further change is refused.
  */
@@ -534,8 +540,18 @@ export const finalizeQuestion = (
 
       if (latest) {
         const latestPayload = isObject(latest.payload) ? latest.payload : {};
+        if (sameAnswers(latestPayload.answers, answers)) {
+          return storedOutput<QuestionResultOutput>(latest);
+        }
         const sameTurn = (latest.input_message_id ?? null) === (f.inputMessageId ?? null);
-        if (sameTurn || sameAnswers(latestPayload.answers, answers)) {
+        if (sameTurn) {
+          if ((latest.turn_fence ?? null) === f.fence) {
+            throw new QuizGradingError(
+              'already_recorded',
+              `Question ${question_num} already has a result from this turn, and it stands. ` +
+                'Do not record it again in this turn.'
+            );
+          }
           return storedOutput<QuestionResultOutput>(latest);
         }
         // A revision follows something the student said about the question,
@@ -676,8 +692,9 @@ export const completeLocked = async (
   if (missing.length > 0) {
     throw new QuizGradingError(
       'incomplete',
-      `Record results for question${missing.length > 1 ? 's' : ''} ${missing.join(', ')} ` +
-        'with record_question_result before submitting the evaluation.'
+      `${missing.length > 1 ? 'Questions' : 'Question'} ${missing.join(', ')} ` +
+        `${missing.length > 1 ? 'have' : 'has'} no result. Record each one you presented once the ` +
+        'student has moved on from it; present any not yet presented. Then submit again.'
     );
   }
 

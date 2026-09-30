@@ -17,13 +17,18 @@ import { contentTools } from '../tools/content.ts';
 import {
   lastUserTextParts,
   needsEvaluation,
+  offerToReplay,
   PERSIST_RETRY_DELAY_MS,
   runQuizTurn,
+  STEP_CEILING,
+  stepCeilingFor,
   watchModelText,
+  withoutEarlierFailedToolCalls,
   withStepCacheBreakpoint,
   type QuizToolsFactory,
   type QuizTurnDeps,
 } from '../loop.ts';
+import { feedbackMissingError, OFFER_AFTER_HINT_TEXT } from '../tools/errors.ts';
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -813,6 +818,50 @@ describe('runQuizTurn', () => {
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).not.toContain('SYSTEM NOTICE');
   });
 
+  it('stops a standard turn at its step ceiling, and gives one with lookups the higher one', async () => {
+    const invalid = (i: number) => [
+      toolCall(`bad${i}`, 'present_question', { preamble: 'x', question_number: 1 }),
+    ];
+    const script = [
+      ...Array.from({ length: STEP_CEILING.standard }, (_, i) => invalid(i)),
+      [toolCall('ok', 'present_question', question(1))],
+    ];
+    const content = {
+      mcpUrl: 'https://mcp.example.test/mcp',
+      classroomRef: 'sample-org/cs-1',
+      courseSearchEnabled: false,
+      docs: [{ kind: 'page', id: 'p1', title: 'Flexbox basics' }],
+    };
+
+    const standard = fakeAttempt(2);
+    const standardModel = scriptedModel(script);
+    await collect(
+      runQuizTurn({
+        ctx: ctxFor(standard.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: standard.deps,
+        model: standardModel,
+      })
+    );
+    expect(standardModel.doStreamCalls).toHaveLength(STEP_CEILING.standard);
+    expect(standard.state.presented).toBe(0);
+
+    const withLookups = fakeAttempt(2);
+    const lookupsModel = scriptedModel(script);
+    await collect(
+      runQuizTurn({
+        ctx: ctxFor(withLookups.progress(), { content }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: withLookups.deps,
+        model: lookupsModel,
+      })
+    );
+    expect(lookupsModel.doStreamCalls).toHaveLength(STEP_CEILING.standard + 1);
+    expect(withLookups.state.presented).toBe(1);
+  });
+
   it("hands the turn's log to the tools", async () => {
     const a = fakeAttempt(2);
     const log = vi.fn();
@@ -876,9 +925,9 @@ describe('runQuizTurn', () => {
 });
 
 describe('runQuizTurn: the text written in the turn', () => {
-  /** A tool set whose offer_next_step records the word count when it ran. */
+  /** A tool set whose offer_next_step records whether text was written when it ran. */
   function offerProbe() {
-    const seen: number[] = [];
+    const seen: boolean[] = [];
     const a = fakeAttempt(2, { presented: 1 });
     const inner = a.deps.tools;
     const tools: QuizToolsFactory = (ctx, d) => ({
@@ -886,7 +935,7 @@ describe('runQuizTurn: the text written in the turn', () => {
       offer_next_step: tool({
         ...quizToolDefs.offer_next_step,
         execute: input => {
-          seen.push(d.wordsWritten());
+          seen.push(d.textWritten());
           return d.queue(async () => ({
             ...input,
             lead_in: 'Would you like to try again or move on?',
@@ -897,51 +946,68 @@ describe('runQuizTurn: the text written in the turn', () => {
     return { seen, a, deps: { ...a.deps, tools } };
   }
 
-  it('counts the feedback written before offer_next_step in the same step', async () => {
-    const { seen, a, deps } = offerProbe();
-    const model = scriptedModel([
-      [
-        ...text('t', 'Not quite: the bound is off by one.'),
-        toolCall('b', 'offer_next_step', { actions: ['try_again', 'next'] }),
-      ],
-    ]);
-    await collect(
+  const turn = (
+    deps: QuizTurnDeps,
+    model: MockLanguageModelV4,
+    over: Partial<AttemptContext> = {}
+  ) =>
+    collect(
       runQuizTurn({
-        ctx: ctxFor(a.progress()),
+        ctx: ctxFor({ ...fakeAttempt(2, { presented: 1 }).progress() }, over),
         messages: history,
         signal: new AbortController().signal,
         deps,
         model,
+        project: false,
       })
     );
-    expect(seen).toEqual([8]);
+
+  it('sees feedback written before offer_next_step in the same step', async () => {
+    const { seen, deps } = offerProbe();
+    await turn(
+      deps,
+      scriptedModel([
+        [...text('t', 'Right.'), toolCall('b', 'offer_next_step', { actions: ['next'] })],
+      ])
+    );
+    expect(seen).toEqual([true]);
   });
 
-  it('counts words across deltas and text blocks, and not markdown marks', async () => {
-    const { seen, a, deps } = offerProbe();
+  it('sees feedback written in an earlier step of the turn', async () => {
+    const { seen, deps } = offerProbe();
     const model = scriptedModel([
       [
-        { type: 'text-start', id: 't' },
-        { type: 'text-delta', id: 't', delta: '**Cor' },
-        { type: 'text-delta', id: 't', delta: 'rect** - your ' },
-        { type: 'text-delta', id: 't', delta: '`flex` rule' },
-        { type: 'text-end', id: 't' },
-        ...text('t2', 'stacks them.'),
-        toolCall('b', 'offer_next_step', { actions: ['next'] }),
+        ...text('t', 'Right.'),
+        toolCall('x', 'explore_codebase', { purpose: 'check_current', focus_area: 'the loop' }),
       ],
+      [toolCall('b', 'offer_next_step', { actions: ['next'] })],
     ]);
-    await collect(
-      runQuizTurn({
-        ctx: ctxFor(a.progress()),
-        messages: history,
-        signal: new AbortController().signal,
-        deps,
-        model,
-      })
+    const chunks = await turn(deps, model);
+    expect(model.doStreamCalls).toHaveLength(2);
+    // The exploration ran (not refused as invalid input) before the buttons.
+    expect(chunks).toContainEqual(
+      expect.objectContaining({ type: 'tool-output-available', toolCallId: 'x' })
     );
-    // "**Correct**", "your", "`flex`", "rule", "stacks", "them." ("-" is no word;
-    // "rule" and "stacks" stay apart across the two blocks).
-    expect(seen).toEqual([6]);
+    expect(seen).toEqual([true]);
+  });
+
+  it('sees feedback streamed in many deltas, whitespace deltas included', async () => {
+    const { seen, deps } = offerProbe();
+    await turn(
+      deps,
+      scriptedModel([
+        [
+          { type: 'text-start', id: 't' },
+          { type: 'text-delta', id: 't', delta: ' ' },
+          { type: 'text-delta', id: 't', delta: '**Cor' },
+          { type: 'text-delta', id: 't', delta: 'rect**' },
+          { type: 'text-delta', id: 't', delta: '\n' },
+          { type: 'text-end', id: 't' },
+          toolCall('b', 'offer_next_step', { actions: ['next'] }),
+        ],
+      ])
+    );
+    expect(seen).toEqual([true]);
   });
 
   it('does not count blank text, or the welcome the loop writes itself', async () => {
@@ -961,11 +1027,11 @@ describe('runQuizTurn: the text written in the turn', () => {
         model,
       })
     );
-    expect(seen[0]).toBe(0);
+    expect(seen).toEqual([false]);
   });
 
   it('sees each delta as it leaves the model, with no UI stream reading it', async () => {
-    let written = '';
+    let written = 0;
     const mock = new MockLanguageModelV4({
       doStream: async () =>
         step([
@@ -973,25 +1039,24 @@ describe('runQuizTurn: the text written in the turn', () => {
           toolCall('b', 'offer_next_step', { actions: ['next'] }),
         ]) as never,
     });
-    const wrapped = watchModelText(mock, text => {
-      written += text;
+    const wrapped = watchModelText(mock, () => {
+      written += 1;
     }) as MockLanguageModelV4;
     const { stream } = await wrapped.doStream({ prompt: [] } as never);
     const reader = stream.getReader();
     const types: string[] = [];
-    const seenAt: string[] = [];
+    const seenAt: number[] = [];
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
       types.push(value.type);
       seenAt.push(written);
     }
-    // Nothing until the text delta, the delta from it, a line break at the
-    // block's end: all before the tool call reaches the SDK.
+    // Nothing until the text delta, then the flag: all before the tool call
+    // reaches the SDK.
     const delta = types.indexOf('text-delta');
-    expect(seenAt.slice(0, delta)).toEqual(seenAt.slice(0, delta).map(() => ''));
-    expect(seenAt[delta]).toBe('Right idea.');
-    expect(seenAt[types.indexOf('text-end')]).toBe('Right idea.\n');
+    expect(seenAt.slice(0, delta)).toEqual(seenAt.slice(0, delta).map(() => 0));
+    expect(seenAt[delta]).toBe(1);
     expect(delta).toBeLessThan(types.indexOf('tool-call'));
     // Every part passes through unchanged.
     expect(types).toEqual([
@@ -1002,6 +1067,200 @@ describe('runQuizTurn: the text written in the turn', () => {
       'tool-call',
       'finish',
     ]);
+  });
+});
+
+describe('the history of earlier turns: failed tool calls left out', () => {
+  const MASKED = { type: 'error-text' as const, value: 'An error occurred.' };
+  const user = (text: string): ModelMessage => ({
+    role: 'user',
+    content: [{ type: 'text', text }],
+  });
+  const assistant = (...content: unknown[]): ModelMessage =>
+    ({ role: 'assistant', content }) as ModelMessage;
+  const toolMsg = (...content: unknown[]): ModelMessage =>
+    ({ role: 'tool', content }) as ModelMessage;
+  const callPart = (id: string, toolName = 'offer_next_step') => ({
+    type: 'tool-call',
+    toolCallId: id,
+    toolName,
+    input: { actions: ['next'] },
+  });
+  const resultPart = (id: string, output: unknown, toolName = 'offer_next_step') => ({
+    type: 'tool-result',
+    toolCallId: id,
+    toolName,
+    output,
+  });
+  const ok = {
+    type: 'json',
+    value: { actions: ['next'], lead_in: 'Ready for the next question?' },
+  };
+  const reasoning = {
+    type: 'reasoning',
+    text: '',
+    providerOptions: { anthropic: { signature: 's' } },
+  };
+
+  /** Turn 1: a question. Turn 2: buttons refused, then feedback and buttons. */
+  const turn1: ModelMessage[] = [
+    user('begin'),
+    assistant(callPart('q1', 'present_question')),
+    toolMsg(resultPart('q1', { type: 'json', value: {} }, 'present_question')),
+    user('my answer'),
+  ];
+  const turn2Reply: ModelMessage[] = [
+    assistant(reasoning, callPart('b1')),
+    toolMsg(resultPart('b1', MASKED)),
+    assistant({ type: 'text', text: 'Right: the loop visits each item once.' }, callPart('b2')),
+    toolMsg(resultPart('b2', ok)),
+  ];
+  const turn3Reply: ModelMessage[] = [
+    assistant(
+      { type: 'text', text: 'Recorded.' },
+      callPart('r2', 'record_question_result'),
+      callPart('q2', 'present_question')
+    ),
+    toolMsg(
+      resultPart('r2', MASKED, 'record_question_result'),
+      resultPart('q2', { type: 'json', value: {} }, 'present_question')
+    ),
+  ];
+
+  it('removes a failed call and its result, and a step left with only reasoning', () => {
+    const history = [...turn1, ...turn2Reply, user('next')];
+    const out = withoutEarlierFailedToolCalls(history);
+    const flat = JSON.stringify(out);
+    expect(flat).not.toContain('"b1"');
+    expect(flat).not.toContain('An error occurred.');
+    expect(out).toHaveLength(history.length - 2);
+    // Everything before the first failed call is the same object.
+    turn1.forEach((m, i) => expect(out[i]).toBe(m));
+    // The accepted call and its feedback stay, in order.
+    expect(out.slice(turn1.length)).toEqual([turn2Reply[2], turn2Reply[3], history.at(-1)]);
+  });
+
+  it('keeps the other calls of a step whose one call failed', () => {
+    const history = [...turn1, ...turn2Reply, user('next'), ...turn3Reply, user('my answer 2')];
+    const out = withoutEarlierFailedToolCalls(history);
+    const step = out.at(-3) as { content: Array<{ type: string; toolCallId?: string }> };
+    expect(step.content.map(p => p.toolCallId ?? p.type)).toEqual(['text', 'q2']);
+    const results = out.at(-2) as { content: Array<{ toolCallId: string }> };
+    expect(results.content.map(p => p.toolCallId)).toEqual(['q2']);
+  });
+
+  it('returns the same array when nothing failed, and the same result every time', () => {
+    expect(withoutEarlierFailedToolCalls(turn1)).toBe(turn1);
+    const history = [...turn1, ...turn2Reply, user('next')];
+    expect(withoutEarlierFailedToolCalls(history)).toEqual(withoutEarlierFailedToolCalls(history));
+  });
+
+  it("keeps each turn's history a prefix of the next turn's", () => {
+    // Turn 3's history, then turn 4's (turn 3's reply had a failed call of its own).
+    const t3 = [...turn1, ...turn2Reply, user('next')];
+    const t4 = [...t3, ...turn3Reply, user('my answer 2')];
+    const t5 = [
+      ...t4,
+      assistant({ type: 'text', text: 'Close.' }, callPart('b3')),
+      toolMsg(resultPart('b3', ok)),
+      user('next'),
+    ];
+    const [o3, o4, o5] = [t3, t4, t5].map(withoutEarlierFailedToolCalls);
+    // Byte for byte: a later turn only appends.
+    expect(JSON.stringify(o4.slice(0, o3.length))).toBe(JSON.stringify(o3));
+    expect(JSON.stringify(o5.slice(0, o4.length))).toBe(JSON.stringify(o4));
+  });
+
+  it('sends the model no failed call of an earlier turn, and keeps this turn refusals', async () => {
+    const a = fakeAttempt(2, { presented: 1 });
+    const refusing: QuizToolsFactory = (c, d) => {
+      let refused = false;
+      const inner = a.deps.tools(c, d);
+      return {
+        ...inner,
+        offer_next_step: tool({
+          ...quizToolDefs.offer_next_step,
+          execute: input =>
+            d.queue(async () => {
+              if (!refused) {
+                refused = true;
+                throw new Error(OFFER_AFTER_HINT_TEXT);
+              }
+              return { ...input, lead_in: 'Ready for the next question?' };
+            }),
+        }),
+      };
+    };
+    const model = scriptedModel([
+      [...text('t', 'Right.'), toolCall('now-1', 'offer_next_step', { actions: ['next'] })],
+      [toolCall('now-2', 'offer_next_step', { actions: ['next'] })],
+    ]);
+    await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: [...turn1, ...turn2Reply, user('my answer')],
+        signal: new AbortController().signal,
+        deps: { ...a.deps, tools: refusing },
+        model,
+      })
+    );
+    const first = JSON.stringify(model.doStreamCalls[0].prompt);
+    expect(first).not.toContain('"b1"');
+    expect(first).not.toContain('An error occurred.');
+    expect(first).toContain('"b2"');
+    // This turn's refusal reaches the model's next step, with its text.
+    const second = JSON.stringify(model.doStreamCalls[1].prompt);
+    expect(second).toContain('now-1');
+    expect(second).toContain(JSON.stringify(OFFER_AFTER_HINT_TEXT).slice(1, -1));
+  });
+});
+
+describe('offerToReplay', () => {
+  const refused = (error: unknown, input: unknown = { actions: ['next'] }) => ({
+    type: 'tool-error',
+    toolName: 'offer_next_step',
+    toolCallId: 'x',
+    input,
+    error,
+  });
+  const succeeded = (toolName: string) => ({ type: 'tool-result', toolName, toolCallId: 'y' });
+  const textPart = { type: 'text', text: 'Right.' };
+
+  it('returns the input of a last offer refused only for missing feedback', () => {
+    const input = { actions: ['try_again', 'next'] };
+    expect(
+      offerToReplay([
+        { content: [refused(feedbackMissingError(), input)] },
+        { content: [textPart] },
+      ])
+    ).toBe(input);
+  });
+
+  it('returns null for any other refusal, or once a card, buttons or the evaluation went out', () => {
+    expect(offerToReplay([{ content: [textPart] }])).toBeNull();
+    expect(offerToReplay([{ content: [refused(new Error(OFFER_AFTER_HINT_TEXT))] }])).toBeNull();
+    // A later refusal for another reason wins over the feedback one.
+    expect(
+      offerToReplay([
+        { content: [refused(feedbackMissingError())] },
+        { content: [refused(new Error('invalid input'))] },
+      ])
+    ).toBeNull();
+    for (const name of ['present_question', 'offer_next_step', 'submit_quiz_evaluation']) {
+      expect(
+        offerToReplay([
+          { content: [refused(feedbackMissingError())] },
+          { content: [succeeded(name)] },
+        ])
+      ).toBeNull();
+    }
+    // A lookup succeeding changes nothing.
+    expect(
+      offerToReplay([
+        { content: [refused(feedbackMissingError())] },
+        { content: [succeeded('content_get')] },
+      ])
+    ).toEqual({ actions: ['next'] });
   });
 });
 
@@ -1048,6 +1307,20 @@ describe('loop helpers', () => {
     );
     expect(marked.filter(m => m.providerOptions?.anthropic?.cacheControl)).toHaveLength(1);
     expect(marked.at(-1)?.providerOptions?.anthropic?.cacheControl).toBeDefined();
+  });
+
+  it('raises the step ceiling for an attempt with the course-material lookups', () => {
+    expect(STEP_CEILING).toEqual({ standard: 10, codeAware: 20 });
+    const content = {
+      mcpUrl: 'https://mcp.example.test/mcp',
+      classroomRef: 'sample-org/cs-1',
+      courseSearchEnabled: false,
+      docs: [],
+    };
+    expect(stepCeilingFor({ isCodeAware: false })).toBe(10);
+    expect(stepCeilingFor({ isCodeAware: false, content: null })).toBe(10);
+    expect(stepCeilingFor({ isCodeAware: false, content })).toBe(20);
+    expect(stepCeilingFor({ isCodeAware: true })).toBe(20);
   });
 
   it('counts the text parts of the last user message', () => {

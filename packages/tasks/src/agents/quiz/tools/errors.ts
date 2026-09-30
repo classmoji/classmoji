@@ -20,9 +20,29 @@ export const TURN_STOPPED_TEXT = 'This turn was stopped. Nothing was saved.';
 export const OFFER_AFTER_QUESTION_TEXT =
   "Wait for the student's answer to this question before offering next steps.";
 
-/** offer_next_step refused because the model has written too little text in this turn (`MIN_FEEDBACK_WORDS`). */
+/**
+ * offer_next_step refused because the model has written no visible text in
+ * this turn yet. It says to call again: a model that only writes the feedback
+ * after this would end the turn without buttons.
+ */
 export const OFFER_BEFORE_FEEDBACK_TEXT =
-  "Write your feedback on the student's answer first: 2 to 4 sentences on what is right, what is wrong (if anything) and why it matters. Then call offer_next_step.";
+  "Write your feedback on the student's answer first (what is right, what is wrong if anything, and why it matters), then call offer_next_step again as the last thing in this reply.";
+
+/** The `code` on that refusal, so the loop can tell it from every other one. */
+export const FEEDBACK_MISSING = 'feedback_missing';
+
+/**
+ * The refusal of offer_next_step for no feedback text yet. The loop may run
+ * such a call again at the end of the turn once the text is there (loop.ts).
+ */
+export function feedbackMissingError(): Error {
+  return Object.assign(new Error(OFFER_BEFORE_FEEDBACK_TEXT), { code: FEEDBACK_MISSING });
+}
+
+/** True for the refusal `feedbackMissingError` makes, and for nothing else. */
+export function isFeedbackMissing(error: unknown): boolean {
+  return error instanceof Error && (error as { code?: unknown }).code === FEEDBACK_MISSING;
+}
 
 /**
  * offer_next_step refused in a turn the student opened with Try again: that
@@ -48,15 +68,15 @@ export const RECORD_BEFORE_ANSWER_TEXT =
  * no Next click, and the call does not say they asked to move on.
  */
 export const RECORD_BEFORE_NEXT_TEXT =
-  'The student has not moved on from this question. Record it only after they click Next, or when their latest message asks to skip or move on (then set student_asked_to_move_on). After an answer, write your feedback and call offer_next_step.';
+  'The student has not moved on from this question. Record it only after they click Next, or when their latest message asks to skip or move on (then set student_asked_to_move_on). If they answered, give feedback and call offer_next_step; otherwise just reply.';
 
 /** present_question refused: question `n`'s card already shows edited code, and a quiz gets one. */
 export const editLimitText = (n: number) =>
   `Only one question per quiz may show edited code, and question ${n} already does. Quote the real code without edit and describe any change in words in question_text.`;
 
-/** present_question refused because question `n`, the one the student is leaving, has no result yet. */
+/** present_question refused because question `n`, the one still open, has no result yet. */
 export const recordBeforePresentText = (n: number) =>
-  `Record question ${n} before presenting the next one.`;
+  `Question ${n} has no result. If the student moved on from it (Next, or asked to skip), record it first, then present; otherwise reply without presenting.`;
 
 /** present_question refused because the file a code quote names could not be read. */
 export const QUOTE_READ_FAILED_TEXT =
