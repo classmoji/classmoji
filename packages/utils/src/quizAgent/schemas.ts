@@ -33,7 +33,7 @@ export const QuizQuestionSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Code shown above question_text; never repeat it there. In a code-aware quiz never the student's code: use code_quote."
+      'Code shown above question_text; never repeat it there. In a code-aware quiz never the student\'s code: use code_quote. The one exception: if code_quote fails twice because the file cannot be read, the lines copied exactly from your exploration output without their "N| " prefixes, with the file and the rule or element named in context.'
     ),
   code_language: z
     .string()
@@ -105,7 +105,7 @@ export type CodeQuote = z.infer<typeof CodeQuoteSchema>;
  */
 export const CodeAwareQuizQuestionSchema = QuizQuestionSchema.extend({
   code_quote: CodeQuoteSchema.optional().describe(
-    'The student\'s lines, filled exactly by the server (with "..." for each gap). Required on every code-aware question unless exploration failed; leave code_snippet out.'
+    'The student\'s lines, filled exactly by the server (with "..." for each gap). Required on every code-aware question unless exploration failed; leave code_snippet out. If it fails twice because the file cannot be read, use code_snippet instead: the lines copied exactly from your exploration output without their "N| " prefixes, with the file and the rule or element named in context.'
   ),
 });
 export type CodeAwareQuizQuestion = z.infer<typeof CodeAwareQuizQuestionSchema>;
@@ -165,7 +165,7 @@ export const RecordQuestionResultSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "true only when the student's latest message itself asks to skip this question, move on or end the quiz. Leave it out after a Next click. An answer, even a correct one, is not a request to move on."
+      "true only when the student's latest message itself asks to skip this question or move on. Leave it out after a Next click. An answer, even a correct one, is not a request to move on."
     ),
 });
 export type RecordQuestionResult = z.infer<typeof RecordQuestionResultSchema>;
@@ -184,6 +184,12 @@ export const QuizEvaluationFeedbackSchema = z.object({
       errorMap: () => ({ message: 'quiz_complete must be true to submit evaluation' }),
     })
     .describe('Must be true to indicate quiz completion'),
+  ended_early: z
+    .boolean()
+    .optional()
+    .describe(
+      "true only when the student's own latest message confirmed ending the quiz early. Record the open question first; every question after it then counts as skipped."
+    ),
   // Optional and never refused: the server sets both from the recorded score
   // (`gradeBandFor`), whatever the model sends.
   evaluation: z.string().optional().describe('Leave out; the server sets it.'),

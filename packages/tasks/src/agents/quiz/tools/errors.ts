@@ -26,7 +26,7 @@ export const OFFER_AFTER_QUESTION_TEXT =
  * after this would end the turn without buttons.
  */
 export const OFFER_BEFORE_FEEDBACK_TEXT =
-  "Write your feedback on the student's answer first (what is right, what is wrong if anything, and why it matters), then call offer_next_step again as the last thing in this reply.";
+  'If the student answered, write your feedback on their answer first, then call offer_next_step again; otherwise reply without buttons.';
 
 /** The `code` on that refusal, so the loop can tell it from every other one. */
 export const FEEDBACK_MISSING = 'feedback_missing';
@@ -55,6 +55,23 @@ export const OFFER_AFTER_HINT_TEXT =
 export const OFFER_TRY_AGAIN_ALONE_TEXT =
   'Offer ["try_again", "next"] or ["next"]: the student can always move on.';
 
+/**
+ * present_question refused: it would show the current question's card again
+ * after the model has already written text in this turn, so a feedback turn
+ * would end with the old card and no buttons.
+ */
+export const RESHOW_AFTER_TEXT =
+  "You already replied this turn; don't re-show the question. If the student answered, call offer_next_step.";
+
+/**
+ * `RESHOW_AFTER_TEXT` for question `lastPresented`. With no question open (it
+ * has its result), the model most likely meant the next one, so it is named.
+ */
+export const reshowAfterText = (lastPresented: number, questionOpen: boolean) =>
+  questionOpen
+    ? RESHOW_AFTER_TEXT
+    : `${RESHOW_AFTER_TEXT} To show the next question, send question_number ${lastPresented + 1}.`;
+
 /** present_question refused because next-step buttons went out earlier in the same turn. */
 export const QUESTION_AFTER_OFFER_TEXT =
   "Wait for the student's choice before presenting the next question.";
@@ -80,7 +97,7 @@ export const recordBeforePresentText = (n: number) =>
 
 /** present_question refused because the file a code quote names could not be read. */
 export const QUOTE_READ_FAILED_TEXT =
-  'The file could not be read just now. Call present_question again; if that fails too, use code_snippet with the lines copied exactly from your exploration.';
+  'The file could not be read just now. Call present_question again; if that fails too, put the lines in code_snippet instead, copied exactly from your exploration output without their "N| " prefixes, and name the file and the rule or element in context.';
 
 /** A grading refusal from `ClassmojiService.quizGrading` (`QuizGradingError`). */
 export function isGradingRefusal(error: unknown): error is Error & { code: string } {

@@ -283,11 +283,20 @@ function isErrorResult(part: unknown): part is { type: 'tool-result'; toolCallId
  * (the step made only that call). Saved, those failures read "An error
  * occurred.", which tells the model nothing but that something is broken.
  *
+ * A step is its assistant message and the tool message after it; its failed
+ * calls are removed together or not at all. They are kept, step unchanged,
+ * when removing them would put two assistant messages next to each other
+ * (the provider would merge them into one turn with two signed thinking
+ * blocks). The check looks at the message kept before the step and the one
+ * after it as given, so it is conservative: an assistant message after it
+ * counts even if a later step drops it.
+ *
  * It depends on nothing but the messages, and removes only: every message
- * before the first one that held a failed call is the same object, so the
- * history of a later turn starts with the same bytes. With nothing to remove,
- * the array itself comes back. The quiz tools use no approvals, so an error
- * output here is always a failed call.
+ * before the first one that held a failed call is the same object, and each
+ * step's outcome depends only on the messages before it and the one after
+ * it, so the history of a later turn starts with the same bytes. With nothing
+ * to remove, the array itself comes back. The quiz tools use no approvals,
+ * so an error output here is always a failed call.
  */
 export function withoutEarlierFailedToolCalls(messages: ModelMessage[]): ModelMessage[] {
   const failed = new Set<string>();
@@ -305,19 +314,32 @@ export function withoutEarlierFailedToolCalls(messages: ModelMessage[]): ModelMe
       failed.has(p.toolCallId)
     );
   };
-  const out: ModelMessage[] = [];
-  for (const m of messages) {
-    if ((m.role !== 'assistant' && m.role !== 'tool') || typeof m.content === 'string') {
-      out.push(m);
-      continue;
-    }
+  /** `m` without its failed parts: `m` itself if it has none, null if nothing is left. */
+  const filtered = (m: ModelMessage): ModelMessage | null => {
+    if ((m.role !== 'assistant' && m.role !== 'tool') || typeof m.content === 'string') return m;
     const content = (m.content as unknown[]).filter(part => !isFailedPart(part));
-    if (content.length === m.content.length) {
-      out.push(m);
-      continue;
-    }
+    if (content.length === m.content.length) return m;
     const kept = content.some(part => (part as { type?: unknown }).type !== 'reasoning');
-    if (kept) out.push({ ...m, content } as ModelMessage);
+    return kept ? ({ ...m, content } as ModelMessage) : null;
+  };
+  const isAssistant = (m: ModelMessage | undefined) => m?.role === 'assistant';
+
+  const out: ModelMessage[] = [];
+  for (let i = 0; i < messages.length; ) {
+    // One step: an assistant message and the tool message after it, if any.
+    const end =
+      messages[i].role === 'assistant' && messages[i + 1]?.role === 'tool' ? i + 2 : i + 1;
+    const step = messages.slice(i, end);
+    const next = messages[end];
+    const kept = step.map(filtered);
+    const changed = kept.some((m, k) => m !== step[k]);
+    const replacement = kept.filter((m): m is ModelMessage => m !== null);
+    const sequence = [out.at(-1), ...replacement, next];
+    const adjacent = sequence.some(
+      (m, k) => k > 0 && isAssistant(m) && isAssistant(sequence[k - 1])
+    );
+    out.push(...(changed && adjacent ? step : replacement));
+    i = end;
   }
   return out;
 }
@@ -335,7 +357,11 @@ const TURN_ENDING_TOOLS = new Set([
  * call in the turn put a card, buttons or the evaluation out; otherwise null.
  * A later offer refused for any other reason, or accepted, wins over it.
  */
-export function offerToReplay(steps: ReadonlyArray<{ content: ReadonlyArray<unknown> }>): unknown {
+export function offerToReplay(
+  steps: ReadonlyArray<{ content: ReadonlyArray<unknown>; finishReason?: string }>
+): unknown {
+  // A reply cut off at the output limit ends as it is: no buttons after cut text.
+  if (steps.at(-1)?.finishReason === 'length') return null;
   let last: { input: unknown; replay: boolean } | null = null;
   for (const step of steps) {
     for (const part of step.content) {

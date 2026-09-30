@@ -21,6 +21,8 @@ export const StoredQuestionResultSchema = z.object({
   emoji: z.string(),
   brief_feedback: z.string(),
   revised: z.literal(true).optional(),
+  /** Recorded as skipped by the server when the student ended the quiz early. */
+  skipped_by_end: z.literal(true).optional(),
   recorded_at: z.string(),
 });
 export type StoredQuestionResult = z.infer<typeof StoredQuestionResultSchema>;
@@ -33,7 +35,10 @@ export const QuizEvaluationRecordV2Schema = z.object({
    * the results). Its `evaluation` and `numeric_score` are the server's band.
    * Absent when the server completed the attempt from the recorded results.
    */
-  feedback: QuizEvaluationFeedbackSchema.omit({ quiz_complete: true }).optional(),
+  feedback: QuizEvaluationFeedbackSchema.omit({
+    quiz_complete: true,
+    ended_early: true,
+  }).optional(),
   /**
    * The evaluation band from `partial_credit_percentage` (`gradeBandFor`), set
    * by the server on every completion, the server's own included. Absent only

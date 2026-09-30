@@ -184,6 +184,19 @@ describe('code quotes', () => {
     expect(CodeQuoteSchema.safeParse({ ...quote, ...patch }).success).toBe(false);
   });
 
+  it('allows typed code only when the file cannot be read twice, copied from the exploration', () => {
+    const copied = 'copied exactly from your exploration output without their "N| " prefixes';
+    const named = 'with the file and the rule or element named in context';
+    const snippet = CodeAwareQuizQuestionSchema.shape.code_snippet.description ?? '';
+    const quoted = CodeAwareQuizQuestionSchema.shape.code_quote.description ?? '';
+    for (const text of [snippet, quoted]) {
+      expect(text).toContain('fails twice because the file cannot be read');
+      expect(text).toContain(copied);
+      expect(text).toContain(named);
+    }
+    expect(snippet).toContain("In a code-aware quiz never the student's code: use code_quote.");
+  });
+
   it('is an optional field of the code-aware question', () => {
     expect(CodeAwareQuizQuestionSchema.safeParse(card).success).toBe(true);
     expect(CodeAwareQuizQuestionSchema.parse({ ...card, code_quote: quote }).code_quote).toEqual(
@@ -293,6 +306,19 @@ describe('QuizEvaluationFeedbackSchema', () => {
       QuizEvaluationFeedbackSchema.safeParse({ ...feedback, quiz_complete: false }).success
     ).toBe(false);
   });
+
+  it('takes ended_early as an optional flag, described for the confirmed early end', () => {
+    expect(QuizEvaluationFeedbackSchema.safeParse(feedback).success).toBe(true);
+    expect(QuizEvaluationFeedbackSchema.parse({ ...feedback, ended_early: true }).ended_early).toBe(
+      true
+    );
+    expect(
+      QuizEvaluationFeedbackSchema.safeParse({ ...feedback, ended_early: 'yes' }).success
+    ).toBe(false);
+    expect(QuizEvaluationFeedbackSchema.shape.ended_early.description).toMatch(
+      /confirmed ending the quiz early/
+    );
+  });
 });
 
 describe('records', () => {
@@ -312,6 +338,23 @@ describe('records', () => {
     expect(StoredQuestionResultSchema.parse(stored)).toEqual(stored);
   });
 
+  it('marks a question the server recorded as skipped for an early end', () => {
+    const skipped = {
+      ...stored,
+      attempts: 0,
+      tries: 0,
+      eventually_correct: false,
+      first_attempt_correct: false,
+      credit_earned: 0,
+      brief_feedback: '',
+      skipped_by_end: true,
+    };
+    expect(StoredQuestionResultSchema.parse(skipped)).toEqual(skipped);
+    expect(StoredQuestionResultSchema.safeParse({ ...stored, skipped_by_end: false }).success).toBe(
+      false
+    );
+  });
+
   it('accepts a server-completed evaluation without feedback and keeps emoji', () => {
     const { recorded_at: _r, ...entry } = stored;
     const record = {
@@ -324,12 +367,12 @@ describe('records', () => {
     expect(QuizEvaluationRecordV2Schema.parse(record)).toEqual(record);
   });
 
-  it('keeps model feedback without quiz_complete', () => {
+  it('keeps model feedback without quiz_complete or ended_early', () => {
     const { quiz_complete: _q, ...text } = feedback;
     const parsed = QuizEvaluationRecordV2Schema.parse({
       v: 2,
       source: 'model',
-      feedback,
+      feedback: { ...feedback, ended_early: true },
       partial_credit_percentage: 0,
       first_attempt_percentage: 0,
       question_results: [],
@@ -417,6 +460,12 @@ describe('quizToolDefs', () => {
       'hints_before',
       'level',
     ]);
+  });
+
+  it('describes student_asked_to_move_on for this question only, not for ending the quiz', () => {
+    const text = RecordQuestionResultSchema.shape.student_asked_to_move_on.description ?? '';
+    expect(text).toContain('asks to skip this question or move on.');
+    expect(text).not.toMatch(/end the quiz/);
   });
 
   it('takes student_asked_to_move_on as an optional flag the service can ignore', () => {
