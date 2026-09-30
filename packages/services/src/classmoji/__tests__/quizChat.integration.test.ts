@@ -1369,6 +1369,58 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     ).rejects.toThrow();
   });
 
+  it("saves an offer's feedback in the row text and keeps it for every viewer; old offers still load", async () => {
+    const attemptId = await newAttempt();
+    await begin(attemptId);
+    const feedback = 'Right: `map` returns a new array. The original is left alone.';
+    const offer = (id: string, input: Record<string, unknown>, state = 'output-available') => ({
+      type: 'tool-offer_next_step',
+      toolCallId: id,
+      state,
+      input,
+      ...(state === 'output-available'
+        ? { output: { actions: ['next'], lead_in: 'Ready for the next question?' } }
+        : { errorText: 'An error occurred.' }),
+    });
+    await chat.persistAssistantMessage(
+      attemptId,
+      {
+        id: 'asst-offer',
+        role: 'assistant',
+        parts: [
+          { type: 'text', text: 'Also some text.' },
+          offer('refused', { feedback: 'Never shown.', actions: ['next'] }, 'output-error'),
+          offer('b', { feedback, actions: ['next'] }),
+        ],
+      } as never,
+      { final: true }
+    );
+    const student = await say(attemptId, 'next');
+    await chat.persistAssistantMessage(
+      attemptId,
+      { id: 'asst-old', role: 'assistant', parts: [offer('old', { actions: ['next'] })] } as never,
+      { final: true }
+    );
+
+    const rows = await getPrisma().aIConversationMessage.findMany({
+      where: { ui_message_id: { in: ['asst-offer', 'asst-old'] } },
+      select: { ui_message_id: true, content: true },
+    });
+    const content = Object.fromEntries(rows.map(r => [r.ui_message_id, r.content]));
+    expect(content['asst-offer']).toBe(`Also some text.\n\n${feedback}`);
+    expect(content['asst-old']).toBe('');
+
+    const viewer = await chat.loadTranscriptForViewer(attemptId);
+    expect(viewer.map(m => m.id)).toEqual(['asst-offer', student.inputMessageId, 'asst-old']);
+    const shown = viewer.find(m => m.id === 'asst-offer')!.parts as Array<Record<string, unknown>>;
+    expect(shown.find(p => p.toolCallId === 'b')).toMatchObject({
+      state: 'output-available',
+      input: { feedback, actions: ['next'] },
+    });
+    const old = viewer.find(m => m.id === 'asst-old')!.parts as Array<Record<string, unknown>>;
+    expect(old).toEqual([offer('old', { actions: ['next'] })]);
+  });
+
   it('keeps runtime state under context.runtime without touching other keys', async () => {
     const attemptId = await newAttempt();
     expect(await chat.readRuntimeState(attemptId)).toBeNull();

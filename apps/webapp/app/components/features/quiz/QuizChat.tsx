@@ -41,12 +41,14 @@ const { Text } = Typography;
  *
  * Parts render by type (the design's §2.4): text as markdown, the question
  * card from the server-accepted `present_question` output, the per-question
- * marker from `data-question-result`, the Try again / Next buttons from
- * `offer_next_step`, the results panel from the stored evaluation record. Any
- * other part (reasoning, internal tools, unknown data) renders nothing. Parts
- * render in arrival order, except that a question's marker renders above a
- * later question's card in the same message (`displayOrder`). As in the legacy
- * chat, a marker is not inside a bubble: it gets its own row with its own
+ * marker from `data-question-result`, `offer_next_step` as the feedback on an
+ * answer (its input, shown as the agent's message while it streams) then the
+ * lead-in line and the Try again / Next buttons (its output), the results
+ * panel from the stored evaluation record. Any other part (reasoning, internal
+ * tools, unknown data) renders nothing. Parts render in arrival order, except
+ * that a question's marker renders above a later question's card in the same
+ * message (`displayOrder`). As in the legacy chat, a marker is not inside a
+ * bubble: it gets its own row with its own
  * avatar, and what follows it (the files read, the next card) starts a new
  * bubble (`messageBlocks`). The rest follows the legacy chat's flow too: the
  * opening reply's welcome is a bubble of its own, above the files read and
@@ -249,12 +251,23 @@ export const isFailedToolPart = (part: QuizPart) => {
 };
 
 /**
+ * The feedback on the answer an offer_next_step call carries in its input,
+ * when it has some. The input is partial while it streams, and a part saved
+ * before the feedback moved into the call has none.
+ */
+const feedbackOf = (input: unknown): string | null => {
+  const feedback = (input as { feedback?: unknown } | undefined)?.feedback;
+  return typeof feedback === 'string' && feedback.trim() ? feedback : null;
+};
+
+/**
  * A part of the assistant's reply that renders: inside a bubble, or (a
  * question's marker) in its own row. A question card still arriving shows its
  * placeholder only while its message is streaming, so a turn that ended before
  * the card leaves no empty card behind, and only in a bubble that already
  * shows something (`messageBlocks`). With `streaming` false this is the set of
- * settled parts.
+ * settled parts. An offer's feedback renders as soon as it has some, as text
+ * does; its buttons only once the call is done (`AssistantPart`).
  */
 const rendersInBubble = (part: QuizPart, streaming: boolean) => {
   if (isFailedToolPart(part)) return false;
@@ -267,7 +280,7 @@ const rendersInBubble = (part: QuizPart, streaming: boolean) => {
     case 'tool-present_question':
       return part.state === 'output-available' || streaming;
     case 'tool-offer_next_step':
-      return part.state === 'output-available';
+      return part.state === 'output-available' || feedbackOf(part.input) !== null;
     default:
       return false;
   }
@@ -356,10 +369,13 @@ const textAfterCard = (parts: readonly QuizPart[]): Set<number> => {
   return after;
 };
 
-/** A part that ends the wait for the reply: a card, the buttons, or a notice. */
+/**
+ * A part that ends the wait for the reply: a card, the buttons, or a notice.
+ * An offer ends it once its buttons are in, not while its feedback streams.
+ */
 const endsTheWait = (part: QuizPart) =>
   part.type === 'tool-present_question' ||
-  part.type === 'tool-offer_next_step' ||
+  (part.type === 'tool-offer_next_step' && part.state === 'output-available') ||
   part.type === 'data-notice';
 
 type MessageBlock = {
@@ -564,7 +580,7 @@ const RevisedResult = ({
   </div>
 );
 
-/** The line offer_next_step puts above its buttons, when it has one. */
+/** The line offer_next_step puts between its feedback and its buttons, when it has one. */
 const leadInOf = (output: unknown): string | null => {
   const leadIn = (output as { lead_in?: unknown } | null)?.lead_in;
   return typeof leadIn === 'string' && leadIn.trim() ? leadIn : null;
@@ -645,15 +661,25 @@ export function AssistantPart({ part, ctx }: { part: QuizPart; ctx: PartContext 
       }
       return null;
     }
-    case 'tool-offer_next_step':
-      return part.state === 'output-available' ? (
-        <NextStepButtons
-          actions={part.output.actions}
-          leadIn={leadInOf(part.output)}
-          disabled={ctx.buttonsDisabled}
-          onAction={ctx.onButton}
-        />
-      ) : null;
+    case 'tool-offer_next_step': {
+      // The feedback (the call's input) is the agent's message, shown as it
+      // streams; the lead-in and buttons (its output) follow once the call is
+      // done. A part saved before the feedback moved into the call has none.
+      const feedback = feedbackOf(part.input);
+      return (
+        <>
+          {feedback ? <Markdown text={feedback} isAssistant /> : null}
+          {part.state === 'output-available' ? (
+            <NextStepButtons
+              actions={part.output.actions}
+              leadIn={leadInOf(part.output)}
+              disabled={ctx.buttonsDisabled}
+              onAction={ctx.onButton}
+            />
+          ) : null}
+        </>
+      );
+    }
     default:
       // reasoning, step-start, data-step (listed above the bubble), internal
       // or unknown parts: nothing.

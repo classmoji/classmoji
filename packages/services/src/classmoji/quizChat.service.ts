@@ -115,13 +115,25 @@ const toUIMessage = (row: StoredMessageRow): QuizUIMessage =>
     ...(isObject(row.metadata) ? { metadata: row.metadata } : {}),
   }) as unknown as QuizUIMessage;
 
+/**
+ * A part's readable text: a text part's text, or the feedback an accepted
+ * offer_next_step carries (shown as the agent's message). A refused offer's
+ * feedback was never shown, so it is not taken.
+ */
+const partText = (p: unknown): string | null => {
+  if (!isObject(p)) return null;
+  if (p.type === 'text') return typeof p.text === 'string' ? p.text : null;
+  if (p.type === 'tool-offer_next_step' && p.state === 'output-available') {
+    const feedback = isObject(p.input) ? p.input.feedback : undefined;
+    return typeof feedback === 'string' && feedback.trim() ? feedback : null;
+  }
+  return null;
+};
+
 const textOf = (parts: unknown): string =>
   (Array.isArray(parts) ? parts : [])
-    .filter(
-      (p): p is { type: 'text'; text: string } =>
-        isObject(p) && p.type === 'text' && typeof p.text === 'string'
-    )
-    .map(p => p.text)
+    .map(partText)
+    .filter((t): t is string => t !== null)
     .join('\n\n');
 
 /**

@@ -33,11 +33,6 @@
  *   server completes the attempt from the recorded grades and writes a
  *   `data-evaluation` part. If the last result is missing, a `reply_failed`
  *   notice is written and the student's next message retries.
- * - Otherwise, if the turn's last offer_next_step was refused only for having
- *   no feedback text yet, the text came after it, and no card, buttons or
- *   evaluation went out, that call is run again with the model's own input
- *   through the same tool (`offerToReplay`), and its buttons are written into
- *   the reply like any other offer. Any other refusal writes nothing.
  * - Everything the model or the tools write is persisted in `onEnd`, upstream
  *   of the projection; the returned stream is projected for the browser. A
  *   failed save is tried once more (the save is an upsert by message id); a
@@ -68,7 +63,6 @@ import type {
 import { THINKING } from '@classmoji/utils/ai-models';
 import type { AttemptContext } from './context.ts';
 import { CODE_UNAVAILABLE_NOTICE } from './prompt/index.ts';
-import { isFeedbackMissing } from './tools/errors.ts';
 import type { Effort } from './settings.ts';
 import { isRefusal, logDiagnostic, type DiagnosticLog } from '../shared/sanitize.ts';
 import { createToolQueue, type ToolQueue } from '../shared/toolQueue.ts';
@@ -344,37 +338,6 @@ export function withoutEarlierFailedToolCalls(messages: ModelMessage[]): ModelMe
   return out;
 }
 
-/** The tools whose success ends the turn: a card, the buttons or the evaluation went out. */
-const TURN_ENDING_TOOLS = new Set([
-  'present_question',
-  'offer_next_step',
-  'submit_quiz_evaluation',
-]);
-
-/**
- * The input of the turn's last offer_next_step call, when that call was
- * refused only for having no feedback text yet (`isFeedbackMissing`) and no
- * call in the turn put a card, buttons or the evaluation out; otherwise null.
- * A later offer refused for any other reason, or accepted, wins over it.
- */
-export function offerToReplay(
-  steps: ReadonlyArray<{ content: ReadonlyArray<unknown>; finishReason?: string }>
-): unknown {
-  // A reply cut off at the output limit ends as it is: no buttons after cut text.
-  if (steps.at(-1)?.finishReason === 'length') return null;
-  let last: { input: unknown; replay: boolean } | null = null;
-  for (const step of steps) {
-    for (const part of step.content) {
-      const p = part as { type?: unknown; toolName?: unknown; input?: unknown; error?: unknown };
-      if (p.type === 'tool-result' && TURN_ENDING_TOOLS.has(p.toolName as string)) return null;
-      if (p.type === 'tool-error' && p.toolName === 'offer_next_step') {
-        last = { input: p.input, replay: isFeedbackMissing(p.error) };
-      }
-    }
-  }
-  return last?.replay ? last.input : null;
-}
-
 /** Text-part count of the last user message in a request (the hidden status is part 2). */
 export function lastUserTextParts(messages: ModelMessage[]): number {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -528,46 +491,6 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
         }
       };
 
-      /**
-       * Runs a refused offer_next_step again through the same tool (the queue,
-       * every guard, the lead-in) and writes it into the reply as a call with
-       * its result, as the model's own call would be. A refusal writes nothing.
-       */
-      const replayOffer = async (offerInput: unknown) => {
-        const execute = tools.offer_next_step?.execute;
-        if (!execute) return;
-        const toolCallId = generateId();
-        let output: unknown;
-        try {
-          output = await execute(
-            offerInput as never,
-            {
-              toolCallId,
-              messages: [],
-              abortSignal: deadline,
-              context: undefined,
-            } as never
-          );
-        } catch {
-          log('[quiz-agent] offer_next_step replay refused', {
-            attemptId: ctx.attemptId,
-            runId: ctx.runId,
-          });
-          return;
-        }
-        writer.write({
-          type: 'tool-input-available',
-          toolCallId,
-          toolName: 'offer_next_step',
-          input: offerInput,
-        });
-        writer.write({ type: 'tool-output-available', toolCallId, output });
-        log('[quiz-agent] offer_next_step replayed', {
-          attemptId: ctx.attemptId,
-          runId: ctx.runId,
-        });
-      };
-
       try {
         // A code-aware quiz without a repository this turn: a fixed hidden notice
         // after the student's message, never persisted.
@@ -580,7 +503,6 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
           ...codeNotice,
         ];
         let result = call(history);
-        const results = [result];
         await pump(result);
 
         for (let i = 0; i < RECOVERY_CALLS && !deadline.aborted && !sawStreamError; i++) {
@@ -598,7 +520,6 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
             n: i + 1,
           });
           result = call(history);
-          results.push(result);
           await pump(result);
         }
 
@@ -617,10 +538,6 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
             } else {
               notice('reply_failed');
             }
-          } else if (textWritten) {
-            const steps = (await Promise.all(results.map(r => r.steps))).flat();
-            const offer = offerToReplay(steps);
-            if (offer !== null) await replayOffer(offer);
           }
         }
         if (sawStreamError && !deadline.aborted) {
