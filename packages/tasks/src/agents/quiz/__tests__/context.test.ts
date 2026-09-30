@@ -150,3 +150,35 @@ describe('loadAttemptContext: the welcome', () => {
     );
   });
 });
+
+describe('loadAttemptContext: the content tools', () => {
+  const material = {
+    docs: [{ kind: 'page', id: 'p1', title: 'Flexbox basics', text: 'Flex containers.' }],
+    configured: 1,
+    totalChars: 16,
+  };
+
+  it('gives an attempt with linked material its lookups when the MCP server is configured', async () => {
+    fakes.findById.mockResolvedValue(attempt({ include_code_context: false }));
+    fakes.loadMaterial.mockResolvedValue(material);
+    const ctx = await loadAttemptContext('attempt-1', admission, {
+      log: vi.fn(),
+      env: { ...env, MCP_PUBLIC_URL: 'https://mcp.example.test' },
+    });
+    expect(ctx.content).toEqual({
+      mcpUrl: 'https://mcp.example.test/mcp',
+      classroomRef: 'sample-org/cs-1',
+      courseSearchEnabled: false,
+      docs: [{ kind: 'page', id: 'p1', title: 'Flexbox basics' }],
+    });
+    expect(ctx.prompt.staticPrompt).toContain('content_get(kind, id)');
+  });
+
+  it('has none, and names none, without the MCP server', async () => {
+    fakes.findById.mockResolvedValue(attempt({ include_code_context: false }));
+    fakes.loadMaterial.mockResolvedValue(material);
+    const ctx = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });
+    expect(ctx.content).toBeNull();
+    expect(ctx.prompt.staticPrompt).not.toMatch(/content_(get|search)/);
+  });
+});

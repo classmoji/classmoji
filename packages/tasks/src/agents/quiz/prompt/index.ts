@@ -23,7 +23,7 @@ export type QuizPromptInput = {
   classroomRef: string | null;
   /** Whole-course search; only meaningful with content tools. */
   courseSearchEnabled?: boolean;
-  /** Content tools registered for this run. Off tonight: the prompt names none. */
+  /** content_get and content_search are registered for this attempt (tools/content.ts). */
   contentToolsAvailable?: boolean;
 };
 

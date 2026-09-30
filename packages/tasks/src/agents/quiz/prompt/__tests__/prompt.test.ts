@@ -163,6 +163,29 @@ describe('quiz prompt: typed tools only', () => {
     expect(baseSystemPrompt).toMatch(/exactly ONE\s+hint/);
   });
 
+  it.each(bothModes)(
+    '%s: asks for feedback of 2 to 4 sentences that never narrates the buttons',
+    (_l, p) => {
+      const flat = p.staticPrompt.replace(/\s+/g, ' ');
+      expect(flat).toContain(
+        "Every answer gets feedback before the buttons: 2 to 4 sentences about THIS answer, in the student's own context"
+      );
+      expect(flat).toContain('Say what is right in the answer and why it matters.');
+      expect(flat).toMatch(/Never narrate the interface or what comes next: no "Click Next"/);
+      expect(flat).toContain('On the last question the feedback is the same as on any other.');
+    }
+  );
+
+  it('records a question only once the student moves on, and says when they asked in words', () => {
+    const flat = baseSystemPrompt.replace(/\s+/g, ' ');
+    expect(flat).toContain(
+      'Do NOT record, not even after a correct answer: a result recorded before the student moves on is refused.'
+    );
+    expect(flat).toContain(
+      'When the student asked in their own words rather than with the Next button, set student_asked_to_move_on: true in that record_question_result call.'
+    );
+  });
+
   it('keeps guidance out of answer feedback and ends the question at the reveal', () => {
     expect(baseSystemPrompt).toMatch(
       /Feedback on an answer says only what is right and what is wrong/
@@ -256,6 +279,28 @@ describe('quiz prompt: typed tools only', () => {
     expect(block).toMatch(/give the one change in edit/);
     expect(block).toMatch(/"edit": \{ "line": 23, "replace": /);
     expect(block).toMatch(/Never state the original line in question_text or in your text/);
+    expect(block).toMatch(/question_text says that one line was changed, never which line/);
+    expect(block).toMatch(/at most once per quiz: a second quote with edit is\s+refused/);
+  });
+
+  it('keeps edit to the find-the-change question: a what-if question quotes the real code', () => {
+    const at = codeAwareAgentPrompt.indexOf('"WHAT IF" QUESTIONS');
+    expect(at).toBeGreaterThan(codeAwareAgentPrompt.indexOf('"BREAK IT" QUESTIONS'));
+    const block = codeAwareAgentPrompt.slice(at, codeAwareAgentPrompt.indexOf('DO NOT:', at));
+    expect(block).toMatch(
+      /Quote the real code, exactly as it is, and describe the change in words/
+    );
+    expect(block).not.toMatch(/"edit":/);
+    expect(codeAwareAgentPrompt).toMatch(
+      /Use edit for anything but the one question that asks the student to find your change/
+    );
+  });
+
+  it('asks for whole rules and elements in a quote, and says where "..." goes', () => {
+    expect(codeAwareAgentPrompt).toMatch(/Quote whole rules and elements where you can/);
+    expect(codeAwareAgentPrompt).toMatch(
+      /Where a\s+range starts or stops inside a rule or element, the server adds a "\.\.\." line there/
+    );
   });
 
   it('gives every code_quote example a context line naming the file and the rule', () => {
@@ -490,6 +535,54 @@ describe('quiz prompt: source material', () => {
       courseSearchEnabled: true,
     });
     expect(staticPrompt).not.toMatch(/content_(get|search|list)/);
+  });
+
+  it('names the content tools, without a classroom argument, when the attempt has them', () => {
+    const linkedOnly = buildQuizPrompt({
+      ...base,
+      sourceMaterial,
+      classroomRef: 'org/cs52',
+      contentToolsAvailable: true,
+    }).staticPrompt;
+    expect(linkedOnly).toContain(
+      'content_get(kind, id) returns the whole of a document listed below when its text here was cut'
+    );
+    expect(linkedOnly).toContain('It reads only the documents listed below.');
+    expect(linkedOnly).toContain(
+      'content_search(query) finds where the documents listed below cover a topic'
+    );
+    expect(linkedOnly).toContain(
+      'never text marked as a draft, unpublished or for instructors only'
+    );
+    expect(linkedOnly).not.toContain('Verification:');
+    expect(linkedOnly).not.toMatch(/content_list|classroom: "/);
+
+    const courseWide = buildQuizPrompt({
+      ...base,
+      sourceMaterial,
+      classroomRef: 'org/cs52',
+      courseSearchEnabled: true,
+      contentToolsAvailable: true,
+    }).staticPrompt;
+    expect(courseWide).toContain(
+      'Verification: content_search(query) can confirm the course covers something not in this material'
+    );
+    expect(courseWide).not.toContain('It reads only the documents listed below.');
+    expect(courseWide).not.toMatch(/content_list|classroom: "/);
+  });
+
+  it('gives a quiz with course search and no material the COURSE SEARCH block', () => {
+    const { staticPrompt } = buildQuizPrompt({
+      ...base,
+      sourceMaterial: [],
+      classroomRef: 'org/cs52',
+      courseSearchEnabled: true,
+      contentToolsAvailable: true,
+    });
+    expect(staticPrompt).toContain(
+      `${standard.staticPrompt}\n\n━━━ COURSE SEARCH (classroom: org/cs52) ━━━\nVerification: content_search(query)`
+    );
+    expect(staticPrompt).not.toContain('━━━ SOURCE MATERIAL');
   });
 
   it('adds the code-aware scope rule only for a code-aware quiz with material', () => {

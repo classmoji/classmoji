@@ -65,7 +65,7 @@ export const CodeQuoteSchema = z.object({
     .min(1)
     .max(MAX_QUOTE_RANGES)
     .describe(
-      `Line ranges to show, as [start, end] pairs of the line numbers in your exploration results: ascending, not overlapping, at most ${MAX_QUOTE_LINES} lines shown in all. A "..." line marks each gap between ranges.`
+      `Line ranges to show, as [start, end] pairs of the line numbers in your exploration results: ascending, not overlapping, at most ${MAX_QUOTE_LINES} lines shown in all. Quote whole CSS rules and HTML elements where you can. A "..." line marks each gap between ranges, and a quote that starts or stops inside a rule or element.`
     ),
   omit: z
     .array(z.number().int().min(1))
@@ -88,7 +88,7 @@ export const CodeQuoteSchema = z.object({
     })
     .optional()
     .describe(
-      'For a question about what a change would do: one quoted line replaced with new text. The card says the code was edited.'
+      'Only for the one question that asks the student to find a change you made to their code: one quoted line replaced with new text. At most one question per quiz; a second is refused. For any other "what if" question, quote the real code and describe the change in words.'
     ),
 });
 export type CodeQuote = z.infer<typeof CodeQuoteSchema>;
@@ -151,6 +151,12 @@ export const RecordQuestionResultSchema = z.object({
     .min(1)
     .max(100)
     .describe('One line of feedback shown with the progress marker, at most 100 characters'),
+  student_asked_to_move_on: z
+    .boolean()
+    .optional()
+    .describe(
+      "true only when the student's latest message itself asks to skip this question, move on or end the quiz. Leave it out after a Next click. An answer, even a correct one, is not a request to move on."
+    ),
 });
 export type RecordQuestionResult = z.infer<typeof RecordQuestionResultSchema>;
 
@@ -276,3 +282,33 @@ export const ExploreCodebaseOutputSchema = z.object({
   files_read: z.array(z.string()),
 });
 export type ExploreCodebaseOutput = z.infer<typeof ExploreCodebaseOutputSchema>;
+
+/**
+ * `content_get`: one course document, by the kind and id the SOURCE MATERIAL
+ * block or a content_search hit names. The task adds the classroom itself;
+ * the model never names one.
+ */
+export const ContentGetSchema = z.object({
+  kind: z
+    .enum(['page', 'slide', 'file'])
+    .describe("Document kind: 'page', 'slide' (a deck) or 'file' (a course note)"),
+  id: z
+    .string()
+    .min(1)
+    .max(400)
+    .describe('Document id, as listed under SOURCE MATERIAL or returned by content_search'),
+});
+export type ContentGetInput = z.infer<typeof ContentGetSchema>;
+
+/** `content_search`: what to look for in the course material, in plain language. */
+export const ContentSearchSchema = z.object({
+  query: z
+    .string()
+    .min(2)
+    .max(500)
+    .describe('What to look for, in plain language (a question works well)'),
+});
+export type ContentSearchInput = z.infer<typeof ContentSearchSchema>;
+
+/** Both content tools answer the model in plain text. */
+export const ContentToolOutputSchema = z.string();

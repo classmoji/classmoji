@@ -99,6 +99,12 @@ const RECORD = {
   ],
 };
 
+/** An earlier turn, so a reply under test is not the opening one (whose first text is the welcome's own bubble). */
+const EARLIER = [
+  msg('a0', 'assistant', [{ type: 'text', text: 'Welcome.' }]),
+  msg('u0', 'user', [{ type: 'text', text: 'my answer' }]),
+];
+
 const renderTranscript = (
   messages: QuizUIMessage[],
   extra: Partial<Parameters<typeof QuizTranscript>[0]> = {}
@@ -222,19 +228,29 @@ describe('QuizTranscript — parts', () => {
       });
 
       it('shows a placeholder while the card is still arriving, and nothing for a refused call', () => {
+        const card = { ...questionPart, state: 'input-available', output: undefined };
         const arriving = [
-          msg('a1', 'assistant', [
-            { ...questionPart, state: 'input-available', output: undefined },
-          ]),
+          ...EARLIER,
+          msg('a1', 'assistant', [{ type: 'text', text: 'One more.' }, card]),
         ];
         const streaming = renderTranscript(arriving, { busy: true, status: 'streaming' });
         expect(streaming).not.toContain('A reworded question');
         expect(streaming).toContain('ant-skeleton');
 
+        // Alone it opens no bubble: no empty bubble, the activity line instead.
+        const alone = renderTranscript([msg('a1', 'assistant', [card])], {
+          busy: true,
+          status: 'streaming',
+        });
+        expect(alone).not.toContain('ant-skeleton');
+        expect(alone).not.toContain('quiz-assistant-bubble');
+        expect(alone).not.toContain('data-message-role="assistant"');
+        expect(alone).toContain('data-testid="quiz-typing"');
+
         // A turn that ended before its card arrived leaves no empty card.
         const ended = renderTranscript(arriving);
         expect(ended).not.toContain('ant-skeleton');
-        expect(ended).not.toContain('data-message-role="assistant"');
+        expect(ended).toContain('One more.');
 
         const refused = renderTranscript([
           msg('a1', 'assistant', [
@@ -550,11 +566,12 @@ describe('QuizTranscript — a quoted card as the viewer receives it', () => {
     expect(html).toContain('grid-template-columns');
   });
 
-  it('shows the placeholder for a card arriving with no input yet', () => {
+  it('shows the placeholder for a card arriving with no input yet, beside text', () => {
     const arriving = msg('a1', 'assistant', [
+      { type: 'text', text: 'Next up.' },
       { type: 'tool-present_question', toolCallId: 'call-1', state: 'input-streaming' },
     ]);
-    const html = renderTranscript([arriving], { busy: true, status: 'streaming' });
+    const html = renderTranscript([...EARLIER, arriving], { busy: true, status: 'streaming' });
     expect(html).toContain('ant-skeleton');
   });
 });
@@ -683,12 +700,18 @@ describe("QuizTranscript — a question's marker above the next card", () => {
       expect(html).toContain('data-testid="quiz-typing"');
     }
 
-    // The record call done, its marker in: the card follows it.
+    // The record call done, its marker in: the card follows it, once it is in.
     const done = renderTranscript(
       [msg('a1', 'assistant', [text('Right.'), recordCall(1), arriving, divider(1)])],
       { busy: true, status: 'streaming' }
     );
-    expectInOrder(done, ['Right.', 'completed question 1:', 'ant-skeleton']);
+    expectInOrder(done, ['Right.', 'completed question 1:', 'data-testid="quiz-typing"']);
+    expect(done).not.toContain('ant-skeleton');
+    const arrived = renderTranscript(
+      [msg('a1', 'assistant', [text('Right.'), recordCall(1), card(2), divider(1)])],
+      { busy: true, status: 'streaming' }
+    );
+    expectInOrder(arrived, ['Right.', 'completed question 1:', 'Question 2 of 8']);
 
     // A refused record call holds nothing back.
     const refused = renderTranscript(
@@ -713,27 +736,27 @@ describe("QuizTranscript — a question's marker above the next card", () => {
 
   it('shows the divider above a card that is still arriving, numbered or not', () => {
     for (const input of [{ preamble: 'Next' }, { preamble: 'Next', question_number: 2 }]) {
-      const html = renderTranscript(
-        [
-          msg('a1', 'assistant', [
-            recordCall(1),
-            {
-              type: 'tool-present_question',
-              toolCallId: 'call-q2',
-              state: 'input-streaming',
-              input,
-            },
-            divider(1),
-          ]),
-        ],
-        { busy: true, status: 'streaming' }
-      );
-      expectInOrder(html, ['completed question 1:', 'ant-skeleton']);
+      const parts = [
+        recordCall(1),
+        { type: 'tool-present_question', toolCallId: 'call-q2', state: 'input-streaming', input },
+        divider(1),
+      ];
+      expect(displayOrder(parts as never).map(e => e.index)).toEqual([0, 2, 1]);
+      // The card opens no bubble while it arrives: the divider, then the activity line.
+      const html = renderTranscript([msg('a1', 'assistant', parts)], {
+        busy: true,
+        status: 'streaming',
+      });
+      expectInOrder(html, ['completed question 1:', 'data-testid="quiz-typing"']);
+      expect(html).not.toContain('ant-skeleton');
+      expect(html).not.toContain('quiz-assistant-bubble');
     }
     // An arriving card numbered for the divider's own question stays above it.
     const own = renderTranscript(
       [
+        ...EARLIER,
         msg('a1', 'assistant', [
+          text('Here it is.'),
           {
             type: 'tool-present_question',
             toolCallId: 'call-q1',
@@ -745,7 +768,7 @@ describe("QuizTranscript — a question's marker above the next card", () => {
       ],
       { busy: true, status: 'streaming' }
     );
-    expectInOrder(own, ['ant-skeleton', 'completed question 1:']);
+    expectInOrder(own, ['Here it is.', 'ant-skeleton', 'completed question 1:']);
   });
 
   it('shows the owner (live) and staff (saved) the same order', () => {

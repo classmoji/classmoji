@@ -20,9 +20,9 @@ export const TURN_STOPPED_TEXT = 'This turn was stopped. Nothing was saved.';
 export const OFFER_AFTER_QUESTION_TEXT =
   "Wait for the student's answer to this question before offering next steps.";
 
-/** offer_next_step refused because the model has written no text in this turn yet. */
+/** offer_next_step refused because the model has written too little text in this turn (`MIN_FEEDBACK_WORDS`). */
 export const OFFER_BEFORE_FEEDBACK_TEXT =
-  "Write your feedback on the student's answer first (what is right and what is wrong), then call offer_next_step.";
+  "Write your feedback on the student's answer first: 2 to 4 sentences on what is right, what is wrong (if anything) and why it matters. Then call offer_next_step.";
 
 /**
  * offer_next_step refused in a turn the student opened with Try again: that
@@ -42,6 +42,17 @@ export const QUESTION_AFTER_OFFER_TEXT =
 /** record_question_result refused for a question whose card went out earlier in the same turn. */
 export const RECORD_BEFORE_ANSWER_TEXT =
   'The student has not answered this question yet. Wait for their answer.';
+
+/**
+ * record_question_result refused for the question the student is still on:
+ * no Next click, and the call does not say they asked to move on.
+ */
+export const RECORD_BEFORE_NEXT_TEXT =
+  'The student has not moved on from this question. Record it only after they click Next, or when their latest message asks to skip or move on (then set student_asked_to_move_on). After an answer, write your feedback and call offer_next_step.';
+
+/** present_question refused: question `n`'s card already shows edited code, and a quiz gets one. */
+export const editLimitText = (n: number) =>
+  `Only one question per quiz may show edited code, and question ${n} already does. Quote the real code without edit and describe any change in words in question_text.`;
 
 /** present_question refused because question `n`, the one the student is leaving, has no result yet. */
 export const recordBeforePresentText = (n: number) =>

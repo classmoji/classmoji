@@ -289,16 +289,22 @@ describe('QuizTranscript — streaming into the second bubble', () => {
 
     parts.push(card(2, 'input-streaming'));
     await stream(parts);
-    expect(bubbles(container)).toHaveLength(2);
-    expect(bubbles(container)[1].querySelector('.ant-skeleton')).not.toBeNull();
-    // The card is arriving: the wait is over, and the files read fold away.
-    expect(typing()).toBeNull();
-    expect(stepsNode.querySelector('.ant-collapse-item-active')).toBeNull();
+    // A card still arriving opens no bubble of its own: no empty bubble, the
+    // activity line and the open files read stay until the card is in.
+    expect(bubbles(container)).toHaveLength(1);
+    expect(container.querySelector('.ant-skeleton')).toBeNull();
+    expect(typing()?.textContent).toContain('Exploring code...');
+    expect(stepsNode.querySelector('.ant-collapse-item-active')).not.toBeNull();
 
     parts[parts.length - 1] = card(2);
     await stream(parts);
     const cardNode = container.querySelector('[data-testid="quiz-question-card"]')!;
+    expect(bubbles(container)).toHaveLength(2);
     expect(bubbles(container)[1].contains(cardNode)).toBe(true);
+    // The card is in: the wait is over, and the files read fold away.
+    expect(typing()).toBeNull();
+    expect(container.querySelector('[data-testid="quiz-steps"]')).toBe(stepsNode);
+    expect(stepsNode.querySelector('.ant-collapse-item-active')).toBeNull();
 
     parts.push(text('Take your time.'));
     await stream(parts);
@@ -329,7 +335,13 @@ describe('QuizTranscript — streaming into the second bubble', () => {
     expect(typing()?.textContent).toContain('Exploring code...');
     expect(before(welcome, container.querySelector('[data-testid="quiz-steps"]')!)).toBe(true);
 
+    // Question 1 still arriving: still waiting, and no empty bubble.
     parts.push(card(1, 'input-streaming'));
+    await stream(parts);
+    expect(typing()?.textContent).toContain('Exploring code...');
+    expect(bubbles(container)).toHaveLength(1);
+
+    parts[parts.length - 1] = card(1);
     await stream(parts);
     expect(typing()).toBeNull();
     expect(bubbles(container)[0]).toBe(welcome);

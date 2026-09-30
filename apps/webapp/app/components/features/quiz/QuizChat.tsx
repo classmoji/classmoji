@@ -22,7 +22,7 @@ import QuestionCard from './QuestionCard';
 import ProgressDivider from './ProgressDivider';
 import NextStepButtons from './NextStepButtons';
 import QuizResults, { type ResultsFocusMetrics } from './QuizResults';
-import StepList, { type QuizStep } from './StepList';
+import StepList, { onlyCourseSteps, type QuizStep } from './StepList';
 import { useQuizFocusMetrics } from './useQuizFocusMetrics';
 
 const { Text } = Typography;
@@ -52,7 +52,8 @@ const { Text } = Typography;
  * opening reply's welcome is a bubble of its own, above the files read and
  * question 1; text after a question card is not shown; a card waits for the
  * marker of the question before it; the activity line ("Thinking...",
- * "Exploring code...") stays up until a card, the buttons or a notice arrive;
+ * "Exploring code...", "Looking things up…") stays up until a card, the
+ * buttons or a notice arrive;
  * the evaluation's closing line sits above the results panel.
  */
 
@@ -251,7 +252,9 @@ export const isFailedToolPart = (part: QuizPart) => {
  * A part of the assistant's reply that renders: inside a bubble, or (a
  * question's marker) in its own row. A question card still arriving shows its
  * placeholder only while its message is streaming, so a turn that ended before
- * the card leaves no empty card behind.
+ * the card leaves no empty card behind, and only in a bubble that already
+ * shows something (`messageBlocks`). With `streaming` false this is the set of
+ * settled parts.
  */
 const rendersInBubble = (part: QuizPart, streaming: boolean) => {
   if (isFailedToolPart(part)) return false;
@@ -381,10 +384,14 @@ type MessageBlock = {
  * when a marker lands above a card already showing.
  *
  * Text after a card, and a card still waiting for the marker of the question
- * before it, render nothing and are left out the same way. In the opening
- * message (`opening`), a first part that is text is the welcome the server
- * writes before any tool call: it is a block of its own, so the files read
- * and question 1 follow it in a new bubble, as in the legacy chat.
+ * before it, render nothing and are left out the same way. So does a card
+ * still arriving in a block with nothing else to show in its bubble: alone
+ * its placeholder would be an empty bubble, which can land ahead of the
+ * marker its question waits for (the record call never reaches the browser),
+ * so the activity line covers the wait until the card itself arrives. In the
+ * opening message (`opening`), a first part that is text is the welcome the
+ * server writes before any tool call: it is a block of its own, so the files
+ * read and question 1 follow it in a new bubble, as in the legacy chat.
  */
 export const messageBlocks = (
   parts: readonly QuizPart[],
@@ -421,7 +428,16 @@ export const messageBlocks = (
       blocks.push({ kind: 'content', key: `content-${moved[0].index}`, entries: moved });
     }
   }
-  return blocks;
+  // No bubble until it has a part that shows something (a settled part): a
+  // card still arriving joins a bubble, it never opens one.
+  for (const block of blocks) {
+    if (block.kind !== 'content') continue;
+    const shows = block.entries.some(
+      ({ part }) => part.type !== 'data-step' && rendersInBubble(part, false)
+    );
+    if (!shows) block.entries = block.entries.filter(({ part }) => part.type === 'data-step');
+  }
+  return blocks.filter(block => block.entries.length > 0);
 };
 
 // ---------------------------------------------------------------------------
@@ -656,14 +672,17 @@ const tailOf = (blocks: readonly MessageBlock[]): QuizPart[] => {
 
 export const THINKING_LINE = 'Thinking...';
 export const EXPLORING_LINE = 'Exploring code...';
+/** The legacy chat's line while only course material is being looked up. */
+export const LOOKING_UP_LINE = 'Looking things up…';
 
 /**
  * What the activity line says while a turn runs, or null when it is hidden.
  * As in the legacy chat it stays up until the reply has arrived: here, until
  * a card, the buttons, a notice or the evaluation follow the message's last
- * marker. It says "Exploring code..." once files are being read for what
- * comes next (the first exploration after the welcome, the one after each
- * marker), "Thinking..." otherwise.
+ * marker. Once work has started on what comes next (the first steps after the
+ * welcome, the ones after each marker) it says "Looking things up…" when
+ * every step so far looked up course material and "Exploring code..." when
+ * any read a file, as in the legacy chat; "Thinking..." otherwise.
  */
 export const activityLine = (
   message: QuizUIMessage | undefined,
@@ -674,7 +693,9 @@ export const activityLine = (
   if (parts.some(isEvaluationPart)) return null;
   const tail = tailOf(messageBlocks(parts, true, { opening }));
   if (tail.some(endsTheWait)) return null;
-  return tail.some(part => part.type === 'data-step') ? EXPLORING_LINE : THINKING_LINE;
+  const steps = stepsOf(tail);
+  if (steps.length === 0) return THINKING_LINE;
+  return onlyCourseSteps(steps) ? LOOKING_UP_LINE : EXPLORING_LINE;
 };
 
 interface TranscriptProps {
