@@ -6,7 +6,8 @@ import { IconId } from '@tabler/icons-react';
 
 import useStore from '~/store';
 import { useCallout } from '@classmoji/ui-components';
-import { requireAuth } from '@classmoji/auth/server';
+import { auth, requireAuth } from '@classmoji/auth/server';
+import { authClient } from '@classmoji/auth/client';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
 import {
@@ -17,6 +18,7 @@ import { normalizeSchoolId, SCHOOL_ID_MAX_LENGTH } from '~/utils/schoolId';
 import type { Route } from './+types/route';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MIN_PASSWORD_LENGTH = 8;
 
 /**
  * Account edits, all scoped to the signed-in user's own row (#343):
@@ -26,6 +28,9 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  *    .update then claims any classroom invite sent to it (#307), which is the
  *    whole point — a student who mistyped their address at sign-up gets into
  *    the classroom they were invited to.
+ *  - set-password: add an email+password sign-in to an account that has none
+ *    (a Github sign-up). Changing an existing password happens client-side
+ *    through better-auth, which checks the current one.
  * The Github account's own email is never touched here.
  */
 export const action = async ({ request }: Route.ActionArgs) => {
@@ -35,7 +40,23 @@ export const action = async ({ request }: Route.ActionArgs) => {
     email?: unknown;
     code?: unknown;
     school_id?: unknown;
+    password?: unknown;
   };
+
+  if (body.intent === 'set-password') {
+    const password = typeof body.password === 'string' ? body.password : '';
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      return { error: `Use at least ${MIN_PASSWORD_LENGTH} characters.` };
+    }
+    try {
+      // Server-only: fails if the account already has a password.
+      await auth.api.setPassword({ body: { newPassword: password }, headers: request.headers });
+    } catch (error) {
+      console.error('[settings] set-password failed', error);
+      return { error: 'Could not set a password. Sign in again and retry.' };
+    }
+    return { passwordSet: true };
+  }
 
   if (body.intent === 'update-school-id') {
     const schoolId = normalizeSchoolId(body.school_id);
@@ -379,7 +400,127 @@ const SettingsGeneral = () => {
             </div>
           )}
         </div>
+
+        <div className="border-t border-gray-200 dark:border-neutral-700 my-8"></div>
+
+        <PasswordSection />
       </Card>
+    </div>
+  );
+};
+
+/** Email+password sign-in: set a first password, or change the current one. */
+const PasswordSection = () => {
+  const { user } = useStore();
+  const passwordFetcher = useFetcher<{ passwordSet?: boolean; error?: string }>();
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [changing, setChanging] = useState(false);
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  useEffect(() => {
+    if (passwordFetcher.data?.passwordSet) {
+      setPassword('');
+      setConfirmPassword('');
+      setMessage({ type: 'success', text: `You can now sign in with ${user?.email}.` });
+    } else if (passwordFetcher.data?.error) {
+      setMessage({ type: 'error', text: passwordFetcher.data.error });
+    }
+  }, [passwordFetcher.data, user?.email]);
+
+  const passwordsMatch = password === confirmPassword;
+  const passwordReady = password.length >= MIN_PASSWORD_LENGTH && passwordsMatch;
+
+  const setNewPassword = () =>
+    passwordFetcher.submit(
+      { intent: 'set-password', password },
+      { method: 'POST', encType: 'application/json' }
+    );
+
+  const changePassword = async () => {
+    setChanging(true);
+    const { error } = await authClient.changePassword({
+      currentPassword,
+      newPassword: password,
+      revokeOtherSessions: true,
+    });
+    setChanging(false);
+    if (error) {
+      setMessage({ type: 'error', text: error.message || 'Could not change your password.' });
+      return;
+    }
+    setPassword('');
+    setConfirmPassword('');
+    setCurrentPassword('');
+    setMessage({ type: 'success', text: 'Password changed.' });
+  };
+
+  return (
+    <div>
+      <h4 className="text-base font-semibold text-gray-800 dark:text-gray-100 mb-1">Password</h4>
+      <p className="text-sm text-ink-3 mb-6">
+        {user?.has_password
+          ? `Sign in with ${user.email} and your password.`
+          : `Add a password to also sign in with ${user?.email ?? 'your email'}.`}
+      </p>
+
+      {message && (
+        <Alert
+          type={message.type}
+          showIcon
+          closable
+          onClose={() => setMessage(null)}
+          style={{ marginBottom: 24 }}
+          message={message.text}
+        />
+      )}
+
+      <div className="flex flex-col gap-3 max-w-md">
+        {user?.has_password && (
+          <Input.Password
+            placeholder="Current password"
+            autoComplete="current-password"
+            value={currentPassword}
+            onChange={e => setCurrentPassword(e.target.value)}
+          />
+        )}
+        <Input.Password
+          placeholder={`New password (${MIN_PASSWORD_LENGTH}+ characters)`}
+          autoComplete="new-password"
+          value={password}
+          onChange={e => setPassword(e.target.value)}
+        />
+        <Input.Password
+          placeholder="Confirm new password"
+          autoComplete="new-password"
+          value={confirmPassword}
+          onChange={e => setConfirmPassword(e.target.value)}
+          status={confirmPassword && !passwordsMatch ? 'error' : undefined}
+        />
+        {confirmPassword && !passwordsMatch && (
+          <p className="text-xs text-red-500 dark:text-red-400">The passwords do not match.</p>
+        )}
+        <div>
+          {user?.has_password ? (
+            <Button
+              onClick={changePassword}
+              loading={changing}
+              disabled={!passwordReady || !currentPassword}
+            >
+              Change password
+            </Button>
+          ) : (
+            <Button
+              onClick={setNewPassword}
+              loading={passwordFetcher.state !== 'idle'}
+              disabled={!passwordReady || !user?.email}
+            >
+              Set password
+            </Button>
+          )}
+        </div>
+      </div>
     </div>
   );
 };
