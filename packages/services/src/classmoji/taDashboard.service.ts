@@ -11,7 +11,8 @@
  * `dashboard.service.ts`.
  */
 
-import getPrisma from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import { displayUsername } from '@classmoji/utils';
 import { emojiToGrade, computeGradeMedian } from './dashboard.service.ts';
 
 // Pure helpers (unit-tested)
@@ -152,6 +153,7 @@ export interface OverdueQueueRow {
   repositoryAssignmentId: string;
   studentName: string | null;
   studentLogin: string | null;
+  studentImage: string | null;
   assignmentTitle: string;
   ageDays: number;
 }
@@ -189,7 +191,7 @@ export async function overdueQueue(
           assignment: { select: { title: true } },
           git_repo: {
             select: {
-              student: { select: { name: true, login: true } },
+              student: { select: { name: true, image: true, ...GIT_IDENTITY } },
             },
           },
         },
@@ -214,7 +216,8 @@ export async function overdueQueue(
   return enriched.slice(0, 10).map(x => ({
     repositoryAssignmentId: x.ra.id,
     studentName: x.ra.git_repo.student?.name ?? null,
-    studentLogin: x.ra.git_repo.student?.login ?? null,
+    studentLogin: displayUsername(x.ra.git_repo.student),
+    studentImage: x.ra.git_repo.student?.image ?? null,
     assignmentTitle: x.ra.assignment.title,
     ageDays: Math.floor(x.ageMs / MS_PER_DAY),
   }));

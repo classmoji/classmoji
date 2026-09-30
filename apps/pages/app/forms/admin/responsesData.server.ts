@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { withoutAnswers, type FormField } from '@classmoji/services/form-contract';
 
+import { GIT_IDENTITY } from '@classmoji/database';
+import { displayUsername } from '@classmoji/utils';
 import { ClassmojiService, prisma } from '~/utils/db.server.ts';
 import { assertFormAdmin, type FormAdminContext } from '~/utils/formAuth.server.ts';
 
@@ -205,10 +207,10 @@ async function addedByNames(ids: Array<string | null>): Promise<Map<string, stri
 
   const users = await prisma.user.findMany({
     where: { id: { in: distinct } },
-    select: { id: true, name: true, login: true },
+    select: { id: true, name: true, ...GIT_IDENTITY },
   });
 
-  return new Map(users.map(user => [user.id, user.name || user.login || null] as const));
+  return new Map(users.map(user => [user.id, user.name || displayUsername(user) || null] as const));
 }
 
 /**

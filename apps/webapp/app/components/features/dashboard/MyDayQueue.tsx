@@ -6,6 +6,7 @@ export interface MyDayQueueRow {
   repositoryAssignmentId: string;
   studentName: string | null;
   studentLogin: string | null;
+  studentImage?: string | null;
   assignmentTitle: string;
   ageDays: number;
 }
@@ -42,6 +43,7 @@ const MyDayQueue = ({ queue }: MyDayQueueProps) => {
               >
                 <UserAvatar
                   login={row.studentLogin}
+                  image={row.studentImage}
                   name={row.studentName}
                   seed={row.repositoryAssignmentId}
                   size={32}

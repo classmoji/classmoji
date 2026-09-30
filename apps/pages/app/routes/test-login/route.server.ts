@@ -94,7 +94,7 @@ export const loader = async ({ request }: { request: Request }) => {
         where: { id: account.id },
         data: { access_token: githubToken },
       });
-      console.log(`[pages/test-login] Stored token for ${account.user.login}`);
+      console.log(`[pages/test-login] Stored token for ${account.username}`);
     }
 
     if (!account?.user) {
@@ -117,7 +117,7 @@ export const loader = async ({ request }: { request: Request }) => {
       },
     });
 
-    console.log(`[pages/test-login] Created session for ${user.login} (role=${role})`);
+    console.log(`[pages/test-login] Created session for ${account.username} (role=${role})`);
 
     // Set Better Auth session cookie and redirect
     return redirect(redirectTo, {

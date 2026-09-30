@@ -113,9 +113,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
   const authData = await getAuthSession(request);
   const octokit = GitHubProvider.getUserOctokit(authData!.token!);
 
-  // Get authenticated user
-  const { data: authenticatedUser } = await octokit.rest.users.getAuthenticated();
-  const user = await ClassmojiService.user.findByLogin(authenticatedUser.login);
+  const user = await ClassmojiService.user.findById(authData!.userId);
 
   if (!user) {
     return { error: 'Unauthorized' };

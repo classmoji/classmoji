@@ -19,6 +19,7 @@
  */
 
 import { ClassmojiService, HelperService } from '@classmoji/services';
+import { gitUsername } from '@classmoji/utils';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
@@ -64,7 +65,7 @@ export const gradeAddTool: ToolDefinition<GradeAddArgs> = {
   title: 'Add a grade',
   description:
     'Adds a grade to a submission (a GitRepoAssignment — one assignment on one student/team ' +
-    'repo). Use a submission id from the grading queue. The value must be in the classroom\'s ' +
+    "repo). Use a submission id from the grading queue. The value must be in the classroom's " +
     'grading scale: on an emoji scale, one of the configured emojis (a grader may stack several; ' +
     'the submission grade is their mean); on the numeric scale, a `score-N` emoji (score-0 … ' +
     "score-100), where the call replaces the caller's previous score on that submission (its " +
@@ -113,7 +114,7 @@ export const gradeAddTool: ToolDefinition<GradeAddArgs> = {
       success: true,
       git_repo_assignment_id: gra.id,
       deduplicated,
-      grades: grades.map(g => ({ id: g.id, emoji: g.emoji, grader: g.grader?.login ?? null })),
+      grades: grades.map(g => ({ id: g.id, emoji: g.emoji, grader: gitUsername(g.grader) })),
     });
   },
 };

@@ -1,4 +1,5 @@
-import getPrisma from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import { displayUsername } from '@classmoji/utils';
 import { ClassmojiService } from '@classmoji/services';
 import type {
   MediaKind,
@@ -123,10 +124,10 @@ async function uploaderNames(userIds: string[]): Promise<Map<string, string>> {
 
   const users = await getPrisma().user.findMany({
     where: { id: { in: wanted } },
-    select: { id: true, name: true, login: true },
+    select: { id: true, name: true, ...GIT_IDENTITY },
   });
 
-  return new Map(users.map(user => [user.id, user.name || user.login || 'Unknown']));
+  return new Map(users.map(user => [user.id, user.name || displayUsername(user) || 'Unknown']));
 }
 
 /**

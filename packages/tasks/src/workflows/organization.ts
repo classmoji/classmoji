@@ -3,11 +3,21 @@ import { ClassmojiService, getGitProvider, getTeamNameForClassroom } from '@clas
 import { nanoid } from 'nanoid';
 import { createRepositoriesTask } from './gitRepo.ts';
 import invariant from 'tiny-invariant';
+import { gitUsername } from '@classmoji/utils';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 
 interface MemberAddedPayload {
-  membership: { user: { login: string }; [key: string]: unknown };
+  membership: { user: { id?: number; login: string }; [key: string]: unknown };
   organization: { id: number; login: string; [key: string]: unknown };
   [key: string]: unknown;
+}
+
+interface ActivateMembershipPayload {
+  /** The user's username on the organization's provider (older payloads carry only this). */
+  login?: string;
+  /** The Github user id (`Account.account_id`), preferred when present. */
+  githubUserId?: string;
+  gitOrganizationId: string;
 }
 
 interface GitOrgData {
@@ -21,7 +31,7 @@ interface GitOrgData {
 }
 
 interface RemoveUserPayload {
-  user: { id: string; login: string; has_accepted_invite: boolean };
+  user: { id: string; login: string | null; has_accepted_invite: boolean };
   gitOrganization?: GitOrgData;
   classroom?: { id: string; slug: string };
   organization?: { id: string; slug: string; git_organization?: GitOrgData };
@@ -44,22 +54,29 @@ interface RemoveUserPayload {
  */
 async function activateMembership({
   login,
+  githubUserId,
   gitOrganizationId,
-}: {
-  login: string;
-  gitOrganizationId: string;
-}) {
-  const user = await ClassmojiService.user.findByLogin(login);
-  if (!user) {
-    console.log(`[activateMembership] User not found for login: ${login}`);
-    return;
-  }
-
+}: ActivateMembershipPayload) {
   const gitOrganization = await ClassmojiService.gitOrganization.findById(gitOrganizationId);
   if (!gitOrganization) {
     console.log(`[activateMembership] GitOrganization not found: ${gitOrganizationId}`);
     return;
   }
+
+  // The Github user id is the stable key; a login-only payload (runs queued
+  // before ids were sent, or a non-Github org) falls back to the username.
+  const user =
+    (githubUserId
+      ? await ClassmojiService.user.findByGitAccountId(githubUserId, 'GITHUB')
+      : null) ??
+    (login ? await ClassmojiService.user.findByGitUsername(login, gitOrganization.provider) : null);
+  if (!user) {
+    console.log(
+      `[activateMembership] User not found for ${githubUserId ? `Github id ${githubUserId}` : `login ${login}`}`
+    );
+    return;
+  }
+  const username = gitUsername(user, gitOrganization.provider);
 
   // Find all user's memberships in classrooms linked to this git organization
   const userMemberships = await ClassmojiService.classroomMembership.findByUserId(user.id);
@@ -69,7 +86,7 @@ async function activateMembership({
 
   if (relevantMemberships.length === 0) {
     console.log(
-      `[activateMembership] No memberships found for ${login} in git org ${gitOrganization.login}`
+      `[activateMembership] No memberships found for ${username ?? user.id} in git org ${gitOrganization.login}`
     );
     return;
   }
@@ -83,7 +100,7 @@ async function activateMembership({
     });
 
     // Only students get assignment repos
-    if (membership.role !== 'STUDENT' || !user.login) {
+    if (membership.role !== 'STUDENT' || !username) {
       continue;
     }
 
@@ -125,7 +142,7 @@ async function activateMembership({
       missingRepositories.map(repository =>
         createRepositoriesTask.trigger(
           {
-            logins: [user.login as string],
+            logins: [username],
             assignmentTitle: repository.title,
             org: membership.classroom.slug,
             sessionId: nanoid(),
@@ -140,12 +157,12 @@ async function activateMembership({
 
 /**
  * Task wrapper so non-task callers (webapp routes) can activate a membership via
- * `tasks.trigger('activate_membership', { login, gitOrganizationId })`. Used by the
+ * `tasks.trigger('activate_membership', { login, githubUserId?, gitOrganizationId })`. Used by the
  * self-join and add-assistant flows when the user is already in the org.
  */
 export const activateMembershipTask = task({
   id: 'activate_membership',
-  run: async (payload: { login: string; gitOrganizationId: string }) => {
+  run: async (payload: ActivateMembershipPayload) => {
     await activateMembership(payload);
   },
 });
@@ -169,7 +186,11 @@ export const memberAddedHandlerTask = task({
       return;
     }
 
-    await activateMembership({ login: githubUser.login, gitOrganizationId: gitOrganization.id });
+    await activateMembership({
+      login: githubUser.login,
+      githubUserId: githubUser.id != null ? String(githubUser.id) : undefined,
+      gitOrganizationId: gitOrganization.id,
+    });
   },
 });
 
@@ -190,7 +211,19 @@ export const removeUserFromOrganizationTask = task({
     invariant(classroomData, '[remove_user] Missing classroom data in payload');
     invariant(gitOrgData, '[remove_user] Missing git organization data in payload');
 
-    if (user.has_accepted_invite) {
+    // The username on the org's provider, read from the stored account; the
+    // payload's `login` is what the caller resolved and covers a deleted user.
+    const storedUser = await getPrisma().user.findUnique({
+      where: { id: user.id },
+      select: { ...GIT_IDENTITY },
+    });
+    const username = gitUsername(storedUser, gitOrgData.provider) ?? user.login;
+
+    if (user.has_accepted_invite && !username) {
+      console.log(
+        `[remove_user] User ${user.id} has no ${gitOrgData.provider} username, skipping git removal`
+      );
+    } else if (user.has_accepted_invite && username) {
       const gitProvider = getGitProvider(gitOrgData);
       const orgLogin = gitOrgData.login;
 
@@ -218,15 +251,15 @@ export const removeUserFromOrganizationTask = task({
 
       if (keepsTeam) {
         console.log(
-          `[remove_user] User ${user.login} holds another role in ${classroomData.slug} that shares team ${teamSlug}, keeping in team`
+          `[remove_user] User ${username} holds another role in ${classroomData.slug} that shares team ${teamSlug}, keeping in team`
         );
       } else {
         try {
-          await gitProvider.removeTeamMember(orgLogin, teamSlug, user.login);
+          await gitProvider.removeTeamMember(orgLogin, teamSlug, username);
         } catch (error: unknown) {
           // Team might not exist or user not in team - log but continue
           console.log(
-            `[remove_user] Could not remove ${user.login} from team ${teamSlug}: ${error instanceof Error ? error.message : String(error)}`
+            `[remove_user] Could not remove ${username} from team ${teamSlug}: ${error instanceof Error ? error.message : String(error)}`
           );
         }
       }
@@ -241,10 +274,10 @@ export const removeUserFromOrganizationTask = task({
 
       // Step 3: Only remove from GitHub org if no other classroom memberships
       if (shouldRemoveFromOrg) {
-        await gitProvider.removeFromOrganization(orgLogin, user.login);
+        await gitProvider.removeFromOrganization(orgLogin, username);
       } else {
         console.log(
-          `[remove_user] User ${user.login} has other classroom memberships in ${orgLogin}, keeping in org`
+          `[remove_user] User ${username} has other classroom memberships in ${orgLogin}, keeping in org`
         );
       }
     }

@@ -61,7 +61,9 @@ export const addStudents = async ({
 
   const emails = students.map(s => s.email.toLowerCase());
   const existingUsers = await getPrisma().user.findMany({
-    where: { email: { in: emails } },
+    // Only a verified address identifies a person; an unverified one gets an
+    // invite like any unknown address, claimed once they verify it.
+    where: { email: { in: emails }, emailVerified: true },
     select: { id: true, email: true, name: true },
   });
   const existingByEmail = new Map(existingUsers.map(u => [(u.email ?? '').toLowerCase(), u]));

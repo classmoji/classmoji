@@ -32,3 +32,4 @@ export * from './naturalSort.ts';
 export * from './surveyQuestions.ts';
 export * from './timeZone.ts';
 export * from './repoLimits.ts';
+export * from './gitIdentity.ts';
