@@ -202,15 +202,14 @@ const SignInPage = ({ handleGitHubLogin, callbackURL, oauthError, children }: Si
               <button
                 type="button"
                 disabled
-                title="Gitlab sign-in is coming soon"
                 className="mt-2 w-full flex items-center justify-center gap-2 border border-stone-200 dark:border-neutral-800 bg-transparent text-gray-400 dark:text-gray-500 font-medium rounded-lg px-4 py-2.5 cursor-not-allowed"
               >
                 <img src={GitLabIcon} alt="" className="w-5 h-5 opacity-60" />
                 Continue with Gitlab
-                <span className="ml-1 rounded-full bg-stone-100 dark:bg-neutral-800 px-2 py-0.5 text-[11px] font-medium text-gray-500 dark:text-gray-400">
-                  Coming soon
-                </span>
               </button>
+              <p className="mt-1.5 text-center text-xs text-gray-400 dark:text-gray-500">
+                Gitlab integration coming soon
+              </p>
               <div className="flex items-center gap-3 my-5 text-xs text-gray-400 dark:text-gray-500">
                 <div className="h-px flex-1 bg-stone-200 dark:bg-neutral-800" />
                 or
