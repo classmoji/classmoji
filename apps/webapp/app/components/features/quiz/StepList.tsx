@@ -1,51 +1,77 @@
-import { FileTextOutlined, WarningOutlined } from '@ant-design/icons';
+import { useEffect, useState } from 'react';
+import { Collapse, Typography } from 'antd';
+import { FileTextOutlined, RocketOutlined, WarningOutlined } from '@ant-design/icons';
 import type { QuizDataParts } from '@classmoji/utils/quiz-agent';
 
+const { Text } = Typography;
+
 /**
- * The files the quiz read in a reply (its `data-step` parts): the path of each
- * file, and nothing about why it was read. Collapsed once the reply is done;
- * open while it is still coming.
+ * The files the quiz read in a reply (its `data-step` parts), under the legacy
+ * chat's collapsed "Code Analysis (N steps)" header: the path of each file,
+ * and nothing about why it was read. Open while the files are still being
+ * read; collapsed once what they were read for has arrived. The student can
+ * open and close it either way.
  */
 export type QuizStep = QuizDataParts['step'];
 
 interface StepListProps {
   steps: readonly QuizStep[];
-  /** The reply is still streaming: show the list open. */
+  /** The files are still being read: show the list open. */
   active?: boolean;
+  isDarkMode?: boolean;
 }
 
 const StepLine = ({ step }: { step: QuizStep }) => (
-  <li className="flex items-center gap-2 py-0.5 text-xs text-gray-600 dark:text-gray-400">
+  <li className="flex items-center gap-2 py-1 text-xs">
     {step.error ? (
-      <WarningOutlined className="text-amber-500 dark:text-amber-400" />
+      <WarningOutlined style={{ color: '#f59e0b' }} />
     ) : (
-      <FileTextOutlined className="text-emerald-600 dark:text-emerald-400" />
+      <FileTextOutlined style={{ color: '#10b981' }} />
     )}
-    <span className="font-mono break-all">
+    <Text type="secondary" className="font-mono break-all" style={{ fontSize: '12px' }}>
       {step.error ? `Couldn't read ${step.path}` : step.path}
-    </span>
+    </Text>
   </li>
 );
 
-function StepList({ steps, active = false }: StepListProps) {
+/** The legacy header's wording, one step or many. */
+export const stepsLabel = (count: number) =>
+  `Code Analysis (${count} ${count === 1 ? 'step' : 'steps'})`;
+
+function StepList({ steps, active = false, isDarkMode = false }: StepListProps) {
+  const [open, setOpen] = useState(active);
+  // Follows the reply: open while files are read, closed once they are done.
+  useEffect(() => setOpen(active), [active]);
+
   if (steps.length === 0) return null;
-  const label = `Read ${steps.length} ${steps.length === 1 ? 'file' : 'files'}`;
 
   return (
-    <details
-      className="mb-2 w-full max-w-[70%] rounded-md border border-stone-200 bg-stone-50 px-3 py-1.5 dark:border-neutral-700 dark:bg-neutral-900"
-      data-testid="quiz-steps"
-      open={active}
-    >
-      <summary className="cursor-pointer select-none text-xs font-medium text-gray-500 dark:text-gray-400">
-        {label}
-      </summary>
-      <ul className="mt-1 max-h-48 list-none overflow-y-auto p-0">
-        {steps.map((step, i) => (
-          <StepLine key={`${step.path}-${i}`} step={step} />
-        ))}
-      </ul>
-    </details>
+    <div className="mb-2 w-full max-w-[70%]" data-testid="quiz-steps">
+      <Collapse
+        size="small"
+        activeKey={open ? ['steps'] : []}
+        onChange={keys => setOpen((Array.isArray(keys) ? keys : [keys]).includes('steps'))}
+        items={[
+          {
+            key: 'steps',
+            forceRender: true,
+            label: (
+              <Text type="secondary" style={{ fontSize: '12px' }}>
+                <RocketOutlined style={{ color: '#3b82f6' }} /> {stepsLabel(steps.length)}
+              </Text>
+            ),
+            children: (
+              <ul className="m-0 max-h-[200px] list-none overflow-y-auto p-0">
+                {steps.map((step, i) => (
+                  <StepLine key={`${step.path}-${i}`} step={step} />
+                ))}
+              </ul>
+            ),
+          },
+        ]}
+        style={{ width: '100%', backgroundColor: isDarkMode ? '#111827' : '#fafafa' }}
+      />
+    </div>
   );
 }
 
