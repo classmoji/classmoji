@@ -8,6 +8,8 @@
  *   path, in `quoteFileCache`: exploration puts every file it reads there, so
  *   a quote is checked against the very lines the model was shown; a file
  *   that is not there yet is read on first use.
+ * - A file the quiz excludes (`excludedPaths`) is refused before it is read
+ *   or looked up in the cache (`QUOTE_EXCLUDED_TEXT`).
  * - The quote is checked before anything is written: the path exists, every
  *   range is inside the file, ascending and apart from the others, and the
  *   anchor matches the first quoted line once whitespace is trimmed and
@@ -26,6 +28,7 @@
 import { MAX_QUOTE_LINES, type CodeQuote, type QuoteSource } from '@classmoji/utils/quiz-agent';
 import { fetchFileContent, isVisiblePath, splitLines } from '../../../workflows/exploreRepo.ts';
 import { providerStatus, untilAborted } from '../../shared/exploration/core.ts';
+import { pathExclusion } from '../../shared/exploration/excludedPaths.ts';
 import type { GitOrgLike } from '../context.ts';
 
 /** The line that stands for lines left out of a quote. */
@@ -37,6 +40,7 @@ export const MAX_QUOTE_CHARS = 8_000;
 /** Why a quote was refused: a code for the log line, never the file's content. */
 export type QuoteRefusalReason =
   | 'not_quotable'
+  | 'excluded'
   | 'missing_file'
   | 'empty_file'
   | 'bad_range'
@@ -65,6 +69,9 @@ export type BuiltQuote = {
 };
 
 const CHECK_NUMBERS = 'Check the line numbers from your exploration.';
+
+/** What the model is told when it quotes a file the quiz excludes. */
+export const QUOTE_EXCLUDED_TEXT = 'That file is excluded from this quiz; quote from another file.';
 
 /** Trimmed, with every run of whitespace as one space. */
 export const normalizeLine = (text: string): string => text.replace(/\s+/g, ' ').trim();
@@ -473,6 +480,8 @@ export type QuoteRepo = {
   owner: string;
   repo: string;
   gitOrganization: GitOrgLike;
+  /** The quiz's excluded paths: a matching file is refused before anything is read. */
+  excludedPaths?: readonly string[];
 };
 
 export type QuoteDeps = {
@@ -500,6 +509,10 @@ export async function resolveCodeQuote(
       'not_quotable',
       `${path || 'That path'} cannot be quoted. Use a path exactly as your exploration results name it.`
     );
+  }
+  // Before the cache: a copy kept before the setting changed is not quoted either.
+  if (pathExclusion(where.excludedPaths)(path)) {
+    throw new QuoteRefusal('excluded', QUOTE_EXCLUDED_TEXT);
   }
   const cache = deps.cache ?? quoteFileCache;
   const key = QuoteFileCache.key(where.attemptId, where.owner, where.repo, path);

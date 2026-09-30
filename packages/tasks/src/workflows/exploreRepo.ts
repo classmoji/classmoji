@@ -220,14 +220,16 @@ export function isExplorableEntry(entry: { path: string; mode?: string }): boole
 /**
  * The picker's paths that may be read: each must name a file in the (already
  * filtered) tree, so a path the model made up, or one the tree left out, is
- * never fetched.
+ * never fetched. `isExcluded` (a quiz's excluded paths) is checked again here,
+ * so a picked path the caller excludes is never fetched either.
  */
 export function readablePickedPaths(
   picked: string[],
-  tree: ReadonlyArray<{ path: string }>
+  tree: ReadonlyArray<{ path: string }>,
+  isExcluded: (path: string) => boolean = () => false
 ): string[] {
   const inTree = new Set(tree.map(entry => entry.path));
-  return picked.filter(path => inTree.has(path) && isVisiblePath(path));
+  return picked.filter(path => inTree.has(path) && isVisiblePath(path) && !isExcluded(path));
 }
 
 /**

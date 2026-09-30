@@ -32,7 +32,9 @@ const { clearAttemptContextCache, loadAttemptContext } = await import('../contex
 const admission = { fence: 'fence-1', inputMessageId: 'msg-1', runId: 'run_1' };
 const env = { ANTHROPIC_API_KEY: 'platform-key' };
 
-function attempt(over: { include_code_context?: boolean; subject?: string | null } = {}) {
+function attempt(
+  over: { include_code_context?: boolean; subject?: string | null; excluded_paths?: unknown } = {}
+) {
   return {
     id: 'attempt-1',
     user_id: 'user-1',
@@ -48,6 +50,7 @@ function attempt(over: { include_code_context?: boolean; subject?: string | null
       name: 'Layout quiz',
       subject: over.subject === undefined ? 'CSS layout' : over.subject,
       difficulty_level: null,
+      excluded_paths: over.excluded_paths ?? [],
       classroom: {
         slug: 'cs-1',
         settings: null,
@@ -105,6 +108,30 @@ describe('loadAttemptContext for a code-aware quiz', () => {
     const again = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });
     expect(fakes.findByStudent).toHaveBeenCalledTimes(1);
     expect(again.codeUnavailable).toBe(false);
+  });
+
+  it("carries the quiz's excluded paths into the exploration", async () => {
+    fakes.findByStudent.mockResolvedValue({ name: 'landing-page' });
+    fakes.findById.mockResolvedValue(
+      attempt({ excluded_paths: ['tests/**', '**/*.spec.js', 'playwright.config.*'] })
+    );
+    const ctx = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });
+    expect(ctx.exploration?.excludedPaths).toEqual([
+      'tests/**',
+      '**/*.spec.js',
+      'playwright.config.*',
+    ]);
+  });
+
+  it('has no excluded paths for a quiz without any, or with a malformed value', async () => {
+    fakes.findByStudent.mockResolvedValue({ name: 'landing-page' });
+    const ctx = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });
+    expect(ctx.exploration?.excludedPaths).toEqual([]);
+
+    clearAttemptContextCache();
+    fakes.findById.mockResolvedValue(attempt({ excluded_paths: null }));
+    const again = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });
+    expect(again.exploration?.excludedPaths).toEqual([]);
   });
 
   it('never flags missing code on a standard quiz', async () => {

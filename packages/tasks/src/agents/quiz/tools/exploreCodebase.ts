@@ -30,6 +30,9 @@
  *   `EXPLORATION_FAILED_TEXT`; the prompt says what to do next.
  * - Every file read is kept (server side, per process) in the code-quote
  *   cache, so a later `code_quote` checks the lines the model was shown.
+ * - The quiz's excluded paths (`exploration.excludedPaths`) are left out of
+ *   the tree the file picker sees and are never read; earlier explorations'
+ *   notes on them are dropped too (they may predate the setting).
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { tool } from 'ai';
@@ -47,6 +50,7 @@ import {
   formatExcerptResult,
   providerStatus,
 } from '../../shared/exploration/core.ts';
+import { pathExclusion } from '../../shared/exploration/excludedPaths.ts';
 import { logDiagnostic, type DiagnosticLog } from '../../shared/sanitize.ts';
 import type { AttemptContext, GitOrgLike } from '../context.ts';
 import { QuoteFileCache } from './codeQuote.ts';
@@ -97,6 +101,12 @@ export function exploreCodebaseTool(
   let inFlight = false;
   let started = 0;
   const ids = { chatId: ctx.attemptId, runId: ctx.runId };
+  const isExcluded = pathExclusion(exploration.excludedPaths);
+  /** The path an exploration summary line is about (`path: lines a–b: why`). */
+  const summaryPath = (line: string) => {
+    const end = line.indexOf(': ');
+    return end === -1 ? line : line.slice(0, end);
+  };
 
   return tool({
     description: TOOL_DESCRIPTIONS.explore_codebase,
@@ -127,8 +137,9 @@ export function exploreCodebaseTool(
             });
           const previousFindings = history.excerpts
             .flatMap(entry => entry.split('\n'))
-            .filter(Boolean)
+            .filter(line => line && !isExcluded(summaryPath(line)))
             .slice(-MAX_PREVIOUS_FINDINGS);
+          const previouslyReadFiles = history.filesRead.filter(path => !isExcluded(path));
 
           // Any failure below reaches the model as EXPLORATION_FAILED_TEXT only;
           // the real error is logged with ids and error facts, by phase.
@@ -159,7 +170,8 @@ export function exploreCodebaseTool(
               depth: input.depth ?? 'focused',
               specificQuestion: input.specific_question ?? null,
               previousFindings,
-              previouslyReadFiles: history.filesRead,
+              previouslyReadFiles,
+              excludedPaths: exploration.excludedPaths ?? [],
               client: services.anthropic(ctx.apiKey),
               signal,
               callLog: {

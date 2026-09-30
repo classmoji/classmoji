@@ -23,6 +23,10 @@ import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { ClassmojiService } from '@classmoji/services';
 import { PromptAssistant, type PromptSuggestion } from '~/components/quiz/PromptAssistant';
 import {
+  normalizeExcludedPaths,
+  parseExcludedPathsText,
+} from '@classmoji/utils/quiz-excluded-paths';
+import {
   fromPickerValue,
   pickerLabel,
   pickerOptions,
@@ -38,6 +42,14 @@ import './quiz-form.css';
 
 const { TextArea } = Input;
 const { Option } = Select;
+
+const EXCLUDED_PATHS_PLACEHOLDER = 'tests/**\n**/*.spec.js\nplaywright.config.*';
+
+/** The "Paths to exclude" textarea's rule: the same check the quiz service makes. */
+const validateExcludedPaths = (_rule: unknown, value: string | undefined) => {
+  const result = normalizeExcludedPaths(parseExcludedPathsText(value));
+  return result.ok ? Promise.resolve() : Promise.reject(new Error(result.error));
+};
 
 export async function loader({ params, request }: Route.LoaderArgs) {
   const classSlug = params.class!;
@@ -63,8 +75,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const repositories = await ClassmojiService.repository.findByClassroomId(classroom.id);
   const examplePrompts = getExamplePrompts();
   // Pages and reveal.js decks for the source-material picker (id, title, draft).
-  const sourceMaterialOptions =
-    await ClassmojiService.quizSourceMaterial.listSourceMaterialOptions(classroom.id);
+  const sourceMaterialOptions = await ClassmojiService.quizSourceMaterial.listSourceMaterialOptions(
+    classroom.id
+  );
 
   // If editing, fetch the quiz data
   let quiz = null;
@@ -96,6 +109,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       // In material order, as picker values.
       sourceMaterial: toPickerValues(found.source_material),
       courseSearchEnabled: found.course_search_enabled,
+      // The textarea's text: one pattern per line.
+      excludedPaths: (found.excluded_paths ?? []).join('\n'),
     };
   }
 
@@ -267,24 +282,35 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
   };
 
   const handleSubmit = () => {
-    form.validateFields().then(values => {
-      const formData = {
-        ...values,
-        dueDate: values.dueDate ? values.dueDate.toISOString() : null,
-        // Selection order is material order: one list across pages and decks.
-        sourceMaterial: ((values.sourceMaterial ?? []) as string[]).map(fromPickerValue),
-        courseSearchEnabled: values.courseSearchEnabled === true,
-        _action: isEditing ? 'updateQuiz' : 'createQuiz',
-        id: quiz?.id,
-      };
+    form.validateFields().then(
+      allValues => {
+        // Absent while the quiz is not code-aware (the field is not shown): the
+        // saved list is left as it is.
+        const { excludedPaths: excludedPathsText, ...values } = allValues;
+        const formData = {
+          ...values,
+          ...(typeof excludedPathsText === 'string'
+            ? { excludedPaths: parseExcludedPathsText(excludedPathsText) }
+            : {}),
+          dueDate: values.dueDate ? values.dueDate.toISOString() : null,
+          // Selection order is material order: one list across pages and decks.
+          sourceMaterial: ((values.sourceMaterial ?? []) as string[]).map(fromPickerValue),
+          courseSearchEnabled: values.courseSearchEnabled === true,
+          _action: isEditing ? 'updateQuiz' : 'createQuiz',
+          id: quiz?.id,
+        };
 
-      // Submit to parent route's action
-      fetcher.submit(formData, {
-        method: 'POST',
-        action: `/${rolePrefix}/${classSlug}/quizzes`,
-        encType: 'application/json',
-      });
-    });
+        // Submit to parent route's action
+        fetcher.submit(formData, {
+          method: 'POST',
+          action: `/${rolePrefix}/${classSlug}/quizzes`,
+          encType: 'application/json',
+        });
+      },
+      () => {
+        // A field that fails its rule shows its own message; nothing is sent.
+      }
+    );
   };
 
   const handleDelete = () => {
@@ -383,12 +409,7 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
               }}
             >
               {saveError && (
-                <Alert
-                  type="error"
-                  showIcon
-                  message={saveError}
-                  style={{ marginBottom: 16 }}
-                />
+                <Alert type="error" showIcon message={saveError} style={{ marginBottom: 16 }} />
               )}
               <Form
                 form={form}
@@ -408,6 +429,7 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                         difficultyLevel: 'Beginner',
                         status: 'DRAFT',
                         includeCodeContext: false,
+                        excludedPaths: '',
                         sourceMaterial: [],
                         courseSearchEnabled: false,
                       }
@@ -426,7 +448,10 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                   label="Linked Repository (Optional)"
                   tooltip="Optionally link this quiz to a specific repository"
                 >
-                  <Select placeholder="Select a repository to link this quiz to (optional)" allowClear>
+                  <Select
+                    placeholder="Select a repository to link this quiz to (optional)"
+                    allowClear
+                  >
                     {assignments?.map((repository: { id: string; title: string }) => (
                       <Option key={repository.id} value={repository.id}>
                         {repository.title}
@@ -479,6 +504,30 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                   tooltip="Enable AI agent to analyze student's code submission and ask specific questions about their implementation. Requires a linked repository with student repositories."
                 >
                   <Switch checkedChildren="Enabled" unCheckedChildren="Disabled" />
+                </Form.Item>
+
+                {/* Only for a code-aware quiz. Read from the form's store, so it
+                    is right on the first render of an edit, not only after it. */}
+                <Form.Item
+                  noStyle
+                  shouldUpdate={(prev, next) => prev.includeCodeContext !== next.includeCodeContext}
+                >
+                  {({ getFieldValue }) =>
+                    getFieldValue('includeCodeContext') === true ? (
+                      <Form.Item
+                        name="excludedPaths"
+                        label="Paths to exclude"
+                        extra="One pattern per line, like .gitignore. The quiz never reads or quotes files that match."
+                        rules={[{ validator: validateExcludedPaths }]}
+                      >
+                        <TextArea
+                          autoSize={{ minRows: 3, maxRows: 10 }}
+                          spellCheck={false}
+                          placeholder={EXCLUDED_PATHS_PLACEHOLDER}
+                        />
+                      </Form.Item>
+                    ) : null
+                  }
                 </Form.Item>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>

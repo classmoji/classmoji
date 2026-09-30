@@ -30,6 +30,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 // eslint-disable-next-line import/no-unresolved -- trigger.dev v3 resolved at runtime
 import { logger } from '@trigger.dev/sdk/v3';
 import type { DiagnosticLog } from '../sanitize.ts';
+import { pathExclusion } from './excludedPaths.ts';
 import {
   buildExploreResult,
   capExcerptEffort,
@@ -81,6 +82,12 @@ export type ExploreRepositoryInput = {
   previousFindings: string[];
   /** Paths earlier explorations showed code from. Context, not a blocklist. */
   previouslyReadFiles: string[];
+  /**
+   * The quiz's excluded paths (.gitignore-style patterns, `excludedPaths.ts`).
+   * Matching files are left out of the tree the model sees, so they are never
+   * picked, listed or read. None when absent.
+   */
+  excludedPaths?: readonly string[];
   client: Anthropic;
   signal: AbortSignal;
   /** One call per file read, with the path only; `error` when the read failed. */
@@ -325,8 +332,12 @@ export async function exploreRepository(i: ExploreRepositoryInput): Promise<Expl
     callLog: i.callLog,
   };
 
+  const isExcluded = pathExclusion(i.excludedPaths);
+
   throwIfStopped(signal);
-  const tree = (await fetchTreeWithRetry(owner, repo, token, retry)).filter(isExplorableEntry);
+  const tree = (await fetchTreeWithRetry(owner, repo, token, retry)).filter(
+    entry => isExplorableEntry(entry) && !isExcluded(entry.path)
+  );
   const treeListing = formatTreeForLLM(tree);
 
   throwIfStopped(signal);
@@ -344,7 +355,8 @@ export async function exploreRepository(i: ExploreRepositoryInput): Promise<Expl
       ),
       signal
     ),
-    tree
+    tree,
+    isExcluded
   );
 
   throwIfStopped(signal);

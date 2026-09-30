@@ -1,5 +1,6 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { withLogins } from '@classmoji/utils';
+import { normalizeExcludedPaths } from '@classmoji/utils/quiz-excluded-paths';
 import type { Prisma, QuizGradingStrategy, QuizStatus, Role } from '@prisma/client';
 import * as notificationService from './notification.service.ts';
 import {
@@ -32,6 +33,12 @@ interface QuizCreateInput {
   sourceMaterial?: SourceMaterialRef[];
   /** Let the quiz agent search the whole course, not only the linked material. */
   courseSearchEnabled?: boolean;
+  /**
+   * "Paths to exclude" for a code-aware quiz: glob patterns relative to the
+   * repository root, like .gitignore lines. Absent saves none; checked by
+   * `normalizeExcludedPaths` (a bad list throws `QuizExcludedPathsError`).
+   */
+  excludedPaths?: string[];
 }
 
 interface QuizUpdateInput {
@@ -51,6 +58,8 @@ interface QuizUpdateInput {
   /** As on QuizCreateInput: absent = unchanged, a list replaces the material. */
   sourceMaterial?: SourceMaterialRef[];
   courseSearchEnabled?: boolean;
+  /** As on QuizCreateInput: absent = unchanged, a list replaces them (empty clears). */
+  excludedPaths?: string[];
 }
 
 interface QuizMembership {
@@ -99,6 +108,29 @@ export class QuizAccessError extends Error {
 }
 
 /**
+ * A quiz's "Paths to exclude" that cannot be saved (empty, absolute, "..",
+ * too many, ...). `message` says which pattern and why, in words the quiz form
+ * and the MCP tools show as is; nothing has been written.
+ */
+export class QuizExcludedPathsError extends Error {
+  code = 'invalid_excluded_paths' as const;
+  /** HTTP status a web caller should answer with. */
+  status = 400;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'QuizExcludedPathsError';
+  }
+}
+
+/** The list to store, checked; throws `QuizExcludedPathsError` for a bad one. */
+function excludedPathsToStore(input: unknown): string[] {
+  const result = normalizeExcludedPaths(input);
+  if (!result.ok) throw new QuizExcludedPathsError(result.error);
+  return result.value;
+}
+
+/**
  * What create hands back: the row with its repository and attempts, as before
  * (a new quiz has no attempts, so this is one join).
  */
@@ -116,8 +148,11 @@ const QUIZ_WRITE_INCLUDE = {
  * unknown or foreign document id rolls the quiz back with it.
  */
 export const create = async (data: QuizCreateInput) => {
+  // Checked before the transaction opens: a bad list writes nothing.
+  const excludedPaths =
+    data.excludedPaths === undefined ? undefined : excludedPathsToStore(data.excludedPaths);
   return getPrisma().$transaction(async tx => {
-    const quiz = await createQuizRow(tx, data);
+    const quiz = await createQuizRow(tx, { ...data, excludedPaths });
     if (data.sourceMaterial !== undefined) {
       await setQuizSourceMaterial(tx, {
         quizId: quiz.id,
@@ -150,6 +185,7 @@ const createQuizRow = (tx: Prisma.TransactionClient, data: QuizCreateInput) =>
       max_attempts: data.maxAttempts !== undefined ? parseInt(String(data.maxAttempts), 10) : 1,
       grading_strategy: data.gradingStrategy || 'HIGHEST',
       course_search_enabled: data.courseSearchEnabled === true,
+      ...(data.excludedPaths !== undefined ? { excluded_paths: data.excludedPaths } : {}),
     },
   });
 
@@ -185,6 +221,8 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
   if (data.gradingStrategy !== undefined) updateData.grading_strategy = data.gradingStrategy;
   if (data.courseSearchEnabled !== undefined)
     updateData.course_search_enabled = data.courseSearchEnabled === true;
+  if (data.excludedPaths !== undefined)
+    updateData.excluded_paths = excludedPathsToStore(data.excludedPaths);
 
   // One transaction, as in create: the material is validated against the
   // quiz's own classroom (read back from the row, not taken from the caller),

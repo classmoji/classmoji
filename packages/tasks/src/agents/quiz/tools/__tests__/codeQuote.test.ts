@@ -22,6 +22,7 @@ const {
   QUOTE_GAP,
   QuoteFileCache,
   QuoteRefusal,
+  QUOTE_EXCLUDED_TEXT,
   resolveCodeQuote,
 } = await import('../codeQuote.ts');
 const { ExplorationStoppedError } = await import('../../../shared/exploration/core.ts');
@@ -652,6 +653,47 @@ describe('resolveCodeQuote: reading the file', () => {
     expect((error as InstanceType<typeof QuoteRefusal>).reason).toBe('not_quotable');
     expect(mintRepoToken).not.toHaveBeenCalled();
     expect(stub.requested).toEqual([]);
+  });
+
+  it('refuses a file the quiz excludes, without reading it or its cached copy', async () => {
+    const stub = githubStub('landing-page');
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    const mintRepoToken = vi.fn(async () => 'repo-token');
+    const cache = new QuoteFileCache();
+    // Kept by an exploration before the setting changed: still not quoted.
+    cache.set(
+      QuoteFileCache.key('attempt-1', 'sample-org', 'landing-page', 'css/style.css'),
+      STYLE.join('\n')
+    );
+    const excluding = { ...(where as object), excludedPaths: ['css/**'] } as never;
+
+    for (const path of ['css/style.css', './css/style.css']) {
+      const error = await resolveCodeQuote(
+        quote({ path }) as never,
+        excluding,
+        { mintRepoToken, cache },
+        signal()
+      ).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(QuoteRefusal);
+      expect((error as InstanceType<typeof QuoteRefusal>).reason).toBe('excluded');
+      expect((error as Error).message).toBe(QUOTE_EXCLUDED_TEXT);
+    }
+    expect(QUOTE_EXCLUDED_TEXT).toBe(
+      'That file is excluded from this quiz; quote from another file.'
+    );
+    expect(mintRepoToken).not.toHaveBeenCalled();
+    expect(stub.requested).toEqual([]);
+  });
+
+  it('quotes a file no excluded pattern matches', async () => {
+    vi.stubGlobal('fetch', githubStub('landing-page').fetchImpl);
+    const built = await resolveCodeQuote(
+      quote() as never,
+      { ...(where as object), excludedPaths: ['tests/**', '**/*.spec.js', 'js/'] } as never,
+      { mintRepoToken: async () => 'repo-token', cache: new QuoteFileCache() },
+      signal()
+    );
+    expect(built.source.path).toBe('css/style.css');
   });
 
   it('passes any other read error on, for the tool to log', async () => {

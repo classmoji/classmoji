@@ -60,6 +60,12 @@ export type AttemptContext = {
     owner: string;
     repo: string;
     gitOrganization: GitOrgLike;
+    /**
+     * The quiz's "Paths to exclude" (`quiz.excluded_paths`): .gitignore-style
+     * patterns whose files exploration never lists or reads and a code quote
+     * refuses. None when absent or empty.
+     */
+    excludedPaths?: string[];
   } | null;
   prompt: { staticPrompt: string; dynamicPrompt: string };
   progress: AttemptProgress;
@@ -142,6 +148,13 @@ export function contentScopeFor(o: {
   };
 }
 
+/** The quiz's stored excluded paths, strings only (the column is `String[]`). */
+function storedExcludedPaths(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((p): p is string => typeof p === 'string' && p.trim() !== '')
+    : [];
+}
+
 /**
  * The repository a code-aware attempt explores: a staff preview's chosen
  * repository when the attempt's own user holds a teaching-team role in the
@@ -192,6 +205,7 @@ async function loadStableParts(
         owner: gitOrganization.login,
         repo,
         gitOrganization: gitOrganization as GitOrgLike,
+        excludedPaths: storedExcludedPaths(quiz.excluded_paths),
       };
     } else {
       log('[quiz-agent] code-aware attempt has no repository to explore', {

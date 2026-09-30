@@ -119,6 +119,12 @@ const codeAware = (overrides: Partial<AttemptContext> = {}) =>
     ...overrides,
   });
 
+/** A code-aware attempt whose quiz excludes `patterns`. */
+const excluding = (patterns: string[], overrides: Partial<AttemptContext> = {}) => {
+  const base = codeAware(overrides);
+  return { ...base, exploration: { ...base.exploration!, excludedPaths: patterns } };
+};
+
 function fakeGrading() {
   return {
     presentQuestion: vi.fn(),
@@ -1522,6 +1528,39 @@ describe('explore_codebase (fake pipeline)', () => {
     expect(seen.depth).toBe('focused');
   });
 
+  it("gives the pipeline the quiz's excluded paths and drops earlier notes on them", async () => {
+    let seen: Record<string, unknown> = {};
+    const { tools, grading } = exploreSetup(
+      async i => {
+        seen = i;
+        return result(['a.css']);
+      },
+      { ctx: excluding(['tests/**', '**/*.spec.js']) }
+    );
+    grading.listExplorations.mockResolvedValue({
+      filesRead: ['index.html', 'tests/e2e/landing.spec.js', 'src/app.spec.js'],
+      excerpts: [
+        'index.html: lines 1–9: nav\ntests/e2e/landing.spec.js: lines 1–20: e2e checks',
+        'src/app.spec.js: whole file: unit tests',
+      ],
+    });
+
+    await call(tools, 'explore_codebase', { focus_area: FOCUS });
+    expect(seen.excludedPaths).toEqual(['tests/**', '**/*.spec.js']);
+    expect(seen.previouslyReadFiles).toEqual(['index.html']);
+    expect(seen.previousFindings).toEqual(['index.html: lines 1–9: nav']);
+  });
+
+  it('gives the pipeline no excluded paths for a quiz without any', async () => {
+    let seen: Record<string, unknown> = {};
+    const { tools } = exploreSetup(async i => {
+      seen = i;
+      return result(['a.css']);
+    });
+    await call(tools, 'explore_codebase', { focus_area: FOCUS });
+    expect(seen.excludedPaths).toEqual([]);
+  });
+
   it('refuses prepare_next while a question is open in a typed-answer turn, reading nothing', async () => {
     const { tools, grading, mintRepoToken } = exploreSetup(async () => result(['a.css']), {
       ctx: codeAware({ progress: progressAt(2, [1]) }),
@@ -2008,6 +2047,64 @@ describe('explore_codebase (real pipeline on a fixture repository)', () => {
       excerpts: 'css/style.css: lines 1–5: hero layout',
     });
   });
+
+  it('never lists or reads a file the quiz excludes, and streams no step for it', async () => {
+    const stub = githubStub('landing-page');
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce({
+        stop_reason: 'end_turn',
+        // The picker names the excluded file anyway.
+        content: [{ type: 'text', text: JSON.stringify(['index.html', 'css/style.css']) }],
+      })
+      .mockResolvedValueOnce({
+        stop_reason: 'end_turn',
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              excerpts: [
+                { path: 'css/style.css', start_line: 1, end_line: 5, why: 'hero layout' },
+                { path: 'index.html', start_line: 1, end_line: 5, why: 'head' },
+              ],
+            }),
+          },
+        ],
+      });
+    const quoteCache = new QuoteFileCache();
+    const { tools, writes, grading } = setup({
+      ctx: excluding(['css/']),
+      services: {
+        mintRepoToken: async () => 'repo-token',
+        anthropic: () => ({ messages: { create } }) as unknown as Anthropic,
+        quoteCache,
+      },
+    });
+
+    const out = (await call(tools, 'explore_codebase', { focus_area: FOCUS })) as {
+      excerpts: string;
+      files_read: string[];
+    };
+
+    const pickerPrompt = create.mock.calls[0][0].messages[0].content as string;
+    expect(pickerPrompt).not.toMatch(/(^|\n)css\/style\.css \(/);
+    expect(pickerPrompt).toMatch(/(^|\n)index\.html \(/);
+    expect(stub.requested.some(url => url.includes('/contents/css/'))).toBe(false);
+    expect(writes).toEqual([
+      { type: 'data-step', data: { kind: 'read_file', path: 'index.html' } },
+    ]);
+    expect(out.files_read).toEqual(['index.html']);
+    expect(out.excerpts).not.toContain('display: flex');
+    expect(grading.recordExploration).toHaveBeenCalledWith(expect.anything(), {
+      filesRead: ['index.html'],
+      excerpts: 'index.html: lines 1–5: head',
+    });
+    // Nothing of it is kept for a later quote either.
+    expect(
+      quoteCache.get(QuoteFileCache.key('attempt-1', 'sample-org', 'landing-page', 'css/style.css'))
+    ).toBeUndefined();
+  });
 });
 
 describe('present_question with code_quote', () => {
@@ -2257,6 +2354,35 @@ describe('present_question with code_quote', () => {
       })
     ).rejects.toThrow('css/style.css has 15 lines; range 11-30 runs past the end.');
     expect(grading.presentQuestion).not.toHaveBeenCalled();
+  });
+
+  it('refuses a file the quiz excludes, with a fixed line, reading and writing nothing', async () => {
+    const { tools, grading, log, stub, mintRepoToken } = quoteSetup({
+      ctx: excluding(['css/**']),
+    });
+    await expect(call(tools, 'present_question', quoted)).rejects.toThrow(
+      'That file is excluded from this quiz; quote from another file.'
+    );
+    expect(grading.presentQuestion).not.toHaveBeenCalled();
+    expect(mintRepoToken).not.toHaveBeenCalled();
+    expect(stub.requested).toEqual([]);
+    expect(log).toHaveBeenCalledWith('[quiz-agent] code quote refused', {
+      attemptId: 'attempt-1',
+      runId: 'run_1',
+      reason: 'excluded',
+    });
+
+    // Another file is still quoted.
+    await call(
+      tools,
+      'present_question',
+      {
+        ...quoted,
+        code_quote: { path: 'index.html', ranges: [[1, 2]], anchor: '<!doctype html>' },
+      },
+      'call-2'
+    );
+    expect(grading.presentQuestion).toHaveBeenCalledTimes(1);
   });
 
   it('refuses a file that is not in the repository, writing nothing', async () => {

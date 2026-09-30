@@ -107,6 +107,14 @@ describe('readablePickedPaths', () => {
       '.gitignore',
     ]);
   });
+
+  it('drops a picked path the caller excludes, even one the tree still has', () => {
+    const tree = [{ path: 'src/App.jsx' }, { path: 'tests/e2e/landing.spec.js' }];
+    const isExcluded = (path: string) => path.startsWith('tests/');
+    expect(
+      readablePickedPaths(['src/App.jsx', 'tests/e2e/landing.spec.js'], tree, isExcluded)
+    ).toEqual(['src/App.jsx']);
+  });
 });
 
 describe('explore-repo task run', () => {

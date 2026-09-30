@@ -33,6 +33,11 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
+import {
+  MAX_EXCLUDED_PATH_CHARS,
+  MAX_EXCLUDED_PATHS,
+  normalizeExcludedPaths,
+} from '@classmoji/utils/quiz-excluded-paths';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
@@ -95,6 +100,7 @@ interface QuizRow {
   grading_strategy?: string;
   include_code_context?: boolean;
   course_search_enabled?: boolean;
+  excluded_paths?: string[];
 }
 
 /**
@@ -116,6 +122,7 @@ function quizSummary(quiz: QuizRow) {
     grading_strategy: quiz.grading_strategy ?? null,
     include_code_context: quiz.include_code_context ?? false,
     course_search_enabled: quiz.course_search_enabled ?? false,
+    excluded_paths: quiz.excluded_paths ?? [],
     subject: quiz.subject ?? null,
     difficulty_level: quiz.difficulty_level ?? null,
     system_prompt: quiz.system_prompt ?? null,
@@ -151,6 +158,27 @@ const courseSearchSchema = z
       'whether the course covers something a student mentions (default false)'
   );
 
+const excludedPathsSchema = z
+  .array(z.string().max(MAX_EXCLUDED_PATH_CHARS))
+  .max(MAX_EXCLUDED_PATHS)
+  .describe(
+    'Code-aware quizzes: files in the student’s repo the AI never lists, reads or quotes. ' +
+      'Glob patterns relative to the repo root, like .gitignore lines (e.g. "tests/**", ' +
+      '"**/*.spec.js"). At most 50, 200 characters each; no absolute paths, "..", "!" or "#"'
+  );
+
+/**
+ * The list as the quiz service will store it, checked with the quiz form's
+ * own rule (@classmoji/utils/quiz-excluded-paths); a bad one is an
+ * invalid_params refusal before anything is read or written.
+ */
+function excludedPathsArg(value: string[] | undefined): string[] | undefined {
+  if (value === undefined) return undefined;
+  const result = normalizeExcludedPaths(value);
+  if (!result.ok) throw new ToolError('invalid_params', `excluded_paths: ${result.error}`);
+  return result.value;
+}
+
 const dueDateSchema = z
   .string()
   .datetime({ offset: true })
@@ -169,6 +197,7 @@ interface QuizCreateArgs {
   subject?: string;
   include_code_context?: boolean;
   course_search_enabled?: boolean;
+  excluded_paths?: string[];
   grading_strategy?: 'HIGHEST' | 'MOST_RECENT' | 'FIRST';
   max_attempts?: number;
 }
@@ -182,7 +211,8 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
     'Creates an AI-conversation quiz. There is NO stored question bank: the AI generates and ' +
     'asks questions live from rubric_prompt (required) and system_prompt, and question_count ' +
     'just tells it how many to ask. Set include_code_context to have it explore the student’s ' +
-    'repository for the linked repo while questioning them. Link source material (the pages ' +
+    'repository for the linked repo while questioning them; excluded_paths lists files it ' +
+    'must never see there (e.g. tests/**). Link source material (the pages ' +
     'and decks the questions come from) with resource_link_add target_type quiz. ' +
     'Teaching-team only (owner, teacher or assistant); requires a Pro ' +
     'subscription and quizzes enabled. ALWAYS created as a DRAFT (students see nothing) — use ' +
@@ -221,12 +251,14 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
       .optional()
       .describe('Let the AI read the student’s repo for the linked repository (default false)'),
     course_search_enabled: courseSearchSchema.optional(),
+    excluded_paths: excludedPathsSchema.optional(),
     grading_strategy: gradingStrategySchema.optional(),
     max_attempts: maxAttemptsSchema.optional(),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
     await assertQuizSurfaceEnabled(ctx);
+    const excludedPaths = excludedPathsArg(args.excluded_paths);
 
     // S1: the quiz row does not exist yet, so a supplied repository is verified
     // against the authorized classroom before it can be linked.
@@ -256,6 +288,7 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
       ...(args.course_search_enabled !== undefined
         ? { courseSearchEnabled: args.course_search_enabled }
         : {}),
+      ...(excludedPaths !== undefined ? { excludedPaths } : {}),
       ...(args.grading_strategy !== undefined ? { gradingStrategy: args.grading_strategy } : {}),
       ...(args.max_attempts !== undefined ? { maxAttempts: args.max_attempts } : {}),
     })) as QuizRow;
@@ -292,6 +325,7 @@ interface QuizServiceUpdate {
   questionCount?: number;
   includeCodeContext?: boolean;
   courseSearchEnabled?: boolean;
+  excludedPaths?: string[];
   maxAttempts?: number;
   gradingStrategy?: 'HIGHEST' | 'MOST_RECENT' | 'FIRST';
 }
@@ -311,6 +345,7 @@ interface QuizUpdateArgs {
   subject?: string;
   include_code_context?: boolean;
   course_search_enabled?: boolean;
+  excluded_paths?: string[];
   grading_strategy?: 'HIGHEST' | 'MOST_RECENT' | 'FIRST';
   max_attempts?: number;
 }
@@ -324,8 +359,8 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
     'and quizzes enabled. Provide at least one field. status accepts only DRAFT (unpublish, ' +
     'hiding it from students again) or CLOSED (stop new attempts); publishing must go through ' +
     'quiz_publish, because only that path notifies students. Set repository_id to null to unlink ' +
-    'the repo, or due_date to null to clear the deadline. Editing prompts does not re-grade ' +
-    'attempts already taken.',
+    'the repo, or due_date to null to clear the deadline. excluded_paths replaces the list ' +
+    '([] clears it). Editing prompts does not re-grade attempts already taken.',
   scope: 'write',
   roles: QUIZ_STAFF,
   inputSchema: {
@@ -365,6 +400,7 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
       .optional()
       .describe('Let the AI read the student’s repo for the linked repository'),
     course_search_enabled: courseSearchSchema.optional(),
+    excluded_paths: excludedPathsSchema.optional(),
     grading_strategy: gradingStrategySchema.optional(),
     max_attempts: maxAttemptsSchema.optional(),
   },
@@ -395,6 +431,7 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
     set('subject', 'subject', args.subject);
     set('include_code_context', 'includeCodeContext', args.include_code_context);
     set('course_search_enabled', 'courseSearchEnabled', args.course_search_enabled);
+    set('excluded_paths', 'excludedPaths', excludedPathsArg(args.excluded_paths));
     set('grading_strategy', 'gradingStrategy', args.grading_strategy);
     set('max_attempts', 'maxAttempts', args.max_attempts);
     if (args.repository_id !== undefined) fields.push('repository_id');
