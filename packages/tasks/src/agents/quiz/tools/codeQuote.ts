@@ -16,6 +16,9 @@
  * - The code is the exact lines, with one "..." line for each gap between
  *   ranges and for each run of omitted lines. An `edit` replaces one quoted
  *   line and marks the quote as changed.
+ * - A quote that starts inside a CSS rule or HTML element gets a "..." line
+ *   above it, and one that stops inside one, with more than its closing brace
+ *   or tag still to come, gets a "..." line below it (`quoteCuts`).
  *
  * Free-typed `code_snippet` stays accepted: the quote is the instructed path,
  * not an enforced one.
@@ -140,6 +143,137 @@ export function languageForPath(path: string): string | undefined {
   return match ? LANGUAGES[match[1].toLowerCase()] : undefined;
 }
 
+// ─── Where a quote cuts into a rule or element ──────────────────────────────
+
+const BRACE_LANGUAGES = new Set(['css', 'scss', 'less']);
+/** Languages with `//` line comments among the brace ones. */
+const LINE_COMMENT_LANGUAGES = new Set(['scss', 'less']);
+
+/**
+ * The brace depth before each line: entry `n - 1` for line `n`, plus one
+ * entry for the depth after the last line. Braces in comments and strings do
+ * not count. Null when the braces do not balance (a closing brace with none
+ * open, or a block left open at the end): nothing is marked then.
+ */
+export function braceDepths(
+  lines: readonly string[],
+  { lineComments = false }: { lineComments?: boolean } = {}
+): number[] | null {
+  const depths: number[] = [];
+  let depth = 0;
+  let inComment = false;
+  for (const line of lines) {
+    depths.push(depth);
+    let quote: string | null = null;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      const next = line[i + 1];
+      if (inComment) {
+        if (ch === '*' && next === '/') {
+          inComment = false;
+          i++;
+        }
+      } else if (quote) {
+        if (ch === '\\') i++;
+        else if (ch === quote) quote = null;
+      } else if (ch === '/' && next === '*') {
+        inComment = true;
+        i++;
+      } else if (lineComments && ch === '/' && next === '/') {
+        break;
+      } else if (ch === '"' || ch === "'") {
+        quote = ch;
+      } else if (ch === '{') {
+        depth++;
+      } else if (ch === '}') {
+        depth--;
+        if (depth < 0) return null;
+      }
+    }
+  }
+  depths.push(depth);
+  return depth === 0 && !inComment ? depths : null;
+}
+
+/** The index (0-based) of the first non-blank line from `from`, going by `step`, or null. */
+function nonBlankFrom(lines: readonly string[], from: number, step: 1 | -1): number | null {
+  for (let i = from; i >= 0 && i < lines.length; i += step) {
+    if (lines[i].trim() !== '') return i;
+  }
+  return null;
+}
+
+const leadingSpace = (line: string): string => /^[ \t]*/.exec(line)?.[0] ?? '';
+
+/**
+ * Whether a quote cuts into a rule or element at its edges: `before` when its
+ * first line is inside one, `after` when its last line is inside one and more
+ * than the closing brace or tag follows. Gaps between ranges already show
+ * "...", so only the first range's start and the last range's end count.
+ *
+ * Kept simple and conservative, by the file's extension:
+ * - CSS, SCSS, Less: by brace depth. It starts inside a rule when the depth
+ *   before its first line is above zero; it stops inside one when the depth
+ *   after its last line is above zero and the next non-blank line does not
+ *   start with the closing brace.
+ * - HTML: by indentation, against the least indented line the quote shows.
+ *   It starts inside an element when the non-blank line before it is indented
+ *   deeper than that, and stops inside one when the non-blank line after it
+ *   is (a closing tag at the quote's own level is not deeper).
+ * - Anything else, braces that do not balance, or indentation that mixes tabs
+ *   and spaces: no cut is marked.
+ */
+export function quoteCuts(
+  lines: readonly string[],
+  ranges: ReadonlyArray<readonly [number, number]>,
+  path: string,
+  omit: ReadonlySet<number> = new Set()
+): { before: boolean; after: boolean } {
+  const none = { before: false, after: false };
+  if (ranges.length === 0) return none;
+  const first = ranges[0][0];
+  const last = ranges[ranges.length - 1][1];
+  const language = languageForPath(path) ?? '';
+
+  if (BRACE_LANGUAGES.has(language)) {
+    const depths = braceDepths(lines, { lineComments: LINE_COMMENT_LANGUAGES.has(language) });
+    if (!depths) return none;
+    let after = false;
+    if (depths[last] > 0) {
+      const next = nonBlankFrom(lines, last, 1);
+      after = next !== null && !lines[next].trim().startsWith('}');
+    }
+    return { before: depths[first - 1] > 0, after };
+  }
+
+  if (language === 'html') {
+    const shown: string[] = [];
+    for (const [a, b] of ranges) {
+      for (let n = a; n <= b; n++) {
+        if (!omit.has(n) && lines[n - 1].trim() !== '') shown.push(lines[n - 1]);
+      }
+    }
+    const prev = nonBlankFrom(lines, first - 2, -1);
+    const next = nonBlankFrom(lines, last, 1);
+    const considered = [
+      ...shown,
+      prev === null ? '' : lines[prev],
+      next === null ? '' : lines[next],
+    ];
+    const indents = considered.map(leadingSpace);
+    const tabs = indents.some(i => i.includes('\t'));
+    const spaces = indents.some(i => i.includes(' '));
+    if ((tabs && spaces) || shown.length === 0) return none;
+    const level = Math.min(...shown.map(line => leadingSpace(line).length));
+    return {
+      before: prev !== null && leadingSpace(lines[prev]).length > level,
+      after: next !== null && leadingSpace(lines[next]).length > level,
+    };
+  }
+
+  return none;
+}
+
 /**
  * Build the card's code from the file's lines. Pure: throws `QuoteRefusal`
  * with a message for the model when the quote does not fit the file.
@@ -240,12 +374,14 @@ export function buildQuote(lines: readonly string[], quote: CodeQuote): BuiltQuo
     edited = { line, text };
   }
 
+  const cuts = quoteCuts(lines, ranges, path, omit);
   const out: string[] = [];
   let gapOpen = false;
   const gap = () => {
     if (!gapOpen) out.push(QUOTE_GAP);
     gapOpen = true;
   };
+  if (cuts.before) gap();
   ranges.forEach(([a, b], i) => {
     if (i > 0) gap();
     for (let n = a; n <= b; n++) {
@@ -257,6 +393,7 @@ export function buildQuote(lines: readonly string[], quote: CodeQuote): BuiltQuo
       gapOpen = false;
     }
   });
+  if (cuts.after) gap();
   const code = out.join('\n');
   if (code.length > MAX_QUOTE_CHARS) {
     throw new QuoteRefusal(

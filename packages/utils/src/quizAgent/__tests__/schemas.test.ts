@@ -397,11 +397,27 @@ describe('quizToolDefs', () => {
       'answers',
       'brief_feedback',
       'question_num',
+      'student_asked_to_move_on',
     ]);
     expect(Object.keys(schema.properties.answers.items?.properties ?? {}).sort()).toEqual([
       'hints_before',
       'level',
     ]);
+  });
+
+  it('takes student_asked_to_move_on as an optional flag the service can ignore', () => {
+    const base = {
+      question_num: 2,
+      answers: [],
+      brief_feedback: 'Moved on',
+    };
+    expect(RecordQuestionResultSchema.safeParse(base).success).toBe(true);
+    expect(
+      RecordQuestionResultSchema.safeParse({ ...base, student_asked_to_move_on: true }).success
+    ).toBe(true);
+    expect(
+      RecordQuestionResultSchema.safeParse({ ...base, student_asked_to_move_on: 'yes' }).success
+    ).toBe(false);
   });
 
   it('types tool parts from the schemas', () => {

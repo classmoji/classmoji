@@ -15,11 +15,30 @@ export const QuestionResultDataSchema = z.object({
 });
 
 /** A label for one exploration read: the file path only, never why it was read. */
-export const StepDataSchema = z.object({
+export const ReadFileStepSchema = z.object({
   kind: z.literal('read_file'),
   path: z.string(),
   error: z.literal(true).optional(),
 });
+
+/** Longest document title a course-material step carries: a label, not a payload. */
+export const COURSE_STEP_TITLE_MAX = 200;
+
+/**
+ * A label for one course-material lookup: the title of the document read
+ * (content_get), or nothing at all for a search (its query is the model's
+ * next question). Never the query, the document's id or its text.
+ */
+export const CourseMaterialStepSchema = z.object({
+  kind: z.literal('course_material'),
+  title: z.string().min(1).max(COURSE_STEP_TITLE_MAX).optional(),
+});
+
+/** One step of the work behind a reply, shown above it. */
+export const StepDataSchema = z.discriminatedUnion('kind', [
+  ReadFileStepSchema,
+  CourseMaterialStepSchema,
+]);
 
 export const NOTICE_CODES = [
   'turn_stopped',

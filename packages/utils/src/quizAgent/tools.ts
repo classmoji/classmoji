@@ -7,6 +7,9 @@
 import { tool } from 'ai';
 import { QuizEvaluationRecordV2Schema } from './records.ts';
 import {
+  ContentGetSchema,
+  ContentSearchSchema,
+  ContentToolOutputSchema,
   ExploreCodebaseOutputSchema,
   ExploreCodebaseSchema,
   OfferNextStepOutputSchema,
@@ -29,7 +32,7 @@ const present_question = tool({
 
 const record_question_result = tool({
   description:
-    'Record how the student did on a question once it is finished (they moved on, skipped it, or the answer was revealed). List every real answer they gave, in order, rate each one with a level, and give the number of hints they had received before it. Clarifying questions about the wording are free and are not answers. The server computes the credit from these ratings. Record each question before presenting the next one or submitting the evaluation. The student does not see this call; they see only the brief feedback.',
+    'Record how the student did on a question once they move on from it (a Next click, or a message asking to skip or move on). List every real answer they gave, in order, rate each one with a level, and give the number of hints they had received before it. Clarifying questions about the wording are free and are not answers. The server computes the credit from these ratings. Record each question before presenting the next one or submitting the evaluation. The student does not see this call; they see only the brief feedback.',
   inputSchema: RecordQuestionResultSchema,
   outputSchema: QuestionResultOutputSchema,
 });
@@ -55,21 +58,45 @@ const explore_codebase = tool({
   outputSchema: ExploreCodebaseOutputSchema,
 });
 
+const content_get = tool({
+  description:
+    "Read the full text of one course document by kind and id, as listed under SOURCE MATERIAL or returned by content_search. Documents outside what this quiz may read are refused. The student sees the document's title only.",
+  inputSchema: ContentGetSchema,
+  outputSchema: ContentToolOutputSchema,
+});
+
+const content_search = tool({
+  description:
+    'Search the course material by meaning. Returns the matching documents with a short snippet each; open one in full with content_get. A miss does not prove the course lacks the topic.',
+  inputSchema: ContentSearchSchema,
+  outputSchema: ContentToolOutputSchema,
+});
+
 export const quizToolDefs = {
   present_question,
   record_question_result,
   offer_next_step,
   submit_quiz_evaluation,
   explore_codebase,
+  content_get,
+  content_search,
 };
 
 export type QuizToolName = keyof typeof quizToolDefs;
 
-/** Fixed tool order (a changed tool list invalidates the prompt cache). */
+/**
+ * Fixed tool order (a changed tool list invalidates the prompt cache). An
+ * attempt sends the tools it has in this order: the first four always,
+ * explore_codebase for a code-aware attempt, and the two content tools when
+ * the quiz has linked material or course search and the MCP server is
+ * configured. What an attempt has does not change between its turns.
+ */
 export const QUIZ_TOOL_ORDER = [
   'present_question',
   'record_question_result',
   'offer_next_step',
   'submit_quiz_evaluation',
   'explore_codebase',
+  'content_get',
+  'content_search',
 ] as const satisfies readonly QuizToolName[];

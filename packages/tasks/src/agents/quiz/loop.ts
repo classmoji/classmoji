@@ -83,10 +83,10 @@ export type QuizToolsFactory = (
     /** The turn's log, so tool diagnostics and usage lines land with the loop's. */
     log?: DiagnosticLog;
     /**
-     * Whether the model has written visible text in this turn (a non-blank
-     * text delta), read from the model's stream itself (`watchModelText`).
+     * How many words the model has written in this turn, counted from the
+     * model's stream itself (`watchModelText`, `createWordCounter`).
      */
-    textWritten: () => boolean;
+    wordsWritten: () => number;
   }
 ) => ToolSet;
 
@@ -134,14 +134,15 @@ type Phase = 'question' | 'evaluation';
 export type ModelObject = Exclude<LanguageModel, string>;
 
 /**
- * The model, with `onText` called as each non-blank text delta leaves it. This
- * sits at the model's own stream, upstream of the SDK's tool execution (a
- * step's tools run once its model call has ended), so every delta of a step
- * has passed here before any tool of that step runs: a tool reading the flag
- * sees the text written before its call in the same step, whatever the
- * downstream UI stream has consumed so far.
+ * The model, with `onText` called with each text delta as it leaves it, and
+ * with a line break where a text block ends (so the words of two blocks never
+ * join). This sits at the model's own stream, upstream of the SDK's tool
+ * execution (a step's tools run once its model call has ended), so every delta
+ * of a step has passed here before any tool of that step runs: a tool reading
+ * the count sees the text written before its call in the same step, whatever
+ * the downstream UI stream has consumed so far.
  */
-export function watchModelText(model: ModelObject, onText: () => void): ModelObject {
+export function watchModelText(model: ModelObject, onText: (text: string) => void): ModelObject {
   return wrapLanguageModel({
     model,
     middleware: {
@@ -153,7 +154,8 @@ export function watchModelText(model: ModelObject, onText: () => void): ModelObj
           stream: result.stream.pipeThrough(
             new TransformStream<Part, Part>({
               transform(part, controller) {
-                if (part.type === 'text-delta' && part.delta.trim() !== '') onText();
+                if (part.type === 'text-delta') onText(part.delta);
+                else if (part.type === 'text-end') onText('\n');
                 controller.enqueue(part);
               },
             })
@@ -162,6 +164,32 @@ export function watchModelText(model: ModelObject, onText: () => void): ModelObj
       },
     },
   });
+}
+
+const HAS_WORD_CHARACTER = /[\p{L}\p{N}]/u;
+
+/**
+ * Counts the words of text that arrives in pieces: a word is a run of
+ * non-space characters with at least one letter or digit, so markdown marks
+ * ("**", "-") and blank text count for nothing, and a word cut across two
+ * deltas counts once.
+ */
+export function createWordCounter() {
+  let words = 0;
+  let current = '';
+  const close = () => {
+    if (HAS_WORD_CHARACTER.test(current)) words += 1;
+    current = '';
+  };
+  return {
+    push(text: string) {
+      for (const ch of text) {
+        if (/\s/.test(ch)) close();
+        else current += ch;
+      }
+    },
+    count: () => words + (HAS_WORD_CHARACTER.test(current) ? 1 : 0),
+  };
 }
 
 /** The turn is in the evaluation phase once the last question is out. */
@@ -301,14 +329,12 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
       };
       const phase = phaseFor(ctx.progress);
       const effort: Effort = phase === 'evaluation' ? ctx.gradingEffort : ctx.questionEffort;
-      // Set from the model's own stream (watchModelText), never from the loop's
-      // writes such as the welcome, and before any tool of the same step runs.
-      let textWritten = false;
+      // Counted from the model's own stream (watchModelText), never from the
+      // loop's writes such as the welcome, and before any tool of the same step runs.
+      const words = createWordCounter();
       const model = watchModelText(
         input.model ?? createAnthropic({ apiKey: ctx.apiKey })(ctx.model),
-        () => {
-          textWritten = true;
-        }
+        text => words.push(text)
       );
       const queue = createToolQueue();
       const tools = deps.tools(ctx, {
@@ -316,7 +342,7 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
         queue,
         signal: deadline,
         log,
-        textWritten: () => textWritten,
+        wordsWritten: words.count,
       });
       let callIndex = 0;
       let sawStreamError = false;

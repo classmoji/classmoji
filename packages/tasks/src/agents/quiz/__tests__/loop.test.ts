@@ -13,6 +13,7 @@ import {
 } from '@classmoji/utils/quiz-agent';
 import type { AttemptContext } from '../context.ts';
 import { CODE_UNAVAILABLE_NOTICE } from '../prompt/index.ts';
+import { contentTools } from '../tools/content.ts';
 import {
   lastUserTextParts,
   needsEvaluation,
@@ -875,9 +876,9 @@ describe('runQuizTurn', () => {
 });
 
 describe('runQuizTurn: the text written in the turn', () => {
-  /** A tool set whose offer_next_step records what the flag said when it ran. */
+  /** A tool set whose offer_next_step records the word count when it ran. */
   function offerProbe() {
-    const seen: boolean[] = [];
+    const seen: number[] = [];
     const a = fakeAttempt(2, { presented: 1 });
     const inner = a.deps.tools;
     const tools: QuizToolsFactory = (ctx, d) => ({
@@ -885,7 +886,7 @@ describe('runQuizTurn: the text written in the turn', () => {
       offer_next_step: tool({
         ...quizToolDefs.offer_next_step,
         execute: input => {
-          seen.push(d.textWritten());
+          seen.push(d.wordsWritten());
           return d.queue(async () => ({
             ...input,
             lead_in: 'Would you like to try again or move on?',
@@ -896,7 +897,7 @@ describe('runQuizTurn: the text written in the turn', () => {
     return { seen, a, deps: { ...a.deps, tools } };
   }
 
-  it('sees feedback written before offer_next_step in the same step', async () => {
+  it('counts the feedback written before offer_next_step in the same step', async () => {
     const { seen, a, deps } = offerProbe();
     const model = scriptedModel([
       [
@@ -913,7 +914,34 @@ describe('runQuizTurn: the text written in the turn', () => {
         model,
       })
     );
-    expect(seen).toEqual([true]);
+    expect(seen).toEqual([8]);
+  });
+
+  it('counts words across deltas and text blocks, and not markdown marks', async () => {
+    const { seen, a, deps } = offerProbe();
+    const model = scriptedModel([
+      [
+        { type: 'text-start', id: 't' },
+        { type: 'text-delta', id: 't', delta: '**Cor' },
+        { type: 'text-delta', id: 't', delta: 'rect** - your ' },
+        { type: 'text-delta', id: 't', delta: '`flex` rule' },
+        { type: 'text-end', id: 't' },
+        ...text('t2', 'stacks them.'),
+        toolCall('b', 'offer_next_step', { actions: ['next'] }),
+      ],
+    ]);
+    await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps,
+        model,
+      })
+    );
+    // "**Correct**", "your", "`flex`", "rule", "stacks", "them." ("-" is no word;
+    // "rule" and "stacks" stay apart across the two blocks).
+    expect(seen).toEqual([6]);
   });
 
   it('does not count blank text, or the welcome the loop writes itself', async () => {
@@ -933,11 +961,11 @@ describe('runQuizTurn: the text written in the turn', () => {
         model,
       })
     );
-    expect(seen[0]).toBe(false);
+    expect(seen[0]).toBe(0);
   });
 
-  it('flips the flag as the delta leaves the model, with no UI stream reading it', async () => {
-    let written = false;
+  it('sees each delta as it leaves the model, with no UI stream reading it', async () => {
+    let written = '';
     const mock = new MockLanguageModelV4({
       doStream: async () =>
         step([
@@ -945,23 +973,25 @@ describe('runQuizTurn: the text written in the turn', () => {
           toolCall('b', 'offer_next_step', { actions: ['next'] }),
         ]) as never,
     });
-    const wrapped = watchModelText(mock, () => {
-      written = true;
+    const wrapped = watchModelText(mock, text => {
+      written += text;
     }) as MockLanguageModelV4;
     const { stream } = await wrapped.doStream({ prompt: [] } as never);
     const reader = stream.getReader();
     const types: string[] = [];
-    const flagAt: boolean[] = [];
+    const seenAt: string[] = [];
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
       types.push(value.type);
-      flagAt.push(written);
+      seenAt.push(written);
     }
-    // Off until the text delta, on from it: before the tool call reaches the SDK.
+    // Nothing until the text delta, the delta from it, a line break at the
+    // block's end: all before the tool call reaches the SDK.
     const delta = types.indexOf('text-delta');
-    expect(flagAt.slice(0, delta)).toEqual(flagAt.slice(0, delta).map(() => false));
-    expect(flagAt[delta]).toBe(true);
+    expect(seenAt.slice(0, delta)).toEqual(seenAt.slice(0, delta).map(() => ''));
+    expect(seenAt[delta]).toBe('Right idea.');
+    expect(seenAt[types.indexOf('text-end')]).toBe('Right idea.\n');
     expect(delta).toBeLessThan(types.indexOf('tool-call'));
     // Every part passes through unchanged.
     expect(types).toEqual([
@@ -1108,3 +1138,94 @@ function evaluationFeedback() {
     feedback_effort_note: 'Good effort.',
   };
 }
+
+describe('runQuizTurn: a lookup in the course material', () => {
+  it('reads a linked document, then presents the question; the browser gets its title only', async () => {
+    const a = fakeAttempt(2);
+    const DOC_TEXT = 'Flex containers lay out their children along a main axis.';
+    const mcpCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const connect = async () => ({
+      callTool: async ({
+        name,
+        arguments: args = {},
+      }: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }) => {
+        mcpCalls.push({ name, args });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                kind: 'page',
+                id: 'p1',
+                title: 'Flexbox basics',
+                text: DOC_TEXT,
+              }),
+            },
+          ],
+        };
+      },
+      close: async () => undefined,
+    });
+    const content = {
+      mcpUrl: 'https://mcp.example.test/mcp',
+      classroomRef: 'sample-org/cs-1',
+      courseSearchEnabled: false,
+      docs: [{ kind: 'page', id: 'p1', title: 'Flexbox basics' }],
+    };
+    const tools: QuizToolsFactory = (ctx, d) => ({
+      ...a.deps.tools(ctx, d),
+      ...contentTools(ctx, content, d, { mintToken: async () => 'bearer', connect }),
+    });
+    const model = scriptedModel([
+      [toolCall('c1', 'content_get', { kind: 'page', id: 'p1' })],
+      [toolCall('c2', 'present_question', question(1))],
+    ]);
+
+    const chunks = await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { inputMessageId: null, content }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: { ...a.deps, tools },
+        model,
+      })
+    );
+
+    // The model read the document as the tool's result, then asked question 1.
+    expect(mcpCalls).toEqual([
+      { name: 'content_get', args: { classroom: 'sample-org/cs-1', kind: 'page', id: 'p1' } },
+    ]);
+    expect(model.doStreamCalls).toHaveLength(2);
+    expect(JSON.stringify(model.doStreamCalls[1].prompt)).toContain(DOC_TEXT);
+    expect(a.state.presented).toBe(1);
+
+    // The browser: one titled step before the card; no content tool part, id or text.
+    const step = chunks.findIndex(c => c.type === 'data-step');
+    expect(chunks[step]).toMatchObject({
+      type: 'data-step',
+      data: { kind: 'course_material', title: 'Flexbox basics' },
+    });
+    const card = chunks.findIndex(
+      c => c.type === 'tool-input-available' && c.toolName === 'present_question'
+    );
+    expect(step).toBeLessThan(card);
+    const sent = JSON.stringify(chunks);
+    expect(sent).not.toContain('content_get');
+    expect(sent).not.toContain(DOC_TEXT);
+    expect(sent).not.toContain('"p1"');
+    expect(sent).not.toContain('bearer');
+
+    // Saved with the reply for the next turn's history, tool result included.
+    const saved = a.persisted.at(-1)?.message.parts ?? [];
+    expect(saved.some(p => p.type === 'tool-content_get')).toBe(true);
+    expect(saved).toContainEqual(
+      expect.objectContaining({
+        type: 'data-step',
+        data: { kind: 'course_material', title: 'Flexbox basics' },
+      })
+    );
+  });
+});

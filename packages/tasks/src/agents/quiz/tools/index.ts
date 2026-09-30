@@ -4,7 +4,8 @@
  * The set is fixed for an attempt and built in one order
  * (`QUIZ_TOOL_ORDER`), because the tools block is the front of the cached
  * prefix: present_question, record_question_result, offer_next_step,
- * submit_quiz_evaluation, and explore_codebase for code-aware attempts.
+ * submit_quiz_evaluation, explore_codebase for code-aware attempts, then
+ * content_get and content_search for attempts with course material.
  *
  * Each execute hands its body to the per-attempt FIFO queue first, so the
  * calls of one step write in the order the model made them. Every write goes
@@ -22,11 +23,17 @@
  * for a question whose card went out in the same turn is refused too, before
  * anything is written: the student has not seen it yet, so there is nothing
  * to rate. Recording an earlier question (the one the student is moving on
- * from) is unaffected. offer_next_step is also refused until the model has
- * written visible text in the turn (`textWritten`, which the loop sets from
- * the model's own stream, not from its own writes such as the welcome):
- * the buttons end the turn, so feedback the model meant to write after them
- * would never be written. It is refused as well in a turn the student opened
+ * from) is unaffected. A first result for a question is recorded only when
+ * the student moves on from it: in a turn they opened with Next, or when the
+ * call says their message asked to skip or move on
+ * (`student_asked_to_move_on`); otherwise it is refused before anything is
+ * written, so a correct answer never shows its result before the Next click.
+ * A result already recorded (a revision) is left to the service's own rules.
+ * offer_next_step is also refused until the model has written feedback in
+ * the turn: at least `MIN_FEEDBACK_WORDS` words (`wordsWritten`, which the
+ * loop counts from the model's own stream, not from its own writes such as
+ * the welcome): the buttons end the turn, so feedback the model meant to
+ * write after them would never be written. It is refused as well in a turn the student opened
  * with Try again (that reply is a hint, which ends with a question), and for
  * Try again without Next. Its output carries the buttons and the fixed line
  * shown with them (`lead_in`, chosen from the buttons and whether the student
@@ -46,7 +53,15 @@
  * the student's file by number, which the server reads and puts on the card
  * as exact code with its `source` (codeQuote.ts). The quote is resolved after
  * the checks above and before the write, so a refused quote writes nothing.
- * A free-typed `code_snippet` is still accepted when there is no quote.
+ * A free-typed `code_snippet` is still accepted when there is no quote. A
+ * quote with `edit` (one line changed, for the question that asks the student
+ * to find the change) is taken for one question per attempt: the journal's
+ * presented cards say which question already has one, and a second is
+ * refused before the file is read.
+ *
+ * An attempt whose quiz has linked material or course search also gets
+ * content_get and content_search, after the others (content.ts): lookups in
+ * the course material through the Classmoji MCP server, as the attempt's user.
  */
 import { tool, type ToolSet, type UIMessageStreamWriter } from 'ai';
 import type Anthropic from '@anthropic-ai/sdk';
@@ -88,6 +103,7 @@ import {
 import { TOOL_DESCRIPTIONS } from './descriptions.ts';
 import {
   aborted,
+  editLimitText,
   OFFER_AFTER_HINT_TEXT,
   OFFER_AFTER_QUESTION_TEXT,
   OFFER_BEFORE_FEEDBACK_TEXT,
@@ -95,13 +111,22 @@ import {
   QUESTION_AFTER_OFFER_TEXT,
   QUOTE_READ_FAILED_TEXT,
   RECORD_BEFORE_ANSWER_TEXT,
+  RECORD_BEFORE_NEXT_TEXT,
   recordBeforePresentText,
   toolFailure,
   TURN_STOPPED_TEXT,
 } from './errors.ts';
+import { connectMcp, contentTools, mintMcpToken, type ConnectMcp } from './content.ts';
 import { defaultAnthropic, exploreCodebaseTool, mintRepoToken } from './exploreCodebase.ts';
 
 type Grading = typeof ClassmojiService.quizGrading;
+
+/**
+ * The fewest words of feedback offer_next_step takes in a turn: enough for
+ * the two sentences the prompt asks for, so a bare "Correct." cannot end an
+ * answer's turn. Never shown to the model as a number.
+ */
+export const MIN_FEEDBACK_WORDS = 15;
 
 /** The service calls the tools make; tests pass fakes. */
 export type QuizToolServices = {
@@ -120,6 +145,15 @@ export type QuizToolServices = {
   quoteCache: QuoteFileCache;
   /** Reads one file for a code quote; defaults to the Contents API read. */
   readFile?: (owner: string, repo: string, path: string, token: string) => Promise<string>;
+  /** The attempt user's MCP bearer for the content tools (content.ts). */
+  mintMcpToken?: (userId: string) => Promise<string>;
+  /** Opens the MCP client one content lookup uses. */
+  connectMcp?: ConnectMcp;
+  /**
+   * The question numbers whose stored card shows edited code (`source.changed`);
+   * defaults to reading the attempt's journal.
+   */
+  editedQuestions?: (attemptId: string) => Promise<number[]>;
 };
 
 export type QuizToolDeps = {
@@ -130,14 +164,41 @@ export type QuizToolDeps = {
   /** Defaults to the real services; tests inject fakes. */
   services?: Partial<QuizToolServices>;
   log?: DiagnosticLog;
-  /** Whether the model has written visible text in this turn; the loop tracks it. */
-  textWritten: () => boolean;
+  /** How many words the model has written in this turn; the loop counts them. */
+  wordsWritten: () => number;
 };
 
 /** The grading service, loaded on first use so the prompt and tests stay light. */
 async function realGrading(): Promise<QuizToolServices['grading']> {
   const { ClassmojiService: services } = await import('@classmoji/services');
   return services.quizGrading;
+}
+
+/**
+ * From `question_presented` journal payloads, the numbers of the questions
+ * whose stored card shows edited code, ascending.
+ */
+export function editedQuestionNumbers(payloads: readonly unknown[]): number[] {
+  const numbers = new Set<number>();
+  for (const payload of payloads) {
+    const p = payload as {
+      question_number?: unknown;
+      output?: { question_number?: unknown; card?: { source?: { changed?: unknown } } };
+    } | null;
+    const n = p?.output?.question_number ?? p?.question_number;
+    if (p?.output?.card?.source?.changed === true && typeof n === 'number') numbers.add(n);
+  }
+  return [...numbers].sort((a, b) => a - b);
+}
+
+/** The attempt's questions presented with edited code, from its journal. */
+async function editedQuestionsFromJournal(attemptId: string): Promise<number[]> {
+  const { default: getPrisma } = await import('@classmoji/database');
+  const events = await getPrisma().quizAttemptEvent.findMany({
+    where: { attempt_id: attemptId, type: 'question_presented' },
+    select: { payload: true },
+  });
+  return editedQuestionNumbers(events.map(e => e.payload));
 }
 
 /** Lazily resolved grading service, shared by every tool of one set. */
@@ -181,6 +242,23 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
   const noQuestionOpen = () => lastPresented < 1 || recorded.has(lastPresented);
   /** Next-step buttons went out in this turn: the student chooses next. */
   let offerMade = false;
+  const editedQuestions = d.services?.editedQuestions ?? editedQuestionsFromJournal;
+
+  /**
+   * The earlier question whose stored card already shows edited code, or
+   * null. Read only for a quote with `edit`, for a question not yet out (a
+   * turn presents at most one, and stops once it has); a failed read is a
+   * retryable tool failure.
+   */
+  const earlierEdit = async (questionNumber: number): Promise<number | null> => {
+    let stored: number[];
+    try {
+      stored = await editedQuestions(ctx.attemptId);
+    } catch (error) {
+      throw toolFailure('present_question', error, ids, d.log);
+    }
+    return stored.find(n => n !== questionNumber) ?? null;
+  };
   /** The repository a code quote reads, for a code-aware attempt; null otherwise. */
   const quoteRepo = ctx.isCodeAware && ctx.exploration ? ctx.exploration : null;
   const quoteCache = d.services?.quoteCache ?? quoteFileCache;
@@ -199,6 +277,15 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
     // The question already out comes back from the service as stored (or is
     // refused), whatever this call says, so there is nothing to read for it.
     if (!quote || !quoteRepo || input.question_number <= lastPresented) return card;
+    // One question per attempt shows edited code: the one that asks the
+    // student to find the change. Refused before the file is read.
+    if (quote.edit) {
+      const earlier = await earlierEdit(input.question_number);
+      if (earlier !== null) {
+        d.log?.('[quiz-agent] code quote refused', { ...ids, reason: 'edit_limit' });
+        throw new Error(editLimitText(earlier));
+      }
+    }
     const signal = abortSignal ? AbortSignal.any([d.signal, abortSignal]) : d.signal;
     let built;
     try {
@@ -279,14 +366,25 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
     execute: (input, { toolCallId, abortSignal }): Promise<QuestionResultOutput> =>
       d.queue(async () => {
         stopIfAborted(abortSignal);
+        const { student_asked_to_move_on: askedToMoveOn, ...result } = input;
         // Refused before the write: a question presented in this turn has no
         // answer yet.
-        if (presentedThisTurn.has(input.question_num)) {
+        if (presentedThisTurn.has(result.question_num)) {
           throw new Error(RECORD_BEFORE_ANSWER_TEXT);
+        }
+        // A first result waits for the student to move on: a Next click, or
+        // their message asking to skip or move on, which the call says. An
+        // answer alone, even a correct one, gets feedback and the buttons.
+        if (
+          !recorded.has(result.question_num) &&
+          ctx.lastAction !== 'next' &&
+          askedToMoveOn !== true
+        ) {
+          throw new Error(RECORD_BEFORE_NEXT_TEXT);
         }
         let out: QuestionResultOutput;
         try {
-          out = await (await grading()).finalizeQuestion(fenced(toolCallId), input);
+          out = await (await grading()).finalizeQuestion(fenced(toolCallId), result);
         } catch (error) {
           throw toolFailure('record_question_result', error, ids, d.log);
         }
@@ -321,8 +419,9 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
         // student is on the last question (no card goes out in an offer's turn).
         const leadIn = nextStepLeadIn(input.actions, lastPresented >= ctx.questionCount);
         if (leadIn === null) throw new Error(OFFER_TRY_AGAIN_ALONE_TEXT);
-        // Buttons end the turn, so feedback written after them is never sent.
-        if (!d.textWritten()) throw new Error(OFFER_BEFORE_FEEDBACK_TEXT);
+        // Buttons end the turn, so feedback written after them is never sent;
+        // and a bare "Correct." is not the feedback an answer gets.
+        if (d.wordsWritten() < MIN_FEEDBACK_WORDS) throw new Error(OFFER_BEFORE_FEEDBACK_TEXT);
         offerMade = true;
         return { actions: [...input.actions], lead_in: leadIn };
       }),
@@ -375,6 +474,17 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
         quoteCache,
       },
       { questionOpen: () => !noQuestionOpen() }
+    );
+  }
+
+  // The course-material lookups, last: only for an attempt that has them.
+  if (ctx.content) {
+    Object.assign(
+      tools,
+      contentTools(ctx, ctx.content, d, {
+        mintToken: d.services?.mintMcpToken ?? mintMcpToken,
+        connect: d.services?.connectMcp ?? connectMcp,
+      })
     );
   }
 

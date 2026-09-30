@@ -18,7 +18,8 @@ vi.mock('@trigger.dev/sdk/v3', () => ({
   metadata: { set: vi.fn(), append: vi.fn(), flush: vi.fn() },
 }));
 
-const { quizTools, questionResultPartId } = await import('../index.ts');
+const { editedQuestionNumbers, MIN_FEEDBACK_WORDS, quizTools, questionResultPartId } =
+  await import('../index.ts');
 const {
   OFFER_AFTER_HINT_TEXT,
   OFFER_AFTER_QUESTION_TEXT,
@@ -27,7 +28,9 @@ const {
   QUESTION_AFTER_OFFER_TEXT,
   QUOTE_READ_FAILED_TEXT,
   RECORD_BEFORE_ANSWER_TEXT,
+  RECORD_BEFORE_NEXT_TEXT,
   recordBeforePresentText,
+  editLimitText,
   TURN_STOPPED_TEXT,
   retryText,
 } = await import('../errors.ts');
@@ -82,6 +85,14 @@ function context(overrides: Partial<AttemptContext> = {}): AttemptContext {
   } as AttemptContext;
 }
 
+/** An attempt with one linked page and course search off. */
+const CONTENT = {
+  mcpUrl: 'https://mcp.example.test/mcp',
+  classroomRef: 'sample-org/sample-class',
+  courseSearchEnabled: false,
+  docs: [{ kind: 'page', id: 'page-1', title: 'Semantic HTML' }],
+};
+
 /** Stored progress at turn start: questions 1..`presented` out, `finalized` recorded. */
 const progressAt = (presented: number, finalized: number[] = []) => ({
   questionCount: 8,
@@ -130,8 +141,8 @@ type Setup = {
   ctx?: AttemptContext;
   signal?: AbortSignal;
   services?: Record<string, unknown>;
-  /** Whether the model has written text this turn; defaults to yes. */
-  textWritten?: () => boolean;
+  /** How many words the model has written this turn; defaults to plenty. */
+  wordsWritten?: () => number;
 };
 
 function setup(o: Setup = {}) {
@@ -144,7 +155,7 @@ function setup(o: Setup = {}) {
     signal: o.signal ?? new AbortController().signal,
     services: { grading, ...(o.services ?? {}) } as never,
     log,
-    textWritten: o.textWritten ?? (() => true),
+    wordsWritten: o.wordsWritten ?? (() => 40),
   });
   return { tools, grading, writes, log };
 }
@@ -176,6 +187,12 @@ const card = {
   question_text: 'Stored question?',
 };
 
+/** Feedback long enough for offer_next_step (MIN_FEEDBACK_WORDS). */
+const FEEDBACK =
+  'Yes, that is right: your grid gives the cards two equal columns, so the page reads as a tidy row of features.';
+const CLOSE =
+  'Close: the loop is right, but the bound is off by one, so the last item of your list is never read.';
+
 const RECORD = {
   question_num: 1,
   answers: [
@@ -201,14 +218,27 @@ describe('quizTools: the fixed set', () => {
     expect(Object.keys(tools)).toEqual(QUIZ_TOOL_ORDER.slice(0, 4));
   });
 
-  it('adds explore_codebase last for a code-aware attempt', () => {
+  it('adds explore_codebase after them for a code-aware attempt', () => {
     const { tools } = setup({ ctx: codeAware() });
-    expect(Object.keys(tools)).toEqual([...QUIZ_TOOL_ORDER]);
+    expect(Object.keys(tools)).toEqual(QUIZ_TOOL_ORDER.slice(0, 5));
+  });
+
+  it('adds content_get and content_search last for an attempt with course material', () => {
+    expect(Object.keys(setup({ ctx: context({ content: CONTENT }) }).tools)).toEqual([
+      ...QUIZ_TOOL_ORDER.slice(0, 4),
+      'content_get',
+      'content_search',
+    ]);
+    expect(Object.keys(setup({ ctx: codeAware({ content: CONTENT }) }).tools)).toEqual([
+      ...QUIZ_TOOL_ORDER,
+    ]);
   });
 
   it('builds byte-identical tool descriptions and schemas on every turn', () => {
-    const first = setup({ ctx: codeAware() }).tools;
-    const second = setup({ ctx: codeAware({ fence: 'fence-2', runId: 'run_2' }) }).tools;
+    const first = setup({ ctx: codeAware({ content: CONTENT }) }).tools;
+    const second = setup({
+      ctx: codeAware({ content: CONTENT, fence: 'fence-2', runId: 'run_2' }),
+    }).tools;
     for (const name of QUIZ_TOOL_ORDER) {
       expect(second[name].description).toBe(first[name].description);
       expect(second[name].inputSchema).toBe(first[name].inputSchema);
@@ -288,7 +318,9 @@ describe('present_question', () => {
   });
 
   it('presents the next question once the current one is recorded earlier in the step', async () => {
-    const { tools, grading } = setup({ ctx: context({ progress: progressAt(1) }) });
+    const { tools, grading } = setup({
+      ctx: context({ progress: progressAt(1), lastAction: 'next' }),
+    });
     grading.finalizeQuestion.mockResolvedValue({
       question_num: 1,
       emoji: 'x',
@@ -304,7 +336,9 @@ describe('present_question', () => {
   });
 
   it('keeps the next question refused after a refused record', async () => {
-    const { tools, grading } = setup({ ctx: context({ progress: progressAt(1) }) });
+    const { tools, grading } = setup({
+      ctx: context({ progress: progressAt(1), lastAction: 'next' }),
+    });
     grading.finalizeQuestion.mockRejectedValue(
       new QuizGradingError('invalid_input', 'Invalid question result: answers.')
     );
@@ -446,7 +480,7 @@ describe('record_question_result', () => {
       total_questions: 8,
     });
     await call(first.tools, 'present_question', card);
-    const next = setup();
+    const next = setup({ ctx: context({ lastAction: 'next' }) });
     const stored = { question_num: 2, emoji: 'x', brief_feedback: 'y' };
     next.grading.finalizeQuestion.mockResolvedValue(stored);
     await expect(
@@ -455,7 +489,7 @@ describe('record_question_result', () => {
   });
 
   it("keeps a refused present_question from blocking that question's result", async () => {
-    const { tools, grading } = setup();
+    const { tools, grading } = setup({ ctx: context({ lastAction: 'next' }) });
     grading.presentQuestion.mockRejectedValue(
       new QuizGradingError('out_of_order', 'Question 2 cannot be presented yet.')
     );
@@ -465,6 +499,68 @@ describe('record_question_result', () => {
     await expect(
       call(tools, 'record_question_result', { ...RECORD, question_num: 2 })
     ).resolves.toBe(stored);
+  });
+
+  describe('waits for the student to move on', () => {
+    /** Question 2 is out and open; the turn opened with `lastAction`. */
+    const onQuestion2 = (lastAction?: 'next' | 'try_again') =>
+      context({ progress: progressAt(2, [1]), ...(lastAction ? { lastAction } : {}) });
+    const Q2 = { ...RECORD, question_num: 2 };
+
+    it('refuses a first result in a turn the student opened with an answer, writing nothing', async () => {
+      for (const lastAction of [undefined, 'try_again'] as const) {
+        const { tools, grading, writes } = setup({ ctx: onQuestion2(lastAction) });
+        await expect(call(tools, 'record_question_result', Q2)).rejects.toThrow(
+          RECORD_BEFORE_NEXT_TEXT
+        );
+        expect(grading.finalizeQuestion).not.toHaveBeenCalled();
+        expect(writes).toEqual([]);
+      }
+      // A false flag is no request to move on either.
+      const { tools, grading } = setup({ ctx: onQuestion2() });
+      await expect(
+        call(tools, 'record_question_result', { ...Q2, student_asked_to_move_on: false })
+      ).rejects.toThrow(RECORD_BEFORE_NEXT_TEXT);
+      expect(grading.finalizeQuestion).not.toHaveBeenCalled();
+    });
+
+    it('records it in a Next turn', async () => {
+      const { tools, grading } = setup({ ctx: onQuestion2('next') });
+      const stored = { question_num: 2, emoji: 'x', brief_feedback: 'y' };
+      grading.finalizeQuestion.mockResolvedValue(stored);
+      await expect(call(tools, 'record_question_result', Q2)).resolves.toBe(stored);
+    });
+
+    it('records it when the call says the student asked to move on, and keeps that flag to itself', async () => {
+      const { tools, grading, writes } = setup({ ctx: onQuestion2() });
+      const stored = { question_num: 2, emoji: 'x', brief_feedback: 'Moved on' };
+      grading.finalizeQuestion.mockResolvedValue(stored);
+      await expect(
+        call(tools, 'record_question_result', {
+          ...Q2,
+          answers: [],
+          student_asked_to_move_on: true,
+        })
+      ).resolves.toBe(stored);
+      expect(grading.finalizeQuestion).toHaveBeenCalledWith(expect.anything(), {
+        ...Q2,
+        answers: [],
+      });
+      expect(writes).toHaveLength(1);
+    });
+
+    it('leaves a result already recorded (a revision) to the service', async () => {
+      const { tools, grading } = setup({ ctx: onQuestion2() });
+      grading.finalizeQuestion.mockResolvedValue({
+        question_num: 1,
+        emoji: 'x',
+        brief_feedback: 'y',
+        revised: true,
+      });
+      await expect(call(tools, 'record_question_result', RECORD)).resolves.toMatchObject({
+        revised: true,
+      });
+    });
   });
 });
 
@@ -648,7 +744,7 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
           stream: convertArrayToReadableStream([
             { type: 'stream-start', warnings: [] },
             { type: 'text-start', id: 't' },
-            { type: 'text-delta', id: 't', delta: 'Yes, that is right.' },
+            { type: 'text-delta', id: 't', delta: FEEDBACK },
             { type: 'text-end', id: 't' },
             {
               type: 'tool-call',
@@ -809,19 +905,25 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
     });
   });
 
-  it('refuses offer_next_step before any feedback text in the turn, then offers once there is some', async () => {
-    let written = false;
-    const { tools, grading, writes } = setup({ textWritten: () => written });
+  it('refuses offer_next_step before the feedback is written, then offers once it is', async () => {
+    let written = 0;
+    const { tools, grading, writes } = setup({ wordsWritten: () => written });
     await expect(
       call(tools, 'offer_next_step', { actions: ['try_again', 'next'] })
     ).rejects.toThrow(OFFER_BEFORE_FEEDBACK_TEXT);
     expect(OFFER_BEFORE_FEEDBACK_TEXT).toBe(
-      "Write your feedback on the student's answer first (what is right and what is wrong), then call offer_next_step."
+      "Write your feedback on the student's answer first: 2 to 4 sentences on what is right, what is wrong (if anything) and why it matters. Then call offer_next_step."
     );
     expect(writes).toEqual([]);
     expect(Object.values(grading).every(fn => fn.mock.calls.length === 0)).toBe(true);
 
-    written = true;
+    // A bare "Correct." is not feedback either.
+    written = MIN_FEEDBACK_WORDS - 1;
+    await expect(call(tools, 'offer_next_step', { actions: ['next'] })).rejects.toThrow(
+      OFFER_BEFORE_FEEDBACK_TEXT
+    );
+
+    written = MIN_FEEDBACK_WORDS;
     await expect(
       call(tools, 'offer_next_step', { actions: ['try_again', 'next'] })
     ).resolves.toEqual({
@@ -831,7 +933,7 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
   });
 
   it('keeps present_question open after an offer_next_step refused for missing feedback', async () => {
-    const { tools, grading } = setup({ textWritten: () => false });
+    const { tools, grading } = setup({ wordsWritten: () => 0 });
     grading.presentQuestion.mockResolvedValue({ card, question_number: 2, total_questions: 8 });
     await expect(call(tools, 'offer_next_step', { actions: ['next'] })).rejects.toThrow(
       OFFER_BEFORE_FEEDBACK_TEXT
@@ -911,7 +1013,7 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
     it('refuses buttons sent before any feedback, keeps the turn going, then takes them after the feedback', async () => {
       const { model, chunks, saved } = await answerTurn([
         [offer('b1')],
-        [...feedback('t', 'Close: the loop is right, but the bound is off by one.'), offer('b2')],
+        [...feedback('t', CLOSE), offer('b2')],
         [...feedback('t2', 'should not be requested')],
       ]);
 
@@ -932,7 +1034,7 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
       expect(saved).toContainEqual(
         expect.objectContaining({
           type: 'text',
-          text: 'Close: the loop is right, but the bound is off by one.',
+          text: CLOSE,
         })
       );
       expect(saved.find(p => p.toolCallId === 'b2')).toMatchObject({
@@ -944,10 +1046,51 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
       );
     });
 
-    it('takes buttons that follow feedback in the same step', async () => {
+    it('refuses a result recorded on an answer, then takes the feedback and the buttons', async () => {
+      const record: Chunk = {
+        type: 'tool-call',
+        toolCallId: 'r',
+        toolName: 'record_question_result',
+        input: JSON.stringify({
+          question_num: 1,
+          answers: [{ level: 'correct', hints_before: 0 }],
+          brief_feedback: 'Nailed it!',
+        }),
+      };
+      const { model, chunks, saved } = await answerTurn(
+        [[record], [...feedback('t', FEEDBACK), offer('b')]],
+        context({ progress: progressAt(1) })
+      );
+      expect(model.doStreamCalls).toHaveLength(2);
+      // The call is hidden from the browser; the saved reply keeps it as refused.
+      expect(saved.find(p => p.toolCallId === 'r')).toMatchObject({ state: 'output-error' });
+      expect(JSON.stringify(model.doStreamCalls[1].prompt)).toContain(
+        JSON.stringify(RECORD_BEFORE_NEXT_TEXT).slice(1, -1)
+      );
+      // No result row before the Next click: only the feedback and the buttons.
+      expect(chunks.some(c => c.type === 'data-question-result')).toBe(false);
+      expect(saved.some(p => p.type === 'data-question-result')).toBe(false);
+      expect(chunks.filter(c => c.type === 'tool-output-available').map(c => c.toolCallId)).toEqual(
+        ['b']
+      );
+    });
+
+    it('refuses buttons after feedback too short to say what is right and why', async () => {
       const { model, chunks } = await answerTurn([
-        [...feedback('t', 'Not quite: the key is missing.'), offer('b')],
+        [...feedback('t', 'Correct.'), offer('b1')],
+        [...feedback('t2', FEEDBACK), offer('b2')],
       ]);
+      expect(model.doStreamCalls).toHaveLength(2);
+      expect(chunks).toContainEqual(
+        expect.objectContaining({ type: 'tool-output-error', toolCallId: 'b1' })
+      );
+      expect(chunks.filter(c => c.type === 'tool-output-available').map(c => c.toolCallId)).toEqual(
+        ['b2']
+      );
+    });
+
+    it('takes buttons that follow feedback in the same step', async () => {
+      const { model, chunks } = await answerTurn([[...feedback('t', FEEDBACK), offer('b')]]);
       expect(model.doStreamCalls).toHaveLength(1);
       expect(chunks.filter(c => c.type === 'tool-output-available').map(c => c.toolCallId)).toEqual(
         ['b']
@@ -967,7 +1110,7 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
         },
       });
       const { model, chunks } = await answerTurn(
-        [[offer('b1')], [...feedback('t', 'That is right.'), offer('b2')]],
+        [[offer('b1')], [...feedback('t', FEEDBACK), offer('b2')]],
         opening
       );
       expect(chunks).toContainEqual(
@@ -982,7 +1125,7 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
     it('does not count whitespace as feedback', async () => {
       const { model, chunks } = await answerTurn([
         [...feedback('t', '  \n '), offer('b1')],
-        [...feedback('t2', 'Right idea, missing the base case.'), offer('b2')],
+        [...feedback('t2', FEEDBACK), offer('b2')],
       ]);
       expect(model.doStreamCalls).toHaveLength(2);
       expect(chunks).toContainEqual(
@@ -1195,7 +1338,7 @@ describe('explore_codebase (fake pipeline)', () => {
 
   it('counts both purposes toward the limit, but not a refused call', async () => {
     const { tools, grading } = exploreSetup(async () => result(['a.css']), {
-      ctx: codeAware({ progress: progressAt(2, [1]) }),
+      ctx: codeAware({ progress: progressAt(2, [1]), lastAction: 'next' }),
     });
     grading.finalizeQuestion.mockResolvedValue({
       question_num: 2,
@@ -1653,9 +1796,15 @@ describe('present_question with code_quote', () => {
       writer: writer as never,
       queue: createToolQueue(),
       signal: o.signal ?? new AbortController().signal,
-      services: { grading, mintRepoToken, quoteCache, ...(o.services ?? {}) } as never,
+      services: {
+        grading,
+        mintRepoToken,
+        quoteCache,
+        editedQuestions: async () => [],
+        ...(o.services ?? {}),
+      } as never,
       log,
-      textWritten: () => true,
+      wordsWritten: () => 40,
     });
     return { tools, grading, log, stub, quoteCache, mintRepoToken };
   }
@@ -1741,6 +1890,84 @@ describe('present_question with code_quote', () => {
     });
   });
 
+  describe('edited code, once per attempt', () => {
+    const edited = {
+      ...quoted,
+      code_quote: {
+        ...quoted.code_quote,
+        edit: { line: 13, replace: 'grid-template-columns: 1fr;' },
+      },
+    };
+
+    it('refuses a second quote with edit before reading the file, writing nothing', async () => {
+      const editedQuestions = vi.fn(async () => [1]);
+      const { tools, grading, stub, log } = quoteSetup({ services: { editedQuestions } });
+      await expect(call(tools, 'present_question', edited)).rejects.toThrow(editLimitText(1));
+      expect(editLimitText(1)).toBe(
+        'Only one question per quiz may show edited code, and question 1 already does. Quote the real code without edit and describe any change in words in question_text.'
+      );
+      expect(editedQuestions).toHaveBeenCalledWith('attempt-1');
+      expect(grading.presentQuestion).not.toHaveBeenCalled();
+      expect(contentsRequests(stub.requested)).toBe(0);
+      expect(log).toHaveBeenCalledWith(
+        '[quiz-agent] code quote refused',
+        expect.objectContaining({ reason: 'edit_limit' })
+      );
+
+      // The same lines quoted as they are go through.
+      await expect(call(tools, 'present_question', quoted)).resolves.toMatchObject({
+        card: { code_snippet: FEATURES.join('\n') },
+      });
+    });
+
+    it('takes the first one, and reads the journal only for a quote with edit', async () => {
+      const editedQuestions = vi.fn(async () => [] as number[]);
+      const plain = quoteSetup({ services: { editedQuestions } });
+      await call(plain.tools, 'present_question', quoted);
+      expect(editedQuestions).not.toHaveBeenCalled();
+
+      const first = quoteSetup({ services: { editedQuestions } });
+      await expect(call(first.tools, 'present_question', edited)).resolves.toMatchObject({
+        card: { source: { changed: true } },
+      });
+      expect(editedQuestions).toHaveBeenCalledTimes(1);
+    });
+
+    it('tells the model to call again when the journal cannot be read', async () => {
+      const { tools, grading } = quoteSetup({
+        services: { editedQuestions: async () => Promise.reject(new Error('db down')) },
+      });
+      await expect(call(tools, 'present_question', edited)).rejects.toThrow(
+        retryText('present_question')
+      );
+      expect(grading.presentQuestion).not.toHaveBeenCalled();
+    });
+
+    it('reads the edited questions from the presented cards in the journal', () => {
+      const presented = (n: number, changed?: boolean) => ({
+        question_number: n,
+        output: {
+          question_number: n,
+          total_questions: 8,
+          card: {
+            question_number: n,
+            ...(changed === undefined ? {} : { source: { path: 'a.css', lines: '1', changed } }),
+          },
+        },
+      });
+      expect(
+        editedQuestionNumbers([
+          presented(1),
+          presented(4, true),
+          presented(2, false),
+          null,
+          'junk',
+          presented(3, true),
+        ])
+      ).toEqual([3, 4]);
+    });
+  });
+
   it('refuses a quote whose anchor is not the first line, writing nothing, then takes the fixed call', async () => {
     const { tools, grading, log } = quoteSetup();
     await expect(
@@ -1795,7 +2022,7 @@ describe('present_question with code_quote', () => {
       writer: recordingWriter().writer as never,
       queue: createToolQueue(),
       signal: new AbortController().signal,
-      textWritten: () => true,
+      wordsWritten: () => 40,
       services: {
         grading,
         mintRepoToken: first.mintRepoToken,

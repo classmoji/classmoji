@@ -200,6 +200,183 @@ describe('buildQuote: the code', () => {
   });
 });
 
+describe('buildQuote: a quote that cuts into a rule or element', () => {
+  /** The quote's code lines for `ranges` of `lines` in `path`. */
+  const code = (
+    lines: string[],
+    ranges: number[][],
+    path = 'css/style.css',
+    patch: Record<string, unknown> = {}
+  ) =>
+    buildQuote(lines, {
+      path,
+      ranges,
+      anchor: lines[ranges[0][0] - 1],
+      ...patch,
+    } as never).code.split('\n');
+
+  it('marks a CSS quote that starts and stops inside a rule', () => {
+    expect(code(STYLE, [[12, 13]])).toEqual([
+      QUOTE_GAP,
+      '  display: grid;',
+      '  grid-template-columns: repeat(2, 1fr);',
+      QUOTE_GAP,
+    ]);
+  });
+
+  it('adds nothing below when only the closing brace follows', () => {
+    expect(code(STYLE, [[12, 14]])).toEqual([
+      QUOTE_GAP,
+      '  display: grid;',
+      '  grid-template-columns: repeat(2, 1fr);',
+      '  gap: 1rem;',
+    ]);
+  });
+
+  it('marks only the end of a quote that starts at the selector', () => {
+    expect(code(STYLE, [[11, 13]])).toEqual([
+      '.features {',
+      '  display: grid;',
+      '  grid-template-columns: repeat(2, 1fr);',
+      QUOTE_GAP,
+    ]);
+    // A whole rule gets no mark, and the label and count stay the lines quoted.
+    const whole = buildQuote(STYLE, quote() as never);
+    expect(whole.code).not.toContain(QUOTE_GAP);
+    const cut = buildQuote(STYLE, { ...quote(), ranges: [[12, 13]], anchor: '  display: grid;' });
+    expect(cut.shownLines).toBe(2);
+    expect(cut.source.lines).toBe('12-13');
+  });
+
+  it('looks only at the first line and the last one of several ranges', () => {
+    expect(
+      code(STYLE, [
+        [2, 3],
+        [13, 14],
+      ])
+    ).toEqual([
+      QUOTE_GAP,
+      '  display: flex;',
+      '  flex-direction: column;',
+      QUOTE_GAP,
+      '  grid-template-columns: repeat(2, 1fr);',
+      '  gap: 1rem;',
+    ]);
+  });
+
+  it('keeps an edit on a cut quote', () => {
+    expect(
+      code(STYLE, [[12, 13]], 'css/style.css', {
+        edit: { line: 13, replace: 'grid-template-columns: 1fr;' },
+      })
+    ).toEqual([QUOTE_GAP, '  display: grid;', '  grid-template-columns: 1fr;', QUOTE_GAP]);
+  });
+
+  it('counts rules nested in an at-rule by their braces', () => {
+    const media = [
+      '@media (max-width: 600px) {',
+      '  .a {',
+      '    color: red;',
+      '  }',
+      '  .b {',
+      '    color: blue;',
+      '  }',
+      '}',
+    ];
+    // Inside the media query, with another rule after it.
+    expect(code(media, [[2, 4]])).toEqual([
+      QUOTE_GAP,
+      '  .a {',
+      '    color: red;',
+      '  }',
+      QUOTE_GAP,
+    ]);
+    // Its last rule: only the media query's closing brace follows.
+    expect(code(media, [[5, 7]])).toEqual([QUOTE_GAP, '  .b {', '    color: blue;', '  }']);
+    expect(code(media, [[1, 8]])).not.toContain(QUOTE_GAP);
+  });
+
+  it('ignores braces in comments and strings', () => {
+    const lines = [
+      '/* a { comment',
+      '   that } runs on */',
+      '.a::before {',
+      '  content: "}";',
+      "  quotes: '{' '}';",
+      '  color: red;',
+      '}',
+    ];
+    expect(code(lines, [[3, 5]])).toEqual([
+      '.a::before {',
+      '  content: "}";',
+      "  quotes: '{' '}';",
+      QUOTE_GAP,
+    ]);
+  });
+
+  it('ignores a brace in an SCSS line comment', () => {
+    const lines = ['.a {', '  // closes with }', '  color: red;', '  margin: 0;', '}'];
+    expect(code(lines, [[1, 3]], 'scss/main.scss')).toEqual([
+      '.a {',
+      '  // closes with }',
+      '  color: red;',
+      QUOTE_GAP,
+    ]);
+  });
+
+  it('marks nothing when the braces do not balance', () => {
+    const open = ['.a {', '  color: red;', '  margin: 0;'];
+    expect(code(open, [[2, 2]])).toEqual(['  color: red;']);
+    const extra = ['}', '.a {', '  color: red;', '  margin: 0;', '}'];
+    expect(code(extra, [[3, 3]])).toEqual(['  color: red;']);
+  });
+
+  const PAGE = [
+    '<main>',
+    '  <ul class="features">',
+    '    <li>Fast</li>',
+    '    <li>Small</li>',
+    '    <li>Free</li>',
+    '  </ul>',
+    '  <p>More</p>',
+    '</main>',
+  ];
+
+  it('marks an HTML quote that stops inside an element, by indentation', () => {
+    expect(code(PAGE, [[2, 4]], 'index.html')).toEqual([
+      '  <ul class="features">',
+      '    <li>Fast</li>',
+      '    <li>Small</li>',
+      QUOTE_GAP,
+    ]);
+  });
+
+  it('marks an HTML quote that starts inside an element', () => {
+    expect(code(PAGE, [[4, 6]], 'index.html')).toEqual([
+      QUOTE_GAP,
+      '    <li>Small</li>',
+      '    <li>Free</li>',
+      '  </ul>',
+    ]);
+  });
+
+  it('marks neither a whole element nor siblings at one level', () => {
+    expect(code(PAGE, [[2, 6]], 'index.html')).not.toContain(QUOTE_GAP);
+    expect(code(PAGE, [[3, 4]], 'index.html')).not.toContain(QUOTE_GAP);
+    expect(code(PAGE, [[1, 8]], 'index.html')).not.toContain(QUOTE_GAP);
+  });
+
+  it('marks nothing in HTML indented with both tabs and spaces', () => {
+    const mixed = ['<ul>', '\t<li>Fast</li>', '    <li>Small</li>', '</ul>'];
+    expect(code(mixed, [[1, 2]], 'index.html')).toEqual(['<ul>', '\t<li>Fast</li>']);
+  });
+
+  it('marks nothing in any other language', () => {
+    const js = ['function f() {', '  a();', '  b();', '}'];
+    expect(code(js, [[2, 2]], 'src/f.js')).toEqual(['  a();']);
+  });
+});
+
 describe('buildQuote: the anchor', () => {
   it('matches after trimming and collapsing whitespace', () => {
     expect(() =>

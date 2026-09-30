@@ -194,8 +194,60 @@ describe('createChunkProjector: every v7 chunk type', () => {
     ['another kind', { kind: 'search_code', path: 'x' }],
     ['no path', { kind: 'read_file' }],
     ['a non-string path', { kind: 'read_file', path: 42 }],
+    ['a course title over the limit', { kind: 'course_material', title: 'x'.repeat(201) }],
+    ['an empty course title', { kind: 'course_material', title: '' }],
+    ['a non-string course title', { kind: 'course_material', title: 7 }],
   ])('drops a data-step with %s', (_l, data) => {
     expect(project([{ type: 'data-step', data } as Chunk])).toEqual([]);
+  });
+
+  it('passes a course-material step with its title only: no query, id, kind of document or text', () => {
+    expect(
+      project([
+        {
+          type: 'data-step',
+          data: {
+            kind: 'course_material',
+            title: 'Semantic HTML',
+            query: 'what does nav mark up',
+            docKind: 'page',
+            id: 'page-1',
+            text: 'The nav element...',
+            path: 'bot-context/notes.md',
+          },
+        } as Chunk,
+        {
+          type: 'data-step',
+          data: { kind: 'course_material', query: 'what does nav mark up' },
+        } as Chunk,
+      ])
+    ).toEqual([
+      { type: 'data-step', data: { kind: 'course_material', title: 'Semantic HTML' } },
+      { type: 'data-step', data: { kind: 'course_material' } },
+    ]);
+  });
+
+  it('drops every chunk of the content tools, live', () => {
+    expect(
+      project([
+        { type: 'tool-input-start', toolCallId: 'k1', toolName: 'content_get' },
+        { type: 'tool-input-delta', toolCallId: 'k1', inputTextDelta: '{"kind":"page"' },
+        {
+          type: 'tool-input-available',
+          toolCallId: 'k1',
+          toolName: 'content_get',
+          input: { kind: 'page', id: 'page-1' },
+        },
+        { type: 'tool-output-available', toolCallId: 'k1', output: 'The nav element...' },
+        {
+          type: 'tool-input-available',
+          toolCallId: 'k2',
+          toolName: 'content_search',
+          input: { query: 'what does nav mark up' },
+        },
+        { type: 'tool-output-error', toolCallId: 'k2', errorText: 'Search could not run' },
+      ] as Chunk[])
+    ).toEqual([]);
   });
 
   it('re-validates question-result, notice and evaluation parts', () => {
@@ -376,6 +428,8 @@ describe('toolVisibility', () => {
   it('reads the registry and defaults to hidden', () => {
     expect(toolVisibility(quizVisibility, 'present_question')).toBe('shown');
     expect(toolVisibility(quizVisibility, 'explore_codebase')).toBe('label');
+    expect(toolVisibility(quizVisibility, 'content_get')).toBe('label');
+    expect(toolVisibility(quizVisibility, 'content_search')).toBe('label');
     expect(toolVisibility(quizVisibility, 'record_question_result')).toBe('hidden');
     expect(toolVisibility(quizVisibility, 'toString')).toBe('hidden');
     expect(toolVisibility(quizVisibility, 'unknown')).toBe('hidden');
