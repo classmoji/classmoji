@@ -63,9 +63,14 @@ test.describe('the headers per type', () => {
     });
   });
 
-  test('HTML and SVG get the download hardening the file-slide download uses', () => {
-    // The two document types `getMimeType` produces today.
-    for (const mime of ['text/html; charset=utf-8', 'image/svg+xml']) {
+  test('HTML renders as a page, so a deck can embed it in an iframe', () => {
+    for (const mime of ['text/html; charset=utf-8', 'application/xhtml+xml']) {
+      expect(contentProxySafetyHeaders(mime)).toEqual({ 'X-Content-Type-Options': 'nosniff' });
+    }
+  });
+
+  test('SVG and XML get the download hardening the file-slide download uses', () => {
+    for (const mime of ['image/svg+xml', 'application/xml']) {
       const headers = contentProxySafetyHeaders(mime);
       expect(headers['X-Content-Type-Options']).toBe('nosniff');
       expect(headers['Content-Security-Policy']).toBe(

@@ -1,0 +1,36 @@
+/**
+ * The quiz tools' descriptions as the model reads them. They sit in the tools
+ * block at the very front of the cached prefix, so they are fixed text: no
+ * per-quiz or per-turn value ever goes in here. They say the same thing as the
+ * prompt (prompt/base.ts, prompt/codeAware.ts); change them together.
+ */
+import { BUTTON_TEXT, type QuizToolName } from '@classmoji/utils/quiz-agent';
+
+export const TOOL_DESCRIPTIONS: Record<QuizToolName, string> = {
+  present_question:
+    "Put a new quiz question on the student's screen as a question card. Use it for EVERY new question; never write a question as plain text, and do not repeat it in your text. " +
+    'Send the question number the CURRENT STATUS names as next, once the previous question has a recorded result; any other number is refused and the error says which one is accepted. ' +
+    'Your turn ends when it succeeds, so write nothing after it and never call offer_next_step with it: the student answers the question first.',
+
+  record_question_result:
+    'Record how a question went when the student moves on from it (Next, "skip", "move on"). ' +
+    'List every real answer the student gave to this question, in order, each rated with a level and the number of hints they had received for this question before it; an empty list when they skipped without answering. ' +
+    'Clarifying questions and bare agreement are not answers; "I don\'t know" is an answer rated no_attempt. Each Try again click or hint request is one hint. Answers after you revealed the answer are not listed. ' +
+    'The server computes the score. Call it before presenting the next question or submitting the evaluation. The student sees only the brief feedback and an emoji; do not mention either.',
+
+  offer_next_step:
+    'Show the student buttons after your feedback on an answer: ["try_again", "next"] when the answer is not correct or after "I don\'t know", ["next"] when it is correct or after you revealed the answer. ' +
+    'Never in the same reply as present_question: after a new question the student answers first, and the call is refused. ' +
+    `Call it last, then end your reply. A click arrives as the student's next message: "${BUTTON_TEXT.try_again}" or "${BUTTON_TEXT.next}".`,
+
+  submit_quiz_evaluation:
+    'Submit your closing feedback once the student has moved on from the last question and every question has a recorded result; it is refused until then and names the questions still missing one. ' +
+    'Scores are computed from the recorded results: provide feedback text only. Write nothing after it succeeds.',
+
+  explore_codebase:
+    "Explore the student's repository to find code to ask about: a faster assistant picks the relevant files and returns exact excerpts. " +
+    'Use focus_area="initial" before the first question, then a specific area (or a file and the part of it you need) when changing topics. ' +
+    'Earlier explorations in this attempt are taken into account, so prefer new areas. One exploration at a time. ' +
+    'Each excerpt line starts with its line number ("N| "), which is not part of the code. ' +
+    'If a call fails, call it at most once more; never tell the student about a failure.',
+};

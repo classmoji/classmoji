@@ -429,6 +429,8 @@ describe('staff attempt drawer payload', () => {
       partial_credit_percentage: 60,
       first_attempt_percentage: 55,
       question_results: [],
+      agent_runtime: 'ai_agent',
+      evaluation_json: null,
     });
     expect(payload.studentName).toBe('Ada Lovelace');
     expect(payload.userLogin).toBe('ada');
@@ -443,7 +445,10 @@ describe('staff attempt drawer payload', () => {
         'readOnly',
         'showTimestamps',
         'studentName',
+        'transcript',
+        'userImage',
         'userLogin',
+        'viewerOwnsAttempt',
       ].sort()
     );
     expectNoSentinels(payload);
@@ -492,13 +497,18 @@ describe('student attempt drawer payload', () => {
         'quiz',
         'readOnly',
         'showTimestamps',
+        'transcript',
+        'userImage',
         'userLogin',
+        'viewerOwnsAttempt',
       ].sort()
     );
     expect(Object.keys(payload.quiz).sort()).toEqual(['id', 'name', 'question_count']);
     expect(Object.keys(payload.attempt).sort()).toEqual(
       [
+        'agent_runtime',
         'completed_at',
+        'evaluation_json',
         'first_attempt_percentage',
         'id',
         'partial_credit_percentage',
