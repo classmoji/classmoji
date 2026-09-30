@@ -116,7 +116,7 @@ import {
   QUESTION_AFTER_OFFER_TEXT,
   QUOTE_READ_FAILED_TEXT,
   RECORD_BEFORE_ANSWER_TEXT,
-  RESHOW_AFTER_TEXT,
+  reshowAfterText,
   RECORD_BEFORE_NEXT_TEXT,
   recordBeforePresentText,
   toolFailure,
@@ -345,7 +345,7 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
           !presentedThisTurn.has(input.question_number) &&
           d.textWritten()
         ) {
-          throw new Error(RESHOW_AFTER_TEXT);
+          throw new Error(reshowAfterText(lastPresented, !noQuestionOpen()));
         }
         // The question the student is leaving is recorded first, so its
         // result shows before the next card. Showing the current question

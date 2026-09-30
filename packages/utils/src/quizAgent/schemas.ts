@@ -188,7 +188,7 @@ export const QuizEvaluationFeedbackSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "true only when the student's own latest message confirmed ending the quiz early: every question without a result then counts as skipped."
+      "true only when the student's own latest message confirmed ending the quiz early. Record the open question first; every question after it then counts as skipped."
     ),
   // Optional and never refused: the server sets both from the recorded score
   // (`gradeBandFor`), whatever the model sends.

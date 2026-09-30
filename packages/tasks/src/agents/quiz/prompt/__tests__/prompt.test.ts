@@ -202,7 +202,7 @@ describe('quiz prompt: typed tools only', () => {
       'Whenever it is unclear whether they mean the question or the whole quiz, ask.'
     );
     expect(flat).toContain(
-      'record the open question only if they gave real answers to it (student_asked_to_move_on: true, as for a skip), then call submit_quiz_evaluation with ended_early: true.'
+      'record the open question (answers [] if they gave none; student_asked_to_move_on: true, as for a skip), then call submit_quiz_evaluation with ended_early: true.'
     );
     // The evaluation gates name the early end too, and the old one-step end is gone.
     expect(flat).toContain('or has confirmed ending early (rule 1)');

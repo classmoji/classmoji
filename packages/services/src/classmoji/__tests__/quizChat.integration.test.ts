@@ -724,7 +724,8 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
 
   const INCOMPLETE_2_3 =
     'Questions 2, 3 have no result. Record each one you presented once the student has moved on ' +
-    'from it; present any not yet presented. Then submit again.';
+    'from it; present any not yet presented. Then submit again. (If the student confirmed ending ' +
+    'early, submit with ended_early instead.)';
 
   /** The journal's results the server recorded as skipped for an early end. */
   const skippedByEndEvents = async (attemptId: string) =>
@@ -803,13 +804,15 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     expect(completed.payload).toMatchObject({ ended_early: true, skipped_by_end: [3] });
   });
 
-  it('records presented and unpresented questions as skipped once, however often the end is submitted', async () => {
+  it('records a card of the same turn and unpresented questions as skipped once, however often the end is submitted', async () => {
     const attemptId = await newAttempt();
     const turn = await begin(attemptId);
     const q1 = await completeQuestion(attemptId, turn, 1, [{ level: 'correct', hints_before: 0 }]);
-    // Question 2 is out, with no answer; question 3 was never presented.
-    await grading.presentQuestion(call(q1), question(2));
     const confirm = await say(attemptId, 'yes, I want to end the quiz now');
+    // Question 2 went out in this same turn, so it has no answer; question 3
+    // was never presented.
+    await grading.presentQuestion(call(confirm), question(2));
+    expect(q1.inputMessageId).not.toBe(confirm.inputMessageId);
     const ended = { source: 'model' as const, feedback: { ...feedback, ended_early: true } };
 
     // Two runs racing, each with its own call id: one fill, one completion.
@@ -886,10 +889,89 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
       expect((await attemptRow(attemptId)).question_results_json).toHaveLength(1);
     }
 
-    // The student's own message confirms it.
+    // The student's own message confirms it, once the open question has its result.
     const confirm = await say(attemptId, 'yes, end the quiz');
+    await grading.finalizeQuestion(call(confirm), result(2, []));
     const record = await grading.completeWithEvaluation(call(confirm), ended);
     expect(record.question_results).toHaveLength(3);
+  });
+
+  const OPEN_2_UNRECORDED =
+    'Record question 2 first (answers [] if the student gave none; student_asked_to_move_on: true), then submit again with ended_early.';
+
+  it('refuses an early end while the open question has no result, writing nothing, then keeps its recorded result', async () => {
+    const attemptId = await newAttempt();
+    const turn = await begin(attemptId);
+    const q1 = await completeQuestion(attemptId, turn, 1, [{ level: 'correct', hints_before: 0 }]);
+    // Question 2 went out in an earlier turn and the student answered it.
+    await grading.presentQuestion(call(q1), question(2));
+    await say(attemptId, 'answer 2');
+    const confirm = await say(attemptId, 'yes, end the quiz');
+    const ended = { source: 'model' as const, feedback: { ...feedback, ended_early: true } };
+
+    const promise = grading.completeWithEvaluation(call(confirm), ended);
+    await expect(promise).rejects.toMatchObject({
+      code: 'open_question_unrecorded',
+      message: OPEN_2_UNRECORDED,
+    });
+    const row = await attemptRow(attemptId);
+    expect(row.completed_at).toBeNull();
+    expect(row.evaluation_json).toBeNull();
+    expect(row.question_results_json).toHaveLength(1);
+    expect(await skippedByEndEvents(attemptId)).toHaveLength(0);
+    expect(await events(attemptId, 'evaluation_completed')).toHaveLength(0);
+
+    // Recorded from the student's answer, it stands; only question 3 is filled.
+    await grading.finalizeQuestion(
+      call(confirm),
+      result(2, [{ level: 'mostly_right', hints_before: 0 }])
+    );
+    const record = await grading.completeWithEvaluation(call(confirm), ended);
+    expect(
+      record.question_results.map(r => [r.question_num, r.credit_earned, r.skipped_by_end])
+    ).toEqual([
+      [1, 100, undefined],
+      [2, 70, undefined],
+      [3, 0, true],
+    ]);
+    expect(record.partial_credit_percentage).toBe(56.7); // (100 + 70 + 0) / 3
+    expect(
+      (await skippedByEndEvents(attemptId)).map(
+        e => (e.payload as { question_num: number }).question_num
+      )
+    ).toEqual([3]);
+    const [completed] = await events(attemptId, 'evaluation_completed');
+    expect(completed.payload).toMatchObject({ ended_early: true, skipped_by_end: [3] });
+  });
+
+  it('fills the open question when its card went out in the same turn as the confirmation', async () => {
+    const attemptId = await newAttempt();
+    const turn = await begin(attemptId);
+    const q1 = await completeQuestion(attemptId, turn, 1, [{ level: 'correct', hints_before: 0 }]);
+    const ended = { source: 'model' as const, feedback: { ...feedback, ended_early: true } };
+
+    // Question 2's card from an earlier turn: refused in a later confirmation.
+    await grading.presentQuestion(call(q1), question(2));
+    const early = await say(attemptId, 'stop the quiz please');
+    expect(await codeOf(grading.completeWithEvaluation(call(early), ended))).toBe(
+      'open_question_unrecorded'
+    );
+    await grading.finalizeQuestion(call(early), result(2, []));
+
+    // Question 3's card goes out in the turn that confirms: filled as skipped.
+    const confirm = await say(attemptId, 'yes, end it');
+    await grading.presentQuestion(call(confirm), question(3));
+    const record = await grading.completeWithEvaluation(call(confirm), ended);
+    expect(
+      record.question_results.map(r => [r.question_num, r.credit_earned, r.skipped_by_end])
+    ).toEqual([
+      [1, 100, undefined],
+      [2, 0, undefined],
+      [3, 0, true],
+    ]);
+    const [skipped] = await skippedByEndEvents(attemptId);
+    expect(skipped.input_message_id).toBe(confirm.inputMessageId);
+    expect(skipped.payload).toMatchObject({ question_num: 3, skipped_by_end: true });
   });
 
   it('keeps the incomplete refusal without ended_early, and takes ended_early with nothing to fill as a plain completion', async () => {

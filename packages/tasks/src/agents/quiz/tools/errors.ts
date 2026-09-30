@@ -63,6 +63,15 @@ export const OFFER_TRY_AGAIN_ALONE_TEXT =
 export const RESHOW_AFTER_TEXT =
   "You already replied this turn; don't re-show the question. If the student answered, call offer_next_step.";
 
+/**
+ * `RESHOW_AFTER_TEXT` for question `lastPresented`. With no question open (it
+ * has its result), the model most likely meant the next one, so it is named.
+ */
+export const reshowAfterText = (lastPresented: number, questionOpen: boolean) =>
+  questionOpen
+    ? RESHOW_AFTER_TEXT
+    : `${RESHOW_AFTER_TEXT} To show the next question, send question_number ${lastPresented + 1}.`;
+
 /** present_question refused because next-step buttons went out earlier in the same turn. */
 export const QUESTION_AFTER_OFFER_TEXT =
   "Wait for the student's choice before presenting the next question.";

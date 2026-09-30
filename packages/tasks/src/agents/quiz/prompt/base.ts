@@ -463,8 +463,8 @@ did. It never restates or overrides a rule below.
    do not end it yet. Ask once, in your own words, e.g. "End the quiz now? The
    remaining questions will count as skipped." and end your reply there, with no
    offer_next_step. Whenever it is unclear whether they mean the question or the
-   whole quiz, ask. If their next message confirms: record the open question only if
-   they gave real answers to it (student_asked_to_move_on: true, as for a skip), then
+   whole quiz, ask. If their next message confirms: record the open question
+   (answers [] if they gave none; student_asked_to_move_on: true, as for a skip), then
    call submit_quiz_evaluation with ended_early: true. If they decline, carry on.
 
 2. A CLARIFYING QUESTION IS NOT AN ANSWER, NOT A HINT AND NOT A TRANSITION. Answer

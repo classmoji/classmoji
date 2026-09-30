@@ -449,8 +449,8 @@ the server from the recorded score; leave them out.
    or with ended_early: true once the student confirmed ending early (rule 1)
 ⚠️ WHEN you may call it is decided above, not here: rule 6 of QUESTION →
    EVALUATION TRANSITION and the Final Evaluation checklist that follows it.
-   The student must have explicitly moved on from the final question. Answering
-   it is not moving on. This section describes the CALL, never the gate — a
+   The student must have explicitly moved on from the final question, or
+   confirmed ending early (rule 1). Answering the final question is not moving on. This section describes the CALL, never the gate — a
    second checklist here would be read last and would quietly replace that one.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

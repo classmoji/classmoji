@@ -72,6 +72,7 @@ export type QuizGradingErrorCode =
   | 'already_recorded'
   | 'incomplete'
   | 'end_not_confirmed'
+  | 'open_question_unrecorded'
   | 'operation_conflict';
 
 /** A refused grading write. `message` is written for the model. */
@@ -660,10 +661,15 @@ const readEvaluation = (json: Prisma.JsonValue): QuizEvaluationRecordV2 =>
  * returns its stored evaluation.
  *
  * The model's `ended_early: true` (the student confirmed ending the quiz
- * early) first records every question without a result as skipped, presented
- * or not (`fillSkippedByEnd`), in the same transaction, so the score is over
- * every question. It is refused in a turn with no student message of its own
- * (a button click, or the begin action): the confirmation is that message.
+ * early) first records every question without a result as skipped
+ * (`fillSkippedByEnd`), in the same transaction, so the score is over every
+ * question. It is refused in a turn with no student message of its own (a
+ * button click, or the begin action): the confirmation is that message. It is
+ * also refused (`open_question_unrecorded`) while the latest presented
+ * question has no result, unless its card went out in this same turn: the
+ * student may have answered it, so the model records it first rather than
+ * the server scoring it 0. Only questions after it (and a card of this turn)
+ * are filled.
  *
  * The evaluation band (`evaluation`, `numeric_score`) is the server's, from
  * the partial credit (`gradeBandFor`): on the record for either source, and in
@@ -713,7 +719,8 @@ export const completeLocked = async (
         'incomplete',
         `${missing.length > 1 ? 'Questions' : 'Question'} ${missing.join(', ')} ` +
           `${missing.length > 1 ? 'have' : 'has'} no result. Record each one you presented once the ` +
-          'student has moved on from it; present any not yet presented. Then submit again.'
+          'student has moved on from it; present any not yet presented. Then submit again. ' +
+          '(If the student confirmed ending early, submit with ended_early instead.)'
       );
     }
     // The student's own message confirms an early end: never a button click.
@@ -726,6 +733,33 @@ export const completeLocked = async (
             ? 'this turn began with a button click. '
             : 'this turn has no student message. ') +
           'Leave ended_early out and carry on with the quiz.'
+      );
+    }
+    // A presented question with no result may have been answered: the model
+    // records it (answers [] if the student gave none) rather than the server
+    // scoring it 0 for good. A card that went out in this same turn has no
+    // answer yet, so it is filled like the unpresented ones.
+    const presented = attempt.questions_asked ?? 0;
+    const presentedThisTurn =
+      presented >= 1 &&
+      missing.includes(presented) &&
+      (await tx.quizAttemptEvent.findFirst({
+        where: {
+          attempt_id: attempt.id,
+          type: 'question_presented',
+          input_message_id: f.inputMessageId,
+          payload: { path: ['question_number'], equals: presented },
+        },
+        select: { id: true },
+      })) !== null;
+    const unrecorded = missing.filter(
+      n => n <= presented && !(n === presented && presentedThisTurn)
+    );
+    if (unrecorded.length > 0) {
+      throw new QuizGradingError(
+        'open_question_unrecorded',
+        `Record question ${unrecorded[0]} first (answers [] if the student gave none; student_asked_to_move_on: true), ` +
+          'then submit again with ended_early.'
       );
     }
     stored = await fillSkippedByEnd(tx, attempt, f, questionCount, missing);

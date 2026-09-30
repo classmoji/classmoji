@@ -400,12 +400,18 @@ describe('present_question', () => {
       "You already replied this turn; don't re-show the question. If the student answered, call offer_next_step."
     );
     // Open (no result yet) or recorded: either way it is the card already out.
-    for (const finalized of [[1], [1, 2]]) {
+    // Recorded, the refusal also names the next question to send.
+    for (const [finalized, message] of [
+      [[1], RESHOW_AFTER_TEXT],
+      [[1, 2], `${RESHOW_AFTER_TEXT} To show the next question, send question_number 3.`],
+    ] as const) {
       const { tools, grading, writes } = setup({
-        ctx: context({ progress: progressAt(2, finalized) }),
+        ctx: context({ progress: progressAt(2, [...finalized]) }),
         textWritten: () => true,
       });
-      await expect(call(tools, 'present_question', card)).rejects.toThrow(RESHOW_AFTER_TEXT);
+      const refusal = await call(tools, 'present_question', card).catch((e: Error) => e);
+      expect(refusal).toBeInstanceOf(Error);
+      expect((refusal as Error).message).toBe(message);
       expect(grading.presentQuestion).not.toHaveBeenCalled();
       expect(writes).toEqual([]);
       // The buttons are still open to the model after the refusal.
@@ -1452,7 +1458,7 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
     grading.completeWithEvaluation.mockRejectedValue(
       new QuizGradingError(
         'incomplete',
-        'Questions 3, 8 have no result. Record each one you presented once the student has moved on from it; present any not yet presented. Then submit again.'
+        'Questions 3, 8 have no result. Record each one you presented once the student has moved on from it; present any not yet presented. Then submit again. (If the student confirmed ending early, submit with ended_early instead.)'
       )
     );
     await expect(call(tools, 'submit_quiz_evaluation', {})).rejects.toThrow('Questions 3, 8');
