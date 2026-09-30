@@ -183,9 +183,26 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
   /** What a tool call in an admitted turn carries, minus the tool call id. */
   type Turn = { attemptId: string; fence: string; inputMessageId: string | null; runId: string };
 
+  /**
+   * Move the attempt's admissions back in time, as if the student had waited
+   * for each reply: admission refuses a message sent within
+   * MIN_TURN_INTERVAL_MS of the previous one.
+   */
+  const settle = (attemptId: string, agoMs = 10_000) =>
+    prisma.quizAttemptEvent.updateMany({
+      where: { attempt_id: attemptId, type: 'input_admitted' },
+      data: { created_at: new Date(Date.now() - agoMs) },
+    });
+
+  /** Admit a student message some time after the previous admission. */
+  const admit = async (i: Parameters<typeof chat.admitStudentMessage>[0]) => {
+    await settle(i.attemptId);
+    return chat.admitStudentMessage(i);
+  };
+
   /** Admit a student message; returns what a tool call in that turn carries. */
   const say = async (attemptId: string, text: string, id = msgId()) => {
-    const admitted = await chat.admitStudentMessage({ attemptId, message: { id, text }, runId });
+    const admitted = await admit({ attemptId, message: { id, text }, runId });
     return { attemptId, fence: admitted.fence, inputMessageId: admitted.inputMessageId, runId };
   };
 
@@ -452,7 +469,7 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     ).toBe('invalid_input');
   });
 
-  it('keeps the stored result within one turn, allows one revision in a later turn, then refuses', async () => {
+  it('keeps the stored result within one turn, and refuses any change to it in a later turn', async () => {
     const attemptId = await newAttempt();
     const turn = await begin(attemptId);
     await grading.presentQuestion(call(turn), question(1));
@@ -492,7 +509,7 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
 
     // A redelivery of turn A's message is still turn A: a re-run under a new
     // fence gets the stored result, whatever it rates.
-    const redelivered = await chat.admitStudentMessage({
+    const redelivered = await admit({
       attemptId,
       message: { id: turnA.inputMessageId, text: 'answer' },
       runId,
@@ -506,7 +523,7 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
       )
     ).toEqual(first);
 
-    // Later turn, same answers: nothing to revise.
+    // Later turn, same answers: the stored result.
     const turnB = await say(attemptId, 'I think my answer was complete');
     expect(
       await grading.finalizeQuestion(
@@ -515,42 +532,37 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
       )
     ).toEqual(first);
 
-    // Later turn, different answers: the one revision.
-    const revised = await grading.finalizeQuestion(
+    // Later turn, different answers: refused, and the stored result stands.
+    const changed = grading.finalizeQuestion(
       call(turnB),
-      result(1, [{ level: 'mostly_right', hints_before: 0 }], 'Revised on review.')
+      result(1, [{ level: 'mostly_right', hints_before: 0 }], 'Changed on review.')
     );
-    expect(revised).toEqual({
-      question_num: 1,
-      emoji: 'rocket',
-      brief_feedback: 'Revised on review.',
-      revised: true,
-    });
-    const stored = (await attemptRow(attemptId)).question_results_json as Record<string, unknown>[];
-    expect(stored[0]).toMatchObject({ credit_earned: 70, revised: true, emoji: 'rocket' });
-    const [revision] = await events(attemptId, 'result_revised');
-    expect(revision.payload).toMatchObject({
-      credit_earned: 70,
-      previous: { credit_earned: 40, emoji: 'seedling' },
-    });
-
-    // A third change in yet another turn is refused.
+    await expect(changed).rejects.toThrow(
+      "That question's result is final: question 1 is already recorded and cannot change. Do not record it again."
+    );
+    await expect(changed).rejects.toMatchObject({ code: 'revision_refused' });
+    expect(grading.RESULT_REVISIONS_ALLOWED).toBe(false);
+    // Nor in yet another turn.
     const turnC = await say(attemptId, 'and again');
     expect(
       await codeOf(
         grading.finalizeQuestion(call(turnC), result(1, [{ level: 'correct', hints_before: 0 }]))
       )
     ).toBe('revision_refused');
-    expect(await events(attemptId, 'result_revised')).toHaveLength(1);
+    expect(await events(attemptId, 'result_finalized')).toHaveLength(1);
+    expect(await events(attemptId, 'result_revised')).toHaveLength(0);
+    const stored = (await attemptRow(attemptId)).question_results_json as Record<string, unknown>[];
+    expect(stored[0]).toMatchObject({ credit_earned: 40, emoji: 'seedling' });
+    expect(stored[0].revised).toBeUndefined();
   });
 
-  it('refuses a revision in a Next turn, and allows it once the student answers again', async () => {
+  it('refuses a change in a later Next turn and in a turn where the student answers again', async () => {
     const attemptId = await newAttempt();
     const turn = await begin(attemptId);
     await grading.presentQuestion(call(turn), question(1));
     const answer = await say(attemptId, 'answer');
     const nextTurn = await say(attemptId, BUTTON_TEXT.next);
-    // The first record in the Next turn is not a revision.
+    // The first record, in the Next turn.
     const first = await grading.finalizeQuestion(
       call(nextTurn),
       result(1, [{ level: 'minimal', hints_before: 0 }])
@@ -568,8 +580,7 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
         )
       )
     ).toBe('revision_refused');
-    expect(await events(attemptId, 'result_revised')).toHaveLength(0);
-    // The same answers in a Next turn are still the stored result, not a revision.
+    // The same answers in a later turn are still the stored result.
     expect(
       await grading.finalizeQuestion(
         call(secondNext),
@@ -577,14 +588,23 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
       )
     ).toEqual(first);
 
-    // A turn where the student says something real may revise it, once.
+    // Nor can a turn where the student says something about the question.
     const real = await say(attemptId, 'I meant the flex container, not the item');
-    const revised = await grading.finalizeQuestion(
-      call(real),
-      result(1, [{ level: 'mostly_right', hints_before: 0 }])
-    );
-    expect(revised.revised).toBe(true);
-    expect(await events(attemptId, 'result_revised')).toHaveLength(1);
+    expect(
+      await codeOf(
+        grading.finalizeQuestion(
+          call(real),
+          result(1, [{ level: 'mostly_right', hints_before: 0 }])
+        )
+      )
+    ).toBe('revision_refused');
+    expect(await events(attemptId, 'result_revised')).toHaveLength(0);
+    const stored = (await attemptRow(attemptId)).question_results_json as Record<string, unknown>[];
+    expect(stored[0]).toMatchObject({
+      credit_earned: deriveResult([{ level: 'minimal', hints_before: 0 }]).credit_earned,
+      emoji: first.emoji,
+    });
+    expect(stored[0].revised).toBeUndefined();
   });
 
   it('serializes two racing records for the same question into one result', async () => {
@@ -1071,7 +1091,7 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     ]); // 85
     await grading.presentQuestion(call(turn), question(2));
     const id = msgId();
-    await chat.admitStudentMessage({ attemptId, message: { id, text: 'how am I doing?' }, runId });
+    await admit({ attemptId, message: { id, text: 'how am I doing?' }, runId });
     const admitted = (await chat.loadCanonicalMessages(attemptId)).find(m => m.id === id);
     const status = admitted?.parts[1] as { type: string; text: string } | undefined;
     expect(status?.text).toContain(
@@ -1085,7 +1105,7 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     const attemptId = await newAttempt();
     const before = await attemptRow(attemptId);
     const id = msgId();
-    const admitted = await chat.admitStudentMessage({
+    const admitted = await admit({
       attemptId,
       message: { id, text: 'hi' },
       runId,
@@ -1115,13 +1135,13 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
 
   it('tags the button texts with their action', async () => {
     const attemptId = await newAttempt();
-    const tryAgain = await chat.admitStudentMessage({
+    const tryAgain = await admit({
       attemptId,
       message: { id: msgId(), text: BUTTON_TEXT.try_again },
       runId,
     });
     expect(tryAgain.action).toBe('try_again');
-    const next = await chat.admitStudentMessage({
+    const next = await admit({
       attemptId,
       message: { id: msgId(), text: BUTTON_TEXT.next },
       runId,
@@ -1148,14 +1168,14 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     // The answer, then a side question and an argument: no action on either.
     for (const text of ['It lines them up.', "Why won't you grade that?", 'That seems unfair.']) {
       const id = msgId();
-      const admitted = await chat.admitStudentMessage({ attemptId, message: { id, text }, runId });
+      const admitted = await admit({ attemptId, message: { id, text }, runId });
       expect(admitted.action).toBeUndefined();
       expect(await statusOf(id)).not.toMatch(/The student clicked/);
     }
 
     // The buttons above, clicked now: Try again, then Next, as right after the feedback.
     const tryAgainId = msgId();
-    const tryAgain = await chat.admitStudentMessage({
+    const tryAgain = await admit({
       attemptId,
       message: { id: tryAgainId, text: BUTTON_TEXT.try_again },
       runId,
@@ -1163,7 +1183,7 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     expect(tryAgain.action).toBe('try_again');
     expect(await statusOf(tryAgainId)).toContain('The student clicked Try again.');
     const nextId = msgId();
-    const next = await chat.admitStudentMessage({
+    const next = await admit({
       attemptId,
       message: { id: nextId, text: BUTTON_TEXT.next },
       runId,
@@ -1216,7 +1236,7 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     await say(attemptId, BUTTON_TEXT.try_again);
     await reply('r4', [hint]);
     const nextId = msgId();
-    const admitted = await chat.admitStudentMessage({
+    const admitted = await admit({
       attemptId,
       message: { id: nextId, text: BUTTON_TEXT.next },
       runId,
@@ -1305,7 +1325,7 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     ];
     const actions: Array<string | undefined> = [];
     for (const text of typed) {
-      const admitted = await chat.admitStudentMessage({
+      const admitted = await admit({
         attemptId,
         message: { id: msgId(), text },
         runId,
@@ -1322,12 +1342,12 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
   it('treats the same id and text as a re-delivery, and refuses the same id with other text', async () => {
     const attemptId = await newAttempt();
     const id = msgId();
-    const first = await chat.admitStudentMessage({
+    const first = await admit({
       attemptId,
       message: { id, text: 'same' },
       runId,
     });
-    const again = await chat.admitStudentMessage({
+    const again = await admit({
       attemptId,
       message: { id, text: 'same' },
       runId,
@@ -1338,7 +1358,7 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     expect(await chat.loadCanonicalMessages(attemptId)).toHaveLength(1);
     expect(await events(attemptId, 'input_admitted')).toHaveLength(1);
 
-    const changed = chat.admitStudentMessage({ attemptId, message: { id, text: 'other' }, runId });
+    const changed = admit({ attemptId, message: { id, text: 'other' }, runId });
     expect(await codeOf(changed)).toBe('message_conflict');
     expect((await attemptRow(attemptId)).turn_fence).toBe(again.fence);
   });
@@ -1347,22 +1367,22 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     const attemptId = await newAttempt();
     const m1 = msgId();
     const m2 = msgId();
-    await chat.admitStudentMessage({ attemptId, message: { id: m1, text: 'one' }, runId });
-    const second = await chat.admitStudentMessage({
+    await admit({ attemptId, message: { id: m1, text: 'one' }, runId });
+    const second = await admit({
       attemptId,
       message: { id: m2, text: 'two' },
       runId,
     });
 
-    const older = chat.admitStudentMessage({ attemptId, message: { id: m1, text: 'one' }, runId });
+    const older = admit({ attemptId, message: { id: m1, text: 'one' }, runId });
     expect(await codeOf(older)).toBe('message_conflict');
-    expect(
-      await kindOf(chat.admitStudentMessage({ attemptId, message: { id: m1, text: 'one' }, runId }))
-    ).toBe('temporary');
+    expect(await kindOf(admit({ attemptId, message: { id: m1, text: 'one' }, runId }))).toBe(
+      'temporary'
+    );
     // The refused re-delivery took no turn: the fence is still the second message's.
     expect((await attemptRow(attemptId)).turn_fence).toBe(second.fence);
 
-    const latest = await chat.admitStudentMessage({
+    const latest = await admit({
       attemptId,
       message: { id: m2, text: 'two' },
       runId,
@@ -1395,7 +1415,7 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     // A turn whose run wrote nothing yet (a crash, a handover) runs again.
     const crashedId = msgId();
     await say(attemptId, 'third', crashedId);
-    const again = await chat.admitStudentMessage({
+    const again = await admit({
       attemptId,
       message: { id: crashedId, text: 'third' },
       runId,
@@ -1409,7 +1429,7 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     );
     expect(
       (
-        await chat.admitStudentMessage({
+        await admit({
           attemptId,
           message: { id: crashedId, text: 'third' },
           runId,
@@ -1553,26 +1573,148 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
       { id: msgId(), text: 'x'.repeat(chat.MAX_STUDENT_MESSAGE_CHARS + 1) },
     ];
     for (const message of bad) {
-      const p = chat.admitStudentMessage({ attemptId, message, runId });
+      const p = admit({ attemptId, message, runId });
       expect(await codeOf(p)).toBe('invalid_message');
     }
     expect(await events(attemptId)).toHaveLength(0);
   });
 
-  it('sets no limit on the messages of an attempt, as the previous runtime did', async () => {
+  it('admits 200 student messages in an attempt, clicks included, and refuses the next for good', async () => {
+    expect(chat.MAX_STUDENT_TURNS).toBe(200);
     const attemptId = await newAttempt({ agent_config: { questionCount: 1 } });
     await begin(attemptId);
-    // Well past 16 messages and 32 turns for a one-question attempt.
+    // Messages and clicks alike, well past any per-question count.
     for (let i = 0; i < 20; i++) await say(attemptId, `m${i}`);
     for (let i = 0; i < 16; i++) {
       await say(attemptId, i % 2 === 0 ? BUTTON_TEXT.try_again : BUTTON_TEXT.next);
     }
-    expect((await say(attemptId, 'one more')).fence).toBeTruthy();
-    expect(await events(attemptId, 'input_admitted')).toHaveLength(38);
+    expect(await events(attemptId, 'input_admitted')).toHaveLength(37);
+    // The journal as 199 admitted messages would leave it (the begin action
+    // does not count), then the 200th through admission.
+    const seeded = 199 - 36;
+    await prisma.quizAttemptEvent.createMany({
+      data: Array.from({ length: seeded }, (_, k) => ({
+        attempt_id: attemptId,
+        seq: 1_000 + k,
+        type: 'input_admitted',
+        operation_id: `seeded-${k}`,
+        input_message_id: `seeded-${k}`,
+        payload: { kind: 'message' },
+      })),
+    });
+    const lastId = msgId();
+    const last = await say(attemptId, 'the 200th', lastId);
+    expect(last.fence).toBeTruthy();
+
+    const fence = (await attemptRow(attemptId)).turn_fence;
+    for (const text of ['one more', BUTTON_TEXT.next]) {
+      const refused = say(attemptId, text);
+      await expect(refused).rejects.toMatchObject({ code: 'turn_limit', kind: 'permanent' });
+    }
+    // Refused: no new turn, no new admission.
+    expect((await attemptRow(attemptId)).turn_fence).toBe(fence);
+    const admitted = await events(attemptId, 'input_admitted');
+    expect(admitted.filter(e => (e.payload as { kind?: string }).kind === 'message')).toHaveLength(
+      200
+    );
+    // The 200th is still re-delivered: a re-delivery is not a new turn.
+    expect(
+      (await admit({ attemptId, message: { id: lastId, text: 'the 200th' }, runId })).status
+    ).toBe('redelivered');
     expect((await attemptRow(attemptId)).completed_at).toBeNull();
-    expect(chat).not.toHaveProperty('TURNS_PER_QUESTION');
-    expect(chat).not.toHaveProperty('TURN_CEILING_PER_QUESTION');
   }, 30_000);
+
+  it('refuses a message sent within 3 s of the previous admission, for now, and admits it later', async () => {
+    expect(chat.MIN_TURN_INTERVAL_MS).toBe(3_000);
+    const attemptId = await newAttempt();
+    const turn = await begin(attemptId);
+    await grading.presentQuestion(call(turn), question(1));
+
+    // Straight after the begin action, and straight after a message.
+    const early = chat.admitStudentMessage({
+      attemptId,
+      message: { id: msgId(), text: 'my answer' },
+      runId,
+    });
+    await expect(early).rejects.toMatchObject({ code: 'too_fast', kind: 'temporary' });
+    const answer = await say(attemptId, 'my answer');
+    const fence = (await attemptRow(attemptId)).turn_fence;
+    for (const text of ['one more thing', BUTTON_TEXT.next, BUTTON_TEXT.try_again]) {
+      await expect(
+        chat.admitStudentMessage({ attemptId, message: { id: msgId(), text }, runId })
+      ).rejects.toMatchObject({ code: 'too_fast', kind: 'temporary' });
+    }
+    // Refused: no new turn, no new admission, no message stored.
+    expect((await attemptRow(attemptId)).turn_fence).toBe(fence);
+    expect(await events(attemptId, 'input_admitted')).toHaveLength(2);
+    expect(await chat.loadCanonicalMessages(attemptId)).toHaveLength(1);
+    // A re-delivery of the message just admitted is not a new turn.
+    expect(
+      (
+        await chat.admitStudentMessage({
+          attemptId,
+          message: { id: answer.inputMessageId, text: 'my answer' },
+          runId,
+        })
+      ).status
+    ).toBe('redelivered');
+
+    // A refused message does not restart the wait: once 3 s have passed since
+    // the admission, the next message is admitted.
+    await settle(attemptId, 3_100);
+    const next = await chat.admitStudentMessage({
+      attemptId,
+      message: { id: msgId(), text: BUTTON_TEXT.next },
+      runId,
+    });
+    expect(next).toMatchObject({ status: 'admitted', action: 'next' });
+  });
+
+  it('times the wait from the previous admission, not from the reply to it', async () => {
+    const attemptId = await newAttempt();
+    const turn = await begin(attemptId);
+    await grading.presentQuestion(call(turn), question(1));
+    await say(attemptId, 'my answer');
+    // The reply took 4 s and was saved just now; the Next click follows at once.
+    await settle(attemptId, 4_000);
+    await chat.persistAssistantMessage(
+      attemptId,
+      { id: 'reply-1', role: 'assistant', parts: [{ type: 'text', text: 'Correct.' }] } as never,
+      { final: true }
+    );
+    const next = await chat.admitStudentMessage({
+      attemptId,
+      message: { id: msgId(), text: BUTTON_TEXT.next },
+      runId,
+    });
+    expect(next).toMatchObject({ status: 'admitted', action: 'next' });
+  });
+
+  it('admits a normal answer, Next and answer flow at the pace of real replies', async () => {
+    const attemptId = await newAttempt();
+    const turn = await begin(attemptId);
+    await grading.presentQuestion(call(turn), question(1));
+    // Each message a few seconds after the previous admission, as the shortest
+    // real reply allows: none is refused.
+    const flow = [
+      'my answer',
+      BUTTON_TEXT.try_again,
+      'better answer',
+      BUTTON_TEXT.next,
+      'answer 2',
+    ];
+    for (const text of flow) {
+      await settle(attemptId, 3_500);
+      const admitted = await chat.admitStudentMessage({
+        attemptId,
+        message: { id: msgId(), text },
+        runId,
+      });
+      expect(admitted.status).toBe('admitted');
+    }
+    expect(await events(attemptId, 'input_admitted')).toHaveLength(1 + flow.length);
+    expect(await events(attemptId, 'turn_refused')).toHaveLength(0);
+  });
 
   it('refuses an expired attempt, a completed one and a legacy one permanently', async () => {
     const expired = await newAttempt({ session_expires_at: new Date(Date.now() - 1000) });

@@ -94,11 +94,13 @@ export const isQuizGradingError = (error: unknown): error is QuizGradingError =>
 export const TRIGGER_CHAT_RUNTIME = 'trigger_chat';
 
 /**
- * Q16: one revision per question, in a later admitted turn, before completion.
- * Slice cut 2 turns this off, which refuses any second record for a question
- * that differs from the stored one.
+ * Q16, decided: a question's result is final once it is recorded (the student
+ * moved on). A later record for it that differs from the stored one is
+ * refused (`revision_refused`). Results written while this was on can still
+ * carry `revised: true` and a `result_revised` journal row; they are read and
+ * shown as stored.
  */
-export const RESULT_REVISIONS_ALLOWED = true;
+export const RESULT_REVISIONS_ALLOWED = false;
 
 /** Operation id of the server completion (Q17). One completion per attempt. */
 export const SERVER_COMPLETION_OPERATION_ID = 'completion:server';
@@ -563,8 +565,8 @@ const writeProjection = async (
  *   its own call had been kept.
  * - Different answers in a re-run of that turn (a redelivered message: same
  *   input message, new fence) → the stored result; the earlier run's stands.
- * - Different answers in a later turn, before completion → one revision
- *   (`result_revised`, old and new values); any further change is refused.
+ * - Different answers in a later turn → refused (`revision_refused`): the
+ *   result is final (`RESULT_REVISIONS_ALLOWED`).
  */
 export const finalizeQuestion = (
   f: Fenced,
@@ -634,26 +636,18 @@ export const finalizeQuestion = (
           }
           return storedOutput<QuestionResultOutput>(latest);
         }
-        // A revision follows something the student said about the question,
-        // never the Next click alone.
+        // A recorded result is final. With RESULT_REVISIONS_ALLOWED, a change
+        // would follow something the student said about the question (never
+        // the Next click alone), once.
         if (
-          RESULT_REVISIONS_ALLOWED &&
-          (await admittedAction(tx, attempt.id, f.inputMessageId)) === 'next'
+          !RESULT_REVISIONS_ALLOWED ||
+          (await admittedAction(tx, attempt.id, f.inputMessageId)) === 'next' ||
+          history.some(e => e.type === 'result_revised')
         ) {
           throw new QuizGradingError(
             'revision_refused',
-            `The result for question ${question_num} is already recorded and cannot change in this turn: ` +
-              'the student clicked Next. A recorded result can be revised once, only in a turn where the ' +
-              'student gives a new answer to that question.'
-          );
-        }
-        const alreadyRevised = history.some(e => e.type === 'result_revised');
-        if (!RESULT_REVISIONS_ALLOWED || alreadyRevised) {
-          throw new QuizGradingError(
-            'revision_refused',
-            RESULT_REVISIONS_ALLOWED
-              ? `The result for question ${question_num} was already revised once and cannot change again.`
-              : `The result for question ${question_num} is already recorded and cannot change.`
+            `That question's result is final: question ${question_num} is already recorded and ` +
+              'cannot change. Do not record it again.'
           );
         }
       }

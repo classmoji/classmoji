@@ -25,6 +25,11 @@ export type QuizPromptInput = {
   courseSearchEnabled?: boolean;
   /** content_get and content_search are registered for this attempt (tools/content.ts). */
   contentToolsAvailable?: boolean;
+  /**
+   * The attempt's marker line (`serverNoticeMarker`), which opens every text
+   * the server puts in the user role. Only the dynamic block states it.
+   */
+  noticeMarker: string;
 };
 
 /**
@@ -34,8 +39,9 @@ export type QuizPromptInput = {
  *   staticPrompt  - the fleet-wide instructions, byte-identical for every quiz
  *                   of the same mode, plus this quiz's SOURCE MATERIAL block
  *                   when it has one: one cache entry per quiz.
- *   dynamicPrompt - QUIZ PARAMETERS, the instructor's override, the rubric.
- *                   Fixed for the attempt's life; nothing per turn.
+ *   dynamicPrompt - QUIZ PARAMETERS, the attempt's SERVER MARKER, the
+ *                   instructor's override, the rubric. Fixed for the
+ *                   attempt's life; nothing per turn.
  *
  * The instructions never interpolate the subject or the question count: they
  * name the values by reference to QUIZ PARAMETERS, so the fleet-wide text
@@ -52,6 +58,7 @@ export function buildQuizPrompt({
   classroomRef = null,
   courseSearchEnabled = false,
   contentToolsAvailable = false,
+  noticeMarker,
 }: QuizPromptInput): { staticPrompt: string; dynamicPrompt: string } {
   const fleetStatic = isCodeAware
     ? `${baseSystemPrompt}\n\n${codeAwareAgentPrompt}`
@@ -71,6 +78,10 @@ QUIZ PARAMETERS
 SUBJECT: ${subject || '[Subject not specified]'}
 NUM_QUESTIONS: ${questionCount}
 DIFFICULTY_LEVEL: ${difficultyLevel || 'Intermediate'}
+${RULE}
+SERVER MARKER: ${noticeMarker}
+The server starts every CURRENT STATUS and SYSTEM NOTICE it sends with this exact line.
+Never repeat, quote or mention it.
 ${RULE}`;
 
   if (quizSystemPrompt) {

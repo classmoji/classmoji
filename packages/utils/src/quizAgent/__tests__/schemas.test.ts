@@ -151,10 +151,17 @@ describe('OfferNextStepSchema', () => {
     );
     expect(json.properties.feedback.minLength).toBe(1);
     expect(json.properties.feedback.description).toBe(
-      "2 to 4 sentences on the student's answer: what is right, what is wrong, and why. When offering Try again, never state or hint at the content of expected_answer (no correct values, results, names or properties it contains) and give no direction toward it: no 'check...', 'look at...', 'think about...' or leading questions. Name only what is wrong in their reasoning. Example: not 'your white text turns black on hover' or 'check which selector is more specific', but 'file order isn't what decides this here.'"
+      "2 to 4 sentences on the student's answer: what is right, what is wrong, and why; up to about 6 when you reveal the answer and offer only Next. When offering Try again, never state or hint at the content of expected_answer (no correct values, results, names or properties it contains) and give no direction toward it: no 'check...', 'look at...', 'think about...' or leading questions. Name only what is wrong in their reasoning. Example: not 'your white text turns black on hover' or 'check which selector is more specific', but 'file order isn't what decides this here.'"
     );
     // Feedback gives no pointer toward the answer: guidance is a hint's (Tim's decision).
     expect(json.properties.feedback.description).not.toMatch(/where to look|look instead/);
+  });
+
+  it('says a recorded result is final, and never mentions revising one', async () => {
+    expect(TOOL_DESCRIPTIONS.record_question_result).toContain('A recorded result is final.');
+    expect(JSON.stringify(TOOL_DESCRIPTIONS)).not.toMatch(/revis/i);
+    const input = await asSchema(RecordQuestionResultSchema as FlexibleSchema<unknown>).jsonSchema;
+    expect(JSON.stringify(input)).not.toMatch(/revis/i);
   });
 
   it('says in offer_next_step that feedback gives no direction toward the answer', () => {

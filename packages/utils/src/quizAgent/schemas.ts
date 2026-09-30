@@ -147,11 +147,7 @@ export const AnswerSchema = z.object({
 });
 
 export const RecordQuestionResultSchema = z.object({
-  question_num: z
-    .number()
-    .int()
-    .min(1)
-    .describe('The question the student is moving on from (or whose result you revise).'),
+  question_num: z.number().int().min(1).describe('The question the student is moving on from.'),
   answers: z
     .array(AnswerSchema)
     .refine(
@@ -252,7 +248,7 @@ export const OfferNextStepSchema = z.object({
     .trim()
     .min(1, 'feedback must not be empty')
     .describe(
-      "2 to 4 sentences on the student's answer: what is right, what is wrong, and why. When offering Try again, never state or hint at the content of expected_answer (no correct values, results, names or properties it contains) and give no direction toward it: no 'check...', 'look at...', 'think about...' or leading questions. Name only what is wrong in their reasoning. Example: not 'your white text turns black on hover' or 'check which selector is more specific', but 'file order isn't what decides this here.'"
+      "2 to 4 sentences on the student's answer: what is right, what is wrong, and why; up to about 6 when you reveal the answer and offer only Next. When offering Try again, never state or hint at the content of expected_answer (no correct values, results, names or properties it contains) and give no direction toward it: no 'check...', 'look at...', 'think about...' or leading questions. Name only what is wrong in their reasoning. Example: not 'your white text turns black on hover' or 'check which selector is more specific', but 'file order isn't what decides this here.'"
     ),
   actions: NextStepActionsSchema,
 });
@@ -319,6 +315,7 @@ export const QuestionResultOutputSchema = z.object({
   question_num: z.number(),
   emoji: z.string(),
   brief_feedback: z.string(),
+  /** Set only on a result revised before results became final; still stored and shown. */
   revised: z.literal(true).optional(),
 });
 export type QuestionResultOutput = z.infer<typeof QuestionResultOutputSchema>;

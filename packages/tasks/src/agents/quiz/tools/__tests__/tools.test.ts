@@ -33,6 +33,7 @@ const {
   RECORD_BEFORE_ANSWER_TEXT,
   RECORD_BEFORE_NEXT_TEXT,
   RESHOW_AFTER_TEXT,
+  RESHOW_ON_HINT_TEXT,
   recordBeforePresentText,
   editLimitText,
   TURN_STOPPED_TEXT,
@@ -429,6 +430,32 @@ describe('present_question', () => {
     }
   });
 
+  it('refuses to show the current question again in a Try again turn, text or not, writing nothing', async () => {
+    expect(RESHOW_ON_HINT_TEXT).toBe(
+      'This is a hint turn: give the hint as text; don\'t show the question again. If your reply already gives the hint, end it there; otherwise give exactly one hint and end with a question such as "What do you think?".'
+    );
+    for (const written of [false, true]) {
+      const { tools, grading, writes } = setup({
+        ctx: context({ progress: progressAt(2, [1]), lastAction: 'try_again' }),
+        textWritten: () => written,
+      });
+      const refusal = await call(tools, 'present_question', card).catch((e: Error) => e);
+      expect(refusal).toBeInstanceOf(Error);
+      expect((refusal as Error).message).toBe(RESHOW_ON_HINT_TEXT);
+      expect(grading.presentQuestion).not.toHaveBeenCalled();
+      expect(writes).toEqual([]);
+    }
+    // Outside a Try again turn, a re-show at the start of the reply still goes to the service.
+    const { tools, grading } = setup({
+      ctx: context({ progress: progressAt(2, [1]), lastAction: 'next' }),
+      textWritten: () => false,
+    });
+    grading.presentQuestion.mockResolvedValue({ card, question_number: 2, total_questions: 8 });
+    await expect(call(tools, 'present_question', card)).resolves.toMatchObject({
+      question_number: 2,
+    });
+  });
+
   it('still presents a new question after text, and a card it put out this turn again', async () => {
     const { tools, grading } = setup({
       ctx: context({ progress: progressAt(2, [1, 2]) }),
@@ -473,7 +500,7 @@ describe('record_question_result', () => {
     ]);
   });
 
-  it('gives a revision its own divider id', () => {
+  it('gives a result revised before results became final its own divider id', () => {
     expect(
       questionResultPartId({ question_num: 2, emoji: 'x', brief_feedback: 'y', revised: true })
     ).toBe('question-result-2-revised');
@@ -482,10 +509,13 @@ describe('record_question_result', () => {
   it('writes no divider when the service refuses', async () => {
     const { tools, grading, writes } = setup();
     grading.finalizeQuestion.mockRejectedValue(
-      new QuizGradingError('revision_refused', 'Question 1 was already revised once.')
+      new QuizGradingError(
+        'revision_refused',
+        "That question's result is final: question 1 is already recorded and cannot change. Do not record it again."
+      )
     );
     await expect(call(tools, 'record_question_result', RECORD)).rejects.toThrow(
-      'already revised once'
+      "That question's result is final"
     );
     expect(writes).toEqual([]);
   });
@@ -652,17 +682,12 @@ describe('record_question_result', () => {
       expect(writes).toHaveLength(1);
     });
 
-    it('leaves a result already recorded (a revision) to the service', async () => {
+    it('leaves a question that already has a result to the service', async () => {
       const { tools, grading } = setup({ ctx: onQuestion2() });
-      grading.finalizeQuestion.mockResolvedValue({
-        question_num: 1,
-        emoji: 'x',
-        brief_feedback: 'y',
-        revised: true,
-      });
-      await expect(call(tools, 'record_question_result', RECORD)).resolves.toMatchObject({
-        revised: true,
-      });
+      const stored = { question_num: 1, emoji: 'x', brief_feedback: 'y' };
+      grading.finalizeQuestion.mockResolvedValue(stored);
+      await expect(call(tools, 'record_question_result', RECORD)).resolves.toEqual(stored);
+      expect(grading.finalizeQuestion).toHaveBeenCalledTimes(1);
     });
   });
 });

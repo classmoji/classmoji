@@ -9,6 +9,7 @@ import getPrisma from '@classmoji/database';
 import { ClassmojiService, getGitProvider } from '@classmoji/services';
 import type { AttemptProgress } from '@classmoji/utils/quiz-agent';
 import { buildQuizPrompt, quizWelcome, usableMaterial } from './prompt/index.ts';
+import { serverNoticeMarker } from './serverNotice.ts';
 import { resolveQuizRunSettings, type Effort } from './settings.ts';
 
 export type GitOrgLike = Parameters<typeof getGitProvider>[0];
@@ -263,6 +264,7 @@ async function loadStableParts(
     classroomRef,
     courseSearchEnabled,
     contentToolsAvailable: content !== null,
+    noticeMarker: serverNoticeMarker(attempt.id),
   });
 
   const parts: StableParts = {

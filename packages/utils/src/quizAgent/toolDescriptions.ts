@@ -24,7 +24,7 @@ export const TOOL_DESCRIPTIONS = {
     'Call it first in that turn, before any prepare_next exploration, present_question or submit_quiz_evaluation. ' +
     'An answer, even a correct one, is not moving on; recording then is refused. ' +
     'List each real answer in order (see answers); [] if they skipped without answering. ' +
-    'A recorded result can be revised once, in a later turn where the student gives a new answer to that question; never on a Next turn. ' +
+    'A recorded result is final. ' +
     'The server scores; never mention the result.',
 
   offer_next_step:

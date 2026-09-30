@@ -13,8 +13,9 @@
  * `<token>` is 24 lowercase hex characters. The token is never stored and
  * never streamed: it is added to each request, the same bytes every turn of
  * the attempt, so the prompt cache keeps hitting. The per-attempt system
- * block states the marker (`serverNoticeMarker`), and admission refuses
- * student text that uses the reserved words (quizChat.service).
+ * block (`buildQuizPrompt`'s dynamic block, never the static one shared
+ * across attempts) states the marker as its SERVER MARKER line, and admission
+ * refuses student text that uses the reserved words (quizChat.service).
  */
 import { createHmac, randomBytes } from 'node:crypto';
 import type { ModelMessage } from 'ai';

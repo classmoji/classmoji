@@ -60,7 +60,9 @@ export type QuizChatRefusalCode =
   | 'classroom_unpublished'
   | 'quiz_unavailable'
   | 'session_ended'
-  | 'reserved_text';
+  | 'reserved_text'
+  | 'turn_limit'
+  | 'too_fast';
 
 /** A refused turn. The caller picks the copy; `message` is for logs only. */
 export class QuizChatRefusal extends Error {
@@ -83,11 +85,24 @@ export const isQuizChatRefusal = (error: unknown): error is QuizChatRefusal =>
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-/**
- * Longest student message admitted, in characters. There is no limit on the
- * number of messages in an attempt, as in the previous runtime.
- */
+/** Longest student message admitted, in characters. */
 export const MAX_STUDENT_MESSAGE_CHARS = 10_000;
+
+/**
+ * The most student messages (button clicks included) one attempt admits: a
+ * safety net far above what any quiz takes, not a budget a student works
+ * within. The next one is refused for good (`turn_limit`).
+ */
+export const MAX_STUDENT_TURNS = 200;
+
+/**
+ * The shortest time between two admitted turns of one attempt, measured from
+ * the previous admission (its journal row), not from the reply to it. The chat
+ * sends nothing while a reply is running and a reply takes longer than this,
+ * so only a scripted sender meets it. A message sent sooner is refused for
+ * now (`too_fast`); the session stays open.
+ */
+export const MIN_TURN_INTERVAL_MS = 3_000;
 
 /** Browser message ids. Server-made ids contain `:` and never match. */
 export const CLIENT_MESSAGE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -309,6 +324,35 @@ const revalidate = async (
 };
 
 /**
+ * The per-attempt safety net for a new student message, read from the journal
+ * under the attempt row lock, so it holds across processes:
+ * - the attempt has admitted `MAX_STUDENT_TURNS` student messages already
+ *   (`turn_limit`, permanent: the count never goes down);
+ * - the attempt's previous admission (a message or the begin action) is less
+ *   than `MIN_TURN_INTERVAL_MS` before `now` (`too_fast`, temporary). A
+ *   refused message is not an admission, so it does not restart the wait.
+ * A re-delivered message is neither: it is not a new turn.
+ */
+const checkTurnPace = async (tx: Tx, attemptId: string, now: Date): Promise<void> => {
+  const admitted = await tx.quizAttemptEvent.count({
+    where: {
+      attempt_id: attemptId,
+      type: 'input_admitted',
+      payload: { path: ['kind'], equals: 'message' },
+    },
+  });
+  if (admitted >= MAX_STUDENT_TURNS) throw new QuizChatRefusal('permanent', 'turn_limit');
+  const previous = await tx.quizAttemptEvent.findFirst({
+    where: { attempt_id: attemptId, type: 'input_admitted' },
+    orderBy: { seq: 'desc' },
+    select: { created_at: true },
+  });
+  if (previous && now.getTime() - previous.created_at.getTime() < MIN_TURN_INTERVAL_MS) {
+    throw new QuizChatRefusal('temporary', 'too_fast');
+  }
+};
+
+/**
  * The action a new message's text names: a button's text, trimmed and in any
  * case (a typed "Next" is the Next button), whatever came before it (a click
  * after a side question is the same click). A re-delivered message keeps the
@@ -338,6 +382,9 @@ type AdmittedMessage = {
  *   saved a partial reply (stopped or failed), which is refused;
  * - an id already used with different text, or an older admitted id, is
  *   refused (`message_conflict`);
+ * - a new message past the attempt's safety net is refused (`checkTurnPace`:
+ *   `turn_limit`, or `too_fast` within `MIN_TURN_INTERVAL_MS` of the
+ *   previous admission);
  * - otherwise the user row is written with parts `[student text, turn status]`
  *   (`metadata.hiddenPartIndexes: [1]`, and `action` when the text is a
  *   button's), an `input_admitted` journal row, and a fresh fence.
@@ -444,6 +491,7 @@ export const admitStudentMessage = async (i: {
       select: { id: true },
     });
     if (clash) throw new QuizChatRefusal('temporary', 'message_conflict');
+    await checkTurnPace(tx, attempt.id, now);
 
     // The status the model reads with this message: progress as of now, with
     // this message's own action (not the previous turn's) as the last action.

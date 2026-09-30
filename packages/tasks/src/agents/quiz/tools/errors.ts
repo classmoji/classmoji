@@ -30,6 +30,14 @@ export const OFFER_AFTER_QUESTION_TEXT =
 export const OFFER_AFTER_HINT_TEXT =
   'This is a hint turn: write the hint as your reply text, with no offer_next_step or present_question. Give exactly one hint and end with a question such as "What do you think?".';
 
+/**
+ * present_question refused: it would show the current question's card again
+ * in a turn the student opened with Try again. The card would end the turn,
+ * and the hint the student asked for would never be written.
+ */
+export const RESHOW_ON_HINT_TEXT =
+  'This is a hint turn: give the hint as text; don\'t show the question again. If your reply already gives the hint, end it there; otherwise give exactly one hint and end with a question such as "What do you think?".';
+
 /** offer_next_step refused because buttons already went out in this turn. */
 export const OFFER_TWICE_TEXT =
   'Your feedback and the buttons are already shown. End your reply now.';

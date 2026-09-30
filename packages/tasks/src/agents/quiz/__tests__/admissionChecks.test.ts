@@ -59,6 +59,7 @@ describe('per-turn refusals', () => {
     ['quiz_unavailable', "This quiz isn't available right now."],
     ['session_ended', 'Your session has ended.'],
     ['reserved_text', "That message couldn't be sent. Please rephrase it."],
+    ['too_fast', 'One message at a time, please. Send it again in a moment.'],
   ])('refuses %s with its fixed line and keeps the session open', async (code, copy) => {
     expect(QUIZ_REFUSAL_COPY[code]).toBe(copy);
     expect(QUIZ_AGENT_ERROR_COPY).toContain(copy);
@@ -76,6 +77,30 @@ describe('per-turn refusals', () => {
       expect(d.onPermanentRefusal).not.toHaveBeenCalled();
       expect(d.loadCanonicalMessages).not.toHaveBeenCalled();
     }
+  });
+
+  it('refuses a message past the per-attempt cap for good, journals it and closes the session', async () => {
+    const copy = 'This attempt has reached its message limit.';
+    expect(QUIZ_REFUSAL_COPY.turn_limit).toBe(copy);
+    expect(QUIZ_AGENT_ERROR_COPY).toContain(copy);
+    const d = deps(refusal('permanent', 'turn_limit'));
+    const error = await admitTurn(
+      'attempt-1',
+      { trigger: 'submit-message', incomingMessages: [message('one more')] },
+      'run_1',
+      d
+    ).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(QuizTurnError);
+    expect((error as QuizTurnError).message).toBe(copy);
+    expect((error as QuizTurnError).refusal).toBe('permanent');
+    expect(d.recordTurnRefused).toHaveBeenCalledWith('attempt-1', 'turn_limit', 'run_1');
+    expect(d.onPermanentRefusal).toHaveBeenCalledTimes(1);
+    expect(d.loadCanonicalMessages).not.toHaveBeenCalled();
+  });
+
+  it('sets the cap and the pace in the services, far from what a student meets', () => {
+    expect(ClassmojiService.quizChat.MAX_STUDENT_TURNS).toBe(200);
+    expect(ClassmojiService.quizChat.MIN_TURN_INTERVAL_MS).toBe(3_000);
   });
 
   it("uses the services' reserved-text rule, which admits ordinary uses of the words", () => {

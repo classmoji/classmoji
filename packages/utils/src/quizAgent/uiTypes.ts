@@ -11,6 +11,7 @@ export const QuestionResultDataSchema = z.object({
   question_num: z.number(),
   emoji: z.string(),
   brief_feedback: z.string(),
+  /** Only on a result revised before results became final; older attempts still carry it. */
   revised: z.literal(true).optional(),
 });
 
