@@ -1117,6 +1117,44 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     ]);
   });
 
+  it('takes a click after a side question as the same click, with its status line', async () => {
+    const attemptId = await newAttempt();
+    const turn = await begin(attemptId);
+    await grading.presentQuestion(call(turn), question(1));
+    const statusOf = async (id: string) =>
+      (
+        (await chat.loadCanonicalMessages(attemptId)).find(m => m.id === id)?.parts[1] as {
+          text: string;
+        }
+      ).text;
+
+    // The answer, then a side question and an argument: no action on either.
+    for (const text of ['It lines them up.', "Why won't you grade that?", 'That seems unfair.']) {
+      const id = msgId();
+      const admitted = await chat.admitStudentMessage({ attemptId, message: { id, text }, runId });
+      expect(admitted.action).toBeUndefined();
+      expect(await statusOf(id)).not.toMatch(/The student clicked/);
+    }
+
+    // The buttons above, clicked now: Try again, then Next, as right after the feedback.
+    const tryAgainId = msgId();
+    const tryAgain = await chat.admitStudentMessage({
+      attemptId,
+      message: { id: tryAgainId, text: BUTTON_TEXT.try_again },
+      runId,
+    });
+    expect(tryAgain.action).toBe('try_again');
+    expect(await statusOf(tryAgainId)).toContain('The student clicked Try again.');
+    const nextId = msgId();
+    const next = await chat.admitStudentMessage({
+      attemptId,
+      message: { id: nextId, text: BUTTON_TEXT.next },
+      runId,
+    });
+    expect(next.action).toBe('next');
+    expect(await statusOf(nextId)).toContain('The student clicked Next.');
+  });
+
   it('tags a typed button text in any case, with spaces around it', async () => {
     const attemptId = await newAttempt();
     const typed = [

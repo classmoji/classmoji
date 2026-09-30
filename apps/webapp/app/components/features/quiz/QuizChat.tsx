@@ -5,11 +5,13 @@ import { UserOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import { useChat } from '@ai-sdk/react';
+import type { ChatTransport, UIMessageChunk } from 'ai';
 import { useChatActions, useTriggerChatTransport } from '@trigger.dev/sdk/chat/react';
 import type { ChatSessionPersistedState } from '@trigger.dev/sdk/chat';
 import {
   QUIZ_AGENT_ERROR_COPY,
   QUIZ_FAILURE_COPY,
+  buttonActionFor,
   type NextStepAction,
   type QuizEvaluationRecordV2,
   type QuizUIMessage,
@@ -163,8 +165,14 @@ export const isPermanentSessionRefusal = (error: unknown) =>
   error.code !== null &&
   PERMANENT_SESSION_CODES.has(error.code);
 
-/** A session token for the attempt, from the session route (start and refresh alike). */
-export const requestSessionToken = async (attemptId: string): Promise<string> => {
+/**
+ * The session route's answer for the attempt (start and refresh alike): a
+ * token, and the reply stream's resume cursor when the session has one (the
+ * position just past the last finished reply).
+ */
+export const requestSession = async (
+  attemptId: string
+): Promise<{ publicAccessToken: string; resumeCursor: string | null }> => {
   const response = await fetch('/api/quiz-chat/session', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -173,6 +181,7 @@ export const requestSessionToken = async (attemptId: string): Promise<string> =>
   });
   const body = (await response.json().catch(() => null)) as {
     publicAccessToken?: unknown;
+    resumeCursor?: unknown;
     message?: unknown;
     code?: unknown;
   } | null;
@@ -183,8 +192,16 @@ export const requestSessionToken = async (attemptId: string): Promise<string> =>
         : START_FAILED_LINE;
     throw new QuizChatSessionError(message, typeof body?.code === 'string' ? body.code : null);
   }
-  return body.publicAccessToken;
+  const cursor = body.resumeCursor;
+  return {
+    publicAccessToken: body.publicAccessToken,
+    resumeCursor: typeof cursor === 'string' && /^\d+$/.test(cursor) ? cursor : null,
+  };
 };
+
+/** A session token for the attempt, from the session route. */
+export const requestSessionToken = async (attemptId: string): Promise<string> =>
+  (await requestSession(attemptId)).publicAccessToken;
 
 /** Session state is kept per tab (sessionStorage), keyed by attempt. */
 const sessionKey = (attemptId: string) => `classmoji:quiz-chat-session:${attemptId}`;
@@ -209,6 +226,64 @@ export const persistSession = (attemptId: string, state: ChatSessionPersistedSta
   } catch {
     // Storage can be unavailable (private mode, quota); the chat works without it.
   }
+};
+
+// ---------------------------------------------------------------------------
+// Replies the transcript already shows
+// ---------------------------------------------------------------------------
+
+/**
+ * The reply stream without the replies the chat already holds. The session's
+ * reply stream keeps about the last reply, and the transport reads it from a
+ * resume cursor; a tab without a good cursor (no session state stored in this
+ * tab, a stale copy of it, a session the transport had to create again, or a
+ * reload before the stored cursor was written) reads that last reply again
+ * ahead of the new one. useChat would add it as another message with the same
+ * id, then fold its parts into the new reply, so the previous turn showed up
+ * twice or three times, and new text after its card was hidden. Every reply
+ * opens with a `start` chunk naming its message id and closes with `finish`:
+ * from a `start` whose id is already in the chat through its `finish` (or up
+ * to the next `start`, for a reply cut short), the chunks are dropped.
+ * Anything else passes as it is, a new turn's error before its own `start`
+ * included.
+ */
+export const dropReplayedMessages = (
+  stream: ReadableStream<UIMessageChunk>,
+  knownIds: ReadonlySet<string>
+): ReadableStream<UIMessageChunk> => {
+  if (knownIds.size === 0) return stream;
+  let replaying = false;
+  return stream.pipeThrough(
+    new TransformStream<UIMessageChunk, UIMessageChunk>({
+      transform(chunk, controller) {
+        if (chunk.type === 'start') {
+          replaying = typeof chunk.messageId === 'string' && knownIds.has(chunk.messageId);
+        }
+        if (!replaying) controller.enqueue(chunk);
+        else if (chunk.type === 'finish') replaying = false;
+      },
+    })
+  );
+};
+
+/**
+ * The transport as useChat sees it: every reply stream passes through
+ * `dropReplayedMessages`, against the messages sent with the request (a new
+ * message) or the chat's messages as they are now (a resumed reply).
+ */
+export const withoutReplayedMessages = (
+  transport: ChatTransport<QuizUIMessage>,
+  currentMessages: () => readonly QuizUIMessage[]
+): ChatTransport<QuizUIMessage> => {
+  const idsOf = (messages: readonly QuizUIMessage[]) => new Set(messages.map(m => m.id));
+  return {
+    sendMessages: async options =>
+      dropReplayedMessages(await transport.sendMessages(options), idsOf(options.messages)),
+    reconnectToStream: async options => {
+      const stream = await transport.reconnectToStream(options);
+      return stream ? dropReplayedMessages(stream, idsOf(currentMessages())) : stream;
+    },
+  };
 };
 
 // ---------------------------------------------------------------------------
@@ -258,6 +333,58 @@ export const isFailedToolPart = (part: QuizPart) => {
 const feedbackOf = (input: unknown): string | null => {
   const feedback = (input as { feedback?: unknown } | undefined)?.feedback;
   return typeof feedback === 'string' && feedback.trim() ? feedback : null;
+};
+
+/** The button a student message used: stored with it by admission, or named by its text. */
+const buttonActionOf = (message: QuizUIMessage) =>
+  message.metadata?.action ??
+  buttonActionFor(
+    visibleParts(message)
+      .flatMap(part => (part.type === 'text' ? [part.text] : []))
+      .join('\n')
+  );
+
+/**
+ * The Try again / Next buttons that can still be clicked: the latest offer, as
+ * its message's position in `messages` and its index in that message's
+ * visible parts, or null when none can. A set stays live until something
+ * supersedes it: one of its buttons is clicked (or its text typed, which the
+ * server takes as the click), a newer set arrives, the card of a later
+ * question or a question's result arrives, or the evaluation does. Anything
+ * else leaves it live: a side question or an argument the student types (the
+ * reply to it brings no buttons, so these stay the way on), the current
+ * question's card shown again on request, or an earlier question's revised
+ * result. After a Try again click the hint brings no buttons either, and the
+ * next answer brings a new set.
+ */
+export const liveOfferOf = (
+  messages: readonly QuizUIMessage[]
+): { message: number; part: number } | null => {
+  let live: { message: number; part: number } | null = null;
+  let lastCard = 0;
+  messages.forEach((message, position) => {
+    if (message.metadata?.hidden) return;
+    if (message.role === 'user') {
+      if (buttonActionOf(message)) live = null;
+      return;
+    }
+    if (message.role !== 'assistant') return;
+    visibleParts(message).forEach((part, index) => {
+      if (isFailedToolPart(part)) return;
+      if (part.type === 'tool-offer_next_step' && part.state === 'output-available') {
+        live = { message: position, part: index };
+      } else if (part.type === 'tool-present_question' && part.state === 'output-available') {
+        if (part.output.question_number > lastCard) live = null;
+        lastCard = Math.max(lastCard, part.output.question_number);
+      } else if (
+        (part.type === 'data-question-result' && !part.data.revised) ||
+        isEvaluationPart(part)
+      ) {
+        live = null;
+      }
+    });
+  });
+  return live;
 };
 
 /**
@@ -602,13 +729,23 @@ interface PartContext {
   isDarkMode: boolean;
   /** This part's message is the reply streaming now. */
   streaming: boolean;
-  /** Buttons are disabled: a later student message exists, a turn is running, or read-only. */
+  /** No button can be used: a turn is running, the attempt is complete, or read-only. */
   buttonsDisabled: boolean;
+  /** The index of this message's live offer (`liveOfferOf`), if it has it. */
+  liveOffer: number | null;
   onButton: ((text: string, action: NextStepAction) => void) | null;
 }
 
-/** One part inside the assistant's bubble, by type. */
-export function AssistantPart({ part, ctx }: { part: QuizPart; ctx: PartContext }) {
+/** One part inside the assistant's bubble, by type (`index`: its place in the visible parts). */
+export function AssistantPart({
+  part,
+  index,
+  ctx,
+}: {
+  part: QuizPart;
+  index: number;
+  ctx: PartContext;
+}) {
   if (isFailedToolPart(part)) return null;
   switch (part.type) {
     case 'text':
@@ -665,6 +802,7 @@ export function AssistantPart({ part, ctx }: { part: QuizPart; ctx: PartContext 
       // The feedback (the call's input) is the agent's message, shown as it
       // streams; the lead-in and buttons (its output) follow once the call is
       // done. A part saved before the feedback moved into the call has none.
+      // Only the live set can be clicked (`liveOfferOf`).
       const feedback = feedbackOf(part.input);
       return (
         <>
@@ -673,7 +811,7 @@ export function AssistantPart({ part, ctx }: { part: QuizPart; ctx: PartContext 
             <NextStepButtons
               actions={part.output.actions}
               leadIn={leadInOf(part.output)}
-              disabled={ctx.buttonsDisabled}
+              disabled={ctx.buttonsDisabled || ctx.liveOffer !== index}
               onAction={ctx.onButton}
             />
           ) : null}
@@ -764,6 +902,8 @@ export function QuizTranscript({
   const lastMessage = shown[shown.length - 1];
   // The opening reply: its welcome is a bubble of its own.
   const openingId = shown.find(m => m.role === 'assistant')?.id;
+  // The one set of buttons that can still be clicked, if any.
+  const liveOffer = liveOfferOf(shown);
 
   // The results panel renders once: at the first evaluation part, from the
   // stored record when the loader has it. Above it, the evaluation's closing
@@ -842,12 +982,12 @@ export function QuizTranscript({
         }
         if (message.role !== 'assistant') return null;
 
-        const answered = shown.slice(index + 1).some(m => m.role === 'user');
         const isStreamingThis = busy && message === lastMessage;
         const ctx: PartContext = {
           isDarkMode,
           streaming: isStreamingThis,
-          buttonsDisabled: answered || busy || status === 'complete' || !onButton,
+          buttonsDisabled: busy || status === 'complete' || !onButton,
+          liveOffer: liveOffer?.message === index ? liveOffer.part : null,
           onButton,
         };
         const blocks = messageBlocks(parts, isStreamingThis, { opening: message.id === openingId });
@@ -881,7 +1021,7 @@ export function QuizTranscript({
                       <AssistantAvatar />
                       <div className="rounded-lg border border-[#d9d9d9] bg-white px-4 py-3 text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
                         {block.entries.map(({ part, index }) => (
-                          <AssistantPart key={index} part={part} ctx={ctx} />
+                          <AssistantPart key={index} part={part} index={index} ctx={ctx} />
                         ))}
                       </div>
                     </Space>
@@ -913,7 +1053,7 @@ export function QuizTranscript({
                       <AssistantAvatar />
                       <Bubble variant="assistant" testId="quiz-assistant-bubble">
                         {inBubble.map(({ part, index }) => (
-                          <AssistantPart key={index} part={part} ctx={ctx} />
+                          <AssistantPart key={index} part={part} index={index} ctx={ctx} />
                         ))}
                       </Bubble>
                     </Space>
@@ -1193,11 +1333,20 @@ function LiveQuizChat({
   // permanent refusal and once the attempt is complete.
   const [closedWhileOpen, setClosedWhileOpen] = useState(false);
 
+  const transportRef = useRef<{ seedResumeCursor?: (chatId: string, cursor: string) => void }>(
+    null
+  );
   const transport = useTriggerChatTransport({
     task: QUIZ_CHAT_TASK_ID,
-    startSession: async ({ chatId }) => ({
-      publicAccessToken: await requestSessionToken(chatId),
-    }),
+    // Called when this tab holds no session state for the attempt (nothing
+    // stored in this tab, or a session the transport creates again). The
+    // stored cursor opens the reply stream just past the last finished reply,
+    // which the transcript already shows, instead of reading it again.
+    startSession: async ({ chatId }) => {
+      const { publicAccessToken, resumeCursor } = await requestSession(chatId);
+      if (resumeCursor) transportRef.current?.seedResumeCursor?.(chatId, resumeCursor);
+      return { publicAccessToken };
+    },
     accessToken: ({ chatId }) => requestSessionToken(chatId),
     ...(persisted ? { sessions: { [attemptId]: persisted } } : {}),
     onSessionChange: (chatId, state) => {
@@ -1205,15 +1354,29 @@ function LiveQuizChat({
       if (state?.closed) setClosedWhileOpen(true);
     },
   });
+  transportRef.current = transport;
+
+  // What useChat reads replies through: the transport, minus any reply the
+  // chat already holds (`withoutReplayedMessages`).
+  const messagesRef = useRef<readonly QuizUIMessage[]>(initialMessages);
+  const chatTransport = useMemo(
+    () =>
+      withoutReplayedMessages(
+        transport as unknown as ChatTransport<QuizUIMessage>,
+        () => messagesRef.current
+      ),
+    [transport]
+  );
 
   const { messages, sendMessage, status, error } = useChat<QuizUIMessage>({
     id: attemptId,
     messages: initialMessages,
-    transport,
+    transport: chatTransport,
     // Re-attach to a reply this tab was streaming when the page was reloaded.
     // Only then: a resume and a start must never race on one chat.
     resume: resuming,
   });
+  messagesRef.current = messages;
   const { sendAction } = useChatActions({ sendMessage });
 
   const busy = status === 'submitted' || status === 'streaming';

@@ -281,7 +281,7 @@ describe('QuizTranscript — parts', () => {
         expect(html).toContain('question 1 revised:');
       });
 
-      it('renders the Try again / Next buttons, disabled once a later message exists', () => {
+      it('renders the Try again / Next buttons, disabled once one is clicked', () => {
         const buttons = {
           type: 'tool-offer_next_step',
           toolCallId: 'call-2',

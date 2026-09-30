@@ -85,6 +85,18 @@ export const BUTTON_TEXT = {
   next: 'next',
 } as const;
 
+/**
+ * The button a student message's text names: a button's text, trimmed and in
+ * any case (a typed "Next" is the Next button). Admission tags the message
+ * with it; the chat reads it to know that a message used up the buttons.
+ */
+export function buttonActionFor(text: string): 'next' | 'try_again' | undefined {
+  const typed = text.trim().toLowerCase();
+  if (typed === BUTTON_TEXT.try_again.toLowerCase()) return 'try_again';
+  if (typed === BUTTON_TEXT.next.toLowerCase()) return 'next';
+  return undefined;
+}
+
 /** The fixed line shown with the buttons (the previous runtime's wording). */
 export const NEXT_STEP_LEAD_IN = {
   /** Next only, with another question to come. */

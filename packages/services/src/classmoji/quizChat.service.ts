@@ -21,8 +21,8 @@
 import getPrisma from '@classmoji/database';
 import type { Prisma } from '@prisma/client';
 import {
-  BUTTON_TEXT,
   buildTurnStatus,
+  buttonActionFor,
   projectTranscript,
   quizVisibility,
   type AttemptProgress,
@@ -232,15 +232,11 @@ const revalidate = async (
 
 /**
  * The action a new message's text names: a button's text, trimmed and in any
- * case (a typed "Next" is the Next button). A re-delivered message keeps the
+ * case (a typed "Next" is the Next button), whatever came before it (a click
+ * after a side question is the same click). A re-delivered message keeps the
  * action journalled when it was first admitted.
  */
-const actionFor = (text: string): 'next' | 'try_again' | undefined => {
-  const typed = text.trim().toLowerCase();
-  if (typed === BUTTON_TEXT.try_again.toLowerCase()) return 'try_again';
-  if (typed === BUTTON_TEXT.next.toLowerCase()) return 'next';
-  return undefined;
-};
+const actionFor = buttonActionFor;
 
 // ─── Admission ──────────────────────────────────────────────────────────────
 

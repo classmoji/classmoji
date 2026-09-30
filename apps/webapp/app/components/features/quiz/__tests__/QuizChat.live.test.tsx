@@ -48,10 +48,11 @@ vi.mock('@ai-sdk/react', () => ({
   },
 }));
 let transportOptions: Record<string, (...a: unknown[]) => unknown> | null = null;
+let transportInstance: Record<string, unknown> = {};
 vi.mock('@trigger.dev/sdk/chat/react', () => ({
   useTriggerChatTransport: (options: Record<string, (...a: unknown[]) => unknown>) => {
     transportOptions = options;
-    return {};
+    return transportInstance;
   },
   useChatActions: () => ({ sendAction: sendActionMock }),
 }));
@@ -116,6 +117,7 @@ beforeEach(() => {
   sendActionMock.mockReset().mockResolvedValue(undefined);
   useChatOptions.length = 0;
   transportOptions = null;
+  transportInstance = {};
   window.sessionStorage.clear();
   fetchMock
     .mockReset()
@@ -172,6 +174,34 @@ describe('QuizChat live', () => {
     expect(sendMessageMock).toHaveBeenCalledWith({ text: BUTTON_TEXT.next });
   });
 
+  it('keeps the buttons usable after a side question, and a click then sends as before', async () => {
+    const sideChat = [
+      buttonsMessage,
+      {
+        id: 'u2',
+        role: 'user',
+        parts: [{ type: 'text', text: "Why won't you grade that?" }],
+      },
+      {
+        id: 'a2',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'The question asks about layout.' }],
+      },
+    ] as unknown as QuizUIMessage[];
+    chatState.messages = sideChat;
+    await mount(sideChat);
+
+    const next = container.querySelector('[data-testid="quiz-next"]') as HTMLButtonElement;
+    expect(next.disabled).toBe(false);
+    await act(async () => next.click());
+    expect(sendMessageMock).toHaveBeenCalledWith({ text: BUTTON_TEXT.next });
+
+    sendMessageMock.mockReset();
+    const tryAgain = container.querySelector('[data-testid="quiz-try-again"]') as HTMLButtonElement;
+    await act(async () => tryAgain.click());
+    expect(sendMessageMock).toHaveBeenCalledWith({ text: BUTTON_TEXT.try_again });
+  });
+
   it('sends the editor text, and nothing while a reply is running', async () => {
     chatState.messages = [buttonsMessage];
     await mount([buttonsMessage]);
@@ -206,6 +236,37 @@ describe('QuizChat live', () => {
     const sessionCalls = fetchMock.mock.calls.filter(([url]) => url === '/api/quiz-chat/session');
     expect(sessionCalls).toHaveLength(2);
     expect(JSON.parse(sessionCalls[0][1].body)).toEqual({ attemptId: 'attempt-1' });
+  });
+
+  it("opens a tab's first reply stream at the session route's resume cursor", async () => {
+    const seedResumeCursor = vi.fn();
+    transportInstance = { seedResumeCursor };
+    let answer: Record<string, unknown> = { publicAccessToken: 'pat-9', resumeCursor: '1234' };
+    fetchMock.mockImplementation(async (url: string) =>
+      url === '/api/quiz-chat/session'
+        ? new Response(JSON.stringify(answer), { status: 200 })
+        : new Response('{}', { status: 200 })
+    );
+    chatState.messages = [buttonsMessage];
+    await mount([buttonsMessage]);
+
+    const start = () =>
+      transportOptions!.startSession({ chatId: 'attempt-1', taskId: 'quiz-attempt' });
+    expect(await start()).toEqual({ publicAccessToken: 'pat-9' });
+    expect(seedResumeCursor).toHaveBeenCalledWith('attempt-1', '1234');
+
+    // No cursor (a new session), or a malformed one: nothing is seeded.
+    seedResumeCursor.mockReset();
+    answer = { publicAccessToken: 'pat-9' };
+    await start();
+    answer = { publicAccessToken: 'pat-9', resumeCursor: '12; drop' };
+    await start();
+    expect(seedResumeCursor).not.toHaveBeenCalled();
+
+    // A token refresh never moves the cursor.
+    answer = { publicAccessToken: 'pat-9', resumeCursor: '99' };
+    expect(await transportOptions!.accessToken({ chatId: 'attempt-1' })).toBe('pat-9');
+    expect(seedResumeCursor).not.toHaveBeenCalled();
   });
 
   it("carries the session route's fixed copy on a refusal, and nothing else", async () => {

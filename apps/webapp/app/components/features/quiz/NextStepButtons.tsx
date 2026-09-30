@@ -12,7 +12,10 @@ import { BUTTON_TEXT, type NextStepAction } from '@classmoji/utils/quiz-agent';
  */
 interface NextStepButtonsProps {
   actions: readonly NextStepAction[];
-  /** Nothing can be sent: a later message exists, a turn is running, or the view is read-only. */
+  /**
+   * Not usable: a click, a newer set, a card, a result or the evaluation came
+   * after this set, a turn is running, or the view is read-only.
+   */
   disabled?: boolean;
   /** Absent in read-only views: the buttons render disabled. */
   onAction?: ((text: string, action: NextStepAction) => void) | null;
