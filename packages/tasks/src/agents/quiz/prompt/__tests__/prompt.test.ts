@@ -168,7 +168,7 @@ describe('quiz prompt: typed tools only', () => {
     (_l, p) => {
       const flat = p.staticPrompt.replace(/\s+/g, ' ');
       expect(flat).toContain(
-        "Every answer gets feedback before the buttons: 2 to 4 sentences about THIS answer, in the student's own context"
+        "Every answer gets feedback, sent in offer_next_step's feedback field together with the buttons: 2 to 4 sentences about THIS answer, in the student's own context"
       );
       expect(flat).toContain('Say what is right in the answer and why it matters.');
       expect(flat).toMatch(/Never narrate the interface or what comes next: no "Click Next"/);
@@ -403,21 +403,30 @@ describe('quiz prompt: typed tools only', () => {
   });
 
   it('tells the model to end its reply after offer_next_step', () => {
-    expect(baseSystemPrompt).toMatch(/Call it LAST in your reply, then end your reply/);
+    expect(baseSystemPrompt).toMatch(/The call ends your reply\. Write nothing after it\./);
   });
 
-  it.each(bothModes)('%s: writes the feedback first, then calls offer_next_step last', (_l, p) => {
-    expect(p.staticPrompt).toMatch(
-      /FIRST write your feedback text \(what is right and what is\s+wrong\), THEN call offer_next_step as the last thing in your reply/
+  it.each(bothModes)('%s: puts the feedback in offer_next_step, not in text', (_l, p) => {
+    const flat = p.staticPrompt.replace(/\s+/g, ' ');
+    expect(flat).toContain(
+      "After a student's answer, call offer_next_step with your feedback in its feedback field (what is right and what is wrong); don't also write the feedback as text."
     );
-    expect(p.staticPrompt).toMatch(/NEVER call offer_next_step before writing your feedback/);
+    expect(flat).toContain(
+      'a quoted reply followed by "→ Call offer_next_step" is that call\'s feedback, not text you write.'
+    );
+    // No instruction left to write the feedback first and call the tool after it.
+    expect(flat).not.toMatch(
+      /FIRST write your feedback|before writing your feedback|THEN call offer_next_step/
+    );
+    expect(flat).not.toMatch(/Calls offer_next_step with actions/);
+    expect(flat).not.toContain('→ Call offer_next_step: { "actions"');
   });
 
-  it('orders the code-aware answer steps feedback first, buttons last', () => {
+  it('has the code-aware answer steps put the feedback in the call', () => {
     expect(codeAwareAgentPrompt).toMatch(
-      /2\. Write your feedback text[^\n]*\n3\. THEN call offer_next_step as the last thing in your reply/
+      /2\. Call offer_next_step with your feedback \(praise, or what is right and what is wrong\) in its feedback field; don't also write the feedback as text\./
     );
-    expect(codeAwareAgentPrompt).toMatch(/Never call it before your feedback/);
+    expect(codeAwareAgentPrompt).not.toMatch(/Never call it before your feedback/);
   });
 
   it.each(bothModes)('%s: leaves the welcome to the loop and starts on question 1', (_l, p) => {

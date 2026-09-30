@@ -39,7 +39,7 @@ window.matchMedia ??= ((query: string) => ({
   dispatchEvent: () => false,
 })) as unknown as typeof window.matchMedia;
 
-const { default: QuizChat, QuizTranscript } = await import('../QuizChat');
+const { default: QuizChat, QuizTranscript, messageBlocks } = await import('../QuizChat');
 
 const msg = (id: string, role: 'user' | 'assistant', parts: unknown[]) =>
   ({ id, role, parts }) as unknown as QuizUIMessage;
@@ -79,6 +79,22 @@ const step = (path: string) => ({ type: 'data-step', data: { kind: 'read_file', 
 const text = (t: string) => ({ type: 'text', text: t });
 
 const FEEDBACK = 'Right, flexbox lines the items up.';
+
+/** offer_next_step as it arrives: the feedback (input) first, the buttons (output) once done. */
+const OFFER_FEEDBACK = 'Close: the loop runs once too often.';
+const LEAD_IN = 'Want another go?';
+const offer = (state: string, feedback?: string) => ({
+  type: 'tool-offer_next_step',
+  toolCallId: 'call-offer',
+  state,
+  input: {
+    ...(feedback !== undefined ? { feedback } : {}),
+    ...(state === 'input-streaming' ? {} : { actions: ['try_again', 'next'] }),
+  },
+  ...(state === 'output-available'
+    ? { output: { actions: ['try_again', 'next'], lead_in: LEAD_IN } }
+    : {}),
+});
 
 /** Static markup, parsed so its structure can be queried. */
 const dom = (html: string) => {
@@ -238,6 +254,38 @@ describe('QuizTranscript — the marker between bubbles', () => {
   });
 });
 
+describe('QuizTranscript — the feedback offer_next_step carries', () => {
+  it('keeps a marker before the feedback in its own row, out of the bubble', () => {
+    const parts = [recordCall(1), divider(1), offer('output-available', OFFER_FEEDBACK)];
+    expect(messageBlocks(parts as never, false).map(block => block.kind)).toEqual([
+      'result',
+      'content',
+    ]);
+    const root = renderStatic([msg('a1', 'assistant', parts)]);
+    expect(rows(root)).toHaveLength(1);
+    expect(bubbles(root)).toHaveLength(1);
+    const [row] = rows(root);
+    const [bubble] = bubbles(root);
+    expect(before(row, bubble)).toBe(true);
+    expect(bubble.contains(row)).toBe(false);
+    expect(row.textContent).not.toContain(OFFER_FEEDBACK);
+    // Feedback, then the lead-in, then the buttons, all in the one bubble.
+    const lead = bubble.querySelector('[data-testid="quiz-next-step-lead-in"]')!;
+    const buttons = bubble.querySelector('[data-testid="quiz-next-step"]')!;
+    expect(bubble.firstElementChild?.textContent).toBe(OFFER_FEEDBACK);
+    expect(before(bubble.firstElementChild!, lead)).toBe(true);
+    expect(before(lead, buttons)).toBe(true);
+  });
+
+  it('shows an old offer, saved with no feedback, as the lead-in and the buttons only', () => {
+    const root = renderStatic([msg('a1', 'assistant', [offer('output-available')])]);
+    expect(bubbles(root)).toHaveLength(1);
+    const [bubble] = bubbles(root);
+    expect(bubble.firstElementChild?.getAttribute('data-testid')).toBe('quiz-next-step-lead-in');
+    expect(bubble.textContent).toBe(`${LEAD_IN}Try AgainNext →`);
+  });
+});
+
 describe('QuizTranscript — streaming into the second bubble', () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -360,6 +408,43 @@ describe('QuizTranscript — streaming into the second bubble', () => {
     await stream([text(FEEDBACK), buttons]);
     expect(typing()).toBeNull();
     await stream([text(FEEDBACK), { type: 'data-notice', data: { code: 'turn_stopped' } }]);
+    expect(typing()).toBeNull();
+  });
+
+  it("shows the buttons' feedback as it streams, the activity line up until the buttons", async () => {
+    const typing = () => container.querySelector('[data-testid="quiz-typing"]');
+    await stream([offer('input-streaming', 'Close: the')]);
+    expect(bubbles(container)).toHaveLength(1);
+    const [bubble] = bubbles(container);
+    expect(bubble.textContent).toBe('Close: the');
+    expect(container.querySelector('[data-testid="quiz-next-step"]')).toBeNull();
+    expect(typing()?.textContent).toContain('Thinking...');
+
+    await stream([offer('input-available', OFFER_FEEDBACK)]);
+    expect(bubbles(container)[0]).toBe(bubble);
+    expect(bubble.textContent).toBe(OFFER_FEEDBACK);
+    expect(typing()?.textContent).toContain('Thinking...');
+
+    await stream([offer('output-available', OFFER_FEEDBACK)]);
+    expect(bubbles(container)).toHaveLength(1);
+    expect(bubbles(container)[0]).toBe(bubble);
+    expect(bubble.querySelector('[data-testid="quiz-next-step-lead-in"]')?.textContent).toBe(
+      LEAD_IN
+    );
+    expect(bubble.querySelector('[data-testid="quiz-try-again"]')).not.toBeNull();
+    expect(typing()).toBeNull();
+  });
+
+  it('keeps the files read open while the feedback streams, folding them once the buttons arrive', async () => {
+    const typing = () => container.querySelector('[data-testid="quiz-typing"]');
+    await stream([step('src/App.tsx'), offer('input-streaming', 'Close: the')]);
+    const stepsNode = container.querySelector('[data-testid="quiz-steps"]')!;
+    expect(stepsNode.querySelector('.ant-collapse-item-active')).not.toBeNull();
+    expect(typing()?.textContent).toContain('Exploring code...');
+
+    await stream([step('src/App.tsx'), offer('output-available', OFFER_FEEDBACK)]);
+    expect(container.querySelector('[data-testid="quiz-steps"]')).toBe(stepsNode);
+    expect(stepsNode.querySelector('.ant-collapse-item-active')).toBeNull();
     expect(typing()).toBeNull();
   });
 

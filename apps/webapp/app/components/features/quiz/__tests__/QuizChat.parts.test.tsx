@@ -42,12 +42,14 @@ vi.mock('~/routes/student.$class.quizzes/ChatEditor', () => ({
 const {
   default: QuizChat,
   QuizTranscript,
+  activityLine,
   displayOrder,
   drivesSession,
   errorLineFor,
   FIXED_ERROR_COPY,
   NOTICE_COPY,
   REPLY_FAILED_LINE,
+  THINKING_LINE,
 } = await import('../QuizChat');
 
 const msg = (id: string, role: 'user' | 'assistant', parts: unknown[], metadata?: unknown) =>
@@ -532,6 +534,160 @@ describe('QuizTranscript — parts', () => {
       });
     });
   }
+});
+
+describe('QuizTranscript — the feedback offer_next_step carries', () => {
+  const offer = (state: string, input?: object, output?: object) => ({
+    type: 'tool-offer_next_step',
+    toolCallId: 'call-offer',
+    state,
+    ...(input ? { input } : {}),
+    ...(output ? { output } : {}),
+    ...(state === 'output-error' ? { errorText: 'An error occurred.' } : {}),
+  });
+  const FEEDBACK = '**Close**: the loop runs one step too far.';
+  const LEAD_IN = 'Want another go?';
+  const BOTH = ['try_again', 'next'];
+  const expectInOrder = (html: string, needles: string[]) => {
+    const at = needles.map(needle => html.indexOf(needle));
+    expect(at.every(i => i > -1)).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+  };
+  const busyView = { busy: true, status: 'streaming' as const };
+
+  for (const theme of ['light', 'dark'] as const) {
+    describe(`in the ${theme} theme`, () => {
+      beforeEach(() => {
+        darkMode = theme === 'dark';
+      });
+
+      it('shows it as the message in the bubble, above the lead-in and the buttons', () => {
+        const html = renderTranscript([
+          msg('a1', 'assistant', [
+            offer(
+              'output-available',
+              { feedback: FEEDBACK, actions: BOTH },
+              { actions: BOTH, lead_in: LEAD_IN }
+            ),
+          ]),
+        ]);
+        expect(html.match(/data-testid="quiz-assistant-bubble"/g)).toHaveLength(1);
+        expectInOrder(html, [
+          'data-testid="quiz-assistant-bubble"',
+          '<strong class="font-semibold">Close</strong>',
+          'the loop runs one step too far.',
+          'data-testid="quiz-next-step-lead-in"',
+          LEAD_IN,
+          'data-testid="quiz-next-step"',
+          'data-testid="quiz-try-again"',
+          'data-testid="quiz-next"',
+        ]);
+        expect(html).not.toContain('**Close**');
+      });
+
+      it('renders the feedback exactly as a text part with the same words', () => {
+        const asText = renderTranscript([
+          msg('a1', 'assistant', [{ type: 'text', text: FEEDBACK }]),
+        ]);
+        const asOffer = renderTranscript([
+          msg('a1', 'assistant', [offer('input-available', { feedback: FEEDBACK, actions: BOTH })]),
+        ]);
+        expect(asOffer).toBe(asText);
+      });
+
+      it('shows the feedback while it streams, with no buttons, above the activity line', () => {
+        for (const part of [
+          offer('input-streaming', { feedback: 'Close: the loop' }),
+          offer('input-available', { feedback: 'Close: the loop', actions: ['next'] }),
+        ]) {
+          const html = renderTranscript([msg('a1', 'assistant', [part])], busyView);
+          expect(html.match(/data-testid="quiz-assistant-bubble"/g)).toHaveLength(1);
+          expect(html).not.toContain('data-testid="quiz-next-step"');
+          expect(html).not.toContain('quiz-next-step-lead-in');
+          expectInOrder(html, ['Close: the loop', 'data-testid="quiz-typing"']);
+        }
+        // No feedback yet: nothing to show, the activity line alone.
+        for (const input of [undefined, {}, { feedback: '  ' }, { actions: ['next'] }]) {
+          const html = renderTranscript(
+            [msg('a1', 'assistant', [offer('input-streaming', input)])],
+            busyView
+          );
+          expect(html).not.toContain('data-testid="quiz-assistant-bubble"');
+          expect(html).toContain('data-testid="quiz-typing"');
+        }
+      });
+
+      it('renders nothing for a refused offer, whatever feedback it carried', () => {
+        for (const state of ['output-error', 'output-denied']) {
+          for (const busy of [false, true]) {
+            const html = renderTranscript(
+              [
+                msg('a1', 'assistant', [
+                  offer(state, { feedback: 'Refused feedback.', actions: ['next'] }),
+                ]),
+              ],
+              { busy, status: busy ? 'streaming' : 'ready' }
+            );
+            expect(html).not.toContain('Refused feedback.');
+            expect(html).not.toContain('An error occurred.');
+            expect(html).not.toContain('data-testid="quiz-next-step"');
+            expect(html).not.toContain('data-message-role="assistant"');
+          }
+        }
+      });
+
+      it('shows text the model also wrote first, then the feedback, the lead-in and the buttons', () => {
+        // After an earlier turn: the opening reply's first text is the welcome's own bubble.
+        const html = renderTranscript([
+          ...EARLIER,
+          msg('a1', 'assistant', [
+            { type: 'text', text: 'Thanks for explaining.' },
+            offer(
+              'output-available',
+              { feedback: FEEDBACK, actions: ['next'] },
+              { actions: ['next'], lead_in: LEAD_IN }
+            ),
+          ]),
+        ]);
+        const reply = html.slice(html.indexOf('my answer'));
+        expect(reply.match(/data-testid="quiz-assistant-bubble"/g)).toHaveLength(1);
+        expectInOrder(reply, [
+          'data-testid="quiz-assistant-bubble"',
+          'Thanks for explaining.',
+          '<strong class="font-semibold">Close</strong>',
+          LEAD_IN,
+          'data-testid="quiz-next"',
+        ]);
+      });
+    });
+  }
+
+  it('keeps the activity line up until the buttons arrive, not the feedback', () => {
+    const reply = (parts: unknown[]) => msg('a1', 'assistant', parts);
+    const streamingOffer = offer('input-streaming', { feedback: 'Close: the loop' });
+    expect(activityLine(reply([streamingOffer]))).toBe(THINKING_LINE);
+    expect(
+      activityLine(reply([offer('input-available', { feedback: FEEDBACK, actions: ['next'] })]))
+    ).toBe(THINKING_LINE);
+    expect(activityLine(reply([{ type: 'text', text: 'Thanks.' }, streamingOffer]))).toBe(
+      THINKING_LINE
+    );
+    expect(
+      activityLine(
+        reply([
+          offer(
+            'output-available',
+            { feedback: FEEDBACK, actions: ['next'] },
+            { actions: ['next'], lead_in: LEAD_IN }
+          ),
+        ])
+      )
+    ).toBeNull();
+    // An old offer (no feedback) ends it the same way.
+    expect(
+      activityLine(reply([offer('output-available', { actions: ['next'] }, { actions: ['next'] })]))
+    ).toBeNull();
+  });
 });
 
 describe('QuizTranscript — a quoted card as the viewer receives it', () => {

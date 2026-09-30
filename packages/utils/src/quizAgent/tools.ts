@@ -16,7 +16,7 @@ import {
   ExploreCodebaseOutputSchema,
   ExploreCodebaseSchema,
   OfferNextStepOutputSchema,
-  OfferNextStepSchema,
+  OfferNextStepPartSchema,
   PresentQuestionOutputSchema,
   QuestionResultOutputSchema,
   QuizEvaluationFeedbackSchema,
@@ -39,9 +39,11 @@ const record_question_result = tool({
   outputSchema: QuestionResultOutputSchema,
 });
 
+// The stored part's input: `feedback` is optional here, for parts saved before
+// it was added. The task's own tool (the model's) requires it.
 const offer_next_step = tool({
   description: TOOL_DESCRIPTIONS.offer_next_step,
-  inputSchema: OfferNextStepSchema,
+  inputSchema: OfferNextStepPartSchema,
   outputSchema: OfferNextStepOutputSchema,
 });
 

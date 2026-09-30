@@ -8,6 +8,7 @@ import {
   CodeAwareQuizQuestionSchema,
   CodeQuoteSchema,
   ExploreCodebaseSchema,
+  OfferNextStepPartSchema,
   OfferNextStepSchema,
   PresentQuestionOutputSchema,
   QuestionCardSchema,
@@ -85,16 +86,47 @@ describe('RecordQuestionResultSchema', () => {
 });
 
 describe('OfferNextStepSchema', () => {
+  const feedback = 'Right idea: `map` returns a new array. The original is left alone.';
+
   it.each([[['next']], [['try_again']], [['try_again', 'next']]])('accepts %j', actions => {
-    expect(OfferNextStepSchema.safeParse({ actions }).success).toBe(true);
+    expect(OfferNextStepSchema.safeParse({ feedback, actions }).success).toBe(true);
   });
 
   it.each([[[]], [['next', 'next']], [['next', 'try_again', 'next']], [['skip']]])(
     'refuses %j',
     actions => {
-      expect(OfferNextStepSchema.safeParse({ actions }).success).toBe(false);
+      expect(OfferNextStepSchema.safeParse({ feedback, actions }).success).toBe(false);
     }
   );
+
+  it('requires feedback from the model: present, a string, not blank', () => {
+    for (const bad of [{}, { feedback: '' }, { feedback: '  \n ' }, { feedback: 3 }]) {
+      expect(OfferNextStepSchema.safeParse({ ...bad, actions: ['next'] }).success).toBe(false);
+    }
+    expect(OfferNextStepSchema.parse({ feedback: `  ${feedback}\n`, actions: ['next'] })).toEqual({
+      feedback,
+      actions: ['next'],
+    });
+  });
+
+  it('puts feedback first and required in the JSON schema the model reads', async () => {
+    const json = (await asSchema(OfferNextStepSchema as FlexibleSchema<unknown>).jsonSchema) as {
+      properties: Record<string, { minLength?: number; description?: string }>;
+      required: string[];
+    };
+    expect(Object.keys(json.properties)).toEqual(['feedback', 'actions']);
+    expect(json.required).toEqual(expect.arrayContaining(['feedback', 'actions']));
+    expect(json.properties.feedback.minLength).toBe(1);
+    expect(json.properties.feedback.description).toBe(
+      '2 to 4 sentences: what is right, what is wrong, and why. On a wrong or partly wrong answer, say which part is wrong and why without giving away the full answer.'
+    );
+  });
+
+  it('keeps stored parts without feedback valid, for the UI types and old rows', () => {
+    expect(OfferNextStepPartSchema.safeParse({ actions: ['next'] }).success).toBe(true);
+    expect(OfferNextStepPartSchema.safeParse({ feedback, actions: ['next'] }).success).toBe(true);
+    expect(quizToolDefs.offer_next_step.inputSchema).toBe(OfferNextStepPartSchema);
+  });
 });
 
 describe('the lead-in shown with the buttons', () => {
@@ -127,9 +159,13 @@ describe('the lead-in shown with the buttons', () => {
     ).toEqual({ actions: ['next'], lead_in: 'Ready for the next question?' });
     expect(OfferNextStepOutputSchema.safeParse({ actions: ['next'] }).success).toBe(false);
     expect(quizToolDefs.offer_next_step.outputSchema).toBe(OfferNextStepOutputSchema);
-    expect(OfferNextStepSchema.parse({ actions: ['next'], lead_in: 'x' })).toEqual({
-      actions: ['next'],
-    });
+    expect(
+      OfferNextStepSchema.parse({ feedback: 'Yes.', actions: ['next'], lead_in: 'x' })
+    ).toEqual({ feedback: 'Yes.', actions: ['next'] });
+    // The feedback stays in the input; the output never echoes it.
+    expect(
+      OfferNextStepOutputSchema.parse({ feedback: 'Yes.', actions: ['next'], lead_in: 'x' })
+    ).toEqual({ actions: ['next'], lead_in: 'x' });
   });
 });
 
@@ -493,6 +529,7 @@ describe('quizToolDefs', () => {
     type NextPart = Extract<Part, { type: 'tool-offer_next_step'; state: 'output-available' }>;
     expectTypeOf<NextPart['output']['actions']>().toEqualTypeOf<('next' | 'try_again')[]>();
     expectTypeOf<NextPart['output']['lead_in']>().toEqualTypeOf<string>();
+    expectTypeOf<NextPart['input']['feedback']>().toEqualTypeOf<string | undefined>();
   });
 });
 

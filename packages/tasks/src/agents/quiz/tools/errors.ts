@@ -21,35 +21,15 @@ export const OFFER_AFTER_QUESTION_TEXT =
   "Wait for the student's answer to this question before offering next steps.";
 
 /**
- * offer_next_step refused because the model has written no visible text in
- * this turn yet. It says to call again: a model that only writes the feedback
- * after this would end the turn without buttons.
- */
-export const OFFER_BEFORE_FEEDBACK_TEXT =
-  'If the student answered, write your feedback on their answer first, then call offer_next_step again; otherwise reply without buttons.';
-
-/** The `code` on that refusal, so the loop can tell it from every other one. */
-export const FEEDBACK_MISSING = 'feedback_missing';
-
-/**
- * The refusal of offer_next_step for no feedback text yet. The loop may run
- * such a call again at the end of the turn once the text is there (loop.ts).
- */
-export function feedbackMissingError(): Error {
-  return Object.assign(new Error(OFFER_BEFORE_FEEDBACK_TEXT), { code: FEEDBACK_MISSING });
-}
-
-/** True for the refusal `feedbackMissingError` makes, and for nothing else. */
-export function isFeedbackMissing(error: unknown): boolean {
-  return error instanceof Error && (error as { code?: unknown }).code === FEEDBACK_MISSING;
-}
-
-/**
  * offer_next_step refused in a turn the student opened with Try again: that
  * turn is a hint, which ends with a question and waits for their answer.
  */
 export const OFFER_AFTER_HINT_TEXT =
-  'The student clicked Try again, so this reply is a hint: give exactly one hint, end with a question such as "What do you think?", and wait for their answer. No buttons after a hint.';
+  'This is a hint turn: write the hint as your reply text, with no tool call. Give exactly one hint and end with a question such as "What do you think?".';
+
+/** offer_next_step refused because buttons already went out in this turn. */
+export const OFFER_TWICE_TEXT =
+  'Your feedback and the buttons are already shown. End your reply now.';
 
 /** offer_next_step refused for Try again without Next: the student can always move on. */
 export const OFFER_TRY_AGAIN_ALONE_TEXT =
@@ -61,7 +41,7 @@ export const OFFER_TRY_AGAIN_ALONE_TEXT =
  * would end with the old card and no buttons.
  */
 export const RESHOW_AFTER_TEXT =
-  "You already replied this turn; don't re-show the question. If the student answered, call offer_next_step.";
+  "You already replied this turn; don't re-show the question. If the student answered, call offer_next_step with your feedback in its feedback field.";
 
 /**
  * `RESHOW_AFTER_TEXT` for question `lastPresented`. With no question open (it
@@ -85,7 +65,7 @@ export const RECORD_BEFORE_ANSWER_TEXT =
  * no Next click, and the call does not say they asked to move on.
  */
 export const RECORD_BEFORE_NEXT_TEXT =
-  'The student has not moved on from this question. Record it only after they click Next, or when their latest message asks to skip or move on (then set student_asked_to_move_on). If they answered, give feedback and call offer_next_step; otherwise just reply.';
+  'The student has not moved on from this question. Record it only after they click Next, or when their latest message asks to skip or move on (then set student_asked_to_move_on). If they answered, call offer_next_step with your feedback in its feedback field; otherwise just reply.';
 
 /** present_question refused: question `n`'s card already shows edited code, and a quiz gets one. */
 export const editLimitText = (n: number) =>

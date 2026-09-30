@@ -32,15 +32,13 @@
  * (`student_asked_to_move_on`); otherwise it is refused before anything is
  * written, so a correct answer never shows its result before the Next click.
  * A result already recorded (a revision) is left to the service's own rules.
- * offer_next_step is also refused until the model has written visible text
- * in the turn (`textWritten`, which the loop sets from the model's own stream,
- * not from its own writes such as the welcome, and before any tool of the same
- * step runs): the buttons end the turn, so feedback the model meant to write
- * after them would never be written (the loop runs such a refused call again
- * at the end of the turn if the text came after it). How much feedback to
- * write is the prompt's to say, never a count here. It is refused as well in
- * a turn the student opened with Try again (that reply is a hint, which ends
- * with a question), and for Try again without Next. Its output carries the
+ * offer_next_step carries the model's feedback on the answer in its input
+ * (`feedback`, which the schema requires to be non-blank; the browser shows it
+ * as the agent's message, above the buttons), so feedback and buttons arrive
+ * together. How much feedback to write is the description's to say, never a
+ * count here. The call is refused in a turn the student opened with Try again
+ * (that reply is a hint, which ends with a question), for Try again without
+ * Next, and once an offer has gone out in the turn. Its output carries the
  * buttons and the fixed line shown with them (`lead_in`, chosen from the
  * buttons and whether the student is on the last question).
  *
@@ -109,10 +107,10 @@ import {
 import {
   aborted,
   editLimitText,
-  feedbackMissingError,
   OFFER_AFTER_HINT_TEXT,
   OFFER_AFTER_QUESTION_TEXT,
   OFFER_TRY_AGAIN_ALONE_TEXT,
+  OFFER_TWICE_TEXT,
   QUESTION_AFTER_OFFER_TEXT,
   QUOTE_READ_FAILED_TEXT,
   RECORD_BEFORE_ANSWER_TEXT,
@@ -163,7 +161,10 @@ export type QuizToolDeps = {
   /** Defaults to the real services; tests inject fakes. */
   services?: Partial<QuizToolServices>;
   log?: DiagnosticLog;
-  /** Whether the model has written visible text in this turn; the loop sets it. */
+  /**
+   * Whether the model has written visible text in this turn; the loop sets it.
+   * Read by present_question (a re-show after text is refused).
+   */
   textWritten: () => boolean;
 };
 
@@ -424,14 +425,15 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
         if (questionPresented) throw new Error(OFFER_AFTER_QUESTION_TEXT);
         // A Try again turn is a hint: it ends with a question, not buttons.
         if (ctx.lastAction === 'try_again') throw new Error(OFFER_AFTER_HINT_TEXT);
+        // One offer per turn: a second (same step) would show its feedback
+        // and buttons twice.
+        if (offerMade) throw new Error(OFFER_TWICE_TEXT);
         // The line shown with the buttons, from the buttons and whether the
         // student is on the last question (no card goes out in an offer's turn).
         const leadIn = nextStepLeadIn(input.actions, lastPresented >= ctx.questionCount);
         if (leadIn === null) throw new Error(OFFER_TRY_AGAIN_ALONE_TEXT);
-        // Buttons end the turn, so feedback written after them is never sent.
-        // Any visible text of the turn, in this step or an earlier one, is taken.
-        if (!d.textWritten()) throw feedbackMissingError();
         offerMade = true;
+        // The feedback stays in the input, which the browser renders.
         return { actions: [...input.actions], lead_in: leadIn };
       }),
   });
