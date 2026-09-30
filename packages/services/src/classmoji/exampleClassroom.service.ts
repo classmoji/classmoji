@@ -210,19 +210,28 @@ function buildExampleSandbox(args: {
       const studentUsers: { id: string; login: string }[] = [];
       for (const p of DEMO_PEOPLE) {
         const image = `https://github.com/identicons/${p.login}.png`;
-        const user = await tx.user.upsert({
-          where: { login: p.login },
-          update: { image },
-          create: {
-            provider: 'GITHUB',
-            provider_id: p.provider_id,
-            login: p.login,
-            name: p.name,
-            email: p.email,
-            image,
-            school_id: 'example',
-          },
+        const account = await tx.account.findUnique({
+          where: { provider_id_account_id: { provider_id: 'github', account_id: p.provider_id } },
+          select: { user_id: true },
         });
+        const user = account
+          ? await tx.user.update({ where: { id: account.user_id }, data: { image } })
+          : await tx.user.create({
+              data: {
+                name: p.name,
+                email: p.email,
+                image,
+                school_id: 'example',
+                accounts: {
+                  create: {
+                    provider_id: 'github',
+                    account_id: p.provider_id,
+                    username: p.login,
+                    image,
+                  },
+                },
+              },
+            });
         await tx.classroomMembership.create({
           data: {
             classroom_id: classroom.id,

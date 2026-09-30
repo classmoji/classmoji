@@ -4,13 +4,13 @@ import { Server as SocketServer } from 'socket.io';
 import { createRequestHandler } from '@react-router/express';
 import compression from 'compression';
 import morgan from 'morgan';
-import getPrisma from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { auth } from '@classmoji/auth/server';
 // The light subpath: the cookie-name builder with none of betterAuth/Prisma
 // behind it (server.ts already pulls those in, but provenance matters — this
 // is the same module apps/pages reads the prefix from).
 import { sessionTokenFromCookieHeader } from '@classmoji/auth/secret';
-import { RoomStateStore } from '@classmoji/utils';
+import { RoomStateStore, withLogin } from '@classmoji/utils';
 
 // Helper to get session from socket cookie header
 async function getSocketAuthSession(cookieHeader: string) {
@@ -25,9 +25,9 @@ async function getSocketAuthSession(cookieHeader: string) {
     // Get user with classroom memberships
     const user = await getPrisma().user.findUnique({
       where: { id: session.user.id },
-      include: { classroom_memberships: { include: { classroom: true } } },
+      include: { classroom_memberships: { include: { classroom: true } }, ...GIT_IDENTITY },
     });
-    return user;
+    return user ? withLogin(user) : null;
   }
 
   // Fallback: Direct DB lookup for dev test sessions.
@@ -52,9 +52,9 @@ async function getSocketAuthSession(cookieHeader: string) {
       if (directSession?.user && directSession.expires_at > new Date()) {
         const user = await getPrisma().user.findUnique({
           where: { id: directSession.user.id },
-          include: { classroom_memberships: { include: { classroom: true } } },
+          include: { classroom_memberships: { include: { classroom: true } }, ...GIT_IDENTITY },
         });
-        return user;
+        return user ? withLogin(user) : null;
       }
     }
   }
@@ -82,7 +82,7 @@ const io = new SocketServer(httpServer, {
 interface SocketData {
   user?: {
     id: string;
-    login: string;
+    login: string | null;
     classroom_memberships: Array<{
       role: string;
       classroom: { id: string; slug: string };

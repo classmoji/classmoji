@@ -1,5 +1,5 @@
-import getPrisma from '@classmoji/database';
-import { titleToIdentifier, RESERVED_PAGE_SLUGS } from '@classmoji/utils';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import { titleToIdentifier, RESERVED_PAGE_SLUGS, withLogins } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import { getGitProvider } from '../git/index.ts';
 import { recordContentAssets, removeContentAssetFolder } from './contentAssets.service.ts';
@@ -102,7 +102,7 @@ const CREATE_INCLUDE = {
       git_organization: true,
     },
   },
-  creator: true,
+  creator: { include: GIT_IDENTITY },
   links: {
     include: {
       repository: true,
@@ -180,8 +180,10 @@ export async function create(values: Prisma.PageUncheckedCreateInput) {
     show_in_student_menu: safeValues.show_in_student_menu ?? false,
   };
 
-  return createWithUniquePageSlug(safeValues.title, slug =>
-    getPrisma().page.create({ data: { ...data, slug }, include: CREATE_INCLUDE })
+  return withLogins(
+    await createWithUniquePageSlug(safeValues.title, slug =>
+      getPrisma().page.create({ data: { ...data, slug }, include: CREATE_INCLUDE })
+    )
   );
 }
 
@@ -549,7 +551,7 @@ export async function findById(pageId: string, options: PageQueryOptions = {}) {
               },
             }
           : false,
-      creator: options.includeCreator ?? false,
+      creator: (options.includeCreator ?? false) ? { include: GIT_IDENTITY } : false,
       links:
         (options.includeLinks ?? false)
           ? {
@@ -562,7 +564,7 @@ export async function findById(pageId: string, options: PageQueryOptions = {}) {
     },
   });
 
-  return page;
+  return withLogins(page);
 }
 
 /**
@@ -582,7 +584,7 @@ export async function findByClassroomId(classroomId: string, options: PageQueryO
               },
             }
           : false,
-      creator: options.includeCreator ?? true,
+      creator: (options.includeCreator ?? true) ? { include: GIT_IDENTITY } : false,
       links:
         (options.includeLinks ?? false)
           ? {
@@ -598,7 +600,7 @@ export async function findByClassroomId(classroomId: string, options: PageQueryO
     },
   });
 
-  return pages;
+  return withLogins(pages);
 }
 
 /**
@@ -617,7 +619,7 @@ export async function findByRepository(repositoryId: string) {
               git_organization: true,
             },
           },
-          creator: true,
+          creator: { include: GIT_IDENTITY },
         },
       },
     },
@@ -626,7 +628,7 @@ export async function findByRepository(repositoryId: string) {
     },
   });
 
-  return pageLinks.map(link => ({ ...link.page, linkOrder: link.order }));
+  return withLogins(pageLinks.map(link => ({ ...link.page, linkOrder: link.order })));
 }
 
 /**
@@ -645,7 +647,7 @@ export async function findByAssignment(assignmentId: string) {
               git_organization: true,
             },
           },
-          creator: true,
+          creator: { include: GIT_IDENTITY },
         },
       },
     },
@@ -654,7 +656,7 @@ export async function findByAssignment(assignmentId: string) {
     },
   });
 
-  return pageLinks.map(link => ({ ...link.page, linkOrder: link.order }));
+  return withLogins(pageLinks.map(link => ({ ...link.page, linkOrder: link.order })));
 }
 
 /**
@@ -761,7 +763,7 @@ export async function update(
           git_organization: true,
         },
       },
-      creator: true,
+      creator: { include: GIT_IDENTITY },
       links: {
         include: {
           repository: true,
@@ -771,7 +773,7 @@ export async function update(
     },
   });
 
-  return page;
+  return withLogins(page);
 }
 
 /**
@@ -876,7 +878,7 @@ export async function findByContentPath(
               },
             }
           : false,
-      creator: options.includeCreator ?? false,
+      creator: (options.includeCreator ?? false) ? { include: GIT_IDENTITY } : false,
       links:
         (options.includeLinks ?? false)
           ? {
@@ -889,7 +891,7 @@ export async function findByContentPath(
     },
   });
 
-  return page;
+  return withLogins(page);
 }
 
 /**

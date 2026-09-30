@@ -1,5 +1,5 @@
-import getPrisma from '@classmoji/database';
-import { titleToIdentifier } from '@classmoji/utils';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import { titleToIdentifier, withLogin } from '@classmoji/utils';
 import {
   DEFINITION_VERSION,
   FORM_DEFINITION_TOO_LARGE,
@@ -458,8 +458,8 @@ async function resolveOptionSource(
 
   const memberships = await tx.classroomMembership.findMany({
     where: { classroom_id: classroomId, role: { in: roles } },
-    select: { user_id: true, user: { select: { name: true, login: true } } },
-    orderBy: [{ user: { name: 'asc' } }, { user: { login: 'asc' } }],
+    select: { user_id: true, user: { select: { name: true, ...GIT_IDENTITY } } },
+    orderBy: [{ user: { name: 'asc' } }, { user_id: 'asc' }],
   });
 
   const byUser = new Map<string, FormOption>();
@@ -467,7 +467,7 @@ async function resolveOptionSource(
     if (byUser.has(membership.user_id)) continue;
     byUser.set(membership.user_id, {
       id: membership.user_id,
-      label: memberLabel(membership.user, membership.user_id),
+      label: memberLabel(withLogin(membership.user), membership.user_id),
     });
   }
   return [...byUser.values()];

@@ -22,7 +22,9 @@
  * (fails safe) and there is no wait-timeout window for a retry to re-fire.
  */
 
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { buildRemoveUserPayload, ClassmojiService } from '@classmoji/services';
+import { gitUsername } from '@classmoji/utils';
 import { signInviteToken } from '@classmoji/auth/invite-token';
 import Tasks from '@classmoji/tasks';
 import { tasks } from '@trigger.dev/sdk';
@@ -131,13 +133,19 @@ export const rosterRemoveStudentTool: ToolDefinition<RosterRemoveStudentArgs> = 
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
 
+    // Classroom-with-git-organization, narrowed by buildRemoveUserPayload below
+    // to the fields the task reads.
+    const classroomRecord = await ClassmojiService.classroom.findById(classroom.classroomId);
+    if (!classroomRecord) throw new ToolError('internal', 'Classroom record unavailable');
+    const provider = classroomRecord.git_organization?.provider ?? 'GITHUB';
+
     // Resolve the target user id server-side (login → user, or a supplied id).
     let userId = args.user_id;
     if (!userId) {
       if (!args.student_login) {
         throw new ToolError('invalid_params', 'Provide student_login or user_id');
       }
-      const user = await ClassmojiService.user.findByLogin(args.student_login);
+      const user = await ClassmojiService.user.findByGitUsername(args.student_login, provider);
       if (!user) throw scopedNotFound('Student');
       userId = user.id;
     }
@@ -154,11 +162,11 @@ export const rosterRemoveStudentTool: ToolDefinition<RosterRemoveStudentArgs> = 
     // has_accepted_invite is a MEMBERSHIP field (the web UI merges it onto its
     // client-side user object); the removal task reads it as user.has_accepted_invite.
     const hasAcceptedInvite = membership.has_accepted_invite;
-
-    // Classroom-with-git-organization, narrowed by buildRemoveUserPayload below
-    // to the fields the task reads.
-    const classroomRecord = await ClassmojiService.classroom.findById(classroom.classroomId);
-    if (!classroomRecord) throw new ToolError('internal', 'Classroom record unavailable');
+    const identity = await getPrisma().user.findUnique({
+      where: { id: target.id },
+      select: GIT_IDENTITY,
+    });
+    const targetLogin = gitUsername(identity, provider);
 
     // Audit the intent BEFORE firing the async removal.
     await writeAudit(ctx, {
@@ -168,7 +176,7 @@ export const rosterRemoveStudentTool: ToolDefinition<RosterRemoveStudentArgs> = 
       data: {
         tool: 'roster_remove_student',
         user_id: target.id,
-        login: target.login,
+        login: targetLogin,
         had_accepted_invite: hasAcceptedInvite,
       },
     });
@@ -183,7 +191,7 @@ export const rosterRemoveStudentTool: ToolDefinition<RosterRemoveStudentArgs> = 
         payload: buildRemoveUserPayload({
           user: {
             id: target.id,
-            login: target.login,
+            login: targetLogin,
             has_accepted_invite: hasAcceptedInvite,
           },
           classroom: classroomRecord,
@@ -198,7 +206,7 @@ export const rosterRemoveStudentTool: ToolDefinition<RosterRemoveStudentArgs> = 
       success: true,
       queued: true,
       user_id: target.id,
-      login: target.login,
+      login: targetLogin,
       message:
         'Student removal queued — removing GitHub team/org access and the membership in the background.',
     });

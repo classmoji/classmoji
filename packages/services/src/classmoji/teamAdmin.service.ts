@@ -26,7 +26,8 @@
  */
 import { queue } from 'async';
 
-import getPrisma from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY, whereGitUsername } from '@classmoji/database';
+import { withLogin } from '@classmoji/utils';
 import type { GitProvider as GitProviderEnum } from '@prisma/client';
 
 import { getGitProvider } from '../git/index.ts';
@@ -718,7 +719,7 @@ export const addTeamMembers = async ({
 
   const membersQueue = queue<string>(async login => {
     try {
-      const user = await findUserByLogin(login);
+      const user = await findUserByLogin(login, gitOrganization.provider);
       if (!user) {
         failed.push({ login, error: 'not_found' });
         return;
@@ -764,7 +765,7 @@ export const removeTeamMember = async ({
   const { gitOrganization, orgLogin } = await loadClassroomOrg(classroomId);
   const team = await resolveTeam(classroomId, slugOrId);
 
-  const user = await findUserByLogin(login);
+  const user = await findUserByLogin(login, gitOrganization.provider);
   if (!user) {
     throw new TeamServiceError('user_not_found', `[team] no user with login ${login}`);
   }
@@ -848,12 +849,14 @@ export const removeTeamTag = async ({
 };
 
 /**
- * Git logins are case-insensitive while Postgres is not, so match the stored
- * login insensitively — 'Ada' and 'ada' are the same person. Only id/login are
- * needed here, unlike user.service.findByLogin which pulls the whole graph.
+ * Git usernames are case-insensitive while Postgres is not, so match the stored
+ * username insensitively — 'Ada' and 'ada' are the same person. Only id/login
+ * are needed here, unlike user.service.findByGitUsername which pulls the whole graph.
  */
-const findUserByLogin = async (login: string) =>
-  getPrisma().user.findFirst({
-    where: { login: { equals: login.replace('@', '').trim(), mode: 'insensitive' } },
-    select: { id: true, login: true },
+const findUserByLogin = async (login: string, provider: string) => {
+  const user = await getPrisma().user.findFirst({
+    where: whereGitUsername(login.replace('@', '').trim(), provider),
+    select: { id: true, ...GIT_IDENTITY },
   });
+  return user ? withLogin(user, provider) : null;
+};
