@@ -1340,16 +1340,57 @@ model QuizAttempt {
   session_status            String?   @default("active")
   codebase_path             String?
   agent_config              Json?
+  /// Which runtime serves this attempt: ai_agent | trigger_chat. Stamped once at
+  /// creation; picks the renderer and the endpoints that may act on the attempt.
+  agent_runtime             String    @default("ai_agent")
+  /// Tool-schema, prompt and grading-policy bundle the attempt is graded under.
+  contract_version          Int?
+  /// QuizEvaluationRecordV2 (packages/utils/src/quizAgent/records.ts).
+  evaluation_json           Json?
+  trigger_session_id        String?
+  session_expires_at        DateTime?
+  /// Set at each admitted turn; a write from a superseded run no longer matches.
+  turn_fence                String?
+  chat_grant                Json?
   created_at                DateTime  @default(now())
   updated_at                DateTime  @default(now()) @updatedAt
 
-  quiz         Quiz            @relation(fields: [quiz_id], references: [id], onDelete: Cascade)
-  user         User            @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  conversation AIConversation? @relation(fields: [conversation_id], references: [id])
+  quiz         Quiz               @relation(fields: [quiz_id], references: [id], onDelete: Cascade)
+  user         User               @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  conversation AIConversation?    @relation(fields: [conversation_id], references: [id])
+  events       QuizAttemptEvent[]
 
   @@index([quiz_id])
   @@index([user_id])
   @@map("quiz_attempts")
+}
+
+/// Append-only journal of a trigger_chat attempt: each accepted outcome is one
+/// row keyed by an operation id (a tool call id, or the admitted message id),
+/// written in the same transaction as the change it records.
+model QuizAttemptEvent {
+  id               String   @id @default(uuid())
+  attempt_id       String
+  seq              Int
+  /// input_admitted | question_presented | result_finalized | result_revised
+  /// | evaluation_completed | exploration_completed | turn_refused
+  type             String
+  operation_id     String
+  tool_call_id     String?
+  turn_fence       String?
+  input_message_id String?
+  run_id           String?
+  contract_version Int?
+  payload          Json
+  actor_user_id    String?
+  created_at       DateTime @default(now())
+
+  attempt QuizAttempt @relation(fields: [attempt_id], references: [id], onDelete: Cascade)
+
+  @@unique([attempt_id, operation_id])
+  @@unique([attempt_id, seq])
+  @@index([attempt_id, type])
+  @@map("quiz_attempt_events")
 }
 
 // ============================================================================
@@ -1658,15 +1699,27 @@ model AIConversation {
 }
 
 model AIConversationMessage {
-  id              String      @id @default(uuid())
-  conversation_id String
-  role            MessageRole
-  content         String
-  metadata        Json?
-  created_at      DateTime    @default(now())
+  id               String      @id @default(uuid())
+  conversation_id  String
+  role             MessageRole
+  content          String
+  metadata         Json?
+  /// UIMessage parts (format ui_message_v1); null for legacy_text rows.
+  parts            Json?
+  /// legacy_text | ui_message_v1
+  format           String      @default("legacy_text")
+  /// The UIMessage id the stream and the browser use; unique per conversation.
+  ui_message_id    String?
+  /// false while a streamed message is still partial.
+  final            Boolean     @default(true)
+  /// student | server_opening | model | server_completion
+  provenance       String?
+  contract_version Int?
+  created_at       DateTime    @default(now())
 
   conversation AIConversation @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
 
+  @@unique([conversation_id, ui_message_id])
   @@index([conversation_id])
   @@map("ai_conversation_messages")
 }
