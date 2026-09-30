@@ -19,12 +19,19 @@ vi.mock('@trigger.dev/sdk/v3', () => ({
 }));
 
 const { quizTools, questionResultPartId } = await import('../index.ts');
-const { OFFER_AFTER_QUESTION_TEXT, QUESTION_AFTER_OFFER_TEXT, TURN_STOPPED_TEXT, retryText } =
-  await import('../errors.ts');
+const {
+  OFFER_AFTER_QUESTION_TEXT,
+  QUESTION_AFTER_OFFER_TEXT,
+  RECORD_BEFORE_ANSWER_TEXT,
+  recordBeforePresentText,
+  TURN_STOPPED_TEXT,
+  retryText,
+} = await import('../errors.ts');
 const { EXPLORATION_FAILED_TEXT } = await import('../../../shared/exploration/core.ts');
 const {
   EXPLORATION_BUSY_TEXT,
   EXPLORATION_LIMIT_TEXT,
+  EXPLORATION_QUESTION_OPEN_TEXT,
   EXPLORATION_STOPPED_TEXT,
   MAX_EXPLORATIONS_PER_TURN,
 } = await import('../exploreCodebase.ts');
@@ -62,13 +69,22 @@ function context(overrides: Partial<AttemptContext> = {}): AttemptContext {
     progress: {
       questionCount: 8,
       presented: 1,
-      finalized: [],
+      finalized: [1],
       completed: false,
       hasEvaluation: false,
     },
     ...overrides,
   } as AttemptContext;
 }
+
+/** Stored progress at turn start: questions 1..`presented` out, `finalized` recorded. */
+const progressAt = (presented: number, finalized: number[] = []) => ({
+  questionCount: 8,
+  presented,
+  finalized,
+  completed: false,
+  hasEvaluation: false,
+});
 
 const codeAware = (overrides: Partial<AttemptContext> = {}) =>
   context({
@@ -254,6 +270,62 @@ describe('present_question', () => {
     await expect(call(tools, 'present_question', card)).rejects.toThrow(TURN_STOPPED_TEXT);
     expect(grading.presentQuestion).not.toHaveBeenCalled();
   });
+
+  it('refuses the next question while the current one has no result, before any write', async () => {
+    const { tools, grading, writes } = setup({ ctx: context({ progress: progressAt(1) }) });
+    await expect(call(tools, 'present_question', card)).rejects.toThrow(recordBeforePresentText(1));
+    expect(recordBeforePresentText(1)).toBe('Record question 1 before presenting the next one.');
+    expect(grading.presentQuestion).not.toHaveBeenCalled();
+    expect(writes).toEqual([]);
+  });
+
+  it('presents the next question once the current one is recorded earlier in the step', async () => {
+    const { tools, grading } = setup({ ctx: context({ progress: progressAt(1) }) });
+    grading.finalizeQuestion.mockResolvedValue({
+      question_num: 1,
+      emoji: 'x',
+      brief_feedback: 'y',
+    });
+    grading.presentQuestion.mockResolvedValue({ card, question_number: 2, total_questions: 8 });
+    const [recorded, presented] = await Promise.allSettled([
+      call(tools, 'record_question_result', RECORD),
+      call(tools, 'present_question', card),
+    ]);
+    expect(recorded.status).toBe('fulfilled');
+    expect(presented).toMatchObject({ status: 'fulfilled', value: { question_number: 2 } });
+  });
+
+  it('keeps the next question refused after a refused record', async () => {
+    const { tools, grading } = setup({ ctx: context({ progress: progressAt(1) }) });
+    grading.finalizeQuestion.mockRejectedValue(
+      new QuizGradingError('invalid_input', 'Invalid question result: answers.')
+    );
+    await expect(call(tools, 'record_question_result', RECORD)).rejects.toThrow('answers');
+    await expect(call(tools, 'present_question', card)).rejects.toThrow(recordBeforePresentText(1));
+    expect(grading.presentQuestion).not.toHaveBeenCalled();
+  });
+
+  it('presents question 1 with nothing to wait for', async () => {
+    const { tools, grading } = setup({ ctx: context({ progress: progressAt(0) }) });
+    const first = { ...card, question_number: 1 };
+    grading.presentQuestion.mockResolvedValue({
+      card: first,
+      question_number: 1,
+      total_questions: 8,
+    });
+    await expect(call(tools, 'present_question', first)).resolves.toMatchObject({
+      question_number: 1,
+    });
+  });
+
+  it('leaves showing the current question again to the service', async () => {
+    const { tools, grading } = setup({ ctx: context({ progress: progressAt(2, [1]) }) });
+    grading.presentQuestion.mockResolvedValue({ card, question_number: 2, total_questions: 8 });
+    await expect(call(tools, 'present_question', card)).resolves.toMatchObject({
+      question_number: 2,
+    });
+    expect(grading.presentQuestion).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('record_question_result', () => {
@@ -313,6 +385,78 @@ describe('record_question_result', () => {
       call(tools, 'present_question', card),
     ]);
     expect(order).toEqual(['record', 'present']);
+  });
+  it('refuses a result for the question presented in the same turn, writing nothing', async () => {
+    const { tools, grading, writes } = setup();
+    grading.presentQuestion.mockResolvedValue({ card, question_number: 2, total_questions: 8 });
+
+    await call(tools, 'present_question', card);
+    await expect(
+      call(tools, 'record_question_result', { ...RECORD, question_num: 2, answers: [] })
+    ).rejects.toThrow(RECORD_BEFORE_ANSWER_TEXT);
+    expect(RECORD_BEFORE_ANSWER_TEXT).toBe(
+      'The student has not answered this question yet. Wait for their answer.'
+    );
+    expect(grading.finalizeQuestion).not.toHaveBeenCalled();
+    expect(writes).toEqual([]);
+  });
+
+  it('refuses it when both calls come in one step, present_question first', async () => {
+    const { tools, grading } = setup();
+    grading.presentQuestion.mockImplementation(async () => {
+      await new Promise(r => setTimeout(r, 20));
+      return { card, question_number: 2, total_questions: 8 };
+    });
+    const [presented, recorded] = await Promise.allSettled([
+      call(tools, 'present_question', card),
+      call(tools, 'record_question_result', { ...RECORD, question_num: 2, answers: [] }),
+    ]);
+    expect(presented.status).toBe('fulfilled');
+    expect(recorded).toMatchObject({
+      status: 'rejected',
+      reason: expect.objectContaining({ message: RECORD_BEFORE_ANSWER_TEXT }),
+    });
+    expect(grading.finalizeQuestion).not.toHaveBeenCalled();
+  });
+
+  it('still records the earlier question after presenting the next one in the same turn', async () => {
+    const { tools, grading } = setup();
+    grading.presentQuestion.mockResolvedValue({ card, question_number: 2, total_questions: 8 });
+    const stored = { question_num: 1, emoji: 'x', brief_feedback: 'y' };
+    grading.finalizeQuestion.mockResolvedValue(stored);
+
+    await call(tools, 'present_question', card);
+    await expect(call(tools, 'record_question_result', RECORD)).resolves.toBe(stored);
+    expect(grading.finalizeQuestion).toHaveBeenCalledTimes(1);
+  });
+
+  it('records a question presented in an earlier turn', async () => {
+    const first = setup();
+    first.grading.presentQuestion.mockResolvedValue({
+      card,
+      question_number: 2,
+      total_questions: 8,
+    });
+    await call(first.tools, 'present_question', card);
+    const next = setup();
+    const stored = { question_num: 2, emoji: 'x', brief_feedback: 'y' };
+    next.grading.finalizeQuestion.mockResolvedValue(stored);
+    await expect(
+      call(next.tools, 'record_question_result', { ...RECORD, question_num: 2 })
+    ).resolves.toBe(stored);
+  });
+
+  it("keeps a refused present_question from blocking that question's result", async () => {
+    const { tools, grading } = setup();
+    grading.presentQuestion.mockRejectedValue(
+      new QuizGradingError('out_of_order', 'Question 2 cannot be presented yet.')
+    );
+    const stored = { question_num: 2, emoji: 'x', brief_feedback: 'y' };
+    grading.finalizeQuestion.mockResolvedValue(stored);
+    await expect(call(tools, 'present_question', card)).rejects.toThrow('cannot be presented');
+    await expect(
+      call(tools, 'record_question_result', { ...RECORD, question_num: 2 })
+    ).resolves.toBe(stored);
   });
 });
 
@@ -725,6 +869,193 @@ describe('explore_codebase (fake pipeline)', () => {
     expect(seen.depth).toBe('focused');
   });
 
+  it('refuses prepare_next while a question is open in a typed-answer turn, reading nothing', async () => {
+    const { tools, grading, mintRepoToken } = exploreSetup(async () => result(['a.css']), {
+      ctx: codeAware({ progress: progressAt(2, [1]) }),
+    });
+    await expect(
+      call(tools, 'explore_codebase', { purpose: 'prepare_next', focus_area: FOCUS })
+    ).rejects.toThrow(EXPLORATION_QUESTION_OPEN_TEXT);
+    expect(EXPLORATION_QUESTION_OPEN_TEXT).toBe(
+      'Finish the current question first: give your feedback and record the result, then explore for the next question.'
+    );
+    expect(mintRepoToken).not.toHaveBeenCalled();
+    expect(grading.listExplorations).not.toHaveBeenCalled();
+    expect(grading.recordExploration).not.toHaveBeenCalled();
+  });
+
+  it('refuses prepare_next while a question is open in a Next turn', async () => {
+    const { tools, mintRepoToken } = exploreSetup(async () => result(['a.css']), {
+      ctx: codeAware({ progress: progressAt(2, [1]), lastAction: 'next' }),
+    });
+    await expect(
+      call(tools, 'explore_codebase', { purpose: 'prepare_next', focus_area: FOCUS })
+    ).rejects.toThrow(EXPLORATION_QUESTION_OPEN_TEXT);
+    expect(mintRepoToken).not.toHaveBeenCalled();
+  });
+
+  it('allows check_current while a question is open', async () => {
+    const { tools, mintRepoToken } = exploreSetup(async () => result(['a.css']), {
+      ctx: codeAware({ progress: progressAt(2, [1]) }),
+    });
+    await expect(
+      call(tools, 'explore_codebase', { purpose: 'check_current', focus_area: 'a.css' })
+    ).resolves.toMatchObject({ files_read: ['a.css'] });
+    expect(mintRepoToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows the opening prepare_next before the first question', async () => {
+    const { tools } = exploreSetup(async () => result(['a.css']), {
+      ctx: codeAware({ progress: progressAt(0) }),
+    });
+    await expect(
+      call(tools, 'explore_codebase', { purpose: 'prepare_next', focus_area: 'initial' })
+    ).resolves.toMatchObject({ files_read: ['a.css'] });
+  });
+
+  it('runs record, prepare_next and present from one step in that order', async () => {
+    const order: string[] = [];
+    const { tools, grading } = exploreSetup(
+      async () => {
+        order.push('explore');
+        return result(['a.css']);
+      },
+      { ctx: codeAware({ progress: progressAt(2, [1]), lastAction: 'next' }) }
+    );
+    grading.finalizeQuestion.mockImplementation(async () => {
+      await new Promise(r => setTimeout(r, 20));
+      order.push('record');
+      return { question_num: 2, emoji: 'x', brief_feedback: 'y' };
+    });
+    const third = { ...card, question_number: 3 };
+    grading.presentQuestion.mockImplementation(async () => {
+      order.push('present');
+      return { card: third, question_number: 3, total_questions: 8 };
+    });
+
+    const settled = await Promise.allSettled([
+      call(tools, 'record_question_result', { ...RECORD, question_num: 2 }),
+      call(tools, 'explore_codebase', { purpose: 'prepare_next', focus_area: FOCUS }),
+      call(tools, 'present_question', third),
+    ]);
+    expect(settled.map(r => r.status)).toEqual(['fulfilled', 'fulfilled', 'fulfilled']);
+    expect(order).toEqual(['record', 'explore', 'present']);
+  });
+
+  it('counts both purposes toward the limit, but not a refused call', async () => {
+    const { tools, grading } = exploreSetup(async () => result(['a.css']), {
+      ctx: codeAware({ progress: progressAt(2, [1]) }),
+    });
+    grading.finalizeQuestion.mockResolvedValue({
+      question_num: 2,
+      emoji: 'x',
+      brief_feedback: 'y',
+    });
+    const explore = (purpose: string, id: string) =>
+      call(tools, 'explore_codebase', { purpose, focus_area: id }, id);
+
+    await expect(explore('prepare_next', 'e1')).rejects.toThrow(EXPLORATION_QUESTION_OPEN_TEXT);
+    await expect(explore('prepare_next', 'e2')).rejects.toThrow(EXPLORATION_QUESTION_OPEN_TEXT);
+    await expect(explore('check_current', 'e3')).resolves.toBeTruthy();
+    await call(tools, 'record_question_result', { ...RECORD, question_num: 2 });
+    for (let i = 1; i < MAX_EXPLORATIONS_PER_TURN; i++) {
+      await expect(explore('prepare_next', `n${i}`)).resolves.toBeTruthy();
+    }
+    await expect(explore('prepare_next', 'last')).rejects.toThrow(EXPLORATION_LIMIT_TEXT);
+  });
+
+  it('in a live Next turn, refuses prepare_next first, then records, explores and presents in order', async () => {
+    const { runQuizTurn } = await import('../../loop.ts');
+    // eslint-disable-next-line import/no-unresolved -- package subpath export, resolved by vitest
+    const { MockLanguageModelV4, convertArrayToReadableStream } = await import('ai/test');
+    const order: string[] = [];
+    const grading = fakeGrading();
+    grading.finalizeQuestion.mockImplementation(async () => {
+      order.push('record');
+      return { question_num: 3, emoji: 'x', brief_feedback: 'y' };
+    });
+    const fourth = { ...card, question_number: 4 };
+    grading.presentQuestion.mockImplementation(async () => {
+      order.push('present');
+      return { card: fourth, question_number: 4, total_questions: 8 };
+    });
+    const explore = vi.fn(async () => {
+      order.push('explore');
+      return result(['a.css']);
+    });
+    const usage = {
+      inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: 1, text: 1, reasoning: 0 },
+    };
+    const toolCall = (toolCallId: string, toolName: string, input: unknown) => ({
+      type: 'tool-call',
+      toolCallId,
+      toolName,
+      input: JSON.stringify(input),
+    });
+    const steps = [
+      toolCall('x1', 'explore_codebase', { purpose: 'prepare_next', focus_area: FOCUS }),
+      toolCall('r1', 'record_question_result', {
+        question_num: 3,
+        answers: [{ level: 'correct', hints_before: 0 }],
+        brief_feedback: 'Nailed it!',
+      }),
+      toolCall('x2', 'explore_codebase', { purpose: 'prepare_next', focus_area: FOCUS }),
+      toolCall('p1', 'present_question', fourth),
+    ];
+    let n = 0;
+    const model = new MockLanguageModelV4({
+      doStream: async () =>
+        ({
+          stream: convertArrayToReadableStream([
+            { type: 'stream-start', warnings: [] },
+            steps[Math.min(n++, steps.length - 1)],
+            { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool_use' }, usage },
+          ]),
+        }) as never,
+    });
+    const stream = runQuizTurn({
+      ctx: codeAware({ progress: progressAt(3, [1, 2]), lastAction: 'next' }),
+      messages: [{ role: 'user', content: 'next' }],
+      signal: new AbortController().signal,
+      model,
+      // Unprojected, so the hidden tools' results can be checked too.
+      project: false,
+      deps: {
+        tools: (ctx, d) =>
+          quizTools(ctx, {
+            ...d,
+            services: {
+              grading,
+              mintRepoToken: async () => 'repo-token',
+              anthropic: () => ({}) as Anthropic,
+              explore,
+            } as never,
+            log: vi.fn(),
+          }),
+        getProgress: async () => progressAt(4, [1, 2, 3]),
+        completeFromGrades: vi.fn(),
+        persistAssistant: async () => {},
+        evaluationNotice: () => 'notice',
+        log: vi.fn(),
+      },
+    });
+    const chunks: Array<Record<string, unknown>> = [];
+    for await (const c of stream as unknown as AsyncIterable<Record<string, unknown>>)
+      chunks.push(c);
+
+    // Four steps: the refused exploration, the record, the exploration, the card (which ends the turn).
+    expect(model.doStreamCalls).toHaveLength(4);
+    expect(JSON.stringify(model.doStreamCalls[1].prompt)).toContain(EXPLORATION_QUESTION_OPEN_TEXT);
+    expect(order).toEqual(['record', 'explore', 'present']);
+    expect(explore).toHaveBeenCalledTimes(1);
+    expect(chunks).toContainEqual(
+      expect.objectContaining({ type: 'tool-output-error', toolCallId: 'x1' })
+    );
+    const outputs = chunks.filter(c => c.type === 'tool-output-available').map(c => c.toolCallId);
+    expect(outputs).toEqual(['r1', 'x2', 'p1']);
+  });
+
   it('refuses a second exploration while one is running', async () => {
     const releases: Array<() => void> = [];
     const { tools } = exploreSetup(
@@ -852,7 +1183,7 @@ describe('explore_codebase (fake pipeline)', () => {
         type: 'tool-call',
         toolCallId: 'e1',
         toolName: 'explore_codebase',
-        input: JSON.stringify({ focus_area: 'initial' }),
+        input: JSON.stringify({ purpose: 'prepare_next', focus_area: 'initial' }),
       },
       { type: 'text-start', id: 't' },
       { type: 'text-end', id: 't' },

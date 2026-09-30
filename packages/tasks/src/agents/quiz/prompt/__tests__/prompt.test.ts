@@ -160,8 +160,24 @@ describe('quiz prompt: typed tools only', () => {
     expect(codeAwareAgentPrompt).toMatch(/Mark every cut with "\.\.\."/);
     expect(codeAwareAgentPrompt).toMatch(/NEVER quote the SOURCE MATERIAL/);
     expect(codeAwareAgentPrompt).toMatch(
-      /check with explore_codebase, then correct\s+yourself in one sentence/
+      /check with explore_codebase using purpose\s+"check_current", then correct yourself in one sentence/
     );
+  });
+
+  it('records the question before exploring for the next one, and names both purposes', () => {
+    expect(codeAwareAgentPrompt).toMatch(/purpose="check_current"/);
+    expect(codeAwareAgentPrompt).toMatch(/purpose="prepare_next"/);
+    const order = codeAwareAgentPrompt.slice(
+      codeAwareAgentPrompt.indexOf('When transitioning to a new question')
+    );
+    const record = order.indexOf('record_question_result');
+    const explore = order.indexOf('explore_codebase with purpose="prepare_next"');
+    const present = order.indexOf('present_question');
+    expect(record).toBeGreaterThan(-1);
+    expect(explore).toBeGreaterThan(record);
+    expect(present).toBeGreaterThan(explore);
+    expect(codeAwareAgentPrompt).not.toMatch(/may explore code first/);
+    expect(baseSystemPrompt).toMatch(/BEFORE anything else \(before any other tool call\)/);
   });
 
   it('tells the model to end its reply after offer_next_step', () => {

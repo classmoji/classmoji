@@ -138,6 +138,12 @@ export type OfferNextStep = z.infer<typeof OfferNextStepSchema>;
 
 /** The ai-agent's ExplorationRequestSchema minus previousFindings/avoidFiles (history comes from the journal). */
 export const ExploreCodebaseSchema = z.object({
+  purpose: z
+    .enum(['check_current', 'prepare_next'])
+    .describe(
+      "check_current: re-read the student's code for the question they are on, to judge an answer or check a quote they dispute. " +
+        'prepare_next: find code for the next question; refused while the current question has no recorded result (allowed before the first question).'
+    ),
   focus_area: z
     .string()
     .max(200)

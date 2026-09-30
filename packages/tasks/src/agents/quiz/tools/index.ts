@@ -13,13 +13,26 @@
  * service stored, never the call's own input: a re-run returns the original
  * card or grade.
  *
- * A set is built once per turn (the loop calls the factory per turn), so state
- * kept in this closure is per turn: once present_question has succeeded, an
- * offer_next_step in the same turn is refused, and once offer_next_step has
- * succeeded, a present_question in the same turn is refused (before anything
- * is written), so a question card and buttons never arrive together, in
- * either order. The checks run inside the queue, after every call the model
- * made before them in the same step.
+ * A set is built once per turn (the loop calls the factory per turn, and its
+ * recovery calls share the set), so state kept in this closure is per turn:
+ * once present_question has succeeded, an offer_next_step in the same turn is
+ * refused, and once offer_next_step has succeeded, a present_question in the
+ * same turn is refused (before anything is written), so a question card and
+ * buttons never arrive together, in either order. A record_question_result
+ * for a question whose card went out in the same turn is refused too, before
+ * anything is written: the student has not seen it yet, so there is nothing
+ * to rate. Recording an earlier question (the one the student is moving on
+ * from) is unaffected.
+ *
+ * A question is open while the last presented question has no recorded
+ * result. While one is open, present_question for a later question is refused
+ * (question 1 has nothing to wait for), and so is explore_codebase with
+ * purpose `prepare_next`, in every turn: the student's result comes before any
+ * exploration for the next question. Exploring with `check_current` (the
+ * question the student is on) is always allowed. The open-question state
+ * starts from the turn's stored progress and follows this turn's successful
+ * calls. The checks run inside the queue, after every call the model made
+ * before them in the same step.
  */
 import { tool, type ToolSet, type UIMessageStreamWriter } from 'ai';
 import type Anthropic from '@anthropic-ai/sdk';
@@ -47,6 +60,8 @@ import {
   aborted,
   OFFER_AFTER_QUESTION_TEXT,
   QUESTION_AFTER_OFFER_TEXT,
+  RECORD_BEFORE_ANSWER_TEXT,
+  recordBeforePresentText,
   toolFailure,
   TURN_STOPPED_TEXT,
 } from './errors.ts';
@@ -116,6 +131,14 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
   };
   /** A question card went out in this turn: the student answers next. */
   let questionPresented = false;
+  /** The question numbers whose card went out in this turn (as stored). */
+  const presentedThisTurn = new Set<number>();
+  /** The last question presented so far, this turn included. */
+  let lastPresented = ctx.progress.presented;
+  /** The questions with a recorded result so far, this turn included. */
+  const recorded = new Set<number>(ctx.progress.finalized);
+  /** No question is open: none presented yet, or the last one has its result. */
+  const noQuestionOpen = () => lastPresented < 1 || recorded.has(lastPresented);
   /** Next-step buttons went out in this turn: the student chooses next. */
   let offerMade = false;
 
@@ -129,6 +152,12 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
         // Refused before the write: a card the student never sees must not
         // count as presented.
         if (offerMade) throw new Error(QUESTION_AFTER_OFFER_TEXT);
+        // The question the student is leaving is recorded first, so its
+        // result shows before the next card. Showing the current question
+        // again is left to the service (it returns the stored card).
+        if (input.question_number > lastPresented && !noQuestionOpen()) {
+          throw new Error(recordBeforePresentText(lastPresented));
+        }
         let out: PresentQuestionOutput;
         try {
           out = await (await grading()).presentQuestion(fenced(toolCallId), input);
@@ -136,6 +165,8 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
           throw toolFailure('present_question', error, ids, d.log);
         }
         questionPresented = true;
+        presentedThisTurn.add(out.question_number);
+        lastPresented = Math.max(lastPresented, out.question_number);
         return out;
       }),
   });
@@ -147,12 +178,18 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
     execute: (input, { toolCallId, abortSignal }): Promise<QuestionResultOutput> =>
       d.queue(async () => {
         stopIfAborted(abortSignal);
+        // Refused before the write: a question presented in this turn has no
+        // answer yet.
+        if (presentedThisTurn.has(input.question_num)) {
+          throw new Error(RECORD_BEFORE_ANSWER_TEXT);
+        }
         let out: QuestionResultOutput;
         try {
           out = await (await grading()).finalizeQuestion(fenced(toolCallId), input);
         } catch (error) {
           throw toolFailure('record_question_result', error, ids, d.log);
         }
+        recorded.add(out.question_num);
         // The tool part is hidden from every viewer; the divider is this part,
         // carrying the stored result only. A fixed id per question keeps a
         // replayed call from drawing a second divider.
@@ -217,12 +254,18 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
       recordExploration: async (...a) => (await grading()).recordExploration(...a),
       listExplorations: async (...a) => (await grading()).listExplorations(...a),
     };
-    tools.explore_codebase = exploreCodebaseTool(ctx, ctx.exploration, d, {
-      grading: lazyGrading,
-      mintRepoToken: d.services?.mintRepoToken ?? mintRepoToken,
-      anthropic: d.services?.anthropic ?? defaultAnthropic,
-      explore: d.services?.explore ?? exploreRepository,
-    });
+    tools.explore_codebase = exploreCodebaseTool(
+      ctx,
+      ctx.exploration,
+      d,
+      {
+        grading: lazyGrading,
+        mintRepoToken: d.services?.mintRepoToken ?? mintRepoToken,
+        anthropic: d.services?.anthropic ?? defaultAnthropic,
+        explore: d.services?.explore ?? exploreRepository,
+      },
+      { questionOpen: () => !noQuestionOpen() }
+    );
   }
 
   return tools;

@@ -435,8 +435,10 @@ did. It never restates or overrides a rule below.
    request. A retry is still the same question. A hint request is not a transition.
 
 5. ON AN EXPLICIT NEXT, RECORD FIRST. Call record_question_result for the
-   question just completed BEFORE anything else, then either present_question
-   for the next one or, if that was the last, submit_quiz_evaluation.
+   question just completed BEFORE anything else (before any other tool call),
+   then either present_question for the next one or, if that was the last,
+   submit_quiz_evaluation. present_question for the next question is refused
+   until the current one has its recorded result.
 
 6. THE LAST QUESTION IS NOT SPECIAL UNTIL NEXT. Answering it does not end the
    quiz; you still wait for an explicit Next. Only then, and in this order:

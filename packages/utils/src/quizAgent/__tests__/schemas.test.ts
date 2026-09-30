@@ -104,20 +104,38 @@ describe('QuizQuestionSchema', () => {
 });
 
 describe('ExploreCodebaseSchema', () => {
+  const purpose = 'prepare_next' as const;
+
   it('defaults depth to focused', () => {
-    expect(ExploreCodebaseSchema.parse({ focus_area: 'initial' }).depth).toBe('focused');
+    expect(ExploreCodebaseSchema.parse({ purpose, focus_area: 'initial' }).depth).toBe('focused');
+  });
+
+  it('requires a purpose of check_current or prepare_next', () => {
+    expect(ExploreCodebaseSchema.safeParse({ focus_area: 'api' }).success).toBe(false);
+    expect(ExploreCodebaseSchema.safeParse({ purpose: 'other', focus_area: 'api' }).success).toBe(
+      false
+    );
+    for (const p of ['check_current', 'prepare_next']) {
+      expect(ExploreCodebaseSchema.parse({ purpose: p, focus_area: 'api' }).purpose).toBe(p);
+    }
   });
 
   it('refuses an overlong focus area and question', () => {
-    expect(ExploreCodebaseSchema.safeParse({ focus_area: 'x'.repeat(201) }).success).toBe(false);
+    expect(ExploreCodebaseSchema.safeParse({ purpose, focus_area: 'x'.repeat(201) }).success).toBe(
+      false
+    );
     expect(
-      ExploreCodebaseSchema.safeParse({ focus_area: 'api', specific_question: 'x'.repeat(501) })
-        .success
+      ExploreCodebaseSchema.safeParse({
+        purpose,
+        focus_area: 'api',
+        specific_question: 'x'.repeat(501),
+      }).success
     ).toBe(false);
   });
 
   it('has no previousFindings or avoidFiles input', () => {
     const parsed = ExploreCodebaseSchema.parse({
+      purpose,
       focus_area: 'api',
       previousFindings: ['a'],
       avoidFiles: ['b'],

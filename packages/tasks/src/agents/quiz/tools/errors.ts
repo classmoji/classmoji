@@ -22,6 +22,14 @@ export const OFFER_AFTER_QUESTION_TEXT =
 export const QUESTION_AFTER_OFFER_TEXT =
   "Wait for the student's choice before presenting the next question.";
 
+/** record_question_result refused for a question whose card went out earlier in the same turn. */
+export const RECORD_BEFORE_ANSWER_TEXT =
+  'The student has not answered this question yet. Wait for their answer.';
+
+/** present_question refused because question `n`, the one the student is leaving, has no result yet. */
+export const recordBeforePresentText = (n: number) =>
+  `Record question ${n} before presenting the next one.`;
+
 /** A grading refusal from `ClassmojiService.quizGrading` (`QuizGradingError`). */
 export function isGradingRefusal(error: unknown): error is Error & { code: string } {
   return (
