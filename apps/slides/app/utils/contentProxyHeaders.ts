@@ -3,17 +3,18 @@
  * proxy puts on what it serves.
  *
  * Everything that route answers carries `nosniff`, so a browser takes the
- * declared type at its word. A file whose type a browser would RENDER as a
- * document — HTML, XHTML, SVG, any XML — is additionally served as a sandboxed
- * download (`DOWNLOAD_HARDENING_HEADERS` plus `attachment`), because this proxy
- * shares the slides app's origin and its cookies.
+ * declared type at its word.
  *
- * Nothing the app itself builds navigates to one of those files: the deck
- * surfaces read a deck's `index.html` with `fetch()` and parse it, and images
- * (SVG included) load through `<img>`, CSS `url()` and `<link>`. A subresource
- * load ignores `Content-Disposition`, and a CSP sandbox governs documents, not
- * decoded images — so none of those are affected. What changes is opening such
- * a file directly: it downloads instead of rendering here.
+ * HTML and XHTML render as pages. Decks embed a course's own HTML (interactive
+ * demos in the content repo) in `<iframe>`s pointed at this proxy, and those
+ * pages load their own scripts and stylesheets through it too — a downloaded
+ * or sandboxed response leaves the iframe blank, and an opaque-origin sandbox
+ * would also stop the page's subresources, which need the viewer's session.
+ *
+ * SVG and other XML are still served as a sandboxed download
+ * (`DOWNLOAD_HARDENING_HEADERS` plus `attachment`): decks load images through
+ * `<img>`, CSS `url()` and `<link>`, which ignore `Content-Disposition` and are
+ * not documents a CSP sandbox governs, so only opening one directly changes.
  *
  * Pure — no Prisma, no services — so it can be unit tested on its own.
  */
@@ -39,8 +40,16 @@ export function isDocumentMimeType(mimeType: string): boolean {
 
 /** The headers the proxy adds to a response of `mimeType`. */
 export function contentProxySafetyHeaders(mimeType: string): Record<string, string> {
-  if (!isDocumentMimeType(mimeType)) return { 'X-Content-Type-Options': 'nosniff' };
+  if (!isDocumentMimeType(mimeType) || rendersAsPage(mimeType)) {
+    return { 'X-Content-Type-Options': 'nosniff' };
+  }
   return { ...DOWNLOAD_HARDENING_HEADERS, 'Content-Disposition': 'attachment' };
+}
+
+/** HTML and XHTML: course pages that decks embed in iframes render as pages. */
+export function rendersAsPage(mimeType: string): boolean {
+  const essence = mimeType.split(';')[0].trim().toLowerCase();
+  return essence === 'text/html' || essence === 'application/xhtml+xml';
 }
 
 /**
