@@ -13,13 +13,18 @@
  * and a correlation id; never the error message and never student text), and
  * rethrows a `QuizTurnError` whose message is fixed copy chosen by kind.
  */
+import {
+  QUIZ_FAILURE_COPY,
+  QUIZ_REFUSAL_COPY,
+  QUIZ_REFUSAL_COPY_BY_KIND,
+} from '@classmoji/utils/quiz-agent';
 
-/** What the student is told, by failure kind. Fixed copy, no mechanics. */
-export const FIXED_COPY = {
-  reply_failed: "That reply couldn't be finished. Please send your message again.",
-  turn_stopped: "That reply couldn't be finished. Send your message again.",
-  refused: "This quiz can't continue right now.",
-} as const;
+/**
+ * What the student is told, by failure kind and by refusal code. Fixed copy,
+ * no mechanics; it lives in `@classmoji/utils/quiz-agent` because the chat's
+ * error allowlist is built from the same lines.
+ */
+export const FIXED_COPY = QUIZ_FAILURE_COPY;
 
 export type FailureKind = keyof typeof FIXED_COPY;
 
@@ -28,25 +33,9 @@ export type FailureKind = keyof typeof FIXED_COPY;
  * the copy for their kind: a temporary refusal may clear on its own, a
  * permanent one ends the attempt's chat.
  */
-const REFUSAL_COPY: Record<string, string> = {
-  quizzes_unavailable: "Quizzes aren't available in this class.",
-  attempt_completed: 'This quiz is already complete.',
-  attempt_expired: 'This attempt can no longer be continued.',
-  attempt_not_found: 'This attempt can no longer be continued.',
-  wrong_runtime: 'This attempt can no longer be continued.',
-  not_a_member: 'This attempt can no longer be continued.',
-  turn_limit: 'This attempt has reached its message limit.',
-  invalid_message: "That message couldn't be sent. Please try again.",
-  message_conflict: "That message couldn't be sent. Please try again.",
-  invalid_input: "That message couldn't be sent. Please try again.",
-  invalid_trigger: "That message couldn't be sent. Please try again.",
-  already_started: 'This quiz has already started.',
-};
+const REFUSAL_COPY = QUIZ_REFUSAL_COPY;
 
-const REFUSAL_COPY_BY_KIND = {
-  temporary: "This quiz isn't available right now. Please try again later.",
-  permanent: 'This attempt can no longer be continued.',
-} as const;
+const REFUSAL_COPY_BY_KIND = QUIZ_REFUSAL_COPY_BY_KIND;
 
 /** The error every sanitized callback throws. Its message is always fixed copy. */
 export class QuizTurnError extends Error {
@@ -112,7 +101,8 @@ export function describeError(error: unknown): Record<string, string | number> {
     if (typeof name === 'string' && SAFE_CODE.test(name)) out.errorClass = name;
     const code = (error as { code?: unknown }).code;
     if (typeof code === 'string' && SAFE_CODE.test(code)) out.errorCode = code;
-    const status = (error as { statusCode?: unknown; status?: unknown }).statusCode ??
+    const status =
+      (error as { statusCode?: unknown; status?: unknown }).statusCode ??
       (error as { status?: unknown }).status;
     if (typeof status === 'number' && Number.isInteger(status)) out.status = status;
     if (error.name === 'AbortError') out.aborted = 1;
@@ -122,15 +112,23 @@ export function describeError(error: unknown): Record<string, string | number> {
   return out;
 }
 
-/** Log a private diagnostic for an error: ids and error facts only. */
+/**
+ * Log a private diagnostic for an error: ids and error facts only. `facts.status`
+ * is an HTTP status the caller read from a provider error that carries it only
+ * in its fixed-format message; a status on the error itself wins.
+ */
 export function logDiagnostic(
   label: string,
   error: unknown,
   ids: DiagnosticIds = {},
-  log: DiagnosticLog = defaultLog
+  log: DiagnosticLog = defaultLog,
+  facts: { status?: number } = {}
 ): string {
   const corr = correlationId();
   const fields: Record<string, string | number> = { corr, ...describeError(error) };
+  if (fields.status === undefined && Number.isInteger(facts.status)) {
+    fields.status = facts.status as number;
+  }
   const chatId = safeId(ids.chatId);
   const runId = safeId(ids.runId);
   if (chatId) fields.chatId = chatId;
@@ -167,7 +165,9 @@ export function toTurnError(
 export function isRuntimeControlError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   const name = error.constructor?.name || error.name;
-  return name === 'OutOfMemoryError' || error.name === 'OutOfMemoryError' || error.name === 'AbortError';
+  return (
+    name === 'OutOfMemoryError' || error.name === 'OutOfMemoryError' || error.name === 'AbortError'
+  );
 }
 
 /** Pull `chatId` / `runId` out of a callback's arguments, where present. */

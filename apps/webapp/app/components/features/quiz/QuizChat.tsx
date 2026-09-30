@@ -9,6 +9,8 @@ import { useChatActions, useTriggerChatTransport } from '@trigger.dev/sdk/chat/r
 import type { ChatSessionPersistedState } from '@trigger.dev/sdk/chat';
 import {
   GRADING_RULE_SENTENCE,
+  QUIZ_AGENT_ERROR_COPY,
+  QUIZ_FAILURE_COPY,
   type NextStepAction,
   type QuizEvaluationRecordV2,
   type QuizUIMessage,
@@ -76,25 +78,26 @@ export interface QuizChatProps {
 // Fixed copy
 // ---------------------------------------------------------------------------
 
-export const REPLY_FAILED_LINE = "That reply couldn't be finished. Please send your message again.";
+export const REPLY_FAILED_LINE: string = QUIZ_FAILURE_COPY.reply_failed;
 const START_FAILED_LINE = "The quiz couldn't start. Please try again.";
 
 /** What a `data-notice` part says, by its code. */
 export const NOTICE_COPY: Record<string, string> = {
-  turn_stopped: 'That reply was stopped. Please send your message again.',
+  turn_stopped: QUIZ_FAILURE_COPY.turn_stopped,
   reply_failed: REPLY_FAILED_LINE,
   source_material_unavailable:
     "This quiz's source material isn't available yet. Ask your instructor.",
-  refused: "This quiz can't continue right now.",
+  refused: QUIZ_FAILURE_COPY.refused,
 };
 
 /**
  * Lines the server writes as fixed copy for students (api.quiz, the session
  * route, the task's sanitized errors). An error whose text is one of these is
- * shown as is; any other error text (a network failure, a library message) is
- * replaced by REPLY_FAILED_LINE.
+ * shown as is; any other error text (a network failure, a library message, the
+ * AI SDK's own "An error occurred.") is replaced by REPLY_FAILED_LINE. The
+ * task's lines come from the module its sanitizer writes them from.
  */
-const FIXED_ERROR_COPY = new Set<string>([
+export const FIXED_ERROR_COPY: ReadonlySet<string> = new Set<string>([
   REPLY_FAILED_LINE,
   START_FAILED_LINE,
   'Something went wrong. Please try again.',
@@ -109,11 +112,7 @@ const FIXED_ERROR_COPY = new Set<string>([
   'Quiz attempt not found.',
   "This quiz can't continue right now.",
   // The Trigger task's own refusals and failures (packages/tasks, sanitize.ts).
-  'That reply took too long and was stopped. Please send your message again.',
-  'This attempt has reached its message limit.',
-  "That message couldn't be sent. Please try again.",
-  'This quiz has already started.',
-  "This quiz isn't available right now. Please try again later.",
+  ...QUIZ_AGENT_ERROR_COPY,
   ...Object.values(NOTICE_COPY),
 ]);
 

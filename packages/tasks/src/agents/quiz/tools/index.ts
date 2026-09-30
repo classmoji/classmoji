@@ -12,6 +12,12 @@
  * call id (row lock, fence check, journal, replay-safe). Outputs are what the
  * service stored, never the call's own input: a re-run returns the original
  * card or grade.
+ *
+ * A set is built once per turn (the loop calls the factory per turn), so state
+ * kept in this closure is per turn: once present_question has succeeded, an
+ * offer_next_step in the same turn is refused, so a new question card never
+ * arrives with buttons under it. The check runs inside the queue, after every
+ * call the model made before it in the same step.
  */
 import { tool, type ToolSet, type UIMessageStreamWriter } from 'ai';
 import type Anthropic from '@anthropic-ai/sdk';
@@ -35,7 +41,7 @@ import type { DiagnosticLog } from '../../shared/sanitize.ts';
 import type { ToolQueue } from '../../shared/toolQueue.ts';
 import type { AttemptContext, GitOrgLike } from '../context.ts';
 import { TOOL_DESCRIPTIONS } from './descriptions.ts';
-import { aborted, toolFailure, TURN_STOPPED_TEXT } from './errors.ts';
+import { aborted, OFFER_AFTER_QUESTION_TEXT, toolFailure, TURN_STOPPED_TEXT } from './errors.ts';
 import { defaultAnthropic, exploreCodebaseTool, mintRepoToken } from './exploreCodebase.ts';
 
 type Grading = typeof ClassmojiService.quizGrading;
@@ -100,6 +106,8 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
   const stopIfAborted = (abortSignal?: AbortSignal) => {
     if (aborted(d.signal, abortSignal)) throw new Error(TURN_STOPPED_TEXT);
   };
+  /** A question card went out in this turn: the student answers next. */
+  let questionPresented = false;
 
   const present_question = tool({
     description: TOOL_DESCRIPTIONS.present_question,
@@ -108,11 +116,14 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
     execute: (input, { toolCallId, abortSignal }): Promise<PresentQuestionOutput> =>
       d.queue(async () => {
         stopIfAborted(abortSignal);
+        let out: PresentQuestionOutput;
         try {
-          return await (await grading()).presentQuestion(fenced(toolCallId), input);
+          out = await (await grading()).presentQuestion(fenced(toolCallId), input);
         } catch (error) {
           throw toolFailure('present_question', error, ids, d.log);
         }
+        questionPresented = true;
+        return out;
       }),
   });
 
@@ -152,6 +163,7 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
     execute: (input, { abortSignal }): Promise<OfferNextStep> =>
       d.queue(async () => {
         stopIfAborted(abortSignal);
+        if (questionPresented) throw new Error(OFFER_AFTER_QUESTION_TEXT);
         return { actions: [...input.actions] };
       }),
   });

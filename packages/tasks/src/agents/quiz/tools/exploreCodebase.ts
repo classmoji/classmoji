@@ -14,6 +14,8 @@
  *   excerpted paths and one summary line per file; the next exploration reads
  *   them back, in this run or a later one.
  * - At most one exploration in flight: a second concurrent call is refused.
+ * - A failed exploration (token or pipeline) tells the model only
+ *   `EXPLORATION_FAILED_TEXT`; the prompt says what to do next.
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { tool } from 'ai';
@@ -25,9 +27,10 @@ import {
 import {
   excerptedPaths,
   excerptSummaryLines,
+  EXPLORATION_FAILED_TEXT,
   ExplorationStoppedError,
-  explorationFailureText,
   formatExcerptResult,
+  providerStatus,
 } from '../../shared/exploration/core.ts';
 import { logDiagnostic } from '../../shared/sanitize.ts';
 import type { AttemptContext, GitOrgLike } from '../context.ts';
@@ -87,12 +90,25 @@ export function exploreCodebaseTool(
             .filter(Boolean)
             .slice(-MAX_PREVIOUS_FINDINGS);
 
+          // Any failure below reaches the model as EXPLORATION_FAILED_TEXT only;
+          // the real error is logged with ids and error facts, by phase.
+          const failed = (label: 'explore_token' | 'explore_codebase', error: unknown) => {
+            if (error instanceof ExplorationStoppedError || aborted(d.signal, abortSignal)) {
+              return new Error(EXPLORATION_STOPPED_TEXT);
+            }
+            logDiagnostic(label, error, ids, d.log, { status: providerStatus(error) });
+            return new Error(EXPLORATION_FAILED_TEXT);
+          };
+
+          let token: string;
+          try {
+            token = await services.mintRepoToken(exploration.gitOrganization, exploration.repo);
+          } catch (error) {
+            throw failed('explore_token', error);
+          }
+
           let result;
           try {
-            const token = await services.mintRepoToken(
-              exploration.gitOrganization,
-              exploration.repo
-            );
             result = await services.explore({
               owner: exploration.owner,
               repo: exploration.repo,
@@ -122,11 +138,7 @@ export function exploreCodebaseTool(
               },
             });
           } catch (error) {
-            if (error instanceof ExplorationStoppedError || aborted(d.signal, abortSignal)) {
-              throw new Error(EXPLORATION_STOPPED_TEXT);
-            }
-            logDiagnostic('explore_codebase', error, ids, d.log);
-            throw new Error(explorationFailureText(error));
+            throw failed('explore_codebase', error);
           }
           if (aborted(d.signal, abortSignal)) throw new Error(EXPLORATION_STOPPED_TEXT);
 

@@ -14,6 +14,10 @@ import { logDiagnostic, type DiagnosticLog } from '../../shared/sanitize.ts';
 
 export const TURN_STOPPED_TEXT = 'This turn was stopped. Nothing was saved.';
 
+/** offer_next_step refused because a question card went out earlier in the same turn. */
+export const OFFER_AFTER_QUESTION_TEXT =
+  "Wait for the student's answer to this question before offering next steps.";
+
 /** A grading refusal from `ClassmojiService.quizGrading` (`QuizGradingError`). */
 export function isGradingRefusal(error: unknown): error is Error & { code: string } {
   return (

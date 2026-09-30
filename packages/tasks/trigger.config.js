@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
  * read of a path resolved from this file's location would run inside the
  * deployed container, where that path does not exist.
  *
- * `requirements`, NOT `requirementsFile`. In @trigger.dev/python 4.6.3 the
+ * `requirements`, NOT `requirementsFile`. In @trigger.dev/python 4.6.4 the
  * requirementsFile branch emits `COPY ./python/requirements.txt .` followed by
  * `pip install -r ./python/requirements.txt`; the COPY lands the file at
  * `./requirements.txt`, so a nested requirements file cannot be opened and the
@@ -36,7 +36,7 @@ import { fileURLToPath } from 'node:url';
  * python/README.md) and is set only when that interpreter exists, so a checkout
  * without the venv still loads this config; the solve task then fails its runs
  * with `engine_error` rather than the whole dev worker refusing to start.
- * Deployed images ignore it and use the extension's /opt/venv. (The 4.6.3 CLI
+ * Deployed images ignore it and use the extension's /opt/venv. (The 4.6.4 CLI
  * snapshots dev run environments before the extension sets it, so the solve
  * task also falls back to the venv itself — `useLocalVenvIfUnset`.)
  */

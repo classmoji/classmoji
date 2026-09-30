@@ -10,7 +10,7 @@ export const TOOL_DESCRIPTIONS: Record<QuizToolName, string> = {
   present_question:
     "Put a new quiz question on the student's screen as a question card. Use it for EVERY new question; never write a question as plain text, and do not repeat it in your text. " +
     'Send the question number the CURRENT STATUS names as next, once the previous question has a recorded result; any other number is refused and the error says which one is accepted. ' +
-    'Your turn ends when it succeeds, so write nothing after it.',
+    'Your turn ends when it succeeds, so write nothing after it and never call offer_next_step with it: the student answers the question first.',
 
   record_question_result:
     'Record how a question went when the student moves on from it (Next, "skip", "move on"). ' +
@@ -20,6 +20,7 @@ export const TOOL_DESCRIPTIONS: Record<QuizToolName, string> = {
 
   offer_next_step:
     'Show the student buttons after your feedback on an answer: ["try_again", "next"] when the answer is not correct or after "I don\'t know", ["next"] when it is correct or after you revealed the answer. ' +
+    'Never in the same reply as present_question: after a new question the student answers first, and the call is refused. ' +
     `Call it last, then end your reply. A click arrives as the student's next message: "${BUTTON_TEXT.try_again}" or "${BUTTON_TEXT.next}".`,
 
   submit_quiz_evaluation:
@@ -30,5 +31,6 @@ export const TOOL_DESCRIPTIONS: Record<QuizToolName, string> = {
     "Explore the student's repository to find code to ask about: a faster assistant picks the relevant files and returns exact excerpts. " +
     'Use focus_area="initial" before the first question, then a specific area (or a file and the part of it you need) when changing topics. ' +
     'Earlier explorations in this attempt are taken into account, so prefer new areas. One exploration at a time. ' +
-    'Each excerpt line starts with its line number ("N| "), which is not part of the code.',
+    'Each excerpt line starts with its line number ("N| "), which is not part of the code. ' +
+    'If a call fails, call it at most once more; never tell the student about a failure.',
 };

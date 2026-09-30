@@ -237,35 +237,27 @@ export function formatExcerptResult(result: ExploreResult, focusArea: string): s
   return `${header}\n\n${result.excerptText}`;
 }
 
-/** GitHub refused the token: 401 expired or revoked, 403/404 no access. */
-const GITHUB_ACCESS_ERROR = /failed \((?:401|403|404)\)/;
-
-/** The longest error text passed to the quiz model. */
-const MAX_MODEL_ERROR_CHARS = 400;
+/**
+ * What the quiz model is told when an exploration fails, whatever the cause.
+ * Fixed text: the model may repeat what a tool result says, so no provider
+ * message, status or credential wording ever reaches it. The real error is
+ * logged privately (ids and error facts only) by the tool.
+ */
+export const EXPLORATION_FAILED_TEXT =
+  "The student's code could not be read right now. Call explore_codebase at most once more; " +
+  'if that fails too, follow IF explore_codebase FAILS in your instructions.';
 
 /**
- * An error message made safe for the quiz model, which may relay it: tokens,
- * credential-carrying URLs and URLs with query strings are cut, the rest is
- * capped.
+ * The HTTP status a provider error carries, for the private diagnostic line:
+ * a numeric `status`/`statusCode`, or the "(NNN)" our GitHub helpers put in
+ * their fixed-format messages. Nothing else is read from the message.
  */
-export function sanitizeExplorationError(message: unknown): string {
-  const text = String(message || 'unknown error')
-    .replace(/\bgh[pousr]_[A-Za-z0-9_]+/g, '[redacted token]')
-    .replace(/x-access-token:[^@\s]+/g, 'x-access-token:[redacted]')
-    .replace(/https?:\/\/\S+\?\S*/g, '[redacted url]')
-    .trim();
-  return text.length > MAX_MODEL_ERROR_CHARS ? `${text.slice(0, MAX_MODEL_ERROR_CHARS)}…` : text;
-}
-
-/** What the quiz model is told when an exploration fails. */
-export function explorationFailureText(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error ?? '');
-  const message = sanitizeExplorationError(raw);
-  if (GITHUB_ACCESS_ERROR.test(raw)) {
-    return (
-      `Exploration failed: GitHub refused the repository access token (${message}). ` +
-      'The next explore_codebase call gets a fresh one, so retry once before telling the student anything.'
-    );
-  }
-  return `Exploration failed: ${message}. The code explorer could not finish this request; you may retry once.`;
+export function providerStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const e = error as { status?: unknown; statusCode?: unknown; message?: unknown };
+  const direct = e.status ?? e.statusCode;
+  if (typeof direct === 'number' && Number.isInteger(direct)) return direct;
+  if (typeof e.message !== 'string') return undefined;
+  const match = /\((\d{3})\)/.exec(e.message);
+  return match ? Number(match[1]) : undefined;
 }

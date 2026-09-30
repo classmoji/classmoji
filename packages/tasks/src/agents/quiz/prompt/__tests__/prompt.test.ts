@@ -168,6 +168,34 @@ describe('quiz prompt: typed tools only', () => {
     expect(baseSystemPrompt).toMatch(/Call it LAST in your reply, then end your reply/);
   });
 
+  it.each(bothModes)('%s: never offers buttons in the same reply as a new question', (_l, p) => {
+    expect(p.staticPrompt).toMatch(
+      /NEVER call offer_next_step in the same reply as present_question/
+    );
+    expect(p.staticPrompt).toMatch(/Call offer_next_step in the same reply/);
+  });
+
+  it('retries a failed exploration once, then asks about the concepts without the code', () => {
+    const rule = codeAwareAgentPrompt.slice(
+      codeAwareAgentPrompt.indexOf('IF explore_codebase FAILS (')
+    );
+    expect(rule).toMatch(/Call it at most once more/);
+    expect(rule).toMatch(/quiz topic and the rubric concepts directly, with no code_snippet/);
+    expect(rule).toMatch(/without\s+quoting or describing the student's code/);
+    expect(rule).toMatch(/at most one short, neutral sentence/);
+    expect(rule).toMatch(/Never mention tools, tokens, access, errors or failures to the student/);
+    expect(codeAwareAgentPrompt).toMatch(
+      /Never mention tools, tokens, repository access or errors to the student/
+    );
+    expect(codeAwareAgentPrompt).toMatch(/The one exception is IF explore_codebase FAILS below/);
+  });
+
+  it.each(bothModes)('%s: never tells the student about tool errors or timing', (_l, p) => {
+    expect(p.staticPrompt).not.toMatch(/few minutes|fresh access|expired access/);
+    expect(p.staticPrompt).not.toMatch(/Only (tell|mention)[^.]*(problem|issues) if/);
+    expect(p.staticPrompt).toMatch(/Never mention tools, tokens, access or errors to the student/);
+  });
+
   it('shows record_question_result examples in the v3 shape only', () => {
     const calls = [
       ...`${baseSystemPrompt}\n${codeAwareAgentPrompt}`.matchAll(

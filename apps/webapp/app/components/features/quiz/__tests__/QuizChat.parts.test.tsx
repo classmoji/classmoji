@@ -44,6 +44,8 @@ const {
   QuizTranscript,
   drivesSession,
   errorLineFor,
+  FIXED_ERROR_COPY,
+  NOTICE_COPY,
   REPLY_FAILED_LINE,
 } = await import('../QuizChat');
 
@@ -436,19 +438,51 @@ describe('errorLineFor', () => {
     expect(errorLineFor(new Error('This quiz is already complete.'))).toBe(
       'This quiz is already complete.'
     );
-    // The task's own fixed copy (packages/tasks/src/agents/shared/sanitize.ts).
-    for (const copy of [
-      'That reply took too long and was stopped. Please send your message again.',
-      'This attempt has reached its message limit.',
-      "That message couldn't be sent. Please try again.",
-      'This quiz has already started.',
-      "This quiz isn't available right now. Please try again later.",
-      'This attempt can no longer be continued.',
-      "Quizzes aren't available in this class.",
-    ]) {
-      expect(errorLineFor(new Error(copy))).toBe(copy);
-    }
     expect(errorLineFor(new Error('TypeError: fetch failed'))).toBe(REPLY_FAILED_LINE);
     expect(errorLineFor(undefined)).toBe(REPLY_FAILED_LINE);
+    // The AI SDK's own mask for a stream error is not ours to show.
+    expect(errorLineFor(new Error('An error occurred.'))).toBe(REPLY_FAILED_LINE);
+  });
+
+  // Every line the task's sanitizer can send (packages/tasks/src/agents/shared/sanitize.ts),
+  // byte for byte. Changing one there must change it here.
+  const SANITIZER_COPY = [
+    "That reply couldn't be finished. Please send your message again.",
+    "That reply couldn't be finished. Send your message again.",
+    "This quiz can't continue right now.",
+    "Quizzes aren't available in this class.",
+    'This quiz is already complete.',
+    'This attempt can no longer be continued.',
+    'This attempt has reached its message limit.',
+    "That message couldn't be sent. Please try again.",
+    'This quiz has already started.',
+    "This quiz isn't available right now. Please try again later.",
+  ];
+
+  it("shows every line the task's sanitizer sends, byte for byte", async () => {
+    const { QUIZ_AGENT_ERROR_COPY } = await import('@classmoji/utils/quiz-agent');
+    expect([...QUIZ_AGENT_ERROR_COPY].sort()).toEqual([...SANITIZER_COPY].sort());
+    for (const copy of SANITIZER_COPY) {
+      expect(FIXED_ERROR_COPY.has(copy)).toBe(true);
+      expect(errorLineFor(new Error(copy))).toBe(copy);
+    }
+  });
+
+  it('allows no line that mentions timing', () => {
+    for (const copy of FIXED_ERROR_COPY) {
+      expect(copy).not.toMatch(/too long|took|seconds?\b|minutes?\b|timed? ?out|\bslow/i);
+    }
+    expect(
+      FIXED_ERROR_COPY.has(
+        'That reply took too long and was stopped. Please send your message again.'
+      )
+    ).toBe(false);
+  });
+
+  it('says the same thing for a stopped turn as the sanitizer does', () => {
+    expect(NOTICE_COPY.turn_stopped).toBe(
+      "That reply couldn't be finished. Send your message again."
+    );
+    expect(NOTICE_COPY.reply_failed).toBe(REPLY_FAILED_LINE);
   });
 });

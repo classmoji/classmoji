@@ -25,7 +25,8 @@ const {
   ExplorationStoppedError,
   excerptSummaryLines,
   formatExcerptResult,
-  explorationFailureText,
+  EXPLORATION_FAILED_TEXT,
+  providerStatus,
   untilAborted,
 } = await import('../core.ts');
 
@@ -193,13 +194,13 @@ describe('exploreRepository on a fixture repository', () => {
     expect(gh.requested.filter(url => url.includes('/contents/'))).toEqual([]);
   });
 
-  it('surfaces a GitHub refusal as an error the tool can explain', async () => {
+  it('surfaces a GitHub refusal as an error carrying its status for the diagnostic', async () => {
     vi.stubGlobal('fetch', githubStub('landing-page', { treeStatus: 401 }).fetchImpl);
     const { client } = stubClient([PICK, POINT]);
 
     const error = await exploreRepository(input({ client })).catch(e => e);
     expect(error).toBeInstanceOf(Error);
-    expect(explorationFailureText(error)).toMatch(/GitHub refused the repository access token/);
+    expect(providerStatus(error)).toBe(401);
   });
 });
 
@@ -233,11 +234,21 @@ describe('exploration helpers', () => {
     );
   });
 
-  it('redacts tokens and signed URLs from error text', () => {
-    const text = explorationFailureText(
-      new Error('boom ghs_abcDEF123 https://example.com/x?sig=1 x-access-token:abc@github.com')
+  it('tells the model a fixed line about a failed exploration: no provider wording, no status', () => {
+    expect(EXPLORATION_FAILED_TEXT).toMatch(/^The student's code could not be read right now\./);
+    expect(EXPLORATION_FAILED_TEXT).not.toMatch(
+      /\d|github|token|access|error|status|installation/i
     );
-    expect(text).not.toMatch(/ghs_abc|sig=1|x-access-token:abc/);
+    expect(EXPLORATION_FAILED_TEXT).toContain('at most once more');
+  });
+
+  it('reads a provider status from the error, never other message text', () => {
+    expect(providerStatus(new Error('Failed to retrieve GitHub installation token (422)'))).toBe(
+      422
+    );
+    expect(providerStatus(Object.assign(new Error('x'), { status: 503 }))).toBe(503);
+    expect(providerStatus(new Error('socket hang up'))).toBeUndefined();
+    expect(providerStatus('not an error')).toBeUndefined();
   });
 
   it('untilAborted rejects on abort and ignores the late result', async () => {

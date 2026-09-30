@@ -19,7 +19,8 @@ vi.mock('@trigger.dev/sdk/v3', () => ({
 }));
 
 const { quizTools, questionResultPartId } = await import('../index.ts');
-const { TURN_STOPPED_TEXT, retryText } = await import('../errors.ts');
+const { OFFER_AFTER_QUESTION_TEXT, TURN_STOPPED_TEXT, retryText } = await import('../errors.ts');
+const { EXPLORATION_FAILED_TEXT } = await import('../../../shared/exploration/core.ts');
 const { EXPLORATION_BUSY_TEXT, EXPLORATION_STOPPED_TEXT } = await import('../exploreCodebase.ts');
 const { TOOL_DESCRIPTIONS } = await import('../descriptions.ts');
 
@@ -321,6 +322,146 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
     expect(Object.values(grading).every(fn => fn.mock.calls.length === 0)).toBe(true);
   });
 
+  it('refuses offer_next_step after a question card in the same turn, writing nothing', async () => {
+    const { tools, grading, writes } = setup();
+    grading.presentQuestion.mockResolvedValue({ card, question_number: 2, total_questions: 8 });
+
+    await call(tools, 'present_question', card);
+    await expect(call(tools, 'offer_next_step', { actions: ['next'] })).rejects.toThrow(
+      OFFER_AFTER_QUESTION_TEXT
+    );
+    expect(OFFER_AFTER_QUESTION_TEXT).toBe(
+      "Wait for the student's answer to this question before offering next steps."
+    );
+    expect(writes).toEqual([]);
+  });
+
+  it('refuses it when both calls come in one step, present_question first', async () => {
+    const { tools, grading } = setup();
+    grading.presentQuestion.mockImplementation(async () => {
+      await new Promise(r => setTimeout(r, 20));
+      return { card, question_number: 2, total_questions: 8 };
+    });
+    const [presented, offered] = await Promise.allSettled([
+      call(tools, 'present_question', card),
+      call(tools, 'offer_next_step', { actions: ['next'] }),
+    ]);
+    expect(presented.status).toBe('fulfilled');
+    expect(offered).toMatchObject({
+      status: 'rejected',
+      reason: expect.objectContaining({ message: OFFER_AFTER_QUESTION_TEXT }),
+    });
+  });
+
+  it('still offers after a present_question that was refused', async () => {
+    const { tools, grading } = setup();
+    grading.presentQuestion.mockRejectedValue(
+      new QuizGradingError('out_of_order', 'Question 3 cannot be presented yet.')
+    );
+    await expect(call(tools, 'present_question', card)).rejects.toThrow('cannot be presented');
+    await expect(call(tools, 'offer_next_step', { actions: ['next'] })).resolves.toEqual({
+      actions: ['next'],
+    });
+  });
+
+  it('in a live turn, sends the question card but never buttons with it, and stops', async () => {
+    const { runQuizTurn } = await import('../../loop.ts');
+    // eslint-disable-next-line import/no-unresolved -- package subpath export, resolved by vitest
+    const { MockLanguageModelV4, convertArrayToReadableStream } = await import('ai/test');
+    const grading = fakeGrading();
+    grading.presentQuestion.mockResolvedValue({ card, question_number: 2, total_questions: 8 });
+    const usage = {
+      inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: 1, text: 1, reasoning: 0 },
+    };
+    const model = new MockLanguageModelV4({
+      doStream: async () =>
+        ({
+          stream: convertArrayToReadableStream([
+            { type: 'stream-start', warnings: [] },
+            {
+              type: 'tool-call',
+              toolCallId: 'q',
+              toolName: 'present_question',
+              input: JSON.stringify(card),
+            },
+            {
+              type: 'tool-call',
+              toolCallId: 'b',
+              toolName: 'offer_next_step',
+              input: JSON.stringify({ actions: ['next'] }),
+            },
+            { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool_use' }, usage },
+          ]),
+        }) as never,
+    });
+    const persisted: Array<{ parts: Array<Record<string, unknown>> }> = [];
+    const stream = runQuizTurn({
+      ctx: context({
+        progress: {
+          questionCount: 8,
+          presented: 1,
+          finalized: [1],
+          completed: false,
+          hasEvaluation: false,
+        },
+      }),
+      messages: [{ role: 'user', content: 'next' }],
+      signal: new AbortController().signal,
+      model,
+      deps: {
+        tools: (ctx, d) => quizTools(ctx, { ...d, services: { grading } as never, log: vi.fn() }),
+        getProgress: async () => ({
+          questionCount: 8,
+          presented: 2,
+          finalized: [1],
+          completed: false,
+          hasEvaluation: false,
+        }),
+        completeFromGrades: vi.fn(),
+        persistAssistant: async (_id, message) => {
+          persisted.push(message as never);
+        },
+        evaluationNotice: () => 'notice',
+        log: vi.fn(),
+      },
+    });
+    const chunks: Array<Record<string, unknown>> = [];
+    for await (const c of stream as unknown as AsyncIterable<Record<string, unknown>>)
+      chunks.push(c);
+
+    // One model call: the successful present_question ended the turn.
+    expect(model.doStreamCalls).toHaveLength(1);
+    // The card's result reaches the browser; the buttons' call only as an error
+    // (the chat renders buttons from a successful result only).
+    const outputs = chunks.filter(c => c.type === 'tool-output-available');
+    expect(outputs.map(c => c.toolCallId)).toEqual(['q']);
+    expect(chunks).toContainEqual(
+      expect.objectContaining({ type: 'tool-output-error', toolCallId: 'b' })
+    );
+    const saved = persisted.at(-1)?.parts ?? [];
+    expect(saved.find(p => p.type === 'tool-offer_next_step')).toMatchObject({
+      state: 'output-error',
+    });
+    expect(
+      saved.some(p => p.type === 'tool-present_question' && p.state === 'output-available')
+    ).toBe(true);
+  });
+
+  it("offers again in the next turn's tool set", async () => {
+    const first = setup();
+    first.grading.presentQuestion.mockResolvedValue({
+      card,
+      question_number: 2,
+      total_questions: 8,
+    });
+    await call(first.tools, 'present_question', card);
+    const next = setup();
+    await expect(call(next.tools, 'offer_next_step', { actions: ['next'] })).resolves.toEqual({
+      actions: ['next'],
+    });
+  });
+
   it('submit_quiz_evaluation completes as the model source and returns the stored record', async () => {
     const { tools, grading } = setup();
     const record = {
@@ -463,8 +604,8 @@ describe('explore_codebase (fake pipeline)', () => {
     await expect(third).resolves.toBeTruthy();
   });
 
-  it('tells the model a GitHub refusal can be retried, without the token', async () => {
-    const { tools, grading } = exploreSetup(async () => {
+  it('tells the model only the fixed line when a read fails, and logs the status privately', async () => {
+    const { tools, grading, log } = exploreSetup(async () => {
       throw new Error(
         'GitHub tree API (sample-org/landing-page) failed (401): Bad credentials ghs_secretvalue'
       );
@@ -472,9 +613,121 @@ describe('explore_codebase (fake pipeline)', () => {
     const error = (await call(tools, 'explore_codebase', { focus_area: FOCUS }).catch(
       (e: unknown) => e
     )) as Error;
-    expect(error.message).toMatch(/GitHub refused the repository access token/);
-    expect(error.message).not.toContain('ghs_secretvalue');
+    expect(error.message).toBe(EXPLORATION_FAILED_TEXT);
     expect(grading.recordExploration).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(
+      '[quiz-agent] explore_codebase failed',
+      expect.objectContaining({ status: 401, chatId: 'attempt-1', runId: 'run_1' })
+    );
+    const logged = JSON.stringify(log.mock.calls);
+    expect(logged).not.toMatch(/ghs_secretvalue|Bad credentials|sample-org|landing-page/);
+    expect(logged).not.toContain(FOCUS);
+  });
+
+  it('in a live turn, the model reads only the fixed line after a failed exploration', async () => {
+    const { runQuizTurn } = await import('../../loop.ts');
+    // eslint-disable-next-line import/no-unresolved -- package subpath export, resolved by vitest
+    const { MockLanguageModelV4, convertArrayToReadableStream } = await import('ai/test');
+    const grading = fakeGrading();
+    const usage = {
+      inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: 1, text: 1, reasoning: 0 },
+    };
+    const steps = [
+      {
+        type: 'tool-call',
+        toolCallId: 'e1',
+        toolName: 'explore_codebase',
+        input: JSON.stringify({ focus_area: 'initial' }),
+      },
+      { type: 'text-start', id: 't' },
+      { type: 'text-end', id: 't' },
+    ];
+    let n = 0;
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        const first = n++ === 0;
+        return {
+          stream: convertArrayToReadableStream([
+            { type: 'stream-start', warnings: [] },
+            ...(first ? steps.slice(0, 1) : steps.slice(1)),
+            {
+              type: 'finish',
+              finishReason: { unified: first ? 'tool-calls' : 'stop', raw: 'x' },
+              usage,
+            },
+          ]),
+        } as never;
+      },
+    });
+    const stream = runQuizTurn({
+      ctx: codeAware({
+        progress: {
+          questionCount: 8,
+          presented: 0,
+          finalized: [],
+          completed: false,
+          hasEvaluation: false,
+        },
+      }),
+      messages: [{ role: 'user', content: 'start' }],
+      signal: new AbortController().signal,
+      model,
+      deps: {
+        tools: (ctx, d) =>
+          quizTools(ctx, {
+            ...d,
+            services: {
+              grading,
+              mintRepoToken: async () => {
+                throw new Error('Failed to retrieve GitHub installation token (422)');
+              },
+              anthropic: () => ({}) as Anthropic,
+              explore: vi.fn(),
+            } as never,
+            log: vi.fn(),
+          }),
+        getProgress: async () => ({
+          questionCount: 8,
+          presented: 0,
+          finalized: [],
+          completed: false,
+          hasEvaluation: false,
+        }),
+        completeFromGrades: vi.fn(),
+        persistAssistant: async () => {},
+        evaluationNotice: () => 'notice',
+        log: vi.fn(),
+      },
+    });
+    for await (const _ of stream as unknown as AsyncIterable<unknown>) void _;
+
+    expect(model.doStreamCalls).toHaveLength(2);
+    const toolMessages = model.doStreamCalls[1].prompt.filter(m => m.role === 'tool');
+    expect(JSON.stringify(toolMessages)).toContain(
+      JSON.stringify(EXPLORATION_FAILED_TEXT).slice(1, -1)
+    );
+    expect(JSON.stringify(model.doStreamCalls[1].prompt)).not.toMatch(/422|installation token/);
+  });
+
+  it('tells the model only the fixed line when no token can be minted', async () => {
+    const explore = vi.fn();
+    const { tools, grading, log, mintRepoToken } = exploreSetup(explore);
+    mintRepoToken.mockRejectedValue(
+      new Error('Failed to retrieve GitHub installation token (422)')
+    );
+    const error = (await call(tools, 'explore_codebase', { focus_area: FOCUS }).catch(
+      (e: unknown) => e
+    )) as Error;
+    expect(error.message).toBe(EXPLORATION_FAILED_TEXT);
+    expect(error.message).not.toMatch(/422|GitHub|token/i);
+    expect(explore).not.toHaveBeenCalled();
+    expect(grading.recordExploration).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(
+      '[quiz-agent] explore_token failed',
+      expect.objectContaining({ status: 422, errorClass: 'Error', chatId: 'attempt-1' })
+    );
+    expect(JSON.stringify(log.mock.calls)).not.toContain('installation token');
   });
 
   it('keeps nothing from an exploration whose turn stopped', async () => {
