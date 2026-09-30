@@ -32,6 +32,7 @@ const {
   QUOTE_READ_FAILED_TEXT,
   RECORD_BEFORE_ANSWER_TEXT,
   RECORD_BEFORE_NEXT_TEXT,
+  RESHOW_AFTER_TEXT,
   recordBeforePresentText,
   editLimitText,
   TURN_STOPPED_TEXT,
@@ -382,13 +383,57 @@ describe('present_question', () => {
     });
   });
 
-  it('leaves showing the current question again to the service', async () => {
-    const { tools, grading } = setup({ ctx: context({ progress: progressAt(2, [1]) }) });
+  it('leaves showing the current question again to the service, at the start of a reply', async () => {
+    const { tools, grading } = setup({
+      ctx: context({ progress: progressAt(2, [1]) }),
+      textWritten: () => false,
+    });
     grading.presentQuestion.mockResolvedValue({ card, question_number: 2, total_questions: 8 });
     await expect(call(tools, 'present_question', card)).resolves.toMatchObject({
       question_number: 2,
     });
     expect(grading.presentQuestion).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses to show the current question again once the turn has text, writing nothing', async () => {
+    expect(RESHOW_AFTER_TEXT).toBe(
+      "You already replied this turn; don't re-show the question. If the student answered, call offer_next_step."
+    );
+    // Open (no result yet) or recorded: either way it is the card already out.
+    for (const finalized of [[1], [1, 2]]) {
+      const { tools, grading, writes } = setup({
+        ctx: context({ progress: progressAt(2, finalized) }),
+        textWritten: () => true,
+      });
+      await expect(call(tools, 'present_question', card)).rejects.toThrow(RESHOW_AFTER_TEXT);
+      expect(grading.presentQuestion).not.toHaveBeenCalled();
+      expect(writes).toEqual([]);
+      // The buttons are still open to the model after the refusal.
+      await expect(call(tools, 'offer_next_step', { actions: ['next'] })).resolves.toMatchObject({
+        actions: ['next'],
+      });
+    }
+  });
+
+  it('still presents a new question after text, and a card it put out this turn again', async () => {
+    const { tools, grading } = setup({
+      ctx: context({ progress: progressAt(2, [1, 2]) }),
+      textWritten: () => true,
+    });
+    const third = { ...card, question_number: 3 };
+    grading.presentQuestion.mockResolvedValue({
+      card: third,
+      question_number: 3,
+      total_questions: 8,
+    });
+    await expect(call(tools, 'present_question', third, 'call-q3')).resolves.toMatchObject({
+      question_number: 3,
+    });
+    // The same card again in this turn is a re-run the service answers, not a re-show.
+    await expect(call(tools, 'present_question', third, 'call-q3-again')).resolves.toMatchObject({
+      question_number: 3,
+    });
+    expect(grading.presentQuestion).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -959,7 +1004,7 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
       ).rejects.toThrow(OFFER_BEFORE_FEEDBACK_TEXT);
     }
     expect(OFFER_BEFORE_FEEDBACK_TEXT).toBe(
-      "Write your feedback on the student's answer first (what is right, what is wrong if anything, and why it matters), then call offer_next_step again as the last thing in this reply."
+      'If the student answered, write your feedback on their answer first, then call offer_next_step again; otherwise reply without buttons.'
     );
     expect(writes).toEqual([]);
     expect(Object.values(grading).every(fn => fn.mock.calls.length === 0)).toBe(true);
@@ -1047,8 +1092,16 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
      */
     const BRIEF = 'Exactly right. `map` returns a new array and leaves the original alone.';
 
-    /** Runs one answer turn on scripted model steps; returns the calls, the chunks and the saved parts. */
-    async function answerTurn(steps: Chunk[][], ctx: AttemptContext = context()) {
+    /**
+     * Runs one answer turn on scripted model steps; returns the calls, the
+     * chunks and the saved parts. Each step finishes as `finishes` says
+     * ('tool-calls' by default).
+     */
+    async function answerTurn(
+      steps: Chunk[][],
+      ctx: AttemptContext = context(),
+      finishes: string[] = []
+    ) {
       const { runQuizTurn } = await import('../../loop.ts');
       // eslint-disable-next-line import/no-unresolved -- package subpath export, resolved by vitest
       const { MockLanguageModelV4, convertArrayToReadableStream } = await import('ai/test');
@@ -1056,12 +1109,13 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
       const model = new MockLanguageModelV4({
         doStream: async () => {
           const parts = steps[Math.min(n, steps.length - 1)];
+          const unified = finishes[n] ?? 'tool-calls';
           n += 1;
           return {
             stream: convertArrayToReadableStream([
               { type: 'stream-start', warnings: [] },
               ...parts,
-              { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool_use' }, usage },
+              { type: 'finish', finishReason: { unified, raw: unified }, usage },
             ]),
           } as never;
         },
@@ -1308,6 +1362,17 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
         expect(flat.indexOf(BRIEF)).toBeLessThan(flat.indexOf(String(replayed.toolCallId)));
       });
 
+      it('writes no buttons when the reply was cut off at the output limit', async () => {
+        const { model, saved } = await answerTurn(
+          [[offer('b1')], [...feedback('t', 'Close: the loop is right, but the')]],
+          context({ progress: progressAt(1) }),
+          ['tool-calls', 'length']
+        );
+        expect(model.doStreamCalls).toHaveLength(2);
+        expect(saved.find(p => p.toolCallId === 'b1')).toMatchObject({ state: 'output-error' });
+        expect(buttons(saved)).toHaveLength(0);
+      });
+
       it('writes no buttons when the model never offered', async () => {
         const { model, saved } = await answerTurn(
           [[...feedback('t', BRIEF)]],
@@ -1391,6 +1456,59 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
       )
     );
     await expect(call(tools, 'submit_quiz_evaluation', {})).rejects.toThrow('Questions 3, 8');
+  });
+
+  describe('ending early', () => {
+    const ended = {
+      final_acknowledgment: 'Thanks for your work today.',
+      quiz_complete: true,
+      ended_early: true,
+      feedback_summary: 'Solid start.',
+      feedback_strengths: ['a'],
+      feedback_improvements: ['b'],
+      feedback_recommendation: 'c',
+      feedback_effort_note: 'd',
+    };
+
+    it('passes ended_early to the service with the feedback, in the turn of the confirmation', async () => {
+      const { tools, grading } = setup({ ctx: context({ progress: progressAt(2, [1]) }) });
+      const record = {
+        v: 2,
+        source: 'model',
+        partial_credit_percentage: 12.5,
+        first_attempt_percentage: 12.5,
+        question_results: [],
+      };
+      grading.completeWithEvaluation.mockResolvedValue(record);
+      await expect(call(tools, 'submit_quiz_evaluation', ended, 'call-end')).resolves.toBe(record);
+      expect(grading.completeWithEvaluation).toHaveBeenCalledWith(
+        expect.objectContaining({ toolCallId: 'call-end', inputMessageId: 'msg-1' }),
+        { source: 'model', feedback: ended }
+      );
+    });
+
+    it("tells the model an early end in a button turn was refused, in the service's words", async () => {
+      for (const lastAction of ['next', 'try_again'] as const) {
+        const { tools, grading } = setup({ ctx: context({ lastAction }) });
+        const refusal =
+          "An early end needs the student's own message confirming it, and this turn began with a button click. Leave ended_early out and carry on with the quiz.";
+        grading.completeWithEvaluation.mockRejectedValue(
+          new QuizGradingError('end_not_confirmed', refusal)
+        );
+        await expect(call(tools, 'submit_quiz_evaluation', ended)).rejects.toThrow(refusal);
+      }
+    });
+
+    it('describes ended_early in the tool description and the field', () => {
+      expect(TOOL_DESCRIPTIONS.submit_quiz_evaluation).toContain(
+        'unless the student confirmed ending early: then set ended_early'
+      );
+      const tools = setup().tools;
+      const schema = tools.submit_quiz_evaluation.inputSchema as unknown as {
+        shape: Record<string, { description?: string }>;
+      };
+      expect(schema.shape.ended_early.description).toMatch(/confirmed ending the quiz early/);
+    });
   });
 });
 
@@ -2021,7 +2139,7 @@ describe('present_question with code_quote', () => {
         ...(o.services ?? {}),
       } as never,
       log,
-      textWritten: () => true,
+      textWritten: o.textWritten ?? (() => true),
     });
     return { tools, grading, log, stub, quoteCache, mintRepoToken };
   }
@@ -2317,6 +2435,7 @@ describe('present_question with code_quote', () => {
   it('reads nothing for the question already out: the service returns the stored card', async () => {
     const { tools, grading, stub } = quoteSetup({
       ctx: codeAware({ progress: progressAt(2, [1]) }),
+      textWritten: () => false,
     });
     await call(tools, 'present_question', quoted);
     expect(stub.requested).toEqual([]);
@@ -2332,6 +2451,14 @@ describe('present_question with code_quote', () => {
     );
     expect(stub.requested).toEqual([]);
     expect(grading.presentQuestion).not.toHaveBeenCalled();
+  });
+
+  it('tells the model to copy the lines from its exploration once the file cannot be read twice', () => {
+    expect(QUOTE_READ_FAILED_TEXT).toContain('Call present_question again; if that fails too');
+    expect(QUOTE_READ_FAILED_TEXT).toContain(
+      'copied exactly from your exploration output without their "N| " prefixes'
+    );
+    expect(QUOTE_READ_FAILED_TEXT).toContain('name the file and the rule or element in context');
   });
 
   it('tells the model a fixed line when the file cannot be read, and logs the status privately', async () => {

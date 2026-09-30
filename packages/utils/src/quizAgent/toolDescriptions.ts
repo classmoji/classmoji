@@ -15,7 +15,7 @@ import { BUTTON_TEXT } from './uiTypes.ts';
 export const TOOL_DESCRIPTIONS = {
   present_question:
     'Show a new question as a card: the only way to ask one. Send the number CURRENT STATUS names as next; the previous question must already have its recorded result. ' +
-    'Resending the current number re-shows its card and ends your turn: do that only if the student asks to see the question again. ' +
+    'Resending the current number re-shows its card and ends your turn: do that only if the student asks to see the question again, at the start of your reply. ' +
     'Do not repeat the question in text or write after it; never call offer_next_step in the same reply. ' +
     'Success ends your turn; on a refusal, do what it says (usually fix the call and call again).',
 
@@ -36,7 +36,7 @@ export const TOOL_DESCRIPTIONS = {
 
   submit_quiz_evaluation:
     'Submit closing feedback after the student moved on from the last question and you recorded it. ' +
-    'Refused until every question has a recorded result; the error lists the missing ones. ' +
+    'Refused until every question has a recorded result (the error lists the missing ones), unless the student confirmed ending early: then set ended_early. ' +
     'The server sets scores and band: send feedback text only, leave evaluation and numeric_score out. ' +
     'Closing words go in final_acknowledgment, not text; write nothing after it.',
 

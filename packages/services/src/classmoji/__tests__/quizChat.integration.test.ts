@@ -720,6 +720,208 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     expect(journal.payload).toMatchObject({ source: 'server' });
   });
 
+  // ─── ending early ─────────────────────────────────────────────────────────
+
+  const INCOMPLETE_2_3 =
+    'Questions 2, 3 have no result. Record each one you presented once the student has moved on ' +
+    'from it; present any not yet presented. Then submit again.';
+
+  /** The journal's results the server recorded as skipped for an early end. */
+  const skippedByEndEvents = async (attemptId: string) =>
+    (await events(attemptId, 'result_finalized')).filter(
+      e => (e.payload as { skipped_by_end?: unknown }).skipped_by_end === true
+    );
+
+  it("ends early on the student's confirmation: the open question keeps its result, the rest count as skipped over every question", async () => {
+    const attemptId = await newAttempt();
+    const turn = await begin(attemptId);
+    const q1 = await completeQuestion(attemptId, turn, 1, [{ level: 'correct', hints_before: 0 }]);
+    await grading.presentQuestion(call(q1), question(2));
+    await say(attemptId, 'answer 2');
+    await say(attemptId, 'can we stop the quiz here?');
+    const confirm = await say(attemptId, 'yes, end it');
+
+    // The open question is recorded from the answer the student gave.
+    await grading.finalizeQuestion(
+      call(confirm),
+      result(2, [{ level: 'partly_right', hints_before: 0 }], 'Moved on')
+    );
+    const evalCall = call(confirm);
+    const record = await grading.completeWithEvaluation(evalCall, {
+      source: 'model',
+      feedback: { ...feedback, ended_early: true },
+    });
+
+    // (100 + 40 + 0) / 3: scored over every question, not only the answered ones.
+    expect(record).toMatchObject({
+      partial_credit_percentage: 46.7,
+      first_attempt_percentage: 33.3,
+      evaluation: 'UNSATISFACTORY',
+      numeric_score: 1,
+    });
+    expect(record.question_results).toEqual([
+      expect.objectContaining({ question_num: 1, credit_earned: 100, tries: 1 }),
+      expect.objectContaining({ question_num: 2, credit_earned: 40, brief_feedback: 'Moved on' }),
+      {
+        question_num: 3,
+        attempts: 0,
+        tries: 0,
+        eventually_correct: false,
+        first_attempt_correct: false,
+        credit_earned: 0,
+        emoji: 'zzz', // the classroom's emoji for 0
+        brief_feedback: '',
+        skipped_by_end: true,
+      },
+    ]);
+    expect(record.question_results[0]).not.toHaveProperty('skipped_by_end');
+    expect(record.question_results[1]).not.toHaveProperty('skipped_by_end');
+    expect(record.feedback).not.toHaveProperty('ended_early');
+    expect(record.feedback?.final_acknowledgment).toBe('Nice work.');
+
+    const row = await attemptRow(attemptId);
+    expect(row.completed_at).not.toBeNull();
+    expect(row.partial_credit_percentage).toBe(46.7);
+    expect(row.evaluation_json).toEqual(record);
+    const stored = row.question_results_json as Record<string, unknown>[];
+    expect(stored.map(r => r.question_num)).toEqual([1, 2, 3]);
+    expect(stored[2]).toMatchObject({ skipped_by_end: true, credit_earned: 0, tries: 0 });
+    expect(typeof stored[2].recorded_at).toBe('string');
+
+    const [skipped] = await skippedByEndEvents(attemptId);
+    expect(skipped.operation_id).toBe(`${evalCall.toolCallId}:skipped_by_end:3`);
+    expect(skipped.input_message_id).toBe(confirm.inputMessageId);
+    expect(skipped.payload).toMatchObject({
+      question_num: 3,
+      answers: [],
+      credit_earned: 0,
+      emoji: 'zzz',
+      skipped_by_end: true,
+    });
+    expect(await skippedByEndEvents(attemptId)).toHaveLength(1);
+    const [completed] = await events(attemptId, 'evaluation_completed');
+    expect(completed.payload).toMatchObject({ ended_early: true, skipped_by_end: [3] });
+  });
+
+  it('records presented and unpresented questions as skipped once, however often the end is submitted', async () => {
+    const attemptId = await newAttempt();
+    const turn = await begin(attemptId);
+    const q1 = await completeQuestion(attemptId, turn, 1, [{ level: 'correct', hints_before: 0 }]);
+    // Question 2 is out, with no answer; question 3 was never presented.
+    await grading.presentQuestion(call(q1), question(2));
+    const confirm = await say(attemptId, 'yes, I want to end the quiz now');
+    const ended = { source: 'model' as const, feedback: { ...feedback, ended_early: true } };
+
+    // Two runs racing, each with its own call id: one fill, one completion.
+    const [a, b] = await Promise.all([
+      grading.completeWithEvaluation(call(confirm), ended),
+      grading.completeWithEvaluation(call(confirm), ended),
+    ]);
+    expect(a).toEqual(b);
+    expect(a.partial_credit_percentage).toBe(33.3); // 100 / 3
+    expect(
+      a.question_results.map(r => [r.question_num, r.credit_earned, r.skipped_by_end])
+    ).toEqual([
+      [1, 100, undefined],
+      [2, 0, true],
+      [3, 0, true],
+    ]);
+
+    // A re-delivered call and a server completion return the stored record.
+    const [first] = await events(attemptId, 'evaluation_completed');
+    const retry = { ...confirm, toolCallId: first.operation_id };
+    expect(await grading.completeWithEvaluation(retry, ended)).toEqual(a);
+    expect(await grading.completeWithEvaluation(call(confirm), ended)).toEqual(a);
+    expect(await grading.completeWithEvaluation(call(confirm), { source: 'server' })).toEqual(a);
+
+    expect(await events(attemptId, 'evaluation_completed')).toHaveLength(1);
+    expect(
+      (await skippedByEndEvents(attemptId)).map(
+        e => (e.payload as { question_num: number }).question_num
+      )
+    ).toEqual([2, 3]);
+    expect((await attemptRow(attemptId)).question_results_json).toHaveLength(3);
+  });
+
+  it('refuses an early end in a Next or Try again turn, or with no student message, writing nothing', async () => {
+    const attemptId = await newAttempt();
+    const opening = await begin(attemptId);
+    const ended = { source: 'model' as const, feedback: { ...feedback, ended_early: true } };
+
+    const refusal = async (turn: Turn) => {
+      try {
+        await grading.completeWithEvaluation(call(turn), ended);
+      } catch (error) {
+        return error as { code?: string; message: string };
+      }
+      throw new Error('expected a refusal');
+    };
+    const expectNothingWritten = async () => {
+      const row = await attemptRow(attemptId);
+      expect(row.completed_at).toBeNull();
+      expect(row.evaluation_json).toBeNull();
+      expect(await skippedByEndEvents(attemptId)).toHaveLength(0);
+      expect(await events(attemptId, 'evaluation_completed')).toHaveLength(0);
+    };
+
+    // The begin action: no student message at all.
+    const begun = await refusal(opening);
+    expect(begun.code).toBe('end_not_confirmed');
+    expect(begun.message).toContain('this turn has no student message');
+    await expectNothingWritten();
+
+    const q1 = await completeQuestion(attemptId, opening, 1, [
+      { level: 'correct', hints_before: 0 },
+    ]);
+    await grading.presentQuestion(call(q1), question(2));
+
+    for (const text of [BUTTON_TEXT.next, BUTTON_TEXT.try_again]) {
+      const clicked = await refusal(await say(attemptId, text));
+      expect(clicked.code).toBe('end_not_confirmed');
+      expect(clicked.message).toBe(
+        "An early end needs the student's own message confirming it, and this turn began with a " +
+          'button click. Leave ended_early out and carry on with the quiz.'
+      );
+      await expectNothingWritten();
+      expect((await attemptRow(attemptId)).question_results_json).toHaveLength(1);
+    }
+
+    // The student's own message confirms it.
+    const confirm = await say(attemptId, 'yes, end the quiz');
+    const record = await grading.completeWithEvaluation(call(confirm), ended);
+    expect(record.question_results).toHaveLength(3);
+  });
+
+  it('keeps the incomplete refusal without ended_early, and takes ended_early with nothing to fill as a plain completion', async () => {
+    const attemptId = await newAttempt();
+    const turn = await begin(attemptId);
+    const q1 = await completeQuestion(attemptId, turn, 1, [{ level: 'correct', hints_before: 0 }]);
+    const typed = await say(attemptId, "that's all from me");
+    for (const f of [feedback, { ...feedback, ended_early: false }]) {
+      const promise = grading.completeWithEvaluation(call(typed), { source: 'model', feedback: f });
+      await expect(promise).rejects.toMatchObject({ code: 'incomplete', message: INCOMPLETE_2_3 });
+    }
+    expect(await skippedByEndEvents(attemptId)).toHaveLength(0);
+    expect((await attemptRow(attemptId)).completed_at).toBeNull();
+
+    expect(q1.inputMessageId).not.toBe(typed.inputMessageId);
+    let last: Turn = typed;
+    for (const n of [2, 3]) {
+      last = await completeQuestion(attemptId, last, n, [{ level: 'correct', hints_before: 0 }]);
+    }
+    // Every question has its result: the flag changes nothing, in any turn.
+    const nextTurn = await say(attemptId, BUTTON_TEXT.next);
+    const record = await grading.completeWithEvaluation(call(nextTurn), {
+      source: 'model',
+      feedback: { ...feedback, ended_early: true },
+    });
+    expect(record.partial_credit_percentage).toBe(100);
+    expect(record.question_results.some(r => r.skipped_by_end)).toBe(false);
+    expect(await skippedByEndEvents(attemptId)).toHaveLength(0);
+    const [completed] = await events(attemptId, 'evaluation_completed');
+    expect(completed.payload).not.toHaveProperty('ended_early');
+  });
+
   // ─── explorations and progress ────────────────────────────────────────────
 
   it('journals explorations once per tool call and lists them', async () => {

@@ -19,7 +19,10 @@
  * once present_question has succeeded, an offer_next_step in the same turn is
  * refused, and once offer_next_step has succeeded, a present_question in the
  * same turn is refused (before anything is written), so a question card and
- * buttons never arrive together, in either order. A record_question_result
+ * buttons never arrive together, in either order. A present_question that
+ * shows the current question again (an earlier turn's card) is refused once
+ * the model has written text in the turn: re-showing is for a student who
+ * asks to see the question, at the start of the reply. A record_question_result
  * for a question whose card went out in the same turn is refused too, before
  * anything is written: the student has not seen it yet, so there is nothing
  * to rate. Recording an earlier question (the one the student is moving on
@@ -113,6 +116,7 @@ import {
   QUESTION_AFTER_OFFER_TEXT,
   QUOTE_READ_FAILED_TEXT,
   RECORD_BEFORE_ANSWER_TEXT,
+  RESHOW_AFTER_TEXT,
   RECORD_BEFORE_NEXT_TEXT,
   recordBeforePresentText,
   toolFailure,
@@ -333,6 +337,16 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
         // Refused before the write: a card the student never sees must not
         // count as presented.
         if (offerMade) throw new Error(QUESTION_AFTER_OFFER_TEXT);
+        // Showing the question already out again is for a student who asks
+        // to see it, at the start of the reply: after text (feedback, say)
+        // the turn would end with the old card and no buttons.
+        if (
+          input.question_number === lastPresented &&
+          !presentedThisTurn.has(input.question_number) &&
+          d.textWritten()
+        ) {
+          throw new Error(RESHOW_AFTER_TEXT);
+        }
         // The question the student is leaving is recorded first, so its
         // result shows before the next card. Showing the current question
         // again is left to the service (it returns the stored card).

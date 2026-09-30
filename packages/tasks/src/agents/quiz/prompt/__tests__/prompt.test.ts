@@ -186,6 +186,39 @@ describe('quiz prompt: typed tools only', () => {
     );
   });
 
+  it('ends the quiz early only once the student confirms, and reads "I\'m done" on a question as an answer', () => {
+    const flat = baseSystemPrompt.replace(/\s+/g, ' ');
+    expect(flat).toContain(
+      'You leave a question only when the student clicks Next or says "next" / "skip" / "move on".'
+    );
+    expect(flat).toContain('"I\'m done" about the current question is an answer.');
+    expect(flat).toContain(
+      "ENDING EARLY: when the student's own message asks to stop or end the whole quiz, do not end it yet."
+    );
+    expect(flat).toContain(
+      '"End the quiz now? The remaining questions will count as skipped." and end your reply there, with no offer_next_step.'
+    );
+    expect(flat).toContain(
+      'Whenever it is unclear whether they mean the question or the whole quiz, ask.'
+    );
+    expect(flat).toContain(
+      'record the open question only if they gave real answers to it (student_asked_to_move_on: true, as for a skip), then call submit_quiz_evaluation with ended_early: true.'
+    );
+    // The evaluation gates name the early end too, and the old one-step end is gone.
+    expect(flat).toContain('or has confirmed ending early (rule 1)');
+    expect(flat).toContain('or the student has confirmed ending early (rule 1)');
+    expect(flat).toContain(
+      'Unless the student confirmed ending early (rule 1), submit_quiz_evaluation is refused'
+    );
+    expect(flat).not.toContain('"done" / "finish"');
+    expect(flat).not.toContain(
+      'record the current question with record_question_result (student_asked_to_move_on: true), then call submit_quiz_evaluation'
+    );
+    expect(codeAwareAgentPrompt.replace(/\s+/g, ' ')).toContain(
+      'or with ended_early: true once the student confirmed ending early (rule 1)'
+    );
+  });
+
   it('keeps guidance out of answer feedback and ends the question at the reveal', () => {
     expect(baseSystemPrompt).toMatch(
       /Feedback on an answer says only what is right and what is wrong/
@@ -262,6 +295,17 @@ describe('quiz prompt: typed tools only', () => {
     );
     expect(codeAwareAgentPrompt).toMatch(
       /Do not type the student's code into the card \(code_snippet\) or into your text/
+    );
+    // The one exception: a file code_quote cannot read, twice.
+    const flat = codeAwareAgentPrompt.replace(/\s+/g, ' ');
+    expect(flat).toContain(
+      'The one exception: if code_quote fails twice because the file cannot be read, put the lines in code_snippet, copied exactly from your exploration output without their "N| " prefixes, and name the file and the rule or element in context.'
+    );
+    expect(flat).toContain(
+      '(use code_quote; the one exception is a file code_quote cannot read, above)'
+    );
+    expect(flat).toContain(
+      'The exceptions are IF explore_codebase FAILS below, and a file code_quote cannot read (above).'
     );
     expect(codeAwareAgentPrompt).toMatch(/code_quote is REQUIRED on EVERY question/);
     expect(codeAwareAgentPrompt).toMatch(/use these numbers in code_quote/);
@@ -411,7 +455,7 @@ describe('quiz prompt: typed tools only', () => {
     expect(codeAwareAgentPrompt).toMatch(
       /Never mention tools, tokens, repository access or errors to the student/
     );
-    expect(codeAwareAgentPrompt).toMatch(/The one exception is IF explore_codebase FAILS below/);
+    expect(codeAwareAgentPrompt).toMatch(/The exceptions are IF explore_codebase FAILS below/);
   });
 
   it('carries on after an exploration that found no code instead of exploring again', () => {

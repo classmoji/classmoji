@@ -1171,6 +1171,131 @@ describe('the history of earlier turns: failed tool calls left out', () => {
     expect(JSON.stringify(o5.slice(0, o4.length))).toBe(JSON.stringify(o4));
   });
 
+  /** Two assistant messages in a row, anywhere in `messages`. */
+  const hasAdjacentAssistants = (messages: ModelMessage[]) =>
+    messages.some(
+      (m, i) => i > 0 && m.role === 'assistant' && messages[i - 1].role === 'assistant'
+    );
+
+  it('keeps a failed call when removing it would put two assistant messages together', () => {
+    // [reasoning, text, failed] then [reasoning, call]: removing b1 leaves
+    // [reasoning, text] right before [reasoning, call].
+    const reply: ModelMessage[] = [
+      assistant(reasoning, { type: 'text', text: 'Right.' }, callPart('b1')),
+      toolMsg(resultPart('b1', MASKED)),
+      assistant(reasoning, callPart('b2')),
+      toolMsg(resultPart('b2', ok)),
+    ];
+    const history = [...turn1, ...reply, user('next')];
+    const out = withoutEarlierFailedToolCalls(history);
+    expect(out).toHaveLength(history.length);
+    out.forEach((m, i) => expect(m).toBe(history[i]));
+    expect(hasAdjacentAssistants(out)).toBe(false);
+  });
+
+  it('still removes a failed call when no two assistant messages end up together', () => {
+    // Text kept, its tool message dropped, the student's message after it.
+    const closing = [
+      ...turn1,
+      assistant({ type: 'text', text: 'Close.' }, callPart('b1')),
+      toolMsg(resultPart('b1', MASKED)),
+      user('next'),
+    ];
+    const out = withoutEarlierFailedToolCalls(closing);
+    expect(JSON.stringify(out)).not.toContain('"b1"');
+    expect(out.slice(turn1.length)).toEqual([
+      assistant({ type: 'text', text: 'Close.' }),
+      user('next'),
+    ]);
+
+    // The first step is kept (removing b1 would join two assistant messages);
+    // the second, a step left with only reasoning, is removed with its results.
+    const chained = [
+      ...turn1,
+      assistant({ type: 'text', text: 'Close.' }, callPart('b1')),
+      toolMsg(resultPart('b1', MASKED)),
+      assistant(reasoning, callPart('b2')),
+      toolMsg(resultPart('b2', MASKED)),
+      assistant({ type: 'text', text: 'What do you think?' }),
+      user('next'),
+    ];
+    const kept = withoutEarlierFailedToolCalls(chained);
+    const flat = JSON.stringify(kept);
+    expect(flat).toContain('"b1"');
+    expect(flat).not.toContain('"b2"');
+    expect(kept.slice(turn1.length)).toEqual([chained[4], chained[5], chained[8], chained[9]]);
+    expect(hasAdjacentAssistants(kept)).toBe(false);
+  });
+
+  it('never leaves two assistant messages together, keeps calls and results paired, and stays a prefix', () => {
+    let id = 0;
+    const failed = () => `f${id++}`;
+    const good = () => `g${id++}`;
+    const text = (t: string) => ({ type: 'text', text: t });
+    /** The shapes a saved step takes: its assistant message and tool message. */
+    const shapes: Record<string, () => ModelMessage[]> = {
+      reasoningFail: () => {
+        const f = failed();
+        return [assistant(reasoning, callPart(f)), toolMsg(resultPart(f, MASKED))];
+      },
+      textFail: () => {
+        const f = failed();
+        return [assistant(reasoning, text('Hmm.'), callPart(f)), toolMsg(resultPart(f, MASKED))];
+      },
+      reasoningOk: () => {
+        const g = good();
+        return [assistant(reasoning, callPart(g)), toolMsg(resultPart(g, ok))];
+      },
+      textOk: () => {
+        const g = good();
+        return [assistant(text('Right.'), callPart(g)), toolMsg(resultPart(g, ok))];
+      },
+      mixed: () => {
+        const [g, f] = [good(), failed()];
+        return [
+          assistant(text('Both.'), callPart(g), callPart(f)),
+          toolMsg(resultPart(g, ok), resultPart(f, MASKED)),
+        ];
+      },
+    };
+    const names = Object.keys(shapes);
+    /** Every reply of one to three steps, optionally ending with a text-only step. */
+    const replies: string[][] = [];
+    for (const a of names) {
+      replies.push([a]);
+      for (const b of names) {
+        replies.push([a, b]);
+        for (const c of names) replies.push([a, b, c]);
+      }
+    }
+    const idsOf = (messages: ModelMessage[], type: string) =>
+      messages
+        .flatMap(m => (typeof m.content === 'string' ? [] : (m.content as unknown[])))
+        .filter(p => (p as { type?: unknown }).type === type)
+        .map(p => (p as { toolCallId: string }).toolCallId)
+        .sort();
+    let removedFrom = 0;
+    for (const reply of replies) {
+      for (const endsWithText of [false, true]) {
+        const history = [
+          ...turn1,
+          ...reply.flatMap(name => shapes[name]()),
+          ...(endsWithText ? [assistant(text('What do you think?'))] : []),
+          user('next'),
+        ];
+        const out = withoutEarlierFailedToolCalls(history);
+        if (JSON.stringify(out).length < JSON.stringify(history).length) removedFrom += 1;
+        expect(hasAdjacentAssistants(out)).toBe(false);
+        expect(idsOf(out, 'tool-call')).toEqual(idsOf(out, 'tool-result'));
+        const later = [...history, assistant(text('Later.')), user('again')];
+        const laterOut = withoutEarlierFailedToolCalls(later);
+        expect(JSON.stringify(laterOut.slice(0, out.length))).toBe(JSON.stringify(out));
+      }
+    }
+    // Most histories still lose a failed call: the filter is not keeping everything.
+    expect(removedFrom).toBeGreaterThan(replies.length);
+  });
+
   it('sends the model no failed call of an earlier turn, and keeps this turn refusals', async () => {
     const a = fakeAttempt(2, { presented: 1 });
     const refusing: QuizToolsFactory = (c, d) => {
@@ -1234,6 +1359,16 @@ describe('offerToReplay', () => {
         { content: [textPart] },
       ])
     ).toBe(input);
+  });
+
+  it('returns null when the last step was cut off at the output limit', () => {
+    const input = { actions: ['try_again', 'next'] };
+    const steps = (finishReason: string) => [
+      { content: [refused(feedbackMissingError(), input)], finishReason: 'tool-calls' },
+      { content: [textPart], finishReason },
+    ];
+    expect(offerToReplay(steps('length'))).toBeNull();
+    expect(offerToReplay(steps('stop'))).toBe(input);
   });
 
   it('returns null for any other refusal, or once a card, buttons or the evaluation went out', () => {
