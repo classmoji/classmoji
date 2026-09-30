@@ -109,6 +109,18 @@ describe('preview loader — chat-runtime attempts', () => {
     expect(data.transcript).toEqual(PROJECTED);
     expect(data.messages).toEqual([]);
     expect(data.viewerOwnsAttempt).toBe(true);
+    expect(data.chatStarted).toBe(true);
+  });
+
+  it('says a new chat preview has not begun, so its drawer sends begin', async () => {
+    signInAs('owner-1', 'OWNER');
+    findWithMessagesMock.mockResolvedValue({
+      attempt: attemptOf('owner-1', 'trigger_chat'),
+      messages: [],
+    });
+    loadTranscriptMock.mockResolvedValue([]);
+
+    expect((await load()).chatStarted).toBe(false);
   });
 
   it('serves an ai-agent preview exactly as before', async () => {

@@ -29,6 +29,11 @@ export const QUIZ_REFUSAL_COPY: Readonly<Record<string, string>> = {
   invalid_input: "That message couldn't be sent. Please try again.",
   invalid_trigger: "That message couldn't be sent. Please try again.",
   already_started: 'This quiz has already started.',
+  classroom_locked: 'This class is in read-only mode. The owner has locked it.',
+  classroom_unpublished: 'This class has been unpublished by the owner.',
+  quiz_unavailable: "This quiz isn't available right now.",
+  session_ended: 'Your session has ended.',
+  reserved_text: "That message couldn't be sent. Please rephrase it.",
 };
 
 /** By refusal kind, for a code not listed above. */

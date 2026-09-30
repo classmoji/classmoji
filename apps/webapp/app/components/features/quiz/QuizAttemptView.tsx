@@ -23,6 +23,8 @@ type LegacyProps = ComponentProps<typeof QuizAttemptInterface>;
 export type QuizAttemptViewProps = LegacyProps & {
   transcript?: QuizUIMessage[] | null;
   viewerOwnsAttempt?: boolean;
+  /** A chat attempt's opening was admitted (see QuizChatProps). */
+  chatStarted?: boolean;
 };
 
 export const isChatRuntimeAttempt = (attempt: unknown) =>
@@ -52,7 +54,16 @@ const QuizChatLoadFailed = () => (
 
 function QuizAttemptView(props: QuizAttemptViewProps) {
   if (isChatRuntimeAttempt(props.attempt)) {
-    const { quiz, attempt, transcript, viewerOwnsAttempt, readOnly, userLogin, userImage } = props;
+    const {
+      quiz,
+      attempt,
+      transcript,
+      viewerOwnsAttempt,
+      chatStarted,
+      readOnly,
+      userLogin,
+      userImage,
+    } = props;
     // Keyed by attempt: the preview's "start new" navigates to another attempt
     // on the same drawer route, and a chat never carries over between attempts.
     return (
@@ -66,6 +77,7 @@ function QuizAttemptView(props: QuizAttemptViewProps) {
             attempt={attempt as unknown as QuizChatProps['attempt']}
             transcript={transcript ?? []}
             viewerOwnsAttempt={viewerOwnsAttempt === true}
+            chatStarted={chatStarted === true}
             readOnly={Boolean(readOnly)}
             userLogin={userLogin ?? null}
             userImage={userImage ?? null}
@@ -76,7 +88,12 @@ function QuizAttemptView(props: QuizAttemptViewProps) {
       </ErrorBoundary>
     );
   }
-  const { transcript: _transcript, viewerOwnsAttempt: _owns, ...legacyProps } = props;
+  const {
+    transcript: _transcript,
+    viewerOwnsAttempt: _owns,
+    chatStarted: _started,
+    ...legacyProps
+  } = props;
   return <QuizAttemptInterface {...legacyProps} />;
 }
 

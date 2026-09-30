@@ -3,7 +3,8 @@
  * repository paths, dot files included.
  */
 import { describe, expect, it } from 'vitest';
-import { NO_EXCLUSION, pathExclusion } from '../excludedPaths.ts';
+import { excludedPathProblem } from '@classmoji/utils/quiz-excluded-paths';
+import { NO_EXCLUSION, normalizeRepoPath, pathExclusion } from '../excludedPaths.ts';
 
 const excludes = (patterns: string[], path: string) => pathExclusion(patterns)(path);
 
@@ -83,5 +84,96 @@ describe('pathExclusion', () => {
 
   it('is case-sensitive, as repository paths are', () => {
     expect(excludes(['Tests/**'], 'tests/a.js')).toBe(false);
+  });
+
+  it('reads "." parts and repeated slashes in a path as the file they name', () => {
+    expect(excludes(['tests/foo.spec.js'], 'tests/./foo.spec.js')).toBe(true);
+    expect(excludes(['*.spec.js'], 'src/./a.spec.js')).toBe(true);
+    expect(excludes(['src/*.js'], 'src//./a.js')).toBe(true);
+    expect(excludes(['src/*.js'], './src/a.js/')).toBe(true);
+    // A path that climbs out of its folder is never read, and counts as excluded.
+    expect(excludes(['docs/**'], 'src/../tests/a.js')).toBe(true);
+  });
+
+  it('matches "(" and ")" as themselves, as in .gitignore', () => {
+    expect(excludes(['app/(auth)/**'], 'app/(auth)/login/page.tsx')).toBe(true);
+    expect(excludes(['app/(auth)/**'], 'app/auth/login/page.tsx')).toBe(false);
+    expect(excludes(['(a+)+b'], 'aaab')).toBe(false);
+    expect(excludes(['(a+)+b'], 'src/(a+)+b')).toBe(true);
+  });
+
+  it('skips a pattern the shared rules refuse instead of compiling it', () => {
+    for (const refused of [
+      '@(a*)*(a*)*(a*)*(a*)b',
+      '**/*a*a*a*a*a*a*a*a*a*a*a*a*b',
+      'src/!(keep)/**',
+      '/tests/**',
+      'tests\\e2e',
+    ]) {
+      expect(excludedPathProblem(refused)).not.toBeNull();
+      expect(pathExclusion([refused])).toBe(NO_EXCLUSION);
+    }
+    expect(excludes(['src/!(keep)/**', 'docs/**'], 'docs/a.md')).toBe(true);
+  });
+});
+
+describe('normalizeRepoPath', () => {
+  it.each([
+    ['tests/foo.spec.js', 'tests/foo.spec.js'],
+    ['./tests/./foo.spec.js', 'tests/foo.spec.js'],
+    ['/src//a.js/', 'src/a.js'],
+    ['src\\a.js', 'src/a.js'],
+    ['.', ''],
+  ])('%s → %s', (path, expected) => {
+    expect(normalizeRepoPath(path)).toBe(expected);
+  });
+
+  it('refuses a ".." part', () => {
+    expect(normalizeRepoPath('src/../tests/a.js')).toBeNull();
+    expect(normalizeRepoPath('..')).toBeNull();
+    expect(normalizeRepoPath('a..b.js')).toBe('a..b.js');
+  });
+});
+
+describe('pathExclusion: every accepted pattern matches quickly', () => {
+  // Patterns at the limits the shared rules allow, with nothing in the path to
+  // end the match early (none of these paths contains "b" or "c").
+  const worstAccepted = [
+    '*a*b',
+    '**/*a*b/**',
+    '**/*a*/**/b',
+    '*a/**/*a*b',
+    '**/{*a,a}*b/**',
+    '{a,aa,aaa,a*,*a}c',
+    '{a,aa,aaa,aaaa,a*}*c',
+    '[a]*[a]*b',
+    'a?a?*a*b',
+    '(a+)+b',
+    '(a*)(a*)b',
+  ];
+  const paths = [
+    'a'.repeat(200),
+    `x/${'a'.repeat(198)}`,
+    `${'aa/'.repeat(66)}aa`,
+    `${`${'a'.repeat(9)}/`.repeat(19)}${'a'.repeat(10)}`,
+  ];
+
+  it('accepts each of the patterns', () => {
+    for (const pattern of worstAccepted) expect(excludedPathProblem(pattern)).toBeNull();
+    for (const path of paths) expect(path).toHaveLength(200);
+  });
+
+  it.each(worstAccepted)('%s matches a 200-character path in under 50 ms', pattern => {
+    const excluded = pathExclusion([pattern]);
+    for (const path of paths) {
+      excluded(path); // warm up
+      let fastest = Infinity;
+      for (let run = 0; run < 3; run++) {
+        const started = performance.now();
+        expect(excluded(path)).toBe(false);
+        fastest = Math.min(fastest, performance.now() - started);
+      }
+      expect(fastest).toBeLessThan(50);
+    }
   });
 });

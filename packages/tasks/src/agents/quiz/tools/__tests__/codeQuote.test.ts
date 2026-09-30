@@ -26,6 +26,7 @@ const {
   resolveCodeQuote,
 } = await import('../codeQuote.ts');
 const { ExplorationStoppedError } = await import('../../../shared/exploration/core.ts');
+const { FileNotReadableError } = await import('../../../../workflows/exploreRepo.ts');
 
 const STYLE = readFileSync(
   join(FIXTURE_REPOS_DIR, 'landing-page', 'css', 'style.css'),
@@ -194,10 +195,10 @@ describe('buildQuote: the code', () => {
     ).toBe('5-10, 7');
   });
 
-  it('takes the path without a leading "./"', () => {
-    expect(buildQuote(STYLE, quote({ path: './css/style.css' }) as never).source.path).toBe(
-      'css/style.css'
-    );
+  it('takes the path without a leading "./", "." parts or repeated slashes', () => {
+    for (const path of ['./css/style.css', 'css/./style.css', '/css//style.css']) {
+      expect(buildQuote(STYLE, quote({ path }) as never).source.path).toBe('css/style.css');
+    }
   });
 });
 
@@ -683,6 +684,99 @@ describe('resolveCodeQuote: reading the file', () => {
     );
     expect(mintRepoToken).not.toHaveBeenCalled();
     expect(stub.requested).toEqual([]);
+  });
+
+  it('checks the exclusion on the file a path with "." parts names, before reading it', async () => {
+    const stub = githubStub('landing-page');
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    const mintRepoToken = vi.fn(async () => 'repo-token');
+    const excluding = { ...(where as object), excludedPaths: ['css/style.css'] } as never;
+    for (const path of ['css/./style.css', 'css//style.css', './css/./style.css']) {
+      const error = await resolveCodeQuote(
+        quote({ path }) as never,
+        excluding,
+        { mintRepoToken, cache: new QuoteFileCache() },
+        signal()
+      ).catch((e: unknown) => e);
+      expect((error as InstanceType<typeof QuoteRefusal>).reason).toBe('excluded');
+    }
+    expect(mintRepoToken).not.toHaveBeenCalled();
+    expect(stub.requested).toEqual([]);
+  });
+
+  it('reads and quotes a path with "." parts at the file it names', async () => {
+    const stub = githubStub('landing-page');
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    const built = await resolveCodeQuote(
+      quote({ path: 'css/./style.css' }) as never,
+      where,
+      { mintRepoToken: async () => 'repo-token', cache: new QuoteFileCache() },
+      signal()
+    );
+    expect(built.source.path).toBe('css/style.css');
+    expect(stub.requested).toEqual([
+      'https://api.github.com/repos/sample-org/landing-page/contents/css/style.css',
+    ]);
+  });
+
+  it('refuses a path with a ".." part without reading it', async () => {
+    const stub = githubStub('landing-page');
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    const error = await resolveCodeQuote(
+      quote({ path: 'js/../css/style.css' }) as never,
+      where,
+      { mintRepoToken: async () => 'repo-token', cache: new QuoteFileCache() },
+      signal()
+    ).catch((e: unknown) => e);
+    expect((error as InstanceType<typeof QuoteRefusal>).reason).toBe('not_quotable');
+    expect(stub.requested).toEqual([]);
+  });
+
+  it.each([
+    ['a symlink', { type: 'symlink', path: 'css/style.css', target: 'js/app.js' }],
+    [
+      'another file',
+      {
+        type: 'file',
+        path: 'js/app.js',
+        encoding: 'base64',
+        content: Buffer.from('const x = 1;').toString('base64'),
+      },
+    ],
+  ])('refuses a file whose answer from GitHub is %s', async (_label, body) => {
+    vi.stubGlobal('fetch', async () => Response.json(body));
+    const cache = new QuoteFileCache();
+    const error = await resolveCodeQuote(
+      quote() as never,
+      where,
+      { mintRepoToken: async () => 'repo-token', cache },
+      signal()
+    ).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(QuoteRefusal);
+    expect((error as InstanceType<typeof QuoteRefusal>).reason).toBe('not_quotable');
+    expect((error as Error).message).toBe(
+      'css/style.css cannot be quoted. Use a path exactly as your exploration results name it.'
+    );
+    expect(cache.size).toBe(0);
+  });
+
+  it('refuses a file the read finds excluded, and passes the exclusion to the read', async () => {
+    const readFile = vi.fn(async () => {
+      throw new FileNotReadableError('css/style.css', 'excluded');
+    });
+    const error = await resolveCodeQuote(
+      quote() as never,
+      { ...(where as object), excludedPaths: ['tests/**'] } as never,
+      { mintRepoToken: async () => 'repo-token', readFile, cache: new QuoteFileCache() },
+      signal()
+    ).catch((e: unknown) => e);
+    expect((error as InstanceType<typeof QuoteRefusal>).reason).toBe('excluded');
+    expect((error as Error).message).toBe(QUOTE_EXCLUDED_TEXT);
+    const options = (readFile.mock.calls[0] as unknown[])[4] as {
+      isExcluded: (path: string) => boolean;
+    };
+    expect(options.isExcluded('tests/a.spec.js')).toBe(true);
+    expect(options.isExcluded('css/style.css')).toBe(false);
   });
 
   it('quotes a file no excluded pattern matches', async () => {

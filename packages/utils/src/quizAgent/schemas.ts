@@ -6,8 +6,13 @@
 import { z } from 'zod';
 import { ANSWER_LEVELS } from './grading.ts';
 
-/** Tool-schema, prompt and grading-policy bundle an attempt is stamped with. */
-export const CONTRACT_VERSION = 1;
+/**
+ * Tool-schema, prompt and grading-policy bundle an attempt is stamped with.
+ * 2: offer_next_step carries the feedback and a private expected answer, and
+ * admission refuses server-reserved text. Stamped only: nothing compares it,
+ * so version-1 attempts keep taking turns under the current code.
+ */
+export const CONTRACT_VERSION = 2;
 
 export const QuizQuestionSchema = z.object({
   preamble: z
@@ -105,7 +110,7 @@ export type CodeQuote = z.infer<typeof CodeQuoteSchema>;
  */
 export const CodeAwareQuizQuestionSchema = QuizQuestionSchema.extend({
   code_quote: CodeQuoteSchema.optional().describe(
-    'The student\'s lines, filled exactly by the server (with "..." for each gap). Required on every code-aware question unless exploration failed; leave code_snippet out. If it fails twice because the file cannot be read, use code_snippet instead: the lines copied exactly from your exploration output without their "N| " prefixes, with the file and the rule or element named in context.'
+    'The student\'s lines, filled exactly by the server (with "..." for each gap). Send it on every code-aware question (unless exploration failed), with code_snippet left out. The one exception: if it fails twice because the file cannot be read, use code_snippet instead: the lines copied exactly from your exploration output without their "N| " prefixes, with the file and the rule or element named in context.'
   ),
 });
 export type CodeAwareQuizQuestion = z.infer<typeof CodeAwareQuizQuestionSchema>;

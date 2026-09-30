@@ -63,7 +63,7 @@ export type AttemptContext = {
     /**
      * The quiz's "Paths to exclude" (`quiz.excluded_paths`): .gitignore-style
      * patterns whose files exploration never lists or reads and a code quote
-     * refuses. None when absent or empty.
+     * refuses. None when absent or empty. Read every turn.
      */
     excludedPaths?: string[];
   } | null;
@@ -99,7 +99,9 @@ type LoadedAttempt = NonNullable<Awaited<ReturnType<typeof ClassmojiService.quiz
 /**
  * The per-attempt parts that do not change between turns (prompt, repository,
  * material state), kept for the life of this process so a warm run builds the
- * cached prompt once and sends byte-identical system blocks every turn.
+ * cached prompt once and sends byte-identical system blocks every turn. The
+ * quiz's excluded paths are not among them: they are read from the attempt
+ * every turn, so an edit to the list applies from the next turn.
  */
 type StableParts = {
   prompt: { staticPrompt: string; dynamicPrompt: string };
@@ -205,7 +207,6 @@ async function loadStableParts(
         owner: gitOrganization.login,
         repo,
         gitOrganization: gitOrganization as GitOrgLike,
-        excludedPaths: storedExcludedPaths(quiz.excluded_paths),
       };
     } else {
       log('[quiz-agent] code-aware attempt has no repository to explore', {
@@ -345,6 +346,8 @@ export async function loadAttemptContext(
           ...stable.exploration,
           model: settings.exploration.model,
           effort: settings.exploration.effort,
+          // From this turn's read of the attempt, never the cached parts.
+          excludedPaths: storedExcludedPaths(attempt.quiz.excluded_paths),
         }
       : null,
     prompt: stable.prompt,

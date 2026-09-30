@@ -44,6 +44,7 @@ import {
   toEffortLevel,
   type Excerpt,
   type ExploreResult,
+  type FileReadOptions,
 } from '../../../workflows/exploreRepo.ts';
 
 export type { ExploreResult, Excerpt } from '../../../workflows/exploreRepo.ts';
@@ -245,14 +246,16 @@ async function fetchFilesWithRetry(
   repo: string,
   paths: string[],
   token: string,
-  r: RetryContext
+  r: RetryContext,
+  read: FileReadOptions = {}
 ): Promise<RepoFiles> {
-  let files = await untilAborted(fetchMultipleFiles(owner, repo, paths, token), r.signal);
+  const fetchFiles = (list: string[]) => fetchMultipleFiles(owner, repo, list, token, 3, read);
+  let files = await untilAborted(fetchFiles(paths), r.signal);
   for (let retry = 0; retry < r.backoff.length; retry++) {
     const limited = files.filter(f => f.error && isGithubRateLimited(f.error)).map(f => f.path);
     if (limited.length === 0) break;
     await waitBeforeRetry(r, retry, 'files', limited.length);
-    const again = await untilAborted(fetchMultipleFiles(owner, repo, limited, token), r.signal);
+    const again = await untilAborted(fetchFiles(limited), r.signal);
     const byPath = new Map(again.map(f => [f.path, f]));
     files = files.map(f => byPath.get(f.path) ?? f);
   }
@@ -360,7 +363,8 @@ export async function exploreRepository(i: ExploreRepositoryInput): Promise<Expl
   );
 
   throwIfStopped(signal);
-  const files = await fetchFilesWithRetry(owner, repo, filePaths, token, retry);
+  // The answer's own path is checked against the excluded paths too.
+  const files = await fetchFilesWithRetry(owner, repo, filePaths, token, retry, { isExcluded });
   throwIfStopped(signal);
   for (const file of files) {
     if (file.error) i.onFileRead(file.path, { error: true });

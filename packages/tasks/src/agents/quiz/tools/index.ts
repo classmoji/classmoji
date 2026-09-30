@@ -104,6 +104,7 @@ import {
   quoteFileCache,
   resolveCodeQuote,
   type QuoteFileCache,
+  type ReadFile,
 } from './codeQuote.ts';
 import {
   aborted,
@@ -142,7 +143,7 @@ export type QuizToolServices = {
   /** Where file lines are kept for code quotes; exploration fills it too. */
   quoteCache: QuoteFileCache;
   /** Reads one file for a code quote; defaults to the Contents API read. */
-  readFile?: (owner: string, repo: string, path: string, token: string) => Promise<string>;
+  readFile?: ReadFile;
   /** The attempt user's MCP bearer for the content tools (content.ts). */
   mintMcpToken?: (userId: string) => Promise<string>;
   /** Opens the MCP client one content lookup uses. */

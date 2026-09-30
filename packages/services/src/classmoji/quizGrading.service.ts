@@ -133,7 +133,15 @@ const LOCKED_ATTEMPT_SELECT = {
   agent_config: true,
   turn_fence: true,
   evaluation_json: true,
-  quiz: { select: { classroom_id: true, question_count: true } },
+  chat_grant: true,
+  quiz: {
+    select: {
+      classroom_id: true,
+      question_count: true,
+      status: true,
+      classroom: { select: { status: true } },
+    },
+  },
 } satisfies Prisma.QuizAttemptSelect;
 
 export type LockedAttempt = Prisma.QuizAttemptGetPayload<{ select: typeof LOCKED_ATTEMPT_SELECT }>;
@@ -459,6 +467,59 @@ const sameAnswers = (a: unknown, b: Answer[]) =>
   a.every((x, i) => isObject(x) && x.level === b[i].level && x.hints_before === b[i].hints_before);
 
 /**
+ * The answers with each `hints_before` raised, where it is lower, to the Try
+ * again clicks admitted before that answer. The model counts the hints; the
+ * server knows the clicks, and a typed hint request can only add to them.
+ *
+ * Question n's messages are the ones admitted after its card went out and
+ * before question n+1's card. A typed message (no button) can carry an
+ * answer; answers are taken one per typed message, in order, so the k-th
+ * answer came no earlier than the k-th typed message and the clicks before
+ * that message are its floor. An answer past the last typed message takes the
+ * last message's floor, so a click after the final answer (a hint, then Next)
+ * counts for none of them. Floors never decrease, so the answers keep
+ * `hints_before` non-decreasing.
+ */
+const floorHintsAtTryAgain = async (
+  tx: Tx,
+  attemptId: string,
+  questionNum: number,
+  answers: Answer[]
+): Promise<Answer[]> => {
+  if (answers.length === 0) return answers;
+  const cards = await tx.quizAttemptEvent.findMany({
+    where: { attempt_id: attemptId, type: 'question_presented' },
+    select: { seq: true, payload: true },
+  });
+  const cardSeq = (n: number) =>
+    cards.find(c => isObject(c.payload) && c.payload.question_number === n)?.seq;
+  const from = cardSeq(questionNum);
+  if (from === undefined) return answers;
+  const to = cardSeq(questionNum + 1);
+  const inputs = await tx.quizAttemptEvent.findMany({
+    where: {
+      attempt_id: attemptId,
+      type: 'input_admitted',
+      seq: { gt: from, ...(to !== undefined ? { lt: to } : {}) },
+    },
+    orderBy: { seq: 'asc' },
+    select: { payload: true },
+  });
+  let clicks = 0;
+  const floors: number[] = [];
+  for (const { payload } of inputs) {
+    const p = isObject(payload) ? payload : {};
+    if (p.action === 'try_again') clicks += 1;
+    else if (p.kind === 'message' && p.action === undefined) floors.push(clicks);
+  }
+  if (floors.length === 0) return answers;
+  return answers.map((a, k) => {
+    const floor = floors[Math.min(k, floors.length - 1)];
+    return a.hints_before >= floor ? a : { ...a, hints_before: floor };
+  });
+};
+
+/**
  * Write `entries` into the attempt's `question_results_json` in one update,
  * each in place of any stored entry for its question, in question order.
  * Returns the array written.
@@ -490,6 +551,9 @@ const writeProjection = async (
 /**
  * Finalize a presented question from the answers the model rated. The server
  * scores it (`deriveResult`) and picks the emoji from the classroom mapping.
+ * Each answer's hint count is first raised to the Try again clicks admitted
+ * before it (`floorHintsAtTryAgain`); the journal keeps what the model sent
+ * as `reported_answers` when that changed anything.
  *
  * - First record → `result_finalized`.
  * - The same answers again, in any turn (a retried call) → the stored result.
@@ -521,7 +585,7 @@ export const finalizeQuestion = (
           `Invalid question result: ${describeIssues(parsed.error)}`
         );
       }
-      const { question_num, answers, brief_feedback } = parsed.data;
+      const { question_num, brief_feedback } = parsed.data;
       const questionCount = attemptQuestionCount(attempt);
       const presented = attempt.questions_asked ?? 0;
 
@@ -538,6 +602,11 @@ export const finalizeQuestion = (
             'Present it with present_question and record its result after the student has answered it.'
         );
       }
+
+      // Floored before any comparison, so a re-sent call with the same
+      // counts matches the result stored from it.
+      const answers = await floorHintsAtTryAgain(tx, attempt.id, question_num, parsed.data.answers);
+      const floored = !sameAnswers(parsed.data.answers, answers);
 
       const history = await tx.quizAttemptEvent.findMany({
         where: {
@@ -626,6 +695,7 @@ export const finalizeQuestion = (
         payload: toJson({
           question_num,
           answers,
+          ...(floored ? { reported_answers: parsed.data.answers } : {}),
           ...derived,
           emoji,
           brief_feedback,

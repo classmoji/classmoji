@@ -29,8 +29,14 @@ vi.mock('@anthropic-ai/sdk', () => ({
 
 vi.spyOn(console, 'log').mockImplementation(() => {});
 
-const { isVisiblePath, isExplorableEntry, readablePickedPaths, fetchFileContent, exploreRepoTask } =
-  await import('../exploreRepo.ts');
+const {
+  isVisiblePath,
+  isExplorableEntry,
+  readablePickedPaths,
+  fetchFileContent,
+  FileNotReadableError,
+  exploreRepoTask,
+} = await import('../exploreRepo.ts');
 
 describe('isVisiblePath', () => {
   it.each([
@@ -94,6 +100,63 @@ describe('fetchFileContent', () => {
   it('refuses an answer whose path is hidden, whatever path was asked for', async () => {
     answer({ type: 'file', path: '.env', encoding: 'base64', content: base64('SECRET=1') });
     await expect(fetchFileContent('org', 'repo', 'docs/notes.md', 'ghs_x')).rejects.toThrow(
+      'not explored'
+    );
+  });
+
+  it('reads a path with "." parts and repeated slashes at the file it names', async () => {
+    const fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            type: 'file',
+            path: 'src/App.jsx',
+            encoding: 'base64',
+            content: base64('hi'),
+          }),
+          { status: 200 }
+        )
+    );
+    vi.stubGlobal('fetch', fetch);
+    await expect(fetchFileContent('org', 'repo', './src/.//App.jsx', 'ghs_x')).resolves.toBe('hi');
+    expect(String((fetch.mock.calls[0] as unknown[])[0])).toBe(
+      'https://api.github.com/repos/org/repo/contents/src/App.jsx'
+    );
+  });
+
+  it('refuses a path with a ".." part, or one the caller excludes, without reading it', async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    await expect(fetchFileContent('org', 'repo', 'src/../.env', 'ghs_x')).rejects.toThrow(
+      'not explored'
+    );
+    const error = await fetchFileContent('org', 'repo', 'tests/./a.spec.js', 'ghs_x', {
+      isExcluded: path => path.startsWith('tests/'),
+    }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(FileNotReadableError);
+    expect((error as InstanceType<typeof FileNotReadableError>).reason).toBe('excluded');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('refuses an answer that names another file than the one asked for', async () => {
+    answer({
+      type: 'file',
+      path: 'tests/hidden.spec.js',
+      encoding: 'base64',
+      content: base64('secret'),
+    });
+    const error = await fetchFileContent('org', 'repo', 'src/link.js', 'ghs_x').catch(
+      (e: unknown) => e
+    );
+    expect(error).toBeInstanceOf(FileNotReadableError);
+    expect((error as InstanceType<typeof FileNotReadableError>).reason).toBe('not_explored');
+    // The message names only the path that was asked for.
+    expect((error as Error).message).toBe('GitHub contents (src/link.js): not explored');
+  });
+
+  it('refuses an answer that carries a symlink target', async () => {
+    answer({ type: 'file', path: 'src/link.js', target: 'tests/hidden.spec.js' });
+    await expect(fetchFileContent('org', 'repo', 'src/link.js', 'ghs_x')).rejects.toThrow(
       'not explored'
     );
   });

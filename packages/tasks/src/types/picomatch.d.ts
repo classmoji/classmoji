@@ -7,6 +7,8 @@ declare module 'picomatch/posix' {
     /** Match dotfiles and dot-directories with `*` and `**`. */
     dot?: boolean;
     nocase?: boolean;
+    /** Treat extended glob groups (`@(a|b)`, `+(a)`, ...) as plain text. */
+    noextglob?: boolean;
   }
   function picomatch(
     glob: string | readonly string[],

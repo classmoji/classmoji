@@ -30,9 +30,11 @@
  *   `EXPLORATION_FAILED_TEXT`; the prompt says what to do next.
  * - Every file read is kept (server side, per process) in the code-quote
  *   cache, so a later `code_quote` checks the lines the model was shown.
- * - The quiz's excluded paths (`exploration.excludedPaths`) are left out of
- *   the tree the file picker sees and are never read; earlier explorations'
- *   notes on them are dropped too (they may predate the setting).
+ * - The quiz's excluded paths (`exploration.excludedPaths`, read every turn,
+ *   so an edit applies from the next turn) are left out of the tree the file
+ *   picker sees and are never read; earlier explorations' notes on them are
+ *   dropped too (they may predate an edit). What an earlier turn's
+ *   exploration already showed the model stays in its history.
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { tool } from 'ai';

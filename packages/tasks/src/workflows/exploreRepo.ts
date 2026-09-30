@@ -1,6 +1,7 @@
 // eslint-disable-next-line import/no-unresolved -- trigger.dev v3 resolved at runtime
 import { task, logger, metadata } from '@trigger.dev/sdk/v3';
 import Anthropic from '@anthropic-ai/sdk';
+import { normalizeRepoPath } from '../agents/shared/exploration/excludedPaths.ts';
 
 console.log('[explore-repo] Repository loaded (v3: excerpts, result in metadata)');
 
@@ -107,8 +108,35 @@ export async function fetchRepoTree(
 }
 
 /**
+ * A file read refused by the rules for what exploration and code quotes may
+ * read: `not_explored` (a hidden path, a symlink, or an answer naming another
+ * file than the one asked for) or `excluded` (the caller's excluded paths).
+ * The message names only the path that was asked for.
+ */
+export class FileNotReadableError extends Error {
+  readonly reason: 'not_explored' | 'excluded';
+  constructor(path: string, reason: 'not_explored' | 'excluded') {
+    super(`GitHub contents (${path}): ${reason === 'excluded' ? 'excluded' : 'not explored'}`);
+    this.name = 'FileNotReadableError';
+    this.reason = reason;
+  }
+}
+
+/** What a file read may be told about the caller's rules. */
+export type FileReadOptions = {
+  /** The caller's excluded paths: checked on the path asked for and on the path GitHub answers with. */
+  isExcluded?: (path: string) => boolean;
+};
+
+/**
  * Fetch a single file's content via the GitHub Contents API.
  * Returns decoded UTF-8 text content.
+ *
+ * The path is read in its canonical form (`normalizeRepoPath`: no "." or
+ * empty parts, no ".."), so the checks see the path URL parsing would
+ * otherwise resolve to after them. The answer must name that same path: a
+ * symlink GitHub followed, or any other file, is refused, and so is a hidden
+ * or excluded path (`FileNotReadableError`).
  *
  * @param {string} owner - GitHub org/user
  * @param {string} repo - GitRepo name
@@ -120,22 +148,36 @@ export async function fetchFileContent(
   owner: string,
   repo: string,
   path: string,
-  token: string
+  token: string,
+  options: FileReadOptions = {}
 ): Promise<string> {
-  const encodedPath = path
+  const requested = normalizeRepoPath(path);
+  if (!requested || !isVisiblePath(requested)) {
+    throw new FileNotReadableError(path, 'not_explored');
+  }
+  if (options.isExcluded?.(requested)) throw new FileNotReadableError(path, 'excluded');
+  const encodedPath = requested
     .split('/')
     .map(segment => encodeURIComponent(segment))
     .join('/');
   const url = `${GITHUB_API}/repos/${owner}/${repo}/contents/${encodedPath}`;
-  const res = await githubFetch(url, GITHUB_HEADERS(token), `GitHub contents (${path})`);
+  const res = await githubFetch(url, GITHUB_HEADERS(token), `GitHub contents (${requested})`);
 
   const data = await res.json();
 
   // Symlinks are not explored. The tree listing already leaves them out; the
-  // Contents API's own answer is held to the same rule, including the path it
-  // says it returned.
-  if (data?.type === 'symlink' || (typeof data?.path === 'string' && !isVisiblePath(data.path))) {
-    throw new Error(`GitHub contents (${path}): not explored`);
+  // Contents API's own answer is held to the same rule: no symlink (its type,
+  // or the target it names), and the path it says it returned must be the one
+  // asked for, visible and not excluded.
+  if (data?.type === 'symlink' || typeof data?.target === 'string') {
+    throw new FileNotReadableError(path, 'not_explored');
+  }
+  if (typeof data?.path === 'string') {
+    const answered = normalizeRepoPath(data.path);
+    if (answered !== requested || !isVisiblePath(answered)) {
+      throw new FileNotReadableError(path, 'not_explored');
+    }
+    if (options.isExcluded?.(answered)) throw new FileNotReadableError(path, 'excluded');
   }
 
   if (data.encoding === 'base64' && data.content) {
@@ -162,7 +204,8 @@ export async function fetchMultipleFiles(
   repo: string,
   paths: string[],
   token: string,
-  concurrency: number = 3
+  concurrency: number = 3,
+  options: FileReadOptions = {}
 ): Promise<Array<{ path: string; content: string; error?: string }>> {
   const results = [];
   // Process in batches for concurrency control
@@ -170,7 +213,7 @@ export async function fetchMultipleFiles(
     const batch = paths.slice(i, i + concurrency);
     const batchResults = await Promise.allSettled(
       batch.map(async path => {
-        const content = await fetchFileContent(owner, repo, path, token);
+        const content = await fetchFileContent(owner, repo, path, token, options);
         return { path, content };
       })
     );

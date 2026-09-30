@@ -123,6 +123,25 @@ describe('loadAttemptContext for a code-aware quiz', () => {
     ]);
   });
 
+  it('reads the excluded paths every turn, so an edit applies from the next turn', async () => {
+    fakes.findByStudent.mockResolvedValue({ name: 'landing-page' });
+    fakes.findById.mockResolvedValue(attempt({ excluded_paths: ['tests/**'] }));
+    const first = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });
+    expect(first.exploration?.excludedPaths).toEqual(['tests/**']);
+
+    fakes.findById.mockResolvedValue(attempt({ excluded_paths: ['tests/**', 'docs/**'] }));
+    const second = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });
+    expect(second.exploration?.excludedPaths).toEqual(['tests/**', 'docs/**']);
+
+    fakes.findById.mockResolvedValue(attempt({ excluded_paths: [] }));
+    const third = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });
+    expect(third.exploration?.excludedPaths).toEqual([]);
+
+    // The rest of the attempt's parts stay cached: the repository is looked up once.
+    expect(fakes.findByStudent).toHaveBeenCalledTimes(1);
+    expect(third.exploration).toMatchObject({ owner: 'sample-org', repo: 'landing-page' });
+  });
+
   it('has no excluded paths for a quiz without any, or with a malformed value', async () => {
     fakes.findByStudent.mockResolvedValue({ name: 'landing-page' });
     const ctx = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });

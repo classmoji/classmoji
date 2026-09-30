@@ -721,7 +721,7 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
       );
     }
     expect(OFFER_AFTER_HINT_TEXT).toBe(
-      'This is a hint turn: write the hint as your reply text, with no tool call. Give exactly one hint and end with a question such as "What do you think?".'
+      'This is a hint turn: write the hint as your reply text, with no offer_next_step or present_question. Give exactly one hint and end with a question such as "What do you think?".'
     );
     expect(writes).toEqual([]);
     expect(Object.values(grading).every(fn => fn.mock.calls.length === 0)).toBe(true);
@@ -935,7 +935,11 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
               type: 'tool-call',
               toolCallId: 'b',
               toolName: 'offer_next_step',
-              input: JSON.stringify({ actions: ['next'] }),
+              input: JSON.stringify({
+                expected_answer: ANSWER,
+                feedback: FEEDBACK,
+                actions: ['next'],
+              }),
             },
             { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool_use' }, usage },
           ]),
@@ -978,6 +982,12 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
 
     // One model call: the successful present_question ended the turn.
     expect(model.doStreamCalls).toHaveLength(1);
+    // The offer's input was valid, so its refusal came from the after-card
+    // rule in execute, not from the schema.
+    expect(chunks).toContainEqual(
+      expect.objectContaining({ type: 'tool-input-available', toolCallId: 'b' })
+    );
+    expect(chunks.some(c => c.type === 'tool-input-error' && c.toolCallId === 'b')).toBe(false);
     // The card's result reaches the browser; the buttons' call only as an error
     // (the chat renders buttons from a successful result only).
     const outputs = chunks.filter(c => c.type === 'tool-output-available');
@@ -1594,6 +1604,22 @@ describe('explore_codebase (fake pipeline)', () => {
       call(tools, 'explore_codebase', { purpose: 'check_current', focus_area: 'a.css' })
     ).resolves.toMatchObject({ files_read: ['a.css'] });
     expect(mintRepoToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('in a Try again turn, re-reads the code with check_current but still refuses the buttons', async () => {
+    const { tools } = exploreSetup(async () => result(['a.css']), {
+      ctx: codeAware({ progress: progressAt(2, [1]), lastAction: 'try_again' }),
+    });
+    await expect(
+      call(tools, 'explore_codebase', { purpose: 'check_current', focus_area: 'a.css' })
+    ).resolves.toMatchObject({ files_read: ['a.css'] });
+    await expect(
+      call(tools, 'offer_next_step', {
+        expected_answer: ANSWER,
+        feedback: FEEDBACK,
+        actions: ['next'],
+      })
+    ).rejects.toThrow(OFFER_AFTER_HINT_TEXT);
   });
 
   it('allows the opening prepare_next before the first question', async () => {

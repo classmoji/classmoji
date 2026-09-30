@@ -88,6 +88,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     // Use unified messages from getAttemptWithMessages (ai-agent owns persistence)
     messages: isChatAttempt ? [] : attemptData.messages || [],
     transcript,
+    // The opening was admitted (its hidden row is stored), even when its reply
+    // is not saved yet: a second tab joins it rather than beginning again.
+    chatStarted: isChatAttempt && (attemptData.messages?.length ?? 0) > 0,
     viewerOwnsAttempt: true,
     userLogin: attemptData.attempt.user?.login || null,
     userImage: attemptData.attempt.user?.image || null,

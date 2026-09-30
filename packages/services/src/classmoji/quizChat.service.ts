@@ -55,7 +55,12 @@ export type QuizChatRefusalCode =
   | 'quizzes_unavailable'
   | 'invalid_message'
   | 'message_conflict'
-  | 'already_started';
+  | 'already_started'
+  | 'classroom_locked'
+  | 'classroom_unpublished'
+  | 'quiz_unavailable'
+  | 'session_ended'
+  | 'reserved_text';
 
 /** A refused turn. The caller picks the copy; `message` is for logs only. */
 export class QuizChatRefusal extends Error {
@@ -91,7 +96,37 @@ export const CLIENT_MESSAGE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 export const OPENING_TEXT = 'The student is ready. Begin.';
 export const OPENING_MESSAGE_ID = 'server:opening';
 
+/** The roles that may take a quiz, weakest first. */
 const ALLOWED_ROLES = ['STUDENT', 'ASSISTANT', 'TEACHER', 'OWNER'] as const;
+type AllowedRole = (typeof ALLOWED_ROLES)[number];
+
+/**
+ * Whether the classroom's status lets this role take a turn: the webapp's
+ * mutation gate, `canMutateClassroom` in packages/auth/src/predicates.ts,
+ * restated here because @classmoji/auth depends on this package (a parity
+ * test holds the two together). The owner always may; anyone else only while
+ * the classroom is ACTIVE (LOCKED and UNPUBLISHED are read-only).
+ */
+export const classroomAllowsTurn = ({ status, role }: { status: string; role: string }) =>
+  role === 'OWNER' || status === 'ACTIVE';
+
+/**
+ * Text only the server writes into the model's context: its notices, the
+ * per-turn status block and the marker line that opens each of them (see the
+ * quiz agent's `serverNotice.ts`). Matched in any case, across spaces,
+ * underscores or hyphens; "current status" only as the block's heading
+ * (followed by "(" or ":"), so a sentence like "the current status code" is
+ * still admitted.
+ */
+const RESERVED_TEXT = [
+  /system[\s_-]*notice/i,
+  /server[\s_-]*notice/i,
+  /current[\s_-]*status\s*[(:]/i,
+];
+
+/** Whether a student's message contains text reserved for the server. */
+export const containsReservedText = (text: string): boolean =>
+  RESERVED_TEXT.some(pattern => pattern.test(text));
 
 /** `ai_conversations.context.runtime`: the transport's cursors and opaque state. */
 export type QuizChatRuntimeState = { cursors: unknown; state: unknown };
@@ -201,10 +236,36 @@ const preflight = async (attemptId: string) => {
 };
 
 /**
- * Per-turn revalidation against the current state (slice §1): the attempt
- * exists on this runtime, is not completed, is before its deadline, its owner
- * is still a member of the quiz's classroom with an allowed role, and quizzes
- * are visible in that classroom.
+ * Whether the attempt's chat grant (written by the webapp's session route
+ * before it hands out a session token) still holds: it names the attempt's
+ * owner in the quiz's classroom, and an impersonation behind it has not
+ * expired (a grant that names one with no expiry does not hold). The web
+ * sign-in session itself is not re-checked per turn (plan Q20/Q23).
+ */
+const grantHolds = (attempt: LockedAttempt, now: number): boolean => {
+  const grant = attempt.chat_grant;
+  if (!isObject(grant)) return false;
+  if (grant.effective_user_id !== attempt.user_id) return false;
+  if (grant.classroom_id !== attempt.quiz.classroom_id) return false;
+  const impersonation = grant.impersonation;
+  if (impersonation === null || impersonation === undefined) return true;
+  if (!isObject(impersonation) || typeof impersonation.expires_at !== 'string') return false;
+  const expiresAt = Date.parse(impersonation.expires_at);
+  return Number.isFinite(expiresAt) && expiresAt > now;
+};
+
+/**
+ * Per-turn revalidation against the current state, the checks the previous
+ * runtime ran on every message:
+ * - the attempt exists on this runtime, is not completed and is before its
+ *   deadline (permanent);
+ * - its owner is still a member of the quiz's classroom with an allowed role
+ *   (permanent); with several roles, the strongest one decides below;
+ * - the chat grant still holds (temporary: the session route writes a new one);
+ * - the classroom's status lets that role act (temporary: LOCKED or
+ *   UNPUBLISHED can be lifted);
+ * - a student's quiz is still published (temporary);
+ * - quizzes are visible in the classroom (temporary).
  */
 const revalidate = async (
   tx: Tx,
@@ -216,18 +277,33 @@ const revalidate = async (
     throw new QuizChatRefusal('permanent', 'wrong_runtime');
   }
   if (attempt.completed_at) throw new QuizChatRefusal('permanent', 'attempt_completed');
-  if (attempt.session_expires_at && attempt.session_expires_at.getTime() <= Date.now()) {
+  const now = Date.now();
+  if (attempt.session_expires_at && attempt.session_expires_at.getTime() <= now) {
     throw new QuizChatRefusal('permanent', 'attempt_expired');
   }
-  const membership = await tx.classroomMembership.findFirst({
+  const memberships = await tx.classroomMembership.findMany({
     where: {
       classroom_id: attempt.quiz.classroom_id,
       user_id: attempt.user_id,
       role: { in: [...ALLOWED_ROLES] },
     },
-    select: { id: true },
+    select: { role: true },
   });
-  if (!membership) throw new QuizChatRefusal('permanent', 'not_a_member');
+  if (memberships.length === 0) throw new QuizChatRefusal('permanent', 'not_a_member');
+  const role = memberships
+    .map(m => m.role as AllowedRole)
+    .reduce((a, b) => (ALLOWED_ROLES.indexOf(b) > ALLOWED_ROLES.indexOf(a) ? b : a));
+  if (!grantHolds(attempt, now)) throw new QuizChatRefusal('temporary', 'session_ended');
+  const status = attempt.quiz.classroom.status;
+  if (!classroomAllowsTurn({ status, role })) {
+    throw new QuizChatRefusal(
+      'temporary',
+      status === 'LOCKED' ? 'classroom_locked' : 'classroom_unpublished'
+    );
+  }
+  if (role === 'STUDENT' && attempt.quiz.status !== 'PUBLISHED') {
+    throw new QuizChatRefusal('temporary', 'quiz_unavailable');
+  }
   if (!visible) throw new QuizChatRefusal('temporary', 'quizzes_unavailable');
   return attempt;
 };
@@ -255,8 +331,11 @@ type AdmittedMessage = {
  * revalidation, then the message checks (well-formed id, non-empty text within
  * the length cap), then:
  *
+ * - text reserved for the server (`containsReservedText`) is refused
+ *   (`reserved_text`);
  * - the latest admitted id with the same text is a re-delivery: a fresh
- *   fence, no new row (`status: 'redelivered'`);
+ *   fence, no new row (`status: 'redelivered'`), unless its turn already
+ *   saved a partial reply (stopped or failed), which is refused;
  * - an id already used with different text, or an older admitted id, is
  *   refused (`message_conflict`);
  * - otherwise the user row is written with parts `[student text, turn status]`
@@ -282,6 +361,7 @@ export const admitStudentMessage = async (i: {
     ) {
       throw new QuizChatRefusal('temporary', 'invalid_message');
     }
+    if (containsReservedText(text)) throw new QuizChatRefusal('temporary', 'reserved_text');
 
     const questionCount = attemptQuestionCount(attempt);
     const fence = newFence();
@@ -311,17 +391,32 @@ export const admitStudentMessage = async (i: {
             ui_message_id: id,
           },
         },
-        select: { parts: true, role: true },
+        select: { parts: true, role: true, created_at: true },
       });
       const stored = Array.isArray(row?.parts) ? row.parts[0] : undefined;
       if (
-        row?.role !== 'USER' ||
+        !row ||
+        row.role !== 'USER' ||
         !isObject(stored) ||
         stored.type !== 'text' ||
         stored.text !== text
       ) {
         throw new QuizChatRefusal('temporary', 'message_conflict');
       }
+      // A turn that was stopped or failed after it began its reply (a partial
+      // reply is saved) is not run again for the same message: what it
+      // committed stands, and the student sends a new message. A turn that
+      // wrote nothing yet (a crashed or handed-over run) is run again.
+      const reply = await tx.aIConversationMessage.findFirst({
+        where: {
+          conversation_id: attempt.conversation_id,
+          role: 'ASSISTANT',
+          created_at: { gt: row.created_at },
+        },
+        orderBy: { created_at: 'desc' },
+        select: { final: true },
+      });
+      if (reply && !reply.final) throw new QuizChatRefusal('temporary', 'message_conflict');
       await tx.quizAttempt.update({
         where: { id: attempt.id },
         data: {
@@ -558,11 +653,39 @@ export const persistAssistantMessage = async (
 
 // ─── Reads ──────────────────────────────────────────────────────────────────
 
+/** Tools whose successful call commits to the attempt (a card, a result, the buttons, the evaluation). */
+const COMMITTED_TOOL_PARTS = new Set([
+  'tool-present_question',
+  'tool-record_question_result',
+  'tool-offer_next_step',
+  'tool-submit_quiz_evaluation',
+]);
+
+/** Data parts written from committed state (a result divider, a server evaluation). */
+const COMMITTED_DATA_PARTS = new Set(['data-question-result', 'data-evaluation']);
+
+/**
+ * What a partial reply keeps: the successful calls of the committing tools
+ * and the data parts written from committed state. Its text (cut off
+ * mid-reply), reasoning, failed or unfinished calls and notices are dropped.
+ */
+const committedParts = (parts: unknown): unknown[] =>
+  (Array.isArray(parts) ? parts : []).filter(
+    p =>
+      isObject(p) &&
+      typeof p.type === 'string' &&
+      (COMMITTED_DATA_PARTS.has(p.type) ||
+        (COMMITTED_TOOL_PARTS.has(p.type) && p.state === 'output-available'))
+  );
+
 /**
  * The attempt's conversation as the model sees it: every UIMessage row in
  * order, with full parts (hidden ones included). A partial assistant message
- * (`final: false`, e.g. left by a crashed turn) is left out, so the chain
- * never ends in an unfinished assistant turn.
+ * (`final: false`, left by a turn that was stopped or failed) keeps only what
+ * its turn committed (`committedParts`): a card, a result, the buttons or the
+ * evaluation the student was shown stay in the model's history and in the
+ * transcript, while its unfinished text does not. A partial message with
+ * nothing committed is left out.
  */
 export const loadCanonicalMessages = async (attemptId: string): Promise<QuizUIMessage[]> => {
   const attempt = await getPrisma().quizAttempt.findUnique({
@@ -575,12 +698,21 @@ export const loadCanonicalMessages = async (attemptId: string): Promise<QuizUIMe
       conversation_id: attempt.conversation_id,
       format: 'ui_message_v1',
       ui_message_id: { not: null },
-      NOT: { role: 'ASSISTANT', final: false },
     },
     orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
-    select: { ui_message_id: true, role: true, parts: true, metadata: true },
+    select: { ui_message_id: true, role: true, parts: true, metadata: true, final: true },
   });
-  return rows.map(toUIMessage);
+  const messages: QuizUIMessage[] = [];
+  for (const row of rows) {
+    if (row.role === 'ASSISTANT' && !row.final) {
+      const parts = committedParts(row.parts);
+      if (parts.length > 0)
+        messages.push(toUIMessage({ ...row, parts: parts as Prisma.JsonValue }));
+      continue;
+    }
+    messages.push(toUIMessage(row));
+  }
+  return messages;
 };
 
 /**

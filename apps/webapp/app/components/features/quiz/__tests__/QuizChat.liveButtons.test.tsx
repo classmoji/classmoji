@@ -345,11 +345,42 @@ describe('the Next after a hint', () => {
     expect(buttonSets()).toEqual([false, false, false, true]);
   });
 
-  it('is not added to a reply that brings buttons, a card or a result of its own', async () => {
-    for (const parts of [[offer('o2', ['next'])], [card(1)], [divider(1)]]) {
+  it("is not added to a reply that brings buttons, a later question's card or a result", async () => {
+    for (const parts of [[offer('o2', ['next'])], [card(2)], [divider(1)]]) {
       const set = buttonSetsOf([...answered, user('u2', BUTTON_TEXT.try_again), hint('a3', parts)]);
       expect(set.hintReplies.size).toBe(0);
     }
+  });
+
+  it('ends a Try again reply that shows the current question again with Next alone', async () => {
+    // The turn ends at the card, so the card is all the reply shows: without
+    // the Next the student would be left with no button at all.
+    const reshown = [...answered, user('u2', BUTTON_TEXT.try_again), hint('a3', [card(1)])];
+    expect(buttonSetsOf(reshown)).toEqual({
+      live: { message: 4, hint: true },
+      hintReplies: new Set([4]),
+    });
+
+    const onButton = vi.fn();
+    await render(reshown, { onButton });
+    expect(buttonSets()).toEqual([false, true]);
+    const row = container.querySelectorAll('[data-message-role]')[4];
+    const bubble = row.querySelector('[data-testid="quiz-assistant-bubble"]')!;
+    expect(bubble.querySelector('[data-testid="quiz-question-card"]')).not.toBeNull();
+    expect(bubble.lastElementChild?.getAttribute('data-testid')).toBe('quiz-next-step');
+    expect(bubble.querySelector('[data-testid="quiz-try-again"]')).toBeNull();
+    expect(bubble.querySelector('[data-testid="quiz-next-step-lead-in"]')).toBeNull();
+
+    const next = bubble.querySelector('[data-testid="quiz-next"]') as HTMLButtonElement;
+    await act(async () => next.click());
+    expect(onButton).toHaveBeenCalledWith(BUTTON_TEXT.next, 'next');
+  });
+
+  it('still reads a reply with the current card and hint text before it as a hint', () => {
+    const parts = [text("Here's a hint: think about the main axis."), card(1)];
+    const set = buttonSetsOf([...answered, user('u2', BUTTON_TEXT.try_again), hint('a3', parts)]);
+    expect(set.hintReplies).toEqual(new Set([4]));
+    expect(set.live).toEqual({ message: 4, hint: true });
   });
 
   it('is not added to a reply to anything but a Try again click', async () => {

@@ -290,6 +290,12 @@ describe('code quotes', () => {
       expect(text).toContain(named);
     }
     expect(snippet).toContain("In a code-aware quiz never the student's code: use code_quote.");
+    // The server accepts typed code either way, so the text asks rather than
+    // claiming a requirement it does not enforce.
+    expect(quoted).toContain(
+      'Send it on every code-aware question (unless exploration failed), with code_snippet left out. The one exception: if it fails twice'
+    );
+    expect(quoted).not.toMatch(/Required/);
   });
 
   it('is an optional field of the code-aware question', () => {

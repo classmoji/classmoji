@@ -112,6 +112,32 @@ describe('attempt loader — chat-runtime attempts', () => {
     expect(JSON.stringify(data)).not.toContain('ready. Begin');
   });
 
+  it("says whether the chat's opening was admitted, as a flag and nothing more", async () => {
+    signInAs('student-1', 'STUDENT');
+    // Only the hidden opening is stored: its reply is still being written.
+    findWithMessagesMock.mockResolvedValue({
+      attempt: attemptOf('student-1', 'trigger_chat'),
+      messages: [RAW_ROWS[0]],
+    });
+    loadTranscriptMock.mockResolvedValue([]);
+
+    const started = await load();
+    expect(started.chatStarted).toBe(true);
+    expect(started.transcript).toEqual([]);
+    expect(started.messages).toEqual([]);
+    expect(JSON.stringify(started)).not.toContain('ready. Begin');
+
+    findWithMessagesMock.mockResolvedValue({
+      attempt: attemptOf('student-1', 'trigger_chat'),
+      messages: [],
+    });
+    expect((await load()).chatStarted).toBe(false);
+
+    // Never for an ai-agent attempt, whose drawer is the legacy one.
+    findWithMessagesMock.mockResolvedValue({ attempt: attemptOf('student-1'), messages: RAW_ROWS });
+    expect((await load()).chatStarted).toBe(false);
+  });
+
   it("serves staff reading a student's chat attempt the staff transcript, not as owner", async () => {
     signInAs('assistant-1', 'ASSISTANT');
     findWithMessagesMock.mockResolvedValue({

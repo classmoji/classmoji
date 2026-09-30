@@ -438,6 +438,7 @@ describe('staff attempt drawer payload', () => {
     expect(Object.keys(payload).sort()).toEqual(
       [
         'attempt',
+        'chatStarted',
         'focusMetrics',
         'isAdmin',
         'messages',
@@ -490,6 +491,7 @@ describe('student attempt drawer payload', () => {
     expect(Object.keys(payload).sort()).toEqual(
       [
         'attempt',
+        'chatStarted',
         'focusMetrics',
         'isAdmin',
         'messages',

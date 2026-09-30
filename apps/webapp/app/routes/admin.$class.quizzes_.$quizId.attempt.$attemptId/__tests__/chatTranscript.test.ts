@@ -124,6 +124,8 @@ describe('staff attempt loader — chat-runtime attempts', () => {
     expect(data.viewerOwnsAttempt).toBe(true);
     // The owner drives the chat, whose stream never carries expected_answer.
     expect(loadTranscriptMock).toHaveBeenCalledWith('attempt-1', 'student');
+    // Its opening was admitted: a second tab joins it rather than beginning.
+    expect(data.chatStarted).toBe(true);
   });
 
   it('serves an ai-agent attempt exactly as before', async () => {

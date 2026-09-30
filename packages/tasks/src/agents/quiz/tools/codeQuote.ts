@@ -8,8 +8,12 @@
  *   path, in `quoteFileCache`: exploration puts every file it reads there, so
  *   a quote is checked against the very lines the model was shown; a file
  *   that is not there yet is read on first use.
+ * - The path is taken in its canonical form first (`normalizeQuotePath`: no
+ *   "." or empty parts, no ".."), and every check and the read use that form.
  * - A file the quiz excludes (`excludedPaths`) is refused before it is read
- *   or looked up in the cache (`QUOTE_EXCLUDED_TEXT`).
+ *   or looked up in the cache (`QUOTE_EXCLUDED_TEXT`). A read is refused too
+ *   when GitHub's answer is a symlink, names another file, or names an
+ *   excluded one.
  * - The quote is checked before anything is written: the path exists, every
  *   range is inside the file, ascending and apart from the others, and the
  *   anchor matches the first quoted line once whitespace is trimmed and
@@ -26,9 +30,15 @@
  * not an enforced one.
  */
 import { MAX_QUOTE_LINES, type CodeQuote, type QuoteSource } from '@classmoji/utils/quiz-agent';
-import { fetchFileContent, isVisiblePath, splitLines } from '../../../workflows/exploreRepo.ts';
+import {
+  fetchFileContent,
+  FileNotReadableError,
+  isVisiblePath,
+  splitLines,
+  type FileReadOptions,
+} from '../../../workflows/exploreRepo.ts';
 import { providerStatus, untilAborted } from '../../shared/exploration/core.ts';
-import { pathExclusion } from '../../shared/exploration/excludedPaths.ts';
+import { normalizeRepoPath, pathExclusion } from '../../shared/exploration/excludedPaths.ts';
 import type { GitOrgLike } from '../context.ts';
 
 /** The line that stands for lines left out of a quote. */
@@ -105,9 +115,13 @@ export function formatLineRanges(ranges: ReadonlyArray<readonly [number, number]
   return ranges.map(([a, b]) => (a === b ? `${a}` : `${a}-${b}`)).join(', ');
 }
 
-/** A path as the repository names it: no leading "./" or "/". */
+/**
+ * A path as the repository names it (`normalizeRepoPath`): no "." or empty
+ * parts, so no leading "./" or "/". Empty for a path with a ".." part, which
+ * no quote may use.
+ */
 export function normalizeQuotePath(path: string): string {
-  return path.trim().replace(/^(\.\/|\/)+/, '');
+  return normalizeRepoPath(path.trim()) ?? '';
 }
 
 const LANGUAGES: Record<string, string> = {
@@ -484,10 +498,19 @@ export type QuoteRepo = {
   excludedPaths?: readonly string[];
 };
 
+/** Reads one file's text, holding GitHub's answer to `options` (`fetchFileContent`'s rules). */
+export type ReadFile = (
+  owner: string,
+  repo: string,
+  path: string,
+  token: string,
+  options?: FileReadOptions
+) => Promise<string>;
+
 export type QuoteDeps = {
   mintRepoToken: (gitOrganization: GitOrgLike, repo: string) => Promise<string>;
   /** Reads one file's text; defaults to the Contents API read exploration uses. */
-  readFile?: (owner: string, repo: string, path: string, token: string) => Promise<string>;
+  readFile?: ReadFile;
   cache?: QuoteFileCache;
 };
 
@@ -504,16 +527,16 @@ export async function resolveCodeQuote(
   signal: AbortSignal
 ): Promise<BuiltQuote & { cached: boolean }> {
   const path = normalizeQuotePath(quote.path);
-  if (!path || !isVisiblePath(path)) {
-    throw new QuoteRefusal(
+  const notQuotable = () =>
+    new QuoteRefusal(
       'not_quotable',
       `${path || 'That path'} cannot be quoted. Use a path exactly as your exploration results name it.`
     );
-  }
-  // Before the cache: a copy kept before the setting changed is not quoted either.
-  if (pathExclusion(where.excludedPaths)(path)) {
-    throw new QuoteRefusal('excluded', QUOTE_EXCLUDED_TEXT);
-  }
+  if (!path || !isVisiblePath(path)) throw notQuotable();
+  // The list is read every turn (context.ts), and it is checked before the
+  // cache: once an edit applies, a copy kept before it is not quoted either.
+  const isExcluded = pathExclusion(where.excludedPaths);
+  if (isExcluded(path)) throw new QuoteRefusal('excluded', QUOTE_EXCLUDED_TEXT);
   const cache = deps.cache ?? quoteFileCache;
   const key = QuoteFileCache.key(where.attemptId, where.owner, where.repo, path);
   let lines = cache.get(key);
@@ -523,8 +546,17 @@ export async function resolveCodeQuote(
     const read = deps.readFile ?? fetchFileContent;
     let content: string;
     try {
-      content = await untilAborted(read(where.owner, where.repo, path, token), signal);
+      content = await untilAborted(
+        read(where.owner, where.repo, path, token, { isExcluded }),
+        signal
+      );
     } catch (error) {
+      // GitHub's answer was a symlink, another file, or an excluded one.
+      if (error instanceof FileNotReadableError) {
+        throw error.reason === 'excluded'
+          ? new QuoteRefusal('excluded', QUOTE_EXCLUDED_TEXT)
+          : notQuotable();
+      }
       if (providerStatus(error) === 404) {
         throw new QuoteRefusal(
           'missing_file',
