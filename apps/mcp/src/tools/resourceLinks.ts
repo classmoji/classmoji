@@ -118,7 +118,7 @@ export const resourceLinkAddTool: ToolDefinition<ResourceLinkAddArgs> = {
     'resource_links_list to see what is already linked. A repo or assignment link also rebuilds ' +
     'the classroom content manifest and commits it to GitHub (best effort, reported as ' +
     'manifest_synced); calls are throttled, so link in small batches. Distinct from ' +
-    'module_item_add (curriculum modules) and calendar event links (scheduled sessions).',
+    'module_item_add (curriculum modules) and calendar_event_link_add (scheduled sessions).',
   scope: 'write',
   roles: OWNER_TEACHER,
   // Tighter than the default bucket: every call rebuilds the whole classroom
