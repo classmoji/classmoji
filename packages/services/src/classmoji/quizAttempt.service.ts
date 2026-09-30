@@ -513,6 +513,12 @@ export const completeAttempt = async (
   });
 };
 
+/**
+ * How long after an attempt on the chat runtime completes its two durations
+ * may still be raised (`updateAttemptDurations`).
+ */
+export const POST_COMPLETION_DURATIONS_WINDOW_MS = 10 * 60 * 1000;
+
 export const updateAttemptDurations = async (
   attemptId: string,
   metrics: QuizAttemptDurationMetrics = {}
@@ -535,9 +541,14 @@ export const updateAttemptDurations = async (
 
     // Skip if quiz already completed. An attempt on the chat runtime is
     // completed by its task, after the student's last message, so the time
-    // since that message arrives once the browser sees the completion: it may
-    // still raise the two durations (never lower them; nothing else changes).
-    if (row.completed_at && row.agent_runtime !== 'trigger_chat') {
+    // since that message arrives once the browser sees the completion: within
+    // POST_COMPLETION_DURATIONS_WINDOW_MS of the completion it may still raise
+    // the two durations (never lower them; nothing else changes).
+    const takesFinalTime =
+      row.agent_runtime === 'trigger_chat' &&
+      row.completed_at !== null &&
+      Date.now() - new Date(row.completed_at).getTime() <= POST_COMPLETION_DURATIONS_WINDOW_MS;
+    if (row.completed_at && !takesFinalTime) {
       return {
         total_duration_ms: Number(row.total_duration_ms),
         unfocused_duration_ms: Number(row.unfocused_duration_ms),
