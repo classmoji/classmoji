@@ -87,6 +87,7 @@ import * as githubClassroomImportService from './githubClassroomImport.service.t
 import * as githubUserTokenService from './githubUserToken.service.ts';
 import * as orgRepoSettingsService from './orgRepoSettings.service.ts';
 import * as classroomInviteService from './classroomInvite.service.ts';
+import * as authEmailService from './authEmail.service.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import * as contentAssetsService from './contentAssets.service.ts';
 import * as contentDeliveryService from './contentDelivery.service.ts';
@@ -168,6 +169,7 @@ const ClassmojiService = {
   // The GitHub organization's repository defaults, changed with the user's own token.
   orgRepoSettings: orgRepoSettingsService,
   classroomInvite: classroomInviteService,
+  authEmail: authEmailService,
   contentManifest: contentManifestService,
   contentAssets: contentAssetsService,
   contentDelivery: contentDeliveryService,
@@ -250,6 +252,7 @@ export {
   githubClassroomImportService,
   githubUserTokenService,
   classroomInviteService,
+  authEmailService,
   contentManifestService,
   contentAssetsService,
   contentDeliveryService,

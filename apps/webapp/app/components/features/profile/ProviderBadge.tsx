@@ -22,9 +22,9 @@ const PROVIDERS: Record<
 
 /**
  * Small pill showing which git provider the signed-in user authenticated with.
- * Mirrors the RoleChip pattern. `provider` comes from `user.provider`
- * (GitProvider enum). Legacy rows have `provider = null` — those pre-date GitLab
- * support and are GitHub users, so unknown/null falls back to GitHub.
+ * Mirrors the RoleChip pattern. `provider` is a GitProvider value derived from
+ * the user's connected git accounts (see useGitProvider); unknown/null falls
+ * back to GitHub.
  */
 export function ProviderBadge({ provider }: { provider?: string | null }) {
   const key: ProviderKey = provider === 'GITLAB' ? 'GITLAB' : 'GITHUB';

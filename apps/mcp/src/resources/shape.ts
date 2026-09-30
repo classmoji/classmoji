@@ -3,13 +3,14 @@
  *
  * Every resource returns a COMPACT, allow-listed payload — never a raw
  * service/Prisma row. The webapp's loaders frequently over-fetch (full User
- * rows with provider_email / stripe ids / ban fields riding along and the UI
+ * rows with account identities / stripe ids / ban fields riding along and the UI
  * simply not rendering them); an MCP resource is a data API, so the allowlist
  * lives here, server-side. When adding fields, allow-list explicitly — never
  * spread a service row into a payload.
  */
 
 import type { Role } from '@prisma/client';
+import { gitUsername, type WithGitAccounts } from '@classmoji/utils';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext } from '../mcp/registry.ts';
 
@@ -31,6 +32,14 @@ export function orgLogin(ctx: ToolContext): string | null {
     git_organization?: { login?: string | null } | null;
   };
   return classroom.git_organization?.login ?? null;
+}
+
+/** The classroom's git provider ('GITHUB' | 'GITLAB'); picks which username a user is known by. */
+export function orgProvider(ctx: ToolContext): string {
+  const classroom = classroomCtx(ctx).classroom as unknown as {
+    git_organization?: { provider?: string | null } | null;
+  };
+  return classroom.git_organization?.provider ?? 'GITHUB';
 }
 
 /** Sanitized (SAFE_SETTINGS_FIELDS) settings from the resolved classroom. */
@@ -74,7 +83,7 @@ export const isStaff = (role: Role): boolean => STAFF_ROLES.has(role);
 
 // ─── User narrowing ──────────────────────────────────────────────────────────
 
-interface UserLike {
+interface UserLike extends WithGitAccounts {
   id: string;
   name?: string | null;
   login?: string | null;
@@ -87,7 +96,7 @@ export function publicUser(user: UserLike | null | undefined) {
   return {
     id: user.id,
     name: user.name ?? null,
-    login: user.login ?? null,
+    login: gitUsername(user),
     avatar: user.image ?? null,
   };
 }

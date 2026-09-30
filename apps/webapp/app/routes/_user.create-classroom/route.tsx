@@ -28,7 +28,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   const octokit = GitHubProvider.getUserOctokit(authData.token);
 
   // Run the two independent GitHub reads in parallel:
-  //  - getAuthenticated: needed for the Classmoji user lookup + revoked-token handling
+  //  - getAuthenticated: revoked-token handling
   //  - syncUserInstallations: reads the user's app installations live from GitHub and
   //    upserts a GitOrganization row for each. This decouples the org dropdown from the
   //    async installation.created webhook, so a just-installed org shows up immediately.
@@ -60,10 +60,9 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     }
     throw error;
   }
-  const authenticatedUser = authResult.data;
   let syncedInstallations = initialSync;
 
-  const user = await ClassmojiService.user.findByLogin(authenticatedUser.login);
+  const user = await ClassmojiService.user.findById(authData.userId);
 
   if (!user) {
     return redirect('/registration');

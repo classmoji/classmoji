@@ -89,6 +89,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     // Use unified messages from getAttemptWithMessages (ai-agent owns persistence)
     messages: attemptData.messages || [],
     userLogin: attemptData.attempt.user?.login || null,
+    userImage: attemptData.attempt.user?.image || null,
     isAdmin: isInstructor,
     readOnly,
     showTimestamps: false,

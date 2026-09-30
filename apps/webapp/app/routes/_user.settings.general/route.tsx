@@ -26,7 +26,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  *    .update then claims any classroom invite sent to it (#307), which is the
  *    whole point — a student who mistyped their address at sign-up gets into
  *    the classroom they were invited to.
- * `provider_email` (the Github one) is never touched here.
+ * The Github account's own email is never touched here.
  */
 export const action = async ({ request }: Route.ActionArgs) => {
   const { userId } = await requireAuth(request);
@@ -46,7 +46,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
     return { schoolIdSaved: true };
   }
 
-  const email = typeof body.email === 'string' ? body.email.trim() : '';
+  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
 
   if (!EMAIL_RE.test(email)) {
     return { error: 'Please enter a valid email address.' };
@@ -201,10 +201,12 @@ const SettingsGeneral = () => {
               {user?.name || 'User Name'}
             </h3>
             <p className="text-ink-2 text-base mb-3">{user?.email}</p>
-            <div className="flex items-center gap-2 text-sm text-gray-500">
-              <GithubOutlined className="text-gray-400" />
-              <span>@{user?.login}</span>
-            </div>
+            {user?.login && (
+              <div className="flex items-center gap-2 text-sm text-gray-500">
+                <GithubOutlined className="text-gray-400" />
+                <span>@{user.login}</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -376,17 +378,6 @@ const SettingsGeneral = () => {
               </div>
             </div>
           )}
-
-          <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
-            <div className="flex items-start gap-3">
-              <div>
-                <p className="text-yellow-800 font-medium mb-1 text-sm">From your Github account</p>
-                <p className="text-yellow-700 text-sm leading-relaxed">
-                  Your name and Github username come from Github and cannot be edited here.
-                </p>
-              </div>
-            </div>
-          </div>
         </div>
       </Card>
     </div>

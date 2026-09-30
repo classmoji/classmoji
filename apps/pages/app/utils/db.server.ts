@@ -9,6 +9,8 @@
  */
 import getPrisma from '@classmoji/database';
 
+export { GIT_IDENTITY } from '@classmoji/database';
+
 export const prisma = getPrisma();
 export { ClassmojiService } from '@classmoji/services';
 export { getAuthSession } from '@classmoji/auth/server';

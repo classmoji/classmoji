@@ -184,6 +184,12 @@ model Account {
   refresh_token_expires_at DateTime?
   scope                    String?
   id_token                 String?
+  // Git identity lives here, not on User: a user can hold a Github account, a
+  // GitLab account and a password (credential) account at once.
+  // This provider's username (Github login / GitLab username).
+  username                 String?
+  email                    String? // The provider profile's email (unverified by us)
+  image                    String? // The provider profile's avatar URL
   password                 String?
   created_at               DateTime  @default(now())
   updated_at               DateTime  @default(now()) @updatedAt
@@ -191,6 +197,7 @@ model Account {
   user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@unique([provider_id, account_id])
+  @@unique([provider_id, username])
   @@index([user_id])
   @@map("accounts")
 }
@@ -294,16 +301,14 @@ model OauthConsent {
 // ============================================================================
 
 model User {
-  id             String       @id @default(uuid())
-  provider       GitProvider?
-  provider_id    String? // User's ID from the OAuth provider (GitHub user ID, GitLab ID, etc.)
-  provider_email String? // User's email from the OAuth provider
-  login          String?      @unique
-  email          String?      @unique
-  emailVerified  Boolean      @default(false) // BetterAuth required
-  name           String?
-  image          String? // BetterAuth required (avatar URL)
-  school_id      String? // School student ID
+  id            String  @id @default(uuid())
+  // Verified contact/school email; also the email+password sign-in email.
+  // Git usernames, ids and provider emails live on Account.
+  email         String? @unique
+  emailVerified Boolean @default(false) // BetterAuth required
+  name          String?
+  image         String? // BetterAuth required: the displayed avatar URL
+  school_id     String? // School student ID
 
   // better-auth fields
   role           String?
@@ -352,8 +357,6 @@ model User {
   team_sets_created             TeamSet[]
   team_set_runs_created         TeamSetRun[]
 
-  @@unique([provider, provider_id])
-  @@index([provider, login])
   @@map("users")
 }
 

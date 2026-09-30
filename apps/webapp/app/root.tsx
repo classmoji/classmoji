@@ -17,7 +17,8 @@ import dayjs from 'dayjs';
 import { ConfigProvider, theme, App as AntdApp } from 'antd';
 import { IconMoodSad } from '@tabler/icons-react';
 
-import { GitHubProvider, ClassmojiService } from '@classmoji/services';
+import { ClassmojiService } from '@classmoji/services';
+import { gitUsername, withLogin } from '@classmoji/utils';
 import { CalloutProvider, CalloutSlot } from '@classmoji/ui-components';
 import OperationProgress from '~/components/features/operations/OperationProgress';
 import { auth, getAuthSession } from '@classmoji/auth/server';
@@ -87,6 +88,52 @@ const toClientSession = (source: unknown) => {
   };
 };
 
+const loadAppUser = async (userId: string): Promise<AppUser | null> => {
+  const [row, passwordAccounts, subscription] = await Promise.all([
+    getPrisma().user.findUnique({ where: { id: userId }, include: ROOT_USER_INCLUDE }),
+    getPrisma().account.count({ where: { user_id: userId, provider_id: 'credential' } }),
+    ClassmojiService.subscription.getCurrent(userId),
+  ]);
+  if (!row) return null;
+  const user: AppUser = {
+    ...withLogin(row, 'GITHUB'),
+    has_github: gitUsername(row, 'GITHUB') !== null,
+    has_password: passwordAccounts > 0,
+  };
+  if (subscription) user.subscription = subscription;
+  return user;
+};
+
+// Paths an account that is not set up yet may still reach: the setup steps
+// themselves, signing out, and (for the Github step) account settings.
+const EMAIL_STEP_PATHS = ['/registration', '/logout'];
+const GITHUB_STEP_PATHS = ['/select-organization', '/logout', '/settings'];
+
+const isUnder = (pathname: string, paths: string[]) =>
+  paths.some(path => pathname === path || pathname.startsWith(`${path}/`));
+
+const accountSetupRedirect = (user: AppUser, url: URL): string | null => {
+  if (url.pathname === '/') return null;
+  const params = new URLSearchParams();
+  const next = `${url.pathname}${url.search}`;
+  if (!user.email || !user.emailVerified) {
+    if (isUnder(url.pathname, EMAIL_STEP_PATHS)) return null;
+    // A roster invite link lands on the picker with a signed invite token;
+    // hand it to registration or the address is never prefilled (#343).
+    const invite = url.searchParams.get('invite');
+    if (invite) params.set('invite', invite);
+    if (url.pathname !== '/select-organization') params.set('next', next);
+    const qs = params.toString();
+    return `/registration${qs ? `?${qs}` : ''}`;
+  }
+  if (!user.has_github) {
+    // The picker asks them to connect Github.
+    if (isUnder(url.pathname, [...GITHUB_STEP_PATHS, '/registration'])) return null;
+    return '/select-organization';
+  }
+  return null;
+};
+
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const url = new URL(request.url);
 
@@ -141,80 +188,23 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     return { user: null, organizations: [], memberships: [] };
   }
 
-  // Check if we're impersonating - if so, fetch the impersonated user directly
+  // Check if we're impersonating - if so, the session user is the impersonated one
   const isImpersonating = !!betterAuthSession?.session?.impersonatedBy;
 
-  let user: AppUser | null = null;
+  const user = await loadAppUser(authData.userId);
 
-  if (isImpersonating) {
-    // When impersonating, fetch the impersonated user directly by their session user ID
-    user = await getPrisma().user.findUnique({
-      where: { id: authData.userId },
-      include: ROOT_USER_INCLUDE,
-    });
+  if (!user) {
+    // A session whose user no longer exists (deleted account).
+    if (!isPublicRoute) return redirect('/');
+    return { user: null, organizations: [], memberships: [] };
+  }
 
-    // Fetch subscription for impersonated user
-    const subscription = await ClassmojiService.subscription.getCurrent(authData.userId);
-    if (user && subscription) {
-      user.subscription = subscription;
-    }
-  } else {
-    // Normal flow - first try to look up user by ID if we have a valid session
-    // This avoids GitHub API calls when user is already in our database
-    if (authData.userId) {
-      user = await getPrisma().user.findUnique({
-        where: { id: authData.userId },
-        include: ROOT_USER_INCLUDE,
-      });
-
-      if (user) {
-        // User found in DB - fetch subscription
-        const subscription = await ClassmojiService.subscription.getCurrent(authData.userId);
-        if (subscription) {
-          user.subscription = subscription;
-        }
-      }
-    }
-
-    // If no user found by ID, fall back to GitHub API lookup (new user registration flow)
-    if (!user) {
-      const accessToken = authData?.token || null;
-
-      // NOTE: Do NOT fall back to auth.api.getAccessToken() here.
-      // BetterAuth's refresh silently fails for GitHub App tokens (HTTP 200 errors)
-      // and can corrupt the DB by storing undefined tokens. Our getAuthSession()
-      // already handles refresh properly via getValidGitHubToken().
-
-      if (accessToken) {
-        const octokit = GitHubProvider.getUserOctokit(accessToken);
-        const { data: githubUser } = await octokit.rest.users.getAuthenticated();
-
-        // Fetch subscription
-        const subscription = await ClassmojiService.subscription.getCurrent(authData.userId);
-
-        user = await getPrisma().user.findUnique({
-          where: { login: githubUser.login },
-          include: ROOT_USER_INCLUDE,
-        });
-
-        // User authenticated with GitHub but not in our DB yet - redirect to registration
-        if (!user && !isPublicRoute) {
-          const params = new URLSearchParams();
-          if (url.pathname !== '/') params.set('next', url.pathname);
-          // A roster invite link lands on the picker with a signed invite token;
-          // this redirect fires before that loader, so hand the token to
-          // registration here or the address is never prefilled (#343).
-          const invite = url.searchParams.get('invite');
-          if (invite) params.set('invite', invite);
-          const qs = params.toString();
-          return redirect(`/registration${qs ? `?${qs}` : ''}`);
-        }
-
-        if (user && subscription) {
-          user.subscription = subscription;
-        }
-      }
-    }
+  // Before anything else, a signed-in person confirms a contact email
+  // (registration) and then connects Github: every classroom runs on it.
+  // Staff viewing as someone skip both; they are looking, not joining.
+  if (!isImpersonating) {
+    const gate = accountSetupRedirect(user, url);
+    if (gate) return redirect(gate);
   }
 
   // For backward compat, map classroom_memberships to format expected by UI

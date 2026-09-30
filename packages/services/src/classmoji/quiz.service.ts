@@ -1,4 +1,5 @@
-import getPrisma from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import { withLogins } from '@classmoji/utils';
 import type { Prisma, QuizGradingStrategy, QuizStatus, Role } from '@prisma/client';
 import * as notificationService from './notification.service.ts';
 import {
@@ -105,7 +106,7 @@ const QUIZ_WRITE_INCLUDE = {
   repository: true,
   attempts: {
     include: {
-      user: true,
+      user: { include: GIT_IDENTITY },
     },
   },
 } as const;
@@ -124,7 +125,9 @@ export const create = async (data: QuizCreateInput) => {
         material: data.sourceMaterial,
       });
     }
-    return tx.quiz.findUniqueOrThrow({ where: { id: quiz.id }, include: QUIZ_WRITE_INCLUDE });
+    return withLogins(
+      await tx.quiz.findUniqueOrThrow({ where: { id: quiz.id }, include: QUIZ_WRITE_INCLUDE })
+    );
   });
 };
 
@@ -224,7 +227,7 @@ export const findById = async (quizId: string) => {
       classroom: true,
       attempts: {
         include: {
-          user: true,
+          user: { include: GIT_IDENTITY },
         },
       },
       ...SOURCE_MATERIAL_INCLUDE,
@@ -232,7 +235,7 @@ export const findById = async (quizId: string) => {
   });
   if (!quiz) return null;
   const { page_links: _pageLinks, slide_links: _slideLinks, ...rest } = quiz;
-  return { ...rest, source_material: sourceMaterialOf(quiz) };
+  return withLogins({ ...rest, source_material: sourceMaterialOf(quiz) });
 };
 
 export const findByClassroom = async (classroomId: string, membership: QuizMembership | null) => {
@@ -269,7 +272,7 @@ export const getQuizzesByOrganization = async (
       repository: true,
       attempts: {
         include: {
-          user: true,
+          user: { include: GIT_IDENTITY },
         },
       },
       _count: {
@@ -281,7 +284,7 @@ export const getQuizzesByOrganization = async (
   });
 
   // Calculate statistics for each quiz
-  return quizzes.map(({ page_links, slide_links, ...quiz }) => {
+  return withLogins(quizzes).map(({ page_links, slide_links, ...quiz }) => {
     const completedAttempts = quiz.attempts.filter(
       a => a.completed_at !== null && a.partial_credit_percentage !== null
     );

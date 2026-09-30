@@ -13,11 +13,11 @@
  *      GitHub's contributor-stats endpoint returns 202 while warming its cache; we
  *      surface that as `pending: true` and still write the row but mark it `stale`
  *      so the Trigger.dev task retries.
- *   4. Resolve GitHub logins → classroom User ids via ClassroomMembership.user.login,
+ *   4. Resolve GitHub logins → classroom User ids via the members' git usernames,
  *      with `GitRepoContributorLink` rows taking precedence as manual overrides.
  *   5. Upsert the snapshot row (JSON columns + aggregate totals + stale/error flags).
  */
-import getPrisma from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import type { GitProvider } from '../git/GitProvider.ts';
 import { getGitProvider } from '../git/index.ts';
 import type {
@@ -200,7 +200,7 @@ export async function upsertSnapshot(
 
 /**
  * Build a `githubLogin → userId` map for a gitRepo. Starts with every
- * `ClassroomMembership.user.login` in the classroom, then overlays any
+ * member's git username in the classroom, then overlays any
  * `GitRepoContributorLink` rows for this repo (manual overrides win).
  */
 async function buildLoginToUserIdMap(
@@ -211,7 +211,7 @@ async function buildLoginToUserIdMap(
   const [memberships, links] = await Promise.all([
     prisma.classroomMembership.findMany({
       where: { classroom_id: classroomId },
-      include: { user: { select: { id: true, login: true } } },
+      include: { user: { select: { id: true, ...GIT_IDENTITY } } },
     }),
     prisma.gitRepoContributorLink.findMany({
       where: { git_repo_id: repositoryId, user_id: { not: null } },
@@ -220,9 +220,11 @@ async function buildLoginToUserIdMap(
 
   const map = new Map<string, string>();
   for (const m of memberships) {
-    const login = m.user?.login;
-    if (login && !map.has(login)) {
-      map.set(login, m.user.id);
+    for (const account of m.user?.accounts ?? []) {
+      const login = account.username;
+      if (login && !map.has(login)) {
+        map.set(login, m.user.id);
+      }
     }
   }
   // Overrides take precedence.

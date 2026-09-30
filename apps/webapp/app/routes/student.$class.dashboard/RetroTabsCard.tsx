@@ -25,7 +25,7 @@ export interface TeamMemberLite {
   id: string;
   name: string | null;
   login: string | null;
-  providerId: string | null;
+  image: string | null;
 }
 
 export interface TeamSummary {
@@ -75,9 +75,6 @@ const fromNow = (date: string | Date) => {
   if (diffDay < 30) return `${diffDay}d ago`;
   return dayjs(date).format('MMM D');
 };
-
-const githubAvatarUrl = (providerId: string | null) =>
-  providerId ? `https://avatars.githubusercontent.com/u/${providerId}?s=48` : undefined;
 
 const initials = (name: string | null, login: string | null) => {
   const source = name || login || '?';
@@ -227,7 +224,7 @@ const TeamPanel = ({
           <Avatar.Group max={{ count: 6 }}>
             {team.members.map(m => (
               <Tooltip key={m.id} title={m.name || m.login || ''}>
-                <Avatar src={githubAvatarUrl(m.providerId)} size={32}>
+                <Avatar src={m.image ?? undefined} size={32}>
                   {initials(m.name, m.login)}
                 </Avatar>
               </Tooltip>
