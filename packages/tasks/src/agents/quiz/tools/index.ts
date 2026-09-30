@@ -78,6 +78,7 @@ import {
   QuizEvaluationRecordV2Schema,
   QuizQuestionSchema,
   RecordQuestionResultSchema,
+  TOOL_DESCRIPTIONS,
   type CodeAwareQuizQuestion,
   type OfferNextStepOutput,
   type PresentQuestionOutput,
@@ -102,7 +103,6 @@ import {
   resolveCodeQuote,
   type QuoteFileCache,
 } from './codeQuote.ts';
-import { TOOL_DESCRIPTIONS } from './descriptions.ts';
 import {
   aborted,
   editLimitText,

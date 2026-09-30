@@ -17,6 +17,7 @@ import {
   QuizQuestionSchema,
   RecordQuestionResultSchema,
   StoredQuestionResultSchema,
+  TOOL_DESCRIPTIONS,
   quizToolDefs,
   quizVisibility,
   type QuizUIMessage,
@@ -280,7 +281,7 @@ describe('QuizEvaluationFeedbackSchema', () => {
 
   it('asks for the closing words in final_acknowledgment, shown above the results', () => {
     expect(QuizEvaluationFeedbackSchema.shape.final_acknowledgment.description).toMatch(
-      /shown above their results/
+      /shown above the results/
     );
     expect(
       QuizEvaluationFeedbackSchema.safeParse({ ...feedback, final_acknowledgment: '' }).success
@@ -375,6 +376,19 @@ describe('quizToolDefs', () => {
       expect(def.outputSchema).toBeDefined();
       expect(typeof def.description).toBe('string');
     }
+  });
+
+  it('takes each description from TOOL_DESCRIPTIONS, which has one per tool', () => {
+    expect(Object.keys(TOOL_DESCRIPTIONS)).toEqual([...QUIZ_TOOL_ORDER]);
+    for (const name of QUIZ_TOOL_ORDER) {
+      expect(quizToolDefs[name].description).toBe(TOOL_DESCRIPTIONS[name]);
+    }
+  });
+
+  it('names the exact button texts in offer_next_step', () => {
+    expect(TOOL_DESCRIPTIONS.offer_next_step).toContain(
+      `"${BUTTON_TEXT.try_again}" or "${BUTTON_TEXT.next}"`
+    );
   });
 
   it('every tool has a visibility entry', () => {

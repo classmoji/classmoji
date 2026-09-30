@@ -437,13 +437,7 @@ EXAMPLE TOOL CALL:
 
 final_acknowledgment is your closing words to the student, shown above their results:
 write them there, not as text before the call. evaluation and numeric_score are set by
-the server from the recorded score; you may leave them out.
-
-⚠️ DO NOT include these fields (computed automatically from recorded results):
-- total_questions
-- first_attempt_percentage
-- partial_credit_percentage
-- question_results
+the server from the recorded score; leave them out.
 
 ⚠️ NEVER call submit_quiz_evaluation with empty parameters {}
 ⚠️ ONLY call this tool AFTER calling record_question_result for ALL questions

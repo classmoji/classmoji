@@ -446,14 +446,35 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     );
     expect(first.emoji).toBe('seedling');
 
-    // Same admitted turn (e.g. a re-run): the stored result, unchanged.
-    const again = await grading.finalizeQuestion(
+    // The same answers again in the same turn (a retried call): the stored result.
+    expect(
+      await grading.finalizeQuestion(
+        call(turnA),
+        result(1, [{ level: 'partly_right', hints_before: 0 }])
+      )
+    ).toEqual(first);
+
+    // Different answers in the same run of the same turn: refused, and the
+    // stored result stands.
+    const second = grading.finalizeQuestion(
       call(turnA),
       result(1, [{ level: 'correct', hints_before: 0 }])
     );
-    expect(again).toEqual(first);
+    await expect(second).rejects.toThrow(
+      'Question 1 already has a result from this turn, and it stands. Do not record it again in this turn.'
+    );
+    expect(
+      await codeOf(
+        grading.finalizeQuestion(call(turnA), result(1, [{ level: 'correct', hints_before: 0 }]))
+      )
+    ).toBe('already_recorded');
+    expect(await events(attemptId, 'result_finalized')).toHaveLength(1);
+    expect(await events(attemptId, 'result_revised')).toHaveLength(0);
+    const kept = (await attemptRow(attemptId)).question_results_json as Record<string, unknown>[];
+    expect(kept[0]).toMatchObject({ credit_earned: 40, emoji: 'seedling' });
 
-    // A redelivery of turn A's message is still turn A.
+    // A redelivery of turn A's message is still turn A: a re-run under a new
+    // fence gets the stored result, whatever it rates.
     const redelivered = await chat.admitStudentMessage({
       attemptId,
       message: { id: turnA.inputMessageId, text: 'answer' },
@@ -554,7 +575,8 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     const turn = await begin(attemptId);
     await grading.presentQuestion(call(turn), question(1));
     const answerTurn = await say(attemptId, 'answer');
-    const [a, b] = await Promise.all([
+    // Different answers: one is recorded, the other refused, never both.
+    const settled = await Promise.allSettled([
       grading.finalizeQuestion(
         call(answerTurn),
         result(1, [{ level: 'correct', hints_before: 0 }])
@@ -564,11 +586,30 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
         result(1, [{ level: 'minimal', hints_before: 0 }])
       ),
     ]);
-    expect(a).toEqual(b);
+    expect(settled.filter(s => s.status === 'fulfilled')).toHaveLength(1);
+    const refused = settled.filter(s => s.status === 'rejected');
+    expect(refused).toHaveLength(1);
+    expect(((refused[0] as PromiseRejectedResult).reason as { code?: string }).code).toBe(
+      'already_recorded'
+    );
     expect(await events(attemptId, 'result_finalized')).toHaveLength(1);
     const seqs = (await events(attemptId)).map(e => e.seq);
     expect(seqs).toEqual([...seqs].sort((x, y) => x - y));
     expect(new Set(seqs).size).toBe(seqs.length);
+  });
+
+  it('serializes two racing identical records for the same question into one result', async () => {
+    const attemptId = await newAttempt();
+    const turn = await begin(attemptId);
+    await grading.presentQuestion(call(turn), question(1));
+    const answerTurn = await say(attemptId, 'answer');
+    const same = [{ level: 'correct' as const, hints_before: 0 }];
+    const [a, b] = await Promise.all([
+      grading.finalizeQuestion(call(answerTurn), result(1, same)),
+      grading.finalizeQuestion(call(answerTurn), result(1, same)),
+    ]);
+    expect(a).toEqual(b);
+    expect(await events(attemptId, 'result_finalized')).toHaveLength(1);
   });
 
   // ─── completeWithEvaluation ───────────────────────────────────────────────

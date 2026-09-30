@@ -13,21 +13,27 @@ export const QuizQuestionSchema = z.object({
   preamble: z
     .string()
     .describe(
-      'A brief, natural lead-in to the question (1-2 sentences). Examples: "I noticed something interesting in your SearchBar component.", "Let me ask you about your error handling approach.", "Based on what I found in your code..."'
+      'One or two neutral lead-in sentences, e.g. "I\'d like to ask you about your error handling." Not the question itself.'
     ),
-  question_number: z.number().int().min(1).describe('Current question number (1-indexed)'),
-  total_questions: z.number().int().min(1).describe('Total number of questions in this quiz'),
+  question_number: z
+    .number()
+    .int()
+    .min(1)
+    .describe('The number CURRENT STATUS names as next (or the current one, to re-show it).'),
+  total_questions: z
+    .number()
+    .int()
+    .min(1)
+    .describe('NUM_QUESTIONS from QUIZ PARAMETERS, as a number; the server sets it anyway.'),
   question_text: z
     .string()
     .min(1, 'question_text must not be empty')
-    .describe(
-      'The actual question being asked to the student. IMPORTANT: Do NOT include code here if you are providing code_snippet - the UI renders code_snippet separately in a styled box above this text.'
-    ),
+    .describe('The question itself, without code: the card shows any code above it.'),
   code_snippet: z
     .string()
     .optional()
     .describe(
-      'Optional code snippet relevant to the question. This is rendered in a separate styled code box ABOVE the question_text, so do NOT repeat or reference this code in question_text with phrases like "Look at this code snippet:" - the UI handles displaying it.'
+      "Code shown above question_text; never repeat it there. In a code-aware quiz never the student's code: use code_quote."
     ),
   code_language: z
     .string()
@@ -37,7 +43,7 @@ export const QuizQuestionSchema = z.object({
     .string()
     .optional()
     .describe(
-      'One short line naming what the question is about. For code: the file name and the rule, element or function the question asks about, e.g. "style.css — .highlight-grid" or "auth.js — login()". Otherwise the concept.'
+      'One line: the file and the rule, element or function ("style.css — .grid", "auth.js — login()"), or the concept. Always send it with code_quote.'
     ),
 });
 export type QuizQuestion = z.infer<typeof QuizQuestionSchema>;
@@ -79,7 +85,7 @@ export const CodeQuoteSchema = z.object({
     .min(1)
     .max(400)
     .describe(
-      'The text of the first quoted line (the first line of the first range), without its line number. It is checked against the file.'
+      'The text of the first quoted line (the first line of the first range), without its line number. Never a blank line. It is checked against the file.'
     ),
   edit: z
     .object({
@@ -99,7 +105,7 @@ export type CodeQuote = z.infer<typeof CodeQuoteSchema>;
  */
 export const CodeAwareQuizQuestionSchema = QuizQuestionSchema.extend({
   code_quote: CodeQuoteSchema.optional().describe(
-    'Use this to show the student\'s code: the server fills the card\'s code with the exact lines and the "..." markers, in place of code_snippet. Leave code_snippet out when you use it.'
+    'The student\'s lines, filled exactly by the server (with "..." for each gap). Required on every code-aware question unless exploration failed; leave code_snippet out.'
   ),
 });
 export type CodeAwareQuizQuestion = z.infer<typeof CodeAwareQuizQuestionSchema>;
@@ -124,19 +130,23 @@ export const AnswerSchema = z.object({
   level: z
     .enum(ANSWER_LEVELS)
     .describe(
-      'How good this answer was. correct: Correct. mostly_right: the right idea, one small gap or imprecision. partly_right: some correct reasoning, a key piece missing. minimal: relevant but mostly wrong. no_attempt: skipped or nothing meaningful.'
+      'How good this answer was. correct: Correct. mostly_right: the right idea, one small gap or imprecision. partly_right: some correct reasoning, a key piece missing. minimal: relevant but mostly wrong. no_attempt: an answer with nothing meaningful, e.g. "I don\'t know" (a skip is [], not no_attempt).'
     ),
   hints_before: z
     .number()
     .int()
     .min(0)
     .describe(
-      'How many hints the student had received for this question before giving this answer. Every hint counts: each Try again click and each hint request gives exactly one hint. Never lower than the previous answer.'
+      'Hints the student had received for this question before this answer: each Try again click or hint request is one. Never lower than the previous answer.'
     ),
 });
 
 export const RecordQuestionResultSchema = z.object({
-  question_num: z.number().int().min(1).describe('The question number (1-indexed)'),
+  question_num: z
+    .number()
+    .int()
+    .min(1)
+    .describe('The question the student is moving on from (or whose result you revise).'),
   answers: z
     .array(AnswerSchema)
     .refine(
@@ -144,7 +154,7 @@ export const RecordQuestionResultSchema = z.object({
       'hints_before must not decrease'
     )
     .describe(
-      'Every real answer the student gave to this question, in order. Empty when the question was skipped. A clarifying question about the wording is not an answer. Answers given after the answer was revealed are not listed.'
+      'Every real answer the student gave to this question, in order; [] when they skipped without answering. Not answers: clarifying or side questions, bare agreement, anything after you revealed the answer.'
     ),
   brief_feedback: z
     .string()
@@ -168,9 +178,7 @@ export const QuizEvaluationFeedbackSchema = z.object({
   final_acknowledgment: z
     .string()
     .min(1, 'final_acknowledgment must not be empty')
-    .describe(
-      "Your closing words to the student, shown above their results: a brief, warm acknowledgment of the student's final answer. This should feel natural and encouraging. Write them here, not as text before the call."
-    ),
+    .describe('Your closing words, shown above the results: brief, warm, honest.'),
   quiz_complete: z
     .literal(true, {
       errorMap: () => ({ message: 'quiz_complete must be true to submit evaluation' }),
@@ -178,18 +186,8 @@ export const QuizEvaluationFeedbackSchema = z.object({
     .describe('Must be true to indicate quiz completion'),
   // Optional and never refused: the server sets both from the recorded score
   // (`gradeBandFor`), whatever the model sends.
-  evaluation: z
-    .string()
-    .optional()
-    .describe(
-      'Optional. Grade level evaluation: EXCELLENT, GOOD, NEEDS WORK, or UNSATISFACTORY. The server sets it from the recorded score.'
-    ),
-  numeric_score: z
-    .number()
-    .optional()
-    .describe(
-      'Optional. Numeric score on 1-4 scale: EXCELLENT=4, GOOD=3, NEEDS WORK=2, UNSATISFACTORY=1. The server sets it from the recorded score.'
-    ),
+  evaluation: z.string().optional().describe('Leave out; the server sets it.'),
+  numeric_score: z.number().optional().describe('Leave out; the server sets it.'),
   feedback_summary: z
     .string()
     .min(1, 'feedback_summary must not be empty')
@@ -220,9 +218,7 @@ export const OfferNextStepSchema = z.object({
     .min(1)
     .max(2)
     .refine(a => new Set(a).size === a.length, 'actions must not repeat')
-    .describe(
-      'The buttons to show: try_again (answer the same question again) and/or next (move on)'
-    ),
+    .describe('["try_again","next"] or ["next"]; never try_again alone.'),
 });
 export type OfferNextStep = z.infer<typeof OfferNextStepSchema>;
 
@@ -241,14 +237,13 @@ export const ExploreCodebaseSchema = z.object({
   purpose: z
     .enum(['check_current', 'prepare_next'])
     .describe(
-      "check_current: re-read the student's code for the question they are on, to judge an answer or check a quote they dispute. " +
-        'prepare_next: find code for the next question; refused while the current question has no recorded result (allowed before the first question).'
+      'prepare_next: code for the next question. check_current: code for the question the student is on.'
     ),
   focus_area: z
     .string()
     .max(200)
     .describe(
-      'What to explore: "initial" for project overview, or specific areas like "authentication", "state_management", "api", "testing", or a custom description'
+      '"initial" for the overview; else an area ("authentication") or a file and part ("src/App.jsx: submit handler").'
     ),
   specific_question: z
     .string()

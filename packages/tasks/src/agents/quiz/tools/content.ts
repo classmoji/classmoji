@@ -53,10 +53,10 @@ import {
   ContentSearchSchema,
   ContentToolOutputSchema,
   COURSE_STEP_TITLE_MAX,
+  TOOL_DESCRIPTIONS,
 } from '@classmoji/utils/quiz-agent';
 import { logDiagnostic } from '../../shared/sanitize.ts';
 import type { AttemptContext, ContentScope } from '../context.ts';
-import { TOOL_DESCRIPTIONS } from './descriptions.ts';
 import { aborted } from './errors.ts';
 import type { QuizToolDeps } from './index.ts';
 
@@ -83,7 +83,7 @@ export const CONTENT_STEP_FALLBACK_TITLE = 'a course document';
 
 /** content_get refused before any call: without course search, only the linked documents. */
 export const CONTENT_NOT_LINKED_TEXT =
-  'content_get may only read the documents listed under SOURCE MATERIAL.';
+  'content_get may only read the documents listed under SOURCE MATERIAL. Use a kind and id from a SOURCE MATERIAL header, or continue without it.';
 /** The MCP found no such document for this user (missing, another classroom's, or not visible). */
 export const CONTENT_NOT_FOUND_TEXT = 'That document is not in this course. Do not try it again.';
 /** Anything else that stopped a lookup. */

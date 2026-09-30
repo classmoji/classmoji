@@ -68,15 +68,15 @@ export const RECORD_BEFORE_ANSWER_TEXT =
  * no Next click, and the call does not say they asked to move on.
  */
 export const RECORD_BEFORE_NEXT_TEXT =
-  'The student has not moved on from this question. Record it only after they click Next, or when their latest message asks to skip or move on (then set student_asked_to_move_on). After an answer, write your feedback and call offer_next_step.';
+  'The student has not moved on from this question. Record it only after they click Next, or when their latest message asks to skip or move on (then set student_asked_to_move_on). If they answered, give feedback and call offer_next_step; otherwise just reply.';
 
 /** present_question refused: question `n`'s card already shows edited code, and a quiz gets one. */
 export const editLimitText = (n: number) =>
   `Only one question per quiz may show edited code, and question ${n} already does. Quote the real code without edit and describe any change in words in question_text.`;
 
-/** present_question refused because question `n`, the one the student is leaving, has no result yet. */
+/** present_question refused because question `n`, the one still open, has no result yet. */
 export const recordBeforePresentText = (n: number) =>
-  `Record question ${n} before presenting the next one.`;
+  `Question ${n} has no result. If the student moved on from it (Next, or asked to skip), record it first, then present; otherwise reply without presenting.`;
 
 /** present_question refused because the file a code quote names could not be read. */
 export const QUOTE_READ_FAILED_TEXT =

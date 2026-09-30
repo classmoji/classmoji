@@ -7,7 +7,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { ToolSet } from 'ai';
-import { QUIZ_TOOL_ORDER, type QuestionResultOutput } from '@classmoji/utils/quiz-agent';
+import {
+  QUIZ_TOOL_ORDER,
+  TOOL_DESCRIPTIONS,
+  type QuestionResultOutput,
+} from '@classmoji/utils/quiz-agent';
 import { githubStub } from '../../__fixtures__/githubStub.ts';
 import { createToolQueue } from '../../../shared/toolQueue.ts';
 import type { AttemptContext } from '../../context.ts';
@@ -42,7 +46,7 @@ const {
   EXPLORATION_STOPPED_TEXT,
   MAX_EXPLORATIONS_PER_TURN,
 } = await import('../exploreCodebase.ts');
-const { TOOL_DESCRIPTIONS } = await import('../descriptions.ts');
+const { MAX_LOOKUPS_PER_TURN, SEARCH_RESULT_LIMIT } = await import('../content.ts');
 
 class QuizGradingError extends Error {
   code: string;
@@ -249,6 +253,23 @@ describe('quizTools: the fixed set', () => {
       expect(text).not.toMatch(/\d+\s*%|credit_earned|\b15\b/);
     }
   });
+
+  it('gives the model the limits the tools enforce', () => {
+    expect(TOOL_DESCRIPTIONS.explore_codebase).toContain(
+      `at most ${MAX_EXPLORATIONS_PER_TURN} per turn, failures included`
+    );
+    for (const name of ['content_get', 'content_search'] as const) {
+      expect(TOOL_DESCRIPTIONS[name]).toContain(`At most ${MAX_LOOKUPS_PER_TURN} lookups per turn`);
+    }
+    expect(TOOL_DESCRIPTIONS.content_search).toContain(`up to ${SEARCH_RESULT_LIMIT} hits`);
+  });
+
+  it('sends the one copy of each description', () => {
+    const tools = setup({ ctx: codeAware({ content: CONTENT }) }).tools;
+    for (const name of QUIZ_TOOL_ORDER) {
+      expect(tools[name].description).toBe(TOOL_DESCRIPTIONS[name]);
+    }
+  });
 });
 
 describe('present_question', () => {
@@ -311,7 +332,9 @@ describe('present_question', () => {
   it('refuses the next question while the current one has no result, before any write', async () => {
     const { tools, grading, writes } = setup({ ctx: context({ progress: progressAt(1) }) });
     await expect(call(tools, 'present_question', card)).rejects.toThrow(recordBeforePresentText(1));
-    expect(recordBeforePresentText(1)).toBe('Record question 1 before presenting the next one.');
+    expect(recordBeforePresentText(1)).toBe(
+      'Question 1 has no result. If the student moved on from it (Next, or asked to skip), record it first, then present; otherwise reply without presenting.'
+    );
     expect(grading.presentQuestion).not.toHaveBeenCalled();
     expect(writes).toEqual([]);
   });
@@ -406,6 +429,28 @@ describe('record_question_result', () => {
       'already revised once'
     );
     expect(writes).toEqual([]);
+  });
+
+  it('tells the model a second, different record in the same turn was refused', async () => {
+    const { tools, grading, writes } = setup();
+    const stored: QuestionResultOutput = { question_num: 1, emoji: 'x', brief_feedback: 'y' };
+    const refusal =
+      'Question 1 already has a result from this turn, and it stands. Do not record it again in this turn.';
+    grading.finalizeQuestion
+      .mockResolvedValueOnce(stored)
+      .mockRejectedValueOnce(new QuizGradingError('already_recorded', refusal));
+
+    await call(tools, 'record_question_result', RECORD);
+    await expect(
+      call(tools, 'record_question_result', {
+        ...RECORD,
+        answers: [{ level: 'correct', hints_before: 0 }],
+      })
+    ).rejects.toThrow(refusal);
+    // One divider: the refused call writes none.
+    expect(writes).toEqual([
+      { type: 'data-question-result', id: 'question-result-1', data: stored },
+    ]);
   });
 
   it('runs before a present_question the model made after it in the same step', async () => {
@@ -1342,10 +1387,10 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
     grading.completeWithEvaluation.mockRejectedValue(
       new QuizGradingError(
         'incomplete',
-        'Record results for questions 3, 8 with record_question_result before submitting the evaluation.'
+        'Questions 3, 8 have no result. Record each one you presented once the student has moved on from it; present any not yet presented. Then submit again.'
       )
     );
-    await expect(call(tools, 'submit_quiz_evaluation', {})).rejects.toThrow('questions 3, 8');
+    await expect(call(tools, 'submit_quiz_evaluation', {})).rejects.toThrow('Questions 3, 8');
   });
 });
 
@@ -1443,7 +1488,7 @@ describe('explore_codebase (fake pipeline)', () => {
       call(tools, 'explore_codebase', { purpose: 'prepare_next', focus_area: FOCUS })
     ).rejects.toThrow(EXPLORATION_QUESTION_OPEN_TEXT);
     expect(EXPLORATION_QUESTION_OPEN_TEXT).toBe(
-      'Finish the current question first: give your feedback and record the result, then explore for the next question.'
+      'A question is still open. Use purpose check_current for it; explore for the next only after the student moves on and you record its result.'
     );
     expect(mintRepoToken).not.toHaveBeenCalled();
     expect(grading.listExplorations).not.toHaveBeenCalled();
