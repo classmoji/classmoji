@@ -29,6 +29,8 @@ import {
   calendarEventCreateTool,
   calendarEventUpdateTool,
   calendarEventDeleteTool,
+  calendarEventLinkAddTool,
+  calendarEventLinkRemoveTool,
 } from './calendar.ts';
 import { pageCreateTool, pageUpdateTool, pageDeleteTool } from './pages.ts';
 import {
@@ -147,10 +149,13 @@ export function registerAllTools(): void {
   registerToolDefinition(modulePublishTool);
   registerToolDefinition(moduleItemAddTool);
 
-  // Calendar (teaching team; assistants own-events-only)
+  // Calendar (teaching team; assistants own-events-only). The link tools attach
+  // pages, decks and assignments to an event under the same gate as an update.
   registerToolDefinition(calendarEventCreateTool);
   registerToolDefinition(calendarEventUpdateTool);
   registerToolDefinition(calendarEventDeleteTool);
+  registerToolDefinition(calendarEventLinkAddTool);
+  registerToolDefinition(calendarEventLinkRemoveTool);
 
   // Pages (OWNER+TEACHER)
   registerToolDefinition(pageCreateTool);
