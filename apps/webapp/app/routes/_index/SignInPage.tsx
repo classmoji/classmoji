@@ -2,6 +2,7 @@ import { useState, type FormEvent, type ReactNode } from 'react';
 import { authClient } from '@classmoji/auth/client';
 import { Emoji } from '~/components';
 import GitHubIcon from './github.svg';
+import GitLabIcon from '~/components/ui/display/gitlab.svg';
 
 type Mode = 'sign-in' | 'sign-up' | 'verify' | 'forgot' | 'reset';
 
@@ -198,6 +199,17 @@ const SignInPage = ({ handleGitHubLogin, callbackURL, oauthError, children }: Si
                 <img src={GitHubIcon} alt="" className="w-5 h-5 dark:invert" />
                 Continue with Github
               </button>
+              <button
+                type="button"
+                disabled
+                className="mt-2 w-full flex items-center justify-center gap-2 border border-stone-200 dark:border-neutral-800 bg-transparent text-gray-400 dark:text-gray-500 font-medium rounded-lg px-4 py-2.5 cursor-not-allowed"
+              >
+                <img src={GitLabIcon} alt="" className="w-5 h-5 opacity-60" />
+                Continue with Gitlab
+              </button>
+              <p className="mt-1.5 text-center text-xs text-gray-400 dark:text-gray-500">
+                Gitlab integration coming soon
+              </p>
               <div className="flex items-center gap-3 my-5 text-xs text-gray-400 dark:text-gray-500">
                 <div className="h-px flex-1 bg-stone-200 dark:bg-neutral-800" />
                 or
@@ -384,7 +396,6 @@ const SignInPage = ({ handleGitHubLogin, callbackURL, oauthError, children }: Si
               </button>
             </form>
           )}
-
         </div>
       </main>
 

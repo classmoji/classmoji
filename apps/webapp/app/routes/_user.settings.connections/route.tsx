@@ -5,6 +5,7 @@ import { GithubOutlined } from '@ant-design/icons';
 
 import useStore from '~/store';
 import { authClient } from '@classmoji/auth/client';
+import GitLabIcon from '~/components/ui/display/gitlab.svg';
 
 const LINK_ERRORS: Record<string, string> = {
   account_already_linked_to_different_user:
@@ -80,6 +81,16 @@ const SettingsConnections = () => {
             Connect Github
           </Button>
         )}
+      </ConnectionRow>
+
+      <ConnectionRow
+        icon={<img src={GitLabIcon} alt="" className="w-[18px] h-[18px] opacity-60" />}
+        name="Gitlab"
+        status="Connect a gitlab.com or self-hosted Gitlab account."
+      >
+        <span className="rounded-full bg-stone-100 dark:bg-neutral-800 px-2.5 py-1 text-xs font-medium text-gray-500 dark:text-gray-400">
+          Coming soon
+        </span>
       </ConnectionRow>
     </div>
   );
