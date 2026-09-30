@@ -33,7 +33,10 @@
  * the turn: at least `MIN_FEEDBACK_WORDS` words (`wordsWritten`, which the
  * loop counts from the model's own stream, not from its own writes such as
  * the welcome): the buttons end the turn, so feedback the model meant to
- * write after them would never be written. It is refused as well in a turn the student opened
+ * write after them would never be written. That refusal is made at most
+ * `MAX_FEEDBACK_REFUSALS` times in a turn; the next call is taken whatever
+ * the count, so a count that is wrong for the model's language cannot keep
+ * the turn from ending with buttons. It is refused as well in a turn the student opened
  * with Try again (that reply is a hint, which ends with a question), and for
  * Try again without Next. Its output carries the buttons and the fixed line
  * shown with them (`lead_in`, chosen from the buttons and whether the student
@@ -127,6 +130,12 @@ type Grading = typeof ClassmojiService.quizGrading;
  * answer's turn. Never shown to the model as a number.
  */
 export const MIN_FEEDBACK_WORDS = 15;
+
+/**
+ * How many times one turn refuses offer_next_step for too little feedback;
+ * the call after that is taken whatever the word count.
+ */
+export const MAX_FEEDBACK_REFUSALS = 2;
 
 /** The service calls the tools make; tests pass fakes. */
 export type QuizToolServices = {
@@ -242,6 +251,8 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
   const noQuestionOpen = () => lastPresented < 1 || recorded.has(lastPresented);
   /** Next-step buttons went out in this turn: the student chooses next. */
   let offerMade = false;
+  /** offer_next_step calls refused in this turn for too little feedback. */
+  let feedbackRefusals = 0;
   const editedQuestions = d.services?.editedQuestions ?? editedQuestionsFromJournal;
 
   /**
@@ -420,8 +431,18 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
         const leadIn = nextStepLeadIn(input.actions, lastPresented >= ctx.questionCount);
         if (leadIn === null) throw new Error(OFFER_TRY_AGAIN_ALONE_TEXT);
         // Buttons end the turn, so feedback written after them is never sent;
-        // and a bare "Correct." is not the feedback an answer gets.
-        if (d.wordsWritten() < MIN_FEEDBACK_WORDS) throw new Error(OFFER_BEFORE_FEEDBACK_TEXT);
+        // and a bare "Correct." is not the feedback an answer gets. Refused a
+        // bounded number of times: after that the buttons go out anyway.
+        if (d.wordsWritten() < MIN_FEEDBACK_WORDS) {
+          if (feedbackRefusals < MAX_FEEDBACK_REFUSALS) {
+            feedbackRefusals += 1;
+            throw new Error(OFFER_BEFORE_FEEDBACK_TEXT);
+          }
+          d.log?.('[quiz-agent] offer_next_step taken after refusals', {
+            ...ids,
+            refusals: feedbackRefusals,
+          });
+        }
         offerMade = true;
         return { actions: [...input.actions], lead_in: leadIn };
       }),

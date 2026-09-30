@@ -24,6 +24,12 @@
  *     this user may see) and content_search searches the whole course.
  * A refused call reads nothing and shows nothing.
  *
+ * PER TURN: at most `MAX_LOOKUPS_PER_TURN` lookups, content_get and
+ * content_search together, failed ones included (the set is built per turn);
+ * after that a call is refused with `CONTENT_LIMIT_TEXT`, so a model that
+ * keeps looking moves on. A content_get refused because the document is not
+ * linked reads nothing and does not count.
+ *
  * WHAT THE STUDENT SEES: one `course_material` step per lookup, as before: a
  * search shows no title (its query is the model's next question); a linked
  * document shows its material title as the call starts; any other document
@@ -36,7 +42,10 @@
  * capped at, with the source-material loader's marker line when it is cut; a
  * search lists at most `SEARCH_RESULT_LIMIT` hits with their snippets.
  *
- * LOGS: ids and counts only; never the query, the text or the token.
+ * LOGS: ids and counts only; never the query, the text or the token. A
+ * document id is logged only when it is one of the linked documents or has
+ * the shape of a Classmoji id (a UUID); any other id the model sent is logged
+ * as `UNLISTED_DOC_ID`.
  */
 import { tool } from 'ai';
 import {
@@ -64,6 +73,10 @@ export const SEARCH_RESULT_LIMIT = 5;
 export const LINKED_SEARCH_LIMIT = 20;
 /** One MCP request's ceiling, connection included. */
 export const MCP_CALL_TIMEOUT_MS = 30_000;
+/** Lookups one turn may make, content_get and content_search together. */
+export const MAX_LOOKUPS_PER_TURN = 3;
+/** What the log line carries in place of a document id that is neither linked nor UUID-shaped. */
+export const UNLISTED_DOC_ID = 'unlisted';
 
 /** A content_get step for a document whose result carries no title. */
 export const CONTENT_STEP_FALLBACK_TITLE = 'a course document';
@@ -82,6 +95,16 @@ export const SEARCH_UNAVAILABLE_TEXT =
 export const SEARCH_NO_HITS_TEXT =
   'No matching course material. A miss does not prove the course does not cover it.';
 export const CONTENT_STOPPED_TEXT = 'This turn was stopped. Nothing was read.';
+/** Refused past `MAX_LOOKUPS_PER_TURN` in one turn. */
+export const CONTENT_LIMIT_TEXT =
+  'You have looked up enough course material this turn. Continue with what you have.';
+
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The id a log line may carry: a linked document's, a UUID-shaped one, or the fixed marker. */
+export function loggableDocId(id: string, isLinked: boolean): string {
+  return isLinked || UUID_SHAPE.test(id) ? id : UNLISTED_DOC_ID;
+}
 
 /** The part of an MCP client a lookup uses; `@ai-sdk/mcp`'s client fits. */
 export type McpContentClient = {
@@ -263,6 +286,17 @@ export function contentTools(
     return bearer;
   };
 
+  /** Lookups started in this turn (the set is built per turn), failed ones included. */
+  let lookups = 0;
+  /** Takes one of the turn's lookups, or refuses the call once they are used up. */
+  const takeLookup = () => {
+    if (lookups >= MAX_LOOKUPS_PER_TURN) {
+      d.log?.('[quiz-agent] content lookup refused', { ...ids, reason: 'turn_limit' });
+      throw new Error(CONTENT_LIMIT_TEXT);
+    }
+    lookups += 1;
+  };
+
   const signalFor = (abortSignal?: AbortSignal) =>
     abortSignal ? AbortSignal.any([d.signal, abortSignal]) : d.signal;
 
@@ -313,13 +347,17 @@ export function contentTools(
     description: TOOL_DESCRIPTIONS.content_get,
     inputSchema: ContentGetSchema,
     outputSchema: ContentToolOutputSchema,
-    execute: (input, { abortSignal }): Promise<string> =>
-      d.queue(async () => {
+    execute: async (input, { abortSignal }): Promise<string> => {
+      const key = materialKey(input.kind, input.id);
+      const isLinked = linked.has(key);
+      const docFields = input.kind === 'file' ? {} : { docId: loggableDocId(input.id, isLinked) };
+      // Refused before it takes a lookup: it reads nothing.
+      const notLinked = !isLinked && !scope.courseSearchEnabled;
+      // Counted at entry, before the queue: the calls of one step start together.
+      if (!notLinked) takeLookup();
+      return d.queue(async () => {
         if (aborted(d.signal, abortSignal)) throw new Error(CONTENT_STOPPED_TEXT);
-        const key = materialKey(input.kind, input.id);
-        const isLinked = linked.has(key);
-        const docFields = input.kind === 'file' ? {} : { docId: input.id };
-        if (!isLinked && !scope.courseSearchEnabled) {
+        if (notLinked) {
           d.log?.('[quiz-agent] content_get refused', {
             ...ids,
             kind: input.kind,
@@ -374,15 +412,17 @@ export function contentTools(
           title: typeof p.title === 'string' ? p.title : '',
           text: p.text,
         });
-      }),
+      });
+    },
   });
 
   const content_search = tool({
     description: TOOL_DESCRIPTIONS.content_search,
     inputSchema: ContentSearchSchema,
     outputSchema: ContentToolOutputSchema,
-    execute: (input, { abortSignal }): Promise<string> =>
-      d.queue(async () => {
+    execute: async (input, { abortSignal }): Promise<string> => {
+      takeLookup();
+      return d.queue(async () => {
         if (aborted(d.signal, abortSignal)) throw new Error(CONTENT_STOPPED_TEXT);
         // A search shows as it starts, with no title: its query is the next question.
         writeStep(null);
@@ -429,7 +469,8 @@ export function contentTools(
           kept: kept.length,
         });
         return formatHits(kept);
-      }),
+      });
+    },
   });
 
   return { content_get, content_search };

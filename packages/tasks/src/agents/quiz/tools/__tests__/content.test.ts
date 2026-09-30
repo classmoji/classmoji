@@ -23,12 +23,15 @@ const { quizTools } = await import('../index.ts');
 const {
   CONTENT_FAILED_TEXT,
   CONTENT_GET_MAX_CHARS,
+  CONTENT_LIMIT_TEXT,
   CONTENT_NOT_FOUND_TEXT,
   CONTENT_NOT_LINKED_TEXT,
   CONTENT_STEP_FALLBACK_TITLE,
   LINKED_SEARCH_LIMIT,
+  MAX_LOOKUPS_PER_TURN,
   SEARCH_RESULT_LIMIT,
   SEARCH_UNAVAILABLE_TEXT,
+  UNLISTED_DOC_ID,
   connectMcp,
   readMcpResult,
 } = await import('../content.ts');
@@ -455,6 +458,40 @@ describe('failures, the bearer and the logs', () => {
     );
   });
 
+  it('logs a document id only when it is linked or UUID-shaped', async () => {
+    const UUID = '0b6f5a4e-3c1d-4e2f-9a8b-7c6d5e4f3a2b';
+    const ODD_ID = 'a free-text id the model wrote';
+    const { tools, log } = setup({
+      content: scope({ courseSearchEnabled: true }),
+      handler: (_n, args) => doc('page', String(args.id), 'A page', 'text'),
+    });
+    await call(tools, 'content_get', { kind: 'page', id: 'page-linked' });
+    await call(tools, 'content_get', { kind: 'page', id: UUID });
+    await call(tools, 'content_get', { kind: 'page', id: ODD_ID });
+
+    const lines = log.mock.calls
+      .filter(([line]) => line === '[quiz-agent] content_get')
+      .map(([, fields]) => (fields as { docId?: string; linked: number }).docId);
+    expect(lines).toEqual(['page-linked', UUID, UNLISTED_DOC_ID]);
+    expect(JSON.stringify(log.mock.calls)).not.toContain(ODD_ID);
+  });
+
+  it('logs the fixed marker for an id the server did not find', async () => {
+    const ODD_ID = 'not-a-classmoji-id';
+    const { tools, log } = setup({
+      content: scope({ courseSearchEnabled: true }),
+      handler: () => refused('not_found'),
+    });
+    await expect(call(tools, 'content_get', { kind: 'slide', id: ODD_ID })).rejects.toThrow(
+      CONTENT_NOT_FOUND_TEXT
+    );
+    expect(log).toHaveBeenCalledWith(
+      '[quiz-agent] content_get',
+      expect.objectContaining({ docId: UNLISTED_DOC_ID, outcome: 'not_found', linked: 0 })
+    );
+    expect(JSON.stringify(log.mock.calls)).not.toContain(ODD_ID);
+  });
+
   it('reads error kinds and payloads from MCP results', () => {
     expect(readMcpResult(refused('forbidden'))).toEqual({ ok: false, kind: 'forbidden' });
     expect(readMcpResult({ content: [{ type: 'text', text: 'not json' }] })).toEqual({
@@ -462,6 +499,97 @@ describe('failures, the bearer and the logs', () => {
       kind: 'invalid_result',
     });
     expect(readMcpResult(ok({ a: 1 }))).toEqual({ ok: true, payload: { a: 1 } });
+  });
+});
+
+// ─── Lookups per turn ──────────────────────────────────────────────────────────
+
+describe('lookups per turn', () => {
+  const answer: Handler = (name, args) =>
+    name === 'content_get'
+      ? doc(String(args.kind), String(args.id), 'Semantic HTML', 'text')
+      : ok({ count: 0, hits: [] });
+
+  it('takes three lookups in a turn, reads and searches together, then refuses with fixed text', async () => {
+    expect(MAX_LOOKUPS_PER_TURN).toBe(3);
+    const { tools, mcp, log, steps } = setup({ handler: answer });
+    await call(tools, 'content_get', { kind: 'page', id: 'page-linked' });
+    await call(tools, 'content_search', { query: QUERY });
+    await call(tools, 'content_get', { kind: 'slide', id: 'deck-linked' });
+    const shown = steps().length;
+
+    await expect(call(tools, 'content_get', { kind: 'page', id: 'page-linked' })).rejects.toThrow(
+      CONTENT_LIMIT_TEXT
+    );
+    await expect(call(tools, 'content_search', { query: QUERY })).rejects.toThrow(
+      CONTENT_LIMIT_TEXT
+    );
+    expect(CONTENT_LIMIT_TEXT).toBe(
+      'You have looked up enough course material this turn. Continue with what you have.'
+    );
+    // The refused calls read nothing and show nothing.
+    expect(mcp.calls).toHaveLength(3);
+    expect(steps()).toHaveLength(shown);
+    expect(log).toHaveBeenCalledWith('[quiz-agent] content lookup refused', {
+      attemptId: 'attempt-1',
+      runId: 'run_1',
+      reason: 'turn_limit',
+    });
+  });
+
+  it('counts a lookup that failed', async () => {
+    const { tools, mcp } = setup({
+      handler: () => {
+        throw new Error('MCP HTTP Transport Error: 502');
+      },
+    });
+    for (let i = 0; i < MAX_LOOKUPS_PER_TURN; i++) {
+      await expect(call(tools, 'content_search', { query: QUERY })).rejects.toThrow(
+        CONTENT_FAILED_TEXT
+      );
+    }
+    await expect(call(tools, 'content_search', { query: QUERY })).rejects.toThrow(
+      CONTENT_LIMIT_TEXT
+    );
+    expect(mcp.calls).toHaveLength(MAX_LOOKUPS_PER_TURN);
+  });
+
+  it('does not count a document refused as not linked', async () => {
+    const { tools, mcp } = setup({ handler: answer });
+    await expect(call(tools, 'content_get', { kind: 'page', id: 'page-other' })).rejects.toThrow(
+      CONTENT_NOT_LINKED_TEXT
+    );
+    for (let i = 0; i < MAX_LOOKUPS_PER_TURN; i++) {
+      await call(tools, 'content_get', { kind: 'page', id: 'page-linked' });
+    }
+    expect(mcp.calls).toHaveLength(MAX_LOOKUPS_PER_TURN);
+  });
+
+  it('bounds the lookups of one step, which start together', async () => {
+    const { tools, mcp } = setup({ handler: answer });
+    const results = await Promise.allSettled(
+      Array.from({ length: MAX_LOOKUPS_PER_TURN + 2 }, () =>
+        call(tools, 'content_search', { query: QUERY })
+      )
+    );
+    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(MAX_LOOKUPS_PER_TURN);
+    expect(
+      results
+        .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+        .map(r => (r.reason as Error).message)
+    ).toEqual([CONTENT_LIMIT_TEXT, CONTENT_LIMIT_TEXT]);
+    expect(mcp.calls).toHaveLength(MAX_LOOKUPS_PER_TURN);
+  });
+
+  it("starts afresh with the next turn's tool set", async () => {
+    const first = setup({ handler: answer });
+    for (let i = 0; i < MAX_LOOKUPS_PER_TURN; i++) {
+      await call(first.tools, 'content_search', { query: QUERY });
+    }
+    const next = setup({ handler: answer });
+    await expect(call(next.tools, 'content_search', { query: QUERY })).resolves.toBeTypeOf(
+      'string'
+    );
   });
 });
 

@@ -18,8 +18,13 @@ vi.mock('@trigger.dev/sdk/v3', () => ({
   metadata: { set: vi.fn(), append: vi.fn(), flush: vi.fn() },
 }));
 
-const { editedQuestionNumbers, MIN_FEEDBACK_WORDS, quizTools, questionResultPartId } =
-  await import('../index.ts');
+const {
+  editedQuestionNumbers,
+  MAX_FEEDBACK_REFUSALS,
+  MIN_FEEDBACK_WORDS,
+  quizTools,
+  questionResultPartId,
+} = await import('../index.ts');
 const {
   OFFER_AFTER_HINT_TEXT,
   OFFER_AFTER_QUESTION_TEXT,
@@ -917,12 +922,8 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
     expect(writes).toEqual([]);
     expect(Object.values(grading).every(fn => fn.mock.calls.length === 0)).toBe(true);
 
-    // A bare "Correct." is not feedback either.
-    written = MIN_FEEDBACK_WORDS - 1;
-    await expect(call(tools, 'offer_next_step', { actions: ['next'] })).rejects.toThrow(
-      OFFER_BEFORE_FEEDBACK_TEXT
-    );
-
+    // The feedback reaches the minimum: the next call is taken on the count
+    // (one refusal so far, so the refusal limit plays no part).
     written = MIN_FEEDBACK_WORDS;
     await expect(
       call(tools, 'offer_next_step', { actions: ['try_again', 'next'] })
@@ -930,6 +931,67 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
       actions: ['try_again', 'next'],
       lead_in: 'Would you like to try again or move on?',
     });
+  });
+
+  it('refuses a bare "Correct." (one word short of the minimum)', async () => {
+    const { tools } = setup({ wordsWritten: () => MIN_FEEDBACK_WORDS - 1 });
+    await expect(call(tools, 'offer_next_step', { actions: ['next'] })).rejects.toThrow(
+      OFFER_BEFORE_FEEDBACK_TEXT
+    );
+  });
+
+  it('takes offer_next_step after two refusals for feedback in one turn, whatever the count', async () => {
+    expect(MAX_FEEDBACK_REFUSALS).toBe(2);
+    const { tools, log } = setup({ wordsWritten: () => 0 });
+    for (let i = 0; i < MAX_FEEDBACK_REFUSALS; i++) {
+      await expect(call(tools, 'offer_next_step', { actions: ['next'] })).rejects.toThrow(
+        OFFER_BEFORE_FEEDBACK_TEXT
+      );
+    }
+    await expect(call(tools, 'offer_next_step', { actions: ['next'] })).resolves.toEqual({
+      actions: ['next'],
+      lead_in: 'Ready for the next question?',
+    });
+    expect(log).toHaveBeenCalledWith('[quiz-agent] offer_next_step taken after refusals', {
+      attemptId: 'attempt-1',
+      runId: 'run_1',
+      refusals: MAX_FEEDBACK_REFUSALS,
+    });
+
+    // The next turn's set counts afresh.
+    const next = setup({ wordsWritten: () => 0 });
+    await expect(call(next.tools, 'offer_next_step', { actions: ['next'] })).rejects.toThrow(
+      OFFER_BEFORE_FEEDBACK_TEXT
+    );
+  });
+
+  it('keeps the other offer_next_step refusals after the feedback refusals run out', async () => {
+    // A hint turn: no buttons at all, however often the model asks.
+    const hint = setup({ ctx: context({ lastAction: 'try_again' }), wordsWritten: () => 0 });
+    for (let i = 0; i < MAX_FEEDBACK_REFUSALS + 2; i++) {
+      await expect(call(hint.tools, 'offer_next_step', { actions: ['next'] })).rejects.toThrow(
+        OFFER_AFTER_HINT_TEXT
+      );
+    }
+
+    // Try again alone, and buttons after a card in the same turn, stay refused.
+    const { tools, grading } = setup({
+      ctx: context({ progress: progressAt(1, [1]) }),
+      wordsWritten: () => 0,
+    });
+    for (let i = 0; i < MAX_FEEDBACK_REFUSALS; i++) {
+      await expect(call(tools, 'offer_next_step', { actions: ['next'] })).rejects.toThrow(
+        OFFER_BEFORE_FEEDBACK_TEXT
+      );
+    }
+    await expect(call(tools, 'offer_next_step', { actions: ['try_again'] })).rejects.toThrow(
+      OFFER_TRY_AGAIN_ALONE_TEXT
+    );
+    grading.presentQuestion.mockResolvedValue({ card, question_number: 2, total_questions: 8 });
+    await call(tools, 'present_question', card);
+    await expect(call(tools, 'offer_next_step', { actions: ['next'] })).rejects.toThrow(
+      OFFER_AFTER_QUESTION_TEXT
+    );
   });
 
   it('keeps present_question open after an offer_next_step refused for missing feedback', async () => {

@@ -792,6 +792,32 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     ]);
   });
 
+  it('tags a typed button text in any case, with spaces around it', async () => {
+    const attemptId = await newAttempt();
+    const typed = [
+      ' Next ',
+      'NEXT',
+      `  ${BUTTON_TEXT.try_again.toUpperCase()}\n`,
+      "I'd Like To Try Answering This Question Again",
+      'next question please',
+      'Next.',
+    ];
+    const actions: Array<string | undefined> = [];
+    for (const text of typed) {
+      const admitted = await chat.admitStudentMessage({
+        attemptId,
+        message: { id: msgId(), text },
+        runId,
+      });
+      actions.push(admitted.action);
+    }
+    expect(actions).toEqual(['next', 'next', 'try_again', 'try_again', undefined, undefined]);
+    const messages = await chat.loadCanonicalMessages(attemptId);
+    expect(messages.map(m => (m.metadata as { action?: string }).action)).toEqual(actions);
+    // The student's own text is kept as typed.
+    expect(messages.map(m => (m.parts[0] as { text: string }).text)).toEqual(typed);
+  });
+
   it('treats the same id and text as a re-delivery, and refuses the same id with other text', async () => {
     const attemptId = await newAttempt();
     const id = msgId();

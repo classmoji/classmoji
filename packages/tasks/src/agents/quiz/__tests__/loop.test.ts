@@ -15,10 +15,14 @@ import type { AttemptContext } from '../context.ts';
 import { CODE_UNAVAILABLE_NOTICE } from '../prompt/index.ts';
 import { contentTools } from '../tools/content.ts';
 import {
+  CHARS_PER_WORD,
+  createWordCounter,
   lastUserTextParts,
   needsEvaluation,
   PERSIST_RETRY_DELAY_MS,
   runQuizTurn,
+  STEP_CEILING,
+  stepCeilingFor,
   watchModelText,
   withStepCacheBreakpoint,
   type QuizToolsFactory,
@@ -813,6 +817,50 @@ describe('runQuizTurn', () => {
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).not.toContain('SYSTEM NOTICE');
   });
 
+  it('stops a standard turn at its step ceiling, and gives one with lookups the higher one', async () => {
+    const invalid = (i: number) => [
+      toolCall(`bad${i}`, 'present_question', { preamble: 'x', question_number: 1 }),
+    ];
+    const script = [
+      ...Array.from({ length: STEP_CEILING.standard }, (_, i) => invalid(i)),
+      [toolCall('ok', 'present_question', question(1))],
+    ];
+    const content = {
+      mcpUrl: 'https://mcp.example.test/mcp',
+      classroomRef: 'sample-org/cs-1',
+      courseSearchEnabled: false,
+      docs: [{ kind: 'page', id: 'p1', title: 'Flexbox basics' }],
+    };
+
+    const standard = fakeAttempt(2);
+    const standardModel = scriptedModel(script);
+    await collect(
+      runQuizTurn({
+        ctx: ctxFor(standard.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: standard.deps,
+        model: standardModel,
+      })
+    );
+    expect(standardModel.doStreamCalls).toHaveLength(STEP_CEILING.standard);
+    expect(standard.state.presented).toBe(0);
+
+    const withLookups = fakeAttempt(2);
+    const lookupsModel = scriptedModel(script);
+    await collect(
+      runQuizTurn({
+        ctx: ctxFor(withLookups.progress(), { content }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: withLookups.deps,
+        model: lookupsModel,
+      })
+    );
+    expect(lookupsModel.doStreamCalls).toHaveLength(STEP_CEILING.standard + 1);
+    expect(withLookups.state.presented).toBe(1);
+  });
+
   it("hands the turn's log to the tools", async () => {
     const a = fakeAttempt(2);
     const log = vi.fn();
@@ -964,6 +1012,28 @@ describe('runQuizTurn: the text written in the turn', () => {
     expect(seen[0]).toBe(0);
   });
 
+  it('counts words in languages written without spaces', async () => {
+    const { seen, a, deps } = offerProbe();
+    // Chinese: "Your answer is correct: this loop visits every element of the array exactly once."
+    const model = scriptedModel([
+      [
+        ...text('t', '你的回答是正确的：这个循环恰好访问数组中的每一个元素一次。'),
+        toolCall('b', 'offer_next_step', { actions: ['next'] }),
+      ],
+    ]);
+    await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps,
+        model,
+      })
+    );
+    // Segmentation of such text varies a little between ICU versions: a floor, not an exact count.
+    expect(seen[0]).toBeGreaterThanOrEqual(10);
+  });
+
   it('sees each delta as it leaves the model, with no UI stream reading it', async () => {
     let written = '';
     const mock = new MockLanguageModelV4({
@@ -1002,6 +1072,38 @@ describe('runQuizTurn: the text written in the turn', () => {
       'tool-call',
       'finish',
     ]);
+  });
+});
+
+describe('createWordCounter', () => {
+  const counted = (pieces: string[], segmenter?: Parameters<typeof createWordCounter>[0]) => {
+    const words = createWordCounter(segmenter);
+    for (const piece of pieces) words.push(piece);
+    return words.count();
+  };
+
+  it('counts word-like segments, once for a word cut across deltas', () => {
+    expect(counted(['Not qu', 'ite: the bound', ' is off by one.'])).toBe(8);
+    expect(counted(['**Cor', 'rect** - your `flex` rule', '\n', 'stacks them.'])).toBe(6);
+    expect(counted([' \n ', '-- ** --'])).toBe(0);
+    // Japanese: "The answer is correct. This function returns the total."
+    expect(counted(['答えは正しいです。', 'この関数は合計を返します。'])).toBeGreaterThanOrEqual(8);
+    // Thai: "Your answer is correct."
+    expect(counted(['คำตอบของคุณถูกต้อง'])).toBeGreaterThanOrEqual(3);
+  });
+
+  describe('without a segmenter', () => {
+    it('counts runs of non-space characters with a letter or digit', () => {
+      expect(counted(['Not qu', 'ite: the bound', ' is off by one.'], null)).toBe(8);
+      expect(counted([' \n ', ' '], null)).toBe(0);
+    });
+
+    it(`counts every ${CHARS_PER_WORD} non-space characters of unspaced text as a word`, () => {
+      const unspaced = '你的回答是正确的这个循环恰好访问数组中的每一个元素一次对吗？'; // 30 characters
+      expect(counted([unspaced], null)).toBe(Math.floor(30 / CHARS_PER_WORD));
+      // About 60 non-space characters are enough for the feedback minimum (15).
+      expect(counted([unspaced, unspaced], null)).toBe(15);
+    });
   });
 });
 
@@ -1048,6 +1150,20 @@ describe('loop helpers', () => {
     );
     expect(marked.filter(m => m.providerOptions?.anthropic?.cacheControl)).toHaveLength(1);
     expect(marked.at(-1)?.providerOptions?.anthropic?.cacheControl).toBeDefined();
+  });
+
+  it('raises the step ceiling for an attempt with the course-material lookups', () => {
+    expect(STEP_CEILING).toEqual({ standard: 10, codeAware: 20 });
+    const content = {
+      mcpUrl: 'https://mcp.example.test/mcp',
+      classroomRef: 'sample-org/cs-1',
+      courseSearchEnabled: false,
+      docs: [],
+    };
+    expect(stepCeilingFor({ isCodeAware: false })).toBe(10);
+    expect(stepCeilingFor({ isCodeAware: false, content: null })).toBe(10);
+    expect(stepCeilingFor({ isCodeAware: false, content })).toBe(20);
+    expect(stepCeilingFor({ isCodeAware: true })).toBe(20);
   });
 
   it('counts the text parts of the last user message', () => {

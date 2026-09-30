@@ -17,8 +17,10 @@
  *   breakpoint to the last message, so an older breakpoint never piles up.
  * - The turn stops once `present_question`, `offer_next_step` or
  *   `submit_quiz_evaluation` SUCCEEDED (an invalid call is a tool error the
- *   model corrects in the same turn), or at the step ceiling. Stopping on the
- *   buttons keeps text from trailing after them.
+ *   model corrects in the same turn), or at the step ceiling
+ *   (`stepCeilingFor`: the higher one when the attempt explores code or has
+ *   the course-material lookups). Stopping on the buttons keeps text from
+ *   trailing after them.
  * - After the stream ends, persisted state decides whether the evaluation is
  *   still owed (for a Next click, only when the last question was already out
  *   before the turn began); if so, up to two more calls carry the evaluation
@@ -67,6 +69,16 @@ export const TURN_DEADLINE_MS = 240_000;
 /** Bounded recovery calls when the evaluation is owed (Q17). */
 export const RECOVERY_CALLS = 2;
 export const STEP_CEILING = { standard: 10, codeAware: 20 } as const;
+
+/**
+ * The turn's step ceiling: the higher one for an attempt that explores code
+ * or has the course-material lookups (tools/index.ts registers them when
+ * `ctx.content` is set), whose steps those calls also use.
+ */
+export function stepCeilingFor(ctx: Pick<AttemptContext, 'isCodeAware' | 'content'>): number {
+  return ctx.isCodeAware || ctx.content ? STEP_CEILING.codeAware : STEP_CEILING.standard;
+}
+
 /** Output ceiling per call, by phase; thinking tokens count against it. */
 export const MAX_OUTPUT_TOKENS = { question: 16_000, evaluation: 32_000 } as const;
 /** Pause before the one retry of a failed end-of-turn save. */
@@ -168,27 +180,53 @@ export function watchModelText(model: ModelObject, onText: (text: string) => voi
 
 const HAS_WORD_CHARACTER = /[\p{L}\p{N}]/u;
 
+/** Characters that stand for one word where words cannot be told apart (the fallback). */
+export const CHARS_PER_WORD = 4;
+
+/** Splits text into word-like segments; `Intl.Segmenter` fits. */
+export type WordSegmenter = {
+  segment(text: string): Iterable<{ isWordLike?: boolean }>;
+};
+
+/** A word segmenter for any language, or null where the runtime has none. */
+export function defaultWordSegmenter(): WordSegmenter | null {
+  const Segmenter = (globalThis.Intl as { Segmenter?: typeof Intl.Segmenter } | undefined)
+    ?.Segmenter;
+  if (typeof Segmenter !== 'function') return null;
+  try {
+    return new Segmenter(undefined, { granularity: 'word' });
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Counts the words of text that arrives in pieces: a word is a run of
- * non-space characters with at least one letter or digit, so markdown marks
- * ("**", "-") and blank text count for nothing, and a word cut across two
- * deltas counts once.
+ * Counts the words of text that arrives in pieces. The pieces are joined and
+ * the whole text is counted each time, so a word cut across two deltas counts
+ * once. With a segmenter (`Intl.Segmenter`), a word is a word-like segment,
+ * which also counts words in languages written without spaces; markdown marks
+ * ("**", "-") and blank text count for nothing. Without one, a word is a run
+ * of non-space characters with a letter or digit in it, and every
+ * `CHARS_PER_WORD` non-space characters count as at least one word, so text
+ * without spaces is not counted as a single word.
  */
-export function createWordCounter() {
-  let words = 0;
-  let current = '';
-  const close = () => {
-    if (HAS_WORD_CHARACTER.test(current)) words += 1;
-    current = '';
+export function createWordCounter(segmenter: WordSegmenter | null = defaultWordSegmenter()) {
+  let text = '';
+  const bySegments = (s: WordSegmenter) => {
+    let words = 0;
+    for (const segment of s.segment(text)) if (segment.isWordLike) words += 1;
+    return words;
+  };
+  const byRuns = () => {
+    const runs = text.split(/\s+/).filter(run => HAS_WORD_CHARACTER.test(run)).length;
+    const chars = text.replace(/\s+/g, '').length;
+    return Math.max(runs, Math.floor(chars / CHARS_PER_WORD));
   };
   return {
-    push(text: string) {
-      for (const ch of text) {
-        if (/\s/.test(ch)) close();
-        else current += ch;
-      }
+    push(delta: string) {
+      text += delta;
     },
-    count: () => words + (HAS_WORD_CHARACTER.test(current) ? 1 : 0),
+    count: () => (segmenter ? bySegments(segmenter) : byRuns()),
   };
 }
 
@@ -360,7 +398,7 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
             succeeded('present_question'),
             succeeded('offer_next_step'),
             succeeded('submit_quiz_evaluation'),
-            isStepCount(ctx.isCodeAware ? STEP_CEILING.codeAware : STEP_CEILING.standard),
+            isStepCount(stepCeilingFor(ctx)),
           ],
           prepareStep: ({ initialMessages, responseMessages }) => ({
             messages: withStepCacheBreakpoint([
