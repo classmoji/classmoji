@@ -19,6 +19,8 @@
  *     grading columns), so the view narrows again here.
  */
 
+import type { QuizEvaluationRecordV2 } from '@classmoji/utils/quiz-agent';
+
 /** The attempt fields the student quiz list reads (table columns and tab filters). */
 export interface StudentQuizAttemptView {
   id: string;
@@ -115,7 +117,28 @@ export interface AttemptDrawerView {
   partial_credit_percentage: number | null;
   first_attempt_percentage: number | null;
   question_results: AttemptQuestionResult[];
+  /**
+   * The runtime the attempt was stamped with at creation: `ai_agent` renders
+   * the legacy chat, `trigger_chat` the chat-runtime one.
+   */
+  agent_runtime: 'ai_agent' | 'trigger_chat';
+  /**
+   * A completed chat-runtime attempt's stored evaluation record (the results
+   * panel reads it); null otherwise.
+   */
+  evaluation_json: QuizEvaluationRecordV2 | null;
 }
+
+/**
+ * The stored evaluation record, when the column holds one (`v: 2`). Anything
+ * else reads as none; the results panel then falls back to the transcript.
+ */
+const evaluationRecord = (json: unknown): QuizEvaluationRecordV2 | null => {
+  const r = json as { v?: unknown; question_results?: unknown } | null;
+  return r && typeof r === 'object' && r.v === 2 && Array.isArray(r.question_results)
+    ? (r as QuizEvaluationRecordV2)
+    : null;
+};
 
 /**
  * The attempt's recorded results for its questions 1..N, in question order:
@@ -168,11 +191,15 @@ export const attemptDrawerView = (attempt: {
   first_attempt_percentage?: number | null;
   question_results_json?: unknown;
   agent_config?: unknown;
+  agent_runtime?: string | null;
+  evaluation_json?: unknown;
   quiz?: { question_count?: number | null } | null;
 }): AttemptDrawerView => {
   // Scores are shown for a completed attempt only.
   const completed = Boolean(attempt.completed_at);
   return {
+    agent_runtime: attempt.agent_runtime === 'trigger_chat' ? 'trigger_chat' : 'ai_agent',
+    evaluation_json: completed ? evaluationRecord(attempt.evaluation_json) : null,
     id: attempt.id,
     completed_at: attempt.completed_at,
     total_duration_ms: attempt.total_duration_ms ?? null,

@@ -86,7 +86,11 @@ const SYMLINK_MODE = '120000';
  * @param {string} token - GitHub installation access token
  * @returns {Promise<TreeEntry[]>}
  */
-async function fetchRepoTree(owner: string, repo: string, token: string): Promise<TreeEntry[]> {
+export async function fetchRepoTree(
+  owner: string,
+  repo: string,
+  token: string
+): Promise<TreeEntry[]> {
   const url = `${GITHUB_API}/repos/${owner}/${repo}/git/trees/HEAD?recursive=1`;
   const res = await githubFetch(url, GITHUB_HEADERS(token), `GitHub tree API (${owner}/${repo})`);
 
@@ -153,7 +157,7 @@ export async function fetchFileContent(
  * @param {number} concurrency - Max parallel requests (default 3)
  * @returns {Promise<Array<{path: string, content: string, error?: string}>>}
  */
-async function fetchMultipleFiles(
+export async function fetchMultipleFiles(
   owner: string,
   repo: string,
   paths: string[],
@@ -234,7 +238,9 @@ export function readablePickedPaths(
  * @param {Array} tree - Raw tree from fetchRepoTree
  * @returns {string} Formatted tree listing
  */
-function formatTreeForLLM(tree: Array<{ path: string; size: number; type: string }>): string {
+export function formatTreeForLLM(
+  tree: Array<{ path: string; size: number; type: string }>
+): string {
   // Filter out noise
   const ignorePatterns = [
     /^node_modules\//,

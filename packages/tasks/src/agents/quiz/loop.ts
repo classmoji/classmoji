@@ -1,0 +1,403 @@
+/**
+ * One quiz turn: the model loop, bounded recovery and server completion,
+ * streamed as UI message chunks.
+ *
+ * No Trigger import: `agent.ts` wires the services, tools and cleanup in, and
+ * tests drive this with `MockLanguageModelV4` and fake dependencies.
+ *
+ * Shape (see the design's §4.1-4.3):
+ * - `instructions` are two cached system blocks (static prompt + material,
+ *   then the per-attempt block); nothing that changes per turn goes there.
+ *   A code-aware quiz whose repository was not found this turn gets a fixed
+ *   hidden user-role notice after the history instead (never persisted).
+ * - `prepareStep` rebuilds each step's messages and moves one cache
+ *   breakpoint to the last message, so an older breakpoint never piles up.
+ * - The turn stops once `present_question`, `offer_next_step` or
+ *   `submit_quiz_evaluation` SUCCEEDED (an invalid call is a tool error the
+ *   model corrects in the same turn), or at the step ceiling. Stopping on the
+ *   buttons keeps text from trailing after them.
+ * - After the stream ends, persisted state decides whether the evaluation is
+ *   still owed; if so, up to two more calls carry the evaluation notice. If
+ *   every result is recorded and the evaluation still did not arrive, the
+ *   server completes the attempt from the recorded grades and writes a
+ *   `data-evaluation` part. If the last result is missing, a `reply_failed`
+ *   notice is written and the student's next message retries.
+ * - Everything the model or the tools write is persisted in `onEnd`, upstream
+ *   of the projection; the returned stream is projected for the browser. A
+ *   failed save is tried once more (the save is an upsert by message id); a
+ *   refusal is not retried. Each failure logs ids only.
+ * - Telemetry is off on every call. One log line per model call: ids, model,
+ *   key source, token and cache counts. Never content.
+ */
+import { createAnthropic } from '@ai-sdk/anthropic';
+import {
+  createUIMessageStream,
+  generateId,
+  isStepCount,
+  streamText,
+  toUIMessageStream,
+  type LanguageModel,
+  type ModelMessage,
+  type StopCondition,
+  type ToolSet,
+  type UIMessageChunk,
+  type UIMessageStreamWriter,
+} from 'ai';
+import type {
+  AttemptProgress,
+  QuizEvaluationRecordV2,
+  QuizUIMessage,
+} from '@classmoji/utils/quiz-agent';
+import { THINKING } from '@classmoji/utils/ai-models';
+import type { AttemptContext } from './context.ts';
+import { CODE_UNAVAILABLE_NOTICE } from './prompt/index.ts';
+import type { Effort } from './settings.ts';
+import { isRefusal, logDiagnostic, type DiagnosticLog } from '../shared/sanitize.ts';
+import { createToolQueue, type ToolQueue } from '../shared/toolQueue.ts';
+import { projectChunks } from '../shared/uiFilter.ts';
+
+/** The turn's own deadline, across every call and tool of the turn. */
+export const TURN_DEADLINE_MS = 240_000;
+/** Bounded recovery calls when the evaluation is owed (Q17). */
+export const RECOVERY_CALLS = 2;
+export const STEP_CEILING = { standard: 10, codeAware: 20 } as const;
+/** Output ceiling per call, by phase; thinking tokens count against it. */
+export const MAX_OUTPUT_TOKENS = { question: 16_000, evaluation: 32_000 } as const;
+/** Pause before the one retry of a failed end-of-turn save. */
+export const PERSIST_RETRY_DELAY_MS = 250;
+
+const EPHEMERAL = { anthropic: { cacheControl: { type: 'ephemeral' as const } } };
+
+export type QuizToolsFactory = (
+  ctx: AttemptContext,
+  d: {
+    writer: UIMessageStreamWriter<QuizUIMessage>;
+    queue: ToolQueue;
+    signal: AbortSignal;
+    /** The turn's log, so tool diagnostics and usage lines land with the loop's. */
+    log?: DiagnosticLog;
+  }
+) => ToolSet;
+
+export type ServerCompletionFence = {
+  attemptId: string;
+  fence: string;
+  inputMessageId: string | null;
+  runId: string;
+};
+
+export type QuizTurnDeps = {
+  tools: QuizToolsFactory;
+  getProgress: (attemptId: string) => Promise<AttemptProgress>;
+  completeFromGrades: (f: ServerCompletionFence) => Promise<QuizEvaluationRecordV2>;
+  persistAssistant: (
+    attemptId: string,
+    message: QuizUIMessage,
+    o: { final: boolean }
+  ) => Promise<void>;
+  evaluationNotice: (p: AttemptProgress) => string;
+  /** Removes tool parts left without a result by a stopped or failed turn. */
+  cleanupParts?: (m: QuizUIMessage) => QuizUIMessage;
+  log?: DiagnosticLog;
+};
+
+export type QuizTurnInput = {
+  ctx: AttemptContext;
+  /** The conversation, already converted from the canonical history. */
+  messages: ModelMessage[];
+  /** The run's signal (cancel or the student's stop). */
+  signal: AbortSignal;
+  deps: QuizTurnDeps;
+  /** Tests inject a mock; otherwise the Anthropic model for `ctx.model` on `ctx.apiKey`. */
+  model?: LanguageModel;
+  deadlineMs?: number;
+  /** Non-persisted messages appended after the history (e.g. a status fallback). */
+  extraMessages?: ModelMessage[];
+  /** Default true. False returns the unprojected stream (tests only). */
+  project?: boolean;
+};
+
+type Phase = 'question' | 'evaluation';
+
+/** The turn is in the evaluation phase once the last question is out. */
+export function phaseFor(p: AttemptProgress): Phase {
+  return p.presented >= p.questionCount ? 'evaluation' : 'question';
+}
+
+export function allResultsFinalized(p: AttemptProgress): boolean {
+  for (let n = 1; n <= p.questionCount; n++) {
+    if (!p.finalized.includes(n)) return false;
+  }
+  return true;
+}
+
+/**
+ * Whether the evaluation is owed after the model's reply: every result is
+ * recorded and there is no evaluation, or the student moved on (Next) from the
+ * last question and its result is still missing. A clarifying question or a
+ * retry on the last question is a legitimate text-only ending.
+ */
+export function needsEvaluation(p: AttemptProgress, lastAction?: 'next' | 'try_again'): boolean {
+  if (p.completed || p.hasEvaluation) return false;
+  if (allResultsFinalized(p)) return true;
+  return (
+    lastAction === 'next' &&
+    p.presented >= p.questionCount &&
+    !p.finalized.includes(p.questionCount)
+  );
+}
+
+/** Stop once the named tool returned a result in the last step (a tool error does not count). */
+export function succeeded(name: string): StopCondition<ToolSet> {
+  return ({ steps }) => steps.at(-1)?.toolResults.some(r => r.toolName === name) ?? false;
+}
+
+/** Mark only the last message with a cache breakpoint. */
+export function withStepCacheBreakpoint(messages: ModelMessage[]): ModelMessage[] {
+  if (messages.length === 0) return messages;
+  const out = messages.map(m => {
+    const opts = m.providerOptions as Record<string, Record<string, unknown>> | undefined;
+    if (!opts?.anthropic?.cacheControl) return m;
+    const { cacheControl: _drop, ...restAnthropic } = opts.anthropic;
+    const rest = { ...opts, anthropic: restAnthropic };
+    return { ...m, providerOptions: rest } as ModelMessage;
+  });
+  const last = out[out.length - 1];
+  const opts = (last.providerOptions ?? {}) as Record<string, Record<string, unknown>>;
+  out[out.length - 1] = {
+    ...last,
+    providerOptions: { ...opts, anthropic: { ...(opts.anthropic ?? {}), ...EPHEMERAL.anthropic } },
+  } as ModelMessage;
+  return out;
+}
+
+/** Drop tool parts that never got a result, so no `tool_use` reaches the next request alone. */
+export function dropIncompleteToolParts(message: QuizUIMessage): QuizUIMessage {
+  const parts = message.parts.filter(part => {
+    const p = part as { type: string; state?: string };
+    if (!(p.type.startsWith('tool-') || p.type === 'dynamic-tool')) return true;
+    return p.state === 'output-available' || p.state === 'output-error' || p.state === 'output-denied';
+  });
+  return { ...message, parts } as QuizUIMessage;
+}
+
+/** Text-part count of the last user message in a request (the hidden status is part 2). */
+export function lastUserTextParts(messages: ModelMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== 'user') continue;
+    if (typeof m.content === 'string') return 1;
+    return m.content.filter(c => c.type === 'text').length;
+  }
+  return 0;
+}
+
+function numberOrZero(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk> {
+  const { ctx, deps } = input;
+  const log: DiagnosticLog = deps.log ?? ((line, fields) => console.log(line, fields));
+  const ids = { chatId: ctx.attemptId, runId: ctx.runId };
+  const timeout = AbortSignal.timeout(input.deadlineMs ?? TURN_DEADLINE_MS);
+  const deadline = AbortSignal.any([input.signal, timeout]);
+  const messageId = generateId();
+  const cleanup = deps.cleanupParts ?? dropIncompleteToolParts;
+  let failed = false;
+
+  const stream = createUIMessageStream<QuizUIMessage>({
+    execute: async ({ writer }) => {
+      writer.write({ type: 'start', messageId });
+      let noticeWritten = false;
+      const notice = (code: 'turn_stopped' | 'reply_failed' | 'source_material_unavailable') => {
+        if (noticeWritten) return;
+        noticeWritten = true;
+        writer.write({ type: 'data-notice', data: { code } });
+      };
+
+      if (ctx.sourceMaterialUnavailable) {
+        notice('source_material_unavailable');
+        writer.write({ type: 'finish' });
+        return;
+      }
+
+      const phase = phaseFor(ctx.progress);
+      const effort: Effort = phase === 'evaluation' ? ctx.gradingEffort : ctx.questionEffort;
+      const model =
+        input.model ?? createAnthropic({ apiKey: ctx.apiKey })(ctx.model);
+      const queue = createToolQueue();
+      const tools = deps.tools(ctx, {
+        writer: writer as UIMessageStreamWriter<QuizUIMessage>,
+        queue,
+        signal: deadline,
+        log,
+      });
+      let callIndex = 0;
+      let sawStreamError = false;
+
+      const call = (history: ModelMessage[]) =>
+        streamText({
+          model,
+          instructions: [
+            { role: 'system', content: ctx.prompt.staticPrompt, providerOptions: EPHEMERAL },
+            { role: 'system', content: ctx.prompt.dynamicPrompt, providerOptions: EPHEMERAL },
+          ],
+          messages: history,
+          tools,
+          stopWhen: [
+            succeeded('present_question'),
+            succeeded('offer_next_step'),
+            succeeded('submit_quiz_evaluation'),
+            isStepCount(ctx.isCodeAware ? STEP_CEILING.codeAware : STEP_CEILING.standard),
+          ],
+          prepareStep: ({ initialMessages, responseMessages }) => ({
+            messages: withStepCacheBreakpoint([
+              ...initialMessages,
+              ...(responseMessages as ModelMessage[]),
+            ]),
+          }),
+          providerOptions: { anthropic: { effort, thinking: { ...THINKING } } },
+          maxOutputTokens: MAX_OUTPUT_TOKENS[phase],
+          telemetry: { isEnabled: false },
+          abortSignal: deadline,
+          onError: ({ error }) => {
+            sawStreamError = true;
+            logDiagnostic('streamText', error, ids, log);
+          },
+          onLanguageModelCallStart: event => {
+            callIndex += 1;
+            if (callIndex === 1) {
+              log('[quiz-agent] request', {
+                attemptId: ctx.attemptId,
+                runId: ctx.runId,
+                messages: event.messages.length,
+                lastUserTextParts: lastUserTextParts(event.messages),
+              });
+            }
+          },
+          onLanguageModelCallEnd: event => {
+            const u = event.usage;
+            log('[quiz-agent] model call', {
+              attemptId: ctx.attemptId,
+              runId: ctx.runId,
+              call: callIndex,
+              model: event.modelId,
+              keySource: ctx.keySource,
+              phase,
+              finish: String(event.finishReason ?? ''),
+              inputTokens: numberOrZero(u?.inputTokens),
+              noCacheTokens: numberOrZero(u?.inputTokenDetails?.noCacheTokens),
+              cacheReadTokens: numberOrZero(u?.inputTokenDetails?.cacheReadTokens),
+              cacheWriteTokens: numberOrZero(u?.inputTokenDetails?.cacheWriteTokens),
+              outputTokens: numberOrZero(u?.outputTokens),
+              reasoningTokens: numberOrZero(u?.outputTokenDetails?.reasoningTokens),
+              ms: numberOrZero(event.performance?.responseTimeMs),
+            });
+          },
+        });
+
+      const pump = async (result: ReturnType<typeof call>) => {
+        const ui = toUIMessageStream({
+          stream: result.stream,
+          tools,
+          sendStart: false,
+          sendFinish: false,
+        });
+        for await (const chunk of ui as unknown as AsyncIterable<UIMessageChunk>) {
+          if (chunk.type === 'error') sawStreamError = true;
+          writer.write(chunk as never);
+        }
+      };
+
+      try {
+        // A code-aware quiz without a repository this turn: a fixed hidden notice
+        // after the student's message, never persisted.
+        const codeNotice: ModelMessage[] = ctx.codeUnavailable
+          ? [{ role: 'user', content: CODE_UNAVAILABLE_NOTICE }]
+          : [];
+        let history: ModelMessage[] = [
+          ...input.messages,
+          ...(input.extraMessages ?? []),
+          ...codeNotice,
+        ];
+        let result = call(history);
+        await pump(result);
+
+        for (let i = 0; i < RECOVERY_CALLS && !deadline.aborted && !sawStreamError; i++) {
+          const progress = await deps.getProgress(ctx.attemptId);
+          if (!needsEvaluation(progress, ctx.lastAction)) break;
+          const response = (await result.responseMessages) as ModelMessage[];
+          history = [
+            ...history,
+            ...response,
+            { role: 'user', content: deps.evaluationNotice(progress) },
+          ];
+          log('[quiz-agent] recovery call', { attemptId: ctx.attemptId, runId: ctx.runId, n: i + 1 });
+          result = call(history);
+          await pump(result);
+        }
+
+        if (!deadline.aborted && !sawStreamError) {
+          const progress = await deps.getProgress(ctx.attemptId);
+          if (needsEvaluation(progress, ctx.lastAction)) {
+            if (allResultsFinalized(progress)) {
+              const record = await deps.completeFromGrades({
+                attemptId: ctx.attemptId,
+                fence: ctx.fence,
+                inputMessageId: ctx.inputMessageId,
+                runId: ctx.runId,
+              });
+              log('[quiz-agent] server completion', { attemptId: ctx.attemptId, runId: ctx.runId });
+              writer.write({ type: 'data-evaluation', data: record });
+            } else {
+              notice('reply_failed');
+            }
+          }
+        }
+        if (sawStreamError && !deadline.aborted) {
+          failed = true;
+          notice('reply_failed');
+        }
+      } catch (error) {
+        failed = true;
+        if (!(deadline.aborted && !timeout.aborted)) {
+          // Not the student's own stop: record why (ids only) and say the reply failed.
+          if (!timeout.aborted) {
+            logDiagnostic('runQuizTurn', error, ids, log);
+            notice('reply_failed');
+          }
+        }
+      }
+      if (timeout.aborted) {
+        failed = true;
+        notice('turn_stopped');
+      }
+      writer.write({ type: 'finish' });
+    },
+    onEnd: async ({ responseMessage, isAborted }) => {
+      const message = cleanup(responseMessage as QuizUIMessage);
+      if (!message.parts || message.parts.length === 0) return;
+      const final = !isAborted && !failed && !deadline.aborted;
+      try {
+        await deps.persistAssistant(ctx.attemptId, message, { final });
+      } catch (error) {
+        logDiagnostic('persistAssistant', error, ids, log);
+        if (isRefusal(error)) return;
+        await new Promise(resolve => setTimeout(resolve, PERSIST_RETRY_DELAY_MS));
+        try {
+          await deps.persistAssistant(ctx.attemptId, message, { final });
+          log('[quiz-agent] persistAssistant retry saved', {
+            attemptId: ctx.attemptId,
+            runId: ctx.runId,
+          });
+        } catch (retryError) {
+          logDiagnostic('persistAssistant_retry', retryError, ids, log);
+        }
+      }
+    },
+  });
+
+  const raw = stream as unknown as ReadableStream<UIMessageChunk>;
+  return input.project === false ? raw : raw.pipeThrough(projectChunks());
+}

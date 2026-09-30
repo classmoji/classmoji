@@ -7,6 +7,7 @@ export * from './tools.ts';
 export * from './uiTypes.ts';
 export * from './visibility.ts';
 export * from './status.ts';
+export * from './copy.ts';
 export {
   createChunkProjector,
   projectMessage,

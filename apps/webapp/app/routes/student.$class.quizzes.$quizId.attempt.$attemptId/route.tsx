@@ -7,6 +7,7 @@ import { QuizAttemptInterface } from '~/components';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { attemptDrawerView, quizDrawerView } from '~/utils/quizPayloads';
+import { isTriggerChatAttempt } from '~/utils/quizRuntime.server';
 
 export async function loader({ params, request }: Route.LoaderArgs) {
   const { ClassmojiService, QuizAttemptNotFoundError } = await import('@classmoji/services');
@@ -79,7 +80,16 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // 6. Determine if read-only (completed attempt)
   const readOnly = Boolean(attemptData.attempt.completed_at);
 
-  // 7. Send only what the drawer and QuizAttemptInterface read — see
+  // 7. A chat-runtime attempt's transcript, projected for every viewer the
+  // same way (hidden rows and internal parts removed). Its raw rows are never
+  // sent. Only the attempt's owner drives its chat session; anyone else reads.
+  const isChatAttempt = isTriggerChatAttempt(attemptData.attempt);
+  const transcript = isChatAttempt
+    ? await ClassmojiService.quizChat.loadTranscriptForViewer(attemptData.attempt.id)
+    : null;
+  const viewerOwnsAttempt = attemptData.attempt.user_id.toString() === userId.toString();
+
+  // 8. Send only what the drawer and QuizAttemptInterface read — see
   // ~/utils/quizPayloads. Both rows arrive joined to much more: the attempt to
   // its user, quiz and classroom; the quiz to every attempt and its user, and
   // its prompts.
@@ -87,7 +97,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     quiz: quizDrawerView(quiz),
     attempt: attemptDrawerView(attemptData.attempt),
     // Use unified messages from getAttemptWithMessages (ai-agent owns persistence)
-    messages: attemptData.messages || [],
+    messages: isChatAttempt ? [] : attemptData.messages || [],
+    transcript,
+    viewerOwnsAttempt,
     userLogin: attemptData.attempt.user?.login || null,
     userImage: attemptData.attempt.user?.image || null,
     isAdmin: isInstructor,
