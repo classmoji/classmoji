@@ -92,7 +92,7 @@ export const loader = async ({ request }: { request: Request }) => {
         where: { id: account.id },
         data: { access_token: githubToken },
       });
-      console.log(`[slides/test-login] Stored token for ${account.username}`);
+      console.log(`[slides/test-login] Stored token for ${account.user.login}`);
     }
 
     if (!account?.user) {
@@ -115,7 +115,7 @@ export const loader = async ({ request }: { request: Request }) => {
       },
     });
 
-    console.log(`[slides/test-login] Created session for ${account.username} (role=${role})`);
+    console.log(`[slides/test-login] Created session for ${user.login} (role=${role})`);
 
     // Set Better Auth session cookie and redirect
     // For slides app, we redirect to the specified path or the index

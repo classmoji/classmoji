@@ -51,7 +51,7 @@ interface Repository {
 
 interface TeamMembership {
   user_id: string;
-  user?: { name?: string | null; login?: string | null; image?: string | null };
+  user?: { name?: string | null; login?: string | null; provider_id?: string | null };
 }
 
 interface UserTeam {
@@ -96,7 +96,7 @@ const TeamFormationBanner = ({ repository, userTeam, classSlug }: TeamFormationB
                 {userTeam.memberships?.map((m: TeamMembership) => (
                   <Avatar
                     key={m.user_id}
-                    src={m.user?.image ?? undefined}
+                    src={`https://avatars.githubusercontent.com/u/${m.user?.provider_id}?v=4`}
                     size={24}
                   >
                     {m.user?.name?.[0] || m.user?.login?.[0]}

@@ -34,22 +34,18 @@ export const listInstructorContacts = async (): Promise<InstructorContact[]> => 
         some: { role: 'OWNER', classroom: { is_example: false } },
       },
     },
-    select: {
-      email: true,
-      name: true,
-      accounts: { where: { provider_id: 'github' }, select: { email: true } },
-    },
+    select: { email: true, provider_email: true, name: true },
   });
 
-  // `email` and the Github account email are both nullable and distinct, so
-  // reading either alone silently drops users. The Github email is not unique, so two
+  // `email` and `provider_email` are both nullable and distinct, so reading
+  // either alone silently drops users. `provider_email` is not unique, so two
   // rows can coalesce onto one address: dedupe on the address the mail provider
   // keys on.
   const seen = new Set<string>();
   const contacts: InstructorContact[] = [];
 
   for (const user of users) {
-    const email = (user.email || user.accounts[0]?.email || '').trim().toLowerCase();
+    const email = (user.email || user.provider_email || '').trim().toLowerCase();
     if (!email || seen.has(email)) continue;
     seen.add(email);
     contacts.push({ email, ...splitName(user.name || '') });

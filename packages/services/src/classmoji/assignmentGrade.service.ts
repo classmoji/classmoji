@@ -3,8 +3,7 @@
  *
  * Manages grades for GitRepoAssignments
  */
-import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { withLogins } from '@classmoji/utils';
+import getPrisma from '@classmoji/database';
 import type { Prisma } from '@prisma/client';
 
 /**
@@ -83,17 +82,15 @@ export const removeAllGrades = async (repositoryAssignmentId: string) => {
  * @returns {Promise<Object[]>}
  */
 export const findByAssignmentId = async (repositoryAssignmentId: string) => {
-  return withLogins(
-    await getPrisma().assignmentGrade.findMany({
-      where: {
-        git_repo_assignment_id: repositoryAssignmentId,
-      },
-      include: {
-        grader: { include: GIT_IDENTITY },
-        token_transaction: true,
-      },
-    })
-  );
+  return getPrisma().assignmentGrade.findMany({
+    where: {
+      git_repo_assignment_id: repositoryAssignmentId,
+    },
+    include: {
+      grader: true,
+      token_transaction: true,
+    },
+  });
 };
 
 /**
@@ -102,16 +99,14 @@ export const findByAssignmentId = async (repositoryAssignmentId: string) => {
  * @returns {Promise<Object|null>}
  */
 export const findById = async (id: string) => {
-  return withLogins(
-    await getPrisma().assignmentGrade.findUnique({
-      where: { id },
-      include: {
-        grader: { include: GIT_IDENTITY },
-        git_repo_assignment: true,
-        token_transaction: true,
-      },
-    })
-  );
+  return getPrisma().assignmentGrade.findUnique({
+    where: { id },
+    include: {
+      grader: true,
+      git_repo_assignment: true,
+      token_transaction: true,
+    },
+  });
 };
 
 /**

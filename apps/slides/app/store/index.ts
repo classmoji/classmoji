@@ -21,7 +21,7 @@ interface SlideUserMembership {
 /** User shape as loaded by the root loader (Prisma user + classroom memberships) */
 export interface SlideUser {
   id: string;
-  login: string | null;
+  login: string;
   name?: string | null;
   email?: string | null;
   image?: string | null;

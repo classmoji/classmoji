@@ -68,8 +68,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     clientName: application?.name || 'Unknown application',
     clientIcon: application?.icon || null,
     scopes: scope.split(' ').filter(Boolean),
-    // Shown as "Signed in as …": the person's name, else their email.
-    userLogin: session.user.name || session.user.email,
+    userLogin: session.user.name,
     viewingAsAnotherUser: isImpersonatingSession({ session }),
   };
 };

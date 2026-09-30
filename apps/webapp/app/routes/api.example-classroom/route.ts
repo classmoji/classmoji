@@ -13,8 +13,7 @@
  */
 
 import { requireAuth } from '@classmoji/auth/server';
-import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { displayUsername } from '@classmoji/utils';
+import getPrisma from '@classmoji/database';
 import { provisionExampleClassroom } from '@classmoji/services';
 import type { Route } from './+types/route';
 
@@ -26,11 +25,10 @@ export const action = async ({ request }: Route.ActionArgs) => {
   const { userId } = await requireAuth(request);
   const user = await getPrisma().user.findUnique({
     where: { id: userId },
-    select: GIT_IDENTITY,
+    select: { login: true },
   });
-  const ownerLogin = displayUsername(user);
-  if (!ownerLogin) {
-    return Response.json({ error: 'Account has no Github or Gitlab username yet.' }, { status: 400 });
+  if (!user?.login) {
+    return Response.json({ error: 'Account has no Github login yet.' }, { status: 400 });
   }
 
   // Optional form field: the tour sends the browser's zone. Absent (an older
@@ -40,7 +38,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
 
   const sandbox = await provisionExampleClassroom({
     ownerUserId: userId,
-    ownerLogin,
+    ownerLogin: user.login,
     timezone: typeof timezone === 'string' ? timezone : null,
   });
   if (!sandbox) {

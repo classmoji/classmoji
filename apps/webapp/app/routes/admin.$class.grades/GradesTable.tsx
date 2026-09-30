@@ -40,6 +40,7 @@ interface Student {
   avatar_url: string | null;
   git_repos: GitRepo[];
   email?: string | null;
+  provider_email?: string | null;
   school_id?: string | null;
 }
 
@@ -242,7 +243,7 @@ const GradesTable = (props: GradesTableProps) => {
     const q = searchQuery.trim().toLowerCase();
     return students.filter(student => {
       if (q) {
-        const hay = [student.name, student.login, student.email]
+        const hay = [student.name, student.login, student.email, student.provider_email]
           .map(v => (v ?? '').toLowerCase())
           .join(' ');
         if (!hay.includes(q)) return false;

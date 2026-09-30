@@ -81,7 +81,7 @@ export const deleteManyInvites = async (ids: string[]): Promise<{ count: number 
 
 /**
  * Claim every pending invite addressed to this user, under either address we
- * hold for them (a verified `email` and their Github account email).
+ * hold for them (`email` and `provider_email`).
  *
  * Called on login and whenever an email changes, NOT only at registration. An
  * invite issued to an address the student did not register with used to strand
@@ -113,20 +113,11 @@ export const claimPendingInvites = async (
 
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: {
-      email: true,
-      emailVerified: true,
-      accounts: { where: { provider_id: 'github' }, select: { email: true } },
-    },
+    select: { email: true, provider_email: true },
   });
   if (!user) return { claimed: 0, classroomIds: [] };
 
-  // An unverified `email` was typed, not proven: claiming on it would let anyone
-  // take the invite by entering someone else's address.
-  const invites = await findInvitesByAnyEmail([
-    user.emailVerified ? user.email : null,
-    ...user.accounts.map(account => account.email),
-  ]);
+  const invites = await findInvitesByAnyEmail([user.email, user.provider_email]);
   if (invites.length === 0) return { claimed: 0, classroomIds: [] };
 
   // One membership per classroom even if the same classroom invited both of the

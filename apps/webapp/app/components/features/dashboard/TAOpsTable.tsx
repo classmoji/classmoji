@@ -7,7 +7,6 @@ export interface TaOpsRow {
   taId: string;
   login: string;
   name: string | null;
-  image?: string | null;
   throughput7d: number;
   overturnRate: number | null;
   gradeDistributionMean: number | null;
@@ -24,7 +23,7 @@ const TAOpsTable = ({ rows }: TAOpsTableProps) => {
       key: 'ta',
       render: (_, r) => (
         <div className="flex items-center gap-2 min-w-0">
-          <UserAvatar login={r.login} image={r.image} name={r.name} seed={r.taId} size={28} />
+          <UserAvatar login={r.login} name={r.name} seed={r.taId} size={28} />
           <div className="min-w-0">
             <div className="text-sm text-ink-0 truncate">
               {r.name || r.login || 'Unknown'}

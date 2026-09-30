@@ -1,5 +1,4 @@
-import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { withLogin, withLogins } from '@classmoji/utils';
+import getPrisma from '@classmoji/database';
 import { Prisma } from '@prisma/client';
 import type { AssignmentType, EventType } from '@prisma/client';
 import { pagesUrl } from '../emails/escape.ts';
@@ -195,7 +194,7 @@ interface CalendarEventWithLinks {
   description: string | null;
   is_recurring: boolean;
   recurrence_rule: Prisma.JsonValue | null;
-  creator?: { id: string; name: string | null; image?: string | null; login: string | null } | null;
+  creator?: { id: string; name: string | null; login: string | null } | null;
   pageLinks: CalendarPageLink[];
   slideLinks: CalendarSlideLink[];
   assignmentLinks: CalendarAssignmentLink[];
@@ -228,7 +227,7 @@ interface CalendarExpandedEvent extends CalendarDisplayLinks {
   meeting_link: string | null;
   is_recurring: boolean;
   recurrence_rule: Prisma.JsonValue | null;
-  creator: { id: string; name: string | null; image?: string | null; login: string | null } | null;
+  creator: { id: string; name: string | null; login: string | null } | null;
   is_overridden: boolean;
   featured_resource: CalendarFeaturedResource | null;
   occurrence_date?: Date;
@@ -883,8 +882,7 @@ export const getClassroomCalendar = async (
         select: {
           id: true,
           name: true,
-          image: true,
-          ...GIT_IDENTITY,
+          login: true,
         },
       },
       overrides: true,
@@ -953,13 +951,7 @@ export const getClassroomCalendar = async (
 
   // Expand recurring events (pass includeRawLinks for admin UI editing)
   const expandedEvents = shownEvents.flatMap(event =>
-    expandRecurringEvent(
-      { ...event, creator: withLogin(event.creator) },
-      startDate,
-      endDate,
-      includeRawLinks,
-      canSeeDrafts
-    )
+    expandRecurringEvent(event, startDate, endDate, includeRawLinks, canSeeDrafts)
   );
 
   // Get deadlines from Assignments (pass userId to include GitHub issue links)
@@ -1308,33 +1300,30 @@ export const createEvent = async (
 
   assertEndAfterStart(start_time, end_time);
 
-  return withLogins(
-    await getPrisma().calendarEvent.create({
-      data: {
-        classroom_id: classroomId,
-        created_by: userId,
-        event_type,
-        title,
-        description,
-        start_time: toDate(start_time),
-        end_time: toDate(end_time),
-        location,
-        meeting_link,
-        is_recurring: is_recurring || false,
-        recurrence_rule: is_recurring ? toNullableJsonInput(recurrence_rule) : Prisma.JsonNull,
-      },
-      include: {
-        creator: {
-          select: {
-            id: true,
-            name: true,
-            image: true,
-            ...GIT_IDENTITY,
-          },
+  return getPrisma().calendarEvent.create({
+    data: {
+      classroom_id: classroomId,
+      created_by: userId,
+      event_type,
+      title,
+      description,
+      start_time: toDate(start_time),
+      end_time: toDate(end_time),
+      location,
+      meeting_link,
+      is_recurring: is_recurring || false,
+      recurrence_rule: is_recurring ? toNullableJsonInput(recurrence_rule) : Prisma.JsonNull,
+    },
+    include: {
+      creator: {
+        select: {
+          id: true,
+          name: true,
+          login: true,
         },
       },
-    })
-  );
+    },
+  });
 };
 
 /**
@@ -1355,33 +1344,30 @@ export const updateEvent = async (eventId: string, eventData: CalendarEventUpdat
 
   assertEndAfterStart(start_time, end_time);
 
-  return withLogins(
-    await getPrisma().calendarEvent.update({
-      where: { id: eventId },
-      data: {
-        event_type,
-        title,
-        description,
-        start_time: toOptionalUpdateDate(start_time),
-        end_time: toOptionalUpdateDate(end_time),
-        location,
-        meeting_link,
-        is_recurring,
-        recurrence_rule: is_recurring ? toNullableJsonInput(recurrence_rule) : Prisma.JsonNull,
-      },
-      include: {
-        creator: {
-          select: {
-            id: true,
-            name: true,
-            image: true,
-            ...GIT_IDENTITY,
-          },
+  return getPrisma().calendarEvent.update({
+    where: { id: eventId },
+    data: {
+      event_type,
+      title,
+      description,
+      start_time: toOptionalUpdateDate(start_time),
+      end_time: toOptionalUpdateDate(end_time),
+      location,
+      meeting_link,
+      is_recurring,
+      recurrence_rule: is_recurring ? toNullableJsonInput(recurrence_rule) : Prisma.JsonNull,
+    },
+    include: {
+      creator: {
+        select: {
+          id: true,
+          name: true,
+          login: true,
         },
-        overrides: true,
       },
-    })
-  );
+      overrides: true,
+    },
+  });
 };
 
 /**
@@ -1661,22 +1647,19 @@ export const deleteEventWithScope = async (
  * Get a single calendar event by ID
  */
 export const getEventById = async (eventId: string) => {
-  return withLogins(
-    await getPrisma().calendarEvent.findUnique({
-      where: { id: eventId },
-      include: {
-        creator: {
-          select: {
-            id: true,
-            name: true,
-            image: true,
-            ...GIT_IDENTITY,
-          },
+  return getPrisma().calendarEvent.findUnique({
+    where: { id: eventId },
+    include: {
+      creator: {
+        select: {
+          id: true,
+          name: true,
+          login: true,
         },
-        overrides: true,
       },
-    })
-  );
+      overrides: true,
+    },
+  });
 };
 
 /**

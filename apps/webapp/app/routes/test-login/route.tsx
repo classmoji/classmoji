@@ -122,7 +122,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         where: { id: account.id },
         data: { access_token: githubToken },
       });
-      console.log(`[test-login] Stored token for ${account.username}`);
+      console.log(`[test-login] Stored token for ${account.user.login}`);
     }
 
     if (!account?.user) {
@@ -145,7 +145,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       },
     });
 
-    console.log(`[test-login] Created session for ${account.username} (role=${role})`);
+    console.log(`[test-login] Created session for ${user.login} (role=${role})`);
 
     // Pre-record a skip for every survey question so the picker's one-off
     // prompt (a blocking overlay) never appears in front of a Playwright spec.

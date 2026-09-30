@@ -15,8 +15,7 @@ import React, { useEffect } from 'react';
 import { ToastContainer } from 'react-toastify';
 import { MantineProvider } from '@mantine/core';
 
-import { withLogin } from '@classmoji/utils';
-import { prisma, getAuthSession, GIT_IDENTITY } from '~/utils/db.server.ts';
+import { prisma, getAuthSession } from '~/utils/db.server.ts';
 import { classifyFormsPath } from '~/utils/formsPaths.ts';
 import useStore from '~/store';
 
@@ -67,14 +66,7 @@ const isSitePath = (pathname: string): boolean =>
  */
 const ROOT_USER_INCLUDE = {
   classroom_memberships: { select: { id: true, role: true, classroom: true } },
-  ...GIT_IDENTITY,
 } as const;
-
-/** Load the signed-in user, flattened to carry their git `login`. */
-const findRootUser = async (userId: string) => {
-  const user = await prisma.user.findUnique({ where: { id: userId }, include: ROOT_USER_INCLUDE });
-  return user ? withLogin(user) : null;
-};
 
 export const loader = async ({ request }: { request: Request }) => {
   const url = new URL(request.url);
@@ -94,7 +86,10 @@ export const loader = async ({ request }: { request: Request }) => {
     try {
       const authData = await getAuthSession(request);
       if (authData) {
-        const user = await findRootUser(authData.userId);
+        const user = await prisma.user.findUnique({
+          where: { id: authData.userId },
+          include: ROOT_USER_INCLUDE,
+        });
         return { user, isSite: false };
       }
     } catch {
@@ -128,7 +123,12 @@ export const loader = async ({ request }: { request: Request }) => {
     const authData = await getAuthSession(request).catch(() => null);
     let user = null;
     if (authData) {
-      user = await findRootUser(authData.userId).catch(() => null);
+      user = await prisma.user
+        .findUnique({
+          where: { id: authData.userId },
+          include: ROOT_USER_INCLUDE,
+        })
+        .catch(() => null);
     }
     return { user, isPublicAccess: true, isSite: false };
   }
@@ -154,7 +154,10 @@ export const loader = async ({ request }: { request: Request }) => {
         let user = null;
 
         if (authData) {
-          user = await findRootUser(authData.userId);
+          user = await prisma.user.findUnique({
+            where: { id: authData.userId },
+            include: ROOT_USER_INCLUDE,
+          });
         }
 
         return { user, isPublicAccess: true, isSite: false };
@@ -176,7 +179,10 @@ export const loader = async ({ request }: { request: Request }) => {
   // Get full user with classroom memberships
   let user = null;
   try {
-    user = await findRootUser(authData.userId);
+    user = await prisma.user.findUnique({
+      where: { id: authData.userId },
+      include: ROOT_USER_INCLUDE,
+    });
   } catch (error) {
     console.error('User lookup failed:', error);
     const webappUrl = process.env.WEBAPP_URL || 'http://localhost:3000';

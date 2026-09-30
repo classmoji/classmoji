@@ -2,8 +2,6 @@ import { prisma, requirePlatformAdmin } from '~/utils/db.server';
 // The light subpath — the cookie-domain resolution with none of betterAuth or
 // Prisma behind it.
 import { COOKIE_DOMAIN } from '@classmoji/auth/secret';
-import { GIT_IDENTITY } from '@classmoji/database';
-import { displayUsername, gitAccount } from '@classmoji/utils';
 import type { LoaderFunctionArgs } from 'react-router';
 
 /** Cap on rows returned. Search narrows; this only bounds the unfiltered view. */
@@ -30,18 +28,10 @@ export async function loadUsers({ request }: LoaderFunctionArgs) {
   const where = q
     ? {
         OR: [
+          { login: { contains: q, mode: 'insensitive' as const } },
           { email: { contains: q, mode: 'insensitive' as const } },
+          { provider_email: { contains: q, mode: 'insensitive' as const } },
           { name: { contains: q, mode: 'insensitive' as const } },
-          {
-            accounts: {
-              some: {
-                OR: [
-                  { username: { contains: q, mode: 'insensitive' as const } },
-                  { email: { contains: q, mode: 'insensitive' as const } },
-                ],
-              },
-            },
-          },
         ],
       }
     : {};
@@ -53,10 +43,11 @@ export async function loadUsers({ request }: LoaderFunctionArgs) {
       take: RESULT_LIMIT,
       select: {
         id: true,
+        login: true,
         name: true,
         email: true,
+        provider_email: true,
         image: true,
-        ...GIT_IDENTITY,
         created_at: true,
         classroom_memberships: {
           select: { role: true, classroom: { select: { slug: true, name: true } } },
@@ -68,9 +59,9 @@ export async function loadUsers({ request }: LoaderFunctionArgs) {
 
   const rows: AdminUserRow[] = users.map(u => ({
     id: u.id,
-    login: displayUsername(u),
+    login: u.login,
     name: u.name,
-    email: u.email ?? gitAccount(u)?.email ?? null,
+    email: u.email ?? u.provider_email,
     image: u.image,
     createdAt: u.created_at.toISOString(),
     classrooms: u.classroom_memberships.map(m => ({

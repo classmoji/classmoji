@@ -32,7 +32,6 @@
 
 import { UriTemplate } from '@modelcontextprotocol/sdk/shared/uriTemplate.js';
 import { ClassmojiService } from '@classmoji/services';
-import { gitUsername, type WithGitAccounts } from '@classmoji/utils';
 import { IssueStatus, type Role } from '@prisma/client';
 import { z, type ZodRawShape } from 'zod';
 import type { ResourceDefinition, ToolDefinition } from '../mcp/registry.ts';
@@ -44,7 +43,7 @@ import {
   submissionIdSchema,
   TEACHING_TEAM,
 } from './shared.ts';
-import { orgLogin, orgProvider, type SubmissionLike } from '../resources/shape.ts';
+import { orgLogin, type SubmissionLike } from '../resources/shape.ts';
 import { meResource } from '../resources/me.ts';
 import { classroomInfoResource } from '../resources/classroomInfo.ts';
 import { rosterResource, teamsResource } from '../resources/roster.ts';
@@ -403,7 +402,7 @@ interface ListTeachingTeamArgs {
 interface TeachingMembershipRow {
   role: Role;
   is_grader?: boolean | null;
-  user?: (WithGitAccounts & { id: string; login?: string | null; name?: string | null }) | null;
+  user?: { id: string; login?: string | null; name?: string | null } | null;
 }
 
 const TEACHING_ROLE_SET: ReadonlySet<Role> = new Set(TEACHING_TEAM);
@@ -450,13 +449,11 @@ export const listTeachingTeamTool: ToolDefinition<ListTeachingTeamArgs> = {
         grader_eligible: boolean;
       }
     >();
-    const provider = orgProvider(ctx);
     for (const m of memberships) {
       if (!TEACHING_ROLE_SET.has(m.role) || !m.user) continue;
-      const login = gitUsername(m.user, provider);
       // The same test findEligibleGrader applies: a grader-role membership
       // with is_grader, and a stored login to assign on GitHub.
-      const eligibleHere = GRADER_ROLE_SET.has(m.role) && m.is_grader === true && !!login;
+      const eligibleHere = GRADER_ROLE_SET.has(m.role) && m.is_grader === true && !!m.user.login;
       const existing = byUser.get(m.user.id);
       if (existing) {
         if (!existing.roles.includes(m.role)) existing.roles.push(m.role);
@@ -464,7 +461,7 @@ export const listTeachingTeamTool: ToolDefinition<ListTeachingTeamArgs> = {
       } else {
         byUser.set(m.user.id, {
           id: m.user.id,
-          login,
+          login: m.user.login ?? null,
           name: m.user.name ?? null,
           roles: [m.role],
           grader_eligible: eligibleHere,

@@ -178,7 +178,10 @@ export function OnboardingTour() {
       return;
     }
 
-    // The first-sign-in auto-start is switched off for now.
+    if (!user.onboarding_completed_at) {
+      startFullTour();
+      fetcher.submit(null, { method: 'POST', action: '/api/onboarding/complete' });
+    }
   }, [
     user,
     onLanding,

@@ -1,7 +1,5 @@
 import type { LoaderFunctionArgs } from 'react-router';
 
-import { GIT_IDENTITY } from '@classmoji/database';
-import { displayUsername } from '@classmoji/utils';
 import { prisma, requirePlatformAdmin } from '~/utils/db.server';
 import {
   buildWeeklyBins,
@@ -28,15 +26,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** Everyone who signs in owns an example classroom; only real ones count. */
 const realClassroom = { is_example: false } as const;
 /**
- * A person who has signed in: an OAuth account holding a token, or a password
- * account. Rows without one are fixtures (the example classroom's students) or
- * roster pre-provisions nobody has claimed yet, including placeholder git
- * accounts known only by username; neither is a signup, and their addresses
- * are not a school.
+ * A person who has signed in. Rows without an account are fixtures (the
+ * example classroom's students) or roster pre-provisions nobody has claimed
+ * yet; neither is a signup, and their addresses are not a school.
  */
-const signedInUser = {
-  accounts: { some: { OR: [{ access_token: { not: null } }, { provider_id: 'credential' }] } },
-};
+const signedInUser = { accounts: { some: {} } } as const;
 /** Tiles count people, not role rows: owning two classrooms is one instructor. */
 const instructorWhere = {
   classroom_memberships: { some: { role: 'OWNER' as const, classroom: realClassroom } },
@@ -217,10 +211,7 @@ export async function loadDashboard({ request }: LoaderFunctionArgs): Promise<Da
       FROM users u
       WHERE u.email IS NOT NULL
         AND position('@' IN u.email) > 0
-        AND EXISTS (
-          SELECT 1 FROM accounts a
-          WHERE a.user_id = u.id AND (a.access_token IS NOT NULL OR a.provider_id = 'credential')
-        )
+        AND EXISTS (SELECT 1 FROM accounts a WHERE a.user_id = u.id)
       GROUP BY 1
     `,
     prisma.classroom.findMany({
@@ -237,7 +228,7 @@ export async function loadDashboard({ request }: LoaderFunctionArgs): Promise<Da
       where: signedInUser,
       orderBy: { created_at: 'desc' },
       take: RECENT,
-      select: { id: true, name: true, image: true, created_at: true, ...GIT_IDENTITY },
+      select: { id: true, login: true, name: true, image: true, created_at: true },
     }),
     prisma.classroom.findMany({
       where: realClassroom,
@@ -259,10 +250,7 @@ export async function loadDashboard({ request }: LoaderFunctionArgs): Promise<Da
       FROM users u
       JOIN classroom_memberships m ON m.user_id = u.id AND m.role = 'OWNER'
       JOIN classrooms c ON c.id = m.classroom_id AND c.is_example = false
-      WHERE EXISTS (
-        SELECT 1 FROM accounts a
-        WHERE a.user_id = u.id AND (a.access_token IS NOT NULL OR a.provider_id = 'credential')
-      )
+      WHERE EXISTS (SELECT 1 FROM accounts a WHERE a.user_id = u.id)
       GROUP BY u.id, u.created_at
     `,
     // Per classroom: creation to its first assignment.
@@ -403,7 +391,7 @@ export async function loadDashboard({ request }: LoaderFunctionArgs): Promise<Da
     largestClasses,
     recentUsers: recentUsers.map(u => ({
       id: u.id,
-      login: displayUsername(u),
+      login: u.login,
       name: u.name,
       image: u.image,
       createdAt: u.created_at.toISOString(),

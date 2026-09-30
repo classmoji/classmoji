@@ -37,6 +37,7 @@ interface RosterStudent {
   is_grader: boolean;
   has_accepted_invite: boolean;
   email?: string | null;
+  provider_email?: string | null;
   school_id?: string | null;
   letter_grade?: string | null;
   comment?: string | null;
@@ -61,7 +62,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
   const invitations = await ClassmojiService.classroomInvite.findInvitesByClassroomId(classroom.id);
 
-  // Contact details (email, school_id) and the membership grade
+  // Contact details (email, provider_email, school_id) and the membership grade
   // fields (letter_grade, comment) are OWNER-only, matching the MCP roster
   // resource. Non-OWNER staff get identity + status only, and the split is done
   // HERE, server-side: the fields are never serialized into the page, so there
@@ -104,7 +105,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     // The membership grade fields are gated HERE rather than in the shared
     // helper: they are OWNER-only on this roster, but they are the whole point
     // of the gradebook, which serves them to a TEACHER too. Only the contact
-    // pair is a policy the two screens share.
+    // trio is a policy the two screens share.
     ...(isOwner ? { letter_grade: s.letter_grade, comment: s.comment } : {}),
   }));
 
@@ -172,7 +173,7 @@ const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
     : allStudents.filter(student => {
         const q = query.toLowerCase();
         const row = student as Record<string, unknown>;
-        const haystack = [student.name, student.login, row.email];
+        const haystack = [student.name, student.login, row.email, row.provider_email];
         return haystack.some(field => typeof field === 'string' && field.toLowerCase().includes(q));
       });
 

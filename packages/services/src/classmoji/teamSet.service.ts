@@ -97,8 +97,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import { tasks } from '@trigger.dev/sdk';
-import getPrisma, { GIT_IDENTITY, whereGitUsername } from '@classmoji/database';
-import { gitUsername, titleToIdentifier } from '@classmoji/utils';
+import getPrisma from '@classmoji/database';
+import { titleToIdentifier } from '@classmoji/utils';
 import { Prisma } from '@prisma/client';
 import type {
   TeamSet as TeamSetDbRow,
@@ -1125,9 +1125,9 @@ async function namesFor(classroomId: string, ids: Iterable<string | null | undef
   if (unique.length === 0) return names;
   const users = await getPrisma().user.findMany({
     where: { id: { in: unique }, classroom_memberships: { some: { classroom_id: classroomId } } },
-    select: { id: true, name: true, ...GIT_IDENTITY },
+    select: { id: true, name: true, login: true },
   });
-  for (const user of users) names.set(user.id, user.name?.trim() || gitUsername(user) || null);
+  for (const user of users) names.set(user.id, user.name?.trim() || user.login || null);
   return names;
 }
 
@@ -3838,9 +3838,9 @@ export async function describeRun({
         id: { in: memberIds },
         classroom_memberships: { some: { classroom_id: classroomId } },
       },
-      select: { id: true, ...GIT_IDENTITY },
+      select: { id: true, login: true },
     });
-    logins = new Map(userRows.map(u => [u.id, gitUsername(u)]));
+    logins = new Map(userRows.map(u => [u.id, u.login]));
     notesByUser = await loadNotes(set.form_id, run, memberIds, mask);
   }
 
@@ -5077,9 +5077,9 @@ export async function previewCreate({
       id: { in: memberIds },
       classroom_memberships: { some: { classroom_id: classroomId } },
     },
-    select: { id: true, name: true, ...GIT_IDENTITY },
+    select: { id: true, name: true, login: true },
   });
-  const byId = new Map(users.map(u => [u.id, { ...u, login: gitUsername(u) }]));
+  const byId = new Map(users.map(u => [u.id, u]));
   const noLogin = toMake.flatMap(t => t.member_user_ids).filter(id => !byId.get(id)?.login).length;
   if (noLogin > 0) warnings.unshift(noLoginWarning(noLogin));
   if (plan.staleReasons.length > 0) {
@@ -5626,14 +5626,11 @@ async function classifyMemberFailures(
   if (notFound.length > 0) {
     const users = await getPrisma().user.findMany({
       where: {
-        OR: notFound.map(login => whereGitUsername(login)),
+        OR: notFound.map(login => ({ login: { equals: login, mode: 'insensitive' as const } })),
       },
-      select: { ...GIT_IDENTITY },
+      select: { login: true },
     });
-    for (const user of users) {
-      const login = gitUsername(user);
-      if (login) known.add(login.toLowerCase());
-    }
+    for (const user of users) if (user.login) known.add(user.login.toLowerCase());
   }
   for (const failure of failures) {
     const key = failure.login.toLowerCase();
@@ -5773,9 +5770,9 @@ export async function applyCreate({
 
     const users = await prisma.user.findMany({
       where: { id: { in: teams.flatMap(t => t.member_user_ids) } },
-      select: { id: true, ...GIT_IDENTITY },
+      select: { id: true, login: true },
     });
-    const loginOf = new Map(users.map(u => [u.id, gitUsername(u)]));
+    const loginOf = new Map(users.map(u => [u.id, u.login]));
     const alreadyCreated = createdPositions(state);
     const adoptedAt = new Map(
       state.teams.filter(team => team.adopted && team.n).map(team => [team.n!, team])

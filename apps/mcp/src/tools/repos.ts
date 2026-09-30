@@ -63,12 +63,10 @@
 
 import { randomUUID } from 'node:crypto';
 import { ClassmojiService } from '@classmoji/services';
-import { gitUsername } from '@classmoji/utils';
 import Tasks from '@classmoji/tasks';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition, ToolContext } from '../mcp/registry.ts';
-import { orgProvider } from '../resources/shape.ts';
 import {
   loadRepositoryInClassroom,
   ok,
@@ -193,10 +191,7 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
         classroom.classroomId,
         'STUDENT'
       );
-      const provider = orgProvider(ctx);
-      const logins = students
-        .map(user => gitUsername(user, provider))
-        .filter((login): login is string => Boolean(login));
+      const logins = students.map(user => user.login || '').filter(login => login !== '');
 
       // Nobody to provision for yet — empty roster (pre-term staging) or every
       // invite still pending, so there is no GitHub login to create a repo under.

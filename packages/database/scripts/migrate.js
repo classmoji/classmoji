@@ -47,11 +47,8 @@ async function buildTokenTransactionMap(userMap) {
 
 async function main() {
   // Load users to map old GitHub ID -> new UUID
-  const accounts = await prisma.account.findMany({
-    where: { provider_id: 'github' },
-    select: { user_id: true, account_id: true },
-  });
-  const userMap = new Map(accounts.map(a => [a.account_id, a.user_id]));
+  const users = await prisma.user.findMany({ select: { id: true, provider_id: true } });
+  const userMap = new Map(users.map(u => [u.provider_id, u.id]));
   console.log(`Loaded ${userMap.size} users for mapping`);
 
   // Build token transaction mapping
@@ -82,7 +79,12 @@ async function main() {
       // Find grader by provider_id (old grader_id is GitHub user ID)
       let graderId = null;
       if (g.grader_id) {
-        graderId = userMap.get(String(g.grader_id)) ?? null;
+        const grader = await prisma.user.findFirst({
+          where: { provider_id: String(g.grader_id) },
+        });
+        if (grader) {
+          graderId = grader.id;
+        }
       }
 
       // Look up token_transaction UUID from map

@@ -30,8 +30,7 @@
  */
 import { tasks } from '@trigger.dev/sdk';
 
-import getPrisma, { GIT_IDENTITY, whereGitUsername } from '@classmoji/database';
-import { accountProviderId, withLogin } from '@classmoji/utils';
+import getPrisma from '@classmoji/database';
 import { getGitProvider, ensureClassroomTeam } from '../git/index.ts';
 import { buildRemoveUserPayload } from './removeUserPayload.ts';
 import * as classroomService from './classroom.service.ts';
@@ -138,22 +137,12 @@ const assertStaffRole = (role: string): void => {
  * typed. Looking the same person up again therefore has to match the way
  * addStaff matched, or 'ada' would not find the user stored as 'Ada'.
  */
-const findUserByLoginInsensitive = async (login: string, provider: string = 'GITHUB') => {
+const findUserByLoginInsensitive = async (login: string) => {
   const cleanLogin = login.replace('@', '').trim();
-  const user = await getPrisma().user.findFirst({
-    where: whereGitUsername(cleanLogin, provider),
-    select: { id: true, name: true, ...GIT_IDENTITY },
+  return getPrisma().user.findFirst({
+    where: { login: { equals: cleanLogin, mode: 'insensitive' } },
+    select: { id: true, login: true, name: true },
   });
-  return user ? withLogin(user, provider) : null;
-};
-
-/** The git provider of a classroom's organization, which decides whose username `login` is. */
-const classroomProvider = async (classroomId: string): Promise<string> => {
-  const classroom = await getPrisma().classroom.findUnique({
-    where: { id: classroomId },
-    select: { git_organization: { select: { provider: true } } },
-  });
-  return classroom?.git_organization?.provider ?? 'GITHUB';
 };
 
 const loadClassroom = async (classroomId: string) => {
@@ -210,7 +199,7 @@ export const addStaff = async ({
   // re-add them to the team and then still fail on the unique constraint.
   // Scoped to the REQUESTED role: another role held here is an additional
   // grant, not a no-op.
-  const existingUser = await findUserByLoginInsensitive(cleanLogin, gitOrganization.provider);
+  const existingUser = await findUserByLoginInsensitive(cleanLogin);
   if (existingUser) {
     const existingMembership = await classroomMembershipService.findByClassroomAndUser(
       classroomId,
@@ -232,17 +221,9 @@ export const addStaff = async ({
 
   const gitProvider = getGitProvider(gitOrganization);
 
-  let gitUser: {
-    id: number | string;
-    login: string;
-    name?: string | null;
-    email?: string | null;
-    avatar_url?: string | null;
-  };
+  let gitUser: { id: number | string; login: string; name?: string | null; email?: string | null };
   try {
-    const found = await gitProvider.getUserByLogin(cleanLogin);
-    // GitLab names the field `username`; Github names it `login`.
-    gitUser = found && { ...found, login: found.login ?? found.username };
+    gitUser = await gitProvider.getUserByLogin(cleanLogin);
   } catch (error: unknown) {
     // Only a 404 means the username is wrong. A rate limit, a network blip or a
     // bad token must surface as itself — telling the operator "no such user"
@@ -257,28 +238,15 @@ export const addStaff = async ({
   // The provider hands back the canonical casing, which may differ from what the
   // caller typed. Re-check with it BEFORE any GitHub write (ensureClassroomTeam
   // creates the team) so a differently-cased login is still a no-op.
-  const providerId = accountProviderId(gitOrganization.provider);
-  const gitUserId = String(gitUser.id);
-  const canonicalAccount =
-    (await getPrisma().account.findUnique({
-      where: { provider_id_account_id: { provider_id: providerId, account_id: gitUserId } },
-      select: { id: true, account_id: true, user: { select: { id: true, name: true } } },
-    })) ??
-    (await getPrisma().account.findFirst({
-      where: {
-        provider_id: providerId,
-        username: { equals: gitUser.login, mode: 'insensitive' },
-      },
-      select: { id: true, account_id: true, user: { select: { id: true, name: true } } },
-    }));
-  const canonicalUser = canonicalAccount?.user ?? null;
+  const canonicalUser = await getPrisma().user.findFirst({
+    where: { login: { equals: gitUser.login, mode: 'insensitive' } },
+    select: { id: true, login: true, name: true, provider_id: true },
+  });
 
-  if (canonicalAccount && canonicalUser) {
+  if (canonicalUser) {
     // The stored row is keyed to a different provider account than the one this
     // login resolves to today — refuse rather than relink the existing record.
-    // A placeholder (`unresolved:`) account has no id yet and is claimed below.
-    const storedId = canonicalAccount.account_id;
-    if (!storedId.startsWith('unresolved:') && storedId !== gitUserId) {
+    if (canonicalUser.provider_id && canonicalUser.provider_id !== String(gitUser.id)) {
       throw new StaffServiceError(
         'login_conflict',
         `[staff] login ${gitUser.login} resolves to a different provider account than the stored user record`
@@ -295,7 +263,7 @@ export const addStaff = async ({
         created: false,
         alreadyExists: true,
         userId: canonicalUser.id,
-        login: gitUser.login,
+        login: canonicalUser.login ?? gitUser.login,
         name: canonicalUser.name,
         role,
         alreadyOrgMember: true,
@@ -325,39 +293,39 @@ export const addStaff = async ({
     }
   }
 
-  // Resolve user and account, then create the membership at the requested role.
-  // An already-known user is left as it is — adding someone as staff must not
-  // rewrite any field of a user record that already exists — apart from
-  // resolving a placeholder account to the provider's real id.
-  let user: { id: string; name: string | null };
-  if (canonicalAccount && canonicalUser) {
-    user = canonicalUser;
-    if (canonicalAccount.account_id !== gitUserId) {
-      await getPrisma().account.update({
-        where: { id: canonicalAccount.id },
-        data: { account_id: gitUserId, username: gitUser.login },
-      });
-    }
-  } else {
-    user = await getPrisma().user.create({
-      data: {
-        name: name || gitUser.name || gitUser.login,
-        role: 'user',
-        email: email ?? null,
-        image: gitUser.avatar_url ?? null,
-        accounts: {
-          create: {
-            provider_id: providerId,
-            account_id: gitUserId,
-            username: gitUser.login,
-            email: gitUser.email ?? null,
-            image: gitUser.avatar_url ?? null,
-          },
-        },
+  // Upsert user and account, then create the membership at the requested role.
+  // Target an already-known row by id: `where: { login }` is an exact match, so
+  // a row stored under different casing would be missed and duplicated.
+  // `update: {}` on purpose — adding someone as staff must not rewrite any
+  // field of a user record that already exists.
+  const user = await getPrisma().user.upsert({
+    where: canonicalUser ? { id: canonicalUser.id } : { login: gitUser.login },
+    create: {
+      login: gitUser.login,
+      name: name || gitUser.name || gitUser.login,
+      provider: gitOrganization.provider as 'GITHUB' | 'GITLAB' | 'BITBUCKET',
+      provider_id: String(gitUser.id),
+      role: 'user',
+      email: email ?? null,
+      provider_email: gitUser.email ?? null,
+    },
+    update: {},
+  });
+
+  await getPrisma().account.upsert({
+    where: {
+      provider_id_account_id: {
+        provider_id: gitOrganization.provider.toLowerCase(),
+        account_id: String(gitUser.id),
       },
-      select: { id: true, name: true },
-    });
-  }
+    },
+    create: {
+      provider_id: gitOrganization.provider.toLowerCase(),
+      account_id: String(gitUser.id),
+      user_id: String(user.id),
+    },
+    update: {},
+  });
 
   try {
     await getPrisma().classroomMembership.create({
@@ -376,7 +344,7 @@ export const addStaff = async ({
       created: false,
       alreadyExists: true,
       userId: user.id,
-      login: gitUser.login,
+      login: user.login ?? gitUser.login,
       name: user.name,
       role,
       alreadyOrgMember: alreadyMember,
@@ -388,7 +356,6 @@ export const addStaff = async ({
   if (alreadyMember) {
     await tasks.trigger('activate_membership', {
       login: gitUser.login,
-      ...(gitOrganization.provider === 'GITHUB' ? { githubUserId: gitUserId } : {}),
       gitOrganizationId: gitOrganization.id,
     });
   }
@@ -397,7 +364,7 @@ export const addStaff = async ({
     created: true,
     alreadyExists: false,
     userId: user.id,
-    login: gitUser.login,
+    login: user.login ?? gitUser.login,
     name: user.name,
     role,
     alreadyOrgMember: alreadyMember,
@@ -436,7 +403,7 @@ export const updateStaff = async ({
     );
   }
 
-  const user = await findUserByLoginInsensitive(login, await classroomProvider(classroomId));
+  const user = await findUserByLoginInsensitive(login);
   if (!user) {
     throw new StaffServiceError('staff_not_found', `[staff] user ${login} not found`);
   }
@@ -484,7 +451,7 @@ export const previewRemoval = async ({
 }): Promise<StaffRemovalPreview> => {
   assertStaffRole(role);
 
-  const user = await findUserByLoginInsensitive(login, await classroomProvider(classroomId));
+  const user = await findUserByLoginInsensitive(login);
   if (!user) {
     throw new StaffServiceError('staff_not_found', `[staff] user ${login} not found`);
   }
@@ -593,7 +560,7 @@ export const previewLeftoverSlots = async ({
     `[staff] ${login} has no open ${role} removal in classroom ${classroomId}`
   );
 
-  const user = await findUserByLoginInsensitive(login, await classroomProvider(classroomId));
+  const user = await findUserByLoginInsensitive(login);
   if (!user) throw notFound;
 
   const stillHoldsRole = await classroomMembershipService.findByClassroomAndUser(
@@ -673,7 +640,7 @@ export const removeStaff = async ({
 
   const classroom = await loadClassroom(classroomId);
 
-  const user = await findUserByLoginInsensitive(login, classroom.git_organization.provider);
+  const user = await findUserByLoginInsensitive(login);
   if (!user) {
     throw new StaffServiceError('staff_not_found', `[staff] user ${login} not found`);
   }

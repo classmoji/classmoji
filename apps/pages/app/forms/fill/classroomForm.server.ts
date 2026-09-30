@@ -1,7 +1,5 @@
 import { requiresResolvedContext, type FormField } from '@classmoji/services/form-contract';
 
-import { GIT_IDENTITY } from '@classmoji/database';
-import { displayUsername, gitAccount } from '@classmoji/utils';
 import { ClassmojiService, getAuthSession, prisma } from '~/utils/db.server.ts';
 import { findClassroomRole } from '~/utils/classroomRole.server.ts';
 import type { ReviewTarget } from '~/components/forms/FormRenderer.tsx';
@@ -174,14 +172,14 @@ async function sessionAccount(request: Request): Promise<SessionMember | null> {
 
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, name: true, email: true, ...GIT_IDENTITY },
+    select: { id: true, name: true, login: true, email: true, provider_email: true },
   });
   if (!user) return null;
 
   return {
     userId: user.id,
-    name: (user.name || displayUsername(user) || '').trim(),
-    email: (user.email || gitAccount(user)?.email || '').trim(),
+    name: (user.name || user.login || '').trim(),
+    email: (user.email || user.provider_email || '').trim(),
   };
 }
 

@@ -17,7 +17,6 @@
 
 import { randomBytes } from 'node:crypto';
 import getPrisma from '@classmoji/database';
-import { gitUsername } from '@classmoji/utils';
 import { ClassmojiService } from '@classmoji/services';
 import type { FastifyInstance } from 'fastify';
 
@@ -55,7 +54,7 @@ export default async function devMintRoutes(fastify: FastifyInstance) {
 
     const user = userId
       ? await ClassmojiService.user.findById(userId)
-      : await ClassmojiService.user.findByGitUsername(login as string);
+      : await ClassmojiService.user.findByLogin(login as string);
     if (!user) {
       return reply
         .status(404)
@@ -91,13 +90,12 @@ export default async function devMintRoutes(fastify: FastifyInstance) {
       },
     });
 
-    const userLogin = gitUsername(user);
-    request.log.warn({ login: userLogin, scopes, expiresInSeconds }, '[mcp] dev token minted');
+    request.log.warn({ login: user.login, scopes, expiresInSeconds }, '[mcp] dev token minted');
 
     return reply.status(201).send({
       access_token: token.accessToken,
       user_id: user.id,
-      login: userLogin,
+      login: user.login,
       scopes,
       access_token_expires_at: accessTokenExpiresAt.toISOString(),
     });

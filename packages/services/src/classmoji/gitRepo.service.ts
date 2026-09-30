@@ -1,5 +1,5 @@
-import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { displayUsername, sortNaturallyBy, withLogins } from '@classmoji/utils';
+import getPrisma from '@classmoji/database';
+import { sortNaturallyBy } from '@classmoji/utils';
 import type { GitProvider, Prisma } from '@prisma/client';
 
 interface RepositoryCreatePayload {
@@ -54,9 +54,9 @@ export const findByRepository = async (classroomSlug: string, repositoryId: stri
       repository_id: repositoryId,
     },
     include: {
-      student: { include: GIT_IDENTITY },
+      student: true,
       // Members ride along so a team row can name who is on it.
-      team: { include: { memberships: { include: { user: { include: GIT_IDENTITY } } } } },
+      team: { include: { memberships: { include: { user: true } } } },
       repository: true,
       assignments: {
         include: {
@@ -70,12 +70,12 @@ export const findByRepository = async (classroomSlug: string, repositoryId: stri
           grades: {
             include: {
               token_transaction: true,
-              grader: { include: GIT_IDENTITY },
+              grader: true,
             },
           },
           graders: {
             include: {
-              grader: { include: GIT_IDENTITY },
+              grader: true,
             },
           },
         },
@@ -86,41 +86,37 @@ export const findByRepository = async (classroomSlug: string, repositoryId: stri
   // Sorted in JS, not the query: Postgres would put `group-a10` above
   // `group-a2`. Keyed on the column the reader scans — team for GROUP, student
   // for INDIVIDUAL.
-  return withLogins(
-    repos.sort(
-      sortNaturallyBy(
-        repo => repo.team?.name ?? repo.student?.name ?? displayUsername(repo.student) ?? repo.name
-      )
+  return repos.sort(
+    sortNaturallyBy(
+      repo => repo.team?.name ?? repo.student?.name ?? repo.student?.login ?? repo.name
     )
   );
 };
 
 export const findMany = async (query: Prisma.GitRepoWhereInput) => {
-  return withLogins(
-    await getPrisma().gitRepo.findMany({
-      where: query,
-      include: {
-        repository: true,
-        student: { include: GIT_IDENTITY },
-        assignments: {
-          include: {
-            assignment: true,
-            token_transactions: true,
-            grades: {
-              include: {
-                token_transaction: true,
-              },
+  return getPrisma().gitRepo.findMany({
+    where: query,
+    include: {
+      repository: true,
+      student: true,
+      assignments: {
+        include: {
+          assignment: true,
+          token_transactions: true,
+          grades: {
+            include: {
+              token_transaction: true,
             },
-            graders: {
-              include: {
-                grader: { include: GIT_IDENTITY },
-              },
+          },
+          graders: {
+            include: {
+              grader: true,
             },
           },
         },
       },
-    })
-  );
+    },
+  });
 };
 
 export const findByName = async (classroomSlug: string, repoName: string) => {
@@ -141,19 +137,17 @@ export const find = async (query: Prisma.GitRepoWhereInput) => {
 };
 
 export const findByStudent = async (repositoryId: string, userId: string) => {
-  return withLogins(
-    await getPrisma().gitRepo.findFirst({
-      where: {
-        repository_id: repositoryId,
-        student_id: userId,
-      },
-      include: {
-        repository: true,
-        student: { include: GIT_IDENTITY },
-        classroom: true,
-      },
-    })
-  );
+  return getPrisma().gitRepo.findFirst({
+    where: {
+      repository_id: repositoryId,
+      student_id: userId,
+    },
+    include: {
+      repository: true,
+      student: true,
+      classroom: true,
+    },
+  });
 };
 
 export const deleteById = async (repoId: string) => {

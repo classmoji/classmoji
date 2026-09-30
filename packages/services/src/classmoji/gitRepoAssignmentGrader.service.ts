@@ -6,9 +6,7 @@
 import _ from 'lodash';
 import { tasks } from '@trigger.dev/sdk';
 
-import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { displayUsername, withLogin, withLogins, type GitIdentityAccount } from '@classmoji/utils';
-import { findClassroomGitProvider } from './classroomGitProvider.ts';
+import getPrisma from '@classmoji/database';
 import * as classroomService from './classroom.service.ts';
 import * as classroomMembershipService from './classroomMembership.service.ts';
 import * as gitRepoAssignmentService from './gitRepoAssignment.service.ts';
@@ -40,7 +38,6 @@ const notifyGraderAssigned = async (repositoryAssignmentId: string, graderIds: s
 interface GraderProgress {
   name: string | null;
   login: string | null;
-  image: string | null;
   id: string;
   total: number;
   completed: number;
@@ -63,7 +60,7 @@ export const findGradersProgress = async (classroomId: string) => {
       },
     },
     include: {
-      grader: { include: GIT_IDENTITY },
+      grader: true,
       git_repo_assignment: {
         include: {
           grades: true,
@@ -72,19 +69,16 @@ export const findGradersProgress = async (classroomId: string) => {
     },
   });
 
-  const provider = await findClassroomGitProvider(classroomId);
   const progress: Record<string, GraderProgress> = {};
 
   assignmentGraders.forEach(graderAssignment => {
-    const grader = withLogin(graderAssignment.grader, provider);
-    const login = grader.login;
+    const login = graderAssignment.grader.login;
     if (!login) return;
     if (!progress[login]) {
       progress[login] = {
-        name: grader.name,
-        login,
-        image: grader.image,
-        id: grader.id,
+        name: graderAssignment.grader.name,
+        login: graderAssignment.grader.login,
+        id: graderAssignment.grader.id,
         total: 0,
         completed: 0,
         progress: 0,
@@ -155,10 +149,9 @@ export const findEligibleGrader = async (classroomId: string, userId: unknown) =
       role: { in: [...GRADER_ROLES] },
       is_grader: true,
     },
-    include: { user: { include: GIT_IDENTITY } },
+    include: { user: true },
   });
-  if (!membership) return null;
-  return withLogin(membership.user, await findClassroomGitProvider(classroomId));
+  return membership?.user ?? null;
 };
 
 /**
@@ -188,46 +181,44 @@ export const removeGraderFromAssignment = async (
  * @returns {Promise<Object[]>}
  */
 export const findAssignedByGrader = async (graderId: string, classroomId: string) => {
-  return withLogins(
-    await getPrisma().gitRepoAssignmentGrader.findMany({
-      where: {
-        grader_id: graderId,
-        git_repo_assignment: {
+  return getPrisma().gitRepoAssignmentGrader.findMany({
+    where: {
+      grader_id: graderId,
+      git_repo_assignment: {
+        git_repo: {
+          classroom_id: classroomId,
+        },
+      },
+    },
+    include: {
+      git_repo_assignment: {
+        include: {
+          assignment: true,
+          analytics_snapshot: {
+            select: { total_commits: true, last_commit_at: true, fetched_at: true },
+          },
+          grades: {
+            include: {
+              token_transaction: true,
+              grader: true,
+            },
+          },
+          graders: {
+            include: {
+              grader: true,
+            },
+          },
           git_repo: {
-            classroom_id: classroomId,
-          },
-        },
-      },
-      include: {
-        git_repo_assignment: {
-          include: {
-            assignment: true,
-            analytics_snapshot: {
-              select: { total_commits: true, last_commit_at: true, fetched_at: true },
-            },
-            grades: {
-              include: {
-                token_transaction: true,
-                grader: { include: GIT_IDENTITY },
-              },
-            },
-            graders: {
-              include: {
-                grader: { include: GIT_IDENTITY },
-              },
-            },
-            git_repo: {
-              include: {
-                repository: true,
-                student: { include: GIT_IDENTITY },
-                team: true,
-              },
+            include: {
+              repository: true,
+              student: true,
+              team: true,
             },
           },
         },
       },
-    })
-  );
+    },
+  });
 };
 
 /**
@@ -236,16 +227,14 @@ export const findAssignedByGrader = async (graderId: string, classroomId: string
  * @returns {Promise<Object[]>}
  */
 export const findByAssignmentId = async (repositoryAssignmentId: string) => {
-  return withLogins(
-    await getPrisma().gitRepoAssignmentGrader.findMany({
-      where: {
-        git_repo_assignment_id: repositoryAssignmentId,
-      },
-      include: {
-        grader: { include: GIT_IDENTITY },
-      },
-    })
-  );
+  return getPrisma().gitRepoAssignmentGrader.findMany({
+    where: {
+      git_repo_assignment_id: repositoryAssignmentId,
+    },
+    include: {
+      grader: true,
+    },
+  });
 };
 
 /**
@@ -507,7 +496,7 @@ export const gradingReport = async ({
         },
       },
       select: {
-        grader: { select: { id: true, name: true, ...GIT_IDENTITY } },
+        grader: { select: { id: true, login: true, name: true } },
         git_repo_assignment: {
           select: {
             assignment_id: true,
@@ -531,7 +520,7 @@ export const gradingReport = async ({
         emoji: true,
         created_at: true,
         git_repo_assignment_id: true,
-        grader: { select: { id: true, name: true, ...GIT_IDENTITY } },
+        grader: { select: { id: true, login: true, name: true } },
         git_repo_assignment: {
           select: {
             assignment_id: true,
@@ -550,14 +539,14 @@ export const gradingReport = async ({
   const rows = new Map<string, Bucket>();
 
   const bucketFor = (
-    grader: { id: string; name: string | null; accounts: GitIdentityAccount[] },
+    grader: { id: string; login: string | null; name: string | null },
     assignment: { id: string; title: string; repository: { title: string | null } | null }
   ): Bucket => {
     const key = `${grader.id}:${assignment.id}`;
     let bucket = rows.get(key);
     if (!bucket) {
       bucket = {
-        grader: { id: grader.id, login: displayUsername(grader), name: grader.name },
+        grader: { id: grader.id, login: grader.login, name: grader.name },
         assignment: {
           id: assignment.id,
           title: assignment.title,

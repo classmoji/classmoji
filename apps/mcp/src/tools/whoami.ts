@@ -6,7 +6,6 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
-import { gitUsername } from '@classmoji/utils';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import { buildSuggestions } from '../suggestions.ts';
 
@@ -43,7 +42,7 @@ export const whoamiTool: ToolDefinition<Record<string, never>> = {
 
     const result = {
       userId: viewer.userId,
-      login: gitUsername(user),
+      login: user?.login ?? null,
       name: user?.name ?? null,
       scopes: [...viewer.scopes],
       memberships,

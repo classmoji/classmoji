@@ -700,70 +700,47 @@ async function importClassroomAttempt(args: {
  *
  * This runs inside an interactive transaction, where a single failed statement
  * aborts the WHOLE transaction (Postgres 25P02) and rolls back the import — so we
- * can't "try the write and recover." Instead: look up the Github account by user
- * id, then by username (handling Github-login reuse), and only `create` when
- * neither exists. The account's unique `username` is only changed when the
- * target is free. Never writes `email` (absent from the export).
+ * can't "try the write and recover." Instead: look up by GitHub user id, then by
+ * `login` (handling GitHub-login reuse), and only `create` when neither exists.
+ * The one mutable unique field, `login`, is only changed when the target is free.
+ * Never writes `email` (unique and absent from the export).
  */
 async function resolveImportedUser(tx: ImportTx, s: ImportStudent, warnings: string[]) {
   // 1) Canonical match: the GitHub user id.
-  const byProvider = await tx.account.findUnique({
-    where: { provider_id_account_id: { provider_id: 'github', account_id: s.providerId } },
-    select: { id: true, username: true, user_id: true },
+  const byProvider = await tx.user.findUnique({
+    where: { provider_provider_id: { provider: 'GITHUB', provider_id: s.providerId } },
   });
   if (byProvider) {
-    const accountData: { image: string | null; username?: string } = {
+    const data: { name: string | null; image: string | null; login?: string } = {
+      name: s.name,
       image: s.avatarUrl ?? null,
     };
-    // Only update `username` when the new value is free, so we never trip the
-    // unique (provider_id, username) constraint mid-transaction.
-    if (s.login && s.login !== byProvider.username) {
-      const taken = await tx.account.findUnique({
-        where: { provider_id_username: { provider_id: 'github', username: s.login } },
-        select: { id: true },
-      });
-      if (!taken) accountData.username = s.login;
+    // Only update `login` when the new value is free, so we never trip the unique
+    // `login` constraint mid-transaction.
+    if (s.login && s.login !== byProvider.login) {
+      const taken = await tx.user.findUnique({ where: { login: s.login }, select: { id: true } });
+      if (!taken) data.login = s.login;
     }
-    await tx.account.update({ where: { id: byProvider.id }, data: accountData });
-    return tx.user.update({
-      where: { id: byProvider.user_id },
-      data: { name: s.name, image: s.avatarUrl ?? null },
-    });
+    return tx.user.update({ where: { id: byProvider.id }, data });
   }
 
   // 2) GitHub login already used by a different account row → reuse it.
   if (s.login) {
-    const byLogin = await tx.account.findFirst({
-      where: { provider_id: 'github', username: { equals: s.login, mode: 'insensitive' } },
-      select: { id: true, account_id: true, user: true },
-    });
+    const byLogin = await tx.user.findUnique({ where: { login: s.login } });
     if (byLogin) {
-      // A placeholder account known only by username takes the real id now.
-      if (byLogin.account_id.startsWith('unresolved:')) {
-        await tx.account.update({
-          where: { id: byLogin.id },
-          data: { account_id: s.providerId, image: s.avatarUrl ?? null },
-        });
-      } else {
-        warnings.push(`Reused existing account for @${s.login} (GitHub login already in use).`);
-      }
-      return byLogin.user;
+      warnings.push(`Reused existing account for @${s.login} (GitHub login already in use).`);
+      return byLogin;
     }
   }
 
   // 3) Brand-new user — neither the GitHub id nor the login exists yet.
   return tx.user.create({
     data: {
+      provider: 'GITHUB',
+      provider_id: s.providerId,
+      login: s.login || null,
       name: s.name,
       image: s.avatarUrl ?? null,
-      accounts: {
-        create: {
-          provider_id: 'github',
-          account_id: s.providerId,
-          username: s.login || null,
-          image: s.avatarUrl ?? null,
-        },
-      },
     },
   });
 }

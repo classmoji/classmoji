@@ -1,5 +1,3 @@
-import { GIT_IDENTITY } from '@classmoji/database';
-import { gitAccount, gitUsername } from '@classmoji/utils';
 import { prisma, requirePlatformAdmin } from '~/utils/db.server';
 import type { LoaderFunctionArgs } from 'react-router';
 
@@ -37,10 +35,11 @@ export async function loadClassroom({ request, params }: LoaderFunctionArgs) {
           user: {
             select: {
               id: true,
+              login: true,
               name: true,
               email: true,
+              provider_email: true,
               image: true,
-              ...GIT_IDENTITY,
             },
           },
         },
@@ -62,19 +61,19 @@ export async function loadClassroom({ request, params }: LoaderFunctionArgs) {
     throw new Response('Classroom not found', { status: 404 });
   }
 
-  const org = classroom.git_organization;
-
   const byRole = (role: string): ClassroomMember[] =>
     classroom.memberships
       .filter(m => m.role === role)
       .map(m => ({
         userId: m.user.id,
-        login: gitUsername(m.user, org.provider),
+        login: m.user.login,
         name: m.user.name,
-        email: m.user.email ?? gitAccount(m.user, org.provider)?.email ?? null,
+        email: m.user.email ?? m.user.provider_email,
         image: m.user.image,
       }))
       .sort((a, b) => (a.name ?? a.login ?? '').localeCompare(b.name ?? b.login ?? ''));
+
+  const org = classroom.git_organization;
 
   return {
     classroom: {

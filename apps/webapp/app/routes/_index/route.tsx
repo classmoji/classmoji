@@ -51,7 +51,6 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
           multipleTokens: process.env.MULTIPLE_TOKENS === 'true',
           setupComplete: false,
           redirectPath,
-          oauthError: null,
         },
         { headers: signOut.headers }
       );
@@ -67,22 +66,18 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     multipleTokens: process.env.MULTIPLE_TOKENS === 'true',
     setupComplete: url.searchParams.get('setup') === 'complete',
     redirectPath,
-    // better-auth sends a failed Github sign-in back here with `?error=<code>`.
-    oauthError: url.searchParams.get('error'),
   };
 };
 
 const Index = ({ loaderData }: Route.ComponentProps) => {
-  const { isDev, setupComplete, multipleTokens, redirectPath, oauthError } = loaderData;
-  const callbackURL = redirectPath ?? '/select-organization';
+  const { isDev, setupComplete, multipleTokens, redirectPath } = loaderData;
 
   const handleGitHubLogin = async () => {
     // Use BetterAuth client for OAuth flow. `redirectPath` was validated in the
     // loader; it is null unless it is a safe relative path.
     await authClient.signIn.social({
       provider: 'github',
-      callbackURL,
-      errorCallbackURL: '/',
+      callbackURL: redirectPath ?? '/select-organization',
     });
   };
 
@@ -94,67 +89,63 @@ const Index = ({ loaderData }: Route.ComponentProps) => {
     />
   );
 
-  // In development, the quick test logins sit under the regular sign-in
+  // In development, show quick login buttons for each role
   if (isDev) {
     return (
-      <>
+      <div className="flex flex-col items-center justify-center h-screen bg-lightGray dark:bg-neutral-900 gap-4">
         {setupBanner}
-        <SignInPage
-          handleGitHubLogin={handleGitHubLogin}
-          callbackURL={callbackURL}
-          oauthError={oauthError}
-        >
-          <div className="mb-8 flex flex-col items-center">
-            <div className="text-ink-3 text-sm mb-2">Development Login</div>
-            {multipleTokens && (
-              <>
-                <div className="flex flex-wrap justify-center gap-2 mt-2">
-                  <button
-                    onClick={() => (window.location.href = '/test-login?role=owner')}
-                    className="font-medium bg-violet-500/80 hover:bg-violet-500 text-white rounded-md px-4 py-2 text-sm cursor-pointer"
-                  >
-                    Owner
-                  </button>
-                  <button
-                    onClick={() => (window.location.href = '/test-login?role=instructor')}
-                    className="font-medium bg-amber-500/80 hover:bg-amber-500 text-white rounded-md px-4 py-2 text-sm cursor-pointer"
-                  >
-                    Instructor
-                  </button>
-                  <button
-                    onClick={() => (window.location.href = '/test-login?role=ta')}
-                    className="font-medium bg-sky-500/80 hover:bg-sky-500 text-white rounded-md px-4 py-2 text-sm cursor-pointer"
-                  >
-                    TA
-                  </button>
-                  <button
-                    onClick={() => (window.location.href = '/test-login?role=student')}
-                    className="font-medium bg-primary/80 hover:bg-primary text-white rounded-md px-4 py-2 text-sm cursor-pointer"
-                  >
-                    Student
-                  </button>
-                </div>
+        <div className="text-ink-3 text-sm mb-2">Development Login</div>
 
-                <div className="text-ink-4 text-xs mt-2">
-                  Quick login uses test tokens from environment
-                </div>
-              </>
-            )}
-          </div>
-        </SignInPage>
-      </>
+        <button
+          onClick={handleGitHubLogin}
+          className="font-bold bg-black dark:bg-gray-200 text-white dark:text-black rounded-md px-6 py-3 min-w-[200px] text-center cursor-pointer"
+        >
+          GitHub OAuth
+        </button>
+
+        {multipleTokens && (
+          <>
+            <div className="flex gap-3 mt-4">
+              <button
+                onClick={() => (window.location.href = '/test-login?role=owner')}
+                className="font-medium bg-violet-500/80 hover:bg-violet-500 text-white rounded-md px-4 py-2 text-sm cursor-pointer"
+              >
+                Owner
+              </button>
+              <button
+                onClick={() => (window.location.href = '/test-login?role=instructor')}
+                className="font-medium bg-amber-500/80 hover:bg-amber-500 text-white rounded-md px-4 py-2 text-sm cursor-pointer"
+              >
+                Instructor
+              </button>
+              <button
+                onClick={() => (window.location.href = '/test-login?role=ta')}
+                className="font-medium bg-sky-500/80 hover:bg-sky-500 text-white rounded-md px-4 py-2 text-sm cursor-pointer"
+              >
+                TA
+              </button>
+              <button
+                onClick={() => (window.location.href = '/test-login?role=student')}
+                className="font-medium bg-primary/80 hover:bg-primary text-white rounded-md px-4 py-2 text-sm cursor-pointer"
+              >
+                Student
+              </button>
+            </div>
+
+            <div className="text-ink-4 text-xs mt-2">
+              Quick login uses test tokens from environment
+            </div>
+          </>
+        )}
+      </div>
     );
   }
 
-  // Deployed: the regular sign-in
+  // Staging: single OAuth button
   return (
     <>
       {setupBanner}
-      <SignInPage
-        handleGitHubLogin={handleGitHubLogin}
-        callbackURL={callbackURL}
-        oauthError={oauthError}
-      />
+      <SignInPage handleGitHubLogin={handleGitHubLogin} />
     </>
   );
 };

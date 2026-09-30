@@ -35,13 +35,7 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
-import {
-  gitUsername,
-  isRealCalendarDate,
-  localDayRange,
-  localMonthGridRange,
-  type WithGitAccounts,
-} from '@classmoji/utils';
+import { isRealCalendarDate, localDayRange, localMonthGridRange } from '@classmoji/utils';
 import { ToolError } from '../mcp/errors.ts';
 import { renderZone } from '../mcp/localTimes.ts';
 import type { ResourceDefinition, ToolContext } from '../mcp/registry.ts';
@@ -392,7 +386,7 @@ interface CalendarRow {
   is_recurring?: boolean;
   recurrence_rule?: unknown;
   occurrence_date?: Date | string;
-  creator?: (WithGitAccounts & { id: string; name?: string | null; login?: string | null }) | null;
+  creator?: { id: string; name?: string | null; login?: string | null } | null;
   is_deadline?: boolean;
   is_unpublished?: boolean;
   assignment_id?: string;
@@ -498,7 +492,7 @@ function shapeCalendarRow(row: CalendarRow, staff: boolean) {
     recurrence_rule: row.recurrence_rule ?? null,
     occurrence_date: row.occurrence_date ?? null,
     creator: row.creator
-      ? { id: row.creator.id, name: row.creator.name ?? null, login: gitUsername(row.creator) }
+      ? { id: row.creator.id, name: row.creator.name ?? null, login: row.creator.login ?? null }
       : null,
     ...(row.is_deadline
       ? {

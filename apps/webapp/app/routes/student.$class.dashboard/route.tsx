@@ -219,7 +219,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
             id: mb.user.id,
             name: mb.user.name,
             login: mb.user.login,
-            image: mb.user.image ?? null,
+            providerId: mb.user.provider_id,
           })),
           repoUrl:
             gitOrgLogin && teamRepoName

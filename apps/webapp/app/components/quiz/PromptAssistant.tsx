@@ -81,7 +81,6 @@ export function PromptAssistant({
 
   const { user } = useUser();
   const userLogin = user?.login;
-  const userImage = user?.image ?? null;
 
   const [inputValue, setInputValue] = useState('');
   const [copiedField, setCopiedField] = useState<string | null>(null);
@@ -233,7 +232,6 @@ export function PromptAssistant({
                 message={msg}
                 isDarkMode={isDarkMode}
                 userLogin={userLogin}
-                userImage={userImage}
                 onApply={handleApply}
                 onCopy={handleCopy}
                 copiedField={copiedField}
@@ -284,7 +282,6 @@ interface MessageBubbleProps {
   message: PromptMessage;
   isDarkMode?: boolean;
   userLogin?: string | null;
-  userImage?: string | null;
   onApply: (suggestion: PromptSuggestion) => void;
   onCopy: (text: string, field: string) => void;
   copiedField: string | null;
@@ -294,7 +291,6 @@ function MessageBubble({
   message,
   isDarkMode,
   userLogin,
-  userImage,
   onApply,
   onCopy,
   copiedField,
@@ -336,7 +332,7 @@ function MessageBubble({
       {isUser &&
         (userLogin ? (
           <Avatar
-            src={userImage ?? undefined}
+            src={`https://github.com/${userLogin}.png?size=40`}
             style={{ backgroundColor: '#52c41a', flexShrink: 0 }}
           >
             {userLogin[0]?.toUpperCase()}

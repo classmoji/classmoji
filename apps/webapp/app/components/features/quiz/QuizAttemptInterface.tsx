@@ -178,7 +178,6 @@ interface QuizAttemptInterfaceProps {
   attempt: Record<string, unknown> | null;
   messages?: QuizMessage[];
   userLogin: string | null;
-  userImage?: string | null;
   readOnly?: boolean;
   showTimestamps?: boolean;
   focusMetrics?: FocusMetrics | null;
@@ -212,7 +211,6 @@ function QuizAttemptInterface({
   attempt,
   messages: initialMessages = [],
   userLogin,
-  userImage = null,
   readOnly = false,
   showTimestamps = false,
   focusMetrics = null,
@@ -1087,7 +1085,6 @@ function QuizAttemptInterface({
           loading={loading || sending}
           isDarkMode={isDarkMode}
           userLogin={userLogin}
-          userImage={userImage}
           onQuickAction={readOnly ? null : handleQuickAction}
           readOnly={readOnly}
           showTimestamps={showTimestamps}

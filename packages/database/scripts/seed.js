@@ -1,5 +1,5 @@
 import { PrismaClient } from '@prisma/client';
-import { seedTeamWithGroupRepo, seedForeignClassroom, upsertGithubUser } from './seed-fixtures.js';
+import { seedTeamWithGroupRepo, seedForeignClassroom } from './seed-fixtures.js';
 
 const prisma = new PrismaClient();
 
@@ -55,7 +55,7 @@ async function main() {
 
   // ── Fake Users + Memberships ────────────────────────────────────────────
   // Fully fake — no real GitHub IDs or tokens needed
-  // Github ids are stable so re-runs don't create duplicate records
+  // provider_ids are stable so re-runs don't create duplicate records
   //
   // CRITICAL (test integrity): prof-classmoji (seed-test-user.js) holds
   // OWNER + ASSISTANT + STUDENT and passes EVERY role gate. Non-owner denial
@@ -67,7 +67,7 @@ async function main() {
       login: 'fake-ta',
       name: 'Dev TA',
       email: 'ta@dev.local',
-      githubId: '10000001',
+      provider_id: '10000001',
       role: 'ASSISTANT',
     },
     {
@@ -76,28 +76,28 @@ async function main() {
       login: 'fake-teacher',
       name: 'Dev Teacher',
       email: 'teacher@dev.local',
-      githubId: '10000005',
+      provider_id: '10000005',
       role: 'TEACHER',
     },
     {
       login: 'fake-student-1',
       name: 'Dev Student 1',
       email: 'student1@dev.local',
-      githubId: '10000002',
+      provider_id: '10000002',
       role: 'STUDENT',
     },
     {
       login: 'fake-student-2',
       name: 'Dev Student 2',
       email: 'student2@dev.local',
-      githubId: '10000003',
+      provider_id: '10000003',
       role: 'STUDENT',
     },
     {
       login: 'fake-student-3',
       name: 'Dev Student 3',
       email: 'student3@dev.local',
-      githubId: '10000004',
+      provider_id: '10000004',
       role: 'STUDENT',
     },
   ].map(u => ({ ...u, image: `https://github.com/identicons/${u.login}.png` }));
@@ -106,7 +106,19 @@ async function main() {
   const studentUsers = [];
 
   for (const u of fakeUsers) {
-    const user = await upsertGithubUser(prisma, u);
+    const user = await prisma.user.upsert({
+      where: { login: u.login },
+      update: { image: u.image },
+      create: {
+        provider: 'GITHUB',
+        provider_id: u.provider_id,
+        login: u.login,
+        name: u.name,
+        email: u.email,
+        image: u.image,
+        school_id: 'dev',
+      },
+    });
 
     await prisma.classroomMembership.upsert({
       where: {

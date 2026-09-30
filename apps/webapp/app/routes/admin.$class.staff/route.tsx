@@ -48,10 +48,11 @@ interface StaffMember {
   name: string | null;
   login: string | null;
   /**
-   * The COMPUTED field from the Prisma result extension (packages/database):
-   * the User's `image`, or a default when there is none — never null. A staff
-   * member who has been invited but has not signed in yet has no `image`, and
-   * reading the column directly left every fresh invite with a blank thumbnail.
+   * The COMPUTED field from the Prisma result extension (packages/database),
+   * derived from provider_id — never null, and not the same thing as the User
+   * model's `image` column. `image` is written at sign-in, so a staff member who
+   * has been invited but has not signed in yet has none; reading it here left
+   * every fresh invite with a blank thumbnail.
    */
   avatar_url: string;
   role: StaffRole;

@@ -1,5 +1,4 @@
-import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { displayUsername } from '@classmoji/utils';
+import getPrisma from '@classmoji/database';
 import { repeatGroups, type FormField, type ResolvedTargetRef } from './formContract.ts';
 import type { Prisma } from '@prisma/client';
 
@@ -229,7 +228,7 @@ export async function resolveRepeatTargets({
       memberships: {
         select: {
           user_id: true,
-          user: { select: { id: true, name: true, email: true, ...GIT_IDENTITY } },
+          user: { select: { id: true, name: true, login: true, email: true } },
         },
       },
     },
@@ -269,12 +268,11 @@ export async function resolveRepeatTargets({
   for (const membership of team.memberships) {
     if (excludeSelf && membership.user_id === userId) continue;
     if (byUser.has(membership.user_id)) continue;
-    const login = displayUsername(membership.user);
     byUser.set(membership.user_id, {
       user_id: membership.user_id,
-      name: (membership.user.name || login || '').trim(),
+      name: (membership.user.name || membership.user.login || '').trim(),
       email: membership.user.email,
-      login,
+      login: membership.user.login,
     });
   }
 

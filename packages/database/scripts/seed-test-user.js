@@ -1,5 +1,4 @@
 import { PrismaClient } from '@prisma/client';
-import { upsertGithubUser } from './seed-fixtures.js';
 
 /**
  * Seed the Playwright E2E test user (prof-classmoji) for offline auth.
@@ -45,7 +44,7 @@ const ROLES = [
     roles: ['ASSISTANT'],
   },
   {
-    // Matches the fake-teacher identity seeded by seed.js (Github id
+    // Matches the fake-teacher identity seeded by seed.js (provider_id
     // 10000005). TEACHER is its own authz tier, so this user holds that role
     // and nothing else — a second membership here would make every
     // "denied for a teacher" assertion pass vacuously.
@@ -80,15 +79,26 @@ async function main() {
   for (const r of ROLES) {
     if (!r.token) throw new Error(`Missing token for ${r.login} (set its GITHUB_*_TOKEN in .env).`);
 
-    // The Github account carries the token for DB-first /test-login lookup (skips GitHub API).
-    const user = await upsertGithubUser(prisma, {
-      login: r.login,
-      githubId: r.githubId,
-      name: r.name,
-      email: r.email,
-      image: `https://github.com/identicons/${r.login}.png`,
-      accessToken: r.token,
-      keepImage: true,
+    const user = await prisma.user.upsert({
+      where: { login: r.login },
+      update: { provider: 'GITHUB', provider_id: r.githubId, emailVerified: true },
+      create: {
+        provider: 'GITHUB',
+        provider_id: r.githubId,
+        login: r.login,
+        name: r.name,
+        email: r.email,
+        emailVerified: true,
+        image: `https://github.com/identicons/${r.login}.png`,
+        school_id: 'dev',
+      },
+    });
+
+    // GitHub account carries the token for DB-first /test-login lookup (skips GitHub API).
+    await prisma.account.upsert({
+      where: { provider_id_account_id: { provider_id: 'github', account_id: r.githubId } },
+      update: { access_token: r.token, user_id: user.id },
+      create: { user_id: user.id, provider_id: 'github', account_id: r.githubId, access_token: r.token },
     });
 
     for (const role of r.roles) {
@@ -104,9 +114,7 @@ async function main() {
     console.log(`✅ ${r.login} (github ${r.githubId}) → ${r.roles.join('+')}`);
   }
 
-  console.log(
-    `   Classroom: ${classroom.slug} (${classroom.id}) — tokens stored, /test-login skips GitHub API.`
-  );
+  console.log(`   Classroom: ${classroom.slug} (${classroom.id}) — tokens stored, /test-login skips GitHub API.`);
 }
 
 main()

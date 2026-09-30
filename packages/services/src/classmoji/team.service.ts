@@ -1,5 +1,5 @@
-import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { sortNaturallyBy, withLogins } from '@classmoji/utils';
+import getPrisma from '@classmoji/database';
+import { sortNaturallyBy } from '@classmoji/utils';
 import type { GitProvider, Prisma } from '@prisma/client';
 
 interface TeamCreatePayload {
@@ -74,7 +74,7 @@ export const findByClassroomId = async (classroomId: string) => {
       },
       memberships: {
         include: {
-          user: { include: GIT_IDENTITY },
+          user: true,
         },
       },
     },
@@ -82,32 +82,30 @@ export const findByClassroomId = async (classroomId: string) => {
 
   // Same human order as the repository tables, so a team sits in the same place
   // on both screens.
-  return withLogins(teams.sort(sortNaturallyBy(team => team.name)));
+  return teams.sort(sortNaturallyBy(team => team.name));
 };
 
 export const findBySlugAndClassroomId = async (slug: string, classroomId: string) => {
-  return withLogins(
-    await getPrisma().team.findUnique({
-      where: {
-        classroom_id_slug: {
-          slug: slug,
-          classroom_id: classroomId,
+  return getPrisma().team.findUnique({
+    where: {
+      classroom_id_slug: {
+        slug: slug,
+        classroom_id: classroomId,
+      },
+    },
+    include: {
+      tags: {
+        include: {
+          tag: true,
         },
       },
-      include: {
-        tags: {
-          include: {
-            tag: true,
-          },
-        },
-        memberships: {
-          include: {
-            user: { include: GIT_IDENTITY },
-          },
+      memberships: {
+        include: {
+          user: true,
         },
       },
-    })
-  );
+    },
+  });
 };
 
 export const findById = async (teamId: string) => {
@@ -157,45 +155,41 @@ export const renameAndRepos = async (payload: {
 };
 
 export const findByTagId = async (classroomId: string, tagId: string) => {
-  return withLogins(
-    await getPrisma().team.findMany({
-      where: {
-        classroom_id: classroomId,
-        tags: { some: { tag_id: tagId } },
-      },
-      include: {
-        memberships: {
-          include: {
-            user: {
-              select: { id: true, name: true, image: true, ...GIT_IDENTITY },
-            },
+  return getPrisma().team.findMany({
+    where: {
+      classroom_id: classroomId,
+      tags: { some: { tag_id: tagId } },
+    },
+    include: {
+      memberships: {
+        include: {
+          user: {
+            select: { id: true, name: true, login: true, provider_id: true },
           },
         },
       },
-      orderBy: { name: 'asc' },
-    })
-  );
+    },
+    orderBy: { name: 'asc' },
+  });
 };
 
 export const findUserTeamByTag = async (classroomId: string, tagId: string, userId: string) => {
-  return withLogins(
-    await getPrisma().team.findFirst({
-      where: {
-        classroom_id: classroomId,
-        tags: { some: { tag_id: tagId } },
-        memberships: { some: { user_id: userId } },
-      },
-      include: {
-        memberships: {
-          include: {
-            user: {
-              select: { id: true, name: true, image: true, ...GIT_IDENTITY },
-            },
+  return getPrisma().team.findFirst({
+    where: {
+      classroom_id: classroomId,
+      tags: { some: { tag_id: tagId } },
+      memberships: { some: { user_id: userId } },
+    },
+    include: {
+      memberships: {
+        include: {
+          user: {
+            select: { id: true, name: true, login: true, provider_id: true },
           },
         },
       },
-    })
-  );
+    },
+  });
 };
 
 export const createWithMembershipAndTag = async (

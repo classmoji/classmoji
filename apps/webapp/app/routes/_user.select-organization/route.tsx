@@ -4,15 +4,14 @@ import { Modal, Button as AntdButton } from 'antd';
 import { useCallout } from '@classmoji/ui-components';
 
 import { useUser, useDisclosure, useGlobalFetcher } from '~/hooks';
-import { getAuthSession } from '@classmoji/auth/server';
+import { getAuthSession, clearRevokedToken } from '@classmoji/auth/server';
 import { verifyInviteToken } from '@classmoji/auth/invite-token';
-import { authClient } from '@classmoji/auth/client';
-import GitHubIcon from '../_index/github.svg';
 import { checkAuth } from '~/utils/helpers';
 import { hashHue } from '~/utils/hue';
 
 import {
   ClassmojiService,
+  GitHubProvider,
   getGitProvider,
   ensureClassroomTeam,
   notificationService,
@@ -20,8 +19,7 @@ import {
 } from '@classmoji/services';
 import { ActionTypes, roleSettings } from '~/constants';
 import useStore from '~/store';
-import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { gitAccountId, gitUsername } from '@classmoji/utils';
+import getPrisma from '@classmoji/database';
 import { tasks } from '@trigger.dev/sdk';
 import type { Route } from './+types/route';
 import type { AppUser, MembershipOrganization, MembershipWithOrganization } from '~/types';
@@ -79,13 +77,10 @@ const toLandingMembership = (m: SelectOrganizationMembership): LandingMembership
   };
 };
 
-const LINK_ERRORS: Record<string, string> = {
-  account_already_linked_to_different_user:
-    'That Github account already belongs to another Classmoji account. Sign out and continue with Github to use it.',
-};
-
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const authData = await getAuthSession(request);
+
+  if (!authData?.token && !authData?.userId) return redirect('/');
 
   // Set by the roster invite link (#343): a signed token naming the invited
   // address. Anything that does not verify is treated as absent.
@@ -93,14 +88,13 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   const invite = inviteToken ? verifyInviteToken(inviteToken) : null;
   const inviteEmail = invite?.email ?? null;
 
-  if (!authData?.userId) return redirect('/');
-  let user = await ClassmojiService.user.findById(authData.userId, { includeMemberships: true });
-  if (!user) return redirect('/');
+  // Try to find user by ID first (avoids GitHub API call if user exists)
+  let user = null;
+  if (authData?.userId) {
+    user = await ClassmojiService.user.findById(authData.userId, { includeMemberships: true });
+  }
 
-  // The root loader runs these same checks, but in parallel with this one, so
-  // they are repeated here: nothing below (the invite claim especially) may
-  // run for an account that has not confirmed an email and connected Github.
-  if (!user.email || !user.emailVerified) {
+  if (!user?.email) {
     // Hand the token to registration: it prefills the address and stands in
     // for the verification code.
     return redirect(
@@ -109,19 +103,27 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         : '/registration'
     );
   }
-  const githubAccount = await getPrisma().account.findFirst({
-    where: { user_id: user.id, provider_id: 'github', username: { not: null } },
-    select: { email: true },
-  });
-  if (!githubAccount) {
-    // The page asks them to connect instead of listing classrooms.
-    const linkError = new URL(request.url).searchParams.get('error');
-    return {
-      needsGithub: true as const,
-      linkError: linkError
-        ? (LINK_ERRORS[linkError] ?? 'Connecting Github failed. Please try again.')
-        : null,
-    };
+
+  // If not found by ID, fall back to GitHub API lookup
+  if (!user && authData?.token) {
+    const octokit = GitHubProvider.getUserOctokit(authData.token);
+
+    let authenticatedUser;
+    try {
+      const { data } = await octokit.rest.users.getAuthenticated();
+      authenticatedUser = data;
+    } catch (error: unknown) {
+      console.log(error);
+      const err = error as Record<string, unknown>;
+      if (err?.status === 401 || (err?.message as string)?.includes('Bad credentials')) {
+        // Only the token GitHub refused: a token refreshed meanwhile is kept.
+        await clearRevokedToken(authData.userId, authData.token);
+        return redirect('/');
+      }
+      throw error;
+    }
+
+    user = await ClassmojiService.user.findByLogin(authenticatedUser.login);
   }
 
   if (user) {
@@ -192,7 +194,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     const sameAddress = (a: string | null | undefined) =>
       !!a && !!inviteEmail && a.toLowerCase() === inviteEmail.toLowerCase();
     const inviteEmailMismatch =
-      inviteEmail && !sameAddress(typedUser.email) && !sameAddress(githubAccount.email)
+      inviteEmail && !sameAddress(typedUser.email) && !sameAddress(typedUser.provider_email)
         ? inviteEmail
         : null;
 
@@ -302,59 +304,7 @@ function buildLandingClasses(memberships: LandingMembership[]): LandingClass[] {
 
 // ───────── component ─────────
 
-/** Shown instead of the classrooms until the account has a Github account connected. */
-const ConnectGithubPrompt = ({ error }: { error: string | null }) => {
-  const [busy, setBusy] = useState(false);
-
-  const connect = async () => {
-    setBusy(true);
-    await authClient.linkSocial({
-      provider: 'github',
-      callbackURL: '/select-organization',
-      errorCallbackURL: '/select-organization',
-    });
-  };
-
-  return (
-    <div className="min-h-[60vh] flex items-center justify-center">
-      <div className="w-full max-w-sm flex flex-col items-center text-center">
-        <h1 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
-          Connect your Github account
-        </h1>
-        <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
-          Classmoji classrooms run on Github, where course repositories and assignments live.
-          Connect your account to create or join a classroom.
-        </p>
-        {error && (
-          <div className="w-full mb-4 rounded-lg bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 text-sm px-3 py-2">
-            {error}
-          </div>
-        )}
-        <button
-          onClick={connect}
-          disabled={busy}
-          className="flex items-center justify-center gap-2 bg-gray-900 hover:bg-gray-800 dark:bg-white dark:hover:bg-gray-100 text-white dark:text-gray-900 disabled:opacity-60 font-medium rounded-lg px-5 py-2.5 transition-colors cursor-pointer"
-        >
-          <img src={GitHubIcon} alt="" className="w-5 h-5 dark:invert" />
-          {busy ? 'Redirecting to Github…' : 'Connect Github'}
-        </button>
-      </div>
-    </div>
-  );
-};
-
-const SelectOrganizationPage = (props: Route.ComponentProps) =>
-  'needsGithub' in props.loaderData ? (
-    <ConnectGithubPrompt error={props.loaderData.linkError ?? null} />
-  ) : (
-    <SelectOrganization loaderData={props.loaderData} />
-  );
-
-const SelectOrganization = ({
-  loaderData,
-}: {
-  loaderData: Exclude<Route.ComponentProps['loaderData'], { needsGithub: true }>;
-}) => {
+const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
   const {
     memberships,
     notifications,
@@ -508,6 +458,7 @@ const SelectOrganization = ({
         classes={classes.filter(c => !c.is_example)}
         onOpenClass={onOpenClass}
         onTakeTour={onTakeTour}
+        tourAvailable
         notifications={notifications}
         unreadCount={unreadCount}
         membershipRoles={membershipRoles}
@@ -527,7 +478,7 @@ export const action = checkAuth(
     const membership = await getPrisma().classroomMembership.findFirst({
       where: { classroom_id, user_id: user.userId },
       include: {
-        user: { include: GIT_IDENTITY },
+        user: true,
         classroom: { include: { git_organization: true } },
       },
     });
@@ -536,12 +487,13 @@ export const action = checkAuth(
       return { error: 'Classroom not found' };
     }
 
-    const classroom = membership.classroom;
-    const student_login = gitUsername(membership.user, classroom.git_organization.provider);
+    const student_login = membership.user.login;
 
     if (!student_login) {
-      return { error: 'Connect your Github account before joining this classroom.' };
+      return { error: 'Your account has no linked GitHub login.' };
     }
+
+    const classroom = membership.classroom;
 
     const gitProvider = getGitProvider(
       classroom.git_organization as {
@@ -574,7 +526,6 @@ export const action = checkAuth(
       // stay stuck pending and never receive their assignment repos.
       await tasks.trigger('activate_membership', {
         login: student_login,
-        githubUserId: gitAccountId(membership.user, classroom.git_organization.provider),
         gitOrganizationId: classroom.git_organization.id,
       });
       return {
@@ -597,4 +548,4 @@ export const action = checkAuth(
   }
 );
 
-export default SelectOrganizationPage;
+export default SelectOrganization;

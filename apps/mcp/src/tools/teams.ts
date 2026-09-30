@@ -41,11 +41,9 @@ import {
   describeTeamFailureReason,
   type TeamFailureReason,
 } from '@classmoji/services';
-import { gitUsername, type WithGitAccounts } from '@classmoji/utils';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
-import { orgProvider } from '../resources/shape.ts';
 import { ok, OWNER_ONLY, requireClassroomCtx, scopedNotFound, writeAudit } from './shared.ts';
 
 /**
@@ -185,13 +183,13 @@ const normalizeLogin = (login: string) => login.replace('@', '').trim().toLowerC
  * THIS classroom, so an arbitrary GitHub account can neither be pulled into an
  * organization team nor probed against one.
  */
-async function classroomMemberLogins(classroomId: string, provider: string): Promise<Set<string>> {
+async function classroomMemberLogins(classroomId: string): Promise<Set<string>> {
   const memberships = (await ClassmojiService.classroomMembership.findByClassroomId(
     classroomId
-  )) as Array<{ user?: (WithGitAccounts & { login?: string | null }) | null }>;
+  )) as Array<{ user?: { login?: string | null } | null }>;
   return new Set(
     memberships
-      .map(m => gitUsername(m.user, provider))
+      .map(m => m.user?.login)
       .filter((login): login is string => Boolean(login))
       .map(normalizeLogin)
   );
@@ -526,7 +524,7 @@ export const teamMembersAddTool: ToolDefinition<TeamMembersAddArgs> = {
 
     // Every login must resolve to a member of THIS classroom (any role) or the
     // whole call is refused — see classroomMemberLogins.
-    const classroomLogins = await classroomMemberLogins(classroom.classroomId, orgProvider(ctx));
+    const classroomLogins = await classroomMemberLogins(classroom.classroomId);
 
     // Dedupe on the same normalized key the service matches on, so 'Ada' and
     // '@ada' do not cost two throttled provider calls.
@@ -628,7 +626,7 @@ export const teamMemberRemoveTool: ToolDefinition<TeamMemberRemoveArgs> = {
     // classroom": without it the tool's two error shapes would differ, and the
     // service's own user_not_found would answer a question about who exists on
     // the platform. That branch of mapTeamError stays as a backstop.
-    const classroomLogins = await classroomMemberLogins(classroom.classroomId, orgProvider(ctx));
+    const classroomLogins = await classroomMemberLogins(classroom.classroomId);
     if (!classroomLogins.has(normalizeLogin(args.login))) {
       throw new ToolError(
         'invalid_params',

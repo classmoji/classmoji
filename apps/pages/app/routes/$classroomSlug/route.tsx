@@ -1,6 +1,5 @@
 import { useLoaderData, redirect, Outlet, useLocation, useNavigate, useParams } from 'react-router';
 import { useEffect, useRef, useState } from 'react';
-import { gitUsername } from '@classmoji/utils';
 import useLocalStorageState from 'use-local-storage-state';
 
 import {
@@ -175,9 +174,7 @@ export const loader = async ({
       show_in_student_menu: p.show_in_student_menu,
       header_image_url: p.header_image_url,
       updated_at: p.updated_at,
-      creator: p.creator
-        ? { login: gitUsername(p.creator as Parameters<typeof gitUsername>[0]) }
-        : null,
+      creator: p.creator ? { login: p.creator.login } : null,
     })),
     membership: membership ? { role: membership.role } : null,
   };

@@ -1,6 +1,6 @@
-import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import type { MessageRole, Prisma } from '@prisma/client';
-import { DEFAULT_EMOJI_GRADE_MAPPINGS, withLogins } from '@classmoji/utils';
+import { DEFAULT_EMOJI_GRADE_MAPPINGS } from '@classmoji/utils';
 
 /**
  * Thrown when an attempt id names no row.
@@ -310,25 +310,23 @@ const _getCurrentDurations = (attemptId: string) =>
   });
 
 export const findById = async (attemptId: string) => {
-  return withLogins(
-    await getPrisma().quizAttempt.findUnique({
-      where: { id: attemptId },
-      include: {
-        quiz: {
-          include: {
-            repository: true,
-            classroom: {
-              include: {
-                settings: true,
-                git_organization: true,
-              },
+  return getPrisma().quizAttempt.findUnique({
+    where: { id: attemptId },
+    include: {
+      quiz: {
+        include: {
+          repository: true,
+          classroom: {
+            include: {
+              settings: true,
+              git_organization: true,
             },
           },
         },
-        user: { include: GIT_IDENTITY },
       },
-    })
-  );
+      user: true,
+    },
+  });
 };
 
 // Bridge function: saves messages to AIConversation (which ai-agent also uses)
@@ -755,12 +753,12 @@ export const findByQuiz = async (quizId: string) => {
   const attempts = await getPrisma().quizAttempt.findMany({
     where: { quiz_id: quizId },
     include: {
-      user: { include: GIT_IDENTITY },
+      user: true,
     },
     orderBy: { started_at: 'desc' },
   });
 
-  return withLogins(attempts);
+  return attempts;
 };
 
 export const findByUser = async (userId: string, organizationId: string | null = null) => {

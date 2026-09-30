@@ -6,7 +6,6 @@ export interface AtRiskStudent {
   userId: string;
   name: string | null;
   login: string;
-  image?: string | null;
   missedDeadlines: number;
 }
 
@@ -39,7 +38,7 @@ const AtRiskStudents = ({ atRiskCount, students }: AtRiskStudentsProps) => {
               className="flex items-center justify-between p-2 rounded-lg hover:bg-paper dark:hover:bg-gray-800 transition-colors"
             >
               <div className="flex items-center gap-3 min-w-0 flex-1">
-                <UserAvatar login={s.login} image={s.image} name={s.name} seed={s.userId} size={32} />
+                <UserAvatar login={s.login} name={s.name} seed={s.userId} size={32} />
                 <div className="min-w-0">
                   <div className="text-sm text-ink-0 truncate">
                     {s.name || s.login || 'Unknown'}

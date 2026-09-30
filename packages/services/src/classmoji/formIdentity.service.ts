@@ -1,5 +1,4 @@
-import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { displayUsername } from '@classmoji/utils';
+import getPrisma from '@classmoji/database';
 
 import { FORM_NOT_FOUND } from './form.service.ts';
 import { FORM_DEFINITION_INVALID, formContractError, identityQuestionIds } from './formContract.ts';
@@ -189,11 +188,9 @@ export async function responseNames(
       ? []
       : await getPrisma().user.findMany({
           where: { id: { in: userIds } },
-          select: { id: true, name: true, ...GIT_IDENTITY },
+          select: { id: true, name: true, login: true },
         });
-  const accountName = new Map(
-    accounts.map(user => [user.id, user.name || displayUsername(user) || null])
-  );
+  const accountName = new Map(accounts.map(user => [user.id, user.name || user.login || null]));
 
   return new Map(
     rows.map(row => {

@@ -1,5 +1,4 @@
 import type { Prisma, Role, SubscriptionTier } from '@prisma/client';
-import { GIT_IDENTITY } from '@classmoji/database';
 
 // Classroom-settings projection shared by the root loader's user queries. Single
 // source of truth so adding a field is one edit, not four. Only non-sensitive
@@ -41,19 +40,12 @@ export const ROOT_MEMBERSHIP_SELECT = {
 // so the three lookups and the types below cannot drift apart.
 export const ROOT_USER_INCLUDE = {
   classroom_memberships: { select: ROOT_MEMBERSHIP_SELECT },
-  ...GIT_IDENTITY,
 } as const satisfies Prisma.UserInclude;
 
 type UserInclude = { include: typeof ROOT_USER_INCLUDE };
 
-// User from Prisma with classroom memberships and git identity accounts included
-type UserWithMembershipsAndAccounts = Prisma.UserGetPayload<UserInclude>;
-
-// The loader flattens the identity accounts: `login` is the Github username
-// (null for an account that has not connected Github yet).
-export type UserWithMemberships = Omit<UserWithMembershipsAndAccounts, 'accounts'> & {
-  login: string | null;
-};
+// Base user from Prisma with classroom memberships included
+export type UserWithMemberships = Prisma.UserGetPayload<UserInclude>;
 
 // The classroom shape nested inside a membership (from the include above)
 export type ClassroomWithSettings =
@@ -97,10 +89,6 @@ export type AppSubscription =
 // Root loader mutates user to add .subscription and .memberships
 // User.image (Prisma) is used as avatar_url in the UI
 export interface AppUser extends UserWithMemberships {
-  /** A Github account is connected (required before joining a classroom). */
-  has_github: boolean;
-  /** Has an email+password sign-in. */
-  has_password: boolean;
   subscription?: AppSubscription | null;
   memberships?: MembershipWithOrganization[];
   avatar_url?: string | null;

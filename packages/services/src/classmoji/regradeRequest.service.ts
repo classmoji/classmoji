@@ -1,5 +1,4 @@
-import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { withLogins } from '@classmoji/utils';
+import getPrisma from '@classmoji/database';
 import type { Prisma, RegradeRequest } from '@prisma/client';
 import * as notificationService from './notification.service.ts';
 
@@ -55,7 +54,7 @@ export const create = async ({
 };
 
 export const findMany = async (query: Prisma.RegradeRequestWhereInput) => {
-  const requests = await getPrisma().regradeRequest.findMany({
+  return getPrisma().regradeRequest.findMany({
     where: query,
     include: {
       git_repo_assignment: {
@@ -64,24 +63,25 @@ export const findMany = async (query: Prisma.RegradeRequestWhereInput) => {
           git_repo: true,
           graders: {
             include: {
-              grader: { include: GIT_IDENTITY },
+              grader: true,
             },
           },
           grades: {
             include: {
               token_transaction: true,
-              grader: { include: GIT_IDENTITY },
+              grader: true,
             },
           },
         },
       },
       student: {
         select: {
+          login: true,
           name: true,
           id: true,
           email: true,
           image: true,
-          ...GIT_IDENTITY,
+          provider_id: true,
           _count: {
             select: {
               regrade_requests: true,
@@ -94,7 +94,6 @@ export const findMany = async (query: Prisma.RegradeRequestWhereInput) => {
       created_at: 'desc',
     },
   });
-  return withLogins(requests);
 };
 
 /**

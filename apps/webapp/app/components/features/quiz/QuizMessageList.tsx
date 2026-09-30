@@ -587,7 +587,6 @@ interface QuizMessageListProps {
   loading?: boolean;
   isDarkMode?: boolean;
   userLogin?: string | null;
-  userImage?: string | null;
   onQuickAction?: ((message: string) => void | Promise<void>) | null;
   readOnly?: boolean;
   showTimestamps?: boolean;
@@ -603,7 +602,6 @@ const QuizMessageList = ({
   loading = false,
   isDarkMode = false,
   userLogin = null,
-  userImage = null,
   onQuickAction = null,
   readOnly = false,
   showTimestamps: _showTimestamps = false,
@@ -780,7 +778,7 @@ const QuizMessageList = ({
           {role === 'USER' &&
             (userLogin ? (
               <Avatar
-                src={userImage ?? undefined}
+                src={`https://github.com/${userLogin}.png?size=40`}
                 style={{ backgroundColor: '#52c41a' }}
               >
                 {userLogin[0]?.toUpperCase()}
