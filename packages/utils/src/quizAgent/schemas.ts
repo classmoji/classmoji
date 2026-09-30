@@ -247,7 +247,7 @@ export const OfferNextStepSchema = z.object({
     .trim()
     .min(1, 'feedback must not be empty')
     .describe(
-      "2 to 4 sentences on the student's answer: what is right, what is wrong, and why. When offering Try again, never state or hint at the content of expected_answer: no correct values, results, names or properties it contains. Name the flawed reasoning and where to look instead. Example: not 'your white text turns black on hover' but 'check which of the two selectors is more specific'."
+      "2 to 4 sentences on the student's answer: what is right, what is wrong, and why. When offering Try again, never state or hint at the content of expected_answer (no correct values, results, names or properties it contains) and give no direction toward it: no 'check...', 'look at...', 'think about...' or leading questions. Name only what is wrong in their reasoning. Example: not 'your white text turns black on hover' or 'check which selector is more specific', but 'file order isn't what decides this here.'"
     ),
   actions: NextStepActionsSchema,
 });

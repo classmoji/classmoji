@@ -151,7 +151,15 @@ describe('OfferNextStepSchema', () => {
     );
     expect(json.properties.feedback.minLength).toBe(1);
     expect(json.properties.feedback.description).toBe(
-      "2 to 4 sentences on the student's answer: what is right, what is wrong, and why. When offering Try again, never state or hint at the content of expected_answer: no correct values, results, names or properties it contains. Name the flawed reasoning and where to look instead. Example: not 'your white text turns black on hover' but 'check which of the two selectors is more specific'."
+      "2 to 4 sentences on the student's answer: what is right, what is wrong, and why. When offering Try again, never state or hint at the content of expected_answer (no correct values, results, names or properties it contains) and give no direction toward it: no 'check...', 'look at...', 'think about...' or leading questions. Name only what is wrong in their reasoning. Example: not 'your white text turns black on hover' or 'check which selector is more specific', but 'file order isn't what decides this here.'"
+    );
+    // Feedback gives no pointer toward the answer: guidance is a hint's (Tim's decision).
+    expect(json.properties.feedback.description).not.toMatch(/where to look|look instead/);
+  });
+
+  it('says in offer_next_step that feedback gives no direction toward the answer', () => {
+    expect(TOOL_DESCRIPTIONS.offer_next_step).toContain(
+      'The feedback says what is right, what is wrong and why; with Try again offered it gives no direction toward the answer, since guidance comes only as a hint after a Try again click.'
     );
   });
 

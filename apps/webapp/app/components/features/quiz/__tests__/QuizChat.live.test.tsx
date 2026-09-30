@@ -202,6 +202,29 @@ describe('QuizChat live', () => {
     expect(sendMessageMock).toHaveBeenCalledWith({ text: BUTTON_TEXT.try_again });
   });
 
+  it("ends a hint with Next alone, whose click sends Next's fixed text", async () => {
+    const hinted = [
+      buttonsMessage,
+      { id: 'u2', role: 'user', parts: [{ type: 'text', text: BUTTON_TEXT.try_again }] },
+      {
+        id: 'a2',
+        role: 'assistant',
+        parts: [{ type: 'text', text: "Here's a hint. What do you think?" }],
+      },
+    ] as unknown as QuizUIMessage[];
+    chatState.messages = hinted;
+    await mount(hinted);
+
+    // The offer's set is used up; the hint's Next is the only button left usable.
+    const usable = [...container.querySelectorAll('button')].filter(
+      b => b.closest('[data-testid="quiz-next-step"]') && !b.disabled
+    );
+    expect(usable.map(b => b.getAttribute('data-testid'))).toEqual(['quiz-next']);
+    await act(async () => usable[0].click());
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageMock).toHaveBeenCalledWith({ text: BUTTON_TEXT.next });
+  });
+
   it('sends the editor text, and nothing while a reply is running', async () => {
     chatState.messages = [buttonsMessage];
     await mount([buttonsMessage]);

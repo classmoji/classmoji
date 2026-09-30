@@ -8,7 +8,9 @@ import { BUTTON_TEXT, type NextStepAction } from '@classmoji/utils/quiz-agent';
  * so the server can tag it. The buttons are shown in a fixed order whatever
  * order the tool listed them in. The tool's `lead_in` line ("Ready for the next
  * question?") is shown above them, as the legacy chat showed its line above its
- * buttons; without one, only the buttons.
+ * buttons; without one, only the buttons. A hint (the reply to a Try again
+ * click) ends with Next alone and no line (QuizChat, `buttonSetsOf`): its Next
+ * sends the same text.
  */
 interface NextStepButtonsProps {
   actions: readonly NextStepAction[];

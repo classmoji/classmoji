@@ -6,7 +6,8 @@
  * a question's result arrives, or the quiz completes. A side question or an
  * argument the student types does not: the reply to it brings no buttons (Tim's
  * decision), so the set above stays the way on. A Try again click uses the set
- * up, so the hint turn shows no live buttons.
+ * up, and the hint that answers it ends with a set of its own: Next alone
+ * (Tim's decision), under the same rules.
  */
 
 import { act } from 'react';
@@ -36,7 +37,7 @@ window.matchMedia ??= ((query: string) => ({
 })) as unknown as typeof window.matchMedia;
 Element.prototype.scrollIntoView ??= () => {};
 
-const { QuizTranscript, liveOfferOf } = await import('../QuizChat');
+const { QuizTranscript, buttonSetsOf, liveButtonsOf } = await import('../QuizChat');
 
 const msg = (id: string, role: 'user' | 'assistant', parts: unknown[], metadata?: unknown) =>
   ({ id, role, parts, ...(metadata ? { metadata } : {}) }) as unknown as QuizUIMessage;
@@ -130,7 +131,7 @@ describe('the live button set', () => {
     expect(buttonSets()).toEqual([true]);
   });
 
-  it('is used up by a click, and a Try again hint brings no live buttons', async () => {
+  it('is used up by a click, and a Try again hint brings a live Next of its own', async () => {
     await render([
       ...answered,
       user('u2', BUTTON_TEXT.try_again),
@@ -138,7 +139,7 @@ describe('the live button set', () => {
         text("Here's a hint: think about the main axis. What do you think?"),
       ]),
     ]);
-    expect(buttonSets()).toEqual([false]);
+    expect(buttonSets()).toEqual([false, true]);
   });
 
   it('is used up by the button text typed in any case, as the server takes it', async () => {
@@ -208,7 +209,7 @@ describe('the live button set', () => {
   it('ignores hidden messages and a refused offer', async () => {
     const refused = { ...offer('o2'), state: 'output-error', errorText: 'An error occurred.' };
     expect(
-      liveOfferOf([
+      liveButtonsOf([
         ...answered,
         msg('h1', 'user', [text('next')], { hidden: true }),
         msg('a3', 'assistant', [refused]),
@@ -218,11 +219,157 @@ describe('the live button set', () => {
 
   it("points at the offer's index among the visible parts", () => {
     expect(
-      liveOfferOf([
+      liveButtonsOf([
         msg('a1', 'assistant', [text('Hidden status'), text('Not quite.'), offer('o1')], {
           hiddenPartIndexes: [0],
         }),
       ])
     ).toEqual({ message: 0, part: 1 });
+  });
+});
+
+describe('the Next after a hint', () => {
+  const hint = (id = 'a3', parts: unknown[] = [text("Here's a hint. What do you think?")]) =>
+    msg(id, 'assistant', parts);
+  // The feedback and buttons, a Try again click, and the hint that answers it.
+  const hinted = [...answered, user('u2', BUTTON_TEXT.try_again), hint()];
+
+  /** The bubbles of an assistant message, by its id. */
+  const bubblesOf = (id: string) => {
+    const index = hinted.findIndex(m => m.id === id);
+    const row = container.querySelectorAll('[data-message-role]')[index];
+    return [...row.querySelectorAll('[data-testid="quiz-assistant-bubble"]')];
+  };
+
+  it('ends the hint with Next alone, no Try again and no lead-in, and a click sends Next', async () => {
+    const onButton = vi.fn();
+    await render(hinted, { onButton });
+    expect(buttonSets()).toEqual([false, true]);
+
+    const bubble = bubblesOf('a3').at(-1)!;
+    const set = bubble.querySelector('[data-testid="quiz-next-step"]')!;
+    expect(set).not.toBeNull();
+    // The set comes after the hint's text, at the end of the bubble.
+    expect(bubble.lastElementChild).toBe(set);
+    expect(bubble.querySelector('[data-testid="quiz-try-again"]')).toBeNull();
+    expect(bubble.querySelector('[data-testid="quiz-next-step-lead-in"]')).toBeNull();
+
+    const next = set.querySelector('[data-testid="quiz-next"]') as HTMLButtonElement;
+    await act(async () => next.click());
+    expect(onButton).toHaveBeenCalledTimes(1);
+    expect(onButton).toHaveBeenCalledWith(BUTTON_TEXT.next, 'next');
+  });
+
+  it('comes from the saved click on reload, and from the button text typed in any case', async () => {
+    const saved = [...answered, user('u2', BUTTON_TEXT.try_again, { action: 'try_again' }), hint()];
+    expect(buttonSetsOf(saved)).toEqual({
+      live: { message: 4, hint: true },
+      hintReplies: new Set([4]),
+    });
+    await render(saved);
+    expect(buttonSets()).toEqual([false, true]);
+
+    const typed = [...answered, user('u2', `  ${BUTTON_TEXT.try_again.toUpperCase()} `), hint()];
+    expect(liveButtonsOf(typed)).toEqual({ message: 4, hint: true });
+  });
+
+  it('ends a hint that carries a refused offer ahead of its text', async () => {
+    const refused = { ...offer('o2'), state: 'output-error', errorText: 'An error occurred.' };
+    await render([
+      ...answered,
+      user('u2', BUTTON_TEXT.try_again),
+      hint('a3', [refused, text("Here's a hint. What do you think?")]),
+    ]);
+    expect(buttonSets()).toEqual([false, true]);
+  });
+
+  it('stays usable after a side question and its text-only reply, and while one is typed', async () => {
+    await render([
+      ...hinted,
+      user('u3', 'Can you rephrase the hint?'),
+      msg('a4', 'assistant', [text('It is about which rule wins.')]),
+    ]);
+    // The side reply brings no set of its own; the hint's Next stays the way on.
+    expect(buttonSets()).toEqual([false, true]);
+
+    await render([...hinted, user('u3', 'Can you rephrase the hint?')]);
+    expect(buttonSets()).toEqual([false, true]);
+  });
+
+  it('is used up by a click on it, or its text typed', async () => {
+    await render([...hinted, user('u3', BUTTON_TEXT.next)]);
+    expect(buttonSets()).toEqual([false, false]);
+    await render([...hinted, user('u3', ' Next ')]);
+    expect(buttonSets()).toEqual([false, false]);
+  });
+
+  it('is superseded by the new set an answer brings, by a card and by a result row', async () => {
+    await render([
+      ...hinted,
+      user('u3', 'It aligns the items along the main axis.'),
+      msg('a4', 'assistant', [offer('o2')]),
+    ]);
+    expect(buttonSets()).toEqual([false, false, true]);
+
+    // The next question's card or the question's result, even without a click.
+    expect(liveButtonsOf([...hinted, msg('a4', 'assistant', [card(2)])])).toBeNull();
+    expect(liveButtonsOf([...hinted, msg('a4', 'assistant', [divider(1)])])).toBeNull();
+    expect(
+      liveButtonsOf([
+        ...hinted,
+        user('u3', BUTTON_TEXT.next),
+        msg('a4', 'assistant', [divider(1), card(2)]),
+      ])
+    ).toBeNull();
+    await render([
+      ...hinted,
+      user('u3', BUTTON_TEXT.next),
+      msg('a4', 'assistant', [divider(1), card(2)]),
+    ]);
+    expect(buttonSets()).toEqual([false, false]);
+  });
+
+  it('is superseded by the evaluation', () => {
+    const evaluation = { type: 'data-evaluation', id: 'evaluation', data: {} };
+    expect(liveButtonsOf([...hinted, msg('a4', 'assistant', [evaluation])])).toBeNull();
+  });
+
+  it('keeps an earlier hint on screen, disabled, once a later set is live', async () => {
+    await render([
+      ...hinted,
+      user('u3', 'It aligns them on the main axis.'),
+      msg('a4', 'assistant', [offer('o2')]),
+      user('u4', BUTTON_TEXT.try_again),
+      hint('a5'),
+    ]);
+    expect(buttonSets()).toEqual([false, false, false, true]);
+  });
+
+  it('is not added to a reply that brings buttons, a card or a result of its own', async () => {
+    for (const parts of [[offer('o2', ['next'])], [card(1)], [divider(1)]]) {
+      const set = buttonSetsOf([...answered, user('u2', BUTTON_TEXT.try_again), hint('a3', parts)]);
+      expect(set.hintReplies.size).toBe(0);
+    }
+  });
+
+  it('is not added to a reply to anything but a Try again click', async () => {
+    await render([...answered, user('u2', 'Give me a hint'), hint()]);
+    expect(buttonSets()).toEqual([true]);
+    await render([msg('a1', 'assistant', [card(1)]), user('u1', 'Is it flexbox?'), hint('a2')]);
+    expect(buttonSets()).toEqual([]);
+  });
+
+  it('shows no Next while the hint is still streaming', async () => {
+    await render(hinted, { busy: true });
+    expect(buttonSets()).toEqual([false]);
+  });
+
+  it('is disabled once the quiz completes, while a turn runs, and in a read-only view', async () => {
+    await render(hinted, { status: 'complete' });
+    expect(buttonSets()).toEqual([false, false]);
+    await render([...hinted, user('u3', 'side question')], { busy: true });
+    expect(buttonSets()).toEqual([false, false]);
+    await render(hinted, { onButton: null });
+    expect(buttonSets()).toEqual([false, false]);
   });
 });

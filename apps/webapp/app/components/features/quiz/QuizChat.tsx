@@ -47,7 +47,10 @@ const { Text } = Typography;
  * answer (its input, shown as the agent's message once it is in; for staff
  * reading someone else's attempt, the expected answer under it) then the
  * lead-in line and the Try again / Next buttons (its output), the results
- * panel from the stored evaluation record. Any other part (reasoning, internal
+ * panel from the stored evaluation record. A hint (the reply to a Try again
+ * click) ends with the Next button alone, with no lead-in, unlike the legacy
+ * chat, which showed Try again and Next after every such reply (Tim's
+ * decision; `buttonSetsOf`). Any other part (reasoning, internal
  * tools, unknown data) renders nothing. Parts render in arrival order, except
  * that a question's marker renders above a later question's card in the same
  * message (`displayOrder`). As in the legacy chat, a marker is not inside a
@@ -356,31 +359,73 @@ const buttonActionOf = (message: QuizUIMessage) =>
       .join('\n')
   );
 
+/** The buttons a hint ends with: Next alone, so the student answers or moves on. */
+export const HINT_ACTIONS: readonly NextStepAction[] = ['next'];
+
 /**
- * The Try again / Next buttons that can still be clicked: the latest offer, as
- * its message's position in `messages` and its index in that message's
- * visible parts, or null when none can. A set stays live until something
- * supersedes it: one of its buttons is clicked (or its text typed, which the
- * server takes as the click), a newer set arrives, the card of a later
- * question or a question's result arrives, or the evaluation does. Anything
- * else leaves it live: a side question or an argument the student types (the
- * reply to it brings no buttons, so these stay the way on), the current
- * question's card shown again on request, or an earlier question's revised
- * result. After a Try again click the hint brings no buttons either, and the
- * next answer brings a new set.
+ * Whether a reply to a Try again click is a hint, which ends with the Next
+ * button alone (`HINT_ACTIONS`): it brings no buttons of its own (an accepted
+ * offer), no question card, no question result and no evaluation. A refused
+ * call counts for nothing: the server refuses offer_next_step in a Try again
+ * turn, so a hint often carries a refused offer ahead of its text.
  */
-export const liveOfferOf = (
+const isHintReply = (message: QuizUIMessage) =>
+  !visibleParts(message).some(
+    part =>
+      !isFailedToolPart(part) &&
+      (((part.type === 'tool-offer_next_step' || part.type === 'tool-present_question') &&
+        part.state === 'output-available') ||
+        part.type === 'data-question-result' ||
+        isEvaluationPart(part))
+  );
+
+/**
+ * A set of buttons that can still be clicked: an offer's Try again / Next,
+ * as its message's position in `messages` and its index in that message's
+ * visible parts, or the Next alone at the end of a hint (`hint`).
+ */
+export type LiveButtons = { message: number; part: number } | { message: number; hint: true };
+
+/**
+ * The button sets of a transcript, from the messages alone, so a reload shows
+ * what the live chat showed: `hintReplies`, the positions of the replies that
+ * end with the Next button alone, and `live`, the one set that can still be
+ * clicked, or null when none can.
+ *
+ * An offer (offer_next_step) brings its own set. So does a hint: the first
+ * assistant reply after a Try again click (the stored action, or the button's
+ * text, which the server takes as the click), when it is a hint
+ * (`isHintReply`), ends with Next alone. The student answers the hint, which
+ * brings feedback and a new offer, or moves on; a hint never ends with Try
+ * again, so hints never chain from the buttons (Tim's decision).
+ *
+ * The latest set stays live until something supersedes it: one of its
+ * buttons is clicked (or its text typed), a newer set arrives, the card of a
+ * later question or a question's result arrives, or the evaluation does.
+ * Anything else leaves it live: a side question or an argument the student
+ * types (the reply to it brings no buttons, so these stay the way on), the
+ * current question's card shown again on request, or an earlier question's
+ * revised result.
+ */
+export const buttonSetsOf = (
   messages: readonly QuizUIMessage[]
-): { message: number; part: number } | null => {
-  let live: { message: number; part: number } | null = null;
+): { live: LiveButtons | null; hintReplies: ReadonlySet<number> } => {
+  let live: LiveButtons | null = null;
   let lastCard = 0;
+  // The next assistant message answers a Try again click.
+  let answersTryAgain = false;
+  const hintReplies = new Set<number>();
   messages.forEach((message, position) => {
     if (message.metadata?.hidden) return;
     if (message.role === 'user') {
-      if (buttonActionOf(message)) live = null;
+      const action = buttonActionOf(message);
+      if (action) live = null;
+      answersTryAgain = action === 'try_again';
       return;
     }
     if (message.role !== 'assistant') return;
+    const repliesToTryAgain = answersTryAgain;
+    answersTryAgain = false;
     visibleParts(message).forEach((part, index) => {
       if (isFailedToolPart(part)) return;
       if (part.type === 'tool-offer_next_step' && part.state === 'output-available') {
@@ -395,9 +440,17 @@ export const liveOfferOf = (
         live = null;
       }
     });
+    if (repliesToTryAgain && isHintReply(message)) {
+      hintReplies.add(position);
+      live = { message: position, hint: true };
+    }
   });
-  return live;
+  return { live, hintReplies };
 };
+
+/** The one set of buttons that can still be clicked (`buttonSetsOf`), or null. */
+export const liveButtonsOf = (messages: readonly QuizUIMessage[]): LiveButtons | null =>
+  buttonSetsOf(messages).live;
 
 /**
  * A part of the assistant's reply that renders: inside a bubble, or (a
@@ -744,7 +797,7 @@ interface PartContext {
   streaming: boolean;
   /** No button can be used: a turn is running, the attempt is complete, or read-only. */
   buttonsDisabled: boolean;
-  /** The index of this message's live offer (`liveOfferOf`), if it has it. */
+  /** The index of this message's live offer (`buttonSetsOf`), if it has it. */
   liveOffer: number | null;
   onButton: ((text: string, action: NextStepAction) => void) | null;
 }
@@ -817,7 +870,7 @@ export function AssistantPart({
       // call is done. A part saved before the feedback moved into the call has
       // none. Under it, for staff only, the answer the model stated (the
       // student's copy never has it). Only the live set can be clicked
-      // (`liveOfferOf`).
+      // (`buttonSetsOf`).
       const feedback = feedbackOf(part.input);
       const expected = expectedAnswerOf(part.input);
       return (
@@ -926,8 +979,9 @@ export function QuizTranscript({
   const lastMessage = shown[shown.length - 1];
   // The opening reply: its welcome is a bubble of its own.
   const openingId = shown.find(m => m.role === 'assistant')?.id;
-  // The one set of buttons that can still be clicked, if any.
-  const liveOffer = liveOfferOf(shown);
+  // The one set of buttons that can still be clicked, if any, and the
+  // replies that end with the Next button alone (the hints).
+  const { live, hintReplies } = buttonSetsOf(shown);
 
   // The results panel renders once: at the first evaluation part, from the
   // stored record when the loader has it. Above it, the evaluation's closing
@@ -1011,7 +1065,7 @@ export function QuizTranscript({
           isDarkMode,
           streaming: isStreamingThis,
           buttonsDisabled: busy || status === 'complete' || !onButton,
-          liveOffer: liveOffer?.message === index ? liveOffer.part : null,
+          liveOffer: live?.message === index && 'part' in live ? live.part : null,
           onButton,
         };
         const blocks = messageBlocks(parts, isStreamingThis, { opening: message.id === openingId });
@@ -1025,6 +1079,19 @@ export function QuizTranscript({
               : null;
 
         if (blocks.length === 0 && !evaluationPart) return null;
+
+        // A hint ends with the Next button alone, in its last bubble, once the
+        // reply is in (a card could still arrive while it streams). Live only
+        // while nothing has superseded it (`buttonSetsOf`).
+        let hintBubble = -1;
+        if (hintReplies.has(index) && !isStreamingThis) {
+          blocks.forEach((block, i) => {
+            if (block.kind === 'content' && block.entries.some(e => e.part.type !== 'data-step')) {
+              hintBubble = i;
+            }
+          });
+        }
+        const hintLive = live?.message === index && 'hint' in live;
 
         return (
           <div
@@ -1079,6 +1146,13 @@ export function QuizTranscript({
                         {inBubble.map(({ part, index }) => (
                           <AssistantPart key={index} part={part} index={index} ctx={ctx} />
                         ))}
+                        {blockIndex === hintBubble && (
+                          <NextStepButtons
+                            actions={HINT_ACTIONS}
+                            disabled={ctx.buttonsDisabled || !hintLive}
+                            onAction={onButton}
+                          />
+                        )}
                       </Bubble>
                     </Space>
                   )}

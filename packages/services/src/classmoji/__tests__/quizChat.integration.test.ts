@@ -1155,6 +1155,127 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     expect(await statusOf(nextId)).toContain('The student clicked Next.');
   });
 
+  it('records a Next after a hint as moving on, with the answers so far and the hints before them', async () => {
+    // Tim's decision: a hint (the reply to Try again) ends with Next alone, so
+    // the student answers it or moves on. That Next posts the same text as any
+    // Next, and the server must take it as moving on from the question.
+    const attemptId = await newAttempt();
+    const turn = await begin(attemptId);
+    await grading.presentQuestion(call(turn), question(1));
+    const offer = (id: string, state = 'output-available') => ({
+      type: 'tool-offer_next_step',
+      toolCallId: id,
+      state,
+      input: {
+        expected_answer: 'The later rule wins at equal specificity.',
+        feedback: 'That is not what decides it here.',
+        actions: ['try_again', 'next'],
+      },
+      ...(state === 'output-available'
+        ? {
+            output: {
+              actions: ['try_again', 'next'],
+              lead_in: 'Would you like to try again or move on?',
+            },
+          }
+        : { errorText: 'An error occurred.' }),
+    });
+    const reply = (id: string, parts: unknown[]) =>
+      chat.persistAssistantMessage(attemptId, { id, role: 'assistant', parts } as never, {
+        final: true,
+      });
+    const hint = { type: 'text', text: "Here's a hint: compare the two rules. What do you think?" };
+
+    // An answer, its feedback and buttons; Try again and a hint (the offer
+    // the model tried in that turn was refused); a second answer after the
+    // hint, its feedback; Try again and a second hint; then the hint's Next.
+    await say(attemptId, 'It depends on the colour.');
+    await reply('r1', [offer('o1')]);
+    const tryAgainId = msgId();
+    await say(attemptId, BUTTON_TEXT.try_again, tryAgainId);
+    await reply('r2', [offer('o2', 'output-error'), hint]);
+    await say(attemptId, 'The rule further down wins.');
+    await reply('r3', [offer('o3')]);
+    await say(attemptId, BUTTON_TEXT.try_again);
+    await reply('r4', [hint]);
+    const nextId = msgId();
+    const admitted = await chat.admitStudentMessage({
+      attemptId,
+      message: { id: nextId, text: BUTTON_TEXT.next },
+      runId,
+    });
+
+    // Admitted as the Next button, and the model is told so.
+    expect(admitted).toMatchObject({ status: 'admitted', action: 'next' });
+    const canonical = await chat.loadCanonicalMessages(attemptId);
+    const status = canonical.find(m => m.id === nextId)?.parts[1] as { text: string };
+    expect(status.text).toContain('The student clicked Next.');
+    expect(status.text).not.toContain('Try again');
+    expect((await grading.getProgress(attemptId)).lastAction).toBe('next');
+
+    // What the browser derives the Next-only set from on reload: the click's
+    // stored action, and hints with no accepted offer.
+    const transcript = await chat.loadTranscriptForViewer(attemptId, 'student');
+    expect(transcript.find(m => m.id === tryAgainId)?.metadata).toEqual({ action: 'try_again' });
+    for (const id of ['r2', 'r4']) {
+      const parts = transcript.find(m => m.id === id)!.parts as Array<Record<string, unknown>>;
+      expect(
+        parts.some(p => p.type === 'tool-offer_next_step' && p.state === 'output-available')
+      ).toBe(false);
+    }
+
+    // Recording in the Next turn: a first result (not a revision), from every
+    // answer so far. The hint before the second answer costs it 15; the
+    // second hint came after the last answer, so it costs nothing.
+    const nextTurn: Turn = {
+      attemptId,
+      fence: admitted.fence,
+      inputMessageId: admitted.inputMessageId,
+      runId,
+    };
+    const answers: Answer[] = [
+      { level: 'minimal', hints_before: 0 },
+      { level: 'partly_right', hints_before: 1 },
+    ];
+    expect(deriveResult(answers).credit_earned).toBe(25); // max(20, 40 - 15)
+    const recorded = await grading.finalizeQuestion(
+      call(nextTurn),
+      result(1, answers, 'Keep learning!')
+    );
+    expect(recorded).toEqual({
+      question_num: 1,
+      emoji: 'seedling',
+      brief_feedback: 'Keep learning!',
+    });
+
+    const [stored] = (await attemptRow(attemptId)).question_results_json as Record<
+      string,
+      unknown
+    >[];
+    expect(stored).toMatchObject({
+      question_num: 1,
+      tries: 2,
+      eventually_correct: false,
+      first_attempt_correct: false,
+      credit_earned: 25,
+    });
+    expect(stored.revised).toBeUndefined();
+    const finalized = await events(attemptId, 'result_finalized');
+    expect(finalized).toHaveLength(1);
+    expect(finalized[0].input_message_id).toBe(nextId);
+    expect(finalized[0].payload).toMatchObject({ question_num: 1, answers });
+    expect(await events(attemptId, 'result_revised')).toHaveLength(0);
+    expect(await grading.getProgress(attemptId)).toMatchObject({
+      presented: 1,
+      finalized: [1],
+      score: { earned: 25, possible: 100 },
+      lastAction: 'next',
+    });
+
+    // The turn goes on to the next question, as after any Next.
+    expect((await grading.presentQuestion(call(nextTurn), question(2))).question_number).toBe(2);
+  });
+
   it('tags a typed button text in any case, with spaces around it', async () => {
     const attemptId = await newAttempt();
     const typed = [

@@ -430,7 +430,7 @@ describe('quiz prompt: typed tools only', () => {
         "Before it, state the correct answer in the call's expected_answer field (one or two sentences, for staff only; the student never sees it)."
       );
       const rule =
-        'When offering Try again, never state or hint at the content of expected_answer: no correct values, results, names or properties it contains. Name the flawed reasoning and where to look instead. Example: not "your white text turns black on hover" but "check which of the two selectors is more specific".';
+        'When offering Try again, never state or hint at the content of expected_answer: no correct values, results, names or properties it contains. Name only what is wrong in their reasoning, with no direction toward the answer (HINTS COME ONLY ON REQUEST). Example: not "your white text turns black on hover" or "check which selector is more specific", but "file order isn\'t what decides this here".';
       expect(flat.split(rule)).toHaveLength(2);
       expect(flat.split('never state or hint at the content of expected_answer')).toHaveLength(2);
       // The reveal rules stand: with only Next the answer may be stated.
@@ -438,12 +438,30 @@ describe('quiz prompt: typed tools only', () => {
         'With only Next (a correct answer, or the reveal), the feedback may state the answer.'
       );
       expect(flat).toMatch(/The reveal ends the question: offer only \["next"\]/);
-      // Feedback may say where to look; any further guidance is still a hint.
-      expect(flat).toContain(
-        'Feedback on an answer says only what is right and what is wrong, and where to look (FEEDBACK ON AN ANSWER). It NEVER guides further toward the answer'
-      );
     }
   );
+
+  it.each(bothModes)(
+    '%s: says once that feedback never guides toward the answer, and nowhere asks where to look',
+    (_l, p) => {
+      const flat = p.staticPrompt.replace(/\s+/g, ' ');
+      // Tim's decision: feedback says what is right, what is wrong and why, with
+      // no pointer toward the answer; guidance comes only in a hint on request.
+      const rule =
+        'Feedback on an answer says only what is right and what is wrong. It NEVER guides toward the answer: no hint, no leading question, no "think about...", "check..." or "look at..." in feedback. Guidance belongs in the hint the student asks for.';
+      expect(flat.split(rule)).toHaveLength(2);
+      expect(flat.split('NEVER guides toward the answer')).toHaveLength(2);
+      expect(flat).not.toMatch(/where to look|where in their code to look|guides further/);
+      expect(flat).not.toContain('check which of the two selectors');
+    }
+  );
+
+  it('moves on with the answers so far on a Next after a hint, and skips only without an answer', () => {
+    const flat = baseSystemPrompt.replace(/\s+/g, ' ');
+    expect(flat).toContain(
+      'The student clicks Next or says "skip" without having answered = skipped: the question is recorded with an empty answers list. Next after an answer, with a hint since or not, moves on with every answer given so far.'
+    );
+  });
 
   it.each(bothModes)('%s: shows every offer_next_step example with an expected answer', (_l, p) => {
     const flat = p.staticPrompt.replace(/\s+/g, ' ');
