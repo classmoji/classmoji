@@ -10,12 +10,21 @@
  *   then the per-attempt block); nothing that changes per turn goes there.
  *   A code-aware quiz whose repository was not found this turn gets a fixed
  *   hidden user-role notice after the history instead (never persisted).
+ * - The opening turn (the `begin` action's) starts with the fixed welcome
+ *   (`ctx.welcome`), written before the first model call and saved with the
+ *   reply.
  * - `prepareStep` rebuilds each step's messages and moves one cache
  *   breakpoint to the last message, so an older breakpoint never piles up.
+ * - Tool calls that failed in EARLIER turns are left out of the history
+ *   (`withoutEarlierFailedToolCalls`): their saved error is only "An error
+ *   occurred.", which reads as a broken interface. This turn's own refusals
+ *   stay in its steps, so the model reads them and recovers.
  * - The turn stops once `present_question`, `offer_next_step` or
  *   `submit_quiz_evaluation` SUCCEEDED (an invalid call is a tool error the
- *   model corrects in the same turn), or at the step ceiling. Stopping on the
- *   buttons keeps text from trailing after them.
+ *   model corrects in the same turn), or at the step ceiling
+ *   (`stepCeilingFor`: the higher one when the attempt explores code or has
+ *   the course-material lookups). Stopping on the buttons keeps text from
+ *   trailing after them.
  * - After the stream ends, persisted state decides whether the evaluation is
  *   still owed (for a Next click, only when the last question was already out
  *   before the turn began); if so, up to two more calls carry the evaluation
@@ -24,6 +33,11 @@
  *   server completes the attempt from the recorded grades and writes a
  *   `data-evaluation` part. If the last result is missing, a `reply_failed`
  *   notice is written and the student's next message retries.
+ * - Otherwise, if the turn's last offer_next_step was refused only for having
+ *   no feedback text yet, the text came after it, and no card, buttons or
+ *   evaluation went out, that call is run again with the model's own input
+ *   through the same tool (`offerToReplay`), and its buttons are written into
+ *   the reply like any other offer. Any other refusal writes nothing.
  * - Everything the model or the tools write is persisted in `onEnd`, upstream
  *   of the projection; the returned stream is projected for the browser. A
  *   failed save is tried once more (the save is an upsert by message id); a
@@ -38,6 +52,7 @@ import {
   isStepCount,
   streamText,
   toUIMessageStream,
+  wrapLanguageModel,
   type LanguageModel,
   type ModelMessage,
   type StopCondition,
@@ -53,6 +68,7 @@ import type {
 import { THINKING } from '@classmoji/utils/ai-models';
 import type { AttemptContext } from './context.ts';
 import { CODE_UNAVAILABLE_NOTICE } from './prompt/index.ts';
+import { isFeedbackMissing } from './tools/errors.ts';
 import type { Effort } from './settings.ts';
 import { isRefusal, logDiagnostic, type DiagnosticLog } from '../shared/sanitize.ts';
 import { createToolQueue, type ToolQueue } from '../shared/toolQueue.ts';
@@ -63,6 +79,16 @@ export const TURN_DEADLINE_MS = 240_000;
 /** Bounded recovery calls when the evaluation is owed (Q17). */
 export const RECOVERY_CALLS = 2;
 export const STEP_CEILING = { standard: 10, codeAware: 20 } as const;
+
+/**
+ * The turn's step ceiling: the higher one for an attempt that explores code
+ * or has the course-material lookups (tools/index.ts registers them when
+ * `ctx.content` is set), whose steps those calls also use.
+ */
+export function stepCeilingFor(ctx: Pick<AttemptContext, 'isCodeAware' | 'content'>): number {
+  return ctx.isCodeAware || ctx.content ? STEP_CEILING.codeAware : STEP_CEILING.standard;
+}
+
 /** Output ceiling per call, by phase; thinking tokens count against it. */
 export const MAX_OUTPUT_TOKENS = { question: 16_000, evaluation: 32_000 } as const;
 /** Pause before the one retry of a failed end-of-turn save. */
@@ -78,6 +104,12 @@ export type QuizToolsFactory = (
     signal: AbortSignal;
     /** The turn's log, so tool diagnostics and usage lines land with the loop's. */
     log?: DiagnosticLog;
+    /**
+     * Whether the model has written visible text in this turn (a text delta
+     * with a non-space character), read from the model's own stream
+     * (`watchModelText`) before any tool of the same step runs.
+     */
+    textWritten: () => boolean;
   }
 ) => ToolSet;
 
@@ -111,7 +143,7 @@ export type QuizTurnInput = {
   signal: AbortSignal;
   deps: QuizTurnDeps;
   /** Tests inject a mock; otherwise the Anthropic model for `ctx.model` on `ctx.apiKey`. */
-  model?: LanguageModel;
+  model?: ModelObject;
   deadlineMs?: number;
   /** Non-persisted messages appended after the history (e.g. a status fallback). */
   extraMessages?: ModelMessage[];
@@ -120,6 +152,41 @@ export type QuizTurnInput = {
 };
 
 type Phase = 'question' | 'evaluation';
+
+/** A model object (not a gateway id string): the turn wraps it. */
+export type ModelObject = Exclude<LanguageModel, string>;
+
+/**
+ * The model, with `onText` called as each text delta with a non-space
+ * character leaves it. This sits at the model's own stream, upstream of the
+ * SDK's tool execution (a step's tools run once its model call has ended), so
+ * every delta of a step has passed here before any tool of that step runs: a
+ * tool reading the flag sees the text written before its call in the same
+ * step, or in an earlier step of the turn, whatever the downstream UI stream
+ * has consumed so far.
+ */
+export function watchModelText(model: ModelObject, onText: () => void): ModelObject {
+  return wrapLanguageModel({
+    model,
+    middleware: {
+      wrapStream: async ({ doStream }) => {
+        const result = await doStream();
+        type Part = typeof result.stream extends ReadableStream<infer P> ? P : never;
+        return {
+          ...result,
+          stream: result.stream.pipeThrough(
+            new TransformStream<Part, Part>({
+              transform(part, controller) {
+                if (part.type === 'text-delta' && part.delta.trim() !== '') onText();
+                controller.enqueue(part);
+              },
+            })
+          ),
+        };
+      },
+    },
+  });
+}
 
 /** The turn is in the evaluation phase once the last question is out. */
 export function phaseFor(p: AttemptProgress): Phase {
@@ -131,6 +198,11 @@ export function allResultsFinalized(p: AttemptProgress): boolean {
     if (!p.finalized.includes(n)) return false;
   }
   return true;
+}
+
+/** The `begin` action's turn (no admitted student message) before any question is out. */
+export function isOpeningTurn(ctx: Pick<AttemptContext, 'inputMessageId' | 'progress'>): boolean {
+  return ctx.inputMessageId === null && ctx.progress.presented === 0;
 }
 
 /** What the turn started from: the student's action and the progress before any call. */
@@ -188,9 +260,119 @@ export function dropIncompleteToolParts(message: QuizUIMessage): QuizUIMessage {
   const parts = message.parts.filter(part => {
     const p = part as { type: string; state?: string };
     if (!(p.type.startsWith('tool-') || p.type === 'dynamic-tool')) return true;
-    return p.state === 'output-available' || p.state === 'output-error' || p.state === 'output-denied';
+    return (
+      p.state === 'output-available' || p.state === 'output-error' || p.state === 'output-denied'
+    );
   });
   return { ...message, parts } as QuizUIMessage;
+}
+
+/** A tool result whose saved state was `output-error` (the SDK converts it to an error output). */
+function isErrorResult(part: unknown): part is { type: 'tool-result'; toolCallId: string } {
+  const p = part as { type?: unknown; output?: { type?: unknown } } | null;
+  return (
+    p?.type === 'tool-result' &&
+    (p.output?.type === 'error-text' || p.output?.type === 'error-json')
+  );
+}
+
+/**
+ * The history of earlier turns without the tool calls that failed in them:
+ * each such call and its result are removed, a tool message left empty is
+ * dropped, and so is an assistant message left with nothing but reasoning
+ * (the step made only that call). Saved, those failures read "An error
+ * occurred.", which tells the model nothing but that something is broken.
+ *
+ * A step is its assistant message and the tool message after it; its failed
+ * calls are removed together or not at all. They are kept, step unchanged,
+ * when removing them would put two assistant messages next to each other
+ * (the provider would merge them into one turn with two signed thinking
+ * blocks). The check looks at the message kept before the step and the one
+ * after it as given, so it is conservative: an assistant message after it
+ * counts even if a later step drops it.
+ *
+ * It depends on nothing but the messages, and removes only: every message
+ * before the first one that held a failed call is the same object, and each
+ * step's outcome depends only on the messages before it and the one after
+ * it, so the history of a later turn starts with the same bytes. With nothing
+ * to remove, the array itself comes back. The quiz tools use no approvals,
+ * so an error output here is always a failed call.
+ */
+export function withoutEarlierFailedToolCalls(messages: ModelMessage[]): ModelMessage[] {
+  const failed = new Set<string>();
+  for (const m of messages) {
+    if (typeof m.content === 'string') continue;
+    for (const part of m.content) if (isErrorResult(part)) failed.add(part.toolCallId);
+  }
+  if (failed.size === 0) return messages;
+
+  const isFailedPart = (part: unknown) => {
+    const p = part as { type?: unknown; toolCallId?: unknown };
+    return (
+      (p.type === 'tool-call' || p.type === 'tool-result') &&
+      typeof p.toolCallId === 'string' &&
+      failed.has(p.toolCallId)
+    );
+  };
+  /** `m` without its failed parts: `m` itself if it has none, null if nothing is left. */
+  const filtered = (m: ModelMessage): ModelMessage | null => {
+    if ((m.role !== 'assistant' && m.role !== 'tool') || typeof m.content === 'string') return m;
+    const content = (m.content as unknown[]).filter(part => !isFailedPart(part));
+    if (content.length === m.content.length) return m;
+    const kept = content.some(part => (part as { type?: unknown }).type !== 'reasoning');
+    return kept ? ({ ...m, content } as ModelMessage) : null;
+  };
+  const isAssistant = (m: ModelMessage | undefined) => m?.role === 'assistant';
+
+  const out: ModelMessage[] = [];
+  for (let i = 0; i < messages.length; ) {
+    // One step: an assistant message and the tool message after it, if any.
+    const end =
+      messages[i].role === 'assistant' && messages[i + 1]?.role === 'tool' ? i + 2 : i + 1;
+    const step = messages.slice(i, end);
+    const next = messages[end];
+    const kept = step.map(filtered);
+    const changed = kept.some((m, k) => m !== step[k]);
+    const replacement = kept.filter((m): m is ModelMessage => m !== null);
+    const sequence = [out.at(-1), ...replacement, next];
+    const adjacent = sequence.some(
+      (m, k) => k > 0 && isAssistant(m) && isAssistant(sequence[k - 1])
+    );
+    out.push(...(changed && adjacent ? step : replacement));
+    i = end;
+  }
+  return out;
+}
+
+/** The tools whose success ends the turn: a card, the buttons or the evaluation went out. */
+const TURN_ENDING_TOOLS = new Set([
+  'present_question',
+  'offer_next_step',
+  'submit_quiz_evaluation',
+]);
+
+/**
+ * The input of the turn's last offer_next_step call, when that call was
+ * refused only for having no feedback text yet (`isFeedbackMissing`) and no
+ * call in the turn put a card, buttons or the evaluation out; otherwise null.
+ * A later offer refused for any other reason, or accepted, wins over it.
+ */
+export function offerToReplay(
+  steps: ReadonlyArray<{ content: ReadonlyArray<unknown>; finishReason?: string }>
+): unknown {
+  // A reply cut off at the output limit ends as it is: no buttons after cut text.
+  if (steps.at(-1)?.finishReason === 'length') return null;
+  let last: { input: unknown; replay: boolean } | null = null;
+  for (const step of steps) {
+    for (const part of step.content) {
+      const p = part as { type?: unknown; toolName?: unknown; input?: unknown; error?: unknown };
+      if (p.type === 'tool-result' && TURN_ENDING_TOOLS.has(p.toolName as string)) return null;
+      if (p.type === 'tool-error' && p.toolName === 'offer_next_step') {
+        last = { input: p.input, replay: isFeedbackMissing(p.error) };
+      }
+    }
+  }
+  return last?.replay ? last.input : null;
 }
 
 /** Text-part count of the last user message in a request (the hidden status is part 2). */
@@ -234,6 +416,15 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
         return;
       }
 
+      // The opening turn starts with the fixed welcome, shown at once and saved
+      // with the reply; the model's work (exploring, question 1) follows it.
+      if (isOpeningTurn(ctx) && ctx.welcome) {
+        const id = generateId();
+        writer.write({ type: 'text-start', id });
+        writer.write({ type: 'text-delta', id, delta: ctx.welcome });
+        writer.write({ type: 'text-end', id });
+      }
+
       // `ctx.progress` is the progress read just before this turn: the phase,
       // the hidden status and the Next check all use this one snapshot.
       const turnStart: TurnStart = {
@@ -242,14 +433,23 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
       };
       const phase = phaseFor(ctx.progress);
       const effort: Effort = phase === 'evaluation' ? ctx.gradingEffort : ctx.questionEffort;
-      const model =
-        input.model ?? createAnthropic({ apiKey: ctx.apiKey })(ctx.model);
+      // Set from the model's own stream (watchModelText), never from the loop's
+      // writes such as the welcome, and before any tool of the same step runs.
+      // One flag for the whole turn: text in any earlier step counts too.
+      let textWritten = false;
+      const model = watchModelText(
+        input.model ?? createAnthropic({ apiKey: ctx.apiKey })(ctx.model),
+        () => {
+          textWritten = true;
+        }
+      );
       const queue = createToolQueue();
       const tools = deps.tools(ctx, {
         writer: writer as UIMessageStreamWriter<QuizUIMessage>,
         queue,
         signal: deadline,
         log,
+        textWritten: () => textWritten,
       });
       let callIndex = 0;
       let sawStreamError = false;
@@ -267,7 +467,7 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
             succeeded('present_question'),
             succeeded('offer_next_step'),
             succeeded('submit_quiz_evaluation'),
-            isStepCount(ctx.isCodeAware ? STEP_CEILING.codeAware : STEP_CEILING.standard),
+            isStepCount(stepCeilingFor(ctx)),
           ],
           prepareStep: ({ initialMessages, responseMessages }) => ({
             messages: withStepCacheBreakpoint([
@@ -328,6 +528,46 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
         }
       };
 
+      /**
+       * Runs a refused offer_next_step again through the same tool (the queue,
+       * every guard, the lead-in) and writes it into the reply as a call with
+       * its result, as the model's own call would be. A refusal writes nothing.
+       */
+      const replayOffer = async (offerInput: unknown) => {
+        const execute = tools.offer_next_step?.execute;
+        if (!execute) return;
+        const toolCallId = generateId();
+        let output: unknown;
+        try {
+          output = await execute(
+            offerInput as never,
+            {
+              toolCallId,
+              messages: [],
+              abortSignal: deadline,
+              context: undefined,
+            } as never
+          );
+        } catch {
+          log('[quiz-agent] offer_next_step replay refused', {
+            attemptId: ctx.attemptId,
+            runId: ctx.runId,
+          });
+          return;
+        }
+        writer.write({
+          type: 'tool-input-available',
+          toolCallId,
+          toolName: 'offer_next_step',
+          input: offerInput,
+        });
+        writer.write({ type: 'tool-output-available', toolCallId, output });
+        log('[quiz-agent] offer_next_step replayed', {
+          attemptId: ctx.attemptId,
+          runId: ctx.runId,
+        });
+      };
+
       try {
         // A code-aware quiz without a repository this turn: a fixed hidden notice
         // after the student's message, never persisted.
@@ -335,11 +575,12 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
           ? [{ role: 'user', content: CODE_UNAVAILABLE_NOTICE }]
           : [];
         let history: ModelMessage[] = [
-          ...input.messages,
+          ...withoutEarlierFailedToolCalls(input.messages),
           ...(input.extraMessages ?? []),
           ...codeNotice,
         ];
         let result = call(history);
+        const results = [result];
         await pump(result);
 
         for (let i = 0; i < RECOVERY_CALLS && !deadline.aborted && !sawStreamError; i++) {
@@ -351,8 +592,13 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
             ...response,
             { role: 'user', content: deps.evaluationNotice(progress) },
           ];
-          log('[quiz-agent] recovery call', { attemptId: ctx.attemptId, runId: ctx.runId, n: i + 1 });
+          log('[quiz-agent] recovery call', {
+            attemptId: ctx.attemptId,
+            runId: ctx.runId,
+            n: i + 1,
+          });
           result = call(history);
+          results.push(result);
           await pump(result);
         }
 
@@ -371,6 +617,10 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
             } else {
               notice('reply_failed');
             }
+          } else if (textWritten) {
+            const steps = (await Promise.all(results.map(r => r.steps))).flat();
+            const offer = offerToReplay(steps);
+            if (offer !== null) await replayOffer(offer);
           }
         }
         if (sawStreamError && !deadline.aborted) {

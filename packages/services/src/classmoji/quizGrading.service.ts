@@ -27,17 +27,19 @@ import { DEFAULT_EMOJI_GRADE_MAPPINGS, gradeToEmoji } from '@classmoji/utils';
 import {
   QuizEvaluationFeedbackSchema,
   QuizEvaluationRecordV2Schema,
-  QuizQuestionSchema,
+  QuestionCardSchema,
   RecordQuestionResultSchema,
   computeAttemptPercentages,
   deriveResult,
+  gradeBandFor,
+  scoreSoFar,
   type Answer,
   type AttemptProgress,
   type PresentQuestionOutput,
   type QuestionResultOutput,
   type QuizEvaluationFeedback,
   type QuizEvaluationRecordV2,
-  type QuizQuestion,
+  type QuestionCard,
   type RecordQuestionResult,
   type StoredQuestionResult,
 } from '@classmoji/utils/quiz-agent';
@@ -67,7 +69,10 @@ export type QuizGradingErrorCode =
   | 'out_of_order'
   | 'invalid_input'
   | 'revision_refused'
+  | 'already_recorded'
   | 'incomplete'
+  | 'end_not_confirmed'
+  | 'open_question_unrecorded'
   | 'operation_conflict';
 
 /** A refused grading write. `message` is written for the model. */
@@ -213,10 +218,7 @@ const describeIssues = (error: {
  * missing a field are dropped. Only questions 1..`questionCount` are returned,
  * in order, one per number.
  */
-export const readStoredResults = (
-  json: Prisma.JsonValue | null | undefined,
-  questionCount: number
-): StoredQuestionResult[] => {
+export const readStoredResults = (json: unknown, questionCount: number): StoredQuestionResult[] => {
   const byNumber = new Map<number, StoredQuestionResult>();
   for (const entry of Array.isArray(json) ? json : []) {
     if (!isObject(entry)) continue;
@@ -244,6 +246,7 @@ export const readStoredResults = (
       emoji: entry.emoji,
       brief_feedback: typeof entry.brief_feedback === 'string' ? entry.brief_feedback : '',
       ...(entry.revised === true ? { revised: true as const } : {}),
+      ...(entry.skipped_by_end === true ? { skipped_by_end: true as const } : {}),
       recorded_at: entry.recorded_at,
     });
   }
@@ -286,12 +289,12 @@ export const progressOf = async (
 ): Promise<AttemptProgress> => {
   const questionCount = attemptQuestionCount(attempt);
   const lastAction = await readLastAction(tx, attempt.id);
+  const results = readStoredResults(attempt.question_results_json, questionCount);
   return {
     questionCount,
     presented: attempt.questions_asked ?? 0,
-    finalized: readStoredResults(attempt.question_results_json, questionCount).map(
-      r => r.question_num
-    ),
+    finalized: results.map(r => r.question_num),
+    score: scoreSoFar(results),
     completed: Boolean(attempt.completed_at),
     hasEvaluation: attempt.evaluation_json !== null && attempt.evaluation_json !== undefined,
     ...(lastAction ? { lastAction } : {}),
@@ -371,13 +374,16 @@ const inLockedTx = <T>(
  * `n <= questionCount`; `total_questions` is set to the attempt's count. A
  * re-run of the question already presented (`n = presented`) returns the
  * ORIGINAL stored question and writes nothing.
+ *
+ * `q` is the card as the tool built it: a code quote is already resolved into
+ * `code_snippet` and `source`, which are stored with the rest of the card.
  */
-export const presentQuestion = (f: Fenced, q: QuizQuestion): Promise<PresentQuestionOutput> =>
+export const presentQuestion = (f: Fenced, q: QuestionCard): Promise<PresentQuestionOutput> =>
   inLockedTx(f.attemptId, f.toolCallId, ['question_presented'], async (tx, attempt) => {
     requireOpen(attempt);
     requireFence(attempt, f.fence);
 
-    const parsed = QuizQuestionSchema.safeParse(q);
+    const parsed = QuestionCardSchema.safeParse(q);
     if (!parsed.success) {
       throw new QuizGradingError(
         'invalid_input',
@@ -404,7 +410,7 @@ export const presentQuestion = (f: Fenced, q: QuizQuestion): Promise<PresentQues
     if (presented >= questionCount) {
       throw new QuizGradingError(
         'out_of_order',
-        `All ${questionCount} questions have been presented. Record the last result, then submit the evaluation.`
+        `All ${questionCount} questions have been presented. Record the last result once the student moves on from it, then submit the evaluation.`
       );
     }
     if (n !== presented + 1) {
@@ -423,7 +429,7 @@ export const presentQuestion = (f: Fenced, q: QuizQuestion): Promise<PresentQues
       );
     }
 
-    const card: QuizQuestion = { ...question, question_number: n, total_questions: questionCount };
+    const card: QuestionCard = { ...question, question_number: n, total_questions: questionCount };
     const output: PresentQuestionOutput = {
       card,
       question_number: n,
@@ -452,22 +458,33 @@ const sameAnswers = (a: unknown, b: Answer[]) =>
   a.length === b.length &&
   a.every((x, i) => isObject(x) && x.level === b[i].level && x.hints_before === b[i].hints_before);
 
+/**
+ * Write `entries` into the attempt's `question_results_json` in one update,
+ * each in place of any stored entry for its question, in question order.
+ * Returns the array written.
+ */
 const writeProjection = async (
   tx: Tx,
   attempt: LockedAttempt,
   questionCount: number,
-  entry: StoredQuestionResult
-) => {
+  entries: StoredQuestionResult[]
+): Promise<Prisma.InputJsonArray> => {
+  const numbers = new Set(entries.map(e => e.question_num));
   const others = (
     Array.isArray(attempt.question_results_json) ? attempt.question_results_json : []
-  ).filter(e => !(isObject(e) && e.question_num === entry.question_num));
+  ).filter(
+    e => !(isObject(e) && typeof e.question_num === 'number' && numbers.has(e.question_num))
+  );
   const numberOf = (e: unknown) =>
     isObject(e) && typeof e.question_num === 'number' ? e.question_num : questionCount + 1;
-  const next = [...others, toJson(entry)].sort((x, y) => numberOf(x) - numberOf(y));
+  const next = [...others, ...entries.map(toJson)].sort(
+    (x, y) => numberOf(x) - numberOf(y)
+  ) as Prisma.InputJsonArray;
   await tx.quizAttempt.update({
     where: { id: attempt.id },
-    data: { question_results_json: next as Prisma.InputJsonArray, last_activity: new Date() },
+    data: { question_results_json: next, last_activity: new Date() },
   });
+  return next;
 };
 
 /**
@@ -475,8 +492,13 @@ const writeProjection = async (
  * scores it (`deriveResult`) and picks the emoji from the classroom mapping.
  *
  * - First record → `result_finalized`.
- * - Same admitted turn (same input message, e.g. a re-run) → the stored result.
- * - The same answers again in a later turn → the stored result.
+ * - The same answers again, in any turn (a retried call) → the stored result.
+ * - Different answers in the run of the turn that wrote the result (same
+ *   input message and turn fence) → refused (`already_recorded`): the stored
+ *   result stands, and the model is told so rather than handed it back as if
+ *   its own call had been kept.
+ * - Different answers in a re-run of that turn (a redelivered message: same
+ *   input message, new fence) → the stored result; the earlier run's stands.
  * - Different answers in a later turn, before completion → one revision
  *   (`result_revised`, old and new values); any further change is refused.
  */
@@ -529,8 +551,18 @@ export const finalizeQuestion = (
 
       if (latest) {
         const latestPayload = isObject(latest.payload) ? latest.payload : {};
+        if (sameAnswers(latestPayload.answers, answers)) {
+          return storedOutput<QuestionResultOutput>(latest);
+        }
         const sameTurn = (latest.input_message_id ?? null) === (f.inputMessageId ?? null);
-        if (sameTurn || sameAnswers(latestPayload.answers, answers)) {
+        if (sameTurn) {
+          if ((latest.turn_fence ?? null) === f.fence) {
+            throw new QuizGradingError(
+              'already_recorded',
+              `Question ${question_num} already has a result from this turn, and it stands. ` +
+                'Do not record it again in this turn.'
+            );
+          }
           return storedOutput<QuestionResultOutput>(latest);
         }
         // A revision follows something the student said about the question,
@@ -582,7 +614,7 @@ export const finalizeQuestion = (
         ...(revised ? { revised: true as const } : {}),
       };
 
-      await writeProjection(tx, attempt, questionCount, entry);
+      await writeProjection(tx, attempt, questionCount, [entry]);
       const previous = latest && isObject(latest.payload) ? latest.payload : null;
       await appendEvent(tx, attempt, {
         type: revised ? 'result_revised' : 'result_finalized',
@@ -628,8 +660,24 @@ const readEvaluation = (json: Prisma.JsonValue): QuizEvaluationRecordV2 =>
  * the stored results, never from the model. An attempt already completed
  * returns its stored evaluation.
  *
- * `source: 'server'` (Q17) records no feedback text; `toolCallId` is then
- * optional and the journal row uses a fixed operation id.
+ * The model's `ended_early: true` (the student confirmed ending the quiz
+ * early) first records every question without a result as skipped
+ * (`fillSkippedByEnd`), in the same transaction, so the score is over every
+ * question. It is refused in a turn with no student message of its own (a
+ * button click, or the begin action): the confirmation is that message. It is
+ * also refused (`open_question_unrecorded`) while the latest presented
+ * question has no result, unless its card went out in this same turn: the
+ * student may have answered it, so the model records it first rather than
+ * the server scoring it 0. Only questions after it (and a card of this turn)
+ * are filled.
+ *
+ * The evaluation band (`evaluation`, `numeric_score`) is the server's, from
+ * the partial credit (`gradeBandFor`): on the record for either source, and in
+ * the model's feedback in place of what the model sent. The model's
+ * `final_acknowledgment` is kept in the feedback.
+ *
+ * `source: 'server'` (Q17) records no feedback text, so no acknowledgment;
+ * `toolCallId` is then optional and the journal row uses a fixed operation id.
  */
 export const completeWithEvaluation = (
   f: Omit<Fenced, 'toolCallId'> & { toolCallId?: string },
@@ -641,8 +689,7 @@ export const completeWithEvaluation = (
 
 /**
  * `completeWithEvaluation`'s body, for a caller that already holds the attempt
- * row lock in `tx` (admission completes an attempt from its recorded grades
- * when it reaches the turn cap).
+ * row lock in `tx`.
  */
 export const completeLocked = async (
   tx: Tx,
@@ -659,20 +706,73 @@ export const completeLocked = async (
   requireFence(attempt, f.fence);
 
   const questionCount = attemptQuestionCount(attempt);
-  const results = readStoredResults(attempt.question_results_json, questionCount);
-  const recorded = new Set(results.map(r => r.question_num));
+  let stored: unknown = attempt.question_results_json;
+  const recorded = new Set(readStoredResults(stored, questionCount).map(r => r.question_num));
   const missing = Array.from({ length: questionCount }, (_, i) => i + 1).filter(
     n => !recorded.has(n)
   );
+  const endedEarly = o.source === 'model' && o.feedback.ended_early === true;
+  let skippedByEnd: number[] = [];
   if (missing.length > 0) {
-    throw new QuizGradingError(
-      'incomplete',
-      `Record results for question${missing.length > 1 ? 's' : ''} ${missing.join(', ')} ` +
-        'with record_question_result before submitting the evaluation.'
+    if (!endedEarly) {
+      throw new QuizGradingError(
+        'incomplete',
+        `${missing.length > 1 ? 'Questions' : 'Question'} ${missing.join(', ')} ` +
+          `${missing.length > 1 ? 'have' : 'has'} no result. Record each one you presented once the ` +
+          'student has moved on from it; present any not yet presented. Then submit again. ' +
+          '(If the student confirmed ending early, submit with ended_early instead.)'
+      );
+    }
+    // The student's own message confirms an early end: never a button click.
+    const action = await admittedAction(tx, attempt.id, f.inputMessageId);
+    if (!f.inputMessageId || action) {
+      throw new QuizGradingError(
+        'end_not_confirmed',
+        "An early end needs the student's own message confirming it, and " +
+          (action
+            ? 'this turn began with a button click. '
+            : 'this turn has no student message. ') +
+          'Leave ended_early out and carry on with the quiz.'
+      );
+    }
+    // A presented question with no result may have been answered: the model
+    // records it (answers [] if the student gave none) rather than the server
+    // scoring it 0 for good. A card that went out in this same turn has no
+    // answer yet, so it is filled like the unpresented ones.
+    const presented = attempt.questions_asked ?? 0;
+    const presentedThisTurn =
+      presented >= 1 &&
+      missing.includes(presented) &&
+      (await tx.quizAttemptEvent.findFirst({
+        where: {
+          attempt_id: attempt.id,
+          type: 'question_presented',
+          input_message_id: f.inputMessageId,
+          payload: { path: ['question_number'], equals: presented },
+        },
+        select: { id: true },
+      })) !== null;
+    const unrecorded = missing.filter(
+      n => n <= presented && !(n === presented && presentedThisTurn)
     );
+    if (unrecorded.length > 0) {
+      throw new QuizGradingError(
+        'open_question_unrecorded',
+        `Record question ${unrecorded[0]} first (answers [] if the student gave none; student_asked_to_move_on: true), ` +
+          'then submit again with ended_early.'
+      );
+    }
+    stored = await fillSkippedByEnd(tx, attempt, f, questionCount, missing);
+    skippedByEnd = missing;
   }
+  const results = readStoredResults(stored, questionCount);
 
-  let feedback: Omit<QuizEvaluationFeedback, 'quiz_complete'> | undefined;
+  const percentages = computeAttemptPercentages(results);
+  // The band follows the score, for either source: the model's own choice of
+  // evaluation and numeric_score is replaced.
+  const band = gradeBandFor(percentages.partial_credit_percentage);
+
+  let feedback: Omit<QuizEvaluationFeedback, 'quiz_complete' | 'ended_early'> | undefined;
   if (o.source === 'model') {
     const parsed = QuizEvaluationFeedbackSchema.safeParse(o.feedback);
     if (!parsed.success) {
@@ -681,15 +781,15 @@ export const completeLocked = async (
         `Invalid evaluation: ${describeIssues(parsed.error)}`
       );
     }
-    const { quiz_complete: _complete, ...rest } = parsed.data;
-    feedback = rest;
+    const { quiz_complete: _complete, ended_early: _endedEarly, ...rest } = parsed.data;
+    feedback = { ...rest, ...band };
   }
 
-  const percentages = computeAttemptPercentages(results);
   const record: QuizEvaluationRecordV2 = QuizEvaluationRecordV2Schema.parse({
     v: 2,
     source: o.source,
     ...(feedback ? { feedback } : {}),
+    ...band,
     ...percentages,
     question_results: results.map(({ recorded_at: _at, ...rest }) => rest),
   });
@@ -714,9 +814,70 @@ export const completeLocked = async (
     fence: f.fence,
     inputMessageId: f.inputMessageId,
     runId: f.runId,
-    payload: toJson({ source: o.source, output: record }),
+    payload: toJson({
+      source: o.source,
+      ...(skippedByEnd.length > 0 ? { ended_early: true, skipped_by_end: skippedByEnd } : {}),
+      output: record,
+    }),
   });
   return record;
+};
+
+/**
+ * Record each of `missing` as skipped because the student ended the quiz
+ * early: the result of a skip (`deriveResult([])`, the classroom's emoji for
+ * it), no feedback line, and `skipped_by_end` on the entry and its
+ * `result_finalized` journal row. The caller holds the row lock and completes
+ * in the same transaction. Returns the results array written.
+ */
+const fillSkippedByEnd = async (
+  tx: Tx,
+  attempt: LockedAttempt,
+  f: Omit<Fenced, 'toolCallId'> & { toolCallId?: string },
+  questionCount: number,
+  missing: number[]
+): Promise<Prisma.InputJsonArray> => {
+  const derived = deriveResult([]);
+  const emoji = gradeToEmoji(
+    derived.credit_earned,
+    await loadEmojiMappings(tx, attempt.quiz.classroom_id)
+  );
+  const recordedAt = new Date().toISOString();
+  const operation = f.toolCallId ?? SERVER_COMPLETION_OPERATION_ID;
+  const entries: StoredQuestionResult[] = [];
+  for (const n of missing) {
+    const output: QuestionResultOutput = { question_num: n, emoji, brief_feedback: '' };
+    entries.push({
+      question_num: n,
+      attempts: derived.tries,
+      tries: derived.tries,
+      eventually_correct: derived.eventually_correct,
+      first_attempt_correct: derived.first_attempt_correct,
+      credit_earned: derived.credit_earned,
+      emoji,
+      brief_feedback: '',
+      skipped_by_end: true,
+      recorded_at: recordedAt,
+    });
+    await appendEvent(tx, attempt, {
+      type: 'result_finalized',
+      operationId: `${operation}:skipped_by_end:${n}`,
+      toolCallId: f.toolCallId ?? null,
+      fence: f.fence,
+      inputMessageId: f.inputMessageId,
+      runId: f.runId,
+      payload: toJson({
+        question_num: n,
+        answers: [],
+        ...derived,
+        emoji,
+        brief_feedback: '',
+        skipped_by_end: true,
+        output,
+      }),
+    });
+  }
+  return writeProjection(tx, attempt, questionCount, entries);
 };
 
 // ─── explore_codebase history ───────────────────────────────────────────────
@@ -767,7 +928,7 @@ export const listExplorations = async (
 
 // ─── Progress ───────────────────────────────────────────────────────────────
 
-/** `{ questionCount, presented, finalized, completed, hasEvaluation, lastAction? }` from Neon. */
+/** `{ questionCount, presented, finalized, score, completed, hasEvaluation, lastAction? }` from Neon. */
 export const getProgress = async (attemptId: string): Promise<AttemptProgress> => {
   const attempt = await getPrisma().quizAttempt.findUnique({
     where: { id: attemptId },

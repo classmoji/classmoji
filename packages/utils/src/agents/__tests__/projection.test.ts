@@ -19,6 +19,35 @@ const card = {
   code_language: 'css',
 };
 
+// present_question's input in a code-aware attempt: the card with the quote the
+// server resolves in place of typed code. The viewer receives the card the
+// server filled (the output), never the quote.
+const quote = {
+  path: 'css/style.css',
+  ranges: [[11, 15]],
+  anchor: '.features {',
+  edit: { line: 13, replace: '  grid-template-columns: 1fr;' },
+};
+const { code_snippet: _typed, ...cardFields } = card;
+const quotedInput = { ...cardFields, code_quote: quote };
+const quotedOutput = {
+  card: {
+    ...cardFields,
+    code_snippet: '.features {\n  display: grid;\n  grid-template-columns: 1fr;\n...\n}',
+    source: { path: 'css/style.css', lines: '11-15', changed: true },
+  },
+  question_number: 2,
+  total_questions: 8,
+};
+
+/** None of the quote's own terms (or raw input text) in what the viewer receives. */
+const expectNoQuote = (value: unknown) => {
+  const s = JSON.stringify(value);
+  for (const term of ['code_quote', '"ranges"', '"anchor"', '"edit"', '"replace"', 'rawInput']) {
+    expect(s).not.toContain(term);
+  }
+};
+
 const project = (chunks: Chunk[]) => {
   const p = createChunkProjector<Chunk>(quizVisibility);
   return chunks.map(c => p(c)).filter((c): c is Chunk => c !== null);
@@ -67,16 +96,17 @@ describe('createChunkProjector: every v7 chunk type', () => {
     ).toBeNull();
   });
 
-  it('passes every chunk of a shown tool call', () => {
+  it('passes every chunk of a shown tool call without hidden input keys', () => {
     const chunks: Chunk[] = [
-      { type: 'tool-input-start', toolCallId: 'c1', toolName: 'present_question' },
-      { type: 'tool-input-delta', toolCallId: 'c1', inputTextDelta: '{"pre' },
-      { type: 'tool-input-available', toolCallId: 'c1', toolName: 'present_question', input: card },
+      { type: 'tool-input-start', toolCallId: 'c1', toolName: 'offer_next_step' },
+      { type: 'tool-input-delta', toolCallId: 'c1', inputTextDelta: '{"act' },
       {
-        type: 'tool-output-available',
+        type: 'tool-input-available',
         toolCallId: 'c1',
-        output: { card, question_number: 2, total_questions: 8 },
+        toolName: 'offer_next_step',
+        input: { actions: ['next'] },
       },
+      { type: 'tool-output-available', toolCallId: 'c1', output: { actions: ['next'] } },
       { type: 'tool-output-error', toolCallId: 'c1', errorText: 'refused' },
       { type: 'tool-output-denied', toolCallId: 'c1' },
     ];
@@ -164,8 +194,60 @@ describe('createChunkProjector: every v7 chunk type', () => {
     ['another kind', { kind: 'search_code', path: 'x' }],
     ['no path', { kind: 'read_file' }],
     ['a non-string path', { kind: 'read_file', path: 42 }],
+    ['a course title over the limit', { kind: 'course_material', title: 'x'.repeat(201) }],
+    ['an empty course title', { kind: 'course_material', title: '' }],
+    ['a non-string course title', { kind: 'course_material', title: 7 }],
   ])('drops a data-step with %s', (_l, data) => {
     expect(project([{ type: 'data-step', data } as Chunk])).toEqual([]);
+  });
+
+  it('passes a course-material step with its title only: no query, id, kind of document or text', () => {
+    expect(
+      project([
+        {
+          type: 'data-step',
+          data: {
+            kind: 'course_material',
+            title: 'Semantic HTML',
+            query: 'what does nav mark up',
+            docKind: 'page',
+            id: 'page-1',
+            text: 'The nav element...',
+            path: 'bot-context/notes.md',
+          },
+        } as Chunk,
+        {
+          type: 'data-step',
+          data: { kind: 'course_material', query: 'what does nav mark up' },
+        } as Chunk,
+      ])
+    ).toEqual([
+      { type: 'data-step', data: { kind: 'course_material', title: 'Semantic HTML' } },
+      { type: 'data-step', data: { kind: 'course_material' } },
+    ]);
+  });
+
+  it('drops every chunk of the content tools, live', () => {
+    expect(
+      project([
+        { type: 'tool-input-start', toolCallId: 'k1', toolName: 'content_get' },
+        { type: 'tool-input-delta', toolCallId: 'k1', inputTextDelta: '{"kind":"page"' },
+        {
+          type: 'tool-input-available',
+          toolCallId: 'k1',
+          toolName: 'content_get',
+          input: { kind: 'page', id: 'page-1' },
+        },
+        { type: 'tool-output-available', toolCallId: 'k1', output: 'The nav element...' },
+        {
+          type: 'tool-input-available',
+          toolCallId: 'k2',
+          toolName: 'content_search',
+          input: { query: 'what does nav mark up' },
+        },
+        { type: 'tool-output-error', toolCallId: 'k2', errorText: 'Search could not run' },
+      ] as Chunk[])
+    ).toEqual([]);
   });
 
   it('re-validates question-result, notice and evaluation parts', () => {
@@ -214,10 +296,140 @@ describe('createChunkProjector: every v7 chunk type', () => {
   });
 });
 
+describe('hidden input keys: present_question code_quote', () => {
+  it('sends the call cut, with no streamed input, and the output as it is', () => {
+    const out = project([
+      { type: 'tool-input-start', toolCallId: 'c1', toolName: 'present_question' },
+      { type: 'tool-input-delta', toolCallId: 'c1', inputTextDelta: '{"question_number":2,' },
+      {
+        type: 'tool-input-delta',
+        toolCallId: 'c1',
+        inputTextDelta: `"code_quote":${JSON.stringify(quote)}}`,
+      },
+      {
+        type: 'tool-input-available',
+        toolCallId: 'c1',
+        toolName: 'present_question',
+        input: quotedInput,
+      },
+      { type: 'tool-output-available', toolCallId: 'c1', output: quotedOutput },
+    ]);
+    expect(out).toEqual([
+      { type: 'tool-input-start', toolCallId: 'c1', toolName: 'present_question' },
+      {
+        type: 'tool-input-available',
+        toolCallId: 'c1',
+        toolName: 'present_question',
+        input: cardFields,
+      },
+      { type: 'tool-output-available', toolCallId: 'c1', output: quotedOutput },
+    ]);
+    expectNoQuote(out);
+  });
+
+  it('cuts an invalid call, and sends no input when it is raw text', () => {
+    const out = project([
+      {
+        type: 'tool-input-error',
+        toolCallId: 'c2',
+        toolName: 'present_question',
+        input: { question_number: 'two', code_quote: quote },
+        errorText: 'Invalid input',
+        dynamic: true,
+      },
+      {
+        type: 'tool-input-error',
+        toolCallId: 'c3',
+        toolName: 'present_question',
+        input: `{"question_number":2,"code_quote":${JSON.stringify(quote)}`,
+        errorText: 'Invalid input',
+      },
+    ]);
+    expect(out).toEqual([
+      {
+        type: 'tool-input-error',
+        toolCallId: 'c2',
+        toolName: 'present_question',
+        input: { question_number: 'two' },
+        errorText: 'Invalid input',
+        dynamic: true,
+      },
+      {
+        type: 'tool-input-error',
+        toolCallId: 'c3',
+        toolName: 'present_question',
+        input: undefined,
+        errorText: 'Invalid input',
+      },
+    ]);
+    expectNoQuote(out);
+  });
+
+  it('cuts stored parts: complete, refused, and still streaming when the turn ended', () => {
+    const m = {
+      id: 'a1',
+      role: 'assistant',
+      parts: [
+        {
+          type: 'tool-present_question',
+          toolCallId: 'c1',
+          state: 'output-available',
+          input: quotedInput,
+          output: quotedOutput,
+        },
+        {
+          type: 'dynamic-tool',
+          toolName: 'present_question',
+          toolCallId: 'c2',
+          state: 'output-error',
+          input: { question_number: 'two', code_quote: quote },
+          errorText: 'Invalid input',
+        },
+        {
+          type: 'tool-present_question',
+          toolCallId: 'c3',
+          state: 'input-streaming',
+          input: { question_number: 3, code_quote: quote },
+          rawInput: `{"question_number":3,"code_quote":${JSON.stringify(quote)}`,
+        },
+      ],
+    } as unknown as QuizUIMessage;
+    const copy = structuredClone(m);
+    const stored = projectMessage(m, quizVisibility)!;
+    expect(stored.parts).toEqual([
+      {
+        type: 'tool-present_question',
+        toolCallId: 'c1',
+        state: 'output-available',
+        input: cardFields,
+        output: quotedOutput,
+      },
+      {
+        type: 'dynamic-tool',
+        toolName: 'present_question',
+        toolCallId: 'c2',
+        state: 'output-error',
+        input: { question_number: 'two' },
+        errorText: 'Invalid input',
+      },
+      {
+        type: 'tool-present_question',
+        toolCallId: 'c3',
+        state: 'input-streaming',
+        input: undefined,
+      },
+    ]);
+    expectNoQuote(stored);
+    expect(m).toEqual(copy);
+  });
+});
+
 describe('toolVisibility', () => {
   it('reads the registry and defaults to hidden', () => {
     expect(toolVisibility(quizVisibility, 'present_question')).toBe('shown');
     expect(toolVisibility(quizVisibility, 'explore_codebase')).toBe('label');
+    expect(toolVisibility(quizVisibility, 'content_get')).toBe('label');
+    expect(toolVisibility(quizVisibility, 'content_search')).toBe('label');
     expect(toolVisibility(quizVisibility, 'record_question_result')).toBe('hidden');
     expect(toolVisibility(quizVisibility, 'toString')).toBe('hidden');
     expect(toolVisibility(quizVisibility, 'unknown')).toBe('hidden');
@@ -285,18 +497,19 @@ const TURN: Chunk[] = [
     type: 'tool-input-error',
     toolCallId: 'c3',
     toolName: 'present_question',
-    input: { question_number: 'two' },
+    input: { question_number: 'two', code_quote: quote },
     errorText: 'Invalid input',
     dynamic: true,
   },
   { type: 'tool-input-start', toolCallId: 'c4', toolName: 'present_question' },
-  { type: 'tool-input-delta', toolCallId: 'c4', inputTextDelta: '{}' },
-  { type: 'tool-input-available', toolCallId: 'c4', toolName: 'present_question', input: card },
+  { type: 'tool-input-delta', toolCallId: 'c4', inputTextDelta: JSON.stringify(quotedInput) },
   {
-    type: 'tool-output-available',
+    type: 'tool-input-available',
     toolCallId: 'c4',
-    output: { card, question_number: 2, total_questions: 8 },
+    toolName: 'present_question',
+    input: quotedInput,
   },
+  { type: 'tool-output-available', toolCallId: 'c4', output: quotedOutput },
   { type: 'tool-input-start', toolCallId: 'c5', toolName: 'mcp_tool', dynamic: true },
   {
     type: 'tool-input-available',
@@ -338,6 +551,7 @@ describe('live equals stored', () => {
     expect(types).toContain('tool-record_question_result');
     expect(types).toContain('tool-explore_codebase');
     expect(types).toContain('data-foo');
+    expect(JSON.stringify(persisted)).toContain('code_quote');
   });
 
   it('the viewer copy has no reasoning, hidden or label tools, or undeclared data', async () => {
@@ -358,6 +572,7 @@ describe('live equals stored', () => {
       'dynamic-tool',
       'tool-present_question',
     ]);
+    expectNoQuote(stored);
     const serialized = JSON.stringify(stored);
     expect(serialized).not.toContain('navigation');
     expect(serialized).not.toContain('sig-1');

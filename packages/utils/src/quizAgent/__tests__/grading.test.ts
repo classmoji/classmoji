@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   ANSWER_LEVEL_CREDIT,
   ANSWER_LEVELS,
-  GRADING_RULE_SENTENCE,
   HINT_COST,
   computeAttemptPercentages,
   deriveResult,
+  gradeBandFor,
+  QUESTION_POINTS,
   scoreAnswer,
+  scoreSoFar,
   type AnswerLevel,
 } from '../grading.ts';
 
@@ -36,13 +38,6 @@ describe('grading constants', () => {
       'minimal',
       'no_attempt',
     ]);
-  });
-
-  it('builds the student-facing sentence from HINT_COST', () => {
-    expect(GRADING_RULE_SENTENCE).toBe(
-      'Your best answer counts, and each hint before it costs 15.'
-    );
-    expect(GRADING_RULE_SENTENCE).toContain(String(HINT_COST));
   });
 });
 
@@ -170,5 +165,47 @@ describe('computeAttemptPercentages', () => {
       partial_credit_percentage: 0,
       first_attempt_percentage: 0,
     });
+  });
+});
+
+describe('gradeBandFor', () => {
+  it.each([
+    [100, 'EXCELLENT', 4],
+    [90, 'EXCELLENT', 4],
+    [89.9, 'GOOD', 3],
+    [70, 'GOOD', 3],
+    [69.9, 'NEEDS WORK', 2],
+    [50, 'NEEDS WORK', 2],
+    [49.9, 'UNSATISFACTORY', 1],
+    [0, 'UNSATISFACTORY', 1],
+    [Number.NaN, 'UNSATISFACTORY', 1],
+  ])('%s%% is %s (%s), the previous runtime thresholds', (pct, evaluation, numeric_score) => {
+    expect(gradeBandFor(pct)).toEqual({ evaluation, numeric_score });
+  });
+
+  it('follows the rounded score the student sees', () => {
+    // 89.95 rounds to 90.0, which is shown as 90%: EXCELLENT, as shown.
+    const { partial_credit_percentage } = computeAttemptPercentages(
+      Array.from({ length: 20 }, (_, i) => ({
+        credit_earned: i === 0 ? 89 : 90,
+        first_attempt_correct: false,
+      }))
+    );
+    expect(partial_credit_percentage).toBe(90);
+    expect(gradeBandFor(partial_credit_percentage).evaluation).toBe('EXCELLENT');
+  });
+});
+
+describe('scoreSoFar', () => {
+  it('adds the recorded credit out of 100 points per recorded question', () => {
+    expect(QUESTION_POINTS).toBe(100);
+    expect(scoreSoFar([{ credit_earned: 100 }, { credit_earned: 85 }])).toEqual({
+      earned: 185,
+      possible: 200,
+    });
+  });
+
+  it('is 0 of 0 before any result', () => {
+    expect(scoreSoFar([])).toEqual({ earned: 0, possible: 0 });
   });
 });

@@ -71,6 +71,7 @@ window.matchMedia ??= ((query: string) => ({
 Element.prototype.scrollIntoView ??= () => {};
 
 const { default: QuizChat, QuizChatSessionError } = await import('../QuizChat');
+const { formatDuration } = await import('~/utils/quizUtils');
 
 const ATTEMPT = { id: 'attempt-1', completed_at: null, evaluation_json: null };
 const QUIZ = { id: 'quiz-1', question_count: 8 };
@@ -274,6 +275,91 @@ describe('QuizChat live', () => {
         unfocusedDurationMs: 42_000,
       },
     ]);
+  });
+
+  const evaluationMessage = {
+    id: 'a2',
+    role: 'assistant',
+    parts: [
+      {
+        type: 'data-evaluation',
+        data: {
+          v: 2,
+          source: 'server',
+          partial_credit_percentage: 70,
+          first_attempt_percentage: 0,
+          question_results: [],
+        },
+      },
+    ],
+  } as unknown as QuizUIMessage;
+
+  const render = async (
+    attempt: Record<string, unknown>,
+    focusMetrics: Record<string, number> | null = null
+  ) => {
+    await act(async () => {
+      root.render(
+        <QuizChat
+          quiz={QUIZ}
+          attempt={attempt as never}
+          transcript={[buttonsMessage]}
+          viewerOwnsAttempt
+          focusMetrics={focusMetrics as never}
+        />
+      );
+    });
+  };
+  const editor = () => container.querySelector('[data-testid="quiz-editor"]');
+
+  it('takes the editor away once the evaluation is in', async () => {
+    chatState.messages = [buttonsMessage];
+    await render(ATTEMPT);
+    expect(editor()).not.toBeNull();
+    expect(container.querySelector('[data-testid="quiz-send"]')).not.toBeNull();
+
+    chatState.messages = [buttonsMessage, evaluationMessage];
+    await render(ATTEMPT);
+    expect(editor()).toBeNull();
+    expect(container.querySelector('[data-testid="quiz-send"]')).toBeNull();
+    expect(container.querySelector('[data-testid="quiz-results"]')).not.toBeNull();
+  });
+
+  it('takes the editor away when the refreshed attempt is complete, after mount', async () => {
+    chatState.messages = [buttonsMessage];
+    await render(ATTEMPT);
+    expect(editor()).not.toBeNull();
+
+    // The drawer's refresh brings the attempt back completed.
+    await render({ ...ATTEMPT, completed_at: '2026-09-30T12:00:00Z' });
+    expect(editor()).toBeNull();
+  });
+
+  it("shows the time from this tab's final count, not the refresh's stored value", async () => {
+    chatState.messages = [buttonsMessage];
+    const stale = { totalMs: 60_000, focusedMs: 60_000, percentage: 100 };
+    await render(ATTEMPT, stale);
+
+    metrics = { totalMs: 125_000, unfocusedMs: 5_000 };
+    chatState.messages = [buttonsMessage, evaluationMessage];
+    await render(ATTEMPT, stale);
+    // The drawer refreshes with the stored time, read before the last write landed.
+    await render({ ...ATTEMPT, completed_at: '2026-09-30T12:00:00Z' }, stale);
+
+    const results = container.querySelector('[data-testid="quiz-results"]')!;
+    expect(results.textContent).toContain(`Total: ${formatDuration(125_000)}`);
+    expect(results.textContent).toContain(`Focused: ${formatDuration(120_000)}`);
+    expect(results.textContent).toContain('96% Time on Page');
+    expect(results.textContent).not.toContain(`Total: ${formatDuration(60_000)}`);
+  });
+
+  it('shows the time it was given while the attempt was never completed here', async () => {
+    chatState.messages = [buttonsMessage, evaluationMessage];
+    const stored = { totalMs: 60_000, focusedMs: 30_000, percentage: 50 };
+    await render(ATTEMPT, stored);
+    const results = container.querySelector('[data-testid="quiz-results"]')!;
+    expect(results.textContent).toContain(`Total: ${formatDuration(60_000)}`);
+    expect(results.textContent).toContain('50% Time on Page');
   });
 
   it('refreshes the drawer once, after the reply, when the session closes', async () => {

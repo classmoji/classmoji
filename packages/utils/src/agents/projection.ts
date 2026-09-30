@@ -11,6 +11,10 @@
  *   label   the tool's parts are dropped; its own code writes a data part instead
  *   hidden  the tool's parts are dropped
  *
+ * A shown tool may also name input keys no viewer receives (`hiddenInputKeys`):
+ * they are cut from its input, live and stored, and its streamed input text is
+ * not sent at all, so the viewer has its input only once the call is complete.
+ *
  * A tool with no entry is hidden; a data part with no schema is dropped; a
  * declared data part is re-validated and passes with its schema's fields only.
  * Reasoning, sources, files, custom parts and approvals never pass.
@@ -29,6 +33,8 @@ export type DataPartSchema = {
 export type Registry<TOOL extends string = string, DATA extends string = string> = {
   tools: Readonly<Record<TOOL, ToolVisibility>>;
   dataParts: Readonly<Record<DATA, DataPartSchema>>;
+  /** Input keys of a tool that no viewer receives (see the header). */
+  hiddenInputKeys?: Readonly<Partial<Record<TOOL, readonly string[]>>>;
 };
 
 // Registries are looked up with names from the stream, so only own keys count
@@ -39,6 +45,23 @@ export function toolVisibility(reg: Registry, toolName: string): ToolVisibility 
   return own(reg.tools, toolName)
     ? (reg.tools as Record<string, ToolVisibility>)[toolName]
     : 'hidden';
+}
+
+/** The input keys of a tool that no viewer receives (none for most tools). */
+function hiddenInputKeys(reg: Registry, toolName: string): readonly string[] {
+  const keys = reg.hiddenInputKeys;
+  return keys && own(keys, toolName) ? (keys[toolName] ?? []) : [];
+}
+
+/**
+ * A tool input without the given keys. An input that is not an object (the raw
+ * text of a call whose JSON did not parse) cannot be cut, so none of it is sent.
+ */
+function withoutKeys(input: unknown, keys: readonly string[]): unknown {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const out: Record<string, unknown> = { ...(input as Record<string, unknown>) };
+  for (const key of keys) delete out[key];
+  return out;
 }
 
 /** The validated payload of a declared data part, or undefined when it must be dropped. */
@@ -85,13 +108,15 @@ export function createChunkProjector<CHUNK extends UIMessageChunk<any, any> = UI
   reg: Registry
 ): (chunk: CHUNK) => CHUNK | null {
   const callVisibility = new Map<string, ToolVisibility>();
+  /** The hidden input keys of each call, from every tool that named it. */
+  const callHiddenKeys = new Map<string, readonly string[]>();
 
   return (chunk: CHUNK): CHUNK | null => {
     const type = chunk.type as string;
     if (PASS_CHUNK_TYPES.has(type)) return chunk;
 
     if (NAMING_TOOL_CHUNKS.has(type)) {
-      const c = chunk as unknown as { toolCallId: string; toolName: string };
+      const c = chunk as unknown as { toolCallId: string; toolName: string; input?: unknown };
       const named = toolVisibility(reg, c.toolName);
       const earlier = callVisibility.get(c.toolCallId);
       // A call id named twice stays shown only if every naming is a shown tool.
@@ -102,12 +127,22 @@ export function createChunkProjector<CHUNK extends UIMessageChunk<any, any> = UI
             ? 'shown'
             : 'hidden';
       callVisibility.set(c.toolCallId, effective);
-      return effective === 'shown' ? chunk : null;
+      const keys = [
+        ...(callHiddenKeys.get(c.toolCallId) ?? []),
+        ...hiddenInputKeys(reg, c.toolName),
+      ];
+      if (keys.length > 0) callHiddenKeys.set(c.toolCallId, keys);
+      if (effective !== 'shown') return null;
+      if (keys.length === 0 || type === 'tool-input-start') return chunk;
+      return { ...c, input: withoutKeys(c.input, keys) } as unknown as CHUNK;
     }
 
     if (ID_ONLY_TOOL_CHUNKS.has(type)) {
       const c = chunk as unknown as { toolCallId: string };
-      return callVisibility.get(c.toolCallId) === 'shown' ? chunk : null;
+      if (callVisibility.get(c.toolCallId) !== 'shown') return null;
+      // Deltas are raw JSON text that cannot be cut safely, so a call with hidden keys sends none.
+      if (type === 'tool-input-delta' && callHiddenKeys.has(c.toolCallId)) return null;
+      return chunk;
     }
 
     if (type.startsWith('data-')) {
@@ -130,16 +165,30 @@ export function createChunkProjector<CHUNK extends UIMessageChunk<any, any> = UI
 
 type AnyPart = { type: string; toolName?: string; data?: unknown };
 
+type ToolPartInput = { state?: unknown; input?: unknown; rawInput?: unknown };
+
+/**
+ * A shown tool's stored part as the live stream built it: hidden input keys
+ * cut, no raw input text, and no input while it was still streaming (the live
+ * stream sends none before the call is complete).
+ */
+function projectToolPart<P extends AnyPart>(part: P, reg: Registry, toolName: string): P | null {
+  if (toolVisibility(reg, toolName) !== 'shown') return null;
+  const keys = hiddenInputKeys(reg, toolName);
+  if (keys.length === 0) return part;
+  const { rawInput: _raw, ...rest } = part as P & ToolPartInput;
+  const input = rest.state === 'input-streaming' ? undefined : withoutKeys(rest.input, keys);
+  return { ...rest, input } as P;
+}
+
 function projectPart<P extends AnyPart>(part: P, reg: Registry): P | null {
   const type = part.type;
   if (type === 'text' || type === 'step-start') return part;
   if (type === 'dynamic-tool') {
-    return typeof part.toolName === 'string' && toolVisibility(reg, part.toolName) === 'shown'
-      ? part
-      : null;
+    return typeof part.toolName === 'string' ? projectToolPart(part, reg, part.toolName) : null;
   }
   if (type.startsWith('tool-')) {
-    return toolVisibility(reg, type.slice('tool-'.length)) === 'shown' ? part : null;
+    return projectToolPart(part, reg, type.slice('tool-'.length));
   }
   if (type.startsWith('data-')) {
     const projected = projectData(reg, type, part.data);

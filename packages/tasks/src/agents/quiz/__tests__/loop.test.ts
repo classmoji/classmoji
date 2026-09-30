@@ -13,15 +13,22 @@ import {
 } from '@classmoji/utils/quiz-agent';
 import type { AttemptContext } from '../context.ts';
 import { CODE_UNAVAILABLE_NOTICE } from '../prompt/index.ts';
+import { contentTools } from '../tools/content.ts';
 import {
   lastUserTextParts,
   needsEvaluation,
+  offerToReplay,
   PERSIST_RETRY_DELAY_MS,
   runQuizTurn,
+  STEP_CEILING,
+  stepCeilingFor,
+  watchModelText,
+  withoutEarlierFailedToolCalls,
   withStepCacheBreakpoint,
   type QuizToolsFactory,
   type QuizTurnDeps,
 } from '../loop.ts';
+import { feedbackMissingError, OFFER_AFTER_HINT_TEXT } from '../tools/errors.ts';
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -49,7 +56,11 @@ const finish = (unified: 'stop' | 'tool-calls'): Part => ({
   usage,
 });
 const step = (parts: Part[], unified: 'stop' | 'tool-calls' = 'tool-calls') => ({
-  stream: convertArrayToReadableStream([{ type: 'stream-start', warnings: [] }, ...parts, finish(unified)]),
+  stream: convertArrayToReadableStream([
+    { type: 'stream-start', warnings: [] },
+    ...parts,
+    finish(unified),
+  ]),
 });
 
 /** A model that answers each call with the next scripted step (the last repeats). */
@@ -93,22 +104,23 @@ function fakeAttempt(questionCount = 2, init: Partial<AttemptProgress> = {}) {
     hasEvaluation: state.hasEvaluation,
   });
 
-  const record = (source: 'model' | 'server'): QuizEvaluationRecordV2 => ({
-    v: 2,
-    source,
-    partial_credit_percentage: 100,
-    first_attempt_percentage: 100,
-    question_results: [...state.finalized].map(n => ({
-      question_num: n,
-      attempts: 1,
-      tries: 1,
-      eventually_correct: true,
-      first_attempt_correct: true,
-      credit_earned: 100,
-      emoji: '🚀',
-      brief_feedback: 'ok',
-    })),
-  }) as unknown as QuizEvaluationRecordV2;
+  const record = (source: 'model' | 'server'): QuizEvaluationRecordV2 =>
+    ({
+      v: 2,
+      source,
+      partial_credit_percentage: 100,
+      first_attempt_percentage: 100,
+      question_results: [...state.finalized].map(n => ({
+        question_num: n,
+        attempts: 1,
+        tries: 1,
+        eventually_correct: true,
+        first_attempt_correct: true,
+        credit_earned: 100,
+        emoji: '🚀',
+        brief_feedback: 'ok',
+      })),
+    }) as unknown as QuizEvaluationRecordV2;
 
   const tools: QuizToolsFactory = (_ctx, { queue, writer }) => ({
     present_question: tool({
@@ -121,7 +133,11 @@ function fakeAttempt(questionCount = 2, init: Partial<AttemptProgress> = {}) {
             throw new Error('previous question has no result');
           }
           state.presented = input.question_number;
-          return { card: input, question_number: input.question_number, total_questions: questionCount };
+          return {
+            card: input,
+            question_number: input.question_number,
+            total_questions: questionCount,
+          };
         }),
     }),
     record_question_result: tool({
@@ -132,14 +148,18 @@ function fakeAttempt(questionCount = 2, init: Partial<AttemptProgress> = {}) {
           order.push(`record:${input.question_num}`);
           if (input.question_num > state.presented) throw new Error('not presented');
           state.finalized.add(input.question_num);
-          const out = { question_num: input.question_num, emoji: '🚀', brief_feedback: input.brief_feedback };
+          const out = {
+            question_num: input.question_num,
+            emoji: '🚀',
+            brief_feedback: input.brief_feedback,
+          };
           writer.write({ type: 'data-question-result', data: out });
           return out;
         }),
     }),
     offer_next_step: tool({
       ...quizToolDefs.offer_next_step,
-      execute: input => queue(async () => input),
+      execute: input => queue(async () => ({ ...input, lead_in: 'Ready for the next question?' })),
     }),
     submit_quiz_evaluation: tool({
       ...quizToolDefs.submit_quiz_evaluation,
@@ -217,6 +237,71 @@ async function collect(stream: ReadableStream<UIMessageChunk>): Promise<UIMessag
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
+describe('runQuizTurn: the welcome', () => {
+  const WELCOME =
+    "Welcome to your quiz on **Loops**! I'll be asking you 2 questions to assess your understanding. Let's get started!";
+
+  it('opens the begin turn with the welcome, before the first model call, and saves it first', async () => {
+    const a = fakeAttempt(2);
+    const model = scriptedModel([[toolCall('c1', 'present_question', question(1))]]);
+    const chunks = await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { inputMessageId: null, welcome: WELCOME }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
+    );
+    const types = chunks.map(c => c.type);
+    const welcomeAt = chunks.findIndex(c => c.type === 'text-delta' && c.delta === WELCOME);
+    expect(welcomeAt).toBeGreaterThan(-1);
+    expect(types.indexOf('text-start')).toBeLessThan(welcomeAt);
+    // Before anything from the model call.
+    expect(welcomeAt).toBeLessThan(types.indexOf('start-step'));
+    expect(welcomeAt).toBeLessThan(types.indexOf('tool-input-available'));
+    expect(a.state.presented).toBe(1);
+    // Saved with the reply, as its first part, so later turns send it to the model.
+    const saved = a.persisted.at(-1)?.message.parts ?? [];
+    expect(saved[0]).toMatchObject({ type: 'text', text: WELCOME });
+    expect(saved.filter(p => p.type === 'text')).toHaveLength(1);
+  });
+
+  it('adds no welcome to a turn on a student message', async () => {
+    const a = fakeAttempt(2);
+    const model = scriptedModel([[toolCall('c1', 'present_question', question(1))]]);
+    const chunks = await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { welcome: WELCOME }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
+    );
+    expect(chunks.some(c => c.type === 'text-delta')).toBe(false);
+    const saved = a.persisted.at(-1)?.message.parts ?? [];
+    expect(saved.some(p => p.type === 'text')).toBe(false);
+  });
+
+  it('adds no welcome once a question is out', async () => {
+    const a = fakeAttempt(2, { presented: 1 });
+    const model = scriptedModel([
+      [...text('t', 'Right.'), toolCall('c1', 'offer_next_step', { actions: ['next'] })],
+    ]);
+    const chunks = await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { inputMessageId: null, welcome: WELCOME }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
+    );
+    expect(chunks.some(c => c.type === 'text-delta' && c.delta === WELCOME)).toBe(false);
+  });
+});
+
 describe('runQuizTurn', () => {
   it('continues the turn after an invalid present_question call', async () => {
     const a = fakeAttempt(2);
@@ -225,7 +310,13 @@ describe('runQuizTurn', () => {
       [toolCall('c2', 'present_question', question(1))],
     ]);
     await collect(
-      runQuizTurn({ ctx: ctxFor(a.progress()), messages: history, signal: new AbortController().signal, deps: a.deps, model })
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
     );
     expect(model.doStreamCalls).toHaveLength(2);
     expect(a.state.presented).toBe(1);
@@ -238,7 +329,13 @@ describe('runQuizTurn', () => {
       [...text('t', 'should not be requested')],
     ]);
     await collect(
-      runQuizTurn({ ctx: ctxFor(a.progress()), messages: history, signal: new AbortController().signal, deps: a.deps, model })
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
     );
     expect(model.doStreamCalls).toHaveLength(1);
   });
@@ -246,11 +343,20 @@ describe('runQuizTurn', () => {
   it('stops once offer_next_step succeeds, so no text trails the buttons', async () => {
     const a = fakeAttempt(2, { presented: 1 });
     const model = scriptedModel([
-      [...text('t', 'Close, but not quite.'), toolCall('c1', 'offer_next_step', { actions: ['try_again', 'next'] })],
+      [
+        ...text('t', 'Close, but not quite.'),
+        toolCall('c1', 'offer_next_step', { actions: ['try_again', 'next'] }),
+      ],
       [...text('t2', 'trailing text')],
     ]);
     await collect(
-      runQuizTurn({ ctx: ctxFor(a.progress()), messages: history, signal: new AbortController().signal, deps: a.deps, model })
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
     );
     expect(model.doStreamCalls).toHaveLength(1);
   });
@@ -268,7 +374,13 @@ describe('runQuizTurn', () => {
       ],
     ]);
     await collect(
-      runQuizTurn({ ctx: ctxFor(a.progress()), messages: history, signal: new AbortController().signal, deps: a.deps, model })
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
     );
     expect(a.order).toEqual(['record:1', 'present:2']);
     expect(a.state.presented).toBe(2);
@@ -279,7 +391,13 @@ describe('runQuizTurn', () => {
     const a = fakeAttempt(2, { presented: 2, finalized: [1, 2] });
     const model = scriptedModel([[...text('t', 'Great work!')]]);
     const chunks = await collect(
-      runQuizTurn({ ctx: ctxFor(a.progress()), messages: history, signal: new AbortController().signal, deps: a.deps, model })
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
     );
     expect(model.doStreamCalls).toHaveLength(3);
     expect(a.serverCompletions()).toBe(1);
@@ -300,7 +418,13 @@ describe('runQuizTurn', () => {
       [toolCall('e1', 'submit_quiz_evaluation', evaluationFeedback())],
     ]);
     const chunks = await collect(
-      runQuizTurn({ ctx: ctxFor(a.progress()), messages: history, signal: new AbortController().signal, deps: a.deps, model })
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
     );
     expect(model.doStreamCalls).toHaveLength(2);
     expect(a.serverCompletions()).toBe(0);
@@ -321,7 +445,9 @@ describe('runQuizTurn', () => {
     );
     expect(model.doStreamCalls).toHaveLength(3);
     expect(a.serverCompletions()).toBe(0);
-    const notices = chunks.filter(c => c.type === 'data-notice') as Array<{ data: { code: string } }>;
+    const notices = chunks.filter(c => c.type === 'data-notice') as Array<{
+      data: { code: string };
+    }>;
     expect(notices.map(n => n.data.code)).toEqual(['reply_failed']);
   });
 
@@ -401,7 +527,13 @@ describe('runQuizTurn', () => {
     const a = fakeAttempt(2, { presented: 2, finalized: [1] });
     const model = scriptedModel([[...text('t', 'Could you say more?')]]);
     const chunks = await collect(
-      runQuizTurn({ ctx: ctxFor(a.progress()), messages: history, signal: new AbortController().signal, deps: a.deps, model })
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
     );
     expect(model.doStreamCalls).toHaveLength(1);
     expect(chunks.some(c => c.type === 'data-notice')).toBe(false);
@@ -424,7 +556,13 @@ describe('runQuizTurn', () => {
       ],
     ]);
     const projected = await collect(
-      runQuizTurn({ ctx: ctxFor(a.progress()), messages: history, signal: new AbortController().signal, deps: a.deps, model })
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
     );
     const types = projected.map(c => c.type);
     expect(types.some(t => t.startsWith('reasoning'))).toBe(false);
@@ -448,14 +586,15 @@ describe('runQuizTurn', () => {
   it('writes turn_stopped when the turn deadline passes', async () => {
     const a = fakeAttempt(2);
     const model = new MockLanguageModelV4({
-      doStream: async ({ abortSignal }) => ({
-        stream: new ReadableStream({
-          start(controller) {
-            controller.enqueue({ type: 'stream-start', warnings: [] });
-            abortSignal?.addEventListener('abort', () => controller.error(abortSignal.reason));
-          },
-        }),
-      }) as never,
+      doStream: async ({ abortSignal }) =>
+        ({
+          stream: new ReadableStream({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              abortSignal?.addEventListener('abort', () => controller.error(abortSignal.reason));
+            },
+          }),
+        }) as never,
     });
     const chunks = await collect(
       runQuizTurn({
@@ -467,7 +606,9 @@ describe('runQuizTurn', () => {
         deadlineMs: 50,
       })
     );
-    const notices = chunks.filter(c => c.type === 'data-notice') as Array<{ data: { code: string } }>;
+    const notices = chunks.filter(c => c.type === 'data-notice') as Array<{
+      data: { code: string };
+    }>;
     expect(notices.map(n => n.data.code)).toEqual(['turn_stopped']);
     expect(chunks.at(-1)?.type).toBe('finish');
   });
@@ -476,18 +617,25 @@ describe('runQuizTurn', () => {
     const a = fakeAttempt(2);
     const stop = new AbortController();
     const model = new MockLanguageModelV4({
-      doStream: async ({ abortSignal }) => ({
-        stream: new ReadableStream({
-          start(controller) {
-            controller.enqueue({ type: 'stream-start', warnings: [] });
-            abortSignal?.addEventListener('abort', () => controller.error(abortSignal.reason));
-            setTimeout(() => stop.abort(), 10);
-          },
-        }),
-      }) as never,
+      doStream: async ({ abortSignal }) =>
+        ({
+          stream: new ReadableStream({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              abortSignal?.addEventListener('abort', () => controller.error(abortSignal.reason));
+              setTimeout(() => stop.abort(), 10);
+            },
+          }),
+        }) as never,
     });
     const chunks = await collect(
-      runQuizTurn({ ctx: ctxFor(a.progress()), messages: history, signal: stop.signal, deps: a.deps, model })
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: history,
+        signal: stop.signal,
+        deps: a.deps,
+        model,
+      })
     );
     expect(chunks.some(c => c.type === 'data-notice')).toBe(false);
   });
@@ -500,10 +648,18 @@ describe('runQuizTurn', () => {
       },
     });
     const chunks = await collect(
-      runQuizTurn({ ctx: ctxFor(a.progress()), messages: history, signal: new AbortController().signal, deps: a.deps, model })
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
     );
     expect(JSON.stringify(chunks)).not.toContain('SENTINEL');
-    const notices = chunks.filter(c => c.type === 'data-notice') as Array<{ data: { code: string } }>;
+    const notices = chunks.filter(c => c.type === 'data-notice') as Array<{
+      data: { code: string };
+    }>;
     expect(notices.map(n => n.data.code)).toEqual(['reply_failed']);
   });
 
@@ -520,7 +676,9 @@ describe('runQuizTurn', () => {
       })
     );
     expect(model.doStreamCalls).toHaveLength(0);
-    const notices = chunks.filter(c => c.type === 'data-notice') as Array<{ data: { code: string } }>;
+    const notices = chunks.filter(c => c.type === 'data-notice') as Array<{
+      data: { code: string };
+    }>;
     expect(notices.map(n => n.data.code)).toEqual(['source_material_unavailable']);
   });
 
@@ -660,6 +818,50 @@ describe('runQuizTurn', () => {
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).not.toContain('SYSTEM NOTICE');
   });
 
+  it('stops a standard turn at its step ceiling, and gives one with lookups the higher one', async () => {
+    const invalid = (i: number) => [
+      toolCall(`bad${i}`, 'present_question', { preamble: 'x', question_number: 1 }),
+    ];
+    const script = [
+      ...Array.from({ length: STEP_CEILING.standard }, (_, i) => invalid(i)),
+      [toolCall('ok', 'present_question', question(1))],
+    ];
+    const content = {
+      mcpUrl: 'https://mcp.example.test/mcp',
+      classroomRef: 'sample-org/cs-1',
+      courseSearchEnabled: false,
+      docs: [{ kind: 'page', id: 'p1', title: 'Flexbox basics' }],
+    };
+
+    const standard = fakeAttempt(2);
+    const standardModel = scriptedModel(script);
+    await collect(
+      runQuizTurn({
+        ctx: ctxFor(standard.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: standard.deps,
+        model: standardModel,
+      })
+    );
+    expect(standardModel.doStreamCalls).toHaveLength(STEP_CEILING.standard);
+    expect(standard.state.presented).toBe(0);
+
+    const withLookups = fakeAttempt(2);
+    const lookupsModel = scriptedModel(script);
+    await collect(
+      runQuizTurn({
+        ctx: ctxFor(withLookups.progress(), { content }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: withLookups.deps,
+        model: lookupsModel,
+      })
+    );
+    expect(lookupsModel.doStreamCalls).toHaveLength(STEP_CEILING.standard + 1);
+    expect(withLookups.state.presented).toBe(1);
+  });
+
   it("hands the turn's log to the tools", async () => {
     const a = fakeAttempt(2);
     const log = vi.fn();
@@ -682,7 +884,13 @@ describe('runQuizTurn', () => {
     const a = fakeAttempt(2);
     const model = scriptedModel([[toolCall('c1', 'present_question', question(1))]]);
     await collect(
-      runQuizTurn({ ctx: ctxFor(a.progress()), messages: history, signal: new AbortController().signal, deps: a.deps, model })
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
     );
     const call = model.doStreamCalls[0];
     const systems = call.prompt.filter(m => m.role === 'system');
@@ -704,9 +912,490 @@ describe('runQuizTurn', () => {
     const a = fakeAttempt(2, { presented: 2, finalized: [1] });
     const model = scriptedModel([[...text('t', 'Tell me more.')]]);
     await collect(
-      runQuizTurn({ ctx: ctxFor(a.progress()), messages: history, signal: new AbortController().signal, deps: a.deps, model })
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
     );
     expect(model.doStreamCalls[0].providerOptions?.anthropic).toMatchObject({ effort: 'high' });
+  });
+});
+
+describe('runQuizTurn: the text written in the turn', () => {
+  /** A tool set whose offer_next_step records whether text was written when it ran. */
+  function offerProbe() {
+    const seen: boolean[] = [];
+    const a = fakeAttempt(2, { presented: 1 });
+    const inner = a.deps.tools;
+    const tools: QuizToolsFactory = (ctx, d) => ({
+      ...inner(ctx, d),
+      offer_next_step: tool({
+        ...quizToolDefs.offer_next_step,
+        execute: input => {
+          seen.push(d.textWritten());
+          return d.queue(async () => ({
+            ...input,
+            lead_in: 'Would you like to try again or move on?',
+          }));
+        },
+      }),
+    });
+    return { seen, a, deps: { ...a.deps, tools } };
+  }
+
+  const turn = (
+    deps: QuizTurnDeps,
+    model: MockLanguageModelV4,
+    over: Partial<AttemptContext> = {}
+  ) =>
+    collect(
+      runQuizTurn({
+        ctx: ctxFor({ ...fakeAttempt(2, { presented: 1 }).progress() }, over),
+        messages: history,
+        signal: new AbortController().signal,
+        deps,
+        model,
+        project: false,
+      })
+    );
+
+  it('sees feedback written before offer_next_step in the same step', async () => {
+    const { seen, deps } = offerProbe();
+    await turn(
+      deps,
+      scriptedModel([
+        [...text('t', 'Right.'), toolCall('b', 'offer_next_step', { actions: ['next'] })],
+      ])
+    );
+    expect(seen).toEqual([true]);
+  });
+
+  it('sees feedback written in an earlier step of the turn', async () => {
+    const { seen, deps } = offerProbe();
+    const model = scriptedModel([
+      [
+        ...text('t', 'Right.'),
+        toolCall('x', 'explore_codebase', { purpose: 'check_current', focus_area: 'the loop' }),
+      ],
+      [toolCall('b', 'offer_next_step', { actions: ['next'] })],
+    ]);
+    const chunks = await turn(deps, model);
+    expect(model.doStreamCalls).toHaveLength(2);
+    // The exploration ran (not refused as invalid input) before the buttons.
+    expect(chunks).toContainEqual(
+      expect.objectContaining({ type: 'tool-output-available', toolCallId: 'x' })
+    );
+    expect(seen).toEqual([true]);
+  });
+
+  it('sees feedback streamed in many deltas, whitespace deltas included', async () => {
+    const { seen, deps } = offerProbe();
+    await turn(
+      deps,
+      scriptedModel([
+        [
+          { type: 'text-start', id: 't' },
+          { type: 'text-delta', id: 't', delta: ' ' },
+          { type: 'text-delta', id: 't', delta: '**Cor' },
+          { type: 'text-delta', id: 't', delta: 'rect**' },
+          { type: 'text-delta', id: 't', delta: '\n' },
+          { type: 'text-end', id: 't' },
+          toolCall('b', 'offer_next_step', { actions: ['next'] }),
+        ],
+      ])
+    );
+    expect(seen).toEqual([true]);
+  });
+
+  it('does not count blank text, or the welcome the loop writes itself', async () => {
+    const { seen, a, deps } = offerProbe();
+    const model = scriptedModel([
+      [...text('t', ' \n '), toolCall('b', 'offer_next_step', { actions: ['next'] })],
+    ]);
+    await collect(
+      runQuizTurn({
+        ctx: ctxFor(
+          { ...a.progress(), presented: 0 },
+          { inputMessageId: null, welcome: 'Welcome!' }
+        ),
+        messages: history,
+        signal: new AbortController().signal,
+        deps,
+        model,
+      })
+    );
+    expect(seen).toEqual([false]);
+  });
+
+  it('sees each delta as it leaves the model, with no UI stream reading it', async () => {
+    let written = 0;
+    const mock = new MockLanguageModelV4({
+      doStream: async () =>
+        step([
+          ...text('t', 'Right idea.'),
+          toolCall('b', 'offer_next_step', { actions: ['next'] }),
+        ]) as never,
+    });
+    const wrapped = watchModelText(mock, () => {
+      written += 1;
+    }) as MockLanguageModelV4;
+    const { stream } = await wrapped.doStream({ prompt: [] } as never);
+    const reader = stream.getReader();
+    const types: string[] = [];
+    const seenAt: number[] = [];
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      types.push(value.type);
+      seenAt.push(written);
+    }
+    // Nothing until the text delta, then the flag: all before the tool call
+    // reaches the SDK.
+    const delta = types.indexOf('text-delta');
+    expect(seenAt.slice(0, delta)).toEqual(seenAt.slice(0, delta).map(() => 0));
+    expect(seenAt[delta]).toBe(1);
+    expect(delta).toBeLessThan(types.indexOf('tool-call'));
+    // Every part passes through unchanged.
+    expect(types).toEqual([
+      'stream-start',
+      'text-start',
+      'text-delta',
+      'text-end',
+      'tool-call',
+      'finish',
+    ]);
+  });
+});
+
+describe('the history of earlier turns: failed tool calls left out', () => {
+  const MASKED = { type: 'error-text' as const, value: 'An error occurred.' };
+  const user = (text: string): ModelMessage => ({
+    role: 'user',
+    content: [{ type: 'text', text }],
+  });
+  const assistant = (...content: unknown[]): ModelMessage =>
+    ({ role: 'assistant', content }) as ModelMessage;
+  const toolMsg = (...content: unknown[]): ModelMessage =>
+    ({ role: 'tool', content }) as ModelMessage;
+  const callPart = (id: string, toolName = 'offer_next_step') => ({
+    type: 'tool-call',
+    toolCallId: id,
+    toolName,
+    input: { actions: ['next'] },
+  });
+  const resultPart = (id: string, output: unknown, toolName = 'offer_next_step') => ({
+    type: 'tool-result',
+    toolCallId: id,
+    toolName,
+    output,
+  });
+  const ok = {
+    type: 'json',
+    value: { actions: ['next'], lead_in: 'Ready for the next question?' },
+  };
+  const reasoning = {
+    type: 'reasoning',
+    text: '',
+    providerOptions: { anthropic: { signature: 's' } },
+  };
+
+  /** Turn 1: a question. Turn 2: buttons refused, then feedback and buttons. */
+  const turn1: ModelMessage[] = [
+    user('begin'),
+    assistant(callPart('q1', 'present_question')),
+    toolMsg(resultPart('q1', { type: 'json', value: {} }, 'present_question')),
+    user('my answer'),
+  ];
+  const turn2Reply: ModelMessage[] = [
+    assistant(reasoning, callPart('b1')),
+    toolMsg(resultPart('b1', MASKED)),
+    assistant({ type: 'text', text: 'Right: the loop visits each item once.' }, callPart('b2')),
+    toolMsg(resultPart('b2', ok)),
+  ];
+  const turn3Reply: ModelMessage[] = [
+    assistant(
+      { type: 'text', text: 'Recorded.' },
+      callPart('r2', 'record_question_result'),
+      callPart('q2', 'present_question')
+    ),
+    toolMsg(
+      resultPart('r2', MASKED, 'record_question_result'),
+      resultPart('q2', { type: 'json', value: {} }, 'present_question')
+    ),
+  ];
+
+  it('removes a failed call and its result, and a step left with only reasoning', () => {
+    const history = [...turn1, ...turn2Reply, user('next')];
+    const out = withoutEarlierFailedToolCalls(history);
+    const flat = JSON.stringify(out);
+    expect(flat).not.toContain('"b1"');
+    expect(flat).not.toContain('An error occurred.');
+    expect(out).toHaveLength(history.length - 2);
+    // Everything before the first failed call is the same object.
+    turn1.forEach((m, i) => expect(out[i]).toBe(m));
+    // The accepted call and its feedback stay, in order.
+    expect(out.slice(turn1.length)).toEqual([turn2Reply[2], turn2Reply[3], history.at(-1)]);
+  });
+
+  it('keeps the other calls of a step whose one call failed', () => {
+    const history = [...turn1, ...turn2Reply, user('next'), ...turn3Reply, user('my answer 2')];
+    const out = withoutEarlierFailedToolCalls(history);
+    const step = out.at(-3) as { content: Array<{ type: string; toolCallId?: string }> };
+    expect(step.content.map(p => p.toolCallId ?? p.type)).toEqual(['text', 'q2']);
+    const results = out.at(-2) as { content: Array<{ toolCallId: string }> };
+    expect(results.content.map(p => p.toolCallId)).toEqual(['q2']);
+  });
+
+  it('returns the same array when nothing failed, and the same result every time', () => {
+    expect(withoutEarlierFailedToolCalls(turn1)).toBe(turn1);
+    const history = [...turn1, ...turn2Reply, user('next')];
+    expect(withoutEarlierFailedToolCalls(history)).toEqual(withoutEarlierFailedToolCalls(history));
+  });
+
+  it("keeps each turn's history a prefix of the next turn's", () => {
+    // Turn 3's history, then turn 4's (turn 3's reply had a failed call of its own).
+    const t3 = [...turn1, ...turn2Reply, user('next')];
+    const t4 = [...t3, ...turn3Reply, user('my answer 2')];
+    const t5 = [
+      ...t4,
+      assistant({ type: 'text', text: 'Close.' }, callPart('b3')),
+      toolMsg(resultPart('b3', ok)),
+      user('next'),
+    ];
+    const [o3, o4, o5] = [t3, t4, t5].map(withoutEarlierFailedToolCalls);
+    // Byte for byte: a later turn only appends.
+    expect(JSON.stringify(o4.slice(0, o3.length))).toBe(JSON.stringify(o3));
+    expect(JSON.stringify(o5.slice(0, o4.length))).toBe(JSON.stringify(o4));
+  });
+
+  /** Two assistant messages in a row, anywhere in `messages`. */
+  const hasAdjacentAssistants = (messages: ModelMessage[]) =>
+    messages.some(
+      (m, i) => i > 0 && m.role === 'assistant' && messages[i - 1].role === 'assistant'
+    );
+
+  it('keeps a failed call when removing it would put two assistant messages together', () => {
+    // [reasoning, text, failed] then [reasoning, call]: removing b1 leaves
+    // [reasoning, text] right before [reasoning, call].
+    const reply: ModelMessage[] = [
+      assistant(reasoning, { type: 'text', text: 'Right.' }, callPart('b1')),
+      toolMsg(resultPart('b1', MASKED)),
+      assistant(reasoning, callPart('b2')),
+      toolMsg(resultPart('b2', ok)),
+    ];
+    const history = [...turn1, ...reply, user('next')];
+    const out = withoutEarlierFailedToolCalls(history);
+    expect(out).toHaveLength(history.length);
+    out.forEach((m, i) => expect(m).toBe(history[i]));
+    expect(hasAdjacentAssistants(out)).toBe(false);
+  });
+
+  it('still removes a failed call when no two assistant messages end up together', () => {
+    // Text kept, its tool message dropped, the student's message after it.
+    const closing = [
+      ...turn1,
+      assistant({ type: 'text', text: 'Close.' }, callPart('b1')),
+      toolMsg(resultPart('b1', MASKED)),
+      user('next'),
+    ];
+    const out = withoutEarlierFailedToolCalls(closing);
+    expect(JSON.stringify(out)).not.toContain('"b1"');
+    expect(out.slice(turn1.length)).toEqual([
+      assistant({ type: 'text', text: 'Close.' }),
+      user('next'),
+    ]);
+
+    // The first step is kept (removing b1 would join two assistant messages);
+    // the second, a step left with only reasoning, is removed with its results.
+    const chained = [
+      ...turn1,
+      assistant({ type: 'text', text: 'Close.' }, callPart('b1')),
+      toolMsg(resultPart('b1', MASKED)),
+      assistant(reasoning, callPart('b2')),
+      toolMsg(resultPart('b2', MASKED)),
+      assistant({ type: 'text', text: 'What do you think?' }),
+      user('next'),
+    ];
+    const kept = withoutEarlierFailedToolCalls(chained);
+    const flat = JSON.stringify(kept);
+    expect(flat).toContain('"b1"');
+    expect(flat).not.toContain('"b2"');
+    expect(kept.slice(turn1.length)).toEqual([chained[4], chained[5], chained[8], chained[9]]);
+    expect(hasAdjacentAssistants(kept)).toBe(false);
+  });
+
+  it('never leaves two assistant messages together, keeps calls and results paired, and stays a prefix', () => {
+    let id = 0;
+    const failed = () => `f${id++}`;
+    const good = () => `g${id++}`;
+    const text = (t: string) => ({ type: 'text', text: t });
+    /** The shapes a saved step takes: its assistant message and tool message. */
+    const shapes: Record<string, () => ModelMessage[]> = {
+      reasoningFail: () => {
+        const f = failed();
+        return [assistant(reasoning, callPart(f)), toolMsg(resultPart(f, MASKED))];
+      },
+      textFail: () => {
+        const f = failed();
+        return [assistant(reasoning, text('Hmm.'), callPart(f)), toolMsg(resultPart(f, MASKED))];
+      },
+      reasoningOk: () => {
+        const g = good();
+        return [assistant(reasoning, callPart(g)), toolMsg(resultPart(g, ok))];
+      },
+      textOk: () => {
+        const g = good();
+        return [assistant(text('Right.'), callPart(g)), toolMsg(resultPart(g, ok))];
+      },
+      mixed: () => {
+        const [g, f] = [good(), failed()];
+        return [
+          assistant(text('Both.'), callPart(g), callPart(f)),
+          toolMsg(resultPart(g, ok), resultPart(f, MASKED)),
+        ];
+      },
+    };
+    const names = Object.keys(shapes);
+    /** Every reply of one to three steps, optionally ending with a text-only step. */
+    const replies: string[][] = [];
+    for (const a of names) {
+      replies.push([a]);
+      for (const b of names) {
+        replies.push([a, b]);
+        for (const c of names) replies.push([a, b, c]);
+      }
+    }
+    const idsOf = (messages: ModelMessage[], type: string) =>
+      messages
+        .flatMap(m => (typeof m.content === 'string' ? [] : (m.content as unknown[])))
+        .filter(p => (p as { type?: unknown }).type === type)
+        .map(p => (p as { toolCallId: string }).toolCallId)
+        .sort();
+    let removedFrom = 0;
+    for (const reply of replies) {
+      for (const endsWithText of [false, true]) {
+        const history = [
+          ...turn1,
+          ...reply.flatMap(name => shapes[name]()),
+          ...(endsWithText ? [assistant(text('What do you think?'))] : []),
+          user('next'),
+        ];
+        const out = withoutEarlierFailedToolCalls(history);
+        if (JSON.stringify(out).length < JSON.stringify(history).length) removedFrom += 1;
+        expect(hasAdjacentAssistants(out)).toBe(false);
+        expect(idsOf(out, 'tool-call')).toEqual(idsOf(out, 'tool-result'));
+        const later = [...history, assistant(text('Later.')), user('again')];
+        const laterOut = withoutEarlierFailedToolCalls(later);
+        expect(JSON.stringify(laterOut.slice(0, out.length))).toBe(JSON.stringify(out));
+      }
+    }
+    // Most histories still lose a failed call: the filter is not keeping everything.
+    expect(removedFrom).toBeGreaterThan(replies.length);
+  });
+
+  it('sends the model no failed call of an earlier turn, and keeps this turn refusals', async () => {
+    const a = fakeAttempt(2, { presented: 1 });
+    const refusing: QuizToolsFactory = (c, d) => {
+      let refused = false;
+      const inner = a.deps.tools(c, d);
+      return {
+        ...inner,
+        offer_next_step: tool({
+          ...quizToolDefs.offer_next_step,
+          execute: input =>
+            d.queue(async () => {
+              if (!refused) {
+                refused = true;
+                throw new Error(OFFER_AFTER_HINT_TEXT);
+              }
+              return { ...input, lead_in: 'Ready for the next question?' };
+            }),
+        }),
+      };
+    };
+    const model = scriptedModel([
+      [...text('t', 'Right.'), toolCall('now-1', 'offer_next_step', { actions: ['next'] })],
+      [toolCall('now-2', 'offer_next_step', { actions: ['next'] })],
+    ]);
+    await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: [...turn1, ...turn2Reply, user('my answer')],
+        signal: new AbortController().signal,
+        deps: { ...a.deps, tools: refusing },
+        model,
+      })
+    );
+    const first = JSON.stringify(model.doStreamCalls[0].prompt);
+    expect(first).not.toContain('"b1"');
+    expect(first).not.toContain('An error occurred.');
+    expect(first).toContain('"b2"');
+    // This turn's refusal reaches the model's next step, with its text.
+    const second = JSON.stringify(model.doStreamCalls[1].prompt);
+    expect(second).toContain('now-1');
+    expect(second).toContain(JSON.stringify(OFFER_AFTER_HINT_TEXT).slice(1, -1));
+  });
+});
+
+describe('offerToReplay', () => {
+  const refused = (error: unknown, input: unknown = { actions: ['next'] }) => ({
+    type: 'tool-error',
+    toolName: 'offer_next_step',
+    toolCallId: 'x',
+    input,
+    error,
+  });
+  const succeeded = (toolName: string) => ({ type: 'tool-result', toolName, toolCallId: 'y' });
+  const textPart = { type: 'text', text: 'Right.' };
+
+  it('returns the input of a last offer refused only for missing feedback', () => {
+    const input = { actions: ['try_again', 'next'] };
+    expect(
+      offerToReplay([
+        { content: [refused(feedbackMissingError(), input)] },
+        { content: [textPart] },
+      ])
+    ).toBe(input);
+  });
+
+  it('returns null when the last step was cut off at the output limit', () => {
+    const input = { actions: ['try_again', 'next'] };
+    const steps = (finishReason: string) => [
+      { content: [refused(feedbackMissingError(), input)], finishReason: 'tool-calls' },
+      { content: [textPart], finishReason },
+    ];
+    expect(offerToReplay(steps('length'))).toBeNull();
+    expect(offerToReplay(steps('stop'))).toBe(input);
+  });
+
+  it('returns null for any other refusal, or once a card, buttons or the evaluation went out', () => {
+    expect(offerToReplay([{ content: [textPart] }])).toBeNull();
+    expect(offerToReplay([{ content: [refused(new Error(OFFER_AFTER_HINT_TEXT))] }])).toBeNull();
+    // A later refusal for another reason wins over the feedback one.
+    expect(
+      offerToReplay([
+        { content: [refused(feedbackMissingError())] },
+        { content: [refused(new Error('invalid input'))] },
+      ])
+    ).toBeNull();
+    for (const name of ['present_question', 'offer_next_step', 'submit_quiz_evaluation']) {
+      expect(
+        offerToReplay([
+          { content: [refused(feedbackMissingError())] },
+          { content: [succeeded(name)] },
+        ])
+      ).toBeNull();
+    }
+    // A lookup succeeding changes nothing.
+    expect(
+      offerToReplay([
+        { content: [refused(feedbackMissingError())] },
+        { content: [succeeded('content_get')] },
+      ])
+    ).toEqual({ actions: ['next'] });
   });
 });
 
@@ -755,6 +1444,20 @@ describe('loop helpers', () => {
     expect(marked.at(-1)?.providerOptions?.anthropic?.cacheControl).toBeDefined();
   });
 
+  it('raises the step ceiling for an attempt with the course-material lookups', () => {
+    expect(STEP_CEILING).toEqual({ standard: 10, codeAware: 20 });
+    const content = {
+      mcpUrl: 'https://mcp.example.test/mcp',
+      classroomRef: 'sample-org/cs-1',
+      courseSearchEnabled: false,
+      docs: [],
+    };
+    expect(stepCeilingFor({ isCodeAware: false })).toBe(10);
+    expect(stepCeilingFor({ isCodeAware: false, content: null })).toBe(10);
+    expect(stepCeilingFor({ isCodeAware: false, content })).toBe(20);
+    expect(stepCeilingFor({ isCodeAware: true })).toBe(20);
+  });
+
   it('counts the text parts of the last user message', () => {
     expect(lastUserTextParts(history)).toBe(2);
     expect(lastUserTextParts([{ role: 'user', content: 'x' }])).toBe(1);
@@ -777,7 +1480,8 @@ describe('telemetry', () => {
     let calls = 0;
     for (const file of files) {
       const source = readFileSync(file, 'utf8');
-      const found = source.match(/\b(streamText|generateText|streamObject|generateObject)\(/g) ?? [];
+      const found =
+        source.match(/\b(streamText|generateText|streamObject|generateObject)\(/g) ?? [];
       const off = source.match(/telemetry: \{ isEnabled: false \}/g) ?? [];
       calls += found.length;
       expect(off.length, file).toBeGreaterThanOrEqual(found.length);
@@ -842,3 +1546,94 @@ function evaluationFeedback() {
     feedback_effort_note: 'Good effort.',
   };
 }
+
+describe('runQuizTurn: a lookup in the course material', () => {
+  it('reads a linked document, then presents the question; the browser gets its title only', async () => {
+    const a = fakeAttempt(2);
+    const DOC_TEXT = 'Flex containers lay out their children along a main axis.';
+    const mcpCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const connect = async () => ({
+      callTool: async ({
+        name,
+        arguments: args = {},
+      }: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }) => {
+        mcpCalls.push({ name, args });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                kind: 'page',
+                id: 'p1',
+                title: 'Flexbox basics',
+                text: DOC_TEXT,
+              }),
+            },
+          ],
+        };
+      },
+      close: async () => undefined,
+    });
+    const content = {
+      mcpUrl: 'https://mcp.example.test/mcp',
+      classroomRef: 'sample-org/cs-1',
+      courseSearchEnabled: false,
+      docs: [{ kind: 'page', id: 'p1', title: 'Flexbox basics' }],
+    };
+    const tools: QuizToolsFactory = (ctx, d) => ({
+      ...a.deps.tools(ctx, d),
+      ...contentTools(ctx, content, d, { mintToken: async () => 'bearer', connect }),
+    });
+    const model = scriptedModel([
+      [toolCall('c1', 'content_get', { kind: 'page', id: 'p1' })],
+      [toolCall('c2', 'present_question', question(1))],
+    ]);
+
+    const chunks = await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { inputMessageId: null, content }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: { ...a.deps, tools },
+        model,
+      })
+    );
+
+    // The model read the document as the tool's result, then asked question 1.
+    expect(mcpCalls).toEqual([
+      { name: 'content_get', args: { classroom: 'sample-org/cs-1', kind: 'page', id: 'p1' } },
+    ]);
+    expect(model.doStreamCalls).toHaveLength(2);
+    expect(JSON.stringify(model.doStreamCalls[1].prompt)).toContain(DOC_TEXT);
+    expect(a.state.presented).toBe(1);
+
+    // The browser: one titled step before the card; no content tool part, id or text.
+    const step = chunks.findIndex(c => c.type === 'data-step');
+    expect(chunks[step]).toMatchObject({
+      type: 'data-step',
+      data: { kind: 'course_material', title: 'Flexbox basics' },
+    });
+    const card = chunks.findIndex(
+      c => c.type === 'tool-input-available' && c.toolName === 'present_question'
+    );
+    expect(step).toBeLessThan(card);
+    const sent = JSON.stringify(chunks);
+    expect(sent).not.toContain('content_get');
+    expect(sent).not.toContain(DOC_TEXT);
+    expect(sent).not.toContain('"p1"');
+    expect(sent).not.toContain('bearer');
+
+    // Saved with the reply for the next turn's history, tool result included.
+    const saved = a.persisted.at(-1)?.message.parts ?? [];
+    expect(saved.some(p => p.type === 'tool-content_get')).toBe(true);
+    expect(saved).toContainEqual(
+      expect.objectContaining({
+        type: 'data-step',
+        data: { kind: 'course_material', title: 'Flexbox basics' },
+      })
+    );
+  });
+});

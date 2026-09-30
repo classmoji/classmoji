@@ -211,7 +211,7 @@ function QuizResults({ evaluation, focusMetrics = null }: QuizResultsProps) {
                     ) : null}
                   </div>
                   <div className="text-xs text-gray-500 dark:text-gray-400">
-                    {result.tries} {result.tries === 1 ? 'try' : 'tries'}
+                    {result.attempts} attempt{result.attempts !== 1 ? 's' : ''}
                   </div>
                   <div className="my-1">
                     <Emoji emoji={result.emoji} fontSize={20} />

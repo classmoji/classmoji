@@ -32,7 +32,7 @@ const { clearAttemptContextCache, loadAttemptContext } = await import('../contex
 const admission = { fence: 'fence-1', inputMessageId: 'msg-1', runId: 'run_1' };
 const env = { ANTHROPIC_API_KEY: 'platform-key' };
 
-function attempt(over: { include_code_context?: boolean } = {}) {
+function attempt(over: { include_code_context?: boolean; subject?: string | null } = {}) {
   return {
     id: 'attempt-1',
     user_id: 'user-1',
@@ -45,7 +45,8 @@ function attempt(over: { include_code_context?: boolean } = {}) {
       include_code_context: over.include_code_context ?? true,
       system_prompt: null,
       rubric_prompt: null,
-      subject: 'CSS layout',
+      name: 'Layout quiz',
+      subject: over.subject === undefined ? 'CSS layout' : over.subject,
       difficulty_level: null,
       classroom: {
         slug: 'cs-1',
@@ -111,5 +112,73 @@ describe('loadAttemptContext for a code-aware quiz', () => {
     const ctx = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });
     expect(ctx.codeUnavailable).toBe(false);
     expect(fakes.findByStudent).not.toHaveBeenCalled();
+  });
+});
+
+describe('loadAttemptContext: the welcome', () => {
+  it('fills the code-aware welcome from the subject and the question count', async () => {
+    fakes.findByStudent.mockResolvedValue({ name: 'landing-page' });
+    const ctx = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });
+    expect(ctx.welcome).toBe(
+      "Welcome to your code review quiz on CSS layout! I'll look at your repository first, then ask you 8 questions about your implementation."
+    );
+  });
+
+  it('uses the quiz name without a subject', async () => {
+    fakes.findById.mockResolvedValue(attempt({ subject: null }));
+    fakes.findByStudent.mockResolvedValue({ name: 'landing-page' });
+    const ctx = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });
+    expect(ctx.welcome).toBe(
+      "Welcome to your code review quiz on Layout quiz! I'll look at your repository first, then ask you 8 questions about your implementation."
+    );
+  });
+
+  it('tells a student with no repository that the quiz is on the concepts', async () => {
+    fakes.findByStudent.mockResolvedValue(null);
+    const ctx = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });
+    expect(ctx.codeUnavailable).toBe(true);
+    expect(ctx.welcome).toBe(
+      "Welcome to your quiz! This assignment doesn't have a linked repository. Let's discuss the concepts."
+    );
+  });
+
+  it('keeps the standard welcome on a standard quiz', async () => {
+    fakes.findById.mockResolvedValue(attempt({ include_code_context: false }));
+    const ctx = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });
+    expect(ctx.welcome).toBe(
+      "Welcome to your quiz on **CSS layout**! I'll be asking you 8 questions to assess your understanding. Let's get started!"
+    );
+  });
+});
+
+describe('loadAttemptContext: the content tools', () => {
+  const material = {
+    docs: [{ kind: 'page', id: 'p1', title: 'Flexbox basics', text: 'Flex containers.' }],
+    configured: 1,
+    totalChars: 16,
+  };
+
+  it('gives an attempt with linked material its lookups when the MCP server is configured', async () => {
+    fakes.findById.mockResolvedValue(attempt({ include_code_context: false }));
+    fakes.loadMaterial.mockResolvedValue(material);
+    const ctx = await loadAttemptContext('attempt-1', admission, {
+      log: vi.fn(),
+      env: { ...env, MCP_PUBLIC_URL: 'https://mcp.example.test' },
+    });
+    expect(ctx.content).toEqual({
+      mcpUrl: 'https://mcp.example.test/mcp',
+      classroomRef: 'sample-org/cs-1',
+      courseSearchEnabled: false,
+      docs: [{ kind: 'page', id: 'p1', title: 'Flexbox basics' }],
+    });
+    expect(ctx.prompt.staticPrompt).toContain('content_get(kind, id)');
+  });
+
+  it('has none, and names none, without the MCP server', async () => {
+    fakes.findById.mockResolvedValue(attempt({ include_code_context: false }));
+    fakes.loadMaterial.mockResolvedValue(material);
+    const ctx = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });
+    expect(ctx.content).toBeNull();
+    expect(ctx.prompt.staticPrompt).not.toMatch(/content_(get|search)/);
   });
 });

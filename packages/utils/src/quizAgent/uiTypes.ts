@@ -15,11 +15,30 @@ export const QuestionResultDataSchema = z.object({
 });
 
 /** A label for one exploration read: the file path only, never why it was read. */
-export const StepDataSchema = z.object({
+export const ReadFileStepSchema = z.object({
   kind: z.literal('read_file'),
   path: z.string(),
   error: z.literal(true).optional(),
 });
+
+/** Longest document title a course-material step carries: a label, not a payload. */
+export const COURSE_STEP_TITLE_MAX = 200;
+
+/**
+ * A label for one course-material lookup: the title of the document read
+ * (content_get), or nothing at all for a search (its query is the model's
+ * next question). Never the query, the document's id or its text.
+ */
+export const CourseMaterialStepSchema = z.object({
+  kind: z.literal('course_material'),
+  title: z.string().min(1).max(COURSE_STEP_TITLE_MAX).optional(),
+});
+
+/** One step of the work behind a reply, shown above it. */
+export const StepDataSchema = z.discriminatedUnion('kind', [
+  ReadFileStepSchema,
+  CourseMaterialStepSchema,
+]);
 
 export const NOTICE_CODES = [
   'turn_stopped',
@@ -65,3 +84,26 @@ export const BUTTON_TEXT = {
   try_again: "I'd like to try answering this question again",
   next: 'next',
 } as const;
+
+/** The fixed line shown with the buttons (the previous runtime's wording). */
+export const NEXT_STEP_LEAD_IN = {
+  /** Next only, with another question to come. */
+  next: 'Ready for the next question?',
+  /** Next only, on the last question: moving on shows the results. */
+  results: 'Ready to see your results?',
+  /** Try again and Next. */
+  try_again_or_next: 'Would you like to try again or move on?',
+} as const;
+
+/**
+ * The lead-in for a set of buttons, or null for a set that has none (Try
+ * again alone: the student can always move on, so it is never offered).
+ */
+export function nextStepLeadIn(
+  actions: readonly ('next' | 'try_again')[],
+  isLastQuestion: boolean
+): string | null {
+  if (!actions.includes('next')) return null;
+  if (actions.includes('try_again')) return NEXT_STEP_LEAD_IN.try_again_or_next;
+  return isLastQuestion ? NEXT_STEP_LEAD_IN.results : NEXT_STEP_LEAD_IN.next;
+}

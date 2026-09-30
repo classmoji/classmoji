@@ -6,7 +6,7 @@
 
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { QuizUIMessage } from '@classmoji/utils/quiz-agent';
+import { projectMessage, quizVisibility, type QuizUIMessage } from '@classmoji/utils/quiz-agent';
 
 let darkMode = false;
 vi.mock('~/hooks', () => ({ useDarkMode: () => ({ isDarkMode: darkMode }) }));
@@ -99,6 +99,12 @@ const RECORD = {
   ],
 };
 
+/** An earlier turn, so a reply under test is not the opening one (whose first text is the welcome's own bubble). */
+const EARLIER = [
+  msg('a0', 'assistant', [{ type: 'text', text: 'Welcome.' }]),
+  msg('u0', 'user', [{ type: 'text', text: 'my answer' }]),
+];
+
 const renderTranscript = (
   messages: QuizUIMessage[],
   extra: Partial<Parameters<typeof QuizTranscript>[0]> = {}
@@ -129,18 +135,37 @@ describe('QuizTranscript — parts', () => {
         darkMode = theme === 'dark';
       });
 
-      it('shows the grading rule above the first question', () => {
+      it('shows no grading rule above the questions', () => {
         const html = renderTranscript([msg('a1', 'assistant', [questionPart])]);
-        const rule = html.indexOf('Your best answer counts, and each hint before it costs 15.');
-        expect(rule).toBeGreaterThan(-1);
-        expect(rule).toBeLessThan(html.indexOf('Question 1 of 8'));
+        expect(html).toContain('Question 1 of 8');
+        expect(html).not.toContain('quiz-grading-rule');
+        expect(html).not.toContain('each hint before it costs');
       });
 
       it('renders text parts as markdown', () => {
         const html = renderTranscript([
           msg('a1', 'assistant', [{ type: 'text', text: 'Good **start**.' }]),
         ]);
-        expect(html).toContain('<strong>start</strong>');
+        expect(html).toContain('<strong class="font-semibold">start</strong>');
+      });
+
+      it('styles headings, quotes and emphasis as the legacy chat did', () => {
+        const html = renderTranscript([
+          msg('a1', 'assistant', [
+            {
+              type: 'text',
+              text: '# Big\n\n## Middle\n\n### Small\n\n> Quoted\n\n*leaning* and **bold**',
+            },
+          ]),
+        ]);
+        expect(html).toContain('<h1 class="mt-3 mb-2 text-[1.5em] font-semibold">Big</h1>');
+        expect(html).toContain('<h2 class="mt-2.5 mb-1.5 text-[1.3em] font-semibold">Middle</h2>');
+        expect(html).toContain('<h3 class="mt-2 mb-1 text-[1.1em] font-semibold">Small</h3>');
+        expect(html).toMatch(/<blockquote class="[^"]*border-l-\[3px\][^"]*">/);
+        expect(html).toContain('dark:border-[#4b5563]');
+        expect(html).toContain('dark:text-[#9ca3af]');
+        expect(html).toContain('<em class="italic">leaning</em>');
+        expect(html).toContain('<strong class="font-semibold">bold</strong>');
       });
 
       it('renders the question card from the accepted output, never the call input', () => {
@@ -152,20 +177,80 @@ describe('QuizTranscript — parts', () => {
         expect(html).toContain(theme === 'dark' ? '#1e3a5f' : '#e6f4ff');
       });
 
-      it('shows a placeholder while the card is still arriving, and nothing for a refused call', () => {
-        const arriving = [
+      it('labels quoted code with its file and lines, above the code', () => {
+        const quotedCard = {
+          ...CARD,
+          code_snippet: '.features {\n  display: grid;\n...\n}',
+          source: { path: 'css/style.css', lines: '11-12, 15', changed: false },
+        };
+        const html = renderTranscript([
           msg('a1', 'assistant', [
-            { ...questionPart, state: 'input-available', output: undefined },
+            {
+              ...questionPart,
+              output: { card: quotedCard, question_number: 1, total_questions: 8 },
+            },
           ]),
+        ]);
+        const label = html.indexOf('data-testid="quiz-code-source"');
+        expect(label).toBeGreaterThan(-1);
+        expect(label).toBeLessThan(html.indexOf('<pre'));
+        expect(html).toContain('css/style.css');
+        expect(html).toContain('lines 11–12, 15');
+        expect(html).toContain(theme === 'dark' ? 'color:#9ca3af' : 'color:#4b5563');
+      });
+
+      it('names the one line of a one-line quote, and marks nothing for an edited quote', () => {
+        const editedCard = {
+          ...CARD,
+          source: { path: 'css/style.css', lines: '13', changed: true },
+        };
+        const html = renderTranscript([
+          msg('a1', 'assistant', [
+            {
+              ...questionPart,
+              output: { card: editedCard, question_number: 1, total_questions: 8 },
+            },
+          ]),
+        ]);
+        expect(html).toContain('data-testid="quiz-code-source"');
+        expect(html).toContain('line 13');
+        expect(html).not.toContain('lines 13');
+        expect(html).not.toContain('>edited<');
+        expect(html).not.toContain('quiz-code-edited');
+        expect(html).toContain(theme === 'dark' ? 'color:#9ca3af' : 'color:#4b5563');
+      });
+
+      it('shows a card without a source as before, with no label', () => {
+        const html = renderTranscript([msg('a1', 'assistant', [questionPart])]);
+        expect(html).toContain('<pre');
+        expect(html).toContain('.header</span>');
+        expect(html).not.toContain('quiz-code-source');
+      });
+
+      it('shows a placeholder while the card is still arriving, and nothing for a refused call', () => {
+        const card = { ...questionPart, state: 'input-available', output: undefined };
+        const arriving = [
+          ...EARLIER,
+          msg('a1', 'assistant', [{ type: 'text', text: 'One more.' }, card]),
         ];
         const streaming = renderTranscript(arriving, { busy: true, status: 'streaming' });
         expect(streaming).not.toContain('A reworded question');
         expect(streaming).toContain('ant-skeleton');
 
+        // Alone it opens no bubble: no empty bubble, the activity line instead.
+        const alone = renderTranscript([msg('a1', 'assistant', [card])], {
+          busy: true,
+          status: 'streaming',
+        });
+        expect(alone).not.toContain('ant-skeleton');
+        expect(alone).not.toContain('quiz-assistant-bubble');
+        expect(alone).not.toContain('data-message-role="assistant"');
+        expect(alone).toContain('data-testid="quiz-typing"');
+
         // A turn that ended before its card arrived leaves no empty card.
         const ended = renderTranscript(arriving);
         expect(ended).not.toContain('ant-skeleton');
-        expect(ended).not.toContain('data-message-role="assistant"');
+        expect(ended).toContain('One more.');
 
         const refused = renderTranscript([
           msg('a1', 'assistant', [
@@ -278,9 +363,120 @@ describe('QuizTranscript — parts', () => {
             { type: 'text', text: 'Here is a question.' },
           ]),
         ]);
-        expect(html).toContain('Read 2 files');
+        expect(html).toContain('Code Analysis (2 steps)');
+        expect(html).toContain('aria-label="rocket"');
         expect(html).toContain('src/index.html');
         expect(html).toContain('Couldn&#x27;t read src/missing.css');
+        // Collapsed once the reply is done, the paths still in the page.
+        expect(html).not.toContain('ant-collapse-item-active');
+        expect(html).toContain(theme === 'dark' ? '#111827' : '#fafafa');
+      });
+
+      it('says one step for one file', () => {
+        const html = renderTranscript([
+          msg('a1', 'assistant', [
+            { type: 'data-step', data: { kind: 'read_file', path: 'src/index.html' } },
+            { type: 'text', text: 'Here is a question.' },
+          ]),
+        ]);
+        expect(html).toContain('Code Analysis (1 step)');
+      });
+
+      it('shows the lead-in line above the buttons, and nothing without one', () => {
+        const buttons = (output: object) => ({
+          type: 'tool-offer_next_step',
+          toolCallId: 'call-2',
+          state: 'output-available',
+          input: { actions: ['next'] },
+          output,
+        });
+        const withLine = renderTranscript([
+          msg('a1', 'assistant', [
+            { type: 'text', text: 'Right.' },
+            buttons({ actions: ['next'], lead_in: 'Ready for the next question?' }),
+          ]),
+        ]);
+        const line = withLine.indexOf('Ready for the next question?');
+        expect(line).toBeGreaterThan(-1);
+        expect(line).toBeLessThan(withLine.indexOf('data-testid="quiz-next"'));
+        expect(withLine).toContain('data-testid="quiz-next-step-lead-in"');
+
+        for (const output of [{ actions: ['next'] }, { actions: ['next'], lead_in: '  ' }]) {
+          const without = renderTranscript([msg('a1', 'assistant', [buttons(output)])]);
+          expect(without).toContain('data-testid="quiz-next"');
+          expect(without).not.toContain('quiz-next-step-lead-in');
+        }
+      });
+
+      it('shows the closing line above the results, once, unless the reply closed in its own words', () => {
+        const evaluation = {
+          type: 'tool-submit_quiz_evaluation',
+          toolCallId: 'call-3',
+          state: 'output-available',
+          input: RECORD.feedback,
+          output: {
+            ...RECORD,
+            feedback: { ...RECORD.feedback, final_acknowledgment: 'All done!' },
+          },
+        };
+        const html = renderTranscript([
+          msg('a1', 'assistant', [
+            { type: 'text', text: 'That last one was right.' },
+            {
+              type: 'data-question-result',
+              data: { question_num: 8, emoji: 'heart', brief_feedback: 'Spot on.' },
+            },
+            evaluation,
+          ]),
+        ]);
+        const closing = html.indexOf('data-testid="quiz-closing-acknowledgment"');
+        expect(closing).toBeGreaterThan(html.indexOf('completed question 8:'));
+        expect(closing).toBeLessThan(html.indexOf('data-testid="quiz-results"'));
+        expect(html.match(/All done!/g)).toHaveLength(1);
+        expect(html).toContain(theme === 'dark' ? 'dark:bg-gray-800' : 'bg-white');
+
+        // Text of its own after the last marker comes first: no second closing line.
+        const ownWords = renderTranscript([
+          msg('a1', 'assistant', [{ type: 'text', text: 'Well played.' }, evaluation]),
+        ]);
+        expect(ownWords).toContain('Well played.');
+        expect(ownWords).not.toContain('All done!');
+
+        // A server-completed record has no closing line.
+        const server = renderTranscript([
+          msg('a1', 'assistant', [
+            { type: 'data-evaluation', data: { ...RECORD, source: 'server', feedback: undefined } },
+          ]),
+        ]);
+        expect(server).not.toContain('quiz-closing-acknowledgment');
+      });
+
+      it('shows the stored closing line on a completed attempt with no evaluation part', () => {
+        const html = renderTranscript([msg('a1', 'assistant', [questionPart])], {
+          evaluationRecord: RECORD as never,
+          status: 'complete',
+        });
+        const closing = html.indexOf('data-testid="quiz-closing-acknowledgment"');
+        expect(closing).toBeGreaterThan(html.indexOf('Question 1 of 8'));
+        expect(closing).toBeLessThan(html.indexOf('data-testid="quiz-results"'));
+        expect(html).toContain('Nice work.');
+      });
+
+      it('counts each question in attempts, as the legacy results did', () => {
+        const record = {
+          ...RECORD,
+          question_results: [
+            { ...RECORD.question_results[0], attempts: 1, tries: 1 },
+            { ...RECORD.question_results[0], question_num: 2, attempts: 3, tries: 3 },
+          ],
+        };
+        const html = renderTranscript([], {
+          evaluationRecord: record as never,
+          status: 'complete',
+        });
+        expect(html).toContain('1 attempt<');
+        expect(html).toContain('3 attempts<');
+        expect(html).not.toMatch(/\btr(y|ies)\b/);
       });
 
       it('renders nothing for reasoning, internal tools, hidden messages or unknown parts', () => {
@@ -333,10 +529,51 @@ describe('QuizTranscript — parts', () => {
       it('uses dark variants on its own surfaces', () => {
         const html = renderTranscript([msg('a1', 'assistant', [{ type: 'text', text: 'Hi' }])]);
         expect(html).toContain('dark:bg-gray-800');
-        expect(html).toContain('dark:text-amber-200');
       });
     });
   }
+});
+
+describe('QuizTranscript — a quoted card as the viewer receives it', () => {
+  const quote = {
+    path: 'css/style.css',
+    ranges: [[11, 15]],
+    anchor: '.features {',
+    edit: { line: 13, replace: '  grid-template-columns: 1fr;' },
+  };
+  const { code_snippet: _typed, ...cardFields } = CARD;
+  const quotedCard = {
+    ...cardFields,
+    code_snippet: '.features {\n  display: grid;\n  grid-template-columns: 1fr;\n...\n}',
+    source: { path: 'css/style.css', lines: '11-15', changed: true },
+  };
+
+  it('renders the card from the output once the projection has cut the quote from the input', () => {
+    const stored = msg('a1', 'assistant', [
+      {
+        ...questionPart,
+        input: { ...cardFields, code_quote: quote },
+        output: { card: quotedCard, question_number: 1, total_questions: 8 },
+      },
+    ]);
+    const projected = projectMessage(stored, quizVisibility)!;
+    expect(JSON.stringify(projected)).not.toContain('code_quote');
+
+    const html = renderTranscript([projected]);
+    expect(html).toContain('Why does the header use flexbox?');
+    expect(html).toContain('data-testid="quiz-code-source"');
+    expect(html).toContain('lines 11–15');
+    expect(html).toContain('grid-template-columns');
+  });
+
+  it('shows the placeholder for a card arriving with no input yet, beside text', () => {
+    const arriving = msg('a1', 'assistant', [
+      { type: 'text', text: 'Next up.' },
+      { type: 'tool-present_question', toolCallId: 'call-1', state: 'input-streaming' },
+    ]);
+    const html = renderTranscript([...EARLIER, arriving], { busy: true, status: 'streaming' });
+    expect(html).toContain('ant-skeleton');
+  });
 });
 
 describe("QuizTranscript — a question's marker above the next card", () => {
@@ -417,7 +654,7 @@ describe("QuizTranscript — a question's marker above the next card", () => {
     expectInOrder(earlier, ['Question 2 of 8', 'completed question 3:']);
   });
 
-  it('keeps text where it was: before the card stays above the divider, after stays below', () => {
+  it('keeps text before the card above the divider, and shows no text after the card', () => {
     const html = renderTranscript([
       msg('a1', 'assistant', [
         text('That is right.'),
@@ -427,13 +664,61 @@ describe("QuizTranscript — a question's marker above the next card", () => {
         text('Good luck.'),
       ]),
     ]);
-    expectInOrder(html, [
-      'That is right.',
-      'completed question 1:',
-      'Question 2 of 8',
-      'Take your time.',
-      'Good luck.',
-    ]);
+    expectInOrder(html, ['That is right.', 'completed question 1:', 'Question 2 of 8']);
+    // As in the legacy chat: what follows a card only restates it.
+    expect(html).not.toContain('Take your time.');
+    expect(html).not.toContain('Good luck.');
+  });
+
+  it('holds the next card back while its question marker is still being recorded', () => {
+    const pending = (n: number | undefined, state = 'input-available') => ({
+      ...recordCall(n ?? 1),
+      state,
+      input: n === undefined ? {} : { question_num: n, answers: [] },
+      output: undefined,
+    });
+    const arriving = {
+      type: 'tool-present_question',
+      toolCallId: 'call-q2',
+      state: 'input-streaming',
+      input: { preamble: 'Next', question_number: 2 },
+    };
+    for (const [record, next] of [
+      [pending(1), arriving],
+      [pending(1, 'input-streaming'), arriving],
+      [pending(undefined, 'input-streaming'), { ...arriving, input: { preamble: 'Next' } }],
+      [pending(1), card(2)],
+    ] as const) {
+      const html = renderTranscript([msg('a1', 'assistant', [text('Right.'), record, next])], {
+        busy: true,
+        status: 'streaming',
+      });
+      expect(html).toContain('Right.');
+      expect(html).not.toContain('ant-skeleton');
+      expect(html).not.toContain('Question 2 of 8');
+      // Still waiting for the reply: the activity line stays up.
+      expect(html).toContain('data-testid="quiz-typing"');
+    }
+
+    // The record call done, its marker in: the card follows it, once it is in.
+    const done = renderTranscript(
+      [msg('a1', 'assistant', [text('Right.'), recordCall(1), arriving, divider(1)])],
+      { busy: true, status: 'streaming' }
+    );
+    expectInOrder(done, ['Right.', 'completed question 1:', 'data-testid="quiz-typing"']);
+    expect(done).not.toContain('ant-skeleton');
+    const arrived = renderTranscript(
+      [msg('a1', 'assistant', [text('Right.'), recordCall(1), card(2), divider(1)])],
+      { busy: true, status: 'streaming' }
+    );
+    expectInOrder(arrived, ['Right.', 'completed question 1:', 'Question 2 of 8']);
+
+    // A refused record call holds nothing back.
+    const refused = renderTranscript(
+      [msg('a1', 'assistant', [{ ...pending(1), state: 'output-error', errorText: 'x' }, card(2)])],
+      { busy: true, status: 'streaming' }
+    );
+    expect(refused).toContain('Question 2 of 8');
   });
 
   it('keeps dividers moved above the same card in their arrival order', () => {
@@ -451,27 +736,27 @@ describe("QuizTranscript — a question's marker above the next card", () => {
 
   it('shows the divider above a card that is still arriving, numbered or not', () => {
     for (const input of [{ preamble: 'Next' }, { preamble: 'Next', question_number: 2 }]) {
-      const html = renderTranscript(
-        [
-          msg('a1', 'assistant', [
-            recordCall(1),
-            {
-              type: 'tool-present_question',
-              toolCallId: 'call-q2',
-              state: 'input-streaming',
-              input,
-            },
-            divider(1),
-          ]),
-        ],
-        { busy: true, status: 'streaming' }
-      );
-      expectInOrder(html, ['completed question 1:', 'ant-skeleton']);
+      const parts = [
+        recordCall(1),
+        { type: 'tool-present_question', toolCallId: 'call-q2', state: 'input-streaming', input },
+        divider(1),
+      ];
+      expect(displayOrder(parts as never).map(e => e.index)).toEqual([0, 2, 1]);
+      // The card opens no bubble while it arrives: the divider, then the activity line.
+      const html = renderTranscript([msg('a1', 'assistant', parts)], {
+        busy: true,
+        status: 'streaming',
+      });
+      expectInOrder(html, ['completed question 1:', 'data-testid="quiz-typing"']);
+      expect(html).not.toContain('ant-skeleton');
+      expect(html).not.toContain('quiz-assistant-bubble');
     }
     // An arriving card numbered for the divider's own question stays above it.
     const own = renderTranscript(
       [
+        ...EARLIER,
         msg('a1', 'assistant', [
+          text('Here it is.'),
           {
             type: 'tool-present_question',
             toolCallId: 'call-q1',
@@ -483,7 +768,7 @@ describe("QuizTranscript — a question's marker above the next card", () => {
       ],
       { busy: true, status: 'streaming' }
     );
-    expectInOrder(own, ['ant-skeleton', 'completed question 1:']);
+    expectInOrder(own, ['Here it is.', 'ant-skeleton', 'completed question 1:']);
   });
 
   it('shows the owner (live) and staff (saved) the same order', () => {

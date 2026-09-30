@@ -1,7 +1,9 @@
 /**
  * The SOURCE MATERIAL block: a quiz's linked pages and decks, inlined on the
  * cached side of the prompt. Ported from the ai-agent's `prompts/utils.js`
- * (`usableMaterial`, `buildMaterialPrompt`) without changing a byte of output.
+ * (`usableMaterial`, `buildMaterialPrompt`). Without the content tools the
+ * output is the same byte for byte; with them, the tool lines name this
+ * runtime's tools (no classroom argument, no content_list).
  *
  * Only student-visible documents arrive here: the loader
  * (`ClassmojiService.quizSourceMaterial.load`, called as the attempt's user)
@@ -11,14 +13,26 @@
  * cut, so no second marker is added here.
  *
  * Each header carries the document's id because content_get takes
- * `(classroom, kind, id)`, and the id is how the model names a document whose
- * text here was cut. Tonight the run has no content tools
- * (`contentToolsAvailable: false`), so the block names none.
+ * `(kind, id)`, and the id is how the model names a document whose text here
+ * was cut. The tool lines appear only when the attempt has the content tools
+ * (`contentToolsAvailable`, tools/content.ts); without them the block names
+ * no tool. The task adds the classroom to every call, so the lines name
+ * none. content_search is always
+ * named with content_get: without course search it finds passages in the
+ * documents listed here only, with it in the whole course.
  *
  * A code-aware quiz with material gets one more rule, right after the
  * precedence line: the material decides the topics, the student's repository
  * is where they are examined.
  */
+
+/**
+ * With the content tools on: what a lookup returns is course material, and
+ * only what a student may read of it is ever quoted to the student.
+ */
+export const STAFF_ONLY_LINE =
+  'Quote to the student only material a student may read: never text marked as a draft, ' +
+  'unpublished or for instructors only, even if a lookup returns it.';
 
 /** One document as the prompt carries it; `SourceDoc` from the loader fits. */
 export type MaterialDoc = {
@@ -67,15 +81,15 @@ export function buildMaterialPrompt({
   const searchOn = Boolean(toolsOn && courseSearchEnabled);
 
   const searchLine = (beyond: string) =>
-    `Verification: content_search(classroom: "${ref}", query) and ` +
-    `content_list(classroom: "${ref}") can confirm the course covers something` +
+    'Verification: content_search(query) can confirm the course covers something' +
     `${beyond}; a miss does not prove absence. Only this classroom. Search hits may be ` +
-    `opened in full with content_get(classroom: "${ref}", kind, id) to check what the ` +
-    `course actually says.`;
+    'opened in full with content_get(kind, id) to check what the course actually says.';
 
   if (docs.length === 0) {
     if (!searchOn) return '';
-    return [`━━━ COURSE SEARCH (classroom: ${ref}) ━━━`, searchLine('')].join('\n');
+    return [`━━━ COURSE SEARCH (classroom: ${ref}) ━━━`, searchLine(''), STAFF_ONLY_LINE].join(
+      '\n'
+    );
   }
 
   const lines = [
@@ -97,12 +111,20 @@ export function buildMaterialPrompt({
   ];
   if (toolsOn) {
     lines.push(
-      `content_get(classroom: "${ref}", kind, id) returns the whole of a document listed ` +
-        'below when its text here was cut.' +
+      'content_get(kind, id) returns the whole of a document listed below when its text ' +
+        'here was cut: its header names the kind and the id.' +
         (searchOn ? '' : ' It reads only the documents listed below.')
     );
+    if (searchOn) {
+      lines.push(searchLine(' not in this material'));
+    } else {
+      lines.push(
+        'content_search(query) finds where the documents listed below cover a topic, ' +
+          'including text cut from them here; a miss does not prove absence.'
+      );
+    }
+    lines.push(STAFF_ONLY_LINE);
   }
-  if (searchOn) lines.push(searchLine(' not in this material'));
 
   const blocks = docs.map(
     doc =>

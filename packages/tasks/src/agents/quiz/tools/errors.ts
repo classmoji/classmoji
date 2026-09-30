@@ -4,10 +4,12 @@
  * A thrown error becomes the tool's `tool-error` result, which the model reads
  * and corrects. For the `shown` tools (present_question, offer_next_step,
  * submit_quiz_evaluation) that error text also reaches the browser, so it is
- * always one of two kinds: a grading refusal, whose message the grading
- * service writes for the model (it says what is accepted), or fixed text.
- * Nothing else (database errors, stack traces, request bodies) is passed on;
- * those are logged as ids and error facts only.
+ * always one of three kinds: a grading refusal, whose message the grading
+ * service writes for the model (it says what is accepted), a code-quote
+ * refusal (codeQuote.ts: what to fix, quoting at most one line of the
+ * student's own file), or fixed text. Nothing else (database errors, stack
+ * traces, request bodies, GitHub answers) is passed on; those are logged as
+ * ids and error facts only.
  */
 import type { QuizToolName } from '@classmoji/utils/quiz-agent';
 import { logDiagnostic, type DiagnosticLog } from '../../shared/sanitize.ts';
@@ -18,6 +20,58 @@ export const TURN_STOPPED_TEXT = 'This turn was stopped. Nothing was saved.';
 export const OFFER_AFTER_QUESTION_TEXT =
   "Wait for the student's answer to this question before offering next steps.";
 
+/**
+ * offer_next_step refused because the model has written no visible text in
+ * this turn yet. It says to call again: a model that only writes the feedback
+ * after this would end the turn without buttons.
+ */
+export const OFFER_BEFORE_FEEDBACK_TEXT =
+  'If the student answered, write your feedback on their answer first, then call offer_next_step again; otherwise reply without buttons.';
+
+/** The `code` on that refusal, so the loop can tell it from every other one. */
+export const FEEDBACK_MISSING = 'feedback_missing';
+
+/**
+ * The refusal of offer_next_step for no feedback text yet. The loop may run
+ * such a call again at the end of the turn once the text is there (loop.ts).
+ */
+export function feedbackMissingError(): Error {
+  return Object.assign(new Error(OFFER_BEFORE_FEEDBACK_TEXT), { code: FEEDBACK_MISSING });
+}
+
+/** True for the refusal `feedbackMissingError` makes, and for nothing else. */
+export function isFeedbackMissing(error: unknown): boolean {
+  return error instanceof Error && (error as { code?: unknown }).code === FEEDBACK_MISSING;
+}
+
+/**
+ * offer_next_step refused in a turn the student opened with Try again: that
+ * turn is a hint, which ends with a question and waits for their answer.
+ */
+export const OFFER_AFTER_HINT_TEXT =
+  'The student clicked Try again, so this reply is a hint: give exactly one hint, end with a question such as "What do you think?", and wait for their answer. No buttons after a hint.';
+
+/** offer_next_step refused for Try again without Next: the student can always move on. */
+export const OFFER_TRY_AGAIN_ALONE_TEXT =
+  'Offer ["try_again", "next"] or ["next"]: the student can always move on.';
+
+/**
+ * present_question refused: it would show the current question's card again
+ * after the model has already written text in this turn, so a feedback turn
+ * would end with the old card and no buttons.
+ */
+export const RESHOW_AFTER_TEXT =
+  "You already replied this turn; don't re-show the question. If the student answered, call offer_next_step.";
+
+/**
+ * `RESHOW_AFTER_TEXT` for question `lastPresented`. With no question open (it
+ * has its result), the model most likely meant the next one, so it is named.
+ */
+export const reshowAfterText = (lastPresented: number, questionOpen: boolean) =>
+  questionOpen
+    ? RESHOW_AFTER_TEXT
+    : `${RESHOW_AFTER_TEXT} To show the next question, send question_number ${lastPresented + 1}.`;
+
 /** present_question refused because next-step buttons went out earlier in the same turn. */
 export const QUESTION_AFTER_OFFER_TEXT =
   "Wait for the student's choice before presenting the next question.";
@@ -26,9 +80,24 @@ export const QUESTION_AFTER_OFFER_TEXT =
 export const RECORD_BEFORE_ANSWER_TEXT =
   'The student has not answered this question yet. Wait for their answer.';
 
-/** present_question refused because question `n`, the one the student is leaving, has no result yet. */
+/**
+ * record_question_result refused for the question the student is still on:
+ * no Next click, and the call does not say they asked to move on.
+ */
+export const RECORD_BEFORE_NEXT_TEXT =
+  'The student has not moved on from this question. Record it only after they click Next, or when their latest message asks to skip or move on (then set student_asked_to_move_on). If they answered, give feedback and call offer_next_step; otherwise just reply.';
+
+/** present_question refused: question `n`'s card already shows edited code, and a quiz gets one. */
+export const editLimitText = (n: number) =>
+  `Only one question per quiz may show edited code, and question ${n} already does. Quote the real code without edit and describe any change in words in question_text.`;
+
+/** present_question refused because question `n`, the one still open, has no result yet. */
 export const recordBeforePresentText = (n: number) =>
-  `Record question ${n} before presenting the next one.`;
+  `Question ${n} has no result. If the student moved on from it (Next, or asked to skip), record it first, then present; otherwise reply without presenting.`;
+
+/** present_question refused because the file a code quote names could not be read. */
+export const QUOTE_READ_FAILED_TEXT =
+  'The file could not be read just now. Call present_question again; if that fails too, put the lines in code_snippet instead, copied exactly from your exploration output without their "N| " prefixes, and name the file and the rule or element in context.';
 
 /** A grading refusal from `ClassmojiService.quizGrading` (`QuizGradingError`). */
 export function isGradingRefusal(error: unknown): error is Error & { code: string } {

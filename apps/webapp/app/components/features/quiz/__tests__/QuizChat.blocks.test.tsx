@@ -127,7 +127,7 @@ describe('QuizTranscript — the marker between bubbles', () => {
 
       // In order: feedback bubble, marker row, files read, card bubble.
       const steps = root.querySelector('[data-testid="quiz-steps"]')!;
-      expect(steps.textContent).toContain('Read 1 file');
+      expect(steps.textContent).toContain('Code Analysis (1 step)');
       expect(first.contains(steps) || second.contains(steps)).toBe(false);
       expect(before(first, row)).toBe(true);
       expect(before(row, steps)).toBe(true);
@@ -158,14 +158,52 @@ describe('QuizTranscript — the marker between bubbles', () => {
     expect(before(steps, rows(root)[0])).toBe(true);
   });
 
-  it('keeps a message without a marker as one bubble', () => {
+  it('keeps a later message without a marker as one bubble', () => {
     const root = renderStatic([
-      msg('a1', 'assistant', [text('Welcome.'), step('src/App.tsx'), card(1)]),
+      msg('a0', 'assistant', [text('Welcome.'), card(1)]),
+      msg('u1', 'user', [text('I would like a hint')]),
+      msg('a1', 'assistant', [text('Look at line 3.'), step('src/App.tsx'), card(1)]),
     ]);
-    expect(bubbles(root)).toHaveLength(1);
+    const later = root.querySelectorAll('[data-message-role="assistant"]')[1];
+    expect(bubbles(later)).toHaveLength(1);
     expect(rows(root)).toHaveLength(0);
-    expect(bubbles(root)[0].textContent).toContain('Welcome.');
-    expect(bubbles(root)[0].textContent).toContain('Question 1 of 8');
+    expect(bubbles(later)[0].textContent).toContain('Look at line 3.');
+    expect(bubbles(later)[0].textContent).toContain('Question 1 of 8');
+  });
+
+  for (const theme of ['light', 'dark'] as const) {
+    it(`gives the opening welcome its own bubble, then the files read, then question 1 (${theme})`, () => {
+      darkMode = theme === 'dark';
+      const root = renderStatic([
+        msg('a1', 'assistant', [
+          { type: 'step-start' },
+          text('Welcome to the quiz.'),
+          step('src/App.tsx'),
+          step('src/index.css'),
+          card(1),
+        ]),
+      ]);
+      const [welcome, question, ...more] = bubbles(root);
+      expect(more).toHaveLength(0);
+      expect(welcome.textContent).toBe('Welcome to the quiz.');
+      expect(question.textContent).toContain('Question 1 of 8');
+      const steps = root.querySelector('[data-testid="quiz-steps"]')!;
+      expect(steps.textContent).toContain('Code Analysis (2 steps)');
+      expect(before(welcome, steps)).toBe(true);
+      expect(before(steps, question)).toBe(true);
+      expect(welcome.className).toContain('dark:bg-gray-800');
+    });
+  }
+
+  it('splits only the opening message, and only when it starts with text', () => {
+    // Opened by a notice, not a welcome: nothing to split.
+    const notice = renderStatic([
+      msg('a1', 'assistant', [{ type: 'data-notice', data: { code: 'reply_failed' } }, text('Hi')]),
+    ]);
+    expect(bubbles(notice)).toHaveLength(1);
+    // A welcome with nothing after it is still one bubble.
+    const alone = renderStatic([msg('a1', 'assistant', [text('Welcome to the quiz.')])]);
+    expect(bubbles(alone)).toHaveLength(1);
   });
 
   it('gives a revised marker its own row the same way, one row per run of markers', () => {
@@ -230,28 +268,43 @@ describe('QuizTranscript — streaming into the second bubble', () => {
   };
 
   it('puts parts arriving after the marker in a new bubble, remounting nothing', async () => {
+    const typing = () => container.querySelector('[data-testid="quiz-typing"]');
     const parts: unknown[] = [text(FEEDBACK), recordCall(1), divider(1)];
     await stream(parts);
     const [feedback] = bubbles(container);
     const [row] = rows(container);
     expect(bubbles(container)).toHaveLength(1);
-    // The marker counts as the reply: no typing indicator under it.
-    expect(container.querySelector('[data-testid="quiz-typing"]')).toBeNull();
+    // The reply goes on after the marker: the activity line stays under it.
+    expect(typing()?.textContent).toContain('Thinking...');
+    expect(before(row, typing()!)).toBe(true);
 
     parts.push(step('src/App.tsx'));
     await stream(parts);
     expect(bubbles(container)).toHaveLength(1);
-    expect(before(row, container.querySelector('[data-testid="quiz-steps"]')!)).toBe(true);
+    const stepsNode = container.querySelector('[data-testid="quiz-steps"]')!;
+    expect(before(row, stepsNode)).toBe(true);
+    expect(typing()?.textContent).toContain('Exploring code...');
+    // Open while the files are read.
+    expect(stepsNode.querySelector('.ant-collapse-item-active')).not.toBeNull();
 
     parts.push(card(2, 'input-streaming'));
     await stream(parts);
-    expect(bubbles(container)).toHaveLength(2);
-    expect(bubbles(container)[1].querySelector('.ant-skeleton')).not.toBeNull();
+    // A card still arriving opens no bubble of its own: no empty bubble, the
+    // activity line and the open files read stay until the card is in.
+    expect(bubbles(container)).toHaveLength(1);
+    expect(container.querySelector('.ant-skeleton')).toBeNull();
+    expect(typing()?.textContent).toContain('Exploring code...');
+    expect(stepsNode.querySelector('.ant-collapse-item-active')).not.toBeNull();
 
     parts[parts.length - 1] = card(2);
     await stream(parts);
     const cardNode = container.querySelector('[data-testid="quiz-question-card"]')!;
+    expect(bubbles(container)).toHaveLength(2);
     expect(bubbles(container)[1].contains(cardNode)).toBe(true);
+    // The card is in: the wait is over, and the files read fold away.
+    expect(typing()).toBeNull();
+    expect(container.querySelector('[data-testid="quiz-steps"]')).toBe(stepsNode);
+    expect(stepsNode.querySelector('.ant-collapse-item-active')).toBeNull();
 
     parts.push(text('Take your time.'));
     await stream(parts);
@@ -261,8 +314,63 @@ describe('QuizTranscript — streaming into the second bubble', () => {
     expect(rows(container)[0]).toBe(row);
     expect(container.querySelector('[data-testid="quiz-question-card"]')).toBe(cardNode);
     expect(second.contains(cardNode)).toBe(true);
-    expect(second.textContent).toContain('Take your time.');
-    expect(first.textContent).not.toContain('Take your time.');
+    // Text after a card is not shown, as in the legacy chat.
+    expect(container.textContent).not.toContain('Take your time.');
+  });
+
+  it('keeps the activity line up through the opening exploration, until question 1', async () => {
+    const typing = () => container.querySelector('[data-testid="quiz-typing"]');
+    await act(async () => {
+      root.render(<QuizTranscript messages={[]} status="streaming" busy isDarkMode={false} />);
+    });
+    expect(typing()?.textContent).toContain('Thinking...');
+
+    const parts: unknown[] = [text('Welcome to the quiz.')];
+    await stream(parts);
+    const [welcome] = bubbles(container);
+    expect(typing()?.textContent).toContain('Thinking...');
+
+    parts.push(step('src/App.tsx'));
+    await stream(parts);
+    expect(typing()?.textContent).toContain('Exploring code...');
+    expect(before(welcome, container.querySelector('[data-testid="quiz-steps"]')!)).toBe(true);
+
+    // Question 1 still arriving: still waiting, and no empty bubble.
+    parts.push(card(1, 'input-streaming'));
+    await stream(parts);
+    expect(typing()?.textContent).toContain('Exploring code...');
+    expect(bubbles(container)).toHaveLength(1);
+
+    parts[parts.length - 1] = card(1);
+    await stream(parts);
+    expect(typing()).toBeNull();
+    expect(bubbles(container)[0]).toBe(welcome);
+    expect(bubbles(container)).toHaveLength(2);
+
+    // Feedback with buttons: up until the buttons arrive; a notice ends it too.
+    const buttons = {
+      type: 'tool-offer_next_step',
+      toolCallId: 'call-b',
+      state: 'output-available',
+      input: { actions: ['next'] },
+      output: { actions: ['next'] },
+    };
+    await stream([text(FEEDBACK)]);
+    expect(typing()?.textContent).toContain('Thinking...');
+    await stream([text(FEEDBACK), buttons]);
+    expect(typing()).toBeNull();
+    await stream([text(FEEDBACK), { type: 'data-notice', data: { code: 'turn_stopped' } }]);
+    expect(typing()).toBeNull();
+  });
+
+  it('lets the student open the files read once the reply is done', async () => {
+    await stream([text('Welcome to the quiz.'), step('src/App.tsx'), card(1)], false);
+    const stepsNode = container.querySelector('[data-testid="quiz-steps"]')!;
+    expect(stepsNode.querySelector('.ant-collapse-item-active')).toBeNull();
+    const header = stepsNode.querySelector<HTMLElement>('.ant-collapse-header')!;
+    await act(async () => header.click());
+    expect(stepsNode.querySelector('.ant-collapse-item-active')).not.toBeNull();
+    expect(stepsNode.textContent).toContain('src/App.tsx');
   });
 
   it('keeps a card that arrived before its marker when the marker lands above it', async () => {
