@@ -26,7 +26,7 @@ const RUN = Boolean(DATABASE_URL) && isLocal && !isSharedDevDb;
 const getPrisma = (await import('@classmoji/database')).default;
 const grading = await import('../quizGrading.service.ts');
 const chat = await import('../quizChat.service.ts');
-const { createNew } = await import('../quizAttempt.service.ts');
+const { createNew, updateAttemptDurations } = await import('../quizAttempt.service.ts');
 const { BUTTON_TEXT, CONTRACT_VERSION, deriveResult } = await import('@classmoji/utils/quiz-agent');
 
 type Answer = {
@@ -232,6 +232,45 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     expect(legacy.session_expires_at).toBeNull();
   });
 
+  // ─── durations on a completed attempt ─────────────────────────────────────
+
+  it('raises the durations of a completed chat attempt, never lowers them, and leaves a completed legacy one alone', async () => {
+    const completedAt = new Date();
+    const chatAttempt = await newAttempt();
+    const legacyAttempt = await newAttempt({ agent_runtime: 'ai_agent' });
+    for (const id of [chatAttempt, legacyAttempt]) {
+      await prisma.quizAttempt.update({
+        where: { id },
+        data: {
+          completed_at: completedAt,
+          total_duration_ms: 60_000,
+          unfocused_duration_ms: 5_000,
+          partial_credit_percentage: 50,
+        },
+      });
+    }
+
+    const raised = await updateAttemptDurations(chatAttempt, {
+      totalDurationMs: 75_000,
+      unfocusedDurationMs: 6_000,
+    });
+    expect(raised).toMatchObject({ total_duration_ms: 75_000, unfocused_duration_ms: 6_000 });
+    await updateAttemptDurations(chatAttempt, { totalDurationMs: 1_000, unfocusedDurationMs: 0 });
+    const chatRow = await attemptRow(chatAttempt);
+    expect(chatRow.total_duration_ms).toBe(75_000);
+    expect(chatRow.unfocused_duration_ms).toBe(6_000);
+    // Nothing but the durations changes.
+    expect(chatRow.completed_at).toEqual(completedAt);
+    expect(chatRow.partial_credit_percentage).toBe(50);
+
+    const skipped = await updateAttemptDurations(legacyAttempt, {
+      totalDurationMs: 75_000,
+      unfocusedDurationMs: 6_000,
+    });
+    expect(skipped).toMatchObject({ skipped: true, reason: 'completed' });
+    expect((await attemptRow(legacyAttempt)).total_duration_ms).toBe(60_000);
+  });
+
   // ─── presentQuestion ──────────────────────────────────────────────────────
 
   it('presents questions in order, returns the original on a re-run, and replays by tool call id', async () => {
@@ -411,6 +450,49 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
         grading.finalizeQuestion(call(turnC), result(1, [{ level: 'correct', hints_before: 0 }]))
       )
     ).toBe('revision_refused');
+    expect(await events(attemptId, 'result_revised')).toHaveLength(1);
+  });
+
+  it('refuses a revision in a Next turn, and allows it once the student answers again', async () => {
+    const attemptId = await newAttempt();
+    const turn = await begin(attemptId);
+    await grading.presentQuestion(call(turn), question(1));
+    const answer = await say(attemptId, 'answer');
+    const nextTurn = await say(attemptId, BUTTON_TEXT.next);
+    // The first record in the Next turn is not a revision.
+    const first = await grading.finalizeQuestion(
+      call(nextTurn),
+      result(1, [{ level: 'minimal', hints_before: 0 }])
+    );
+    expect(first.revised).toBeUndefined();
+    expect(answer.inputMessageId).not.toBe(nextTurn.inputMessageId);
+
+    // A later Next turn cannot change it.
+    const secondNext = await say(attemptId, BUTTON_TEXT.next);
+    expect(
+      await codeOf(
+        grading.finalizeQuestion(
+          call(secondNext),
+          result(1, [{ level: 'correct', hints_before: 0 }])
+        )
+      )
+    ).toBe('revision_refused');
+    expect(await events(attemptId, 'result_revised')).toHaveLength(0);
+    // The same answers in a Next turn are still the stored result, not a revision.
+    expect(
+      await grading.finalizeQuestion(
+        call(secondNext),
+        result(1, [{ level: 'minimal', hints_before: 0 }])
+      )
+    ).toEqual(first);
+
+    // A turn where the student says something real may revise it, once.
+    const real = await say(attemptId, 'I meant the flex container, not the item');
+    const revised = await grading.finalizeQuestion(
+      call(real),
+      result(1, [{ level: 'mostly_right', hints_before: 0 }])
+    );
+    expect(revised.revised).toBe(true);
     expect(await events(attemptId, 'result_revised')).toHaveLength(1);
   });
 
@@ -654,6 +736,34 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     expect((await attemptRow(attemptId)).turn_fence).toBe(again.fence);
   });
 
+  it('re-delivers only the latest admitted message; an older id is a conflict', async () => {
+    const attemptId = await newAttempt();
+    const m1 = msgId();
+    const m2 = msgId();
+    await chat.admitStudentMessage({ attemptId, message: { id: m1, text: 'one' }, runId });
+    const second = await chat.admitStudentMessage({
+      attemptId,
+      message: { id: m2, text: 'two' },
+      runId,
+    });
+
+    const older = chat.admitStudentMessage({ attemptId, message: { id: m1, text: 'one' }, runId });
+    expect(await codeOf(older)).toBe('message_conflict');
+    expect(
+      await kindOf(chat.admitStudentMessage({ attemptId, message: { id: m1, text: 'one' }, runId }))
+    ).toBe('temporary');
+    // The refused re-delivery took no turn: the fence is still the second message's.
+    expect((await attemptRow(attemptId)).turn_fence).toBe(second.fence);
+
+    const latest = await chat.admitStudentMessage({
+      attemptId,
+      message: { id: m2, text: 'two' },
+      runId,
+    });
+    expect(latest.status).toBe('redelivered');
+    expect(await events(attemptId, 'input_admitted')).toHaveLength(2);
+  });
+
   it('refuses malformed messages', async () => {
     const attemptId = await newAttempt();
     const bad = [
@@ -669,7 +779,8 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     expect(await events(attemptId)).toHaveLength(0);
   });
 
-  it('refuses turns past the cap of question_count × 8', async () => {
+  it('refuses turns past the cap of question_count × 16', async () => {
+    expect(chat.TURNS_PER_QUESTION).toBe(16);
     const attemptId = await newAttempt({ agent_config: { questionCount: 1 } });
     for (let i = 0; i < chat.TURNS_PER_QUESTION; i++) await say(attemptId, `m${i}`);
     const over = chat.admitStudentMessage({
@@ -678,6 +789,57 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
       runId,
     });
     await expect(over).rejects.toMatchObject({ code: 'turn_limit', kind: 'permanent' });
+    // Nothing recorded, so nothing to complete.
+    expect((await attemptRow(attemptId)).completed_at).toBeNull();
+  });
+
+  it('does not count the Try again and Next messages toward the cap', async () => {
+    const attemptId = await newAttempt({ agent_config: { questionCount: 1 } });
+    for (let i = 0; i < chat.TURNS_PER_QUESTION - 1; i++) await say(attemptId, `m${i}`);
+    for (let i = 0; i < 6; i++) {
+      await say(attemptId, i % 2 === 0 ? BUTTON_TEXT.try_again : BUTTON_TEXT.next);
+    }
+    // The cap's last counted turn is still open.
+    expect((await say(attemptId, 'last answer')).fence).toBeTruthy();
+    await expect(say(attemptId, 'one more')).rejects.toMatchObject({
+      code: 'turn_limit',
+      kind: 'permanent',
+    });
+  });
+
+  it('completes an attempt from its recorded grades when the cap is reached', async () => {
+    const attemptId = await newAttempt({ agent_config: { questionCount: 1 } });
+    const turn = await begin(attemptId);
+    await grading.presentQuestion(call(turn), question(1));
+    const answer = await say(attemptId, 'answer');
+    await grading.finalizeQuestion(
+      call(answer),
+      result(1, [{ level: 'mostly_right', hints_before: 0 }])
+    );
+    // begin + the answer already count: fill up to the cap.
+    for (let i = 2; i < chat.TURNS_PER_QUESTION; i++) await say(attemptId, `m${i}`);
+
+    const refusedId = msgId();
+    const over = chat.admitStudentMessage({
+      attemptId,
+      message: { id: refusedId, text: 'one more' },
+      runId,
+    });
+    await expect(over).rejects.toMatchObject({ code: 'turn_limit', kind: 'permanent' });
+
+    const row = await attemptRow(attemptId);
+    expect(row.completed_at).not.toBeNull();
+    expect(row.session_status).toBe('completed');
+    expect(row.partial_credit_percentage).toBe(70);
+    expect(row.evaluation_json).toMatchObject({ v: 2, source: 'server' });
+    const [journal] = await events(attemptId, 'evaluation_completed');
+    expect(journal.operation_id).toBe(grading.SERVER_COMPLETION_OPERATION_ID);
+    expect(journal.run_id).toBe(runId);
+    // The refused message was not stored.
+    const stored = await chat.loadCanonicalMessages(attemptId);
+    expect(stored.some(m => m.id === refusedId)).toBe(false);
+    // The attempt now refuses as completed.
+    expect(await codeOf(say(attemptId, 'more'))).toBe('attempt_completed');
   });
 
   it('refuses an expired attempt, a completed one and a legacy one permanently', async () => {

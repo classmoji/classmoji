@@ -50,6 +50,7 @@ interface LockedQuizAttemptRow extends QuizAttemptDurationState {
   completed_at: Date | string | null;
   modal_closed_at?: Date | string | null;
   updated_at?: Date | string | null;
+  agent_runtime?: string | null;
 }
 
 interface QuizAttemptMembership {
@@ -520,7 +521,7 @@ export const updateAttemptDurations = async (
   return getPrisma().$transaction(async (tx: Prisma.TransactionClient) => {
     // Lock the row by selecting FOR UPDATE
     const current = await tx.$queryRaw<LockedQuizAttemptRow[]>`
-      SELECT total_duration_ms, unfocused_duration_ms, completed_at, modal_closed_at
+      SELECT total_duration_ms, unfocused_duration_ms, completed_at, modal_closed_at, agent_runtime
       FROM quiz_attempts
       WHERE id = ${attemptId}
       FOR UPDATE
@@ -532,8 +533,11 @@ export const updateAttemptDurations = async (
 
     const row = current[0];
 
-    // Skip if quiz already completed
-    if (row.completed_at) {
+    // Skip if quiz already completed. An attempt on the chat runtime is
+    // completed by its task, after the student's last message, so the time
+    // since that message arrives once the browser sees the completion: it may
+    // still raise the two durations (never lower them; nothing else changes).
+    if (row.completed_at && row.agent_runtime !== 'trigger_chat') {
       return {
         total_duration_ms: Number(row.total_duration_ms),
         unfocused_duration_ms: Number(row.unfocused_duration_ms),

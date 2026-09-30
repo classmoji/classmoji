@@ -208,8 +208,27 @@ export const hasEvaluation = (messages: readonly QuizUIMessage[]) =>
 const stepsOf = (parts: QuizPart[]): QuizStep[] =>
   parts.flatMap(part => (part.type === 'data-step' ? [part.data] : []));
 
-/** A part that renders inside the assistant's bubble. */
-const rendersInBubble = (part: QuizPart) => {
+/**
+ * A tool call that failed or was refused, of any tool. Never shown, live or
+ * saved: the model retries within its turn, and the error text the stream and
+ * the saved message carry is the AI SDK's generic mask ("An error occurred."),
+ * which says nothing to a student.
+ */
+export const isFailedToolPart = (part: QuizPart) => {
+  const { type, state } = part as { type: string; state?: unknown };
+  return (
+    (type.startsWith('tool-') || type === 'dynamic-tool') &&
+    (state === 'output-error' || state === 'output-denied')
+  );
+};
+
+/**
+ * A part that renders inside the assistant's bubble. A question card still
+ * arriving shows its placeholder only while its message is streaming, so a
+ * turn that ended before the card leaves no empty card behind.
+ */
+const rendersInBubble = (part: QuizPart, streaming: boolean) => {
+  if (isFailedToolPart(part)) return false;
   switch (part.type) {
     case 'text':
       return part.text.trim().length > 0;
@@ -217,7 +236,7 @@ const rendersInBubble = (part: QuizPart) => {
     case 'data-notice':
       return true;
     case 'tool-present_question':
-      return part.state !== 'output-error' && part.state !== 'output-denied';
+      return part.state === 'output-available' || streaming;
     case 'tool-offer_next_step':
       return part.state === 'output-available';
     default:
@@ -323,6 +342,8 @@ const RevisedResult = ({
 
 interface PartContext {
   isDarkMode: boolean;
+  /** This part's message is the reply streaming now. */
+  streaming: boolean;
   /** Buttons are disabled: a later student message exists, a turn is running, or read-only. */
   buttonsDisabled: boolean;
   onButton: ((text: string, action: NextStepAction) => void) | null;
@@ -330,6 +351,7 @@ interface PartContext {
 
 /** One part inside the assistant's bubble, by type. */
 export function AssistantPart({ part, ctx }: { part: QuizPart; ctx: PartContext }) {
+  if (isFailedToolPart(part)) return null;
   switch (part.type) {
     case 'text':
       return part.text.trim() ? <Markdown text={part.text} isAssistant /> : null;
@@ -376,7 +398,7 @@ export function AssistantPart({ part, ctx }: { part: QuizPart; ctx: PartContext 
           </div>
         );
       }
-      if (part.state === 'input-streaming' || part.state === 'input-available') {
+      if (ctx.streaming && (part.state === 'input-streaming' || part.state === 'input-available')) {
         return <QuestionCardSkeleton />;
       }
       return null;
@@ -462,7 +484,8 @@ export function QuizTranscript({
   }, [scrollToResults]);
 
   const lastHasVisibleReply =
-    lastMessage?.role === 'assistant' && visibleParts(lastMessage).some(rendersInBubble);
+    lastMessage?.role === 'assistant' &&
+    visibleParts(lastMessage).some(part => rendersInBubble(part, busy));
   const showTyping = busy && !lastHasVisibleReply;
 
   return (
@@ -508,13 +531,15 @@ export function QuizTranscript({
         if (message.role !== 'assistant') return null;
 
         const answered = shown.slice(index + 1).some(m => m.role === 'user');
+        const isStreamingThis = busy && message === lastMessage;
         const ctx: PartContext = {
           isDarkMode,
+          streaming: isStreamingThis,
           buttonsDisabled: answered || busy || status === 'complete' || !onButton,
           onButton,
         };
         const steps = stepsOf(parts);
-        const inBubble = parts.filter(rendersInBubble);
+        const inBubble = parts.filter(part => rendersInBubble(part, isStreamingThis));
         const evaluationPart = parts.find(isEvaluationPart);
         const evaluationFromPart =
           evaluationPart?.type === 'tool-submit_quiz_evaluation' &&
@@ -523,7 +548,6 @@ export function QuizTranscript({
             : evaluationPart?.type === 'data-evaluation'
               ? evaluationPart.data
               : null;
-        const isStreamingThis = busy && message === lastMessage;
 
         if (steps.length === 0 && inBubble.length === 0 && !evaluationPart) return null;
 
@@ -539,7 +563,9 @@ export function QuizTranscript({
                 <AssistantAvatar />
                 <Bubble variant="assistant">
                   {parts.map((part, i) =>
-                    rendersInBubble(part) ? <AssistantPart key={i} part={part} ctx={ctx} /> : null
+                    rendersInBubble(part, isStreamingThis) ? (
+                      <AssistantPart key={i} part={part} ctx={ctx} />
+                    ) : null
                   )}
                 </Bubble>
               </Space>
@@ -740,6 +766,32 @@ function useAttemptTime({
     };
   }, [recordClose]);
 
+  // The attempt completed while open (its task completes it after the last
+  // message): send the time up to now, once. The focus tracker has already
+  // stopped the clock when `active` turned false, so this is the final count.
+  const wasActiveRef = useRef(active);
+  const finalSentRef = useRef(false);
+  useEffect(() => {
+    const completedNow = wasActiveRef.current && !active;
+    wasActiveRef.current = active;
+    if (!completedNow || finalSentRef.current) return;
+    finalSentRef.current = true;
+    const snapshot = getMetricsSnapshot();
+    if (!snapshot) return;
+    const previous = lastSentRef.current;
+    if (snapshot.totalMs === previous.totalMs && snapshot.unfocusedMs === previous.unfocusedMs) {
+      return;
+    }
+    const unfocusedMs = Math.min(snapshot.unfocusedMs, snapshot.totalMs);
+    postQuizAction({
+      _action: 'updateMetrics',
+      attemptId,
+      totalDurationMs: snapshot.totalMs,
+      unfocusedDurationMs: unfocusedMs,
+    });
+    lastSentRef.current = { totalMs: snapshot.totalMs, unfocusedMs };
+  }, [active, attemptId, getMetricsSnapshot]);
+
   /** Save the time so far now (before the attempt completes). */
   return { flush: sendUpdate };
 }
@@ -814,9 +866,21 @@ function LiveQuizChat({
     beganRef.current = true;
     void sendAction({ type: 'begin' });
   }, [sendAction]);
+  // Sent once the mount has held, not from the mount effect itself: useChat
+  // stops its chat when it unmounts, which aborts the request in flight, and
+  // StrictMode (the client entry) unmounts and remounts every effect once in
+  // development. A begin sent from the first mount was aborted that way: the
+  // server ran the turn but its reply never reached the drawer. A torn-down
+  // mount cancels its pending send; the mount that stays sends it.
   useEffect(() => {
-    if (beganRef.current || initialMessages.length > 0 || resuming) return;
-    begin();
+    if (beganRef.current || initialMessages.length > 0 || resuming) return undefined;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled && !beganRef.current) begin();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [begin, initialMessages.length, resuming]);
 
   // Once the evaluation is in and the reply has finished, refresh the drawer

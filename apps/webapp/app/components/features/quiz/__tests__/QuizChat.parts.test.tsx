@@ -152,13 +152,19 @@ describe('QuizTranscript — parts', () => {
       });
 
       it('shows a placeholder while the card is still arriving, and nothing for a refused call', () => {
-        const streaming = renderTranscript([
+        const arriving = [
           msg('a1', 'assistant', [
             { ...questionPart, state: 'input-available', output: undefined },
           ]),
-        ]);
+        ];
+        const streaming = renderTranscript(arriving, { busy: true, status: 'streaming' });
         expect(streaming).not.toContain('A reworded question');
         expect(streaming).toContain('ant-skeleton');
+
+        // A turn that ended before its card arrived leaves no empty card.
+        const ended = renderTranscript(arriving);
+        expect(ended).not.toContain('ant-skeleton');
+        expect(ended).not.toContain('data-message-role="assistant"');
 
         const refused = renderTranscript([
           msg('a1', 'assistant', [
@@ -330,6 +336,105 @@ describe('QuizTranscript — parts', () => {
       });
     });
   }
+});
+
+describe('QuizTranscript — failed tool calls', () => {
+  // The AI SDK masks every tool error as this text, and it is saved with the part.
+  const MASK = 'An error occurred.';
+  const failed = (type: string, state: 'output-error' | 'output-denied' = 'output-error') => ({
+    type,
+    toolCallId: `call-${type}`,
+    state,
+    input: { anything: 'the call input' },
+    ...(state === 'output-error' ? { errorText: MASK } : {}),
+    ...(type === 'dynamic-tool' ? { toolName: 'present_question' } : {}),
+  });
+  const TOOL_PARTS = [
+    'tool-present_question',
+    'tool-offer_next_step',
+    'tool-submit_quiz_evaluation',
+    'tool-record_question_result',
+    'tool-explore_codebase',
+    'dynamic-tool',
+  ];
+
+  for (const type of TOOL_PARTS) {
+    for (const state of ['output-error', 'output-denied'] as const) {
+      it(`renders nothing for ${type} in ${state}, alone or beside text`, () => {
+        for (const busy of [false, true]) {
+          const alone = renderTranscript([msg('a1', 'assistant', [failed(type, state)])], {
+            busy,
+            status: busy ? 'streaming' : 'ready',
+          });
+          expect(alone).not.toContain(MASK);
+          expect(alone).not.toContain('the call input');
+          expect(alone).not.toContain('data-message-role="assistant"');
+          expect(alone).not.toContain('ant-skeleton');
+          expect(alone).not.toContain('quiz-results');
+
+          const beside = renderTranscript([
+            msg('a2', 'assistant', [
+              { type: 'step-start' },
+              failed(type, state),
+              { type: 'text', text: 'Here is the next one.' },
+            ]),
+          ]);
+          expect(beside).toContain('Here is the next one.');
+          expect(beside).not.toContain(MASK);
+          expect(beside).not.toContain('ant-skeleton');
+        }
+      });
+    }
+  }
+
+  it('keeps the typing indicator up while an opening reply only lists exploration steps', () => {
+    const html = renderTranscript(
+      [
+        msg('a1', 'assistant', [
+          {
+            type: 'data-step',
+            data: { kind: 'read_file', path: 'src/App.tsx' },
+          },
+        ]),
+      ],
+      { busy: true, status: 'streaming' }
+    );
+    expect(html).toContain('data-testid="quiz-typing"');
+    expect(html).toContain('src/App.tsx');
+  });
+
+  const attempt = { id: 'attempt-1', completed_at: null, evaluation_json: null };
+  const quiz = { id: 'quiz-1', question_count: 8 };
+  const withFailures = [
+    msg('a1', 'assistant', [failed('tool-present_question'), questionPart]),
+    msg(
+      'a2',
+      'assistant',
+      TOOL_PARTS.map(type => failed(type))
+    ),
+  ];
+
+  it('shows staff the same (saved transcript)', () => {
+    const html = renderToStaticMarkup(
+      <QuizChat quiz={quiz} attempt={attempt} transcript={withFailures} viewerOwnsAttempt={false} />
+    );
+    expect(html).toContain('Question 1 of 8');
+    expect(html).not.toContain(MASK);
+    expect(html.match(/data-message-role="assistant"/g)).toHaveLength(1);
+  });
+
+  it('shows the owner the same, live', () => {
+    chatState.messages = withFailures;
+    chatState.status = 'streaming';
+    const html = renderToStaticMarkup(
+      <QuizChat quiz={quiz} attempt={attempt} transcript={withFailures} viewerOwnsAttempt />
+    );
+    expect(html).toContain('Question 1 of 8');
+    expect(html).not.toContain(MASK);
+    expect(html).not.toContain('ant-skeleton');
+    // The reply still running has nothing to show yet: the typing indicator stays.
+    expect(html).toContain('data-testid="quiz-typing"');
+  });
 });
 
 describe('QuizChat — which view, and its status', () => {

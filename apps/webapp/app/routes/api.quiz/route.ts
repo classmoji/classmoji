@@ -30,14 +30,20 @@
  * (`trigger_chat`) runs through api.quiz-chat.session and its Trigger task:
  * startQuiz answers its id and touches nothing, sendMessage and completeQuiz
  * answer 409, and restartQuiz ends no ai-agent session for it. The timing
- * actions (updateMetrics, recordModalClose, recordModalOpen) serve both.
+ * actions (updateMetrics, recordModalClose, recordModalOpen) serve both;
+ * updateMetrics also takes the final time of a completed chat attempt.
  */
 import { assertClassroomAccess } from '~/utils/helpers';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { runBackgroundTask } from '~/utils/backgroundTask.server';
-import { isLegacyRuntimeAttempt, runtimeFor } from '~/utils/quizRuntime.server';
+import {
+  isCodeAwareQuiz,
+  isLegacyRuntimeAttempt,
+  isTriggerChatAttempt,
+  runtimeFor,
+} from '~/utils/quizRuntime.server';
 import { getQuestionProgressFromMessage, checkForCompletion } from '@classmoji/utils';
 import type { Role } from '@prisma/client';
 import type { Route } from './+types/route';
@@ -202,6 +208,27 @@ const sourceMaterialUnavailableResponse = () =>
       code: 'SOURCE_MATERIAL_UNAVAILABLE',
       message: SOURCE_MATERIAL_UNAVAILABLE_MESSAGE,
       error: SOURCE_MATERIAL_UNAVAILABLE_MESSAGE,
+    }),
+    { status: 409, headers: { 'Content-Type': 'application/json' } }
+  );
+
+/**
+ * A code-aware quiz on the chat runtime asks about the student's own
+ * repository for the quiz's assignment, so a student without one has nothing
+ * to be quizzed on. Fixed copy, shown as-is by the quiz list (it reads
+ * `message`), in the same shape as the source-material refusal.
+ */
+const REPOSITORY_NOT_FOUND_MESSAGE =
+  "Your repository for this quiz wasn't found. Ask your instructor.";
+
+/** The 409 a start or restart answers when the student has no repository for the quiz. */
+const repositoryNotFoundResponse = () =>
+  new Response(
+    JSON.stringify({
+      success: false,
+      code: 'REPOSITORY_NOT_FOUND',
+      message: REPOSITORY_NOT_FOUND_MESSAGE,
+      error: REPOSITORY_NOT_FOUND_MESSAGE,
     }),
     { status: 409, headers: { 'Content-Type': 'application/json' } }
   );
@@ -458,7 +485,10 @@ export async function action({ request }: Route.ActionArgs) {
       attemptedAction: data._action,
       metadata: context.metadata,
     });
-    assertClassroomMutationAllowed({ status: access.classroom.status, role: access.membership!.role });
+    assertClassroomMutationAllowed({
+      status: access.classroom.status,
+      role: access.membership!.role,
+    });
 
     // Check AI agent availability AFTER auth (preserves audit logging)
     if (!isAIAgentConfigured()) {
@@ -500,6 +530,25 @@ export async function action({ request }: Route.ActionArgs) {
         userId,
       });
       return configured > 0 && startable === 0 ? sourceMaterialUnavailableResponse() : null;
+    };
+
+    /**
+     * A STUDENT's new attempt on the chat runtime, on a code-aware quiz, is
+     * refused (409) when the student has no repository for the quiz's
+     * assignment, BEFORE the attempt row exists, so the refusal costs no
+     * attempt. Staff preview with a repository they name instead. A new
+     * attempt on the ai-agent runtime is not checked here: its start keeps its
+     * own handling of a missing repository.
+     */
+    const studentRepositoryRefusal = async (
+      quiz: { repository_id?: string | null; include_code_context?: boolean | null } | undefined,
+      agentRuntime: ReturnType<typeof runtimeFor>
+    ): Promise<Response | null> => {
+      if (agentRuntime !== 'trigger_chat') return null;
+      if (access.membership!.role !== 'STUDENT') return null;
+      if (!isCodeAwareQuiz(quiz)) return null;
+      const repo = await ClassmojiService.gitRepo.findByStudent(quiz!.repository_id!, userId);
+      return repo ? null : repositoryNotFoundResponse();
     };
 
     /**
@@ -631,6 +680,8 @@ export async function action({ request }: Route.ActionArgs) {
             // the runtime it runs on (quizRuntime.server). An ai-agent attempt
             // is created exactly as it always was.
             const agentRuntime = runtimeFor(context.quiz);
+            const noRepository = await studentRepositoryRefusal(context.quiz, agentRuntime);
+            if (noRepository) return noRepository;
             const result =
               agentRuntime === 'ai_agent'
                 ? await ClassmojiService.quizAttempt.createNew(
@@ -1141,10 +1192,13 @@ export async function action({ request }: Route.ActionArgs) {
           console.error('[sendMessage] Error:', error);
 
           if (!ownsAttempt) {
-            return new Response(JSON.stringify({ success: false, error: GENERIC_FAILURE_MESSAGE }), {
-              status: 500,
-              headers: { 'Content-Type': 'application/json' },
-            });
+            return new Response(
+              JSON.stringify({ success: false, error: GENERIC_FAILURE_MESSAGE }),
+              {
+                status: 500,
+                headers: { 'Content-Type': 'application/json' },
+              }
+            );
           }
 
           // The reply is saved and the student sees it; the quiz page completes
@@ -1273,8 +1327,11 @@ export async function action({ request }: Route.ActionArgs) {
             });
           }
 
-          // CRITICAL: Reject updates for already-completed attempts
-          if (attempt.completed_at) {
+          // CRITICAL: Reject updates for already-completed attempts. An attempt
+          // on the chat runtime is completed by its task after the student's
+          // last message, so its drawer sends the time since then once it sees
+          // the completion; the service only ever raises its two durations.
+          if (attempt.completed_at && !isTriggerChatAttempt(attempt)) {
             return new Response(
               JSON.stringify({
                 success: false,
@@ -1419,6 +1476,12 @@ export async function action({ request }: Route.ActionArgs) {
           const refusal = await sourceMaterialRefusal(context.quiz);
           if (refusal) return refusal;
 
+          // No repository for a student's code-aware chat attempt: refused
+          // before anything changes, like the check above.
+          const agentRuntime = runtimeFor(context.quiz);
+          const noRepository = await studentRepositoryRefusal(context.quiz, agentRuntime);
+          if (noRepository) return noRepository;
+
           // Cleanup via ai-agent service BEFORE creating new attempt.
           // The attempt created below is the caller's own, so the only session
           // worth ending is the caller's own attempt on this same quiz. An id
@@ -1445,7 +1508,6 @@ export async function action({ request }: Route.ActionArgs) {
           // Create a new attempt using the service, stamped with the runtime
           // it runs on (quizRuntime.server). An ai-agent attempt is created
           // exactly as it always was.
-          const agentRuntime = runtimeFor(context.quiz);
           const result =
             agentRuntime === 'ai_agent'
               ? await ClassmojiService.quizAttempt.createNew(

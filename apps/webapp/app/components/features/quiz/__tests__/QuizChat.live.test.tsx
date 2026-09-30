@@ -26,7 +26,8 @@ vi.mock('~/routes/student.$class.quizzes/ChatEditor', () => ({
     </button>
   ),
 }));
-const snapshot = () => ({ totalMs: 0, unfocusedMs: 0 });
+let metrics = { totalMs: 0, unfocusedMs: 0 };
+const snapshot = () => metrics;
 vi.mock('~/components/features/quiz/useQuizFocusMetrics', () => ({
   useQuizFocusMetrics: () => ({ getMetricsSnapshot: snapshot, finalizeCurrentSession: snapshot }),
 }));
@@ -102,6 +103,7 @@ beforeEach(() => {
   root = createRoot(container);
   chatState.messages = [];
   chatState.status = 'ready';
+  metrics = { totalMs: 0, unfocusedMs: 0 };
   sendMessageMock.mockReset();
   sendActionMock.mockReset().mockResolvedValue(undefined);
   useChatOptions.length = 0;
@@ -220,6 +222,51 @@ describe('QuizChat live', () => {
     await expect(transportOptions!.accessToken({ chatId: 'attempt-1' })).rejects.toThrow(
       "The quiz couldn't start. Please try again."
     );
+  });
+
+  it('sends the final time once, when the attempt completes', async () => {
+    chatState.messages = [buttonsMessage];
+    await mount([buttonsMessage]);
+    const metricPosts = () =>
+      fetchMock.mock.calls
+        .filter(([url]) => url === '/api/quiz')
+        .map(([, init]) => JSON.parse((init as RequestInit).body as string))
+        .filter(body => body._action === 'updateMetrics');
+    expect(metricPosts()).toHaveLength(0);
+
+    // The closing reply carries the evaluation: the attempt is complete.
+    metrics = { totalMs: 42_000, unfocusedMs: 50_000 };
+    chatState.messages = [
+      buttonsMessage,
+      {
+        id: 'a2',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'data-evaluation',
+            data: {
+              v: 2,
+              source: 'server',
+              partial_credit_percentage: 70,
+              first_attempt_percentage: 0,
+              question_results: [],
+            },
+          },
+        ],
+      } as unknown as QuizUIMessage,
+    ];
+    await mount([buttonsMessage]);
+    await mount([buttonsMessage]);
+
+    expect(metricPosts()).toEqual([
+      {
+        _action: 'updateMetrics',
+        attemptId: 'attempt-1',
+        totalDurationMs: 42_000,
+        // Never more time away than time in total.
+        unfocusedDurationMs: 42_000,
+      },
+    ]);
   });
 
   it('keeps the session state per tab', async () => {

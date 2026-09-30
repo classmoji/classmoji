@@ -261,6 +261,15 @@ const readLastAction = async (tx: Tx | ReturnType<typeof getPrisma>, attemptId: 
   return action === 'next' || action === 'try_again' ? action : undefined;
 };
 
+/** The button (`next` / `try_again`) an admitted student message was, from its journal row. */
+const admittedAction = async (tx: Tx, attemptId: string, inputMessageId: string | null) => {
+  if (!inputMessageId) return undefined;
+  const admitted = await findEvent(tx, attemptId, inputMessageId);
+  if (admitted?.type !== 'input_admitted') return undefined;
+  const action = isObject(admitted.payload) ? admitted.payload.action : undefined;
+  return action === 'next' || action === 'try_again' ? action : undefined;
+};
+
 /** Progress of a locked (or freshly read) attempt. */
 export const progressOf = async (
   tx: Tx | ReturnType<typeof getPrisma>,
@@ -524,6 +533,19 @@ export const finalizeQuestion = (
         if (sameTurn || sameAnswers(latestPayload.answers, answers)) {
           return storedOutput<QuestionResultOutput>(latest);
         }
+        // A revision follows something the student said about the question,
+        // never the Next click alone.
+        if (
+          RESULT_REVISIONS_ALLOWED &&
+          (await admittedAction(tx, attempt.id, f.inputMessageId)) === 'next'
+        ) {
+          throw new QuizGradingError(
+            'revision_refused',
+            `The result for question ${question_num} is already recorded and cannot change in this turn: ` +
+              'the student clicked Next. A recorded result can be revised once, only in a turn where the ' +
+              'student gives a new answer to that question.'
+          );
+        }
         const alreadyRevised = history.some(e => e.type === 'result_revised');
         if (!RESULT_REVISIONS_ALLOWED || alreadyRevised) {
           throw new QuizGradingError(
@@ -613,75 +635,89 @@ export const completeWithEvaluation = (
   f: Omit<Fenced, 'toolCallId'> & { toolCallId?: string },
   o: CompletionInput
 ): Promise<QuizEvaluationRecordV2> =>
-  inLockedTx(f.attemptId, f.toolCallId, ['evaluation_completed'], async (tx, attempt) => {
-    if (attempt.completed_at) {
-      if (attempt.evaluation_json !== null && attempt.evaluation_json !== undefined) {
-        return readEvaluation(attempt.evaluation_json);
-      }
-      requireOpen(attempt);
-    }
-    requireFence(attempt, f.fence);
+  inLockedTx(f.attemptId, f.toolCallId, ['evaluation_completed'], (tx, attempt) =>
+    completeLocked(tx, attempt, f, o)
+  );
 
-    const questionCount = attemptQuestionCount(attempt);
-    const results = readStoredResults(attempt.question_results_json, questionCount);
-    const recorded = new Set(results.map(r => r.question_num));
-    const missing = Array.from({ length: questionCount }, (_, i) => i + 1).filter(
-      n => !recorded.has(n)
+/**
+ * `completeWithEvaluation`'s body, for a caller that already holds the attempt
+ * row lock in `tx` (admission completes an attempt from its recorded grades
+ * when it reaches the turn cap).
+ */
+export const completeLocked = async (
+  tx: Tx,
+  attempt: LockedAttempt,
+  f: Omit<Fenced, 'toolCallId'> & { toolCallId?: string },
+  o: CompletionInput
+): Promise<QuizEvaluationRecordV2> => {
+  if (attempt.completed_at) {
+    if (attempt.evaluation_json !== null && attempt.evaluation_json !== undefined) {
+      return readEvaluation(attempt.evaluation_json);
+    }
+    requireOpen(attempt);
+  }
+  requireFence(attempt, f.fence);
+
+  const questionCount = attemptQuestionCount(attempt);
+  const results = readStoredResults(attempt.question_results_json, questionCount);
+  const recorded = new Set(results.map(r => r.question_num));
+  const missing = Array.from({ length: questionCount }, (_, i) => i + 1).filter(
+    n => !recorded.has(n)
+  );
+  if (missing.length > 0) {
+    throw new QuizGradingError(
+      'incomplete',
+      `Record results for question${missing.length > 1 ? 's' : ''} ${missing.join(', ')} ` +
+        'with record_question_result before submitting the evaluation.'
     );
-    if (missing.length > 0) {
+  }
+
+  let feedback: Omit<QuizEvaluationFeedback, 'quiz_complete'> | undefined;
+  if (o.source === 'model') {
+    const parsed = QuizEvaluationFeedbackSchema.safeParse(o.feedback);
+    if (!parsed.success) {
       throw new QuizGradingError(
-        'incomplete',
-        `Record results for question${missing.length > 1 ? 's' : ''} ${missing.join(', ')} ` +
-          'with record_question_result before submitting the evaluation.'
+        'invalid_input',
+        `Invalid evaluation: ${describeIssues(parsed.error)}`
       );
     }
+    const { quiz_complete: _complete, ...rest } = parsed.data;
+    feedback = rest;
+  }
 
-    let feedback: Omit<QuizEvaluationFeedback, 'quiz_complete'> | undefined;
-    if (o.source === 'model') {
-      const parsed = QuizEvaluationFeedbackSchema.safeParse(o.feedback);
-      if (!parsed.success) {
-        throw new QuizGradingError(
-          'invalid_input',
-          `Invalid evaluation: ${describeIssues(parsed.error)}`
-        );
-      }
-      const { quiz_complete: _complete, ...rest } = parsed.data;
-      feedback = rest;
-    }
-
-    const percentages = computeAttemptPercentages(results);
-    const record: QuizEvaluationRecordV2 = QuizEvaluationRecordV2Schema.parse({
-      v: 2,
-      source: o.source,
-      ...(feedback ? { feedback } : {}),
-      ...percentages,
-      question_results: results.map(({ recorded_at: _at, ...rest }) => rest),
-    });
-
-    const now = new Date();
-    await tx.quizAttempt.update({
-      where: { id: attempt.id },
-      data: {
-        evaluation_json: toJson(record),
-        partial_credit_percentage: percentages.partial_credit_percentage,
-        first_attempt_percentage: percentages.first_attempt_percentage,
-        completed_at: now,
-        session_status: 'completed',
-        last_activity: now,
-      },
-    });
-    const operationId = f.toolCallId ?? SERVER_COMPLETION_OPERATION_ID;
-    await appendEvent(tx, attempt, {
-      type: 'evaluation_completed',
-      operationId,
-      toolCallId: f.toolCallId ?? null,
-      fence: f.fence,
-      inputMessageId: f.inputMessageId,
-      runId: f.runId,
-      payload: toJson({ source: o.source, output: record }),
-    });
-    return record;
+  const percentages = computeAttemptPercentages(results);
+  const record: QuizEvaluationRecordV2 = QuizEvaluationRecordV2Schema.parse({
+    v: 2,
+    source: o.source,
+    ...(feedback ? { feedback } : {}),
+    ...percentages,
+    question_results: results.map(({ recorded_at: _at, ...rest }) => rest),
   });
+
+  const now = new Date();
+  await tx.quizAttempt.update({
+    where: { id: attempt.id },
+    data: {
+      evaluation_json: toJson(record),
+      partial_credit_percentage: percentages.partial_credit_percentage,
+      first_attempt_percentage: percentages.first_attempt_percentage,
+      completed_at: now,
+      session_status: 'completed',
+      last_activity: now,
+    },
+  });
+  const operationId = f.toolCallId ?? SERVER_COMPLETION_OPERATION_ID;
+  await appendEvent(tx, attempt, {
+    type: 'evaluation_completed',
+    operationId,
+    toolCallId: f.toolCallId ?? null,
+    fence: f.fence,
+    inputMessageId: f.inputMessageId,
+    runId: f.runId,
+    payload: toJson({ source: o.source, output: record }),
+  });
+  return record;
+};
 
 // ─── explore_codebase history ───────────────────────────────────────────────
 

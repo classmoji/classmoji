@@ -18,6 +18,7 @@ const createNewMock = vi.fn();
 const completeAttemptMock = vi.fn();
 const updateDurationsMock = vi.fn();
 const auditCreateMock = vi.fn();
+const findByStudentMock = vi.fn();
 
 const assertAccessMock = vi.fn();
 const quizzesVisibleMock = vi.fn();
@@ -43,7 +44,7 @@ vi.mock('@classmoji/services', () => ({
       deleteAttempt: vi.fn(),
     },
     quizSourceMaterial: { countStartable: vi.fn() },
-    gitRepo: { findByStudent: vi.fn() },
+    gitRepo: { findByStudent: (...a: unknown[]) => findByStudentMock(...a) },
     aiConversation: { addMessage: vi.fn() },
     audit: { create: (...a: unknown[]) => auditCreateMock(...a) },
   },
@@ -138,6 +139,7 @@ beforeEach(() => {
   findWithMessagesMock.mockResolvedValue({ attempt: attemptRow('ai_agent'), messages: [] });
   createNewMock.mockResolvedValue({ success: true, attemptId: 'attempt-new' });
   completeAttemptMock.mockResolvedValue({ id: ATTEMPT_ID });
+  findByStudentMock.mockResolvedValue({ id: 'git-repo-1', name: 'student-repo' });
   endQuizSessionMock.mockResolvedValue(undefined);
   quizzesVisibleMock.mockResolvedValue(true);
   assertMutationMock.mockReturnValue(undefined);
@@ -221,6 +223,91 @@ describe('api.quiz — the runtime stamp at creation', () => {
   });
 });
 
+describe("api.quiz — a student's code-aware chat attempt needs the student's repository", () => {
+  const NO_REPOSITORY = {
+    success: false,
+    code: 'REPOSITORY_NOT_FOUND',
+    message: "Your repository for this quiz wasn't found. Ask your instructor.",
+    error: "Your repository for this quiz wasn't found. Ask your instructor.",
+  };
+
+  beforeEach(() => {
+    vi.stubEnv('QUIZ_TRIGGER_RUNTIME', 'code_aware');
+    quizFindByIdMock.mockResolvedValue(quizRow(true));
+    findByStudentMock.mockResolvedValue(null);
+  });
+
+  it('restartQuiz answers 409 before anything changes: no session ended, no attempt used', async () => {
+    const response = await post({ _action: 'restartQuiz', quizId: QUIZ_ID, attemptId: ATTEMPT_ID });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual(NO_REPOSITORY);
+    expect(findByStudentMock).toHaveBeenCalledWith('repo-1', STUDENT);
+    expect(createNewMock).not.toHaveBeenCalled();
+    expect(endQuizSessionMock).not.toHaveBeenCalled();
+  });
+
+  it('startQuiz answers 409 on its create path and creates nothing', async () => {
+    const response = await post({ _action: 'startQuiz', quizId: QUIZ_ID });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual(NO_REPOSITORY);
+    expect(createNewMock).not.toHaveBeenCalled();
+    expect(runBackgroundTaskMock).not.toHaveBeenCalled();
+  });
+
+  it('creates the attempt when the student has a repository', async () => {
+    findByStudentMock.mockResolvedValue({ id: 'git-repo-1', name: 'student-repo' });
+    const response = await post({ _action: 'restartQuiz', quizId: QUIZ_ID });
+
+    expect(response.status).toBe(200);
+    expect(createNewMock.mock.calls[0]).toEqual([
+      QUIZ_ID,
+      STUDENT,
+      MEMBERSHIP,
+      { agentRuntime: 'trigger_chat' },
+    ]);
+  });
+
+  it('does not check staff, who preview with a repository they name', async () => {
+    const owner = { role: 'OWNER' };
+    assertAccessMock.mockResolvedValue({
+      userId: 'owner-1',
+      classroom: { id: 'class-1', status: 'ACTIVE', slug: 'test-class' },
+      membership: owner,
+    });
+    const response = await post({ _action: 'restartQuiz', quizId: QUIZ_ID, repoName: 'r' });
+
+    expect(response.status).toBe(200);
+    expect(findByStudentMock).not.toHaveBeenCalled();
+    expect(createNewMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves an ai_agent attempt exactly as before (no check, created as always)', async () => {
+    vi.stubEnv('QUIZ_TRIGGER_RUNTIME', 'off');
+    const restart = await post({ _action: 'restartQuiz', quizId: QUIZ_ID });
+    expect(restart.status).toBe(200);
+
+    const start = await post({ _action: 'startQuiz', quizId: QUIZ_ID });
+    expect(start.status).toBe(200);
+
+    expect(findByStudentMock).not.toHaveBeenCalled();
+    expect(createNewMock.mock.calls).toEqual([
+      [QUIZ_ID, STUDENT, MEMBERSHIP],
+      [QUIZ_ID, STUDENT, MEMBERSHIP],
+    ]);
+  });
+
+  it('does not check a quiz without code context', async () => {
+    vi.stubEnv('QUIZ_TRIGGER_RUNTIME', 'all');
+    quizFindByIdMock.mockResolvedValue(quizRow(false));
+    const response = await post({ _action: 'restartQuiz', quizId: QUIZ_ID });
+
+    expect(response.status).toBe(200);
+    expect(findByStudentMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('api.quiz — legacy actions on a trigger_chat attempt', () => {
   beforeEach(() => {
     attemptFindByIdMock.mockResolvedValue(attemptRow('trigger_chat'));
@@ -283,6 +370,44 @@ describe('api.quiz — legacy actions on a trigger_chat attempt', () => {
       totalDurationMs: 1000,
       unfocusedDurationMs: 10,
     });
+  });
+
+  it('takes the final time of a completed chat attempt', async () => {
+    attemptFindByIdMock.mockResolvedValue({
+      ...attemptRow('trigger_chat'),
+      completed_at: new Date('2026-09-30T12:00:00Z'),
+    });
+    const response = await post({
+      _action: 'updateMetrics',
+      attemptId: ATTEMPT_ID,
+      totalDurationMs: 90_000,
+      unfocusedDurationMs: 100,
+    });
+
+    expect(response.status).toBe(200);
+    expect(updateDurationsMock).toHaveBeenCalledWith(ATTEMPT_ID, {
+      totalDurationMs: 90_000,
+      unfocusedDurationMs: 100,
+    });
+  });
+
+  it('still refuses metrics for a completed ai_agent attempt with 400', async () => {
+    attemptFindByIdMock.mockResolvedValue({
+      ...attemptRow('ai_agent'),
+      completed_at: new Date('2026-09-30T12:00:00Z'),
+    });
+    const response = await post({
+      _action: 'updateMetrics',
+      attemptId: ATTEMPT_ID,
+      totalDurationMs: 90_000,
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      skipped: true,
+      reason: 'Quiz already completed',
+    });
+    expect(updateDurationsMock).not.toHaveBeenCalled();
   });
 
   it('restartQuiz ends no ai-agent session for it', async () => {
