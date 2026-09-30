@@ -28,9 +28,6 @@ export const ANSWER_LEVEL_CREDIT = {
 /** Points taken off an answer for each hint the student had before giving it. */
 export const HINT_COST = 15;
 
-/** The one-sentence grading rule shown to students, built from HINT_COST. */
-export const GRADING_RULE_SENTENCE = `Your best answer counts, and each hint before it costs ${HINT_COST}.`;
-
 export const scoreAnswer = (a: Answer): number =>
   Math.max(ANSWER_LEVEL_CREDIT[a.level] - HINT_COST * a.hints_before, 0);
 
@@ -59,6 +56,21 @@ export function deriveResult(answers: readonly Answer[]): DerivedQuestionResult 
   };
 }
 
+/** Points one question is worth: the credit of a correct answer with no hint. */
+export const QUESTION_POINTS = ANSWER_LEVEL_CREDIT.correct;
+
+/**
+ * The points earned so far out of the points possible so far, from the
+ * recorded results only (a question still open counts toward neither).
+ */
+export function scoreSoFar(results: readonly { credit_earned: number }[]): {
+  earned: number;
+  possible: number;
+} {
+  const earned = results.reduce((sum, r) => sum + r.credit_earned, 0);
+  return { earned: Math.round(earned * 10) / 10, possible: QUESTION_POINTS * results.length };
+}
+
 /**
  * Attempt percentages from its question results, rounded to one decimal as the
  * existing completion path does: partial credit is the mean credit, first-attempt
@@ -75,4 +87,26 @@ export function computeAttemptPercentages(
     partial_credit_percentage: Math.round(partial * 10) / 10,
     first_attempt_percentage: Math.round(first * 10) / 10,
   };
+}
+
+/** The evaluation labels, best first. */
+export const GRADE_BAND_LABELS = ['EXCELLENT', 'GOOD', 'NEEDS WORK', 'UNSATISFACTORY'] as const;
+
+export type GradeBand = {
+  evaluation: (typeof GRADE_BAND_LABELS)[number];
+  numeric_score: 1 | 2 | 3 | 4;
+};
+
+/**
+ * The evaluation band of an attempt, from its partial credit percentage (the
+ * stored, rounded value, so the band and the score shown agree), with the
+ * previous runtime's thresholds: 90 and up EXCELLENT, 70 GOOD, 50 NEEDS WORK,
+ * below 50 UNSATISFACTORY. The server sets it; the model's choice is not used.
+ */
+export function gradeBandFor(partialCreditPercentage: number): GradeBand {
+  const pct = Number.isFinite(partialCreditPercentage) ? partialCreditPercentage : 0;
+  if (pct >= 90) return { evaluation: 'EXCELLENT', numeric_score: 4 };
+  if (pct >= 70) return { evaluation: 'GOOD', numeric_score: 3 };
+  if (pct >= 50) return { evaluation: 'NEEDS WORK', numeric_score: 2 };
+  return { evaluation: 'UNSATISFACTORY', numeric_score: 1 };
 }

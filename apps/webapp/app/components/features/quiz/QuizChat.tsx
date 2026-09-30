@@ -8,7 +8,6 @@ import { useChat } from '@ai-sdk/react';
 import { useChatActions, useTriggerChatTransport } from '@trigger.dev/sdk/chat/react';
 import type { ChatSessionPersistedState } from '@trigger.dev/sdk/chat';
 import {
-  GRADING_RULE_SENTENCE,
   QUIZ_AGENT_ERROR_COPY,
   QUIZ_FAILURE_COPY,
   type NextStepAction,
@@ -49,7 +48,12 @@ const { Text } = Typography;
  * later question's card in the same message (`displayOrder`). As in the legacy
  * chat, a marker is not inside a bubble: it gets its own row with its own
  * avatar, and what follows it (the files read, the next card) starts a new
- * bubble (`messageBlocks`).
+ * bubble (`messageBlocks`). The rest follows the legacy chat's flow too: the
+ * opening reply's welcome is a bubble of its own, above the files read and
+ * question 1; text after a question card is not shown; a card waits for the
+ * marker of the question before it; the activity line ("Thinking...",
+ * "Exploring code...") stays up until a card, the buttons or a notice arrive;
+ * the evaluation's closing line sits above the results panel.
  */
 
 export type QuizChatStatus = 'streaming' | 'ready' | 'complete';
@@ -309,11 +313,59 @@ export const displayOrder = (parts: readonly QuizPart[]): { part: QuizPart; inde
   return ordered;
 };
 
+/**
+ * A record call still running. Tools run one at a time and the record call
+ * writes its marker before it returns, so once it has an output (or failed)
+ * its marker has arrived or never will.
+ */
+const isPendingRecord = (part: QuizPart) =>
+  part.type === 'tool-record_question_result' &&
+  (part.state === 'input-streaming' || part.state === 'input-available');
+
+/**
+ * The lowest question a record call in the message is still recording
+ * (-Infinity when a pending call has no number yet, Infinity when none is
+ * pending). A card for a later question waits for that marker: in the legacy
+ * chat the marker came first and the card after, never the other way round.
+ */
+const pendingRecordFrom = (parts: readonly QuizPart[]): number => {
+  let from = Infinity;
+  for (const part of parts) {
+    if (!isPendingRecord(part)) continue;
+    const n = (part.input as { question_num?: unknown } | undefined)?.question_num;
+    from = Math.min(from, typeof n === 'number' ? n : -Infinity);
+  }
+  return from;
+};
+
+/**
+ * The indexes of the text parts that come after a question card in the same
+ * message. As in the legacy chat, nothing the model writes after a card is
+ * shown: it only restates the question.
+ */
+const textAfterCard = (parts: readonly QuizPart[]): Set<number> => {
+  const after = new Set<number>();
+  let cardSeen = false;
+  parts.forEach((part, index) => {
+    if (cardNumber(part) !== null) cardSeen = true;
+    else if (cardSeen && part.type === 'text') after.add(index);
+  });
+  return after;
+};
+
+/** A part that ends the wait for the reply: a card, the buttons, or a notice. */
+const endsTheWait = (part: QuizPart) =>
+  part.type === 'tool-present_question' ||
+  part.type === 'tool-offer_next_step' ||
+  part.type === 'data-notice';
+
 type MessageBlock = {
   kind: 'result' | 'content';
   /** The React key: `kind` and the first part's index in `parts`. */
   key: string;
   entries: { part: QuizPart; index: number }[];
+  /** Nothing more joins this block (the opening welcome's own bubble). */
+  closed?: boolean;
 };
 
 /**
@@ -327,15 +379,32 @@ type MessageBlock = {
  * record call) and its saved copy cut the same way. A block is keyed by its
  * first part's index, so it keeps its elements while the reply streams, even
  * when a marker lands above a card already showing.
+ *
+ * Text after a card, and a card still waiting for the marker of the question
+ * before it, render nothing and are left out the same way. In the opening
+ * message (`opening`), a first part that is text is the welcome the server
+ * writes before any tool call: it is a block of its own, so the files read
+ * and question 1 follow it in a new bubble, as in the legacy chat.
  */
-export const messageBlocks = (parts: readonly QuizPart[], streaming: boolean): MessageBlock[] => {
+export const messageBlocks = (
+  parts: readonly QuizPart[],
+  streaming: boolean,
+  { opening = false }: { opening?: boolean } = {}
+): MessageBlock[] => {
   const blocks: MessageBlock[] = [];
+  const recordFrom = pendingRecordFrom(parts);
+  const hiddenText = textAfterCard(parts);
   for (const entry of displayOrder(parts)) {
     if (entry.part.type !== 'data-step' && !rendersInBubble(entry.part, streaming)) continue;
+    if (hiddenText.has(entry.index)) continue;
+    if ((cardNumber(entry.part) ?? -Infinity) > recordFrom) continue;
     const last = blocks[blocks.length - 1];
     if (entry.part.type !== 'data-question-result') {
-      if (last?.kind === 'content') last.entries.push(entry);
+      if (last?.kind === 'content' && !last.closed) last.entries.push(entry);
       else blocks.push({ kind: 'content', key: `content-${entry.index}`, entries: [entry] });
+      if (opening && blocks.length === 1 && blocks[0].entries.length === 1) {
+        blocks[0].closed = entry.part.type === 'text';
+      }
       continue;
     }
     let moved: MessageBlock['entries'] = [];
@@ -388,6 +457,25 @@ const markdownComponents = (isAssistant: boolean) => ({
     <ol className="my-2 list-decimal pl-5">{children}</ol>
   ),
   li: ({ children }: { children?: ReactNode }) => <li className="my-1">{children}</li>,
+  // Tailwind's reset strips these; the legacy chat's sizes and weights.
+  strong: ({ children }: { children?: ReactNode }) => (
+    <strong className="font-semibold">{children}</strong>
+  ),
+  em: ({ children }: { children?: ReactNode }) => <em className="italic">{children}</em>,
+  h1: ({ children }: { children?: ReactNode }) => (
+    <h1 className="mt-3 mb-2 text-[1.5em] font-semibold">{children}</h1>
+  ),
+  h2: ({ children }: { children?: ReactNode }) => (
+    <h2 className="mt-2.5 mb-1.5 text-[1.3em] font-semibold">{children}</h2>
+  ),
+  h3: ({ children }: { children?: ReactNode }) => (
+    <h3 className="mt-2 mb-1 text-[1.1em] font-semibold">{children}</h3>
+  ),
+  blockquote: ({ children }: { children?: ReactNode }) => (
+    <blockquote className="my-2 border-l-[3px] border-[#d9d9d9] pl-3 text-[#666] dark:border-[#4b5563] dark:text-[#9ca3af]">
+      {children}
+    </blockquote>
+  ),
   a: ({ children, href }: { children?: ReactNode; href?: string }) => (
     <a
       href={href}
@@ -460,6 +548,24 @@ const RevisedResult = ({
   </div>
 );
 
+/** The line offer_next_step puts above its buttons, when it has one. */
+const leadInOf = (output: unknown): string | null => {
+  const leadIn = (output as { lead_in?: unknown } | null)?.lead_in;
+  return typeof leadIn === 'string' && leadIn.trim() ? leadIn : null;
+};
+
+/** The evaluation's closing line, above the results panel (as the legacy chat showed it). */
+const ClosingAcknowledgment = ({ text, spaced }: { text: string; spaced: boolean }) => (
+  <div className={`flex justify-start${spaced ? ' mt-4' : ''}`}>
+    <Space align="start">
+      <AssistantAvatar />
+      <Bubble variant="assistant" testId="quiz-closing-acknowledgment">
+        <Markdown text={text} isAssistant />
+      </Bubble>
+    </Space>
+  </div>
+);
+
 interface PartContext {
   isDarkMode: boolean;
   /** This part's message is the reply streaming now. */
@@ -527,6 +633,7 @@ export function AssistantPart({ part, ctx }: { part: QuizPart; ctx: PartContext 
       return part.state === 'output-available' ? (
         <NextStepButtons
           actions={part.output.actions}
+          leadIn={leadInOf(part.output)}
           disabled={ctx.buttonsDisabled}
           onAction={ctx.onButton}
         />
@@ -537,6 +644,38 @@ export function AssistantPart({ part, ctx }: { part: QuizPart; ctx: PartContext 
       return null;
   }
 }
+
+/** The blocks after a message's last marker row: the part of the reply still coming. */
+const tailOf = (blocks: readonly MessageBlock[]): QuizPart[] => {
+  let start = 0;
+  blocks.forEach((block, i) => {
+    if (block.kind === 'result') start = i + 1;
+  });
+  return blocks.slice(start).flatMap(block => block.entries.map(entry => entry.part));
+};
+
+export const THINKING_LINE = 'Thinking...';
+export const EXPLORING_LINE = 'Exploring code...';
+
+/**
+ * What the activity line says while a turn runs, or null when it is hidden.
+ * As in the legacy chat it stays up until the reply has arrived: here, until
+ * a card, the buttons, a notice or the evaluation follow the message's last
+ * marker. It says "Exploring code..." once files are being read for what
+ * comes next (the first exploration after the welcome, the one after each
+ * marker), "Thinking..." otherwise.
+ */
+export const activityLine = (
+  message: QuizUIMessage | undefined,
+  { opening = false }: { opening?: boolean } = {}
+): string | null => {
+  if (message?.role !== 'assistant') return THINKING_LINE;
+  const parts = visibleParts(message);
+  if (parts.some(isEvaluationPart)) return null;
+  const tail = tailOf(messageBlocks(parts, true, { opening }));
+  if (tail.some(endsTheWait)) return null;
+  return tail.some(part => part.type === 'data-step') ? EXPLORING_LINE : THINKING_LINE;
+};
 
 interface TranscriptProps {
   messages: QuizUIMessage[];
@@ -557,7 +696,7 @@ interface TranscriptProps {
   scrollToResults?: boolean;
 }
 
-/** The transcript: grading rule, messages, the typing indicator, the results panel. */
+/** The transcript: messages, the typing indicator, the results panel. */
 export function QuizTranscript({
   messages,
   status,
@@ -576,18 +715,30 @@ export function QuizTranscript({
   const resultsRef = useRef<HTMLDivElement>(null);
   const shown = messages.filter(m => !m.metadata?.hidden);
   const lastMessage = shown[shown.length - 1];
+  // The opening reply: its welcome is a bubble of its own.
+  const openingId = shown.find(m => m.role === 'assistant')?.id;
 
   // The results panel renders once: at the first evaluation part, from the
-  // stored record when the loader has it.
+  // stored record when the loader has it. Above it, the evaluation's closing
+  // line, unless the reply already closed in its own words after its last
+  // marker (the legacy chat showed the model's text first, the line only
+  // when there was none).
   let resultsRendered = false;
-  const renderResults = (fallback: QuizEvaluationRecordV2 | null | undefined) => {
+  const renderResults = (
+    fallback: QuizEvaluationRecordV2 | null | undefined,
+    { ownClosingText = false, spaced = false }: { ownClosingText?: boolean; spaced?: boolean } = {}
+  ) => {
     const record = evaluationRecord ?? fallback ?? null;
     if (resultsRendered || !record) return null;
     resultsRendered = true;
+    const closing = ownClosingText ? '' : (record.feedback?.final_acknowledgment?.trim() ?? '');
     return (
-      <div ref={resultsRef}>
-        <QuizResults evaluation={record} focusMetrics={focusMetrics} />
-      </div>
+      <>
+        {closing && <ClosingAcknowledgment text={closing} spaced={spaced} />}
+        <div ref={resultsRef}>
+          <QuizResults evaluation={record} focusMetrics={focusMetrics} />
+        </div>
+      </>
     );
   };
 
@@ -603,10 +754,11 @@ export function QuizTranscript({
     return () => clearTimeout(timer);
   }, [scrollToResults]);
 
-  const lastHasVisibleReply =
-    lastMessage?.role === 'assistant' &&
-    visibleParts(lastMessage).some(part => rendersInBubble(part, busy));
-  const showTyping = busy && !lastHasVisibleReply;
+  const activity = busy
+    ? activityLine(lastMessage, {
+        opening: lastMessage !== undefined && lastMessage.id === openingId,
+      })
+    : null;
 
   return (
     <div
@@ -616,13 +768,6 @@ export function QuizTranscript({
       aria-label="Quiz conversation"
       className="flex-1 overflow-y-auto px-4 pb-4 outline-none"
     >
-      <div
-        className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
-        data-testid="quiz-grading-rule"
-      >
-        {GRADING_RULE_SENTENCE}
-      </div>
-
       {shown.map((message, index) => {
         const parts = visibleParts(message);
         if (message.role === 'user') {
@@ -658,7 +803,7 @@ export function QuizTranscript({
           buttonsDisabled: answered || busy || status === 'complete' || !onButton,
           onButton,
         };
-        const blocks = messageBlocks(parts, isStreamingThis);
+        const blocks = messageBlocks(parts, isStreamingThis, { opening: message.id === openingId });
         const evaluationPart = parts.find(isEvaluationPart);
         const evaluationFromPart =
           evaluationPart?.type === 'tool-submit_quiz_evaluation' &&
@@ -703,7 +848,19 @@ export function QuizTranscript({
                   key={block.key}
                   className={`flex w-full flex-col items-start${followed ? ' mb-4' : ''}`}
                 >
-                  {steps.length > 0 && <StepList steps={steps} active={isStreamingThis} />}
+                  {steps.length > 0 && (
+                    <StepList
+                      steps={steps}
+                      // Open while these files are being read: the reply's
+                      // last block, with nothing yet that they were read for.
+                      active={
+                        isStreamingThis &&
+                        !followed &&
+                        !block.entries.some(e => endsTheWait(e.part))
+                      }
+                      isDarkMode={isDarkMode}
+                    />
+                  )}
                   {inBubble.length > 0 && (
                     <Space align="start">
                       <AssistantAvatar />
@@ -717,18 +874,27 @@ export function QuizTranscript({
                 </div>
               );
             })}
-            {evaluationPart && <div className="w-full">{renderResults(evaluationFromPart)}</div>}
+            {evaluationPart && (
+              <div className="w-full">
+                {renderResults(evaluationFromPart, {
+                  ownClosingText: tailOf(blocks).some(part => part.type === 'text'),
+                  spaced: blocks.length > 0,
+                })}
+              </div>
+            )}
           </div>
         );
       })}
 
-      {showTyping && (
+      {activity && (
         <div className="mb-4 flex justify-start" data-testid="quiz-typing">
           <Space>
             <AssistantAvatar />
             <div className="flex items-center gap-2 rounded-lg border border-[#d9d9d9] bg-white px-4 py-3 dark:border-gray-600 dark:bg-gray-800">
               <TypingIndicator color="#10b981" />
-              <Text type="secondary">Thinking...</Text>
+              <Text type="secondary" style={{ marginLeft: 4 }}>
+                {activity}
+              </Text>
             </div>
           </Space>
         </div>
@@ -916,8 +1082,11 @@ function useAttemptTime({
   // The attempt completed while open (its task completes it after the last
   // message): send the time up to now, once. The focus tracker has already
   // stopped the clock when `active` turned false, so this is the final count.
+  // It is also what the results panel shows from then on, as the legacy chat
+  // did: the drawer's refresh can read the attempt before this write lands.
   const wasActiveRef = useRef(active);
   const finalSentRef = useRef(false);
+  const [finalMetrics, setFinalMetrics] = useState<ResultsFocusMetrics | null>(null);
   useEffect(() => {
     const completedNow = wasActiveRef.current && !active;
     wasActiveRef.current = active;
@@ -925,6 +1094,12 @@ function useAttemptTime({
     finalSentRef.current = true;
     const snapshot = getMetricsSnapshot();
     if (!snapshot) return;
+    const focusedMs = Math.max(0, snapshot.totalMs - snapshot.unfocusedMs);
+    setFinalMetrics({
+      totalMs: snapshot.totalMs,
+      focusedMs,
+      percentage: snapshot.totalMs > 0 ? Math.round((focusedMs / snapshot.totalMs) * 100) : 100,
+    });
     const previous = lastSentRef.current;
     if (snapshot.totalMs === previous.totalMs && snapshot.unfocusedMs === previous.unfocusedMs) {
       return;
@@ -939,8 +1114,8 @@ function useAttemptTime({
     lastSentRef.current = { totalMs: snapshot.totalMs, unfocusedMs };
   }, [active, attemptId, getMetricsSnapshot]);
 
-  /** Save the time so far now (before the attempt completes). */
-  return { flush: sendUpdate };
+  /** Save the time so far now (before the attempt completes); the final count once it has. */
+  return { flush: sendUpdate, finalMetrics };
 }
 
 // ---------------------------------------------------------------------------
@@ -1086,33 +1261,33 @@ function LiveQuizChat({
           userLogin={userLogin}
           userImage={userImage}
           evaluationRecord={attempt.evaluation_json ?? null}
-          focusMetrics={focusMetrics}
+          focusMetrics={time.finalMetrics ?? focusMetrics}
           onButton={canSend ? onButton : null}
           errorLine={errorLine}
           onRetryStart={startFailed ? begin : null}
         />
       </div>
 
-      <div className="mt-4 border-t border-[#f0f0f0] pt-4 dark:border-gray-700">
-        <div
-          data-testid="quiz-editor"
-          className={canSend ? undefined : 'pointer-events-none opacity-50'}
-        >
-          <ChatEditor
-            onSubmit={send}
-            loading={busy}
-            disabled={!canSend}
-            placeholder={
-              complete
-                ? 'Quiz completed!'
-                : sessionClosed
-                  ? "This quiz can't continue right now."
-                  : EDITOR_PLACEHOLDER
-            }
-            sendButtonTestId="quiz-send"
-          />
+      {/* Gone once the attempt is complete, as in the legacy chat; a closed
+          session without an evaluation leaves it in place, inert. */}
+      {!complete && (
+        <div className="mt-4 border-t border-[#f0f0f0] pt-4 dark:border-gray-700">
+          <div
+            data-testid="quiz-editor"
+            className={canSend ? undefined : 'pointer-events-none opacity-50'}
+          >
+            <ChatEditor
+              onSubmit={send}
+              loading={busy}
+              disabled={!canSend}
+              placeholder={
+                sessionClosed ? "This quiz can't continue right now." : EDITOR_PLACEHOLDER
+              }
+              sendButtonTestId="quiz-send"
+            />
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

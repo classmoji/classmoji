@@ -2,8 +2,15 @@ import { asSchema, type FlexibleSchema } from 'ai';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   BUTTON_TEXT,
+  NEXT_STEP_LEAD_IN,
+  nextStepLeadIn,
+  OfferNextStepOutputSchema,
+  CodeAwareQuizQuestionSchema,
+  CodeQuoteSchema,
   ExploreCodebaseSchema,
   OfferNextStepSchema,
+  PresentQuestionOutputSchema,
+  QuestionCardSchema,
   QUIZ_TOOL_ORDER,
   QuizEvaluationFeedbackSchema,
   QuizEvaluationRecordV2Schema,
@@ -89,6 +96,42 @@ describe('OfferNextStepSchema', () => {
   );
 });
 
+describe('the lead-in shown with the buttons', () => {
+  it('uses the previous wording', () => {
+    expect(NEXT_STEP_LEAD_IN).toEqual({
+      next: 'Ready for the next question?',
+      results: 'Ready to see your results?',
+      try_again_or_next: 'Would you like to try again or move on?',
+    });
+  });
+
+  it('picks it from the buttons and whether the question is the last one', () => {
+    expect(nextStepLeadIn(['next'], false)).toBe('Ready for the next question?');
+    expect(nextStepLeadIn(['next'], true)).toBe('Ready to see your results?');
+    expect(nextStepLeadIn(['try_again', 'next'], false)).toBe(
+      'Would you like to try again or move on?'
+    );
+    expect(nextStepLeadIn(['next', 'try_again'], true)).toBe(
+      'Would you like to try again or move on?'
+    );
+    expect(nextStepLeadIn(['try_again'], false)).toBeNull();
+  });
+
+  it('is part of the output, not the input', () => {
+    expect(
+      OfferNextStepOutputSchema.parse({
+        actions: ['next'],
+        lead_in: 'Ready for the next question?',
+      })
+    ).toEqual({ actions: ['next'], lead_in: 'Ready for the next question?' });
+    expect(OfferNextStepOutputSchema.safeParse({ actions: ['next'] }).success).toBe(false);
+    expect(quizToolDefs.offer_next_step.outputSchema).toBe(OfferNextStepOutputSchema);
+    expect(OfferNextStepSchema.parse({ actions: ['next'], lead_in: 'x' })).toEqual({
+      actions: ['next'],
+    });
+  });
+});
+
 describe('QuizQuestionSchema', () => {
   it('accepts a card', () => {
     expect(QuizQuestionSchema.safeParse(card).success).toBe(true);
@@ -100,6 +143,82 @@ describe('QuizQuestionSchema', () => {
     ['a total of 0', { total_questions: 0 }],
   ])('refuses %s', (_label, patch) => {
     expect(QuizQuestionSchema.safeParse({ ...card, ...patch }).success).toBe(false);
+  });
+
+  it('has no code_quote: a standard attempt never sees one', () => {
+    expect(Object.keys(QuizQuestionSchema.shape)).not.toContain('code_quote');
+  });
+});
+
+describe('code quotes', () => {
+  const quote = { path: 'css/style.css', ranges: [[11, 15]], anchor: '.features {' };
+
+  it('accepts a quote with ranges, omitted lines and one edit', () => {
+    expect(
+      CodeQuoteSchema.safeParse({
+        ...quote,
+        ranges: [
+          [1, 2],
+          [11, 15],
+        ],
+        omit: [13],
+        edit: { line: 12, replace: 'display: block;' },
+      }).success
+    ).toBe(true);
+  });
+
+  it.each([
+    ['no ranges', { ranges: [] }],
+    ['a range of one number', { ranges: [[11]] }],
+    ['a range of three numbers', { ranges: [[11, 12, 13]] }],
+    ['line 0', { ranges: [[0, 4]] }],
+    ['a fractional line', { ranges: [[1.5, 4]] }],
+    ['an empty anchor', { anchor: '' }],
+    ['an empty path', { path: '' }],
+    [
+      'more than eight ranges',
+      { ranges: Array.from({ length: 9 }, (_, i) => [i * 2 + 1, i * 2 + 1]) },
+    ],
+  ])('refuses %s', (_label, patch) => {
+    expect(CodeQuoteSchema.safeParse({ ...quote, ...patch }).success).toBe(false);
+  });
+
+  it('is an optional field of the code-aware question', () => {
+    expect(CodeAwareQuizQuestionSchema.safeParse(card).success).toBe(true);
+    expect(CodeAwareQuizQuestionSchema.parse({ ...card, code_quote: quote }).code_quote).toEqual(
+      quote
+    );
+  });
+
+  it('writes each range as an array of two line numbers in the JSON schema, never a tuple', async () => {
+    const schema = (await asSchema(CodeAwareQuizQuestionSchema).jsonSchema) as {
+      properties: {
+        code_quote: {
+          properties: { ranges: { items: { items: unknown; minItems: number; maxItems: number } } };
+        };
+      };
+    };
+    const range = schema.properties.code_quote.properties.ranges.items;
+    expect(Array.isArray(range.items)).toBe(false);
+    expect(range.items).toMatchObject({ type: 'integer', minimum: 1 });
+    expect(range).toMatchObject({ minItems: 2, maxItems: 2 });
+  });
+
+  it('stores the card with its source, and a card without one as before', () => {
+    const source = { path: 'css/style.css', lines: '11-15', changed: false };
+    expect(QuestionCardSchema.parse({ ...card, source }).source).toEqual(source);
+    expect(QuestionCardSchema.parse(card)).toEqual(card);
+    expect(
+      PresentQuestionOutputSchema.parse({
+        card: { ...card, source },
+        question_number: 1,
+        total_questions: 8,
+      }).card.source
+    ).toEqual(source);
+    // The quote itself is never part of the stored card.
+    expect(QuestionCardSchema.parse({ ...card, code_quote: quote })).not.toHaveProperty(
+      'code_quote'
+    );
   });
 });
 
@@ -150,6 +269,24 @@ describe('QuizEvaluationFeedbackSchema', () => {
     expect(QuizEvaluationFeedbackSchema.safeParse(feedback).success).toBe(true);
   });
 
+  it('takes the band as optional and never refuses it: the server sets it', () => {
+    const { evaluation: _e, numeric_score: _n, ...rest } = feedback;
+    expect(QuizEvaluationFeedbackSchema.safeParse(rest).success).toBe(true);
+    expect(
+      QuizEvaluationFeedbackSchema.safeParse({ ...feedback, evaluation: 'GREAT', numeric_score: 9 })
+        .success
+    ).toBe(true);
+  });
+
+  it('asks for the closing words in final_acknowledgment, shown above the results', () => {
+    expect(QuizEvaluationFeedbackSchema.shape.final_acknowledgment.description).toMatch(
+      /shown above their results/
+    );
+    expect(
+      QuizEvaluationFeedbackSchema.safeParse({ ...feedback, final_acknowledgment: '' }).success
+    ).toBe(false);
+  });
+
   it('refuses quiz_complete other than true', () => {
     expect(
       QuizEvaluationFeedbackSchema.safeParse({ ...feedback, quiz_complete: false }).success
@@ -197,6 +334,24 @@ describe('records', () => {
       question_results: [],
     });
     expect(parsed.feedback).toEqual(text);
+  });
+
+  it('carries the server band on the record, and reads a record stored without it', () => {
+    const base = {
+      v: 2,
+      source: 'server',
+      partial_credit_percentage: 72,
+      first_attempt_percentage: 0,
+      question_results: [],
+    };
+    expect(
+      QuizEvaluationRecordV2Schema.parse({ ...base, evaluation: 'GOOD', numeric_score: 3 })
+    ).toMatchObject({ evaluation: 'GOOD', numeric_score: 3 });
+    expect(QuizEvaluationRecordV2Schema.parse(base)).toEqual(base);
+    expect(
+      QuizEvaluationRecordV2Schema.safeParse({ ...base, evaluation: 'GREAT', numeric_score: 3 })
+        .success
+    ).toBe(false);
   });
 
   it('refuses another record version', () => {
@@ -253,8 +408,12 @@ describe('quizToolDefs', () => {
     type Part = QuizUIMessage['parts'][number];
     type PresentPart = Extract<Part, { type: 'tool-present_question'; state: 'output-available' }>;
     expectTypeOf<PresentPart['output']['card']['question_text']>().toEqualTypeOf<string>();
+    expectTypeOf<PresentPart['output']['card']['source']>().toEqualTypeOf<
+      { path: string; lines: string; changed: boolean } | undefined
+    >();
     type NextPart = Extract<Part, { type: 'tool-offer_next_step'; state: 'output-available' }>;
     expectTypeOf<NextPart['output']['actions']>().toEqualTypeOf<('next' | 'try_again')[]>();
+    expectTypeOf<NextPart['output']['lead_in']>().toEqualTypeOf<string>();
   });
 });
 

@@ -85,6 +85,12 @@ export type ExploreRepositoryInput = {
   signal: AbortSignal;
   /** One call per file read, with the path only; `error` when the read failed. */
   onFileRead: (path: string, o?: { error: true }) => void;
+  /**
+   * One call per file read successfully, with its content as read: the lines
+   * the excerpts were numbered from. Server side only (the quiz keeps them so
+   * a code quote checks the same lines the model was shown).
+   */
+  onFileContent?: (path: string, content: string) => void;
   /** One usage line per model call; none when absent. */
   callLog?: ExplorationCallLog;
   /** Pauses before the rate-limit retries; defaults to `RATE_LIMIT_BACKOFF_MS`. */
@@ -348,6 +354,16 @@ export async function exploreRepository(i: ExploreRepositoryInput): Promise<Expl
     if (file.error) i.onFileRead(file.path, { error: true });
     else i.onFileRead(file.path);
   }
+  if (i.onFileContent) {
+    for (const file of files) {
+      if (file.error) continue;
+      try {
+        i.onFileContent(file.path, file.content);
+      } catch {
+        // Keeping a copy never fails an exploration.
+      }
+    }
+  }
 
   const response = files.some(f => !f.error && f.content)
     ? await untilAborted(
@@ -430,7 +446,7 @@ export function formatExcerptResult(result: ExploreResult, focusArea: string): s
   }
   const header = [
     `Exploration for focus area "${focusArea}".`,
-    `Exact code from the student's repository; each line starts with its line number ("N| "), which is not part of the code.`,
+    `Exact code from the student's repository; each line starts with its line number in the file ("N| "), which is not part of the code. Cite code by these line numbers.`,
     paths.length ? `Excerpted files: ${paths.join(', ')}.` : '',
   ]
     .filter(Boolean)

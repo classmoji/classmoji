@@ -27,17 +27,19 @@ import { DEFAULT_EMOJI_GRADE_MAPPINGS, gradeToEmoji } from '@classmoji/utils';
 import {
   QuizEvaluationFeedbackSchema,
   QuizEvaluationRecordV2Schema,
-  QuizQuestionSchema,
+  QuestionCardSchema,
   RecordQuestionResultSchema,
   computeAttemptPercentages,
   deriveResult,
+  gradeBandFor,
+  scoreSoFar,
   type Answer,
   type AttemptProgress,
   type PresentQuestionOutput,
   type QuestionResultOutput,
   type QuizEvaluationFeedback,
   type QuizEvaluationRecordV2,
-  type QuizQuestion,
+  type QuestionCard,
   type RecordQuestionResult,
   type StoredQuestionResult,
 } from '@classmoji/utils/quiz-agent';
@@ -286,12 +288,12 @@ export const progressOf = async (
 ): Promise<AttemptProgress> => {
   const questionCount = attemptQuestionCount(attempt);
   const lastAction = await readLastAction(tx, attempt.id);
+  const results = readStoredResults(attempt.question_results_json, questionCount);
   return {
     questionCount,
     presented: attempt.questions_asked ?? 0,
-    finalized: readStoredResults(attempt.question_results_json, questionCount).map(
-      r => r.question_num
-    ),
+    finalized: results.map(r => r.question_num),
+    score: scoreSoFar(results),
     completed: Boolean(attempt.completed_at),
     hasEvaluation: attempt.evaluation_json !== null && attempt.evaluation_json !== undefined,
     ...(lastAction ? { lastAction } : {}),
@@ -371,13 +373,16 @@ const inLockedTx = <T>(
  * `n <= questionCount`; `total_questions` is set to the attempt's count. A
  * re-run of the question already presented (`n = presented`) returns the
  * ORIGINAL stored question and writes nothing.
+ *
+ * `q` is the card as the tool built it: a code quote is already resolved into
+ * `code_snippet` and `source`, which are stored with the rest of the card.
  */
-export const presentQuestion = (f: Fenced, q: QuizQuestion): Promise<PresentQuestionOutput> =>
+export const presentQuestion = (f: Fenced, q: QuestionCard): Promise<PresentQuestionOutput> =>
   inLockedTx(f.attemptId, f.toolCallId, ['question_presented'], async (tx, attempt) => {
     requireOpen(attempt);
     requireFence(attempt, f.fence);
 
-    const parsed = QuizQuestionSchema.safeParse(q);
+    const parsed = QuestionCardSchema.safeParse(q);
     if (!parsed.success) {
       throw new QuizGradingError(
         'invalid_input',
@@ -423,7 +428,7 @@ export const presentQuestion = (f: Fenced, q: QuizQuestion): Promise<PresentQues
       );
     }
 
-    const card: QuizQuestion = { ...question, question_number: n, total_questions: questionCount };
+    const card: QuestionCard = { ...question, question_number: n, total_questions: questionCount };
     const output: PresentQuestionOutput = {
       card,
       question_number: n,
@@ -628,8 +633,13 @@ const readEvaluation = (json: Prisma.JsonValue): QuizEvaluationRecordV2 =>
  * the stored results, never from the model. An attempt already completed
  * returns its stored evaluation.
  *
- * `source: 'server'` (Q17) records no feedback text; `toolCallId` is then
- * optional and the journal row uses a fixed operation id.
+ * The evaluation band (`evaluation`, `numeric_score`) is the server's, from
+ * the partial credit (`gradeBandFor`): on the record for either source, and in
+ * the model's feedback in place of what the model sent. The model's
+ * `final_acknowledgment` is kept in the feedback.
+ *
+ * `source: 'server'` (Q17) records no feedback text, so no acknowledgment;
+ * `toolCallId` is then optional and the journal row uses a fixed operation id.
  */
 export const completeWithEvaluation = (
   f: Omit<Fenced, 'toolCallId'> & { toolCallId?: string },
@@ -641,8 +651,7 @@ export const completeWithEvaluation = (
 
 /**
  * `completeWithEvaluation`'s body, for a caller that already holds the attempt
- * row lock in `tx` (admission completes an attempt from its recorded grades
- * when it reaches the turn cap).
+ * row lock in `tx`.
  */
 export const completeLocked = async (
   tx: Tx,
@@ -672,6 +681,11 @@ export const completeLocked = async (
     );
   }
 
+  const percentages = computeAttemptPercentages(results);
+  // The band follows the score, for either source: the model's own choice of
+  // evaluation and numeric_score is replaced.
+  const band = gradeBandFor(percentages.partial_credit_percentage);
+
   let feedback: Omit<QuizEvaluationFeedback, 'quiz_complete'> | undefined;
   if (o.source === 'model') {
     const parsed = QuizEvaluationFeedbackSchema.safeParse(o.feedback);
@@ -682,14 +696,14 @@ export const completeLocked = async (
       );
     }
     const { quiz_complete: _complete, ...rest } = parsed.data;
-    feedback = rest;
+    feedback = { ...rest, ...band };
   }
 
-  const percentages = computeAttemptPercentages(results);
   const record: QuizEvaluationRecordV2 = QuizEvaluationRecordV2Schema.parse({
     v: 2,
     source: o.source,
     ...(feedback ? { feedback } : {}),
+    ...band,
     ...percentages,
     question_results: results.map(({ recorded_at: _at, ...rest }) => rest),
   });
@@ -767,7 +781,7 @@ export const listExplorations = async (
 
 // ─── Progress ───────────────────────────────────────────────────────────────
 
-/** `{ questionCount, presented, finalized, completed, hasEvaluation, lastAction? }` from Neon. */
+/** `{ questionCount, presented, finalized, score, completed, hasEvaluation, lastAction? }` from Neon. */
 export const getProgress = async (attemptId: string): Promise<AttemptProgress> => {
   const attempt = await getPrisma().quizAttempt.findUnique({
     where: { id: attemptId },

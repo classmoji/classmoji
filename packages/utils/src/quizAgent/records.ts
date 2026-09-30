@@ -3,6 +3,7 @@
  * and the evaluation record in quiz_attempts.evaluation_json.
  */
 import { z } from 'zod';
+import { GRADE_BAND_LABELS } from './grading.ts';
 import { QuizEvaluationFeedbackSchema } from './schemas.ts';
 
 /**
@@ -27,8 +28,19 @@ export type StoredQuestionResult = z.infer<typeof StoredQuestionResultSchema>;
 export const QuizEvaluationRecordV2Schema = z.object({
   v: z.literal(2),
   source: z.enum(['model', 'server']),
-  /** Absent when the server completed the attempt from the recorded results. */
+  /**
+   * The model's closing feedback, `final_acknowledgment` included (shown above
+   * the results). Its `evaluation` and `numeric_score` are the server's band.
+   * Absent when the server completed the attempt from the recorded results.
+   */
   feedback: QuizEvaluationFeedbackSchema.omit({ quiz_complete: true }).optional(),
+  /**
+   * The evaluation band from `partial_credit_percentage` (`gradeBandFor`), set
+   * by the server on every completion, the server's own included. Absent only
+   * on records stored before it was added.
+   */
+  evaluation: z.enum(GRADE_BAND_LABELS).optional(),
+  numeric_score: z.number().int().min(1).max(4).optional(),
   partial_credit_percentage: z.number(),
   first_attempt_percentage: z.number(),
   question_results: z.array(StoredQuestionResultSchema.omit({ recorded_at: true })),

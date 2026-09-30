@@ -22,7 +22,15 @@
  * for a question whose card went out in the same turn is refused too, before
  * anything is written: the student has not seen it yet, so there is nothing
  * to rate. Recording an earlier question (the one the student is moving on
- * from) is unaffected.
+ * from) is unaffected. offer_next_step is also refused until the model has
+ * written visible text in the turn (`textWritten`, which the loop sets from
+ * the model's own stream, not from its own writes such as the welcome):
+ * the buttons end the turn, so feedback the model meant to write after them
+ * would never be written. It is refused as well in a turn the student opened
+ * with Try again (that reply is a hint, which ends with a question), and for
+ * Try again without Next. Its output carries the buttons and the fixed line
+ * shown with them (`lead_in`, chosen from the buttons and whether the student
+ * is on the last question).
  *
  * A question is open while the last presented question has no recorded
  * result. While one is open, present_question for a later question is refused
@@ -33,10 +41,19 @@
  * starts from the turn's stored progress and follows this turn's successful
  * calls. The checks run inside the queue, after every call the model made
  * before them in the same step.
+ *
+ * In a code-aware attempt present_question also takes `code_quote`: lines of
+ * the student's file by number, which the server reads and puts on the card
+ * as exact code with its `source` (codeQuote.ts). The quote is resolved after
+ * the checks above and before the write, so a refused quote writes nothing.
+ * A free-typed `code_snippet` is still accepted when there is no quote.
  */
 import { tool, type ToolSet, type UIMessageStreamWriter } from 'ai';
 import type Anthropic from '@anthropic-ai/sdk';
 import {
+  CodeAwareQuizQuestionSchema,
+  nextStepLeadIn,
+  OfferNextStepOutputSchema,
   OfferNextStepSchema,
   PresentQuestionOutputSchema,
   QuestionResultOutputSchema,
@@ -44,22 +61,39 @@ import {
   QuizEvaluationRecordV2Schema,
   QuizQuestionSchema,
   RecordQuestionResultSchema,
-  type OfferNextStep,
+  type CodeAwareQuizQuestion,
+  type OfferNextStepOutput,
   type PresentQuestionOutput,
+  type QuestionCard,
   type QuestionResultOutput,
   type QuizEvaluationRecordV2,
   type QuizUIMessage,
 } from '@classmoji/utils/quiz-agent';
 import type { ClassmojiService } from '@classmoji/services';
-import { exploreRepository } from '../../shared/exploration/core.ts';
-import type { DiagnosticLog } from '../../shared/sanitize.ts';
+import {
+  ExplorationStoppedError,
+  exploreRepository,
+  providerStatus,
+} from '../../shared/exploration/core.ts';
+import { logDiagnostic, type DiagnosticLog } from '../../shared/sanitize.ts';
 import type { ToolQueue } from '../../shared/toolQueue.ts';
 import type { AttemptContext, GitOrgLike } from '../context.ts';
+import {
+  languageForPath,
+  QuoteRefusal,
+  quoteFileCache,
+  resolveCodeQuote,
+  type QuoteFileCache,
+} from './codeQuote.ts';
 import { TOOL_DESCRIPTIONS } from './descriptions.ts';
 import {
   aborted,
+  OFFER_AFTER_HINT_TEXT,
   OFFER_AFTER_QUESTION_TEXT,
+  OFFER_BEFORE_FEEDBACK_TEXT,
+  OFFER_TRY_AGAIN_ALONE_TEXT,
   QUESTION_AFTER_OFFER_TEXT,
+  QUOTE_READ_FAILED_TEXT,
   RECORD_BEFORE_ANSWER_TEXT,
   recordBeforePresentText,
   toolFailure,
@@ -82,6 +116,10 @@ export type QuizToolServices = {
   mintRepoToken: (gitOrganization: GitOrgLike, repo: string) => Promise<string>;
   anthropic: (apiKey: string) => Anthropic;
   explore: typeof exploreRepository;
+  /** Where file lines are kept for code quotes; exploration fills it too. */
+  quoteCache: QuoteFileCache;
+  /** Reads one file for a code quote; defaults to the Contents API read. */
+  readFile?: (owner: string, repo: string, path: string, token: string) => Promise<string>;
 };
 
 export type QuizToolDeps = {
@@ -92,6 +130,8 @@ export type QuizToolDeps = {
   /** Defaults to the real services; tests inject fakes. */
   services?: Partial<QuizToolServices>;
   log?: DiagnosticLog;
+  /** Whether the model has written visible text in this turn; the loop tracks it. */
+  textWritten: () => boolean;
 };
 
 /** The grading service, loaded on first use so the prompt and tests stay light. */
@@ -141,10 +181,69 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
   const noQuestionOpen = () => lastPresented < 1 || recorded.has(lastPresented);
   /** Next-step buttons went out in this turn: the student chooses next. */
   let offerMade = false;
+  /** The repository a code quote reads, for a code-aware attempt; null otherwise. */
+  const quoteRepo = ctx.isCodeAware && ctx.exploration ? ctx.exploration : null;
+  const quoteCache = d.services?.quoteCache ?? quoteFileCache;
+  const repoToken = d.services?.mintRepoToken ?? mintRepoToken;
+
+  /**
+   * The card to store: the input without `code_quote`, and, when there is a
+   * quote, its exact code and source in place of any typed code. A refused
+   * quote throws its message for the model; nothing has been written.
+   */
+  const cardFor = async (
+    input: CodeAwareQuizQuestion,
+    abortSignal?: AbortSignal
+  ): Promise<QuestionCard> => {
+    const { code_quote: quote, ...card } = input;
+    // The question already out comes back from the service as stored (or is
+    // refused), whatever this call says, so there is nothing to read for it.
+    if (!quote || !quoteRepo || input.question_number <= lastPresented) return card;
+    const signal = abortSignal ? AbortSignal.any([d.signal, abortSignal]) : d.signal;
+    let built;
+    try {
+      built = await resolveCodeQuote(
+        quote,
+        { attemptId: ctx.attemptId, ...quoteRepo },
+        { mintRepoToken: repoToken, readFile: d.services?.readFile, cache: quoteCache },
+        signal
+      );
+    } catch (error) {
+      if (error instanceof QuoteRefusal) {
+        d.log?.('[quiz-agent] code quote refused', { ...ids, reason: error.reason });
+        throw new Error(error.message);
+      }
+      if (error instanceof ExplorationStoppedError || aborted(d.signal, abortSignal)) {
+        throw new Error(TURN_STOPPED_TEXT);
+      }
+      logDiagnostic('code_quote', error, { chatId: ids.attemptId, runId: ids.runId }, d.log, {
+        status: providerStatus(error),
+      });
+      throw new Error(QUOTE_READ_FAILED_TEXT);
+    }
+    d.log?.('[quiz-agent] code quote', {
+      ...ids,
+      lines: built.shownLines,
+      ranges: quote.ranges.length,
+      changed: built.source.changed,
+      cached: built.cached,
+    });
+    return {
+      ...card,
+      code_snippet: built.code,
+      code_language: card.code_language ?? languageForPath(built.source.path),
+      source: built.source,
+    };
+  };
 
   const present_question = tool({
     description: TOOL_DESCRIPTIONS.present_question,
-    inputSchema: QuizQuestionSchema,
+    // Fixed for the attempt: only a code-aware attempt's schema has
+    // `code_quote`. A standard attempt's input never carries one (the schema
+    // drops unknown keys), so both are typed as the code-aware input.
+    inputSchema: (quoteRepo
+      ? CodeAwareQuizQuestionSchema
+      : QuizQuestionSchema) as typeof CodeAwareQuizQuestionSchema,
     outputSchema: PresentQuestionOutputSchema,
     execute: (input, { toolCallId, abortSignal }): Promise<PresentQuestionOutput> =>
       d.queue(async () => {
@@ -158,9 +257,11 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
         if (input.question_number > lastPresented && !noQuestionOpen()) {
           throw new Error(recordBeforePresentText(lastPresented));
         }
+        const card = await cardFor(input, abortSignal);
+        stopIfAborted(abortSignal);
         let out: PresentQuestionOutput;
         try {
-          out = await (await grading()).presentQuestion(fenced(toolCallId), input);
+          out = await (await grading()).presentQuestion(fenced(toolCallId), card);
         } catch (error) {
           throw toolFailure('present_question', error, ids, d.log);
         }
@@ -209,13 +310,21 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
   const offer_next_step = tool({
     description: TOOL_DESCRIPTIONS.offer_next_step,
     inputSchema: OfferNextStepSchema,
-    outputSchema: OfferNextStepSchema,
-    execute: (input, { abortSignal }): Promise<OfferNextStep> =>
+    outputSchema: OfferNextStepOutputSchema,
+    execute: (input, { abortSignal }): Promise<OfferNextStepOutput> =>
       d.queue(async () => {
         stopIfAborted(abortSignal);
         if (questionPresented) throw new Error(OFFER_AFTER_QUESTION_TEXT);
+        // A Try again turn is a hint: it ends with a question, not buttons.
+        if (ctx.lastAction === 'try_again') throw new Error(OFFER_AFTER_HINT_TEXT);
+        // The line shown with the buttons, from the buttons and whether the
+        // student is on the last question (no card goes out in an offer's turn).
+        const leadIn = nextStepLeadIn(input.actions, lastPresented >= ctx.questionCount);
+        if (leadIn === null) throw new Error(OFFER_TRY_AGAIN_ALONE_TEXT);
+        // Buttons end the turn, so feedback written after them is never sent.
+        if (!d.textWritten()) throw new Error(OFFER_BEFORE_FEEDBACK_TEXT);
         offerMade = true;
-        return { actions: [...input.actions] };
+        return { actions: [...input.actions], lead_in: leadIn };
       }),
   });
 
@@ -260,9 +369,10 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
       d,
       {
         grading: lazyGrading,
-        mintRepoToken: d.services?.mintRepoToken ?? mintRepoToken,
+        mintRepoToken: repoToken,
         anthropic: d.services?.anthropic ?? defaultAnthropic,
         explore: d.services?.explore ?? exploreRepository,
+        quoteCache,
       },
       { questionOpen: () => !noQuestionOpen() }
     );

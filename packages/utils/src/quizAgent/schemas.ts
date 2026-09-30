@@ -36,9 +36,89 @@ export const QuizQuestionSchema = z.object({
   context: z
     .string()
     .optional()
-    .describe('Brief context about what file/concept this question relates to'),
+    .describe(
+      'One short line naming what the question is about. For code: the file name and the rule, element or function the question asks about, e.g. "style.css — .highlight-grid" or "auth.js — login()". Otherwise the concept.'
+    ),
 });
 export type QuizQuestion = z.infer<typeof QuizQuestionSchema>;
+
+/** The most lines one code quote may show: its ranges, less the omitted lines. */
+export const MAX_QUOTE_LINES = 40;
+/** The most separate ranges one code quote may join. */
+export const MAX_QUOTE_RANGES = 8;
+
+/**
+ * Lines of the student's file for a question card, by line number. The server
+ * reads the file and fills the card's code from it, so the code is exact and
+ * every cut is marked. Code-aware attempts only.
+ */
+export const CodeQuoteSchema = z.object({
+  path: z
+    .string()
+    .min(1)
+    .max(300)
+    .describe("The file's path in the repository, exactly as your exploration results name it."),
+  ranges: z
+    .array(
+      z.array(z.number().int().min(1)).length(2).describe('[first line, last line], both included')
+    )
+    .min(1)
+    .max(MAX_QUOTE_RANGES)
+    .describe(
+      `Line ranges to show, as [start, end] pairs of the line numbers in your exploration results: ascending, not overlapping, at most ${MAX_QUOTE_LINES} lines shown in all. A "..." line marks each gap between ranges.`
+    ),
+  omit: z
+    .array(z.number().int().min(1))
+    .max(MAX_QUOTE_LINES)
+    .optional()
+    .describe(
+      'Line numbers inside a range to leave out (never its first or last line). Each run of left-out lines shows as one "..." line.'
+    ),
+  anchor: z
+    .string()
+    .min(1)
+    .max(400)
+    .describe(
+      'The text of the first quoted line (the first line of the first range), without its line number. It is checked against the file.'
+    ),
+  edit: z
+    .object({
+      line: z.number().int().min(1).describe('A quoted line number'),
+      replace: z.string().max(400).describe('The new text of that one line'),
+    })
+    .optional()
+    .describe(
+      'For a question about what a change would do: one quoted line replaced with new text. The card says the code was edited.'
+    ),
+});
+export type CodeQuote = z.infer<typeof CodeQuoteSchema>;
+
+/**
+ * present_question's input for a code-aware attempt: the card, plus
+ * `code_quote` for code from the student's repository.
+ */
+export const CodeAwareQuizQuestionSchema = QuizQuestionSchema.extend({
+  code_quote: CodeQuoteSchema.optional().describe(
+    'Use this to show the student\'s code: the server fills the card\'s code with the exact lines and the "..." markers, in place of code_snippet. Leave code_snippet out when you use it.'
+  ),
+});
+export type CodeAwareQuizQuestion = z.infer<typeof CodeAwareQuizQuestionSchema>;
+
+/** Where a card's code came from, when the server filled it from a code quote. */
+export const QuoteSourceSchema = z.object({
+  path: z.string(),
+  /** The quoted line ranges: "5-10", "7", or "5-10, 20-24". */
+  lines: z.string(),
+  /** True when `edit` changed one line. */
+  changed: z.boolean(),
+});
+export type QuoteSource = z.infer<typeof QuoteSourceSchema>;
+
+/** The card as stored and shown: the question, plus `source` for a quoted card. */
+export const QuestionCardSchema = QuizQuestionSchema.extend({
+  source: QuoteSourceSchema.optional(),
+});
+export type QuestionCard = z.infer<typeof QuestionCardSchema>;
 
 export const AnswerSchema = z.object({
   level: z
@@ -83,23 +163,27 @@ export const QuizEvaluationFeedbackSchema = z.object({
     .string()
     .min(1, 'final_acknowledgment must not be empty')
     .describe(
-      "A brief, warm acknowledgment of the student's final answer before presenting the evaluation. This should feel natural and encouraging."
+      "Your closing words to the student, shown above their results: a brief, warm acknowledgment of the student's final answer. This should feel natural and encouraging. Write them here, not as text before the call."
     ),
   quiz_complete: z
     .literal(true, {
       errorMap: () => ({ message: 'quiz_complete must be true to submit evaluation' }),
     })
     .describe('Must be true to indicate quiz completion'),
+  // Optional and never refused: the server sets both from the recorded score
+  // (`gradeBandFor`), whatever the model sends.
   evaluation: z
     .string()
-    .min(1, 'evaluation must not be empty')
-    .describe('Grade level evaluation: EXCELLENT, GOOD, NEEDS WORK, or UNSATISFACTORY'),
+    .optional()
+    .describe(
+      'Optional. Grade level evaluation: EXCELLENT, GOOD, NEEDS WORK, or UNSATISFACTORY. The server sets it from the recorded score.'
+    ),
   numeric_score: z
     .number()
-    .int()
-    .min(1)
-    .max(4)
-    .describe('Numeric score on 1-4 scale: EXCELLENT=4, GOOD=3, NEEDS WORK=2, UNSATISFACTORY=1'),
+    .optional()
+    .describe(
+      'Optional. Numeric score on 1-4 scale: EXCELLENT=4, GOOD=3, NEEDS WORK=2, UNSATISFACTORY=1. The server sets it from the recorded score.'
+    ),
   feedback_summary: z
     .string()
     .min(1, 'feedback_summary must not be empty')
@@ -136,6 +220,16 @@ export const OfferNextStepSchema = z.object({
 });
 export type OfferNextStep = z.infer<typeof OfferNextStepSchema>;
 
+/**
+ * offer_next_step's output: the buttons, and the fixed line shown with them,
+ * chosen by the server from the buttons and whether the question is the last
+ * one (`nextStepLeadIn`).
+ */
+export const OfferNextStepOutputSchema = OfferNextStepSchema.extend({
+  lead_in: z.string(),
+});
+export type OfferNextStepOutput = z.infer<typeof OfferNextStepOutputSchema>;
+
 /** The ai-agent's ExplorationRequestSchema minus previousFindings/avoidFiles (history comes from the journal). */
 export const ExploreCodebaseSchema = z.object({
   purpose: z
@@ -163,7 +257,7 @@ export const ExploreCodebaseSchema = z.object({
 export type ExploreCodebaseInput = z.input<typeof ExploreCodebaseSchema>;
 
 export const PresentQuestionOutputSchema = z.object({
-  card: QuizQuestionSchema,
+  card: QuestionCardSchema,
   question_number: z.number(),
   total_questions: z.number(),
 });

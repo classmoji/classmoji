@@ -9,18 +9,21 @@ import { QuizEvaluationRecordV2Schema } from './records.ts';
 import {
   ExploreCodebaseOutputSchema,
   ExploreCodebaseSchema,
+  OfferNextStepOutputSchema,
   OfferNextStepSchema,
   PresentQuestionOutputSchema,
   QuestionResultOutputSchema,
   QuizEvaluationFeedbackSchema,
-  QuizQuestionSchema,
+  CodeAwareQuizQuestionSchema,
   RecordQuestionResultSchema,
 } from './schemas.ts';
 
+// The code-aware input (with the optional `code_quote`), so the typed parts
+// cover both modes; a standard attempt's tool takes the card fields only.
 const present_question = tool({
   description:
     'Present a quiz question to the student as a question card. Use this tool for EVERY new question; do not write questions as plain text. Questions are presented in order: the next question number, once the previous question has a recorded result. Any other number is refused. The card shows the question, so do not repeat it in text.',
-  inputSchema: QuizQuestionSchema,
+  inputSchema: CodeAwareQuizQuestionSchema,
   outputSchema: PresentQuestionOutputSchema,
 });
 
@@ -33,9 +36,9 @@ const record_question_result = tool({
 
 const offer_next_step = tool({
   description:
-    "Show the student buttons for what to do after your feedback on an answer: try_again (answer the same question again) and/or next (move on). A click arrives as the student's next message.",
+    "Show the student buttons for what to do after your feedback on an answer: try_again (answer the same question again) and/or next (move on), with a fixed lead-in line. A click arrives as the student's next message.",
   inputSchema: OfferNextStepSchema,
-  outputSchema: OfferNextStepSchema,
+  outputSchema: OfferNextStepOutputSchema,
 });
 
 const submit_quiz_evaluation = tool({

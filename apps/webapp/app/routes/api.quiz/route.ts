@@ -40,7 +40,6 @@ import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { runBackgroundTask } from '~/utils/backgroundTask.server';
 import {
-  isCodeAwareQuiz,
   isLegacyRuntimeAttempt,
   isTriggerChatAttempt,
   runtimeFor,
@@ -209,27 +208,6 @@ const sourceMaterialUnavailableResponse = () =>
       code: 'SOURCE_MATERIAL_UNAVAILABLE',
       message: SOURCE_MATERIAL_UNAVAILABLE_MESSAGE,
       error: SOURCE_MATERIAL_UNAVAILABLE_MESSAGE,
-    }),
-    { status: 409, headers: { 'Content-Type': 'application/json' } }
-  );
-
-/**
- * A code-aware quiz on the chat runtime asks about the student's own
- * repository for the quiz's assignment, so a student without one has nothing
- * to be quizzed on. Fixed copy, shown as-is by the quiz list (it reads
- * `message`), in the same shape as the source-material refusal.
- */
-const REPOSITORY_NOT_FOUND_MESSAGE =
-  "Your repository for this quiz wasn't found. Ask your instructor.";
-
-/** The 409 a start or restart answers when the student has no repository for the quiz. */
-const repositoryNotFoundResponse = () =>
-  new Response(
-    JSON.stringify({
-      success: false,
-      code: 'REPOSITORY_NOT_FOUND',
-      message: REPOSITORY_NOT_FOUND_MESSAGE,
-      error: REPOSITORY_NOT_FOUND_MESSAGE,
     }),
     { status: 409, headers: { 'Content-Type': 'application/json' } }
   );
@@ -534,25 +512,6 @@ export async function action({ request }: Route.ActionArgs) {
     };
 
     /**
-     * A STUDENT's new attempt on the chat runtime, on a code-aware quiz, is
-     * refused (409) when the student has no repository for the quiz's
-     * assignment, BEFORE the attempt row exists, so the refusal costs no
-     * attempt. Staff preview with a repository they name instead. A new
-     * attempt on the ai-agent runtime is not checked here: its start keeps its
-     * own handling of a missing repository.
-     */
-    const studentRepositoryRefusal = async (
-      quiz: { repository_id?: string | null; include_code_context?: boolean | null } | undefined,
-      agentRuntime: ReturnType<typeof runtimeFor>
-    ): Promise<Response | null> => {
-      if (agentRuntime !== 'trigger_chat') return null;
-      if (access.membership!.role !== 'STUDENT') return null;
-      if (!isCodeAwareQuiz(quiz)) return null;
-      const repo = await ClassmojiService.gitRepo.findByStudent(quiz!.repository_id!, userId);
-      return repo ? null : repositoryNotFoundResponse();
-    };
-
-    /**
      * Removes an attempt nothing has happened on (no message saved, no
      * question asked) once its start is refused for source material: left in
      * place it would count toward max_attempts and block a new attempt, though
@@ -679,10 +638,10 @@ export async function action({ request }: Route.ActionArgs) {
 
             // Create new attempt with max_attempts validation, stamped with
             // the runtime it runs on (quizRuntime.server). An ai-agent attempt
-            // is created exactly as it always was.
+            // is created exactly as it always was. A student with no
+            // repository for a code-aware quiz still gets an attempt: the
+            // chat runtime runs it on the concepts, as the ai-agent did.
             const agentRuntime = runtimeFor(context.quiz);
-            const noRepository = await studentRepositoryRefusal(context.quiz, agentRuntime);
-            if (noRepository) return noRepository;
             const result =
               agentRuntime === 'ai_agent'
                 ? await ClassmojiService.quizAttempt.createNew(
@@ -1478,11 +1437,7 @@ export async function action({ request }: Route.ActionArgs) {
           const refusal = await sourceMaterialRefusal(context.quiz);
           if (refusal) return refusal;
 
-          // No repository for a student's code-aware chat attempt: refused
-          // before anything changes, like the check above.
           const agentRuntime = runtimeFor(context.quiz);
-          const noRepository = await studentRepositoryRefusal(context.quiz, agentRuntime);
-          if (noRepository) return noRepository;
 
           // Cleanup via ai-agent service BEFORE creating new attempt.
           // The attempt created below is the caller's own, so the only session
