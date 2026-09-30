@@ -91,7 +91,26 @@ export default defineConfig({
       randomize: true,
     },
   },
-  dirs: ['./src/workflows'],
+  dirs: ['./src/workflows', './src/agents'],
+  // The CLI's default ignore list (test and spec files) plus test fixtures:
+  // every other file under `dirs` is imported to discover tasks, and a fixture
+  // repository's browser script must never be. Setting this replaces the
+  // defaults, so they are repeated here.
+  ignorePatterns: [
+    '**/*.test.ts',
+    '**/*.test.mts',
+    '**/*.test.cts',
+    '**/*.test.js',
+    '**/*.test.mjs',
+    '**/*.test.cjs',
+    '**/*.spec.ts',
+    '**/*.spec.mts',
+    '**/*.spec.cts',
+    '**/*.spec.js',
+    '**/*.spec.mjs',
+    '**/*.spec.cjs',
+    '**/__fixtures__/**',
+  ],
   build: {
     extensions: [
       prismaExtension({
