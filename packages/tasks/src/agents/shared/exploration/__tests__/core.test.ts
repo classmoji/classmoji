@@ -138,6 +138,53 @@ describe('exploreRepository on a fixture repository', () => {
     expect(onFileRead.mock.calls).toEqual([['index.html'], ['css/style.css', { error: true }]]);
   });
 
+  it('hands over the content of each file read, and none for a failed read', async () => {
+    const gh = githubStub('landing-page', { failPaths: ['index.html'] });
+    vi.stubGlobal('fetch', gh.fetchImpl);
+    const { client } = stubClient([PICK, POINT]);
+    const onFileContent = vi.fn();
+
+    await exploreRepository(input({ client, onFileContent }));
+
+    expect(onFileContent.mock.calls.map(([path]) => path)).toEqual(['css/style.css']);
+    expect(onFileContent.mock.calls[0][1]).toMatch(/^\.hero \{\n {2}display: flex;/);
+  });
+
+  it('keeps exploring when keeping a copy of a file fails', async () => {
+    vi.stubGlobal('fetch', githubStub('landing-page').fetchImpl);
+    const { client } = stubClient([PICK, POINT]);
+    const result = await exploreRepository(
+      input({
+        client,
+        onFileContent: () => {
+          throw new Error('cache full');
+        },
+      })
+    );
+    expect(result.excerpts).toHaveLength(2);
+  });
+
+  it('gives the model every excerpt line with its line number in the file', async () => {
+    vi.stubGlobal('fetch', githubStub('landing-page').fetchImpl);
+    const { client } = stubClient([PICK, POINT]);
+    const result = await exploreRepository(input({ client }));
+    const said = formatExcerptResult(result, FOCUS);
+
+    // The excerpt body reaches the model byte for byte, numbered by file line.
+    expect(said.endsWith(result.excerptText)).toBe(true);
+    expect(said).toContain(
+      [
+        '11| .features {',
+        '12|   display: grid;',
+        '13|   grid-template-columns: repeat(2, 1fr);',
+        '14|   gap: 1rem;',
+        '15| }',
+      ].join('\n')
+    );
+    expect(said).toMatch(/each line starts with its line number in the file \("N\| "\)/);
+    expect(said).toMatch(/Cite code by these line numbers\./);
+  });
+
   it('never logs the focus area or the specific question', async () => {
     const gh = githubStub('landing-page');
     vi.stubGlobal('fetch', gh.fetchImpl);

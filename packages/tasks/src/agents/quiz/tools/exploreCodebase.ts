@@ -28,6 +28,8 @@
  *   limit.
  * - A failed exploration (token or pipeline) tells the model only
  *   `EXPLORATION_FAILED_TEXT`; the prompt says what to do next.
+ * - Every file read is kept (server side, per process) in the code-quote
+ *   cache, so a later `code_quote` checks the lines the model was shown.
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { tool } from 'ai';
@@ -46,6 +48,7 @@ import {
 } from '../../shared/exploration/core.ts';
 import { logDiagnostic, type DiagnosticLog } from '../../shared/sanitize.ts';
 import type { AttemptContext, GitOrgLike } from '../context.ts';
+import { QuoteFileCache } from './codeQuote.ts';
 import { TOOL_DESCRIPTIONS } from './descriptions.ts';
 import { aborted, isGradingRefusal } from './errors.ts';
 import type { QuizToolDeps, QuizToolServices } from './index.ts';
@@ -164,6 +167,12 @@ export function exploreCodebaseTool(
                 attemptId: ctx.attemptId,
                 runId: ctx.runId,
                 keySource: ctx.keySource,
+              },
+              onFileContent: (path, content) => {
+                services.quoteCache.set(
+                  QuoteFileCache.key(ctx.attemptId, exploration.owner, exploration.repo, path),
+                  content
+                );
               },
               onFileRead: (path, o) => {
                 try {

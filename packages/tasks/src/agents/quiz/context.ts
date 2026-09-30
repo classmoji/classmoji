@@ -8,7 +8,7 @@
 import getPrisma from '@classmoji/database';
 import { ClassmojiService, getGitProvider } from '@classmoji/services';
 import type { AttemptProgress } from '@classmoji/utils/quiz-agent';
-import { buildQuizPrompt } from './prompt/index.ts';
+import { buildQuizPrompt, quizWelcome } from './prompt/index.ts';
 import { resolveQuizRunSettings, type Effort } from './settings.ts';
 
 export type GitOrgLike = Parameters<typeof getGitProvider>[0];
@@ -53,9 +53,16 @@ export type AttemptContext = {
   /**
    * The quiz is code-aware but no repository was found for this attempt: the
    * turn runs the standard instructions without explore_codebase, and the
-   * loop adds a fixed hidden notice (`CODE_UNAVAILABLE_NOTICE`).
+   * loop adds a fixed hidden notice (`CODE_UNAVAILABLE_NOTICE`). The opening
+   * welcome says so (`NO_REPOSITORY_WELCOME`), and the quiz runs on the
+   * concepts, as in the previous runtime.
    */
   codeUnavailable?: boolean;
+  /**
+   * The fixed welcome (`quizWelcome`). The loop writes it first on the opening
+   * turn only: the `begin` action's turn, before any question.
+   */
+  welcome?: string;
 };
 
 const PREVIEW_ROLES = ['OWNER', 'TEACHER', 'ASSISTANT'] as const;
@@ -261,6 +268,13 @@ export async function loadAttemptContext(
     progress,
     sourceMaterialUnavailable: stable.sourceMaterialUnavailable,
     codeUnavailable: stable.codeUnavailable,
+    welcome: quizWelcome({
+      subject: attempt.quiz.subject ?? null,
+      quizName: attempt.quiz.name ?? null,
+      questionCount,
+      isCodeAware: stable.isCodeAware,
+      codeUnavailable: stable.codeUnavailable,
+    }),
   };
 }
 

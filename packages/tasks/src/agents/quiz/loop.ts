@@ -10,6 +10,9 @@
  *   then the per-attempt block); nothing that changes per turn goes there.
  *   A code-aware quiz whose repository was not found this turn gets a fixed
  *   hidden user-role notice after the history instead (never persisted).
+ * - The opening turn (the `begin` action's) starts with the fixed welcome
+ *   (`ctx.welcome`), written before the first model call and saved with the
+ *   reply.
  * - `prepareStep` rebuilds each step's messages and moves one cache
  *   breakpoint to the last message, so an older breakpoint never piles up.
  * - The turn stops once `present_question`, `offer_next_step` or
@@ -38,6 +41,7 @@ import {
   isStepCount,
   streamText,
   toUIMessageStream,
+  wrapLanguageModel,
   type LanguageModel,
   type ModelMessage,
   type StopCondition,
@@ -78,6 +82,11 @@ export type QuizToolsFactory = (
     signal: AbortSignal;
     /** The turn's log, so tool diagnostics and usage lines land with the loop's. */
     log?: DiagnosticLog;
+    /**
+     * Whether the model has written visible text in this turn (a non-blank
+     * text delta), read from the model's stream itself (`watchModelText`).
+     */
+    textWritten: () => boolean;
   }
 ) => ToolSet;
 
@@ -111,7 +120,7 @@ export type QuizTurnInput = {
   signal: AbortSignal;
   deps: QuizTurnDeps;
   /** Tests inject a mock; otherwise the Anthropic model for `ctx.model` on `ctx.apiKey`. */
-  model?: LanguageModel;
+  model?: ModelObject;
   deadlineMs?: number;
   /** Non-persisted messages appended after the history (e.g. a status fallback). */
   extraMessages?: ModelMessage[];
@@ -120,6 +129,40 @@ export type QuizTurnInput = {
 };
 
 type Phase = 'question' | 'evaluation';
+
+/** A model object (not a gateway id string): the turn wraps it. */
+export type ModelObject = Exclude<LanguageModel, string>;
+
+/**
+ * The model, with `onText` called as each non-blank text delta leaves it. This
+ * sits at the model's own stream, upstream of the SDK's tool execution (a
+ * step's tools run once its model call has ended), so every delta of a step
+ * has passed here before any tool of that step runs: a tool reading the flag
+ * sees the text written before its call in the same step, whatever the
+ * downstream UI stream has consumed so far.
+ */
+export function watchModelText(model: ModelObject, onText: () => void): ModelObject {
+  return wrapLanguageModel({
+    model,
+    middleware: {
+      wrapStream: async ({ doStream }) => {
+        const result = await doStream();
+        type Part = typeof result.stream extends ReadableStream<infer P> ? P : never;
+        return {
+          ...result,
+          stream: result.stream.pipeThrough(
+            new TransformStream<Part, Part>({
+              transform(part, controller) {
+                if (part.type === 'text-delta' && part.delta.trim() !== '') onText();
+                controller.enqueue(part);
+              },
+            })
+          ),
+        };
+      },
+    },
+  });
+}
 
 /** The turn is in the evaluation phase once the last question is out. */
 export function phaseFor(p: AttemptProgress): Phase {
@@ -131,6 +174,11 @@ export function allResultsFinalized(p: AttemptProgress): boolean {
     if (!p.finalized.includes(n)) return false;
   }
   return true;
+}
+
+/** The `begin` action's turn (no admitted student message) before any question is out. */
+export function isOpeningTurn(ctx: Pick<AttemptContext, 'inputMessageId' | 'progress'>): boolean {
+  return ctx.inputMessageId === null && ctx.progress.presented === 0;
 }
 
 /** What the turn started from: the student's action and the progress before any call. */
@@ -188,7 +236,9 @@ export function dropIncompleteToolParts(message: QuizUIMessage): QuizUIMessage {
   const parts = message.parts.filter(part => {
     const p = part as { type: string; state?: string };
     if (!(p.type.startsWith('tool-') || p.type === 'dynamic-tool')) return true;
-    return p.state === 'output-available' || p.state === 'output-error' || p.state === 'output-denied';
+    return (
+      p.state === 'output-available' || p.state === 'output-error' || p.state === 'output-denied'
+    );
   });
   return { ...message, parts } as QuizUIMessage;
 }
@@ -234,6 +284,15 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
         return;
       }
 
+      // The opening turn starts with the fixed welcome, shown at once and saved
+      // with the reply; the model's work (exploring, question 1) follows it.
+      if (isOpeningTurn(ctx) && ctx.welcome) {
+        const id = generateId();
+        writer.write({ type: 'text-start', id });
+        writer.write({ type: 'text-delta', id, delta: ctx.welcome });
+        writer.write({ type: 'text-end', id });
+      }
+
       // `ctx.progress` is the progress read just before this turn: the phase,
       // the hidden status and the Next check all use this one snapshot.
       const turnStart: TurnStart = {
@@ -242,14 +301,22 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
       };
       const phase = phaseFor(ctx.progress);
       const effort: Effort = phase === 'evaluation' ? ctx.gradingEffort : ctx.questionEffort;
-      const model =
-        input.model ?? createAnthropic({ apiKey: ctx.apiKey })(ctx.model);
+      // Set from the model's own stream (watchModelText), never from the loop's
+      // writes such as the welcome, and before any tool of the same step runs.
+      let textWritten = false;
+      const model = watchModelText(
+        input.model ?? createAnthropic({ apiKey: ctx.apiKey })(ctx.model),
+        () => {
+          textWritten = true;
+        }
+      );
       const queue = createToolQueue();
       const tools = deps.tools(ctx, {
         writer: writer as UIMessageStreamWriter<QuizUIMessage>,
         queue,
         signal: deadline,
         log,
+        textWritten: () => textWritten,
       });
       let callIndex = 0;
       let sawStreamError = false;
@@ -351,7 +418,11 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
             ...response,
             { role: 'user', content: deps.evaluationNotice(progress) },
           ];
-          log('[quiz-agent] recovery call', { attemptId: ctx.attemptId, runId: ctx.runId, n: i + 1 });
+          log('[quiz-agent] recovery call', {
+            attemptId: ctx.attemptId,
+            runId: ctx.runId,
+            n: i + 1,
+          });
           result = call(history);
           await pump(result);
         }

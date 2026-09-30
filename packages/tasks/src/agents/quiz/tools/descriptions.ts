@@ -20,17 +20,20 @@ export const TOOL_DESCRIPTIONS: Record<QuizToolName, string> = {
 
   offer_next_step:
     'Show the student buttons after your feedback on an answer: ["try_again", "next"] when the answer is not correct or after "I don\'t know", ["next"] when it is correct or after you revealed the answer. ' +
+    'The buttons come with their own fixed lead-in line (such as "Ready for the next question?"), so do not write one yourself. ' +
     'Never in the same reply as present_question: after a new question the student answers first, and the call is refused. ' +
-    `Call it last, then end your reply. A click arrives as the student's next message: "${BUTTON_TEXT.try_again}" or "${BUTTON_TEXT.next}".`,
+    'Never after a hint: a Try again click or a hint request gets one hint ending with a question such as "What do you think?", and the call is refused in a Try again turn. ' +
+    'Write your feedback text first, then call it as the last thing in your reply and end the reply; a call before any feedback text is refused. ' +
+    `A click arrives as the student's next message: "${BUTTON_TEXT.try_again}" or "${BUTTON_TEXT.next}".`,
 
   submit_quiz_evaluation:
     'Submit your closing feedback once the student has moved on from the last question and every question has a recorded result; it is refused until then and names the questions still missing one. ' +
-    'Scores are computed from the recorded results: provide feedback text only. Write nothing after it succeeds.',
+    'Scores and the evaluation band are computed from the recorded results: provide feedback text only. Your closing words go in final_acknowledgment, shown above the results; do not also write them as text. Write nothing after it succeeds.',
 
   explore_codebase:
     "Explore the student's repository to find code to ask about: a faster assistant picks the relevant files and returns exact excerpts. " +
     'Use focus_area="initial" before the first question, then a specific area (or a file and the part of it you need) when changing topics. ' +
     'Earlier explorations in this attempt are taken into account, so prefer new areas. One exploration at a time. ' +
-    'Each excerpt line starts with its line number ("N| "), which is not part of the code. ' +
+    'Each excerpt line starts with its line number in the file ("N| "), which is not part of the code; quote lines in a question card by these numbers (present_question code_quote). ' +
     'If a call fails, call it at most once more; never tell the student about a failure.',
 };

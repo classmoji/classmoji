@@ -331,6 +331,28 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     expect((await attemptRow(attemptId)).questions_asked).toBe(1);
   });
 
+  it("stores a quoted card's source and returns it on a re-run and a re-delivery", async () => {
+    const attemptId = await newAttempt();
+    const turn = await begin(attemptId);
+    const source = { path: 'css/style.css', lines: '11-15', changed: true };
+    const quoted = {
+      ...question(1),
+      code_snippet: '.features {\n  display: grid;\n}',
+      source,
+      // A quote never reaches the store; the tool resolves it first.
+      code_quote: { path: 'css/style.css', ranges: [[11, 15]], anchor: '.features {' },
+    };
+
+    const first = call(turn);
+    const accepted = await grading.presentQuestion(first, quoted as never);
+    expect(accepted.card.source).toEqual(source);
+    expect(accepted.card).not.toHaveProperty('code_quote');
+
+    const rerun = await grading.presentQuestion(call(turn), question(1, 'Reworded?'));
+    expect(rerun.card.source).toEqual(source);
+    expect(await grading.presentQuestion(first, question(1))).toEqual(accepted);
+  });
+
   it('refuses a write under a superseded fence and writes nothing', async () => {
     const attemptId = await newAttempt();
     const old = await begin(attemptId);
@@ -590,6 +612,11 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     });
     expect(record.feedback).toBeDefined();
     expect((record.feedback as Record<string, unknown>).quiz_complete).toBeUndefined();
+    // The model's closing words are kept, shown above the results.
+    expect(record.feedback?.final_acknowledgment).toBe('Nice work.');
+    // The band follows the score (61.7: NEEDS WORK), not the model's GOOD / 3.
+    expect(record).toMatchObject({ evaluation: 'NEEDS WORK', numeric_score: 2 });
+    expect(record.feedback).toMatchObject({ evaluation: 'NEEDS WORK', numeric_score: 2 });
     expect(record.question_results.map(r => r.credit_earned)).toEqual([100, 85, 0]);
     expect(record.question_results.map(r => r.tries)).toEqual([1, 2, 0]);
     expect(record.question_results.map(r => (r as Record<string, unknown>).recorded_at)).toEqual([
@@ -640,8 +667,12 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     const { toolCallId: _unused, ...fenced } = call(turn);
     const record = await grading.completeWithEvaluation(fenced, { source: 'server' });
     expect(record.source).toBe('server');
+    // No feedback text, so no closing acknowledgment either.
     expect(record.feedback).toBeUndefined();
+    expect(JSON.stringify(record)).not.toContain('final_acknowledgment');
     expect(record.partial_credit_percentage).toBe(70);
+    // The server's band from the score: 70 is GOOD.
+    expect(record).toMatchObject({ evaluation: 'GOOD', numeric_score: 3 });
     expect(record.first_attempt_percentage).toBe(0);
     const [journal] = await events(attemptId, 'evaluation_completed');
     expect(journal.operation_id).toBe(grading.SERVER_COMPLETION_OPERATION_ID);
@@ -682,10 +713,28 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
       questionCount: 3,
       presented: 2,
       finalized: [1],
+      score: { earned: 100, possible: 100 },
       completed: false,
       hasEvaluation: false,
       lastAction: 'try_again',
     });
+  });
+
+  it("puts the score so far in the hidden status of the student's next message", async () => {
+    const attemptId = await newAttempt();
+    let turn: Turn = await begin(attemptId);
+    turn = await completeQuestion(attemptId, turn, 1, [
+      { level: 'partly_right', hints_before: 0 },
+      { level: 'correct', hints_before: 1 },
+    ]); // 85
+    await grading.presentQuestion(call(turn), question(2));
+    const id = msgId();
+    await chat.admitStudentMessage({ attemptId, message: { id, text: 'how am I doing?' }, runId });
+    const admitted = (await chat.loadCanonicalMessages(attemptId)).find(m => m.id === id);
+    const status = admitted?.parts[1] as { type: string; text: string } | undefined;
+    expect(status?.text).toContain(
+      'Score so far: 85 of 100 points, from the 1 question with a recorded result (100 points each). Questions remaining: 2.'
+    );
   });
 
   // ─── admission ────────────────────────────────────────────────────────────
@@ -810,123 +859,19 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     expect(await events(attemptId)).toHaveLength(0);
   });
 
-  it('refuses turns past the cap of question_count × 16', async () => {
-    expect(chat.TURNS_PER_QUESTION).toBe(16);
-    const attemptId = await newAttempt({ agent_config: { questionCount: 1 } });
-    for (let i = 0; i < chat.TURNS_PER_QUESTION; i++) await say(attemptId, `m${i}`);
-    const over = chat.admitStudentMessage({
-      attemptId,
-      message: { id: msgId(), text: 'one more' },
-      runId,
-    });
-    await expect(over).rejects.toMatchObject({ code: 'turn_limit', kind: 'permanent' });
-    // Nothing recorded, so nothing to complete.
-    expect((await attemptRow(attemptId)).completed_at).toBeNull();
-  });
-
-  it('does not count the Try again and Next messages toward the cap', async () => {
-    const attemptId = await newAttempt({ agent_config: { questionCount: 1 } });
-    for (let i = 0; i < chat.TURNS_PER_QUESTION - 1; i++) await say(attemptId, `m${i}`);
-    for (let i = 0; i < 6; i++) {
-      await say(attemptId, i % 2 === 0 ? BUTTON_TEXT.try_again : BUTTON_TEXT.next);
-    }
-    // The cap's last counted turn is still open.
-    expect((await say(attemptId, 'last answer')).fence).toBeTruthy();
-    await expect(say(attemptId, 'one more')).rejects.toMatchObject({
-      code: 'turn_limit',
-      kind: 'permanent',
-    });
-  });
-
-  it('completes an attempt from its recorded grades when the cap is reached', async () => {
-    const attemptId = await newAttempt({ agent_config: { questionCount: 1 } });
-    const turn = await begin(attemptId);
-    await grading.presentQuestion(call(turn), question(1));
-    const answer = await say(attemptId, 'answer');
-    await grading.finalizeQuestion(
-      call(answer),
-      result(1, [{ level: 'mostly_right', hints_before: 0 }])
-    );
-    // begin + the answer already count: fill up to the cap.
-    for (let i = 2; i < chat.TURNS_PER_QUESTION; i++) await say(attemptId, `m${i}`);
-
-    const refusedId = msgId();
-    const over = chat.admitStudentMessage({
-      attemptId,
-      message: { id: refusedId, text: 'one more' },
-      runId,
-    });
-    await expect(over).rejects.toMatchObject({ code: 'turn_limit', kind: 'permanent' });
-
-    const row = await attemptRow(attemptId);
-    expect(row.completed_at).not.toBeNull();
-    expect(row.session_status).toBe('completed');
-    expect(row.partial_credit_percentage).toBe(70);
-    expect(row.evaluation_json).toMatchObject({ v: 2, source: 'server' });
-    const [journal] = await events(attemptId, 'evaluation_completed');
-    expect(journal.operation_id).toBe(grading.SERVER_COMPLETION_OPERATION_ID);
-    expect(journal.run_id).toBe(runId);
-    // The refused message was not stored.
-    const stored = await chat.loadCanonicalMessages(attemptId);
-    expect(stored.some(m => m.id === refusedId)).toBe(false);
-    // The attempt now refuses as completed.
-    expect(await codeOf(say(attemptId, 'more'))).toBe('attempt_completed');
-  });
-
-  it('refuses every turn past the ceiling of question_count × 32, begin and buttons included', async () => {
-    expect(chat.TURN_CEILING_PER_QUESTION).toBe(32);
+  it('sets no limit on the messages of an attempt, as the previous runtime did', async () => {
     const attemptId = await newAttempt({ agent_config: { questionCount: 1 } });
     await begin(attemptId);
-    for (let i = 1; i < chat.TURN_CEILING_PER_QUESTION; i++) {
-      await say(attemptId, i % 2 === 0 ? BUTTON_TEXT.next : BUTTON_TEXT.try_again);
+    // Well past 16 messages and 32 turns for a one-question attempt.
+    for (let i = 0; i < 20; i++) await say(attemptId, `m${i}`);
+    for (let i = 0; i < 16; i++) {
+      await say(attemptId, i % 2 === 0 ? BUTTON_TEXT.try_again : BUTTON_TEXT.next);
     }
-    // One counted turn (begin) of 16, and every turn of the 32.
-    expect(await events(attemptId, 'input_admitted')).toHaveLength(32);
-
-    await expect(say(attemptId, BUTTON_TEXT.try_again)).rejects.toMatchObject({
-      code: 'turn_limit',
-      kind: 'permanent',
-    });
-    await expect(say(attemptId, 'an answer')).rejects.toMatchObject({
-      code: 'turn_limit',
-      kind: 'permanent',
-    });
-    await expect(begin(attemptId)).rejects.toMatchObject({
-      code: 'turn_limit',
-      kind: 'permanent',
-    });
-    expect(await events(attemptId, 'input_admitted')).toHaveLength(32);
-    // Nothing recorded, so nothing to complete.
+    expect((await say(attemptId, 'one more')).fence).toBeTruthy();
+    expect(await events(attemptId, 'input_admitted')).toHaveLength(38);
     expect((await attemptRow(attemptId)).completed_at).toBeNull();
-  }, 30_000);
-
-  it('completes an attempt from its recorded grades when the ceiling is reached', async () => {
-    const attemptId = await newAttempt({ agent_config: { questionCount: 1 } });
-    const turn = await begin(attemptId);
-    await grading.presentQuestion(call(turn), question(1));
-    const answer = await say(attemptId, 'answer');
-    await grading.finalizeQuestion(
-      call(answer),
-      result(1, [{ level: 'mostly_right', hints_before: 0 }])
-    );
-    // begin + the answer already count: fill up to the ceiling with buttons.
-    for (let i = 2; i < chat.TURN_CEILING_PER_QUESTION; i++) {
-      await say(attemptId, i % 2 === 0 ? BUTTON_TEXT.next : BUTTON_TEXT.try_again);
-    }
-
-    await expect(say(attemptId, BUTTON_TEXT.try_again)).rejects.toMatchObject({
-      code: 'turn_limit',
-      kind: 'permanent',
-    });
-
-    const row = await attemptRow(attemptId);
-    expect(row.completed_at).not.toBeNull();
-    expect(row.session_status).toBe('completed');
-    expect(row.partial_credit_percentage).toBe(70);
-    expect(row.evaluation_json).toMatchObject({ v: 2, source: 'server' });
-    const [journal] = await events(attemptId, 'evaluation_completed');
-    expect(journal.operation_id).toBe(grading.SERVER_COMPLETION_OPERATION_ID);
-    expect(await codeOf(say(attemptId, 'more'))).toBe('attempt_completed');
+    expect(chat).not.toHaveProperty('TURNS_PER_QUESTION');
+    expect(chat).not.toHaveProperty('TURN_CEILING_PER_QUESTION');
   }, 30_000);
 
   it('refuses an expired attempt, a completed one and a legacy one permanently', async () => {
@@ -1003,9 +948,9 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
 
   it('journals a refused turn with its code only', async () => {
     const attemptId = await newAttempt();
-    await chat.recordTurnRefused(attemptId, 'turn_limit', runId);
+    await chat.recordTurnRefused(attemptId, 'attempt_expired', runId);
     const [row] = await events(attemptId, 'turn_refused');
-    expect(row.payload).toEqual({ code: 'turn_limit' });
+    expect(row.payload).toEqual({ code: 'attempt_expired' });
     await chat.recordTurnRefused(randomUUID(), 'x', runId); // unknown attempt: no-op
   });
 

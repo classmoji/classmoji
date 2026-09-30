@@ -223,88 +223,37 @@ describe('api.quiz — the runtime stamp at creation', () => {
   });
 });
 
-describe("api.quiz — a student's code-aware chat attempt needs the student's repository", () => {
-  const NO_REPOSITORY = {
-    success: false,
-    code: 'REPOSITORY_NOT_FOUND',
-    message: "Your repository for this quiz wasn't found. Ask your instructor.",
-    error: "Your repository for this quiz wasn't found. Ask your instructor.",
-  };
-
+describe("api.quiz — a student's code-aware chat attempt without a repository", () => {
   beforeEach(() => {
     vi.stubEnv('QUIZ_TRIGGER_RUNTIME', 'code_aware');
     quizFindByIdMock.mockResolvedValue(quizRow(true));
     findByStudentMock.mockResolvedValue(null);
   });
 
-  it('restartQuiz answers 409 before anything changes: no session ended, no attempt used', async () => {
-    const response = await post({ _action: 'restartQuiz', quizId: QUIZ_ID, attemptId: ATTEMPT_ID });
+  // The chat runtime runs it on the concepts, as the ai-agent did: no refusal.
+  it('restartQuiz creates the attempt on the chat runtime', async () => {
+    const response = await post({ _action: 'restartQuiz', quizId: QUIZ_ID });
 
-    expect(response.status).toBe(409);
-    expect(await response.json()).toEqual(NO_REPOSITORY);
-    expect(findByStudentMock).toHaveBeenCalledWith('repo-1', STUDENT);
-    expect(createNewMock).not.toHaveBeenCalled();
-    expect(endQuizSessionMock).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(createNewMock.mock.calls).toEqual([
+      [QUIZ_ID, STUDENT, MEMBERSHIP, { agentRuntime: 'trigger_chat' }],
+    ]);
   });
 
-  it('startQuiz answers 409 on its create path and creates nothing', async () => {
+  it('startQuiz creates the attempt on its create path and starts nothing', async () => {
+    findWithMessagesMock.mockResolvedValue({
+      attempt: attemptRow('trigger_chat', 'attempt-new'),
+      messages: [],
+    });
     const response = await post({ _action: 'startQuiz', quizId: QUIZ_ID });
 
-    expect(response.status).toBe(409);
-    expect(await response.json()).toEqual(NO_REPOSITORY);
-    expect(createNewMock).not.toHaveBeenCalled();
-    expect(runBackgroundTaskMock).not.toHaveBeenCalled();
-  });
-
-  it('creates the attempt when the student has a repository', async () => {
-    findByStudentMock.mockResolvedValue({ id: 'git-repo-1', name: 'student-repo' });
-    const response = await post({ _action: 'restartQuiz', quizId: QUIZ_ID });
-
     expect(response.status).toBe(200);
-    expect(createNewMock.mock.calls[0]).toEqual([
-      QUIZ_ID,
-      STUDENT,
-      MEMBERSHIP,
-      { agentRuntime: 'trigger_chat' },
-    ]);
-  });
-
-  it('does not check staff, who preview with a repository they name', async () => {
-    const owner = { role: 'OWNER' };
-    assertAccessMock.mockResolvedValue({
-      userId: 'owner-1',
-      classroom: { id: 'class-1', status: 'ACTIVE', slug: 'test-class' },
-      membership: owner,
-    });
-    const response = await post({ _action: 'restartQuiz', quizId: QUIZ_ID, repoName: 'r' });
-
-    expect(response.status).toBe(200);
-    expect(findByStudentMock).not.toHaveBeenCalled();
-    expect(createNewMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('leaves an ai_agent attempt exactly as before (no check, created as always)', async () => {
-    vi.stubEnv('QUIZ_TRIGGER_RUNTIME', 'off');
-    const restart = await post({ _action: 'restartQuiz', quizId: QUIZ_ID });
-    expect(restart.status).toBe(200);
-
-    const start = await post({ _action: 'startQuiz', quizId: QUIZ_ID });
-    expect(start.status).toBe(200);
-
-    expect(findByStudentMock).not.toHaveBeenCalled();
+    expect(await response.json()).toEqual({ attemptId: 'attempt-new' });
     expect(createNewMock.mock.calls).toEqual([
-      [QUIZ_ID, STUDENT, MEMBERSHIP],
-      [QUIZ_ID, STUDENT, MEMBERSHIP],
+      [QUIZ_ID, STUDENT, MEMBERSHIP, { agentRuntime: 'trigger_chat' }],
     ]);
-  });
-
-  it('does not check a quiz without code context', async () => {
-    vi.stubEnv('QUIZ_TRIGGER_RUNTIME', 'all');
-    quizFindByIdMock.mockResolvedValue(quizRow(false));
-    const response = await post({ _action: 'restartQuiz', quizId: QUIZ_ID });
-
-    expect(response.status).toBe(200);
-    expect(findByStudentMock).not.toHaveBeenCalled();
+    expect(runBackgroundTaskMock).not.toHaveBeenCalled();
+    expect(initializeQuizViaAgentMock).not.toHaveBeenCalled();
   });
 });
 

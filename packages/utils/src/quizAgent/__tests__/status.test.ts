@@ -59,6 +59,33 @@ describe('buildTurnStatus', () => {
     );
   });
 
+  it('gives the score so far from the recorded results, with the questions remaining', () => {
+    const s = buildTurnStatus({
+      ...base,
+      presented: 3,
+      finalized: [1, 2],
+      score: { earned: 185, possible: 200 },
+    });
+    expect(s).toContain(
+      'Score so far: 185 of 200 points, from the 2 questions with a recorded result (100 points each). Questions remaining: 6.'
+    );
+    expect(
+      buildTurnStatus({
+        ...base,
+        presented: 2,
+        finalized: [1],
+        score: { earned: 70, possible: 100 },
+      })
+    ).toContain('Score so far: 70 of 100 points, from the 1 question with a recorded result');
+  });
+
+  it('says there is no score yet before any result, and nothing without a score', () => {
+    expect(buildTurnStatus({ ...base, presented: 1, score: { earned: 0, possible: 0 } })).toContain(
+      'Score so far: no question has a recorded result yet. Questions remaining: 8.'
+    );
+    expect(buildTurnStatus({ ...base, presented: 1 })).not.toContain('Score so far');
+  });
+
   it('a completed attempt', () => {
     const s = buildTurnStatus({
       ...base,

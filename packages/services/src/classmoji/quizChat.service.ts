@@ -34,12 +34,10 @@ import {
   TRIGGER_CHAT_RUNTIME,
   appendEvent,
   attemptQuestionCount,
-  completeLocked,
   findEvent,
   lockAttempt,
   newFence,
   progressOf,
-  readStoredResults,
   toJson,
   type LockedAttempt,
   type Tx,
@@ -54,7 +52,6 @@ export type QuizChatRefusalCode =
   | 'attempt_expired'
   | 'not_a_member'
   | 'quizzes_unavailable'
-  | 'turn_limit'
   | 'invalid_message'
   | 'message_conflict'
   | 'already_started';
@@ -80,21 +77,11 @@ export const isQuizChatRefusal = (error: unknown): error is QuizChatRefusal =>
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-/** Longest student message admitted, in characters. */
+/**
+ * Longest student message admitted, in characters. There is no limit on the
+ * number of messages in an attempt, as in the previous runtime.
+ */
 export const MAX_STUDENT_MESSAGE_CHARS = 10_000;
-
-/**
- * Admitted turns per attempt: `question_count × TURNS_PER_QUESTION`, a cost
- * bound. The Try again and Next buttons' messages do not count toward it.
- */
-export const TURNS_PER_QUESTION = 16;
-
-/**
- * Admitted turns of every kind per attempt: `question_count ×
- * TURN_CEILING_PER_QUESTION`, a second bound over the one above that counts
- * every admitted turn, `begin` and the buttons' messages included.
- */
-export const TURN_CEILING_PER_QUESTION = 32;
 
 /** Browser message ids. Server-made ids contain `:` and never match. */
 export const CLIENT_MESSAGE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -231,59 +218,6 @@ const revalidate = async (
   return attempt;
 };
 
-/**
- * The attempt's admitted turns: `all` of them, and the `counted` ones (every
- * one but the buttons' messages).
- */
-const admittedTurns = async (tx: Tx, attemptId: string) => {
-  const [all, buttons] = await Promise.all([
-    tx.quizAttemptEvent.count({ where: { attempt_id: attemptId, type: 'input_admitted' } }),
-    tx.quizAttemptEvent.count({
-      where: {
-        attempt_id: attemptId,
-        type: 'input_admitted',
-        OR: [
-          { payload: { path: ['action'], equals: 'next' } },
-          { payload: { path: ['action'], equals: 'try_again' } },
-        ],
-      },
-    }),
-  ]);
-  return { all, counted: all - buttons };
-};
-
-/** What a locked admission returns when the attempt has reached its turn cap. */
-const TURN_LIMIT = Symbol('turn_limit');
-
-/**
- * Whether the attempt has reached its turn cap (`TURNS_PER_QUESTION`, counted
- * turns) or its turn ceiling (`TURN_CEILING_PER_QUESTION`, all turns). When it
- * has and every question already has a recorded result, the attempt is
- * completed from those results first (`source: 'server'`), so reaching either
- * bound never loses a recorded grade. The caller commits, then refuses the
- * turn (`turn_limit`, permanent).
- */
-const turnCapReached = async (tx: Tx, attempt: LockedAttempt, runId: string) => {
-  const questionCount = attemptQuestionCount(attempt);
-  const { all, counted } = await admittedTurns(tx, attempt.id);
-  if (
-    counted < questionCount * TURNS_PER_QUESTION &&
-    all < questionCount * TURN_CEILING_PER_QUESTION
-  ) {
-    return false;
-  }
-  const recorded = readStoredResults(attempt.question_results_json, questionCount).length;
-  if (attempt.turn_fence && recorded === questionCount) {
-    await completeLocked(
-      tx,
-      attempt,
-      { attemptId: attempt.id, fence: attempt.turn_fence, inputMessageId: null, runId },
-      { source: 'server' }
-    );
-  }
-  return true;
-};
-
 const actionFor = (text: string): 'next' | 'try_again' | undefined => {
   const trimmed = text.trim();
   if (trimmed === BUTTON_TEXT.try_again) return 'try_again';
@@ -310,9 +244,6 @@ type AdmittedMessage = {
  *   fence, no new row (`status: 'redelivered'`);
  * - an id already used with different text, or an older admitted id, is
  *   refused (`message_conflict`);
- * - at the turn cap or the turn ceiling the turn is refused for good
- *   (`turn_limit`), after the attempt is completed from its recorded grades
- *   when every question has one;
  * - otherwise the user row is written with parts `[student text, turn status]`
  *   (`metadata.hiddenPartIndexes: [1]`, and `action` when the text is a
  *   button's), an `input_admitted` journal row, and a fresh fence.
@@ -323,122 +254,59 @@ export const admitStudentMessage = async (i: {
   runId: string;
 }): Promise<AdmittedMessage> => {
   const { visible } = await preflight(i.attemptId);
-  const outcome = await getPrisma().$transaction(
-    async (tx): Promise<AdmittedMessage | typeof TURN_LIMIT> => {
-      const attempt = await revalidate(tx, await lockAttempt(tx, i.attemptId), visible);
+  return getPrisma().$transaction(async (tx): Promise<AdmittedMessage> => {
+    const attempt = await revalidate(tx, await lockAttempt(tx, i.attemptId), visible);
 
-      const { id, text } = i.message ?? ({} as { id?: unknown; text?: unknown });
+    const { id, text } = i.message ?? ({} as { id?: unknown; text?: unknown });
+    if (
+      typeof id !== 'string' ||
+      !CLIENT_MESSAGE_ID_PATTERN.test(id) ||
+      typeof text !== 'string' ||
+      text.trim().length === 0 ||
+      text.length > MAX_STUDENT_MESSAGE_CHARS
+    ) {
+      throw new QuizChatRefusal('temporary', 'invalid_message');
+    }
+
+    const questionCount = attemptQuestionCount(attempt);
+    const fence = newFence();
+    const now = new Date();
+    const agentConfig = pinnedAgentConfig(attempt, questionCount);
+
+    const existing = await findEvent(tx, attempt.id, id);
+    if (existing) {
+      // Only the latest admitted message can be re-delivered (its turn is the
+      // one a retried run is still answering); an older one is a conflict.
+      const latest = await tx.quizAttemptEvent.findFirst({
+        where: { attempt_id: attempt.id, type: 'input_admitted' },
+        orderBy: { seq: 'desc' },
+        select: { seq: true },
+      });
       if (
-        typeof id !== 'string' ||
-        !CLIENT_MESSAGE_ID_PATTERN.test(id) ||
-        typeof text !== 'string' ||
-        text.trim().length === 0 ||
-        text.length > MAX_STUDENT_MESSAGE_CHARS
+        existing.type !== 'input_admitted' ||
+        latest?.seq !== existing.seq ||
+        !attempt.conversation_id
       ) {
-        throw new QuizChatRefusal('temporary', 'invalid_message');
+        throw new QuizChatRefusal('temporary', 'message_conflict');
       }
-
-      const questionCount = attemptQuestionCount(attempt);
-      const fence = newFence();
-      const now = new Date();
-      const agentConfig = pinnedAgentConfig(attempt, questionCount);
-
-      const existing = await findEvent(tx, attempt.id, id);
-      if (existing) {
-        // Only the latest admitted message can be re-delivered (its turn is the
-        // one a retried run is still answering); an older one is a conflict.
-        const latest = await tx.quizAttemptEvent.findFirst({
-          where: { attempt_id: attempt.id, type: 'input_admitted' },
-          orderBy: { seq: 'desc' },
-          select: { seq: true },
-        });
-        if (
-          existing.type !== 'input_admitted' ||
-          latest?.seq !== existing.seq ||
-          !attempt.conversation_id
-        ) {
-          throw new QuizChatRefusal('temporary', 'message_conflict');
-        }
-        const row = await tx.aIConversationMessage.findUnique({
-          where: {
-            conversation_id_ui_message_id: {
-              conversation_id: attempt.conversation_id,
-              ui_message_id: id,
-            },
-          },
-          select: { parts: true, role: true },
-        });
-        const stored = Array.isArray(row?.parts) ? row.parts[0] : undefined;
-        if (
-          row?.role !== 'USER' ||
-          !isObject(stored) ||
-          stored.type !== 'text' ||
-          stored.text !== text
-        ) {
-          throw new QuizChatRefusal('temporary', 'message_conflict');
-        }
-        await tx.quizAttempt.update({
-          where: { id: attempt.id },
-          data: {
-            turn_fence: fence,
-            last_activity: now,
-            ...(agentConfig ? { agent_config: agentConfig } : {}),
-          },
-        });
-        const payload = isObject(existing.payload) ? existing.payload : {};
-        const action =
-          payload.action === 'next' || payload.action === 'try_again' ? payload.action : undefined;
-        return {
-          status: 'redelivered' as const,
-          fence,
-          inputMessageId: id,
-          ...(action ? { action } : {}),
-        };
-      }
-
-      if (await turnCapReached(tx, attempt, i.runId)) return TURN_LIMIT;
-
-      const conversationId = await ensureConversation(tx, attempt);
-      const clash = await tx.aIConversationMessage.findUnique({
+      const row = await tx.aIConversationMessage.findUnique({
         where: {
-          conversation_id_ui_message_id: { conversation_id: conversationId, ui_message_id: id },
+          conversation_id_ui_message_id: {
+            conversation_id: attempt.conversation_id,
+            ui_message_id: id,
+          },
         },
-        select: { id: true },
+        select: { parts: true, role: true },
       });
-      if (clash) throw new QuizChatRefusal('temporary', 'message_conflict');
-
-      // The status the model reads with this message: progress as of now, with
-      // this message's own action (not the previous turn's) as the last action.
-      const action = actionFor(text);
-      const { lastAction: _previous, ...current } = await progressOf(tx, attempt);
-      const progress: AttemptProgress = { ...current, ...(action ? { lastAction: action } : {}) };
-
-      await tx.aIConversationMessage.create({
-        data: {
-          conversation_id: conversationId,
-          role: 'USER',
-          content: text,
-          parts: toJson([
-            { type: 'text', text },
-            { type: 'text', text: buildTurnStatus(progress) },
-          ]),
-          metadata: toJson({ hiddenPartIndexes: [1], ...(action ? { action } : {}) }),
-          format: 'ui_message_v1',
-          ui_message_id: id,
-          final: true,
-          provenance: 'student',
-          contract_version: attempt.contract_version,
-          created_at: await nextCreatedAt(tx, conversationId),
-        },
-      });
-      await appendEvent(tx, attempt, {
-        type: 'input_admitted',
-        operationId: id,
-        fence,
-        inputMessageId: id,
-        runId: i.runId,
-        payload: toJson({ kind: 'message', ...(action ? { action } : {}) }),
-      });
+      const stored = Array.isArray(row?.parts) ? row.parts[0] : undefined;
+      if (
+        row?.role !== 'USER' ||
+        !isObject(stored) ||
+        stored.type !== 'text' ||
+        stored.text !== text
+      ) {
+        throw new QuizChatRefusal('temporary', 'message_conflict');
+      }
       await tx.quizAttempt.update({
         where: { id: attempt.id },
         data: {
@@ -447,24 +315,79 @@ export const admitStudentMessage = async (i: {
           ...(agentConfig ? { agent_config: agentConfig } : {}),
         },
       });
-
+      const payload = isObject(existing.payload) ? existing.payload : {};
+      const action =
+        payload.action === 'next' || payload.action === 'try_again' ? payload.action : undefined;
       return {
-        status: 'admitted' as const,
+        status: 'redelivered' as const,
         fence,
         inputMessageId: id,
         ...(action ? { action } : {}),
       };
-    },
-    LOCKED_TX_OPTIONS
-  );
-  // Refused after the commit, so a completion from recorded grades is kept.
-  if (outcome === TURN_LIMIT) throw new QuizChatRefusal('permanent', 'turn_limit');
-  return outcome;
+    }
+
+    const conversationId = await ensureConversation(tx, attempt);
+    const clash = await tx.aIConversationMessage.findUnique({
+      where: {
+        conversation_id_ui_message_id: { conversation_id: conversationId, ui_message_id: id },
+      },
+      select: { id: true },
+    });
+    if (clash) throw new QuizChatRefusal('temporary', 'message_conflict');
+
+    // The status the model reads with this message: progress as of now, with
+    // this message's own action (not the previous turn's) as the last action.
+    const action = actionFor(text);
+    const { lastAction: _previous, ...current } = await progressOf(tx, attempt);
+    const progress: AttemptProgress = { ...current, ...(action ? { lastAction: action } : {}) };
+
+    await tx.aIConversationMessage.create({
+      data: {
+        conversation_id: conversationId,
+        role: 'USER',
+        content: text,
+        parts: toJson([
+          { type: 'text', text },
+          { type: 'text', text: buildTurnStatus(progress) },
+        ]),
+        metadata: toJson({ hiddenPartIndexes: [1], ...(action ? { action } : {}) }),
+        format: 'ui_message_v1',
+        ui_message_id: id,
+        final: true,
+        provenance: 'student',
+        contract_version: attempt.contract_version,
+        created_at: await nextCreatedAt(tx, conversationId),
+      },
+    });
+    await appendEvent(tx, attempt, {
+      type: 'input_admitted',
+      operationId: id,
+      fence,
+      inputMessageId: id,
+      runId: i.runId,
+      payload: toJson({ kind: 'message', ...(action ? { action } : {}) }),
+    });
+    await tx.quizAttempt.update({
+      where: { id: attempt.id },
+      data: {
+        turn_fence: fence,
+        last_activity: now,
+        ...(agentConfig ? { agent_config: agentConfig } : {}),
+      },
+    });
+
+    return {
+      status: 'admitted' as const,
+      fence,
+      inputMessageId: id,
+      ...(action ? { action } : {}),
+    };
+  }, LOCKED_TX_OPTIONS);
 };
 
 /**
- * Admit the `begin` action: the same revalidation, turn cap and turn ceiling,
- * refused once a question has been presented, an `input_admitted` journal row
+ * Admit the `begin` action: the same revalidation, refused once a question has
+ * been presented, an `input_admitted` journal row
  * (`kind: 'action'`), and a fresh fence. No message is written; the caller
  * stores the hidden opening with `storeHiddenOpening`.
  */
@@ -475,38 +398,32 @@ export const admitAction = async (i: {
   fence: string;
 }> => {
   const { visible } = await preflight(i.attemptId);
-  const outcome = await getPrisma().$transaction(
-    async (tx): Promise<{ fence: string } | typeof TURN_LIMIT> => {
-      const attempt = await revalidate(tx, await lockAttempt(tx, i.attemptId), visible);
-      if ((attempt.questions_asked ?? 0) > 0) {
-        throw new QuizChatRefusal('temporary', 'already_started');
-      }
-      if (await turnCapReached(tx, attempt, i.runId)) return TURN_LIMIT;
+  return getPrisma().$transaction(async (tx): Promise<{ fence: string }> => {
+    const attempt = await revalidate(tx, await lockAttempt(tx, i.attemptId), visible);
+    if ((attempt.questions_asked ?? 0) > 0) {
+      throw new QuizChatRefusal('temporary', 'already_started');
+    }
 
-      const fence = newFence();
-      const agentConfig = pinnedAgentConfig(attempt, attemptQuestionCount(attempt));
-      await appendEvent(tx, attempt, {
-        type: 'input_admitted',
-        operationId: `action:begin:${fence}`,
-        fence,
-        inputMessageId: null,
-        runId: i.runId,
-        payload: toJson({ kind: 'action', action: 'begin' }),
-      });
-      await tx.quizAttempt.update({
-        where: { id: attempt.id },
-        data: {
-          turn_fence: fence,
-          last_activity: new Date(),
-          ...(agentConfig ? { agent_config: agentConfig } : {}),
-        },
-      });
-      return { fence };
-    },
-    LOCKED_TX_OPTIONS
-  );
-  if (outcome === TURN_LIMIT) throw new QuizChatRefusal('permanent', 'turn_limit');
-  return outcome;
+    const fence = newFence();
+    const agentConfig = pinnedAgentConfig(attempt, attemptQuestionCount(attempt));
+    await appendEvent(tx, attempt, {
+      type: 'input_admitted',
+      operationId: `action:begin:${fence}`,
+      fence,
+      inputMessageId: null,
+      runId: i.runId,
+      payload: toJson({ kind: 'action', action: 'begin' }),
+    });
+    await tx.quizAttempt.update({
+      where: { id: attempt.id },
+      data: {
+        turn_fence: fence,
+        last_activity: new Date(),
+        ...(agentConfig ? { agent_config: agentConfig } : {}),
+      },
+    });
+    return { fence };
+  }, LOCKED_TX_OPTIONS);
 };
 
 /**

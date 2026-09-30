@@ -3,6 +3,7 @@
  * given to the model as a hidden part of the student's message. State only: the
  * rules for what to do with it live in the prompt.
  */
+import { QUESTION_POINTS } from './grading.ts';
 
 export type AttemptProgress = {
   questionCount: number;
@@ -14,7 +15,27 @@ export type AttemptProgress = {
   hasEvaluation: boolean;
   /** The admitted student message of this turn was a button click. */
   lastAction?: 'next' | 'try_again';
+  /**
+   * Points earned out of points possible, over the questions with a recorded
+   * result (`scoreSoFar`). The server's numbers; the model quotes them when
+   * the student asks how they are doing.
+   */
+  score?: { earned: number; possible: number };
 };
+
+/** "Score so far" for the status: the recorded results only. */
+function scoreLine(p: AttemptProgress, recorded: number): string | null {
+  if (!p.score) return null;
+  const remaining = Math.max(p.questionCount - recorded, 0);
+  if (recorded === 0) {
+    return `Score so far: no question has a recorded result yet. Questions remaining: ${remaining}.`;
+  }
+  return (
+    `Score so far: ${p.score.earned} of ${p.score.possible} points, from the ${recorded} ` +
+    `question${recorded === 1 ? '' : 's'} with a recorded result (${QUESTION_POINTS} points each). ` +
+    `Questions remaining: ${remaining}.`
+  );
+}
 
 export function buildTurnStatus(p: AttemptProgress): string {
   const finalized = new Set(p.finalized);
@@ -38,6 +59,8 @@ export function buildTurnStatus(p: AttemptProgress): string {
   lines.push(`Phase: ${phase}`);
   lines.push(`Questions presented: ${p.presented}/${p.questionCount}`);
   lines.push(`Questions with a recorded result: ${finalized.size}/${p.questionCount}`);
+  const score = scoreLine(p, finalized.size);
+  if (score) lines.push(score);
 
   if (p.presented === 0) {
     lines.push('No question has been presented yet. The next one is Question 1.');
