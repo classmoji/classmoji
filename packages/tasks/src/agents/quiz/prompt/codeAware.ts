@@ -312,7 +312,9 @@ The tool returns exact excerpts from the student's files (plus a short project
 overview for "initial"); ask again with a narrower focus if you need code that
 was not included. Each excerpt line starts with its line number as "N| ", which
 is not part of the code: leave it out when you quote code to the student. If an
-exploration returns no code, explore a different focus area.
+exploration returns no code, do not explore again for it: continue with the code
+you have already seen, or, if you have seen none, ask about the concepts directly
+as IF explore_codebase FAILS describes.
 
 IF explore_codebase FAILS (its result is an error):
 - Call it at most once more, with the same request. Write nothing to the student

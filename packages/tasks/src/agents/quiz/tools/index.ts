@@ -15,9 +15,11 @@
  *
  * A set is built once per turn (the loop calls the factory per turn), so state
  * kept in this closure is per turn: once present_question has succeeded, an
- * offer_next_step in the same turn is refused, so a new question card never
- * arrives with buttons under it. The check runs inside the queue, after every
- * call the model made before it in the same step.
+ * offer_next_step in the same turn is refused, and once offer_next_step has
+ * succeeded, a present_question in the same turn is refused (before anything
+ * is written), so a question card and buttons never arrive together, in
+ * either order. The checks run inside the queue, after every call the model
+ * made before them in the same step.
  */
 import { tool, type ToolSet, type UIMessageStreamWriter } from 'ai';
 import type Anthropic from '@anthropic-ai/sdk';
@@ -41,7 +43,13 @@ import type { DiagnosticLog } from '../../shared/sanitize.ts';
 import type { ToolQueue } from '../../shared/toolQueue.ts';
 import type { AttemptContext, GitOrgLike } from '../context.ts';
 import { TOOL_DESCRIPTIONS } from './descriptions.ts';
-import { aborted, OFFER_AFTER_QUESTION_TEXT, toolFailure, TURN_STOPPED_TEXT } from './errors.ts';
+import {
+  aborted,
+  OFFER_AFTER_QUESTION_TEXT,
+  QUESTION_AFTER_OFFER_TEXT,
+  toolFailure,
+  TURN_STOPPED_TEXT,
+} from './errors.ts';
 import { defaultAnthropic, exploreCodebaseTool, mintRepoToken } from './exploreCodebase.ts';
 
 type Grading = typeof ClassmojiService.quizGrading;
@@ -108,6 +116,8 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
   };
   /** A question card went out in this turn: the student answers next. */
   let questionPresented = false;
+  /** Next-step buttons went out in this turn: the student chooses next. */
+  let offerMade = false;
 
   const present_question = tool({
     description: TOOL_DESCRIPTIONS.present_question,
@@ -116,6 +126,9 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
     execute: (input, { toolCallId, abortSignal }): Promise<PresentQuestionOutput> =>
       d.queue(async () => {
         stopIfAborted(abortSignal);
+        // Refused before the write: a card the student never sees must not
+        // count as presented.
+        if (offerMade) throw new Error(QUESTION_AFTER_OFFER_TEXT);
         let out: PresentQuestionOutput;
         try {
           out = await (await grading()).presentQuestion(fenced(toolCallId), input);
@@ -164,6 +177,7 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
       d.queue(async () => {
         stopIfAborted(abortSignal);
         if (questionPresented) throw new Error(OFFER_AFTER_QUESTION_TEXT);
+        offerMade = true;
         return { actions: [...input.actions] };
       }),
   });

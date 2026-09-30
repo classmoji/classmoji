@@ -19,9 +19,15 @@ vi.mock('@trigger.dev/sdk/v3', () => ({
 }));
 
 const { quizTools, questionResultPartId } = await import('../index.ts');
-const { OFFER_AFTER_QUESTION_TEXT, TURN_STOPPED_TEXT, retryText } = await import('../errors.ts');
+const { OFFER_AFTER_QUESTION_TEXT, QUESTION_AFTER_OFFER_TEXT, TURN_STOPPED_TEXT, retryText } =
+  await import('../errors.ts');
 const { EXPLORATION_FAILED_TEXT } = await import('../../../shared/exploration/core.ts');
-const { EXPLORATION_BUSY_TEXT, EXPLORATION_STOPPED_TEXT } = await import('../exploreCodebase.ts');
+const {
+  EXPLORATION_BUSY_TEXT,
+  EXPLORATION_LIMIT_TEXT,
+  EXPLORATION_STOPPED_TEXT,
+  MAX_EXPLORATIONS_PER_TURN,
+} = await import('../exploreCodebase.ts');
 const { TOOL_DESCRIPTIONS } = await import('../descriptions.ts');
 
 class QuizGradingError extends Error {
@@ -364,6 +370,134 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
     });
   });
 
+  it('refuses present_question after buttons in the same turn, before any write', async () => {
+    const { tools, grading, writes } = setup();
+    await call(tools, 'offer_next_step', { actions: ['try_again', 'next'] });
+    await expect(call(tools, 'present_question', card)).rejects.toThrow(QUESTION_AFTER_OFFER_TEXT);
+    expect(QUESTION_AFTER_OFFER_TEXT).toBe(
+      "Wait for the student's choice before presenting the next question."
+    );
+    expect(grading.presentQuestion).not.toHaveBeenCalled();
+    expect(writes).toEqual([]);
+  });
+
+  it('refuses it when both calls come in one step, offer_next_step first', async () => {
+    const { tools, grading } = setup();
+    grading.presentQuestion.mockResolvedValue({ card, question_number: 2, total_questions: 8 });
+    const [offered, presented] = await Promise.allSettled([
+      call(tools, 'offer_next_step', { actions: ['next'] }),
+      call(tools, 'present_question', card),
+    ]);
+    expect(offered).toEqual({ status: 'fulfilled', value: { actions: ['next'] } });
+    expect(presented).toMatchObject({
+      status: 'rejected',
+      reason: expect.objectContaining({ message: QUESTION_AFTER_OFFER_TEXT }),
+    });
+    expect(grading.presentQuestion).not.toHaveBeenCalled();
+  });
+
+  it('still presents after an offer_next_step that was refused', async () => {
+    const { tools, grading } = setup();
+    grading.presentQuestion.mockResolvedValue({ card, question_number: 2, total_questions: 8 });
+    const stopped = new AbortController();
+    stopped.abort();
+    await expect(
+      call(tools, 'offer_next_step', { actions: ['next'] }, 'call-offer', stopped.signal)
+    ).rejects.toThrow(TURN_STOPPED_TEXT);
+    await expect(call(tools, 'present_question', card)).resolves.toMatchObject({
+      question_number: 2,
+    });
+  });
+
+  it("presents again in the next turn's tool set", async () => {
+    const first = setup();
+    await call(first.tools, 'offer_next_step', { actions: ['next'] });
+    const next = setup();
+    next.grading.presentQuestion.mockResolvedValue({
+      card,
+      question_number: 2,
+      total_questions: 8,
+    });
+    await expect(call(next.tools, 'present_question', card)).resolves.toMatchObject({
+      question_number: 2,
+    });
+  });
+
+  it('in a live turn, sends the buttons but never a question card after them, and stops', async () => {
+    const { runQuizTurn } = await import('../../loop.ts');
+    // eslint-disable-next-line import/no-unresolved -- package subpath export, resolved by vitest
+    const { MockLanguageModelV4, convertArrayToReadableStream } = await import('ai/test');
+    const grading = fakeGrading();
+    grading.presentQuestion.mockResolvedValue({ card, question_number: 2, total_questions: 8 });
+    const usage = {
+      inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: 1, text: 1, reasoning: 0 },
+    };
+    const model = new MockLanguageModelV4({
+      doStream: async () =>
+        ({
+          stream: convertArrayToReadableStream([
+            { type: 'stream-start', warnings: [] },
+            {
+              type: 'tool-call',
+              toolCallId: 'b',
+              toolName: 'offer_next_step',
+              input: JSON.stringify({ actions: ['next'] }),
+            },
+            {
+              type: 'tool-call',
+              toolCallId: 'q',
+              toolName: 'present_question',
+              input: JSON.stringify(card),
+            },
+            { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool_use' }, usage },
+          ]),
+        }) as never,
+    });
+    const persisted: Array<{ parts: Array<Record<string, unknown>> }> = [];
+    const stream = runQuizTurn({
+      ctx: context(),
+      messages: [{ role: 'user', content: 'my answer' }],
+      signal: new AbortController().signal,
+      model,
+      deps: {
+        tools: (ctx, d) => quizTools(ctx, { ...d, services: { grading } as never, log: vi.fn() }),
+        getProgress: async () => ({
+          questionCount: 8,
+          presented: 1,
+          finalized: [],
+          completed: false,
+          hasEvaluation: false,
+        }),
+        completeFromGrades: vi.fn(),
+        persistAssistant: async (_id, message) => {
+          persisted.push(message as never);
+        },
+        evaluationNotice: () => 'notice',
+        log: vi.fn(),
+      },
+    });
+    const chunks: Array<Record<string, unknown>> = [];
+    for await (const c of stream as unknown as AsyncIterable<Record<string, unknown>>)
+      chunks.push(c);
+
+    // One model call: the successful offer_next_step ended the turn.
+    expect(model.doStreamCalls).toHaveLength(1);
+    expect(grading.presentQuestion).not.toHaveBeenCalled();
+    const outputs = chunks.filter(c => c.type === 'tool-output-available');
+    expect(outputs.map(c => c.toolCallId)).toEqual(['b']);
+    expect(chunks).toContainEqual(
+      expect.objectContaining({ type: 'tool-output-error', toolCallId: 'q' })
+    );
+    const saved = persisted.at(-1)?.parts ?? [];
+    expect(saved.find(p => p.type === 'tool-present_question')).toMatchObject({
+      state: 'output-error',
+    });
+    expect(
+      saved.some(p => p.type === 'tool-offer_next_step' && p.state === 'output-available')
+    ).toBe(true);
+  });
+
   it('in a live turn, sends the question card but never buttons with it, and stops', async () => {
     const { runQuizTurn } = await import('../../loop.ts');
     // eslint-disable-next-line import/no-unresolved -- package subpath export, resolved by vitest
@@ -567,7 +701,7 @@ describe('explore_codebase (fake pipeline)', () => {
 
   it('hands earlier explorations to the pipeline as context', async () => {
     let seen: Record<string, unknown> = {};
-    const { tools, grading } = exploreSetup(async i => {
+    const { tools, grading, log } = exploreSetup(async i => {
       seen = i;
       return result(['a.css']);
     });
@@ -577,6 +711,12 @@ describe('explore_codebase (fake pipeline)', () => {
     });
 
     await call(tools, 'explore_codebase', { focus_area: FOCUS });
+    expect(seen.callLog).toEqual({
+      log,
+      attemptId: 'attempt-1',
+      runId: 'run_1',
+      keySource: 'platform',
+    });
     expect(seen.previouslyReadFiles).toEqual(['index.html', 'css/style.css']);
     expect(seen.previousFindings).toEqual([
       'index.html: lines 1–9: nav',
@@ -602,6 +742,80 @@ describe('explore_codebase (fake pipeline)', () => {
     await vi.waitFor(() => expect(releases).toHaveLength(2));
     releases[1]();
     await expect(third).resolves.toBeTruthy();
+  });
+
+  it('refuses a fourth exploration in one turn, failed ones included', async () => {
+    let n = 0;
+    const { tools, mintRepoToken } = exploreSetup(async () => {
+      n += 1;
+      if (n === 2) throw new Error('GitHub tree API (sample-org/landing-page) failed (502): x');
+      return result(['a.css']);
+    });
+    expect(MAX_EXPLORATIONS_PER_TURN).toBe(3);
+    await expect(call(tools, 'explore_codebase', { focus_area: 'a' }, 'e1')).resolves.toBeTruthy();
+    await expect(call(tools, 'explore_codebase', { focus_area: 'b' }, 'e2')).rejects.toThrow(
+      EXPLORATION_FAILED_TEXT
+    );
+    await expect(call(tools, 'explore_codebase', { focus_area: 'c' }, 'e3')).resolves.toBeTruthy();
+    await expect(call(tools, 'explore_codebase', { focus_area: 'd' }, 'e4')).rejects.toThrow(
+      EXPLORATION_LIMIT_TEXT
+    );
+    expect(EXPLORATION_LIMIT_TEXT).toBe(
+      'You have explored enough this turn. Continue with what you have.'
+    );
+    expect(n).toBe(3);
+    expect(mintRepoToken).toHaveBeenCalledTimes(3);
+  });
+
+  it('counts an exploration whose token could not be minted', async () => {
+    const explore = vi.fn(async () => result(['a.css']));
+    const { tools, mintRepoToken } = exploreSetup(explore);
+    mintRepoToken.mockRejectedValue(
+      new Error('Failed to retrieve GitHub installation token (422)')
+    );
+    for (const id of ['e1', 'e2', 'e3']) {
+      await expect(call(tools, 'explore_codebase', { focus_area: FOCUS }, id)).rejects.toThrow(
+        EXPLORATION_FAILED_TEXT
+      );
+    }
+    await expect(call(tools, 'explore_codebase', { focus_area: FOCUS }, 'e4')).rejects.toThrow(
+      EXPLORATION_LIMIT_TEXT
+    );
+    expect(mintRepoToken).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not count a call refused while another exploration was running', async () => {
+    const releases: Array<() => void> = [];
+    const { tools } = exploreSetup(
+      () => new Promise(r => releases.push(() => r(result(['a.css']))))
+    );
+    const first = call(tools, 'explore_codebase', { focus_area: 'a' }, 'e1');
+    await expect(call(tools, 'explore_codebase', { focus_area: 'b' }, 'e2')).rejects.toThrow(
+      EXPLORATION_BUSY_TEXT
+    );
+    await vi.waitFor(() => expect(releases).toHaveLength(1));
+    releases[0]();
+    await first;
+    for (const [i, id] of ['e3', 'e4'].entries()) {
+      const pending = call(tools, 'explore_codebase', { focus_area: id }, id);
+      await vi.waitFor(() => expect(releases).toHaveLength(i + 2));
+      releases[i + 1]();
+      await expect(pending).resolves.toBeTruthy();
+    }
+    await expect(call(tools, 'explore_codebase', { focus_area: 'e5' }, 'e5')).rejects.toThrow(
+      EXPLORATION_LIMIT_TEXT
+    );
+  });
+
+  it("explores again in the next turn's tool set", async () => {
+    const first = exploreSetup(async () => result(['a.css']));
+    for (const id of ['e1', 'e2', 'e3'])
+      await call(first.tools, 'explore_codebase', { focus_area: id }, id);
+    await expect(call(first.tools, 'explore_codebase', { focus_area: 'x' })).rejects.toThrow(
+      EXPLORATION_LIMIT_TEXT
+    );
+    const next = exploreSetup(async () => result(['a.css']));
+    await expect(call(next.tools, 'explore_codebase', { focus_area: 'x' })).resolves.toBeTruthy();
   });
 
   it('tells the model only the fixed line when a read fails, and logs the status privately', async () => {

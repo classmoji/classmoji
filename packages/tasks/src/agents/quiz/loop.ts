@@ -8,6 +8,8 @@
  * Shape (see the design's §4.1-4.3):
  * - `instructions` are two cached system blocks (static prompt + material,
  *   then the per-attempt block); nothing that changes per turn goes there.
+ *   A code-aware quiz whose repository was not found this turn gets a fixed
+ *   hidden user-role notice after the history instead (never persisted).
  * - `prepareStep` rebuilds each step's messages and moves one cache
  *   breakpoint to the last message, so an older breakpoint never piles up.
  * - The turn stops once `present_question`, `offer_next_step` or
@@ -21,7 +23,9 @@
  *   `data-evaluation` part. If the last result is missing, a `reply_failed`
  *   notice is written and the student's next message retries.
  * - Everything the model or the tools write is persisted in `onEnd`, upstream
- *   of the projection; the returned stream is projected for the browser.
+ *   of the projection; the returned stream is projected for the browser. A
+ *   failed save is tried once more (the save is an upsert by message id); a
+ *   refusal is not retried. Each failure logs ids only.
  * - Telemetry is off on every call. One log line per model call: ids, model,
  *   key source, token and cache counts. Never content.
  */
@@ -46,8 +50,9 @@ import type {
 } from '@classmoji/utils/quiz-agent';
 import { THINKING } from '@classmoji/utils/ai-models';
 import type { AttemptContext } from './context.ts';
+import { CODE_UNAVAILABLE_NOTICE } from './prompt/index.ts';
 import type { Effort } from './settings.ts';
-import { logDiagnostic, type DiagnosticLog } from '../shared/sanitize.ts';
+import { isRefusal, logDiagnostic, type DiagnosticLog } from '../shared/sanitize.ts';
 import { createToolQueue, type ToolQueue } from '../shared/toolQueue.ts';
 import { projectChunks } from '../shared/uiFilter.ts';
 
@@ -58,12 +63,20 @@ export const RECOVERY_CALLS = 2;
 export const STEP_CEILING = { standard: 10, codeAware: 20 } as const;
 /** Output ceiling per call, by phase; thinking tokens count against it. */
 export const MAX_OUTPUT_TOKENS = { question: 16_000, evaluation: 32_000 } as const;
+/** Pause before the one retry of a failed end-of-turn save. */
+export const PERSIST_RETRY_DELAY_MS = 250;
 
 const EPHEMERAL = { anthropic: { cacheControl: { type: 'ephemeral' as const } } };
 
 export type QuizToolsFactory = (
   ctx: AttemptContext,
-  d: { writer: UIMessageStreamWriter<QuizUIMessage>; queue: ToolQueue; signal: AbortSignal }
+  d: {
+    writer: UIMessageStreamWriter<QuizUIMessage>;
+    queue: ToolQueue;
+    signal: AbortSignal;
+    /** The turn's log, so tool diagnostics and usage lines land with the loop's. */
+    log?: DiagnosticLog;
+  }
 ) => ToolSet;
 
 export type ServerCompletionFence = {
@@ -218,6 +231,7 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
         writer: writer as UIMessageStreamWriter<QuizUIMessage>,
         queue,
         signal: deadline,
+        log,
       });
       let callIndex = 0;
       let sawStreamError = false;
@@ -297,7 +311,16 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
       };
 
       try {
-        let history: ModelMessage[] = [...input.messages, ...(input.extraMessages ?? [])];
+        // A code-aware quiz without a repository this turn: a fixed hidden notice
+        // after the student's message, never persisted.
+        const codeNotice: ModelMessage[] = ctx.codeUnavailable
+          ? [{ role: 'user', content: CODE_UNAVAILABLE_NOTICE }]
+          : [];
+        let history: ModelMessage[] = [
+          ...input.messages,
+          ...(input.extraMessages ?? []),
+          ...codeNotice,
+        ];
         let result = call(history);
         await pump(result);
 
@@ -355,12 +378,22 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
     onEnd: async ({ responseMessage, isAborted }) => {
       const message = cleanup(responseMessage as QuizUIMessage);
       if (!message.parts || message.parts.length === 0) return;
+      const final = !isAborted && !failed && !deadline.aborted;
       try {
-        await deps.persistAssistant(ctx.attemptId, message, {
-          final: !isAborted && !failed && !deadline.aborted,
-        });
+        await deps.persistAssistant(ctx.attemptId, message, { final });
       } catch (error) {
         logDiagnostic('persistAssistant', error, ids, log);
+        if (isRefusal(error)) return;
+        await new Promise(resolve => setTimeout(resolve, PERSIST_RETRY_DELAY_MS));
+        try {
+          await deps.persistAssistant(ctx.attemptId, message, { final });
+          log('[quiz-agent] persistAssistant retry saved', {
+            attemptId: ctx.attemptId,
+            runId: ctx.runId,
+          });
+        } catch (retryError) {
+          logDiagnostic('persistAssistant_retry', retryError, ids, log);
+        }
       }
     },
   });

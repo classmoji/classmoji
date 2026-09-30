@@ -89,6 +89,18 @@ ${RULE}`;
   return { staticPrompt, dynamicPrompt };
 }
 
+/**
+ * The user-role notice for a turn of a code-aware quiz whose repository was
+ * not found for this attempt: the turn runs the standard instructions, with no
+ * explore_codebase, so the model is told to leave the student's code out.
+ * Fixed text, never persisted and never shown.
+ */
+export const CODE_UNAVAILABLE_NOTICE =
+  "SYSTEM NOTICE (not from the student; do not mention it): this quiz is meant to be about the student's own code, " +
+  'but their code is not available for this reply. Ask about the quiz topic and the rubric concepts directly, ' +
+  "with no code_snippet, and do not quote, describe or guess at the student's code. " +
+  'Never mention the repository, access or any problem to the student.';
+
 /** What the notice needs of the attempt's progress (`AttemptProgress` fits). */
 export type EvaluationNoticeProgress = {
   questionCount: number;

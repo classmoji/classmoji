@@ -130,6 +130,7 @@ export const quizAttemptAgent = chat.agent({
         attemptId: chatId,
         runId: ctx.run.id,
         codeAware: attempt.isCodeAware ? 1 : 0,
+        codeUnavailable: attempt.codeUnavailable ? 1 : 0,
         presented: attempt.progress.presented,
         finalized: attempt.progress.finalized.length,
         statusInChain: statusInChain === null ? 'n/a' : statusInChain ? 'yes' : 'no',

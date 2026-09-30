@@ -7,6 +7,8 @@
  *   expired token gets a fresh one.
  * - Payer: the attempt's resolved key (`ctx.apiKey`: the classroom's when it
  *   has one, else the platform's) with the resolved exploration model (Q18).
+ *   Each exploration model call logs one usage line (ids, model, key source,
+ *   token counts) like the quiz loop's.
  * - What the student sees: one `data-step` per file read, path only. The tool
  *   part itself is `label` in the projection, so its input (the focus area,
  *   which names the next question) and its output never leave the task.
@@ -14,6 +16,9 @@
  *   excerpted paths and one summary line per file; the next exploration reads
  *   them back, in this run or a later one.
  * - At most one exploration in flight: a second concurrent call is refused.
+ * - At most `MAX_EXPLORATIONS_PER_TURN` per turn (the set is built per turn),
+ *   failed ones included; after that the call is refused with fixed text, so
+ *   a model that keeps exploring moves on to the question instead.
  * - A failed exploration (token or pipeline) tells the model only
  *   `EXPLORATION_FAILED_TEXT`; the prompt says what to do next.
  */
@@ -32,7 +37,7 @@ import {
   formatExcerptResult,
   providerStatus,
 } from '../../shared/exploration/core.ts';
-import { logDiagnostic } from '../../shared/sanitize.ts';
+import { logDiagnostic, type DiagnosticLog } from '../../shared/sanitize.ts';
 import type { AttemptContext, GitOrgLike } from '../context.ts';
 import { TOOL_DESCRIPTIONS } from './descriptions.ts';
 import { aborted, isGradingRefusal } from './errors.ts';
@@ -44,6 +49,11 @@ const MAX_PREVIOUS_FINDINGS = 30;
 export const EXPLORATION_STOPPED_TEXT = 'This turn was stopped. Nothing was explored.';
 export const EXPLORATION_BUSY_TEXT =
   'Another exploration is still running. Wait for its result before exploring again.';
+export const EXPLORATION_LIMIT_TEXT =
+  'You have explored enough this turn. Continue with what you have.';
+
+/** Explorations one turn may start, successful and failed alike. */
+export const MAX_EXPLORATIONS_PER_TURN = 3;
 
 /** Mint a read-only installation token for one repository of the organization. */
 export async function mintRepoToken(gitOrganization: GitOrgLike, repo: string): Promise<string> {
@@ -57,6 +67,10 @@ export async function mintRepoToken(gitOrganization: GitOrgLike, repo: string): 
 
 export const defaultAnthropic = (apiKey: string): Anthropic => new Anthropic({ apiKey });
 
+/** The usage and rate-limit lines' sink when the turn passes no log (agent.ts's format). */
+// eslint-disable-next-line no-console -- a plain run log line, as agent.ts writes them
+const consoleLog: DiagnosticLog = (line, fields) => console.log(line, JSON.stringify(fields));
+
 export function exploreCodebaseTool(
   ctx: AttemptContext,
   exploration: NonNullable<AttemptContext['exploration']>,
@@ -64,6 +78,7 @@ export function exploreCodebaseTool(
   services: QuizToolServices
 ) {
   let inFlight = false;
+  let started = 0;
   const ids = { chatId: ctx.attemptId, runId: ctx.runId };
 
   return tool({
@@ -73,6 +88,8 @@ export function exploreCodebaseTool(
     execute: async (input, { toolCallId, abortSignal }): Promise<ExploreCodebaseOutput> => {
       // Refused at entry, before queueing: two calls in one step start together.
       if (inFlight) throw new Error(EXPLORATION_BUSY_TEXT);
+      if (started >= MAX_EXPLORATIONS_PER_TURN) throw new Error(EXPLORATION_LIMIT_TEXT);
+      started += 1;
       inFlight = true;
       try {
         return await d.queue(async () => {
@@ -122,6 +139,12 @@ export function exploreCodebaseTool(
               previouslyReadFiles: history.filesRead,
               client: services.anthropic(ctx.apiKey),
               signal,
+              callLog: {
+                log: d.log ?? consoleLog,
+                attemptId: ctx.attemptId,
+                runId: ctx.runId,
+                keySource: ctx.keySource,
+              },
               onFileRead: (path, o) => {
                 try {
                   d.writer.write({

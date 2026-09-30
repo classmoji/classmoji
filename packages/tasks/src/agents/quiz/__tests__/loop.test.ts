@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tool, type ModelMessage, type UIMessageChunk } from 'ai';
 import { MockLanguageModelV4, convertArrayToReadableStream } from 'ai/test';
@@ -11,9 +12,11 @@ import {
   type QuizUIMessage,
 } from '@classmoji/utils/quiz-agent';
 import type { AttemptContext } from '../context.ts';
+import { CODE_UNAVAILABLE_NOTICE } from '../prompt/index.ts';
 import {
   lastUserTextParts,
   needsEvaluation,
+  PERSIST_RETRY_DELAY_MS,
   runQuizTurn,
   withStepCacheBreakpoint,
   type QuizToolsFactory,
@@ -449,6 +452,160 @@ describe('runQuizTurn', () => {
     expect(notices.map(n => n.data.code)).toEqual(['source_material_unavailable']);
   });
 
+  it('saves the reply again once when the first save fails, logging ids only', async () => {
+    const a = fakeAttempt(2);
+    const lines: Array<[string, Record<string, unknown>]> = [];
+    let calls = 0;
+    const deps: QuizTurnDeps = {
+      ...a.deps,
+      log: (line, fields) => lines.push([line, fields]),
+      persistAssistant: async (id, message, o) => {
+        calls += 1;
+        if (calls === 1) throw new Error('SENTINEL-db-detail connection reset');
+        await a.deps.persistAssistant(id, message, o);
+      },
+    };
+    const model = scriptedModel([[toolCall('c1', 'present_question', question(1))]]);
+    await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps,
+        model,
+      })
+    );
+    await vi.waitFor(() => expect(a.persisted).toHaveLength(1));
+    expect(calls).toBe(2);
+    expect(a.persisted[0].final).toBe(true);
+    expect(lines.map(l => l[0])).toEqual(
+      expect.arrayContaining([
+        '[quiz-agent] persistAssistant failed',
+        '[quiz-agent] persistAssistant retry saved',
+      ])
+    );
+    expect(JSON.stringify(lines)).not.toContain('SENTINEL');
+  });
+
+  it('gives up after the one retry and never throws out of the turn', async () => {
+    const a = fakeAttempt(2);
+    const lines: Array<[string, Record<string, unknown>]> = [];
+    let calls = 0;
+    const deps: QuizTurnDeps = {
+      ...a.deps,
+      log: (line, fields) => lines.push([line, fields]),
+      persistAssistant: async () => {
+        calls += 1;
+        throw new Error('SENTINEL-db-detail');
+      },
+    };
+    const model = scriptedModel([[toolCall('c1', 'present_question', question(1))]]);
+    const chunks = await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps,
+        model,
+      })
+    );
+    await vi.waitFor(() =>
+      expect(lines.map(l => l[0])).toContain('[quiz-agent] persistAssistant_retry failed')
+    );
+    expect(calls).toBe(2);
+    expect(chunks.at(-1)?.type).toBe('finish');
+    expect(JSON.stringify(lines)).not.toContain('SENTINEL');
+  });
+
+  it('does not retry a save the service refused', async () => {
+    const a = fakeAttempt(2);
+    let calls = 0;
+    const refusal = Object.assign(new Error('attempt_not_found'), {
+      name: 'QuizChatRefusal',
+      kind: 'permanent' as const,
+      code: 'attempt_not_found',
+    });
+    const deps: QuizTurnDeps = {
+      ...a.deps,
+      persistAssistant: async () => {
+        calls += 1;
+        throw refusal;
+      },
+    };
+    const model = scriptedModel([[toolCall('c1', 'present_question', question(1))]]);
+    await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps,
+        model,
+      })
+    );
+    await new Promise(r => setTimeout(r, PERSIST_RETRY_DELAY_MS + 50));
+    expect(calls).toBe(1);
+  });
+
+  it('adds the fixed hidden notice when a code-aware quiz has no code this turn, and saves none of it', async () => {
+    const a = fakeAttempt(2);
+    const model = scriptedModel([[toolCall('c1', 'present_question', question(1))]]);
+    await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { codeUnavailable: true }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
+    );
+    const prompt = model.doStreamCalls[0].prompt;
+    const last = prompt.at(-1);
+    expect(last?.role).toBe('user');
+    expect(JSON.stringify(last?.content)).toContain(
+      JSON.stringify(CODE_UNAVAILABLE_NOTICE).slice(1, -1)
+    );
+    // The student's message (with its status part) still comes first.
+    expect(JSON.stringify(prompt)).toContain('my answer');
+    expect(CODE_UNAVAILABLE_NOTICE).toMatch(
+      /^SYSTEM NOTICE \(not from the student; do not mention it\)/
+    );
+    expect(CODE_UNAVAILABLE_NOTICE).not.toMatch(/explore_codebase|token|error|fail/i);
+    expect(JSON.stringify(a.persisted)).not.toContain('SYSTEM NOTICE');
+  });
+
+  it('sends no such notice when the code is available', async () => {
+    const a = fakeAttempt(2);
+    const model = scriptedModel([[toolCall('c1', 'present_question', question(1))]]);
+    await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
+    );
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).not.toContain('SYSTEM NOTICE');
+  });
+
+  it("hands the turn's log to the tools", async () => {
+    const a = fakeAttempt(2);
+    const log = vi.fn();
+    const tools = vi.fn(a.deps.tools);
+    const model = scriptedModel([[toolCall('c1', 'present_question', question(1))]]);
+    await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: { ...a.deps, tools, log },
+        model,
+      })
+    );
+    expect(tools).toHaveBeenCalledTimes(1);
+    expect(tools.mock.calls[0][1].log).toBe(log);
+  });
+
   it('sends two cached system blocks, one message breakpoint, adaptive thinking and the effort', async () => {
     const a = fakeAttempt(2);
     const model = scriptedModel([[toolCall('c1', 'present_question', question(1))]]);
@@ -531,6 +688,49 @@ describe('telemetry', () => {
       expect(off.length, file).toBeGreaterThanOrEqual(found.length);
     }
     expect(calls).toBeGreaterThan(0);
+  });
+});
+
+describe('telemetry layer 1: @ai-sdk/otel is not installed', () => {
+  // Trigger registers AI SDK telemetry at every chat-agent boot whenever
+  // `@ai-sdk/otel` can be imported, so it must never be resolvable here.
+  const tasksRoot = join(fileURLToPath(import.meta.url), '../../../../..');
+  const repoRoot = join(tasksRoot, '../..');
+
+  it('does not resolve from packages/tasks', () => {
+    expect(JSON.parse(readFileSync(join(tasksRoot, 'package.json'), 'utf8')).name).toBe(
+      '@classmoji/tasks'
+    );
+    const requireFromTasks = createRequire(join(tasksRoot, 'package.json'));
+    let code: unknown = null;
+    try {
+      requireFromTasks.resolve('@ai-sdk/otel');
+    } catch (error) {
+      code = (error as { code?: unknown }).code;
+    }
+    // Not "throws": an installed ESM-only package throws a different code.
+    expect(code).toBe('MODULE_NOT_FOUND');
+  });
+
+  it('is in no node_modules folder Node would search from packages/tasks', () => {
+    const found: string[] = [];
+    for (let dir = tasksRoot; ; dir = dirname(dir)) {
+      const candidate = join(dir, 'node_modules', '@ai-sdk', 'otel');
+      if (existsSync(candidate)) found.push(candidate);
+      if (dirname(dir) === dir) break;
+    }
+    expect(found).toEqual([]);
+  });
+
+  it('is installed by no workspace in the lockfile', () => {
+    const lock = JSON.parse(readFileSync(join(repoRoot, 'package-lock.json'), 'utf8')) as {
+      packages?: Record<string, unknown>;
+    };
+    expect(Object.keys(lock.packages ?? {}).length).toBeGreaterThan(0);
+    const installed = Object.keys(lock.packages ?? {}).filter(key =>
+      key.endsWith('node_modules/@ai-sdk/otel')
+    );
+    expect(installed).toEqual([]);
   });
 });
 

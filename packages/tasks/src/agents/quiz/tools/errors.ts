@@ -18,6 +18,10 @@ export const TURN_STOPPED_TEXT = 'This turn was stopped. Nothing was saved.';
 export const OFFER_AFTER_QUESTION_TEXT =
   "Wait for the student's answer to this question before offering next steps.";
 
+/** present_question refused because next-step buttons went out earlier in the same turn. */
+export const QUESTION_AFTER_OFFER_TEXT =
+  "Wait for the student's choice before presenting the next question.";
+
 /** A grading refusal from `ClassmojiService.quizGrading` (`QuizGradingError`). */
 export function isGradingRefusal(error: unknown): error is Error & { code: string } {
   return (

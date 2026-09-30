@@ -50,6 +50,12 @@ export type AttemptContext = {
   progress: AttemptProgress;
   /** Linked material is configured but none of it could be loaded for this user. */
   sourceMaterialUnavailable?: boolean;
+  /**
+   * The quiz is code-aware but no repository was found for this attempt: the
+   * turn runs the standard instructions without explore_codebase, and the
+   * loop adds a fixed hidden notice (`CODE_UNAVAILABLE_NOTICE`).
+   */
+  codeUnavailable?: boolean;
 };
 
 const PREVIEW_ROLES = ['OWNER', 'TEACHER', 'ASSISTANT'] as const;
@@ -66,6 +72,7 @@ type StableParts = {
   sourceMaterialUnavailable: boolean;
   exploration: AttemptContext['exploration'];
   isCodeAware: boolean;
+  codeUnavailable: boolean;
 };
 const stableCache = new Map<string, StableParts>();
 const STABLE_CACHE_MAX = 20;
@@ -137,6 +144,7 @@ async function loadStableParts(
     }
   }
   const isCodeAware = quizIsCodeAware && exploration !== null;
+  const codeUnavailable = quizIsCodeAware && exploration === null;
 
   const material = await ClassmojiService.quizSourceMaterial.load({
     quizId: quiz.id,
@@ -167,13 +175,21 @@ async function loadStableParts(
     classroomRef: classroomRefFor(quiz.classroom),
   });
 
-  const parts: StableParts = { prompt, sourceMaterialUnavailable, exploration, isCodeAware };
+  const parts: StableParts = {
+    prompt,
+    sourceMaterialUnavailable,
+    exploration,
+    isCodeAware,
+    codeUnavailable,
+  };
+  // A turn that found no material, or no repository for a code-aware quiz,
+  // does not pin that result: the next turn looks again.
+  if (sourceMaterialUnavailable || codeUnavailable) return parts;
   if (stableCache.size >= STABLE_CACHE_MAX) {
     const oldest = stableCache.keys().next().value;
     if (oldest !== undefined) stableCache.delete(oldest);
   }
-  // A turn that found no material does not pin that result: the next turn looks again.
-  if (!sourceMaterialUnavailable) stableCache.set(attempt.id, parts);
+  stableCache.set(attempt.id, parts);
   return parts;
 }
 
@@ -244,6 +260,7 @@ export async function loadAttemptContext(
     prompt: stable.prompt,
     progress,
     sourceMaterialUnavailable: stable.sourceMaterialUnavailable,
+    codeUnavailable: stable.codeUnavailable,
   };
 }
 

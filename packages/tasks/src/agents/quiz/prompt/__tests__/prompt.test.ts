@@ -190,6 +190,13 @@ describe('quiz prompt: typed tools only', () => {
     expect(codeAwareAgentPrompt).toMatch(/The one exception is IF explore_codebase FAILS below/);
   });
 
+  it('carries on after an exploration that found no code instead of exploring again', () => {
+    expect(codeAwareAgentPrompt).not.toMatch(/explore a different focus area\./i);
+    expect(codeAwareAgentPrompt).toMatch(
+      /returns no code, do not explore again for it: continue with the code\s+you have already seen/
+    );
+  });
+
   it.each(bothModes)('%s: never tells the student about tool errors or timing', (_l, p) => {
     expect(p.staticPrompt).not.toMatch(/few minutes|fresh access|expired access/);
     expect(p.staticPrompt).not.toMatch(/Only (tell|mention)[^.]*(problem|issues) if/);

@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
-import { githubStub } from '../../../quiz/__fixtures__/githubStub.ts';
+import { githubStub, SECONDARY_RATE_LIMIT_BODY } from '../../../quiz/__fixtures__/githubStub.ts';
 
 const logs = vi.hoisted(() => ({ lines: [] as unknown[][] }));
 
@@ -26,7 +26,10 @@ const {
   excerptSummaryLines,
   formatExcerptResult,
   EXPLORATION_FAILED_TEXT,
+  isGithubRateLimited,
   providerStatus,
+  RATE_LIMIT_BACKOFF_MS,
+  rateLimitWaitMs,
   untilAborted,
 } = await import('../core.ts');
 
@@ -204,6 +207,243 @@ describe('exploreRepository on a fixture repository', () => {
   });
 });
 
+describe('exploreRepository under a GitHub rate limit', () => {
+  const fast = [
+    [1, 1],
+    [1, 1],
+  ] as const;
+  const count = (gh: { requested: string[] }, part: string) =>
+    gh.requested.filter(url => url.includes(part)).length;
+
+  it('reads the tree again after a rate limit and carries on', async () => {
+    const gh = githubStub('landing-page', { limited: { tree: 2 } });
+    vi.stubGlobal('fetch', gh.fetchImpl);
+    const { client } = stubClient([PICK, POINT]);
+
+    const result = await exploreRepository(input({ client, rateLimitBackoffMs: fast }));
+
+    expect(count(gh, '/git/trees/')).toBe(3);
+    expect(result.excerpts.map(e => e.path)).toEqual(['css/style.css', 'index.html']);
+  });
+
+  it('gives up on the tree after two retries, with the status for the diagnostic', async () => {
+    const gh = githubStub('landing-page', { limited: { tree: 5 } });
+    vi.stubGlobal('fetch', gh.fetchImpl);
+    const { client, create } = stubClient([PICK, POINT]);
+
+    const error = await exploreRepository(input({ client, rateLimitBackoffMs: fast })).catch(
+      e => e
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(ExplorationStoppedError);
+    expect(providerStatus(error)).toBe(403);
+    expect(count(gh, '/git/trees/')).toBe(3);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('does not retry a 403 that is not a rate limit', async () => {
+    const gh = githubStub('landing-page', {
+      limited: { tree: 1 },
+      limitBody: '{"message":"Resource not accessible by integration"}',
+    });
+    vi.stubGlobal('fetch', gh.fetchImpl);
+    const { client } = stubClient([PICK, POINT]);
+
+    const error = await exploreRepository(input({ client, rateLimitBackoffMs: fast })).catch(
+      e => e
+    );
+    expect(providerStatus(error)).toBe(403);
+    expect(count(gh, '/git/trees/')).toBe(1);
+  });
+
+  it('reads again only the files that hit a rate limit, reporting each file once', async () => {
+    const gh = githubStub('landing-page', { limited: { paths: { 'index.html': 2 } } });
+    vi.stubGlobal('fetch', gh.fetchImpl);
+    const { client } = stubClient([PICK, POINT]);
+    const onFileRead = vi.fn();
+
+    const result = await exploreRepository(input({ client, onFileRead, rateLimitBackoffMs: fast }));
+
+    expect(onFileRead.mock.calls).toEqual([['index.html'], ['css/style.css']]);
+    expect(count(gh, '/contents/index.html')).toBe(3);
+    expect(count(gh, '/contents/css/style.css')).toBe(1);
+    expect(result.filesRead).toEqual(['index.html', 'css/style.css']);
+    expect(result.excerpts.map(e => e.path)).toContain('index.html');
+  });
+
+  it('keeps the error on a file still limited after the retries', async () => {
+    const gh = githubStub('landing-page', { limited: { paths: { 'css/style.css': 9 } } });
+    vi.stubGlobal('fetch', gh.fetchImpl);
+    const { client } = stubClient([PICK, POINT]);
+    const onFileRead = vi.fn();
+
+    await exploreRepository(input({ client, onFileRead, rateLimitBackoffMs: fast }));
+
+    expect(onFileRead.mock.calls).toEqual([['index.html'], ['css/style.css', { error: true }]]);
+    expect(count(gh, '/contents/css/style.css')).toBe(3);
+    expect(count(gh, '/contents/index.html')).toBe(1);
+  });
+
+  it('stops during the pause when the turn ends, and reads nothing more', async () => {
+    const gh = githubStub('landing-page', { limited: { tree: 1 } });
+    vi.stubGlobal('fetch', gh.fetchImpl);
+    const { client, create } = stubClient([PICK, POINT]);
+    const controller = new AbortController();
+
+    const run = exploreRepository(
+      input({ client, signal: controller.signal, rateLimitBackoffMs: [[60_000, 60_000]] })
+    );
+    await vi.waitFor(() => expect(count(gh, '/git/trees/')).toBe(1));
+    controller.abort();
+
+    await expect(run).rejects.toBeInstanceOf(ExplorationStoppedError);
+    await new Promise(r => setTimeout(r, 20));
+    expect(gh.requested).toHaveLength(1);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('logs each retry with ids and counts only', async () => {
+    const gh = githubStub('landing-page', {
+      limited: { tree: 1, paths: { 'index.html': 1, 'css/style.css': 1 } },
+    });
+    vi.stubGlobal('fetch', gh.fetchImpl);
+    const { client } = stubClient([PICK, POINT]);
+    const log = vi.fn();
+
+    await exploreRepository(
+      input({
+        client,
+        rateLimitBackoffMs: fast,
+        callLog: { log, attemptId: 'attempt-1', runId: 'run_1', keySource: 'platform' },
+      })
+    );
+
+    const limited = log.mock.calls.filter(c => c[0] === '[quiz-agent] exploration rate limited');
+    expect(limited.map(c => c[1])).toEqual([
+      {
+        attemptId: 'attempt-1',
+        runId: 'run_1',
+        retry: 1,
+        of: 2,
+        what: 'tree',
+        count: 1,
+        waitMs: 1,
+      },
+      {
+        attemptId: 'attempt-1',
+        runId: 'run_1',
+        retry: 1,
+        of: 2,
+        what: 'files',
+        count: 2,
+        waitMs: 1,
+      },
+    ]);
+    const logged = JSON.stringify(log.mock.calls);
+    expect(logged).not.toMatch(/index\.html|style\.css|landing-page|sample-org|token-value/);
+    expect(logged).not.toContain(FOCUS);
+  });
+
+  it('waits 1-3 s before the first retry and 3-6 s before the second', () => {
+    expect(RATE_LIMIT_BACKOFF_MS).toEqual([
+      [1_000, 3_000],
+      [3_000, 6_000],
+    ]);
+    expect(rateLimitWaitMs(RATE_LIMIT_BACKOFF_MS[0], () => 0)).toBe(1_000);
+    expect(rateLimitWaitMs(RATE_LIMIT_BACKOFF_MS[0], () => 0.999_999)).toBe(3_000);
+    expect(rateLimitWaitMs(RATE_LIMIT_BACKOFF_MS[1], () => 0.5)).toBe(4_500);
+  });
+
+  it('recognises a rate limit only from a 429 or a 403 that names one', () => {
+    const failed = (status: number, body: string) =>
+      new Error(`GitHub contents (src/a.js) failed (${status}): ${body}`);
+    expect(isGithubRateLimited(failed(403, SECONDARY_RATE_LIMIT_BODY))).toBe(true);
+    expect(
+      isGithubRateLimited(
+        failed(403, '{"message":"API rate limit exceeded for installation ID 1."}')
+      )
+    ).toBe(true);
+    // A 429 is a rate limit whatever its body (githubFetch has already waited
+    // on it three times itself, so a stubbed 429 would take seconds here).
+    expect(isGithubRateLimited(failed(429, '{}'))).toBe(true);
+    expect(isGithubRateLimited(`GitHub contents (a) failed (429): {}`)).toBe(true);
+    expect(
+      isGithubRateLimited(failed(403, '{"message":"Resource not accessible by integration"}'))
+    ).toBe(false);
+    expect(isGithubRateLimited(failed(404, '{"message":"rate limit"}'))).toBe(false);
+    expect(isGithubRateLimited(new Error('socket hang up'))).toBe(false);
+    expect(isGithubRateLimited(undefined)).toBe(false);
+  });
+});
+
+describe('exploreRepository usage lines', () => {
+  it('logs one line per model call: ids, model, key source and token counts, no content', async () => {
+    vi.stubGlobal('fetch', githubStub('landing-page').fetchImpl);
+    const answers = [PICK, POINT];
+    const create = vi.fn(async () => ({
+      ...text(answers.shift() ?? ''),
+      usage: {
+        input_tokens: 100,
+        cache_read_input_tokens: 50,
+        cache_creation_input_tokens: 10,
+        output_tokens: 20,
+      },
+    }));
+    const client = { messages: { create } } as unknown as Anthropic;
+    const log = vi.fn();
+
+    await exploreRepository(
+      input({
+        client,
+        callLog: { log, attemptId: 'attempt-1', runId: 'run_1', keySource: 'classroom' },
+      })
+    );
+
+    const lines = log.mock.calls.filter(c => c[0] === '[quiz-agent] exploration call');
+    expect(lines.map(c => c[1])).toEqual(
+      [1, 2].map(call => ({
+        attemptId: 'attempt-1',
+        runId: 'run_1',
+        call,
+        model: 'claude-sonnet-5',
+        keySource: 'classroom',
+        finish: 'end_turn',
+        inputTokens: 160,
+        noCacheTokens: 100,
+        cacheReadTokens: 50,
+        cacheWriteTokens: 10,
+        outputTokens: 20,
+        ms: expect.any(Number),
+      }))
+    );
+    const logged = JSON.stringify(log.mock.calls);
+    expect(logged).not.toContain(FOCUS);
+    expect(logged).not.toContain(QUESTION);
+    expect(logged).not.toMatch(/index\.html|grid layout|token-value/);
+  });
+
+  it('logs zeros for an answer without usage, and the requested model', async () => {
+    vi.stubGlobal('fetch', githubStub('landing-page').fetchImpl);
+    const answers = [PICK, POINT];
+    const create = vi.fn(async () => ({
+      stop_reason: 'end_turn',
+      content: [{ type: 'text', text: answers.shift() }],
+    }));
+    const log = vi.fn();
+
+    await exploreRepository(
+      input({
+        client: { messages: { create } } as unknown as Anthropic,
+        model: 'claude-haiku-5',
+        callLog: { log, attemptId: 'attempt-1', runId: 'run_1', keySource: 'platform' },
+      })
+    );
+
+    const first = log.mock.calls.find(c => c[0] === '[quiz-agent] exploration call')?.[1];
+    expect(first).toMatchObject({ model: 'claude-haiku-5', inputTokens: 0, outputTokens: 0 });
+  });
+});
+
 describe('exploration helpers', () => {
   const excerpts = [
     { path: 'css/style.css', startLine: 11, endLine: 15, wholeFile: false, why: 'grid' },
@@ -229,9 +469,11 @@ describe('exploration helpers', () => {
       focusArea: 'x',
       fileCount: 1,
     };
-    expect(formatExcerptResult(empty, 'forms')).toMatch(
-      /found no code to show \(files read: a\.js\)/
-    );
+    const said = formatExcerptResult(empty, 'forms');
+    expect(said).toMatch(/found no code to show \(files read: a\.js\)/);
+    // It says to carry on, never to explore somewhere else.
+    expect(said).toContain('Continue with the code you have already seen');
+    expect(said).not.toMatch(/explore a different|explore again|another focus/i);
   });
 
   it('tells the model a fixed line about a failed exploration: no provider wording, no status', () => {
