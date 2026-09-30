@@ -11,9 +11,13 @@ import { describe, it, expect } from 'vitest';
 import {
   ASSISTANT_EVENT_TYPE,
   ASSISTANT_EVENT_TYPE_MESSAGE,
+  assertFeaturedAmongLinks,
   assistantMayChangeEventType,
   assistantMayCreateEventType,
+  CALENDAR_LINK_ERROR_REASONS,
+  CalendarLinkError,
   CalendarTimeRangeError,
+  isCalendarLinkError,
   isCalendarTimeRangeError,
   isFeaturedLinkRow,
   resolveFeaturedLink,
@@ -139,5 +143,61 @@ describe('recognising a refused time range', () => {
     expect(isCalendarTimeRangeError(null)).toBe(false);
     expect(isCalendarTimeRangeError(undefined)).toBe(false);
     expect(isCalendarTimeRangeError('end_before_start')).toBe(false);
+  });
+});
+
+describe('the star on an additive link write', () => {
+  const linking = { pageIds: ['page-a'], slideIds: ['deck-a'], assignmentIds: [] };
+
+  it('accepts no star at all', () => {
+    expect(() => assertFeaturedAmongLinks(null, linking)).not.toThrow();
+    expect(() => assertFeaturedAmongLinks(undefined, linking)).not.toThrow();
+  });
+
+  it('accepts a star on something the call links', () => {
+    expect(() => assertFeaturedAmongLinks({ kind: 'slide', id: 'deck-a' }, linking)).not.toThrow();
+  });
+
+  it('refuses one naming something the call does not link', () => {
+    // Where the replace-all save drops such a star, this one was passed on
+    // purpose: saying nothing would leave the caller believing it was set.
+    expect(() => assertFeaturedAmongLinks({ kind: 'page', id: 'page-z' }, linking)).toThrow(
+      CalendarLinkError
+    );
+  });
+
+  it('holds the id to the list for its own kind', () => {
+    try {
+      assertFeaturedAmongLinks({ kind: 'assignment', id: 'page-a' }, linking);
+      expect.unreachable('a page id is not an assignment');
+    } catch (error) {
+      expect((error as CalendarLinkError).reason).toBe('featured_not_linked');
+    }
+  });
+});
+
+describe('recognising a refused link write', () => {
+  it('accepts the error the service throws, whatever its reason', () => {
+    for (const reason of CALENDAR_LINK_ERROR_REASONS) {
+      expect(isCalendarLinkError(new CalendarLinkError(reason, 'x'))).toBe(true);
+    }
+  });
+
+  it('accepts one that crossed a module boundary and lost its identity', () => {
+    expect(isCalendarLinkError({ reason: 'not_an_occurrence', message: 'x' })).toBe(true);
+  });
+
+  it('carries the ids that were not found, by kind', () => {
+    const ids = { pageIds: ['p-9'], slideIds: [], assignmentIds: ['a-9'] };
+    expect(new CalendarLinkError('targets_not_found', 'x', ids).ids).toEqual(ids);
+    expect(new CalendarLinkError('occurrence_required', 'x').ids).toBeNull();
+  });
+
+  it('rejects anything else, including the other calendar refusal', () => {
+    expect(isCalendarLinkError(new Error('connection reset'))).toBe(false);
+    expect(isCalendarLinkError(new CalendarTimeRangeError())).toBe(false);
+    expect(isCalendarLinkError({ reason: 'something_else' })).toBe(false);
+    expect(isCalendarLinkError(null)).toBe(false);
+    expect(isCalendarLinkError('event_not_found')).toBe(false);
   });
 });

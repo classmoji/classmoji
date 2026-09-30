@@ -177,3 +177,96 @@ export const isFeaturedLinkRow = (
   kind: FeaturedLinkKind,
   id: string
 ): boolean => resolved !== null && resolved.kind === kind && resolved.id === id;
+
+/** Ids of the three kinds of resource a calendar event can link to. */
+export interface CalendarLinkIds {
+  pageIds: string[];
+  slideIds: string[];
+  assignmentIds: string[];
+}
+
+/**
+ * Why an additive link write (`addEventLinks` / `removeEventLinks`) refused.
+ *
+ *   - `event_not_found`       the event is not in this classroom
+ *   - `targets_not_found`     one or more resources are not; `ids` names them
+ *   - `quizzes_hidden`        a quiz assignment, where the classroom's quizzes do not show
+ *   - `occurrence_required`   a recurring event, and no occurrence was named
+ *   - `occurrence_not_allowed` an occurrence was named on an event that has one date
+ *   - `not_an_occurrence`     the date named is not one the series falls on
+ *   - `featured_not_linked`   the star names something this call is not linking
+ */
+export const CALENDAR_LINK_ERROR_REASONS = [
+  'event_not_found',
+  'targets_not_found',
+  'quizzes_hidden',
+  'occurrence_required',
+  'occurrence_not_allowed',
+  'not_an_occurrence',
+  'featured_not_linked',
+] as const;
+
+export type CalendarLinkErrorReason = (typeof CALENDAR_LINK_ERROR_REASONS)[number];
+
+/**
+ * An additive link write was refused, and nothing was written.
+ *
+ * The replace-all save the web modal makes drops what it cannot link and
+ * carries on: the user can see the result in front of them. A caller adding
+ * links one call at a time cannot, and a write reported as done that linked
+ * nothing — or linked into a bucket no occurrence reads — is the failure these
+ * refusals exist to prevent. `reason` says which rule, for the caller that has
+ * to turn it into something a person can act on.
+ */
+export class CalendarLinkError extends Error {
+  readonly reason: CalendarLinkErrorReason;
+  /** For `targets_not_found`: the ids that are not in the classroom, by kind. */
+  readonly ids: CalendarLinkIds | null;
+
+  constructor(
+    reason: CalendarLinkErrorReason,
+    message: string,
+    ids: CalendarLinkIds | null = null
+  ) {
+    super(message);
+    this.name = 'CalendarLinkError';
+    this.reason = reason;
+    this.ids = ids;
+  }
+}
+
+/**
+ * Recognise that refusal without depending on the class identity, for the same
+ * reason `isCalendarTimeRangeError` does.
+ */
+export const isCalendarLinkError = (
+  error: unknown
+): error is { reason: CalendarLinkErrorReason; message: string; ids?: CalendarLinkIds | null } =>
+  error instanceof CalendarLinkError ||
+  (typeof error === 'object' &&
+    error !== null &&
+    (CALENDAR_LINK_ERROR_REASONS as readonly unknown[]).includes(
+      (error as { reason?: unknown }).reason
+    ));
+
+/**
+ * The star on an ADDITIVE write has to name something that call is linking.
+ *
+ * `resolveFeaturedLink` above answers the same question as a filter, because a
+ * form re-posts a star field that may have gone stale. Here the star is an
+ * argument somebody chose to pass, so one that matches nothing is a mistake to
+ * report rather than a decoration to drop. Naming an id that is already linked
+ * is how the star is moved.
+ */
+export const assertFeaturedAmongLinks = (
+  featured: FeaturedLinkRef | null | undefined,
+  ids: CalendarLinkIds
+): void => {
+  if (!featured) return;
+  if (resolveFeaturedLink(featured, ids) === null) {
+    throw new CalendarLinkError(
+      'featured_not_linked',
+      'The featured resource must be one of the resources this call links'
+    );
+  }
+};

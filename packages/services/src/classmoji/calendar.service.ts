@@ -5,9 +5,12 @@ import type { AssignmentType, EventType } from '@prisma/client';
 import { pagesUrl } from '../emails/escape.ts';
 import * as entitlementService from './entitlement.service.ts';
 import {
+  assertFeaturedAmongLinks,
+  CalendarLinkError,
   CalendarTimeRangeError,
   isFeaturedLinkRow,
   resolveFeaturedLink,
+  type CalendarLinkIds,
   type FeaturedLinkKind,
   type FeaturedLinkRef,
 } from './calendarPolicy.ts';
@@ -346,18 +349,27 @@ interface DeadlineRepositoryAssignment {
 export {
   ASSISTANT_EVENT_TYPE,
   ASSISTANT_EVENT_TYPE_MESSAGE,
+  assertFeaturedAmongLinks,
   assistantMayChangeEventType,
   assistantMayCreateEventType,
+  CALENDAR_LINK_ERROR_REASONS,
+  CalendarLinkError,
   CalendarTimeRangeError,
   EDIT_SCOPE_THIS_ONLY,
   FEATURED_LINK_KINDS,
+  isCalendarLinkError,
   isCalendarTimeRangeError,
   isFeaturedLinkRow,
   resolveFeaturedLink,
   scopeCarriesLinks,
   toFeaturedLinkRef,
 } from './calendarPolicy.ts';
-export type { FeaturedLinkKind, FeaturedLinkRef } from './calendarPolicy.ts';
+export type {
+  CalendarLinkErrorReason,
+  CalendarLinkIds,
+  FeaturedLinkKind,
+  FeaturedLinkRef,
+} from './calendarPolicy.ts';
 
 /**
  * An event must end strictly after it starts; a zero-length or inverted range
@@ -1972,5 +1984,552 @@ export const updateEventLinks = async (
         assignments: validAssignmentIds.length,
       },
     };
+  });
+};
+
+/** The ids a link write names. A kind that is left out names none. */
+type CalendarLinkIdInput = Partial<CalendarLinkIds>;
+
+/**
+ * The same id twice in one list is one link: the tables hold a resource once
+ * per date, and the second copy would fail the insert rather than be ignored.
+ */
+const toLinkIds = (linkData: CalendarLinkIdInput): CalendarLinkIds => ({
+  pageIds: [...new Set(linkData.pageIds ?? [])],
+  slideIds: [...new Set(linkData.slideIds ?? [])],
+  assignmentIds: [...new Set(linkData.assignmentIds ?? [])],
+});
+
+const eventNotInClassroom = (): CalendarLinkError =>
+  new CalendarLinkError('event_not_found', 'Calendar event not found in this classroom');
+
+/**
+ * Refuse unless every resource named can be linked from this classroom's
+ * calendar, and the star — if one is asked for — names one of them.
+ *
+ * Exported for a caller that is about to CREATE the event the links go on:
+ * asked first, a bad id refuses the request before there is an event left
+ * behind without the links it was created for. `addEventLinks` asks it again
+ * as its own check, so the two cannot disagree.
+ *
+ * Strict where `updateEventLinks` is forgiving, and deliberately: that save
+ * drops an id it cannot link and the modal shows what is left, while an
+ * additive caller is told only what this returns. The classroom test is the
+ * same one — pages and decks by their own `classroom_id`, an assignment
+ * through its module, since quiz and form assignments have no repository — and
+ * so is the quiz rule: where the classroom's quizzes are hidden no surface
+ * links to one.
+ *
+ * @param {Function} [quizzesVisible] - How to ask whether this classroom's quizzes show.
+ *   `addEventLinks` passes its own so one write asks once; defaults to asking
+ *   `entitlement.quizzesVisible` directly.
+ * @throws {CalendarLinkError} `featured_not_linked`, `targets_not_found` (with
+ *   the offending ids by kind) or `quizzes_hidden`.
+ */
+export const assertLinkTargetsInClassroom = async (
+  classroomId: string,
+  linkData: CalendarLinkIdInput,
+  featured: FeaturedLinkRef | null = null,
+  quizzesVisible: () => Promise<boolean> = () => entitlementService.quizzesVisible(classroomId)
+): Promise<void> => {
+  const ids = toLinkIds(linkData);
+
+  // Needs no query, so it is settled before any is made.
+  assertFeaturedAmongLinks(featured, ids);
+
+  const [pages, slides, assignments] = await Promise.all([
+    ids.pageIds.length > 0
+      ? getPrisma().page.findMany({
+          where: { id: { in: ids.pageIds }, classroom_id: classroomId },
+          select: { id: true },
+        })
+      : [],
+    ids.slideIds.length > 0
+      ? getPrisma().slide.findMany({
+          where: { id: { in: ids.slideIds }, classroom_id: classroomId },
+          select: { id: true },
+        })
+      : [],
+    ids.assignmentIds.length > 0
+      ? getPrisma().assignment.findMany({
+          where: { id: { in: ids.assignmentIds }, module: { classroom_id: classroomId } },
+          select: { id: true, type: true },
+        })
+      : [],
+  ]);
+
+  const notIn = (asked: string[], found: Array<{ id: string }>): string[] => {
+    const foundIds = new Set(found.map(row => row.id));
+    return asked.filter(id => !foundIds.has(id));
+  };
+  const missing: CalendarLinkIds = {
+    pageIds: notIn(ids.pageIds, pages),
+    slideIds: notIn(ids.slideIds, slides),
+    assignmentIds: notIn(ids.assignmentIds, assignments),
+  };
+
+  if (missing.pageIds.length + missing.slideIds.length + missing.assignmentIds.length > 0) {
+    throw new CalendarLinkError(
+      'targets_not_found',
+      'One or more linked resources were not found in this classroom',
+      missing
+    );
+  }
+
+  // Asked only when a quiz is actually being linked, as `updateEventLinks` does.
+  if (assignments.some(a => a.type === 'QUIZ') && !(await quizzesVisible())) {
+    throw new CalendarLinkError('quizzes_hidden', 'Quizzes are not available in this classroom');
+  }
+};
+
+/**
+ * Whether this date's quiz links are to be treated as not there, settled
+ * BEFORE the write's transaction opens.
+ *
+ * Where the classroom's quizzes are hidden the calendar read leaves quiz links
+ * out, so a write made there neither reports them nor removes them — the rule
+ * `updateEventLinks` keeps. The entitlement lookup runs on its own connection
+ * and can fail; asked here, a failure refuses a write that has not started.
+ * Asked after the commit it would report failure for one that had landed. And
+ * as there, it is asked only when the date actually holds a quiz link.
+ */
+const quizLinksHiddenOn = async (
+  eventId: string,
+  bucket: Date | null,
+  quizzesVisible: () => Promise<boolean>
+): Promise<boolean> => {
+  const storedQuizLinks = await getPrisma().calendarEventAssignmentLink.count({
+    where: { event_id: eventId, occurrence_date: bucket, assignment: { type: 'QUIZ' } },
+  });
+  return storedQuizLinks > 0 && !(await quizzesVisible());
+};
+
+/**
+ * Take the event's row lock and load the event under it.
+ *
+ * The lock is the one `updateEventLinks` takes, for both of the reasons given
+ * there: writers of one event's links queue behind each other, so the star
+ * stays single across three tables, and an event deleted since the caller's
+ * own check is a refusal rather than a foreign-key failure. The row is read
+ * AFTER the lock so the occurrence rule below is applied to the event as it is
+ * now — one made recurring a moment ago is judged as recurring.
+ */
+const lockEventForLinks = async (
+  tx: Prisma.TransactionClient,
+  eventId: string,
+  classroomId: string
+) => {
+  const locked = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT id FROM calendar_events
+    WHERE id = ${eventId} AND classroom_id = ${classroomId}
+    FOR UPDATE
+  `;
+
+  if (locked.length === 0) {
+    throw eventNotInClassroom();
+  }
+
+  return tx.calendarEvent.findUniqueOrThrow({
+    where: { id: eventId },
+    include: { overrides: true },
+  });
+};
+
+type LinkTargetEvent = Awaited<ReturnType<typeof lockEventForLinks>>;
+
+/**
+ * The occurrence a link write landed on, for the caller to be told.
+ *
+ * `occurrence_date` is the occurrence's instant as the calendar read returns
+ * it, not the date the caller passed: any instant on the same UTC day is
+ * accepted, so a caller who guessed the time of day learns here which
+ * occurrence that was. Null for an event with one date. `start_time` is when
+ * that occurrence meets — an override's moved start, where there is one — and
+ * null for a date the series no longer falls on, which only a removal reaches.
+ */
+interface LinkedOccurrence {
+  occurrence_date: Date | null;
+  start_time: Date | null;
+}
+
+/**
+ * Which bucket of link rows a write addresses — the stored `occurrence_date`,
+ * or null for the undated bucket — and the occurrence that bucket belongs to.
+ *
+ * The rule is the read path's, turned around. A recurring event's occurrences
+ * read only the rows dated to them, keyed by the UTC date of the occurrence
+ * instant, and an event with one date reads the undated rows — so a link
+ * written anywhere else is saved and never shown. For an evening class that
+ * UTC date is the day after the local one, which is why the series is expanded
+ * and asked, rather than the date taken on trust.
+ *
+ * @param {boolean} mustOccur - Whether the date has to be one the series
+ *   currently falls on. True for a write that adds; false for one that only
+ *   removes, which has to reach a link left behind on a date since cancelled.
+ */
+const resolveLinkBucket = (
+  event: LinkTargetEvent,
+  occurrenceDate: Date | null,
+  { mustOccur }: { mustOccur: boolean }
+): { bucket: Date | null; occurrence: LinkedOccurrence } => {
+  if (!event.is_recurring) {
+    if (occurrenceDate) {
+      throw new CalendarLinkError(
+        'occurrence_not_allowed',
+        'This event is not recurring, so its links are not tied to an occurrence date'
+      );
+    }
+    return { bucket: null, occurrence: { occurrence_date: null, start_time: event.start_time } };
+  }
+
+  if (!occurrenceDate) {
+    throw new CalendarLinkError(
+      'occurrence_required',
+      'This event is recurring: links belong to one occurrence, so an occurrence date is required'
+    );
+  }
+
+  const bucket = normalizeDate(occurrenceDate);
+
+  // The whole UTC day the date names: every occurrence keyed to this bucket
+  // falls inside it, and a cancelled one is already left out of the expansion.
+  const dayEnd = new Date(bucket.getTime() + 24 * 60 * 60 * 1000 - 1);
+  const matched = expandRecurringEvent(
+    { ...event, pageLinks: [], slideLinks: [], assignmentLinks: [] },
+    bucket,
+    dayEnd
+  ).find(o => o.occurrence_date && normalizeDate(o.occurrence_date).getTime() === bucket.getTime());
+
+  if (matched?.occurrence_date) {
+    return {
+      bucket,
+      occurrence: { occurrence_date: matched.occurrence_date, start_time: matched.start_time },
+    };
+  }
+
+  if (mustOccur) {
+    throw new CalendarLinkError('not_an_occurrence', 'This event has no occurrence on that date');
+  }
+
+  return { bucket, occurrence: { occurrence_date: bucket, start_time: null } };
+};
+
+/** One bucket's link rows, each kind in display order. */
+const readLinkBucket = async (
+  tx: Prisma.TransactionClient,
+  eventId: string,
+  bucket: Date | null
+) => {
+  const where = { event_id: eventId, occurrence_date: bucket };
+  const pages = await tx.calendarEventPageLink.findMany({
+    where,
+    select: { page_id: true, order: true, featured: true },
+    orderBy: { order: 'asc' },
+  });
+  const slides = await tx.calendarEventSlideLink.findMany({
+    where,
+    select: { slide_id: true, order: true, featured: true },
+    orderBy: { order: 'asc' },
+  });
+  const assignments = await tx.calendarEventAssignmentLink.findMany({
+    where,
+    select: {
+      assignment_id: true,
+      order: true,
+      featured: true,
+      assignment: { select: { type: true } },
+    },
+    orderBy: { order: 'asc' },
+  });
+  return { where, pages, slides, assignments };
+};
+
+type LinkBucket = Awaited<ReturnType<typeof readLinkBucket>>;
+
+/** Where the next row of a kind goes: after everything the bucket holds. */
+const nextLinkOrder = (rows: Array<{ order: number }>): number =>
+  rows.reduce((max, row) => Math.max(max, row.order), -1) + 1;
+
+/**
+ * A bucket as a caller is told about it: the ids of each kind in order, and
+ * the star.
+ *
+ * Where the classroom's quizzes are hidden the calendar read leaves quiz links
+ * out, and so does this — the answer to a write is what the calendar now shows
+ * for that date.
+ */
+const describeLinkBucket = (
+  bucket: LinkBucket,
+  quizLinksHidden: boolean
+): { links: CalendarLinkIds; featured: FeaturedLinkRef | null } => {
+  const assignments = quizLinksHidden
+    ? bucket.assignments.filter(l => l.assignment.type !== 'QUIZ')
+    : bucket.assignments;
+
+  const starredPage = bucket.pages.find(l => l.featured);
+  const starredSlide = bucket.slides.find(l => l.featured);
+  const starredAssignment = assignments.find(l => l.featured);
+
+  return {
+    links: {
+      pageIds: bucket.pages.map(l => l.page_id),
+      slideIds: bucket.slides.map(l => l.slide_id),
+      assignmentIds: assignments.map(l => l.assignment_id),
+    },
+    featured: starredPage
+      ? { kind: 'page', id: starredPage.page_id }
+      : starredSlide
+        ? { kind: 'slide', id: starredSlide.slide_id }
+        : starredAssignment
+          ? { kind: 'assignment', id: starredAssignment.assignment_id }
+          : null,
+  };
+};
+
+/**
+ * Add resource links to a calendar event, leaving the ones it has in place.
+ *
+ * `updateEventLinks` REPLACES a date's links with the lists it is handed,
+ * across all three kinds, and re-derives the star from its argument: right for
+ * the web modal, which always sends everything. A caller that knows only what
+ * it wants to add cannot go through it — a partial list would delete the rest.
+ * This is that caller's write.
+ *
+ * @param {string} eventId - The calendar event ID
+ * @param {string} classroomId - The classroom the event must be in
+ * @param {object} linkData - `pageIds`, `slideIds`, `assignmentIds` to add. An id already linked
+ *   on this date is left as it is and reported, not duplicated.
+ * @param {Date|null} occurrenceDate - Required for a recurring event, and it must be a date the
+ *   series falls on: the occurrence instant (as the calendar read returns it) or any instant on
+ *   the same UTC date. Must be null for an event that is not recurring.
+ * @param {object|null} featured - `{ kind, id }` to star one of the resources THIS call names,
+ *   newly added or already linked — which is how the star is moved. Null leaves the date's star
+ *   where it is.
+ * @returns {object} `added` and `alreadyLinked` (the ids named, split by what happened to them),
+ *   `occurrence` (which occurrence the date turned out to be — see `LinkedOccurrence`), then the
+ *   date as it now stands: `links` in display order and `featured`.
+ * @throws {CalendarLinkError} Nothing is written when it does.
+ */
+export const addEventLinks = async (
+  eventId: string,
+  classroomId: string,
+  linkData: CalendarLinkIdInput,
+  occurrenceDate: Date | null = null,
+  featured: FeaturedLinkRef | null = null
+) => {
+  const ids = toLinkIds(linkData);
+
+  // The early refusal, before the validation queries and before a transaction
+  // is opened; the authoritative check is the lock inside it.
+  const target = await getPrisma().calendarEvent.findFirst({
+    where: { id: eventId, classroom_id: classroomId },
+    select: { id: true },
+  });
+
+  if (!target) {
+    throw eventNotInClassroom();
+  }
+
+  // One answer for the whole write: the check below asks when a quiz is being
+  // linked, the bucket lookup when the date already holds one.
+  let quizzesVisibleAnswer: Promise<boolean> | undefined;
+  const quizzesVisible = () =>
+    (quizzesVisibleAnswer ??= entitlementService.quizzesVisible(classroomId));
+
+  await assertLinkTargetsInClassroom(classroomId, ids, featured, quizzesVisible);
+
+  const quizLinksHidden = await quizLinksHiddenOn(
+    eventId,
+    occurrenceDate ? normalizeDate(occurrenceDate) : null,
+    quizzesVisible
+  );
+
+  return getPrisma().$transaction(async tx => {
+    const event = await lockEventForLinks(tx, eventId, classroomId);
+    const { bucket: occurrence_date, occurrence } = resolveLinkBucket(event, occurrenceDate, {
+      mustOccur: true,
+    });
+    const stored = await readLinkBucket(tx, eventId, occurrence_date);
+
+    const linkedPageIds = new Set(stored.pages.map(l => l.page_id));
+    const linkedSlideIds = new Set(stored.slides.map(l => l.slide_id));
+    const linkedAssignmentIds = new Set(stored.assignments.map(l => l.assignment_id));
+
+    const added: CalendarLinkIds = {
+      pageIds: ids.pageIds.filter(id => !linkedPageIds.has(id)),
+      slideIds: ids.slideIds.filter(id => !linkedSlideIds.has(id)),
+      assignmentIds: ids.assignmentIds.filter(id => !linkedAssignmentIds.has(id)),
+    };
+    const alreadyLinked: CalendarLinkIds = {
+      pageIds: ids.pageIds.filter(id => linkedPageIds.has(id)),
+      slideIds: ids.slideIds.filter(id => linkedSlideIds.has(id)),
+      assignmentIds: ids.assignmentIds.filter(id => linkedAssignmentIds.has(id)),
+    };
+
+    // New rows go after the ones already there, and none of them is starred
+    // yet: the star is written below, once the old one has been cleared.
+    if (added.pageIds.length > 0) {
+      const firstOrder = nextLinkOrder(stored.pages);
+      await tx.calendarEventPageLink.createMany({
+        data: added.pageIds.map((id, idx) => ({
+          event_id: eventId,
+          page_id: id,
+          occurrence_date,
+          order: firstOrder + idx,
+        })),
+      });
+    }
+    if (added.slideIds.length > 0) {
+      const firstOrder = nextLinkOrder(stored.slides);
+      await tx.calendarEventSlideLink.createMany({
+        data: added.slideIds.map((id, idx) => ({
+          event_id: eventId,
+          slide_id: id,
+          occurrence_date,
+          order: firstOrder + idx,
+        })),
+      });
+    }
+    if (added.assignmentIds.length > 0) {
+      const firstOrder = nextLinkOrder(stored.assignments);
+      await tx.calendarEventAssignmentLink.createMany({
+        data: added.assignmentIds.map((id, idx) => ({
+          event_id: eventId,
+          assignment_id: id,
+          occurrence_date,
+          order: firstOrder + idx,
+        })),
+      });
+    }
+
+    // One star per date across the three tables. Cleared everywhere before it
+    // is set: each table's partial unique index refuses a second starred row
+    // for the date, so the other order fails when the star stays within a kind.
+    if (featured) {
+      const starred = { ...stored.where, featured: true };
+      await tx.calendarEventPageLink.updateMany({ where: starred, data: { featured: false } });
+      await tx.calendarEventSlideLink.updateMany({ where: starred, data: { featured: false } });
+      await tx.calendarEventAssignmentLink.updateMany({
+        where: starred,
+        data: { featured: false },
+      });
+
+      const star = { data: { featured: true } };
+      if (featured.kind === 'page') {
+        await tx.calendarEventPageLink.updateMany({
+          where: { ...stored.where, page_id: featured.id },
+          ...star,
+        });
+      } else if (featured.kind === 'slide') {
+        await tx.calendarEventSlideLink.updateMany({
+          where: { ...stored.where, slide_id: featured.id },
+          ...star,
+        });
+      } else {
+        await tx.calendarEventAssignmentLink.updateMany({
+          where: { ...stored.where, assignment_id: featured.id },
+          ...star,
+        });
+      }
+    }
+
+    const after = await readLinkBucket(tx, eventId, occurrence_date);
+    return { added, alreadyLinked, occurrence, ...describeLinkBucket(after, quizLinksHidden) };
+  });
+};
+
+/**
+ * Remove resource links from a calendar event, leaving its other links in
+ * place. The counterpart of `addEventLinks`.
+ *
+ * An id that is not linked on this date is reported, not refused, so the call
+ * can be repeated. A removed link that held the star takes it along: nothing
+ * else is starred in its place.
+ *
+ * Where the classroom's quizzes are hidden, a quiz assignment's link is one of
+ * the ids that is "not linked": it is left in place and reported exactly as an
+ * id that was never there. Hidden quizzes leave no trace on any surface, and
+ * `updateEventLinks` keeps such a link through a save for the same reason.
+ *
+ * @param {string} eventId - The calendar event ID
+ * @param {string} classroomId - The classroom the event must be in
+ * @param {object} linkData - `pageIds`, `slideIds`, `assignmentIds` to unlink
+ * @param {Date|null} occurrenceDate - Required for a recurring event, null for one that is not.
+ *   Unlike an add, the date need not still be an occurrence: a link left on a date that was
+ *   cancelled afterwards has to be removable.
+ * @returns {object} `removed` and `notLinked` (the ids named, split by what happened to them),
+ *   `occurrence` (see `LinkedOccurrence`; no `start_time` for a date the series no longer falls
+ *   on), then the date as it now stands: `links` in display order and `featured`.
+ * @throws {CalendarLinkError} Nothing is removed when it does.
+ */
+export const removeEventLinks = async (
+  eventId: string,
+  classroomId: string,
+  linkData: CalendarLinkIdInput,
+  occurrenceDate: Date | null = null
+) => {
+  const ids = toLinkIds(linkData);
+
+  const target = await getPrisma().calendarEvent.findFirst({
+    where: { id: eventId, classroom_id: classroomId },
+    select: { id: true },
+  });
+
+  if (!target) {
+    throw eventNotInClassroom();
+  }
+
+  const quizLinksHidden = await quizLinksHiddenOn(
+    eventId,
+    occurrenceDate ? normalizeDate(occurrenceDate) : null,
+    () => entitlementService.quizzesVisible(classroomId)
+  );
+
+  return getPrisma().$transaction(async tx => {
+    const event = await lockEventForLinks(tx, eventId, classroomId);
+    const { bucket: occurrence_date, occurrence } = resolveLinkBucket(event, occurrenceDate, {
+      mustOccur: false,
+    });
+    const stored = await readLinkBucket(tx, eventId, occurrence_date);
+
+    const linkedPageIds = new Set(stored.pages.map(l => l.page_id));
+    const linkedSlideIds = new Set(stored.slides.map(l => l.slide_id));
+    // A hidden quiz link is not among the links this call can see, so it is
+    // neither removed nor reported as linked.
+    const linkedAssignmentIds = new Set(
+      stored.assignments
+        .filter(l => !(quizLinksHidden && l.assignment.type === 'QUIZ'))
+        .map(l => l.assignment_id)
+    );
+
+    const removed: CalendarLinkIds = {
+      pageIds: ids.pageIds.filter(id => linkedPageIds.has(id)),
+      slideIds: ids.slideIds.filter(id => linkedSlideIds.has(id)),
+      assignmentIds: ids.assignmentIds.filter(id => linkedAssignmentIds.has(id)),
+    };
+    const notLinked: CalendarLinkIds = {
+      pageIds: ids.pageIds.filter(id => !linkedPageIds.has(id)),
+      slideIds: ids.slideIds.filter(id => !linkedSlideIds.has(id)),
+      assignmentIds: ids.assignmentIds.filter(id => !linkedAssignmentIds.has(id)),
+    };
+
+    if (removed.pageIds.length > 0) {
+      await tx.calendarEventPageLink.deleteMany({
+        where: { ...stored.where, page_id: { in: removed.pageIds } },
+      });
+    }
+    if (removed.slideIds.length > 0) {
+      await tx.calendarEventSlideLink.deleteMany({
+        where: { ...stored.where, slide_id: { in: removed.slideIds } },
+      });
+    }
+    if (removed.assignmentIds.length > 0) {
+      await tx.calendarEventAssignmentLink.deleteMany({
+        where: { ...stored.where, assignment_id: { in: removed.assignmentIds } },
+      });
+    }
+
+    const after = await readLinkBucket(tx, eventId, occurrence_date);
+    return { removed, notLinked, occurrence, ...describeLinkBucket(after, quizLinksHidden) };
   });
 };

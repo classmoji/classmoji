@@ -111,6 +111,8 @@ export {
   ClassroomSettingsValidationError,
   CalendarTimeRangeError,
   isCalendarTimeRangeError,
+  CalendarLinkError,
+  isCalendarLinkError,
   ASSISTANT_EVENT_TYPE,
   ASSISTANT_EVENT_TYPE_MESSAGE,
   assistantMayCreateEventType,
