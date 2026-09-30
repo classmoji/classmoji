@@ -80,14 +80,19 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // 6. Determine if read-only (completed attempt)
   const readOnly = Boolean(attemptData.attempt.completed_at);
 
-  // 7. A chat-runtime attempt's transcript, projected for every viewer the
-  // same way (hidden rows and internal parts removed). Its raw rows are never
-  // sent. Only the attempt's owner drives its chat session; anyone else reads.
+  // 7. A chat-runtime attempt's transcript, projected (hidden rows and
+  // internal parts removed). Its raw rows are never sent. Only the attempt's
+  // owner drives its chat session, and gets exactly what that session
+  // streamed; staff reading someone else's attempt also get the answer each
+  // feedback was written against (`expected_answer`).
   const isChatAttempt = isTriggerChatAttempt(attemptData.attempt);
-  const transcript = isChatAttempt
-    ? await ClassmojiService.quizChat.loadTranscriptForViewer(attemptData.attempt.id)
-    : null;
   const viewerOwnsAttempt = attemptData.attempt.user_id.toString() === userId.toString();
+  const transcript = isChatAttempt
+    ? await ClassmojiService.quizChat.loadTranscriptForViewer(
+        attemptData.attempt.id,
+        isInstructor && !viewerOwnsAttempt ? 'staff' : 'student'
+      )
+    : null;
 
   // 8. Send only what the drawer and QuizAttemptInterface read — see
   // ~/utils/quizPayloads. Both rows arrive joined to much more: the attempt to

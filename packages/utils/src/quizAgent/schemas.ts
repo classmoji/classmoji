@@ -226,18 +226,28 @@ const NextStepActionsSchema = z
   .describe('["try_again","next"] or ["next"]; never try_again alone.');
 
 /**
- * offer_next_step's input as the model sends it: the feedback on the answer,
- * shown as the agent's message, then the buttons. `feedback` comes first so
- * it streams first. How much to write is the description's to say; the only
- * check is that there is some.
+ * offer_next_step's input as the model sends it: the correct answer, for staff
+ * only, then the feedback on the answer, shown as the agent's message, then
+ * the buttons. `expected_answer` comes first so the model states the answer
+ * before it writes feedback that must not give it away; no student ever
+ * receives it (`quizVisibility.hiddenInputKeys`), so the call's input reaches
+ * the student only once it is complete. How much feedback to write is the
+ * description's to say; the only check is that there is some.
  */
 export const OfferNextStepSchema = z.object({
+  expected_answer: z
+    .string()
+    .trim()
+    .min(1, 'expected_answer must not be empty')
+    .describe(
+      'The correct answer to this question in one or two sentences, for staff only; never shown to the student.'
+    ),
   feedback: z
     .string()
     .trim()
     .min(1, 'feedback must not be empty')
     .describe(
-      '2 to 4 sentences: what is right, what is wrong, and why. On a wrong or partly wrong answer, say which part is wrong and why without giving away the full answer.'
+      "2 to 4 sentences on the student's answer: what is right, what is wrong, and why. When offering Try again, never state or hint at the content of expected_answer: no correct values, results, names or properties it contains. Name the flawed reasoning and where to look instead. Example: not 'your white text turns black on hover' but 'check which of the two selectors is more specific'."
     ),
   actions: NextStepActionsSchema,
 });
@@ -245,10 +255,14 @@ export type OfferNextStep = z.infer<typeof OfferNextStepSchema>;
 
 /**
  * offer_next_step's input as stored and rendered: parts saved before the
- * feedback moved into the call have none, so here it is optional. Used for
- * the UI part types (`quizToolDefs`), never for the model's tool.
+ * feedback moved into the call have neither field, and parts saved before
+ * `expected_answer` was added have no answer, so here both are optional. A
+ * student's copy never has `expected_answer` (the projection cuts it); staff
+ * reading someone else's attempt see it. Used for the UI part types
+ * (`quizToolDefs`), never for the model's tool.
  */
 export const OfferNextStepPartSchema = OfferNextStepSchema.extend({
+  expected_answer: z.string().optional(),
   feedback: z.string().optional(),
 });
 export type OfferNextStepPart = z.infer<typeof OfferNextStepPartSchema>;

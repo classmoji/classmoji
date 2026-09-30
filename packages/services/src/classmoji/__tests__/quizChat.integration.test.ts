@@ -1459,6 +1459,71 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     expect(old).toEqual([offer('old', { actions: ['next'] })]);
   });
 
+  it("keeps an offer's expected answer out of the row text and every student transcript, and shows it to staff", async () => {
+    const attemptId = await newAttempt();
+    await begin(attemptId);
+    const feedback = 'Check which of the two selectors is more specific.';
+    const answer = 'SENTINEL: the .btn text stays white; the :hover rule is less specific.';
+    const input = { expected_answer: answer, feedback, actions: ['try_again', 'next'] };
+    await chat.persistAssistantMessage(
+      attemptId,
+      {
+        id: 'asst-answer',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'tool-offer_next_step',
+            toolCallId: 'b',
+            state: 'output-available',
+            input,
+            output: {
+              actions: ['try_again', 'next'],
+              lead_in: 'Would you like to try again or move on?',
+            },
+          },
+          {
+            type: 'dynamic-tool',
+            toolName: 'offer_next_step',
+            toolCallId: 'refused',
+            state: 'output-error',
+            input: { ...input, actions: ['try_again'] },
+            errorText: 'An error occurred.',
+          },
+        ],
+      } as never,
+      { final: true }
+    );
+
+    // The row text is the feedback only.
+    const row = await getPrisma().aIConversationMessage.findFirstOrThrow({
+      where: { ui_message_id: 'asst-answer' },
+      select: { content: true },
+    });
+    expect(row.content).toBe(feedback);
+
+    // The canonical history (the model's) keeps it.
+    expect(JSON.stringify(await chat.loadCanonicalMessages(attemptId))).toContain('SENTINEL');
+
+    // A student (the default viewer, and the explicit one) never receives it.
+    for (const student of [
+      await chat.loadTranscriptForViewer(attemptId),
+      await chat.loadTranscriptForViewer(attemptId, 'student'),
+    ]) {
+      const s = JSON.stringify(student);
+      expect(s).not.toContain('SENTINEL');
+      expect(s).not.toContain('expected_answer');
+      const parts = student[0].parts as Array<Record<string, unknown>>;
+      expect(parts.find(p => p.toolCallId === 'b')).toMatchObject({
+        input: { feedback, actions: ['try_again', 'next'] },
+      });
+    }
+
+    // Staff reading the attempt see it with the feedback.
+    const staff = await chat.loadTranscriptForViewer(attemptId, 'staff');
+    const parts = staff[0].parts as Array<Record<string, unknown>>;
+    expect(parts.find(p => p.toolCallId === 'b')).toMatchObject({ input });
+  });
+
   it('keeps runtime state under context.runtime without touching other keys', async () => {
     const attemptId = await newAttempt();
     expect(await chat.readRuntimeState(attemptId)).toBeNull();

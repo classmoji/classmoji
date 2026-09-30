@@ -77,14 +77,19 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const studentName =
     attemptData.attempt.user?.name || attemptData.attempt.user?.login || 'Student';
 
-  // 8. A chat-runtime attempt's transcript, projected exactly as its student
-  // sees it (hidden rows and internal parts removed). Its raw rows are never
-  // sent. Staff read it; only the attempt's owner drives its chat session.
+  // 8. A chat-runtime attempt's transcript, projected as its student sees it
+  // (hidden rows and internal parts removed), plus the answer each feedback
+  // was written against (`expected_answer`) for staff reading someone else's
+  // attempt. Its raw rows are never sent. Only the attempt's owner drives its
+  // chat session, and gets exactly what that session streamed.
   const isChatAttempt = isTriggerChatAttempt(attemptData.attempt);
-  const transcript = isChatAttempt
-    ? await ClassmojiService.quizChat.loadTranscriptForViewer(attemptData.attempt.id)
-    : null;
   const viewerOwnsAttempt = attemptData.attempt.user_id.toString() === userId.toString();
+  const transcript = isChatAttempt
+    ? await ClassmojiService.quizChat.loadTranscriptForViewer(
+        attemptData.attempt.id,
+        viewerOwnsAttempt ? 'student' : 'staff'
+      )
+    : null;
 
   // 9. Send only what the drawer and QuizAttemptInterface read — see
   // ~/utils/quizPayloads. Both rows arrive joined to much more: the attempt to

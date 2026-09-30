@@ -196,6 +196,8 @@ const FEEDBACK =
   'Yes, that is right: your grid gives the cards two equal columns, so the page reads as a tidy row of features.';
 const CLOSE =
   'Close: the loop is right, but the bound is off by one, so the last item of your list is never read.';
+/** The correct answer an offer states for staff; no student ever receives it. */
+const ANSWER = 'SENTINEL: the loop must run while i < items.length, not i < items.length - 1.';
 
 const RECORD = {
   question_num: 1,
@@ -842,7 +844,11 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
               type: 'tool-call',
               toolCallId: 'b',
               toolName: 'offer_next_step',
-              input: JSON.stringify({ feedback: FEEDBACK, actions: ['next'] }),
+              input: JSON.stringify({
+                expected_answer: ANSWER,
+                feedback: FEEDBACK,
+                actions: ['next'],
+              }),
             },
             {
               type: 'tool-call',
@@ -1068,7 +1074,7 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
       input: JSON.stringify(input),
     });
     const offer = (id: string, feedback = CLOSE): Chunk =>
-      offerOf(id, { feedback, actions: ['try_again', 'next'] });
+      offerOf(id, { expected_answer: ANSWER, feedback, actions: ['try_again', 'next'] });
     /** The saved offer parts that carry buttons. */
     const buttons = (saved: Chunk[]) =>
       saved.filter(p => p.type === 'tool-offer_next_step' && p.state === 'output-available');
@@ -1103,7 +1109,8 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
     async function answerTurn(
       steps: Chunk[][],
       ctx: AttemptContext = context(),
-      finishes: string[] = []
+      finishes: string[] = [],
+      project = true
     ) {
       const { runQuizTurn } = await import('../../loop.ts');
       // eslint-disable-next-line import/no-unresolved -- package subpath export, resolved by vitest
@@ -1133,6 +1140,7 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
       };
       const stream = runQuizTurn({
         ctx,
+        project,
         messages: [{ role: 'user', content: 'my answer' }],
         signal: new AbortController().signal,
         model,
@@ -1163,15 +1171,17 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
       expect(chunks.some(c => c.type === 'tool-output-error')).toBe(false);
       expect(saved.some(p => p.type === 'text')).toBe(false);
       expect(buttons(saved)).toHaveLength(1);
+      // Saved whole: the expected answer stays with the reply, for staff.
       expect(buttons(saved)[0]).toMatchObject({
         toolCallId: 'b',
-        input: { feedback: CLOSE, actions: ['try_again', 'next'] },
+        input: { expected_answer: ANSWER, feedback: CLOSE, actions: ['try_again', 'next'] },
         output: {
           actions: ['try_again', 'next'],
           lead_in: 'Would you like to try again or move on?',
         },
       });
-      // The browser gets the input, feedback included, through the projection.
+      // The browser gets the input, feedback included, through the projection:
+      // without the expected answer, and with no streamed input text.
       expect(chunks).toContainEqual(
         expect.objectContaining({
           type: 'tool-input-available',
@@ -1179,16 +1189,64 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
           input: { feedback: CLOSE, actions: ['try_again', 'next'] },
         })
       );
-      // The next turn's history carries the feedback in the call.
+      expect(chunks.some(c => c.type === 'tool-input-delta' && c.toolCallId === 'b')).toBe(false);
+      expect(JSON.stringify(chunks)).not.toContain('SENTINEL');
+      expect(JSON.stringify(chunks)).not.toContain('expected_answer');
+      // The next turn's history carries the feedback and the answer in the call.
       const { convertToModelMessages } = await import('ai');
       const history = await convertToModelMessages([
         { id: 'm', role: 'assistant', parts: saved } as never,
       ]);
       expect(JSON.stringify(history)).toContain(CLOSE);
+      expect(JSON.stringify(history)).toContain(ANSWER);
     });
 
-    it('refuses an offer with no or blank feedback as invalid input, then takes the corrected call', async () => {
-      for (const bad of [{}, { feedback: '  \n ' }]) {
+    it('never streams the expected answer to the browser, even as input text', async () => {
+      // The model's input arrives as text deltas, answer first (the order it
+      // is asked for), as a real provider streams it.
+      const input = JSON.stringify({
+        expected_answer: ANSWER,
+        feedback: CLOSE,
+        actions: ['try_again', 'next'],
+      });
+      const cut = input.indexOf('SENTINEL') + 4;
+      const steps = [
+        [
+          { type: 'tool-input-start', id: 'b', toolName: 'offer_next_step' },
+          { type: 'tool-input-delta', id: 'b', delta: input.slice(0, cut) },
+          { type: 'tool-input-delta', id: 'b', delta: input.slice(cut) },
+          { type: 'tool-input-end', id: 'b' },
+          { type: 'tool-call', toolCallId: 'b', toolName: 'offer_next_step', input },
+        ],
+      ];
+      // Unprojected, the turn does stream the answer as input text...
+      const raw = await answerTurn(steps, context(), [], false);
+      expect(
+        raw.chunks.filter(c => c.type === 'tool-input-delta').map(c => c.inputTextDelta)
+      ).toEqual([input.slice(0, cut), input.slice(cut)]);
+      // ...and the browser's stream carries none of it.
+      const { chunks, saved } = await answerTurn(steps);
+      expect(buttons(saved).map(p => p.toolCallId)).toEqual(['b']);
+      expect(chunks.map(c => c.type)).toEqual(
+        expect.arrayContaining([
+          'tool-input-start',
+          'tool-input-available',
+          'tool-output-available',
+        ])
+      );
+      expect(chunks.some(c => c.type === 'tool-input-delta')).toBe(false);
+      for (const term of ['SENTINEL', 'items.length', 'expected_answer']) {
+        expect(JSON.stringify(chunks)).not.toContain(term);
+      }
+    });
+
+    it('refuses an offer with no or blank feedback or expected answer as invalid input, then takes the corrected call', async () => {
+      for (const bad of [
+        { expected_answer: ANSWER },
+        { expected_answer: ANSWER, feedback: '  \n ' },
+        { feedback: CLOSE },
+        { expected_answer: ' ', feedback: CLOSE },
+      ]) {
         const { model, chunks, saved } = await answerTurn([
           [offerOf('b1', { ...bad, actions: ['try_again', 'next'] })],
           [offer('b2')],

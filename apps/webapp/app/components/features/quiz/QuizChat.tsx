@@ -44,7 +44,8 @@ const { Text } = Typography;
  * Parts render by type (the design's §2.4): text as markdown, the question
  * card from the server-accepted `present_question` output, the per-question
  * marker from `data-question-result`, `offer_next_step` as the feedback on an
- * answer (its input, shown as the agent's message while it streams) then the
+ * answer (its input, shown as the agent's message once it is in; for staff
+ * reading someone else's attempt, the expected answer under it) then the
  * lead-in line and the Try again / Next buttons (its output), the results
  * panel from the stored evaluation record. Any other part (reasoning, internal
  * tools, unknown data) renders nothing. Parts render in arrival order, except
@@ -327,12 +328,23 @@ export const isFailedToolPart = (part: QuizPart) => {
 
 /**
  * The feedback on the answer an offer_next_step call carries in its input,
- * when it has some. The input is partial while it streams, and a part saved
- * before the feedback moved into the call has none.
+ * when it has some. A student's copy has no input until the call is complete
+ * (its `expected_answer` is cut, and with it the streamed input), and a part
+ * saved before the feedback moved into the call has none.
  */
 const feedbackOf = (input: unknown): string | null => {
   const feedback = (input as { feedback?: unknown } | undefined)?.feedback;
   return typeof feedback === 'string' && feedback.trim() ? feedback : null;
+};
+
+/**
+ * The correct answer an offer_next_step call stated for staff, when the
+ * transcript has it: only staff reading someone else's attempt get it (the
+ * projection cuts it for everyone else, live and saved).
+ */
+const expectedAnswerOf = (input: unknown): string | null => {
+  const answer = (input as { expected_answer?: unknown } | undefined)?.expected_answer;
+  return typeof answer === 'string' && answer.trim() ? answer.trim() : null;
 };
 
 /** The button a student message used: stored with it by admission, or named by its text. */
@@ -393,8 +405,9 @@ export const liveOfferOf = (
  * placeholder only while its message is streaming, so a turn that ended before
  * the card leaves no empty card behind, and only in a bubble that already
  * shows something (`messageBlocks`). With `streaming` false this is the set of
- * settled parts. An offer's feedback renders as soon as it has some, as text
- * does; its buttons only once the call is done (`AssistantPart`).
+ * settled parts. An offer's feedback renders as soon as its input has some
+ * (a student's copy has none until the call is complete: see `feedbackOf`);
+ * its buttons only once the call is done (`AssistantPart`).
  */
 const rendersInBubble = (part: QuizPart, streaming: boolean) => {
   if (isFailedToolPart(part)) return false;
@@ -498,7 +511,7 @@ const textAfterCard = (parts: readonly QuizPart[]): Set<number> => {
 
 /**
  * A part that ends the wait for the reply: a card, the buttons, or a notice.
- * An offer ends it once its buttons are in, not while its feedback streams.
+ * An offer ends it once its buttons are in, not when its feedback shows.
  */
 const endsTheWait = (part: QuizPart) =>
   part.type === 'tool-present_question' ||
@@ -799,14 +812,25 @@ export function AssistantPart({
       return null;
     }
     case 'tool-offer_next_step': {
-      // The feedback (the call's input) is the agent's message, shown as it
-      // streams; the lead-in and buttons (its output) follow once the call is
-      // done. A part saved before the feedback moved into the call has none.
-      // Only the live set can be clicked (`liveOfferOf`).
+      // The feedback (the call's input) is the agent's message, shown once
+      // the input is in; the lead-in and buttons (its output) follow once the
+      // call is done. A part saved before the feedback moved into the call has
+      // none. Under it, for staff only, the answer the model stated (the
+      // student's copy never has it). Only the live set can be clicked
+      // (`liveOfferOf`).
       const feedback = feedbackOf(part.input);
+      const expected = expectedAnswerOf(part.input);
       return (
         <>
           {feedback ? <Markdown text={feedback} isAssistant /> : null}
+          {expected ? (
+            <p
+              className="mt-1 mb-2 text-xs text-gray-500 dark:text-gray-400"
+              data-testid="quiz-expected-answer"
+            >
+              <span className="font-medium">Expected:</span> {expected}
+            </p>
+          ) : null}
           {part.state === 'output-available' ? (
             <NextStepButtons
               actions={part.output.actions}

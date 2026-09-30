@@ -35,7 +35,8 @@
  * offer_next_step carries the model's feedback on the answer in its input
  * (`feedback`, which the schema requires to be non-blank; the browser shows it
  * as the agent's message, above the buttons), so feedback and buttons arrive
- * together. How much feedback to write is the description's to say, never a
+ * together. Before it comes the correct answer (`expected_answer`), saved with
+ * the reply for staff and cut by the projection for every student. How much feedback to write is the description's to say, never a
  * count here. The call is refused in a turn the student opened with Try again
  * (that reply is a hint, which ends with a question), for Try again without
  * Next, and once an offer has gone out in the turn. Its output carries the

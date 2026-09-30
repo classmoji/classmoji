@@ -158,7 +158,9 @@ function fakeAttempt(questionCount = 2, init: Partial<AttemptProgress> = {}) {
     }),
     offer_next_step: tool({
       ...quizToolDefs.offer_next_step,
-      execute: input => queue(async () => ({ ...input, lead_in: 'Ready for the next question?' })),
+      // As the real tool: the buttons and the lead-in, never the input's text.
+      execute: input =>
+        queue(async () => ({ actions: input.actions, lead_in: 'Ready for the next question?' })),
     }),
     submit_quiz_evaluation: tool({
       ...quizToolDefs.submit_quiz_evaluation,
@@ -1310,7 +1312,7 @@ describe('the history of earlier turns: failed tool calls left out', () => {
                 refused = true;
                 throw new Error(OFFER_AFTER_HINT_TEXT);
               }
-              return { ...input, lead_in: 'Ready for the next question?' };
+              return { actions: input.actions, lead_in: 'Ready for the next question?' };
             }),
         }),
       };
@@ -1341,11 +1343,18 @@ describe('the history of earlier turns: failed tool calls left out', () => {
 
 describe('an offer that carries its feedback', () => {
   const FEEDBACK = 'Right: `map` returns a new array. The original is left alone.';
+  const ANSWER = 'SENTINEL: `map` builds a new array and never changes the original.';
 
   it('ends the turn on a reply that is only the call, and saves a part carrying the feedback', async () => {
     const a = fakeAttempt(2, { presented: 1 });
     const model = scriptedModel([
-      [toolCall('b', 'offer_next_step', { feedback: FEEDBACK, actions: ['next'] })],
+      [
+        toolCall('b', 'offer_next_step', {
+          expected_answer: ANSWER,
+          feedback: FEEDBACK,
+          actions: ['next'],
+        }),
+      ],
       [...text('t', 'should not be requested')],
     ]);
     const chunks = await collect(
@@ -1360,12 +1369,13 @@ describe('an offer that carries its feedback', () => {
     expect(model.doStreamCalls).toHaveLength(1);
     const saved = a.persisted.at(-1)?.message.parts ?? [];
     expect(saved.some(p => p.type === 'text')).toBe(false);
+    // Saved whole, the expected answer included (staff read it).
     expect(saved.find(p => p.type === 'tool-offer_next_step')).toMatchObject({
       state: 'output-available',
-      input: { feedback: FEEDBACK, actions: ['next'] },
+      input: { expected_answer: ANSWER, feedback: FEEDBACK, actions: ['next'] },
       output: { actions: ['next'], lead_in: 'Ready for the next question?' },
     });
-    // The browser receives the feedback with the call's input.
+    // The browser receives the feedback with the call's input, never the answer.
     expect(chunks).toContainEqual(
       expect.objectContaining({
         type: 'tool-input-available',
@@ -1373,6 +1383,8 @@ describe('an offer that carries its feedback', () => {
         input: { feedback: FEEDBACK, actions: ['next'] },
       })
     );
+    expect(JSON.stringify(chunks)).not.toContain('SENTINEL');
+    expect(JSON.stringify(chunks)).not.toContain('expected_answer');
   });
 
   it('adds no buttons at the end of a turn whose offer was refused', async () => {

@@ -24,6 +24,7 @@ import {
   buildTurnStatus,
   buttonActionFor,
   projectTranscript,
+  quizStaffVisibility,
   quizVisibility,
   type AttemptProgress,
   type QuizUIMessage,
@@ -118,7 +119,8 @@ const toUIMessage = (row: StoredMessageRow): QuizUIMessage =>
 /**
  * A part's readable text: a text part's text, or the feedback an accepted
  * offer_next_step carries (shown as the agent's message). A refused offer's
- * feedback was never shown, so it is not taken.
+ * feedback was never shown, so it is not taken. The offer's
+ * `expected_answer` is for staff only and is never taken.
  */
 const partText = (p: unknown): string | null => {
   if (!isObject(p)) return null;
@@ -581,9 +583,23 @@ export const loadCanonicalMessages = async (attemptId: string): Promise<QuizUIMe
   return rows.map(toUIMessage);
 };
 
-/** The transcript any viewer (student or staff) gets: the canonical messages, projected. */
-export const loadTranscriptForViewer = async (attemptId: string): Promise<QuizUIMessage[]> =>
-  projectTranscript(await loadCanonicalMessages(attemptId), quizVisibility) as QuizUIMessage[];
+/**
+ * Who reads a transcript. `student`: the attempt's owner (staff previewing
+ * included), who drives its chat and so gets what the live stream showed.
+ * `staff`: staff reading someone else's attempt, who also see the answer each
+ * offer_next_step call stated for staff (`expected_answer`).
+ */
+export type TranscriptViewer = 'student' | 'staff';
+
+/** The transcript a viewer gets: the canonical messages, projected for them. */
+export const loadTranscriptForViewer = async (
+  attemptId: string,
+  viewer: TranscriptViewer = 'student'
+): Promise<QuizUIMessage[]> =>
+  projectTranscript(
+    await loadCanonicalMessages(attemptId),
+    viewer === 'staff' ? quizStaffVisibility : quizVisibility
+  ) as QuizUIMessage[];
 
 /** `ai_conversations.context.runtime`, or null before the first save. */
 export const readRuntimeState = async (attemptId: string): Promise<QuizChatRuntimeState | null> => {

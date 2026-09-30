@@ -71,11 +71,12 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const readOnly = Boolean(attemptData.attempt.completed_at);
 
   // 7. A chat-runtime attempt's transcript, projected exactly as a student
-  // sees theirs (hidden rows and internal parts removed). Its raw rows are
-  // never sent. Step 4 already made the caller its owner.
+  // sees theirs (hidden rows and internal parts removed, and no
+  // `expected_answer`). Its raw rows are never sent. Step 4 already made the
+  // caller its owner, who drives its chat session.
   const isChatAttempt = isTriggerChatAttempt(attemptData.attempt);
   const transcript = isChatAttempt
-    ? await ClassmojiService.quizChat.loadTranscriptForViewer(attemptData.attempt.id)
+    ? await ClassmojiService.quizChat.loadTranscriptForViewer(attemptData.attempt.id, 'student')
     : null;
 
   // Send only what the drawer and QuizAttemptInterface read — see

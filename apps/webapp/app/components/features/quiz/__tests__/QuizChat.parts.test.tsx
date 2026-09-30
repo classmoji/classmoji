@@ -6,7 +6,12 @@
 
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { projectMessage, quizVisibility, type QuizUIMessage } from '@classmoji/utils/quiz-agent';
+import {
+  projectMessage,
+  quizStaffVisibility,
+  quizVisibility,
+  type QuizUIMessage,
+} from '@classmoji/utils/quiz-agent';
 
 let darkMode = false;
 vi.mock('~/hooks', () => ({ useDarkMode: () => ({ isDarkMode: darkMode }) }));
@@ -546,6 +551,7 @@ describe('QuizTranscript — the feedback offer_next_step carries', () => {
     ...(state === 'output-error' ? { errorText: 'An error occurred.' } : {}),
   });
   const FEEDBACK = '**Close**: the loop runs one step too far.';
+  const ANSWER = 'SENTINEL: the loop should stop at items.length - 1.';
   const LEAD_IN = 'Want another go?';
   const BOTH = ['try_again', 'next'];
   const expectInOrder = (html: string, needles: string[]) => {
@@ -633,6 +639,65 @@ describe('QuizTranscript — the feedback offer_next_step carries', () => {
             expect(html).not.toContain('data-testid="quiz-next-step"');
             expect(html).not.toContain('data-message-role="assistant"');
           }
+        }
+      });
+
+      it('shows staff the expected answer as a muted line under the feedback, above the buttons', () => {
+        const html = renderTranscript([
+          msg('a1', 'assistant', [
+            offer(
+              'output-available',
+              { expected_answer: ANSWER, feedback: FEEDBACK, actions: BOTH },
+              { actions: BOTH, lead_in: LEAD_IN }
+            ),
+          ]),
+        ]);
+        expect(html.match(/data-testid="quiz-assistant-bubble"/g)).toHaveLength(1);
+        expectInOrder(html, [
+          '<strong class="font-semibold">Close</strong>',
+          'data-testid="quiz-expected-answer"',
+          'Expected:',
+          ANSWER,
+          LEAD_IN,
+          'data-testid="quiz-try-again"',
+        ]);
+        const line = html.slice(html.lastIndexOf('<p', html.indexOf('quiz-expected-answer')));
+        expect(line).toMatch(/^<p class="[^"]*text-xs text-gray-500 dark:text-gray-400[^"]*"/);
+      });
+
+      it("shows no expected answer in a student's copy of the same reply, only in staff's", () => {
+        const stored = msg('a1', 'assistant', [
+          offer(
+            'output-available',
+            { expected_answer: ANSWER, feedback: FEEDBACK, actions: BOTH },
+            { actions: BOTH, lead_in: LEAD_IN }
+          ),
+        ]);
+        const student = renderTranscript([projectMessage(stored, quizVisibility)!]);
+        expect(student).toContain('the loop runs one step too far.');
+        expect(student).toContain('data-testid="quiz-try-again"');
+        expect(student).not.toContain('quiz-expected-answer');
+        expect(student).not.toContain('SENTINEL');
+        expect(student).not.toContain('Expected:');
+
+        const staff = renderTranscript([projectMessage(stored, quizStaffVisibility)!]);
+        expect(staff).toContain('data-testid="quiz-expected-answer"');
+        expect(staff).toContain(ANSWER);
+      });
+
+      it('shows no expected-answer line when there is none, or it is blank', () => {
+        for (const expected_answer of [undefined, '', '  \n']) {
+          const html = renderTranscript([
+            msg('a1', 'assistant', [
+              offer(
+                'output-available',
+                { expected_answer, feedback: FEEDBACK, actions: BOTH },
+                { actions: BOTH, lead_in: LEAD_IN }
+              ),
+            ]),
+          ]);
+          expect(html).toContain('the loop runs one step too far.');
+          expect(html).not.toContain('quiz-expected-answer');
         }
       });
 

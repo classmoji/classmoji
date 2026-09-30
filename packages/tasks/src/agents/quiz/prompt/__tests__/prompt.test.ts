@@ -422,6 +422,44 @@ describe('quiz prompt: typed tools only', () => {
     expect(flat).not.toContain('→ Call offer_next_step: { "actions"');
   });
 
+  it.each(bothModes)(
+    '%s: asks for the expected answer first, and says once that Try again feedback never gives it away',
+    (_l, p) => {
+      const flat = p.staticPrompt.replace(/\s+/g, ' ');
+      expect(flat).toContain(
+        "Before it, state the correct answer in the call's expected_answer field (one or two sentences, for staff only; the student never sees it)."
+      );
+      const rule =
+        'When offering Try again, never state or hint at the content of expected_answer: no correct values, results, names or properties it contains. Name the flawed reasoning and where to look instead. Example: not "your white text turns black on hover" but "check which of the two selectors is more specific".';
+      expect(flat.split(rule)).toHaveLength(2);
+      expect(flat.split('never state or hint at the content of expected_answer')).toHaveLength(2);
+      // The reveal rules stand: with only Next the answer may be stated.
+      expect(flat).toContain(
+        'With only Next (a correct answer, or the reveal), the feedback may state the answer.'
+      );
+      expect(flat).toMatch(/The reveal ends the question: offer only \["next"\]/);
+      // Feedback may say where to look; any further guidance is still a hint.
+      expect(flat).toContain(
+        'Feedback on an answer says only what is right and what is wrong, and where to look (FEEDBACK ON AN ANSWER). It NEVER guides further toward the answer'
+      );
+    }
+  );
+
+  it.each(bothModes)('%s: shows every offer_next_step example with an expected answer', (_l, p) => {
+    const flat = p.staticPrompt.replace(/\s+/g, ' ');
+    const arrows = flat.match(/→ Call offer_next_step: \{[^}]*\}/g) ?? [];
+    expect(arrows.length).toBeGreaterThan(0);
+    for (const call of arrows) {
+      expect(call).toMatch(
+        /^→ Call offer_next_step: \{ "expected_answer": "<the correct answer>", "feedback"/
+      );
+    }
+    const walkthrough = flat.match(/\[Calls offer_next_step with [^\]]*\]/g) ?? [];
+    for (const call of walkthrough) {
+      expect(call).toContain('expected_answer');
+    }
+  });
+
   it('has the code-aware answer steps put the feedback in the call', () => {
     expect(codeAwareAgentPrompt).toMatch(
       /2\. Call offer_next_step with your feedback \(praise, or what is right and what is wrong\) in its feedback field; don't also write the feedback as text\./

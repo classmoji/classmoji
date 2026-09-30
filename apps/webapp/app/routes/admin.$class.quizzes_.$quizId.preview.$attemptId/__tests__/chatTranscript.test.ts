@@ -104,7 +104,8 @@ describe('preview loader — chat-runtime attempts', () => {
 
     const data = await load();
 
-    expect(loadTranscriptMock).toHaveBeenCalledWith('attempt-1');
+    // A preview is the caller's own attempt: the student transcript.
+    expect(loadTranscriptMock).toHaveBeenCalledWith('attempt-1', 'student');
     expect(data.transcript).toEqual(PROJECTED);
     expect(data.messages).toEqual([]);
     expect(data.viewerOwnsAttempt).toBe(true);
