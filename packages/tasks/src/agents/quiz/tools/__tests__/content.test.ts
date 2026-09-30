@@ -138,7 +138,7 @@ function setup(
     signal: new AbortController().signal,
     services: { grading: {}, mintMcpToken, connectMcp: mcp.connect } as never,
     log,
-    wordsWritten: () => 40,
+    textWritten: () => true,
   });
   const steps = () => writes.filter(w => w.type === 'data-step').map(w => w.data);
   return { tools, writes, steps, log, mcp, mintMcpToken };
@@ -697,7 +697,7 @@ describe('connectMcp: the real client against a stubbed MCP endpoint', () => {
       signal: new AbortController().signal,
       services: { grading: {}, mintMcpToken: async () => TOKEN, connectMcp } as never,
       log: vi.fn(),
-      wordsWritten: () => 40,
+      textWritten: () => true,
     });
 
     const out = await call(tools, 'content_get', { kind: 'page', id: 'page-linked' });

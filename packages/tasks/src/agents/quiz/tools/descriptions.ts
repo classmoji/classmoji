@@ -21,10 +21,10 @@ export const TOOL_DESCRIPTIONS: Record<QuizToolName, string> = {
 
   offer_next_step:
     'Show the student buttons after your feedback on an answer: ["try_again", "next"] when the answer is not correct or after "I don\'t know", ["next"] when it is correct or after you revealed the answer. ' +
-    'The buttons come with their own fixed lead-in line (such as "Ready for the next question?"), so do not write one yourself, and never tell the student what to click or what comes next ("Click Next to see your results"). ' +
+    'The buttons come with their own fixed lead-in line (such as "Ready for the next question?"), so do not write one yourself; never mention the buttons, tell the student what to click or type, or say what comes next ("Click Next to see your results", "type next"). ' +
     'Never in the same reply as present_question: after a new question the student answers first, and the call is refused. ' +
     'Never after a hint: a Try again click or a hint request gets one hint ending with a question such as "What do you think?", and the call is refused in a Try again turn. ' +
-    'Write your feedback text first (2 to 4 sentences: what is right, what is wrong if anything, and why it matters), then call it as the last thing in your reply and end the reply; a call before that feedback is refused. ' +
+    'Write your feedback text first (2 to 4 sentences: what is right, what is wrong if anything, and why it matters), then call it as the last thing in your reply and end the reply; a call before any feedback text is refused. ' +
     `A click arrives as the student's next message: "${BUTTON_TEXT.try_again}" or "${BUTTON_TEXT.next}".`,
 
   submit_quiz_evaluation:

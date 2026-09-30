@@ -15,6 +15,10 @@
  *   reply.
  * - `prepareStep` rebuilds each step's messages and moves one cache
  *   breakpoint to the last message, so an older breakpoint never piles up.
+ * - Tool calls that failed in EARLIER turns are left out of the history
+ *   (`withoutEarlierFailedToolCalls`): their saved error is only "An error
+ *   occurred.", which reads as a broken interface. This turn's own refusals
+ *   stay in its steps, so the model reads them and recovers.
  * - The turn stops once `present_question`, `offer_next_step` or
  *   `submit_quiz_evaluation` SUCCEEDED (an invalid call is a tool error the
  *   model corrects in the same turn), or at the step ceiling
@@ -29,6 +33,11 @@
  *   server completes the attempt from the recorded grades and writes a
  *   `data-evaluation` part. If the last result is missing, a `reply_failed`
  *   notice is written and the student's next message retries.
+ * - Otherwise, if the turn's last offer_next_step was refused only for having
+ *   no feedback text yet, the text came after it, and no card, buttons or
+ *   evaluation went out, that call is run again with the model's own input
+ *   through the same tool (`offerToReplay`), and its buttons are written into
+ *   the reply like any other offer. Any other refusal writes nothing.
  * - Everything the model or the tools write is persisted in `onEnd`, upstream
  *   of the projection; the returned stream is projected for the browser. A
  *   failed save is tried once more (the save is an upsert by message id); a
@@ -59,6 +68,7 @@ import type {
 import { THINKING } from '@classmoji/utils/ai-models';
 import type { AttemptContext } from './context.ts';
 import { CODE_UNAVAILABLE_NOTICE } from './prompt/index.ts';
+import { isFeedbackMissing } from './tools/errors.ts';
 import type { Effort } from './settings.ts';
 import { isRefusal, logDiagnostic, type DiagnosticLog } from '../shared/sanitize.ts';
 import { createToolQueue, type ToolQueue } from '../shared/toolQueue.ts';
@@ -95,10 +105,11 @@ export type QuizToolsFactory = (
     /** The turn's log, so tool diagnostics and usage lines land with the loop's. */
     log?: DiagnosticLog;
     /**
-     * How many words the model has written in this turn, counted from the
-     * model's stream itself (`watchModelText`, `createWordCounter`).
+     * Whether the model has written visible text in this turn (a text delta
+     * with a non-space character), read from the model's own stream
+     * (`watchModelText`) before any tool of the same step runs.
      */
-    wordsWritten: () => number;
+    textWritten: () => boolean;
   }
 ) => ToolSet;
 
@@ -146,15 +157,15 @@ type Phase = 'question' | 'evaluation';
 export type ModelObject = Exclude<LanguageModel, string>;
 
 /**
- * The model, with `onText` called with each text delta as it leaves it, and
- * with a line break where a text block ends (so the words of two blocks never
- * join). This sits at the model's own stream, upstream of the SDK's tool
- * execution (a step's tools run once its model call has ended), so every delta
- * of a step has passed here before any tool of that step runs: a tool reading
- * the count sees the text written before its call in the same step, whatever
- * the downstream UI stream has consumed so far.
+ * The model, with `onText` called as each text delta with a non-space
+ * character leaves it. This sits at the model's own stream, upstream of the
+ * SDK's tool execution (a step's tools run once its model call has ended), so
+ * every delta of a step has passed here before any tool of that step runs: a
+ * tool reading the flag sees the text written before its call in the same
+ * step, or in an earlier step of the turn, whatever the downstream UI stream
+ * has consumed so far.
  */
-export function watchModelText(model: ModelObject, onText: (text: string) => void): ModelObject {
+export function watchModelText(model: ModelObject, onText: () => void): ModelObject {
   return wrapLanguageModel({
     model,
     middleware: {
@@ -166,8 +177,7 @@ export function watchModelText(model: ModelObject, onText: (text: string) => voi
           stream: result.stream.pipeThrough(
             new TransformStream<Part, Part>({
               transform(part, controller) {
-                if (part.type === 'text-delta') onText(part.delta);
-                else if (part.type === 'text-end') onText('\n');
+                if (part.type === 'text-delta' && part.delta.trim() !== '') onText();
                 controller.enqueue(part);
               },
             })
@@ -176,58 +186,6 @@ export function watchModelText(model: ModelObject, onText: (text: string) => voi
       },
     },
   });
-}
-
-const HAS_WORD_CHARACTER = /[\p{L}\p{N}]/u;
-
-/** Characters that stand for one word where words cannot be told apart (the fallback). */
-export const CHARS_PER_WORD = 4;
-
-/** Splits text into word-like segments; `Intl.Segmenter` fits. */
-export type WordSegmenter = {
-  segment(text: string): Iterable<{ isWordLike?: boolean }>;
-};
-
-/** A word segmenter for any language, or null where the runtime has none. */
-export function defaultWordSegmenter(): WordSegmenter | null {
-  const Segmenter = (globalThis.Intl as { Segmenter?: typeof Intl.Segmenter } | undefined)
-    ?.Segmenter;
-  if (typeof Segmenter !== 'function') return null;
-  try {
-    return new Segmenter(undefined, { granularity: 'word' });
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Counts the words of text that arrives in pieces. The pieces are joined and
- * the whole text is counted each time, so a word cut across two deltas counts
- * once. With a segmenter (`Intl.Segmenter`), a word is a word-like segment,
- * which also counts words in languages written without spaces; markdown marks
- * ("**", "-") and blank text count for nothing. Without one, a word is a run
- * of non-space characters with a letter or digit in it, and every
- * `CHARS_PER_WORD` non-space characters count as at least one word, so text
- * without spaces is not counted as a single word.
- */
-export function createWordCounter(segmenter: WordSegmenter | null = defaultWordSegmenter()) {
-  let text = '';
-  const bySegments = (s: WordSegmenter) => {
-    let words = 0;
-    for (const segment of s.segment(text)) if (segment.isWordLike) words += 1;
-    return words;
-  };
-  const byRuns = () => {
-    const runs = text.split(/\s+/).filter(run => HAS_WORD_CHARACTER.test(run)).length;
-    const chars = text.replace(/\s+/g, '').length;
-    return Math.max(runs, Math.floor(chars / CHARS_PER_WORD));
-  };
-  return {
-    push(delta: string) {
-      text += delta;
-    },
-    count: () => (segmenter ? bySegments(segmenter) : byRuns()),
-  };
 }
 
 /** The turn is in the evaluation phase once the last question is out. */
@@ -309,6 +267,88 @@ export function dropIncompleteToolParts(message: QuizUIMessage): QuizUIMessage {
   return { ...message, parts } as QuizUIMessage;
 }
 
+/** A tool result whose saved state was `output-error` (the SDK converts it to an error output). */
+function isErrorResult(part: unknown): part is { type: 'tool-result'; toolCallId: string } {
+  const p = part as { type?: unknown; output?: { type?: unknown } } | null;
+  return (
+    p?.type === 'tool-result' &&
+    (p.output?.type === 'error-text' || p.output?.type === 'error-json')
+  );
+}
+
+/**
+ * The history of earlier turns without the tool calls that failed in them:
+ * each such call and its result are removed, a tool message left empty is
+ * dropped, and so is an assistant message left with nothing but reasoning
+ * (the step made only that call). Saved, those failures read "An error
+ * occurred.", which tells the model nothing but that something is broken.
+ *
+ * It depends on nothing but the messages, and removes only: every message
+ * before the first one that held a failed call is the same object, so the
+ * history of a later turn starts with the same bytes. With nothing to remove,
+ * the array itself comes back. The quiz tools use no approvals, so an error
+ * output here is always a failed call.
+ */
+export function withoutEarlierFailedToolCalls(messages: ModelMessage[]): ModelMessage[] {
+  const failed = new Set<string>();
+  for (const m of messages) {
+    if (typeof m.content === 'string') continue;
+    for (const part of m.content) if (isErrorResult(part)) failed.add(part.toolCallId);
+  }
+  if (failed.size === 0) return messages;
+
+  const isFailedPart = (part: unknown) => {
+    const p = part as { type?: unknown; toolCallId?: unknown };
+    return (
+      (p.type === 'tool-call' || p.type === 'tool-result') &&
+      typeof p.toolCallId === 'string' &&
+      failed.has(p.toolCallId)
+    );
+  };
+  const out: ModelMessage[] = [];
+  for (const m of messages) {
+    if ((m.role !== 'assistant' && m.role !== 'tool') || typeof m.content === 'string') {
+      out.push(m);
+      continue;
+    }
+    const content = (m.content as unknown[]).filter(part => !isFailedPart(part));
+    if (content.length === m.content.length) {
+      out.push(m);
+      continue;
+    }
+    const kept = content.some(part => (part as { type?: unknown }).type !== 'reasoning');
+    if (kept) out.push({ ...m, content } as ModelMessage);
+  }
+  return out;
+}
+
+/** The tools whose success ends the turn: a card, the buttons or the evaluation went out. */
+const TURN_ENDING_TOOLS = new Set([
+  'present_question',
+  'offer_next_step',
+  'submit_quiz_evaluation',
+]);
+
+/**
+ * The input of the turn's last offer_next_step call, when that call was
+ * refused only for having no feedback text yet (`isFeedbackMissing`) and no
+ * call in the turn put a card, buttons or the evaluation out; otherwise null.
+ * A later offer refused for any other reason, or accepted, wins over it.
+ */
+export function offerToReplay(steps: ReadonlyArray<{ content: ReadonlyArray<unknown> }>): unknown {
+  let last: { input: unknown; replay: boolean } | null = null;
+  for (const step of steps) {
+    for (const part of step.content) {
+      const p = part as { type?: unknown; toolName?: unknown; input?: unknown; error?: unknown };
+      if (p.type === 'tool-result' && TURN_ENDING_TOOLS.has(p.toolName as string)) return null;
+      if (p.type === 'tool-error' && p.toolName === 'offer_next_step') {
+        last = { input: p.input, replay: isFeedbackMissing(p.error) };
+      }
+    }
+  }
+  return last?.replay ? last.input : null;
+}
+
 /** Text-part count of the last user message in a request (the hidden status is part 2). */
 export function lastUserTextParts(messages: ModelMessage[]): number {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -367,12 +407,15 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
       };
       const phase = phaseFor(ctx.progress);
       const effort: Effort = phase === 'evaluation' ? ctx.gradingEffort : ctx.questionEffort;
-      // Counted from the model's own stream (watchModelText), never from the
-      // loop's writes such as the welcome, and before any tool of the same step runs.
-      const words = createWordCounter();
+      // Set from the model's own stream (watchModelText), never from the loop's
+      // writes such as the welcome, and before any tool of the same step runs.
+      // One flag for the whole turn: text in any earlier step counts too.
+      let textWritten = false;
       const model = watchModelText(
         input.model ?? createAnthropic({ apiKey: ctx.apiKey })(ctx.model),
-        text => words.push(text)
+        () => {
+          textWritten = true;
+        }
       );
       const queue = createToolQueue();
       const tools = deps.tools(ctx, {
@@ -380,7 +423,7 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
         queue,
         signal: deadline,
         log,
-        wordsWritten: words.count,
+        textWritten: () => textWritten,
       });
       let callIndex = 0;
       let sawStreamError = false;
@@ -459,6 +502,46 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
         }
       };
 
+      /**
+       * Runs a refused offer_next_step again through the same tool (the queue,
+       * every guard, the lead-in) and writes it into the reply as a call with
+       * its result, as the model's own call would be. A refusal writes nothing.
+       */
+      const replayOffer = async (offerInput: unknown) => {
+        const execute = tools.offer_next_step?.execute;
+        if (!execute) return;
+        const toolCallId = generateId();
+        let output: unknown;
+        try {
+          output = await execute(
+            offerInput as never,
+            {
+              toolCallId,
+              messages: [],
+              abortSignal: deadline,
+              context: undefined,
+            } as never
+          );
+        } catch {
+          log('[quiz-agent] offer_next_step replay refused', {
+            attemptId: ctx.attemptId,
+            runId: ctx.runId,
+          });
+          return;
+        }
+        writer.write({
+          type: 'tool-input-available',
+          toolCallId,
+          toolName: 'offer_next_step',
+          input: offerInput,
+        });
+        writer.write({ type: 'tool-output-available', toolCallId, output });
+        log('[quiz-agent] offer_next_step replayed', {
+          attemptId: ctx.attemptId,
+          runId: ctx.runId,
+        });
+      };
+
       try {
         // A code-aware quiz without a repository this turn: a fixed hidden notice
         // after the student's message, never persisted.
@@ -466,11 +549,12 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
           ? [{ role: 'user', content: CODE_UNAVAILABLE_NOTICE }]
           : [];
         let history: ModelMessage[] = [
-          ...input.messages,
+          ...withoutEarlierFailedToolCalls(input.messages),
           ...(input.extraMessages ?? []),
           ...codeNotice,
         ];
         let result = call(history);
+        const results = [result];
         await pump(result);
 
         for (let i = 0; i < RECOVERY_CALLS && !deadline.aborted && !sawStreamError; i++) {
@@ -488,6 +572,7 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
             n: i + 1,
           });
           result = call(history);
+          results.push(result);
           await pump(result);
         }
 
@@ -506,6 +591,10 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
             } else {
               notice('reply_failed');
             }
+          } else if (textWritten) {
+            const steps = (await Promise.all(results.map(r => r.steps))).flat();
+            const offer = offerToReplay(steps);
+            if (offer !== null) await replayOffer(offer);
           }
         }
         if (sawStreamError && !deadline.aborted) {

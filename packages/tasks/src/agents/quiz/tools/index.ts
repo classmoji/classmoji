@@ -29,18 +29,17 @@
  * (`student_asked_to_move_on`); otherwise it is refused before anything is
  * written, so a correct answer never shows its result before the Next click.
  * A result already recorded (a revision) is left to the service's own rules.
- * offer_next_step is also refused until the model has written feedback in
- * the turn: at least `MIN_FEEDBACK_WORDS` words (`wordsWritten`, which the
- * loop counts from the model's own stream, not from its own writes such as
- * the welcome): the buttons end the turn, so feedback the model meant to
- * write after them would never be written. That refusal is made at most
- * `MAX_FEEDBACK_REFUSALS` times in a turn; the next call is taken whatever
- * the count, so a count that is wrong for the model's language cannot keep
- * the turn from ending with buttons. It is refused as well in a turn the student opened
- * with Try again (that reply is a hint, which ends with a question), and for
- * Try again without Next. Its output carries the buttons and the fixed line
- * shown with them (`lead_in`, chosen from the buttons and whether the student
- * is on the last question).
+ * offer_next_step is also refused until the model has written visible text
+ * in the turn (`textWritten`, which the loop sets from the model's own stream,
+ * not from its own writes such as the welcome, and before any tool of the same
+ * step runs): the buttons end the turn, so feedback the model meant to write
+ * after them would never be written (the loop runs such a refused call again
+ * at the end of the turn if the text came after it). How much feedback to
+ * write is the prompt's to say, never a count here. It is refused as well in
+ * a turn the student opened with Try again (that reply is a hint, which ends
+ * with a question), and for Try again without Next. Its output carries the
+ * buttons and the fixed line shown with them (`lead_in`, chosen from the
+ * buttons and whether the student is on the last question).
  *
  * A question is open while the last presented question has no recorded
  * result. While one is open, present_question for a later question is refused
@@ -107,9 +106,9 @@ import { TOOL_DESCRIPTIONS } from './descriptions.ts';
 import {
   aborted,
   editLimitText,
+  feedbackMissingError,
   OFFER_AFTER_HINT_TEXT,
   OFFER_AFTER_QUESTION_TEXT,
-  OFFER_BEFORE_FEEDBACK_TEXT,
   OFFER_TRY_AGAIN_ALONE_TEXT,
   QUESTION_AFTER_OFFER_TEXT,
   QUOTE_READ_FAILED_TEXT,
@@ -123,19 +122,6 @@ import { connectMcp, contentTools, mintMcpToken, type ConnectMcp } from './conte
 import { defaultAnthropic, exploreCodebaseTool, mintRepoToken } from './exploreCodebase.ts';
 
 type Grading = typeof ClassmojiService.quizGrading;
-
-/**
- * The fewest words of feedback offer_next_step takes in a turn: enough for
- * the two sentences the prompt asks for, so a bare "Correct." cannot end an
- * answer's turn. Never shown to the model as a number.
- */
-export const MIN_FEEDBACK_WORDS = 15;
-
-/**
- * How many times one turn refuses offer_next_step for too little feedback;
- * the call after that is taken whatever the word count.
- */
-export const MAX_FEEDBACK_REFUSALS = 2;
 
 /** The service calls the tools make; tests pass fakes. */
 export type QuizToolServices = {
@@ -173,8 +159,8 @@ export type QuizToolDeps = {
   /** Defaults to the real services; tests inject fakes. */
   services?: Partial<QuizToolServices>;
   log?: DiagnosticLog;
-  /** How many words the model has written in this turn; the loop counts them. */
-  wordsWritten: () => number;
+  /** Whether the model has written visible text in this turn; the loop sets it. */
+  textWritten: () => boolean;
 };
 
 /** The grading service, loaded on first use so the prompt and tests stay light. */
@@ -251,8 +237,6 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
   const noQuestionOpen = () => lastPresented < 1 || recorded.has(lastPresented);
   /** Next-step buttons went out in this turn: the student chooses next. */
   let offerMade = false;
-  /** offer_next_step calls refused in this turn for too little feedback. */
-  let feedbackRefusals = 0;
   const editedQuestions = d.services?.editedQuestions ?? editedQuestionsFromJournal;
 
   /**
@@ -430,19 +414,9 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
         // student is on the last question (no card goes out in an offer's turn).
         const leadIn = nextStepLeadIn(input.actions, lastPresented >= ctx.questionCount);
         if (leadIn === null) throw new Error(OFFER_TRY_AGAIN_ALONE_TEXT);
-        // Buttons end the turn, so feedback written after them is never sent;
-        // and a bare "Correct." is not the feedback an answer gets. Refused a
-        // bounded number of times: after that the buttons go out anyway.
-        if (d.wordsWritten() < MIN_FEEDBACK_WORDS) {
-          if (feedbackRefusals < MAX_FEEDBACK_REFUSALS) {
-            feedbackRefusals += 1;
-            throw new Error(OFFER_BEFORE_FEEDBACK_TEXT);
-          }
-          d.log?.('[quiz-agent] offer_next_step taken after refusals', {
-            ...ids,
-            refusals: feedbackRefusals,
-          });
-        }
+        // Buttons end the turn, so feedback written after them is never sent.
+        // Any visible text of the turn, in this step or an earlier one, is taken.
+        if (!d.textWritten()) throw feedbackMissingError();
         offerMade = true;
         return { actions: [...input.actions], lead_in: leadIn };
       }),

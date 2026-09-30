@@ -20,9 +20,29 @@ export const TURN_STOPPED_TEXT = 'This turn was stopped. Nothing was saved.';
 export const OFFER_AFTER_QUESTION_TEXT =
   "Wait for the student's answer to this question before offering next steps.";
 
-/** offer_next_step refused because the model has written too little text in this turn (`MIN_FEEDBACK_WORDS`). */
+/**
+ * offer_next_step refused because the model has written no visible text in
+ * this turn yet. It says to call again: a model that only writes the feedback
+ * after this would end the turn without buttons.
+ */
 export const OFFER_BEFORE_FEEDBACK_TEXT =
-  "Write your feedback on the student's answer first: 2 to 4 sentences on what is right, what is wrong (if anything) and why it matters. Then call offer_next_step.";
+  "Write your feedback on the student's answer first (what is right, what is wrong if anything, and why it matters), then call offer_next_step again as the last thing in this reply.";
+
+/** The `code` on that refusal, so the loop can tell it from every other one. */
+export const FEEDBACK_MISSING = 'feedback_missing';
+
+/**
+ * The refusal of offer_next_step for no feedback text yet. The loop may run
+ * such a call again at the end of the turn once the text is there (loop.ts).
+ */
+export function feedbackMissingError(): Error {
+  return Object.assign(new Error(OFFER_BEFORE_FEEDBACK_TEXT), { code: FEEDBACK_MISSING });
+}
+
+/** True for the refusal `feedbackMissingError` makes, and for nothing else. */
+export function isFeedbackMissing(error: unknown): boolean {
+  return error instanceof Error && (error as { code?: unknown }).code === FEEDBACK_MISSING;
+}
 
 /**
  * offer_next_step refused in a turn the student opened with Try again: that
