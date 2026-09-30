@@ -48,7 +48,7 @@ const TimeZoneSection = ({ current, zones }: TimeZoneSectionProps) => {
 
   return (
     <SettingSection
-      title="Time zone"
+      title="Course time zone"
       description="The course's time zone. Deadlines on the public schedule and in Ask Moji are given in this zone."
     >
       <Form layout="vertical">
