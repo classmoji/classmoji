@@ -658,6 +658,28 @@ export async function findByAssignment(assignmentId: string) {
 }
 
 /**
+ * The first linked page of each assignment (lowest link order), in one query.
+ * Keyed by assignment id; assignments with no linked page are absent.
+ */
+export async function findFirstLinkedByAssignmentIds(assignmentIds: string[]) {
+  const result: Record<string, { id: string; title: string }> = {};
+  if (assignmentIds.length === 0) return result;
+
+  const pageLinks = await getPrisma().pageLink.findMany({
+    where: { assignment_id: { in: assignmentIds } },
+    select: { assignment_id: true, page: { select: { id: true, title: true } } },
+    orderBy: [{ order: 'asc' }, { created_at: 'asc' }],
+  });
+
+  for (const link of pageLinks) {
+    if (link.assignment_id && !result[link.assignment_id]) {
+      result[link.assignment_id] = link.page;
+    }
+  }
+  return result;
+}
+
+/**
  * Throw unless every given link target belongs to `classroomId`: the
  * repository by its own classroom, the assignment through its module (and its
  * repository, when it has one). A target in another classroom reads exactly

@@ -23,11 +23,29 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   const emojiMappings = await ClassmojiService.emojiMapping.findByClassroomId(classroom.id);
 
-  return { allRepositoryAssignments, myRepositoryAssignments, repositories, emojiMappings };
+  // The Assignment cell links to the assignment's first linked page, its
+  // instructions. Every assigned row is also in the classroom-wide list.
+  const instructionPages = await ClassmojiService.page.findFirstLinkedByAssignmentIds([
+    ...new Set(allRepositoryAssignments.map(ra => ra.assignment_id)),
+  ]);
+
+  return {
+    allRepositoryAssignments,
+    myRepositoryAssignments,
+    repositories,
+    emojiMappings,
+    instructionPages,
+  };
 };
 
 const AssistantGrading = ({ loaderData }: Route.ComponentProps) => {
-  const { myRepositoryAssignments, repositories, allRepositoryAssignments, emojiMappings } = loaderData;
+  const {
+    myRepositoryAssignments,
+    repositories,
+    allRepositoryAssignments,
+    emojiMappings,
+    instructionPages,
+  } = loaderData;
 
   return (
     <div className="min-h-full">
@@ -36,6 +54,7 @@ const AssistantGrading = ({ loaderData }: Route.ComponentProps) => {
         repositoryAssignments={myRepositoryAssignments}
         repositories={repositories}
         emojiMappings={emojiMappings}
+        instructionPages={instructionPages}
       />
     </div>
   );
