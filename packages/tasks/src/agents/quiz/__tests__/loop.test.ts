@@ -17,7 +17,6 @@ import { contentTools } from '../tools/content.ts';
 import {
   lastUserTextParts,
   needsEvaluation,
-  offerToReplay,
   PERSIST_RETRY_DELAY_MS,
   runQuizTurn,
   STEP_CEILING,
@@ -28,7 +27,7 @@ import {
   type QuizToolsFactory,
   type QuizTurnDeps,
 } from '../loop.ts';
-import { feedbackMissingError, OFFER_AFTER_HINT_TEXT } from '../tools/errors.ts';
+import { OFFER_AFTER_HINT_TEXT } from '../tools/errors.ts';
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -1340,62 +1339,72 @@ describe('the history of earlier turns: failed tool calls left out', () => {
   });
 });
 
-describe('offerToReplay', () => {
-  const refused = (error: unknown, input: unknown = { actions: ['next'] }) => ({
-    type: 'tool-error',
-    toolName: 'offer_next_step',
-    toolCallId: 'x',
-    input,
-    error,
-  });
-  const succeeded = (toolName: string) => ({ type: 'tool-result', toolName, toolCallId: 'y' });
-  const textPart = { type: 'text', text: 'Right.' };
+describe('an offer that carries its feedback', () => {
+  const FEEDBACK = 'Right: `map` returns a new array. The original is left alone.';
 
-  it('returns the input of a last offer refused only for missing feedback', () => {
-    const input = { actions: ['try_again', 'next'] };
-    expect(
-      offerToReplay([
-        { content: [refused(feedbackMissingError(), input)] },
-        { content: [textPart] },
-      ])
-    ).toBe(input);
+  it('ends the turn on a reply that is only the call, and saves a part carrying the feedback', async () => {
+    const a = fakeAttempt(2, { presented: 1 });
+    const model = scriptedModel([
+      [toolCall('b', 'offer_next_step', { feedback: FEEDBACK, actions: ['next'] })],
+      [...text('t', 'should not be requested')],
+    ]);
+    const chunks = await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
+    );
+    expect(model.doStreamCalls).toHaveLength(1);
+    const saved = a.persisted.at(-1)?.message.parts ?? [];
+    expect(saved.some(p => p.type === 'text')).toBe(false);
+    expect(saved.find(p => p.type === 'tool-offer_next_step')).toMatchObject({
+      state: 'output-available',
+      input: { feedback: FEEDBACK, actions: ['next'] },
+      output: { actions: ['next'], lead_in: 'Ready for the next question?' },
+    });
+    // The browser receives the feedback with the call's input.
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'tool-input-available',
+        toolCallId: 'b',
+        input: { feedback: FEEDBACK, actions: ['next'] },
+      })
+    );
   });
 
-  it('returns null when the last step was cut off at the output limit', () => {
-    const input = { actions: ['try_again', 'next'] };
-    const steps = (finishReason: string) => [
-      { content: [refused(feedbackMissingError(), input)], finishReason: 'tool-calls' },
-      { content: [textPart], finishReason },
-    ];
-    expect(offerToReplay(steps('length'))).toBeNull();
-    expect(offerToReplay(steps('stop'))).toBe(input);
-  });
-
-  it('returns null for any other refusal, or once a card, buttons or the evaluation went out', () => {
-    expect(offerToReplay([{ content: [textPart] }])).toBeNull();
-    expect(offerToReplay([{ content: [refused(new Error(OFFER_AFTER_HINT_TEXT))] }])).toBeNull();
-    // A later refusal for another reason wins over the feedback one.
+  it('adds no buttons at the end of a turn whose offer was refused', async () => {
+    const a = fakeAttempt(2, { presented: 1 });
+    const refusing: QuizToolsFactory = (c, d) => ({
+      ...a.deps.tools(c, d),
+      offer_next_step: tool({
+        ...quizToolDefs.offer_next_step,
+        execute: () =>
+          d.queue(async () => {
+            throw new Error(OFFER_AFTER_HINT_TEXT);
+          }),
+      }),
+    });
+    const model = scriptedModel([
+      [toolCall('b', 'offer_next_step', { feedback: FEEDBACK, actions: ['next'] })],
+      [...text('t', 'Look at line 3. What do you think?')],
+    ]);
+    await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: { ...a.deps, tools: refusing },
+        model,
+      })
+    );
+    expect(model.doStreamCalls).toHaveLength(2);
+    const saved = a.persisted.at(-1)?.message.parts ?? [];
     expect(
-      offerToReplay([
-        { content: [refused(feedbackMissingError())] },
-        { content: [refused(new Error('invalid input'))] },
-      ])
-    ).toBeNull();
-    for (const name of ['present_question', 'offer_next_step', 'submit_quiz_evaluation']) {
-      expect(
-        offerToReplay([
-          { content: [refused(feedbackMissingError())] },
-          { content: [succeeded(name)] },
-        ])
-      ).toBeNull();
-    }
-    // A lookup succeeding changes nothing.
-    expect(
-      offerToReplay([
-        { content: [refused(feedbackMissingError())] },
-        { content: [succeeded('content_get')] },
-      ])
-    ).toEqual({ actions: ['next'] });
+      saved.filter(p => p.type === 'tool-offer_next_step' && p.state === 'output-available')
+    ).toHaveLength(0);
   });
 });
 

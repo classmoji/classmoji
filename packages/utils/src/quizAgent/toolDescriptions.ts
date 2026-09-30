@@ -28,8 +28,9 @@ export const TOOL_DESCRIPTIONS = {
     'The server scores; never mention the result.',
 
   offer_next_step:
-    'Show buttons after your feedback on a real answer: ["try_again","next"] if not correct or "I don\'t know", ["next"] if correct or after you revealed the answer. ' +
-    'Write the feedback first, call this last; it ends your turn. ' +
+    "Give your feedback on the student's answer and show the buttons, in one call. " +
+    'Put the feedback in `feedback`; write no other text in the reply, because the feedback is shown as your message. ' +
+    'Buttons: ["try_again","next"] if not correct or "I don\'t know", ["next"] if correct or after you revealed the answer. It ends your turn. ' +
     'Never after a question card, a hint (a Try again turn is always a hint), a clarifying or side question, bare agreement, or a letter-only answer to a question that asks for an explanation: those end with your text. ' +
     'The buttons bring their own lead-in; never mention them or tell the student what to click or type. ' +
     `A click arrives as the next message: "${BUTTON_TEXT.try_again}" or "${BUTTON_TEXT.next}".`,

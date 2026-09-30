@@ -26,8 +26,8 @@ const { editedQuestionNumbers, quizTools, questionResultPartId } = await import(
 const {
   OFFER_AFTER_HINT_TEXT,
   OFFER_AFTER_QUESTION_TEXT,
-  OFFER_BEFORE_FEEDBACK_TEXT,
   OFFER_TRY_AGAIN_ALONE_TEXT,
+  OFFER_TWICE_TEXT,
   QUESTION_AFTER_OFFER_TEXT,
   QUOTE_READ_FAILED_TEXT,
   RECORD_BEFORE_ANSWER_TEXT,
@@ -397,7 +397,7 @@ describe('present_question', () => {
 
   it('refuses to show the current question again once the turn has text, writing nothing', async () => {
     expect(RESHOW_AFTER_TEXT).toBe(
-      "You already replied this turn; don't re-show the question. If the student answered, call offer_next_step."
+      "You already replied this turn; don't re-show the question. If the student answered, call offer_next_step with your feedback in its feedback field."
     );
     // Open (no result yet) or recorded: either way it is the card already out.
     // Recorded, the refusal also names the next question to send.
@@ -713,7 +713,7 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
       );
     }
     expect(OFFER_AFTER_HINT_TEXT).toBe(
-      'The student clicked Try again, so this reply is a hint: give exactly one hint, end with a question such as "What do you think?", and wait for their answer. No buttons after a hint.'
+      'This is a hint turn: write the hint as your reply text, with no tool call. Give exactly one hint and end with a question such as "What do you think?".'
     );
     expect(writes).toEqual([]);
     expect(Object.values(grading).every(fn => fn.mock.calls.length === 0)).toBe(true);
@@ -838,14 +838,11 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
         ({
           stream: convertArrayToReadableStream([
             { type: 'stream-start', warnings: [] },
-            { type: 'text-start', id: 't' },
-            { type: 'text-delta', id: 't', delta: FEEDBACK },
-            { type: 'text-end', id: 't' },
             {
               type: 'tool-call',
               toolCallId: 'b',
               toolName: 'offer_next_step',
-              input: JSON.stringify({ actions: ['next'] }),
+              input: JSON.stringify({ feedback: FEEDBACK, actions: ['next'] }),
             },
             {
               type: 'tool-call',
@@ -1000,30 +997,36 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
     });
   });
 
-  it('refuses offer_next_step before any feedback text, every time, then offers once there is some', async () => {
-    let written = false;
-    const { tools, grading, writes, log } = setup({ textWritten: () => written });
-    // No escape after a number of refusals: without text, the buttons never go out.
-    for (let i = 0; i < 4; i++) {
-      await expect(
-        call(tools, 'offer_next_step', { actions: ['try_again', 'next'] })
-      ).rejects.toThrow(OFFER_BEFORE_FEEDBACK_TEXT);
-    }
-    expect(OFFER_BEFORE_FEEDBACK_TEXT).toBe(
-      'If the student answered, write your feedback on their answer first, then call offer_next_step again; otherwise reply without buttons.'
-    );
-    expect(writes).toEqual([]);
-    expect(Object.values(grading).every(fn => fn.mock.calls.length === 0)).toBe(true);
-    expect(log).not.toHaveBeenCalled();
-
-    // Any feedback text at all: the next call is taken, whatever its length.
-    written = true;
+  it('offers whether or not the turn has text: the feedback is in the call itself', async () => {
+    const { tools, grading, writes, log } = setup({ textWritten: () => false });
     await expect(
-      call(tools, 'offer_next_step', { actions: ['try_again', 'next'] })
+      call(tools, 'offer_next_step', { feedback: CLOSE, actions: ['try_again', 'next'] })
     ).resolves.toEqual({
       actions: ['try_again', 'next'],
       lead_in: 'Would you like to try again or move on?',
     });
+    expect(writes).toEqual([]);
+    expect(Object.values(grading).every(fn => fn.mock.calls.length === 0)).toBe(true);
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it('refuses a second offer in the same turn, so feedback and buttons show once', async () => {
+    const { tools } = setup();
+    const [first, second] = await Promise.allSettled([
+      call(tools, 'offer_next_step', { feedback: FEEDBACK, actions: ['next'] }, 'b1'),
+      call(tools, 'offer_next_step', { feedback: FEEDBACK, actions: ['next'] }, 'b2'),
+    ]);
+    expect(first).toEqual({
+      status: 'fulfilled',
+      value: { actions: ['next'], lead_in: 'Ready for the next question?' },
+    });
+    expect(second).toMatchObject({
+      status: 'rejected',
+      reason: expect.objectContaining({ message: OFFER_TWICE_TEXT }),
+    });
+    expect(OFFER_TWICE_TEXT).toBe(
+      'Your feedback and the buttons are already shown. End your reply now.'
+    );
   });
 
   it('keeps the other offer_next_step refusals whether or not feedback was written', async () => {
@@ -1052,29 +1055,23 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
     }
   });
 
-  it('keeps present_question open after an offer_next_step refused for missing feedback', async () => {
-    const { tools, grading } = setup({ textWritten: () => false });
-    grading.presentQuestion.mockResolvedValue({ card, question_number: 2, total_questions: 8 });
-    await expect(call(tools, 'offer_next_step', { actions: ['next'] })).rejects.toThrow(
-      OFFER_BEFORE_FEEDBACK_TEXT
-    );
-    await expect(call(tools, 'present_question', card)).resolves.toMatchObject({
-      question_number: 2,
-    });
-  });
-
   describe('in a live turn', () => {
     type Chunk = Record<string, unknown>;
     const usage = {
       inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
       outputTokens: { total: 1, text: 1, reasoning: 0 },
     };
-    const offer = (id: string): Chunk => ({
+    const offerOf = (id: string, input: Record<string, unknown>): Chunk => ({
       type: 'tool-call',
       toolCallId: id,
       toolName: 'offer_next_step',
-      input: JSON.stringify({ actions: ['try_again', 'next'] }),
+      input: JSON.stringify(input),
     });
+    const offer = (id: string, feedback = CLOSE): Chunk =>
+      offerOf(id, { feedback, actions: ['try_again', 'next'] });
+    /** The saved offer parts that carry buttons. */
+    const buttons = (saved: Chunk[]) =>
+      saved.filter(p => p.type === 'tool-offer_next_step' && p.state === 'output-available');
     const feedback = (id: string, delta: string): Chunk[] => [
       { type: 'text-start', id },
       { type: 'text-delta', id, delta },
@@ -1156,40 +1153,61 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
       return { model, chunks, saved: persisted.at(-1)?.parts ?? [] };
     }
 
-    it('refuses buttons sent before any feedback, keeps the turn going, then takes them after the feedback', async () => {
+    it('takes the feedback and the buttons in one call, with no text in the reply', async () => {
       const { model, chunks, saved } = await answerTurn([
-        [offer('b1')],
-        [...feedback('t', CLOSE), offer('b2')],
+        [offer('b')],
         [...feedback('t2', 'should not be requested')],
       ]);
-
-      // The refused call did not end the turn; the accepted one did.
-      expect(model.doStreamCalls).toHaveLength(2);
+      // One call ends the turn: nothing refused, nothing replayed.
+      expect(model.doStreamCalls).toHaveLength(1);
+      expect(chunks.some(c => c.type === 'tool-output-error')).toBe(false);
+      expect(saved.some(p => p.type === 'text')).toBe(false);
+      expect(buttons(saved)).toHaveLength(1);
+      expect(buttons(saved)[0]).toMatchObject({
+        toolCallId: 'b',
+        input: { feedback: CLOSE, actions: ['try_again', 'next'] },
+        output: {
+          actions: ['try_again', 'next'],
+          lead_in: 'Would you like to try again or move on?',
+        },
+      });
+      // The browser gets the input, feedback included, through the projection.
       expect(chunks).toContainEqual(
-        expect.objectContaining({ type: 'tool-output-error', toolCallId: 'b1' })
-      );
-      expect(chunks.filter(c => c.type === 'tool-output-available').map(c => c.toolCallId)).toEqual(
-        ['b2']
-      );
-      // The model's next call read the refusal.
-      expect(JSON.stringify(model.doStreamCalls[1].prompt)).toContain(
-        JSON.stringify(OFFER_BEFORE_FEEDBACK_TEXT).slice(1, -1)
-      );
-      expect(saved.find(p => p.toolCallId === 'b1')).toMatchObject({ state: 'output-error' });
-      // The saved reply carries the feedback text and the buttons.
-      expect(saved).toContainEqual(
         expect.objectContaining({
-          type: 'text',
-          text: CLOSE,
+          type: 'tool-input-available',
+          toolCallId: 'b',
+          input: { feedback: CLOSE, actions: ['try_again', 'next'] },
         })
       );
-      expect(saved.find(p => p.toolCallId === 'b2')).toMatchObject({
-        type: 'tool-offer_next_step',
-        state: 'output-available',
-      });
-      expect(saved.some(p => p.type === 'text' && p.text === 'should not be requested')).toBe(
-        false
-      );
+      // The next turn's history carries the feedback in the call.
+      const { convertToModelMessages } = await import('ai');
+      const history = await convertToModelMessages([
+        { id: 'm', role: 'assistant', parts: saved } as never,
+      ]);
+      expect(JSON.stringify(history)).toContain(CLOSE);
+    });
+
+    it('refuses an offer with no or blank feedback as invalid input, then takes the corrected call', async () => {
+      for (const bad of [{}, { feedback: '  \n ' }]) {
+        const { model, chunks, saved } = await answerTurn([
+          [offerOf('b1', { ...bad, actions: ['try_again', 'next'] })],
+          [offer('b2')],
+          [...feedback('t3', 'should not be requested')],
+        ]);
+        expect(model.doStreamCalls).toHaveLength(2);
+        expect(chunks).toContainEqual(
+          expect.objectContaining({ type: 'tool-output-error', toolCallId: 'b1' })
+        );
+        expect(buttons(saved).map(p => p.toolCallId)).toEqual(['b2']);
+      }
+    });
+
+    it('keeps text written in the same reply as the offer: both are saved, text first', async () => {
+      const { model, saved } = await answerTurn([[...feedback('t', BRIEF), offer('b')]]);
+      expect(model.doStreamCalls).toHaveLength(1);
+      const textAt = saved.findIndex(p => p.type === 'text' && p.text === BRIEF);
+      expect(textAt).toBeGreaterThan(-1);
+      expect(saved.indexOf(buttons(saved)[0])).toBeGreaterThan(textAt);
     });
 
     it('refuses a result recorded on an answer, then takes the feedback and the buttons', async () => {
@@ -1244,184 +1262,26 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
       expect(saved.find(p => p.toolCallId === 'b')).toMatchObject({ state: 'output-available' });
     });
 
-    it('takes buttons after feedback streamed in many deltas and blocks', async () => {
-      const pieces = BRIEF.match(/.{1,4}/gs) ?? [];
-      expect(pieces.length).toBeGreaterThan(10);
-      const { model, chunks } = await answerTurn(
-        [
-          [
-            { type: 'text-start', id: 't' },
-            ...pieces.map(delta => ({ type: 'text-delta', id: 't', delta })),
-            { type: 'text-end', id: 't' },
-            ...feedback('t2', 'Nice work.'),
-            offer('b'),
-          ],
-        ],
+    it('never runs a refused offer again at the end of the turn', async () => {
+      // A hint turn: the refused call stays refused; the hint is the reply.
+      const hint = await answerTurn(
+        [[offer('b1')], [...feedback('t', 'Look at the bound on line 3. What do you think?')]],
+        context({ lastAction: 'try_again', progress: progressAt(1) })
+      );
+      expect(hint.model.doStreamCalls).toHaveLength(2);
+      expect(buttons(hint.saved)).toHaveLength(0);
+      // A call without feedback, then feedback as text only: no buttons are added.
+      const noFeedback = await answerTurn(
+        [[offerOf('b1', { actions: ['try_again', 'next'] })], [...feedback('t', BRIEF)]],
         context({ progress: progressAt(1) })
       );
-      expect(model.doStreamCalls).toHaveLength(1);
-      expect(chunks.filter(c => c.type === 'tool-output-available').map(c => c.toolCallId)).toEqual(
-        ['b']
-      );
-    });
-
-    it('takes buttons that follow feedback in the same step', async () => {
-      const { model, chunks } = await answerTurn([[...feedback('t', FEEDBACK), offer('b')]]);
-      expect(model.doStreamCalls).toHaveLength(1);
-      expect(chunks.filter(c => c.type === 'tool-output-available').map(c => c.toolCallId)).toEqual(
-        ['b']
-      );
-    });
-
-    it("does not count the opening turn's welcome as feedback", async () => {
-      const opening = context({
-        inputMessageId: null,
-        welcome: 'Welcome to your quiz!',
-        progress: {
-          questionCount: 8,
-          presented: 0,
-          finalized: [],
-          completed: false,
-          hasEvaluation: false,
-        },
-      });
-      const { model, chunks } = await answerTurn(
-        [[offer('b1')], [...feedback('t', FEEDBACK), offer('b2')]],
-        opening
-      );
-      expect(chunks).toContainEqual(
-        expect.objectContaining({ type: 'text-delta', delta: 'Welcome to your quiz!' })
-      );
-      expect(model.doStreamCalls).toHaveLength(2);
-      expect(chunks).toContainEqual(
-        expect.objectContaining({ type: 'tool-output-error', toolCallId: 'b1' })
-      );
-    });
-
-    it('does not count whitespace as feedback', async () => {
-      const { model, chunks } = await answerTurn([
-        [...feedback('t', '  \n '), offer('b1')],
-        [...feedback('t2', FEEDBACK), offer('b2')],
-      ]);
-      expect(model.doStreamCalls).toHaveLength(2);
-      expect(chunks).toContainEqual(
-        expect.objectContaining({ type: 'tool-output-error', toolCallId: 'b1' })
-      );
-    });
-
-    describe('a refused offer run again at the end of the turn', () => {
-      const offerOf = (id: string, actions: string[]): Chunk => ({
-        type: 'tool-call',
-        toolCallId: id,
-        toolName: 'offer_next_step',
-        input: JSON.stringify({ actions }),
-      });
-      /** The saved offer parts that carry buttons. */
-      const buttons = (saved: Chunk[]) =>
-        saved.filter(p => p.type === 'tool-offer_next_step' && p.state === 'output-available');
-
-      it('ends with buttons when the model offered, then wrote its feedback and stopped', async () => {
-        const { model, chunks, saved } = await answerTurn(
-          [
-            [offer('b1')],
-            [...feedback('t', BRIEF)],
-            [...feedback('t3', 'should not be requested')],
-          ],
-          context({ progress: progressAt(1) })
-        );
-        expect(model.doStreamCalls).toHaveLength(2);
-        expect(saved.find(p => p.toolCallId === 'b1')).toMatchObject({ state: 'output-error' });
-
-        // Saved like the model's own offer: the call and its result, after the feedback.
-        const [replayed] = buttons(saved);
-        expect(buttons(saved)).toHaveLength(1);
-        expect(replayed).toMatchObject({
-          type: 'tool-offer_next_step',
-          state: 'output-available',
-          input: { actions: ['try_again', 'next'] },
-          output: {
-            actions: ['try_again', 'next'],
-            lead_in: 'Would you like to try again or move on?',
-          },
-        });
-        expect(replayed.toolCallId).not.toBe('b1');
-        const textAt = saved.findIndex(p => p.type === 'text' && p.text === BRIEF);
-        expect(textAt).toBeGreaterThan(-1);
-        expect(saved.indexOf(replayed)).toBeGreaterThan(textAt);
-
-        // The browser gets it live, through the projection.
-        expect(chunks).toContainEqual(
-          expect.objectContaining({
-            type: 'tool-output-available',
-            toolCallId: replayed.toolCallId,
-          })
-        );
-
-        // The next turn's history: the feedback, then the buttons; the refusal left out.
-        const { convertToModelMessages } = await import('ai');
-        const { withoutEarlierFailedToolCalls } = await import('../../loop.ts');
-        const history = withoutEarlierFailedToolCalls(
-          await convertToModelMessages([{ id: 'm', role: 'assistant', parts: saved } as never])
-        );
-        const flat = JSON.stringify(history);
-        expect(flat).not.toContain('"b1"');
-        expect(flat.indexOf(BRIEF)).toBeLessThan(flat.indexOf(String(replayed.toolCallId)));
-      });
-
-      it('writes no buttons when the reply was cut off at the output limit', async () => {
-        const { model, saved } = await answerTurn(
-          [[offer('b1')], [...feedback('t', 'Close: the loop is right, but the')]],
-          context({ progress: progressAt(1) }),
-          ['tool-calls', 'length']
-        );
-        expect(model.doStreamCalls).toHaveLength(2);
-        expect(saved.find(p => p.toolCallId === 'b1')).toMatchObject({ state: 'output-error' });
-        expect(buttons(saved)).toHaveLength(0);
-      });
-
-      it('writes no buttons when the model never offered', async () => {
-        const { model, saved } = await answerTurn(
-          [[...feedback('t', BRIEF)]],
-          context({ progress: progressAt(1) })
-        );
-        expect(model.doStreamCalls).toHaveLength(1);
-        expect(saved.some(p => p.type === 'tool-offer_next_step')).toBe(false);
-      });
-
-      it('writes no buttons when no feedback followed the refusal', async () => {
-        const { saved } = await answerTurn(
-          [[offer('b1')], [...feedback('t', '  ')]],
-          context({ progress: progressAt(1) })
-        );
-        expect(buttons(saved)).toHaveLength(0);
-      });
-
-      it('does not run other refusals again', async () => {
-        // A hint turn: buttons are refused as a hint's, not for missing feedback.
-        const hint = await answerTurn(
-          [[offer('b1')], [...feedback('t', 'Look at the bound on line 3. What do you think?')]],
-          context({ lastAction: 'try_again', progress: progressAt(1) })
-        );
-        expect(buttons(hint.saved)).toHaveLength(0);
-
-        // Try again alone.
-        const alone = await answerTurn(
-          [[offerOf('b1', ['try_again'])], [...feedback('t', BRIEF)]],
-          context({ progress: progressAt(1) })
-        );
-        expect(buttons(alone.saved)).toHaveLength(0);
-
-        // A feedback refusal followed by another kind: the last one decides.
-        const later = await answerTurn(
-          [[offer('b1')], [offerOf('b2', ['try_again'])], [...feedback('t', BRIEF)]],
-          context({ progress: progressAt(1) })
-        );
-        expect(later.model.doStreamCalls).toHaveLength(3);
-        expect(buttons(later.saved)).toHaveLength(0);
-      });
+      expect(buttons(noFeedback.saved)).toHaveLength(0);
+      expect(noFeedback.saved.some(p => p.type === 'text' && p.text === BRIEF)).toBe(true);
     });
   });
+});
 
+describe('submit_quiz_evaluation', () => {
   it('submit_quiz_evaluation completes as the model source and returns the stored record', async () => {
     const { tools, grading } = setup();
     const record = {

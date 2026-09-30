@@ -218,22 +218,48 @@ export type QuizEvaluationFeedback = z.infer<typeof QuizEvaluationFeedbackSchema
 export const NEXT_STEP_ACTIONS = ['next', 'try_again'] as const;
 export type NextStepAction = (typeof NEXT_STEP_ACTIONS)[number];
 
+const NextStepActionsSchema = z
+  .array(z.enum(NEXT_STEP_ACTIONS))
+  .min(1)
+  .max(2)
+  .refine(a => new Set(a).size === a.length, 'actions must not repeat')
+  .describe('["try_again","next"] or ["next"]; never try_again alone.');
+
+/**
+ * offer_next_step's input as the model sends it: the feedback on the answer,
+ * shown as the agent's message, then the buttons. `feedback` comes first so
+ * it streams first. How much to write is the description's to say; the only
+ * check is that there is some.
+ */
 export const OfferNextStepSchema = z.object({
-  actions: z
-    .array(z.enum(NEXT_STEP_ACTIONS))
-    .min(1)
-    .max(2)
-    .refine(a => new Set(a).size === a.length, 'actions must not repeat')
-    .describe('["try_again","next"] or ["next"]; never try_again alone.'),
+  feedback: z
+    .string()
+    .trim()
+    .min(1, 'feedback must not be empty')
+    .describe(
+      '2 to 4 sentences: what is right, what is wrong, and why. On a wrong or partly wrong answer, say which part is wrong and why without giving away the full answer.'
+    ),
+  actions: NextStepActionsSchema,
 });
 export type OfferNextStep = z.infer<typeof OfferNextStepSchema>;
 
 /**
+ * offer_next_step's input as stored and rendered: parts saved before the
+ * feedback moved into the call have none, so here it is optional. Used for
+ * the UI part types (`quizToolDefs`), never for the model's tool.
+ */
+export const OfferNextStepPartSchema = OfferNextStepSchema.extend({
+  feedback: z.string().optional(),
+});
+export type OfferNextStepPart = z.infer<typeof OfferNextStepPartSchema>;
+
+/**
  * offer_next_step's output: the buttons, and the fixed line shown with them,
  * chosen by the server from the buttons and whether the question is the last
- * one (`nextStepLeadIn`).
+ * one (`nextStepLeadIn`). The feedback stays in the input.
  */
-export const OfferNextStepOutputSchema = OfferNextStepSchema.extend({
+export const OfferNextStepOutputSchema = z.object({
+  actions: NextStepActionsSchema,
   lead_in: z.string(),
 });
 export type OfferNextStepOutput = z.infer<typeof OfferNextStepOutputSchema>;
