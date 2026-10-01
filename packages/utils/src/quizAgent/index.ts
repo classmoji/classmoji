@@ -24,6 +24,7 @@ export {
   FALLBACK_MODEL,
   THINKING,
   isAllowedModel,
+  platformDefaultModel,
   resolveAllowedModel,
   type AllowedModel,
   type ResolvedModel,

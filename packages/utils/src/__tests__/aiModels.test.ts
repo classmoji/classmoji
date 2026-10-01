@@ -4,8 +4,43 @@ import {
   FALLBACK_MODEL,
   THINKING,
   isAllowedModel,
+  platformDefaultModel,
   resolveAllowedModel,
 } from '../aiModels.ts';
+
+describe('FALLBACK_MODEL', () => {
+  it('is Claude Sonnet 5.5, on the allow-list', () => {
+    expect(FALLBACK_MODEL).toBe('claude-sonnet-5-5');
+    expect(isAllowedModel(FALLBACK_MODEL)).toBe(true);
+  });
+
+  // Haiku is not on the list: a quiz never runs it, whoever names it.
+  it('leaves Haiku off the allow-list', () => {
+    expect(ALLOWED_MODELS.some(id => id.includes('haiku'))).toBe(false);
+  });
+});
+
+describe('platformDefaultModel', () => {
+  it('is FALLBACK_MODEL when the env value is unset or blank', () => {
+    expect(platformDefaultModel(undefined)).toBe(FALLBACK_MODEL);
+    expect(platformDefaultModel(null)).toBe(FALLBACK_MODEL);
+    expect(platformDefaultModel('')).toBe(FALLBACK_MODEL);
+    expect(platformDefaultModel('   ')).toBe(FALLBACK_MODEL);
+  });
+
+  it('is the env value, trimmed, when it is allowed', () => {
+    expect(platformDefaultModel('claude-opus-5-5')).toBe('claude-opus-5-5');
+    expect(platformDefaultModel(' claude-sonnet-5 ')).toBe('claude-sonnet-5');
+    expect(platformDefaultModel('claude-sonnet-5-5-20260901')).toBe('claude-sonnet-5-5-20260901');
+  });
+
+  it.each(['claude-haiku-4-5', 'claude-haiku-4-5-20251001', 'claude-sonnet-4-5', 'gpt-4o'])(
+    'is FALLBACK_MODEL for %s, which is not allowed',
+    id => {
+      expect(platformDefaultModel(id)).toBe(FALLBACK_MODEL);
+    }
+  );
+});
 
 describe('isAllowedModel', () => {
   it('lists the six models', () => {

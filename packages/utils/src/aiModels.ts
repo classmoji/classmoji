@@ -16,14 +16,27 @@ export const ALLOWED_MODELS = [
 
 export type AllowedModel = (typeof ALLOWED_MODELS)[number];
 
-/** Used when neither the requested model nor the configured platform default is allowed. */
-export const FALLBACK_MODEL: AllowedModel = 'claude-sonnet-5';
+/**
+ * The quiz code default: what a quiz model slot runs when neither the
+ * classroom's choice nor the platform's env value is allowed (or set).
+ */
+export const FALLBACK_MODEL: AllowedModel = 'claude-sonnet-5-5';
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const MODEL_PATTERNS = ALLOWED_MODELS.map(m => new RegExp(`^${escape(m)}(-\\d{8})?$`));
 
 export const isAllowedModel = (id: string | null | undefined): id is string =>
   typeof id === 'string' && MODEL_PATTERNS.some(re => re.test(id));
+
+/**
+ * The model a slot runs when the classroom names none: the platform's env value
+ * (trimmed) when it is allowed, else FALLBACK_MODEL. The quiz runtime and the
+ * "Default: X" on the AI settings page both read it, so they name the same model.
+ */
+export function platformDefaultModel(envValue: string | null | undefined): string {
+  const id = typeof envValue === 'string' ? envValue.trim() : '';
+  return isAllowedModel(id) ? id : FALLBACK_MODEL;
+}
 
 /** Thinking options for every model call of every agent. */
 export const THINKING = { type: 'adaptive', display: 'omitted' } as const;

@@ -202,12 +202,15 @@ function formatClaudeModelName(modelId: string): string {
  * left the page. Every id that used to be here (Claude 3 Opus/Sonnet/Haiku,
  * Claude 3.5 Sonnet/Haiku) has since been retired by Anthropic. The entries
  * below are ids the repo itself declares, which is the only list this file can
- * keep current without guessing: Sonnet 5 is LLM_MODEL and EXPLORATION_MODEL
- * in .env.example, and Sonnet 4.5 and Haiku 4.5 were the previous LLM_MODEL and
- * EXPLORATION_MODEL, kept so a classroom that saved one still sees it listed.
+ * keep current without guessing: Sonnet 5.5 is LLM_MODEL and EXPLORATION_MODEL
+ * in .env.example, Sonnet 5 is SYLLABUS_BOT_MODEL, and Sonnet 4.5 and Haiku 4.5
+ * were the previous LLM_MODEL and EXPLORATION_MODEL, kept so a classroom that
+ * saved one still sees it listed. The quiz selects show only the entries on the
+ * quiz allow-list (@classmoji/utils/ai-models).
  */
 function getFallbackAnthropicModels(): Model[] {
   return [
+    { value: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5' },
     { value: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
     { value: 'claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5' },
     { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },

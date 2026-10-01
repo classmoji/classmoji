@@ -22,7 +22,7 @@
  *   key pays for exploration. A classroom key that fails is never retried on
  *   the platform key.
  */
-import { FALLBACK_MODEL, isAllowedModel } from '@classmoji/utils/ai-models';
+import { FALLBACK_MODEL, isAllowedModel, platformDefaultModel } from '@classmoji/utils/ai-models';
 
 export { FALLBACK_MODEL };
 
@@ -104,12 +104,9 @@ function pickModel(
     if (isAllowedModel(id)) return id;
     fallbacks.push(settingName);
   }
-  if (present(envValue)) {
-    const id = envValue.trim();
-    if (isAllowedModel(id)) return id;
-    fallbacks.push(envName);
-  }
-  return FALLBACK_MODEL;
+  if (present(envValue) && !isAllowedModel(envValue.trim())) fallbacks.push(envName);
+  // The same resolver names the default on the AI settings page.
+  return platformDefaultModel(envValue);
 }
 
 /**
@@ -146,7 +143,13 @@ export function resolveQuizRunSettings(
   }
 
   const model = opts.isCodeAware
-    ? pickModel(choice(settings?.code_aware_model), env.LLM_MODEL, 'code_aware_model', 'LLM_MODEL', fallbacks)
+    ? pickModel(
+        choice(settings?.code_aware_model),
+        env.LLM_MODEL,
+        'code_aware_model',
+        'LLM_MODEL',
+        fallbacks
+      )
     : pickModel(choice(settings?.llm_model), env.LLM_MODEL, 'llm_model', 'LLM_MODEL', fallbacks);
 
   const explorationModel = pickModel(
