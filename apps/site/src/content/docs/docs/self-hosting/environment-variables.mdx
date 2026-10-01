@@ -33,13 +33,13 @@ AI features (quizzes, Ask Moji, prompt assistant) run on **Anthropic Claude**. T
 | `AI_AGENT_URL` | No | | URL of the AI agent service. Enables AI features when set with the shared secret. |
 | `AI_AGENT_SHARED_SECRET` | No | | Shared secret used to authenticate the webapp to the AI agent. |
 | `ANTHROPIC_API_KEY` | No | | Anthropic API key the AI agent uses to call Claude. |
-| `LLM_MODEL` | No | `claude-sonnet-5-5` | Claude model used for quizzes and the quiz prompt assistant. These accept only the models listed in `packages/utils/src/aiModels.ts`; any other value runs the default. Set it wherever quizzes run: the AI agent and the background jobs. |
-| `EXPLORATION_MODEL` | No | `claude-sonnet-5-5` | Claude model used for code-aware quiz repository exploration. Same list, default and places as `LLM_MODEL`. |
+| `LLM_MODEL` | No | `claude-sonnet-5-5` | Claude model used for quizzes and the quiz prompt assistant. These accept only the models listed in `packages/utils/src/aiModels.ts`; any other value runs the default. Set the same value in all three places that read it: the AI agent and the background jobs, which run quizzes, and the web app, which shows it as the default on AI settings. |
+| `EXPLORATION_MODEL` | No | `claude-sonnet-5-5` | Claude model used for code-aware quiz repository exploration. Same list and default as `LLM_MODEL`, read by the same three: the AI agent, the background jobs and the web app. |
 | `EXPLORATION_MODE` | No | | Controls the code-aware exploration behavior for quizzes. |
 | `QUIZ_QUESTION_EFFORT` | No | `medium` | Reasoning effort (`low`, `medium`, `high`, `xhigh`, `max`) for quiz question and conversation turns. A classroom with its own API key can override it. |
 | `QUIZ_GRADING_EFFORT` | No | `high` | Reasoning effort for final quiz grading. A classroom with its own API key can override it. |
 | `EXPLORATION_EFFORT` | No | `low` | Reasoning effort for the code-aware quiz's excerpt selection (`xhigh` and `max` run as `high`). A classroom with its own API key can override it. |
-| `SYLLABUS_BOT_MODEL` | No | `LLM_MODEL`, then `claude-sonnet-5-5` | Claude model used for Ask Moji. Any Claude model id works here; the quiz list does not apply. A classroom with its own API key can override it. |
+| `SYLLABUS_BOT_MODEL` | No | `LLM_MODEL`, then `claude-sonnet-5-5` | Claude model used for Ask Moji. Any Claude model id works here; the quiz list does not apply. Read by the AI agent, and by the web app to show the default. A classroom with its own API key can override it. |
 | `SYLLABUS_BOT_EFFORT` | No | `low` | Reasoning effort for Ask Moji. A classroom with its own API key can override it. |
 | `AI_MAX_BUDGET_USD` | No | `1.00` | Per-call cost ceiling in USD for quiz and Ask Moji agent calls on the platform `ANTHROPIC_API_KEY`. A runaway guard, not a spend limit. |
 | `OPENAI_API_KEY` | No | | Reserved. Not used by any current feature. |
