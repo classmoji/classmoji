@@ -1,6 +1,6 @@
 import { readUIMessageStream, type UIMessage, type UIMessageChunk } from 'ai';
 import { describe, expect, it } from 'vitest';
-import { quizVisibility, type QuizUIMessage } from '../../quizAgent/index.ts';
+import { quizStaffVisibility, quizVisibility, type QuizUIMessage } from '../../quizAgent/index.ts';
 import {
   createChunkProjector,
   projectMessage,
@@ -44,6 +44,36 @@ const quotedOutput = {
 const expectNoQuote = (value: unknown) => {
   const s = JSON.stringify(value);
   for (const term of ['code_quote', '"ranges"', '"anchor"', '"edit"', '"replace"', 'rawInput']) {
+    expect(s).not.toContain(term);
+  }
+};
+
+// offer_next_step's input: the correct answer (staff only), then the feedback
+// and the buttons. The answer is a sentinel, so a test can look for its value
+// (not just its key) in everything a student receives.
+const ANSWER = 'SENTINEL-the-text-is-white';
+const offerInput = {
+  expected_answer: ANSWER,
+  feedback: 'Check which of the two selectors is more specific.',
+  actions: ['try_again', 'next'],
+};
+const { expected_answer: _answer, ...offerShown } = offerInput;
+const offerOutput = {
+  actions: ['try_again', 'next'],
+  lead_in: 'Would you like to try again or move on?',
+};
+/** The model's streamed input text, cut so the answer spans two deltas. */
+const offerDeltas = (toolCallId: string): Chunk[] =>
+  [
+    '{"expected_answer":"SENTINEL-the-',
+    'text-is-white","feedback":"Check which of the two',
+    ' selectors is more specific.","actions":["try_again","next"]}',
+  ].map(inputTextDelta => ({ type: 'tool-input-delta', toolCallId, inputTextDelta }));
+
+/** Neither the answer's value, nor any piece of it, nor its key, in what a student receives. */
+const expectNoAnswer = (value: unknown) => {
+  const s = JSON.stringify(value);
+  for (const term of ['SENTINEL', 'text-is-white', 'expected_answer', 'rawInput']) {
     expect(s).not.toContain(term);
   }
 };
@@ -98,15 +128,15 @@ describe('createChunkProjector: every v7 chunk type', () => {
 
   it('passes every chunk of a shown tool call without hidden input keys', () => {
     const chunks: Chunk[] = [
-      { type: 'tool-input-start', toolCallId: 'c1', toolName: 'offer_next_step' },
-      { type: 'tool-input-delta', toolCallId: 'c1', inputTextDelta: '{"act' },
+      { type: 'tool-input-start', toolCallId: 'c1', toolName: 'submit_quiz_evaluation' },
+      { type: 'tool-input-delta', toolCallId: 'c1', inputTextDelta: '{"final_ack' },
       {
         type: 'tool-input-available',
         toolCallId: 'c1',
-        toolName: 'offer_next_step',
-        input: { actions: ['next'] },
+        toolName: 'submit_quiz_evaluation',
+        input: { final_acknowledgment: 'Well done.' },
       },
-      { type: 'tool-output-available', toolCallId: 'c1', output: { actions: ['next'] } },
+      { type: 'tool-output-available', toolCallId: 'c1', output: { v: 2 } },
       { type: 'tool-output-error', toolCallId: 'c1', errorText: 'refused' },
       { type: 'tool-output-denied', toolCallId: 'c1' },
     ];
@@ -424,6 +454,179 @@ describe('hidden input keys: present_question code_quote', () => {
   });
 });
 
+describe('hidden input keys: offer_next_step expected_answer', () => {
+  it('sends a student no streamed input, and the call without the answer', () => {
+    const chunks: Chunk[] = [
+      { type: 'tool-input-start', toolCallId: 'o1', toolName: 'offer_next_step' },
+      ...offerDeltas('o1'),
+      {
+        type: 'tool-input-available',
+        toolCallId: 'o1',
+        toolName: 'offer_next_step',
+        input: offerInput,
+      },
+      { type: 'tool-output-available', toolCallId: 'o1', output: offerOutput },
+    ];
+    const out = project(chunks);
+    expect(out).toEqual([
+      { type: 'tool-input-start', toolCallId: 'o1', toolName: 'offer_next_step' },
+      {
+        type: 'tool-input-available',
+        toolCallId: 'o1',
+        toolName: 'offer_next_step',
+        input: offerShown,
+      },
+      { type: 'tool-output-available', toolCallId: 'o1', output: offerOutput },
+    ]);
+    // Not one delta reaches the student: their text is raw JSON with the answer in it.
+    expect(out.some(c => c.type === 'tool-input-delta')).toBe(false);
+    expectNoAnswer(out);
+  });
+
+  it('sends no delta even when the answer comes last, or a delta arrives before the call is named', () => {
+    const p = createChunkProjector<Chunk>(quizVisibility);
+    const out = [
+      // A delta for an id not yet named is dropped.
+      {
+        type: 'tool-input-delta',
+        toolCallId: 'o2',
+        inputTextDelta: `{"expected_answer":"${ANSWER}"`,
+      },
+      { type: 'tool-input-start', toolCallId: 'o2', toolName: 'offer_next_step' },
+      { type: 'tool-input-delta', toolCallId: 'o2', inputTextDelta: '{"feedback":"Check it.",' },
+      {
+        type: 'tool-input-delta',
+        toolCallId: 'o2',
+        inputTextDelta: `"expected_answer":"${ANSWER}"}`,
+      },
+    ]
+      .map(c => p(c as Chunk))
+      .filter(c => c !== null);
+    expect(out).toEqual([
+      { type: 'tool-input-start', toolCallId: 'o2', toolName: 'offer_next_step' },
+    ]);
+    expectNoAnswer(out);
+  });
+
+  it('cuts an invalid call, and sends no input when it is raw text', () => {
+    const out = project([
+      {
+        type: 'tool-input-error',
+        toolCallId: 'o3',
+        toolName: 'offer_next_step',
+        input: { ...offerInput, actions: ['try_again'] },
+        errorText: 'Invalid input',
+        dynamic: true,
+      },
+      {
+        type: 'tool-input-error',
+        toolCallId: 'o4',
+        toolName: 'offer_next_step',
+        input: `{"expected_answer":"${ANSWER}","feedback":"Chec`,
+        errorText: 'Invalid input',
+      },
+    ]);
+    expect(out).toEqual([
+      {
+        type: 'tool-input-error',
+        toolCallId: 'o3',
+        toolName: 'offer_next_step',
+        input: { ...offerShown, actions: ['try_again'] },
+        errorText: 'Invalid input',
+        dynamic: true,
+      },
+      {
+        type: 'tool-input-error',
+        toolCallId: 'o4',
+        toolName: 'offer_next_step',
+        input: undefined,
+        errorText: 'Invalid input',
+      },
+    ]);
+    expectNoAnswer(out);
+  });
+
+  const storedOffers = {
+    id: 'a1',
+    role: 'assistant',
+    parts: [
+      {
+        type: 'tool-offer_next_step',
+        toolCallId: 'o1',
+        state: 'output-available',
+        input: offerInput,
+        output: offerOutput,
+      },
+      {
+        type: 'dynamic-tool',
+        toolName: 'offer_next_step',
+        toolCallId: 'o2',
+        state: 'output-error',
+        input: { ...offerInput, actions: ['try_again'] },
+        errorText: 'Invalid input',
+      },
+      {
+        type: 'tool-offer_next_step',
+        toolCallId: 'o3',
+        state: 'input-streaming',
+        input: { expected_answer: ANSWER },
+        rawInput: `{"expected_answer":"${ANSWER}"`,
+      },
+    ],
+  } as unknown as QuizUIMessage;
+
+  it("cuts a student's stored parts: complete, refused, and still streaming when the turn ended", () => {
+    const copy = structuredClone(storedOffers);
+    const stored = projectMessage(storedOffers, quizVisibility)!;
+    expect(stored.parts).toEqual([
+      {
+        type: 'tool-offer_next_step',
+        toolCallId: 'o1',
+        state: 'output-available',
+        input: offerShown,
+        output: offerOutput,
+      },
+      {
+        type: 'dynamic-tool',
+        toolName: 'offer_next_step',
+        toolCallId: 'o2',
+        state: 'output-error',
+        input: { ...offerShown, actions: ['try_again'] },
+        errorText: 'Invalid input',
+      },
+      {
+        type: 'tool-offer_next_step',
+        toolCallId: 'o3',
+        state: 'input-streaming',
+        input: undefined,
+      },
+    ]);
+    expectNoAnswer(stored);
+    expectNoAnswer(projectTranscript([storedOffers], quizVisibility));
+    expect(storedOffers).toEqual(copy);
+  });
+
+  it('keeps the answer for staff, and still cuts the code quote', () => {
+    const withQuote = {
+      ...storedOffers,
+      parts: [
+        ...storedOffers.parts.slice(0, 2),
+        {
+          type: 'tool-present_question',
+          toolCallId: 'c1',
+          state: 'output-available',
+          input: quotedInput,
+          output: quotedOutput,
+        },
+      ],
+    } as unknown as QuizUIMessage;
+    const staff = projectTranscript([withQuote], quizStaffVisibility);
+    expect(staff[0].parts[0]).toEqual(storedOffers.parts[0]);
+    expect(JSON.stringify(staff)).toContain(ANSWER);
+    expectNoQuote(staff);
+  });
+});
+
 describe('toolVisibility', () => {
   it('reads the registry and defaults to hidden', () => {
     expect(toolVisibility(quizVisibility, 'present_question')).toBe('shown');
@@ -520,6 +723,17 @@ const TURN: Chunk[] = [
   },
   { type: 'tool-output-available', toolCallId: 'c5', output: { r: 1 }, dynamic: true },
   { type: 'finish-step' },
+  { type: 'start-step' },
+  { type: 'tool-input-start', toolCallId: 'c6', toolName: 'offer_next_step' },
+  ...offerDeltas('c6'),
+  {
+    type: 'tool-input-available',
+    toolCallId: 'c6',
+    toolName: 'offer_next_step',
+    input: offerInput,
+  },
+  { type: 'tool-output-available', toolCallId: 'c6', output: offerOutput },
+  { type: 'finish-step' },
   { type: 'finish', finishReason: 'tool-calls' },
 ];
 
@@ -552,6 +766,7 @@ describe('live equals stored', () => {
     expect(types).toContain('tool-explore_codebase');
     expect(types).toContain('data-foo');
     expect(JSON.stringify(persisted)).toContain('code_quote');
+    expect(JSON.stringify(persisted)).toContain(ANSWER);
   });
 
   it('the viewer copy has no reasoning, hidden or label tools, or undeclared data', async () => {
@@ -571,8 +786,12 @@ describe('live equals stored', () => {
       'step-start',
       'dynamic-tool',
       'tool-present_question',
+      'step-start',
+      'tool-offer_next_step',
     ]);
     expectNoQuote(stored);
+    expectNoAnswer(stored);
+    expectNoAnswer(project(TURN));
     const serialized = JSON.stringify(stored);
     expect(serialized).not.toContain('navigation');
     expect(serialized).not.toContain('sig-1');

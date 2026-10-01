@@ -6,7 +6,12 @@
 
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { projectMessage, quizVisibility, type QuizUIMessage } from '@classmoji/utils/quiz-agent';
+import {
+  projectMessage,
+  quizStaffVisibility,
+  quizVisibility,
+  type QuizUIMessage,
+} from '@classmoji/utils/quiz-agent';
 
 let darkMode = false;
 vi.mock('~/hooks', () => ({ useDarkMode: () => ({ isDarkMode: darkMode }) }));
@@ -47,8 +52,11 @@ const {
   drivesSession,
   errorLineFor,
   FIXED_ERROR_COPY,
+  isPermanentSessionRefusal,
   NOTICE_COPY,
+  QuizChatSessionError,
   REPLY_FAILED_LINE,
+  requestSession,
   THINKING_LINE,
 } = await import('../QuizChat');
 
@@ -281,7 +289,7 @@ describe('QuizTranscript — parts', () => {
         expect(html).toContain('question 1 revised:');
       });
 
-      it('renders the Try again / Next buttons, disabled once a later message exists', () => {
+      it('renders the Try again / Next buttons, disabled once one is clicked', () => {
         const buttons = {
           type: 'tool-offer_next_step',
           toolCallId: 'call-2',
@@ -332,15 +340,31 @@ describe('QuizTranscript — parts', () => {
         expect(html).toContain('Spot on.');
       });
 
-      it("renders a server-completed record's scores without feedback sections", () => {
-        const serverRecord = { ...RECORD, source: 'server', feedback: undefined };
+      it("renders a server-completed record's band and scores without feedback sections", () => {
+        const serverRecord = {
+          ...RECORD,
+          source: 'server',
+          feedback: undefined,
+          evaluation: 'NEEDS WORK',
+          numeric_score: 2,
+        };
         const html = renderTranscript([
           msg('a1', 'assistant', [{ type: 'data-evaluation', data: serverRecord }]),
         ]);
-        expect(html).toContain('Quiz Results');
+        expect(html).toContain('Quiz Evaluation: NEEDS WORK');
+        expect(html).not.toContain('Quiz Results');
         expect(html).toContain('77.5%');
         expect(html).not.toContain('Summary');
         expect(html).not.toContain('Strengths');
+      });
+
+      it('titles a record with no band anywhere (stored before it was added) Quiz Results', () => {
+        const older = { ...RECORD, source: 'server', feedback: undefined };
+        const html = renderTranscript([
+          msg('a1', 'assistant', [{ type: 'data-evaluation', data: older }]),
+        ]);
+        expect(html).toContain('Quiz Results');
+        expect(html).not.toContain('Quiz Evaluation');
       });
 
       it('prefers the stored record and renders the panel once', () => {
@@ -546,6 +570,7 @@ describe('QuizTranscript — the feedback offer_next_step carries', () => {
     ...(state === 'output-error' ? { errorText: 'An error occurred.' } : {}),
   });
   const FEEDBACK = '**Close**: the loop runs one step too far.';
+  const ANSWER = 'SENTINEL: the loop should stop at items.length - 1.';
   const LEAD_IN = 'Want another go?';
   const BOTH = ['try_again', 'next'];
   const expectInOrder = (html: string, needles: string[]) => {
@@ -633,6 +658,65 @@ describe('QuizTranscript — the feedback offer_next_step carries', () => {
             expect(html).not.toContain('data-testid="quiz-next-step"');
             expect(html).not.toContain('data-message-role="assistant"');
           }
+        }
+      });
+
+      it('shows staff the expected answer as a muted line under the feedback, above the buttons', () => {
+        const html = renderTranscript([
+          msg('a1', 'assistant', [
+            offer(
+              'output-available',
+              { expected_answer: ANSWER, feedback: FEEDBACK, actions: BOTH },
+              { actions: BOTH, lead_in: LEAD_IN }
+            ),
+          ]),
+        ]);
+        expect(html.match(/data-testid="quiz-assistant-bubble"/g)).toHaveLength(1);
+        expectInOrder(html, [
+          '<strong class="font-semibold">Close</strong>',
+          'data-testid="quiz-expected-answer"',
+          'Expected:',
+          ANSWER,
+          LEAD_IN,
+          'data-testid="quiz-try-again"',
+        ]);
+        const line = html.slice(html.lastIndexOf('<p', html.indexOf('quiz-expected-answer')));
+        expect(line).toMatch(/^<p class="[^"]*text-xs text-gray-500 dark:text-gray-400[^"]*"/);
+      });
+
+      it("shows no expected answer in a student's copy of the same reply, only in staff's", () => {
+        const stored = msg('a1', 'assistant', [
+          offer(
+            'output-available',
+            { expected_answer: ANSWER, feedback: FEEDBACK, actions: BOTH },
+            { actions: BOTH, lead_in: LEAD_IN }
+          ),
+        ]);
+        const student = renderTranscript([projectMessage(stored, quizVisibility)!]);
+        expect(student).toContain('the loop runs one step too far.');
+        expect(student).toContain('data-testid="quiz-try-again"');
+        expect(student).not.toContain('quiz-expected-answer');
+        expect(student).not.toContain('SENTINEL');
+        expect(student).not.toContain('Expected:');
+
+        const staff = renderTranscript([projectMessage(stored, quizStaffVisibility)!]);
+        expect(staff).toContain('data-testid="quiz-expected-answer"');
+        expect(staff).toContain(ANSWER);
+      });
+
+      it('shows no expected-answer line when there is none, or it is blank', () => {
+        for (const expected_answer of [undefined, '', '  \n']) {
+          const html = renderTranscript([
+            msg('a1', 'assistant', [
+              offer(
+                'output-available',
+                { expected_answer, feedback: FEEDBACK, actions: BOTH },
+                { actions: BOTH, lead_in: LEAD_IN }
+              ),
+            ]),
+          ]);
+          expect(html).toContain('the loop runs one step too far.');
+          expect(html).not.toContain('quiz-expected-answer');
         }
       });
 
@@ -1171,7 +1255,7 @@ describe('errorLineFor', () => {
     "Quizzes aren't available in this class.",
     'This quiz is already complete.',
     'This attempt can no longer be continued.',
-    'This attempt has reached its message limit.',
+    'This quiz reached its message limit and has been submitted.',
     "That message couldn't be sent. Please try again.",
     'This quiz has already started.',
     "This quiz isn't available right now. Please try again later.",
@@ -1179,9 +1263,18 @@ describe('errorLineFor', () => {
 
   it("shows every line the task's sanitizer sends, byte for byte", async () => {
     const { QUIZ_AGENT_ERROR_COPY } = await import('@classmoji/utils/quiz-agent');
-    expect([...QUIZ_AGENT_ERROR_COPY].sort()).toEqual([...SANITIZER_COPY].sort());
-    for (const copy of SANITIZER_COPY) {
+    expect([...QUIZ_AGENT_ERROR_COPY]).toEqual(expect.arrayContaining(SANITIZER_COPY));
+    for (const copy of [...SANITIZER_COPY, ...QUIZ_AGENT_ERROR_COPY]) {
       expect(FIXED_ERROR_COPY.has(copy)).toBe(true);
+      expect(errorLineFor(new Error(copy))).toBe(copy);
+    }
+  });
+
+  it("shows each refusal code's own line, a code added later included", async () => {
+    // The chat knows no refusal code by name: whatever line the copy module
+    // gives a code (classroom_locked, say) is shown as it is.
+    const { QUIZ_REFUSAL_COPY } = await import('@classmoji/utils/quiz-agent');
+    for (const copy of Object.values(QUIZ_REFUSAL_COPY)) {
       expect(errorLineFor(new Error(copy))).toBe(copy);
     }
   });
@@ -1202,5 +1295,58 @@ describe('errorLineFor', () => {
       "That reply couldn't be finished. Send your message again."
     );
     expect(NOTICE_COPY.reply_failed).toBe(REPLY_FAILED_LINE);
+  });
+});
+
+describe('requestSession refusals', () => {
+  const LOCKED = 'This class is in read-only mode. The owner has locked it.';
+  const UNPUBLISHED = 'This class has been unpublished by the owner.';
+
+  const refusedWith = async (status: number, body: unknown) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify(body), { status }))
+    );
+    try {
+      await requestSession('attempt-1');
+    } catch (error) {
+      return error as InstanceType<typeof QuizChatSessionError>;
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    throw new Error('expected a refusal');
+  };
+
+  it("shows a locked class's own line, as the classroom-status gate answers it", async () => {
+    const error = await refusedWith(403, { error: 'CLASSROOM_LOCKED', message: LOCKED });
+    expect(error).toBeInstanceOf(QuizChatSessionError);
+    expect(error.message).toBe(LOCKED);
+    expect(error.code).toBe('CLASSROOM_LOCKED');
+    expect(errorLineFor(error)).toBe(LOCKED);
+    // A lock can be lifted: the chat stays open to try again.
+    expect(isPermanentSessionRefusal(error)).toBe(false);
+
+    const html = renderTranscript([], { errorLine: errorLineFor(error) });
+    expect(html).toContain('data-testid="quiz-error"');
+    expect(html).toContain('read-only mode');
+    expect(html).not.toContain("The quiz couldn't start.");
+  });
+
+  it('shows the line for a classroom-status code when the body has no line of its own', async () => {
+    const error = await refusedWith(403, { error: 'CLASSROOM_UNPUBLISHED' });
+    expect(error.message).toBe(UNPUBLISHED);
+    expect(errorLineFor(error)).toBe(UNPUBLISHED);
+  });
+
+  it("keeps the route's own coded refusals, and replaces text it doesn't know", async () => {
+    const complete = await refusedWith(409, {
+      code: 'QUIZ_COMPLETE',
+      message: 'This quiz is already complete.',
+    });
+    expect(complete.message).toBe('This quiz is already complete.');
+    expect(isPermanentSessionRefusal(complete)).toBe(true);
+
+    const unknown = await refusedWith(500, { error: 'SOMETHING_ELSE', message: 'stack trace' });
+    expect(unknown.message).toBe("The quiz couldn't start. Please try again.");
   });
 });

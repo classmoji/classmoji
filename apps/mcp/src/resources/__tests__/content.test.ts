@@ -224,6 +224,46 @@ describe('quizzes resource source_material (quiz source material)', () => {
     expect(result.quizzes[0]).not.toHaveProperty('system_prompt');
   });
 
+  it('staff get excluded_paths; students never do', async () => {
+    findByClassroom.mockResolvedValue([
+      {
+        id: 'q1',
+        name: 'Quiz 1',
+        status: 'DRAFT',
+        weight: 0,
+        question_count: 3,
+        include_code_context: true,
+        excluded_paths: ['tests/**', '**/*.spec.js'],
+      },
+      { id: 'q2', name: 'Quiz 2', status: 'DRAFT', weight: 0, question_count: 3 },
+    ]);
+    const staff = (await quizzesResource.handler(
+      VARS,
+      ownerCtx({ quizzes_enabled: true }),
+      new URL('classmoji://x')
+    )) as { quizzes: Array<Record<string, unknown>> };
+    expect(staff.quizzes[0].excluded_paths).toEqual(['tests/**', '**/*.spec.js']);
+    expect(staff.quizzes[1].excluded_paths).toEqual([]);
+
+    getQuizzesForStudent.mockResolvedValue([
+      {
+        id: 'q1',
+        name: 'Quiz 1',
+        status: 'PUBLISHED',
+        weight: 0,
+        question_count: 3,
+        excluded_paths: ['tests/**'],
+      },
+    ]);
+    const ctx = studentCtx();
+    (ctx.classroom as unknown as { classroom: { slug: string } }).classroom.slug =
+      'authorized-slug';
+    const student = (await quizzesResource.handler(VARS, ctx, new URL('classmoji://x'))) as {
+      quizzes: Array<Record<string, unknown>>;
+    };
+    expect(student.quizzes[0]).not.toHaveProperty('excluded_paths');
+  });
+
   it('an unlinked quiz reports an empty list', async () => {
     findByClassroom.mockResolvedValue([
       { id: 'q1', name: 'Quiz 1', status: 'DRAFT', weight: 0, question_count: 3 },

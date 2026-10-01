@@ -1,8 +1,10 @@
 /**
  * POST /api/quiz-chat/session — a token for one quiz attempt's chat session.
  *
- * Body `{ attemptId }` → `200 { publicAccessToken }`, or a refusal with fixed
- * copy (`{ code?, message }`). The chat transport calls this for both of its
+ * Body `{ attemptId }` → `200 { publicAccessToken, resumeCursor? }`, or a
+ * refusal with fixed copy (`{ code?, message }`). `resumeCursor` comes with a
+ * re-joined session that has finished a reply: where its reply stream resumes
+ * (see readResumeCursor). The chat transport calls this for both of its
  * callbacks: `startSession` (the first send on an attempt) and `accessToken`
  * (a refresh after a 401). Both mean the same thing here, because starting the
  * session is idempotent on the chat id, which is the attempt id.
@@ -80,6 +82,29 @@ const json = (status: number, body: unknown) =>
   });
 
 const refuse = (refusal: Refusal) => json(refusal.status, refusal.body);
+
+/**
+ * Where the attempt's reply stream resumes: the id of the record that ended
+ * the last finished reply, which the task stores after every reply
+ * (`context.runtime.cursors.lastOutEventId`). A tab without session state of
+ * its own opens the stream there, past what its transcript already shows.
+ * Null when there is none; a failed read is not a refusal.
+ */
+const readResumeCursor = async (
+  readRuntimeState: () => Promise<{ cursors: unknown } | null>
+): Promise<string | null> => {
+  try {
+    const cursors = (await readRuntimeState())?.cursors as
+      | { lastOutEventId?: unknown }
+      | null
+      | undefined;
+    const cursor = cursors?.lastOutEventId;
+    return typeof cursor === 'string' && /^\d+$/.test(cursor) ? cursor : null;
+  } catch (error: unknown) {
+    console.error('[api.quiz-chat.session] resume cursor unavailable:', error);
+    return null;
+  }
+};
 
 /** Whether the attempt's session deadline has passed. No deadline stamped: open. */
 const pastDeadline = (expiresAt: unknown, now: Date) => {
@@ -200,9 +225,17 @@ export async function action({ request }: Route.ActionArgs) {
       `attempt:${attemptId}`,
       `classroom:${classroomId}`,
     ]);
+    // The session the attempt already had, re-joined rather than created: its
+    // stored cursor is a place in this same reply stream.
+    const rejoined =
+      Boolean(sessionId) &&
+      (attempt as { trigger_session_id?: unknown }).trigger_session_id === sessionId;
     if (sessionId) await recordTriggerSession(attemptId, sessionId);
+    const resumeCursor = rejoined
+      ? await readResumeCursor(() => ClassmojiService.quizChat.readRuntimeState(attemptId))
+      : null;
 
-    return json(200, { publicAccessToken });
+    return json(200, { publicAccessToken, ...(resumeCursor ? { resumeCursor } : {}) });
   } catch (error: unknown) {
     // A gate's refusal (access, classroom status) goes back exactly as thrown.
     if (error instanceof Response) return error;

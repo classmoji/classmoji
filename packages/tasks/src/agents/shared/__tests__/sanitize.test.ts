@@ -124,6 +124,7 @@ describe('fixed copy', () => {
       'wrong_runtime',
       'not_a_member',
       'turn_limit',
+      'too_fast',
       'invalid_message',
       'message_conflict',
       'invalid_input',

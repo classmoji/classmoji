@@ -2,14 +2,15 @@
  * What a failed quiz tool call tells the model.
  *
  * A thrown error becomes the tool's `tool-error` result, which the model reads
- * and corrects. For the `shown` tools (present_question, offer_next_step,
- * submit_quiz_evaluation) that error text also reaches the browser, so it is
- * always one of three kinds: a grading refusal, whose message the grading
- * service writes for the model (it says what is accepted), a code-quote
- * refusal (codeQuote.ts: what to fix, quoting at most one line of the
- * student's own file), or fixed text. Nothing else (database errors, stack
- * traces, request bodies, GitHub answers) is passed on; those are logged as
- * ids and error facts only.
+ * and corrects in the same turn. The browser never gets that text: the UI
+ * stream replaces every tool error with "An error occurred.", the saved reply
+ * carries that same text, and the chat renders no failed tool part. The text
+ * is still kept to three kinds, since the model reads it: a grading refusal,
+ * whose message the grading service writes for the model (it says what is
+ * accepted), a code-quote refusal (codeQuote.ts: what to fix, quoting at most
+ * one line of the student's own file), or fixed text. Nothing else (database
+ * errors, stack traces, request bodies, GitHub answers) is passed on; those
+ * are logged as ids and error facts only.
  */
 import type { QuizToolName } from '@classmoji/utils/quiz-agent';
 import { logDiagnostic, type DiagnosticLog } from '../../shared/sanitize.ts';
@@ -22,10 +23,20 @@ export const OFFER_AFTER_QUESTION_TEXT =
 
 /**
  * offer_next_step refused in a turn the student opened with Try again: that
- * turn is a hint, which ends with a question and waits for their answer.
+ * turn is a hint, which ends with a question and waits for their answer. A
+ * code-aware hint may still re-read the code first (explore_codebase with
+ * purpose check_current), so only the two calls that end a turn are named.
  */
 export const OFFER_AFTER_HINT_TEXT =
-  'This is a hint turn: write the hint as your reply text, with no tool call. Give exactly one hint and end with a question such as "What do you think?".';
+  'This is a hint turn: write the hint as your reply text, with no offer_next_step or present_question. Give exactly one hint and end with a question such as "What do you think?".';
+
+/**
+ * present_question refused: it would show the current question's card again
+ * in a turn the student opened with Try again. The card would end the turn,
+ * and the hint the student asked for would never be written.
+ */
+export const RESHOW_ON_HINT_TEXT =
+  'This is a hint turn: give the hint as text; don\'t show the question again. If your reply already gives the hint, end it there; otherwise give exactly one hint and end with a question such as "What do you think?".';
 
 /** offer_next_step refused because buttons already went out in this turn. */
 export const OFFER_TWICE_TEXT =

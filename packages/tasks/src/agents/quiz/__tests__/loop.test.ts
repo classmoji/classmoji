@@ -28,6 +28,7 @@ import {
   type QuizTurnDeps,
 } from '../loop.ts';
 import { OFFER_AFTER_HINT_TEXT } from '../tools/errors.ts';
+import { serverNoticeMarker, serverNoticeToken } from '../serverNotice.ts';
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -158,7 +159,9 @@ function fakeAttempt(questionCount = 2, init: Partial<AttemptProgress> = {}) {
     }),
     offer_next_step: tool({
       ...quizToolDefs.offer_next_step,
-      execute: input => queue(async () => ({ ...input, lead_in: 'Ready for the next question?' })),
+      // As the real tool: the buttons and the lead-in, never the input's text.
+      execute: input =>
+        queue(async () => ({ actions: input.actions, lead_in: 'Ready for the next question?' })),
     }),
     submit_quiz_evaluation: tool({
       ...quizToolDefs.submit_quiz_evaluation,
@@ -408,6 +411,69 @@ describe('runQuizTurn', () => {
     // The persisted message carries the evaluation part.
     const saved = a.persisted.at(-1)!.message;
     expect(saved.parts.some(p => p.type === 'data-evaluation')).toBe(true);
+  });
+
+  it('completes from the recorded grades when the model call fails after the last result', async () => {
+    const a = fakeAttempt(2, { presented: 2, finalized: [1] });
+    let calls = 0;
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return step([
+            toolCall('r2', 'record_question_result', {
+              question_num: 2,
+              answers: [{ level: 'correct', hints_before: 0 }],
+              brief_feedback: 'Nice.',
+            }),
+          ]) as never;
+        }
+        throw new Error('overloaded');
+      },
+    });
+    const chunks = await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { lastAction: 'next' }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
+    );
+    // No recovery call after the model error, but the server completion runs.
+    expect(calls).toBe(2);
+    expect(a.serverCompletions()).toBe(1);
+    expect(chunks.some(c => c.type === 'data-evaluation')).toBe(true);
+    // The attempt is complete, so no "send it again" notice.
+    expect(chunks.some(c => c.type === 'data-notice')).toBe(false);
+    // Saved as a partial reply that carries the evaluation.
+    const saved = a.persisted.at(-1)!;
+    expect(saved.final).toBe(false);
+    expect(saved.message.parts.some(p => p.type === 'data-evaluation')).toBe(true);
+  });
+
+  it('still writes reply_failed after a model error when a result is missing', async () => {
+    const a = fakeAttempt(2, { presented: 2, finalized: [1] });
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        throw new Error('overloaded');
+      },
+    });
+    const chunks = await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { lastAction: 'next' }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
+    );
+    expect(model.doStreamCalls).toHaveLength(1);
+    expect(a.serverCompletions()).toBe(0);
+    const notices = chunks.filter(c => c.type === 'data-notice') as Array<{
+      data: { code: string };
+    }>;
+    expect(notices.map(n => n.data.code)).toEqual(['reply_failed']);
   });
 
   it('stops recovering once the model submits the evaluation', async () => {
@@ -800,6 +866,57 @@ describe('runQuizTurn', () => {
     );
     expect(CODE_UNAVAILABLE_NOTICE).not.toMatch(/explore_codebase|token|error|fail/i);
     expect(JSON.stringify(a.persisted)).not.toContain('SYSTEM NOTICE');
+  });
+
+  it("opens each stored status part and each notice with the attempt's marker, and saves none of it", async () => {
+    const a = fakeAttempt(2, { presented: 2, finalized: [1, 2] });
+    const model = scriptedModel([[...text('t', 'Great work!')]]);
+    await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { codeUnavailable: true }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
+    );
+    const marker = serverNoticeMarker('attempt-1');
+    expect(marker).toMatch(/^\[\[server-notice:[0-9a-f]{24}\]\]$/);
+    const users = model.doStreamCalls[2].prompt.filter(m => m.role === 'user') as Array<{
+      content: Array<{ type: string; text: string }>;
+    }>;
+    // The student's text is left as it is; the status part after it is marked.
+    expect(users[0].content[0].text).toBe('my answer');
+    expect(users[0].content[1].text).toBe(`${marker}\nCURRENT STATUS`);
+    // The code notice and the recovery notice both start with the marker.
+    const notices = users.slice(1).map(u => u.content[0].text);
+    expect(notices.length).toBeGreaterThanOrEqual(2);
+    for (const notice of notices) {
+      expect(notice.startsWith(`${marker}\nSYSTEM NOTICE`)).toBe(true);
+    }
+    // Same bytes on every call of the turn, so the cached prefix holds.
+    expect(JSON.stringify(model.doStreamCalls[0].prompt[2])).toBe(
+      JSON.stringify(model.doStreamCalls[2].prompt[2])
+    );
+    // Never saved, never streamed.
+    expect(JSON.stringify(a.persisted)).not.toContain(serverNoticeToken('attempt-1'));
+  });
+
+  it('gives each attempt its own marker, and leaves a first text part alone', async () => {
+    expect(serverNoticeToken('attempt-1')).toBe(serverNoticeToken('attempt-1'));
+    expect(serverNoticeToken('attempt-1')).not.toBe(serverNoticeToken('attempt-2'));
+    const a = fakeAttempt(2);
+    const model = scriptedModel([[toolCall('c1', 'present_question', question(1))]]);
+    await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress()),
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'CURRENT STATUS: hello' }] }],
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
+    );
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).not.toContain('server-notice');
   });
 
   it('sends no such notice when the code is available', async () => {
@@ -1310,7 +1427,7 @@ describe('the history of earlier turns: failed tool calls left out', () => {
                 refused = true;
                 throw new Error(OFFER_AFTER_HINT_TEXT);
               }
-              return { ...input, lead_in: 'Ready for the next question?' };
+              return { actions: input.actions, lead_in: 'Ready for the next question?' };
             }),
         }),
       };
@@ -1341,11 +1458,18 @@ describe('the history of earlier turns: failed tool calls left out', () => {
 
 describe('an offer that carries its feedback', () => {
   const FEEDBACK = 'Right: `map` returns a new array. The original is left alone.';
+  const ANSWER = 'SENTINEL: `map` builds a new array and never changes the original.';
 
   it('ends the turn on a reply that is only the call, and saves a part carrying the feedback', async () => {
     const a = fakeAttempt(2, { presented: 1 });
     const model = scriptedModel([
-      [toolCall('b', 'offer_next_step', { feedback: FEEDBACK, actions: ['next'] })],
+      [
+        toolCall('b', 'offer_next_step', {
+          expected_answer: ANSWER,
+          feedback: FEEDBACK,
+          actions: ['next'],
+        }),
+      ],
       [...text('t', 'should not be requested')],
     ]);
     const chunks = await collect(
@@ -1360,12 +1484,13 @@ describe('an offer that carries its feedback', () => {
     expect(model.doStreamCalls).toHaveLength(1);
     const saved = a.persisted.at(-1)?.message.parts ?? [];
     expect(saved.some(p => p.type === 'text')).toBe(false);
+    // Saved whole, the expected answer included (staff read it).
     expect(saved.find(p => p.type === 'tool-offer_next_step')).toMatchObject({
       state: 'output-available',
-      input: { feedback: FEEDBACK, actions: ['next'] },
+      input: { expected_answer: ANSWER, feedback: FEEDBACK, actions: ['next'] },
       output: { actions: ['next'], lead_in: 'Ready for the next question?' },
     });
-    // The browser receives the feedback with the call's input.
+    // The browser receives the feedback with the call's input, never the answer.
     expect(chunks).toContainEqual(
       expect.objectContaining({
         type: 'tool-input-available',
@@ -1373,6 +1498,8 @@ describe('an offer that carries its feedback', () => {
         input: { feedback: FEEDBACK, actions: ['next'] },
       })
     );
+    expect(JSON.stringify(chunks)).not.toContain('SENTINEL');
+    expect(JSON.stringify(chunks)).not.toContain('expected_answer');
   });
 
   it('adds no buttons at the end of a turn whose offer was refused', async () => {

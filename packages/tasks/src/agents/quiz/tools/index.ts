@@ -22,7 +22,9 @@
  * buttons never arrive together, in either order. A present_question that
  * shows the current question again (an earlier turn's card) is refused once
  * the model has written text in the turn: re-showing is for a student who
- * asks to see the question, at the start of the reply. A record_question_result
+ * asks to see the question, at the start of the reply. It is refused in a
+ * turn the student opened with Try again, text or not: that turn is a hint,
+ * and the card would end it before the hint is written. A record_question_result
  * for a question whose card went out in the same turn is refused too, before
  * anything is written: the student has not seen it yet, so there is nothing
  * to rate. Recording an earlier question (the one the student is moving on
@@ -31,11 +33,13 @@
  * call says their message asked to skip or move on
  * (`student_asked_to_move_on`); otherwise it is refused before anything is
  * written, so a correct answer never shows its result before the Next click.
- * A result already recorded (a revision) is left to the service's own rules.
+ * A record for a question that already has a result is left to the service,
+ * which returns the stored result or refuses: a recorded result is final.
  * offer_next_step carries the model's feedback on the answer in its input
  * (`feedback`, which the schema requires to be non-blank; the browser shows it
  * as the agent's message, above the buttons), so feedback and buttons arrive
- * together. How much feedback to write is the description's to say, never a
+ * together. Before it comes the correct answer (`expected_answer`), saved with
+ * the reply for staff and cut by the projection for every student. How much feedback to write is the description's to say, never a
  * count here. The call is refused in a turn the student opened with Try again
  * (that reply is a hint, which ends with a question), for Try again without
  * Next, and once an offer has gone out in the turn. Its output carries the
@@ -103,6 +107,7 @@ import {
   quoteFileCache,
   resolveCodeQuote,
   type QuoteFileCache,
+  type ReadFile,
 } from './codeQuote.ts';
 import {
   aborted,
@@ -114,6 +119,7 @@ import {
   QUESTION_AFTER_OFFER_TEXT,
   QUOTE_READ_FAILED_TEXT,
   RECORD_BEFORE_ANSWER_TEXT,
+  RESHOW_ON_HINT_TEXT,
   reshowAfterText,
   RECORD_BEFORE_NEXT_TEXT,
   recordBeforePresentText,
@@ -141,7 +147,7 @@ export type QuizToolServices = {
   /** Where file lines are kept for code quotes; exploration fills it too. */
   quoteCache: QuoteFileCache;
   /** Reads one file for a code quote; defaults to the Contents API read. */
-  readFile?: (owner: string, repo: string, path: string, token: string) => Promise<string>;
+  readFile?: ReadFile;
   /** The attempt user's MCP bearer for the content tools (content.ts). */
   mintMcpToken?: (userId: string) => Promise<string>;
   /** Opens the MCP client one content lookup uses. */
@@ -209,7 +215,10 @@ function gradingResolver(injected?: QuizToolServices['grading']) {
   return () => (pending ??= realGrading());
 }
 
-/** The `data-question-result` part id: one divider per question, one more for a revision. */
+/**
+ * The `data-question-result` part id: one divider per question, and one more
+ * for a result revised before results became final (stored ones still carry it).
+ */
 export const questionResultPartId = (out: QuestionResultOutput) =>
   `question-result-${out.question_num}${out.revised ? '-revised' : ''}`;
 
@@ -338,14 +347,15 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
         // Refused before the write: a card the student never sees must not
         // count as presented.
         if (offerMade) throw new Error(QUESTION_AFTER_OFFER_TEXT);
+        const reshow =
+          input.question_number === lastPresented && !presentedThisTurn.has(input.question_number);
+        // A Try again turn is a hint, written as text: the card again would
+        // end the turn before the hint, with or without text so far.
+        if (reshow && ctx.lastAction === 'try_again') throw new Error(RESHOW_ON_HINT_TEXT);
         // Showing the question already out again is for a student who asks
         // to see it, at the start of the reply: after text (feedback, say)
         // the turn would end with the old card and no buttons.
-        if (
-          input.question_number === lastPresented &&
-          !presentedThisTurn.has(input.question_number) &&
-          d.textWritten()
-        ) {
+        if (reshow && d.textWritten()) {
           throw new Error(reshowAfterText(lastPresented, !noQuestionOpen()));
         }
         // The question the student is leaving is recorded first, so its

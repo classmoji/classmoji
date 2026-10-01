@@ -22,6 +22,7 @@ import { currentAdmission } from './admission.ts';
 import { attemptCompleted, attemptHasQuestion, loadAttemptContext } from './context.ts';
 import { runQuizTurn } from './loop.ts';
 import { evaluationNotice } from './prompt/index.ts';
+import { markServerText } from './serverNotice.ts';
 import { createQuizTranscriptStorage } from './storage.ts';
 import { quizTools } from './tools/index.ts';
 import { QuizTurnError, sanitized, type DiagnosticLog } from '../shared/sanitize.ts';
@@ -79,16 +80,19 @@ export const quizAttemptAgent = chat.agent({
     });
   }),
 
-  onAction: sanitized('onAction', async ({ action, chatId }: { action: { type: 'begin' }; chatId: string }) => {
-    if (action.type !== 'begin') return;
-    if (await attemptHasQuestion(chatId)) return;
-    const opening = (await ClassmojiService.quizChat.storeHiddenOpening(chatId)) as QuizUIMessage;
-    const chain = chat.history.all();
-    if (!chain.some(m => m.id === opening.id)) {
-      chat.history.set([...chain, opening as unknown as UIMessage]);
+  onAction: sanitized(
+    'onAction',
+    async ({ action, chatId }: { action: { type: 'begin' }; chatId: string }) => {
+      if (action.type !== 'begin') return;
+      if (await attemptHasQuestion(chatId)) return;
+      const opening = (await ClassmojiService.quizChat.storeHiddenOpening(chatId)) as QuizUIMessage;
+      const chain = chat.history.all();
+      if (!chain.some(m => m.id === opening.id)) {
+        chat.history.set([...chain, opening as unknown as UIMessage]);
+      }
+      return chat.turn();
     }
-    return chat.turn();
-  }),
+  ),
 
   run: sanitized(
     'run',
@@ -114,7 +118,8 @@ export const quizAttemptAgent = chat.agent({
 
       // The admitted row carries the per-turn status as a hidden second text
       // part. If the runtime's chain lost it, send the status as a separate,
-      // non-persisted user message instead.
+      // non-persisted user message instead, opened by the attempt's marker
+      // like every server text.
       const chain = chat.history.all();
       // The begin turn has no admitted student message; its hidden opening
       // message (the chain's last user message) carries the status instead.
@@ -124,7 +129,7 @@ export const quizAttemptAgent = chat.agent({
       const statusInChain = admitted ? textPartCount(admitted) >= 2 : null;
       const extraMessages: ModelMessage[] =
         statusInChain === false
-          ? [{ role: 'user', content: buildTurnStatus(attempt.progress) }]
+          ? [{ role: 'user', content: markServerText(chatId, buildTurnStatus(attempt.progress)) }]
           : [];
       log('[quiz-agent] turn', {
         attemptId: chatId,
@@ -158,7 +163,10 @@ export const quizAttemptAgent = chat.agent({
     }
   ),
 
-  onBeforeTurnComplete: sanitized('onBeforeTurnComplete', async ({ chatId }: { chatId: string }) => {
-    if (await attemptCompleted(chatId)) chat.close();
-  }),
+  onBeforeTurnComplete: sanitized(
+    'onBeforeTurnComplete',
+    async ({ chatId }: { chatId: string }) => {
+      if (await attemptCompleted(chatId)) chat.close();
+    }
+  ),
 });

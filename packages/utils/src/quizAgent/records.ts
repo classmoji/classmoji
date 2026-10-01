@@ -20,6 +20,7 @@ export const StoredQuestionResultSchema = z.object({
   credit_earned: z.number().min(0).max(100),
   emoji: z.string(),
   brief_feedback: z.string(),
+  /** Only on a result revised before results became final; older attempts still carry it. */
   revised: z.literal(true).optional(),
   /** Recorded as skipped by the server when the student ended the quiz early. */
   skipped_by_end: z.literal(true).optional(),

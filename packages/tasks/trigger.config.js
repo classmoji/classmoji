@@ -70,15 +70,21 @@ export default defineConfig({
   // a non-local database. Deployed (STAGING/PRODUCTION) runs are unaffected.
   init: async ({ ctx }) => {
     if (ctx?.environment?.type !== 'DEVELOPMENT') return;
-    const url = process.env.DATABASE_URL || '';
-    const isLocal = /@(localhost|127\.0\.0\.1|0\.0\.0\.0|host\.docker\.internal)[:/]/.test(url);
-    if (!isLocal) {
-      const masked = url.replace(/\/\/[^@]*@/, '//***@');
-      throw new Error(
-        `[db-safety] Local Trigger.dev (DEVELOPMENT) worker is pointed at a NON-LOCAL database: ${masked}. ` +
-          `Refusing to run so local task runs cannot write to production. ` +
-          `Fix DATABASE_URL in packages/tasks/.env to point at localhost.`
-      );
+    const isLocal = url =>
+      /@(localhost|127\.0\.0\.1|0\.0\.0\.0|host\.docker\.internal)[:/]/.test(url);
+    // DATABASE_URL_UNPOOLED, when set, is used by the few places that need a
+    // direct connection, so it must be local too.
+    for (const name of ['DATABASE_URL', 'DATABASE_URL_UNPOOLED']) {
+      const url = process.env[name] || '';
+      if (name !== 'DATABASE_URL' && !url) continue;
+      if (!isLocal(url)) {
+        const masked = url.replace(/\/\/[^@]*@/, '//***@');
+        throw new Error(
+          `[db-safety] Local Trigger.dev (DEVELOPMENT) worker is pointed at a NON-LOCAL database: ${masked}. ` +
+            `Refusing to run so local task runs cannot write to production. ` +
+            `Fix ${name} in packages/tasks/.env to point at localhost.`
+        );
+      }
     }
   },
   retries: {
@@ -181,14 +187,10 @@ export default defineConfig({
             value: secret.secretValue,
           }));
 
-          // Trigger.dev workers need a direct (unpooled) connection
-          const unpooledUrl = mapped.find(s => s.name === 'DATABASE_URL_UNPOOLED')?.value;
-          if (unpooledUrl) {
-            const entry = mapped.find(s => s.name === 'DATABASE_URL');
-            if (entry) entry.value = unpooledUrl;
-            else mapped.push({ name: 'DATABASE_URL', value: unpooledUrl });
-          }
-
+          // Tasks use the pooled DATABASE_URL, the same one the web apps use.
+          // The direct endpoint is synced as DATABASE_URL_UNPOOLED like any other
+          // secret, for the few places that need session state (a session-level
+          // advisory lock, a session setting).
           return mapped;
         } catch (error) {
           console.error('[Infisical] Failed to sync secrets:', error.message);

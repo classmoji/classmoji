@@ -18,7 +18,8 @@ const { Title, Text } = Typography;
  * evaluation tool part / `data-evaluation`). Scores and each question's emoji
  * are the stored values; nothing is recomputed here. A record the server
  * completed from the recorded results (`source: 'server'`) has no feedback
- * text, and the panel simply shows the scores and per-question results.
+ * text, and the panel simply shows its band, the scores and per-question
+ * results.
  */
 export interface ResultsFocusMetrics {
   totalMs: number | null;
@@ -50,6 +51,10 @@ const roundScore = (value: number) => Math.round(Number(value || 0) * 10) / 10;
 
 function QuizResults({ evaluation, focusMetrics = null }: QuizResultsProps) {
   const feedback = evaluation.feedback;
+  // The band the server stores on every completion, its own included; a
+  // record stored before it was added has it in the model's feedback only.
+  const band = evaluation.evaluation ?? feedback?.evaluation ?? null;
+  const bandScore = evaluation.numeric_score ?? feedback?.numeric_score;
   const score = roundScore(evaluation.partial_credit_percentage);
   const results = [...(evaluation.question_results ?? [])].sort(
     (a, b) => a.question_num - b.question_num
@@ -67,10 +72,10 @@ function QuizResults({ evaluation, focusMetrics = null }: QuizResultsProps) {
 
       <Card
         title={
-          feedback ? (
+          band ? (
             <Space>
-              {gradeIcon(feedback.numeric_score)}
-              <span>Quiz Evaluation: {feedback.evaluation}</span>
+              {gradeIcon(bandScore)}
+              <span>Quiz Evaluation: {band}</span>
             </Space>
           ) : (
             <span>Quiz Results</span>

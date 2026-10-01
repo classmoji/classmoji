@@ -23,10 +23,12 @@ const writeChatGrantMock = vi.fn();
 const recordTriggerSessionMock = vi.fn();
 const startSessionMock = vi.fn();
 const isTriggerConfiguredMock = vi.fn();
+const readRuntimeStateMock = vi.fn();
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     quizAttempt: { findById: (...a: unknown[]) => attemptFindByIdMock(...a) },
+    quizChat: { readRuntimeState: (...a: unknown[]) => readRuntimeStateMock(...a) },
     audit: { create: (...a: unknown[]) => auditCreateMock(...a) },
   },
 }));
@@ -123,6 +125,7 @@ beforeEach(() => {
   writeChatGrantMock.mockResolvedValue(undefined);
   recordTriggerSessionMock.mockResolvedValue(undefined);
   startSessionMock.mockResolvedValue({ publicAccessToken: 'pat-1', sessionId: 'session_1' });
+  readRuntimeStateMock.mockResolvedValue(null);
   auditCreateMock.mockResolvedValue(undefined);
   signInAs(STUDENT);
 });
@@ -181,6 +184,49 @@ describe('api.quiz-chat.session — the happy path', () => {
 
     expect(again.status).toBe(200);
     expect(startSessionMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("adds the stored resume cursor when it re-joins the attempt's own session", async () => {
+    attemptFindByIdMock.mockResolvedValue(attemptRow({ trigger_session_id: 'session_1' }));
+    readRuntimeStateMock.mockResolvedValue({
+      cursors: { lastOutEventId: '4711', lastInEventId: '12' },
+      state: null,
+    });
+
+    const response = await post({ attemptId: ATTEMPT_ID });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ publicAccessToken: 'pat-1', resumeCursor: '4711' });
+    expect(readRuntimeStateMock).toHaveBeenCalledWith(ATTEMPT_ID);
+  });
+
+  it('adds no cursor for a new session, a session with none, or one that cannot be read', async () => {
+    // A session created now (none recorded, or another one): its stream starts over.
+    readRuntimeStateMock.mockResolvedValue({ cursors: { lastOutEventId: '4711' }, state: null });
+    expect(await (await post({ attemptId: ATTEMPT_ID })).json()).toEqual({
+      publicAccessToken: 'pat-1',
+    });
+    attemptFindByIdMock.mockResolvedValue(attemptRow({ trigger_session_id: 'session_0' }));
+    expect(await (await post({ attemptId: ATTEMPT_ID })).json()).toEqual({
+      publicAccessToken: 'pat-1',
+    });
+    expect(readRuntimeStateMock).not.toHaveBeenCalled();
+
+    // The same session, with no cursor stored yet, a malformed one, or a failed read.
+    attemptFindByIdMock.mockResolvedValue(attemptRow({ trigger_session_id: 'session_1' }));
+    for (const runtime of [
+      null,
+      { cursors: {}, state: null },
+      { cursors: { lastOutEventId: 'abc' }, state: null },
+    ]) {
+      readRuntimeStateMock.mockResolvedValueOnce(runtime);
+      const response = await post({ attemptId: ATTEMPT_ID });
+      expect(await response.json()).toEqual({ publicAccessToken: 'pat-1' });
+    }
+    readRuntimeStateMock.mockRejectedValueOnce(new Error('db down'));
+    const failed = await post({ attemptId: ATTEMPT_ID });
+    expect(failed.status).toBe(200);
+    expect(await failed.json()).toEqual({ publicAccessToken: 'pat-1' });
   });
 
   it('gives a staff member a session for their own preview attempt', async () => {

@@ -32,6 +32,7 @@ import {
   computeAttemptPercentages,
   deriveResult,
   gradeBandFor,
+  replyShowsHint,
   scoreSoFar,
   type Answer,
   type AttemptProgress,
@@ -94,11 +95,13 @@ export const isQuizGradingError = (error: unknown): error is QuizGradingError =>
 export const TRIGGER_CHAT_RUNTIME = 'trigger_chat';
 
 /**
- * Q16: one revision per question, in a later admitted turn, before completion.
- * Slice cut 2 turns this off, which refuses any second record for a question
- * that differs from the stored one.
+ * Q16, decided: a question's result is final once it is recorded (the student
+ * moved on). A later record for it that differs from the stored one is
+ * refused (`revision_refused`). Results written while this was on can still
+ * carry `revised: true` and a `result_revised` journal row; they are read and
+ * shown as stored.
  */
-export const RESULT_REVISIONS_ALLOWED = true;
+export const RESULT_REVISIONS_ALLOWED = false;
 
 /** Operation id of the server completion (Q17). One completion per attempt. */
 export const SERVER_COMPLETION_OPERATION_ID = 'completion:server';
@@ -133,7 +136,15 @@ const LOCKED_ATTEMPT_SELECT = {
   agent_config: true,
   turn_fence: true,
   evaluation_json: true,
-  quiz: { select: { classroom_id: true, question_count: true } },
+  chat_grant: true,
+  quiz: {
+    select: {
+      classroom_id: true,
+      question_count: true,
+      status: true,
+      classroom: { select: { status: true } },
+    },
+  },
 } satisfies Prisma.QuizAttemptSelect;
 
 export type LockedAttempt = Prisma.QuizAttemptGetPayload<{ select: typeof LOCKED_ATTEMPT_SELECT }>;
@@ -459,6 +470,109 @@ const sameAnswers = (a: unknown, b: Answer[]) =>
   a.every((x, i) => isObject(x) && x.level === b[i].level && x.hints_before === b[i].hints_before);
 
 /**
+ * The answers with each `hints_before` raised, where it is lower, to the Try
+ * again clicks admitted before that answer whose reply showed the student a
+ * hint (`hintsShown`). The model counts the hints; the server knows the
+ * clicks, and a typed hint request can only add to them.
+ *
+ * Question n's messages are the ones admitted after its card went out and
+ * before question n+1's card. A typed message (no button) can carry an
+ * answer; answers are taken one per typed message, in order, so the k-th
+ * answer came no earlier than the k-th typed message and the clicks before
+ * that message are its floor. An answer past the last typed message takes the
+ * last message's floor, so a click after the final answer (a hint, then Next)
+ * counts for none of them. Floors never decrease, so the answers keep
+ * `hints_before` non-decreasing.
+ */
+const floorHintsAtTryAgain = async (
+  tx: Tx,
+  attempt: Pick<LockedAttempt, 'id' | 'conversation_id'>,
+  questionNum: number,
+  answers: Answer[]
+): Promise<Answer[]> => {
+  if (answers.length === 0) return answers;
+  const cards = await tx.quizAttemptEvent.findMany({
+    where: { attempt_id: attempt.id, type: 'question_presented' },
+    select: { seq: true, payload: true },
+  });
+  const cardSeq = (n: number) =>
+    cards.find(c => isObject(c.payload) && c.payload.question_number === n)?.seq;
+  const from = cardSeq(questionNum);
+  if (from === undefined) return answers;
+  const to = cardSeq(questionNum + 1);
+  const inputs = await tx.quizAttemptEvent.findMany({
+    where: {
+      attempt_id: attempt.id,
+      type: 'input_admitted',
+      seq: { gt: from, ...(to !== undefined ? { lt: to } : {}) },
+    },
+    orderBy: { seq: 'asc' },
+    select: { payload: true, input_message_id: true },
+  });
+  const clickIds = inputs.flatMap(i =>
+    isObject(i.payload) && i.payload.action === 'try_again' && i.input_message_id
+      ? [i.input_message_id]
+      : []
+  );
+  const shown = await hintsShown(tx, attempt.conversation_id, clickIds);
+  let clicks = 0;
+  const floors: number[] = [];
+  for (const { payload, input_message_id } of inputs) {
+    const p = isObject(payload) ? payload : {};
+    if (p.action === 'try_again') {
+      if (input_message_id && shown.has(input_message_id)) clicks += 1;
+    } else if (p.kind === 'message' && p.action === undefined) floors.push(clicks);
+  }
+  if (floors.length === 0) return answers;
+  return answers.map((a, k) => {
+    const floor = floors[Math.min(k, floors.length - 1)];
+    return a.hints_before >= floor ? a : { ...a, hints_before: floor };
+  });
+};
+
+/**
+ * The Try again clicks (student message ids) whose reply showed the student a
+ * hint. A click's reply is the first assistant row after the click's own row,
+ * before the next user row, finished or partial; it showed a hint when its
+ * parts pass `replyShowsHint`: text that is not blank, and no notice. So a
+ * reply the student stopped part way counts once it has text (the text
+ * reached them, and the transcript keeps it: `loadCanonicalMessages`), while
+ * a reply that failed or ran out of time (it carries a notice), one that
+ * shows only a notice or no text, and a reply never saved count for nothing.
+ * The chat gives Try again back after exactly the replies this leaves out
+ * (`buttonSetsOf` in QuizChat applies the same predicate).
+ */
+const hintsShown = async (
+  tx: Tx,
+  conversationId: string | null,
+  clickIds: readonly string[]
+): Promise<Set<string>> => {
+  if (!conversationId || clickIds.length === 0) return new Set();
+  const rows = await tx.aIConversationMessage.findMany({
+    where: { conversation_id: conversationId },
+    orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
+    select: { id: true, ui_message_id: true, role: true },
+  });
+  const replyOf = new Map<string, string>();
+  for (const clickId of clickIds) {
+    const at = rows.findIndex(r => r.role === 'USER' && r.ui_message_id === clickId);
+    if (at === -1) continue;
+    const reply = rows.slice(at + 1).find(r => r.role === 'USER' || r.role === 'ASSISTANT');
+    if (reply?.role === 'ASSISTANT') replyOf.set(clickId, reply.id);
+  }
+  if (replyOf.size === 0) return new Set();
+  // Only the replies' parts: a long conversation's rows are not read whole.
+  const replies = await tx.aIConversationMessage.findMany({
+    where: { id: { in: [...new Set(replyOf.values())] } },
+    select: { id: true, parts: true },
+  });
+  const showsHint = new Set(
+    replies.filter(r => replyShowsHint(Array.isArray(r.parts) ? r.parts : [])).map(r => r.id)
+  );
+  return new Set([...replyOf].flatMap(([clickId, id]) => (showsHint.has(id) ? [clickId] : [])));
+};
+
+/**
  * Write `entries` into the attempt's `question_results_json` in one update,
  * each in place of any stored entry for its question, in question order.
  * Returns the array written.
@@ -490,6 +604,9 @@ const writeProjection = async (
 /**
  * Finalize a presented question from the answers the model rated. The server
  * scores it (`deriveResult`) and picks the emoji from the classroom mapping.
+ * Each answer's hint count is first raised to the Try again clicks admitted
+ * before it whose reply showed a hint (`floorHintsAtTryAgain`); the journal
+ * keeps what the model sent as `reported_answers` when that changed anything.
  *
  * - First record → `result_finalized`.
  * - The same answers again, in any turn (a retried call) → the stored result.
@@ -499,8 +616,8 @@ const writeProjection = async (
  *   its own call had been kept.
  * - Different answers in a re-run of that turn (a redelivered message: same
  *   input message, new fence) → the stored result; the earlier run's stands.
- * - Different answers in a later turn, before completion → one revision
- *   (`result_revised`, old and new values); any further change is refused.
+ * - Different answers in a later turn → refused (`revision_refused`): the
+ *   result is final (`RESULT_REVISIONS_ALLOWED`).
  */
 export const finalizeQuestion = (
   f: Fenced,
@@ -521,7 +638,7 @@ export const finalizeQuestion = (
           `Invalid question result: ${describeIssues(parsed.error)}`
         );
       }
-      const { question_num, answers, brief_feedback } = parsed.data;
+      const { question_num, brief_feedback } = parsed.data;
       const questionCount = attemptQuestionCount(attempt);
       const presented = attempt.questions_asked ?? 0;
 
@@ -538,6 +655,11 @@ export const finalizeQuestion = (
             'Present it with present_question and record its result after the student has answered it.'
         );
       }
+
+      // Floored before any comparison, so a re-sent call with the same
+      // counts matches the result stored from it.
+      const answers = await floorHintsAtTryAgain(tx, attempt, question_num, parsed.data.answers);
+      const floored = !sameAnswers(parsed.data.answers, answers);
 
       const history = await tx.quizAttemptEvent.findMany({
         where: {
@@ -565,26 +687,18 @@ export const finalizeQuestion = (
           }
           return storedOutput<QuestionResultOutput>(latest);
         }
-        // A revision follows something the student said about the question,
-        // never the Next click alone.
+        // A recorded result is final. With RESULT_REVISIONS_ALLOWED, a change
+        // would follow something the student said about the question (never
+        // the Next click alone), once.
         if (
-          RESULT_REVISIONS_ALLOWED &&
-          (await admittedAction(tx, attempt.id, f.inputMessageId)) === 'next'
+          !RESULT_REVISIONS_ALLOWED ||
+          (await admittedAction(tx, attempt.id, f.inputMessageId)) === 'next' ||
+          history.some(e => e.type === 'result_revised')
         ) {
           throw new QuizGradingError(
             'revision_refused',
-            `The result for question ${question_num} is already recorded and cannot change in this turn: ` +
-              'the student clicked Next. A recorded result can be revised once, only in a turn where the ' +
-              'student gives a new answer to that question.'
-          );
-        }
-        const alreadyRevised = history.some(e => e.type === 'result_revised');
-        if (!RESULT_REVISIONS_ALLOWED || alreadyRevised) {
-          throw new QuizGradingError(
-            'revision_refused',
-            RESULT_REVISIONS_ALLOWED
-              ? `The result for question ${question_num} was already revised once and cannot change again.`
-              : `The result for question ${question_num} is already recorded and cannot change.`
+            `That question's result is final: question ${question_num} is already recorded and ` +
+              'cannot change. Do not record it again.'
           );
         }
       }
@@ -626,6 +740,7 @@ export const finalizeQuestion = (
         payload: toJson({
           question_num,
           answers,
+          ...(floored ? { reported_answers: parsed.data.answers } : {}),
           ...derived,
           emoji,
           brief_feedback,
@@ -648,7 +763,14 @@ export const finalizeQuestion = (
 
 // ─── submit_quiz_evaluation / server completion ─────────────────────────────
 
-type CompletionInput = { source: 'model'; feedback: QuizEvaluationFeedback } | { source: 'server' };
+type CompletionInput =
+  | { source: 'model'; feedback: QuizEvaluationFeedback }
+  /**
+   * `endedBy: 'turn_limit'`: the server ends the attempt at the per-attempt
+   * message limit (quizChat.service), every question without a result
+   * counted as skipped, the open one included.
+   */
+  | { source: 'server'; endedBy?: 'turn_limit' };
 
 const readEvaluation = (json: Prisma.JsonValue): QuizEvaluationRecordV2 =>
   QuizEvaluationRecordV2Schema.parse(json);
@@ -678,6 +800,9 @@ const readEvaluation = (json: Prisma.JsonValue): QuizEvaluationRecordV2 =>
  *
  * `source: 'server'` (Q17) records no feedback text, so no acknowledgment;
  * `toolCallId` is then optional and the journal row uses a fixed operation id.
+ * With `endedBy: 'turn_limit'` (`completeAtTurnLimit`) it fills every
+ * question without a result as skipped, the open one included, with no
+ * student confirmation: the server ends the attempt, not the student.
  */
 export const completeWithEvaluation = (
   f: Omit<Fenced, 'toolCallId'> & { toolCallId?: string },
@@ -712,8 +837,12 @@ export const completeLocked = async (
     n => !recorded.has(n)
   );
   const endedEarly = o.source === 'model' && o.feedback.ended_early === true;
+  const endedBy = o.source === 'server' ? o.endedBy : undefined;
   let skippedByEnd: number[] = [];
-  if (missing.length > 0) {
+  if (missing.length > 0 && endedBy) {
+    stored = await fillSkippedByEnd(tx, attempt, f, questionCount, missing);
+    skippedByEnd = missing;
+  } else if (missing.length > 0) {
     if (!endedEarly) {
       throw new QuizGradingError(
         'incomplete',
@@ -816,6 +945,7 @@ export const completeLocked = async (
     runId: f.runId,
     payload: toJson({
       source: o.source,
+      ...(endedBy ? { ended_by: endedBy } : {}),
       ...(skippedByEnd.length > 0 ? { ended_early: true, skipped_by_end: skippedByEnd } : {}),
       output: record,
     }),
@@ -824,9 +954,32 @@ export const completeLocked = async (
 };
 
 /**
- * Record each of `missing` as skipped because the student ended the quiz
- * early: the result of a skip (`deriveResult([])`, the classroom's emoji for
- * it), no feedback line, and `skipped_by_end` on the entry and its
+ * Complete the attempt at the per-attempt message limit, for admission
+ * (quizChat.service), which holds the row lock in `tx`: a fresh turn fence
+ * first, so no earlier turn can write after it, then `completeLocked` with
+ * `endedBy: 'turn_limit'`. Returns the evaluation record.
+ */
+export const completeAtTurnLimit = async (
+  tx: Tx,
+  attempt: LockedAttempt,
+  runId: string
+): Promise<QuizEvaluationRecordV2> => {
+  const fence = newFence();
+  await tx.quizAttempt.update({ where: { id: attempt.id }, data: { turn_fence: fence } });
+  attempt.turn_fence = fence;
+  return completeLocked(
+    tx,
+    attempt,
+    { attemptId: attempt.id, fence, inputMessageId: null, runId },
+    { source: 'server', endedBy: 'turn_limit' }
+  );
+};
+
+/**
+ * Record each of `missing` as skipped because the quiz ended early (the
+ * student confirmed it, or the server ended it at the message limit): the
+ * result of a skip (`deriveResult([])`, the classroom's emoji for it), no
+ * feedback line, and `skipped_by_end` on the entry and its
  * `result_finalized` journal row. The caller holds the row lock and completes
  * in the same transaction. Returns the results array written.
  */
