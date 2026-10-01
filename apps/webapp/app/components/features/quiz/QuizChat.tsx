@@ -442,66 +442,104 @@ export const REPLY_START_MS = 90_000;
  */
 export const REPLY_SILENCE_MS = 240_000 + 60_000;
 
+/** A reply stream as useChat reads it, watched for going quiet (`watchReply`). */
+export interface WatchedReply {
+  stream: ReadableStream<UIMessageChunk>;
+  /** No chunk within the current wait; the stream is still read. */
+  readonly quiet: boolean;
+  /**
+   * Stop reading the reply here: the transport's stream is cancelled, which
+   * ends this tab's reading of it and nothing else (only an abort of the
+   * request writes a stop, and stops the run's turn), and the stream ends as
+   * a finished reply would.
+   */
+  release: () => void;
+}
+
 /**
- * The reply stream, given up when it goes quiet: no chunk within
- * `startMs` of the start, or within `silenceMs` of the last chunk. Then the
- * transport's stream is cancelled, which ends this tab's reading of it and
- * nothing else (the run is not stopped: only an abort of the request writes
- * a stop), the stream useChat reads ends as a finished reply would, so the
- * chat takes messages again, and `onLapse` is called. Whatever the run still
- * writes is read by the next message's stream, after anything it wrote
- * before.
+ * Watches a reply stream for going quiet: no chunk within `startMs` of the
+ * start, or within `silenceMs` of the last chunk. Quiet, the reply is still
+ * read, so a late one shows as it comes; the chat takes a message meanwhile
+ * (and releases the reply first: `release`). A chunk ends the quiet, and so
+ * does the end of the stream; `onQuietChange` hears each change. A tab
+ * coming back into view waits afresh: its timers ran on while it was hidden
+ * or asleep, and the transport reconnects then.
  */
-export const withReplyDeadline = (
-  stream: ReadableStream<UIMessageChunk>,
-  onLapse: () => void,
+export const watchReply = (
+  source: ReadableStream<UIMessageChunk>,
+  onQuietChange: (quiet: boolean) => void,
   { startMs = REPLY_START_MS, silenceMs = REPLY_SILENCE_MS } = {}
-): ReadableStream<UIMessageChunk> => {
-  const reader = stream.getReader();
+): WatchedReply => {
+  const reader = source.getReader();
+  let controller!: ReadableStreamDefaultController<UIMessageChunk>;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let over = false;
-  const end = () => {
+  let begun = false;
+  let quiet = false;
+  const setQuiet = (next: boolean) => {
+    if (quiet === next) return;
+    quiet = next;
+    onQuietChange(next);
+  };
+  const arm = () => {
+    clearTimeout(timer);
+    if (over || quiet) return;
+    timer = setTimeout(() => setQuiet(true), begun ? silenceMs : startMs);
+  };
+  const onVisibility = () => {
+    if (document.visibilityState === 'visible') arm();
+  };
+  const watching = typeof document !== 'undefined';
+  /** Ends the watch, once: false when it had already ended. */
+  const finish = () => {
+    if (over) return false;
     over = true;
     clearTimeout(timer);
+    if (watching) document.removeEventListener('visibilitychange', onVisibility);
+    setQuiet(false);
+    return true;
   };
-  return new ReadableStream<UIMessageChunk>({
-    start(controller) {
-      const arm = (ms: number) => {
-        clearTimeout(timer);
-        timer = setTimeout(() => {
-          if (over) return;
-          end();
-          reader.cancel().catch(() => {});
-          controller.close();
-          onLapse();
-        }, ms);
-      };
-      arm(startMs);
+  const stream = new ReadableStream<UIMessageChunk>({
+    start(c) {
+      controller = c;
+      arm();
+      if (watching) document.addEventListener('visibilitychange', onVisibility);
       void (async () => {
         try {
           for (;;) {
             const { done, value } = await reader.read();
             if (over) return;
             if (done) {
-              end();
+              finish();
               controller.close();
               return;
             }
-            arm(silenceMs);
+            begun = true;
+            setQuiet(false);
+            arm();
             controller.enqueue(value);
           }
         } catch (error) {
-          if (over) return;
-          end();
-          controller.error(error);
+          if (finish()) controller.error(error);
         }
       })();
     },
     cancel(reason) {
-      end();
+      finish();
       return reader.cancel(reason);
     },
   });
+  return {
+    stream,
+    get quiet() {
+      return quiet;
+    },
+    release: () => {
+      if (!finish()) return;
+      reader.cancel().catch(() => {});
+      controller.close();
+    },
+  };
 };
 
 /** Two parts with the same content. */
@@ -1806,6 +1844,10 @@ function LiveQuizChat({
   // state, so a reload asks the session route for a session, which writes a
   // new grant, instead of reusing this one.
   const sessionEndedRef = useRef(false);
+  // The reply this tab reads has gone quiet (`watchReply`): while it is, the
+  // stored session state says no reply is running, so a reload does not wait
+  // on it again. The transport's own state is left as it is: it still reads.
+  const quietRef = useRef(false);
 
   const transportRef = useRef<{ seedResumeCursor?: (chatId: string, cursor: string) => void }>(
     null
@@ -1824,27 +1866,37 @@ function LiveQuizChat({
     accessToken: ({ chatId }) => requestSessionToken(chatId),
     ...(persisted ? { sessions: { [attemptId]: persisted } } : {}),
     onSessionChange: (chatId, state) => {
-      persistSession(chatId, sessionEndedRef.current ? null : state);
+      const stored = state && quietRef.current ? { ...state, isStreaming: false } : state;
+      persistSession(chatId, sessionEndedRef.current ? null : stored);
       if (state?.closed) setClosedWhileOpen(true);
     },
   });
   transportRef.current = transport;
 
   // What useChat reads replies through: the transport, minus any reply the
-  // chat already holds (`withoutReplayedMessages`), given up when it goes
-  // quiet (`withReplyDeadline`; not the begin action's, whose opening has its
-  // own wait). A join's resume first readies the transport to read the
-  // running opening (`readyToJoinOpening`).
+  // chat already holds (`withoutReplayedMessages`), watched for going quiet
+  // (`watchReply`; not the begin action's, whose opening has its own wait).
+  // A join's resume first readies the transport to read the running opening
+  // (`readyToJoinOpening`).
   const messagesRef = useRef<readonly QuizUIMessage[]>(initialMessages);
   const joinNextRef = useRef(false);
-  const lapseRef = useRef<(chatId: string) => void>(() => {});
+  /** The reply stream useChat reads now, watched. */
+  const watchRef = useRef<WatchedReply | null>(null);
+  const quietChangeRef = useRef<(chatId: string, reply: WatchedReply, quiet: boolean) => void>(
+    () => {}
+  );
   const chatTransport = useMemo((): ChatTransport<QuizUIMessage> => {
     const replayed = withoutReplayedMessages(
       transport as unknown as ChatTransport<QuizUIMessage>,
       () => messagesRef.current
     );
-    const watched = (stream: ReadableStream<UIMessageChunk>, chatId: string) =>
-      withReplyDeadline(stream, () => lapseRef.current(chatId));
+    const watched = (stream: ReadableStream<UIMessageChunk>, chatId: string) => {
+      const reply: WatchedReply = watchReply(stream, quiet =>
+        quietChangeRef.current(chatId, reply, quiet)
+      );
+      watchRef.current = reply;
+      return reply.stream;
+    };
     return {
       sendMessages: async options => {
         const stream = await replayed.sendMessages(options);
@@ -1899,21 +1951,36 @@ function LiveQuizChat({
   const [awaitingSaved, setAwaitingSaved] = useState(false);
   const [openingLost, setOpeningLost] = useState(lostAtOpen);
 
-  // A reply given up (`withReplyDeadline`): the tab's session state no longer
-  // says a reply is running, so a reload does not read it again, and the chat
-  // takes messages again (the next one wakes a run). With no reply in the
-  // chat yet, it was the opening's: the saved transcript is waited for, as
-  // after a join.
-  lapseRef.current = (chatId: string) => {
+  // A reply that went quiet (`watchReply`): the chat takes a message (the
+  // next one wakes a run) while the reply is still read, and the stored
+  // session state says no reply is running; a late chunk ends the quiet, and
+  // the stored state is the transport's again. With no reply in the chat yet,
+  // it was the opening's: the reply is released and the saved transcript
+  // waited for, as after a join.
+  const [quiet, setQuiet] = useState(false);
+  quietChangeRef.current = (chatId, reply, nowQuiet) => {
+    quietRef.current = nowQuiet;
+    setQuiet(nowQuiet);
     const session =
       typeof transport.getSession === 'function' ? transport.getSession(chatId) : undefined;
-    if (session && !session.closed && typeof transport.setSession === 'function') {
-      transport.setSession(chatId, { ...session, isStreaming: false, activeInputSeq: undefined });
+    if (!session || session.closed) return;
+    if (!sessionEndedRef.current) {
+      persistSession(chatId, nowQuiet ? { ...session, isStreaming: false } : session);
     }
-    if (!messagesRef.current.some(m => m.role === 'assistant')) setAwaitingSaved(true);
+    if (nowQuiet && !messagesRef.current.some(m => m.role === 'assistant')) {
+      if (typeof transport.setSession === 'function') {
+        transport.setSession(chatId, { ...session, isStreaming: false, activeInputSeq: undefined });
+      }
+      setAwaitingSaved(true);
+      reply.release();
+    }
   };
+  // A message sent while a quiet reply was still read: it goes once useChat
+  // has let that reply go (`send`).
+  const [pendingText, setPendingText] = useState<string | null>(null);
 
-  const busy = status === 'submitted' || status === 'streaming' || joining || awaitingSaved;
+  const replyOpen = status === 'submitted' || status === 'streaming';
+  const busy = (replyOpen && !quiet) || joining || awaitingSaved || pendingText !== null;
   const evaluationSeen = hasEvaluation(messages);
   const complete = Boolean(attempt.completed_at) || evaluationSeen;
   // A session closed without an evaluation (the attempt can no longer take
@@ -2075,11 +2142,30 @@ function LiveQuizChat({
     (text: string) => {
       const trimmed = text.trim();
       if (!trimmed || busy || !canSend) return;
+      if (replyOpen) {
+        // A quiet reply still being read. Unless a chunk of it has just come
+        // (then it is read on, and this waits like any reply), this tab stops
+        // reading it, and the message goes once useChat has let it go:
+        // sending into the open request would let that request's end mark the
+        // new one as finished.
+        const reply = watchRef.current;
+        if (!reply?.quiet) return;
+        time.flush();
+        reply.release();
+        setPendingText(trimmed);
+        return;
+      }
       time.flush();
       void sendMessage({ text: trimmed });
     },
-    [busy, canSend, sendMessage, time]
+    [busy, canSend, replyOpen, sendMessage, time]
   );
+
+  useEffect(() => {
+    if (pendingText === null || replyOpen) return;
+    setPendingText(null);
+    void sendMessage({ text: pendingText });
+  }, [pendingText, replyOpen, sendMessage]);
 
   const onButton = useCallback((text: string) => send(text), [send]);
 
