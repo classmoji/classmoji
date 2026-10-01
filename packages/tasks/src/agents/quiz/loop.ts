@@ -10,6 +10,9 @@
  *   then the per-attempt block); nothing that changes per turn goes there.
  *   A code-aware quiz whose repository was not found this turn gets a fixed
  *   hidden user-role notice after the history instead (never persisted).
+ * - Every server text in the user role (each stored status part, each notice)
+ *   is opened by the attempt's marker line (serverNotice.ts), added to the
+ *   request only, never stored.
  * - The opening turn (the `begin` action's) starts with the fixed welcome
  *   (`ctx.welcome`), written before the first model call and saved with the
  *   reply.
@@ -28,11 +31,17 @@
  * - After the stream ends, persisted state decides whether the evaluation is
  *   still owed (for a Next click, only when the last question was already out
  *   before the turn began); if so, up to two more calls carry the evaluation
- *   notice. If
- *   every result is recorded and the evaluation still did not arrive, the
- *   server completes the attempt from the recorded grades and writes a
- *   `data-evaluation` part. If the last result is missing, a `reply_failed`
- *   notice is written and the student's next message retries.
+ *   notice (none after a model error). If every result is recorded and the
+ *   evaluation still did not arrive, the server completes the attempt from the
+ *   recorded grades and writes a `data-evaluation` part, after a model error
+ *   too, since that needs no model. If the last result is missing, a
+ *   `reply_failed` notice is written and the student's next message retries.
+ * - A turn the student stops writes no notice; one that fails or runs out of
+ *   time writes one (the server's completion after a model error writes its
+ *   evaluation instead). The services tell a stopped reply from a failed one
+ *   by that alone: a stopped reply's text stays in the transcript and the
+ *   history, and a Try again whose reply has text counts as a hint
+ *   (`replyShowsHint`).
  * - Everything the model or the tools write is persisted in `onEnd`, upstream
  *   of the projection; the returned stream is projected for the browser. A
  *   failed save is tried once more (the save is an upsert by message id); a
@@ -63,6 +72,7 @@ import type {
 import { THINKING } from '@classmoji/utils/ai-models';
 import type { AttemptContext } from './context.ts';
 import { CODE_UNAVAILABLE_NOTICE } from './prompt/index.ts';
+import { markServerText, markStatusParts } from './serverNotice.ts';
 import type { Effort } from './settings.ts';
 import { isRefusal, logDiagnostic, type DiagnosticLog } from '../shared/sanitize.ts';
 import { createToolQueue, type ToolQueue } from '../shared/toolQueue.ts';
@@ -495,10 +505,10 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
         // A code-aware quiz without a repository this turn: a fixed hidden notice
         // after the student's message, never persisted.
         const codeNotice: ModelMessage[] = ctx.codeUnavailable
-          ? [{ role: 'user', content: CODE_UNAVAILABLE_NOTICE }]
+          ? [{ role: 'user', content: markServerText(ctx.attemptId, CODE_UNAVAILABLE_NOTICE) }]
           : [];
         let history: ModelMessage[] = [
-          ...withoutEarlierFailedToolCalls(input.messages),
+          ...markStatusParts(ctx.attemptId, withoutEarlierFailedToolCalls(input.messages)),
           ...(input.extraMessages ?? []),
           ...codeNotice,
         ];
@@ -512,7 +522,10 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
           history = [
             ...history,
             ...response,
-            { role: 'user', content: deps.evaluationNotice(progress) },
+            {
+              role: 'user',
+              content: markServerText(ctx.attemptId, deps.evaluationNotice(progress)),
+            },
           ];
           log('[quiz-agent] recovery call', {
             attemptId: ctx.attemptId,
@@ -523,7 +536,10 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
           await pump(result);
         }
 
-        if (!deadline.aborted && !sawStreamError) {
+        // Server completion needs no model, so a model error does not stop
+        // it: every result is recorded, and the evaluation is written from them.
+        let completedByServer = false;
+        if (!deadline.aborted) {
           const progress = await deps.getProgress(ctx.attemptId);
           if (needsEvaluation(progress, turnStart)) {
             if (allResultsFinalized(progress)) {
@@ -533,6 +549,7 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
                 inputMessageId: ctx.inputMessageId,
                 runId: ctx.runId,
               });
+              completedByServer = true;
               log('[quiz-agent] server completion', { attemptId: ctx.attemptId, runId: ctx.runId });
               writer.write({ type: 'data-evaluation', data: record });
             } else {
@@ -542,7 +559,8 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
         }
         if (sawStreamError && !deadline.aborted) {
           failed = true;
-          notice('reply_failed');
+          // A completed attempt takes no more messages: no "send it again".
+          if (!completedByServer) notice('reply_failed');
         }
       } catch (error) {
         failed = true;

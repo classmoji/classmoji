@@ -30,6 +30,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 // eslint-disable-next-line import/no-unresolved -- trigger.dev v3 resolved at runtime
 import { logger } from '@trigger.dev/sdk/v3';
 import type { DiagnosticLog } from '../sanitize.ts';
+import { pathExclusion } from './excludedPaths.ts';
 import {
   buildExploreResult,
   capExcerptEffort,
@@ -43,6 +44,7 @@ import {
   toEffortLevel,
   type Excerpt,
   type ExploreResult,
+  type FileReadOptions,
 } from '../../../workflows/exploreRepo.ts';
 
 export type { ExploreResult, Excerpt } from '../../../workflows/exploreRepo.ts';
@@ -81,6 +83,12 @@ export type ExploreRepositoryInput = {
   previousFindings: string[];
   /** Paths earlier explorations showed code from. Context, not a blocklist. */
   previouslyReadFiles: string[];
+  /**
+   * The quiz's excluded paths (.gitignore-style patterns, `excludedPaths.ts`).
+   * Matching files are left out of the tree the model sees, so they are never
+   * picked, listed or read. None when absent.
+   */
+  excludedPaths?: readonly string[];
   client: Anthropic;
   signal: AbortSignal;
   /** One call per file read, with the path only; `error` when the read failed. */
@@ -238,14 +246,16 @@ async function fetchFilesWithRetry(
   repo: string,
   paths: string[],
   token: string,
-  r: RetryContext
+  r: RetryContext,
+  read: FileReadOptions = {}
 ): Promise<RepoFiles> {
-  let files = await untilAborted(fetchMultipleFiles(owner, repo, paths, token), r.signal);
+  const fetchFiles = (list: string[]) => fetchMultipleFiles(owner, repo, list, token, 3, read);
+  let files = await untilAborted(fetchFiles(paths), r.signal);
   for (let retry = 0; retry < r.backoff.length; retry++) {
     const limited = files.filter(f => f.error && isGithubRateLimited(f.error)).map(f => f.path);
     if (limited.length === 0) break;
     await waitBeforeRetry(r, retry, 'files', limited.length);
-    const again = await untilAborted(fetchMultipleFiles(owner, repo, limited, token), r.signal);
+    const again = await untilAborted(fetchFiles(limited), r.signal);
     const byPath = new Map(again.map(f => [f.path, f]));
     files = files.map(f => byPath.get(f.path) ?? f);
   }
@@ -325,8 +335,12 @@ export async function exploreRepository(i: ExploreRepositoryInput): Promise<Expl
     callLog: i.callLog,
   };
 
+  const isExcluded = pathExclusion(i.excludedPaths);
+
   throwIfStopped(signal);
-  const tree = (await fetchTreeWithRetry(owner, repo, token, retry)).filter(isExplorableEntry);
+  const tree = (await fetchTreeWithRetry(owner, repo, token, retry)).filter(
+    entry => isExplorableEntry(entry) && !isExcluded(entry.path)
+  );
   const treeListing = formatTreeForLLM(tree);
 
   throwIfStopped(signal);
@@ -344,11 +358,13 @@ export async function exploreRepository(i: ExploreRepositoryInput): Promise<Expl
       ),
       signal
     ),
-    tree
+    tree,
+    isExcluded
   );
 
   throwIfStopped(signal);
-  const files = await fetchFilesWithRetry(owner, repo, filePaths, token, retry);
+  // The answer's own path is checked against the excluded paths too.
+  const files = await fetchFilesWithRetry(owner, repo, filePaths, token, retry, { isExcluded });
   throwIfStopped(signal);
   for (const file of files) {
     if (file.error) i.onFileRead(file.path, { error: true });

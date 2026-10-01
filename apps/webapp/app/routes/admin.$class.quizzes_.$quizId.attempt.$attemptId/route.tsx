@@ -5,7 +5,7 @@ import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { QuizAttemptInterface } from '~/components';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
-import { attemptDrawerView, quizDrawerView } from '~/utils/quizPayloads';
+import { attemptDrawerView, chatActivityView, quizDrawerView } from '~/utils/quizPayloads';
 import { isTriggerChatAttempt } from '~/utils/quizRuntime.server';
 import type { Route } from './+types/route';
 
@@ -77,14 +77,19 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const studentName =
     attemptData.attempt.user?.name || attemptData.attempt.user?.login || 'Student';
 
-  // 8. A chat-runtime attempt's transcript, projected exactly as its student
-  // sees it (hidden rows and internal parts removed). Its raw rows are never
-  // sent. Staff read it; only the attempt's owner drives its chat session.
+  // 8. A chat-runtime attempt's transcript, projected as its student sees it
+  // (hidden rows and internal parts removed), plus the answer each feedback
+  // was written against (`expected_answer`) for staff reading someone else's
+  // attempt. Its raw rows are never sent. Only the attempt's owner drives its
+  // chat session, and gets exactly what that session streamed.
   const isChatAttempt = isTriggerChatAttempt(attemptData.attempt);
-  const transcript = isChatAttempt
-    ? await ClassmojiService.quizChat.loadTranscriptForViewer(attemptData.attempt.id)
-    : null;
   const viewerOwnsAttempt = attemptData.attempt.user_id.toString() === userId.toString();
+  const transcript = isChatAttempt
+    ? await ClassmojiService.quizChat.loadTranscriptForViewer(
+        attemptData.attempt.id,
+        viewerOwnsAttempt ? 'student' : 'staff'
+      )
+    : null;
 
   // 9. Send only what the drawer and QuizAttemptInterface read — see
   // ~/utils/quizPayloads. Both rows arrive joined to much more: the attempt to
@@ -95,6 +100,12 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     // Use unified messages from getAttemptWithMessages (ai-agent owns persistence)
     messages: isChatAttempt ? [] : attemptData.messages || [],
     transcript,
+    // The opening was admitted (its hidden row is stored), even when its reply
+    // is not saved yet: a second tab joins it rather than beginning again.
+    chatStarted: isChatAttempt && (attemptData.messages?.length ?? 0) > 0,
+    // When the attempt last admitted a turn, as timestamps only: an opening
+    // admitted longer ago than a turn can run, with nothing saved, is lost.
+    chatActivity: isChatAttempt ? chatActivityView(attemptData.attempt) : null,
     viewerOwnsAttempt,
     userLogin: attemptData.attempt.user?.login || null,
     userImage: attemptData.attempt.user?.image || null,

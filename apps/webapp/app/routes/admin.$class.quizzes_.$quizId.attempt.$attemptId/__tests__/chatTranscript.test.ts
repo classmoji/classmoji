@@ -95,7 +95,7 @@ beforeEach(() => {
 });
 
 describe('staff attempt loader — chat-runtime attempts', () => {
-  it("serves staff a student's chat attempt as its projected transcript, read-only", async () => {
+  it("serves staff a student's chat attempt as its staff transcript, read-only", async () => {
     signInAs('teacher-1', 'TEACHER');
     findWithMessagesMock.mockResolvedValue({
       attempt: attemptOf('student-1', 'trigger_chat'),
@@ -104,7 +104,7 @@ describe('staff attempt loader — chat-runtime attempts', () => {
 
     const data = await load();
 
-    expect(loadTranscriptMock).toHaveBeenCalledWith('attempt-1');
+    expect(loadTranscriptMock).toHaveBeenCalledWith('attempt-1', 'staff');
     expect(data.transcript).toEqual(PROJECTED);
     expect(data.messages).toEqual([]);
     expect(data.viewerOwnsAttempt).toBe(false);
@@ -112,7 +112,7 @@ describe('staff attempt loader — chat-runtime attempts', () => {
     expect(JSON.stringify(data)).not.toContain('ready. Begin');
   });
 
-  it("marks a staff member's own attempt as theirs", async () => {
+  it("marks a staff member's own attempt as theirs, with the student transcript", async () => {
     signInAs('teacher-1', 'TEACHER');
     findWithMessagesMock.mockResolvedValue({
       attempt: attemptOf('teacher-1', 'trigger_chat'),
@@ -122,6 +122,10 @@ describe('staff attempt loader — chat-runtime attempts', () => {
     const data = await load();
 
     expect(data.viewerOwnsAttempt).toBe(true);
+    // The owner drives the chat, whose stream never carries expected_answer.
+    expect(loadTranscriptMock).toHaveBeenCalledWith('attempt-1', 'student');
+    // Its opening was admitted: a second tab joins it rather than beginning.
+    expect(data.chatStarted).toBe(true);
   });
 
   it('serves an ai-agent attempt exactly as before', async () => {

@@ -6,8 +6,13 @@
 import { z } from 'zod';
 import { ANSWER_LEVELS } from './grading.ts';
 
-/** Tool-schema, prompt and grading-policy bundle an attempt is stamped with. */
-export const CONTRACT_VERSION = 1;
+/**
+ * Tool-schema, prompt and grading-policy bundle an attempt is stamped with.
+ * 2: offer_next_step carries the feedback and a private expected answer, and
+ * admission refuses server-reserved text. Stamped only: nothing compares it,
+ * so version-1 attempts keep taking turns under the current code.
+ */
+export const CONTRACT_VERSION = 2;
 
 export const QuizQuestionSchema = z.object({
   preamble: z
@@ -105,7 +110,7 @@ export type CodeQuote = z.infer<typeof CodeQuoteSchema>;
  */
 export const CodeAwareQuizQuestionSchema = QuizQuestionSchema.extend({
   code_quote: CodeQuoteSchema.optional().describe(
-    'The student\'s lines, filled exactly by the server (with "..." for each gap). Required on every code-aware question unless exploration failed; leave code_snippet out. If it fails twice because the file cannot be read, use code_snippet instead: the lines copied exactly from your exploration output without their "N| " prefixes, with the file and the rule or element named in context.'
+    'The student\'s lines, filled exactly by the server (with "..." for each gap). Send it on every code-aware question (unless exploration failed), with code_snippet left out. The one exception: if it fails twice because the file cannot be read, use code_snippet instead: the lines copied exactly from your exploration output without their "N| " prefixes, with the file and the rule or element named in context.'
   ),
 });
 export type CodeAwareQuizQuestion = z.infer<typeof CodeAwareQuizQuestionSchema>;
@@ -142,11 +147,7 @@ export const AnswerSchema = z.object({
 });
 
 export const RecordQuestionResultSchema = z.object({
-  question_num: z
-    .number()
-    .int()
-    .min(1)
-    .describe('The question the student is moving on from (or whose result you revise).'),
+  question_num: z.number().int().min(1).describe('The question the student is moving on from.'),
   answers: z
     .array(AnswerSchema)
     .refine(
@@ -226,18 +227,28 @@ const NextStepActionsSchema = z
   .describe('["try_again","next"] or ["next"]; never try_again alone.');
 
 /**
- * offer_next_step's input as the model sends it: the feedback on the answer,
- * shown as the agent's message, then the buttons. `feedback` comes first so
- * it streams first. How much to write is the description's to say; the only
- * check is that there is some.
+ * offer_next_step's input as the model sends it: the correct answer, for staff
+ * only, then the feedback on the answer, shown as the agent's message, then
+ * the buttons. `expected_answer` comes first so the model states the answer
+ * before it writes feedback that must not give it away; no student ever
+ * receives it (`quizVisibility.hiddenInputKeys`), so the call's input reaches
+ * the student only once it is complete. How much feedback to write is the
+ * description's to say; the only check is that there is some.
  */
 export const OfferNextStepSchema = z.object({
+  expected_answer: z
+    .string()
+    .trim()
+    .min(1, 'expected_answer must not be empty')
+    .describe(
+      'The correct answer to this question in one or two sentences, for staff only; never shown to the student.'
+    ),
   feedback: z
     .string()
     .trim()
     .min(1, 'feedback must not be empty')
     .describe(
-      '2 to 4 sentences: what is right, what is wrong, and why. On a wrong or partly wrong answer, say which part is wrong and why without giving away the full answer.'
+      "2 to 4 sentences on the student's answer: what is right, what is wrong, and why; up to about 6 when you reveal the answer and offer only Next. When offering Try again, never state or hint at the content of expected_answer (no correct values, results, names or properties it contains) and give no direction toward it: no 'check...', 'look at...', 'think about...' or leading questions. Name only what is wrong in their reasoning. Example: not 'your white text turns black on hover' or 'check which selector is more specific', but 'file order isn't what decides this here.'"
     ),
   actions: NextStepActionsSchema,
 });
@@ -245,10 +256,14 @@ export type OfferNextStep = z.infer<typeof OfferNextStepSchema>;
 
 /**
  * offer_next_step's input as stored and rendered: parts saved before the
- * feedback moved into the call have none, so here it is optional. Used for
- * the UI part types (`quizToolDefs`), never for the model's tool.
+ * feedback moved into the call have neither field, and parts saved before
+ * `expected_answer` was added have no answer, so here both are optional. A
+ * student's copy never has `expected_answer` (the projection cuts it); staff
+ * reading someone else's attempt see it. Used for the UI part types
+ * (`quizToolDefs`), never for the model's tool.
  */
 export const OfferNextStepPartSchema = OfferNextStepSchema.extend({
+  expected_answer: z.string().optional(),
   feedback: z.string().optional(),
 });
 export type OfferNextStepPart = z.infer<typeof OfferNextStepPartSchema>;
@@ -300,6 +315,7 @@ export const QuestionResultOutputSchema = z.object({
   question_num: z.number(),
   emoji: z.string(),
   brief_feedback: z.string(),
+  /** Set only on a result revised before results became final; still stored and shown. */
   revised: z.literal(true).optional(),
 });
 export type QuestionResultOutput = z.infer<typeof QuestionResultOutputSchema>;

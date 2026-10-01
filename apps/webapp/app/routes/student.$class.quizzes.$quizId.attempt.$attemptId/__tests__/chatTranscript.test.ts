@@ -104,7 +104,7 @@ describe('attempt loader — chat-runtime attempts', () => {
 
     const data = await load();
 
-    expect(loadTranscriptMock).toHaveBeenCalledWith('attempt-1');
+    expect(loadTranscriptMock).toHaveBeenCalledWith('attempt-1', 'student');
     expect(data.transcript).toEqual(PROJECTED);
     expect(data.messages).toEqual([]);
     expect(data.viewerOwnsAttempt).toBe(true);
@@ -112,7 +112,62 @@ describe('attempt loader — chat-runtime attempts', () => {
     expect(JSON.stringify(data)).not.toContain('ready. Begin');
   });
 
-  it("serves staff reading a student's chat attempt the same transcript, not as owner", async () => {
+  it("says whether the chat's opening was admitted, as a flag and nothing more", async () => {
+    signInAs('student-1', 'STUDENT');
+    // Only the hidden opening is stored: its reply is still being written.
+    findWithMessagesMock.mockResolvedValue({
+      attempt: attemptOf('student-1', 'trigger_chat'),
+      messages: [RAW_ROWS[0]],
+    });
+    loadTranscriptMock.mockResolvedValue([]);
+
+    const started = await load();
+    expect(started.chatStarted).toBe(true);
+    expect(started.transcript).toEqual([]);
+    expect(started.messages).toEqual([]);
+    expect(JSON.stringify(started)).not.toContain('ready. Begin');
+
+    findWithMessagesMock.mockResolvedValue({
+      attempt: attemptOf('student-1', 'trigger_chat'),
+      messages: [],
+    });
+    expect((await load()).chatStarted).toBe(false);
+
+    // Never for an ai-agent attempt, whose drawer is the legacy one.
+    findWithMessagesMock.mockResolvedValue({ attempt: attemptOf('student-1'), messages: RAW_ROWS });
+    expect((await load()).chatStarted).toBe(false);
+  });
+
+  it('says when the chat last admitted a turn, as server timestamps and nothing more', async () => {
+    signInAs('student-1', 'STUDENT');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-30T12:05:00Z'));
+    try {
+      findWithMessagesMock.mockResolvedValue({
+        attempt: {
+          ...attemptOf('student-1', 'trigger_chat'),
+          last_activity: new Date('2026-09-30T12:00:00Z'),
+        },
+        messages: [RAW_ROWS[0]],
+      });
+      loadTranscriptMock.mockResolvedValue([]);
+      expect((await load()).chatActivity).toEqual({
+        lastAt: '2026-09-30T12:00:00.000Z',
+        readAt: '2026-09-30T12:05:00.000Z',
+      });
+
+      // None for an ai-agent attempt.
+      findWithMessagesMock.mockResolvedValue({
+        attempt: { ...attemptOf('student-1'), last_activity: new Date('2026-09-30T12:00:00Z') },
+        messages: RAW_ROWS,
+      });
+      expect((await load()).chatActivity).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("serves staff reading a student's chat attempt the staff transcript, not as owner", async () => {
     signInAs('assistant-1', 'ASSISTANT');
     findWithMessagesMock.mockResolvedValue({
       attempt: attemptOf('student-1', 'trigger_chat'),
@@ -121,8 +176,22 @@ describe('attempt loader — chat-runtime attempts', () => {
 
     const data = await load();
 
+    expect(loadTranscriptMock).toHaveBeenCalledWith('attempt-1', 'staff');
     expect(data.transcript).toEqual(PROJECTED);
     expect(data.viewerOwnsAttempt).toBe(false);
+  });
+
+  it("serves staff their own chat attempt as a student's transcript", async () => {
+    signInAs('teacher-1', 'TEACHER');
+    findWithMessagesMock.mockResolvedValue({
+      attempt: attemptOf('teacher-1', 'trigger_chat'),
+      messages: RAW_ROWS,
+    });
+
+    const data = await load();
+
+    expect(loadTranscriptMock).toHaveBeenCalledWith('attempt-1', 'student');
+    expect(data.viewerOwnsAttempt).toBe(true);
   });
 
   it('serves an ai-agent attempt exactly as before', async () => {

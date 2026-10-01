@@ -107,6 +107,7 @@ export default [
         '@classmoji/database',
         '@classmoji/utils',
         '@classmoji/utils/quiz-agent',
+        '@classmoji/utils/quiz-excluded-paths',
         '@classmoji/utils/agents/projection',
         '@classmoji/utils/ai-models',
         '@classmoji/content-signing',

@@ -578,15 +578,24 @@ async function writePage(
  * So the lock gets ONE connection of its own, opened when the run starts and
  * closed when it ends. One extra connection, once a night, for a guarantee that
  * is otherwise not a guarantee at all.
+ *
+ * That connection goes to the DIRECT endpoint (`DATABASE_URL_UNPOOLED`), not
+ * the pooler. A transaction-mode pooler hands each statement to whichever
+ * server connection is free, so even a dedicated client could take the lock on
+ * one backend and release it on another. Locally the two URLs are the same
+ * database, and the unpooled one is usually unset, hence the fallback.
  */
 interface DocsLock {
   release(): Promise<void>;
 }
 
 async function acquireDocsLock(): Promise<DocsLock | null> {
-  // Reads DATABASE_URL at construction, exactly as `@classmoji/database` does,
-  // so a caller that redirected the environment is followed here too.
-  const session = new PrismaClient();
+  // A session-level advisory lock needs a real session: the direct endpoint.
+  // Read at construction, so a caller that redirected the environment is
+  // followed here too.
+  const session = new PrismaClient({
+    datasourceUrl: process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL,
+  });
   try {
     const rows = await session.$queryRaw<Array<{ locked: boolean }>>`
       SELECT pg_try_advisory_lock(${DOCS_INDEX_LOCK_KEY}::bigint) AS locked
