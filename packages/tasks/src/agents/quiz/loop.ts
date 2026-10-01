@@ -16,6 +16,9 @@
  * - The opening turn (the `begin` action's) starts with the fixed welcome
  *   (`ctx.welcome`), written before the first model call and saved with the
  *   reply.
+ * - The reply to a student message opens with a transient
+ *   `data-messages-left` part: the messages the attempt still admits, as
+ *   admission counted them (`ctx.messagesLeft`). Never saved.
  * - `prepareStep` rebuilds each step's messages and moves one cache
  *   breakpoint to the last message, so an older breakpoint never piles up.
  * - Tool calls that failed in EARLIER turns are left out of the history
@@ -376,6 +379,15 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
   const stream = createUIMessageStream<QuizUIMessage>({
     execute: async ({ writer }) => {
       writer.write({ type: 'start', messageId });
+      // How many more messages the attempt admits, for the chat's countdown:
+      // transient, so it is never part of the saved reply.
+      if (typeof ctx.messagesLeft === 'number') {
+        writer.write({
+          type: 'data-messages-left',
+          data: { remaining: ctx.messagesLeft },
+          transient: true,
+        });
+      }
       let noticeWritten = false;
       const notice = (code: 'turn_stopped' | 'reply_failed' | 'source_material_unavailable') => {
         if (noticeWritten) return;

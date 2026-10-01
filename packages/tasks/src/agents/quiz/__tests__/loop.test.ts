@@ -304,6 +304,66 @@ describe('runQuizTurn: the welcome', () => {
   });
 });
 
+describe('runQuizTurn: the messages left', () => {
+  const leftChunks = (chunks: UIMessageChunk[]) =>
+    chunks.filter(c => c.type === 'data-messages-left') as Array<{
+      data: { remaining: number };
+      transient?: boolean;
+    }>;
+
+  it("opens the reply to a student message with admission's count, transient, and saves none of it", async () => {
+    const a = fakeAttempt(2);
+    const model = scriptedModel([[toolCall('c1', 'present_question', question(1))]]);
+    const chunks = await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { messagesLeft: 19 }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
+    );
+    // Through the browser projection, right after the reply's start.
+    expect(chunks[0].type).toBe('start');
+    expect(chunks[1]).toEqual({
+      type: 'data-messages-left',
+      data: { remaining: 19 },
+      transient: true,
+    });
+    expect(leftChunks(chunks)).toHaveLength(1);
+    const saved = a.persisted.at(-1)?.message.parts ?? [];
+    expect(saved.some(p => p.type === 'data-messages-left')).toBe(false);
+  });
+
+  it('sends it with a turn that answers unavailable source material too', async () => {
+    const a = fakeAttempt(2);
+    const chunks = await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { messagesLeft: 0, sourceMaterialUnavailable: true }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model: scriptedModel([[...text('t', 'x')]]),
+      })
+    );
+    expect(leftChunks(chunks).map(c => c.data.remaining)).toEqual([0]);
+  });
+
+  it('sends none on the begin turn, which admits no student message', async () => {
+    const a = fakeAttempt(2);
+    const chunks = await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { inputMessageId: null }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model: scriptedModel([[toolCall('c1', 'present_question', question(1))]]),
+      })
+    );
+    expect(leftChunks(chunks)).toHaveLength(0);
+  });
+});
+
 describe('runQuizTurn', () => {
   it('continues the turn after an invalid present_question call', async () => {
     const a = fakeAttempt(2);

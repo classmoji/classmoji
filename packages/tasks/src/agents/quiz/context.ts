@@ -22,6 +22,8 @@ export type TurnAdmission = {
   runId: string;
   /** Set when the admitted text was one of the two button texts. */
   action?: 'next' | 'try_again';
+  /** The messages the attempt admits after the admitted one; absent for `begin`. */
+  messagesLeft?: number;
 };
 
 /**
@@ -50,6 +52,11 @@ export type AttemptContext = {
   inputMessageId: string | null;
   runId: string;
   lastAction?: 'next' | 'try_again';
+  /**
+   * The messages the attempt admits after this turn's student message, as
+   * admission counted them; absent for the `begin` action's turn.
+   */
+  messagesLeft?: number;
   model: string;
   questionEffort: Effort;
   gradingEffort: Effort;
@@ -338,6 +345,7 @@ export async function loadAttemptContext(
     inputMessageId: admission.inputMessageId,
     runId: admission.runId,
     lastAction: admission.action,
+    ...(typeof admission.messagesLeft === 'number' ? { messagesLeft: admission.messagesLeft } : {}),
     model: settings.model,
     questionEffort: settings.questionEffort,
     gradingEffort: settings.gradingEffort,

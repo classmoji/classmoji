@@ -26,6 +26,9 @@ import {
   normalizeExcludedPaths,
   parseExcludedPathsText,
 } from '@classmoji/utils/quiz-excluded-paths';
+import { MAX_STUDENT_TURNS } from '@classmoji/utils/quiz-agent/limits';
+import { QUIZ_MESSAGE_LIMIT_COPY } from '@classmoji/utils/quiz-agent/copy';
+import { runtimeFor } from '~/utils/quizRuntime.server';
 import {
   fromPickerValue,
   pickerLabel,
@@ -44,6 +47,24 @@ const { TextArea } = Input;
 const { Option } = Select;
 
 const EXCLUDED_PATHS_PLACEHOLDER = 'tests/**\n**/*.spec.js\nplaywright.config.*';
+
+/** The loader's reading of the runtime switch: whether a new attempt runs on the chat runtime. */
+type ChatRuntimeFor = { codeAware: boolean; other: boolean };
+
+/**
+ * Whether a new attempt of the quiz, as the form has it now, runs on the chat
+ * runtime (whose message limit the form states). A quiz is code-aware there
+ * with a linked repository and code context on (quizRuntime.server.ts,
+ * isCodeAwareQuiz). Not shown when the loader sent no reading.
+ */
+const runsOnChatRuntime = (
+  chatRuntime: ChatRuntimeFor | undefined,
+  fields: { repositoryId?: unknown; includeCodeContext?: unknown }
+): boolean => {
+  if (!chatRuntime) return false;
+  const codeAware = Boolean(fields.repositoryId) && fields.includeCodeContext === true;
+  return codeAware ? chatRuntime.codeAware : chatRuntime.other;
+};
 
 /** The "Paths to exclude" textarea's rule: the same check the quiz service makes. */
 const validateExcludedPaths = (_rule: unknown, value: string | undefined) => {
@@ -114,10 +135,20 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     };
   }
 
+  // Whether a new attempt runs on the chat runtime, for a code-aware quiz and
+  // for any other, by the same switch attempt creation reads (runtimeFor).
+  // The form picks one as its repository and Code-Aware fields change.
+  const chatRuntime: ChatRuntimeFor = {
+    codeAware:
+      runtimeFor({ repository_id: 'linked', include_code_context: true }) === 'trigger_chat',
+    other: runtimeFor({}) === 'trigger_chat',
+  };
+
   return {
     org: classSlug,
     quiz,
     isEditing: Boolean(quizId),
+    chatRuntime,
     assignments: repositories, // Keep variable name for backward compat with component
     examplePrompts,
     // What the classroom offers, plus any linked document it does not.
@@ -126,7 +157,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 }
 
 function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
-  const { org, quiz, isEditing, assignments, examplePrompts, sourceMaterialOptions } = loaderData;
+  const { org, quiz, isEditing, assignments, examplePrompts, sourceMaterialOptions, chatRuntime } =
+    loaderData;
   const callout = useCallout();
   const { opened, close } = useRouteDrawer({});
   const { isDarkMode } = useDarkMode();
@@ -561,18 +593,41 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                  {/* The per-attempt message limit, for a quiz whose attempts
+                      run on the chat runtime. Read from the form's store, so
+                      it is right on the first render of an edit. */}
                   <Form.Item
-                    name="maxAttempts"
-                    label="Max Attempts"
-                    rules={[{ required: true, message: 'Please enter maximum attempts' }]}
-                    tooltip="Maximum number of attempts allowed. Set to 0 for unlimited attempts."
+                    noStyle
+                    shouldUpdate={(prev, next) =>
+                      prev.includeCodeContext !== next.includeCodeContext ||
+                      prev.repositoryId !== next.repositoryId
+                    }
                   >
-                    <Input
-                      type="number"
-                      placeholder="Enter max attempts (0 = unlimited)"
-                      min={0}
-                      max={10}
-                    />
+                    {({ getFieldValue }) => (
+                      <Form.Item
+                        name="maxAttempts"
+                        label="Max Attempts"
+                        rules={[{ required: true, message: 'Please enter maximum attempts' }]}
+                        tooltip="Maximum number of attempts allowed. Set to 0 for unlimited attempts."
+                        extra={
+                          runsOnChatRuntime(chatRuntime, {
+                            repositoryId: getFieldValue('repositoryId'),
+                            includeCodeContext: getFieldValue('includeCodeContext'),
+                          }) ? (
+                            <span data-testid="quiz-form-message-limit">
+                              {QUIZ_MESSAGE_LIMIT_COPY.form(MAX_STUDENT_TURNS)}
+                            </span>
+                          ) : undefined
+                        }
+                      >
+                        <Input
+                          type="number"
+                          placeholder="Enter max attempts (0 = unlimited)"
+                          min={0}
+                          max={10}
+                        />
+                      </Form.Item>
+                    )}
                   </Form.Item>
 
                   <Form.Item

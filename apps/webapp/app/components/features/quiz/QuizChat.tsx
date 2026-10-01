@@ -9,8 +9,10 @@ import type { ChatTransport, UIMessageChunk } from 'ai';
 import { useChatActions, useTriggerChatTransport } from '@trigger.dev/sdk/chat/react';
 import type { ChatSessionPersistedState } from '@trigger.dev/sdk/chat';
 import {
+  MESSAGES_LEFT_NOTICE_AT,
   QUIZ_AGENT_ERROR_COPY,
   QUIZ_FAILURE_COPY,
+  QUIZ_MESSAGE_LIMIT_COPY,
   QUIZ_REFUSAL_COPY,
   QUIZ_REFUSAL_COPY_BY_KIND,
   buttonActionFor,
@@ -66,6 +68,11 @@ const { Text } = Typography;
  * "Exploring code...", "Looking things up…") stays up until a card, the
  * buttons or a notice arrive;
  * the evaluation's closing line sits above the results panel.
+ *
+ * The message limit: once `MESSAGES_LEFT_NOTICE_AT` or fewer messages are
+ * left, a muted line under the latest reply counts them down, from the
+ * server's count (the loader's, then each reply's `data-messages-left`); an
+ * attempt the server submitted at the limit says so above its results.
  */
 
 export type QuizChatStatus = 'streaming' | 'ready' | 'complete';
@@ -79,6 +86,8 @@ export interface QuizChatAttempt {
   total_duration_ms?: number | null;
   unfocused_duration_ms?: number | null;
   evaluation_json?: QuizEvaluationRecordV2 | null;
+  /** `turn_limit`: the server submitted the attempt at its message limit. */
+  ended_by?: 'turn_limit' | null;
 }
 
 export interface QuizChatProps {
@@ -95,6 +104,11 @@ export interface QuizChatProps {
   chatStarted?: boolean;
   /** When the attempt last admitted a turn (see `ChatActivity`). */
   chatActivity?: ChatActivity | null;
+  /**
+   * How many more student messages the attempt admits, counted by the server
+   * when the loader read it; null when unknown or the attempt is complete.
+   */
+  messagesLeft?: number | null;
   readOnly?: boolean;
   userLogin?: string | null;
   userImage?: string | null;
@@ -1146,6 +1160,13 @@ interface TranscriptProps {
   /** Shown with a failed start: re-sends the start. */
   onRetryStart?: (() => void) | null;
   scrollToResults?: boolean;
+  /** The server submitted the attempt at its message limit: the results say so. */
+  endedAtLimit?: boolean;
+  /**
+   * How many more messages the attempt admits, shown under the latest reply
+   * once it is `MESSAGES_LEFT_NOTICE_AT` or fewer; null for none.
+   */
+  messagesLeft?: number | null;
 }
 
 /** The transcript: messages, the typing indicator, the results panel. */
@@ -1162,6 +1183,8 @@ export function QuizTranscript({
   errorLine = null,
   onRetryStart = null,
   scrollToResults = false,
+  endedAtLimit = false,
+  messagesLeft = null,
 }: TranscriptProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
@@ -1191,7 +1214,11 @@ export function QuizTranscript({
       <>
         {closing && <ClosingAcknowledgment text={closing} spaced={spaced} />}
         <div ref={resultsRef}>
-          <QuizResults evaluation={record} focusMetrics={focusMetrics} />
+          <QuizResults
+            evaluation={record}
+            focusMetrics={focusMetrics}
+            submittedAtLimit={endedAtLimit}
+          />
         </div>
       </>
     );
@@ -1214,6 +1241,11 @@ export function QuizTranscript({
         opening: lastMessage !== undefined && lastMessage.id === openingId,
       })
     : null;
+  // Under the latest reply once it is in, while few messages are left.
+  const messagesLeftLine =
+    !busy && messagesLeft !== null && messagesLeft <= MESSAGES_LEFT_NOTICE_AT
+      ? QUIZ_MESSAGE_LIMIT_COPY.messagesLeft(messagesLeft)
+      : null;
 
   return (
     <div
@@ -1360,6 +1392,15 @@ export function QuizTranscript({
           </div>
         );
       })}
+
+      {messagesLeftLine && (
+        <p
+          className="-mt-2 mb-4 pl-10 text-xs text-gray-500 dark:text-gray-400"
+          data-testid="quiz-messages-left"
+        >
+          {messagesLeftLine}
+        </p>
+      )}
 
       {activity && (
         <div className="mb-4 flex justify-start" data-testid="quiz-typing">
@@ -1614,6 +1655,7 @@ function LiveQuizChat({
   transcript,
   chatStarted = false,
   chatActivity = null,
+  messagesLeft = null,
   userLogin,
   userImage,
   focusMetrics,
@@ -1694,6 +1736,10 @@ function LiveQuizChat({
     };
   }, [transport]);
 
+  // The messages each reply to a student message says the attempt still
+  // admits (`data-messages-left`, counted by admission; never saved).
+  const [streamedLeft, setStreamedLeft] = useState<number | null>(null);
+
   const { messages, sendMessage, status, error, resumeStream, setMessages, clearError } =
     useChat<QuizUIMessage>({
       id: attemptId,
@@ -1702,6 +1748,9 @@ function LiveQuizChat({
       // Re-attach to a reply this tab was streaming when the page was reloaded.
       // Only then: a resume and a start must never race on one chat.
       resume: resuming,
+      onData: part => {
+        if (part.type === 'data-messages-left') setStreamedLeft(part.data.remaining);
+      },
     });
   messagesRef.current = messages;
   const { sendAction } = useChatActions({ sendMessage });
@@ -1893,6 +1942,15 @@ function LiveQuizChat({
     status === 'error' && error ? errorLineFor(error) : openingLost ? START_FAILED_LINE : null;
   // Nothing to start again once the attempt can take no more messages.
   const startFailed = Boolean(errorLine) && shown.length === 0 && canSend;
+  // Once the refreshed attempt says it was submitted at the message limit, its
+  // results say so: the refusal's line is not repeated above them.
+  const endedAtLimit = attempt.ended_by === 'turn_limit';
+  const shownErrorLine =
+    endedAtLimit && errorLine === QUIZ_REFUSAL_COPY.turn_limit ? null : errorLine;
+  // The server's count, from the loader and from each reply: it only goes
+  // down, so the lower one is the current one. None once nothing can be sent.
+  const knownLeft = [messagesLeft, streamedLeft].filter((n): n is number => typeof n === 'number');
+  const left = canSend && knownLeft.length > 0 ? Math.min(...knownLeft) : null;
   // A start that failed is tried again the way it was made: a join joins
   // again, and begin is sent again only for an attempt with no opening, one
   // whose opening was lost, or one this tab began.
@@ -1916,8 +1974,10 @@ function LiveQuizChat({
           evaluationRecord={attempt.evaluation_json ?? null}
           focusMetrics={time.finalMetrics ?? focusMetrics}
           onButton={canSend ? onButton : null}
-          errorLine={errorLine}
+          errorLine={shownErrorLine}
           onRetryStart={startFailed ? retryStart : null}
+          endedAtLimit={endedAtLimit}
+          messagesLeft={left}
         />
       </div>
 
@@ -1975,6 +2035,7 @@ function SavedQuizChat({ attempt, transcript, userLogin, userImage, focusMetrics
           evaluationRecord={attempt.evaluation_json ?? null}
           focusMetrics={focusMetrics}
           scrollToResults={complete}
+          endedAtLimit={attempt.ended_by === 'turn_limit'}
         />
       </div>
     </div>

@@ -5,6 +5,9 @@
  * error only when its text is one of them. Both read this one module, so the
  * two can never drift apart.
  *
+ * Below them, the lines about the per-attempt message limit
+ * (`QUIZ_MESSAGE_LIMIT_COPY`), which are never error text.
+ *
  * Copy only: no mechanics, no timing.
  */
 
@@ -51,3 +54,16 @@ export const QUIZ_AGENT_ERROR_COPY: readonly string[] = [
     ...Object.values(QUIZ_REFUSAL_COPY_BY_KIND),
   ]),
 ];
+
+/** The per-attempt message limit (`MAX_STUDENT_TURNS`), as each screen states it. */
+export const QUIZ_MESSAGE_LIMIT_COPY = {
+  /** The quiz form, for a quiz whose attempts run on the chat runtime. */
+  form: (limit: number) =>
+    `Students can send up to ${limit} messages per attempt. At ${limit} the attempt is ` +
+    'submitted, and unanswered questions count as skipped.',
+  /** Under the chat's latest reply, once `MESSAGES_LEFT_NOTICE_AT` or fewer are left. */
+  messagesLeft: (left: number) =>
+    `${left} ${left === 1 ? 'message' : 'messages'} left in this attempt.`,
+  /** Above the results of an attempt the server submitted at the limit. */
+  submittedAtLimit: 'This quiz reached its message limit and was submitted.',
+} as const;

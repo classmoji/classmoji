@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const quizFindByIdMock = vi.fn();
 const findWithMessagesMock = vi.fn();
 const loadTranscriptMock = vi.fn();
+const messageLimitMock = vi.fn();
 const assertAccessMock = vi.fn();
 const quizzesVisibleMock = vi.fn();
 
@@ -20,7 +21,10 @@ vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     quiz: { findById: (...a: unknown[]) => quizFindByIdMock(...a) },
     quizAttempt: { findWithMessages: (...a: unknown[]) => findWithMessagesMock(...a) },
-    quizChat: { loadTranscriptForViewer: (...a: unknown[]) => loadTranscriptMock(...a) },
+    quizChat: {
+      loadTranscriptForViewer: (...a: unknown[]) => loadTranscriptMock(...a),
+      messageLimitOf: (...a: unknown[]) => messageLimitMock(...a),
+    },
   },
   QuizAttemptNotFoundError: class QuizAttemptNotFoundError extends Error {},
 }));
@@ -92,6 +96,7 @@ beforeEach(() => {
   quizzesVisibleMock.mockResolvedValue(true);
   quizFindByIdMock.mockResolvedValue(QUIZ);
   loadTranscriptMock.mockResolvedValue(PROJECTED);
+  messageLimitMock.mockResolvedValue({ messagesLeft: 200, endedBy: null });
 });
 
 describe('attempt loader — chat-runtime attempts', () => {
@@ -203,5 +208,36 @@ describe('attempt loader — chat-runtime attempts', () => {
     expect(loadTranscriptMock).not.toHaveBeenCalled();
     expect(data.messages).toEqual(RAW_ROWS);
     expect(data.transcript).toBeNull();
+  });
+
+  it('says how many messages an open chat attempt admits, and how a completed one ended', async () => {
+    signInAs('student-1', 'STUDENT');
+    findWithMessagesMock.mockResolvedValue({
+      attempt: attemptOf('student-1', 'trigger_chat'),
+      messages: RAW_ROWS,
+    });
+    messageLimitMock.mockResolvedValue({ messagesLeft: 12, endedBy: null });
+    const open = await load();
+    expect(messageLimitMock).toHaveBeenCalledWith('attempt-1');
+    expect(open.messagesLeft).toBe(12);
+    expect(open.attempt.ended_by).toBeNull();
+
+    // Submitted at the limit: the results say so, and there is nothing left to count.
+    findWithMessagesMock.mockResolvedValue({
+      attempt: { ...attemptOf('student-1', 'trigger_chat'), completed_at: new Date() },
+      messages: RAW_ROWS,
+    });
+    messageLimitMock.mockResolvedValue({ messagesLeft: 0, endedBy: 'turn_limit' });
+    const ended = await load();
+    expect(ended.attempt.ended_by).toBe('turn_limit');
+    expect(ended.messagesLeft).toBeNull();
+
+    // Never for an ai-agent attempt.
+    messageLimitMock.mockClear();
+    findWithMessagesMock.mockResolvedValue({ attempt: attemptOf('student-1'), messages: RAW_ROWS });
+    const legacy = await load();
+    expect(messageLimitMock).not.toHaveBeenCalled();
+    expect(legacy.messagesLeft).toBeNull();
+    expect(legacy.attempt.ended_by).toBeNull();
   });
 });
