@@ -502,7 +502,9 @@ const addGitLabStaff = async ({
     });
     user = await getPrisma().user.create({
       data: {
-        name: name || gitlabUser.username,
+        // Their Gitlab name and picture, as a Gitlab sign-in would record them.
+        name: name || gitlabUser.name || gitlabUser.username,
+        image: gitlabUser.avatar_url ?? null,
         role: 'user',
         email: email ? email.toLowerCase() : null,
         // Git identity lives on the account; their first Gitlab sign-in lands
@@ -513,6 +515,7 @@ const addGitLabStaff = async ({
             account_id: gitlabId,
             gitlab_instance_id: gitlabInstanceId,
             username: gitlabUser.username,
+            image: gitlabUser.avatar_url ?? null,
           },
         },
       },

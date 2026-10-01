@@ -1100,10 +1100,20 @@ export class GitLabProvider extends GitProvider {
    * @param {string} username - GitLab username
    * @returns {Promise<Object>}
    */
-  async getUserByLogin(username: string): Promise<{ id: number; username: string } | null> {
+  async getUserByLogin(username: string): Promise<{
+    id: number;
+    username: string;
+    name?: string | null;
+    avatar_url?: string | null;
+  } | null> {
     const users = (await this.api(
       `/api/v4/users?username=${encodeURIComponent(username)}`
-    )) as Array<{ id: number; username: string }>;
+    )) as Array<{
+      id: number;
+      username: string;
+      name?: string | null;
+      avatar_url?: string | null;
+    }>;
     return users.length > 0 ? users[0] : null;
   }
 
