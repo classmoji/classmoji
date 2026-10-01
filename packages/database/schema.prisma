@@ -190,6 +190,11 @@ model Account {
   username                 String?
   email                    String? // The provider profile's email (unverified by us)
   image                    String? // The provider profile's avatar URL
+  // The self-managed GitLab instance a `gitlab` account lives on; "" for
+  // gitlab.com and every other provider. Usernames are unique per server, not
+  // per provider: `jdoe` on gitlab.com and `jdoe` on a school's GitLab are two
+  // people. "" rather than null so the unique key below still holds for them.
+  gitlab_instance_id       String    @default("")
   password                 String?
   created_at               DateTime  @default(now())
   updated_at               DateTime  @default(now()) @updatedAt
@@ -197,7 +202,7 @@ model Account {
   user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@unique([provider_id, account_id])
-  @@unique([provider_id, username])
+  @@unique([provider_id, gitlab_instance_id, username])
   @@index([user_id])
   @@map("accounts")
 }

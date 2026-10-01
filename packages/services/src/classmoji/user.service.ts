@@ -1,5 +1,10 @@
 import _ from 'lodash';
-import getPrisma, { GIT_IDENTITY, whereGitUsername } from '@classmoji/database';
+import getPrisma, {
+  GIT_IDENTITY,
+  gitScopeProvider,
+  whereGitUsername,
+  type GitUsernameScope,
+} from '@classmoji/database';
 import { claimPendingInvites } from './classroomInvite.service.ts';
 import type { GitProvider, Prisma, GitRepo } from '@prisma/client';
 import {
@@ -401,8 +406,12 @@ const findByGitIdentity = async (where: Prisma.UserWhereInput, provider: GitProv
   };
 };
 
-export const findByGitUsername = async (username: string, provider: GitProvider = 'GITHUB') =>
-  findByGitIdentity(whereGitUsername(username, provider), provider);
+/**
+ * By git username. Pass the classroom's git organization as `scope` when there
+ * is one: a GitLab username is only unique on its own server.
+ */
+export const findByGitUsername = async (username: string, scope: GitUsernameScope = 'GITHUB') =>
+  findByGitIdentity(whereGitUsername(username, scope), gitScopeProvider(scope) as GitProvider);
 
 /** Same shape as `findByGitUsername`, keyed on the provider's user id (`Account.account_id`). */
 export const findByGitAccountId = async (accountId: string, provider: GitProvider = 'GITHUB') =>

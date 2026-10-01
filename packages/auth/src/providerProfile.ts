@@ -11,7 +11,7 @@
  */
 
 import type { PrismaClient } from '@prisma/client';
-import { scopeGitlabId } from '@classmoji/utils';
+import { parseGitlabId, scopeGitlabId } from '@classmoji/utils';
 
 type Prisma = Pick<PrismaClient, 'user' | 'account'>;
 
@@ -140,7 +140,7 @@ async function noteProviderProfile(
       where: { provider_id: providerId, account_id: accountId },
       select: { id: true, user_id: true },
     });
-    if (existing) await writeProfile(prisma, providerId, existing, profile);
+    if (existing) await writeProfile(prisma, providerId, accountId, existing, profile);
   } catch (error: unknown) {
     console.error('[auth] provider profile update failed', error);
   }
@@ -165,6 +165,7 @@ export async function onAccountCreated(
     await writeProfile(
       prisma,
       account.providerId,
+      account.accountId,
       { id: account.id, user_id: account.userId },
       profile
     );
@@ -173,18 +174,26 @@ export async function onAccountCreated(
   }
 }
 
+/** The GitLab server an account lives on ("" for gitlab.com and other providers). */
+export const accountGitlabInstanceId = (providerId: string, accountId: string): string =>
+  providerId === 'gitlab' ? (parseGitlabId(accountId).instanceId ?? '') : '';
+
 async function writeProfile(
   prisma: Prisma,
   providerId: ProviderId,
+  accountId: string,
   account: { id: string; user_id: string },
   profile: ProviderProfile
 ): Promise<void> {
+  const gitlabInstanceId = accountGitlabInstanceId(providerId, accountId);
   if (profile.username) {
-    // Usernames are unique per provider. One held by another account is stale
-    // (that account renamed, and the name was reused): release it.
+    // Usernames are unique per provider and server. One held by another
+    // account there is stale (that account renamed, and the name was reused):
+    // release it. Another GitLab server's `jdoe` is someone else and keeps it.
     await prisma.account.updateMany({
       where: {
         provider_id: providerId,
+        gitlab_instance_id: gitlabInstanceId,
         username: { equals: profile.username, mode: 'insensitive' },
         NOT: { id: account.id },
       },
@@ -194,6 +203,7 @@ async function writeProfile(
   await prisma.account.update({
     where: { id: account.id },
     data: {
+      gitlab_instance_id: gitlabInstanceId,
       ...(profile.username ? { username: profile.username } : {}),
       ...(profile.email ? { email: profile.email } : {}),
       ...(profile.image ? { image: profile.image } : {}),

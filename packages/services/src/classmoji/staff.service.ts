@@ -30,7 +30,12 @@
  */
 import { tasks } from '@trigger.dev/sdk';
 
-import getPrisma, { GIT_IDENTITY, whereGitUsername } from '@classmoji/database';
+import getPrisma, {
+  GIT_IDENTITY,
+  gitScopeProvider,
+  whereGitUsername,
+  type GitUsernameScope,
+} from '@classmoji/database';
 import { accountProviderId, scopeGitlabId, withLogin } from '@classmoji/utils';
 import { getGitProvider, ensureClassroomTeam } from '../git/index.ts';
 import type { GitLabProvider } from '../git/GitLabProvider.ts';
@@ -139,22 +144,23 @@ const assertStaffRole = (role: string): void => {
  * typed. Looking the same person up again therefore has to match the way
  * addStaff matched, or 'ada' would not find the user stored as 'Ada'.
  */
-const findUserByLoginInsensitive = async (login: string, provider: string = 'GITHUB') => {
+const findUserByLoginInsensitive = async (login: string, scope: GitUsernameScope = 'GITHUB') => {
   const cleanLogin = login.replace('@', '').trim();
   const user = await getPrisma().user.findFirst({
-    where: whereGitUsername(cleanLogin, provider),
+    where: whereGitUsername(cleanLogin, scope),
     select: { id: true, name: true, ...GIT_IDENTITY },
   });
-  return user ? withLogin(user, provider) : null;
+  return user ? withLogin(user, gitScopeProvider(scope)) : null;
 };
 
 /** The git provider of a classroom's organization, which decides whose username `login` is. */
-const classroomProvider = async (classroomId: string): Promise<string> => {
+/** Where staff logins in this classroom are looked up (provider, and GitLab server). */
+const classroomProvider = async (classroomId: string): Promise<GitUsernameScope> => {
   const classroom = await getPrisma().classroom.findUnique({
     where: { id: classroomId },
-    select: { git_organization: { select: { provider: true } } },
+    select: { git_organization: { select: { provider: true, gitlab_instance_id: true } } },
   });
-  return classroom?.git_organization?.provider ?? 'GITHUB';
+  return classroom?.git_organization ?? 'GITHUB';
 };
 
 const loadClassroom = async (classroomId: string) => {
@@ -215,7 +221,7 @@ export const addStaff = async ({
   // re-add them to the team and then still fail on the unique constraint.
   // Scoped to the REQUESTED role: another role held here is an additional
   // grant, not a no-op.
-  const existingUser = await findUserByLoginInsensitive(cleanLogin, gitOrganization.provider);
+  const existingUser = await findUserByLoginInsensitive(cleanLogin, gitOrganization);
   if (existingUser) {
     const existingMembership = await classroomMembershipService.findByClassroomAndUser(
       classroomId,
@@ -481,12 +487,14 @@ const addGitLabStaff = async ({
       };
     }
   } else {
-    // Usernames are unique per provider. One held by another Gitlab account is
-    // stale (that account renamed, or it is another instance's `alice`):
-    // release it, as a sign-in would (packages/auth/src/providerProfile.ts).
+    // Usernames are unique per provider and server. One held by another
+    // account on this Gitlab is stale (that account renamed): release it, as a
+    // sign-in would (packages/auth/src/providerProfile.ts).
+    const gitlabInstanceId = classroom.git_organization.gitlab_instance_id ?? '';
     await getPrisma().account.updateMany({
       where: {
         provider_id: 'gitlab',
+        gitlab_instance_id: gitlabInstanceId,
         username: { equals: gitlabUser.username, mode: 'insensitive' },
         NOT: { account_id: gitlabId },
       },
@@ -500,7 +508,12 @@ const addGitLabStaff = async ({
         // Git identity lives on the account; their first Gitlab sign-in lands
         // on it through better-auth's (provider_id, account_id) lookup.
         accounts: {
-          create: { provider_id: 'gitlab', account_id: gitlabId, username: gitlabUser.username },
+          create: {
+            provider_id: 'gitlab',
+            account_id: gitlabId,
+            gitlab_instance_id: gitlabInstanceId,
+            username: gitlabUser.username,
+          },
         },
       },
       select: { id: true, name: true },
@@ -810,7 +823,7 @@ export const removeStaff = async ({
 
   const classroom = await loadClassroom(classroomId);
 
-  const user = await findUserByLoginInsensitive(login, classroom.git_organization.provider);
+  const user = await findUserByLoginInsensitive(login, classroom.git_organization);
   if (!user) {
     throw new StaffServiceError('staff_not_found', `[staff] user ${login} not found`);
   }

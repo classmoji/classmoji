@@ -45,28 +45,51 @@ export const GIT_IDENTITY = {
   },
 } satisfies Prisma.UserInclude;
 
-/** `where` filter: users whose `provider` username is `username` (case-insensitive). */
+/**
+ * Where a git username is looked up: a provider (`'GITHUB'`, `'GITLAB'`), or a
+ * git organization (`{ provider, gitlab_instance_id }`). GitLab usernames are
+ * unique per server, so pass the organization whenever the lookup belongs to a
+ * classroom: a bare `'GITLAB'` matches that username on any GitLab server.
+ */
+export type GitUsernameScope =
+  | string
+  | null
+  | { provider: string | null; gitlab_instance_id?: string | null };
+
+/** The provider a scope names ('GITHUB' when unset). */
+export const gitScopeProvider = (scope: GitUsernameScope = 'GITHUB'): string =>
+  (typeof scope === 'object' && scope ? scope.provider : scope) || 'GITHUB';
+
+/** The account filter for `scope`: provider, plus the GitLab server when known. */
+const scopeFilter = (scope: GitUsernameScope = 'GITHUB') => {
+  const provider_id = gitScopeProvider(scope).toLowerCase();
+  if (provider_id !== 'gitlab' || !scope || typeof scope !== 'object') return { provider_id };
+  return { provider_id, gitlab_instance_id: scope.gitlab_instance_id ?? '' };
+};
+
+/** `where` filter: users whose username in `scope` is `username` (case-insensitive). */
 export const whereGitUsername = (
   username: string,
-  provider: string | null = 'GITHUB'
+  scope: GitUsernameScope = 'GITHUB'
 ): Prisma.UserWhereInput => ({
   accounts: {
     some: {
-      provider_id: (provider || 'GITHUB').toLowerCase(),
+      ...scopeFilter(scope),
       username: { equals: username, mode: 'insensitive' },
     },
   },
 });
 
-/** `where` filter: users whose `provider` username is any of `usernames` (exact). */
+/** `where` filter: users whose username in `scope` is any of `usernames` (exact). */
 export const whereGitUsernameIn = (
   usernames: string[],
-  provider: string | null = 'GITHUB'
+  scope: GitUsernameScope = 'GITHUB'
 ): Prisma.UserWhereInput => ({
   accounts: {
-    some: { provider_id: (provider || 'GITHUB').toLowerCase(), username: { in: usernames } },
+    some: { ...scopeFilter(scope), username: { in: usernames } },
   },
 });
+
 // ─── OAuth tokens at rest ────────────────────────────────────────────────────
 //
 // OAuth tokens (sign-in accounts, Gitlab connections) are stored encrypted:

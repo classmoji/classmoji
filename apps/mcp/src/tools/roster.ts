@@ -150,7 +150,10 @@ export const rosterRemoveStudentTool: ToolDefinition<RosterRemoveStudentArgs> = 
       if (!args.student_login) {
         throw new ToolError('invalid_params', 'Provide student_login or user_id');
       }
-      const user = await ClassmojiService.user.findByGitUsername(args.student_login, provider);
+      const user = await ClassmojiService.user.findByGitUsername(
+        args.student_login,
+        classroomRecord.git_organization ?? provider
+      );
       if (!user) throw scopedNotFound('Student');
       userId = user.id;
     }

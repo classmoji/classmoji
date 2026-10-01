@@ -74,7 +74,7 @@ async function activateMembership({
     (githubUserId
       ? await ClassmojiService.user.findByGitAccountId(githubUserId, 'GITHUB')
       : null) ??
-    (login ? await ClassmojiService.user.findByGitUsername(login, gitOrganization.provider) : null);
+    (login ? await ClassmojiService.user.findByGitUsername(login, gitOrganization) : null);
   if (!user) {
     console.log(
       `[activateMembership] User not found for ${githubUserId ? `Github id ${githubUserId}` : `login ${login}`}`

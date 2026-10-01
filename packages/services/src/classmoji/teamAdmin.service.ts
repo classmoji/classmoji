@@ -26,7 +26,12 @@
  */
 import { queue } from 'async';
 
-import getPrisma, { GIT_IDENTITY, whereGitUsername } from '@classmoji/database';
+import getPrisma, {
+  GIT_IDENTITY,
+  gitScopeProvider,
+  whereGitUsername,
+  type GitUsernameScope,
+} from '@classmoji/database';
 import { withLogin } from '@classmoji/utils';
 import type { GitProvider as GitProviderEnum } from '@prisma/client';
 
@@ -806,7 +811,7 @@ export const addTeamMembers = async ({
 
   const membersQueue = queue<string>(async login => {
     try {
-      const user = await findUserByLogin(login, gitOrganization.provider);
+      const user = await findUserByLogin(login, gitOrganization);
       if (!user) {
         failed.push({ login, error: 'not_found' });
         return;
@@ -852,7 +857,7 @@ export const removeTeamMember = async ({
   const { gitOrganization, orgLogin } = await loadClassroomOrg(classroomId);
   const team = await resolveTeam(classroomId, slugOrId);
 
-  const user = await findUserByLogin(login, gitOrganization.provider);
+  const user = await findUserByLogin(login, gitOrganization);
   if (!user) {
     throw new TeamServiceError('user_not_found', `[team] no user with login ${login}`);
   }
@@ -940,10 +945,10 @@ export const removeTeamTag = async ({
  * username insensitively — 'Ada' and 'ada' are the same person. Only id/login
  * are needed here, unlike user.service.findByGitUsername which pulls the whole graph.
  */
-const findUserByLogin = async (login: string, provider: string) => {
+const findUserByLogin = async (login: string, scope: GitUsernameScope) => {
   const user = await getPrisma().user.findFirst({
-    where: whereGitUsername(login.replace('@', '').trim(), provider),
+    where: whereGitUsername(login.replace('@', '').trim(), scope),
     select: { id: true, ...GIT_IDENTITY },
   });
-  return user ? withLogin(user, provider) : null;
+  return user ? withLogin(user, gitScopeProvider(scope)) : null;
 };
