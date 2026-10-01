@@ -464,7 +464,7 @@ const ModuleCard = ({
   const addItemMenu: MenuProps['items'] = [
     {
       type: 'group',
-      label: 'Assignments',
+      label: 'Submissions',
       children: [
         {
           key: 'ASSIGNMENT_REPO',
