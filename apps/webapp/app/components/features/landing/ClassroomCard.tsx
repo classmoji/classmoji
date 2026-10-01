@@ -177,11 +177,11 @@ export function ClassroomCard({
           )}
           {/* Where the class lives. */}
           <span
-            className="ml-auto inline-flex text-ink-3"
+            className="ml-auto inline-flex text-gray-900 dark:text-gray-100"
             title={c.provider === 'GITLAB' ? 'Gitlab classroom' : 'Github classroom'}
             aria-label={c.provider === 'GITLAB' ? 'Gitlab classroom' : 'Github classroom'}
           >
-            {c.provider === 'GITLAB' ? <GitlabLogo size={16} /> : <IconGithub size={16} />}
+            {c.provider === 'GITLAB' ? <GitlabLogo size={18} /> : <IconGithub size={18} />}
           </span>
         </div>
       </div>

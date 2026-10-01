@@ -174,7 +174,19 @@ describe('mapGitLabProfile', () => {
         image: gitlab.avatar_url,
       },
     });
-    // Only the Github avatar becomes the displayed one.
+    // No Github connected (findFirst finds none): the Gitlab avatar is shown.
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 'u5' },
+      data: { image: gitlab.avatar_url },
+    });
+  });
+
+  it('keeps the Github avatar when Github is connected too', async () => {
+    prisma.account.findFirst
+      .mockResolvedValueOnce({ id: 'g4', user_id: 'u4' }) // the Gitlab account
+      .mockResolvedValueOnce({ id: 'gh4' }); // a Github account exists
+    await mapGitLabProfile(db, gitlab);
+
     expect(prisma.user.update).not.toHaveBeenCalled();
   });
 

@@ -209,8 +209,16 @@ async function writeProfile(
       ...(profile.image ? { image: profile.image } : {}),
     },
   });
-  // The Github avatar is the displayed one.
-  if (providerId === 'github' && profile.image) {
-    await prisma.user.update({ where: { id: account.user_id }, data: { image: profile.image } });
+  // The displayed avatar is the Github one; without Github connected, Gitlab's.
+  if (profile.image) {
+    const showsThis =
+      providerId === 'github' ||
+      !(await prisma.account.findFirst({
+        where: { user_id: account.user_id, provider_id: 'github' },
+        select: { id: true },
+      }));
+    if (showsThis) {
+      await prisma.user.update({ where: { id: account.user_id }, data: { image: profile.image } });
+    }
   }
 }
