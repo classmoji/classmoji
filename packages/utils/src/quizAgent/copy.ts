@@ -23,7 +23,7 @@ export const QUIZ_REFUSAL_COPY: Readonly<Record<string, string>> = {
   attempt_not_found: 'This attempt can no longer be continued.',
   wrong_runtime: 'This attempt can no longer be continued.',
   not_a_member: 'This attempt can no longer be continued.',
-  turn_limit: 'This attempt has reached its message limit.',
+  turn_limit: 'This quiz reached its message limit and has been submitted.',
   too_fast: 'One message at a time, please. Send it again in a moment.',
   invalid_message: "That message couldn't be sent. Please try again.",
   message_conflict: "That message couldn't be sent. Please try again.",
@@ -33,7 +33,7 @@ export const QUIZ_REFUSAL_COPY: Readonly<Record<string, string>> = {
   classroom_locked: 'This class is in read-only mode. The owner has locked it.',
   classroom_unpublished: 'This class has been unpublished by the owner.',
   quiz_unavailable: "This quiz isn't available right now.",
-  session_ended: 'Your session has ended.',
+  session_ended: 'This session ended. Reload the page to continue.',
   reserved_text: "That message couldn't be sent. Please rephrase it.",
 };
 

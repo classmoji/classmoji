@@ -35,6 +35,7 @@ import {
   TRIGGER_CHAT_RUNTIME,
   appendEvent,
   attemptQuestionCount,
+  completeAtTurnLimit,
   findEvent,
   lockAttempt,
   newFence,
@@ -91,7 +92,9 @@ export const MAX_STUDENT_MESSAGE_CHARS = 10_000;
 /**
  * The most student messages (button clicks included) one attempt admits: a
  * safety net far above what any quiz takes, not a budget a student works
- * within. The next one is refused for good (`turn_limit`).
+ * within. The next one completes the attempt from the results recorded so
+ * far, every other question counted as skipped (`completeAtTurnLimit`), and
+ * is refused for good (`turn_limit`).
  */
 export const MAX_STUDENT_TURNS = 200;
 
@@ -126,22 +129,40 @@ export const classroomAllowsTurn = ({ status, role }: { status: string; role: st
   role === 'OWNER' || status === 'ACTIVE';
 
 /**
- * Text only the server writes into the model's context: its notices, the
- * per-turn status block and the marker line that opens each of them (see the
- * quiz agent's `serverNotice.ts`). Matched in any case, across spaces,
- * underscores or hyphens; "current status" only as the block's heading
- * (followed by "(" or ":"), so a sentence like "the current status code" is
- * still admitted.
+ * The framing only the server writes into the model's context (see the quiz
+ * agent's `serverNotice.ts`): a line that opens with SYSTEM NOTICE, SERVER
+ * NOTICE or CURRENT STATUS (any case, words apart by spaces or tabs) and goes
+ * on with ":" or "(" or nothing, and the marker's opening "[[server-notice"
+ * anywhere. The words inside a sentence ("the operating system notices…",
+ * `setCurrentStatus(`) are ordinary text. The per-attempt marker, not this
+ * check, is what tells the model which text is the server's.
  */
-const RESERVED_TEXT = [
-  /system[\s_-]*notice/i,
-  /server[\s_-]*notice/i,
-  /current[\s_-]*status\s*[(:]/i,
-];
+const SERVER_HEADING = /^\s*(?:(?:system|server)\s+notice|current\s+status)\s*(?:[:(]|$)/i;
+const SERVER_MARKER_OPENING = /\[\[\s*server[\s_-]*notice/i;
 
-/** Whether a student's message contains text reserved for the server. */
-export const containsReservedText = (text: string): boolean =>
-  RESERVED_TEXT.some(pattern => pattern.test(text));
+/** Line breaks a reader (or the model) may take as the start of a new line. */
+const LINE_BREAK = /\r\n|[\n\r\v\f\u0085\u2028\u2029]/;
+
+/** Invisible characters: format characters, joiners, variation selectors and fillers. */
+const INVISIBLE = /[\p{Cf}\u034F\u115F\u1160\u17B4\u17B5\u180B-\u180F\u3164\uFE00-\uFE0F\uFFA0]/gu;
+
+const framesAsServer = (text: string): boolean =>
+  SERVER_MARKER_OPENING.test(text) ||
+  text.split(LINE_BREAK).some(line => SERVER_HEADING.test(line));
+
+/**
+ * Whether a student's message imitates the server's framing. The text is read
+ * in NFKC form, twice: with invisible characters removed (one inside a word)
+ * and with each replaced by a space (one standing in for the space between
+ * the words).
+ */
+export const containsReservedText = (text: string): boolean => {
+  const normalized = text.normalize('NFKC');
+  return (
+    framesAsServer(normalized.replace(INVISIBLE, '')) ||
+    framesAsServer(normalized.replace(INVISIBLE, ' '))
+  );
+};
 
 /** `ai_conversations.context.runtime`: the transport's cursors and opaque state. */
 export type QuizChatRuntimeState = { cursors: unknown; state: unknown };
@@ -279,7 +300,9 @@ const grantHolds = (attempt: LockedAttempt, now: number): boolean => {
  * - the chat grant still holds (temporary: the session route writes a new one);
  * - the classroom's status lets that role act (temporary: LOCKED or
  *   UNPUBLISHED can be lifted);
- * - a student's quiz is still published (temporary);
+ * - a student's quiz is not back in DRAFT (temporary). CLOSED stops new
+ *   attempts only (quizAttempt.service `createNew`), so an attempt already
+ *   under way goes on to its end, as it did on the previous runtime;
  * - quizzes are visible in the classroom (temporary).
  */
 const revalidate = async (
@@ -316,7 +339,7 @@ const revalidate = async (
       status === 'LOCKED' ? 'classroom_locked' : 'classroom_unpublished'
     );
   }
-  if (role === 'STUDENT' && attempt.quiz.status !== 'PUBLISHED') {
+  if (role === 'STUDENT' && attempt.quiz.status === 'DRAFT') {
     throw new QuizChatRefusal('temporary', 'quiz_unavailable');
   }
   if (!visible) throw new QuizChatRefusal('temporary', 'quizzes_unavailable');
@@ -324,24 +347,27 @@ const revalidate = async (
 };
 
 /**
- * The per-attempt safety net for a new student message, read from the journal
- * under the attempt row lock, so it holds across processes:
- * - the attempt has admitted `MAX_STUDENT_TURNS` student messages already
- *   (`turn_limit`, permanent: the count never goes down);
- * - the attempt's previous admission (a message or the begin action) is less
- *   than `MIN_TURN_INTERVAL_MS` before `now` (`too_fast`, temporary). A
- *   refused message is not an admission, so it does not restart the wait.
- * A re-delivered message is neither: it is not a new turn.
+ * Whether the attempt has admitted `MAX_STUDENT_TURNS` student messages
+ * already, read from the journal under the attempt row lock, so it holds
+ * across processes. The count never goes down.
  */
-const checkTurnPace = async (tx: Tx, attemptId: string, now: Date): Promise<void> => {
-  const admitted = await tx.quizAttemptEvent.count({
+const turnLimitReached = async (tx: Tx, attemptId: string): Promise<boolean> =>
+  (await tx.quizAttemptEvent.count({
     where: {
       attempt_id: attemptId,
       type: 'input_admitted',
       payload: { path: ['kind'], equals: 'message' },
     },
-  });
-  if (admitted >= MAX_STUDENT_TURNS) throw new QuizChatRefusal('permanent', 'turn_limit');
+  })) >= MAX_STUDENT_TURNS;
+
+/**
+ * Refuse a new student message sent less than `MIN_TURN_INTERVAL_MS` after
+ * the attempt's previous admission (a message or the begin action):
+ * `too_fast`, temporary. A refused message is not an admission, so it does
+ * not restart the wait. A re-delivered message is not checked: it is not a
+ * new turn.
+ */
+const checkTurnPace = async (tx: Tx, attemptId: string, now: Date): Promise<void> => {
   const previous = await tx.quizAttemptEvent.findFirst({
     where: { attempt_id: attemptId, type: 'input_admitted' },
     orderBy: { seq: 'desc' },
@@ -370,6 +396,9 @@ type AdmittedMessage = {
   action?: 'next' | 'try_again';
 };
 
+/** What admission's transaction decided: a message, or the turn limit (the attempt completed). */
+type AdmissionOutcome = AdmittedMessage | { status: 'turn_limit' };
+
 /**
  * Admit one student message, in one transaction under the attempt row lock:
  * revalidation, then the message checks (well-formed id, non-empty text within
@@ -382,9 +411,12 @@ type AdmittedMessage = {
  *   saved a partial reply (stopped or failed), which is refused;
  * - an id already used with different text, or an older admitted id, is
  *   refused (`message_conflict`);
- * - a new message past the attempt's safety net is refused (`checkTurnPace`:
- *   `turn_limit`, or `too_fast` within `MIN_TURN_INTERVAL_MS` of the
- *   previous admission);
+ * - a new message once the attempt has admitted `MAX_STUDENT_TURNS` completes
+ *   the attempt (`completeAtTurnLimit`: the results recorded so far, every
+ *   other question skipped) and is refused for good (`turn_limit`); the
+ *   completion is committed before the refusal is thrown;
+ * - a new message within `MIN_TURN_INTERVAL_MS` of the previous admission is
+ *   refused for now (`too_fast`);
  * - otherwise the user row is written with parts `[student text, turn status]`
  *   (`metadata.hiddenPartIndexes: [1]`, and `action` when the text is a
  *   button's), an `input_admitted` journal row, and a fresh fence.
@@ -395,7 +427,7 @@ export const admitStudentMessage = async (i: {
   runId: string;
 }): Promise<AdmittedMessage> => {
   const { visible } = await preflight(i.attemptId);
-  return getPrisma().$transaction(async (tx): Promise<AdmittedMessage> => {
+  const outcome = await getPrisma().$transaction(async (tx): Promise<AdmissionOutcome> => {
     const attempt = await revalidate(tx, await lockAttempt(tx, i.attemptId), visible);
 
     const { id, text } = i.message ?? ({} as { id?: unknown; text?: unknown });
@@ -491,6 +523,10 @@ export const admitStudentMessage = async (i: {
       select: { id: true },
     });
     if (clash) throw new QuizChatRefusal('temporary', 'message_conflict');
+    if (await turnLimitReached(tx, attempt.id)) {
+      await completeAtTurnLimit(tx, attempt, i.runId);
+      return { status: 'turn_limit' as const };
+    }
     await checkTurnPace(tx, attempt.id, now);
 
     // The status the model reads with this message: progress as of now, with
@@ -541,6 +577,9 @@ export const admitStudentMessage = async (i: {
       ...(action ? { action } : {}),
     };
   }, LOCKED_TX_OPTIONS);
+  // Thrown only now, so the completion it follows is committed.
+  if (outcome.status === 'turn_limit') throw new QuizChatRefusal('permanent', 'turn_limit');
+  return outcome;
 };
 
 /**
@@ -712,28 +751,47 @@ const COMMITTED_TOOL_PARTS = new Set([
 /** Data parts written from committed state (a result divider, a server evaluation). */
 const COMMITTED_DATA_PARTS = new Set(['data-question-result', 'data-evaluation']);
 
+/** A tool call the partial reply keeps: a committing tool's successful call. */
+const isCommittedCall = (p: Record<string, unknown>) =>
+  typeof p.type === 'string' && COMMITTED_TOOL_PARTS.has(p.type) && p.state === 'output-available';
+
 /**
- * What a partial reply keeps: the successful calls of the committing tools
- * and the data parts written from committed state. Its text (cut off
- * mid-reply), reasoning, failed or unfinished calls and notices are dropped.
+ * What a partial reply keeps: the successful calls of the committing tools,
+ * the data parts written from committed state, and, in each step (the parts
+ * from one `step-start` to the next, the blocks the AI SDK turns into one
+ * assistant message and its tool results) that holds a kept call, that
+ * step's `step-start` and finished reasoning, so the call reaches the model
+ * with the thinking that led to it. Its text (cut off mid-reply), other
+ * reasoning, failed or unfinished calls and notices are dropped.
  */
-const committedParts = (parts: unknown): unknown[] =>
-  (Array.isArray(parts) ? parts : []).filter(
-    p =>
-      isObject(p) &&
-      typeof p.type === 'string' &&
-      (COMMITTED_DATA_PARTS.has(p.type) ||
-        (COMMITTED_TOOL_PARTS.has(p.type) && p.state === 'output-available'))
-  );
+const committedParts = (parts: unknown): unknown[] => {
+  const steps: Record<string, unknown>[][] = [];
+  for (const p of Array.isArray(parts) ? parts : []) {
+    if (!isObject(p)) continue;
+    if (p.type === 'step-start' || steps.length === 0) steps.push([]);
+    steps[steps.length - 1].push(p);
+  }
+  return steps.flatMap(step => {
+    const callKept = step.some(isCommittedCall);
+    return step.filter(
+      p =>
+        isCommittedCall(p) ||
+        (typeof p.type === 'string' && COMMITTED_DATA_PARTS.has(p.type)) ||
+        (callKept &&
+          (p.type === 'step-start' || (p.type === 'reasoning' && p.state !== 'streaming')))
+    );
+  });
+};
 
 /**
  * The attempt's conversation as the model sees it: every UIMessage row in
  * order, with full parts (hidden ones included). A partial assistant message
  * (`final: false`, left by a turn that was stopped or failed) keeps only what
  * its turn committed (`committedParts`): a card, a result, the buttons or the
- * evaluation the student was shown stay in the model's history and in the
- * transcript, while its unfinished text does not. A partial message with
- * nothing committed is left out.
+ * evaluation the student was shown stay in the model's history (with the
+ * reasoning of the step that made each call) and in the transcript, while its
+ * unfinished text does not. A partial message with nothing committed is left
+ * out.
  */
 export const loadCanonicalMessages = async (attemptId: string): Promise<QuizUIMessage[]> => {
   const attempt = await getPrisma().quizAttempt.findUnique({
@@ -811,21 +869,40 @@ export const writeRuntimeState = async (
 
 // ─── Journal ────────────────────────────────────────────────────────────────
 
-/** Journal a refused turn (`turn_refused`, payload `{ code }` only). No-op for an unknown attempt. */
+/** The shortest time between two `turn_refused` rows with the same code for one attempt. */
+export const REFUSAL_JOURNAL_INTERVAL_MS = 60_000;
+
+/**
+ * Journal a refused turn (`turn_refused`, payload `{ code }` only), at most
+ * once per code per attempt within `REFUSAL_JOURNAL_INTERVAL_MS`: a refusal
+ * repeated sooner (messages sent in a burst) adds no row. No-op for an
+ * unknown attempt.
+ */
 export const recordTurnRefused = async (
   attemptId: string,
   code: string,
   runId: string
 ): Promise<void> => {
+  const stored = String(code).slice(0, 64);
   await getPrisma().$transaction(async tx => {
     const attempt = await lockAttempt(tx, attemptId);
     if (!attempt) return;
+    const recent = await tx.quizAttemptEvent.findFirst({
+      where: {
+        attempt_id: attempt.id,
+        type: 'turn_refused',
+        payload: { path: ['code'], equals: stored },
+        created_at: { gt: new Date(Date.now() - REFUSAL_JOURNAL_INTERVAL_MS) },
+      },
+      select: { id: true },
+    });
+    if (recent) return;
     await appendEvent(tx, attempt, {
       type: 'turn_refused',
       operationId: `refused:${newFence()}`,
       fence: attempt.turn_fence,
       runId,
-      payload: toJson({ code: String(code).slice(0, 64) }),
+      payload: toJson({ code: stored }),
     });
   }, LOCKED_TX_OPTIONS);
 };

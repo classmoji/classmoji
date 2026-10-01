@@ -57,7 +57,7 @@ describe('per-turn refusals', () => {
     ['classroom_locked', 'This class is in read-only mode. The owner has locked it.'],
     ['classroom_unpublished', 'This class has been unpublished by the owner.'],
     ['quiz_unavailable', "This quiz isn't available right now."],
-    ['session_ended', 'Your session has ended.'],
+    ['session_ended', 'This session ended. Reload the page to continue.'],
     ['reserved_text', "That message couldn't be sent. Please rephrase it."],
     ['too_fast', 'One message at a time, please. Send it again in a moment.'],
   ])('refuses %s with its fixed line and keeps the session open', async (code, copy) => {
@@ -80,7 +80,7 @@ describe('per-turn refusals', () => {
   });
 
   it('refuses a message past the per-attempt cap for good, journals it and closes the session', async () => {
-    const copy = 'This attempt has reached its message limit.';
+    const copy = 'This quiz reached its message limit and has been submitted.';
     expect(QUIZ_REFUSAL_COPY.turn_limit).toBe(copy);
     expect(QUIZ_AGENT_ERROR_COPY).toContain(copy);
     const d = deps(refusal('permanent', 'turn_limit'));

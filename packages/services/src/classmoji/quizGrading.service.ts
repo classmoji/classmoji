@@ -470,8 +470,9 @@ const sameAnswers = (a: unknown, b: Answer[]) =>
 
 /**
  * The answers with each `hints_before` raised, where it is lower, to the Try
- * again clicks admitted before that answer. The model counts the hints; the
- * server knows the clicks, and a typed hint request can only add to them.
+ * again clicks admitted before that answer whose hint reached the student
+ * (`hintArrived`). The model counts the hints; the server knows the clicks,
+ * and a typed hint request can only add to them.
  *
  * Question n's messages are the ones admitted after its card went out and
  * before question n+1's card. A typed message (no button) can carry an
@@ -484,13 +485,13 @@ const sameAnswers = (a: unknown, b: Answer[]) =>
  */
 const floorHintsAtTryAgain = async (
   tx: Tx,
-  attemptId: string,
+  attempt: Pick<LockedAttempt, 'id' | 'conversation_id'>,
   questionNum: number,
   answers: Answer[]
 ): Promise<Answer[]> => {
   if (answers.length === 0) return answers;
   const cards = await tx.quizAttemptEvent.findMany({
-    where: { attempt_id: attemptId, type: 'question_presented' },
+    where: { attempt_id: attempt.id, type: 'question_presented' },
     select: { seq: true, payload: true },
   });
   const cardSeq = (n: number) =>
@@ -500,25 +501,55 @@ const floorHintsAtTryAgain = async (
   const to = cardSeq(questionNum + 1);
   const inputs = await tx.quizAttemptEvent.findMany({
     where: {
-      attempt_id: attemptId,
+      attempt_id: attempt.id,
       type: 'input_admitted',
       seq: { gt: from, ...(to !== undefined ? { lt: to } : {}) },
     },
     orderBy: { seq: 'asc' },
-    select: { payload: true },
+    select: { payload: true, input_message_id: true },
   });
+  const clicked = inputs.some(i => isObject(i.payload) && i.payload.action === 'try_again');
+  const arrived = clicked ? await hintArrived(tx, attempt.conversation_id) : () => false;
   let clicks = 0;
   const floors: number[] = [];
-  for (const { payload } of inputs) {
+  for (const { payload, input_message_id } of inputs) {
     const p = isObject(payload) ? payload : {};
-    if (p.action === 'try_again') clicks += 1;
-    else if (p.kind === 'message' && p.action === undefined) floors.push(clicks);
+    if (p.action === 'try_again') {
+      if (input_message_id && arrived(input_message_id)) clicks += 1;
+    } else if (p.kind === 'message' && p.action === undefined) floors.push(clicks);
   }
   if (floors.length === 0) return answers;
   return answers.map((a, k) => {
     const floor = floors[Math.min(k, floors.length - 1)];
     return a.hints_before >= floor ? a : { ...a, hints_before: floor };
   });
+};
+
+/**
+ * Whether the reply to a student message finished: the first assistant row
+ * after the message's own row, before the next user row, is final. A reply
+ * that was stopped or failed (a partial row) or never saved did not reach
+ * the student whole.
+ */
+const hintArrived = async (
+  tx: Tx,
+  conversationId: string | null
+): Promise<(inputMessageId: string) => boolean> => {
+  if (!conversationId) return () => false;
+  const rows = await tx.aIConversationMessage.findMany({
+    where: { conversation_id: conversationId },
+    orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
+    select: { ui_message_id: true, role: true, final: true },
+  });
+  return inputMessageId => {
+    const at = rows.findIndex(r => r.role === 'USER' && r.ui_message_id === inputMessageId);
+    if (at === -1) return false;
+    for (const row of rows.slice(at + 1)) {
+      if (row.role === 'USER') return false;
+      if (row.role === 'ASSISTANT') return row.final;
+    }
+    return false;
+  };
 };
 
 /**
@@ -554,8 +585,8 @@ const writeProjection = async (
  * Finalize a presented question from the answers the model rated. The server
  * scores it (`deriveResult`) and picks the emoji from the classroom mapping.
  * Each answer's hint count is first raised to the Try again clicks admitted
- * before it (`floorHintsAtTryAgain`); the journal keeps what the model sent
- * as `reported_answers` when that changed anything.
+ * before it whose reply finished (`floorHintsAtTryAgain`); the journal keeps
+ * what the model sent as `reported_answers` when that changed anything.
  *
  * - First record → `result_finalized`.
  * - The same answers again, in any turn (a retried call) → the stored result.
@@ -607,7 +638,7 @@ export const finalizeQuestion = (
 
       // Floored before any comparison, so a re-sent call with the same
       // counts matches the result stored from it.
-      const answers = await floorHintsAtTryAgain(tx, attempt.id, question_num, parsed.data.answers);
+      const answers = await floorHintsAtTryAgain(tx, attempt, question_num, parsed.data.answers);
       const floored = !sameAnswers(parsed.data.answers, answers);
 
       const history = await tx.quizAttemptEvent.findMany({
@@ -712,7 +743,14 @@ export const finalizeQuestion = (
 
 // ─── submit_quiz_evaluation / server completion ─────────────────────────────
 
-type CompletionInput = { source: 'model'; feedback: QuizEvaluationFeedback } | { source: 'server' };
+type CompletionInput =
+  | { source: 'model'; feedback: QuizEvaluationFeedback }
+  /**
+   * `endedBy: 'turn_limit'`: the server ends the attempt at the per-attempt
+   * message limit (quizChat.service), every question without a result
+   * counted as skipped, the open one included.
+   */
+  | { source: 'server'; endedBy?: 'turn_limit' };
 
 const readEvaluation = (json: Prisma.JsonValue): QuizEvaluationRecordV2 =>
   QuizEvaluationRecordV2Schema.parse(json);
@@ -742,6 +780,9 @@ const readEvaluation = (json: Prisma.JsonValue): QuizEvaluationRecordV2 =>
  *
  * `source: 'server'` (Q17) records no feedback text, so no acknowledgment;
  * `toolCallId` is then optional and the journal row uses a fixed operation id.
+ * With `endedBy: 'turn_limit'` (`completeAtTurnLimit`) it fills every
+ * question without a result as skipped, the open one included, with no
+ * student confirmation: the server ends the attempt, not the student.
  */
 export const completeWithEvaluation = (
   f: Omit<Fenced, 'toolCallId'> & { toolCallId?: string },
@@ -776,8 +817,12 @@ export const completeLocked = async (
     n => !recorded.has(n)
   );
   const endedEarly = o.source === 'model' && o.feedback.ended_early === true;
+  const endedBy = o.source === 'server' ? o.endedBy : undefined;
   let skippedByEnd: number[] = [];
-  if (missing.length > 0) {
+  if (missing.length > 0 && endedBy) {
+    stored = await fillSkippedByEnd(tx, attempt, f, questionCount, missing);
+    skippedByEnd = missing;
+  } else if (missing.length > 0) {
     if (!endedEarly) {
       throw new QuizGradingError(
         'incomplete',
@@ -880,6 +925,7 @@ export const completeLocked = async (
     runId: f.runId,
     payload: toJson({
       source: o.source,
+      ...(endedBy ? { ended_by: endedBy } : {}),
       ...(skippedByEnd.length > 0 ? { ended_early: true, skipped_by_end: skippedByEnd } : {}),
       output: record,
     }),
@@ -888,9 +934,32 @@ export const completeLocked = async (
 };
 
 /**
- * Record each of `missing` as skipped because the student ended the quiz
- * early: the result of a skip (`deriveResult([])`, the classroom's emoji for
- * it), no feedback line, and `skipped_by_end` on the entry and its
+ * Complete the attempt at the per-attempt message limit, for admission
+ * (quizChat.service), which holds the row lock in `tx`: a fresh turn fence
+ * first, so no earlier turn can write after it, then `completeLocked` with
+ * `endedBy: 'turn_limit'`. Returns the evaluation record.
+ */
+export const completeAtTurnLimit = async (
+  tx: Tx,
+  attempt: LockedAttempt,
+  runId: string
+): Promise<QuizEvaluationRecordV2> => {
+  const fence = newFence();
+  await tx.quizAttempt.update({ where: { id: attempt.id }, data: { turn_fence: fence } });
+  attempt.turn_fence = fence;
+  return completeLocked(
+    tx,
+    attempt,
+    { attemptId: attempt.id, fence, inputMessageId: null, runId },
+    { source: 'server', endedBy: 'turn_limit' }
+  );
+};
+
+/**
+ * Record each of `missing` as skipped because the quiz ended early (the
+ * student confirmed it, or the server ended it at the message limit): the
+ * result of a skip (`deriveResult([])`, the classroom's emoji for it), no
+ * feedback line, and `skipped_by_end` on the entry and its
  * `result_finalized` journal row. The caller holds the row lock and completes
  * in the same transaction. Returns the results array written.
  */

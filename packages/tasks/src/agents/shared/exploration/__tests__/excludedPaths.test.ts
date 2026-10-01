@@ -3,8 +3,14 @@
  * repository paths, dot files included.
  */
 import { describe, expect, it } from 'vitest';
+import picomatch from 'picomatch/posix';
 import { excludedPathProblem } from '@classmoji/utils/quiz-excluded-paths';
-import { NO_EXCLUSION, normalizeRepoPath, pathExclusion } from '../excludedPaths.ts';
+import {
+  MAX_PATH_DEPTH,
+  NO_EXCLUSION,
+  normalizeRepoPath,
+  pathExclusion,
+} from '../excludedPaths.ts';
 
 const excludes = (patterns: string[], path: string) => pathExclusion(patterns)(path);
 
@@ -154,7 +160,7 @@ describe('pathExclusion: every accepted pattern matches quickly', () => {
   const paths = [
     'a'.repeat(200),
     `x/${'a'.repeat(198)}`,
-    `${'aa/'.repeat(66)}aa`,
+    `${'aaa/'.repeat(49)}aaaa`,
     `${`${'a'.repeat(9)}/`.repeat(19)}${'a'.repeat(10)}`,
   ];
 
@@ -175,5 +181,222 @@ describe('pathExclusion: every accepted pattern matches quickly', () => {
       }
       expect(fastest).toBeLessThan(50);
     }
+  });
+});
+
+describe('pathExclusion: the depth cap', () => {
+  it(`excludes a path deeper than ${MAX_PATH_DEPTH} parts, and only then`, () => {
+    expect(MAX_PATH_DEPTH).toBe(64);
+    const excluded = pathExclusion(['docs/**']);
+    const deep = (parts: number) => Array.from({ length: parts }, (_, k) => `d${k}`).join('/');
+    expect(excluded(deep(MAX_PATH_DEPTH))).toBe(false);
+    expect(excluded(deep(MAX_PATH_DEPTH + 1))).toBe(true);
+    // "." parts and repeated slashes are not parts.
+    expect(excluded(`./${deep(MAX_PATH_DEPTH).replace(/\//g, '//./')}`)).toBe(false);
+  });
+});
+
+/**
+ * The matcher as first written, kept as the reference: every directory above
+ * the path and the path itself, each against every rule's whole glob (plus the
+ * depth cap, which the reference shares).
+ */
+function referenceExclusion(patterns: string[]): (path: string) => boolean {
+  const rules = patterns
+    .filter(raw => excludedPathProblem(raw) === null)
+    .map(raw => {
+      let pattern = raw.trim().replace(/^(\.\/)+/, '');
+      const directoryOnly = pattern.endsWith('/');
+      pattern = pattern.replace(/\/+$/, '');
+      const glob = pattern.includes('/') ? pattern : `**/${pattern}`;
+      return {
+        matches: picomatch(
+          glob.replace(/[()]/g, ch => `\\${ch}`),
+          { dot: true, noextglob: true }
+        ),
+        directoryOnly,
+      };
+    });
+  return path => {
+    const normalized = normalizeRepoPath(path);
+    if (normalized === null) return true;
+    const parts = normalized.split('/').filter(Boolean);
+    if (parts.length > MAX_PATH_DEPTH) return true;
+    for (let i = 1; i <= parts.length; i++) {
+      const prefix = parts.slice(0, i).join('/');
+      const isDirectory = i < parts.length;
+      for (const rule of rules) {
+        if (rule.directoryOnly && !isDirectory) continue;
+        if (rule.matches(prefix)) return true;
+      }
+    }
+    return false;
+  };
+}
+
+describe('pathExclusion: the same answers as matching every directory with the whole glob', () => {
+  const patterns = [
+    'tests/**',
+    'tests',
+    'tests/',
+    '**/*.spec.js',
+    '*.spec.js',
+    'playwright.config.*',
+    'src/*.js',
+    'src/**/*.test.js',
+    '.github/**',
+    '.env*',
+    '*',
+    '?',
+    '**',
+    '**/**',
+    'a/**/**',
+    'src/**/',
+    '**/x/**',
+    'x/**/y/**',
+    'a*b/**',
+    'a/**/b',
+    'app/(auth)/**',
+    '(a+)+b',
+    'src/!x',
+    'src/!*',
+    'a/{b,c/d}',
+    '{a/b,c}',
+    '{a/b,c}/**',
+    '{a/b,c}/x',
+    '**/*.{js,ts}',
+    'src/{a,b}*/x',
+    'a[/b',
+    'a[x]/**',
+    '[ab]/c',
+    'a**',
+    '**x',
+    '*a*b',
+    '**/*a*b/**',
+    '**/*a*/**/b',
+    '*a/**/*a*b',
+    '**/{*a,a}*b/**',
+    '{a,aa,aaa,a*,*a}c',
+  ];
+  const names = [
+    'a',
+    'b',
+    'c',
+    'd',
+    'x',
+    'y',
+    'aa',
+    'ab',
+    'axb',
+    'aab',
+    'abc',
+    'ac',
+    'src',
+    'tests',
+    'app',
+    '(auth)',
+    'login',
+    'page.tsx',
+    '!x',
+    '!abc',
+    '.env',
+    '.env.local',
+    '.github',
+    'a.spec.js',
+    'a.test.js',
+    'a.js',
+    'a.ts',
+    'playwright.config.ts',
+    'a[',
+    'a[x]',
+    'e2e',
+    'ax',
+    'bx',
+  ];
+  // A fixed pseudo-random walk, so every run checks the same paths.
+  let seed = 7;
+  const next = (n: number) => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed % n;
+  };
+  const paths = [
+    'src/!abc',
+    'src/!x',
+    'src/x',
+    'src/ab/x',
+    'a/b',
+    'a/c/d',
+    'a/b/x',
+    'c',
+    'b/c',
+    'axb',
+    'axb/c',
+    'x/y',
+    'q/x/r/y/s',
+    'a/b/x',
+    'c/x',
+    'a/b/y',
+    'app/(auth)/login/page.tsx',
+    '(a+)+b',
+    'src/(a+)+b',
+    'tests',
+    'tests/e2e/a.spec.js',
+    '.github/workflows/ci.yml',
+    'a[/b',
+    'a[x]/c',
+    ...Array.from({ length: 3_000 }, () =>
+      Array.from({ length: 1 + next(6) }, () => names[next(names.length)]).join('/')
+    ),
+  ];
+
+  it.each(patterns)('%s', pattern => {
+    const actual = pathExclusion([pattern]);
+    const expected = referenceExclusion([pattern]);
+    const differ = paths.filter(path => actual(path) !== expected(path));
+    expect(differ).toEqual([]);
+  });
+
+  it('all the patterns together', () => {
+    const actual = pathExclusion(patterns.slice(0, 20));
+    const expected = referenceExclusion(patterns.slice(0, 20));
+    expect(paths.filter(path => actual(path) !== expected(path))).toEqual([]);
+  });
+});
+
+describe('pathExclusion: a large, deep tree', () => {
+  it('checks 10,000 paths up to the depth cap against 50 accepted worst-case patterns in under 1 s', () => {
+    // The patterns the shared rules allow that cost the most, each made unique,
+    // none matching any path below, so every pattern runs on every path.
+    const shapes = [
+      '*a*b',
+      '**/*a*b/**',
+      '**/*a*/**/b',
+      '*a/**/*a*b',
+      '**/{*a,a}*b/**',
+      '{a,aa,aaa,a*,*a}c',
+      '{a,aa,aaa,aaaa,a*}*c',
+      '[a]*[a]*b',
+      'a?a?*a*b',
+      '(a+)+b',
+      '(a*)(a*)b',
+    ];
+    const patterns: string[] = [];
+    for (let i = 0; patterns.length < 50; i++) {
+      const suffix = 'q'.repeat(1 + Math.floor(i / shapes.length));
+      patterns.push(shapes[i % shapes.length].replace(/b|c/, ch => `${ch}${suffix}`));
+    }
+    for (const pattern of patterns) expect(excludedPathProblem(pattern)).toBeNull();
+    // Paths of "a"s only, one to MAX_PATH_DEPTH parts deep, each file distinct.
+    const paths = Array.from({ length: 10_000 }, (_, i) => {
+      const folders = Array.from({ length: i % MAX_PATH_DEPTH }, (_, k) => 'a'.repeat(3 + (k % 5)));
+      return [...folders, `${'a'.repeat(40 + (i % 60))}${i}`].join('/');
+    });
+
+    const excluded = pathExclusion(patterns);
+    const started = performance.now();
+    const matched = paths.filter(path => excluded(path));
+    const elapsed = performance.now() - started;
+    expect(matched).toEqual([]);
+    expect(elapsed).toBeLessThan(1_000);
   });
 });

@@ -287,6 +287,17 @@ describe('quiz prompt: typed tools only', () => {
     );
   });
 
+  it('lets a side question or a dispute re-explain the concept, never the open answer', () => {
+    for (const prompt of [standard, codeAware]) {
+      const text = `${prompt.staticPrompt}\n${prompt.dynamicPrompt}`.replace(/\s+/g, ' ');
+      expect(text).toContain(
+        "A side question, or a dispute about your feedback, may re-explain the concept, but never state the open question's answer or its expected result."
+      );
+      expect(text).not.toContain('hints at it');
+      expect(text).not.toMatch(/side question[^.]*never in a way that/);
+    }
+  });
+
   it('rates an answer with a real error or a missing piece below correct', () => {
     expect(baseSystemPrompt).toMatch(
       /An answer with a real error, or with a key piece missing, is NOT\s+correct/

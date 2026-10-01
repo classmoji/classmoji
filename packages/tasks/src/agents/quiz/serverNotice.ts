@@ -15,7 +15,9 @@
  * the attempt, so the prompt cache keeps hitting. The per-attempt system
  * block (`buildQuizPrompt`'s dynamic block, never the static one shared
  * across attempts) states the marker as its SERVER MARKER line, and admission
- * refuses student text that uses the reserved words (quizChat.service).
+ * refuses student text framed as the server's: a line opening with SYSTEM
+ * NOTICE, SERVER NOTICE or CURRENT STATUS, or "[[server-notice"
+ * (quizChat.service `containsReservedText`).
  */
 import { createHmac, randomBytes } from 'node:crypto';
 import type { ModelMessage } from 'ai';
