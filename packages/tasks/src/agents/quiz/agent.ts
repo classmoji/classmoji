@@ -15,10 +15,10 @@
  *   turn that answered the last admitted message (loop.ts). The close rides
  *   out on the turn's final record, so the chat stops taking messages and
  *   refreshes into the results.
- * - `onTurnComplete` ends the run between turns once it has used its compute
- *   budget (runBudget.ts), before it can reach its `maxDuration` mid-turn. The
- *   next message starts a new run, which loads the conversation from storage
- *   as after any run that ended between turns.
+ * - `onTurnComplete` ends the run once it has used its compute budget
+ *   (runBudget.ts), before it can reach its `maxDuration` mid-turn. The next
+ *   message starts a new run, which loads the conversation from storage as
+ *   after any run that ended between turns.
  * - Every callback is sanitized: whatever it throws leaves as fixed copy.
  */
 import { usage } from '@trigger.dev/sdk';
@@ -26,17 +26,11 @@ import { chat } from '@trigger.dev/sdk/ai';
 import type { ModelMessage, UIMessage } from 'ai';
 import { z } from 'zod';
 import { ClassmojiService } from '@classmoji/services';
-import {
-  QUIZ_RUN_MAX_DURATION_SECONDS,
-  QUIZ_RUN_MAX_TURNS,
-  buildTurnStatus,
-  quizToolDefs,
-  type QuizUIMessage,
-} from '@classmoji/utils/quiz-agent';
+import { buildTurnStatus, quizToolDefs, type QuizUIMessage } from '@classmoji/utils/quiz-agent';
 import { currentAdmission } from './admission.ts';
 import { attemptCompleted, attemptHasQuestion, loadAttemptContext } from './context.ts';
 import { runQuizTurn } from './loop.ts';
-import { shouldEndRun } from './runBudget.ts';
+import { QUIZ_RUN_MAX_DURATION_SECONDS, QUIZ_RUN_MAX_TURNS, shouldEndRun } from './runBudget.ts';
 import { evaluationNotice } from './prompt/index.ts';
 import { markServerText } from './serverNotice.ts';
 import { createQuizTranscriptStorage } from './storage.ts';
@@ -89,7 +83,7 @@ export const quizAttemptAgent = chat.agent({
   idleTimeoutInSeconds: 10,
   turnTimeout: '1h',
   // The SDK reads the next message before it checks this limit and ends the
-  // run without answering it, so one attempt must never reach it (limits.ts).
+  // run without answering it, so a run must never reach it (runBudget.ts).
   maxTurns: QUIZ_RUN_MAX_TURNS,
   chatAccessTokenTTL: '15m',
   // A hint at most, never identity or settings; absent when the client sends none.
@@ -200,9 +194,12 @@ export const quizAttemptAgent = chat.agent({
     }
   ),
 
-  // After every turn, failed ones included. The runtime checks this before it
-  // waits for the next message; a close from onBeforeTurnComplete is checked
-  // first and ends the run the same way.
+  // After every turn that ran, failed ones included. An action that runs no
+  // turn (a begin once the attempt is under way) and a message whose answer
+  // the run already holds skip this hook, and the run waits on unchecked; the
+  // next turn that runs checks again. The runtime reads the endRun request
+  // before it waits for the next message; a close from onBeforeTurnComplete
+  // is read first and ends the run the same way.
   onTurnComplete: sanitized(
     'onTurnComplete',
     async ({ chatId, turn, runId }: { chatId: string; turn: number; runId: string }) => {

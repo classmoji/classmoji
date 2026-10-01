@@ -1,23 +1,24 @@
 /**
- * The quiz agent's run limits.
+ * The quiz agent's run limits as the agent wires them (the limits themselves
+ * and the budget's boundaries are in runBudget.test.ts):
  *
- * - Turns: every message and action an attempt sends is a turn of the run
- *   that reads it, a refused one included, and the SDK reads the next message
- *   before it checks `maxTurns`: the run then ends without answering that
- *   message. So the limit sits above everything one attempt sends, with room
- *   to spare.
- * - Compute: after every turn the agent ends the run once it has used its
- *   compute budget (`chat.endRun()`), with room left for one more turn and the
- *   wait before it, so a run never reaches its `maxDuration` mid-turn.
+ * - `maxTurns` and `maxDuration` are the run limits;
+ * - the margin leaves room for one more turn at its deadline and the idle
+ *   wait before it;
+ * - after a turn, the run ends (`chat.endRun()`) once this execution's
+ *   compute reaches the budget, measured as `maxDuration` is: the attempt's,
+ *   not the run's total across retries.
  *
  * The SDK and services are faked: `chat.agent` hands back the options it was
- * given, and `usage.getCurrent()` reports the compute a test sets.
+ * given, and `usage.getCurrent()` reports the attempt and total compute a test
+ * sets, always different so that reading the wrong one fails.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const fakes = vi.hoisted(() => ({
   endRun: vi.fn(),
-  computeMs: 0,
+  attemptMs: 0,
+  totalMs: 0,
 }));
 
 vi.mock('@trigger.dev/sdk/ai', () => ({
@@ -28,8 +29,8 @@ vi.mock('@trigger.dev/sdk', async importOriginal => ({
   usage: {
     getCurrent: () => ({
       compute: {
-        attempt: { durationMs: fakes.computeMs, costInCents: 0 },
-        total: { durationMs: fakes.computeMs, costInCents: 0 },
+        attempt: { durationMs: fakes.attemptMs, costInCents: 0 },
+        total: { durationMs: fakes.totalMs, costInCents: 0 },
       },
     }),
   },
@@ -40,12 +41,11 @@ vi.mock('@classmoji/services', () => ({ ClassmojiService: {}, getGitProvider: vi
 const { quizAttemptAgent } = await import('../agent.ts');
 const { TURN_DEADLINE_MS } = await import('../loop.ts');
 const {
-  MAX_STUDENT_TURNS,
   QUIZ_RUN_COMPUTE_BUDGET_MS,
   QUIZ_RUN_MAX_DURATION_SECONDS,
   QUIZ_RUN_MAX_TURNS,
   QUIZ_RUN_ROLLOVER_MARGIN_MS,
-} = await import('@classmoji/utils/quiz-agent');
+} = await import('../runBudget.ts');
 
 type TurnCompleteEvent = { chatId: string; turn: number; runId: string };
 const agent = quizAttemptAgent as unknown as {
@@ -55,59 +55,41 @@ const agent = quizAttemptAgent as unknown as {
   onTurnComplete: (event: TurnCompleteEvent) => Promise<void>;
 };
 
-/**
- * The turns an attempt's admitted path takes: the begin turn, every message
- * the attempt admits, and the one refused at the limit (which closes the
- * session).
- */
-const ADMITTED_PATH_TURNS = 1 + MAX_STUDENT_TURNS + 1;
-
 beforeEach(() => {
   fakes.endRun.mockClear();
-  fakes.computeMs = 0;
+  fakes.attemptMs = 0;
+  fakes.totalMs = 0;
 });
 
-describe('quizAttemptAgent maxTurns', () => {
-  it('is QUIZ_RUN_MAX_TURNS', () => {
+describe('quizAttemptAgent run limits', () => {
+  it('are QUIZ_RUN_MAX_TURNS and QUIZ_RUN_MAX_DURATION_SECONDS', () => {
     expect(agent.maxTurns).toBe(QUIZ_RUN_MAX_TURNS);
-  });
-
-  it('is above the admitted path, with three times that again for refused and re-delivered messages', () => {
-    expect(QUIZ_RUN_MAX_TURNS).toBeGreaterThan(ADMITTED_PATH_TURNS);
-    expect(QUIZ_RUN_MAX_TURNS - ADMITTED_PATH_TURNS).toBeGreaterThanOrEqual(
-      3 * ADMITTED_PATH_TURNS
-    );
-  });
-});
-
-describe('quizAttemptAgent compute budget', () => {
-  it('runs for QUIZ_RUN_MAX_DURATION_SECONDS, ending between turns at the budget', () => {
     expect(agent.maxDuration).toBe(QUIZ_RUN_MAX_DURATION_SECONDS);
-    expect(QUIZ_RUN_COMPUTE_BUDGET_MS).toBe(
-      QUIZ_RUN_MAX_DURATION_SECONDS * 1_000 - QUIZ_RUN_ROLLOVER_MARGIN_MS
-    );
-    expect(QUIZ_RUN_COMPUTE_BUDGET_MS).toBeGreaterThan(0);
   });
 
-  it('keeps room for one more turn at its deadline and the idle wait before it, with slack', () => {
+  it('keep room for one more turn at its deadline and the idle wait before it, with slack', () => {
     expect(QUIZ_RUN_ROLLOVER_MARGIN_MS).toBeGreaterThan(
       TURN_DEADLINE_MS + agent.idleTimeoutInSeconds * 1_000
     );
   });
+});
 
-  it('keeps the run under the budget', async () => {
-    fakes.computeMs = QUIZ_RUN_COMPUTE_BUDGET_MS - 1;
+describe('quizAttemptAgent onTurnComplete', () => {
+  it('keeps a run whose attempt is under the budget, whatever earlier attempts used', async () => {
+    fakes.attemptMs = QUIZ_RUN_COMPUTE_BUDGET_MS / 2;
+    fakes.totalMs = QUIZ_RUN_COMPUTE_BUDGET_MS + 600_000;
     await agent.onTurnComplete({ chatId: 'attempt-1', turn: 41, runId: 'run_1' });
     expect(fakes.endRun).not.toHaveBeenCalled();
   });
 
-  it('ends the run at the budget, logging ids and counts only', async () => {
+  it("ends a run whose attempt is over the budget, logging ids and the attempt's compute only", async () => {
     const lines: unknown[][] = [];
     const spy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
       lines.push(args);
     });
     try {
-      fakes.computeMs = QUIZ_RUN_COMPUTE_BUDGET_MS + 0.4;
+      fakes.attemptMs = QUIZ_RUN_COMPUTE_BUDGET_MS + 60_000.4;
+      fakes.totalMs = QUIZ_RUN_COMPUTE_BUDGET_MS + 900_000;
       await agent.onTurnComplete({ chatId: 'attempt-1', turn: 41, runId: 'run_1' });
     } finally {
       spy.mockRestore();
@@ -119,7 +101,7 @@ describe('quizAttemptAgent compute budget', () => {
       attemptId: 'attempt-1',
       runId: 'run_1',
       turnsInRun: 42,
-      usedMs: QUIZ_RUN_COMPUTE_BUDGET_MS,
+      usedMs: QUIZ_RUN_COMPUTE_BUDGET_MS + 60_000,
     });
   });
 });
