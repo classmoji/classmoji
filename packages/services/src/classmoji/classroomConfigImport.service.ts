@@ -2,6 +2,7 @@ import getPrisma from '@classmoji/database';
 import type { Prisma } from '@prisma/client';
 import { ModuleItemType } from '@prisma/client';
 import { isAllowedModel } from '@classmoji/utils/ai-models';
+import { meetingLinkForCopy } from './calendarPolicy.ts';
 import * as entitlementService from './entitlement.service.ts';
 
 type RepositoryImportClient = Prisma.TransactionClient | ReturnType<typeof getPrisma>;
@@ -281,12 +282,12 @@ export const importClassroomConfig = async (
         classroom_id: targetClassroomId,
         created_by: createdByUserId,
         title: event.title,
-        description: event.description,
         event_type: event.event_type,
         start_time: event.start_time,
         end_time: event.end_time,
         location: event.location,
-        meeting_link: event.meeting_link,
+        // meeting_link and description: text that is not a web link moves to the description.
+        ...meetingLinkForCopy(event.meeting_link, event.description),
         is_recurring: event.is_recurring,
         // Nullable Json: omit when null to sidestep Prisma DbNull/JsonNull typing.
         ...(event.recurrence_rule === null

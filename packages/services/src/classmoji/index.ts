@@ -40,11 +40,14 @@ export {
   ClassroomSettingsEntitlementError,
   ClassroomSettingsValidationError,
 } from './classroom.service.ts';
-// A refused calendar time range, so a caller can say so instead of 500ing,
-// plus the event-type policy every calendar write surface has to apply.
+// A refused calendar time range or meeting link, so a caller can say so
+// instead of 500ing, plus the event-type policy every calendar write surface
+// has to apply.
 export {
   CalendarTimeRangeError,
   isCalendarTimeRangeError,
+  CalendarMeetingLinkError,
+  isCalendarMeetingLinkError,
   ASSISTANT_EVENT_TYPE,
   ASSISTANT_EVENT_TYPE_MESSAGE,
   assistantMayCreateEventType,
