@@ -32,6 +32,7 @@ import {
   computeAttemptPercentages,
   deriveResult,
   gradeBandFor,
+  replyShowsHint,
   scoreSoFar,
   type Answer,
   type AttemptProgress,
@@ -470,9 +471,9 @@ const sameAnswers = (a: unknown, b: Answer[]) =>
 
 /**
  * The answers with each `hints_before` raised, where it is lower, to the Try
- * again clicks admitted before that answer whose hint reached the student
- * (`hintArrived`). The model counts the hints; the server knows the clicks,
- * and a typed hint request can only add to them.
+ * again clicks admitted before that answer whose reply showed the student a
+ * hint (`hintsShown`). The model counts the hints; the server knows the
+ * clicks, and a typed hint request can only add to them.
  *
  * Question n's messages are the ones admitted after its card went out and
  * before question n+1's card. A typed message (no button) can carry an
@@ -508,14 +509,18 @@ const floorHintsAtTryAgain = async (
     orderBy: { seq: 'asc' },
     select: { payload: true, input_message_id: true },
   });
-  const clicked = inputs.some(i => isObject(i.payload) && i.payload.action === 'try_again');
-  const arrived = clicked ? await hintArrived(tx, attempt.conversation_id) : () => false;
+  const clickIds = inputs.flatMap(i =>
+    isObject(i.payload) && i.payload.action === 'try_again' && i.input_message_id
+      ? [i.input_message_id]
+      : []
+  );
+  const shown = await hintsShown(tx, attempt.conversation_id, clickIds);
   let clicks = 0;
   const floors: number[] = [];
   for (const { payload, input_message_id } of inputs) {
     const p = isObject(payload) ? payload : {};
     if (p.action === 'try_again') {
-      if (input_message_id && arrived(input_message_id)) clicks += 1;
+      if (input_message_id && shown.has(input_message_id)) clicks += 1;
     } else if (p.kind === 'message' && p.action === undefined) floors.push(clicks);
   }
   if (floors.length === 0) return answers;
@@ -526,30 +531,45 @@ const floorHintsAtTryAgain = async (
 };
 
 /**
- * Whether the reply to a student message finished: the first assistant row
- * after the message's own row, before the next user row, is final. A reply
- * that was stopped or failed (a partial row) or never saved did not reach
- * the student whole.
+ * The Try again clicks (student message ids) whose reply showed the student a
+ * hint. A click's reply is the first assistant row after the click's own row,
+ * before the next user row, finished or partial; it showed a hint when its
+ * parts pass `replyShowsHint`: text that is not blank, and no notice. So a
+ * reply the student stopped part way counts once it has text (the text
+ * reached them, and the transcript keeps it: `loadCanonicalMessages`), while
+ * a reply that failed or ran out of time (it carries a notice), one that
+ * shows only a notice or no text, and a reply never saved count for nothing.
+ * The chat gives Try again back after exactly the replies this leaves out
+ * (`buttonSetsOf` in QuizChat applies the same predicate).
  */
-const hintArrived = async (
+const hintsShown = async (
   tx: Tx,
-  conversationId: string | null
-): Promise<(inputMessageId: string) => boolean> => {
-  if (!conversationId) return () => false;
+  conversationId: string | null,
+  clickIds: readonly string[]
+): Promise<Set<string>> => {
+  if (!conversationId || clickIds.length === 0) return new Set();
   const rows = await tx.aIConversationMessage.findMany({
     where: { conversation_id: conversationId },
     orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
-    select: { ui_message_id: true, role: true, final: true },
+    select: { id: true, ui_message_id: true, role: true },
   });
-  return inputMessageId => {
-    const at = rows.findIndex(r => r.role === 'USER' && r.ui_message_id === inputMessageId);
-    if (at === -1) return false;
-    for (const row of rows.slice(at + 1)) {
-      if (row.role === 'USER') return false;
-      if (row.role === 'ASSISTANT') return row.final;
-    }
-    return false;
-  };
+  const replyOf = new Map<string, string>();
+  for (const clickId of clickIds) {
+    const at = rows.findIndex(r => r.role === 'USER' && r.ui_message_id === clickId);
+    if (at === -1) continue;
+    const reply = rows.slice(at + 1).find(r => r.role === 'USER' || r.role === 'ASSISTANT');
+    if (reply?.role === 'ASSISTANT') replyOf.set(clickId, reply.id);
+  }
+  if (replyOf.size === 0) return new Set();
+  // Only the replies' parts: a long conversation's rows are not read whole.
+  const replies = await tx.aIConversationMessage.findMany({
+    where: { id: { in: [...new Set(replyOf.values())] } },
+    select: { id: true, parts: true },
+  });
+  const showsHint = new Set(
+    replies.filter(r => replyShowsHint(Array.isArray(r.parts) ? r.parts : [])).map(r => r.id)
+  );
+  return new Set([...replyOf].flatMap(([clickId, id]) => (showsHint.has(id) ? [clickId] : [])));
 };
 
 /**
@@ -585,8 +605,8 @@ const writeProjection = async (
  * Finalize a presented question from the answers the model rated. The server
  * scores it (`deriveResult`) and picks the emoji from the classroom mapping.
  * Each answer's hint count is first raised to the Try again clicks admitted
- * before it whose reply finished (`floorHintsAtTryAgain`); the journal keeps
- * what the model sent as `reported_answers` when that changed anything.
+ * before it whose reply showed a hint (`floorHintsAtTryAgain`); the journal
+ * keeps what the model sent as `reported_answers` when that changed anything.
  *
  * - First record → `result_finalized`.
  * - The same answers again, in any turn (a retried call) → the stored result.

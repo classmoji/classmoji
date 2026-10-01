@@ -36,6 +36,12 @@
  *   recorded grades and writes a `data-evaluation` part, after a model error
  *   too, since that needs no model. If the last result is missing, a
  *   `reply_failed` notice is written and the student's next message retries.
+ * - A turn the student stops writes no notice; one that fails or runs out of
+ *   time writes one (the server's completion after a model error writes its
+ *   evaluation instead). The services tell a stopped reply from a failed one
+ *   by that alone: a stopped reply's text stays in the transcript and the
+ *   history, and a Try again whose reply has text counts as a hint
+ *   (`replyShowsHint`).
  * - Everything the model or the tools write is persisted in `onEnd`, upstream
  *   of the projection; the returned stream is projected for the browser. A
  *   failed save is tried once more (the save is an upsert by message id); a

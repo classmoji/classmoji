@@ -352,28 +352,48 @@ describe('the Next after a hint', () => {
     }
   });
 
-  it('ends a Try again reply that shows the current question again with Next alone', async () => {
-    // The turn ends at the card, so the card is all the reply shows: without
-    // the Next the student would be left with no button at all.
+  it('gives the set back after a Try again reply that only shows the current question again', async () => {
+    // The card is no hint text, so the server does not count the click (the
+    // task also refuses the card in a Try again turn): the offer's Try again
+    // and Next come back, and the reply's bubble has no Next of its own.
     const reshown = [...answered, user('u2', BUTTON_TEXT.try_again), hint('a3', [card(1)])];
     expect(buttonSetsOf(reshown)).toEqual({
-      live: { message: 4, hint: true },
-      hintReplies: new Set([4]),
+      live: { message: 2, part: 0 },
+      hintReplies: new Set(),
     });
 
     const onButton = vi.fn();
     await render(reshown, { onButton });
-    expect(buttonSets()).toEqual([false, true]);
+    expect(buttonSets()).toEqual([true]);
     const row = container.querySelectorAll('[data-message-role]')[4];
     const bubble = row.querySelector('[data-testid="quiz-assistant-bubble"]')!;
     expect(bubble.querySelector('[data-testid="quiz-question-card"]')).not.toBeNull();
-    expect(bubble.lastElementChild?.getAttribute('data-testid')).toBe('quiz-next-step');
-    expect(bubble.querySelector('[data-testid="quiz-try-again"]')).toBeNull();
-    expect(bubble.querySelector('[data-testid="quiz-next-step-lead-in"]')).toBeNull();
+    expect(bubble.querySelector('[data-testid="quiz-next-step"]')).toBeNull();
 
-    const next = bubble.querySelector('[data-testid="quiz-next"]') as HTMLButtonElement;
-    await act(async () => next.click());
-    expect(onButton).toHaveBeenCalledWith(BUTTON_TEXT.next, 'next');
+    const tryAgain = container.querySelector('[data-testid="quiz-try-again"]') as HTMLButtonElement;
+    await act(async () => tryAgain.click());
+    expect(onButton).toHaveBeenCalledWith(BUTTON_TEXT.try_again, 'try_again');
+  });
+
+  it('ends a hint the student stopped part way with Next alone, as the server counts it', async () => {
+    // A stopped turn writes no notice: the text that arrived is the hint.
+    const stopped = [
+      ...answered,
+      user('u2', BUTTON_TEXT.try_again),
+      hint('a3', [
+        { type: 'step-start' },
+        { type: 'text', text: "Here's a hi", state: 'streaming' },
+      ]),
+    ];
+    expect(buttonSetsOf(stopped)).toEqual({
+      live: { message: 4, hint: true },
+      hintReplies: new Set([4]),
+    });
+    await render(stopped);
+    expect(buttonSets()).toEqual([false, true]);
+    // No Try again can be clicked: the click was counted.
+    const tryAgains = [...container.querySelectorAll('[data-testid="quiz-try-again"]')];
+    expect(tryAgains.every(b => (b as HTMLButtonElement).disabled)).toBe(true);
   });
 
   it('still reads a reply with the current card and hint text before it as a hint', () => {
@@ -462,6 +482,31 @@ describe('a click whose reply did not get through', () => {
     }
     await render([...answered, user('u2', BUTTON_TEXT.try_again), msg('a3', 'assistant', [step])]);
     expect(buttonSets()).toEqual([true]);
+  });
+
+  it('gives a Try again click its set back when the reply has text and a notice, or only blank text', async () => {
+    // The server counts neither as a hint (`replyShowsHint`), so the click
+    // can be made again.
+    for (const parts of [
+      [text("Here's a"), notice()],
+      [text("Here's a"), notice('turn_stopped')],
+      [notice('source_material_unavailable')],
+      [{ type: 'step-start' }, text('   ')],
+    ]) {
+      const replied = [
+        ...answered,
+        user('u2', BUTTON_TEXT.try_again),
+        msg('a3', 'assistant', parts),
+      ];
+      expect(buttonSetsOf(replied)).toEqual({ live: OFFER_SET, hintReplies: new Set() });
+    }
+    await render([
+      ...answered,
+      user('u2', BUTTON_TEXT.try_again),
+      msg('a3', 'assistant', [text("Here's a"), notice()]),
+    ]);
+    expect(buttonSets()).toEqual([true]);
+    expect(container.querySelector('[data-testid="quiz-try-again"]')).not.toBeNull();
   });
 
   it("gives a failed Next click on a hint the hint's Next back", () => {

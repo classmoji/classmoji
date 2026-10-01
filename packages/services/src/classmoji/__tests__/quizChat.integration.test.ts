@@ -215,11 +215,19 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
 
   /** Save the reply to the latest message: finished (`final`) or cut off (a partial row). */
   const reply = (attemptId: string, final = true, text = 'A hint.') =>
-    chat.persistAssistantMessage(
-      attemptId,
-      { id: `reply-${randomUUID()}`, role: 'assistant', parts: [{ type: 'text', text }] } as never,
-      { final }
-    );
+    replyWith(attemptId, [{ type: 'text', text }], final);
+
+  /** Save a reply with these parts; returns its message id. */
+  const replyWith = async (attemptId: string, parts: unknown[], final = true) => {
+    const id = `reply-${randomUUID()}`;
+    await chat.persistAssistantMessage(attemptId, { id, role: 'assistant', parts } as never, {
+      final,
+    });
+    return id;
+  };
+
+  /** The notice a turn writes when it failed (`reply_failed`) or ran out of time. */
+  const noticePart = (code = 'reply_failed') => ({ type: 'data-notice', data: { code } });
 
   const question = (n: number, text = `Question ${n}?`) => ({
     preamble: 'Next up.',
@@ -1512,10 +1520,14 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
       } as never,
       { final: false }
     );
-    // A partial with nothing committed stays out.
+    // A failed partial with nothing committed stays out: its text was cut.
     await chat.persistAssistantMessage(
       attemptId,
-      { id: 'text-only', role: 'assistant', parts: [{ type: 'text', text: 'Hmm' }] } as never,
+      {
+        id: 'text-only',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'Hmm' }, noticePart()],
+      } as never,
       { final: false }
     );
 
@@ -1630,14 +1642,15 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     expect(results[1].credit_earned).toBe(40); // max(20, 70 - 2 * 15)
   });
 
-  it('counts no Try again whose hint did not arrive: a reply cut off or never saved', async () => {
+  it('counts no Try again whose reply failed or was never saved', async () => {
     const attemptId = await newAttempt();
     const turn = await begin(attemptId);
     await grading.presentQuestion(call(turn), question(1));
     await say(attemptId, 'It is the colour.');
-    // The first hint's reply was cut off (a partial row); the second saved nothing.
+    // The first hint's reply failed part way (a partial row with a notice);
+    // the second saved nothing.
     await say(attemptId, BUTTON_TEXT.try_again);
-    await reply(attemptId, false);
+    await replyWith(attemptId, [{ type: 'text', text: 'A hi' }, noticePart()], false);
     await say(attemptId, BUTTON_TEXT.try_again);
     const answerTurn = await say(attemptId, 'The later rule wins.');
     const reported: Answer[] = [
@@ -1649,13 +1662,13 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     expect(first.payload).toMatchObject({ question_num: 1, answers: reported });
     expect(first.payload).not.toHaveProperty('reported_answers');
 
-    // One hint arrived and one was cut off: the answer after them has one.
+    // One hint arrived and one ran out of time: the answer after them has one.
     await grading.presentQuestion(call(answerTurn), question(2));
     await say(attemptId, 'A guess.');
     await say(attemptId, BUTTON_TEXT.try_again);
     await reply(attemptId);
     await say(attemptId, BUTTON_TEXT.try_again);
-    await reply(attemptId, false);
+    await replyWith(attemptId, [{ type: 'text', text: 'A hi' }, noticePart('turn_stopped')], false);
     const second = await say(attemptId, 'Another guess.');
     await grading.finalizeQuestion(
       call(second),
@@ -1672,6 +1685,144 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
         { level: 'correct', hints_before: 1 },
       ],
     });
+  });
+
+  it('counts a Try again whose reply the student stopped once it has text, and keeps that text on reload', async () => {
+    const attemptId = await newAttempt();
+    const turn = await begin(attemptId);
+    await grading.presentQuestion(call(turn), question(1));
+    await say(attemptId, 'It is the colour.');
+    const step = { type: 'step-start' };
+    const thinking = (n: number, state = 'done') => ({
+      type: 'reasoning',
+      text: `thinking ${n}`,
+      state,
+      providerMetadata: { anthropic: { signature: `sig-${n}` } },
+    });
+    const refusedOffer = {
+      type: 'tool-offer_next_step',
+      toolCallId: 'toolu_refused',
+      state: 'output-error',
+      input: { expected_answer: 'Hidden.', feedback: 'Close.', actions: ['try_again', 'next'] },
+      errorText: 'An error occurred.',
+    };
+    const hint = {
+      type: 'text',
+      text: "Let's try again! Here's a hint: think about which rule comes la",
+      state: 'streaming',
+    };
+    // The student stopped the hint part way: a partial row with no notice.
+    const tryAgain = await say(attemptId, BUTTON_TEXT.try_again);
+    const stoppedId = await replyWith(
+      attemptId,
+      [step, thinking(1), refusedOffer, step, thinking(2, 'streaming'), hint],
+      false
+    );
+    // Stopped again before any text: nothing reached the student.
+    const secondClick = await say(attemptId, BUTTON_TEXT.try_again);
+    const emptyId = await replyWith(attemptId, [step, thinking(3, 'streaming')], false);
+    const answerTurn = await say(attemptId, 'The later rule wins.');
+    const reported: Answer[] = [
+      { level: 'partly_right', hints_before: 0 },
+      { level: 'correct', hints_before: 0 },
+    ];
+    await grading.finalizeQuestion(call(answerTurn), result(1, reported));
+
+    // One hint: the stopped reply with text, not the one without.
+    const [row] = await events(attemptId, 'result_finalized');
+    expect(row.payload).toMatchObject({
+      answers: [
+        { level: 'partly_right', hints_before: 0 },
+        { level: 'correct', hints_before: 1 },
+      ],
+      reported_answers: reported,
+    });
+    const [stored] = (await attemptRow(attemptId)).question_results_json as Record<
+      string,
+      unknown
+    >[];
+    expect(stored.credit_earned).toBe(85); // 100 - 15
+
+    // On reload the hint text is there, after its click, with nothing else of
+    // the stopped reply; the reply stopped before any text is left out.
+    const transcript = await chat.loadTranscriptForViewer(attemptId, 'student');
+    const ids = transcript.map(m => m.id);
+    expect(ids).not.toContain(emptyId);
+    expect(ids.indexOf(stoppedId)).toBe(ids.indexOf(tryAgain.inputMessageId!) + 1);
+    expect(ids.indexOf(secondClick.inputMessageId!)).toBe(ids.indexOf(stoppedId) + 1);
+    expect(transcript.find(m => m.id === stoppedId)?.parts).toEqual([step, hint]);
+    expect(JSON.stringify(transcript)).not.toContain('Hidden.');
+
+    // The model's history has it too, as text the assistant wrote.
+    const canonical = await chat.loadCanonicalMessages(attemptId);
+    expect(canonical.find(m => m.id === stoppedId)?.parts).toEqual([step, hint]);
+    expect(canonical.map(m => m.id)).not.toContain(emptyId);
+    const { convertToModelMessages } = await import('ai');
+    const model = (await convertToModelMessages(
+      canonical.filter(m => m.id === stoppedId) as never
+    )) as { role: string; content: { type: string; text?: string }[] }[];
+    expect(model).toEqual([
+      { role: 'assistant', content: [expect.objectContaining({ type: 'text', text: hint.text })] },
+    ]);
+    expect(JSON.stringify(model)).not.toContain('toolu_refused');
+    expect(JSON.stringify(model)).not.toContain('thinking');
+  });
+
+  it('counts no Try again whose reply is only a notice; a click again counts once its hint text arrives', async () => {
+    const attemptId = await newAttempt();
+    const turn = await begin(attemptId);
+    await grading.presentQuestion(call(turn), question(1));
+    await say(attemptId, 'It is the colour.');
+    // A finished reply that is only a notice (the material was unavailable).
+    await say(attemptId, BUTTON_TEXT.try_again);
+    await replyWith(attemptId, [noticePart('source_material_unavailable')]);
+    // Try again given back and clicked again: this time the hint arrives.
+    await say(attemptId, BUTTON_TEXT.try_again);
+    await reply(attemptId);
+    const answerTurn = await say(attemptId, 'The later rule wins.');
+    await grading.finalizeQuestion(
+      call(answerTurn),
+      result(1, [
+        { level: 'partly_right', hints_before: 0 },
+        { level: 'correct', hints_before: 0 },
+      ])
+    );
+    const [row] = await events(attemptId, 'result_finalized');
+    expect(row.payload).toMatchObject({
+      answers: [
+        { level: 'partly_right', hints_before: 0 },
+        { level: 'correct', hints_before: 1 },
+      ],
+    });
+  });
+
+  it('counts no Try again whose reply shows no text', async () => {
+    const attemptId = await newAttempt();
+    const turn = await begin(attemptId);
+    await grading.presentQuestion(call(turn), question(1));
+    await say(attemptId, 'It is the colour.');
+    const step = { type: 'step-start' };
+    const refusedOffer = {
+      type: 'tool-offer_next_step',
+      toolCallId: 'toolu_refused',
+      state: 'output-error',
+      input: { feedback: 'Close.', actions: ['try_again', 'next'] },
+      errorText: 'An error occurred.',
+    };
+    // Finished replies with blank text, only a refused call, or no parts of note.
+    for (const parts of [[step, { type: 'text', text: '  \n ' }], [step, refusedOffer], [step]]) {
+      await say(attemptId, BUTTON_TEXT.try_again);
+      await replyWith(attemptId, parts);
+    }
+    const reported: Answer[] = [
+      { level: 'partly_right', hints_before: 0 },
+      { level: 'correct', hints_before: 0 },
+    ];
+    const answerTurn = await say(attemptId, 'The later rule wins.');
+    await grading.finalizeQuestion(call(answerTurn), result(1, reported));
+    const [row] = await events(attemptId, 'result_finalized');
+    expect(row.payload).toMatchObject({ answers: reported });
+    expect(row.payload).not.toHaveProperty('reported_answers');
   });
 
   it('refuses malformed messages', async () => {
@@ -2209,10 +2360,13 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
   it('upserts assistant messages; a partial never replaces a final one and is not canonical', async () => {
     const attemptId = await newAttempt();
     await begin(attemptId);
-    const message = (text: string) =>
-      ({ id: 'asst-x', role: 'assistant', parts: [{ type: 'text', text }] }) as never;
+    const message = (text: string, ...more: unknown[]) =>
+      ({ id: 'asst-x', role: 'assistant', parts: [{ type: 'text', text }, ...more] }) as never;
 
-    await chat.persistAssistantMessage(attemptId, message('partial'), { final: false });
+    // A failed partial: its text is cut, and nothing else was committed.
+    await chat.persistAssistantMessage(attemptId, message('partial', noticePart()), {
+      final: false,
+    });
     expect(await chat.loadCanonicalMessages(attemptId)).toHaveLength(0);
 
     await chat.persistAssistantMessage(attemptId, message('done'), { final: true });

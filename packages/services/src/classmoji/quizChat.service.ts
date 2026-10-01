@@ -755,16 +755,38 @@ const COMMITTED_DATA_PARTS = new Set(['data-question-result', 'data-evaluation']
 const isCommittedCall = (p: Record<string, unknown>) =>
   typeof p.type === 'string' && COMMITTED_TOOL_PARTS.has(p.type) && p.state === 'output-available';
 
+/** Text the student was shown: a text part that is not blank. */
+const isShownText = (p: Record<string, unknown>) =>
+  p.type === 'text' && typeof p.text === 'string' && p.text.trim() !== '';
+
+/**
+ * Whether the student stopped a partial reply: it carries no notice and no
+ * server evaluation. A turn that failed or ran out of time writes a notice
+ * (`runQuizTurn` in the tasks package), and a turn the student stopped writes
+ * none. The one failed turn without a notice is the server's completion after
+ * a model error (a completed attempt takes no more messages), which carries
+ * the evaluation it wrote instead.
+ */
+const stoppedByStudent = (parts: unknown) =>
+  !(Array.isArray(parts) ? parts : []).some(
+    p => isObject(p) && (p.type === 'data-notice' || p.type === 'data-evaluation')
+  );
+
 /**
  * What a partial reply keeps: the successful calls of the committing tools,
  * the data parts written from committed state, and, in each step (the parts
  * from one `step-start` to the next, the blocks the AI SDK turns into one
  * assistant message and its tool results) that holds a kept call, that
  * step's `step-start` and finished reasoning, so the call reaches the model
- * with the thinking that led to it. Its text (cut off mid-reply), other
- * reasoning, failed or unfinished calls and notices are dropped.
+ * with the thinking that led to it. With `keepText` (a reply the student
+ * stopped: `stoppedByStudent`) its text that is not blank stays too, with
+ * its step's `step-start`, since that text reached the student: a hint cut
+ * short stays on screen and in the model's history, and a Try again whose
+ * reply had text counts as a hint (`replyShowsHint`). Without it (a failed
+ * turn) the text is dropped. Other reasoning, failed or unfinished calls and
+ * notices are dropped either way.
  */
-const committedParts = (parts: unknown): unknown[] => {
+const partialParts = (parts: unknown, keepText: boolean): unknown[] => {
   const steps: Record<string, unknown>[][] = [];
   for (const p of Array.isArray(parts) ? parts : []) {
     if (!isObject(p)) continue;
@@ -773,12 +795,14 @@ const committedParts = (parts: unknown): unknown[] => {
   }
   return steps.flatMap(step => {
     const callKept = step.some(isCommittedCall);
+    const textKept = keepText && step.some(isShownText);
     return step.filter(
       p =>
         isCommittedCall(p) ||
         (typeof p.type === 'string' && COMMITTED_DATA_PARTS.has(p.type)) ||
-        (callKept &&
-          (p.type === 'step-start' || (p.type === 'reasoning' && p.state !== 'streaming')))
+        (textKept && isShownText(p)) ||
+        ((callKept || textKept) && p.type === 'step-start') ||
+        (callKept && p.type === 'reasoning' && p.state !== 'streaming')
     );
   });
 };
@@ -786,11 +810,12 @@ const committedParts = (parts: unknown): unknown[] => {
 /**
  * The attempt's conversation as the model sees it: every UIMessage row in
  * order, with full parts (hidden ones included). A partial assistant message
- * (`final: false`, left by a turn that was stopped or failed) keeps only what
- * its turn committed (`committedParts`): a card, a result, the buttons or the
+ * (`final: false`, left by a turn that was stopped or failed) keeps what its
+ * turn committed (`partialParts`): a card, a result, the buttons or the
  * evaluation the student was shown stay in the model's history (with the
- * reasoning of the step that made each call) and in the transcript, while its
- * unfinished text does not. A partial message with nothing committed is left
+ * reasoning of the step that made each call) and in the transcript. Its text
+ * stays too when the student stopped the turn (`stoppedByStudent`), and is
+ * dropped when the turn failed. A partial message left with nothing is left
  * out.
  */
 export const loadCanonicalMessages = async (attemptId: string): Promise<QuizUIMessage[]> => {
@@ -811,7 +836,7 @@ export const loadCanonicalMessages = async (attemptId: string): Promise<QuizUIMe
   const messages: QuizUIMessage[] = [];
   for (const row of rows) {
     if (row.role === 'ASSISTANT' && !row.final) {
-      const parts = committedParts(row.parts);
+      const parts = partialParts(row.parts, stoppedByStudent(row.parts));
       if (parts.length > 0)
         messages.push(toUIMessage({ ...row, parts: parts as Prisma.JsonValue }));
       continue;

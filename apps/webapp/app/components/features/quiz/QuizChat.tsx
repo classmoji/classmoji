@@ -14,6 +14,7 @@ import {
   QUIZ_REFUSAL_COPY,
   QUIZ_REFUSAL_COPY_BY_KIND,
   buttonActionFor,
+  replyShowsHint,
   type NextStepAction,
   type QuizEvaluationRecordV2,
   type QuizUIMessage,
@@ -485,11 +486,12 @@ export const HINT_ACTIONS: readonly NextStepAction[] = ['next'];
  * Whether a reply moves the quiz on: it brings buttons of its own (an
  * accepted offer), the card of a later question, a question result or the
  * evaluation. The current question's card shown again (`currentQuestion` is
- * the highest card number before this reply) does not count: a Try again
- * turn ends at that card, and without the hint's Next the student would be
- * left with no button at all. A refused call counts for nothing: the server
- * refuses offer_next_step in a Try again turn, so a hint often carries a
- * refused offer ahead of its text.
+ * the highest card number before this reply) does not count: it brings no
+ * buttons, so the clicked set is decided as for any other reply (the server
+ * refuses the card again in a Try again turn; a saved Try again reply that is
+ * only that card shows no hint, and gives the set back). A refused call
+ * counts for nothing: the server refuses offer_next_step in a Try again turn,
+ * so a hint often carries a refused offer ahead of its text.
  */
 const movesOn = (message: QuizUIMessage, currentQuestion: number) =>
   visibleParts(message).some(
@@ -504,9 +506,11 @@ const movesOn = (message: QuizUIMessage, currentQuestion: number) =>
   );
 
 /**
- * Whether a reply did not get through: it carries a notice (it couldn't be
- * finished, and asks for the message again), or it shows nothing in a bubble
- * (only the files read, only refused calls, or nothing yet while it streams).
+ * Whether the reply to a Next click did not get through: it carries a notice
+ * (it couldn't be finished, and asks for the message again), or it shows
+ * nothing in a bubble (only the files read, only refused calls, or nothing
+ * yet while it streams). The reply to a Try again click is judged by
+ * `replyShowsHint` instead (`buttonSetsOf`).
  */
 const fellThrough = (message: QuizUIMessage) => {
   const parts = visibleParts(message);
@@ -531,8 +535,9 @@ export type LiveButtons = { message: number; part: number } | { message: number;
  *
  * An offer (offer_next_step) brings its own set. So does a hint: the first
  * assistant reply after a Try again click (the stored action, or text the
- * server takes as the click: `buttonActionFor`), when it gets through and
- * does not move the quiz on (`fellThrough`, `movesOn`), ends with Next alone.
+ * server takes as the click: `buttonActionFor`), when it shows a hint and
+ * does not move the quiz on (`replyShowsHint`, `movesOn`), ends with Next
+ * alone.
  * The student answers the hint, which brings feedback and a new offer, or
  * moves on; a hint never ends with Try again, so hints never chain from the
  * buttons (Tim's decision).
@@ -544,8 +549,15 @@ export type LiveButtons = { message: number; part: number } | { message: number;
  * types (the reply to it brings no buttons, so these stay the way on), the
  * current question's card shown again on request, or an earlier question's
  * revised result. A click whose reply did not get through gives its set back,
- * so the click can be made again, as the reply's notice asks; the server
- * counts a Try again click only once its hint has reached the student.
+ * so the click can be made again, as the reply's notice asks: a Next click's
+ * reply that `fellThrough`, and a Try again click's reply that shows no hint.
+ *
+ * Which Try again replies show a hint is `replyShowsHint`: text that is not
+ * blank and no notice, finished or stopped part way. The server counts a
+ * Try again click toward the answer's hints by the same predicate
+ * (`floorHintsAtTryAgain` in quizGrading.service), so a click that is counted
+ * never gives Try again back, and one that is not always does (unless its
+ * reply moved the quiz on, which decides the buttons itself).
  */
 export const buttonSetsOf = (
   messages: readonly QuizUIMessage[]
@@ -587,11 +599,17 @@ export const buttonSetsOf = (
       }
     });
     if (!answers || movesOn(message, currentQuestion)) return;
-    if (fellThrough(message)) {
+    if (answers === 'try_again') {
+      // The server's rule for counting the click as a hint, applied to what
+      // this viewer sees (an assistant reply has no hidden parts).
+      if (replyShowsHint(visibleParts(message))) {
+        hintReplies.add(position);
+        live = { message: position, hint: true };
+      } else {
+        live = given;
+      }
+    } else if (fellThrough(message)) {
       live = given;
-    } else if (answers === 'try_again') {
-      hintReplies.add(position);
-      live = { message: position, hint: true };
     }
   });
   return { live, hintReplies };

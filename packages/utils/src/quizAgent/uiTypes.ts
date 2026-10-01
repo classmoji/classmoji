@@ -105,6 +105,29 @@ export function buttonActionFor(text: string): 'next' | 'try_again' | undefined 
   return undefined;
 }
 
+/**
+ * Whether the reply to a Try again click showed the student a hint: one of
+ * its parts is text that is not blank, and none is a notice. A reply that was
+ * stopped part way counts once it has text; one that failed or ran out of
+ * time (it carries a notice), or that shows no text, does not.
+ *
+ * The one rule for both sides of a Try again click: the server raises an
+ * answer's hint count for each click whose reply this holds for
+ * (`floorHintsAtTryAgain` in quizGrading.service), and the chat ends exactly
+ * those replies with Next alone and gives the clicked set back after any
+ * other (`buttonSetsOf` in QuizChat). Takes stored parts (JSON) or a
+ * message's parts.
+ */
+export function replyShowsHint(parts: readonly unknown[]): boolean {
+  const objects = parts.filter(
+    (p): p is { type?: unknown; text?: unknown } => typeof p === 'object' && p !== null
+  );
+  return (
+    !objects.some(p => p.type === 'data-notice') &&
+    objects.some(p => p.type === 'text' && typeof p.text === 'string' && p.text.trim() !== '')
+  );
+}
+
 /** The fixed line shown with the buttons (the previous runtime's wording). */
 export const NEXT_STEP_LEAD_IN = {
   /** Next only, with another question to come. */
