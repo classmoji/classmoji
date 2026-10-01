@@ -1,10 +1,5 @@
 import '@ant-design/v5-patch-for-react-19';
-import {
-  classroomSlugFromPath,
-  fallbackMode,
-  sessionMode,
-  usernameForMode,
-} from '~/utils/sessionMode.server';
+import { classroomSlugFromPath, fallbackMode } from '~/utils/sessionMode.server';
 import {
   Links,
   Meta,
@@ -15,6 +10,7 @@ import {
   redirect,
   useRouteError,
   isRouteErrorResponse,
+  type ShouldRevalidateFunction,
 } from 'react-router';
 import axios from 'axios';
 
@@ -101,10 +97,13 @@ const loadAppUser = async (userId: string): Promise<AppUser | null> => {
     ClassmojiService.subscription.getCurrent(userId),
   ]);
   if (!row) return null;
+  const logins = { GITHUB: gitUsername(row, 'GITHUB'), GITLAB: gitUsername(row, 'GITLAB') };
   const user: AppUser = {
-    ...withLogin(row, 'GITHUB'),
-    has_github: gitUsername(row, 'GITHUB') !== null,
-    has_gitlab: gitUsername(row, 'GITLAB') !== null,
+    // Github first, else Gitlab; the loader swaps in the classroom's own below.
+    ...withLogin(row),
+    logins,
+    has_github: logins.GITHUB !== null,
+    has_gitlab: logins.GITLAB !== null,
     has_password: passwordAccounts > 0,
   };
   if (subscription) user.subscription = subscription;
@@ -140,6 +139,25 @@ const accountSetupRedirect = (user: AppUser, url: URL): string | null => {
   }
   return null;
 };
+
+/** The classroom a path is in (`/admin/<slug>/...`), mirroring classroomSlugFromPath. */
+const classroomSlugOf = (pathname: string): string | null => {
+  const [, prefix, slug] = pathname.split('/');
+  return ['admin', 'student', 'assistant', 'teacher'].includes(prefix ?? '') && slug ? slug : null;
+};
+
+/**
+ * The user's username follows the classroom (Github in a Github class, Gitlab
+ * in a Gitlab one), so moving between classrooms re-runs the loader even when
+ * no params changed the way React Router looks for.
+ */
+export const shouldRevalidate: ShouldRevalidateFunction = ({
+  currentUrl,
+  nextUrl,
+  defaultShouldRevalidate,
+}) =>
+  classroomSlugOf(currentUrl.pathname) !== classroomSlugOf(nextUrl.pathname) ||
+  defaultShouldRevalidate;
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const url = new URL(request.url);
@@ -216,24 +234,21 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     if (gate) return redirect(gate);
   }
 
-  // The session's mode (the provider it signed in with). A GitLab session sees
-  // only GitLab classrooms and GitLab identity; a Github one only Github's.
-  const gitMode = sessionMode(session, fallbackMode(user));
-  if (user) {
-    const otherModeClassroom = (user.classroom_memberships ?? []).find(
-      m =>
-        m.classroom.slug === classroomSlugFromPath(url.pathname) &&
-        (m.classroom.git_organization?.provider ?? 'GITHUB') !== gitMode
-    );
-    if (otherModeClassroom) return redirect('/select-organization');
-    user.classroom_memberships = (user.classroom_memberships ?? []).filter(
-      m => (m.classroom.git_organization?.provider ?? 'GITHUB') === gitMode
-    );
-    // Identity follows the mode: the username of the account for this provider.
-    const modeUsername = await usernameForMode(user.id, gitMode);
-    if (modeUsername) user.login = modeUsername;
-    user.provider = gitMode;
-  }
+  // Every classroom is listed, Github and Gitlab alike, whichever way the
+  // person signed in. Inside one, its provider decides the words and which of
+  // their usernames is "theirs" (repo names are built from it); outside, their
+  // Github username first, else their Gitlab one.
+  const slug = classroomSlugFromPath(url.pathname);
+  const currentClassroom = slug
+    ? user.classroom_memberships?.find(m => m.classroom.slug === slug)?.classroom
+    : undefined;
+  const gitMode: 'GITHUB' | 'GITLAB' = currentClassroom
+    ? currentClassroom.git_organization?.provider === 'GITLAB'
+      ? 'GITLAB'
+      : 'GITHUB'
+    : fallbackMode(user);
+  user.login = user.logins[gitMode] ?? user.login;
+  user.provider = gitMode;
 
   // For backward compat, map classroom_memberships to format expected by UI
   // TODO: Update UI to use classroom_memberships directly

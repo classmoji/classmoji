@@ -1,5 +1,5 @@
 import { redirect, useNavigate, useSearchParams } from 'react-router';
-import { fallbackMode, sessionMode, usernameForMode } from '~/utils/sessionMode.server';
+import { fallbackMode } from '~/utils/sessionMode.server';
 import { useEffect, useMemo, useState } from 'react';
 import { Modal, Button as AntdButton } from 'antd';
 import { useCallout } from '@classmoji/ui-components';
@@ -228,23 +228,13 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       metadata: (n.metadata ?? null) as Record<string, unknown> | null,
     }));
 
-    // The session's mode decides which classrooms are listed: a GitLab
-    // session sees GitLab classrooms only, a Github session Github ones.
-    const gitMode = sessionMode(
-      authData.session,
-      fallbackMode({
-        has_github: gitAccounts.some(a => a.provider_id === 'github'),
-        has_gitlab: gitAccounts.some(a => a.provider_id === 'gitlab'),
-      })
-    );
-    // Identity follows the mode too: show the username of this provider's account.
-    const modeUsername = await usernameForMode(typedUser.id, gitMode);
-    if (modeUsername) typedUser.login = modeUsername;
-    typedUser.memberships = (typedUser.memberships ?? []).filter(
-      m =>
-        ((m as { classroom?: { git_organization?: { provider?: string } } }).classroom
-          ?.git_organization?.provider ?? 'GITHUB') === gitMode
-    ) as SelectOrganizationMembership[];
+    // Every classroom is listed, Github and Gitlab alike, whichever way the
+    // person signed in. Outside a classroom, Github's words apply when they
+    // have it connected (e.g. Github Classroom import), else Gitlab's.
+    const gitMode = fallbackMode({
+      has_github: gitAccounts.some(a => a.provider_id === 'github'),
+      has_gitlab: gitAccounts.some(a => a.provider_id === 'gitlab'),
+    });
 
     const membershipRoles: Record<string, NotificationRole[]> = {};
     for (const m of typedUser.memberships ?? []) {
@@ -504,7 +494,9 @@ const SelectOrganization = ({
     if (!organization || !user.login) return;
     notify(
       ActionTypes.SEND_INVITATION,
-      loaderData.gitMode === 'GITLAB' ? 'Joining the class...' : 'Sending you Github invite...'
+      organization.git_organization?.provider === 'GITLAB'
+        ? 'Joining the class...'
+        : 'Sending you Github invite...'
     );
     fetcher?.submit(
       { classroom_id: organization.id },
@@ -573,7 +565,7 @@ const SelectOrganization = ({
             {(pendingClassroom ?? classroom)?.name || (pendingClassroom ?? classroom)?.login}
           </span>
           .{' '}
-          {loaderData.gitMode === 'GITLAB'
+          {(pendingClassroom ?? classroom)?.git_organization?.provider === 'GITLAB'
             ? 'Once you accept, you will get your Gitlab repositories right away.'
             : 'Once you accept, you will be sent a Github invitation to join the organization.'}
         </p>

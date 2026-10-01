@@ -3,21 +3,11 @@ import getPrisma from '@classmoji/database';
 export type GitMode = 'GITHUB' | 'GITLAB';
 
 /**
- * The session's mode: the provider it signed in with (recorded on the session
- * row at sign-in). A password sign-in, or a session from before that was
- * recorded, falls back to `fallback`: Github when the user has it connected,
- * else Gitlab when they have that (see `fallbackMode`). A GitLab session is
- * shown only GitLab classrooms and GitLab identity; a Github session only
- * Github ones.
+ * Which provider's words and username apply. A person sees every classroom
+ * they belong to, Github and Gitlab alike, whichever way they signed in; inside
+ * a classroom its provider decides, and outside one this does: Github when they
+ * have it connected, else Gitlab when they have that.
  */
-export function sessionMode(session: unknown, fallback: GitMode | null | undefined): GitMode {
-  const recorded = (session as { session?: { sign_in_provider?: string | null } } | null)?.session
-    ?.sign_in_provider;
-  const mode = recorded ?? fallback ?? 'GITHUB';
-  return mode === 'GITLAB' ? 'GITLAB' : 'GITHUB';
-}
-
-/** Mode for a session that recorded none: Github if connected, else Gitlab if connected. */
 export const fallbackMode = (identity: { has_github: boolean; has_gitlab: boolean }): GitMode =>
   !identity.has_github && identity.has_gitlab ? 'GITLAB' : 'GITHUB';
 
@@ -31,15 +21,6 @@ export async function userFallbackMode(userId: string): Promise<GitMode> {
     has_github: accounts.some(a => a.provider_id === 'github'),
     has_gitlab: accounts.some(a => a.provider_id === 'gitlab'),
   });
-}
-
-/** The user's username on the mode's provider (their connected account's), if known. */
-export async function usernameForMode(userId: string, mode: GitMode): Promise<string | null> {
-  const account = await getPrisma().account.findFirst({
-    where: { user_id: userId, provider_id: mode.toLowerCase(), username: { not: null } },
-    select: { username: true },
-  });
-  return account?.username ?? null;
 }
 
 /** `/admin/<slug>/...`-style paths name a classroom as their second segment. */

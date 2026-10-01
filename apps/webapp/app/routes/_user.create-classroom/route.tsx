@@ -1,5 +1,14 @@
-import { redirect, useNavigate, useFetcher, useSearchParams, useRevalidator } from 'react-router';
-import { sessionMode, userFallbackMode } from '~/utils/sessionMode.server';
+import {
+  Link,
+  redirect,
+  useNavigate,
+  useFetcher,
+  useSearchParams,
+  useRevalidator,
+} from 'react-router';
+import { GithubOutlined } from '@ant-design/icons';
+import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
+import { fallbackMode } from '~/utils/sessionMode.server';
 import { useState, useEffect, useRef } from 'react';
 import { useForm, FormProvider } from 'react-hook-form';
 import { Button, Card, Alert, Steps, Spin } from 'antd';
@@ -27,10 +36,31 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   const authData = await getAuthSession(request);
 
   if (!authData) return redirect('/');
-  // The session's mode picks the side: a GitLab session creates GitLab
-  // classrooms, a Github session Github ones.
-  const gitMode = sessionMode(authData.session, await userFallbackMode(authData.userId));
+  // Which side to create on: `?provider=github|gitlab` (the switch at the top
+  // of the form), else the person's main account: Github if connected, else
+  // Gitlab.
+  const accounts = await getPrisma().account.findMany({
+    where: {
+      user_id: authData.userId,
+      provider_id: { in: ['github', 'gitlab'] },
+      username: { not: null },
+    },
+    select: { provider_id: true },
+  });
+  const hasGithubAccount = accounts.some(a => a.provider_id === 'github');
+  const requested = new URL(request.url).searchParams.get('provider');
+  const gitMode: 'GITHUB' | 'GITLAB' =
+    requested === 'gitlab'
+      ? 'GITLAB'
+      : requested === 'github'
+        ? 'GITHUB'
+        : fallbackMode({
+            has_github: hasGithubAccount,
+            has_gitlab: accounts.some(a => a.provider_id === 'gitlab'),
+          });
   const gitlab = await loadGitLabOptions(authData.userId);
+  // The sides this person can create on, for the switch.
+  const sides = { github: hasGithubAccount, gitlab: gitlab.enabled };
   if (gitMode === 'GITLAB') {
     // GitLab classrooms import from any class this user owns or teaches,
     // Github or GitLab. Quiz import follows the same rule as below.
@@ -42,6 +72,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       requiresGithub: true as const,
       gitMode,
       gitlab,
+      sides,
       importableClassrooms,
       quizzesVisible:
         isAIAgentConfigured() &&
@@ -49,7 +80,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         ClassmojiService.subscription.isSubscriptionActive(subscription),
     };
   }
-  if (!authData.token) return { requiresGithub: true as const, gitMode, gitlab };
+  if (!authData.token) return { requiresGithub: true as const, gitMode, gitlab, sides };
 
   const octokit = GitHubProvider.getUserOctokit(authData.token);
 
@@ -224,6 +255,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     requiresGithub: false as const,
     gitMode,
     gitlab,
+    sides,
     user,
     gitOrgs: gitOrgsWithAvatars,
     importableClassrooms,
@@ -234,9 +266,43 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
 type CreateClassroomData = Extract<Route.ComponentProps['loaderData'], { requiresGithub: false }>;
 
+/** Github / Gitlab: which side the new classroom goes on. */
+const ProviderSwitch = ({ current }: { current: 'github' | 'gitlab' }) => {
+  const option = (value: 'github' | 'gitlab', label: React.ReactNode) => (
+    <Link
+      to={`/create-classroom?provider=${value}`}
+      replace
+      className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+        current === value
+          ? 'bg-white dark:bg-neutral-800 text-gray-900 dark:text-gray-100 shadow-sm'
+          : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
+      }`}
+    >
+      {label}
+    </Link>
+  );
+  return (
+    <div className="mb-6 inline-flex gap-1 rounded-lg bg-stone-100 dark:bg-neutral-900 p-1">
+      {option(
+        'github',
+        <>
+          <GithubOutlined /> Github
+        </>
+      )}
+      {option(
+        'gitlab',
+        <>
+          <GitlabLogo size={14} /> Gitlab
+        </>
+      )}
+    </div>
+  );
+};
+
 /**
  * A classroom lives on Github (an org with the Github App) or GitLab (a group
- * with a GitLab connection). Offer whichever this user has connected.
+ * with a GitLab connection). Offer whichever this user has connected; someone
+ * with both picks with the switch.
  */
 const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
   const isGitLabMode = loaderData.gitMode === 'GITLAB';
@@ -256,7 +322,12 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
     );
   }
 
-  // One side per session: its mode decides, so there is no Github/GitLab switch.
+  // Someone with both can create on either side.
+  const providerSwitch =
+    loaderData.sides.github && loaderData.sides.gitlab ? (
+      <ProviderSwitch current={isGitLabMode ? 'gitlab' : 'github'} />
+    ) : null;
+
   if (hasGitLab) {
     return (
       <GitLabClassroomForm
@@ -265,12 +336,15 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
           ('importableClassrooms' in loaderData ? loaderData.importableClassrooms : null) ?? []
         }
         quizzesVisible={'quizzesVisible' in loaderData ? Boolean(loaderData.quizzesVisible) : false}
-        providerSwitch={null}
+        providerSwitch={providerSwitch}
       />
     );
   }
   return (
-    <CreateClassroomForm loaderData={loaderData as CreateClassroomData} providerSwitch={null} />
+    <CreateClassroomForm
+      loaderData={loaderData as CreateClassroomData}
+      providerSwitch={providerSwitch}
+    />
   );
 };
 

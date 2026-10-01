@@ -101,7 +101,12 @@ export interface AppUser extends UserWithMemberships {
   has_github: boolean;
   /** A Gitlab account is connected. One of the two is required before joining a classroom. */
   has_gitlab: boolean;
-  /** The session's mode (the provider it signed in with); set by the root loader. */
+  /** The person's username on each provider (null where not connected). */
+  logins: { GITHUB: string | null; GITLAB: string | null };
+  /**
+   * The provider in effect (the current classroom's, else `fallbackMode`); set
+   * by the root loader, which also points `login` at that provider's username.
+   */
   provider?: 'GITHUB' | 'GITLAB';
   /** Has an email+password sign-in. */
   has_password: boolean;
