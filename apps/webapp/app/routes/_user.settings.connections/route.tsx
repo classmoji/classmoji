@@ -96,6 +96,8 @@ const GitLabConnectChooser = ({
   const [host, setHost] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  // A Gitlab Classmoji doesn't know yet: offer to set it up.
+  const [unknownHost, setUnknownHost] = useState<string | null>(null);
 
   const linkInstance = async (instanceId: string) => {
     const response = await fetch('/api/auth/gitlab-instance/link', {
@@ -133,6 +135,7 @@ const GitLabConnectChooser = ({
     if (!host.trim()) return;
     setBusy(true);
     setMessage(null);
+    setUnknownHost(null);
     const response = await fetch(
       `/api/gitlab-instances/lookup?host=${encodeURIComponent(host.trim())}`
     );
@@ -147,14 +150,16 @@ const GitLabConnectChooser = ({
       return;
     }
     setBusy(false);
+    if (body?.status === 'unknown') {
+      setUnknownHost(body.host);
+      return;
+    }
     setMessage(
-      body?.status === 'unknown'
-        ? `${new URL(body.host).host} isn't connected to Classmoji yet. It can be set up at /gitlab/setup.`
-        : body?.status === 'pending'
-          ? `${new URL(body.host).host} is waiting for Classmoji's approval. You can connect it once it is approved.`
-          : body?.status === 'disabled'
-            ? 'Sign-in with that Gitlab is turned off.'
-            : 'Enter your Gitlab address, like gitlab.school.edu'
+      body?.status === 'pending'
+        ? `${new URL(body.host).host} is waiting for Classmoji's approval. You can connect it once it is approved.`
+        : body?.status === 'disabled'
+          ? 'Sign-in with that Gitlab is turned off.'
+          : 'Enter your Gitlab address, like gitlab.school.edu'
     );
   };
 
@@ -180,6 +185,17 @@ const GitLabConnectChooser = ({
         </Button>
       </div>
       {message && <p className="text-xs text-red-600 dark:text-red-400">{message}</p>}
+      {unknownHost && (
+        <p className="text-xs text-ink-3">
+          {new URL(unknownHost).host} isn&apos;t connected to Classmoji yet.{' '}
+          <a
+            href={`/gitlab/setup?host=${encodeURIComponent(unknownHost)}`}
+            className="font-medium text-accent hover:underline"
+          >
+            Set it up
+          </a>
+        </p>
+      )}
     </div>
   );
 };
