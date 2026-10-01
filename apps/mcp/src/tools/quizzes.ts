@@ -38,6 +38,7 @@ import {
   MAX_EXCLUDED_PATHS,
   normalizeExcludedPaths,
 } from '@classmoji/utils/quiz-excluded-paths';
+import { MAX_STUDENT_TURNS } from '@classmoji/utils/quiz-agent/limits';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
@@ -210,7 +211,9 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
   description:
     'Creates an AI-conversation quiz. There is NO stored question bank: the AI generates and ' +
     'asks questions live from rubric_prompt (required) and system_prompt, and question_count ' +
-    'just tells it how many to ask. Set include_code_context to have it explore the student’s ' +
+    `just tells it how many to ask. Students can send up to ${MAX_STUDENT_TURNS} messages per ` +
+    `attempt; at ${MAX_STUDENT_TURNS} the attempt is submitted and unanswered questions count ` +
+    'as skipped. Set include_code_context to have it explore the student’s ' +
     'repository for the linked repo while questioning them; excluded_paths lists files it ' +
     'must never see there (e.g. tests/**). Link source material (the pages ' +
     'and decks the questions come from) with resource_link_add target_type quiz. ' +
@@ -360,7 +363,9 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
     'hiding it from students again) or CLOSED (stop new attempts); publishing must go through ' +
     'quiz_publish, because only that path notifies students. Set repository_id to null to unlink ' +
     'the repo, or due_date to null to clear the deadline. excluded_paths replaces the list ' +
-    '([] clears it). Editing prompts does not re-grade attempts already taken.',
+    '([] clears it). Editing prompts does not re-grade attempts already taken. Students can send ' +
+    `up to ${MAX_STUDENT_TURNS} messages per attempt; at ${MAX_STUDENT_TURNS} the attempt is ` +
+    'submitted and unanswered questions count as skipped.',
   scope: 'write',
   roles: QUIZ_STAFF,
   inputSchema: {

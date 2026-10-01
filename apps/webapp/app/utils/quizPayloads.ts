@@ -127,6 +127,11 @@ export interface AttemptDrawerView {
    * panel reads it); null otherwise.
    */
   evaluation_json: QuizEvaluationRecordV2 | null;
+  /**
+   * `turn_limit` when the server submitted the completed attempt at its
+   * message limit (the results panel says so); null otherwise.
+   */
+  ended_by: 'turn_limit' | null;
 }
 
 /**
@@ -182,24 +187,32 @@ const attemptQuestionResults = (
   return [...byNumber.values()].sort((a, b) => a.question_num - b.question_num);
 };
 
-export const attemptDrawerView = (attempt: {
-  id: string;
-  completed_at: Date | string | null;
-  total_duration_ms?: number | null;
-  unfocused_duration_ms?: number | null;
-  partial_credit_percentage?: number | null;
-  first_attempt_percentage?: number | null;
-  question_results_json?: unknown;
-  agent_config?: unknown;
-  agent_runtime?: string | null;
-  evaluation_json?: unknown;
-  quiz?: { question_count?: number | null } | null;
-}): AttemptDrawerView => {
+/**
+ * `endedBy` is how a chat-runtime attempt ended, read from its journal
+ * (quizChat.service, `messageLimitOf`): it is not an attempt column.
+ */
+export const attemptDrawerView = (
+  attempt: {
+    id: string;
+    completed_at: Date | string | null;
+    total_duration_ms?: number | null;
+    unfocused_duration_ms?: number | null;
+    partial_credit_percentage?: number | null;
+    first_attempt_percentage?: number | null;
+    question_results_json?: unknown;
+    agent_config?: unknown;
+    agent_runtime?: string | null;
+    evaluation_json?: unknown;
+    quiz?: { question_count?: number | null } | null;
+  },
+  { endedBy = null }: { endedBy?: 'turn_limit' | null } = {}
+): AttemptDrawerView => {
   // Scores are shown for a completed attempt only.
   const completed = Boolean(attempt.completed_at);
   return {
     agent_runtime: attempt.agent_runtime === 'trigger_chat' ? 'trigger_chat' : 'ai_agent',
     evaluation_json: completed ? evaluationRecord(attempt.evaluation_json) : null,
+    ended_by: completed && endedBy === 'turn_limit' ? 'turn_limit' : null,
     id: attempt.id,
     completed_at: attempt.completed_at,
     total_duration_ms: attempt.total_duration_ms ?? null,
