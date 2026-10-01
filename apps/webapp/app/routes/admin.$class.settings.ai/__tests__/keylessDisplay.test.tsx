@@ -81,6 +81,7 @@ const render = (
         },
       },
       availableModels: { anthropic: MODELS },
+      quizModels: MODELS,
       aiAgentAvailable,
       quizzesProRequired: extra.quizzesProRequired ?? false,
       askMojiProRequired: extra.askMojiProRequired ?? false,
