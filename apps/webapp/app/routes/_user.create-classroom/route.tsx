@@ -1,11 +1,4 @@
-import {
-  Link,
-  redirect,
-  useNavigate,
-  useFetcher,
-  useSearchParams,
-  useRevalidator,
-} from 'react-router';
+import { redirect, useNavigate, useFetcher, useSearchParams, useRevalidator } from 'react-router';
 import { GithubOutlined } from '@ant-design/icons';
 import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 import { fallbackMode } from '~/utils/sessionMode.server';
@@ -268,18 +261,21 @@ type CreateClassroomData = Extract<Route.ComponentProps['loaderData'], { require
 
 /** Github / Gitlab: which side the new classroom goes on. */
 const ProviderSwitch = ({ current }: { current: 'github' | 'gitlab' }) => {
+  const navigate = useNavigate();
+  // Buttons, not links: the global link color would turn them blue.
   const option = (value: 'github' | 'gitlab', label: React.ReactNode) => (
-    <Link
-      to={`/create-classroom?provider=${value}`}
-      replace
-      className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+    <button
+      type="button"
+      aria-pressed={current === value}
+      onClick={() => navigate(`/create-classroom?provider=${value}`, { replace: true })}
+      className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer ${
         current === value
           ? 'bg-white dark:bg-neutral-800 text-gray-900 dark:text-gray-100 shadow-sm'
           : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
       }`}
     >
       {label}
-    </Link>
+    </button>
   );
   return (
     <div className="mb-6 inline-flex gap-1 rounded-lg bg-stone-100 dark:bg-neutral-900 p-1">

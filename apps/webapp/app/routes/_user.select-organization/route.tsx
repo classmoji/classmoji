@@ -331,6 +331,7 @@ function buildLandingClasses(memberships: LandingMembership[]): LandingClass[] {
         subtitle: '',
         slug: `@${gitLogin}/${orgLogin}`,
         githubOrg: gitLogin,
+        provider: org.git_organization?.provider === 'GITLAB' ? 'GITLAB' : 'GITHUB',
         role: deriveRole(m.role, m.has_accepted_invite),
         hue: hashHue(org.id),
         avatar:

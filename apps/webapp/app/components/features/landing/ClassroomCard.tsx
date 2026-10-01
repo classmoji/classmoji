@@ -5,6 +5,8 @@ import { ClassMark } from './ClassMark';
 import { RoleChip } from './RoleChip';
 import type { LandingClass } from './types';
 import { useClassroomStatusModals } from '~/utils/classroomStatusModals';
+import { IconGithub } from '@classmoji/ui-components';
+import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 
 interface ClassroomCardProps {
   c: LandingClass;
@@ -173,6 +175,14 @@ export function ClassroomCard({
               Unpublished
             </span>
           )}
+          {/* Where the class lives. */}
+          <span
+            className="ml-auto inline-flex text-ink-3"
+            title={c.provider === 'GITLAB' ? 'Gitlab classroom' : 'Github classroom'}
+            aria-label={c.provider === 'GITLAB' ? 'Gitlab classroom' : 'Github classroom'}
+          >
+            {c.provider === 'GITLAB' ? <GitlabLogo size={16} /> : <IconGithub size={16} />}
+          </span>
         </div>
       </div>
     </div>
