@@ -91,12 +91,21 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       )
     : null;
 
+  // A chat attempt's message limit: the messages it still admits (the chat's
+  // countdown) and whether the server submitted it at the limit (the results
+  // say so).
+  const messageLimit = isChatAttempt
+    ? await ClassmojiService.quizChat.messageLimitOf(attemptData.attempt.id)
+    : null;
+
   // 9. Send only what the drawer and QuizAttemptInterface read — see
   // ~/utils/quizPayloads. Both rows arrive joined to much more: the attempt to
   // its user, quiz and classroom; the quiz to every attempt and its user.
   return {
     quiz: quizDrawerView(quiz),
-    attempt: attemptDrawerView(attemptData.attempt),
+    attempt: attemptDrawerView(attemptData.attempt, {
+      endedBy: messageLimit?.endedBy ?? null,
+    }),
     // Use unified messages from getAttemptWithMessages (ai-agent owns persistence)
     messages: isChatAttempt ? [] : attemptData.messages || [],
     transcript,
@@ -106,6 +115,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     // When the attempt last admitted a turn, as timestamps only: an opening
     // admitted longer ago than a turn can run, with nothing saved, is lost.
     chatActivity: isChatAttempt ? chatActivityView(attemptData.attempt) : null,
+    // How many more messages an open chat attempt admits: a count only.
+    messagesLeft: messageLimit && !readOnly ? messageLimit.messagesLeft : null,
     viewerOwnsAttempt,
     userLogin: attemptData.attempt.user?.login || null,
     userImage: attemptData.attempt.user?.image || null,

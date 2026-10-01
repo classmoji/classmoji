@@ -19,6 +19,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
+import { MAX_STUDENT_TURNS } from '@classmoji/utils/quiz-agent/limits';
 import type { ToolContext } from '../../mcp/registry.ts';
 
 const mocks = vi.hoisted(() => ({
@@ -267,6 +268,16 @@ describe('course_search_enabled (quiz source material, Stage 2 tier)', () => {
       expect(new TextEncoder().encode(tool.description).length, tool.name).toBeLessThan(1500);
     }
     expect(quizCreateTool.description).toContain('resource_link_add');
+  });
+
+  it('states the per-attempt message limit from the shared constant', () => {
+    expect(MAX_STUDENT_TURNS).toBe(200);
+    for (const tool of [quizCreateTool, quizUpdateTool]) {
+      expect(tool.description, tool.name).toContain(
+        `Students can send up to ${MAX_STUDENT_TURNS} messages per attempt; at ` +
+          `${MAX_STUDENT_TURNS} the attempt is submitted and unanswered questions count as skipped.`
+      );
+    }
   });
 });
 

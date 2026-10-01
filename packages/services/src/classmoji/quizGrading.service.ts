@@ -954,15 +954,19 @@ export const completeLocked = async (
 };
 
 /**
- * Complete the attempt at the per-attempt message limit, for admission
- * (quizChat.service), which holds the row lock in `tx`: a fresh turn fence
- * first, so no earlier turn can write after it, then `completeLocked` with
- * `endedBy: 'turn_limit'`. Returns the evaluation record.
+ * Complete the attempt at the per-attempt message limit, for quizChat.service
+ * (at the end of the turn that answered the last admitted message, and in
+ * admission for a message after it), which holds the row lock in `tx`: a
+ * fresh turn fence first, so no earlier turn can write after it, then
+ * `completeLocked` with `endedBy: 'turn_limit'`. `inputMessageId` is the last
+ * admitted message whose turn ended the attempt, for its journal rows; null
+ * from admission. Returns the evaluation record.
  */
 export const completeAtTurnLimit = async (
   tx: Tx,
   attempt: LockedAttempt,
-  runId: string
+  runId: string,
+  inputMessageId: string | null = null
 ): Promise<QuizEvaluationRecordV2> => {
   const fence = newFence();
   await tx.quizAttempt.update({ where: { id: attempt.id }, data: { turn_fence: fence } });
@@ -970,7 +974,7 @@ export const completeAtTurnLimit = async (
   return completeLocked(
     tx,
     attempt,
-    { attemptId: attempt.id, fence, inputMessageId: null, runId },
+    { attemptId: attempt.id, fence, inputMessageId, runId },
     { source: 'server', endedBy: 'turn_limit' }
   );
 };

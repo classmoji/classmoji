@@ -10,7 +10,11 @@
  *   appended to the runtime chain).
  * - `run()` builds the turn's context from Neon and pipes the projected
  *   stream from `runQuizTurn` (loop.ts).
- * - `onBeforeTurnComplete` closes the session once the attempt is complete.
+ * - `onBeforeTurnComplete` closes the session once the attempt is complete:
+ *   by its evaluation, or submitted at the message limit at the end of the
+ *   turn that answered the last admitted message (loop.ts). The close rides
+ *   out on the turn's final record, so the chat stops taking messages and
+ *   refreshes into the results.
  * - Every callback is sanitized: whatever it throws leaves as fixed copy.
  */
 import { chat } from '@trigger.dev/sdk/ai';
@@ -155,6 +159,7 @@ export const quizAttemptAgent = chat.agent({
           persistAssistant: (attemptId, message, o) =>
             ClassmojiService.quizChat.persistAssistantMessage(attemptId, message, o),
           evaluationNotice,
+          submitAtLimit: f => ClassmojiService.quizChat.submitAtMessageLimit(f),
           cleanupParts: message => chat.cleanupAbortedParts(message),
           log,
         },

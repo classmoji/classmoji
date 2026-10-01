@@ -79,6 +79,8 @@ export type AdmissionDeps = {
     fence: string;
     inputMessageId: string;
     action?: 'next' | 'try_again';
+    /** The messages the attempt admits after this one (the journal's count). */
+    messagesLeft?: number;
   }>;
   admitAction: (i: { attemptId: string; runId: string }) => Promise<{ fence: string }>;
   loadCanonicalMessages: (attemptId: string) => Promise<QuizUIMessage[]>;
@@ -153,6 +155,9 @@ export async function admitTurn(
         inputMessageId: admitted.inputMessageId,
         runId,
         ...(admitted.action ? { action: admitted.action } : {}),
+        ...(typeof admitted.messagesLeft === 'number'
+          ? { messagesLeft: admitted.messagesLeft }
+          : {}),
       });
     }
   } catch (error) {

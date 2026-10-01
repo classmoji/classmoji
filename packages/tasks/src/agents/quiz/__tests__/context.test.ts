@@ -74,6 +74,24 @@ beforeEach(() => {
   fakes.findById.mockResolvedValue(attempt());
 });
 
+describe("loadAttemptContext: admission's count of the messages left", () => {
+  it('carries it into the turn, and none for a turn without it', async () => {
+    fakes.findByStudent.mockResolvedValue({ name: 'landing-page' });
+    const ctx = await loadAttemptContext(
+      'attempt-1',
+      { ...admission, messagesLeft: 7 },
+      { log: vi.fn(), env }
+    );
+    expect(ctx.messagesLeft).toBe(7);
+    const begin = await loadAttemptContext(
+      'attempt-1',
+      { ...admission, inputMessageId: null },
+      { log: vi.fn(), env }
+    );
+    expect(begin).not.toHaveProperty('messagesLeft');
+  });
+});
+
 describe('loadAttemptContext for a code-aware quiz', () => {
   it('runs without exploration and flags the missing code when no repository is found', async () => {
     fakes.findByStudent.mockResolvedValue(null);

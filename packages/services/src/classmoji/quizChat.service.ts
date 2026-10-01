@@ -21,12 +21,14 @@
 import getPrisma from '@classmoji/database';
 import type { Prisma } from '@prisma/client';
 import {
+  MAX_STUDENT_TURNS,
   buildTurnStatus,
   buttonActionFor,
   projectTranscript,
   quizStaffVisibility,
   quizVisibility,
   type AttemptProgress,
+  type QuizEvaluationRecordV2,
   type QuizUIMessage,
 } from '@classmoji/utils/quiz-agent';
 import { quizzesVisible } from './entitlement.service.ts';
@@ -90,13 +92,15 @@ export const isQuizChatRefusal = (error: unknown): error is QuizChatRefusal =>
 export const MAX_STUDENT_MESSAGE_CHARS = 10_000;
 
 /**
- * The most student messages (button clicks included) one attempt admits: a
- * safety net far above what any quiz takes, not a budget a student works
- * within. The next one completes the attempt from the results recorded so
- * far, every other question counted as skipped (`completeAtTurnLimit`), and
- * is refused for good (`turn_limit`).
+ * The most student messages (button clicks included) one attempt admits
+ * (@classmoji/utils/quiz-agent, shared with the screens that state it). The
+ * turn that answers the last of them submits the attempt as it ends
+ * (`submitAtMessageLimit`): the results recorded so far, every other question
+ * counted as skipped (`completeAtTurnLimit`). A message after it is refused
+ * for good (`turn_limit`), and completes the attempt the same way if it is
+ * still open.
  */
-export const MAX_STUDENT_TURNS = 200;
+export { MAX_STUDENT_TURNS };
 
 /**
  * The shortest time between two admitted turns of one attempt, measured from
@@ -347,18 +351,25 @@ const revalidate = async (
 };
 
 /**
- * Whether the attempt has admitted `MAX_STUDENT_TURNS` student messages
- * already, read from the journal under the attempt row lock, so it holds
+ * The student messages the attempt has admitted, read from the journal
+ * (`input_admitted` rows of kind `message`; the begin action is not one, a
+ * refused message never has a row). Under the attempt row lock it holds
  * across processes. The count never goes down.
  */
-const turnLimitReached = async (tx: Tx, attemptId: string): Promise<boolean> =>
-  (await tx.quizAttemptEvent.count({
+const admittedStudentMessages = (
+  db: Pick<Tx, 'quizAttemptEvent'>,
+  attemptId: string
+): Promise<number> =>
+  db.quizAttemptEvent.count({
     where: {
       attempt_id: attemptId,
       type: 'input_admitted',
       payload: { path: ['kind'], equals: 'message' },
     },
-  })) >= MAX_STUDENT_TURNS;
+  });
+
+/** The messages an attempt that has admitted `admitted` can still take, never below 0. */
+const messagesLeftAfter = (admitted: number): number => Math.max(MAX_STUDENT_TURNS - admitted, 0);
 
 /**
  * Refuse a new student message sent less than `MIN_TURN_INTERVAL_MS` after
@@ -388,12 +399,16 @@ const actionFor = buttonActionFor;
 
 // ─── Admission ──────────────────────────────────────────────────────────────
 
-/** An admitted (or re-delivered) student message: the turn's fence and input id. */
+/**
+ * An admitted (or re-delivered) student message: the turn's fence and input
+ * id, and how many more messages the attempt admits after it.
+ */
 type AdmittedMessage = {
   status: 'admitted' | 'redelivered';
   fence: string;
   inputMessageId: string;
   action?: 'next' | 'try_again';
+  messagesLeft: number;
 };
 
 /** What admission's transaction decided: a message, or the turn limit (the attempt completed). */
@@ -411,15 +426,20 @@ type AdmissionOutcome = AdmittedMessage | { status: 'turn_limit' };
  *   saved a partial reply (stopped or failed), which is refused;
  * - an id already used with different text, or an older admitted id, is
  *   refused (`message_conflict`);
- * - a new message once the attempt has admitted `MAX_STUDENT_TURNS` completes
- *   the attempt (`completeAtTurnLimit`: the results recorded so far, every
- *   other question skipped) and is refused for good (`turn_limit`); the
- *   completion is committed before the refusal is thrown;
+ * - a new message once the attempt has admitted `MAX_STUDENT_TURNS` is refused
+ *   for good (`turn_limit`). The turn that answered the last admitted message
+ *   has normally submitted the attempt already (`submitAtMessageLimit`); if it
+ *   is still open, this completes it (`completeAtTurnLimit`: the results
+ *   recorded so far, every other question skipped), committed before the
+ *   refusal is thrown;
  * - a new message within `MIN_TURN_INTERVAL_MS` of the previous admission is
  *   refused for now (`too_fast`);
  * - otherwise the user row is written with parts `[student text, turn status]`
  *   (`metadata.hiddenPartIndexes: [1]`, and `action` when the text is a
  *   button's), an `input_admitted` journal row, and a fresh fence.
+ *
+ * Either way it returns `messagesLeft`: the messages the attempt admits after
+ * this one, from the journal count (a re-delivery adds nothing to it).
  */
 export const admitStudentMessage = async (i: {
   attemptId: string;
@@ -512,6 +532,7 @@ export const admitStudentMessage = async (i: {
         fence,
         inputMessageId: id,
         ...(action ? { action } : {}),
+        messagesLeft: messagesLeftAfter(await admittedStudentMessages(tx, attempt.id)),
       };
     }
 
@@ -523,7 +544,8 @@ export const admitStudentMessage = async (i: {
       select: { id: true },
     });
     if (clash) throw new QuizChatRefusal('temporary', 'message_conflict');
-    if (await turnLimitReached(tx, attempt.id)) {
+    const admittedBefore = await admittedStudentMessages(tx, attempt.id);
+    if (admittedBefore >= MAX_STUDENT_TURNS) {
       await completeAtTurnLimit(tx, attempt, i.runId);
       return { status: 'turn_limit' as const };
     }
@@ -575,12 +597,45 @@ export const admitStudentMessage = async (i: {
       fence,
       inputMessageId: id,
       ...(action ? { action } : {}),
+      messagesLeft: messagesLeftAfter(admittedBefore + 1),
     };
   }, LOCKED_TX_OPTIONS);
   // Thrown only now, so the completion it follows is committed.
   if (outcome.status === 'turn_limit') throw new QuizChatRefusal('permanent', 'turn_limit');
   return outcome;
 };
+
+/**
+ * Submit the attempt once the turn that answered its last admitted message
+ * (the `MAX_STUDENT_TURNS`th) has ended, however it ended (finished, failed or
+ * stopped): the quiz agent calls this after the turn's reply is saved. In one
+ * transaction under the attempt row lock, it changes nothing and returns null
+ * when:
+ * - the attempt is gone, on another runtime, or already complete (the turn's
+ *   own evaluation, or the server's completion from the recorded results);
+ * - a newer turn holds the attempt (`f.fence` is not its turn fence): that
+ *   turn submits it when it ends;
+ * - fewer than `MAX_STUDENT_TURNS` student messages are admitted (the journal's
+ *   count, not the caller's).
+ *
+ * Otherwise it completes the attempt with `completeAtTurnLimit` (the results
+ * recorded so far, every other question counted as skipped, the open one
+ * included, `ended_by: 'turn_limit'`) and returns the evaluation record.
+ */
+export const submitAtMessageLimit = (f: {
+  attemptId: string;
+  fence: string;
+  inputMessageId: string | null;
+  runId: string;
+}): Promise<QuizEvaluationRecordV2 | null> =>
+  getPrisma().$transaction(async (tx): Promise<QuizEvaluationRecordV2 | null> => {
+    const attempt = await lockAttempt(tx, f.attemptId);
+    if (!attempt || attempt.agent_runtime !== TRIGGER_CHAT_RUNTIME) return null;
+    if (attempt.completed_at) return null;
+    if (!f.fence || attempt.turn_fence !== f.fence) return null;
+    if ((await admittedStudentMessages(tx, attempt.id)) < MAX_STUDENT_TURNS) return null;
+    return completeAtTurnLimit(tx, attempt, f.runId, f.inputMessageId);
+  }, LOCKED_TX_OPTIONS);
 
 /**
  * Admit the `begin` action: the same revalidation, refused once a question has
@@ -863,6 +918,39 @@ export const loadTranscriptForViewer = async (
     await loadCanonicalMessages(attemptId),
     viewer === 'staff' ? quizStaffVisibility : quizVisibility
   ) as QuizUIMessage[];
+
+/**
+ * What the attempt drawer states about the message limit. An open attempt:
+ * the messages it still admits (`MAX_STUDENT_TURNS` less the admitted ones,
+ * never below 0), `endedBy: null`. A completed one admits none
+ * (`messagesLeft: 0`, not counted), and `endedBy` is `'turn_limit'` when the
+ * server submitted it at the limit (its `evaluation_completed` journal row
+ * says so), else null. No lock: each value only ever moves one way.
+ */
+export const messageLimitOf = async (
+  attemptId: string
+): Promise<{ messagesLeft: number; endedBy: 'turn_limit' | null }> => {
+  const prisma = getPrisma();
+  const attempt = await prisma.quizAttempt.findUnique({
+    where: { id: attemptId },
+    select: { completed_at: true },
+  });
+  if (!attempt?.completed_at) {
+    return {
+      messagesLeft: messagesLeftAfter(await admittedStudentMessages(prisma, attemptId)),
+      endedBy: null,
+    };
+  }
+  const endedAtLimit = await prisma.quizAttemptEvent.findFirst({
+    where: {
+      attempt_id: attemptId,
+      type: 'evaluation_completed',
+      payload: { path: ['ended_by'], equals: 'turn_limit' },
+    },
+    select: { id: true },
+  });
+  return { messagesLeft: 0, endedBy: endedAtLimit ? 'turn_limit' : null };
+};
 
 /** `ai_conversations.context.runtime`, or null before the first save. */
 export const readRuntimeState = async (attemptId: string): Promise<QuizChatRuntimeState | null> => {

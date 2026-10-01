@@ -50,11 +50,20 @@ export const NOTICE_CODES = [
 
 export const NoticeDataSchema = z.object({ code: z.enum(NOTICE_CODES) });
 
+/**
+ * How many more student messages the attempt admits (`MAX_STUDENT_TURNS` less
+ * the admitted ones), as admission counted them for this turn. Sent transient
+ * at the start of each reply to a student message: the chat reads it, and it
+ * is never part of a stored message.
+ */
+export const MessagesLeftDataSchema = z.object({ remaining: z.number().int().min(0) });
+
 /** Every data part the quiz agent may send; the projection drops any other. */
 export const quizDataPartSchemas = {
   'question-result': QuestionResultDataSchema,
   step: StepDataSchema,
   notice: NoticeDataSchema,
+  'messages-left': MessagesLeftDataSchema,
   /** Written only when the server completes the attempt from the recorded results. */
   evaluation: QuizEvaluationRecordV2Schema,
 };
@@ -63,6 +72,7 @@ export type QuizDataParts = {
   'question-result': z.infer<typeof QuestionResultDataSchema>;
   step: z.infer<typeof StepDataSchema>;
   notice: z.infer<typeof NoticeDataSchema>;
+  'messages-left': z.infer<typeof MessagesLeftDataSchema>;
   evaluation: z.infer<typeof QuizEvaluationRecordV2Schema>;
 };
 
