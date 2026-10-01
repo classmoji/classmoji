@@ -660,7 +660,7 @@ const FormModule = ({
                   }
                   description={
                     gitlabRunner === 'none'
-                      ? 'Ask your Gitlab admin to enable shared runners or register a runner for your group. Classmoji adds the tests to student projects once a runner is available (use Autograde on the repository to push them).'
+                      ? 'Ask your Gitlab admin to enable shared runners or register a runner for your group. Classmoji adds the tests to student repositories once a runner is available (use Autograde on the repository to push them).'
                       : undefined
                   }
                 />

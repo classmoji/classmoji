@@ -519,7 +519,7 @@ const SubmissionsTable = ({
                             }}
                           >
                             {web.isGitLab
-                              ? 'Also delete the Gitlab project'
+                              ? 'Also delete the Gitlab repository'
                               : 'Also delete the Github repository'}
                             <span className="block text-xs text-ink-3">
                               Permanent, and removes every other assignment&rsquo;s submission on

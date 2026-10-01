@@ -43,29 +43,30 @@ export function gitContextFor(classroom: ClassroomLike | null | undefined): GitW
 }
 
 /**
- * The words each provider uses for the same things. Copy that names a repo,
- * pull request or organization reads from here so Gitlab classrooms say
- * project, merge request and group.
+ * The words copy uses for each provider. Classmoji's own vocabulary is
+ * Github's on both: repository, pull request, issue. Only what names a real
+ * place in Gitlab's interface differs: the platform, the group a class lives
+ * in, and the tab that shows a change's diff.
  */
 export function gitTerms(isGitLab: boolean) {
   return isGitLab
     ? {
         platform: 'Gitlab',
-        repo: 'project',
-        repos: 'projects',
-        Repo: 'Project',
-        Repos: 'Projects',
-        pr: 'merge request',
-        prs: 'merge requests',
-        PR: 'Merge request',
-        prShort: 'MR',
+        repo: 'repository',
+        repos: 'repositories',
+        Repo: 'Repository',
+        Repos: 'Repositories',
+        pr: 'pull request',
+        prs: 'pull requests',
+        PR: 'Pull request',
+        prShort: 'PR',
         org: 'group',
         Org: 'Group',
         changesTab: 'Changes',
-        issue: 'work item',
-        issues: 'work items',
-        Issue: 'Work item',
-        anIssue: 'a work item',
+        issue: 'issue',
+        issues: 'issues',
+        Issue: 'Issue',
+        anIssue: 'an issue',
       }
     : {
         platform: 'Github',

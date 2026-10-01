@@ -47,13 +47,13 @@ interface FeatureStep {
  */
 const GITLAB_DESCRIPTIONS: Record<string, string> = {
   'Add an assignment':
-    'Use Add item to place a page or slide deck in the module, or to create an assignment. An assignment is what gets graded: it has a weight and a due date, and students submit through a project (their last push before the deadline, or closing its issue), a quiz, or a form.',
+    'Use Add item to place a page or slide deck in the module, or to create an assignment. An assignment is what gets graded: it has a weight and a due date, and students submit through a repository (their last push before the deadline, or closing its issue), a quiz, or a form.',
   Repositories:
-    'A project is a Gitlab template that Classmoji copies to every student, or every team for group work, when you publish it. Copies live in your class subgroup, under Projects. Assignments in any module can submit through the same project, so a semester-long project can carry several of them.',
+    'A repository is a Gitlab template that Classmoji copies to every student, or every team for group work, when you publish it. Copies live in your class subgroup, under projects. Assignments in any module can submit through the same repository, so a semester-long project repo can carry several of them.',
   'Name the repository':
-    'Type the project title, which becomes the Gitlab project name in lowercase with dashes.',
+    'Type the repository title, which becomes the Gitlab repository name in lowercase with dashes.',
   'Your roster':
-    'The roster lists everyone enrolled. On Gitlab there is no invite to accept: students with a Gitlab account are active right away and get their projects. This is where you review enrollment and remove students or revoke invites.',
+    'The roster lists everyone enrolled. On Gitlab there is no invite to accept: students with a Gitlab account are active right away and get their repositories. This is where you review enrollment and remove students or revoke invites.',
   'Add students':
     'Add Students lets you paste a list of names and emails, one per line, often straight from your school’s system. Existing Classmoji users are enrolled right away, while new users get an email to join and are set up when they first sign in with Gitlab.',
   'Team name': 'Type the name for the new team, which becomes its Gitlab subgroup under Teams.',
@@ -62,10 +62,10 @@ const GITLAB_DESCRIPTIONS: Record<string, string> = {
   'Create team':
     'Click to create the team as a Gitlab subgroup in your class and add it to the classroom.',
   'Teaching staff':
-    'Your teaching staff help you run and grade the class. You add someone by Gitlab username, and they get access to every project in the class subgroup. Then assign them specific submissions to grade. This spreads grading across your staff so it scales even in a large course.',
+    'Your teaching staff help you run and grade the class. You add someone by Gitlab username, and they get access to every repository in the class subgroup. Then assign them specific submissions to grade. This spreads grading across your staff so it scales even in a large course.',
   'Add staff': 'Invite an assistant, a teacher or a co-owner to this classroom by Gitlab username.',
   Pages:
-    'Pages are course material you write and publish for students, such as the syllabus, lecture notes, assignment specs, or reference guides. They are stored in your class’s Content project on Gitlab, so your content lives in the same Git-native setup as the rest of the class.',
+    'Pages are course material you write and publish for students, such as the syllabus, lecture notes, assignment specs, or reference guides. They are stored in your class’s Content repository on Gitlab, so your content lives in the same Git-native setup as the rest of the class.',
 };
 
 const OWNER_STEPS: FeatureStep[] = [

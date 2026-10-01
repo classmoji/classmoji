@@ -43,7 +43,7 @@ export function orgGit(ctx: ToolContext): GitWebContext | null {
   return classroom.git_organization?.login ? gitContextFor(classroom) : null;
 }
 
-/** The classroom's words for repos, PRs and orgs (project/merge request/group on Gitlab). */
+/** The classroom's words for repos, PRs and orgs (Github's on both; the org is a group on Gitlab). */
 export function gitTermsFor(ctx: ToolContext) {
   return gitTerms(orgGit(ctx)?.provider === 'GITLAB');
 }

@@ -348,7 +348,7 @@ export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
   annotations: { destructive: false, openWorld: true },
   title: 'Create an assignment container (repo)',
   description:
-    'Creates an UNPUBLISHED repository (a Github repo or Gitlab project template students are provisioned from). ' +
+    'Creates an UNPUBLISHED repository (a Github or Gitlab repository template students are provisioned from). ' +
     'Owner only. A repository has no module: it is the submission target of REPO assignments, ' +
     'which live in modules. No student git repos are created — the repo starts hidden; attach ' +
     'assignments with assignment_create (module_id + repository_id), then provision student repos ' +

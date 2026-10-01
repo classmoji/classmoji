@@ -141,7 +141,7 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
         title={web.isGitLab ? 'Content Project' : 'Content Repository'}
         description={
           web.isGitLab
-            ? 'Your course content (slides, pages, syllabus) is stored in a Gitlab project.'
+            ? 'Your course content (slides, pages, syllabus) is stored in a Gitlab repository.'
             : 'Your course content (slides, pages, syllabus) is stored in a Github repository.'
         }
       >

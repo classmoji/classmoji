@@ -74,7 +74,7 @@ export const graderAssignTool: ToolDefinition<GraderArgs> = {
   title: 'Assign a grader',
   description:
     'Assigns a grader to one submission and mirrors them onto the Github issue assignees ' +
-    '(Gitlab work items are left unassigned: one assignee per work item on its free plan), like ' +
+    '(Gitlab issues are left unassigned: one assignee per issue on its free plan), like ' +
     'the web assignment page. Owner or teacher. The grader must be an ASSISTANT or ' +
     'TEACHER of this classroom marked as a grader (is_grader) — an owner, or staff without ' +
     'is_grader, is refused; staff_update sets is_grader. git_repo_assignment_id is the `id` from ' +

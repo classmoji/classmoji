@@ -574,7 +574,7 @@ const SelectOrganization = ({
           </span>
           .{' '}
           {loaderData.gitMode === 'GITLAB'
-            ? 'Once you accept, you will get your Gitlab project(s) right away.'
+            ? 'Once you accept, you will get your Gitlab repositories right away.'
             : 'Once you accept, you will be sent a Github invitation to join the organization.'}
         </p>
       </Modal>
@@ -644,7 +644,7 @@ export const action = checkAuth(
         gitOrganizationId: classroom.git_organization.id,
       });
       return {
-        success: "You're in. Your Gitlab projects are being created.",
+        success: "You're in. Your Gitlab repositories are being created.",
         action: ActionTypes.SEND_INVITATION,
       };
     }
