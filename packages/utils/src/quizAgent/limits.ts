@@ -29,3 +29,27 @@ export const MESSAGES_LEFT_NOTICE_AT = 20;
  * limit; this leaves room for about 800 of those in one run.
  */
 export const QUIZ_RUN_MAX_TURNS = 1_000;
+
+/**
+ * The quiz agent run's `maxDuration`, in seconds of compute. Trigger.dev
+ * counts the time a run is working or waiting warm (the idle wait after a
+ * turn), not the time it is suspended waiting for a message.
+ */
+export const QUIZ_RUN_MAX_DURATION_SECONDS = 3_600;
+
+/**
+ * The compute a run keeps in hand when it ends between turns: room for one
+ * more turn and the wait before it. 240 s for a turn at its deadline (every
+ * call and tool of the turn), 10 s of idle wait before it, and 50 s for the
+ * work outside that deadline (admission, saving the reply, the turn's last
+ * writes): 300 s.
+ */
+export const QUIZ_RUN_ROLLOVER_MARGIN_MS = 300_000;
+
+/**
+ * The compute after which a quiz run ends once its turn is over, so it never
+ * reaches its `maxDuration` mid-turn: 3,600 s less the 300 s margin, 3,300 s.
+ * The next message starts a new run on the same conversation.
+ */
+export const QUIZ_RUN_COMPUTE_BUDGET_MS =
+  QUIZ_RUN_MAX_DURATION_SECONDS * 1_000 - QUIZ_RUN_ROLLOVER_MARGIN_MS;

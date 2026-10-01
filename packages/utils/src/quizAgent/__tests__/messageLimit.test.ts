@@ -22,6 +22,7 @@ describe('the message limit', () => {
     expect(MESSAGES_LEFT_NOTICE_AT).toBe(20);
     expect(limits.MAX_STUDENT_TURNS).toBe(MAX_STUDENT_TURNS);
     expect(limits.QUIZ_RUN_MAX_TURNS).toBe(QUIZ_RUN_MAX_TURNS);
+    expect(limits.QUIZ_RUN_COMPUTE_BUDGET_MS).toBe(3_300_000);
     expect(copy.QUIZ_MESSAGE_LIMIT_COPY).toBe(QUIZ_MESSAGE_LIMIT_COPY);
   });
 
