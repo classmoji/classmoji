@@ -253,7 +253,8 @@ export function ClassroomsLandingScreen({
           {gitMode === 'GITHUB' && (
             <Link to="/import-classroom" data-onboarding="import">
               <Button>
-                <IconGithub size={14} /> Import from GitHub Classroom
+                <IconGithub size={14} className="text-gray-900 dark:text-gray-100" /> Import from
+                GitHub Classroom
               </Button>
             </Link>
           )}

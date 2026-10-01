@@ -5,10 +5,10 @@ type ProviderKey = 'GITHUB' | 'GITLAB';
 
 const PROVIDERS: Record<ProviderKey, { label: string; icon: React.ReactNode; classes: string }> = {
   GITHUB: {
-    label: 'GitHub',
+    label: 'Github',
     icon: <GithubFilled style={{ fontSize: 12 }} />,
     classes:
-      'text-gray-700 bg-gray-100 border-gray-200 dark:text-gray-300 dark:bg-neutral-800 dark:border-neutral-700',
+      'text-gray-900 bg-gray-100 border-gray-200 dark:text-gray-100 dark:bg-neutral-800 dark:border-neutral-700',
   },
   GITLAB: {
     label: 'Gitlab',

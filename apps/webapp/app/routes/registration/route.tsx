@@ -408,7 +408,11 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
                   <Form.Item
                     label={
                       <span className="flex items-center gap-2 font-medium text-gray-700 text-sm">
-                        {isGitLab ? <GitlabLogo size={14} /> : <GithubOutlined />}
+                        {isGitLab ? (
+                          <GitlabLogo size={14} />
+                        ) : (
+                          <GithubOutlined className="text-gray-900 dark:text-gray-100" />
+                        )}
                         {isGitLab ? 'Gitlab Username' : 'Github Username'}
                       </span>
                     }

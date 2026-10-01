@@ -197,7 +197,11 @@ const TeamPanel = ({
             rel="noreferrer"
             className="inline-flex items-center gap-1.5 text-xs font-medium text-white px-3 py-1.5 rounded-full bg-gray-900 dark:bg-gray-100 dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors"
           >
-            {web.isGitLab ? <GitlabLogo size={14} /> : <IconBrandGithub size={14} />}
+            {web.isGitLab ? (
+              <GitlabLogo size={14} />
+            ) : (
+              <IconBrandGithub size={14} className="text-gray-900 dark:text-gray-100" />
+            )}
             Go to repo
             <IconArrowRight size={12} />
           </a>

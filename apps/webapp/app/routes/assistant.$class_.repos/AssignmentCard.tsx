@@ -152,7 +152,11 @@ const AssignmentCard = ({
               aria-label={`View ${repoWeb.label} issue`}
               className="inline-flex items-center justify-center w-7 h-7 rounded-md text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-stone-100 dark:hover:bg-neutral-700 transition-colors"
             >
-              {repoWeb.isGitLab ? <GitlabLogo size={16} /> : <IconBrandGithub size={16} />}
+              {repoWeb.isGitLab ? (
+                <GitlabLogo size={16} />
+              ) : (
+                <IconBrandGithub size={16} className="text-gray-900 dark:text-gray-100" />
+              )}
             </a>
           )}
         </div>

@@ -110,7 +110,7 @@ const Header = ({
                     {isGitLab ? (
                       <img src={gitlabLogo} alt="" aria-hidden width={18} height={18} />
                     ) : (
-                      <IconBrandGithub size={18} />
+                      <IconBrandGithub size={18} className="text-gray-900 dark:text-gray-100" />
                     )}
                   </a>
                 )}

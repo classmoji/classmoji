@@ -282,7 +282,7 @@ const ProviderSwitch = ({ current }: { current: 'github' | 'gitlab' }) => {
       {option(
         'github',
         <>
-          <GithubOutlined /> Github
+          <GithubOutlined className="text-gray-900 dark:text-gray-100" /> Github
         </>
       )}
       {option(

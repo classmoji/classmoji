@@ -463,7 +463,11 @@ function ExplorationSteps({ steps }: { steps: PromptExplorationStep[] }) {
     if (n === 'explore_codebase') return <RocketOutlined style={{ color: '#3b82f6' }} />;
     if (n === 'github_tree') return <BranchesOutlined style={{ color: '#06b6d4' }} />;
     if (n === 'github_read')
-      return isGitLab ? <GitlabLogo size={14} /> : <GithubOutlined style={{ color: '#10b981' }} />;
+      return isGitLab ? (
+        <GitlabLogo size={14} />
+      ) : (
+        <GithubOutlined className="text-gray-900 dark:text-gray-100" />
+      );
     if (n === 'synthesize') return <ExperimentOutlined style={{ color: '#8b5cf6' }} />;
     // Local/sandbox-mode tools
     if (n === 'Read' || n === 'secure_read')

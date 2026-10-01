@@ -228,14 +228,14 @@ const NodeIcon = ({ node, isExpanded }: { node: ModuleTreeNode; isExpanded: bool
     return web.isGitLab ? (
       <GitlabLogo size={18} />
     ) : (
-      <IconBrandGithub size={18} className="text-gray-400 shrink-0" />
+      <IconBrandGithub size={18} className="text-gray-900 dark:text-gray-100 shrink-0" />
     );
   }
   if (node.kind === 'repo') {
     return web.isGitLab ? (
       <GitlabLogo size={16} />
     ) : (
-      <IconBrandGithub size={16} className="text-gray-400 shrink-0" />
+      <IconBrandGithub size={16} className="text-gray-900 dark:text-gray-100 shrink-0" />
     );
   }
   if (node.kind === 'assignment') {

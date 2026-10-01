@@ -224,7 +224,7 @@ const SettingsGeneral = () => {
             <p className="text-ink-2 text-base mb-3">{user?.email}</p>
             {user?.login && (
               <div className="flex items-center gap-2 text-sm text-gray-500">
-                <GithubOutlined className="text-gray-400" />
+                <GithubOutlined className="text-gray-900 dark:text-gray-100" />
                 <span>@{user.login}</span>
               </div>
             )}
@@ -294,7 +294,7 @@ const SettingsGeneral = () => {
                 readOnly
                 variant="filled"
                 value={user?.login ?? ''}
-                prefix={<GithubOutlined className="text-gray-400" />}
+                prefix={<GithubOutlined className="text-gray-900 dark:text-gray-100" />}
                 className={readOnlyInput}
               />
             </FieldRow>

@@ -244,7 +244,7 @@ const SettingsConnections = ({ loaderData }: Route.ComponentProps) => {
 
       <div className="divide-y divide-line">
         <ConnectionRow
-          icon={<GithubOutlined />}
+          icon={<GithubOutlined className="text-gray-900 dark:text-gray-100" />}
           name="Github"
           status={github ? `Connected as @${github}` : 'Not connected'}
         >

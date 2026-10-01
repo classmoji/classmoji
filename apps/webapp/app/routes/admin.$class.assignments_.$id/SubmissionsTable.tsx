@@ -276,7 +276,7 @@ const SubmissionsTable = ({
               {web.isGitLab ? (
                 <GitlabLogo size={14} />
               ) : (
-                <IconBrandGithub size={14} className="shrink-0 text-gray-400" />
+                <IconBrandGithub size={14} className="shrink-0 text-gray-900 dark:text-gray-100" />
               )}
               <span className="truncate">{repo.name}</span>
             </a>

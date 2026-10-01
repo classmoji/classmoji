@@ -117,7 +117,7 @@ const EventLinks = ({
           {gitCtx.provider === 'GITLAB' ? (
             <GitlabLogo size={18} />
           ) : (
-            <GithubOutlined className="text-lg" />
+            <GithubOutlined className="text-lg text-gray-900 dark:text-gray-100" />
           )}
           <span className="underline">View on {gitWeb(gitCtx).label}</span>
           <IconExternalLink size={14} className="text-ink-3" />

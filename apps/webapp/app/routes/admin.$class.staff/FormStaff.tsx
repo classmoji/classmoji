@@ -192,7 +192,13 @@ const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
       >
         <Input
           placeholder={web.isGitLab ? 'gitlab-username' : 'github-username'}
-          prefix={web.isGitLab ? <GitlabLogo size={16} /> : <IconBrandGithubCopilot size={16} />}
+          prefix={
+            web.isGitLab ? (
+              <GitlabLogo size={16} />
+            ) : (
+              <IconBrandGithubCopilot size={16} className="text-gray-900 dark:text-gray-100" />
+            )
+          }
         />
       </Form.Item>
 
