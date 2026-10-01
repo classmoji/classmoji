@@ -7,8 +7,8 @@
  * weight in the system. Students work on GitRepoAssignments which track their
  * progress on REPO assignments.
  */
-import getPrisma from '@classmoji/database';
-import { titleToIdentifier } from '@classmoji/utils';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import { titleToIdentifier, withLogins } from '@classmoji/utils';
 import type { Prisma } from '@prisma/client';
 import * as entitlementService from './entitlement.service.ts';
 import * as notificationService from './notification.service.ts';
@@ -890,7 +890,7 @@ export const findWithGradingSummary = async (id: string) => {
           grades: true,
           git_repo: {
             include: {
-              student: true,
+              student: { include: GIT_IDENTITY },
               team: true,
             },
           },
@@ -922,8 +922,8 @@ export const findWithGradingSummary = async (id: string) => {
     }
   }
 
-  return {
+  return withLogins({
     ...assignment,
     stats,
-  };
+  });
 };

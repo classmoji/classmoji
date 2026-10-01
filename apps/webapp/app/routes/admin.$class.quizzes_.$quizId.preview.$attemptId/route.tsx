@@ -6,6 +6,7 @@ import { QuizAttemptInterface } from '~/components';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { attemptDrawerView, quizDrawerView } from '~/utils/quizPayloads';
+import { isTriggerChatAttempt } from '~/utils/quizRuntime.server';
 import type { Route } from './+types/route';
 
 export async function loader({ params, request }: Route.LoaderArgs) {
@@ -69,6 +70,14 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // 6. Determine if read-only (completed attempt)
   const readOnly = Boolean(attemptData.attempt.completed_at);
 
+  // 7. A chat-runtime attempt's transcript, projected exactly as a student
+  // sees theirs (hidden rows and internal parts removed). Its raw rows are
+  // never sent. Step 4 already made the caller its owner.
+  const isChatAttempt = isTriggerChatAttempt(attemptData.attempt);
+  const transcript = isChatAttempt
+    ? await ClassmojiService.quizChat.loadTranscriptForViewer(attemptData.attempt.id)
+    : null;
+
   // Send only what the drawer and QuizAttemptInterface read — see
   // ~/utils/quizPayloads. Both rows arrive joined to much more: the attempt to
   // its user, quiz and classroom; the quiz to every attempt and its user.
@@ -76,8 +85,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     quiz: quizDrawerView(quiz),
     attempt: attemptDrawerView(attemptData.attempt),
     // Use unified messages from getAttemptWithMessages (ai-agent owns persistence)
-    messages: attemptData.messages || [],
+    messages: isChatAttempt ? [] : attemptData.messages || [],
+    transcript,
+    viewerOwnsAttempt: true,
     userLogin: attemptData.attempt.user?.login || null,
+    userImage: attemptData.attempt.user?.image || null,
     isAdmin: true,
     readOnly,
     showTimestamps: false,

@@ -83,7 +83,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     quiz = {
       id: found.id,
       name: found.name,
-      moduleId: found.repository_id?.toString() || null,
+      repositoryId: found.repository_id?.toString() || null,
       systemPrompt: found.system_prompt,
       rubricPrompt: found.rubric_prompt,
       subject: found.subject || '',
@@ -141,7 +141,7 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
         title?: string;
         template?: string;
         issues?: Array<{ title: string; body: string }>;
-      }) => a.id?.toString() === values.moduleId?.toString()
+      }) => a.id?.toString() === values.repositoryId?.toString()
     );
 
     return {
@@ -421,7 +421,7 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                 </Form.Item>
 
                 <Form.Item
-                  name="moduleId"
+                  name="repositoryId"
                   label={`Linked ${terms.Repo} (Optional)`}
                   tooltip={`Optionally link this quiz to a specific ${terms.repo}`}
                 >

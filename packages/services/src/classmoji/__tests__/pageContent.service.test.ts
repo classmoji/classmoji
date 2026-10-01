@@ -69,6 +69,10 @@ const warmContentTextMock = vi.fn(async (..._args: unknown[]) => {});
 // contentDelivery.resolve.test.ts owns the resolve itself.
 const resolveAssetUrlMock = vi.fn();
 const canonicalizeAssetRefMock = vi.fn();
+// Which file types an upload may be — the classroom policy, stubbed so the
+// wiring (asked with the page's classroom, handed to the upload) is what is
+// under test here; contentDelivery owns the rule itself.
+const uploadFileTypesMock = vi.fn((..._args: unknown[]) => 'allowlist');
 vi.mock('../contentDelivery.service.ts', async () => {
   const actual = await vi.importActual<typeof import('../contentDelivery.service.ts')>(
     '../contentDelivery.service.ts'
@@ -85,13 +89,33 @@ vi.mock('../contentDelivery.service.ts', async () => {
     signBlobUrlForClassroom: actual.signBlobUrlForClassroom,
     resolveAssetUrl: (...args: unknown[]) => resolveAssetUrlMock(...args),
     canonicalizeAssetRef: (...args: unknown[]) => canonicalizeAssetRefMock(...args),
+    uploadFileTypes: (...args: unknown[]) => uploadFileTypesMock(...args),
     // Real: the placeholder check is a pure shape test, and it is one of the
     // decisions `resolvePageAssetUrl` is made of. Stubbing it would leave
     // nothing under test. (`canonicalizePageCoverRef`'s own path rule is
     // module-private and runs for real either way.)
     parseMissingUrl: actual.parseMissingUrl,
+    parseMediaRef: actual.parseMediaRef,
   };
 });
+
+// The media lookup a `media://` cover is checked against: READY rows of one
+// classroom, by id. Stubbed so the cover rule (IMAGE only, this classroom) is
+// what is under test; mediaLookup.test.ts owns the query.
+const lookupReadyMediaMock = vi.fn(
+  async (..._args: unknown[]) => new Map<string, { kind: string }>()
+);
+vi.mock('../../media/mediaLookup.ts', () => ({
+  lookupReadyMedia: (...args: unknown[]) => lookupReadyMediaMock(...args),
+}));
+
+// The storage router's repository check. Its rule is uploadCapability.test.ts's
+// to pin; what is under test here is that every page upload asks it, with the
+// page's classroom and the file actually received, before anything is written.
+const assertRepoTargetMock = vi.fn(async (..._args: unknown[]) => {});
+vi.mock('../../media/uploadCapability.ts', () => ({
+  assertRepoTarget: (...args: unknown[]) => assertRepoTargetMock(...args),
+}));
 
 const {
   loadPageContent,
@@ -99,6 +123,7 @@ const {
   uploadPageAsset,
   resolvePageAssetUrl,
   canonicalizePageCoverRef,
+  coverMediaRefAllowed,
   ensureBlockIds,
   applyBlockOps,
   normalizeBlockStructure,
@@ -689,6 +714,37 @@ describe('pageContent.uploadPageAsset', () => {
     expect(arg.file).toBe(buffer);
     expect(arg.filename).toBe('a.png');
     expect(arg.branch).toBe('main');
+    expect(arg.fileTypes).toBe('allowlist');
+  });
+
+  it('asks the storage router first, with the classroom and the file received', async () => {
+    const buffer = Buffer.from('image-bytes');
+    await uploadPageAsset(page, buffer, 'a.png');
+    expect(assertRepoTargetMock).toHaveBeenCalledWith(page.classroom, {
+      name: 'a.png',
+      size: buffer.length,
+    });
+  });
+
+  it('writes nothing when the router sends the file to media', async () => {
+    const { MediaRoutingError } = await import('../../media/MediaRoutingError.ts');
+    assertRepoTargetMock.mockRejectedValueOnce(new MediaRoutingError('USE_MEDIA'));
+
+    await expect(uploadPageAsset(page, Buffer.from('x'), 'intro.mp4')).rejects.toMatchObject({
+      code: 'USE_MEDIA',
+    });
+    expect(resolveContentBranchMock).not.toHaveBeenCalled();
+    expect(uploadMock).not.toHaveBeenCalled();
+    expect(recordContentAssetMock).not.toHaveBeenCalled();
+  });
+
+  it("uploads under the classroom's file-type policy", async () => {
+    uploadFileTypesMock.mockReturnValueOnce('any');
+
+    await uploadPageAsset(page, Buffer.from('x'), 'notebook.ipynb');
+
+    expect(uploadFileTypesMock).toHaveBeenCalledWith(page.classroom);
+    expect(callArg(uploadMock).fileTypes).toBe('any');
   });
 
   it('commits to the repo default branch rather than a hardcoded main', async () => {
@@ -989,6 +1045,69 @@ describe('pageContent.canonicalizePageCoverRef', () => {
 
   it('refuses an empty reference', async () => {
     await expect(canonicalizePageCoverRef(signablePage, '')).resolves.toBeNull();
+  });
+
+  describe('coverMediaRefAllowed', () => {
+    const MEDIA_ID = '77777777-8888-4999-8aaa-bbbbbbbbbbbb';
+    beforeEach(() => lookupReadyMediaMock.mockReset());
+
+    it('passes anything that is not a media ref without a lookup', async () => {
+      await expect(coverMediaRefAllowed(signablePage, REF)).resolves.toBe(true);
+      await expect(coverMediaRefAllowed(signablePage, null)).resolves.toBe(true);
+      expect(lookupReadyMediaMock).not.toHaveBeenCalled();
+    });
+
+    it('allows only a READY image of this classroom', async () => {
+      lookupReadyMediaMock.mockResolvedValueOnce(new Map([[MEDIA_ID, { kind: 'IMAGE' }]]));
+      await expect(coverMediaRefAllowed(signablePage, `media://${MEDIA_ID}`)).resolves.toBe(true);
+      expect(lookupReadyMediaMock).toHaveBeenCalledWith(CLASSROOM_ID, [MEDIA_ID]);
+
+      lookupReadyMediaMock.mockResolvedValueOnce(new Map([[MEDIA_ID, { kind: 'VIDEO' }]]));
+      await expect(coverMediaRefAllowed(signablePage, `media://${MEDIA_ID}`)).resolves.toBe(false);
+
+      lookupReadyMediaMock.mockResolvedValueOnce(new Map());
+      await expect(coverMediaRefAllowed(signablePage, `media://${MEDIA_ID}`)).resolves.toBe(false);
+    });
+  });
+
+  describe('media references', () => {
+    const MEDIA_ID = '77777777-8888-4999-8aaa-bbbbbbbbbbbb';
+    const MEDIA_REF = `media://${MEDIA_ID}`;
+
+    beforeEach(() => lookupReadyMediaMock.mockReset());
+
+    it('accepts a READY image of this classroom, looked up by classroom and id', async () => {
+      lookupReadyMediaMock.mockResolvedValue(new Map([[MEDIA_ID, { kind: 'IMAGE' }]]));
+      await expect(canonicalizePageCoverRef(signablePage, MEDIA_REF)).resolves.toBe(MEDIA_REF);
+      expect(lookupReadyMediaMock).toHaveBeenCalledWith(CLASSROOM_ID, [MEDIA_ID]);
+    });
+
+    it('accepts a signed media URL, which canonicalizes to the ref', async () => {
+      canonicalizeAssetRefMock.mockResolvedValue(MEDIA_REF);
+      lookupReadyMediaMock.mockResolvedValue(new Map([[MEDIA_ID, { kind: 'IMAGE' }]]));
+      await expect(
+        canonicalizePageCoverRef(
+          signablePage,
+          `https://cdn.classmoji.test/c/${CLASSROOM_ID}/media/${MEDIA_ID}/orig.png?sig=x`
+        )
+      ).resolves.toBe(MEDIA_REF);
+    });
+
+    it('refuses a video, a missing row (deleted, or another classroom), or a failed lookup', async () => {
+      lookupReadyMediaMock.mockResolvedValue(new Map([[MEDIA_ID, { kind: 'VIDEO' }]]));
+      await expect(canonicalizePageCoverRef(signablePage, MEDIA_REF)).resolves.toBeNull();
+
+      lookupReadyMediaMock.mockResolvedValue(new Map());
+      await expect(canonicalizePageCoverRef(signablePage, MEDIA_REF)).resolves.toBeNull();
+
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      lookupReadyMediaMock.mockImplementationOnce(async () => {
+        throw new Error('db down');
+      });
+      await expect(canonicalizePageCoverRef(signablePage, MEDIA_REF)).resolves.toBeNull();
+      expect(lookupReadyMediaMock).toHaveBeenCalledTimes(3);
+      warn.mockRestore();
+    });
   });
 
   it('swallows a resolver failure — a cover read must not fail on a signing error', async () => {

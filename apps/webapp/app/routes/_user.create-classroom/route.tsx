@@ -1,5 +1,5 @@
 import { redirect, useNavigate, useFetcher, useSearchParams, useRevalidator } from 'react-router';
-import { sessionMode } from '~/utils/sessionMode.server';
+import { sessionMode, userFallbackMode } from '~/utils/sessionMode.server';
 import { useState, useEffect, useRef } from 'react';
 import { useForm, FormProvider } from 'react-hook-form';
 import { Button, Card, Alert, Steps, Spin } from 'antd';
@@ -17,7 +17,7 @@ import StepReview from './StepReview';
 import { slugify, STEPS } from './utils';
 import { browserTimeZone } from '~/utils/browserTimeZone';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
-import type { ImportSelections } from './types';
+import type { GitOrganizationOption, ImportSelections } from './types';
 import { loadGitLabOptions } from './gitlabOptions.server';
 import { loadImportableClassrooms } from './importSources.server';
 import GitLabClassroomForm from './GitLabClassroomForm';
@@ -29,10 +29,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   if (!authData) return redirect('/');
   // The session's mode picks the side: a GitLab session creates GitLab
   // classrooms, a Github session Github ones.
-  const gitMode = sessionMode(
-    authData.session,
-    (authData.session as { user?: { provider?: string | null } } | undefined)?.user?.provider
-  );
+  const gitMode = sessionMode(authData.session, await userFallbackMode(authData.userId));
   const gitlab = await loadGitLabOptions(authData.userId);
   if (gitMode === 'GITLAB') {
     // GitLab classrooms import from any class this user owns or teaches,
@@ -57,7 +54,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   const octokit = GitHubProvider.getUserOctokit(authData.token);
 
   // Run the two independent GitHub reads in parallel:
-  //  - getAuthenticated: needed for the Classmoji user lookup + revoked-token handling
+  //  - getAuthenticated: revoked-token handling
   //  - syncUserInstallations: reads the user's app installations live from GitHub and
   //    upserts a GitOrganization row for each. This decouples the org dropdown from the
   //    async installation.created webhook, so a just-installed org shows up immediately.
@@ -89,10 +86,9 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     }
     throw error;
   }
-  const authenticatedUser = authResult.data;
   let syncedInstallations = initialSync;
 
-  const user = await ClassmojiService.user.findByLogin(authenticatedUser.login);
+  const user = await ClassmojiService.user.findById(authData.userId);
 
   if (!user) {
     return redirect('/registration');
@@ -186,7 +182,12 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         provider_id: { in: providerIds },
         ...(useInstalledFilter ? { github_installation_id: { not: null } } : {}),
       },
-      include: {
+      // What the org picker shows (id, login, its classrooms), plus the
+      // provider id the avatar is looked up by.
+      select: {
+        id: true,
+        login: true,
+        provider_id: true,
         classrooms: {
           select: {
             id: true,
@@ -210,10 +211,13 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     subscription.tier === 'PRO' &&
     ClassmojiService.subscription.isSubscriptionActive(subscription);
 
-  // Enrich gitOrgs with avatar URLs from GitHub
-  const gitOrgsWithAvatars = gitOrgs.map(org => ({
-    ...org,
+  // Enrich gitOrgs with avatar URLs from GitHub. Each org leaves as exactly
+  // what the picker reads (GitOrganizationOption).
+  const gitOrgsWithAvatars: GitOrganizationOption[] = gitOrgs.map(org => ({
+    id: org.id,
+    login: org.login,
     avatar_url: avatarByProviderId.get(org.provider_id) ?? null,
+    classrooms: org.classrooms,
   }));
 
   return {

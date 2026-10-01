@@ -7,7 +7,8 @@ import type { Route } from './+types/route';
 import { ClassmojiService, getGitProvider, isReservedSlug } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
-import { scopeGitlabId, teamsNamespace, titleToIdentifier, userAvatarUrl } from '@classmoji/utils';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import { gitUsername, scopeGitlabId, teamsNamespace, titleToIdentifier } from '@classmoji/utils';
 import { tasks } from '@trigger.dev/sdk/v3';
 import { useClassroomStatusModals } from '~/utils/classroomStatusModals';
 import { gitTerms } from '~/utils/gitWeb';
@@ -105,9 +106,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     return { error: 'Team formation deadline has passed' };
   }
 
-  // Get user info for GitHub operations
-  const user = await ClassmojiService.user.findById(userId);
-
   // Get or create tag for this repository
   const tag = await ClassmojiService.organizationTag.upsert(classroom.id, repository.slug!);
 
@@ -124,14 +122,17 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   );
   // Where teams live: the org on Github, `<class subgroup>/teams` on GitLab.
   const orgLogin = teamsNamespace(classroomWithOrg!) ?? classroomWithOrg!.git_organization.login;
-  const isGitLab = classroomWithOrg!.git_organization.provider === 'GITLAB';
-  // The provider username to put on the team: GitLab's own username on a
-  // GitLab classroom (the Classmoji login may differ from it).
-  const providerLogin = isGitLab
-    ? ((await ClassmojiService.user.findProviderUsernames([userId], 'GITLAB')).get(userId) ?? null)
-    : (user?.login ?? null);
-  if (!providerLogin) {
-    return { error: 'Connect your Gitlab account first (Settings → Connected accounts).' };
+  const provider = classroomWithOrg!.git_organization.provider;
+  const isGitLab = provider === 'GITLAB';
+  const providerName = isGitLab ? 'Gitlab' : 'Github';
+
+  const identity = await getPrisma().user.findUnique({
+    where: { id: userId },
+    select: GIT_IDENTITY,
+  });
+  const username = gitUsername(identity, provider);
+  if (!username) {
+    return { error: `Connect your ${providerName} account before joining a team.` };
   }
 
   return namedAction(request, {
@@ -218,7 +219,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       // Add user to GitHub team
       try {
-        await gitProvider.addTeamMember(orgLogin, teamSlug, providerLogin);
+        await gitProvider.addTeamMember(orgLogin, teamSlug, username);
       } catch (error: unknown) {
         console.error('Failed to add user to GitHub team:', error);
         // Team was created, but user wasn't added - still return success
@@ -278,7 +279,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       // Add user to GitHub team
       try {
-        await gitProvider.addTeamMember(orgLogin, team.slug, providerLogin);
+        await gitProvider.addTeamMember(orgLogin, team.slug, username);
       } catch (error: unknown) {
         console.error('Failed to add user to GitHub team:', error);
         // DB was updated, GitHub failed - still return success
@@ -300,7 +301,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       // Remove user from GitHub team
       try {
-        await gitProvider.removeTeamMember(orgLogin, userTeam.slug, providerLogin);
+        await gitProvider.removeTeamMember(orgLogin, userTeam.slug, username);
       } catch (error: unknown) {
         console.error('Failed to remove user from GitHub team:', error);
         // DB was updated, GitHub failed - still return success
@@ -406,7 +407,7 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
               <div className="flex gap-3">
                 {userTeam.memberships.map(membership => (
                   <div key={membership.user_id} className="flex items-center gap-2">
-                    <Avatar src={userAvatarUrl(membership.user)} size={32}>
+                    <Avatar src={membership.user.image ?? undefined} size={32}>
                       {membership.user.name?.[0] || membership.user.login?.[0]}
                     </Avatar>
                     <span className="text-sm">{membership.user.name || membership.user.login}</span>
@@ -512,7 +513,7 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
                           </Tag>
                           <div className="flex items-center gap-2">
                             {team.memberships.map(m => (
-                              <Avatar key={m.user_id} src={userAvatarUrl(m.user)} size={24}>
+                              <Avatar key={m.user_id} src={m.user.image ?? undefined} size={24}>
                                 {m.user.name?.[0] || m.user.login?.[0]}
                               </Avatar>
                             ))}

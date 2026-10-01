@@ -17,8 +17,8 @@
  *   whose GitRepoAnalyticsSnapshot.last_commit_at is in the last 14 days.
  */
 
-import getPrisma from '@classmoji/database';
-import { DEFAULT_EMOJI_GRADE_MAPPINGS } from '@classmoji/utils';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import { DEFAULT_EMOJI_GRADE_MAPPINGS, displayUsername } from '@classmoji/utils';
 
 // Pure helpers (unit-tested)
 
@@ -60,6 +60,7 @@ export interface AtRiskStudent {
   userId: string;
   name: string | null;
   login: string;
+  image: string | null;
   missedDeadlines: number;
 }
 
@@ -207,7 +208,7 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
     topAtRiskIds.length > 0
       ? await prisma.user.findMany({
           where: { id: { in: topAtRiskIds.map(x => x.id) } },
-          select: { id: true, name: true, login: true },
+          select: { id: true, name: true, image: true, ...GIT_IDENTITY },
         })
       : [];
   const profileById = new Map(atRiskProfiles.map(p => [p.id, p]));
@@ -218,7 +219,8 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
       return {
         userId: p.id,
         name: p.name,
-        login: p.login ?? '',
+        login: displayUsername(p) ?? '',
+        image: p.image,
         missedDeadlines: count,
       };
     })
@@ -431,6 +433,7 @@ export interface TaOpsRow {
   taId: string;
   login: string;
   name: string | null;
+  image: string | null;
   throughput7d: number;
   overturnRate: number | null;
   gradeDistributionMean: number | null;
@@ -446,7 +449,7 @@ export async function taOps(classroomId: string): Promise<TaOpsRow[]> {
       role: { in: ['ASSISTANT', 'TEACHER', 'OWNER'] },
     },
     select: {
-      user: { select: { id: true, login: true, name: true } },
+      user: { select: { id: true, name: true, image: true, ...GIT_IDENTITY } },
     },
   });
 
@@ -518,8 +521,9 @@ export async function taOps(classroomId: string): Promise<TaOpsRow[]> {
 
     return {
       taId: u.id,
-      login: u.login ?? '',
+      login: displayUsername(u) ?? '',
       name: u.name,
+      image: u.image,
       throughput7d,
       overturnRate,
       gradeDistributionMean,

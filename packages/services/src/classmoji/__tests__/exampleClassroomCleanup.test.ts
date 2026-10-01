@@ -54,6 +54,31 @@ describe('deleteAbandonedExampleClassrooms', () => {
     });
   });
 
+  it('keeps a sandbox that holds any media, which this sweep does not purge', async () => {
+    classroomFindMany.mockResolvedValue([
+      {
+        id: 'with-media',
+        memberships: [{ tour_completed_at: null }],
+        _count: { audit_logs: 0, media_objects: 1 },
+      },
+      {
+        id: 'untouched',
+        memberships: [{ tour_completed_at: null }],
+        _count: { audit_logs: 0, media_objects: 0 },
+      },
+    ]);
+
+    const report = await deleteAbandonedExampleClassrooms({ now });
+
+    expect(report).toEqual({ candidates: 2, deleted: 1, kept: 1 });
+    expect(classroomDeleteMany).toHaveBeenCalledWith({
+      where: { id: { in: ['untouched'] }, is_example: true },
+    });
+    expect(classroomFindMany.mock.calls[0][0].select._count.select).toMatchObject({
+      media_objects: true,
+    });
+  });
+
   it('does not issue a delete when nothing qualifies', async () => {
     classroomFindMany.mockResolvedValue([
       { id: 'toured', memberships: [{ tour_completed_at: now }], _count: { audit_logs: 0 } },

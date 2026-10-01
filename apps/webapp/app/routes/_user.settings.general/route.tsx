@@ -1,18 +1,15 @@
 import { useEffect, useState } from 'react';
-import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
-import { useFetcher, useSearchParams } from 'react-router';
+import { useFetcher } from 'react-router';
 import { Avatar, Input, Card, Button, Alert } from 'antd';
 import { GithubOutlined, MailOutlined, UserOutlined } from '@ant-design/icons';
 import { IconId } from '@tabler/icons-react';
 
 import useStore from '~/store';
-import { useGitProvider } from '~/hooks';
-import { authClient } from '@classmoji/auth/client';
 import { useCallout } from '@classmoji/ui-components';
-import { requireAuth } from '@classmoji/auth/server';
+import { auth, requireAuth } from '@classmoji/auth/server';
+import { authClient } from '@classmoji/auth/client';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
-import { parseGitlabId } from '@classmoji/utils';
 import {
   sendEmailVerificationCode,
   consumeEmailVerificationCode,
@@ -21,75 +18,7 @@ import { normalizeSchoolId, SCHOOL_ID_MAX_LENGTH } from '~/utils/schoolId';
 import type { Route } from './+types/route';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-type LinkProvider = 'github' | 'gitlab';
-
-/** Sign-in methods on this account, for the Connected accounts section. */
-export const loader = async ({ request }: Route.LoaderArgs) => {
-  const { userId } = await requireAuth(request);
-  const accounts = await getPrisma().account.findMany({
-    where: { user_id: userId, provider_id: { in: ['github', 'gitlab'] } },
-    select: { provider_id: true, username: true, account_id: true },
-  });
-  const instances = ClassmojiService.gitlabInstance;
-  const connected = await Promise.all(
-    accounts.map(async a => {
-      // A self-managed GitLab account names its server; gitlab.com's doesn't.
-      const instanceId = a.provider_id === 'gitlab' ? parseGitlabId(a.account_id).instanceId : null;
-      const host = instanceId ? await instances.hostFor(instanceId).catch(() => null) : null;
-      return {
-        provider: a.provider_id as LinkProvider,
-        username: a.username,
-        host: host ? new URL(host).host : null,
-      };
-    })
-  );
-
-  // Github is connected but its username could not become the main login
-  // because another user holds it, so Github courses are closed to this user.
-  // Unknown username (connected before usernames were recorded) is not "taken":
-  // the next Github sign-in records it and promotes it.
-  const githubUsername = connected.find(a => a.provider === 'github')?.username;
-  const githubLoginTaken = githubUsername
-    ? Boolean(
-        await getPrisma().user.findFirst({
-          where: { login: githubUsername, NOT: { id: userId } },
-          select: { id: true },
-        })
-      )
-    : false;
-
-  // Gitlab can be linked through gitlab.com (when configured) or any
-  // self-managed instance set up at /gitlab/setup.
-  const gitlabDefaultHost = instances.defaultConfigured() ? instances.defaultHost() : null;
-  const hasInstances =
-    (await getPrisma().gitLabInstance.count({
-      where: { disabled_at: null, approved_at: { not: null } },
-    })) > 0;
-
-  return {
-    connected,
-    githubLoginTaken,
-    gitlabDefaultHost,
-    // Only offer providers this deployment has configured.
-    available: [
-      'github',
-      ...(gitlabDefaultHost || hasInstances ? ['gitlab'] : []),
-    ] as LinkProvider[],
-  };
-};
-
-const PROVIDER_LABEL: Record<LinkProvider, string> = { github: 'Github', gitlab: 'Gitlab' };
-
-/** better-auth's link errors (its callback appends `?error=`), in plain words. */
-const LINK_ERRORS: Record<string, string> = {
-  account_already_linked_to_different_user:
-    'That account is already connected to a different Classmoji account.',
-  gitlab_already_connected: 'This account already has a Gitlab account connected.',
-  gitlab_instance_unavailable: 'That Gitlab is no longer available.',
-  unable_to_link_account: 'We could not connect that account. Please try again.',
-  access_denied: 'Connection cancelled.',
-};
+const MIN_PASSWORD_LENGTH = 8;
 
 /**
  * Account edits, all scoped to the signed-in user's own row (#343):
@@ -99,7 +28,10 @@ const LINK_ERRORS: Record<string, string> = {
  *    .update then claims any classroom invite sent to it (#307), which is the
  *    whole point — a student who mistyped their address at sign-up gets into
  *    the classroom they were invited to.
- * `provider_email` (the Github one) is never touched here.
+ *  - set-password: add an email+password sign-in to an account that has none
+ *    (a Github sign-up). Changing an existing password happens client-side
+ *    through better-auth, which checks the current one.
+ * The Github account's own email is never touched here.
  */
 export const action = async ({ request }: Route.ActionArgs) => {
   const { userId } = await requireAuth(request);
@@ -108,7 +40,23 @@ export const action = async ({ request }: Route.ActionArgs) => {
     email?: unknown;
     code?: unknown;
     school_id?: unknown;
+    password?: unknown;
   };
+
+  if (body.intent === 'set-password') {
+    const password = typeof body.password === 'string' ? body.password : '';
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      return { error: `Use at least ${MIN_PASSWORD_LENGTH} characters.` };
+    }
+    try {
+      // Server-only: fails if the account already has a password.
+      await auth.api.setPassword({ body: { newPassword: password }, headers: request.headers });
+    } catch (error) {
+      console.error('[settings] set-password failed', error);
+      return { error: 'Could not set a password. Sign in again and retry.' };
+    }
+    return { passwordSet: true };
+  }
 
   if (body.intent === 'update-school-id') {
     const schoolId = normalizeSchoolId(body.school_id);
@@ -119,7 +67,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
     return { schoolIdSaved: true };
   }
 
-  const email = typeof body.email === 'string' ? body.email.trim() : '';
+  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
 
   if (!EMAIL_RE.test(email)) {
     return { error: 'Please enter a valid email address.' };
@@ -180,234 +128,8 @@ const FieldRow = ({
 
 const linkButton = 'text-xs font-medium text-accent hover:underline cursor-pointer';
 
-/**
- * Which Gitlab to connect: gitlab.com, or a school's own address (the same
- * choice as the sign-in page). A self-managed one links through the
- * gitlab-instance plugin; gitlab.com through better-auth's own provider.
- */
-const GitLabConnectChooser = ({
-  defaultHost,
-  onCancel,
-}: {
-  defaultHost: string | null;
-  onCancel: () => void;
-}) => {
-  const [host, setHost] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const callbackURL = '/settings/general?connected=gitlab';
-
-  const linkInstance = async (instanceId: string) => {
-    const response = await fetch('/api/auth/gitlab-instance/link', {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ instanceId, callbackURL, errorCallbackURL: '/settings/general' }),
-    });
-    const body = (await response.json().catch(() => null)) as {
-      url?: string;
-      message?: string;
-    } | null;
-    if (response.ok && body?.url) {
-      window.location.href = body.url;
-      return;
-    }
-    setMessage(body?.message ?? 'Could not start connecting Gitlab.');
-    setBusy(false);
-  };
-
-  const connectDefault = async () => {
-    setBusy(true);
-    await authClient.linkSocial({
-      provider: 'gitlab',
-      callbackURL,
-      errorCallbackURL: '/settings/general',
-    });
-  };
-
-  const connectHost = async () => {
-    if (!host.trim()) return;
-    setBusy(true);
-    setMessage(null);
-    const response = await fetch(
-      `/api/gitlab-instances/lookup?host=${encodeURIComponent(host.trim())}`
-    );
-    const body = (await response.json().catch(() => null)) as
-      | { status: 'ok'; instance: { id: string | null; host: string } }
-      | { status: 'unknown' | 'disabled' | 'pending'; host: string }
-      | { status: 'invalid' }
-      | null;
-    if (body?.status === 'ok') {
-      if (body.instance.id === null) await connectDefault();
-      else await linkInstance(body.instance.id);
-      return;
-    }
-    setBusy(false);
-    setMessage(
-      body?.status === 'unknown'
-        ? `${new URL(body.host).host} isn't connected to Classmoji yet. It can be set up at /gitlab/setup.`
-        : body?.status === 'pending'
-          ? `${new URL(body.host).host} is waiting for Classmoji's approval. You can connect it once it is approved.`
-          : body?.status === 'disabled'
-            ? 'Sign-in with that Gitlab is turned off.'
-            : 'Enter your Gitlab address, like gitlab.school.edu'
-    );
-  };
-
-  return (
-    <div className="px-4 pb-3 flex flex-col gap-2">
-      {defaultHost && (
-        <Button size="small" onClick={connectDefault} disabled={busy} className="self-start">
-          {new URL(defaultHost).host}
-        </Button>
-      )}
-      <div className="flex gap-2">
-        <Input
-          size="small"
-          value={host}
-          onChange={e => setHost(e.target.value)}
-          onPressEnter={connectHost}
-          placeholder="Self-hosted Gitlab address, e.g. gitlab.school.edu"
-        />
-        <Button size="small" type="primary" onClick={connectHost} loading={busy}>
-          Connect
-        </Button>
-        <Button size="small" onClick={onCancel} disabled={busy}>
-          Cancel
-        </Button>
-      </div>
-      {message && <p className="text-xs text-red-600 dark:text-red-400">{message}</p>}
-    </div>
-  );
-};
-
-const ConnectedAccounts = ({
-  connected,
-  available,
-  githubLoginTaken,
-  gitlabDefaultHost,
-}: {
-  connected: { provider: LinkProvider; username: string | null; host: string | null }[];
-  available: LinkProvider[];
-  githubLoginTaken: boolean;
-  gitlabDefaultHost: string | null;
-}) => {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [connecting, setConnecting] = useState<LinkProvider | null>(null);
-  const [choosingGitLab, setChoosingGitLab] = useState(false);
-  const linkError = searchParams.get('error');
-  const justConnected = searchParams.get('connected') as LinkProvider | null;
-
-  const connect = async (provider: LinkProvider) => {
-    // Gitlab first asks which Gitlab.
-    if (provider === 'gitlab') {
-      setChoosingGitLab(true);
-      return;
-    }
-    setConnecting(provider);
-    // Links to the SIGNED-IN user; better-auth sends them to the provider and
-    // back here, with `?error=` on failure.
-    await authClient.linkSocial({
-      provider,
-      callbackURL: `/settings/general?connected=${provider}`,
-      errorCallbackURL: '/settings/general',
-    });
-  };
-
-  const dismiss = () => setSearchParams({}, { replace: true });
-
-  return (
-    <div className="mt-8">
-      <h4 className="text-base font-semibold text-gray-800 dark:text-gray-100 mb-1">
-        Connected accounts
-      </h4>
-      <p className="text-sm text-ink-3 mb-4">
-        Sign in to this Classmoji account with any account connected here.
-      </p>
-
-      {linkError && (
-        <Alert
-          type="error"
-          showIcon
-          closable
-          onClose={dismiss}
-          style={{ marginBottom: 16 }}
-          message={LINK_ERRORS[linkError] ?? `We could not connect that account (${linkError}).`}
-        />
-      )}
-      {justConnected && connected.some(a => a.provider === justConnected) && (
-        <Alert
-          type="success"
-          showIcon
-          closable
-          onClose={dismiss}
-          style={{ marginBottom: 16 }}
-          message={`${PROVIDER_LABEL[justConnected]} connected. You can now sign in with it.`}
-        />
-      )}
-
-      {githubLoginTaken && (
-        <Alert
-          type="warning"
-          showIcon
-          style={{ marginBottom: 16 }}
-          message="Your Github username is already used by another Classmoji account."
-          description="You can sign in with Github, but you can't join Github courses until this is sorted out. Contact support."
-        />
-      )}
-
-      <div className="divide-y divide-stone-200 dark:divide-neutral-800 rounded-lg ring-1 ring-stone-200 dark:ring-neutral-800">
-        {available.map(provider => {
-          const account = connected.find(a => a.provider === provider);
-          return (
-            <div key={provider}>
-              <div className="flex items-center justify-between px-4 py-3">
-                <span className="flex items-center gap-2 text-sm font-medium text-ink-1">
-                  {provider === 'gitlab' ? <GitlabLogo size={14} /> : <GithubOutlined />}
-                  {PROVIDER_LABEL[provider]}
-                  {account?.username && (
-                    <span className="font-normal text-ink-3">@{account.username}</span>
-                  )}
-                  {account?.host && (
-                    <span className="font-normal text-ink-3">on {account.host}</span>
-                  )}
-                </span>
-                {account ? (
-                  <span className="text-xs font-medium text-green-700 dark:text-green-400">
-                    Connected
-                  </span>
-                ) : (
-                  <Button
-                    size="small"
-                    onClick={() => connect(provider)}
-                    loading={connecting === provider}
-                    disabled={provider === 'gitlab' && choosingGitLab}
-                  >
-                    Connect
-                  </Button>
-                )}
-              </div>
-              {provider === 'gitlab' && !account && choosingGitLab && (
-                <GitLabConnectChooser
-                  defaultHost={gitlabDefaultHost}
-                  onCancel={() => setChoosingGitLab(false)}
-                />
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
-
-const SettingsGeneral = ({ loaderData }: Route.ComponentProps) => {
+const SettingsGeneral = () => {
   const { user, setUser } = useStore();
-  const isGitLab = useGitProvider() === 'GITLAB';
-  const providerName = isGitLab ? 'Gitlab' : 'Github';
-  const ProviderIcon = isGitLab
-    ? ({ className }: { className?: string }) => <GitlabLogo size={14} className={className} />
-    : GithubOutlined;
 
   const codeFetcher = useFetcher<{ codeSent?: boolean; error?: string }>();
   const saveFetcher = useFetcher<{ changed?: boolean; error?: string }>();
@@ -500,10 +222,12 @@ const SettingsGeneral = ({ loaderData }: Route.ComponentProps) => {
               {user?.name || 'User Name'}
             </h3>
             <p className="text-ink-2 text-base mb-3">{user?.email}</p>
-            <div className="flex items-center gap-2 text-sm text-gray-500">
-              <ProviderIcon className="text-gray-400" />
-              <span>@{user?.login}</span>
-            </div>
+            {user?.login && (
+              <div className="flex items-center gap-2 text-sm text-gray-500">
+                <GithubOutlined className="text-gray-400" />
+                <span>@{user.login}</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -560,6 +284,17 @@ const SettingsGeneral = ({ loaderData }: Route.ComponentProps) => {
                 variant="filled"
                 value={user?.email ?? ''}
                 prefix={<MailOutlined className="text-gray-400" />}
+                className={readOnlyInput}
+              />
+            </FieldRow>
+
+            <FieldRow htmlFor="account-login" label="Github Username">
+              <Input
+                id="account-login"
+                readOnly
+                variant="filled"
+                value={user?.login ?? ''}
+                prefix={<GithubOutlined className="text-gray-400" />}
                 className={readOnlyInput}
               />
             </FieldRow>
@@ -664,29 +399,128 @@ const SettingsGeneral = ({ loaderData }: Route.ComponentProps) => {
               </div>
             </div>
           )}
-
-          <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
-            <div className="flex items-start gap-3">
-              <div>
-                <p className="text-yellow-800 dark:text-yellow-200 font-medium mb-1 text-sm">
-                  From your {providerName} account
-                </p>
-                <p className="text-yellow-700 dark:text-yellow-300 text-sm leading-relaxed">
-                  Your name comes from the account you signed up with and cannot be edited here.
-                  Your usernames are listed under Connected accounts.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <ConnectedAccounts
-            connected={loaderData.connected}
-            available={loaderData.available}
-            gitlabDefaultHost={loaderData.gitlabDefaultHost}
-            githubLoginTaken={loaderData.githubLoginTaken}
-          />
         </div>
+
+        <div className="border-t border-gray-200 dark:border-neutral-700 my-8"></div>
+
+        <PasswordSection />
       </Card>
+    </div>
+  );
+};
+
+/** Email+password sign-in: set a first password, or change the current one. */
+const PasswordSection = () => {
+  const { user } = useStore();
+  const passwordFetcher = useFetcher<{ passwordSet?: boolean; error?: string }>();
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [changing, setChanging] = useState(false);
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  useEffect(() => {
+    if (passwordFetcher.data?.passwordSet) {
+      setPassword('');
+      setConfirmPassword('');
+      setMessage({ type: 'success', text: `You can now sign in with ${user?.email}.` });
+    } else if (passwordFetcher.data?.error) {
+      setMessage({ type: 'error', text: passwordFetcher.data.error });
+    }
+  }, [passwordFetcher.data, user?.email]);
+
+  const passwordsMatch = password === confirmPassword;
+  const passwordReady = password.length >= MIN_PASSWORD_LENGTH && passwordsMatch;
+
+  const setNewPassword = () =>
+    passwordFetcher.submit(
+      { intent: 'set-password', password },
+      { method: 'POST', encType: 'application/json' }
+    );
+
+  const changePassword = async () => {
+    setChanging(true);
+    const { error } = await authClient.changePassword({
+      currentPassword,
+      newPassword: password,
+      revokeOtherSessions: true,
+    });
+    setChanging(false);
+    if (error) {
+      setMessage({ type: 'error', text: error.message || 'Could not change your password.' });
+      return;
+    }
+    setPassword('');
+    setConfirmPassword('');
+    setCurrentPassword('');
+    setMessage({ type: 'success', text: 'Password changed.' });
+  };
+
+  return (
+    <div>
+      <h4 className="text-base font-semibold text-gray-800 dark:text-gray-100 mb-1">Password</h4>
+      <p className="text-sm text-ink-3 mb-6">
+        {user?.has_password
+          ? `Sign in with ${user.email} and your password.`
+          : `Add a password to also sign in with ${user?.email ?? 'your email'}.`}
+      </p>
+
+      {message && (
+        <Alert
+          type={message.type}
+          showIcon
+          closable
+          onClose={() => setMessage(null)}
+          style={{ marginBottom: 24 }}
+          message={message.text}
+        />
+      )}
+
+      <div className="flex flex-col gap-3 max-w-md">
+        {user?.has_password && (
+          <Input.Password
+            placeholder="Current password"
+            autoComplete="current-password"
+            value={currentPassword}
+            onChange={e => setCurrentPassword(e.target.value)}
+          />
+        )}
+        <Input.Password
+          placeholder={`New password (${MIN_PASSWORD_LENGTH}+ characters)`}
+          autoComplete="new-password"
+          value={password}
+          onChange={e => setPassword(e.target.value)}
+        />
+        <Input.Password
+          placeholder="Confirm new password"
+          autoComplete="new-password"
+          value={confirmPassword}
+          onChange={e => setConfirmPassword(e.target.value)}
+          status={confirmPassword && !passwordsMatch ? 'error' : undefined}
+        />
+        {confirmPassword && !passwordsMatch && (
+          <p className="text-xs text-red-500 dark:text-red-400">The passwords do not match.</p>
+        )}
+        <div>
+          {user?.has_password ? (
+            <Button
+              onClick={changePassword}
+              loading={changing}
+              disabled={!passwordReady || !currentPassword}
+            >
+              Change password
+            </Button>
+          ) : (
+            <Button
+              onClick={setNewPassword}
+              loading={passwordFetcher.state !== 'idle'}
+              disabled={!passwordReady || !user?.email}
+            >
+              Set password
+            </Button>
+          )}
+        </div>
+      </div>
     </div>
   );
 };

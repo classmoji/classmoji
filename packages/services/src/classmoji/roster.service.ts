@@ -69,8 +69,10 @@ export const addStudents = async ({
 
   const emails = students.map(s => s.email.toLowerCase());
   const existingUsers = await getPrisma().user.findMany({
-    where: { email: { in: emails } },
-    select: { id: true, email: true, name: true, login: true },
+    // Only a verified address identifies a person; an unverified one gets an
+    // invite like any unknown address, claimed once they verify it.
+    where: { email: { in: emails }, emailVerified: true },
+    select: { id: true, email: true, name: true },
   });
 
   // Gitlab has no org invite to accept: a student who already has a Gitlab
@@ -78,24 +80,24 @@ export const addStudents = async ({
   // projects are created now. Anyone else activates on their first Gitlab
   // sign-in (select-organization).
   const org = classroom.git_organization;
-  const readyOnGitLab = new Set<string>();
+  // Users with a Gitlab account on this classroom's instance, by id → their
+  // Gitlab username (what activation looks them up by).
+  const readyOnGitLab = new Map<string, string>();
   if (org?.provider === 'GITLAB' && existingUsers.length > 0) {
     const instanceId = org.gitlab_instance_id ?? null;
     const accounts = await getPrisma().account.findMany({
       where: { user_id: { in: existingUsers.map(u => u.id) }, provider_id: 'gitlab' },
-      select: { user_id: true, account_id: true },
+      select: { user_id: true, account_id: true, username: true },
     });
     for (const account of accounts) {
-      if (parseGitlabId(account.account_id).instanceId === instanceId) {
-        readyOnGitLab.add(account.user_id);
+      if (account.username && parseGitlabId(account.account_id).instanceId === instanceId) {
+        readyOnGitLab.set(account.user_id, account.username);
       }
     }
   }
   const existingByEmail = new Map(existingUsers.map(u => [(u.email ?? '').toLowerCase(), u]));
 
-  const toAddDirectly: Array<
-    RosterStudentInput & { userId: string; userName: string | null; login: string | null }
-  > = [];
+  const toAddDirectly: Array<RosterStudentInput & { userId: string; userName: string | null }> = [];
   const toInvite: RosterStudentInput[] = [];
   for (const student of students) {
     const existing = existingByEmail.get(student.email.toLowerCase());
@@ -104,7 +106,6 @@ export const addStudents = async ({
         ...student,
         userId: existing.id,
         userName: existing.name,
-        login: existing.login,
       });
     } else {
       toInvite.push(student);
@@ -121,13 +122,14 @@ export const addStudents = async ({
       classroom_id: classroomId,
       user_id: student.userId,
       role: 'STUDENT' as const,
-      has_accepted_invite: readyOnGitLab.has(student.userId) && Boolean(student.login),
+      has_accepted_invite: readyOnGitLab.has(student.userId),
     }));
     await classroomMembershipService.createMany(memberships);
     if (org) {
       for (const student of toAddDirectly) {
-        if (readyOnGitLab.has(student.userId) && student.login) {
-          activations.push({ login: student.login, gitOrganizationId: org.id });
+        const gitlabUsername = readyOnGitLab.get(student.userId);
+        if (gitlabUsername) {
+          activations.push({ login: gitlabUsername, gitOrganizationId: org.id });
         }
       }
     }

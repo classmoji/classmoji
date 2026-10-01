@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   FIELD_TYPE_REGISTRY,
   FORM_LIMITS,
+  isIdentityQuestion,
   type FormField,
   type FormOption,
 } from '@classmoji/services/form-contract';
@@ -279,6 +280,27 @@ function isBlankReview(review: Record<string, unknown>): boolean {
   });
 }
 
+/**
+ * A multiselect's ticked ids after the box for `ticked` was just ticked, with
+ * the field's `exclusive` options applied: ticking an exclusive option leaves
+ * only it, and ticking any other option drops every exclusive one.
+ *
+ * `checked` is what the boxes hold after the click, `ticked` included. The
+ * contract refuses an exclusive id combined with anything else (the
+ * multiselect answer schema), so this keeps the checkboxes from building an
+ * answer the server would refuse. Unticking never needs it.
+ */
+export function exclusiveSelection(
+  options: FormOption[],
+  checked: string[],
+  ticked: string
+): string[] {
+  const exclusive = new Set(options.filter(option => option.exclusive).map(option => option.id));
+  if (exclusive.size === 0) return checked;
+  if (exclusive.has(ticked)) return [ticked];
+  return checked.filter(id => !exclusive.has(id));
+}
+
 /** Every value of an answer set, narrowed. Display blocks contribute nothing. */
 export function coerceAnswers(
   fields: FormField[],
@@ -382,10 +404,17 @@ const NAME_LABEL = /\bname\b/i;
  * failure mode is a blank column rather than a link mailed to the wrong person.
  * The first email field wins; a form with two of them (a "confirm your address"
  * pattern) identifies by the first, which is the one it asked for first.
+ *
+ * An identity question (`identity_question: true`) is never picked. Its answer
+ * is hidden from staff views until someone asks to see it, and the response's
+ * `name` and `email` columns are shown everywhere, so lifting "Chosen name"
+ * into `name` would put that answer where no mask reaches. The contract refuses
+ * the flag on `email`, so in practice this only affects the name pick.
  */
 export function identityPlan(fields: FormField[]): IdentityPlan {
-  const emailField = fields.find(field => field.type === 'email');
-  const nameField = fields.find(
+  const candidates = fields.filter(field => !isIdentityQuestion(field));
+  const emailField = candidates.find(field => field.type === 'email');
+  const nameField = candidates.find(
     field => field.type === 'short_text' && NAME_LABEL.test(String(field.label ?? ''))
   );
   return {
@@ -506,6 +535,10 @@ export interface ClassroomIdentityPlan {
  * that case the field stays visible and the member fills it in — the identity
  * on the RESPONSE row still comes from the session either way, so this is a
  * question the form asks, not a hole in who the response belongs to.
+ *
+ * An identity question is never answered from the account either. A flagged
+ * "Preferred name" asks for a name the account may not hold, so it stays
+ * visible and the member answers it.
  */
 export function classroomIdentityPlan(
   fields: FormField[],
@@ -534,6 +567,7 @@ export function classroomIdentityPlan(
   };
 
   for (const field of fields) {
+    if (isIdentityQuestion(field)) continue;
     const isEmail = field.type === 'email';
     const isSelfName =
       field.type === 'short_text' && SELF_NAME_LABEL.test(String(field.label ?? '').trim());

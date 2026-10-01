@@ -44,7 +44,11 @@ const SLIDES_DIR = 'slides';
  */
 const MANIFEST_PATH = path.join('.classmoji', 'manifest.json');
 
-/** Cap on a single file's in-memory URL rewrite. Content files are text, not datasets. */
+/**
+ * Cap on a single file's in-memory repo-URL rewrite. Content files are text,
+ * not datasets. The MEDIA rewrite has no cap: a file over it still has its
+ * media references copied and repointed (see `rewriteAssetUrls`).
+ */
 const MAX_REWRITE_BYTES = 5 * 1024 * 1024;
 
 export interface ContentRepoCoordinates {
@@ -71,6 +75,41 @@ export interface CloneContentRepoPayload {
   commitMessage: string;
   /** Coarse step reporting for the progress banner. Never awaited by callers. */
   onStep?: (note: string) => void;
+  /**
+   * Something the user should see in the import's warnings — a file whose links
+   * were left as they were. Unscoped; the caller adds its prefix.
+   */
+  warn?: (detail: string) => void;
+  /**
+   * The import run's media copy (`ClassmojiService.contentImport
+   * .openImportMediaCopy`). The tree's media references are copied into the
+   * target classroom's media and repointed BEFORE the push, through this one
+   * session, so the page rows that follow share its old→new map. Absent means
+   * media references are pushed verbatim.
+   */
+  media?: RolloverMediaCopy;
+}
+
+/**
+ * The part of the services' `ImportMediaCopy` this helper uses, structurally —
+ * the services barrel's types stay out of this module's contract, and a test
+ * can hand in two functions.
+ */
+export interface RolloverMediaCopy {
+  prepare(texts: readonly (string | null | undefined)[]): Promise<void>;
+  rewrite(text: string): string;
+  /**
+   * Delete the copies this run made. Called when the clone fails before its
+   * push lands: nothing references them, and the target should not pay for
+   * them. Optional so a test can hand in two functions.
+   */
+  discard?(): Promise<void>;
+  /**
+   * The copies made so far are now referenced by pushed content: a later
+   * `discard` (a later step of the same run that fails) leaves them alone.
+   * Called once the push lands. Optional for the same reason as `discard`.
+   */
+  keep?(): void;
 }
 
 /** Why nothing reached the target. Set whenever `pushed` is false. */
@@ -91,7 +130,7 @@ export type CloneSkipReason =
 export type CloneContentRepoResult =
   | {
       pushed: true;
-      /** Files whose absolute source-repo URLs were repointed at the target repo. */
+      /** Files rewritten: source-repo URLs repointed at the target repo, or media refs at the copies. */
       rewritten: number;
       /** Files in the pushed tree (excluding .git). */
       files: number;
@@ -201,17 +240,42 @@ function listFilesRecursive(dir: string): string[] {
  * the chained-import rewrite — a source repo that was itself imported still
  * names the repo it came from, and those references are repointed only where
  * the bytes actually came along. Everything else is counted and left alone.
+ *
+ * ## Media, in two passes
+ *
+ * Media objects live in R2, not in the tree, so the push cannot carry them.
+ * The first pass reads every text file that could hold a media
+ * reference (`mayReferenceMedia` — a substring test) and hands those texts to
+ * the run's media copy, which copies the objects into the target classroom
+ * BEFORE anything is pushed. The second pass is the rewrite below, with the
+ * copy's `rewrite` as the first step. A tree with no media reference reads
+ * nothing extra and asks R2 nothing. Only files that pass the marker test are
+ * held in memory between the passes; the rest are re-read, as before.
+ *
+ * The size cap applies to the repo-URL rewrite only. A text file over it is
+ * still handed to the media copy and gets the media rewrite — nothing else —
+ * because a signed media URL left in it would keep serving the SOURCE's bytes
+ * from the copy, and its `media://` references would render as missing.
+ *
+ * What cannot be copied (Free target, no room, a failed copy, an object that
+ * is not the source's) is left byte-for-byte as it was and named in the import
+ * warnings — never repointed at a copy that does not exist.
  */
-function rewriteAssetUrls({
+async function rewriteAssetUrls({
   root,
   source,
   target,
+  media,
+  warn,
 }: {
   root: string;
   source: ContentRepoCoordinates;
   target: ContentRepoCoordinates;
-}): { rewritten: number; files: number; copied: ReadonlySet<string> } {
-  const { rewriteContentUrls, isTextContentPath } = ClassmojiService.contentImport;
+  media?: RolloverMediaCopy;
+  warn?: (detail: string) => void;
+}): Promise<{ rewritten: number; files: number; copied: ReadonlySet<string> }> {
+  const { rewriteContentUrls, isTextContentPath, mayReferenceMedia } =
+    ClassmojiService.contentImport;
   const files = listFilesRecursive(root);
   // Repo-relative and POSIX-separated, which is how a reference spells a path.
   const copied = new Set(files.map(file => path.relative(root, file).split(path.sep).join('/')));
@@ -221,6 +285,23 @@ function rewriteAssetUrls({
     uncopiedRefs++;
   };
   let rewritten = 0;
+  /** Text files over the rewrite cap, their repo links left as they were — named in one warning. */
+  const oversized: { file: string; size: number }[] = [];
+
+  if (media) {
+    const mediaTexts: string[] = [];
+    for (const file of files) {
+      if (!isTextContentPath(path.relative(root, file))) continue;
+      let text: string;
+      try {
+        text = fs.readFileSync(file, 'utf8');
+      } catch {
+        continue;
+      }
+      if (mayReferenceMedia(text)) mediaTexts.push(text);
+    }
+    await media.prepare(mediaTexts);
+  }
 
   for (const file of files) {
     const relative = path.relative(root, file);
@@ -236,6 +317,17 @@ function rewriteAssetUrls({
         file: relative,
         size: stat.size,
       });
+      oversized.push({ file: relative.split(path.sep).join('/'), size: stat.size });
+      // The media rewrite still runs: it is a plain scan, and it is what keeps
+      // the source's signed media URLs out of the copy.
+      if (media) {
+        const text = fs.readFileSync(file, 'utf8');
+        const mediaOnly = media.rewrite(text);
+        if (mediaOnly !== text) {
+          fs.writeFileSync(file, mediaOnly, 'utf8');
+          rewritten++;
+        }
+      }
       continue;
     }
 
@@ -249,6 +341,7 @@ function rewriteAssetUrls({
       targetPath: '',
       targetHasPath,
       onUncopiedRef,
+      ...(media ? { rewriteMedia: (text: string) => media.rewrite(text) } : {}),
     });
     if (updated === original) continue;
     fs.writeFileSync(file, updated, 'utf8');
@@ -265,7 +358,32 @@ function rewriteAssetUrls({
     });
   }
 
+  if (oversized.length > 0) warn?.(oversizedWarning(oversized));
+
   return { rewritten, files: files.length, copied };
+}
+
+/** How many oversized files one warning names before it summarizes the rest. */
+const OVERSIZED_NAMED_MAX = 5;
+
+/**
+ * One warning for every text file the repo-URL rewrite skipped for size. Its
+ * links into the source's repository still point there, which an instructor
+ * has to know to fix by hand; its media references were handled (the media
+ * rewrite has no cap). Exported for tests.
+ */
+export function oversizedWarning(files: readonly { file: string; size: number }[]): string {
+  const mb = (bytes: number) => `${Math.round((bytes / (1024 * 1024)) * 10) / 10} MB`;
+  const named = files
+    .slice(0, OVERSIZED_NAMED_MAX)
+    .map(({ file, size }) => `${file} (${mb(size)})`);
+  const more = files.length - named.length;
+  const list = named.join(', ') + (more > 0 ? `, and ${more} more` : '');
+  const noun = files.length === 1 ? 'text file' : `${files.length} text files`;
+  return (
+    `Copied ${noun} over ${mb(MAX_REWRITE_BYTES)} without updating ${files.length === 1 ? 'its' : 'their'} ` +
+    `links to the source class's repository: ${list}`
+  );
 }
 
 /**
@@ -279,7 +397,7 @@ function rewriteAssetUrls({
 export const cloneContentRepo = async (
   payload: CloneContentRepoPayload
 ): Promise<CloneContentRepoResult> => {
-  const { source, target, keepPages, keepSlides, commitMessage, onStep } = payload;
+  const { source, target, keepPages, keepSlides, commitMessage, onStep, media, warn } = payload;
 
   // Unique per run: two imports in the same org must never share a directory.
   const localPath = path.join(
@@ -287,6 +405,10 @@ export const cloneContentRepo = async (
     'repos',
     `content-import-${target.repo}-${Date.now()}`
   );
+
+  // Set once the push has returned. Until then, media copies made for this
+  // tree are referenced by nothing that exists, and a failure removes them.
+  let pushed = false;
 
   try {
     if (fs.existsSync(localPath)) {
@@ -343,7 +465,13 @@ export const cloneContentRepo = async (
     }
     fs.rmSync(path.join(localPath, MANIFEST_PATH), { force: true });
 
-    const { rewritten, files, copied } = rewriteAssetUrls({ root: localPath, source, target });
+    const { rewritten, files, copied } = await rewriteAssetUrls({
+      root: localPath,
+      source,
+      target,
+      media,
+      warn,
+    });
     if (files === 0) {
       logger.warn('content import: nothing left to push after pruning', {
         repo: `${source.orgLogin}/${source.repo}`,
@@ -384,9 +512,13 @@ export const cloneContentRepo = async (
     try {
       // Overwrites ONLY the auto-init scaffold ensureContentRepo just created.
       await freshGit.push('origin', 'main', target.gitlab ? [] : ['--force']);
+      pushed = true;
     } catch (error: unknown) {
       throw gitFailure('pushing to', target, error);
     }
+    // The pushed tree references these copies now, so a later step of the run
+    // that fails and discards must not remove them.
+    media?.keep?.();
 
     logger.info('content import: pushed content repo copy', {
       from: `${source.orgLogin}/${source.repo}`,
@@ -396,6 +528,19 @@ export const cloneContentRepo = async (
     });
 
     return { pushed: true, rewritten, files, copied };
+  } catch (error: unknown) {
+    // Nothing reached the target, so the media copies made for this tree are
+    // referenced by nothing. A push that failed AFTER the remote took it is
+    // indistinguishable from here; the retry this failure invites pushes the
+    // tree again and copies what it needs again, so that case converges too.
+    if (!pushed && media?.discard) {
+      await media.discard().catch((discardError: unknown) => {
+        logger.warn('content import: could not remove unused media copies', {
+          error: discardError instanceof Error ? discardError.message : String(discardError),
+        });
+      });
+    }
+    throw error;
   } finally {
     if (fs.existsSync(localPath)) {
       fs.rmSync(localPath, { recursive: true, force: true });

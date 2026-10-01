@@ -1,1 +1,1 @@
-export { loader, default } from '../student.$class.settings/route';
+export { loader } from '../student.$class.settings/route';

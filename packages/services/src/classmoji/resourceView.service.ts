@@ -1,6 +1,6 @@
-import getPrisma from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import { displayUsername } from '@classmoji/utils';
 import type { Prisma, Role } from '@prisma/client';
-import { userAvatarUrl } from '@classmoji/utils';
 
 /**
  * Resource View Service
@@ -151,10 +151,8 @@ export async function getRecentViewers({
           select: {
             id: true,
             name: true,
-            login: true,
             image: true,
-            provider: true,
-            provider_id: true,
+            ...GIT_IDENTITY,
           },
         },
       },
@@ -187,10 +185,8 @@ type ResourceViewWithUser = Prisma.ResourceViewGetPayload<{
       select: {
         id: true;
         name: true;
-        login: true;
         image: true;
-        provider: true;
-        provider_id: true;
+        accounts: (typeof GIT_IDENTITY)['accounts'];
       };
     };
   };
@@ -226,7 +222,7 @@ function buildViewerObject(
   userRoles: Record<string, string>,
   includeRoles: boolean
 ) {
-  const avatar_url = userAvatarUrl(view.user) ?? null;
+  const avatar_url = view.user.image || null;
 
   const viewerData: {
     user: { id: string; name: string | null; login: string | null; avatar_url: string | null };
@@ -236,7 +232,7 @@ function buildViewerObject(
     user: {
       id: view.user.id,
       name: view.user.name,
-      login: view.user.login,
+      login: displayUsername(view.user),
       avatar_url,
     },
     lastViewedAt: view.last_viewed_at,
@@ -304,10 +300,8 @@ export async function getRecentViewersForPaths({
           select: {
             id: true,
             name: true,
-            login: true,
             image: true,
-            provider: true,
-            provider_id: true,
+            ...GIT_IDENTITY,
           },
         },
       },

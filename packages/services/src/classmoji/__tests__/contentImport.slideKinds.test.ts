@@ -41,9 +41,11 @@ const getMeta = vi.fn();
 
 vi.mock('../../content/ContentService.ts', () => ({
   ContentService: {
-    listFolder: vi.fn(async () => [{ type: 'file', path: 'slides/week-1/index.html' }]),
+    listFolder: vi.fn(async () => [
+      { type: 'file', path: 'slides/week-1/index.html', sha: 'd'.repeat(40), size: 64 },
+    ]),
     getMeta: (...args: unknown[]) => getMeta(...args),
-    getContent: vi.fn(async () => ({ content: 'PGgxPmhpPC9oMT4=' })),
+    getBlobContent: vi.fn(async () => ({ content: 'PGgxPmhpPC9oMT4=', sha: 'd'.repeat(40) })),
     getLargeContent: (...args: unknown[]) => getLargeContent(...args),
     uploadBatch: (...args: unknown[]) => uploadBatch(...args),
   },
@@ -165,9 +167,8 @@ beforeEach(() => {
     filesUploaded: files.length,
     files: files.map((file, index) => ({ path: file.path, sha: `sha-${index}` })),
   }));
-  // Path-aware: the deck's own files are small (the folder walk drops anything
-  // over 1 MB), the uploaded document is not — which is the whole reason a FILE
-  // slide is read by a different route.
+  // The FILE slide's document is looked up by its path (the deck's own files
+  // come from the folder listing, which carries their size).
   getMeta.mockImplementation(async ({ path }: { path: string }) => ({
     sha: 'a'.repeat(40),
     size: path.endsWith('.pdf') ? 4_000_000 : 64,

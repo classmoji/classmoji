@@ -150,7 +150,7 @@ const SYMLINK_MODE = '120000';
  * @param {string} token - GitHub installation access token
  * @returns {Promise<TreeEntry[]>}
  */
-async function fetchRepoTree(
+export async function fetchRepoTree(
   owner: string,
   repo: string,
   token: string,
@@ -225,7 +225,7 @@ export async function fetchFileContent(
  * @param {number} concurrency - Max parallel requests (default 3)
  * @returns {Promise<Array<{path: string, content: string, error?: string}>>}
  */
-async function fetchMultipleFiles(
+export async function fetchMultipleFiles(
   owner: string,
   repo: string,
   paths: string[],
@@ -307,7 +307,9 @@ export function readablePickedPaths(
  * @param {Array} tree - Raw tree from fetchRepoTree
  * @returns {string} Formatted tree listing
  */
-function formatTreeForLLM(tree: Array<{ path: string; size: number; type: string }>): string {
+export function formatTreeForLLM(
+  tree: Array<{ path: string; size: number; type: string }>
+): string {
   // Filter out noise
   const ignorePatterns = [
     /^node_modules\//,
@@ -1435,9 +1437,7 @@ export const exploreRepoTask = task({
     await metadata.flush();
 
     // Only entries exploration may read are listed, picked or fetched.
-    const tree = (await fetchRepoTree(owner, repo, accessToken, gitHost)).filter(
-      isExplorableEntry
-    );
+    const tree = (await fetchRepoTree(owner, repo, accessToken, gitHost)).filter(isExplorableEntry);
     console.log(`[explore-repo] Step 1 done: ${tree.length} files in tree`);
     logger.info(`GitRepo has ${tree.length} files`);
 

@@ -7,8 +7,10 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   return null;
 };
 
+// Personal look and feel, kept in this browser (see useDarkMode). Applies in
+// every classroom, so it lives in account settings rather than a class's.
 const SettingsAppearance = () => (
-  <div className="w-2/3">
+  <div className="w-full max-w-2xl">
     <TweaksSection />
   </div>
 );

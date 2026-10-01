@@ -4,6 +4,7 @@
 // modules so the Modules pages have content. Idempotent. Safe to re-run; remove the
 // rows by re-running `npm run db:seed` (sessions) or deleting the dev-owner user.
 import { PrismaClient } from '@prisma/client';
+import { upsertGithubUser } from './seed-fixtures.js';
 
 const prisma = new PrismaClient();
 const SLUG = 'classmoji-dev-winter-2025';
@@ -20,18 +21,13 @@ async function main() {
   });
 
   // ── Dummy OWNER ───────────────────────────────────────────────────────────
-  const owner = await prisma.user.upsert({
-    where: { login: 'dev-owner' },
-    update: {},
-    create: {
-      provider: 'GITHUB',
-      provider_id: '10000000',
-      login: 'dev-owner',
-      name: 'Dev Owner',
-      email: 'owner@dev.local',
-      image: 'https://github.com/identicons/dev-owner.png',
-      school_id: 'dev',
-    },
+  const owner = await upsertGithubUser(prisma, {
+    login: 'dev-owner',
+    githubId: '10000000',
+    name: 'Dev Owner',
+    email: 'owner@dev.local',
+    image: 'https://github.com/identicons/dev-owner.png',
+    keepImage: true,
   });
   await prisma.classroomMembership.upsert({
     where: {
@@ -50,8 +46,12 @@ async function main() {
     },
   });
 
-  const ta = await prisma.user.findFirst({ where: { login: 'fake-ta' } });
-  const student = await prisma.user.findFirst({ where: { login: 'fake-student-1' } });
+  const byLogin = login =>
+    prisma.user.findFirst({
+      where: { accounts: { some: { provider_id: 'github', username: login } } },
+    });
+  const ta = await byLogin('fake-ta');
+  const student = await byLogin('fake-student-1');
 
   // ── Sessions (token = cookie value) ───────────────────────────────────────
   const expires = new Date(Date.now() + 24 * 60 * 60 * 1000);

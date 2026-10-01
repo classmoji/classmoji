@@ -13,12 +13,12 @@
  *      GitHub's contributor-stats endpoint returns 202 while warming its cache; we
  *      surface that as `pending: true` and still write the row but mark it `stale`
  *      so the Trigger.dev task retries.
- *   4. Resolve GitHub logins → classroom User ids via ClassroomMembership.user.login,
+ *   4. Resolve GitHub logins → classroom User ids via the members' git usernames,
  *      with `GitRepoContributorLink` rows taking precedence as manual overrides.
  *   5. Upsert the snapshot row (JSON columns + aggregate totals + stale/error flags).
  */
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { repoNamespace } from '@classmoji/utils';
-import getPrisma from '@classmoji/database';
 import type { GitProvider } from '../git/GitProvider.ts';
 import { getGitProvider } from '../git/index.ts';
 import type {
@@ -225,11 +225,11 @@ export async function upsertSnapshot(
 
 /**
  * Build an `identity → userId` map for a gitRepo, keys lowercased (see
- * identityKeys). Every classroom member answers to their Classmoji login,
- * their Gitlab username and their email (Gitlab reports commit authors by
- * email, and its no-reply addresses carry the username). Never by display
- * name: anyone can commit as any name, and the contributor breakdown should
- * not credit one student's commits to another on that alone. Then any
+ * identityKeys). Every classroom member answers to each of their git usernames
+ * (Github, Gitlab) and their email (Gitlab reports commit authors by email, and
+ * its no-reply addresses carry the username). Never by display name: anyone
+ * can commit as any name, and the contributor breakdown should not credit one
+ * student's commits to another on that alone. Then any
  * `GitRepoContributorLink` rows for this repo overlay it (manual overrides
  * win). Commit emails are self-asserted too, as on Github: attribution is a
  * teaching aid, and a TA can relink.
@@ -242,16 +242,7 @@ async function buildLoginToUserIdMap(
   const [memberships, links] = await Promise.all([
     prisma.classroomMembership.findMany({
       where: { classroom_id: classroomId },
-      include: {
-        user: {
-          select: {
-            id: true,
-            login: true,
-            email: true,
-            accounts: { where: { provider_id: 'gitlab' }, select: { username: true } },
-          },
-        },
-      },
+      include: { user: { select: { id: true, email: true, ...GIT_IDENTITY } } },
     }),
     prisma.gitRepoContributorLink.findMany({
       where: { git_repo_id: repositoryId, user_id: { not: null } },
@@ -264,7 +255,6 @@ async function buildLoginToUserIdMap(
   };
   for (const m of memberships) {
     if (!m.user) continue;
-    add(m.user.login, m.user.id);
     for (const account of m.user.accounts ?? []) add(account.username, m.user.id);
     add(m.user.email, m.user.id);
   }

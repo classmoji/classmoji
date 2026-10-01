@@ -27,7 +27,7 @@ export interface TeamMemberLite {
   id: string;
   name: string | null;
   login: string | null;
-  avatarUrl: string | null;
+  image: string | null;
 }
 
 export interface TeamSummary {
@@ -217,7 +217,7 @@ const TeamPanel = ({
           <Avatar.Group max={{ count: 6 }}>
             {team.members.map(m => (
               <Tooltip key={m.id} title={m.name || m.login || ''}>
-                <Avatar src={m.avatarUrl ?? undefined} size={32}>
+                <Avatar src={m.image ?? undefined} size={32}>
                   {initials(m.name, m.login)}
                 </Avatar>
               </Tooltip>

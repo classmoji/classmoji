@@ -70,9 +70,7 @@ describe('gitWeb on a self-managed instance', () => {
       git_namespace: 'cs/cs101',
       base_url: 'https://gitlab.school.edu',
     });
-    expect(web.repo('hw1-alice')).toBe(
-      'https://gitlab.school.edu/cs/cs101/projects/hw1-alice'
-    );
+    expect(web.repo('hw1-alice')).toBe('https://gitlab.school.edu/cs/cs101/projects/hw1-alice');
     expect(web.issue('hw1-alice', 3)).toBe(
       'https://gitlab.school.edu/cs/cs101/projects/hw1-alice/-/issues/3'
     );
@@ -86,23 +84,5 @@ describe('gitWeb on a self-managed instance', () => {
   it('falls back to gitlab.com without a base_url', () => {
     const web = gitWeb({ provider: 'GITLAB', login: 'cs', git_namespace: 'cs/cs101' });
     expect(web.repo('x')).toBe('https://gitlab.com/cs/cs101/projects/x');
-  });
-});
-
-describe('pickAvailableLogin', () => {
-  const takenSet = (taken: string[]) => async (l: string) => taken.includes(l);
-
-  it('uses the base when free, else the first free suffix', async () => {
-    const { pickAvailableLogin } = await import('../index.ts');
-    await expect(pickAvailableLogin('alice', takenSet([]))).resolves.toBe('alice');
-    await expect(pickAvailableLogin('alice', takenSet(['alice', 'alice-2']))).resolves.toBe(
-      'alice-3'
-    );
-  });
-
-  it('gives up with null when nothing is free', async () => {
-    const { pickAvailableLogin } = await import('../index.ts');
-    await expect(pickAvailableLogin('a', async () => true, 3)).resolves.toBeNull();
-    await expect(pickAvailableLogin('  ', takenSet([]))).resolves.toBeNull();
   });
 });

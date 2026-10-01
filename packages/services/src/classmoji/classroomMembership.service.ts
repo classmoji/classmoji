@@ -1,4 +1,6 @@
-import getPrisma from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY, whereGitUsername } from '@classmoji/database';
+import { withLogin, withLogins } from '@classmoji/utils';
+import { findClassroomGitProvider } from './classroomGitProvider.ts';
 import type { Prisma, Role } from '@prisma/client';
 
 interface ClassroomMembershipUpsertData {
@@ -60,17 +62,19 @@ export const findByClassroomAndUser = async (
   roles: Role | Role[] | null = null
 ) => {
   const rolesFilter = roles ? { role: { in: Array.isArray(roles) ? roles : [roles] } } : {};
-  return getPrisma().classroomMembership.findFirst({
-    where: {
-      classroom_id: classroomId,
-      user_id: userId,
-      ...rolesFilter,
-    },
-    include: {
-      user: true,
-      classroom: true,
-    },
-  });
+  return withLogins(
+    await getPrisma().classroomMembership.findFirst({
+      where: {
+        classroom_id: classroomId,
+        user_id: userId,
+        ...rolesFilter,
+      },
+      include: {
+        user: { include: GIT_IDENTITY },
+        classroom: true,
+      },
+    })
+  );
 };
 
 /**
@@ -99,11 +103,12 @@ export const findByClassroomAndUser = async (
  * @returns {Promise<Object|null>}
  */
 export const findStudentByLoginInClassroom = async (classroomId: string, login: string) => {
-  return getPrisma().classroomMembership.findFirst({
+  const provider = await findClassroomGitProvider(classroomId);
+  const membership = await getPrisma().classroomMembership.findFirst({
     where: {
       classroom_id: classroomId,
       role: 'STUDENT',
-      user: { login },
+      user: whereGitUsername(login, provider),
     },
     select: {
       id: true,
@@ -114,10 +119,11 @@ export const findStudentByLoginInClassroom = async (classroomId: string, login: 
         // apps/webapp/app/utils/studentFields.server.ts). Selected here because
         // the student detail drawer shows it, but callers still choose what to
         // return — the grades drawer projects it away.
-        select: { id: true, name: true, login: true, image: true, school_id: true },
+        select: { id: true, name: true, image: true, school_id: true, ...GIT_IDENTITY },
       },
     },
   });
+  return membership ? { ...membership, user: withLogin(membership.user, provider) } : null;
 };
 
 /**
@@ -148,10 +154,10 @@ export const findByClassroomId = async (classroomId: string, role: Role | null =
   const where: Prisma.ClassroomMembershipWhereInput = { classroom_id: classroomId };
   if (role) where.role = role;
 
-  return getPrisma().classroomMembership.findMany({
+  const memberships = await getPrisma().classroomMembership.findMany({
     where,
     include: {
-      user: true,
+      user: { include: GIT_IDENTITY },
     },
     orderBy: {
       user: {
@@ -159,6 +165,7 @@ export const findByClassroomId = async (classroomId: string, role: Role | null =
       },
     },
   });
+  return withLogins(memberships, await findClassroomGitProvider(classroomId));
 };
 
 /**
@@ -176,15 +183,16 @@ export const findStudents = async (classroomId: string) => {
  * @returns {Promise<Object[]>}
  */
 export const findStaff = async (classroomId: string) => {
-  return getPrisma().classroomMembership.findMany({
+  const memberships = await getPrisma().classroomMembership.findMany({
     where: {
       classroom_id: classroomId,
       role: { in: ['OWNER', 'TEACHER'] satisfies Role[] },
     },
     include: {
-      user: true,
+      user: { include: GIT_IDENTITY },
     },
   });
+  return withLogins(memberships, await findClassroomGitProvider(classroomId));
 };
 
 /**
@@ -193,15 +201,16 @@ export const findStaff = async (classroomId: string) => {
  * @returns {Promise<Object[]>}
  */
 export const findGraders = async (classroomId: string) => {
-  return getPrisma().classroomMembership.findMany({
+  const memberships = await getPrisma().classroomMembership.findMany({
     where: {
       classroom_id: classroomId,
       is_grader: true,
     },
     include: {
-      user: true,
+      user: { include: GIT_IDENTITY },
     },
   });
+  return withLogins(memberships, await findClassroomGitProvider(classroomId));
 };
 
 /**
@@ -215,13 +224,15 @@ export const findGraders = async (classroomId: string) => {
  * @returns {Promise<Object>}
  */
 export const create = async (data: Prisma.ClassroomMembershipUncheckedCreateInput) => {
-  return getPrisma().classroomMembership.create({
-    data,
-    include: {
-      user: true,
-      classroom: true,
-    },
-  });
+  return withLogins(
+    await getPrisma().classroomMembership.create({
+      data,
+      include: {
+        user: { include: GIT_IDENTITY },
+        classroom: true,
+      },
+    })
+  );
 };
 
 /**
@@ -236,25 +247,27 @@ export const upsert = async (
   userId: string,
   data: ClassroomMembershipUpsertData
 ) => {
-  return getPrisma().classroomMembership.upsert({
-    where: {
-      classroom_id_user_id_role: {
+  return withLogins(
+    await getPrisma().classroomMembership.upsert({
+      where: {
+        classroom_id_user_id_role: {
+          classroom_id: classroomId,
+          user_id: userId,
+          role: data.role,
+        },
+      },
+      create: {
         classroom_id: classroomId,
         user_id: userId,
-        role: data.role,
+        ...data,
       },
-    },
-    create: {
-      classroom_id: classroomId,
-      user_id: userId,
-      ...data,
-    },
-    update: data,
-    include: {
-      user: true,
-      classroom: true,
-    },
-  });
+      update: data,
+      include: {
+        user: { include: GIT_IDENTITY },
+        classroom: true,
+      },
+    })
+  );
 };
 
 /**
@@ -279,14 +292,16 @@ export const update = async (
     await assertNotLastOwner(classroomId);
   }
 
-  return getPrisma().classroomMembership.update({
-    where: { id: membership.id },
-    data: updates,
-    include: {
-      user: true,
-      classroom: true,
-    },
-  });
+  return withLogins(
+    await getPrisma().classroomMembership.update({
+      where: { id: membership.id },
+      data: updates,
+      include: {
+        user: { include: GIT_IDENTITY },
+        classroom: true,
+      },
+    })
+  );
 };
 
 /**
@@ -304,14 +319,16 @@ export const updateById = async (id: string, updates: Prisma.ClassroomMembership
     }
   }
 
-  return getPrisma().classroomMembership.update({
-    where: { id },
-    data: updates,
-    include: {
-      user: true,
-      classroom: true,
-    },
-  });
+  return withLogins(
+    await getPrisma().classroomMembership.update({
+      where: { id },
+      data: updates,
+      include: {
+        user: { include: GIT_IDENTITY },
+        classroom: true,
+      },
+    })
+  );
 };
 
 /**
@@ -490,6 +507,7 @@ export const findUsersByRole = async (
   role: Role,
   filters: Prisma.ClassroomMembershipWhereInput = {}
 ) => {
+  const provider = await findClassroomGitProvider(classroomId);
   const memberships = await getPrisma().classroomMembership.findMany({
     where: {
       classroom_id: classroomId,
@@ -497,7 +515,7 @@ export const findUsersByRole = async (
       ...filters,
     },
     include: {
-      user: true,
+      user: { include: GIT_IDENTITY },
     },
     orderBy: {
       user: {
@@ -507,7 +525,7 @@ export const findUsersByRole = async (
   });
 
   return memberships.map(({ user, is_grader, has_accepted_invite, letter_grade, comment }) => ({
-    ...user,
+    ...withLogin(user, provider),
     is_grader,
     has_accepted_invite,
     letter_grade,
@@ -536,6 +554,7 @@ export const findUsersByRoles = async (
   roles: Role[],
   filters: Prisma.ClassroomMembershipWhereInput = {}
 ) => {
+  const provider = await findClassroomGitProvider(classroomId);
   const memberships = await getPrisma().classroomMembership.findMany({
     where: {
       classroom_id: classroomId,
@@ -543,7 +562,7 @@ export const findUsersByRoles = async (
       ...filters,
     },
     include: {
-      user: true,
+      user: { include: GIT_IDENTITY },
     },
     orderBy: [{ is_grader: 'desc' }, { user: { name: 'asc' } }],
   });
@@ -556,7 +575,7 @@ export const findUsersByRoles = async (
       return true;
     })
     .map(({ user, is_grader, has_accepted_invite, letter_grade, comment }) => ({
-      ...user,
+      ...withLogin(user, provider),
       is_grader,
       has_accepted_invite,
       letter_grade,

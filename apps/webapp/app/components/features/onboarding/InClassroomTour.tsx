@@ -190,6 +190,14 @@ const OWNER_STEPS: FeatureStep[] = [
   },
   {
     link: '/teams/new',
+    selector: '[data-tour="teams-new-tags"]',
+    placement: 'bottom',
+    title: 'Team tags',
+    description:
+      'Every team needs at least one tag. Pick existing tags, or type a new name at the bottom of the list to make one.',
+  },
+  {
+    link: '/teams/new',
     selector: '[data-tour="teams-new-visibility"]',
     placement: 'top',
     title: 'Team visibility',

@@ -32,6 +32,7 @@ const getInitials = (name?: string | null, login?: string | null) => {
 
 interface UserAvatarProps {
   login?: string | null;
+  image?: string | null;
   name?: string | null;
   seed?: string | null;
   size?: number;
@@ -41,6 +42,7 @@ interface UserAvatarProps {
 
 const UserAvatar = ({
   login,
+  image,
   name,
   seed,
   size = 32,
@@ -48,15 +50,12 @@ const UserAvatar = ({
   ringClassName = 'ring-1 ring-gray-200 dark:ring-gray-700',
 }: UserAvatarProps) => {
   const [errored, setErrored] = useState(false);
-  // Avatars come from github.com by login; in a Gitlab classroom that login
-  // names a stranger there, so Gitlab users get their initials.
-  const { isGitLab } = useGitWeb();
   const initials = getInitials(name, login);
   const gradient = pickGradient(seed || login || name || 'x');
   const style = { width: size, height: size };
   const fontSize = Math.max(10, Math.round(size * 0.38));
 
-  if (!login || errored || isGitLab) {
+  if (!image || errored) {
     return (
       <div
         style={{ ...style, fontSize }}
@@ -69,8 +68,8 @@ const UserAvatar = ({
 
   return (
     <img
-      src={`https://github.com/${login}.png?size=${size * 2}`}
-      alt={name || login}
+      src={image}
+      alt={name || login || ''}
       onError={() => setErrored(true)}
       style={style}
       className={`rounded-full ${ringClassName} flex-shrink-0 object-cover ${className}`}

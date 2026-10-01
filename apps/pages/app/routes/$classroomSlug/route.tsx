@@ -1,5 +1,6 @@
 import { useLoaderData, redirect, Outlet, useLocation, useNavigate, useParams } from 'react-router';
 import { useEffect, useRef, useState } from 'react';
+import { gitUsername } from '@classmoji/utils';
 import useLocalStorageState from 'use-local-storage-state';
 
 import {
@@ -10,6 +11,7 @@ import {
 } from './embedBridge.ts';
 
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
+import { findClassroomRole } from '~/utils/classroomRole.server.ts';
 import { assetResolveContext } from '~/utils/assetRefs.server.ts';
 import { headerImageRefs, withResolvedHeaderImages } from '~/utils/headerImages.ts';
 
@@ -63,15 +65,12 @@ export const loader = async ({
   let pages: Awaited<ReturnType<typeof ClassmojiService.page.findByClassroomId>> = [];
 
   if (authData) {
-    // Get membership in this classroom
-    membership = await ClassmojiService.classroomMembership.findByClassroomAndUser(
-      classroom.id,
-      authData.userId
-    );
+    // Their role in this classroom: the highest of the rows they hold there, so
+    // an owner also enrolled as a student gets the admin view.
+    const role = await findClassroomRole({ userId: authData.userId, classroomId: classroom.id });
+    membership = role ? { role } : null;
 
-    if (membership) {
-      const role = membership.role;
-
+    if (role) {
       if (role === 'OWNER' || role === 'TEACHER') {
         view = 'admin';
         // Admin sees all pages including drafts
@@ -177,7 +176,9 @@ export const loader = async ({
       show_in_student_menu: p.show_in_student_menu,
       header_image_url: p.header_image_url,
       updated_at: p.updated_at,
-      creator: p.creator ? { login: p.creator.login } : null,
+      creator: p.creator
+        ? { login: gitUsername(p.creator as Parameters<typeof gitUsername>[0]) }
+        : null,
     })),
     membership: membership ? { role: membership.role } : null,
   };
@@ -207,12 +208,10 @@ export const action = async ({
     return Response.json({ error: 'Classroom not found' }, { status: 404 });
   }
 
-  const membership = await ClassmojiService.classroomMembership.findByClassroomAndUser(
-    classroom.id,
-    authData.userId
-  );
+  // The highest of their roles here, as the loader reads it.
+  const role = await findClassroomRole({ userId: authData.userId, classroomId: classroom.id });
 
-  if (!membership || !['OWNER', 'TEACHER'].includes(membership.role)) {
+  if (!role || !['OWNER', 'TEACHER'].includes(role)) {
     return Response.json({ error: 'Unauthorized' }, { status: 403 });
   }
 

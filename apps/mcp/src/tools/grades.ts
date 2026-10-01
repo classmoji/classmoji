@@ -19,6 +19,7 @@
  */
 
 import { ClassmojiService, HelperService } from '@classmoji/services';
+import { gitUsername } from '@classmoji/utils';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
@@ -113,7 +114,7 @@ export const gradeAddTool: ToolDefinition<GradeAddArgs> = {
       success: true,
       git_repo_assignment_id: gra.id,
       deduplicated,
-      grades: grades.map(g => ({ id: g.id, emoji: g.emoji, grader: g.grader?.login ?? null })),
+      grades: grades.map(g => ({ id: g.id, emoji: g.emoji, grader: gitUsername(g.grader) })),
     });
   },
 };

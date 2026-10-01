@@ -212,14 +212,6 @@ export const routes = {
     roles: ['OWNER'],
     category: 'settings',
   },
-  memberSettings: {
-    link: '/settings',
-    label: 'Settings',
-    icon: IconSettings,
-    // Personal member settings, not the owner-only classroom settings above.
-    roles: ['STUDENT', 'TEACHER', 'ASSISTANT'],
-    category: 'settings',
-  },
   support: {
     link: '/support',
     label: 'Help & Feedback',

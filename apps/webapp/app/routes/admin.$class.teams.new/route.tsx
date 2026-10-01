@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { useFetcher, useNavigate } from 'react-router';
 import { namedAction } from 'remix-utils/named-action';
-import { Input, Modal, Form, Radio, Select } from 'antd';
+import { Button, Input, Modal, Form, Radio, Select } from 'antd';
 import type { ButtonProps } from 'antd';
 
 import { useGlobalFetcher, useDisclosure } from '~/hooks';
@@ -32,7 +32,42 @@ const AdminNewTeam = ({ loaderData }: Route.ComponentProps) => {
   const navigate = useNavigate();
 
   const [name, setName] = useState('');
-  const [tagsList, setTagsList] = useState([]);
+  const [tagsList, setTagsList] = useState<string[]>([]);
+  const [tagsError, setTagsError] = useState(false);
+
+  // Tag creation has its own fetcher so it never collides with the create submit.
+  const tagFetcher = useFetcher<{ tag?: { id: string; name: string }; error?: string }>();
+  const [newTagName, setNewTagName] = useState('');
+  const [createdTags, setCreatedTags] = useState<{ id: string; name: string }[]>([]);
+  const creatingTag = tagFetcher.state !== 'idle';
+  const tagCreateError = tagFetcher.state === 'idle' ? tagFetcher.data?.error : undefined;
+
+  // Tags the classroom already had, plus any made here without leaving the form.
+  const allTags = useMemo(
+    () => [...tags, ...createdTags.filter(c => !tags.some(t => t.id === c.id))],
+    [tags, createdTags]
+  );
+
+  const createTag = () => {
+    const tagName = newTagName.trim();
+    if (!tagName) return;
+    tagFetcher.submit(
+      { name: tagName },
+      { method: 'post', encType: 'application/json', action: '?/createTag' }
+    );
+  };
+
+  // A tag made here is selected straight away: every team needs one, so a
+  // classroom without tags would otherwise be a dead end.
+  useEffect(() => {
+    if (tagFetcher.state !== 'idle') return;
+    const created = tagFetcher.data?.tag;
+    if (!created) return;
+    setCreatedTags(prev => (prev.some(t => t.id === created.id) ? prev : [...prev, created]));
+    setTagsList(prev => (prev.includes(created.id) ? prev : [...prev, created.id]));
+    setTagsError(false);
+    setNewTagName('');
+  }, [tagFetcher.state, tagFetcher.data]);
 
   // 'closed' (Visible) is the default: the choice used to be ignored and every
   // team ended up visible, so this keeps the effective default unchanged now
@@ -47,12 +82,11 @@ const AdminNewTeam = ({ loaderData }: Route.ComponentProps) => {
   }, []);
 
   const createTeam = () => {
-    if (!name) {
-      setNameError(true);
-      return;
-    } else {
-      setNameError(false);
-    }
+    const nameMissing = !name;
+    const tagsMissing = tagsList.length === 0;
+    setNameError(nameMissing);
+    setTagsError(tagsMissing);
+    if (nameMissing || tagsMissing) return;
 
     notify(ActionTypes.SAVE_TEAM, 'Creating team...');
 
@@ -101,6 +135,7 @@ const AdminNewTeam = ({ loaderData }: Route.ComponentProps) => {
         <Form layout="vertical">
           <Form.Item
             label="Team name"
+            required
             validateStatus={nameError ? 'error' : undefined}
             help={nameError ? 'Team name is required' : undefined}
           >
@@ -111,15 +146,62 @@ const AdminNewTeam = ({ loaderData }: Route.ComponentProps) => {
             />
           </Form.Item>
 
-          <Form.Item label="Tag">
+          <Form.Item
+            label="Tags"
+            required
+            validateStatus={tagsError || tagCreateError ? 'error' : undefined}
+            help={tagCreateError ?? (tagsError ? 'At least one tag is required' : undefined)}
+          >
             <Select
-              options={tags.map((tag: { name: string; id: string }) => ({
-                label: tag.name,
-                value: tag.id,
-              }))}
+              data-tour="teams-new-tags"
               mode="multiple"
-              onChange={setTagsList}
+              optionFilterProp="label"
+              placeholder="Choose team tags…"
+              value={tagsList}
+              options={allTags.map(tag => ({ label: tag.name, value: tag.id }))}
+              onChange={(next: string[]) => {
+                setTagsList(next);
+                if (next.length > 0) setTagsError(false);
+              }}
               allowClear
+              notFoundContent={
+                <span className="text-sm text-ink-3">No team tags yet — type one below.</span>
+              }
+              popupRender={menu => (
+                <>
+                  {menu}
+                  <div className="flex items-center gap-2 border-t border-line px-2 py-2">
+                    <Input
+                      size="small"
+                      value={newTagName}
+                      placeholder="New tag name"
+                      aria-label="New team tag name"
+                      disabled={creatingTag}
+                      onChange={e => setNewTagName(e.target.value)}
+                      onKeyDown={e => {
+                        // No key reaches the Select: in multiple mode its own
+                        // handler takes Backspace on an empty search as
+                        // "remove the last chosen tag". Enter makes the tag
+                        // rather than submitting the team.
+                        e.stopPropagation();
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          createTag();
+                        }
+                      }}
+                    />
+                    <Button
+                      size="small"
+                      type="primary"
+                      loading={creatingTag}
+                      disabled={!newTagName.trim()}
+                      onClick={createTag}
+                    >
+                      Add
+                    </Button>
+                  </div>
+                </>
+              )}
             />
           </Form.Item>
 
@@ -161,6 +243,20 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   };
 
   return namedAction(request, {
+    // Every team needs a tag, so tags are made where the team is. Upsert, so
+    // re-entering a name that exists simply hands back that tag.
+    async createTag() {
+      const tagName = typeof name === 'string' ? name.trim() : '';
+      if (!tagName) return { error: 'A tag name is required.' };
+      try {
+        const tag = await ClassmojiService.organizationTag.upsert(classroom.id, tagName);
+        return { tag: { id: tag.id, name: tag.name } };
+      } catch (error: unknown) {
+        console.error('Tag create error:', error);
+        return { error: 'Could not create the tag.' };
+      }
+    },
+
     async createTeam() {
       try {
         const { tagsFailed } = await ClassmojiService.teamAdmin.createTeam({
@@ -192,11 +288,23 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
             action: ActionTypes.SAVE_TEAM,
           };
         }
+        // A chosen tag deleted after the service checked it fails the tag write
+        // (a foreign-key violation); the service has removed the provider team
+        // again. The team was not created for want of a tag.
+        if (isForeignKeyViolation(error)) {
+          return { error: TAG_REQUIRED_MESSAGE, action: ActionTypes.SAVE_TEAM };
+        }
         throw error;
       }
     },
   });
 };
+
+const TAG_REQUIRED_MESSAGE = 'A team needs at least one tag from this classroom.';
+
+/** A Prisma foreign-key violation (P2003). */
+const isForeignKeyViolation = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2003';
 
 const createErrorMessage = (error: TeamServiceError, name: string, isGitLab = false) => {
   switch (error.code) {
@@ -210,6 +318,8 @@ const createErrorMessage = (error: TeamServiceError, name: string, isGitLab = fa
         : `A team named "${name}" already exists in this Github organization. Please choose a different name.`;
     case 'no_org_configured':
       return 'No Github organization or Gitlab group configured';
+    case 'tag_required':
+      return TAG_REQUIRED_MESSAGE;
     default:
       return 'Could not create this team.';
   }

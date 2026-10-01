@@ -10,10 +10,13 @@
  * more, must still be cut off — which is why the byte count while reading is a
  * separate gate and not an optimisation of the first one.
  *
- * The slot limit at the bottom is the other half of the same problem: the size
- * cap bounds ONE upload, and says nothing about ten of them arriving together.
+ * The per-process slot limit — the other half of the same problem, bounding
+ * how many uploads arrive together rather than the size of one — is tested
+ * next to its own module in `packages/utils/src/__tests__/uploadConcurrency.test.ts`.
  */
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 
 import {
@@ -25,14 +28,8 @@ import {
   readLimitedChunks,
   readLimitedFormData,
   uploadBodyLimit,
-} from '../../app/utils/uploadLimit.ts';
-import {
-  MAX_CONCURRENT_UPLOADS,
-  acquireUploadSlot,
-  releaseUploadSlot,
-  uploadsInFlight,
-} from '../../app/utils/uploadConcurrency.server.ts';
-
+} from '@classmoji/utils/upload-limit';
+import { SLIDES_IMPORT_MAX_BYTES, SLIDES_IMPORT_MAX_LABEL } from '../../app/utils/importLimits.ts';
 /** A stream that hands over `count` chunks of `size` bytes. */
 function streamOf(count: number, size: number): ReadableStream<Uint8Array> {
   let sent = 0;
@@ -147,37 +144,20 @@ test.describe('reading without joining', () => {
   });
 });
 
-test.describe('the concurrency limit', () => {
-  test('hands out a fixed number of slots and then says no', () => {
-    const taken: boolean[] = [];
-    for (let i = 0; i < MAX_CONCURRENT_UPLOADS; i += 1) taken.push(acquireUploadSlot());
-    expect(taken.every(Boolean)).toBe(true);
-    expect(uploadsInFlight()).toBe(MAX_CONCURRENT_UPLOADS);
+test.describe('the slides.com import cap', () => {
+  const read = (relative: string) =>
+    readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
 
-    // The one over the line is refused rather than queued: a queued upload
-    // holds its socket open for as long as the ones ahead of it take, which is
-    // the same resource problem one step later.
-    expect(acquireUploadSlot()).toBe(false);
-
-    for (let i = 0; i < MAX_CONCURRENT_UPLOADS; i += 1) releaseUploadSlot();
-    expect(uploadsInFlight()).toBe(0);
-  });
-
-  test('a release frees exactly one slot', () => {
-    for (let i = 0; i < MAX_CONCURRENT_UPLOADS; i += 1) acquireUploadSlot();
-    expect(acquireUploadSlot()).toBe(false);
-
-    releaseUploadSlot();
-    expect(acquireUploadSlot()).toBe(true);
-
-    for (let i = 0; i < MAX_CONCURRENT_UPLOADS; i += 1) releaseUploadSlot();
-  });
-
-  test('never counts below zero, whatever a caller does', () => {
-    // A `finally` that runs twice, or one that runs after an acquire returned
-    // false, must not leave the process with more slots than it has.
-    releaseUploadSlot();
-    releaseUploadSlot();
-    expect(uploadsInFlight()).toBe(0);
+  test('is one constant, read by both the screen and the endpoint', () => {
+    expect(SLIDES_IMPORT_MAX_BYTES).toBe(150 * 1024 * 1024);
+    expect(SLIDES_IMPORT_MAX_LABEL).toBe('150 MB');
+    for (const file of [
+      '../../app/routes/import/route.tsx',
+      '../../app/routes/api.slides.import.start/route.ts',
+    ]) {
+      const text = read(file);
+      expect(text).toContain("from '~/utils/importLimits'");
+      expect(text).not.toMatch(/150 \* 1024 \* 1024/);
+    }
   });
 });

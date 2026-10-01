@@ -25,11 +25,15 @@ import { enqueueDeckThumbnail } from '../classmoji/deckThumbnail.service.ts';
 import {
   canonicalizeMany,
   isOwnAssetRef,
+  parseMediaUrl,
+  parseMissingUrl,
+  stripSignedMediaUrls,
   warmContentText,
   type ResolveContext,
   type WarmContext,
 } from '../classmoji/contentDelivery.service.ts';
 import { indexOneFile } from '../classmoji/contentIndex.service.ts';
+import { mediaRef } from '../media/mediaLookup.ts';
 
 // Structural type compatible with ContentService's (unexported) git org record.
 interface GitOrgRecord {
@@ -287,13 +291,38 @@ export function deckWarmContext(slide: SlideContentTarget): WarmContext | null {
 }
 
 /**
+ * One ref canonicalized with NO database read: a `/missing/` placeholder back
+ * to its reference, and a signed media URL of ours back to `media://{id}`.
+ * Everything else — a signed blob url, which needs the asset map to find its
+ * path — comes back unchanged.
+ *
+ * "Ours" is `parseMediaUrl`'s answer (the delivery host and this classroom),
+ * the same one `canonicalizeAssetRef` asks, so it means one thing on both paths.
+ */
+function canonicalizeRefWithoutLookup(ctx: ResolveContext, ref: string): string {
+  const missing = parseMissingUrl(ctx, ref);
+  if (missing !== null) return missing;
+  const mediaId = parseMediaUrl(ctx, ref);
+  return mediaId !== null ? mediaRef(mediaId) : ref;
+}
+
+/**
  * A deck with every signed URL of ours replaced by the repo path behind it.
  *
  * Failure is swallowed on purpose. The asset map lives in Postgres, and a
  * database hiccup must not turn a save into a lost edit — the worst case of
- * skipping this pass is the state the deck was already in before it existed.
+ * skipping the full pass is the state the deck was already in before it
+ * existed. With one exception: a signed MEDIA url is never committed. The
+ * editor holds every `media://` reference signed, so skipping the pass would
+ * freeze an expiring signature into the deck for every video on it — and
+ * undoing that one needs no database at all (`canonicalizeRefWithoutLookup`).
+ *
+ * Exported for the editor's merge save, which runs it on the editor's side of
+ * the 3-way merge BEFORE comparing: the editor holds its `media://` references
+ * signed (they have no proxy to load through), and a signed URL compared with
+ * the stored reference would read as an edit to every slide with a video on it.
  */
-async function canonicalizeDeckForSave(
+export async function canonicalizeDeckForSave(
   slide: SlideContentTarget,
   deck: DeckJson
 ): Promise<DeckJson> {
@@ -316,7 +345,26 @@ async function canonicalizeDeckForSave(
       '[slideContent] Could not canonicalize deck asset refs on save:',
       error instanceof Error ? error.message : error
     );
-    return deck;
+    try {
+      return await canonicalizeDeckAssets(
+        deck,
+        async refs => new Map(refs.map(ref => [ref, canonicalizeRefWithoutLookup(ctx, ref)])),
+        ref => isOwnAssetRef(ctx, ref)
+      );
+    } catch (fallbackError) {
+      console.warn(
+        '[slideContent] Could not canonicalize media refs on save either:',
+        fallbackError instanceof Error ? fallbackError.message : fallbackError
+      );
+      // Last resort, at the text level: a signed media URL is never committed.
+      // If even this cannot be done, the save is refused rather than storing
+      // expiring signatures.
+      try {
+        return JSON.parse(stripSignedMediaUrls(ctx, JSON.stringify(deck))) as DeckJson;
+      } catch {
+        throw new Error('This deck could not be saved. Try again.');
+      }
+    }
   }
 }
 

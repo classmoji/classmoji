@@ -70,6 +70,7 @@ const SAMPLES: Record<string, unknown> = {
     props: { url: 'https://example.test/a.png', caption: 'cap', previewWidth: 400 },
   },
   file: { type: 'file', props: { url: 'https://example.test/a.pdf', name: 'a.pdf' } },
+  audio: { type: 'audio', props: { url: 'https://example.test/a.mp3', name: 'a.mp3' } },
   table: {
     type: 'table',
     content: { type: 'tableContent', rows: [{ cells: [text('cell')] }] },
@@ -212,6 +213,7 @@ test.describe('editor affordances are stripped', () => {
   const EMPTY_FILE_SAMPLES: Record<string, unknown> = {
     image: { type: 'image', props: { url: '' } },
     file: { type: 'file', props: { url: '' } },
+    audio: { type: 'audio', props: { url: '' } },
   };
 
   for (const [type, block] of Object.entries(EMPTY_FILE_SAMPLES)) {
@@ -222,6 +224,7 @@ test.describe('editor affordances are stripped', () => {
       }
       expect(html).not.toContain('Add image');
       expect(html).not.toContain('Add file');
+      expect(html).not.toContain('Add audio');
       // It renders as nothing at all, like every other redacted block.
       expect(html).toContain('data-content-type="paragraph"');
     });
@@ -239,6 +242,7 @@ test.describe('editor affordances are stripped', () => {
     // The POPULATED samples still render — this is not a blanket ban on files.
     expect(html).toContain('https://example.test/a.png');
     expect(html).toContain('https://example.test/a.pdf');
+    expect(html).toContain('https://example.test/a.mp3');
   });
 
   test('unset file blocks nested inside a column are redacted too', async () => {

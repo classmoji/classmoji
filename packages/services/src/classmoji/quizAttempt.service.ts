@@ -1,6 +1,7 @@
-import getPrisma from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import type { MessageRole, Prisma } from '@prisma/client';
-import { checkForCompletion, DEFAULT_EMOJI_GRADE_MAPPINGS } from '@classmoji/utils';
+import { DEFAULT_EMOJI_GRADE_MAPPINGS, withLogins } from '@classmoji/utils';
+import { CONTRACT_VERSION } from '@classmoji/utils/quiz-agent';
 
 /**
  * Thrown when an attempt id names no row.
@@ -14,6 +15,21 @@ export class QuizAttemptNotFoundError extends Error {
   constructor(message: string = 'Attempt not found') {
     super(message);
     this.name = 'QuizAttemptNotFoundError';
+  }
+}
+
+/**
+ * Thrown when an attempt is asked to complete before it is finished: its
+ * recorded question results do not cover every question the attempt asks
+ * (see hasResultsForEveryQuestion). Nothing is written.
+ *
+ * Carries a `code` so a route can recognize it without importing the class.
+ */
+export class QuizAttemptIncompleteError extends Error {
+  readonly code = 'QUIZ_ATTEMPT_INCOMPLETE';
+  constructor(message: string = 'Quiz attempt is not finished') {
+    super(message);
+    this.name = 'QuizAttemptIncompleteError';
   }
 }
 
@@ -34,6 +50,7 @@ interface LockedQuizAttemptRow extends QuizAttemptDurationState {
   completed_at: Date | string | null;
   modal_closed_at?: Date | string | null;
   updated_at?: Date | string | null;
+  agent_runtime?: string | null;
 }
 
 interface QuizAttemptMembership {
@@ -87,14 +104,6 @@ interface QuizAgentConfig {
 interface QuizOpeningResult {
   response?: string | null;
   explorationSteps?: Prisma.InputJsonArray | null;
-}
-
-interface CompletionPayload {
-  quiz_complete?: boolean;
-  partial_credit_percentage?: string | number | null;
-  raw_percentage?: string | number | null;
-  percentage?: string | number | null;
-  first_attempt_percentage?: string | number | null;
 }
 
 const isJsonObject = (
@@ -152,6 +161,106 @@ const toStoredQuizQuestionResultJson = (
   recorded_at: result.recorded_at,
 });
 
+/**
+ * How many questions an attempt asks. The ai-agent stores the quiz's question
+ * count in `agent_config` when the attempt starts and keeps asking that many
+ * even if the quiz is edited afterwards, so that value decides. An attempt the
+ * ai-agent has not started yet falls back to the quiz's own count.
+ */
+export const resolveAttemptQuestionCount = (
+  agentConfig: Prisma.JsonValue | null | undefined,
+  quizQuestionCount: number | null | undefined
+): number => {
+  const started = isJsonObject(agentConfig)
+    ? getJsonObjectValue(agentConfig, 'questionCount')
+    : undefined;
+  if (typeof started === 'number' && Number.isInteger(started) && started > 0) {
+    return started;
+  }
+  return typeof quizQuestionCount === 'number' && quizQuestionCount > 0 ? quizQuestionCount : 5;
+};
+
+/**
+ * The recorded results an attempt is scored on: one per question from 1 to
+ * `questionCount` (the latest recorded, if a number appears twice), in
+ * question order. Entries outside that range, and malformed ones, are not
+ * part of the attempt's score.
+ */
+export const scoredQuestionResults = (
+  questionResults: Prisma.JsonValue | null | undefined,
+  questionCount: number
+): StoredQuizQuestionResult[] => {
+  const byNumber = new Map<number, StoredQuizQuestionResult>();
+  for (const r of normalizeQuestionResults(questionResults)) {
+    if (
+      Number.isInteger(r.question_num) &&
+      r.question_num >= 1 &&
+      r.question_num <= questionCount
+    ) {
+      byNumber.set(r.question_num, r);
+    }
+  }
+  return [...byNumber.values()].sort((a, b) => a.question_num - b.question_num);
+};
+
+/**
+ * The questions from 1 to `questionCount` that have no recorded result yet, in
+ * order.
+ */
+export const missingQuestionNumbers = (
+  questionResults: Prisma.JsonValue | null | undefined,
+  questionCount: number
+): number[] => {
+  const recorded = new Set(
+    scoredQuestionResults(questionResults, questionCount).map(r => r.question_num)
+  );
+  return Array.from({ length: questionCount }, (_, i) => i + 1).filter(n => !recorded.has(n));
+};
+
+/**
+ * Whether the recorded results cover the whole attempt: a result for each
+ * question from 1 to `questionCount`. Only those questions count (see
+ * scoredQuestionResults).
+ */
+export const hasResultsForEveryQuestion = (
+  questionResults: Prisma.JsonValue | null | undefined,
+  questionCount: number
+): boolean => missingQuestionNumbers(questionResults, questionCount).length === 0;
+
+/**
+ * How far an attempt's recorded results cover its questions: the count it
+ * asks, the questions still without a result, whether it can complete (the
+ * same test completeAttempt applies), and the results it is scored on. Used by
+ * the quiz agent's evaluation tool, so the evaluation and the completion share
+ * one rule and one set of results.
+ */
+export const getQuestionResultCoverage = async (attemptId: string) => {
+  const attempt = await getPrisma().quizAttempt.findUnique({
+    where: { id: attemptId },
+    select: {
+      question_results_json: true,
+      agent_config: true,
+      quiz: { select: { question_count: true } },
+    },
+  });
+
+  if (!attempt) {
+    throw new QuizAttemptNotFoundError();
+  }
+
+  const questionCount = resolveAttemptQuestionCount(
+    attempt.agent_config,
+    attempt.quiz?.question_count
+  );
+  const missing = missingQuestionNumbers(attempt.question_results_json, questionCount);
+  return {
+    questionCount,
+    missing,
+    complete: missing.length === 0,
+    results: scoredQuestionResults(attempt.question_results_json, questionCount),
+  };
+};
+
 const getExistingAgentConfig = (
   value: Prisma.JsonValue | null | undefined
 ): Prisma.InputJsonObject => {
@@ -203,23 +312,25 @@ const _getCurrentDurations = (attemptId: string) =>
   });
 
 export const findById = async (attemptId: string) => {
-  return getPrisma().quizAttempt.findUnique({
-    where: { id: attemptId },
-    include: {
-      quiz: {
-        include: {
-          repository: true,
-          classroom: {
-            include: {
-              settings: true,
-              git_organization: true,
+  return withLogins(
+    await getPrisma().quizAttempt.findUnique({
+      where: { id: attemptId },
+      include: {
+        quiz: {
+          include: {
+            repository: true,
+            classroom: {
+              include: {
+                settings: true,
+                git_organization: true,
+              },
             },
           },
         },
+        user: { include: GIT_IDENTITY },
       },
-      user: true,
-    },
-  });
+    })
+  );
 };
 
 // Bridge function: saves messages to AIConversation (which ai-agent also uses)
@@ -295,61 +406,6 @@ export const getMessages = async (attemptId: string) => {
   });
 };
 
-const clampPercentage = (value: number): number => {
-  if (!Number.isFinite(value)) {
-    throw new Error(`Percentage value must be finite, received ${value}`);
-  }
-  if (value < 0) return 0;
-  if (value > 100) return 100;
-  return value;
-};
-
-const parsePercentage = (rawValue: unknown, label: string, attemptId: string): number => {
-  if (rawValue === undefined || rawValue === null) {
-    throw new Error(`[completeAttempt] Missing ${label} for attempt ${attemptId}`);
-  }
-  const numeric = Number.parseFloat(String(rawValue));
-  if (!Number.isFinite(numeric)) {
-    throw new Error(
-      `[completeAttempt] ${label} must be numeric, received ${rawValue} for attempt ${attemptId}`
-    );
-  }
-  return clampPercentage(numeric);
-};
-
-const findCompletionPayload = async (attemptId: string) => {
-  // All messages are stored in AIConversation (ai-agent owns persistence)
-  // The relation is: QuizAttempt.conversation_id -> AIConversation.id
-  const conversation = await getPrisma().aIConversation.findFirst({
-    where: { quiz_attempt: { id: attemptId } },
-  });
-
-  if (!conversation) {
-    return null; // No conversation yet
-  }
-
-  const assistantMessages = await getPrisma().aIConversationMessage.findMany({
-    where: {
-      conversation_id: conversation.id,
-      role: 'ASSISTANT',
-    },
-    orderBy: { created_at: 'desc' },
-    take: 12,
-    select: {
-      content: true,
-    },
-  });
-
-  for (const message of assistantMessages) {
-    const completion = checkForCompletion(message.content);
-    if (completion?.quiz_complete === true) {
-      return completion;
-    }
-  }
-
-  return null;
-};
-
 export const completeAttempt = async (
   attemptId: string,
   metrics: QuizAttemptDurationMetrics | null = null
@@ -364,11 +420,20 @@ export const completeAttempt = async (
       partial_credit_percentage: true,
       first_attempt_percentage: true,
       question_results_json: true, // Progressive grading data
+      agent_config: true,
+      agent_runtime: true,
+      quiz: { select: { question_count: true } },
     },
   });
 
   if (!currentAttempt) {
     throw new Error(`[completeAttempt] Attempt ${attemptId} not found`);
+  }
+
+  // Chat-runtime attempts complete through their own evaluation tool
+  // (quizGrading.completeWithEvaluation), never through this path.
+  if (currentAttempt.agent_runtime && currentAttempt.agent_runtime !== 'ai_agent') {
+    throw new QuizAttemptIncompleteError();
   }
 
   const durationUpdate = buildDurationUpdate(metrics, currentAttempt);
@@ -409,36 +474,22 @@ export const completeAttempt = async (
     });
   }
 
-  let partialCredit;
-  let firstAttempt;
-
-  // PRIORITY 1: Use progressive question_results_json from DB (source of truth)
-  const questionResults = normalizeQuestionResults(currentAttempt.question_results_json);
-  if (questionResults.length > 0) {
-    const calculated = calculatePercentagesFromResults(questionResults);
-    partialCredit = calculated.partial_credit_percentage;
-    firstAttempt = calculated.first_attempt_percentage;
-  } else {
-    // PRIORITY 2: Fall back to LLM's completion payload (legacy/backup)
-    const completion = (await findCompletionPayload(attemptId)) as CompletionPayload | null;
-
-    if (!completion) {
-      throw new Error(
-        `[completeAttempt] Could not locate completion payload for attempt ${attemptId}`
-      );
-    }
-
-    partialCredit = parsePercentage(
-      completion.partial_credit_percentage ?? completion.raw_percentage ?? completion.percentage,
-      'partial_credit_percentage',
-      attemptId
-    );
-    firstAttempt = parsePercentage(
-      completion.first_attempt_percentage ?? completion.percentage,
-      'first_attempt_percentage',
-      attemptId
-    );
+  // Only a finished attempt completes: one recorded result for every question
+  // it asks. Refused before anything is written, durations included.
+  const questionCount = resolveAttemptQuestionCount(
+    currentAttempt.agent_config,
+    currentAttempt.quiz?.question_count
+  );
+  if (!hasResultsForEveryQuestion(currentAttempt.question_results_json, questionCount)) {
+    throw new QuizAttemptIncompleteError();
   }
+
+  // Scores come from the recorded results for the attempt's questions.
+  const calculated = calculatePercentagesFromResults(
+    scoredQuestionResults(currentAttempt.question_results_json, questionCount)
+  );
+  const partialCredit = calculated.partial_credit_percentage;
+  const firstAttempt = calculated.first_attempt_percentage;
 
   const updateData: Prisma.QuizAttemptUpdateInput = {
     completed_at: new Date(),
@@ -462,6 +513,12 @@ export const completeAttempt = async (
   });
 };
 
+/**
+ * How long after an attempt on the chat runtime completes its two durations
+ * may still be raised (`updateAttemptDurations`).
+ */
+export const POST_COMPLETION_DURATIONS_WINDOW_MS = 10 * 60 * 1000;
+
 export const updateAttemptDurations = async (
   attemptId: string,
   metrics: QuizAttemptDurationMetrics = {}
@@ -470,7 +527,7 @@ export const updateAttemptDurations = async (
   return getPrisma().$transaction(async (tx: Prisma.TransactionClient) => {
     // Lock the row by selecting FOR UPDATE
     const current = await tx.$queryRaw<LockedQuizAttemptRow[]>`
-      SELECT total_duration_ms, unfocused_duration_ms, completed_at, modal_closed_at
+      SELECT total_duration_ms, unfocused_duration_ms, completed_at, modal_closed_at, agent_runtime
       FROM quiz_attempts
       WHERE id = ${attemptId}
       FOR UPDATE
@@ -482,8 +539,16 @@ export const updateAttemptDurations = async (
 
     const row = current[0];
 
-    // Skip if quiz already completed
-    if (row.completed_at) {
+    // Skip if quiz already completed. An attempt on the chat runtime is
+    // completed by its task, after the student's last message, so the time
+    // since that message arrives once the browser sees the completion: within
+    // POST_COMPLETION_DURATIONS_WINDOW_MS of the completion it may still raise
+    // the two durations (never lower them; nothing else changes).
+    const takesFinalTime =
+      row.agent_runtime === 'trigger_chat' &&
+      row.completed_at !== null &&
+      Date.now() - new Date(row.completed_at).getTime() <= POST_COMPLETION_DURATIONS_WINDOW_MS;
+    if (row.completed_at && !takesFinalTime) {
       return {
         total_duration_ms: Number(row.total_duration_ms),
         unfocused_duration_ms: Number(row.unfocused_duration_ms),
@@ -713,12 +778,12 @@ export const findByQuiz = async (quizId: string) => {
   const attempts = await getPrisma().quizAttempt.findMany({
     where: { quiz_id: quizId },
     include: {
-      user: true,
+      user: { include: GIT_IDENTITY },
     },
     orderBy: { started_at: 'desc' },
   });
 
-  return attempts;
+  return withLogins(attempts);
 };
 
 export const findByUser = async (userId: string, organizationId: string | null = null) => {
@@ -841,7 +906,7 @@ const AGENT_FAILURE_REPLY = "That reply couldn't be finished. Please send your m
  * Older API_ERROR rows hold lines that describe the upstream failure ("the AI
  * service is temporarily busy"), so they read as the fixed line.
  */
-const STUDENT_FACING_AGENT_CODES = ['BUDGET_EXCEEDED'];
+const STUDENT_FACING_AGENT_CODES = ['BUDGET_EXCEEDED', 'turn_in_progress'];
 
 type TranscriptFields = { content: string; metadata: Prisma.JsonValue | null };
 
@@ -1031,10 +1096,14 @@ export const restartQuizAttempt = async (
  * @param {Object} membership - The user's membership object
  * @returns {Promise<Object>} Result object with success status and attempt details
  */
+/** How long a `trigger_chat` attempt can take turns after it is created (Q19). */
+export const TRIGGER_CHAT_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
 export const createNew = async (
   quizId: string,
   userId: string,
-  membership: QuizAttemptMembership
+  membership: QuizAttemptMembership,
+  options: { agentRuntime?: 'ai_agent' | 'trigger_chat' } = {}
 ) => {
   if (!membership) {
     throw new Error('Membership required to create quiz attempt');
@@ -1138,12 +1207,22 @@ export const createNew = async (
   }
   // Instructors can always create attempts (for preview/testing)
 
-  // Create the new attempt
+  // Create the new attempt. The runtime is stamped here, once: a
+  // `trigger_chat` attempt also records the contract version it is graded
+  // under and the deadline after which it takes no more turns.
+  const startedAt = new Date();
   const newAttempt = await getPrisma().quizAttempt.create({
     data: {
       quiz_id: quizId,
       user_id: userId.toString(),
-      started_at: new Date(),
+      started_at: startedAt,
+      ...(options.agentRuntime === 'trigger_chat'
+        ? {
+            agent_runtime: 'trigger_chat',
+            contract_version: CONTRACT_VERSION,
+            session_expires_at: new Date(startedAt.getTime() + TRIGGER_CHAT_SESSION_TTL_MS),
+          }
+        : {}),
     },
   });
 
@@ -1589,10 +1668,51 @@ export const appendQuestionResult = async (
 ) => {
   const attempt = await getPrisma().quizAttempt.findUnique({
     where: { id: attemptId },
-    select: { question_results_json: true },
+    select: {
+      question_results_json: true,
+      agent_config: true,
+      questions_asked: true,
+      completed_at: true,
+      quiz: { select: { question_count: true } },
+    },
   });
 
-  const existing = normalizeQuestionResults(attempt?.question_results_json);
+  if (!attempt) {
+    throw new QuizAttemptNotFoundError();
+  }
+
+  // The messages below go back to the model as the tool's error, so each says
+  // what is accepted.
+  if (attempt.completed_at) {
+    throw new Error('This quiz attempt is already complete; no more results can be recorded.');
+  }
+
+  // Only the attempt's own questions can be recorded.
+  const questionCount = resolveAttemptQuestionCount(
+    attempt.agent_config,
+    attempt.quiz?.question_count
+  );
+  if (
+    !Number.isInteger(result.question_num) ||
+    result.question_num < 1 ||
+    result.question_num > questionCount
+  ) {
+    throw new Error(
+      `question_num must be a whole number from 1 to ${questionCount} for this quiz (received ${result.question_num})`
+    );
+  }
+
+  // And only a question that has been presented: present_question comes first.
+  const presented = attempt.questions_asked ?? 0;
+  if (result.question_num > presented) {
+    throw new Error(
+      `Question ${result.question_num} has not been presented yet ` +
+        `(the latest question presented is ${presented}). Present it with present_question ` +
+        'and record its result after the student has answered it.'
+    );
+  }
+
+  const existing = normalizeQuestionResults(attempt.question_results_json);
 
   // Prevent duplicates (upsert behavior) - filter out any existing result for this question
   const filtered = existing.filter(r => r.question_num !== result.question_num);

@@ -567,7 +567,7 @@ export function list() {
       requester_is_admin: true,
       requester_since: true,
       request_note: true,
-      created_by: { select: { id: true, name: true, login: true, email: true } },
+      created_by: { select: { id: true, name: true, email: true } },
       _count: { select: { git_organizations: true, connections: true } },
     },
   });

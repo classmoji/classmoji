@@ -1,0 +1,639 @@
+/**
+ * Conversation storage and turn admission for quiz attempts served as chat
+ * agents (`agent_runtime: 'trigger_chat'`).
+ *
+ * Admission is the one place a turn starts. Each admitted turn gets a fresh
+ * `turn_fence` on the attempt; grading writes (quizGrading.service) carry the
+ * fence they were handed and are refused once a newer turn holds the attempt.
+ *
+ * Messages live in `ai_conversation_messages` as UIMessage parts
+ * (`format: 'ui_message_v1'`), upserted by `(conversation_id, ui_message_id)`,
+ * never by a global id. Browser-supplied ids are restricted to
+ * `[A-Za-z0-9_-]`; the server's own ids contain `:` so the two can never meet.
+ *
+ * A refused turn throws `QuizChatRefusal` with a `kind` (`temporary`: the
+ * session stays open and a later turn may pass; `permanent`: the attempt can
+ * take no more turns) and a `code`. Admission does not journal its own
+ * refusals: the caller records them with `recordTurnRefused` and chooses the
+ * copy the student sees.
+ */
+
+import getPrisma from '@classmoji/database';
+import type { Prisma } from '@prisma/client';
+import {
+  BUTTON_TEXT,
+  buildTurnStatus,
+  projectTranscript,
+  quizVisibility,
+  type AttemptProgress,
+  type QuizUIMessage,
+} from '@classmoji/utils/quiz-agent';
+import { quizzesVisible } from './entitlement.service.ts';
+import {
+  LOCKED_TX_OPTIONS,
+  TRIGGER_CHAT_RUNTIME,
+  appendEvent,
+  attemptQuestionCount,
+  findEvent,
+  lockAttempt,
+  newFence,
+  progressOf,
+  toJson,
+  type LockedAttempt,
+  type Tx,
+} from './quizGrading.service.ts';
+
+// ─── Refusals ───────────────────────────────────────────────────────────────
+
+export type QuizChatRefusalCode =
+  | 'attempt_not_found'
+  | 'wrong_runtime'
+  | 'attempt_completed'
+  | 'attempt_expired'
+  | 'not_a_member'
+  | 'quizzes_unavailable'
+  | 'invalid_message'
+  | 'message_conflict'
+  | 'already_started';
+
+/** A refused turn. The caller picks the copy; `message` is for logs only. */
+export class QuizChatRefusal extends Error {
+  readonly kind: 'temporary' | 'permanent';
+  readonly code: QuizChatRefusalCode;
+  constructor(kind: 'temporary' | 'permanent', code: QuizChatRefusalCode) {
+    super(`quiz chat turn refused: ${code}`);
+    this.name = 'QuizChatRefusal';
+    this.kind = kind;
+    this.code = code;
+  }
+}
+
+export const isQuizChatRefusal = (error: unknown): error is QuizChatRefusal =>
+  error instanceof QuizChatRefusal ||
+  (error instanceof Error &&
+    error.name === 'QuizChatRefusal' &&
+    'kind' in error &&
+    'code' in error);
+
+// ─── Constants ──────────────────────────────────────────────────────────────
+
+/**
+ * Longest student message admitted, in characters. There is no limit on the
+ * number of messages in an attempt, as in the previous runtime.
+ */
+export const MAX_STUDENT_MESSAGE_CHARS = 10_000;
+
+/** Browser message ids. Server-made ids contain `:` and never match. */
+export const CLIENT_MESSAGE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+
+/** The hidden go-ahead that opens an attempt (today's opening turn). */
+export const OPENING_TEXT = 'The student is ready. Begin.';
+export const OPENING_MESSAGE_ID = 'server:opening';
+
+const ALLOWED_ROLES = ['STUDENT', 'ASSISTANT', 'TEACHER', 'OWNER'] as const;
+
+/** `ai_conversations.context.runtime`: the transport's cursors and opaque state. */
+export type QuizChatRuntimeState = { cursors: unknown; state: unknown };
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+type StoredMessageRow = {
+  ui_message_id: string | null;
+  role: string;
+  parts: Prisma.JsonValue | null;
+  metadata: Prisma.JsonValue | null;
+};
+
+const toUIMessage = (row: StoredMessageRow): QuizUIMessage =>
+  ({
+    id: row.ui_message_id ?? '',
+    role: row.role === 'ASSISTANT' ? 'assistant' : row.role === 'SYSTEM' ? 'system' : 'user',
+    parts: Array.isArray(row.parts) ? row.parts : [],
+    ...(isObject(row.metadata) ? { metadata: row.metadata } : {}),
+  }) as unknown as QuizUIMessage;
+
+/**
+ * A part's readable text: a text part's text, or the feedback an accepted
+ * offer_next_step carries (shown as the agent's message). A refused offer's
+ * feedback was never shown, so it is not taken.
+ */
+const partText = (p: unknown): string | null => {
+  if (!isObject(p)) return null;
+  if (p.type === 'text') return typeof p.text === 'string' ? p.text : null;
+  if (p.type === 'tool-offer_next_step' && p.state === 'output-available') {
+    const feedback = isObject(p.input) ? p.input.feedback : undefined;
+    return typeof feedback === 'string' && feedback.trim() ? feedback : null;
+  }
+  return null;
+};
+
+const textOf = (parts: unknown): string =>
+  (Array.isArray(parts) ? parts : [])
+    .map(partText)
+    .filter((t): t is string => t !== null)
+    .join('\n\n');
+
+/**
+ * A `created_at` strictly after the conversation's latest row, so the order
+ * rows are read back in is the order they were written. Caller holds the
+ * attempt lock, which serializes every writer of this conversation.
+ */
+const nextCreatedAt = async (tx: Tx, conversationId: string): Promise<Date> => {
+  const last = await tx.aIConversationMessage.findFirst({
+    where: { conversation_id: conversationId },
+    orderBy: { created_at: 'desc' },
+    select: { created_at: true },
+  });
+  return new Date(Math.max(Date.now(), (last?.created_at.getTime() ?? 0) + 1));
+};
+
+/** The attempt's conversation, created on first use. Caller holds the attempt lock. */
+const ensureConversation = async (tx: Tx, attempt: LockedAttempt): Promise<string> => {
+  if (attempt.conversation_id) return attempt.conversation_id;
+  const conversation = await tx.aIConversation.create({
+    data: { type: 'QUIZ', user_id: attempt.user_id, classroom_id: attempt.quiz.classroom_id },
+    select: { id: true },
+  });
+  await tx.quizAttempt.update({
+    where: { id: attempt.id },
+    data: { conversation_id: conversation.id },
+  });
+  attempt.conversation_id = conversation.id;
+  return conversation.id;
+};
+
+/**
+ * Pin the attempt's question count into `agent_config.questionCount` the first
+ * time a turn is admitted, so an edit to the quiz mid-attempt does not change
+ * how many questions this attempt asks. Merges with what is there (staff
+ * previews keep `instructorRepoName`).
+ */
+const pinnedAgentConfig = (
+  attempt: LockedAttempt,
+  questionCount: number
+): Prisma.InputJsonValue | undefined => {
+  const config = isObject(attempt.agent_config) ? attempt.agent_config : {};
+  const pinned = config.questionCount;
+  if (typeof pinned === 'number' && Number.isInteger(pinned) && pinned > 0) return undefined;
+  return toJson({ ...config, questionCount });
+};
+
+/** Entitlement read before the row lock: it uses its own connection. */
+const preflight = async (attemptId: string) => {
+  const attempt = await getPrisma().quizAttempt.findUnique({
+    where: { id: attemptId },
+    select: { quiz: { select: { classroom_id: true } } },
+  });
+  if (!attempt) throw new QuizChatRefusal('permanent', 'attempt_not_found');
+  let visible: boolean;
+  try {
+    visible = await quizzesVisible(attempt.quiz.classroom_id);
+  } catch {
+    // A failed lookup is not a verdict; the next turn tries again.
+    throw new QuizChatRefusal('temporary', 'quizzes_unavailable');
+  }
+  return { visible };
+};
+
+/**
+ * Per-turn revalidation against the current state (slice §1): the attempt
+ * exists on this runtime, is not completed, is before its deadline, its owner
+ * is still a member of the quiz's classroom with an allowed role, and quizzes
+ * are visible in that classroom.
+ */
+const revalidate = async (
+  tx: Tx,
+  attempt: LockedAttempt | null,
+  visible: boolean
+): Promise<LockedAttempt> => {
+  if (!attempt) throw new QuizChatRefusal('permanent', 'attempt_not_found');
+  if (attempt.agent_runtime !== TRIGGER_CHAT_RUNTIME) {
+    throw new QuizChatRefusal('permanent', 'wrong_runtime');
+  }
+  if (attempt.completed_at) throw new QuizChatRefusal('permanent', 'attempt_completed');
+  if (attempt.session_expires_at && attempt.session_expires_at.getTime() <= Date.now()) {
+    throw new QuizChatRefusal('permanent', 'attempt_expired');
+  }
+  const membership = await tx.classroomMembership.findFirst({
+    where: {
+      classroom_id: attempt.quiz.classroom_id,
+      user_id: attempt.user_id,
+      role: { in: [...ALLOWED_ROLES] },
+    },
+    select: { id: true },
+  });
+  if (!membership) throw new QuizChatRefusal('permanent', 'not_a_member');
+  if (!visible) throw new QuizChatRefusal('temporary', 'quizzes_unavailable');
+  return attempt;
+};
+
+/**
+ * The action a new message's text names: a button's text, trimmed and in any
+ * case (a typed "Next" is the Next button). A re-delivered message keeps the
+ * action journalled when it was first admitted.
+ */
+const actionFor = (text: string): 'next' | 'try_again' | undefined => {
+  const typed = text.trim().toLowerCase();
+  if (typed === BUTTON_TEXT.try_again.toLowerCase()) return 'try_again';
+  if (typed === BUTTON_TEXT.next.toLowerCase()) return 'next';
+  return undefined;
+};
+
+// ─── Admission ──────────────────────────────────────────────────────────────
+
+/** An admitted (or re-delivered) student message: the turn's fence and input id. */
+type AdmittedMessage = {
+  status: 'admitted' | 'redelivered';
+  fence: string;
+  inputMessageId: string;
+  action?: 'next' | 'try_again';
+};
+
+/**
+ * Admit one student message, in one transaction under the attempt row lock:
+ * revalidation, then the message checks (well-formed id, non-empty text within
+ * the length cap), then:
+ *
+ * - the latest admitted id with the same text is a re-delivery: a fresh
+ *   fence, no new row (`status: 'redelivered'`);
+ * - an id already used with different text, or an older admitted id, is
+ *   refused (`message_conflict`);
+ * - otherwise the user row is written with parts `[student text, turn status]`
+ *   (`metadata.hiddenPartIndexes: [1]`, and `action` when the text is a
+ *   button's), an `input_admitted` journal row, and a fresh fence.
+ */
+export const admitStudentMessage = async (i: {
+  attemptId: string;
+  message: { id: string; text: string };
+  runId: string;
+}): Promise<AdmittedMessage> => {
+  const { visible } = await preflight(i.attemptId);
+  return getPrisma().$transaction(async (tx): Promise<AdmittedMessage> => {
+    const attempt = await revalidate(tx, await lockAttempt(tx, i.attemptId), visible);
+
+    const { id, text } = i.message ?? ({} as { id?: unknown; text?: unknown });
+    if (
+      typeof id !== 'string' ||
+      !CLIENT_MESSAGE_ID_PATTERN.test(id) ||
+      typeof text !== 'string' ||
+      text.trim().length === 0 ||
+      text.length > MAX_STUDENT_MESSAGE_CHARS
+    ) {
+      throw new QuizChatRefusal('temporary', 'invalid_message');
+    }
+
+    const questionCount = attemptQuestionCount(attempt);
+    const fence = newFence();
+    const now = new Date();
+    const agentConfig = pinnedAgentConfig(attempt, questionCount);
+
+    const existing = await findEvent(tx, attempt.id, id);
+    if (existing) {
+      // Only the latest admitted message can be re-delivered (its turn is the
+      // one a retried run is still answering); an older one is a conflict.
+      const latest = await tx.quizAttemptEvent.findFirst({
+        where: { attempt_id: attempt.id, type: 'input_admitted' },
+        orderBy: { seq: 'desc' },
+        select: { seq: true },
+      });
+      if (
+        existing.type !== 'input_admitted' ||
+        latest?.seq !== existing.seq ||
+        !attempt.conversation_id
+      ) {
+        throw new QuizChatRefusal('temporary', 'message_conflict');
+      }
+      const row = await tx.aIConversationMessage.findUnique({
+        where: {
+          conversation_id_ui_message_id: {
+            conversation_id: attempt.conversation_id,
+            ui_message_id: id,
+          },
+        },
+        select: { parts: true, role: true },
+      });
+      const stored = Array.isArray(row?.parts) ? row.parts[0] : undefined;
+      if (
+        row?.role !== 'USER' ||
+        !isObject(stored) ||
+        stored.type !== 'text' ||
+        stored.text !== text
+      ) {
+        throw new QuizChatRefusal('temporary', 'message_conflict');
+      }
+      await tx.quizAttempt.update({
+        where: { id: attempt.id },
+        data: {
+          turn_fence: fence,
+          last_activity: now,
+          ...(agentConfig ? { agent_config: agentConfig } : {}),
+        },
+      });
+      const payload = isObject(existing.payload) ? existing.payload : {};
+      const action =
+        payload.action === 'next' || payload.action === 'try_again' ? payload.action : undefined;
+      return {
+        status: 'redelivered' as const,
+        fence,
+        inputMessageId: id,
+        ...(action ? { action } : {}),
+      };
+    }
+
+    const conversationId = await ensureConversation(tx, attempt);
+    const clash = await tx.aIConversationMessage.findUnique({
+      where: {
+        conversation_id_ui_message_id: { conversation_id: conversationId, ui_message_id: id },
+      },
+      select: { id: true },
+    });
+    if (clash) throw new QuizChatRefusal('temporary', 'message_conflict');
+
+    // The status the model reads with this message: progress as of now, with
+    // this message's own action (not the previous turn's) as the last action.
+    const action = actionFor(text);
+    const { lastAction: _previous, ...current } = await progressOf(tx, attempt);
+    const progress: AttemptProgress = { ...current, ...(action ? { lastAction: action } : {}) };
+
+    await tx.aIConversationMessage.create({
+      data: {
+        conversation_id: conversationId,
+        role: 'USER',
+        content: text,
+        parts: toJson([
+          { type: 'text', text },
+          { type: 'text', text: buildTurnStatus(progress) },
+        ]),
+        metadata: toJson({ hiddenPartIndexes: [1], ...(action ? { action } : {}) }),
+        format: 'ui_message_v1',
+        ui_message_id: id,
+        final: true,
+        provenance: 'student',
+        contract_version: attempt.contract_version,
+        created_at: await nextCreatedAt(tx, conversationId),
+      },
+    });
+    await appendEvent(tx, attempt, {
+      type: 'input_admitted',
+      operationId: id,
+      fence,
+      inputMessageId: id,
+      runId: i.runId,
+      payload: toJson({ kind: 'message', ...(action ? { action } : {}) }),
+    });
+    await tx.quizAttempt.update({
+      where: { id: attempt.id },
+      data: {
+        turn_fence: fence,
+        last_activity: now,
+        ...(agentConfig ? { agent_config: agentConfig } : {}),
+      },
+    });
+
+    return {
+      status: 'admitted' as const,
+      fence,
+      inputMessageId: id,
+      ...(action ? { action } : {}),
+    };
+  }, LOCKED_TX_OPTIONS);
+};
+
+/**
+ * Admit the `begin` action: the same revalidation, refused once a question has
+ * been presented, an `input_admitted` journal row
+ * (`kind: 'action'`), and a fresh fence. No message is written; the caller
+ * stores the hidden opening with `storeHiddenOpening`.
+ */
+export const admitAction = async (i: {
+  attemptId: string;
+  runId: string;
+}): Promise<{
+  fence: string;
+}> => {
+  const { visible } = await preflight(i.attemptId);
+  return getPrisma().$transaction(async (tx): Promise<{ fence: string }> => {
+    const attempt = await revalidate(tx, await lockAttempt(tx, i.attemptId), visible);
+    if ((attempt.questions_asked ?? 0) > 0) {
+      throw new QuizChatRefusal('temporary', 'already_started');
+    }
+
+    const fence = newFence();
+    const agentConfig = pinnedAgentConfig(attempt, attemptQuestionCount(attempt));
+    await appendEvent(tx, attempt, {
+      type: 'input_admitted',
+      operationId: `action:begin:${fence}`,
+      fence,
+      inputMessageId: null,
+      runId: i.runId,
+      payload: toJson({ kind: 'action', action: 'begin' }),
+    });
+    await tx.quizAttempt.update({
+      where: { id: attempt.id },
+      data: {
+        turn_fence: fence,
+        last_activity: new Date(),
+        ...(agentConfig ? { agent_config: agentConfig } : {}),
+      },
+    });
+    return { fence };
+  }, LOCKED_TX_OPTIONS);
+};
+
+/**
+ * The hidden opening user message (`metadata.hidden`): the go-ahead text plus
+ * the turn status as a hidden second part. Stored once; later calls return the
+ * stored message.
+ */
+export const storeHiddenOpening = (attemptId: string): Promise<QuizUIMessage> =>
+  getPrisma().$transaction(async tx => {
+    const attempt = await lockAttempt(tx, attemptId);
+    if (!attempt) throw new QuizChatRefusal('permanent', 'attempt_not_found');
+    if (attempt.agent_runtime !== TRIGGER_CHAT_RUNTIME) {
+      throw new QuizChatRefusal('permanent', 'wrong_runtime');
+    }
+    const conversationId = await ensureConversation(tx, attempt);
+    const existing = await tx.aIConversationMessage.findUnique({
+      where: {
+        conversation_id_ui_message_id: {
+          conversation_id: conversationId,
+          ui_message_id: OPENING_MESSAGE_ID,
+        },
+      },
+      select: { ui_message_id: true, role: true, parts: true, metadata: true },
+    });
+    if (existing) return toUIMessage(existing);
+
+    const progress = await progressOf(tx, attempt);
+    const parts = [
+      { type: 'text', text: OPENING_TEXT },
+      { type: 'text', text: buildTurnStatus(progress) },
+    ];
+    const metadata = { hidden: true, hiddenPartIndexes: [1] };
+    await tx.aIConversationMessage.create({
+      data: {
+        conversation_id: conversationId,
+        role: 'USER',
+        content: OPENING_TEXT,
+        parts: toJson(parts),
+        metadata: toJson(metadata),
+        format: 'ui_message_v1',
+        ui_message_id: OPENING_MESSAGE_ID,
+        final: true,
+        provenance: 'server_opening',
+        contract_version: attempt.contract_version,
+        created_at: await nextCreatedAt(tx, conversationId),
+      },
+    });
+    return toUIMessage({
+      ui_message_id: OPENING_MESSAGE_ID,
+      role: 'USER',
+      parts: parts as Prisma.JsonValue,
+      metadata: metadata as Prisma.JsonValue,
+    });
+  }, LOCKED_TX_OPTIONS);
+
+// ─── Assistant messages ─────────────────────────────────────────────────────
+
+/**
+ * Upsert an assistant message by `(conversation_id, ui_message_id)`. A partial
+ * save (`final: false`) never overwrites a final one, and an id that belongs
+ * to a non-assistant row is refused.
+ */
+export const persistAssistantMessage = async (
+  attemptId: string,
+  m: QuizUIMessage,
+  o: { final: boolean; provenance?: 'model' | 'server_completion' }
+): Promise<void> => {
+  if (!m || m.role !== 'assistant' || typeof m.id !== 'string' || !m.id || m.id.length > 200) {
+    throw new Error('persistAssistantMessage: expected an assistant message with an id');
+  }
+  await getPrisma().$transaction(async tx => {
+    const attempt = await lockAttempt(tx, attemptId);
+    if (!attempt) throw new QuizChatRefusal('permanent', 'attempt_not_found');
+    if (attempt.agent_runtime !== TRIGGER_CHAT_RUNTIME) {
+      throw new QuizChatRefusal('permanent', 'wrong_runtime');
+    }
+    const conversationId = await ensureConversation(tx, attempt);
+    const where = {
+      conversation_id_ui_message_id: { conversation_id: conversationId, ui_message_id: m.id },
+    };
+    const existing = await tx.aIConversationMessage.findUnique({
+      where,
+      select: { role: true, final: true },
+    });
+    const parts = toJson(m.parts ?? []);
+    const content = textOf(m.parts);
+    const metadata = isObject(m.metadata) ? toJson(m.metadata) : undefined;
+
+    if (existing) {
+      if (existing.role !== 'ASSISTANT') {
+        throw new Error('persistAssistantMessage: message id belongs to another message');
+      }
+      if (existing.final && !o.final) return;
+      await tx.aIConversationMessage.update({
+        where,
+        data: { parts, content, final: o.final, ...(metadata ? { metadata } : {}) },
+      });
+      return;
+    }
+    await tx.aIConversationMessage.create({
+      data: {
+        conversation_id: conversationId,
+        role: 'ASSISTANT',
+        content,
+        parts,
+        ...(metadata ? { metadata } : {}),
+        format: 'ui_message_v1',
+        ui_message_id: m.id,
+        final: o.final,
+        provenance: o.provenance ?? 'model',
+        contract_version: attempt.contract_version,
+        created_at: await nextCreatedAt(tx, conversationId),
+      },
+    });
+  }, LOCKED_TX_OPTIONS);
+};
+
+// ─── Reads ──────────────────────────────────────────────────────────────────
+
+/**
+ * The attempt's conversation as the model sees it: every UIMessage row in
+ * order, with full parts (hidden ones included). A partial assistant message
+ * (`final: false`, e.g. left by a crashed turn) is left out, so the chain
+ * never ends in an unfinished assistant turn.
+ */
+export const loadCanonicalMessages = async (attemptId: string): Promise<QuizUIMessage[]> => {
+  const attempt = await getPrisma().quizAttempt.findUnique({
+    where: { id: attemptId },
+    select: { conversation_id: true },
+  });
+  if (!attempt?.conversation_id) return [];
+  const rows = await getPrisma().aIConversationMessage.findMany({
+    where: {
+      conversation_id: attempt.conversation_id,
+      format: 'ui_message_v1',
+      ui_message_id: { not: null },
+      NOT: { role: 'ASSISTANT', final: false },
+    },
+    orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
+    select: { ui_message_id: true, role: true, parts: true, metadata: true },
+  });
+  return rows.map(toUIMessage);
+};
+
+/** The transcript any viewer (student or staff) gets: the canonical messages, projected. */
+export const loadTranscriptForViewer = async (attemptId: string): Promise<QuizUIMessage[]> =>
+  projectTranscript(await loadCanonicalMessages(attemptId), quizVisibility) as QuizUIMessage[];
+
+/** `ai_conversations.context.runtime`, or null before the first save. */
+export const readRuntimeState = async (attemptId: string): Promise<QuizChatRuntimeState | null> => {
+  const attempt = await getPrisma().quizAttempt.findUnique({
+    where: { id: attemptId },
+    select: { conversation: { select: { context: true } } },
+  });
+  const context = attempt?.conversation?.context;
+  const runtime = isObject(context) ? context.runtime : undefined;
+  return isObject(runtime) ? (runtime as QuizChatRuntimeState) : null;
+};
+
+/** Replace `ai_conversations.context.runtime`, keeping every other context key. */
+export const writeRuntimeState = async (
+  attemptId: string,
+  v: QuizChatRuntimeState
+): Promise<void> => {
+  await getPrisma().$transaction(async tx => {
+    const attempt = await lockAttempt(tx, attemptId);
+    if (!attempt) throw new QuizChatRefusal('permanent', 'attempt_not_found');
+    const conversationId = await ensureConversation(tx, attempt);
+    const value = JSON.stringify(v ?? null);
+    await tx.$executeRaw`
+      UPDATE ai_conversations
+      SET context = jsonb_set(COALESCE(context, '{}'::jsonb), '{runtime}', ${value}::jsonb, true)
+      WHERE id = ${conversationId}`;
+  }, LOCKED_TX_OPTIONS);
+};
+
+// ─── Journal ────────────────────────────────────────────────────────────────
+
+/** Journal a refused turn (`turn_refused`, payload `{ code }` only). No-op for an unknown attempt. */
+export const recordTurnRefused = async (
+  attemptId: string,
+  code: string,
+  runId: string
+): Promise<void> => {
+  await getPrisma().$transaction(async tx => {
+    const attempt = await lockAttempt(tx, attemptId);
+    if (!attempt) return;
+    await appendEvent(tx, attempt, {
+      type: 'turn_refused',
+      operationId: `refused:${newFence()}`,
+      fence: attempt.turn_fence,
+      runId,
+      payload: toJson({ code: String(code).slice(0, 64) }),
+    });
+  }, LOCKED_TX_OPTIONS);
+};

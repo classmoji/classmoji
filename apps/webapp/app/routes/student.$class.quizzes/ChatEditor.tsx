@@ -57,9 +57,17 @@ interface ChatEditorProps {
   placeholder?: string;
   loading?: boolean;
   disabled?: boolean;
+  /** Optional `data-testid` for the Send button. Absent: the button carries none. */
+  sendButtonTestId?: string;
 }
 
-const ChatEditor = ({ onSubmit, placeholder, loading, disabled }: ChatEditorProps) => {
+const ChatEditor = ({
+  onSubmit,
+  placeholder,
+  loading,
+  disabled,
+  sendButtonTestId,
+}: ChatEditorProps) => {
   const [selectedLanguage, setSelectedLanguage] = useState('javascript');
   const [hasContent, setHasContent] = useState(false);
   const { isDarkMode } = useDarkMode();
@@ -212,6 +220,7 @@ const ChatEditor = ({ onSubmit, placeholder, loading, disabled }: ChatEditorProp
       <div className={`border-t px-2 py-1 flex justify-end ${isDarkMode ? 'border-gray-700' : ''}`}>
         <Button
           icon={<SendOutlined />}
+          {...(sendButtonTestId ? { 'data-testid': sendButtonTestId } : {})}
           onClick={handleSend}
           loading={loading}
           disabled={!hasContent || loading || disabled}

@@ -1,14 +1,17 @@
 import { useCreateBlockNote } from '@blocknote/react';
 import { BlockNoteView } from '@blocknote/mantine';
 import { MantineProvider } from '@mantine/core';
-import { useState, useEffect } from 'react';
-import { schema, type PageBlockInsertions } from '~/components/editor/blocks/index.tsx';
+import { useState, useEffect, useMemo } from 'react';
+import type { PageBlockInsertions } from '~/components/editor/blocks/index.tsx';
+import { viewerSchema } from './viewerBlocks.tsx';
 import { AssetSrcSetContext, NO_SRC_SETS, type AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
 import {
   AssetDisplayUrlContext,
   IDENTITY_DISPLAY_URL,
   type DisplayUrlLookup,
 } from '~/hooks/useAssetDisplayUrl.ts';
+import { MediaDownloadContext, mediaDownloadLookup } from '~/hooks/useMediaDownloads.ts';
+import type { MediaDownloads } from '~/utils/mediaDownloads.ts';
 
 import '@blocknote/mantine/style.css';
 import '@blocknote/core/fonts/inter.css';
@@ -16,6 +19,10 @@ import '~/styles/blocknote-overrides.css';
 
 /**
  * BlockNoteViewer - Read-only BlockNote viewer for pages.
+ *
+ * Renders with `viewerSchema` (the editor's blocks, plus a reader's Download
+ * button on file and audio blocks) and hands the video block the same
+ * button through `MediaDownloadContext`.
  */
 interface BlockNoteViewerProps {
   content: unknown;
@@ -35,6 +42,13 @@ interface BlockNoteViewerProps {
    * effect-time swap paints the bare stored path, and the browser fetches it.
    */
   displayUrl?: DisplayUrlLookup;
+  /** The page, for the download buttons' route. */
+  pageId?: string;
+  /**
+   * `ref → downloadable` for this reader (the loader's `mediaDownloads`). A
+   * file with `true` gets a Download button; everything else gets none.
+   */
+  mediaDownloads?: MediaDownloads;
 }
 
 const BlockNoteViewer = ({
@@ -43,6 +57,8 @@ const BlockNoteViewer = ({
   resolveFileUrl,
   srcSets,
   displayUrl,
+  pageId,
+  mediaDownloads,
 }: BlockNoteViewerProps) => {
   const [isMounted, setIsMounted] = useState(false);
   const initialContent =
@@ -50,9 +66,14 @@ const BlockNoteViewer = ({
       ? (content as PageBlockInsertions)
       : ([{ type: 'paragraph', content: [] }] as PageBlockInsertions);
 
+  const downloads = useMemo(
+    () => (pageId ? mediaDownloadLookup(pageId, mediaDownloads) : mediaDownloadLookup('', null)),
+    [pageId, mediaDownloads]
+  );
+
   const editor = useCreateBlockNote({
-    schema,
-    initialContent,
+    schema: viewerSchema,
+    initialContent: initialContent as never,
     ...(resolveFileUrl ? { resolveFileUrl } : {}),
   });
 
@@ -80,7 +101,9 @@ const BlockNoteViewer = ({
       <div className="page-editor">
         <AssetSrcSetContext.Provider value={srcSets ?? NO_SRC_SETS}>
           <AssetDisplayUrlContext.Provider value={displayUrl ?? IDENTITY_DISPLAY_URL}>
-            <BlockNoteView editor={editor} editable={false} theme={darkMode ? 'dark' : 'light'} />
+            <MediaDownloadContext.Provider value={downloads}>
+              <BlockNoteView editor={editor} editable={false} theme={darkMode ? 'dark' : 'light'} />
+            </MediaDownloadContext.Provider>
           </AssetDisplayUrlContext.Provider>
         </AssetSrcSetContext.Provider>
       </div>

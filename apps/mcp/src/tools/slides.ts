@@ -285,10 +285,9 @@ export const slideDeleteTool: ToolDefinition<SlideDeleteArgs> = {
   title: 'Delete a slide deck',
   description:
     "Permanently deletes a slide deck: removes its folder from the classroom's content repo " +
-    '(Github or Gitlab), deletes the database record, and refreshes the content manifest. This cannot ' +
-    'be undone. Shared themes the deck used are kept, and any Cloudinary-hosted slide videos ' +
-    'are NOT removed (delete those from the web app). OWNER/TEACHER may delete any deck; an ' +
-    'ASSISTANT only decks they created or decks with allow_team_edit.',
+    'on Github or Gitlab, deletes the database record, and refreshes the content manifest. This cannot ' +
+    'be undone. Shared themes and media-library files the deck used are kept. OWNER/TEACHER ' +
+    'may delete any deck; an ASSISTANT only decks they created or decks with allow_team_edit.',
   scope: 'write',
   roles: TEACHING_TEAM,
   inputSchema: {
@@ -299,10 +298,7 @@ export const slideDeleteTool: ToolDefinition<SlideDeleteArgs> = {
     const slide = await loadSlideInClassroom(args.slide_id, ctx);
     await assertSlideEditable(slide, ctx);
 
-    // Orchestrated delete. Cloudinary video cleanup is an app-local concern
-    // (the service takes an optional onDeleteVideos callback the web app
-    // provides); MCP has no cloudinary client, so videos are left in place
-    // and the response says so.
+    // Orchestrated delete. Shared themes are never deleted from MCP.
     const result = await slideService.deleteSlide({ slideId: slide.id });
 
     await writeAudit(ctx, {
@@ -313,7 +309,6 @@ export const slideDeleteTool: ToolDefinition<SlideDeleteArgs> = {
         tool: 'slide_delete',
         title: slide.title,
         ...(result.themeName ? { shared_theme: result.themeName } : {}),
-        video_cleanup: 'skipped',
       } as Prisma.InputJsonValue,
     });
 
@@ -321,7 +316,6 @@ export const slideDeleteTool: ToolDefinition<SlideDeleteArgs> = {
       success: true,
       deleted: { id: slide.id, title: slide.title },
       ...(result.themeName ? { shared_theme: { name: result.themeName, deleted: false } } : {}),
-      note: 'Cloudinary-hosted slide videos (if any) were not removed — delete them from the web app.',
     });
   },
 };

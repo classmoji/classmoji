@@ -9,7 +9,6 @@ import { authClient } from '@classmoji/auth/client';
 import SignInPage from './SignInPage';
 import GitLabSignIn from './GitLabSignIn';
 import { loadGitLabSignIn } from './gitlabSignIn.server';
-import GitHubIcon from './github.svg';
 import type { Route } from './+types/route';
 
 /**
@@ -23,28 +22,6 @@ import type { Route } from './+types/route';
  * become a second, unauthenticated one.
  */
 const REDIRECT_PARAM_MAX_LENGTH = 1024;
-
-/**
- * better-auth sends a failed OAuth sign-in back here with `?error=<code>`
- * (the `errorCallbackURL` below). Only known codes get a sentence; anything
- * else gets a generic one, so the query string never becomes page copy.
- */
-const SIGN_IN_ERRORS: Record<string, string> = {
-  // Implicit linking is off: an email match never merges accounts.
-  account_not_linked:
-    'You already have a Classmoji account with this email. Sign in the way you usually do, then connect this account in Settings.',
-  access_denied: 'Sign-in was cancelled.',
-  gitlab_instance_unavailable: 'That Gitlab is no longer available for sign-in.',
-  gitlab_setup_credentials:
-    'Gitlab rejected that Application ID or Secret, or the callback URL on the application does not match. Check them and try again.',
-  gitlab_setup_failed: 'Could not save that Gitlab. Try again.',
-  email_is_missing: 'Your Gitlab account has no email address Classmoji can read.',
-};
-
-function signInErrorMessage(code: string | null): string | null {
-  if (!code) return null;
-  return SIGN_IN_ERRORS[code] ?? 'Sign-in failed. Please try again.';
-}
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const url = new URL(request.url);
@@ -76,9 +53,9 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
           isDev: process.env.NODE_ENV === 'development',
           multipleTokens: process.env.MULTIPLE_TOKENS === 'true',
           gitlab: await loadGitLabSignIn(url, redirectPath),
-          signInError: null,
           setupComplete: false,
           redirectPath,
+          oauthError: null,
         },
         { headers: signOut.headers }
       );
@@ -94,14 +71,15 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     multipleTokens: process.env.MULTIPLE_TOKENS === 'true',
     // gitlab.com (when configured) and any self-managed instances.
     gitlab: await loadGitLabSignIn(url, redirectPath),
-    signInError: signInErrorMessage(url.searchParams.get('error')),
     setupComplete: url.searchParams.get('setup') === 'complete',
     redirectPath,
+    // A failed sign-in comes back here with `?error=<code>` (SignInPage words it).
+    oauthError: url.searchParams.get('error'),
   };
 };
 
 const Index = ({ loaderData }: Route.ComponentProps) => {
-  const { isDev, setupComplete, multipleTokens, gitlab, signInError, redirectPath } = loaderData;
+  const { isDev, setupComplete, multipleTokens, gitlab, redirectPath, oauthError } = loaderData;
 
   // Use BetterAuth client for OAuth flow. `redirectPath` was validated in the
   // loader; it is null unless it is a safe relative path.
@@ -109,6 +87,9 @@ const Index = ({ loaderData }: Route.ComponentProps) => {
   const handleGitHubLogin = async () => {
     await authClient.signIn.social({ provider: 'github', callbackURL, errorCallbackURL: '/' });
   };
+  // Sits under "Continue with Github", in the same shape.
+  const gitlabButtonClass =
+    'w-full flex items-center justify-center gap-2 bg-white hover:bg-stone-50 dark:bg-neutral-900 dark:hover:bg-neutral-800 text-gray-900 dark:text-white ring-1 ring-stone-200 dark:ring-neutral-700 font-medium rounded-lg px-4 py-2.5 transition-colors cursor-pointer';
   // While the Gitlab chooser is open it takes the whole column: no Github button.
   const [gitlabChoosing, setGitlabChoosing] = useState(false);
   const gitlabSignIn = (buttonClassName: string) =>
@@ -121,10 +102,6 @@ const Index = ({ loaderData }: Route.ComponentProps) => {
       />
     ) : null;
 
-  const errorBanner = signInError && (
-    <Alert type="warning" showIcon message={signInError} className="max-w-md" />
-  );
-
   const setupBanner = setupComplete && (
     <Alert
       type="success"
@@ -133,79 +110,70 @@ const Index = ({ loaderData }: Route.ComponentProps) => {
     />
   );
 
-  // In development, show quick login buttons for each role
+  // In development, the quick test logins sit under the regular sign-in
   if (isDev) {
     return (
-      <div className="flex flex-col items-center justify-center h-screen bg-lightGray dark:bg-neutral-900 gap-4">
+      <>
         {setupBanner}
-        {errorBanner}
-        <div className="text-ink-3 text-sm mb-2">Development Login</div>
+        <SignInPage
+          handleGitHubLogin={handleGitHubLogin}
+          callbackURL={callbackURL}
+          oauthError={oauthError}
+          gitlabChoosing={gitlabChoosing}
+          gitlabSignIn={gitlabSignIn(gitlabButtonClass)}
+        >
+          <div className="mb-8 flex flex-col items-center">
+            <div className="text-ink-3 text-sm mb-2">Development Login</div>
+            {multipleTokens && (
+              <>
+                <div className="flex flex-wrap justify-center gap-2 mt-2">
+                  <button
+                    onClick={() => (window.location.href = '/test-login?role=owner')}
+                    className="font-medium bg-violet-500/80 hover:bg-violet-500 text-white rounded-md px-4 py-2 text-sm cursor-pointer"
+                  >
+                    Owner
+                  </button>
+                  <button
+                    onClick={() => (window.location.href = '/test-login?role=instructor')}
+                    className="font-medium bg-amber-500/80 hover:bg-amber-500 text-white rounded-md px-4 py-2 text-sm cursor-pointer"
+                  >
+                    Instructor
+                  </button>
+                  <button
+                    onClick={() => (window.location.href = '/test-login?role=ta')}
+                    className="font-medium bg-sky-500/80 hover:bg-sky-500 text-white rounded-md px-4 py-2 text-sm cursor-pointer"
+                  >
+                    TA
+                  </button>
+                  <button
+                    onClick={() => (window.location.href = '/test-login?role=student')}
+                    className="font-medium bg-primary/80 hover:bg-primary text-white rounded-md px-4 py-2 text-sm cursor-pointer"
+                  >
+                    Student
+                  </button>
+                </div>
 
-        {!gitlabChoosing && (
-          <button
-            onClick={handleGitHubLogin}
-            className="flex items-center justify-center gap-2 font-bold bg-black text-white dark:ring-1 dark:ring-neutral-700 rounded-md px-4 py-3 w-64 cursor-pointer"
-          >
-            <img src={GitHubIcon} alt="" className="w-5 h-5" />
-            Continue with Github
-          </button>
-        )}
-
-        <div className={`${gitlabChoosing ? 'w-96' : 'w-64'} flex justify-center`}>
-          {gitlabSignIn(
-            'w-full flex items-center justify-center gap-2 font-bold bg-white dark:bg-neutral-800 text-gray-900 dark:text-white ring-1 ring-stone-200 dark:ring-neutral-700 rounded-md px-4 py-3 cursor-pointer'
-          )}
-        </div>
-
-        {multipleTokens && (
-          <>
-            <div className="flex gap-3 mt-4">
-              <button
-                onClick={() => (window.location.href = '/test-login?role=owner')}
-                className="font-medium bg-violet-500/80 hover:bg-violet-500 text-white rounded-md px-4 py-2 text-sm cursor-pointer"
-              >
-                Owner
-              </button>
-              <button
-                onClick={() => (window.location.href = '/test-login?role=instructor')}
-                className="font-medium bg-amber-500/80 hover:bg-amber-500 text-white rounded-md px-4 py-2 text-sm cursor-pointer"
-              >
-                Instructor
-              </button>
-              <button
-                onClick={() => (window.location.href = '/test-login?role=ta')}
-                className="font-medium bg-sky-500/80 hover:bg-sky-500 text-white rounded-md px-4 py-2 text-sm cursor-pointer"
-              >
-                TA
-              </button>
-              <button
-                onClick={() => (window.location.href = '/test-login?role=student')}
-                className="font-medium bg-primary/80 hover:bg-primary text-white rounded-md px-4 py-2 text-sm cursor-pointer"
-              >
-                Student
-              </button>
-            </div>
-
-            <div className="text-ink-4 text-xs mt-2">
-              Quick login uses test tokens from environment
-            </div>
-          </>
-        )}
-      </div>
+                <div className="text-ink-4 text-xs mt-2">
+                  Quick login uses test tokens from environment
+                </div>
+              </>
+            )}
+          </div>
+        </SignInPage>
+      </>
     );
   }
 
-  // Staging: single OAuth button
+  // Deployed: the regular sign-in
   return (
     <>
       {setupBanner}
       <SignInPage
-        error={signInError}
         handleGitHubLogin={handleGitHubLogin}
+        callbackURL={callbackURL}
+        oauthError={oauthError}
         gitlabChoosing={gitlabChoosing}
-        gitlabSignIn={gitlabSignIn(
-          'w-full flex items-center justify-center gap-2 bg-white hover:bg-stone-50 dark:bg-neutral-900 dark:hover:bg-neutral-800 text-gray-900 dark:text-white ring-1 ring-stone-200 dark:ring-neutral-700 font-medium rounded-lg px-4 py-2.5 transition-colors cursor-pointer'
-        )}
+        gitlabSignIn={gitlabSignIn(gitlabButtonClass)}
       />
     </>
   );

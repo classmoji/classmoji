@@ -5,7 +5,6 @@ import { IconChevronDown, IconCheck, IconUsers } from '@tabler/icons-react';
 import ResourceLinks from './ResourceLinks';
 import AssignmentCard from './AssignmentCard';
 import { useGitWeb } from '~/hooks/useGitWeb';
-import { userAvatarUrl } from '@classmoji/utils';
 
 // The `is_draft` / `status` flags below are only ever set to a draft value on
 // the teaching-team view, whose loader fetches unpublished content too.
@@ -53,7 +52,7 @@ interface Repository {
 
 interface TeamMembership {
   user_id: string;
-  user?: { name?: string | null; login?: string | null; provider_id?: string | null };
+  user?: { name?: string | null; login?: string | null; image?: string | null };
 }
 
 interface UserTeam {
@@ -97,7 +96,7 @@ const TeamFormationBanner = ({ repository, userTeam, classSlug }: TeamFormationB
               </Tag>
               <div className="flex items-center gap-2">
                 {userTeam.memberships?.map((m: TeamMembership) => (
-                  <Avatar key={m.user_id} src={userAvatarUrl(m.user)} size={24}>
+                  <Avatar key={m.user_id} src={m.user?.image ?? undefined} size={24}>
                     {m.user?.name?.[0] || m.user?.login?.[0]}
                   </Avatar>
                 ))}

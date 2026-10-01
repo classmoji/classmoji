@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import dayjs, { type Dayjs } from 'dayjs';
 import { createOneShotShutdown } from '@classmoji/utils';
 
@@ -24,6 +24,49 @@ const calculateLateHours = (
   return totalHoursLate - calculateExtensionHours(tokenTransactions);
 };
 
+const DEFAULT_AVATAR_URL = 'https://cdn-icons-png.flaticon.com/512/25/25231.png';
+
+/**
+ * Loads a user's git identity (Github / GitLab username, id, avatar) from their
+ * Account rows. Include it wherever a user's git username is needed and read it
+ * with `gitUsername` / `withLogin` / `withLogins` from `@classmoji/utils`.
+ * Never selects tokens or password hashes, so results are safe to serialize.
+ */
+export const GIT_IDENTITY = {
+  accounts: {
+    where: { provider_id: { in: ['github', 'gitlab'] } },
+    select: {
+      provider_id: true,
+      account_id: true,
+      username: true,
+      image: true,
+      email: true,
+    },
+  },
+} satisfies Prisma.UserInclude;
+
+/** `where` filter: users whose `provider` username is `username` (case-insensitive). */
+export const whereGitUsername = (
+  username: string,
+  provider: string | null = 'GITHUB'
+): Prisma.UserWhereInput => ({
+  accounts: {
+    some: {
+      provider_id: (provider || 'GITHUB').toLowerCase(),
+      username: { equals: username, mode: 'insensitive' },
+    },
+  },
+});
+
+/** `where` filter: users whose `provider` username is any of `usernames` (exact). */
+export const whereGitUsernameIn = (
+  usernames: string[],
+  provider: string | null = 'GITHUB'
+): Prisma.UserWhereInput => ({
+  accounts: {
+    some: { provider_id: (provider || 'GITHUB').toLowerCase(), username: { in: usernames } },
+  },
+});
 // ─── OAuth tokens at rest ────────────────────────────────────────────────────
 //
 // OAuth tokens (sign-in accounts, Gitlab connections) are stored encrypted:
@@ -180,22 +223,9 @@ function createPrismaClient() {
       ...tokenResults,
       user: {
         avatar_url: {
-          needs: { provider_id: true, provider: true, image: true },
-          compute(user: {
-            provider_id: string | null;
-            provider: string | null;
-            image: string | null;
-          }) {
-            // Github avatars are addressable by user id; a Gitlab id is not (and
-            // is instance-scoped), so Gitlab users use the avatar their Gitlab
-            // reported at sign-in.
-            if (user.provider === 'GITLAB') {
-              return user.image || 'https://cdn-icons-png.flaticon.com/512/25/25231.png';
-            }
-            if (!user.provider_id) {
-              return 'https://cdn-icons-png.flaticon.com/512/25/25231.png';
-            }
-            return `https://avatars.githubusercontent.com/u/${user.provider_id}?v=4`;
+          needs: { image: true },
+          compute(user: { image: string | null }) {
+            return user.image || DEFAULT_AVATAR_URL;
           },
         },
       },

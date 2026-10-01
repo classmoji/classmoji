@@ -5,9 +5,6 @@
  * createSlide choreography (repo ensure → starter deck saveDeck → DB row →
  * manifest refresh), deleteSlide/getSlideDeleteInfo ported from
  * apps/slides/app/utils/slideService.server.ts.
- *
- * Cloudinary stays app-local: deleteSlide accepts an optional onDeleteVideos
- * callback instead of importing the cloudinary service.
  */
 
 import getPrisma from '@classmoji/database';
@@ -17,7 +14,7 @@ import * as contentManifestService from '../classmoji/contentManifest.service.ts
 import { ensureContentRepo } from '../classmoji/page.service.ts';
 import { mintSlideId, type IdGenerator } from './deckHtml.ts';
 import { previewBranchName, saveDeck } from './slideContent.service.ts';
-import { isDeckSlide, SlideKindError } from './slideSource.ts';
+import { isDeckSlide, isMediaBackedFileSlide, SlideKindError } from './slideSource.ts';
 import type { DeckJson } from './deckTypes.ts';
 
 const THEMES_FOLDER = '.slidesthemes';
@@ -636,18 +633,13 @@ async function loadSlideWithClassroom(slideId: string) {
 
 /**
  * Delete a slide and its content from GitHub.
- *
- * Cloudinary video cleanup stays app-local: pass onDeleteVideos to run it
- * (videos live under the cloudinary folder `classmoji/slides/{slideId}/`).
  */
 export async function deleteSlide({
   slideId,
   deleteTheme = false,
-  onDeleteVideos,
 }: {
   slideId: string;
   deleteTheme?: boolean;
-  onDeleteVideos?: (slideId: string) => Promise<unknown>;
 }): Promise<{
   success: boolean;
   themeName: string | null;
@@ -671,8 +663,12 @@ export async function deleteSlide({
   const isDeck = isDeckSlide(slide);
   // A LINK owns nothing in the repo — no folder was ever created for it, so
   // every GitHub call below would be a request whose only possible answer is a
-  // 404 logged as an error on an otherwise clean delete.
-  const ownsRepoContent = slide.kind !== 'LINK';
+  // 404 logged as an error on an otherwise clean delete. Neither does a FILE
+  // whose document lives in the media store: it was never committed. (Its media
+  // object stays — it is in the classroom's media library, and removing it from
+  // there is a separate decision.) `media_id` wins over a `source_path`, as it
+  // does for every reader — see `isMediaBackedFileSlide`.
+  const ownsRepoContent = slide.kind !== 'LINK' && !isMediaBackedFileSlide(slide);
 
   // Check if this slide uses a shared theme (deck.json-first). Decks only: a
   // theme is something a deck's `deck.json` names, and a file slide's folder
@@ -718,15 +714,6 @@ export async function deleteSlide({
       contentPath: slide.content_path,
       context: 'slide deleted',
     });
-  }
-
-  // Cloudinary cleanup via the app-provided callback.
-  if (onDeleteVideos) {
-    try {
-      await onDeleteVideos(slideId);
-    } catch (error: unknown) {
-      console.error('Failed to delete slide videos:', error);
-    }
   }
 
   // Handle shared theme deletion if requested.

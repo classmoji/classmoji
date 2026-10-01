@@ -66,7 +66,7 @@ export async function loadGitLabInstances({ request }: LoaderFunctionArgs) {
           note: r.request_note,
           emailMatchesHost: emailMatchesHost(r.requester_email, r.host),
         },
-        createdBy: r.created_by?.name ?? r.created_by?.login ?? r.created_by?.email ?? null,
+        createdBy: r.created_by?.name ?? r.created_by?.email ?? null,
         groups: r._count.git_organizations,
         connections: r._count.connections,
       })

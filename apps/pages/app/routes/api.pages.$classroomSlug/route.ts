@@ -1,4 +1,5 @@
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
+import { findClassroomRole } from '~/utils/classroomRole.server.ts';
 
 /**
  * GET /api/pages/:classroomSlug
@@ -30,15 +31,10 @@ export const loader = async ({
   let pages: Awaited<ReturnType<typeof ClassmojiService.page.findByClassroomId>> = [];
 
   if (authData) {
-    // Get membership
-    const membership = await ClassmojiService.classroomMembership.findByClassroomAndUser(
-      classroom.id,
-      authData.userId
-    );
+    // Their role: the highest of the rows they hold in this classroom.
+    const role = await findClassroomRole({ userId: authData.userId, classroomId: classroom.id });
 
-    if (membership) {
-      const role = membership.role;
-
+    if (role) {
       if (role === 'OWNER' || role === 'TEACHER') {
         // Admins see all pages including drafts
         pages = await ClassmojiService.page.findByClassroomId(classroom.id, {

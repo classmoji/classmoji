@@ -8,9 +8,9 @@ import { IconId } from '@tabler/icons-react';
 import type { Route } from './+types/route';
 import { Logo } from '@classmoji/ui-components';
 import { getAuthSession } from '@classmoji/auth/server';
-import getPrisma from '@classmoji/database';
-import { generateId } from '@classmoji/utils';
-import { GitHubProvider, ClassmojiService } from '@classmoji/services';
+import getPrisma, { GIT_IDENTITY, whereGitUsername } from '@classmoji/database';
+import { generateId, gitUsername } from '@classmoji/utils';
+import { ClassmojiService } from '@classmoji/services';
 import {
   sendEmailVerificationCode,
   isEmailVerificationCodeValid,
@@ -18,85 +18,51 @@ import {
 } from '~/utils/emailVerification.server';
 import { verifyInviteToken, inviteTokenMatchesEmail } from '@classmoji/auth/invite-token';
 
-/**
- * The signed-in user's provider identity, read server-side. better-auth creates
- * the user row at sign-in (see packages/auth/src/providerProfile.ts), so its
- * login/provider/provider_email are already there for Github and GitLab alike.
- *
- * For Github the email is re-read from the API when a token is available:
- * `provider_email` is otherwise written on create only, and invite claims match
- * on it. It is never taken from the form, which would let anyone claim an
- * invite addressed to someone else.
- */
-async function getSignedInIdentity(userId: string, githubToken: string | null) {
-  const user = await getPrisma().user.findUnique({
-    where: { id: userId },
-    select: { id: true, login: true, provider: true, provider_email: true },
-  });
-  if (!user) return null;
-
-  let providerEmail = user.provider_email;
-  if (user.provider !== 'GITLAB' && githubToken) {
-    const octokit = GitHubProvider.getUserOctokit(githubToken);
-    const { data: githubUser } = await octokit.rest.users.getAuthenticated();
-    // A profile whose email went private must not null out what we hold.
-    providerEmail = githubUser.email || providerEmail;
-  }
-
-  return {
-    userId: user.id,
-    login: user.login,
-    provider: user.provider ?? 'GITHUB',
-    providerEmail,
-  };
-}
+/** Where to go once registered: a same-site path from `?next=`, else the picker. */
+const safeNext = (value: string | null | undefined): string =>
+  value && value.startsWith('/') && !value.startsWith('//') ? value : '/select-organization';
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const authData = await getAuthSession(request);
+  if (!authData?.userId) return redirect('/');
 
-  if (!authData) return redirect('/');
+  const url = new URL(request.url);
+  const next = safeNext(url.searchParams.get('next'));
+
+  const user = await getPrisma().user.findUnique({
+    where: { id: authData.userId },
+    include: GIT_IDENTITY,
+  });
+  if (!user) return redirect('/');
+  const githubLogin = gitUsername(user, 'GITHUB');
+
+  // Already registered: nothing to do here.
+  if (user.email && user.emailVerified) return redirect(next);
 
   // In local dev, skip the registration form entirely — auto-register using GitHub profile data.
   // Gated on an explicit allow flag in addition to NODE_ENV to avoid a misconfigured
   // production (NODE_ENV unset) silently turning into a no-form auto-register backdoor.
-  // Github only: it needs the Github profile, and GitLab users register through the form.
   if (
     process.env.NODE_ENV === 'development' &&
     process.env.ENABLE_DEV_AUTO_REGISTER === 'true' &&
-    authData.token
+    githubLogin
   ) {
-    const octokit = GitHubProvider.getUserOctokit(authData.token);
-    const { data: githubUser } = await octokit.rest.users.getAuthenticated();
-    const githubId = String(githubUser.id);
-    const email = githubUser.email || `${githubUser.login}@dev.local`;
-
-    const user = await getPrisma().user.upsert({
-      where: { provider_provider_id: { provider: 'GITHUB', provider_id: githubId } },
-      update: { email, name: githubUser.name || githubUser.login },
-      create: {
-        provider: 'GITHUB',
-        provider_id: githubId,
-        login: githubUser.login,
-        name: githubUser.name || githubUser.login,
+    const email = (user.email || `${githubLogin}@dev.local`).toLowerCase();
+    await getPrisma().user.update({
+      where: { id: user.id },
+      data: {
         email,
-        provider_email: githubUser.email || null,
-        school_id: 'dev',
-        subscriptions: { create: { id: String(generateId()), tier: 'PRO' } },
+        emailVerified: true,
+        name: user.name || githubLogin,
+        school_id: user.school_id || 'dev',
       },
     });
-
-    const sessionId = (authData as { session?: { session?: { id?: string } } })?.session?.session
-      ?.id;
-    if (sessionId) {
-      await getPrisma().session.updateMany({
-        where: { id: sessionId },
-        data: { user_id: user.id },
+    const hasSubscription = await getPrisma().subscription.count({ where: { user_id: user.id } });
+    if (!hasSubscription) {
+      await getPrisma().subscription.create({
+        data: { id: String(generateId()), tier: 'PRO', user_id: user.id },
       });
     }
-    await getPrisma().account.updateMany({
-      where: { provider_id: 'github', account_id: githubId },
-      data: { user_id: user.id },
-    });
 
     // Auto-join the dev classroom as OWNER + ASSISTANT + STUDENT
     const devClassroom = await getPrisma().classroom.findFirst({
@@ -132,7 +98,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       // Seed student data for the real user so the student view is non-empty
       const helloWorldModule = devClassroom.repositories.find(m => m.title === 'hello-world');
       const [assignment1, assignment2] = helloWorldModule?.assignments ?? [];
-      const fakeTA = await getPrisma().user.findFirst({ where: { login: 'fake-ta' } });
+      const fakeTA = await getPrisma().user.findFirst({ where: whereGitUsername('fake-ta') });
 
       if (helloWorldModule && assignment1 && fakeTA) {
         // Repo for the real user
@@ -140,7 +106,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
           where: {
             provider_provider_id: {
               provider: 'GITHUB',
-              provider_id: `fake-repo-${githubUser.login}`,
+              provider_id: `fake-repo-${githubLogin}`,
             },
           },
           update: {},
@@ -148,8 +114,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
             classroom_id: devClassroom.id,
             repository_id: helloWorldModule.id,
             provider: 'GITHUB',
-            provider_id: `fake-repo-${githubUser.login}`,
-            name: `${githubUser.login}-hello-world`,
+            provider_id: `fake-repo-${githubLogin}`,
+            name: `${githubLogin}-hello-world`,
             student_id: user.id,
           },
         });
@@ -159,7 +125,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
           where: {
             provider_provider_id: {
               provider: 'GITHUB',
-              provider_id: `fake-issue-${githubUser.login}`,
+              provider_id: `fake-issue-${githubLogin}`,
             },
           },
           update: {},
@@ -167,7 +133,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
             git_repo_id: repo.id,
             assignment_id: assignment1.id,
             provider: 'GITHUB',
-            provider_id: `fake-issue-${githubUser.login}`,
+            provider_id: `fake-issue-${githubLogin}`,
             provider_issue_number: 999,
             status: 'CLOSED',
           },
@@ -202,7 +168,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
             where: {
               provider_provider_id: {
                 provider: 'GITHUB',
-                provider_id: `fake-issue-p2-${githubUser.login}`,
+                provider_id: `fake-issue-p2-${githubLogin}`,
               },
             },
             update: {},
@@ -210,7 +176,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
               git_repo_id: repo.id,
               assignment_id: assignment2.id,
               provider: 'GITHUB',
-              provider_id: `fake-issue-p2-${githubUser.login}`,
+              provider_id: `fake-issue-p2-${githubLogin}`,
               provider_issue_number: 998,
               status: 'OPEN',
             },
@@ -218,29 +184,33 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         }
       }
     }
-    return redirect('/select-organization');
+    return redirect(next);
   }
 
   // From the roster invite link (#343). Opening that mail already proved the
   // address, so the token stands in for the code — for that address only. A
   // token that fails to verify is simply ignored and the code flow applies.
-  const inviteToken = new URL(request.url).searchParams.get('invite');
+  const inviteToken = url.searchParams.get('invite');
   const invite = inviteToken ? verifyInviteToken(inviteToken) : null;
 
-  const identity = await getSignedInIdentity(authData.userId, authData.token);
-  if (!identity) return redirect('/');
-
   return {
-    login: identity.login,
-    provider: identity.provider,
+    githubLogin,
+    gitlabLogin: gitUsername(user, 'GITLAB'),
+    name: user.name,
+    // A Github sign-up arrives with its Github email; it still needs a code.
+    suggestedEmail: invite?.email ?? user.email ?? null,
     invitedEmail: invite?.email ?? null,
     inviteToken: invite ? inviteToken : null,
+    next,
   };
 };
 
 const Registration = ({ loaderData }: Route.ComponentProps) => {
-  const { login, provider, invitedEmail, inviteToken } = loaderData;
-  const isGitLab = provider === 'GITLAB';
+  const { githubLogin, gitlabLogin, name, suggestedEmail, invitedEmail, inviteToken, next } =
+    loaderData;
+  // The provider username shown (display only; the server never reads it back).
+  const gitLogin = githubLogin ?? gitlabLogin;
+  const isGitLab = !githubLogin && Boolean(gitlabLogin);
   const fetcher = useFetcher();
   const codeFetcher = useFetcher();
   const verifyFetcher = useFetcher();
@@ -269,9 +239,9 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
   // Handle successful registration redirect
   useEffect(() => {
     if (fetcher.state === 'idle' && fetcher.data && !fetcher.data.error) {
-      navigate('/select-organization');
+      navigate(next);
     }
-  }, [fetcher.state, fetcher.data, navigate]);
+  }, [fetcher.state, fetcher.data, navigate, next]);
 
   const handleSendCode = () => {
     const email = form.getFieldValue('email');
@@ -301,7 +271,7 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
 
   const onFinish = (values: Record<string, unknown>) => {
     fetcher.submit(
-      { ...values, intent: 'register', invite_token: useInvite ? inviteToken : null },
+      { ...values, intent: 'register', invite_token: useInvite ? inviteToken : null, next },
       {
         method: 'POST',
         encType: 'application/json',
@@ -310,19 +280,24 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
+    <div className="min-h-screen bg-gray-50 dark:bg-neutral-950 flex flex-col items-center justify-center p-4">
       <div className="w-full max-w-md">
         {/* Header */}
         <div className="text-center mb-6">
           <div className="flex justify-center mb-4">
             <Logo size={48} />
           </div>
-          <h1 className="text-xl font-semibold mb-2">Create Your Account</h1>
-          <p className="text-gray-600 text-sm">Complete your profile to get started</p>
+          <h1 className="text-xl font-semibold mb-2 dark:text-gray-100">Create Your Account</h1>
+          <p className="text-gray-600 dark:text-gray-400 text-sm">
+            Complete your profile to get started
+          </p>
         </div>
 
         {/* Main Form Card */}
-        <Card className="shadow-xs border border-gray-200" styles={{ body: { padding: '24px' } }}>
+        <Card
+          className="shadow-xs border border-gray-200 dark:border-neutral-800"
+          styles={{ body: { padding: '24px' } }}
+        >
           <Spin spinning={isSubmitting} tip="Setting up your account..." fullscreen />
 
           {actionError && (
@@ -334,7 +309,11 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
             layout="vertical"
             onFinish={onFinish}
             size="middle"
-            initialValues={{ login, email: invitedEmail ?? undefined }}
+            initialValues={{
+              login: gitLogin ?? undefined,
+              email: suggestedEmail ?? undefined,
+              name: name ?? undefined,
+            }}
             disabled={isSubmitting}
           >
             {/* School Email + Send Code */}
@@ -424,10 +403,8 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
                   <Input />
                 </Form.Item>
 
-                {/* Provider username (display only; the server never reads it
-                    back). Hidden when the Gitlab username was already taken
-                    and no login was assigned. */}
-                {login && (
+                {/* Github or Gitlab username */}
+                {gitLogin && (
                   <Form.Item
                     label={
                       <span className="flex items-center gap-2 font-medium text-gray-700 text-sm">
@@ -557,36 +534,35 @@ export const action = async ({ request }: Route.ActionArgs) => {
     return { error: 'Verification code is invalid or expired. Please verify your email again.' };
   }
 
-  // The account being registered is the signed-in user's own row, which
-  // better-auth created at sign-in for either provider. Nothing about identity
-  // is read from the form.
-  if (!authData) return redirect('/');
-  const identity = await getSignedInIdentity(authData.userId, authData.token);
-  if (!identity) return redirect('/');
+  if (!authData?.userId) return redirect('/');
+  const email = String(formData.email).trim().toLowerCase();
 
   // Check if email is already in use by another user
   const existingUserWithEmail = await getPrisma().user.findFirst({
-    where: { email: formData.email, NOT: { id: identity.userId } },
-    select: { id: true },
+    where: {
+      email: { equals: email, mode: 'insensitive' },
+      NOT: { id: authData.userId },
+    },
   });
   if (existingUserWithEmail) {
     return { error: 'This email is already in use by another account.' };
   }
 
   const user = await getPrisma().user.update({
-    where: { id: identity.userId },
+    where: { id: authData.userId },
     data: {
       name: formData.name,
-      email: formData.email,
+      email,
+      emailVerified: true,
       school_id: formData.school_id || null,
-      // `provider_email` is otherwise written on create only, so a returning
-      // user keeps whatever better-auth stored at first sign-in. The invite
-      // claim below reads the stored row, so a stale value here silently costs
-      // the student their invite.
-      ...(identity.providerEmail ? { provider_email: identity.providerEmail } : {}),
     },
-    select: { id: true },
   });
+  const hasSubscription = await getPrisma().subscription.count({ where: { user_id: user.id } });
+  if (!hasSubscription) {
+    await getPrisma().subscription.create({
+      data: { id: String(generateId()), tier: 'FREE', user_id: user.id },
+    });
+  }
 
   // Claim any pending classroom invites addressed to either email we now hold
   // for this user. The same call runs on login and on an email change, so a
@@ -598,7 +574,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
   // on demand when someone starts the tour (POST /api/example-classroom).
   // Most accounts are students, who never needed one.
 
-  return redirect('/select-organization');
+  return redirect(safeNext(formData.next));
 };
 
 export default Registration;

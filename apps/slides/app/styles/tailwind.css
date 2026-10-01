@@ -11,6 +11,9 @@
    the default type scale; adding those would restyle the whole app. */
 @import '@classmoji/ui-components/styles/tokens.css';
 @import '@classmoji/ui-components/styles/components.css';
+/* The shared video upload options (`@classmoji/ui-components/media-options`)
+ * ship their own stylesheet; the video upload dialog renders them. */
+@import '@classmoji/ui-components/styles/media-options.css';
 
 @custom-variant dark (&:where(.dark, .dark *));
 

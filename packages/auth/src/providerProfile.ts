@@ -1,257 +1,206 @@
 /**
- * Maps an OAuth provider profile onto our User fields at sign-in.
+ * Records an OAuth provider profile (username, email, avatar) on the user's
+ * Account row at sign-in and when an account is connected.
  *
- * Lives outside ./server.ts so the matching rules can be unit-tested without
- * standing up betterAuth. Both mappers run BEFORE better-auth's findOAuthUser
- * lookup, and what they return is only used when better-auth creates a
- * genuinely new user.
+ * Lives outside ./server.ts so the rules can be unit-tested without standing up
+ * betterAuth. `mapGitHubProfile` runs BEFORE better-auth's findOAuthUser lookup;
+ * what it returns is only used when better-auth creates a brand-new user.
  *
- * `User.login` is unique across every provider, so a username is never proof of
- * identity on its own: Github `jdoe` and GitLab `jdoe` can be different people.
- * A login match is therefore only ever trusted within the same provider.
+ * Git identity is per account: a Github username is only ever compared with
+ * other Github accounts' usernames, never with another provider's.
  */
 
 import type { PrismaClient } from '@prisma/client';
-import { pickAvailableLogin, scopeGitlabId } from '@classmoji/utils';
+import { scopeGitlabId } from '@classmoji/utils';
 
 type Prisma = Pick<PrismaClient, 'user' | 'account'>;
 
-interface ProviderUserFields {
-  login: string | null;
-  provider: 'GITHUB' | 'GITLAB';
-  provider_id: string;
+type ProviderId = 'github' | 'gitlab';
+
+interface ProviderProfile {
+  username: string | null;
+  email: string | null;
+  image: string | null;
 }
 
+/** Prefix of placeholder account ids for users known only by a Github username. */
+export const UNRESOLVED_ACCOUNT_PREFIX = 'unresolved:';
+
 /**
- * Github sign-in. Links a pre-provisioned user (roster/assistant invites create
- * users by username with no provider linkage) instead of letting better-auth
- * collide on the unique `login`. Only users that are Github's or not yet tied to
- * any provider can be claimed by login.
+ * Github sign-in (and Github connect from settings; better-auth runs this in
+ * both flows). Keeps the stored profile current and claims a placeholder
+ * account left for a user who was added by username before they ever signed in.
  */
 export async function mapGitHubProfile(
   prisma: Prisma,
-  profile: { id: number | string; login: string }
-): Promise<ProviderUserFields> {
-  const githubId = String(profile.id);
-  const login = profile.login;
-  await noteProviderUsername(prisma, 'github', githubId, login);
-
-  // An already-connected Github account (e.g. linked before usernames were
-  // recorded, or renamed on Github): make sure its username is the main login.
-  try {
-    const linked = await prisma.account.findFirst({
-      where: { provider_id: 'github', account_id: githubId },
-      select: { user_id: true },
-    });
-    if (linked) await promoteGitHubLogin(prisma, linked.user_id, githubId, login);
-  } catch (error: unknown) {
-    console.error('[auth] Github login promotion failed', error);
+  profile: {
+    id: number | string;
+    login: string;
+    email?: string | null;
+    avatar_url?: string | null;
   }
+): Promise<{ emailVerified: false }> {
+  const githubId = String(profile.id);
+  const note: ProviderProfile = {
+    username: profile.login || null,
+    email: profile.email ?? null,
+    image: profile.avatar_url ?? null,
+  };
 
-  // ── Link existing users instead of colliding on the unique `login` ──────
-  // Users can already exist in our DB without a linked Github account:
-  //  - pre-provisioned by username via ClassmojiService.user.create (login
-  //    set, no provider_id / no account row), e.g. roster/assistant invites
-  //  - a prior login whose account row was removed
-  // If we link the account here, findOAuthUser finds it and takes the
-  // (non-destructive) link path — instead of falling through to
-  // createOAuthUser, which would throw `unable to create user` on the
-  // `login`/`provider` unique constraints.
   try {
-    const existing = await prisma.user.findFirst({
-      where: {
-        OR: [
-          { provider: 'GITHUB', provider_id: githubId },
-          // A GitLab user holding this login is someone else: never claim it.
-          { login, OR: [{ provider: null }, { provider: 'GITHUB' }] },
-        ],
-      },
-      include: {
-        accounts: { where: { provider_id: 'github' }, select: { id: true } },
-      },
-    });
-
-    if (existing && existing.accounts.length === 0) {
-      // Backfill provider linkage on the existing record (login-only invites
-      // have a null provider_id) so the (provider, provider_id) unique key and
-      // future lookups resolve correctly.
-      await prisma.user.update({
-        where: { id: existing.id },
-        data: {
-          provider: 'GITHUB',
-          provider_id: githubId,
-          login: existing.login ?? login,
-        },
+    // Claim a placeholder held under this username, so better-auth's
+    // (provider_id, account_id) lookup lands on that user.
+    if (note.username) {
+      const alreadyLinked = await prisma.account.findFirst({
+        where: { provider_id: 'github', account_id: githubId },
+        select: { id: true },
       });
-
-      // Create the account link BetterAuth looks up by (provider_id, account_id).
-      // Tokens are intentionally left null — BetterAuth fills them on this same
-      // sign-in once it resolves the linked account.
-      await prisma.account.upsert({
-        where: {
-          provider_id_account_id: { provider_id: 'github', account_id: githubId },
-        },
-        update: {},
-        create: {
-          user_id: existing.id,
-          provider_id: 'github',
-          account_id: githubId,
-          username: login,
-        },
-      });
+      if (!alreadyLinked) {
+        const placeholder = await prisma.account.findFirst({
+          where: {
+            provider_id: 'github',
+            account_id: { startsWith: UNRESOLVED_ACCOUNT_PREFIX },
+            username: { equals: note.username, mode: 'insensitive' },
+          },
+          select: { id: true },
+        });
+        if (placeholder) {
+          await prisma.account.update({
+            where: { id: placeholder.id },
+            data: { account_id: githubId },
+          });
+        }
+      }
     }
   } catch (error: unknown) {
-    // Never block sign-in on the linking attempt; if it fails, BetterAuth
-    // proceeds with its default behavior and we surface its error as before.
-    console.error('[auth] mapProfileToUser account-link failed', error);
+    // Never block sign-in on the claim; better-auth then treats this as a new
+    // Github account.
+    console.error('[auth] Github placeholder claim failed', error);
   }
 
-  return { login, provider: 'GITHUB', provider_id: githubId };
+  await noteProviderProfile(prisma, 'github', githubId, note);
+
+  // A brand-new user must still confirm a contact email at registration: the
+  // Github email lands in users.email unverified.
+  return { emailVerified: false };
 }
 
 /**
- * GitLab sign-in. Never links to an existing user: a GitLab account only ever
- * resolves through its own account row (better-auth's lookup), so a returning
- * GitLab user is found by id and a new one gets a fresh user.
- *
- * The GitLab username becomes `login` when nobody holds it; otherwise the
- * first free `username-2`, `username-3`… (a user without a login can't be
- * activated in a classroom, which looks the student up by login).
+ * Gitlab sign-in (gitlab.com through socialProviders, a self-managed instance
+ * through the gitlabInstances plugin) and Gitlab connect from settings. Records
+ * the profile the same way as Github. A Gitlab account is only ever found by
+ * its own (provider_id, account_id), never claimed by username.
  *
  * `instanceId` is the self-managed instance signed in with (null: the default
- * instance). GitLab ids repeat across instances, so the stored id is scoped.
+ * instance). Gitlab ids repeat across instances, so the stored id is scoped.
  */
 export async function mapGitLabProfile(
   prisma: Prisma,
-  profile: { id: number | string; username: string },
+  profile: {
+    id: number | string;
+    username: string;
+    email?: string | null;
+    avatar_url?: string | null;
+  },
   instanceId: string | null = null
-): Promise<ProviderUserFields> {
-  const gitlabId = scopeGitlabId(instanceId, profile.id);
-  await noteProviderUsername(prisma, 'gitlab', gitlabId, profile.username);
-
-  let login: string | null = null;
-  try {
-    // The login the returning GitLab user already holds, if any.
-    const own = await prisma.user.findFirst({
-      where: { provider: 'GITLAB', provider_id: gitlabId },
-      select: { id: true, login: true },
-    });
-    login =
-      own?.login ??
-      (await pickAvailableLogin(profile.username || '', async candidate =>
-        Boolean(
-          await prisma.user.findFirst({
-            where: {
-              login: { equals: candidate, mode: 'insensitive' },
-              ...(own ? { NOT: { id: own.id } } : {}),
-            },
-            select: { id: true },
-          })
-        )
-      ));
-    // A GitLab user created before this (or pre-provisioned by staff) may
-    // have been left without a login; give them one now.
-    if (own && !own.login && login) {
-      await prisma.user.update({ where: { id: own.id }, data: { login } });
-    }
-  } catch (error: unknown) {
-    console.error('[auth] GitLab login availability check failed', error);
-    login = null;
-  }
-
-  return { login, provider: 'GITLAB', provider_id: gitlabId };
+): Promise<{ emailVerified: false }> {
+  await noteProviderProfile(prisma, 'gitlab', scopeGitlabId(instanceId, profile.id), {
+    username: profile.username || null,
+    email: profile.email ?? null,
+    image: profile.avatar_url ?? null,
+  });
+  return { emailVerified: false };
 }
 
-// ─── Per-provider usernames ──────────────────────────────────────────────────
+// ─── Parking the profile for the account-create hook ────────────────────────
 //
-// A user with Github and GitLab connected has two usernames; each lives on its
-// Account row. The mappers above see the provider profile but run before the
-// account row exists on a first sign-in or link, so the username is parked here
-// and written by the account-create hook later in the same request.
+// On a first sign-in or a connect, the mapper runs before the account row
+// exists (better-auth writes only ids and tokens on it), so the profile is
+// parked here and written by the account-create hook later in the same request.
 
-type ProviderId = 'github' | 'gitlab';
-
-const pendingUsernames = new Map<string, { username: string; at: number }>();
+const pendingProfiles = new Map<string, ProviderProfile & { at: number }>();
 const PENDING_TTL_MS = 5 * 60 * 1000;
 const pendingKey = (providerId: string, accountId: string) => `${providerId}:${accountId}`;
 
-/** Records the profile's username: now for an existing row, later for a new one. */
-async function noteProviderUsername(
+/** Records the profile: now on an existing row, later (via onAccountCreated) on a new one. */
+async function noteProviderProfile(
   prisma: Prisma,
   providerId: ProviderId,
   accountId: string,
-  username: string | null | undefined
+  profile: ProviderProfile
 ): Promise<void> {
-  if (!username) return;
   const now = Date.now();
-  for (const [key, entry] of pendingUsernames) {
-    if (now - entry.at > PENDING_TTL_MS) pendingUsernames.delete(key);
+  for (const [key, entry] of pendingProfiles) {
+    if (now - entry.at > PENDING_TTL_MS) pendingProfiles.delete(key);
   }
-  pendingUsernames.set(pendingKey(providerId, accountId), { username, at: now });
+  pendingProfiles.set(pendingKey(providerId, accountId), { ...profile, at: now });
+
   try {
-    // Returning sign-ins: keep the stored username current (renames).
-    await prisma.account.updateMany({
+    const existing = await prisma.account.findFirst({
       where: { provider_id: providerId, account_id: accountId },
-      data: { username },
+      select: { id: true, user_id: true },
     });
+    if (existing) await writeProfile(prisma, providerId, existing, profile);
   } catch (error: unknown) {
-    console.error('[auth] provider username update failed', error);
+    console.error('[auth] provider profile update failed', error);
   }
 }
 
 /**
- * Runs after better-auth creates an Account row (first sign-in, or Connect in
- * settings). Stores the provider username on it, and when the new account is
- * Github, makes the Github username the user's main `login`: every Github-side
- * operation (course invites, repo names, repo access) reads `User.login` as a
- * Github username. Never throws; a failure here must not undo the sign-in.
+ * Runs after better-auth creates an Account row (first sign-in, or connect in
+ * settings). Stores the parked profile on it. Never throws: a failure here must
+ * not undo the sign-in.
  */
 export async function onAccountCreated(
   prisma: Prisma,
   account: { id: string; providerId: string; accountId: string; userId: string }
 ): Promise<void> {
+  if (account.providerId !== 'github' && account.providerId !== 'gitlab') return;
   const key = pendingKey(account.providerId, account.accountId);
-  const username = pendingUsernames.get(key)?.username;
-  pendingUsernames.delete(key);
-  if (!username) return;
+  const profile = pendingProfiles.get(key);
+  pendingProfiles.delete(key);
+  if (!profile) return;
 
   try {
-    await prisma.account.update({ where: { id: account.id }, data: { username } });
-    if (account.providerId === 'github') {
-      await promoteGitHubLogin(prisma, account.userId, account.accountId, username);
-    }
+    await writeProfile(
+      prisma,
+      account.providerId,
+      { id: account.id, user_id: account.userId },
+      profile
+    );
   } catch (error: unknown) {
-    console.error('[auth] recording account username failed', error);
+    console.error('[auth] recording account profile failed', error);
   }
 }
 
-/**
- * Makes `githubLogin` the user's main login. Skipped when another user already
- * holds it (their `login` is unique): the user keeps their current login and
- * Github courses stay closed to them until that is resolved.
- */
-export async function promoteGitHubLogin(
+async function writeProfile(
   prisma: Prisma,
-  userId: string,
-  githubId: string,
-  githubLogin: string
-): Promise<'promoted' | 'unchanged' | 'taken'> {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { login: true, provider: true },
+  providerId: ProviderId,
+  account: { id: string; user_id: string },
+  profile: ProviderProfile
+): Promise<void> {
+  if (profile.username) {
+    // Usernames are unique per provider. One held by another account is stale
+    // (that account renamed, and the name was reused): release it.
+    await prisma.account.updateMany({
+      where: {
+        provider_id: providerId,
+        username: { equals: profile.username, mode: 'insensitive' },
+        NOT: { id: account.id },
+      },
+      data: { username: null },
+    });
+  }
+  await prisma.account.update({
+    where: { id: account.id },
+    data: {
+      ...(profile.username ? { username: profile.username } : {}),
+      ...(profile.email ? { email: profile.email } : {}),
+      ...(profile.image ? { image: profile.image } : {}),
+    },
   });
-  if (!user) return 'unchanged';
-  if ((user.provider ?? 'GITHUB') === 'GITHUB' && user.login === githubLogin) return 'unchanged';
-
-  const holder = await prisma.user.findFirst({
-    where: { login: githubLogin, NOT: { id: userId } },
-    select: { id: true },
-  });
-  if (holder) return 'taken';
-
-  await prisma.user.update({
-    where: { id: userId },
-    data: { login: githubLogin, provider: 'GITHUB', provider_id: githubId },
-  });
-  return 'promoted';
+  // The Github avatar is the displayed one.
+  if (providerId === 'github' && profile.image) {
+    await prisma.user.update({ where: { id: account.user_id }, data: { image: profile.image } });
+  }
 }

@@ -5,7 +5,7 @@
  *   The web's roster route (admin.$class.students) READS at the teaching-team
  *   tier and applies exactly this split in its loader: identity plus the
  *   grader/invite flags for the whole teaching team, with contact PII
- *   (`email`, `provider_email`, `school_id`) and the membership grade fields
+ *   (`email`, `school_id`) and the membership grade fields
  *   (`letter_grade`, `comment`) added for an OWNER alone. Its MUTATIONS stay
  *   OWNER-only and carry their own gate.
  *

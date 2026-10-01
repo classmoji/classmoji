@@ -79,6 +79,7 @@ const {
   teamTagRemoveTool,
   tagCreateTool,
   TAG_NAME_MAX_LENGTH,
+  TAG_REQUIRED_MESSAGES,
 } = await import('../teams.ts');
 
 const CTX: ToolContext = {
@@ -197,17 +198,62 @@ describe('team_create', () => {
   it('passes is_visible through when set', async () => {
     mocks.createTeam.mockResolvedValue({
       team: { id: 'team-1', name: 'Team Rocket', slug: 'team-rocket', isVisible: true },
-      tagsAdded: [],
+      tagsAdded: ['tag-1'],
       tagsFailed: [],
     });
 
-    const payload = parse(
-      await teamCreateTool.handler({ ...ARGS, is_visible: true, tag_ids: undefined }, CTX)
-    );
+    const payload = parse(await teamCreateTool.handler({ ...ARGS, is_visible: true }, CTX));
     expect(payload.team.is_visible).toBe(true);
     expect(mocks.createTeam).toHaveBeenCalledWith(
-      expect.objectContaining({ isVisible: true, tagIds: [] })
+      expect.objectContaining({ isVisible: true, tagIds: ['tag-1'] })
     );
+  });
+
+  it('requires tag_ids with at least one id in the schema', () => {
+    // The registry validates inputSchema before the handler runs, so a call
+    // without a tag never reaches the service.
+    const tagIds = teamCreateTool.inputSchema.tag_ids;
+    expect(tagIds.safeParse(undefined).success).toBe(false);
+    expect(tagIds.safeParse([]).success).toBe(false);
+    expect(tagIds.safeParse(['']).success).toBe(false);
+    expect(tagIds.safeParse(['tag-1']).success).toBe(true);
+  });
+
+  it('maps tag_required to invalid_params with its fixed sentence and audits nothing', async () => {
+    // Every id the caller sent belongs to another classroom (or none exists):
+    // the service refuses before any GitHub call.
+    mocks.createTeam.mockRejectedValue(
+      new TeamServiceError('tag_required', '[team] a team needs at least one tag of this classroom')
+    );
+
+    const error = await teamCreateTool
+      .handler({ ...ARGS, tag_ids: ['foreign-tag'] }, CTX)
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({
+      kind: 'invalid_params',
+      code: 'tag_required',
+      message: TAG_REQUIRED_MESSAGES.create,
+    });
+    // The fixed sentence, never the service's own text.
+    expect((error as Error).message).not.toContain('[team]');
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('maps a tag deleted mid-create (a foreign-key violation) to tag_required, and audits nothing', async () => {
+    // The service checked the tags, then one was deleted before the team's
+    // write; the write fails P2003 and the service removes the GitHub team.
+    mocks.createTeam.mockRejectedValue(
+      Object.assign(new Error('Foreign key constraint violated'), { code: 'P2003' })
+    );
+
+    const error = await teamCreateTool.handler(ARGS, CTX).catch((e: unknown) => e);
+    expect(error).toMatchObject({
+      kind: 'invalid_params',
+      code: 'tag_required',
+      message: TAG_REQUIRED_MESSAGES.create_tag_gone,
+    });
+    expect((error as Error).message).not.toContain('Foreign key');
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('maps reserved_name to invalid_params and audits nothing', async () => {
@@ -788,6 +834,26 @@ describe('team_tag_remove', () => {
     for (const mock of teamAdminMocks()) expect(mock).not.toHaveBeenCalled();
   });
 
+  it("maps tag_required (the team's last tag) to invalid_params and audits nothing", async () => {
+    // The service counts the team's tags under a row lock and refuses the last
+    // one; the handler does not pre-check, so the mock decides.
+    mocks.removeTeamTag.mockRejectedValue(
+      new TeamServiceError('tag_required', "[team] a team's last tag cannot be removed")
+    );
+
+    const error = await teamTagRemoveTool
+      .handler({ classroom: 'org/w26', team: 'team-rocket', tag_name: 'frontend' }, CTX)
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({
+      kind: 'invalid_params',
+      code: 'tag_required',
+      message: TAG_REQUIRED_MESSAGES.remove,
+    });
+    expect((error as Error).message).not.toContain('[team]');
+    expect(mocks.removeTeamTag).toHaveBeenCalledWith({ classroomId: 'class-1', teamTagId: 'tt-1' });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
   it('requires one of tag_name / tag_id', async () => {
     await expect(
       teamTagRemoveTool.handler({ classroom: 'org/w26', team: 'team-rocket' }, CTX)
@@ -921,6 +987,17 @@ describe('tool declarations', () => {
     }
     expect(teamTagAddTool.annotations?.openWorld).toBe(false);
     expect(teamTagRemoveTool.annotations?.openWorld).toBe(false);
+  });
+
+  it('keep every description under the 1,500 UTF-8 bytes a client will keep', () => {
+    for (const tool of TOOLS) {
+      expect(new TextEncoder().encode(tool.description).length, tool.name).toBeLessThan(1500);
+    }
+  });
+
+  it('state the tag rule in team_create and team_tag_remove', () => {
+    expect(teamCreateTool.description).toContain('tag_ids is required');
+    expect(teamTagRemoveTool.description).toContain('tag_required');
   });
 
   it('flag the removals as destructive and the additions as not', () => {

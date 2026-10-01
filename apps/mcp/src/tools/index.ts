@@ -85,6 +85,14 @@ import {
 } from './forms.ts';
 import { formTeamsGetTool, formTeamsRunTool, formTeamsCreateTool } from './formTeams.ts';
 import {
+  fileImportUrlTool,
+  fileUploadFinishTool,
+  fileUploadStartTool,
+  fileUploadStatusTool,
+  mediaDeleteTool,
+  mediaListTool,
+} from './media.ts';
+import {
   teamCreateTool,
   teamDeleteTool,
   teamRenameTool,
@@ -161,6 +169,19 @@ export function registerAllTools(): void {
   // branch — the same boundary the web editor draws around cover changes.
   registerToolDefinition(pageAssetUploadTool);
   registerToolDefinition(pageCoverSetTool);
+
+  // Media + agent file uploads (TEACHING_TEAM — the web media routes' gate —
+  // with the target page's or deck's own edit gate in-handler). Bytes never
+  // pass through the model: file_upload_start hands out one presigned PUT for a
+  // staging key, file_import_url fetches server-side under the SSRF rules, and
+  // both are placed where the storage router sends them (repo or media).
+  // media_delete is destructive.
+  registerToolDefinition(mediaListTool);
+  registerToolDefinition(mediaDeleteTool);
+  registerToolDefinition(fileUploadStartTool);
+  registerToolDefinition(fileUploadFinishTool);
+  registerToolDefinition(fileUploadStatusTool);
+  registerToolDefinition(fileImportUrlTool);
 
   // Slides: list (all roles, students published-only) + metadata CRUD
   // (TEACHING_TEAM with the web's creator/allow_team_edit sub-gate)

@@ -2,7 +2,7 @@ import { defineConfig } from '@trigger.dev/sdk';
 // eslint-disable-next-line import/no-unresolved
 import { prismaExtension } from '@trigger.dev/build/extensions/prisma';
 // eslint-disable-next-line import/no-unresolved
-import { aptGet, syncEnvVars } from '@trigger.dev/build/extensions/core';
+import { aptGet, ffmpeg, syncEnvVars } from '@trigger.dev/build/extensions/core';
 // eslint-disable-next-line import/no-unresolved
 import { pythonExtension } from '@trigger.dev/python/extension';
 import { InfisicalSDK } from '@infisical/sdk';
@@ -20,8 +20,8 @@ import { fileURLToPath } from 'node:url';
  * read of a path resolved from this file's location would run inside the
  * deployed container, where that path does not exist.
  *
- * `requirements`, NOT `requirementsFile`. In some @trigger.dev/python versions
- * (4.6.x) the requirementsFile branch emits `COPY ./python/requirements.txt .` followed by
+ * `requirements`, NOT `requirementsFile`. In @trigger.dev/python 4.6.4 the
+ * requirementsFile branch emits `COPY ./python/requirements.txt .` followed by
  * `pip install -r ./python/requirements.txt`; the COPY lands the file at
  * `./requirements.txt`, so a nested requirements file cannot be opened and the
  * image build fails (triggerdotdev/trigger.dev#1843). The `requirements` branch
@@ -36,8 +36,8 @@ import { fileURLToPath } from 'node:url';
  * python/README.md) and is set only when that interpreter exists, so a checkout
  * without the venv still loads this config; the solve task then fails its runs
  * with `engine_error` rather than the whole dev worker refusing to start.
- * Deployed images ignore it and use the extension's /opt/venv. (The Trigger CLI can
- * snapshot dev run environments before the extension sets it, so the solve
+ * Deployed images ignore it and use the extension's /opt/venv. (The 4.6.4 CLI
+ * snapshots dev run environments before the extension sets it, so the solve
  * task also falls back to the venv itself — `useLocalVenvIfUnset`.)
  */
 function teamSetSolverPythonOptions() {
@@ -91,7 +91,26 @@ export default defineConfig({
       randomize: true,
     },
   },
-  dirs: ['./src/workflows'],
+  dirs: ['./src/workflows', './src/agents'],
+  // The CLI's default ignore list (test and spec files) plus test fixtures:
+  // every other file under `dirs` is imported to discover tasks, and a fixture
+  // repository's browser script must never be. Setting this replaces the
+  // defaults, so they are repeated here.
+  ignorePatterns: [
+    '**/*.test.ts',
+    '**/*.test.mts',
+    '**/*.test.cts',
+    '**/*.test.js',
+    '**/*.test.mjs',
+    '**/*.test.cjs',
+    '**/*.spec.ts',
+    '**/*.spec.mts',
+    '**/*.spec.cts',
+    '**/*.spec.js',
+    '**/*.spec.mjs',
+    '**/*.spec.cjs',
+    '**/__fixtures__/**',
+  ],
   build: {
     extensions: [
       prismaExtension({
@@ -101,6 +120,13 @@ export default defineConfig({
       aptGet({
         packages: ['bash', 'git'],
       }),
+      // For `media-video-process`. No version: the extension installs Debian's
+      // `ffmpeg` package — on the node-22 image (bookworm) that is 5.1.x, a
+      // fixed release with libx264 and the native aac/mjpeg encoders. (Version
+      // '7' would pull johnvansickle's static `ffmpeg-git`, i.e. whatever git
+      // master is on build day.) Sets FFMPEG_PATH / FFPROBE_PATH in deployed
+      // images; it does nothing for `trigger dev`, which uses ffmpeg on PATH.
+      ffmpeg(),
       pythonExtension(teamSetSolverPythonOptions()),
       syncEnvVars(async ctx => {
         // Skip sync if credentials not available (allows local dev without Infisical)

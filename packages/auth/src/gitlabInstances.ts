@@ -439,7 +439,7 @@ export const gitlabInstances = () =>
               email,
               name: profile.name || profile.username,
               image: profile.avatar_url ?? undefined,
-              emailVerified: Boolean(profile.confirmed_at),
+              // Unverified, as for Github: registration confirms a contact email.
               ...mapped,
             },
             account: {

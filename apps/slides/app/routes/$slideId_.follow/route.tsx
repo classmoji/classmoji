@@ -106,7 +106,8 @@ export const loader = async ({
     // highest-fanout case of exactly that.
     const { html } = await resolveDeckDelivery(
       contentResult.content,
-      deckDeliveryContext(slide, gitOrgLogin, repo, deckAccessFor('follow', { canEdit }, slide))
+      deckDeliveryContext(slide, gitOrgLogin, repo, deckAccessFor('follow', { canEdit }, slide)),
+      { classroomId: slide.classroom_id }
     );
     slideContent = html;
 

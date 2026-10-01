@@ -1,10 +1,15 @@
 import { test, expect } from '@playwright/test';
-import type { FormField } from '@classmoji/services/form-contract';
+import { identityQuestionIds, type FormField } from '@classmoji/services/form-contract';
 
 import {
   buildWideCsv,
   type ExportableResponse,
 } from '../../app/forms/admin/responsesCsv.server.ts';
+import {
+  identityAudit,
+  pickAnswers,
+  type ResponsesContext,
+} from '../../app/forms/admin/responsesData.server.ts';
 
 /**
  * The WIDE export's lead columns, pinned.
@@ -29,7 +34,15 @@ import {
  *
  * An end-to-end export test cannot see either property: it downloads one form's
  * CSV and confirms the bytes look like a CSV.
+ *
+ * The third is the identity mask: the sheet drops the identity questions'
+ * columns, header and cells, and the drawer's reveal picks one response's
+ * answers to them and nothing else. Which fields count is the services' rule
+ * (`formIdentity.service.ts`), tested there.
  */
+
+/** No mask: every column. The export of a form with no identity question. */
+const NONE: ReadonlySet<string> = new Set();
 
 let seq = 0;
 const field = (patch: Record<string, unknown>): FormField =>
@@ -88,7 +101,7 @@ test.describe('buildWideCsv — lead columns', () => {
       field({ type: 'long_text', label: 'Why this class?' }),
     ];
 
-    const [header] = cells(buildWideCsv(fields, [response()]));
+    const [header] = cells(buildWideCsv(fields, [response()], NONE));
 
     // Stated in full rather than as "starts with": the point of the assertion is
     // that "Added by" is the LAST lead column, which a prefix check would miss.
@@ -97,7 +110,7 @@ test.describe('buildWideCsv — lead columns', () => {
 
   test('a form with no matrix emits ONE header row', () => {
     const fields = [field({ type: 'short_text', label: 'Full name' })];
-    const rows = cells(buildWideCsv(fields, [response()]));
+    const rows = cells(buildWideCsv(fields, [response()], NONE));
 
     expect(rows).toHaveLength(2); // header + the one response
     expect(rows[0][0]).toBe('Name');
@@ -107,7 +120,7 @@ test.describe('buildWideCsv — lead columns', () => {
 test.describe('buildWideCsv — the Added by cell', () => {
   const fields = [field({ type: 'short_text', label: 'Full name' })];
   const addedByCell = (patch: Partial<ExportableResponse>) =>
-    cells(buildWideCsv(fields, [response(patch)]))[1][ADDED_BY];
+    cells(buildWideCsv(fields, [response(patch)], NONE))[1][ADDED_BY];
 
   test('a resolved staff name is what the cell says', () => {
     expect(
@@ -154,7 +167,7 @@ test.describe('buildWideCsv — the two-row header a matrix forces', () => {
 
   test('the group row is padded to the FULL lead-column count', () => {
     const grid = matrix();
-    const rows = cells(buildWideCsv([grid], [response()]));
+    const rows = cells(buildWideCsv([grid], [response()], NONE));
     const [groupRow, headerRow] = rows;
 
     expect(rows).toHaveLength(3); // group + header + the one response
@@ -185,7 +198,8 @@ test.describe('buildWideCsv — the two-row header a matrix forces', () => {
             added_by_name: 'Grace Hopper',
             answers: { [grid.id]: { 'row-recursion': 'col-solid', 'row-pointers': 'col-shaky' } },
           }),
-        ]
+        ],
+        NONE
       )
     );
     const body = rows[2];
@@ -196,5 +210,131 @@ test.describe('buildWideCsv — the two-row header a matrix forces', () => {
     expect(body[ADDED_BY + 1]).toBe('Solid');
     expect(body[ADDED_BY + 2]).toBe('Shaky');
     expect(body).toHaveLength(LEAD.length + 2);
+  });
+});
+
+// ─── Identity questions ─────────────────────────────────────────────────────
+
+/** A form with one identity question between two ordinary ones. */
+const identityForm = () => {
+  const reason = field({ type: 'long_text', label: 'Why this class?' });
+  const self = field({
+    type: 'short_text',
+    label: 'Self-description',
+    identity_question: true,
+  });
+  const choice = field({
+    type: 'multiselect',
+    label: 'Which describe you?',
+    identity_question: true,
+    options: [
+      { id: 'opt-alpha', label: 'Alpha answer' },
+      { id: 'opt-beta', label: 'Beta answer' },
+    ],
+  });
+  const terms = field({ type: 'number', label: 'How many terms?' });
+  return { reason, self, choice, terms, fields: [reason, self, choice, terms] };
+};
+
+const identityResponse = (form: ReturnType<typeof identityForm>) =>
+  response({
+    answers: {
+      [form.reason.id]: 'Curious',
+      [form.self.id]: 'zz-self-description',
+      [form.choice.id]: ['opt-beta'],
+      [form.terms.id]: 3,
+    },
+  });
+
+test.describe('buildWideCsv — identity questions', () => {
+  test('hidden: no column, no cell, even when the answer is on the row', () => {
+    const form = identityForm();
+    // The row still carries the answers: the builder must not read them, not
+    // merely rely on the loader having stripped them.
+    const csv = buildWideCsv(
+      form.fields,
+      [identityResponse(form)],
+      identityQuestionIds(form.fields)
+    );
+    const [header, body] = cells(csv);
+
+    expect(header).toEqual([...LEAD, 'Why this class?', 'How many terms?']);
+    expect(csv).not.toContain('Self-description');
+    expect(csv).not.toContain('zz-self-description');
+    expect(csv).not.toContain('Which describe you?');
+    expect(csv).not.toContain('Beta answer');
+    // The columns that remain still line up with their own answers.
+    expect(body.slice(LEAD.length)).toEqual(['Curious', '3']);
+  });
+
+  test('the columns removed are exactly the masked ones', () => {
+    const form = identityForm();
+    const [header] = cells(
+      buildWideCsv(form.fields, [identityResponse(form)], new Set([form.self.id]))
+    );
+
+    expect(header).toEqual([...LEAD, 'Why this class?', 'Which describe you?', 'How many terms?']);
+  });
+});
+
+test.describe('buildWideCsv — a flagged name question', () => {
+  test('a flagged "Preferred name" is not in the default sheet, header or cell', () => {
+    const preferred = field({
+      type: 'short_text',
+      label: 'Preferred name',
+      identity_question: true,
+    });
+    const terms = field({ type: 'number', label: 'How many terms?' });
+    const fields = [preferred, terms];
+
+    const csv = buildWideCsv(
+      fields,
+      [response({ answers: { [preferred.id]: 'zz-preferred', [terms.id]: 2 } })],
+      identityQuestionIds(fields)
+    );
+    const [header, body] = cells(csv);
+
+    expect(header).toEqual([...LEAD, 'How many terms?']);
+    expect(body.slice(LEAD.length)).toEqual(['2']);
+    expect(csv).not.toContain('Preferred name');
+    expect(csv).not.toContain('zz-preferred');
+  });
+});
+
+test.describe('pickAnswers — what the drawer reveal returns for one response', () => {
+  test('only the identity keys the response has', () => {
+    const form = identityForm();
+    const ids = identityQuestionIds(form.fields);
+    const answers = identityResponse(form).answers;
+
+    expect(pickAnswers(answers, ids)).toEqual({
+      [form.self.id]: 'zz-self-description',
+      [form.choice.id]: ['opt-beta'],
+    });
+  });
+
+  test('an unanswered question stays absent, not null', () => {
+    const form = identityForm();
+    const picked = pickAnswers({ [form.reason.id]: 'Curious' }, identityQuestionIds(form.fields));
+
+    expect(picked).toEqual({});
+    expect(Object.keys(picked)).toHaveLength(0);
+  });
+});
+
+test.describe('identityAudit — what the view, export and reveal rows record', () => {
+  const context = (identityFieldIds: string[]) => ({ identityFieldIds }) as ResponsesContext;
+
+  test('disclosed (a drawer reveal): true, with the field ids', () => {
+    expect(identityAudit(context(['field-a', 'field-b']), true)).toEqual({
+      identity_answers: true,
+      identity_field_ids: ['field-a', 'field-b'],
+    });
+  });
+
+  test('the list view and the export, or nothing to disclose: false, and no ids', () => {
+    expect(identityAudit(context(['field-a']), false)).toEqual({ identity_answers: false });
+    // Asked for on a form with no identity question: nothing was disclosed.
+    expect(identityAudit(context([]), true)).toEqual({ identity_answers: false });
   });
 });

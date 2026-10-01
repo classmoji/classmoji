@@ -12,11 +12,31 @@ export default ({ command }) => {
     // This triggers a dev server restart when the setup wizard writes GitHub credentials.
     envDir: '../../',
     ssr: {
-      // In production builds, bundle workspace-local node_modules that npm doesn't
-      // hoist to the root — the Dockerfile only copies root node_modules to the
-      // production image, so non-hoisted packages would be missing at runtime.
+      // In production builds, bundle what lives in apps/webapp/node_modules (packages
+      // npm doesn't hoist to the root): the Dockerfile only copies root node_modules
+      // into the image, so anything left external must resolve there at runtime.
+      // - @trigger.dev/react-hooks and the @trigger.dev/core it pulls in are
+      //   webapp-local (root core is an older version), and so are that core's own
+      //   deps listed after it; each must be bundled or the image loads the wrong
+      //   copy or none at all (zod-validation-error/v4 is missing from root).
+      // - @trigger.dev/sdk must stay EXTERNAL: root has it together with its own
+      //   nested node_modules, which only Node's resolution from the sdk's real
+      //   location finds. Bundling it cuts it off from those.
       noExternal: isBuild
-        ? ['use-sound', /@trigger\.dev\//, /@mantine\//, /@tabler\//, 'lucide-react', 'zustand']
+        ? [
+            'use-sound',
+            '@trigger.dev/react-hooks',
+            '@trigger.dev/core',
+            'zod-validation-error',
+            '@opentelemetry/api',
+            '@opentelemetry/core',
+            'nanoid',
+            'std-env',
+            /@mantine\//,
+            /@tabler\//,
+            'lucide-react',
+            'zustand',
+          ]
         : ['use-sound'],
     },
     resolve: {

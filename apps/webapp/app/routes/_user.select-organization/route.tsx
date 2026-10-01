@@ -1,18 +1,19 @@
 import { redirect, useNavigate, useSearchParams } from 'react-router';
-import { sessionMode, usernameForMode } from '~/utils/sessionMode.server';
+import { fallbackMode, sessionMode, usernameForMode } from '~/utils/sessionMode.server';
 import { useEffect, useMemo, useState } from 'react';
 import { Modal, Button as AntdButton } from 'antd';
 import { useCallout } from '@classmoji/ui-components';
 
 import { useUser, useDisclosure, useGlobalFetcher } from '~/hooks';
-import { getAuthSession, clearRevokedToken } from '@classmoji/auth/server';
+import { getAuthSession } from '@classmoji/auth/server';
 import { verifyInviteToken } from '@classmoji/auth/invite-token';
+import { authClient } from '@classmoji/auth/client';
+import GitHubIcon from '../_index/github.svg';
 import { checkAuth } from '~/utils/helpers';
 import { hashHue } from '~/utils/hue';
 
 import {
   ClassmojiService,
-  GitHubProvider,
   getGitProvider,
   ensureClassroomTeam,
   notificationService,
@@ -20,7 +21,8 @@ import {
 } from '@classmoji/services';
 import { ActionTypes, roleSettings } from '~/constants';
 import useStore from '~/store';
-import getPrisma from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import { gitAccountId, gitUsername } from '@classmoji/utils';
 import { tasks } from '@trigger.dev/sdk';
 import type { Route } from './+types/route';
 import type { AppUser, MembershipOrganization, MembershipWithOrganization } from '~/types';
@@ -40,10 +42,51 @@ interface SelectOrganizationMembership extends MembershipWithOrganization {
   };
 }
 
+/** A membership as this page sends it to the browser (see toLandingMembership). */
+type LandingMembership = Pick<
+  SelectOrganizationMembership,
+  'id' | 'role' | 'has_accepted_invite' | 'organization'
+> & { pin_order: number | null };
+
+/**
+ * What the landing screen reads of a membership: its id, role, invite state
+ * and pin, and its classroom's own fields with the git organization's id,
+ * provider, login and avatar.
+ */
+const toLandingMembership = (m: SelectOrganizationMembership): LandingMembership => {
+  const {
+    memberships: _otherMemberships,
+    git_organization: gitOrganization,
+    ...classroom
+  } = m.organization as SelectOrganizationMembership['organization'] & {
+    memberships?: unknown;
+    git_organization: MembershipOrganization['git_organization'] & { avatar_url?: string | null };
+  };
+  return {
+    id: m.id,
+    role: m.role,
+    has_accepted_invite: m.has_accepted_invite,
+    pin_order: (m as { pin_order?: number | null }).pin_order ?? null,
+    organization: {
+      ...classroom,
+      git_organization: {
+        id: gitOrganization.id,
+        provider: gitOrganization.provider,
+        provider_id: gitOrganization.provider_id,
+        login: gitOrganization.login,
+        avatar_url: gitOrganization.avatar_url ?? null,
+      },
+    } as SelectOrganizationMembership['organization'],
+  };
+};
+
+const LINK_ERRORS: Record<string, string> = {
+  account_already_linked_to_different_user:
+    'That Github account already belongs to another Classmoji account. Sign out and continue with Github to use it.',
+};
+
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const authData = await getAuthSession(request);
-
-  if (!authData?.token && !authData?.userId) return redirect('/');
 
   // Set by the roster invite link (#343): a signed token naming the invited
   // address. Anything that does not verify is treated as absent.
@@ -51,13 +94,15 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   const invite = inviteToken ? verifyInviteToken(inviteToken) : null;
   const inviteEmail = invite?.email ?? null;
 
-  // Try to find user by ID first (avoids GitHub API call if user exists)
-  let user = null;
-  if (authData?.userId) {
-    user = await ClassmojiService.user.findById(authData.userId, { includeMemberships: true });
-  }
+  if (!authData?.userId) return redirect('/');
+  let user = await ClassmojiService.user.findById(authData.userId, { includeMemberships: true });
+  if (!user) return redirect('/');
 
-  if (!user?.email) {
+  // The root loader runs these same checks, but in parallel with this one, so
+  // they are repeated here: nothing below (the invite claim especially) may
+  // run for an account that has not confirmed an email and connected Github or
+  // Gitlab.
+  if (!user.email || !user.emailVerified) {
     // Hand the token to registration: it prefills the address and stands in
     // for the verification code.
     return redirect(
@@ -66,27 +111,19 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         : '/registration'
     );
   }
-
-  // If not found by ID, fall back to GitHub API lookup
-  if (!user && authData?.token) {
-    const octokit = GitHubProvider.getUserOctokit(authData.token);
-
-    let authenticatedUser;
-    try {
-      const { data } = await octokit.rest.users.getAuthenticated();
-      authenticatedUser = data;
-    } catch (error: unknown) {
-      console.log(error);
-      const err = error as Record<string, unknown>;
-      if (err?.status === 401 || (err?.message as string)?.includes('Bad credentials')) {
-        // Only the token GitHub refused: a token refreshed meanwhile is kept.
-        await clearRevokedToken(authData.userId, authData.token);
-        return redirect('/');
-      }
-      throw error;
-    }
-
-    user = await ClassmojiService.user.findByLogin(authenticatedUser.login);
+  const gitAccounts = await getPrisma().account.findMany({
+    where: { user_id: user.id, provider_id: { in: ['github', 'gitlab'] }, username: { not: null } },
+    select: { provider_id: true, email: true },
+  });
+  if (gitAccounts.length === 0) {
+    // The page asks them to connect instead of listing classrooms.
+    const linkError = new URL(request.url).searchParams.get('error');
+    return {
+      needsGithub: true as const,
+      linkError: linkError
+        ? (LINK_ERRORS[linkError] ?? 'Connecting Github failed. Please try again.')
+        : null,
+    };
   }
 
   if (user) {
@@ -138,18 +175,18 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
             select: { id: true, classroom: { select: { git_org_id: true } } },
           });
       const gitlabUsername =
-        pendingGitLab.length > 0 && typedUser.login
+        pendingGitLab.length > 0
           ? (await ClassmojiService.user.findProviderUsernames([typedUser.id], 'GITLAB')).get(
               typedUser.id
             )
           : undefined;
-      if (gitlabUsername && typedUser.login) {
+      if (gitlabUsername) {
         await getPrisma().classroomMembership.updateMany({
           where: { id: { in: pendingGitLab.map(m => m.id) } },
           data: { has_accepted_invite: true },
         });
         for (const gitOrganizationId of new Set(pendingGitLab.map(m => m.classroom.git_org_id))) {
-          await tasks.trigger('activate_membership', { login: typedUser.login, gitOrganizationId });
+          await tasks.trigger('activate_membership', { login: gitlabUsername, gitOrganizationId });
         }
         const refreshedUser = await ClassmojiService.user.findById(typedUser.id, {
           includeMemberships: true,
@@ -193,7 +230,13 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
     // The session's mode decides which classrooms are listed: a GitLab
     // session sees GitLab classrooms only, a Github session Github ones.
-    const gitMode = sessionMode(authData.session, typedUser.provider);
+    const gitMode = sessionMode(
+      authData.session,
+      fallbackMode({
+        has_github: gitAccounts.some(a => a.provider_id === 'github'),
+        has_gitlab: gitAccounts.some(a => a.provider_id === 'gitlab'),
+      })
+    );
     // Identity follows the mode too: show the username of this provider's account.
     const modeUsername = await usernameForMode(typedUser.id, gitMode);
     if (modeUsername) typedUser.login = modeUsername;
@@ -217,14 +260,18 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     const sameAddress = (a: string | null | undefined) =>
       !!a && !!inviteEmail && a.toLowerCase() === inviteEmail.toLowerCase();
     const inviteEmailMismatch =
-      inviteEmail && !sameAddress(typedUser.email) && !sameAddress(typedUser.provider_email)
+      inviteEmail &&
+      !sameAddress(typedUser.email) &&
+      !gitAccounts.some(account => sameAddress(account.email))
         ? inviteEmail
         : null;
 
     return {
       user,
       gitMode,
-      memberships: typedUser.memberships as SelectOrganizationMembership[],
+      memberships: (typedUser.memberships as SelectOrganizationMembership[]).map(
+        toLandingMembership
+      ),
       githubAppName: process.env.GITHUB_APP_NAME,
       notifications,
       unreadCount,
@@ -268,9 +315,9 @@ function formatUpdated(d: Date | string | null | undefined): string {
   return `${years}y ago`;
 }
 
-function buildLandingClasses(memberships: SelectOrganizationMembership[]): LandingClass[] {
+function buildLandingClasses(memberships: LandingMembership[]): LandingClass[] {
   const items = memberships.map(m => {
-    const org = m.organization as SelectOrganizationMembership['organization'] & {
+    const org = m.organization as LandingMembership['organization'] & {
       updated_at?: Date | string | null;
     };
     const orgLogin = org.login;
@@ -283,7 +330,7 @@ function buildLandingClasses(memberships: SelectOrganizationMembership[]): Landi
       org.settings?.updated_at ?? (org as { updated_at?: Date | string | null }).updated_at;
     const createdAt = (org as { created_at?: Date | string | null }).created_at;
     const createdTs = createdAt ? new Date(createdAt as string | Date).getTime() || 0 : 0;
-    const pinOrder = (m as { pin_order?: number | null }).pin_order ?? null;
+    const pinOrder = m.pin_order ?? null;
 
     return {
       landing: {
@@ -327,7 +374,65 @@ function buildLandingClasses(memberships: SelectOrganizationMembership[]): Landi
 
 // ───────── component ─────────
 
-const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
+/** Shown instead of the classrooms until the account has a Github or Gitlab account connected. */
+const ConnectGithubPrompt = ({ error }: { error: string | null }) => {
+  const [busy, setBusy] = useState(false);
+
+  const connect = async () => {
+    setBusy(true);
+    await authClient.linkSocial({
+      provider: 'github',
+      callbackURL: '/select-organization',
+      errorCallbackURL: '/select-organization',
+    });
+  };
+
+  return (
+    <div className="min-h-[60vh] flex items-center justify-center">
+      <div className="w-full max-w-sm flex flex-col items-center text-center">
+        <h1 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+          Connect your Github account
+        </h1>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
+          Classmoji classrooms run on Github or Gitlab, where course repositories and assignments
+          live. Connect your account to create or join a classroom.
+        </p>
+        {error && (
+          <div className="w-full mb-4 rounded-lg bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 text-sm px-3 py-2">
+            {error}
+          </div>
+        )}
+        <button
+          onClick={connect}
+          disabled={busy}
+          className="flex items-center justify-center gap-2 bg-gray-900 hover:bg-gray-800 dark:bg-white dark:hover:bg-gray-100 text-white dark:text-gray-900 disabled:opacity-60 font-medium rounded-lg px-5 py-2.5 transition-colors cursor-pointer"
+        >
+          <img src={GitHubIcon} alt="" className="w-5 h-5 dark:invert" />
+          {busy ? 'Redirecting to Github…' : 'Connect Github'}
+        </button>
+        <a
+          href="/settings/connections"
+          className="mt-3 text-sm text-gray-600 dark:text-gray-400 hover:underline"
+        >
+          Use Gitlab instead
+        </a>
+      </div>
+    </div>
+  );
+};
+
+const SelectOrganizationPage = (props: Route.ComponentProps) =>
+  'needsGithub' in props.loaderData ? (
+    <ConnectGithubPrompt error={props.loaderData.linkError ?? null} />
+  ) : (
+    <SelectOrganization loaderData={props.loaderData} />
+  );
+
+const SelectOrganization = ({
+  loaderData,
+}: {
+  loaderData: Exclude<Route.ComponentProps['loaderData'], { needsGithub: true }>;
+}) => {
   const {
     memberships,
     notifications,
@@ -390,7 +495,7 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inviteEmailMismatch]);
 
-  const memberList = memberships as SelectOrganizationMembership[];
+  const memberList = memberships as LandingMembership[];
   const classes = useMemo(() => buildLandingClasses(memberList), [memberList]);
 
   if (!user) return null;
@@ -488,7 +593,6 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
         classes={classes.filter(c => !c.is_example)}
         onOpenClass={onOpenClass}
         onTakeTour={onTakeTour}
-        tourAvailable
         notifications={notifications}
         unreadCount={unreadCount}
         membershipRoles={membershipRoles}
@@ -508,7 +612,7 @@ export const action = checkAuth(
     const membership = await getPrisma().classroomMembership.findFirst({
       where: { classroom_id, user_id: user.userId },
       include: {
-        user: true,
+        user: { include: GIT_IDENTITY },
         classroom: { include: { git_organization: true } },
       },
     });
@@ -517,14 +621,12 @@ export const action = checkAuth(
       return { error: 'Classroom not found' };
     }
 
-    // `login` is a username on the user's own provider. Sent to a different
-    // provider's org it would name whoever holds that username there, so a
-    // GitLab `jdoe` would invite a stranger who is Github `jdoe`. Rows from
-    // before GitLab support have a null provider and are Github users.
-    // Connecting Github makes the Github username the main login (see
-    // packages/auth/src/providerProfile.ts), so the provider on the user row
-    // says which platform `login` belongs to.
-    const courseProvider = membership.classroom.git_organization.provider;
+    const classroom = membership.classroom;
+    const courseProvider = classroom.git_organization.provider;
+    // The student's username on the course's own provider. A Github username is
+    // never sent to a Gitlab group or the other way round: it would name a
+    // stranger who holds that username there.
+    const student_login = gitUsername(membership.user, courseProvider);
 
     // GitLab course: the student needs GitLab connected (their project is
     // named after, and shared with, their GitLab username). They never join
@@ -532,21 +634,14 @@ export const action = checkAuth(
     // expose classmates' repos. Activation creates their projects straight
     // away, since GitLab has no invite to accept and no webhook to wait for.
     if (courseProvider === 'GITLAB') {
-      const gitlabUsername = (
-        await ClassmojiService.user.findProviderUsernames([user.userId], 'GITLAB')
-      ).get(user.userId);
-      if (!gitlabUsername) {
+      if (!student_login) {
         return {
           error: 'This course uses Gitlab. Connect your Gitlab account in Settings to join it.',
         };
       }
-      // Activation still identifies the student by `login`.
-      if (!membership.user.login) {
-        return { error: 'Your account has no username yet. Contact support to join this course.' };
-      }
       await tasks.trigger('activate_membership', {
-        login: membership.user.login,
-        gitOrganizationId: membership.classroom.git_organization.id,
+        login: student_login,
+        gitOrganizationId: classroom.git_organization.id,
       });
       return {
         success: "You're in. Your Gitlab projects are being created.",
@@ -554,29 +649,9 @@ export const action = checkAuth(
       };
     }
 
-    // Github course. Connecting Github makes the Github username the main
-    // login (see packages/auth/src/providerProfile.ts), so the provider on the
-    // user row says whether `login` is a Github username. Rows from before
-    // GitLab support have a null provider and are Github users.
-    if ((membership.user.provider ?? 'GITHUB') !== 'GITHUB') {
-      const githubAccount = await getPrisma().account.findFirst({
-        where: { user_id: user.userId, provider_id: 'github' },
-        select: { id: true },
-      });
-      return {
-        error: githubAccount
-          ? "Your Github username is already used by another Classmoji account, so you can't join Github courses yet. Contact support to sort it out."
-          : 'This course uses Github. Connect your Github account in Settings to join it.',
-      };
-    }
-
-    const student_login = membership.user.login;
-
     if (!student_login) {
-      return { error: 'Your account has no linked GitHub login.' };
+      return { error: 'Connect your Github account before joining this classroom.' };
     }
-
-    const classroom = membership.classroom;
 
     const gitProvider = getGitProvider(
       classroom.git_organization as {
@@ -609,6 +684,7 @@ export const action = checkAuth(
       // stay stuck pending and never receive their assignment repos.
       await tasks.trigger('activate_membership', {
         login: student_login,
+        githubUserId: gitAccountId(membership.user, classroom.git_organization.provider),
         gitOrganizationId: classroom.git_organization.id,
       });
       return {
@@ -631,4 +707,4 @@ export const action = checkAuth(
   }
 );
 
-export default SelectOrganization;
+export default SelectOrganizationPage;

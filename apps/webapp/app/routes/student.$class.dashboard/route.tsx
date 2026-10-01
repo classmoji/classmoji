@@ -17,7 +17,6 @@ import RetroTabsCard, {
   type TeamSummary,
   type SelfFormedNeedsTeam,
 } from './RetroTabsCard';
-import { userAvatarUrl } from '@classmoji/utils';
 
 interface DashboardData {
   weekStart: string;
@@ -237,7 +236,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
             id: mb.user.id,
             name: mb.user.name,
             login: mb.user.login,
-            avatarUrl: userAvatarUrl(mb.user, 48) ?? null,
+            image: mb.user.image ?? null,
           })),
           repoUrl: gitOrgLogin && teamRepoName ? web.repo(teamRepoName) : null,
         };

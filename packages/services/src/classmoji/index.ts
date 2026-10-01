@@ -21,6 +21,7 @@ import * as calendarService from './calendar.service.ts';
 import * as icsGeneratorService from './icsGenerator.service.ts';
 import * as formService from './form.service.ts';
 import * as formResponseService from './formResponse.service.ts';
+import * as formIdentityService from './formIdentity.service.ts';
 import * as formTeamResolverService from './formTeamResolver.ts';
 import * as pageService from './page.service.ts';
 import * as pageContentService from './pageContent.service.ts';
@@ -78,6 +79,8 @@ import * as userService from './user.service.ts';
 import * as quizService from './quiz.service.ts';
 import * as quizAttemptService from './quizAttempt.service.ts';
 import * as quizSourceMaterialService from './quizSourceMaterial.service.ts';
+import * as quizChatService from './quizChat.service.ts';
+import * as quizGradingService from './quizGrading.service.ts';
 import * as repositoryImportService from './repositoryImport.service.ts';
 import * as contentImportService from './contentImport.service.ts';
 import * as templateImportService from './templateImport.service.ts';
@@ -88,6 +91,7 @@ import * as gitlabConnectionService from './gitlabConnection.service.ts';
 import * as gitlabInstanceService from './gitlabInstance.service.ts';
 import * as orgRepoSettingsService from './orgRepoSettings.service.ts';
 import * as classroomInviteService from './classroomInvite.service.ts';
+import * as authEmailService from './authEmail.service.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import * as contentAssetsService from './contentAssets.service.ts';
 import * as contentDeliveryService from './contentDelivery.service.ts';
@@ -103,6 +107,11 @@ import * as gitRepoAnalyticsService from './repoAnalytics.service.ts';
 import * as dashboardService from './dashboard.service.ts';
 import * as taDashboardService from './taDashboard.service.ts';
 import * as notificationService from './notification.service.ts';
+// Lives outside classmoji/ because it is a store rather than a classroom
+// entity: no GitHub, no content repo, and the only Prisma table it touches is
+// its own. Registered here because every app reaches services through
+// ClassmojiService.
+import * as mediaService from '../media/index.ts';
 
 const ClassmojiService = {
   // All services namespaced for consistency
@@ -125,6 +134,8 @@ const ClassmojiService = {
   icsGenerator: icsGeneratorService,
   form: formService,
   formResponse: formResponseService,
+  // Which questions' answers are hidden by default: one rule for every surface.
+  formIdentity: formIdentityService,
   formTeam: formTeamResolverService,
   page: pageService,
   pageContent: pageContentService,
@@ -153,6 +164,11 @@ const ClassmojiService = {
   // A quiz's linked pages and decks: `load` (the prompt text, as the attempt's
   // user may read it), `countStartable` (the pre-attempt check), the budget.
   quizSourceMaterial: quizSourceMaterialService,
+  // Quiz attempts served as chat agents (`agent_runtime: 'trigger_chat'`):
+  // turn admission and conversation storage, and the locked, fenced,
+  // journaled grading writes their tools make.
+  quizChat: quizChatService,
+  quizGrading: quizGradingService,
   repositoryImport: repositoryImportService,
   contentImport: contentImportService,
   templateImport: templateImportService,
@@ -164,6 +180,7 @@ const ClassmojiService = {
   // The GitHub organization's repository defaults, changed with the user's own token.
   orgRepoSettings: orgRepoSettingsService,
   classroomInvite: classroomInviteService,
+  authEmail: authEmailService,
   contentManifest: contentManifestService,
   contentAssets: contentAssetsService,
   contentDelivery: contentDeliveryService,
@@ -186,6 +203,7 @@ const ClassmojiService = {
   dashboard: dashboardService,
   taDashboard: taDashboardService,
   notification: notificationService,
+  media: mediaService,
   // Alias for AI conversation functions (delegates to quizAttempt)
   aiConversation: {
     addMessage: quizAttemptService.addMessage,
@@ -215,6 +233,7 @@ export {
   icsGeneratorService,
   formService,
   formResponseService,
+  formIdentityService,
   formTeamResolverService,
   pageService,
   pageContentService,
@@ -246,6 +265,7 @@ export {
   gitlabConnectionService,
   gitlabInstanceService,
   classroomInviteService,
+  authEmailService,
   contentManifestService,
   contentAssetsService,
   contentDeliveryService,
@@ -259,4 +279,5 @@ export {
   dashboardService,
   taDashboardService,
   notificationService,
+  mediaService,
 };

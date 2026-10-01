@@ -1,7 +1,7 @@
 import { betterAuth } from 'better-auth';
 import { APIError, createAuthMiddleware, getSession } from 'better-auth/api';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
-import { admin, mcp } from 'better-auth/plugins';
+import { admin, emailOTP, mcp } from 'better-auth/plugins';
 import getPrisma from '@classmoji/database';
 import type { Role } from '@prisma/client';
 import { ClassmojiService } from '@classmoji/services';
@@ -19,8 +19,8 @@ import {
 } from './secret.ts';
 import { ASK_MOJI_CLIENT_ID } from './mcpToken.ts';
 import { GITLAB_INSTANCE_CALLBACK_PATH, gitlabInstances } from './gitlabInstances.ts';
-import { mapGitHubProfile, mapGitLabProfile, onAccountCreated } from './providerProfile.ts';
 import { applyAppConnectionRules, type AppConnectionSession } from './appConnectionGuard.ts';
+import { mapGitHubProfile, mapGitLabProfile, onAccountCreated } from './providerProfile.ts';
 
 export { AUTH_SECRET, COOKIE_PREFIX };
 export { CONNECT_APP_VIEWING_AS_MESSAGE } from './appConnectionGuard.ts';
@@ -425,6 +425,8 @@ export const auth = betterAuth({
       clientId: process.env.GITHUB_CLIENT_ID as string,
       clientSecret: process.env.GITHUB_CLIENT_SECRET as string,
       scope: [], // scopes are ignored for GitHub App auth; permissions come from App config
+      // Records the Github username/email/avatar on the account and claims
+      // placeholder accounts; see ./providerProfile.ts.
       mapProfileToUser: profile => mapGitHubProfile(getPrisma(), profile),
     },
     // Registered only when configured, so an install without a GitLab app
@@ -437,11 +439,61 @@ export const auth = betterAuth({
             // Self-managed GitLab; unset means gitlab.com.
             issuer: process.env.GITLAB_ISSUER || undefined,
             // Default `read_user` scope only: identity, nothing on the user's projects.
-            mapProfileToUser: (profile: { id: number; username: string }) =>
-              mapGitLabProfile(getPrisma(), profile),
+            // Records the Gitlab username/email/avatar on the account.
+            mapProfileToUser: (profile: {
+              id: number;
+              username: string;
+              email?: string | null;
+              avatar_url?: string | null;
+            }) => mapGitLabProfile(getPrisma(), profile),
           },
         }
       : {}),
+  },
+  // Email + password sign-in. Addresses are confirmed with a 6-digit code (the
+  // emailOTP plugin below), the same way registration confirms a school email.
+  emailAndPassword: {
+    enabled: true,
+    requireEmailVerification: true,
+    minPasswordLength: 8,
+    autoSignIn: false,
+    revokeSessionsOnPasswordReset: true,
+  },
+  emailVerification: {
+    // Both send a code through the emailOTP plugin (it overrides the default
+    // link email): on sign-up, and again when an unverified account tries to
+    // sign in.
+    sendOnSignUp: true,
+    sendOnSignIn: true,
+    autoSignInAfterVerification: true,
+  },
+  account: {
+    modelName: 'Account',
+    fields: {
+      userId: 'user_id',
+      accountId: 'account_id',
+      providerId: 'provider_id',
+      accessToken: 'access_token',
+      refreshToken: 'refresh_token',
+      accessTokenExpiresAt: 'access_token_expires_at',
+      refreshTokenExpiresAt: 'refresh_token_expires_at',
+      idToken: 'id_token',
+      createdAt: 'created_at',
+      updatedAt: 'updated_at',
+    },
+    accountLinking: {
+      // Never attach a provider account to an existing user just because the
+      // emails match: anyone can sign up with a password under someone else's
+      // address, and would then inherit that person's Github sign-in. Linking
+      // happens only from a signed-in session (Connect Github).
+      disableImplicitLinking: true,
+      // better-auth refuses a link from an untrusted provider unless it reports
+      // a verified email, and its GitLab provider never does. Trusting both is
+      // safe here: a link needs a live session AND the provider's own consent.
+      trustedProviders: ['github', 'gitlab'],
+      // A connected Github or Gitlab account may use a different email than the user's.
+      allowDifferentEmails: true,
+    },
   },
   session: {
     expiresIn: 60 * 60 * 24 * 7, // 7 days
@@ -463,16 +515,6 @@ export const auth = betterAuth({
     // The provider the session signed in with: its GitLab/Github mode.
     additionalFields: {
       sign_in_provider: { type: 'string', required: false, input: false },
-    },
-  },
-  // Per client IP. Tight on the public Gitlab endpoints: setup can be run
-  // against any Gitlab-looking server, and each request that gets through
-  // emails every platform admin (the setup callback also caps pending ones).
-  rateLimit: {
-    customRules: {
-      '/gitlab-instance/setup': { window: 60 * 60, max: 5 },
-      '/gitlab-instance/sign-in': { window: 60, max: 20 },
-      '/gitlab-instance/link': { window: 60, max: 10 },
     },
   },
   advanced: {
@@ -504,60 +546,19 @@ export const auth = betterAuth({
   // Map to your existing schema conventions
   user: {
     modelName: 'User', // Prisma model name
-    // Tell BetterAuth about custom fields so mapProfileToUser can save them
     additionalFields: {
-      login: {
-        type: 'string',
-        required: false,
-      },
-      provider: {
-        type: 'string',
-        required: false,
-      },
-      provider_id: {
-        type: 'string',
-        required: false,
-      },
+      // Optional on email sign-up; registration asks for it otherwise.
+      school_id: { type: 'string', required: false, input: true },
     },
+    // better-auth's `email` is users.email: the verified contact/school email,
+    // also the password sign-in email. Git usernames live on Account.
     fields: {
       createdAt: 'created_at',
       updatedAt: 'updated_at',
       // Admin plugin fields
       banReason: 'ban_reason',
       banExpires: 'ban_expires_at',
-      email: 'provider_email',
     } as Record<string, string>,
-  },
-  account: {
-    modelName: 'Account',
-    accountLinking: {
-      // better-auth otherwise attaches a new provider sign-in to any user with
-      // the same (verified) email. Email is not proof of identity across
-      // providers (a self-managed GitLab admin can set any address), so a
-      // GitLab sign-in must never land in an existing Github user's account.
-      // Checked before `trustedProviders`, so trust below never re-enables it.
-      disableImplicitLinking: true,
-      // Explicit linking only ("Connect GitLab" in settings, while signed in).
-      // better-auth refuses a link from an untrusted provider unless it reports
-      // a verified email, and its GitLab provider never does. Trusting both is
-      // safe here: a link needs a live session AND the provider's own consent.
-      trustedProviders: ['github', 'gitlab'],
-      // A person's Github and GitLab emails often differ; identity is the
-      // session doing the linking, not a matching address.
-      allowDifferentEmails: true,
-    },
-    fields: {
-      userId: 'user_id',
-      accountId: 'account_id',
-      providerId: 'provider_id',
-      accessToken: 'access_token',
-      refreshToken: 'refresh_token',
-      accessTokenExpiresAt: 'access_token_expires_at',
-      refreshTokenExpiresAt: 'refresh_token_expires_at',
-      idToken: 'id_token',
-      createdAt: 'created_at',
-      updatedAt: 'updated_at',
-    },
   },
   verification: {
     modelName: 'Verification',
@@ -609,8 +610,8 @@ export const auth = betterAuth({
     },
     account: {
       create: {
-        // First sign-in or "Connect" in settings: record the provider username,
-        // and for Github make it the user's main login (see providerProfile.ts).
+        // First sign-in or "Connect" in settings: record the provider profile
+        // on the new account (see providerProfile.ts).
         after: async account => {
           await onAccountCreated(getPrisma(), account);
         },
@@ -653,9 +654,46 @@ export const auth = betterAuth({
    * caller we have: apps/mcp/src/auth/resolveViewer.ts:42. Nothing in the OAuth
    * flow uses this endpoint; it exists for better-auth's own `withMcpAuth`
    * helper, which we do not use.
+   *
+   * `/list-sessions` is off too: no app lists a user's own sessions. So are
+   * `/get-access-token` and `/refresh-token`: no client calls them, and the
+   * GitHub token the server uses comes from getValidGitHubToken (the
+   * githubUserToken service), not from these endpoints. Like every entry
+   * here, they are off for HTTP only; in-process `auth.api.*` is unchanged.
    */
-  disabledPaths: ['/mcp/get-session'],
+  disabledPaths: ['/mcp/get-session', '/list-sessions', '/get-access-token', '/refresh-token'],
+  // Password guessing and code guessing are throttled harder than the default
+  // (better-auth enables its limiter in production only). Per client IP. Tight
+  // on the public Gitlab endpoints too: setup can be run against any
+  // Gitlab-looking server, and each request that gets through emails every
+  // platform admin (the setup callback also caps pending ones).
+  rateLimit: {
+    customRules: {
+      '/gitlab-instance/setup': { window: 60 * 60, max: 5 },
+      '/gitlab-instance/sign-in': { window: 60, max: 20 },
+      '/gitlab-instance/link': { window: 60, max: 10 },
+      '/sign-in/email': { window: 60, max: 5 },
+      '/sign-up/email': { window: 60, max: 3 },
+      '/email-otp/send-verification-otp': { window: 60, max: 3 },
+      '/email-otp/verify-email': { window: 60, max: 5 },
+      '/email-otp/reset-password': { window: 60, max: 5 },
+      '/forget-password/email-otp': { window: 60, max: 3 },
+    },
+  },
   plugins: [
+    // 6-digit codes for verifying a password account's email and for
+    // resetting a password. Never a way to sign up or sign in on its own.
+    emailOTP({
+      otpLength: 6,
+      expiresIn: 10 * 60,
+      allowedAttempts: 5,
+      storeOTP: 'hashed',
+      overrideDefaultEmailVerification: true,
+      disableSignUp: true,
+      sendVerificationOTP: async ({ email, otp, type }) => {
+        await ClassmojiService.authEmail.sendAuthOtp(email, otp, type);
+      },
+    }),
     // Self-managed GitLab instances (gitlab.com uses socialProviders.gitlab).
     gitlabInstances(),
     admin({
@@ -726,6 +764,27 @@ export const auth = betterAuth({
  * @param {Request} request - The request object
  * @returns {Promise<{userId: string, token: string, userLogin: string} | null>}
  */
+/** The user's Github username (for logs and git-side callers), cached briefly. */
+async function githubUsernameFor(userId: string): Promise<string> {
+  const cacheKey = `username:${userId}`;
+  const cached = getCached<string>(cacheKey);
+  if (cached !== null && cached !== undefined) return cached;
+  let username = '';
+  try {
+    const account = await getPrisma().account.findFirst({
+      where: { user_id: userId, provider_id: 'github' },
+      select: { username: true },
+    });
+    username = account?.username ?? '';
+  } catch (error: unknown) {
+    // Only ever used for logs and display: never fail a request over it.
+    console.error('[auth] Github username lookup failed', error);
+    return '';
+  }
+  setCache(cacheKey, username);
+  return username;
+}
+
 export async function getAuthSession(request: Request): Promise<AuthSessionResult | null> {
   // Read by the CONFIGURED cookie name — see `sessionCookieRegexFor` in
   // ./secret.ts for why this must never be a hardcoded `classmoji.`.
@@ -744,7 +803,7 @@ export async function getAuthSession(request: Request): Promise<AuthSessionResul
       return {
         userId,
         token: cachedToken,
-        userLogin: session.user.name,
+        userLogin: await githubUsernameFor(userId),
         session,
       };
     }
@@ -756,7 +815,7 @@ export async function getAuthSession(request: Request): Promise<AuthSessionResul
       return {
         userId,
         token: tokenResult.token,
-        userLogin: session.user.name,
+        userLogin: await githubUsernameFor(userId),
         session,
       };
     }
@@ -766,7 +825,7 @@ export async function getAuthSession(request: Request): Promise<AuthSessionResul
     return {
       userId,
       token: null,
-      userLogin: session.user.name,
+      userLogin: await githubUsernameFor(userId),
       session,
     };
   }
@@ -806,7 +865,7 @@ export async function getAuthSession(request: Request): Promise<AuthSessionResul
       const result: AuthSessionResult = {
         userId,
         token: accessToken,
-        userLogin: directSession.user.login ?? '',
+        userLogin: (await githubUsernameFor(userId)) ?? '',
         session: { user: directSession.user, session: directSession },
       };
       setCache(sessionCacheKey, result, tokenResult?.expiresAt);
@@ -883,7 +942,12 @@ export async function requirePlatformAdmin(request: Request): Promise<PlatformAd
 
   const user = await getPrisma().user.findUnique({
     where: { id: authData.userId },
-    select: { id: true, login: true, email: true, name: true },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      accounts: { where: { provider_id: 'github' }, select: { username: true } },
+    },
   });
 
   if (!user) {
@@ -894,7 +958,8 @@ export async function requirePlatformAdmin(request: Request): Promise<PlatformAd
     });
   }
 
-  return { userId: user.id, user };
+  const { accounts, ...rest } = user;
+  return { userId: user.id, user: { ...rest, login: accounts[0]?.username ?? null } };
 }
 
 /**

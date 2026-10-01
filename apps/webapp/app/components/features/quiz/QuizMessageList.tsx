@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect } from 'react';
 import { Space, Avatar, Collapse, Typography, Button } from 'antd';
 import {
   UserOutlined,
@@ -590,6 +590,7 @@ interface QuizMessageListProps {
   loading?: boolean;
   isDarkMode?: boolean;
   userLogin?: string | null;
+  userImage?: string | null;
   onQuickAction?: ((message: string) => void | Promise<void>) | null;
   readOnly?: boolean;
   showTimestamps?: boolean;
@@ -605,6 +606,7 @@ const QuizMessageList = ({
   loading = false,
   isDarkMode = false,
   userLogin = null,
+  userImage = null,
   onQuickAction = null,
   readOnly = false,
   showTimestamps: _showTimestamps = false,
@@ -617,28 +619,9 @@ const QuizMessageList = ({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const evaluationRef = useRef<HTMLDivElement>(null);
 
-  // Extract evaluation data from messages if not provided as prop
-  const [extractedEvaluationData, setExtractedEvaluationData] = useState<EvaluationData | null>(
-    null
-  );
-
-  useEffect(() => {
-    // In read-only mode, extract evaluation data from messages
-    if (readOnly && messages.length > 0 && !propEvaluationData) {
-      for (const msg of messages) {
-        if (msg?.role?.toUpperCase() === 'ASSISTANT') {
-          const completion = checkForCompletion(msg?.content ?? '');
-          if (completion) {
-            setExtractedEvaluationData(completion as unknown as EvaluationData);
-            break;
-          }
-        }
-      }
-    }
-  }, [messages, readOnly, propEvaluationData]);
-
-  // Use prop evaluation data if provided, otherwise use extracted
-  const evaluationData = propEvaluationData || extractedEvaluationData;
+  // The evaluation card's data comes from the attempt (QuizAttemptInterface
+  // passes it for a completed attempt only), never from a message.
+  const evaluationData = propEvaluationData;
   const isQuizComplete = propIsQuizComplete || Boolean(evaluationData);
 
   // Function to scroll to bottom
@@ -800,11 +783,7 @@ const QuizMessageList = ({
           </div>
           {role === 'USER' &&
             (userLogin ? (
-              <Avatar
-                // A Gitlab username names a stranger on github.com: initial only.
-                src={isGitLab ? undefined : `https://github.com/${userLogin}.png?size=40`}
-                style={{ backgroundColor: '#52c41a' }}
-              >
+              <Avatar src={userImage ?? undefined} style={{ backgroundColor: '#52c41a' }}>
                 {userLogin[0]?.toUpperCase()}
               </Avatar>
             ) : (

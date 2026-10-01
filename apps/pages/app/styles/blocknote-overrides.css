@@ -532,6 +532,41 @@
   color: #9ca3af;
 }
 
+/* A reader's Download button under a media file (viewer and class site). */
+.media-download-block {
+  width: 100%;
+  align-items: flex-start;
+}
+
+.media-download-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-top: 0.5rem;
+  padding: 0.25rem 0.625rem;
+  border: 1px solid rgba(55, 53, 47, 0.16);
+  border-radius: 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.25rem;
+  color: #37352f;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.media-download-link:hover {
+  background-color: rgba(55, 53, 47, 0.06);
+}
+
+.dark .media-download-link {
+  border-color: rgba(255, 255, 255, 0.16);
+  color: #d4d4d4;
+}
+
+.dark .media-download-link:hover {
+  background-color: rgba(255, 255, 255, 0.06);
+}
+
 /* ============================================
    Embed & Video Block Notion-Style Styling
    ============================================ */

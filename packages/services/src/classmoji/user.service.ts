@@ -1,19 +1,15 @@
 import _ from 'lodash';
-import getPrisma from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY, whereGitUsername } from '@classmoji/database';
 import { claimPendingInvites } from './classroomInvite.service.ts';
-import type { GitProvider, Prisma, GitRepo, Role } from '@prisma/client';
-import type {
-  Repository as GradeModule,
-  GitRepo as GradeRepository,
-  GitRepoAssignment as GradeRepositoryAssignment,
+import type { GitProvider, Prisma, GitRepo } from '@prisma/client';
+import {
+  accountProviderId,
+  withLogin,
+  type GitIdentityAccount,
+  type Repository as GradeModule,
+  type GitRepo as GradeRepository,
+  type GitRepoAssignment as GradeRepositoryAssignment,
 } from '@classmoji/utils';
-
-interface UserCreateClassroomContext {
-  id: string;
-  git_organization: {
-    provider: GitProvider | null;
-  };
-}
 
 interface StudentRepositoryClassroomContext {
   id: string;
@@ -61,9 +57,8 @@ interface StudentRepositoriesRecord {
   id: string;
   name?: string | null;
   image?: string | null;
-  login?: string | null;
+  accounts?: GitIdentityAccount[];
   email?: string | null;
-  provider_email?: string | null;
   school_id?: string | null;
   git_repos?: RepositoryWithRelations[];
   team_memberships?: TeamMembershipWithRepositories[];
@@ -87,56 +82,10 @@ interface UserWithMemberships {
   [key: string]: unknown;
 }
 
-export const create = async (
-  userData: Prisma.UserCreateInput,
-  classroomData: UserCreateClassroomContext,
-  role: Role
-) => {
-  let whereClause: Prisma.UserWhereUniqueInput;
-
-  if (typeof userData.login === 'string' && userData.login.length > 0) {
-    whereClause = { login: userData.login };
-  } else if (typeof userData.email === 'string' && userData.email.length > 0) {
-    whereClause = { email: userData.email };
-  } else {
-    throw new Error('User create requires a unique login or email');
-  }
-
-  // Get the provider from the classroom's git_organization
-  const provider = classroomData.git_organization.provider;
-
-  return getPrisma().user.upsert({
-    where: whereClause,
-    update: {
-      // Always create a new membership for the classroom on update
-      classroom_memberships: {
-        create: {
-          classroom_id: classroomData.id,
-          role,
-          is_grader: role === 'ASSISTANT' ? true : false,
-          has_accepted_invite: false,
-        },
-      },
-    },
-    create: {
-      // If user doesn't exist, create the user and the membership
-      ...userData,
-      provider: provider,
-      classroom_memberships: {
-        create: {
-          classroom_id: classroomData.id,
-          role,
-          is_grader: role === 'ASSISTANT' ? true : false,
-          has_accepted_invite: false,
-        },
-      },
-    },
-  });
-};
-
 /**
  * Which of these addresses belong to an existing account, under EITHER address
- * we hold (`email` or `provider_email`), compared case-insensitively.
+ * we hold (the user's `email` or the email their Github account gave us),
+ * compared case-insensitively.
  *
  * Answers one question for the roster: is a pending invite waiting on someone
  * who has simply not signed up yet, or on an address nobody on Classmoji uses?
@@ -156,15 +105,25 @@ export const findRegisteredEmails = async (emails: string[]): Promise<Set<string
     where: {
       OR: candidates.flatMap(email => [
         { email: { equals: email, mode: 'insensitive' as const } },
-        { provider_email: { equals: email, mode: 'insensitive' as const } },
+        {
+          accounts: {
+            some: {
+              provider_id: 'github',
+              email: { equals: email, mode: 'insensitive' as const },
+            },
+          },
+        },
       ]),
     },
-    select: { email: true, provider_email: true },
+    select: {
+      email: true,
+      accounts: { where: { provider_id: 'github' }, select: { email: true } },
+    },
   });
 
   const registered = new Set<string>();
   for (const user of users) {
-    for (const address of [user.email, user.provider_email]) {
+    for (const address of [user.email, ...user.accounts.map(account => account.email)]) {
       const normalized = address?.trim().toLowerCase();
       if (normalized && candidates.includes(normalized)) registered.add(normalized);
     }
@@ -188,7 +147,7 @@ export const update = async (userId: string, updates: Prisma.UserUpdateInput) =>
   // they were invited to a classroom they never joined, so a pending invite for
   // the NEW address is claimed here rather than waiting for the next login
   // (#307). Never let it fail the update it is following.
-  if (updates.email !== undefined || updates.provider_email !== undefined) {
+  if (updates.email !== undefined) {
     try {
       await claimPendingInvites(userId);
     } catch (error) {
@@ -199,10 +158,13 @@ export const update = async (userId: string, updates: Prisma.UserUpdateInput) =>
   return user;
 };
 
-export const deleteByLogin = async (login: string) => {
-  return getPrisma().user.delete({
-    where: { login },
+export const deleteByGitUsername = async (username: string, provider: GitProvider = 'GITHUB') => {
+  const user = await getPrisma().user.findFirst({
+    where: whereGitUsername(username, provider),
+    select: { id: true },
   });
+  if (!user) throw new Error(`No user with ${provider} username ${username}`);
+  return getPrisma().user.delete({ where: { id: user.id } });
 };
 
 export const findRepositoriesPerStudent = async (classroom: StudentRepositoryClassroomContext) => {
@@ -244,7 +206,7 @@ export const findRepositoriesPerStudent = async (classroom: StudentRepositoryCla
         some: { classroom_id: classroom.id, role: 'STUDENT' },
       },
     },
-    include: includeRepos,
+    include: { ...includeRepos, ...GIT_IDENTITY },
   });
 
   // 2. find team repos that students belong to
@@ -259,6 +221,7 @@ export const findRepositoriesPerStudent = async (classroom: StudentRepositoryCla
       },
     },
     include: {
+      ...GIT_IDENTITY,
       team_memberships: {
         include: {
           team: {
@@ -296,7 +259,7 @@ export const findRepositoriesPerStudent = async (classroom: StudentRepositoryCla
   // New schema: GitRepo.repository, GitRepo.assignments (GitRepoAssignment[])
   // Expected: gitRepo.assignment_id, gitRepo.assignment, gitRepo.issues
   return combined.map(student => ({
-    ...student,
+    ...withLogin(student),
     git_repos: (student.git_repos || []).map((repo: RepositoryWithRelations) => ({
       ...repo,
       // Map repository to assignment for backward compatibility with grades UI
@@ -323,10 +286,11 @@ export const findRepositoriesPerStudent = async (classroom: StudentRepositoryCla
 export const findById = async (id: string, options: { includeMemberships?: boolean } = {}) => {
   const { includeMemberships = false } = options;
 
-  const user = await getPrisma().user.findUnique({
+  const found = await getPrisma().user.findUnique({
     where: { id },
     include: includeMemberships
       ? {
+          ...GIT_IDENTITY,
           classroom_memberships: {
             include: {
               classroom: {
@@ -343,10 +307,11 @@ export const findById = async (id: string, options: { includeMemberships?: boole
             },
           },
         }
-      : undefined,
+      : GIT_IDENTITY,
   });
 
-  if (!user) return null;
+  if (!found) return null;
+  const user = withLogin(found);
 
   // Transform to backward compatible format for UI if memberships included
   if (includeMemberships && 'classroom_memberships' in user) {
@@ -372,9 +337,9 @@ export const findById = async (id: string, options: { includeMemberships?: boole
 
 /**
  * Each user's username on a git provider, read from their connected account
- * (`Account.username`). `User.login` is the Github username whenever Github is
- * connected, so GitLab-side work (project names, project membership) must go
- * through this instead. Users without that provider connected are absent.
+ * (`Account.username`), keyed by user id. For batch work on a classroom's
+ * provider (project names, project membership). Users without that provider
+ * connected are absent.
  */
 export const findProviderUsernames = async (
   userIds: string[],
@@ -384,7 +349,7 @@ export const findProviderUsernames = async (
   const accounts = await getPrisma().account.findMany({
     where: {
       user_id: { in: userIds },
-      provider_id: provider.toLowerCase(),
+      provider_id: accountProviderId(provider),
       username: { not: null },
     },
     select: { user_id: true, username: true },
@@ -392,11 +357,11 @@ export const findProviderUsernames = async (
   return new Map(accounts.map(a => [a.user_id, a.username as string]));
 };
 
-// TODO: refactor to just take any
-export const findByLogin = async (login: string) => {
-  const user = await getPrisma().user.findUnique({
-    where: { login },
+const findByGitIdentity = async (where: Prisma.UserWhereInput, provider: GitProvider) => {
+  const found = await getPrisma().user.findFirst({
+    where,
     include: {
+      ...GIT_IDENTITY,
       classroom_memberships: {
         include: {
           classroom: {
@@ -415,7 +380,8 @@ export const findByLogin = async (login: string) => {
     },
   });
 
-  if (!user) return null;
+  if (!found) return null;
+  const user = withLogin(found, provider);
 
   // Transform to backward compatible format for UI
   // TODO: Update all consumers to use classroom_memberships directly
@@ -434,3 +400,13 @@ export const findByLogin = async (login: string) => {
     })),
   };
 };
+
+export const findByGitUsername = async (username: string, provider: GitProvider = 'GITHUB') =>
+  findByGitIdentity(whereGitUsername(username, provider), provider);
+
+/** Same shape as `findByGitUsername`, keyed on the provider's user id (`Account.account_id`). */
+export const findByGitAccountId = async (accountId: string, provider: GitProvider = 'GITHUB') =>
+  findByGitIdentity(
+    { accounts: { some: { provider_id: accountProviderId(provider), account_id: accountId } } },
+    provider
+  );

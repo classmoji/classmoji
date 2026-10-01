@@ -55,6 +55,14 @@ const mocks = vi.hoisted(() => ({
   describeRun: vi.fn(),
   previewCreate: vi.fn(),
   claimCreate: vi.fn(),
+  changesSinceRun: vi.fn(),
+  revertToRun: vi.fn(),
+  newSetFromSetup: vi.fn(),
+  compareRuns: vi.fn(),
+  explainPlacements: vi.fn(),
+  readinessCounts: vi.fn(),
+  mustLabels: vi.fn(),
+  nonRespondentsFor: vi.fn(),
 }));
 
 vi.mock('@classmoji/auth/server', () => ({
@@ -96,6 +104,14 @@ vi.mock('@classmoji/services', async () => {
         describeRun: (...a: unknown[]) => mocks.describeRun(...a),
         previewCreate: (...a: unknown[]) => mocks.previewCreate(...a),
         claimCreate: (...a: unknown[]) => mocks.claimCreate(...a),
+        changesSinceRun: (...a: unknown[]) => mocks.changesSinceRun(...a),
+        revertToRun: (...a: unknown[]) => mocks.revertToRun(...a),
+        newSetFromSetup: (...a: unknown[]) => mocks.newSetFromSetup(...a),
+        compareRuns: (...a: unknown[]) => mocks.compareRuns(...a),
+        explainPlacements: (...a: unknown[]) => mocks.explainPlacements(...a),
+        readinessCounts: (...a: unknown[]) => mocks.readinessCounts(...a),
+        mustLabels: (...a: unknown[]) => mocks.mustLabels(...a),
+        nonRespondentsFor: (...a: unknown[]) => mocks.nonRespondentsFor(...a),
       },
     },
   };
@@ -135,9 +151,10 @@ const FOREIGN_FORM = { ...FORM_ROW, classroom_id: 'class-2' };
 const CONFIG = {
   version: 1,
   grouping: { mode: 'free' },
-  team_size: { min: 3, max: 4, allow_one_larger: false },
+  team_size: { min: 3, max: 4 },
 };
 
+/** A set as getSet returns it: the row, its status and its lock. */
 const SET_ROW = {
   id: 'set-1',
   form_id: FORM_ID,
@@ -146,17 +163,32 @@ const SET_ROW = {
   tag_id: null,
   created_run_id: null,
   create_state: null,
+  status: 'setting_up',
+  locked: false,
 };
 
+/** A set as listForForm returns it (`created` is an object once teams exist). */
 const SUMMARY = {
   id: 'set-1',
   name: 'project-bids-teams',
-  created: false,
+  status: 'setting_up',
+  created: null,
   created_run_id: null,
   create_state: null,
   run_count: 7,
-  latest_run: { id: 'run-7', number: 7, status: 'SOLVED', created_at: new Date() },
+  latest_run: {
+    number: 7,
+    status: 'SOLVED',
+    solver_status: 'OPTIMAL',
+    first_choice: 4,
+    responded: 5,
+  },
+  updated_at: '2026-09-24T12:00:00.000Z',
 };
+
+/** Real user ids: `person` is a uuid on the wire. */
+const AVERY = '0c1d2e3f-4a5b-4c6d-8e7f-8091a2b3c4d5';
+const BLAIR = '1d2e3f4a-5b6c-4d7e-9f80-91a2b3c4d5e6';
 
 const RUN_ROW = {
   id: 'run-3',
@@ -181,7 +213,11 @@ const METRICS = {
   requests: { total: 3, kept: 2, mutual_pairs: 1, mutual_pairs_kept: 1 },
   avoids: { total: 2, broken: 0 },
   must_broken: 0,
+  top3: 5,
 };
+
+/** An answer to an identity question: it must never appear in any payload. */
+const IDENTITY_ANSWER = 'IDENTITY-ANSWER-Oak';
 
 /** A run view as describeRun returns it — plus two keys that must not ship. */
 const RUN_VIEW = {
@@ -191,13 +227,20 @@ const RUN_VIEW = {
   error: null,
   created_at: '2026-09-24T12:00:00.000Z',
   finished_at: '2026-09-24T12:00:02.000Z',
-  solver: { status: 'OPTIMAL', objective: 120, bound: 120, wall_s: 1.5 },
+  created_by: { user_id: 'owner-1', name: 'Olive Owner' },
+  solver: { status: 'OPTIMAL', objective: 120, bound: 120, wall_s: 1.5, gap_pct: 0 },
   metrics: METRICS,
   stale: false,
   stale_reasons: [],
   issues: [],
   core: [],
   summary: null,
+  changes_since_run: [],
+  changes_from_previous: null,
+  progress: { responses: 5, people: 6, pins: 0, warnings: 0 },
+  identity_rules: [],
+  non_respondents: { mode: 'include', people: 1 },
+  option_status: [],
   debug_trace: 'INTERNAL-TRACE',
   teams: [
     {
@@ -205,6 +248,16 @@ const RUN_VIEW = {
       name: 'project-bids-teams-01',
       option: null,
       size: 1,
+      signals: {
+        wanted_first: null,
+        seats: { used: 1, max: 4 },
+        pitcher_on_team: null,
+        requests: { kept: 1, total: 1 },
+        pinned: 0,
+        did_not_answer: 0,
+        fourth_or_lower: 0,
+        balance: [],
+      },
       members: [
         {
           user_id: 'u-1',
@@ -212,6 +265,9 @@ const RUN_VIEW = {
           login: 'aquill',
           email: 'avery.quill@example.edu',
           placement: '1',
+          rank: null,
+          pinned: false,
+          responded: true,
           requests_kept: 1,
           requests_total: 1,
           notes: [{ field_label: 'Anything else?', text: 'Prefers mornings' }],
@@ -277,6 +333,16 @@ beforeEach(() => {
   mocks.claimCreate.mockResolvedValue(undefined);
   mocks.listRuns.mockResolvedValue([]);
   mocks.loadInputs.mockResolvedValue({ responses: [], roster: [] });
+  mocks.readinessCounts.mockResolvedValue({ roster: 0, responded: 0 });
+  mocks.mustLabels.mockResolvedValue({});
+  mocks.nonRespondentsFor.mockResolvedValue({ setting: null, resolved: 'include' });
+  mocks.changesSinceRun.mockResolvedValue({ run_number: null, changes: [] });
+  mocks.revertToRun.mockResolvedValue(SET_ROW);
+  mocks.newSetFromSetup.mockResolvedValue({
+    ...SET_ROW,
+    id: 'set-2',
+    name: 'project-bids-teams-2',
+  });
 });
 
 // ─── Definitions ────────────────────────────────────────────────────────────
@@ -347,6 +413,22 @@ describe('team-set tool definitions', () => {
     expect(formTeamsCreateTool.description).toMatch(/explicit approval/);
   });
 
+  it('names every setting the page can change, and the new reads', () => {
+    for (const phrase of [
+      'options (open, size, note)',
+      'non_respondents (include/group/exclude)',
+      'priority',
+      'copy_from',
+      'revert_to_run',
+      'locked',
+    ]) {
+      expect(formTeamsRunTool.description, phrase).toContain(phrase);
+    }
+    expect(formTeamsGetTool.description).toMatch(/compare_with/);
+    expect(formTeamsGetTool.description).toMatch(/person/);
+    expect(formTeamsGetTool.description).toMatch(/held on N of M teams, never per person/);
+  });
+
   it('is registered in the tool manifest', () => {
     const manifest = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
     for (const name of ['formTeamsGetTool', 'formTeamsRunTool', 'formTeamsCreateTool']) {
@@ -411,6 +493,11 @@ describe('role tiers (through the registry)', () => {
     expect(run?.inputSchema.properties).toHaveProperty('patch');
     expect(run?.inputSchema.properties).toHaveProperty('wait_s');
     expect(run?.inputSchema.properties).toHaveProperty('new_set');
+    expect(run?.inputSchema.properties).toHaveProperty('copy_from');
+    expect(run?.inputSchema.properties).toHaveProperty('revert_to_run');
+    const get = tools.find(tool => tool.name === 'form_teams_get');
+    expect(get?.inputSchema.properties).toHaveProperty('compare_with');
+    expect(get?.inputSchema.properties).toHaveProperty('person');
   });
 
   it('lets a TEACHER read and run but not create', async () => {
@@ -480,6 +567,42 @@ describe('role tiers (through the registry)', () => {
     expect(mocks.formFindById).not.toHaveBeenCalled();
     expect(mocks.saveConfig).not.toHaveBeenCalled();
     expect(mocks.startRun).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The three tools' share of tools/list: name + description + input JSON
+   * Schema, as the registry serializes them. Every tool on this server shares
+   * one manifest, so the team-set tools may not grow past this ceiling
+   * without a deliberate raise here.
+   *   staging 5b01af66 (release 1):  5,117 B (descriptions 720 / 920 / 785)
+   *   release 2 (MCP parity):        6,068 B (descriptions 918 / 1,145 / 785)
+   *     + compare_with, person, copy_from, revert_to_run and the texts for
+   *       them, sizes, notes, non_respondents and priority.
+   * The ceiling leaves ~180 B for wording fixes, not for another argument.
+   */
+  const TEAM_SET_MANIFEST_CEILING = 6_250;
+
+  it('keeps the three tools’ manifest (name + description + schema) under its ceiling', async () => {
+    asMember('OWNER');
+    const client = await connect();
+    const { tools } = await client.listTools();
+    const bytes = ['form_teams_get', 'form_teams_run', 'form_teams_create'].map(name => {
+      const tool = tools.find(entry => entry.name === name);
+      expect(tool, name).toBeDefined();
+      return new TextEncoder().encode(
+        JSON.stringify({
+          name: tool!.name,
+          description: tool!.description,
+          inputSchema: tool!.inputSchema,
+        })
+      ).length;
+    });
+    const total = bytes.reduce((sum, n) => sum + n, 0);
+    expect(total).toBeLessThanOrEqual(TEAM_SET_MANIFEST_CEILING);
+    // A shared schema object converts to a `$ref` some clients can't follow.
+    for (const tool of tools.filter(entry => entry.name.startsWith('form_teams_'))) {
+      expect(JSON.stringify(tool.inputSchema), tool.name).not.toContain('$ref');
+    }
   });
 
   it('advertises patch as a plain object, not the full config schema', async () => {
@@ -558,12 +681,11 @@ describe('role tiers (through the registry)', () => {
     };
     const result = await call(client, 'form_teams_run', { ...RUN_ARGS, patch, start: false });
     expect(result.isError).toBeFalsy();
-    // The tool hands saveConfig the PARSED patch, so the schema's defaults
-    // arrive filled in (team_size is replaced whole, as applyConfigPatch does).
+    // The tool hands saveConfig the PARSED patch: team_size is replaced whole,
+    // as applyConfigPatch does, and gets no default for the retired
+    // allow_one_larger.
     expect(mocks.saveConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        patch: { ...patch, team_size: { min: 3, max: 4, allow_one_larger: false } },
-      })
+      expect.objectContaining({ patch: { ...patch, team_size: { min: 3, max: 4 } } })
     );
   });
 });
@@ -635,6 +757,7 @@ describe('cross-classroom scoping (S1)', () => {
       formId: FORM_ID,
       setRef: 'set-1',
       userId: 'owner-1',
+      via: 'mcp',
     });
     expect(mocks.startRun).toHaveBeenCalledWith({
       classroomId: 'class-1',
@@ -665,6 +788,7 @@ describe('form_teams_run — a new set shows its setup first', () => {
       name: 'bids',
       patch: { fairness: 70 },
       userId: 'owner-1',
+      via: 'mcp',
     });
     expect(mocks.startRun).not.toHaveBeenCalled();
     expect(payload).toMatchObject({
@@ -727,7 +851,10 @@ describe('form_teams_run — a new set shows its setup first', () => {
     const exists = (await formTeamsRunTool
       .handler({ ...BASE, name: 'project-bids-teams', new_set: true }, CTX)
       .catch(e => e)) as ToolError;
-    expect(exists.code).toBe('set_exists');
+    // The same code, sentence and details as the service's own name_taken.
+    expect(exists.code).toBe('name_taken');
+    expect(exists.data).toEqual({ name: 'project-bids-teams' });
+    expect(exists.message).toContain('"project-bids-teams"');
 
     const nameless = (await formTeamsRunTool
       .handler({ ...BASE, new_set: true }, CTX)
@@ -787,7 +914,12 @@ describe('form_teams_run — check writes nothing', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
     expect(payload).toMatchObject({ checked: true, saved: false, started: false, config: CONFIG });
     expect(payload.issues).toEqual([
-      { level: 'error', code: 'capacity', message: 'Too many people for the slots' },
+      {
+        level: 'error',
+        code: 'capacity',
+        message: 'Too many people for the slots',
+        hint: expect.stringMatching(/team_size/),
+      },
       {
         level: 'error',
         code: 'model_too_large',
@@ -877,7 +1009,7 @@ describe('form_teams_run — an existing set', () => {
     });
     expect(payload.issues[1]).toMatchObject({
       code: 'odd_group_in_pairs',
-      hint: expect.stringMatching(/allow_one_larger/),
+      hint: expect.stringMatching(/team of 3/),
       names: ['Avery Quill'],
     });
     expect(mocks.waitForRun).not.toHaveBeenCalled();
@@ -902,6 +1034,9 @@ describe('form_teams_run — an existing set', () => {
       name: 'Avery Quill',
       login: 'aquill',
       placement: '1',
+      rank: null,
+      pinned: false,
+      responded: true,
       requests_kept: 1,
       requests_total: 1,
       notes: [{ field_label: 'Anything else?', text: 'Prefers mornings' }],
@@ -992,7 +1127,16 @@ describe('form_teams_create', () => {
     });
     expect(mocks.claimCreate).not.toHaveBeenCalled();
     expect(mocks.getRun).not.toHaveBeenCalled();
-    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    // The preview names every member: its read is audited, and nothing else is written.
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.auditCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resource_type: 'TEAM_SETS',
+        resource_id: PREVIEW.run_id,
+        action: 'VIEW',
+        data: expect.objectContaining({ tool: 'form_teams_create', value: 'preview' }),
+      })
+    );
     expect(payload.created).toBe(false);
     expect(payload.notice).toBe(
       'Nothing was created. Show this to the user and call again with confirm: true only after they approve.'
@@ -1128,13 +1272,26 @@ describe('TeamSetError mapping', () => {
       'A create of run 4 failed partway and made some teams; only run 4 can be retried (form_teams_create with run: 4)'
     );
 
-    // …while a set that has its teams says so, and names no run to retry.
+    // …while a set whose teams all exist is locked (a DONE or PARTIAL
+    // preview), and says so without naming a run to retry.
     mocks.previewCreate.mockRejectedValueOnce(
-      teamSetError('already_created', 'raw', { run_number: 4, status: 'DONE' })
+      teamSetError('set_locked', 'raw', { run_number: 4, status: 'DONE' })
     );
     const done = (await formTeamsCreateTool.handler(BASE, CTX).catch(e => e)) as ToolError;
-    expect(done.message).toMatch(/^This set already has its teams/);
-    expect(done.message).not.toMatch(/retried/);
+    expect(done.code).toBe('set_locked');
+    expect(done.message).toMatch(/^This set’s teams were created from run 4/);
+    expect(done.message).toMatch(/copy_from and new_set: true/);
+    expect(done.message).not.toMatch(/retr/);
+
+    // A claim that loses the race to another create still reads already_created.
+    mocks.claimCreate.mockRejectedValueOnce(
+      teamSetError('already_created', 'raw', { run_number: 4, status: 'DONE' })
+    );
+    const raced = (await formTeamsCreateTool
+      .handler({ ...BASE, confirm: true }, CTX)
+      .catch(e => e)) as ToolError;
+    expect(raced.message).toMatch(/^This set already has its teams/);
+    expect(raced.message).not.toMatch(/retried/);
   });
 
   it('says Github or Gitlab is needed to a classroom on neither', async () => {
@@ -1219,10 +1376,7 @@ describe('form_teams_get', () => {
 
   it('with no set returns the suggestion, readiness, a next step and patch_help', async () => {
     mocks.suggestForForm.mockResolvedValue({ name: 'project-bids-teams', config: CONFIG });
-    mocks.loadInputs.mockResolvedValue({
-      roster: [{ user_id: 'u-1' }, { user_id: 'u-2' }, { user_id: 'u-3' }],
-      responses: [{ user_id: 'u-1' }, { user_id: 'u-3' }, { user_id: 'not-on-roster' }],
-    });
+    mocks.readinessCounts.mockResolvedValue({ roster: 3, responded: 2 });
     const payload = parse(await formTeamsGetTool.handler(BASE, CTX));
     expect(payload.team_sets).toEqual([]);
     expect(payload.set).toBeNull();
@@ -1230,7 +1384,10 @@ describe('form_teams_get', () => {
     expect(payload.suggested_name).toBe('project-bids-teams');
     expect(payload.next).toMatch(/Show the suggested setup to the user/);
     expect(payload.readiness).toEqual({ roster: 3, responded: 2, not_responded: 1 });
-    expect(mocks.loadInputs).toHaveBeenCalledWith({ classroomId: 'class-1', formId: FORM_ID });
+    // Two counts, no answers: the inputs (every response's answers) are never loaded.
+    expect(mocks.readinessCounts).toHaveBeenCalledWith({ classroomId: 'class-1', formId: FORM_ID });
+    expect(mocks.loadInputs).not.toHaveBeenCalled();
+    expect(mocks.mustLabels).not.toHaveBeenCalled();
     expect(mocks.auditCreate).not.toHaveBeenCalled();
     // The config module's own tables, so the help cannot drift from the validator.
     expect(payload.patch_help.params_by_job.rank).toEqual(
@@ -1239,6 +1396,29 @@ describe('form_teams_get', () => {
     expect(payload.patch_help.field_types_by_job.together).toEqual(['roster_select']);
     expect(payload.patch_help.pins).toMatch(/identical to an existing one is skipped/);
     expect(payload.patch_help.options).toMatch(/single field set to null clears just that field/);
+    // Release 2: every new setting is documented where the agent reads it.
+    expect(payload.patch_help.options).toMatch(/size\?: \{ min\?, max\? \}/);
+    expect(payload.patch_help.options).toMatch(/note\?: .*500 characters/);
+    expect(payload.patch_help.other).toMatch(/non_respondents include\|group\|exclude/);
+    expect(payload.patch_help.other).toMatch(
+      /group when team_size\.max is 2 and they can form teams of their own, else include/
+    );
+    expect(payload.patch_help.other).not.toMatch(/allow_one_larger/);
+    expect(payload.patch_help.params_by_job.priority).toEqual([
+      'rule_a',
+      'rule_b',
+      'answers',
+      'shift',
+    ]);
+    expect(payload.patch_help.field_types_by_job.priority).toEqual(['dropdown', 'switch']);
+    expect(payload.patch_help.field_types_by_job.no_one_alone).toContain('multiselect');
+    expect(payload.patch_help.priority).toMatch(/shift = 10-90 in steps of 10 \(default 50\)/);
+    expect(payload.patch_help.priority).toMatch(
+      /rank\/fallback\/owner\/together\/apart\/match\/mix/
+    );
+    expect(payload.patch_help.identity).toMatch(/takes only no_one_alone, strength off or prefer/);
+    expect(payload.patch_help.identity).toMatch(/can’t group teams or carry a note rule/);
+    expect(payload.patch_help.rules).toMatch(/refused in a patch/);
   });
 
   it('lists the newest runs with a summary and a stale flag, in one light read', async () => {
@@ -1249,7 +1429,8 @@ describe('form_teams_get', () => {
         id: `run-${number}`,
         number,
         status: number === 7 ? 'SOLVED' : 'INFEASIBLE',
-        created_at: new Date('2026-09-24T12:00:00.000Z'),
+        // The service returns ISO strings now; they pass through as they are.
+        created_at: '2026-09-24T12:00:00.000Z',
         finished_at: null,
         error: null,
         metrics: number === 7 ? METRICS : null,
@@ -1279,11 +1460,13 @@ describe('form_teams_get', () => {
       {
         id: 'set-1',
         name: 'project-bids-teams',
+        status: 'setting_up',
         create_status: 'none',
         run_count: 7,
         latest_run: { number: 7, status: 'SOLVED' },
       },
     ]);
+    expect(payload.runs[0].created_at).toBe('2026-09-24T12:00:00.000Z');
     // The newest five, newest first; the rest are counted, not fetched.
     expect(payload.runs.map((run: { number: number }) => run.number)).toEqual([7, 6, 5, 4, 3]);
     expect(payload.runs_omitted).toBe(2);
@@ -1465,5 +1648,1842 @@ describe('form_teams_get', () => {
     mocks.listForForm.mockResolvedValue([{ id: 'set-1', name: 'project-bids-teams' }]);
     const error = await formTeamsGetTool.handler({ ...BASE, team_set: 'nope' }, CTX).catch(e => e);
     expect((error as ToolError).kind).toBe('not_found');
+  });
+});
+
+// ─── Release 2: every new setting rides the patch ───────────────────────────
+
+/** Field and option ids for the release-2 fixtures (uuids where the schema asks). */
+const RANK_FIELD = '2a3b4c5d-6e7f-4a8b-9c0d-1e2f3a4b5c6d';
+const PARTNER_FIELD = '3b4c5d6e-7f80-4b9c-8d1e-2f3a4b5c6d7e';
+const PRIORITY_FIELD = '4c5d6e7f-8091-4cad-9e2f-3a4b5c6d7e8f';
+const IDENTITY_FIELD = '5d6e7f80-91a2-4dbe-8f3a-4b5c6d7e8f90';
+
+describe('form_teams_run — release-2 settings ride the patch', () => {
+  const BASE = { classroom: 'org/w26', form_id: FORM_ID, start: false };
+
+  beforeEach(() => {
+    mocks.getSet.mockResolvedValue(SET_ROW);
+  });
+
+  it('carries option size and note, non_respondents group, and a priority rule to saveConfig', async () => {
+    const patch = {
+      non_respondents: 'group',
+      options: {
+        'opt-1': { size: { max: 5 }, note: 'Needs a lab bench' },
+        'opt-2': { size: null, note: null },
+      },
+      rules: {
+        upsert: [
+          { field_id: IDENTITY_FIELD, job: 'no_one_alone', strength: 'prefer' },
+          {
+            field_id: PRIORITY_FIELD,
+            job: 'priority',
+            strength: 'prefer',
+            params: {
+              rule_a: `${RANK_FIELD}:rank`,
+              rule_b: `${PARTNER_FIELD}:together`,
+              answers: { 'ans-project': 'a', 'ans-people': 'b', 'ans-both': 'none' },
+              shift: 60,
+            },
+          },
+        ],
+      },
+    };
+    const payload = parse(await formTeamsRunTool.handler({ ...BASE, patch }, CTX));
+    expect(mocks.saveConfig).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      formId: FORM_ID,
+      setRef: 'set-1',
+      patch,
+      userId: 'owner-1',
+      via: 'mcp',
+    });
+    expect(payload).toMatchObject({ started: false, set_created: false });
+    // Back to the default (group for pairs, else spread) is a null.
+    await formTeamsRunTool.handler({ ...BASE, patch: { non_respondents: null } }, CTX);
+    expect(mocks.saveConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({ patch: { non_respondents: null } })
+    );
+  });
+
+  it('refuses provenance stamps in a patch, before anything is read', async () => {
+    for (const patch of [
+      {
+        pins: {
+          add: [{ kind: 'apart', user_ids: [AVERY, BLAIR], added_by: AVERY, added_via: 'mcp' }],
+        },
+      },
+      { options: { 'opt-1': { open: 'closed', closed_by: AVERY } } },
+    ]) {
+      const error = (await formTeamsRunTool
+        .handler({ ...BASE, patch }, CTX)
+        .catch(e => e)) as ToolError;
+      expect(error.code, JSON.stringify(patch)).toBe('invalid_config');
+    }
+    expect(mocks.formFindById).not.toHaveBeenCalled();
+    expect(mocks.saveConfig).not.toHaveBeenCalled();
+  });
+
+  it('refuses github_teams: false (classroom-only teams are cut), before anything is read', async () => {
+    const error = (await formTeamsRunTool
+      .handler({ ...BASE, patch: { github_teams: false } }, CTX)
+      .catch(e => e)) as ToolError;
+    expect(error).toMatchObject({ kind: 'invalid_params', code: 'github_teams_off_unsupported' });
+    expect(mocks.formFindById).not.toHaveBeenCalled();
+    expect(mocks.saveConfig).not.toHaveBeenCalled();
+    // true is the only value there is, and it saves.
+    await formTeamsRunTool.handler({ ...BASE, patch: { github_teams: true } }, CTX);
+    expect(mocks.saveConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it('still refuses github_teams: false at create, with a way forward', async () => {
+    mocks.previewCreate.mockRejectedValueOnce(
+      teamSetError('github_teams_off_unsupported', 'raw service text')
+    );
+    const error = (await formTeamsCreateTool
+      .handler({ classroom: 'org/w26', form_id: FORM_ID, run: 3 }, CTX)
+      .catch(e => e)) as ToolError;
+    expect(error.code).toBe('github_teams_off_unsupported');
+    expect(error.message).toMatch(/patch github_teams: true, run again/);
+    expect(error.message).not.toContain('raw service text');
+  });
+});
+
+// ─── Release 2: Discard (revert_to_run) ─────────────────────────────────────
+
+describe('form_teams_run — revert_to_run (Discard)', () => {
+  const BASE = { classroom: 'org/w26', form_id: FORM_ID };
+
+  beforeEach(() => {
+    mocks.getSet.mockResolvedValue(SET_ROW);
+  });
+
+  it('puts the setup back to the run’s, stamped over MCP, saving only', async () => {
+    const payload = parse(await formTeamsRunTool.handler({ ...BASE, revert_to_run: 2 }, CTX));
+    expect(mocks.revertToRun).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      teamSetId: 'set-1',
+      runRef: 2,
+      userId: 'owner-1',
+      via: 'mcp',
+    });
+    expect(mocks.saveConfig).not.toHaveBeenCalled();
+    expect(mocks.checkPatch).not.toHaveBeenCalled();
+    expect(mocks.startRun).not.toHaveBeenCalled();
+    expect(payload).toMatchObject({
+      set_created: false,
+      started: false,
+      reverted_to_run: 2,
+      team_set: { id: 'set-1', config: CONFIG, locked: false, status: 'setting_up' },
+    });
+    expect(payload.next).toMatch(/start: true to run it/);
+    expect(mocks.auditCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resource_type: 'TEAM_SETS',
+        resource_id: 'set-1',
+        action: 'UPDATE',
+        data: expect.objectContaining({
+          tool: 'form_teams_run',
+          reverted_to_run: 2,
+          value: 'revert:2',
+        }),
+      })
+    );
+  });
+
+  it('refuses a revert mixed with another act, before anything is read', async () => {
+    const mixed: Record<string, unknown>[] = [
+      { patch: { fairness: 10 } },
+      { check: true },
+      { start: true },
+      { new_set: true, name: 'again' },
+      { name: 'other' },
+      { copy_from: 'project-bids-teams', new_set: true },
+    ];
+    for (const extra of mixed) {
+      const error = (await formTeamsRunTool
+        .handler({ ...BASE, revert_to_run: 2, ...extra } as never, CTX)
+        .catch(e => e)) as ToolError;
+      expect(error.kind, JSON.stringify(extra)).toBe('invalid_params');
+    }
+    expect(mocks.formFindById).not.toHaveBeenCalled();
+    expect(mocks.revertToRun).not.toHaveBeenCalled();
+  });
+
+  it('maps a locked set and an unknown run', async () => {
+    mocks.revertToRun.mockRejectedValueOnce(
+      teamSetError('set_locked', 'raw', { run_number: 3, status: 'DONE' })
+    );
+    const locked = (await formTeamsRunTool
+      .handler({ ...BASE, revert_to_run: 2 }, CTX)
+      .catch(e => e)) as ToolError;
+    expect(locked).toMatchObject({ kind: 'invalid_params', code: 'set_locked' });
+    expect(locked.message).toMatch(/created from run 3/);
+    expect(locked.data).toEqual({ run_number: 3, status: 'DONE' });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+
+    mocks.revertToRun.mockRejectedValueOnce(teamSetError('not_found', 'Run 99 not found.'));
+    const missing = (await formTeamsRunTool
+      .handler({ ...BASE, revert_to_run: 99 }, CTX)
+      .catch(e => e)) as ToolError;
+    expect(missing.kind).toBe('not_found');
+    expect(missing.message).toBe('Run not found in this classroom');
+  });
+
+  it('refuses a form without a set', async () => {
+    mocks.getSet.mockResolvedValue(null);
+    const error = (await formTeamsRunTool
+      .handler({ ...BASE, revert_to_run: 1 }, CTX)
+      .catch(e => e)) as ToolError;
+    expect(error.kind).toBe('not_found');
+    expect(mocks.revertToRun).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Release 2: a new set from another set's setup (copy_from) ──────────────
+
+describe('form_teams_run — copy_from', () => {
+  const BASE = { classroom: 'org/w26', form_id: FORM_ID };
+
+  it('copies a set’s setup into a new set, stamped over MCP, and never runs it', async () => {
+    mocks.getSet.mockImplementation(async ({ setRef }: { setRef?: string }) =>
+      setRef === 'project-bids-teams' ? { ...SET_ROW, status: 'created', locked: true } : null
+    );
+    const payload = parse(
+      await formTeamsRunTool.handler(
+        { ...BASE, copy_from: 'project-bids-teams', new_set: true, name: 'bids-2', start: true },
+        CTX
+      )
+    );
+    expect(mocks.newSetFromSetup).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      formId: FORM_ID,
+      fromSetRef: 'set-1',
+      name: 'bids-2',
+      userId: 'owner-1',
+      via: 'mcp',
+    });
+    expect(mocks.saveConfig).not.toHaveBeenCalled();
+    expect(mocks.startRun).not.toHaveBeenCalled();
+    expect(payload).toMatchObject({
+      set_created: true,
+      started: false,
+      copied_from: { id: 'set-1', name: 'project-bids-teams' },
+      team_set: { id: 'set-2', name: 'project-bids-teams-2', locked: false },
+    });
+    expect(payload.start_refused).toMatch(/never run on the call that creates it/);
+    expect(payload.next).toMatch(/Show the user this setup/);
+    expect(mocks.auditCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resource_id: 'set-2',
+        action: 'CREATE',
+        data: expect.objectContaining({ copied_from: 'set-1', value: 'copy:set-1' }),
+      })
+    );
+  });
+
+  it('lets the service name the copy when no name is given', async () => {
+    mocks.getSet.mockResolvedValue(SET_ROW);
+    await formTeamsRunTool.handler({ ...BASE, copy_from: 'set-1', new_set: true }, CTX);
+    // Only the source is looked up: no name to clash.
+    expect(mocks.getSet).toHaveBeenCalledTimes(1);
+    const call = mocks.newSetFromSetup.mock.calls[0]![0] as Record<string, unknown>;
+    expect(call).not.toHaveProperty('name');
+    expect(call.fromSetRef).toBe('set-1');
+  });
+
+  it('refuses copy_from without new_set, with a patch or check, or with team_set', async () => {
+    for (const extra of [
+      {},
+      { new_set: true, patch: { fairness: 10 } },
+      { new_set: true, check: true },
+      { new_set: true, team_set: 'project-bids-teams' },
+    ]) {
+      const error = (await formTeamsRunTool
+        .handler({ ...BASE, copy_from: 'project-bids-teams', ...extra } as never, CTX)
+        .catch(e => e)) as ToolError;
+      expect(error.kind, JSON.stringify(extra)).toBe('invalid_params');
+    }
+    expect(mocks.formFindById).not.toHaveBeenCalled();
+    expect(mocks.newSetFromSetup).not.toHaveBeenCalled();
+  });
+
+  it('refuses a name that is taken, and a source that does not exist', async () => {
+    mocks.getSet.mockResolvedValue(SET_ROW);
+    const taken = (await formTeamsRunTool
+      .handler(
+        { ...BASE, copy_from: 'project-bids-teams', new_set: true, name: 'project-bids-teams' },
+        CTX
+      )
+      .catch(e => e)) as ToolError;
+    expect(taken.code).toBe('name_taken');
+    expect(taken.data).toEqual({ name: 'project-bids-teams' });
+
+    mocks.getSet.mockResolvedValue(null);
+    const missing = (await formTeamsRunTool
+      .handler({ ...BASE, copy_from: 'nope', new_set: true }, CTX)
+      .catch(e => e)) as ToolError;
+    expect(missing.kind).toBe('not_found');
+    expect(mocks.newSetFromSetup).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Release 2: locks and runs in flight ────────────────────────────────────
+
+describe('set_locked and run_in_progress', () => {
+  const BASE = { classroom: 'org/w26', form_id: FORM_ID };
+
+  beforeEach(() => {
+    mocks.getSet.mockResolvedValue(SET_ROW);
+  });
+
+  it('refuses a save to a created set with the run and a way forward', async () => {
+    mocks.saveConfig.mockRejectedValueOnce(
+      teamSetError('set_locked', 'Teams were created from run 4 (internal)', {
+        run_number: 4,
+        status: 'PARTIAL',
+      })
+    );
+    const error = (await formTeamsRunTool
+      .handler({ ...BASE, patch: { fairness: 10 } }, CTX)
+      .catch(e => e)) as ToolError;
+    expect(error).toMatchObject({ kind: 'invalid_params', code: 'set_locked' });
+    expect(error.message).toMatch(/created from run 4, so its setup can’t change/);
+    expect(error.message).toMatch(/copy_from and new_set: true/);
+    expect(error.message).not.toContain('internal');
+    expect(error.data).toEqual({ run_number: 4, status: 'PARTIAL' });
+    expect(mocks.startRun).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('says a create is under way, and how a failed one is retried', async () => {
+    mocks.saveConfig.mockRejectedValueOnce(
+      teamSetError('set_locked', 'raw', { run_number: null, status: null })
+    );
+    const creating = (await formTeamsRunTool.handler(BASE, CTX).catch(e => e)) as ToolError;
+    expect(creating.message).toMatch(/being created from this set now/);
+
+    mocks.saveConfig.mockRejectedValueOnce(
+      teamSetError('set_locked', 'raw', { run_number: 2, status: 'FAILED' })
+    );
+    const failed = (await formTeamsRunTool.handler(BASE, CTX).catch(e => e)) as ToolError;
+    expect(failed.message).toMatch(/Retry it with form_teams_create \(run: 2\)/);
+
+    // Without details, the code's own sentence.
+    mocks.startRun.mockRejectedValueOnce(teamSetError('set_locked', 'raw'));
+    const bare = (await formTeamsRunTool.handler(BASE, CTX).catch(e => e)) as ToolError;
+    expect(bare.message).toMatch(/^This set’s teams exist/);
+  });
+
+  it('says which run is still solving when a start is refused, after the save was audited', async () => {
+    mocks.startRun.mockRejectedValueOnce(
+      teamSetError('run_in_progress', 'Run 6 has not finished.', { run_number: 6 })
+    );
+    const error = (await formTeamsRunTool
+      .handler({ ...BASE, patch: { fairness: 20 } }, CTX)
+      .catch(e => e)) as ToolError;
+    expect(error).toMatchObject({ kind: 'invalid_params', code: 'run_in_progress' });
+    expect(error.message).toMatch(/Run 6 of this set hasn’t finished/);
+    expect(error.message).toMatch(/Poll form_teams_get with run: 6/);
+    expect(error.message).toMatch(/a patch, if any, was saved/);
+    expect(error.data).toEqual({ run_number: 6 });
+    expect(mocks.auditCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'UPDATE', resource_id: 'set-1' })
+    );
+  });
+});
+
+// ─── Release 2: advice lives in the hints, facts in the messages ────────────
+
+describe('CHECK_HINTS', () => {
+  /** The checks module's own vocabulary: its header, and the codes it emits. */
+  const checksSource = readFileSync(
+    new URL('../../../../../packages/services/src/classmoji/teamSetChecks.ts', import.meta.url),
+    'utf8'
+  );
+  const header = checksSource.slice(
+    checksSource.indexOf('Codes (closed vocabulary):'),
+    checksSource.indexOf(' *   ok ')
+  );
+  const headerCodes = header
+    .replace('Codes (closed vocabulary):', ' ')
+    .replace(/\*|\berrors\b|\bwarnings\b/g, ' ')
+    .split(/[\s·]+/)
+    .filter(Boolean);
+  const okLine = checksSource.slice(
+    checksSource.indexOf(' *   ok '),
+    checksSource.indexOf('\n *\n', checksSource.indexOf(' *   ok '))
+  );
+  const okCodes = okLine
+    .replace(/\*|\bok\b|\(includePassed only\)/g, ' ')
+    .split(/[\s·]+/)
+    .filter(Boolean);
+
+  /** Run one issue through a check call and read back its payload. */
+  async function hinted(issue: Record<string, unknown>) {
+    mocks.checkPatch.mockResolvedValueOnce({
+      set: null,
+      name: 'x',
+      config: CONFIG,
+      notes: [],
+      issues: [issue],
+    });
+    const payload = parse(
+      await formTeamsRunTool.handler({ classroom: 'org/w26', form_id: FORM_ID, check: true }, CTX)
+    );
+    return payload.issues[0] as Record<string, unknown>;
+  }
+
+  it('reads the full vocabulary from the checks module', () => {
+    expect(headerCodes).toEqual(
+      expect.arrayContaining(['no_people', 'capacity', 'group_too_small', 'priority_target_off'])
+    );
+    expect(headerCodes.length).toBeGreaterThanOrEqual(22);
+    // Every code the module emits is in its header (error/warning) or its ok line.
+    const emitted = [
+      ...checksSource.matchAll(/code: '([a-z_]+)'/g),
+      ...checksSource.matchAll(/code: \w+ \? '([a-z_]+)' : '([a-z_]+)'/g),
+    ].flatMap(match => match.slice(1).filter(Boolean));
+    for (const code of emitted) {
+      expect([...headerCodes, ...okCodes], code).toContain(code);
+    }
+  });
+
+  it('gives every error and warning code a hint, and the config refusals too', async () => {
+    for (const code of [...headerCodes, 'invalid_config', 'no_grouping_field']) {
+      const payload = await hinted({ level: 'warning', code, message: 'fact' });
+      expect(payload.hint, code).toEqual(expect.any(String));
+      expect((payload.hint as string).length, code).toBeGreaterThan(20);
+    }
+  });
+
+  it('holds the advice the page’s messages no longer carry', async () => {
+    const hintFor = async (code: string) =>
+      (await hinted({ level: 'error', code, message: 'fact' })).hint as string;
+    expect(await hintFor('group_too_small')).toMatch(/choose Spread .* or Leave out/);
+    expect(await hintFor('group_split')).toMatch(/Spread|Leave out/);
+    expect(await hintFor('odd_group_in_pairs')).toMatch(/prefer instead of must/);
+    // allow_one_larger is retired: no hint sends an agent to it.
+    for (const code of headerCodes)
+      expect(await hintFor(code), code).not.toMatch(/allow_one_larger/);
+    expect(await hintFor('no_response')).toMatch(/non_respondents include .* group .* exclude/);
+    expect(await hintFor('model_too_large')).toMatch(/match or mix/);
+    expect(await hintFor('option_capacity_pins')).toMatch(/size\.max/);
+    expect(await hintFor('priority_target_off')).toMatch(/rule_a \/ rule_b/);
+    expect(await hintFor('invalid_config')).toMatch(/pins\.remove/);
+  });
+
+  it('forwards option ids, and never a person on an identity issue', async () => {
+    const capacity = await hinted({
+      level: 'error',
+      code: 'option_capacity_pins',
+      message: "'Ledger' has 4 seats, and 5 people must be on it.",
+      option_ids: ['opt-1'],
+      user_ids: [AVERY],
+      names: ['Avery Quill'],
+    });
+    expect(capacity).toMatchObject({ option_ids: ['opt-1'], user_ids: [AVERY] });
+
+    for (const code of ['identity_single_answer', 'identity_rule_pairs']) {
+      const payload = await hinted({
+        level: 'warning',
+        code,
+        message: '1 answer to "Q" has a single student.',
+        srcs: [`${IDENTITY_FIELD}:no_one_alone`],
+        user_ids: [AVERY],
+        names: ['Avery Quill'],
+      });
+      expect(payload, code).not.toHaveProperty('user_ids');
+      expect(payload, code).not.toHaveProperty('names');
+      expect(JSON.stringify(payload)).not.toContain(AVERY);
+      expect(payload.srcs).toEqual([`${IDENTITY_FIELD}:no_one_alone`]);
+    }
+  });
+});
+
+// ─── Release 2: the run view ────────────────────────────────────────────────
+
+describe('form_teams_get — the release-2 run view', () => {
+  const BASE = { classroom: 'org/w26', form_id: FORM_ID, run: 3 };
+
+  beforeEach(() => {
+    mocks.getSet.mockResolvedValue(SET_ROW);
+    mocks.getRun.mockResolvedValue({ ...RUN_ROW, status: 'SOLVED' });
+  });
+
+  it('adds top3, the gap, team signals, option status, non-respondents and changes', async () => {
+    mocks.describeRun.mockResolvedValue({
+      ...RUN_VIEW,
+      solver: { ...RUN_VIEW.solver, gap_pct: 2.5 },
+      changes_since_run: [
+        { kind: 'fairness', before: 50, after: 70, text: 'Fairness: 50 → 70', extra: 'x' },
+      ],
+      option_status: [
+        { option_id: 'opt-1', label: 'Ledger', status: 'full', placed: 4, max: 4 },
+        { option_id: 'opt-9', label: null, status: 'not_on_form', placed: 0, max: 0 },
+      ],
+      non_respondents: { mode: 'group', people: 2 },
+      teams: [
+        {
+          ...RUN_VIEW.teams[0],
+          option: { id: 'opt-9', label: null },
+          signals: {
+            ...RUN_VIEW.teams[0]!.signals,
+            wanted_first: 3,
+            pitcher_on_team: true,
+            balance: [
+              { field_id: 'f-1', label: 'Experience', team_avg: 3, class_avg: 3.2, raw: [1, 5] },
+            ],
+          },
+          members: [{ ...RUN_VIEW.teams[0]!.members[0], rank: 2, pinned: true }],
+        },
+      ],
+    });
+    const { run } = parse(await formTeamsGetTool.handler(BASE, CTX));
+    expect(run.metrics.top3).toBe(5);
+    expect(run.solver.gap_pct).toBe(2.5);
+    expect(run.changes_since_run).toEqual(['Fairness: 50 → 70']);
+    expect(run.non_respondents).toEqual({ mode: 'group', people: 2 });
+    expect(run.option_status).toEqual([
+      { option_id: 'opt-1', label: 'Ledger', status: 'full', placed: 4, max: 4 },
+      { option_id: 'opt-9', label: null, status: 'not_on_form', placed: 0, max: 0 },
+    ]);
+    // A label is null when the option is no longer on the form.
+    expect(run.teams[0].option).toEqual({ id: 'opt-9', label: null });
+    expect(run.teams[0].signals).toEqual({
+      wanted_first: 3,
+      seats: { used: 1, max: 4 },
+      pitcher_on_team: true,
+      requests: { kept: 1, total: 1 },
+      pinned: 0,
+      did_not_answer: 0,
+      fourth_or_lower: 0,
+      balance: [{ question: 'Experience', team_avg: 3, class_avg: 3.2 }],
+    });
+    expect(run.teams[0].members[0]).toMatchObject({ rank: 2, pinned: true, responded: true });
+  });
+
+  it('derives top3 from placement on runs scored before it existed', async () => {
+    const { top3: _gone, ...older } = METRICS;
+    mocks.describeRun.mockResolvedValue({ ...RUN_VIEW, metrics: older });
+    const { run } = parse(await formTeamsGetTool.handler(BASE, CTX));
+    expect(run.metrics.top3).toBe(5);
+  });
+
+  it('keeps the null picks of free teams null, never zeros', async () => {
+    const free = { ...METRICS, placement: null, first_choice: null, top2: null, top3: null };
+    mocks.describeRun.mockResolvedValue({ ...RUN_VIEW, metrics: free });
+    const { run } = parse(await formTeamsGetTool.handler(BASE, CTX));
+    expect(run.metrics).toMatchObject({
+      placement: null,
+      first_choice: null,
+      top2: null,
+      top3: null,
+      people: METRICS.people,
+    });
+    const { top3: _gone, ...older } = free;
+    mocks.describeRun.mockResolvedValue({ ...RUN_VIEW, metrics: older });
+    expect(parse(await formTeamsGetTool.handler(BASE, CTX)).run.metrics.top3).toBeNull();
+  });
+
+  it('names the students of a per-student Can’t-solve item from people, with what to patch', async () => {
+    mocks.getRun.mockResolvedValue({ ...RUN_ROW, status: 'INFEASIBLE' });
+    mocks.describeRun.mockResolvedValue({
+      ...RUN_VIEW,
+      status: 'INFEASIBLE',
+      teams: [],
+      summary:
+        "The settings listed can't all be met together within the team-size, teams-per-option and team-count limits.",
+      solver: {
+        status: 'INFEASIBLE',
+        objective: null,
+        bound: null,
+        wall_s: 2,
+        core_status: 'complete',
+        gap_pct: null,
+      },
+      core: [
+        {
+          src: `${RANK_FIELD}:rank@3`,
+          kind: 'rule',
+          label: 'Rank the projects (rank, must)',
+          user_ids: [AVERY],
+          people: [{ user_id: AVERY, name: 'Avery Quill' }],
+          link: { tab: 'questions', field_id: RANK_FIELD },
+        },
+        {
+          src: 'option:opt-1',
+          kind: 'option',
+          label: "'Ledger' is closed",
+          option: {
+            id: 'opt-1',
+            label: 'Ledger',
+            open: 'closed',
+            note: 'Sponsor withdrew',
+            closed: { since_run: 2, by: { user_id: 'owner-1', name: 'Olive Owner' }, via: 'mcp' },
+          },
+          link: { tab: 'projects', option_id: 'opt-1' },
+        },
+        {
+          src: 'pin:p1',
+          kind: 'pin',
+          label: 'Pin p1: together: 2 people',
+          user_ids: [AVERY, BLAIR],
+          link: { tab: 'pins', pin_id: 'p1' },
+        },
+      ],
+      changes_from_previous: {
+        since_run: 2,
+        items: [
+          {
+            kind: 'option',
+            option_id: 'opt-1',
+            field: 'open',
+            text: "'Ledger': Solver decides → Closed",
+          },
+        ],
+      },
+    });
+    const { run } = parse(await formTeamsGetTool.handler(BASE, CTX));
+    expect(run.core).toEqual([
+      {
+        src: `${RANK_FIELD}:rank@3`,
+        label: 'Rank the projects (rank, must)',
+        people: [{ user_id: AVERY, name: 'Avery Quill' }],
+        field_id: RANK_FIELD,
+      },
+      {
+        src: 'option:opt-1',
+        label: "'Ledger' is closed",
+        option: {
+          id: 'opt-1',
+          label: 'Ledger',
+          open: 'closed',
+          note: 'Sponsor withdrew',
+          closed: { since_run: 2, by: 'Olive Owner', via: 'mcp' },
+        },
+        option_id: 'opt-1',
+      },
+      {
+        src: 'pin:p1',
+        label: 'Pin p1: together: 2 people',
+        user_ids: [AVERY, BLAIR],
+        pin_id: 'p1',
+      },
+    ]);
+    expect(run.changes_from_previous).toEqual({
+      run: 2,
+      changes: ["'Ledger': Solver decides → Closed"],
+    });
+    // The page's sentence is facts; the advice is in next.
+    expect(run.summary).toMatch(/can't all be met together/);
+    expect(run.next).toMatch(/relax or remove one of those in core/);
+    // No teams, but a student is named: the read is audited.
+    expect(mocks.auditCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ resource_id: 'run-3', action: 'VIEW' })
+    );
+  });
+
+  it('gives INFEASIBLE advice for group mode, the size limits alone, and a timed-out core', async () => {
+    mocks.getRun.mockResolvedValue({ ...RUN_ROW, status: 'INFEASIBLE' });
+    const infeasible = {
+      ...RUN_VIEW,
+      status: 'INFEASIBLE',
+      teams: [],
+      solver: { status: 'INFEASIBLE', objective: null, bound: null, wall_s: 2, gap_pct: null },
+    };
+    const cases: [Record<string, unknown>, RegExp][] = [
+      [
+        { non_respondents: { mode: 'group', people: 3 }, core: [] },
+        /choose Spread \(non_respondents: include\) or Leave out \(exclude\)/,
+      ],
+      [
+        {
+          non_respondents: { mode: 'group', people: 3 },
+          core: [
+            {
+              src: 'non_respondents',
+              kind: 'non_respondents',
+              label: 'x',
+              link: { tab: 'non_respondents' },
+            },
+          ],
+        },
+        /choose Spread/,
+      ],
+      [
+        { core: [], solver: { ...infeasible.solver, core_status: 'complete' } },
+        /size limits alone can’t place everyone/,
+      ],
+      [
+        { core: [], solver: { ...infeasible.solver, core_status: 'timeout' } },
+        /raise time_limit_s/,
+      ],
+      [
+        {
+          core: [{ src: 'pin:p1', kind: 'pin', label: 'x', link: { tab: 'pins', pin_id: 'p1' } }],
+          solver: { ...infeasible.solver, core_status: 'timeout' },
+        },
+        /relax or remove one of those in core.*may not be part of the conflict/,
+      ],
+    ];
+    for (const [overrides, next] of cases) {
+      mocks.describeRun.mockResolvedValue({ ...infeasible, ...overrides });
+      const { run } = parse(await formTeamsGetTool.handler(BASE, CTX));
+      expect(run.next, JSON.stringify(overrides)).toMatch(next);
+    }
+  });
+});
+
+// ─── Release 2: identity questions — the aggregate only ─────────────────────
+
+describe('identity questions — aggregate only', () => {
+  const BASE = { classroom: 'org/w26', form_id: FORM_ID, run: 3 };
+
+  beforeEach(() => {
+    mocks.getSet.mockResolvedValue(SET_ROW);
+    mocks.getRun.mockResolvedValue({ ...RUN_ROW, status: 'SOLVED' });
+  });
+
+  it('forwards "held on N of M teams" and never which teams missed', async () => {
+    mocks.describeRun.mockResolvedValue({
+      ...RUN_VIEW,
+      identity_rules: [
+        {
+          rule_id: `${IDENTITY_FIELD}:no_one_alone`,
+          label: 'Which describes you?',
+          teams_held: 5,
+          teams_total: 6,
+          missed_teams: [{ n: 4, name: 'MISSED-TEAM-bids-04' }],
+          answers: [IDENTITY_ANSWER],
+        },
+      ],
+      issues: [
+        {
+          level: 'warning',
+          code: 'identity_single_answer',
+          message: '1 answer to "Which describes you?" has a single student.',
+          srcs: [`${IDENTITY_FIELD}:no_one_alone`],
+          user_ids: [AVERY],
+          names: ['Avery Quill'],
+        },
+      ],
+    });
+    const payload = parse(await formTeamsGetTool.handler(BASE, CTX));
+    expect(payload.run.identity_rules).toEqual([
+      { question: 'Which describes you?', teams_held: 5, teams_total: 6 },
+    ]);
+    const json = JSON.stringify(payload);
+    expect(json).not.toContain('MISSED-TEAM');
+    expect(json).not.toContain('missed_teams');
+    expect(json).not.toContain(IDENTITY_ANSWER);
+    expect(payload.run.issues[0]).not.toHaveProperty('user_ids');
+    expect(payload.run.issues[0]).not.toHaveProperty('names');
+    // The reveal is the page's, on request; no tool asks for it.
+    const call = mocks.describeRun.mock.calls[0]![0] as Record<string, unknown>;
+    expect(call.revealIdentity).toBeUndefined();
+  });
+
+  it('keeps identity answers out of the why facts and the comparison', async () => {
+    mocks.explainPlacements.mockResolvedValue([
+      {
+        ...WHY_FACTS,
+        identity_answers: { [IDENTITY_FIELD]: IDENTITY_ANSWER },
+        answers: { [IDENTITY_FIELD]: IDENTITY_ANSWER },
+        team: { ...WHY_FACTS.team, identity: IDENTITY_ANSWER },
+      },
+    ]);
+    const why = parse(await formTeamsGetTool.handler({ ...BASE, person: AVERY }, CTX));
+    expect(JSON.stringify(why)).not.toContain(IDENTITY_ANSWER);
+    expect(why.why).not.toHaveProperty('answers');
+    expect(why.why).not.toHaveProperty('identity_answers');
+
+    mocks.compareRuns.mockResolvedValue({
+      ...COMPARISON,
+      missed_teams: [{ n: 4, name: 'MISSED-TEAM-bids-04' }],
+      moved: COMPARISON.moved.map(mover => ({ ...mover, answer: IDENTITY_ANSWER })),
+    });
+    const compared = parse(await formTeamsGetTool.handler({ ...BASE, compare_with: 2 }, CTX));
+    const json = JSON.stringify(compared);
+    expect(json).not.toContain(IDENTITY_ANSWER);
+    expect(json).not.toContain('MISSED-TEAM');
+    // The identity rule's row is a held count, as on the page.
+    expect(compared.comparison.metrics).toContainEqual({
+      key: 'rule_held',
+      question: 'Which describes you?',
+      identity: true,
+      run: 5,
+      other: 4,
+      delta: 1,
+      of: { run: 6, other: 6 },
+    });
+  });
+});
+
+// ─── Release 2: compare two runs ────────────────────────────────────────────
+
+/** compareRuns as the service returns it (plus keys that must not ship). */
+const COMPARISON = {
+  run_number: 3,
+  other_run_number: 2,
+  grouped: true,
+  changes: [
+    {
+      kind: 'option',
+      option_id: 'opt-1',
+      field: 'open',
+      before: 'auto',
+      after: 'closed',
+      text: "'Ledger': Solver decides → Closed",
+    },
+  ],
+  metrics: [
+    { key: 'first_choice', run: 4, other: 3, delta: 1 },
+    { key: 'requests_kept', run: 2, other: 1, delta: 1, of: { run: 3, other: 3 } },
+    { key: 'options_open', run: 2, other: 2, delta: 0, of: { run: 3, other: 3 }, same_set: true },
+    {
+      key: 'rule_held',
+      rule_id: `${IDENTITY_FIELD}:no_one_alone`,
+      identity: true,
+      run: 5,
+      other: 4,
+      delta: 1,
+      of: { run: 6, other: 6 },
+    },
+  ],
+  moved: [
+    {
+      user: { user_id: AVERY, name: 'Avery Quill' },
+      from: { option: { id: 'opt-1', label: 'Ledger' }, team_n: 1, rank: 1, responded: true },
+      to: { option: { id: 'opt-2', label: null }, team_n: 2, rank: 2, responded: true },
+      pin: { pin_id: 'p1', kind: 'on_option', reason: 'Asked to move' },
+      requests: [
+        {
+          kind: 'now_kept',
+          asker: { user_id: BLAIR, name: 'Blair Stone' },
+          asked: { user_id: AVERY, name: 'Avery Quill' },
+        },
+      ],
+      email: 'avery.quill@example.edu',
+    },
+  ],
+  unchanged: 4,
+  joined: 0,
+  left: 1,
+  rule_labels: { [`${IDENTITY_FIELD}:no_one_alone`]: 'Which describes you?' },
+};
+
+describe('form_teams_get — compare_with', () => {
+  const BASE = { classroom: 'org/w26', form_id: FORM_ID, run: 3 };
+
+  beforeEach(() => {
+    mocks.getSet.mockResolvedValue(SET_ROW);
+    mocks.getRun.mockResolvedValue({ ...RUN_ROW, status: 'SOLVED' });
+    mocks.compareRuns.mockResolvedValue(COMPARISON);
+  });
+
+  it('compares the run with another, compactly, and audits the read of people', async () => {
+    const payload = parse(await formTeamsGetTool.handler({ ...BASE, compare_with: 2 }, CTX));
+    expect(mocks.compareRuns).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      teamSetId: 'set-1',
+      runRef: 'run-3',
+      otherRunRef: 2,
+      includePeople: true,
+    });
+    expect(mocks.describeRun).not.toHaveBeenCalled();
+    expect(payload.run).toEqual({ number: 3, status: 'SOLVED' });
+    expect(payload.comparison).toEqual({
+      run: 3,
+      other_run: 2,
+      grouped: true,
+      changes: ["'Ledger': Solver decides → Closed"],
+      metrics: [
+        { key: 'first_choice', run: 4, other: 3, delta: 1 },
+        { key: 'requests_kept', run: 2, other: 1, delta: 1, of: { run: 3, other: 3 } },
+        {
+          key: 'options_open',
+          run: 2,
+          other: 2,
+          delta: 0,
+          of: { run: 3, other: 3 },
+          same_set: true,
+        },
+        {
+          key: 'rule_held',
+          question: 'Which describes you?',
+          identity: true,
+          run: 5,
+          other: 4,
+          delta: 1,
+          of: { run: 6, other: 6 },
+        },
+      ],
+      moved: [
+        {
+          user_id: AVERY,
+          name: 'Avery Quill',
+          from: "'Ledger', team 1, 1st pick",
+          to: 'option opt-2 (no longer on the form), team 2, 2nd pick',
+          pin: { id: 'p1', kind: 'on_option', reason: 'Asked to move' },
+          requests: ["Now kept: Blair Stone's request for Avery Quill"],
+        },
+      ],
+      unchanged: 4,
+      joined: 0,
+      left: 1,
+    });
+    expect(JSON.stringify(payload)).not.toContain('avery.quill@example.edu');
+    expect(mocks.auditCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resource_id: 'run-3',
+        action: 'VIEW',
+        data: expect.objectContaining({ tool: 'form_teams_get', value: 'compare:2' }),
+      })
+    );
+  });
+
+  it('reads movers by team in free mode, and skips names and the audit without people', async () => {
+    mocks.compareRuns.mockResolvedValue({
+      ...COMPARISON,
+      grouped: false,
+      moved: [
+        {
+          user: { user_id: AVERY, name: null },
+          from: { option: null, team_n: 1, rank: null, responded: true },
+          to: { option: null, team_n: 3, rank: null, responded: false },
+          requests: [],
+        },
+      ],
+    });
+    const payload = parse(
+      await formTeamsGetTool.handler({ ...BASE, compare_with: 2, include_people: false }, CTX)
+    );
+    expect(mocks.compareRuns).toHaveBeenCalledWith(
+      expect.objectContaining({ includePeople: false })
+    );
+    // Without people, who moved is a count: no user id, seat, pin or request.
+    expect(payload.comparison).not.toHaveProperty('moved');
+    expect(payload.comparison.moved_count).toBe(1);
+    expect(JSON.stringify(payload)).not.toContain(AVERY);
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('a seat reads "not ranked" for who answered, "no answer" for who did not', async () => {
+    const ledger = { id: 'opt-1', label: 'Ledger' };
+    mocks.compareRuns.mockResolvedValue({
+      ...COMPARISON,
+      moved: [
+        {
+          user: { user_id: AVERY, name: 'Avery Quill' },
+          from: { option: ledger, team_n: 1, rank: null, responded: false },
+          to: { option: ledger, team_n: 2, rank: null, responded: true },
+          requests: [],
+        },
+        {
+          user: { user_id: BLAIR, name: 'Blair Stone' },
+          from: { option: null, team_n: 1, rank: null, responded: false },
+          to: { option: null, team_n: 3, rank: null, responded: false },
+          requests: [],
+        },
+      ],
+    });
+    const payload = parse(await formTeamsGetTool.handler({ ...BASE, compare_with: 2 }, CTX));
+    expect(
+      payload.comparison.moved.map((m: { from: string; to: string }) => [m.from, m.to])
+    ).toEqual([
+      ["'Ledger', team 1, no answer", "'Ledger', team 2, not ranked"],
+      // No option on the seat: the team only, whether they answered or not.
+      ['team 1', 'team 3'],
+    ]);
+  });
+
+  it('passes a free run’s side of projects running as null, with no change and no same-set', async () => {
+    mocks.compareRuns.mockResolvedValue({
+      ...COMPARISON,
+      grouped: false,
+      metrics: [
+        { key: 'options_open', run: 5, other: null, delta: null, of: { run: 8, other: null } },
+      ],
+    });
+    const payload = parse(await formTeamsGetTool.handler({ ...BASE, compare_with: 2 }, CTX));
+    expect(payload.comparison.metrics).toEqual([
+      { key: 'options_open', run: 5, other: null, delta: null, of: { run: 8, other: null } },
+    ]);
+  });
+
+  it('needs run, and takes compare_with or person, not both — before anything is read', async () => {
+    const withoutRun = (await formTeamsGetTool
+      .handler({ classroom: 'org/w26', form_id: FORM_ID, compare_with: 2 }, CTX)
+      .catch(e => e)) as ToolError;
+    expect(withoutRun.kind).toBe('invalid_params');
+    const both = (await formTeamsGetTool
+      .handler({ ...BASE, compare_with: 2, person: AVERY }, CTX)
+      .catch(e => e)) as ToolError;
+    expect(both.kind).toBe('invalid_params');
+    expect(mocks.formFindById).not.toHaveBeenCalled();
+    expect(mocks.compareRuns).not.toHaveBeenCalled();
+    expect(mocks.explainPlacements).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unknown other run with the uniform sentence', async () => {
+    mocks.compareRuns.mockRejectedValue(teamSetError('not_found', 'Run 9 not found.'));
+    const error = (await formTeamsGetTool
+      .handler({ ...BASE, compare_with: 9 }, CTX)
+      .catch(e => e)) as ToolError;
+    expect(error.kind).toBe('not_found');
+    expect(error.message).toBe('Run not found in this classroom');
+  });
+});
+
+// ─── Release 2: why one person is where they are ────────────────────────────
+
+/** explainPlacements' facts for one person (plus a key that must not ship). */
+const WHY_FACTS = {
+  user_id: AVERY,
+  name: 'Avery Quill',
+  responded: true,
+  team: {
+    n: 2,
+    name: 'bids-studio',
+    option: { id: 'opt-2', label: 'Studio' },
+    mates: [{ user_id: BLAIR, name: 'Blair Stone' }],
+  },
+  placement: '2',
+  rank: 2,
+  pitched: [
+    {
+      option: { id: 'opt-3', label: 'Canopy' },
+      status: { status: 'not_running', placed: 0, max: 4 },
+    },
+  ],
+  pins: [
+    {
+      id: 'p1',
+      kind: 'together',
+      people: [
+        { user_id: AVERY, name: 'Avery Quill' },
+        { user_id: BLAIR, name: 'Blair Stone' },
+      ],
+      option: null,
+      reason: 'Lab partners',
+      added_by: { user_id: 'owner-1', name: 'Olive Owner' },
+      added_via: 'mcp',
+      added_at: '2026-09-24T12:00:00.000Z',
+    },
+  ],
+  previous: { run_number: 2, option: { id: 'opt-1', label: 'Ledger' }, team_n: 1 },
+  higher_picks: [
+    {
+      rank: 1,
+      option: { id: 'opt-1', label: 'Ledger' },
+      status: { status: 'full', placed: 4, max: 4 },
+    },
+  ],
+  requests: [
+    {
+      user: { user_id: BLAIR, name: 'Blair Stone' },
+      kept: true,
+      on: { team_n: 2, option: { id: 'opt-2', label: 'Studio' } },
+    },
+    {
+      user: { user_id: 'u-9', name: null },
+      kept: false,
+      on: { team_n: 1, option: { id: 'opt-1', label: 'Ledger' } },
+    },
+  ],
+  notes: [{ field_label: 'Anything else?', text: 'Prefers mornings' }],
+  priority: [
+    {
+      rule_id: `${PRIORITY_FIELD}:priority`,
+      question: 'What matters more to you?',
+      answer: 'The project',
+      favored: 'Rank the projects',
+      other: 'Partner',
+      up: 1.5,
+      down: 0.5,
+    },
+  ],
+  email: 'avery.quill@example.edu',
+};
+
+describe('form_teams_get — person (why this placement)', () => {
+  const BASE = { classroom: 'org/w26', form_id: FORM_ID, run: 3 };
+
+  beforeEach(() => {
+    mocks.getSet.mockResolvedValue(SET_ROW);
+    mocks.getRun.mockResolvedValue({ ...RUN_ROW, status: 'SOLVED' });
+    mocks.explainPlacements.mockResolvedValue([WHY_FACTS]);
+  });
+
+  it('returns the facts behind one placement, allow-listed, and audits the read', async () => {
+    const payload = parse(await formTeamsGetTool.handler({ ...BASE, person: AVERY }, CTX));
+    expect(mocks.explainPlacements).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      teamSetId: 'set-1',
+      runRef: 'run-3',
+      userIds: [AVERY],
+    });
+    expect(mocks.describeRun).not.toHaveBeenCalled();
+    expect(payload.run).toEqual({ number: 3, status: 'SOLVED' });
+    expect(payload.why).toEqual({
+      user_id: AVERY,
+      name: 'Avery Quill',
+      responded: true,
+      team: { n: 2, name: 'bids-studio', option: "'Studio'", mates: ['Blair Stone'] },
+      placement: '2',
+      rank: 2,
+      pitched: ["'Canopy': not running"],
+      pins: [
+        {
+          id: 'p1',
+          kind: 'together',
+          people: ['Avery Quill', 'Blair Stone'],
+          reason: 'Lab partners',
+        },
+      ],
+      previous: { run: 2, option: "'Ledger'", team: 1 },
+      higher_picks: ["1st 'Ledger': full 4 of 4"],
+      requests: ['Blair Stone: kept', "u-9: not kept (on team 1, 'Ledger')"],
+      notes: [{ field_label: 'Anything else?', text: 'Prefers mornings' }],
+      priority: [
+        'Answered "The project" to "What matters more to you?": "Rank the projects" counts ×1.5 and "Partner" ×0.5 for this student.',
+      ],
+    });
+    expect(JSON.stringify(payload)).not.toContain('avery.quill@example.edu');
+    expect(mocks.auditCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resource_id: 'run-3',
+        action: 'VIEW',
+        data: expect.objectContaining({ tool: 'form_teams_get', value: `person:${AVERY}` }),
+      })
+    );
+  });
+
+  it('says so for a non-respondent seated with the others, and an answer that changes nothing', async () => {
+    mocks.explainPlacements.mockResolvedValue([
+      {
+        ...WHY_FACTS,
+        responded: false,
+        non_respondents_mode: 'group',
+        grouped: true,
+        rank: null,
+        placement: 'no_answer',
+        priority: [
+          {
+            ...WHY_FACTS.priority[0],
+            answer: 'Both equally',
+            favored: null,
+            other: null,
+            up: 1,
+            down: 1,
+          },
+        ],
+      },
+    ]);
+    const { why } = parse(await formTeamsGetTool.handler({ ...BASE, person: AVERY }, CTX));
+    expect(why).toMatchObject({ responded: false, non_respondents_mode: 'group', grouped: true });
+    expect(why.priority).toEqual([
+      'Answered "Both equally" to "What matters more to you?": no change to the weights.',
+    ]);
+  });
+
+  it('passes a placement the service does not show as null, never as no answer', async () => {
+    // A run grouped by a question that is an identity question now.
+    mocks.explainPlacements.mockResolvedValue([
+      {
+        ...WHY_FACTS,
+        team: { ...WHY_FACTS.team, option: null },
+        placement: null,
+        rank: null,
+        higher_picks: [],
+        previous: { ...WHY_FACTS.previous, option: null },
+        requests: [],
+      },
+    ]);
+    const { why } = parse(await formTeamsGetTool.handler({ ...BASE, person: AVERY }, CTX));
+    expect(why).toMatchObject({
+      responded: true,
+      team: { n: 2, option: null },
+      placement: null,
+      rank: null,
+      higher_picks: [],
+      previous: { run: 2, option: null, team: 1 },
+    });
+    expect(why).not.toHaveProperty('non_respondents_mode');
+    expect(JSON.stringify(why)).not.toContain('no_answer');
+    expect(JSON.stringify(why)).not.toContain('Studio');
+  });
+
+  it('refuses a run that is not solved, and a person who is not in it', async () => {
+    mocks.getRun.mockResolvedValueOnce({ ...RUN_ROW, status: 'INFEASIBLE' });
+    const unsolved = (await formTeamsGetTool
+      .handler({ ...BASE, person: AVERY }, CTX)
+      .catch(e => e)) as ToolError;
+    expect(unsolved).toMatchObject({ kind: 'invalid_params', code: 'run_not_solved' });
+    expect(mocks.explainPlacements).not.toHaveBeenCalled();
+
+    mocks.explainPlacements.mockResolvedValueOnce([]);
+    const absent = (await formTeamsGetTool
+      .handler({ ...BASE, person: BLAIR }, CTX)
+      .catch(e => e)) as ToolError;
+    expect(absent).toMatchObject({ kind: 'invalid_params', code: 'person_not_in_run' });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('takes only a user id on the wire', () => {
+    const person = formTeamsGetTool.inputSchema.person as z.ZodTypeAny;
+    expect(person.safeParse(AVERY).success).toBe(true);
+    expect(person.safeParse('Avery Quill').success).toBe(false);
+  });
+});
+
+// ─── Release 2: the setup view ──────────────────────────────────────────────
+
+describe('form_teams_get — the release-2 setup view', () => {
+  const BASE = { classroom: 'org/w26', form_id: FORM_ID };
+  const LOCKED_STATE = {
+    status: 'DONE',
+    run_number: 3,
+    attempt: 1,
+    total: 1,
+    done: 1,
+    failed: [],
+    teams: [{ team_id: 't-1', name: 'bids-01' }],
+  };
+
+  it('shows the lock, and the changes since the last run without anyone’s name', async () => {
+    mocks.listForForm.mockResolvedValue([
+      {
+        ...SUMMARY,
+        status: 'created',
+        created: { run_number: 3, teams_created: 1, finished_at: '2026-09-24T12:05:00.000Z' },
+        created_run_id: 'run-3',
+        create_state: LOCKED_STATE,
+      },
+    ]);
+    mocks.getSet.mockResolvedValue({
+      ...SET_ROW,
+      status: 'created',
+      locked: true,
+      created_run_id: 'run-3',
+      create_state: LOCKED_STATE,
+    });
+    mocks.listRuns.mockResolvedValue([
+      {
+        id: 'run-3',
+        number: 3,
+        status: 'SOLVED',
+        created_at: '2026-09-24T12:00:00.000Z',
+        finished_at: '2026-09-24T12:00:02.000Z',
+        error: null,
+        metrics: METRICS,
+        stale: false,
+      },
+    ]);
+    mocks.changesSinceRun.mockResolvedValue({
+      run_number: 3,
+      changes: [
+        {
+          kind: 'pin',
+          pin_id: 'p4',
+          change: 'added',
+          pin: {
+            id: 'p4',
+            kind: 'on_option',
+            people: [{ user_id: AVERY, name: 'Avery Quill' }],
+            option: { id: 'opt-1', label: 'Ledger' },
+            reason: null,
+            added_by: null,
+            added_via: null,
+            added_at: null,
+          },
+          text: "Pin added: Avery Quill → 'Ledger'",
+        },
+        { kind: 'fairness', before: 50, after: 70, text: 'Fairness: 50 → 70' },
+      ],
+    });
+    const payload = parse(await formTeamsGetTool.handler(BASE, CTX));
+    // The mode a run would use now is read once and handed to the diff.
+    expect(mocks.changesSinceRun).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      teamSetId: 'set-1',
+      nonRespondents: 'include',
+    });
+    expect(payload.set).toMatchObject({ status: 'created', locked: true, create_status: 'done' });
+    expect(payload.team_sets[0]).toMatchObject({ status: 'created', create_status: 'done' });
+    expect(payload.changes_since_last_run).toEqual({
+      run: 3,
+      changes: ["Pin p4 added: on_option 'Ledger', 1 person", 'Fairness: 50 → 70'],
+    });
+    // This view is not audited, so it names no one.
+    expect(JSON.stringify(payload)).not.toContain('Avery Quill');
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    expect(payload.next).toMatch(/locked/);
+    expect(payload.next).toMatch(/copy_from and new_set: true/);
+  });
+
+  it('reads no changes for a set that has never run', async () => {
+    mocks.listForForm.mockResolvedValue([{ ...SUMMARY, run_count: 0, latest_run: null }]);
+    mocks.getSet.mockResolvedValue(SET_ROW);
+    const payload = parse(await formTeamsGetTool.handler(BASE, CTX));
+    expect(mocks.changesSinceRun).not.toHaveBeenCalled();
+    expect(payload).not.toHaveProperty('changes_since_last_run');
+    expect(payload.set).toMatchObject({ status: 'setting_up', locked: false });
+    expect(payload).not.toHaveProperty('next');
+  });
+});
+
+// ─── Fix wave: names, audits, people-free views, counts ─────────────────────
+
+describe('team-set tools — who a response names, and what it says', () => {
+  const BASE = { classroom: 'org/w26', form_id: FORM_ID };
+
+  it('maps name_taken to a sentence naming the set, with the name', async () => {
+    mocks.saveConfig.mockRejectedValue(
+      teamSetError('name_taken', 'A team set named "pairs" already exists on this form.', {
+        name: 'pairs',
+      })
+    );
+    const error = (await formTeamsRunTool
+      .handler({ ...BASE, name: 'pairs' }, CTX)
+      .catch(e => e)) as ToolError;
+    expect(error.kind).toBe('invalid_params');
+    expect(error.code).toBe('name_taken');
+    expect(error.message).toBe(
+      'This form already has a team set named "pairs"; pass team_set: "pairs" to edit it, or choose another name'
+    );
+    expect(error.data).toEqual({ name: 'pairs' });
+  });
+
+  it('forwards where each config problem is, aligned with the problems', async () => {
+    mocks.getSet.mockResolvedValue(SET_ROW);
+    mocks.saveConfig.mockRejectedValue(
+      teamSetError('invalid_config', 'x', {
+        problems: [
+          'A pin places people on options, but teams are not grouped by a question.',
+          'Two pins have the same id.',
+        ],
+        paths: ['pins.p1', ''],
+      })
+    );
+    const error = (await formTeamsRunTool
+      .handler({ ...BASE, patch: { fairness: 10 } }, CTX)
+      .catch(e => e)) as ToolError;
+    expect(error.code).toBe('invalid_config');
+    expect(error.data).toEqual({
+      problems: [
+        'A pin places people on options, but teams are not grouped by a question.',
+        'Two pins have the same id.',
+      ],
+      paths: ['pins.p1', ''],
+    });
+  });
+
+  it('refuses to compare a run that is not solved, in words about comparing', async () => {
+    mocks.getSet.mockResolvedValue(SET_ROW);
+    mocks.getRun.mockResolvedValue({ ...RUN_ROW, status: 'SOLVED' });
+    mocks.compareRuns.mockRejectedValue(
+      teamSetError('run_not_solved', 'Run 2 is INFEASIBLE, not SOLVED.', {
+        run_number: 2,
+        status: 'INFEASIBLE',
+      })
+    );
+    const error = (await formTeamsGetTool
+      .handler({ ...BASE, run: 3, compare_with: 2 }, CTX)
+      .catch(e => e)) as ToolError;
+    expect(error.kind).toBe('invalid_params');
+    expect(error.code).toBe('run_not_solved');
+    expect(error.message).toBe('Run 2 is INFEASIBLE; only SOLVED runs can be compared');
+    expect(error.data).toEqual({ run_number: 2, status: 'INFEASIBLE' });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('carries no person in a run view without people', async () => {
+    mocks.getSet.mockResolvedValue(SET_ROW);
+    mocks.getRun.mockResolvedValue({ ...RUN_ROW, status: 'INFEASIBLE' });
+    mocks.describeRun.mockResolvedValue({
+      ...RUN_VIEW,
+      status: 'INFEASIBLE',
+      teams: [],
+      issues: [
+        {
+          level: 'warning',
+          code: 'no_response',
+          message: '2 people haven’t answered',
+          user_ids: [AVERY, BLAIR],
+          names: ['Avery Quill', 'Blair Stone'],
+        },
+      ],
+      core: [
+        {
+          src: 'f:together@0+1',
+          kind: 'rule',
+          label: 'Who? (together, must)',
+          user_ids: [AVERY, BLAIR],
+          people: [
+            { user_id: AVERY, name: 'Avery Quill' },
+            { user_id: BLAIR, name: 'Blair Stone' },
+          ],
+          link: { tab: 'questions', field_id: 'f' },
+        },
+        {
+          src: 'pin:p1',
+          kind: 'pin',
+          label: 'Pin: together — 2 students',
+          user_ids: [AVERY, BLAIR],
+          link: { tab: 'pins', pin_id: 'p1' },
+        },
+      ],
+    });
+    const payload = parse(
+      await formTeamsGetTool.handler({ ...BASE, run: 3, include_people: false }, CTX)
+    );
+    expect(payload.run.issues[0]).toEqual({
+      level: 'warning',
+      code: 'no_response',
+      message: '2 people haven’t answered',
+      hint: expect.any(String),
+    });
+    expect(
+      payload.run.core.map((item: Record<string, unknown>) => Object.keys(item).sort())
+    ).toEqual([
+      ['field_id', 'label', 'src'],
+      ['label', 'pin_id', 'src'],
+    ]);
+    const json = JSON.stringify(payload);
+    expect(json).not.toContain(AVERY);
+    expect(json).not.toContain('Avery Quill');
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+
+    // With people, the same view names them — and is audited.
+    const named = parse(await formTeamsGetTool.handler({ ...BASE, run: 3 }, CTX));
+    expect(named.run.core[0].people).toHaveLength(2);
+    expect(named.run.issues[0].names).toEqual(['Avery Quill', 'Blair Stone']);
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('audits the finished run a form_teams_run call returns with its members', async () => {
+    mocks.getSet.mockResolvedValue(SET_ROW);
+    await formTeamsRunTool.handler({ ...BASE, wait_s: 1 }, CTX);
+    expect(mocks.auditCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resource_id: 'run-3',
+        action: 'VIEW',
+        data: expect.objectContaining({ tool: 'form_teams_run', run_number: 3 }),
+      })
+    );
+  });
+
+  it('audits a check and a refused start only when their issues name people', async () => {
+    mocks.getSet.mockResolvedValue(SET_ROW);
+    const named = {
+      level: 'warning',
+      code: 'no_response',
+      message: '1 person hasn’t answered',
+      user_ids: [AVERY],
+      names: ['Avery Quill'],
+    };
+    mocks.checkPatch.mockResolvedValue({
+      set: { id: 'set-1', name: 'project-bids-teams' },
+      name: 'project-bids-teams',
+      config: CONFIG,
+      notes: [],
+      issues: [named],
+    });
+    await formTeamsRunTool.handler({ ...BASE, check: true }, CTX);
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.auditCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resource_id: 'set-1',
+        action: 'VIEW',
+        data: expect.objectContaining({
+          tool: 'form_teams_run',
+          value: expect.stringMatching(/^check:/),
+        }),
+      })
+    );
+
+    mocks.auditCreate.mockClear();
+    mocks.startRun.mockResolvedValue({
+      run: null,
+      issues: [{ level: 'error', code: 'capacity', message: 'Too many people' }, named],
+    });
+    await formTeamsRunTool.handler(BASE, CTX);
+    const refusedRow = expect.objectContaining({
+      resource_id: 'set-1',
+      action: 'VIEW',
+      data: expect.objectContaining({
+        tool: 'form_teams_run',
+        value: expect.stringMatching(/^checks:[0-9a-f]{12}$/),
+      }),
+    });
+    expect(mocks.auditCreate).toHaveBeenCalledWith(refusedRow);
+    // Refused starts of different patches are keyed apart, so neither row is merged away.
+    const valueOf = () =>
+      (mocks.auditCreate.mock.calls.at(-1)![0] as { data: { value: string } }).data.value;
+    const first = valueOf();
+    await formTeamsRunTool.handler({ ...BASE, patch: { fairness: 70 } }, CTX);
+    expect(valueOf()).toMatch(/^checks:/);
+    expect(valueOf()).not.toBe(first);
+
+    // Nobody named: nothing to audit.
+    mocks.auditCreate.mockClear();
+    mocks.checkPatch.mockResolvedValue({
+      set: { id: 'set-1', name: 'project-bids-teams' },
+      name: 'project-bids-teams',
+      config: CONFIG,
+      notes: [],
+      issues: [{ level: 'error', code: 'capacity', message: 'Too many people' }],
+    });
+    await formTeamsRunTool.handler({ ...BASE, check: true }, CTX);
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('says a checked set is locked, and that the patch can’t be saved', async () => {
+    mocks.getSet.mockResolvedValue({ ...SET_ROW, status: 'created', locked: true });
+    const payload = parse(
+      await formTeamsRunTool.handler({ ...BASE, check: true, patch: { fairness: 10 } }, CTX)
+    );
+    expect(payload).toMatchObject({ checked: true, saved: false, locked: true });
+    expect(payload.next).toMatch(/This set is locked/);
+    expect(payload.next).toMatch(/copy_from and new_set: true/);
+    expect(mocks.saveConfig).not.toHaveBeenCalled();
+  });
+
+  it('shows what Must means for each rule in the setup view', async () => {
+    mocks.listForForm.mockResolvedValue([SUMMARY]);
+    const config = {
+      ...CONFIG,
+      rules: [{ field_id: 'f-rank', job: 'rank', strength: 'prefer', weight: 5, params: {} }],
+    };
+    mocks.getSet.mockResolvedValue({ ...SET_ROW, config });
+    mocks.mustLabels.mockResolvedValue({
+      'f-rank:rank': 'Everyone gets one of the options they ranked',
+    });
+    const payload = parse(await formTeamsGetTool.handler(BASE, CTX));
+    expect(mocks.mustLabels).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      formId: FORM_ID,
+      config,
+    });
+    expect(payload.set.must_labels).toEqual({
+      'f-rank:rank': 'Everyone gets one of the options they ranked',
+    });
+  });
+
+  it('reports each made team’s members and the teams a retry renamed in create_state', async () => {
+    mocks.listForForm.mockResolvedValue([SUMMARY]);
+    mocks.getSet.mockResolvedValue({
+      ...SET_ROW,
+      created_run_id: 'run-3',
+      status: 'creating',
+      locked: true,
+      create_state: {
+        status: 'RUNNING',
+        run_id: 'run-3',
+        run_number: 3,
+        total: 2,
+        done: 1,
+        failed: [],
+        teams: [{ team_id: 't-1', name: 'pb-01', n: 1, members_added: 2 }],
+        names: ['pb-01', 'pb-02-2'],
+        sizes: [3, 2],
+        renamed: [{ n: 2, from: 'pb-02', to: 'pb-02-2' }],
+        claimed_by: 'owner-1',
+        started_at: '2026-09-24T12:00:00.000Z',
+        finished_at: null,
+      },
+    });
+    const payload = parse(await formTeamsGetTool.handler(BASE, CTX));
+    expect(payload.set.create_state.teams).toEqual([
+      { team_id: 't-1', name: 'pb-01', n: 1, members_added: 2, size: 3 },
+    ]);
+    expect(payload.set.create_state.renamed).toEqual([{ n: 2, from: 'pb-02', to: 'pb-02-2' }]);
+  });
+});
+
+// ─── W9: people only where audited, one code per fact ───────────────────────
+
+describe('team-set tools — people only in audited reads', () => {
+  const BASE = { classroom: 'org/w26', form_id: FORM_ID };
+
+  /** A create that failed partway: one team made, two members not added. */
+  const FAILED_STATE = {
+    status: 'FAILED',
+    run_id: 'run-3',
+    run_number: 3,
+    total: 2,
+    done: 1,
+    failed: [
+      {
+        team: 'pb-01',
+        reason: 'members_failed',
+        members: [
+          { user_id: AVERY, login: 'aquill', reason: 'github_user_not_found' },
+          { user_id: BLAIR, login: null, reason: 'no_login' },
+        ],
+      },
+      { team: 'pb-02', reason: 'provider_error' },
+    ],
+    teams: [{ team_id: 't-1', name: 'pb-01', n: 1, members_added: 1 }],
+    names: ['pb-01', 'pb-02'],
+    sizes: [3, 2],
+    claimed_by: 'owner-1',
+    started_at: '2026-09-24T12:00:00.000Z',
+    finished_at: '2026-09-24T12:01:00.000Z',
+  };
+  const FAILED_SET = {
+    ...SET_ROW,
+    created_run_id: 'run-3',
+    status: 'create_failed',
+    locked: true,
+    create_state: FAILED_STATE,
+  };
+
+  it('counts the members a create couldn’t add in the setup view, without naming them', async () => {
+    mocks.listForForm.mockResolvedValue([{ ...SUMMARY, created_run_id: 'run-3' }]);
+    mocks.getSet.mockResolvedValue(FAILED_SET);
+    const payload = parse(await formTeamsGetTool.handler(BASE, CTX));
+    expect(payload.set.create_state.failed).toEqual([
+      { team: 'pb-01', reason: 'members_failed', members_failed: 2 },
+      { team: 'pb-02', reason: 'provider_error' },
+    ]);
+    const json = JSON.stringify(payload);
+    expect(json).not.toContain(AVERY);
+    expect(json).not.toContain('aquill');
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('names them in a run read with people (audited), and counts them without', async () => {
+    mocks.getSet.mockResolvedValue(FAILED_SET);
+    mocks.getRun.mockResolvedValue({ ...RUN_ROW, status: 'SOLVED' });
+    const named = parse(await formTeamsGetTool.handler({ ...BASE, run: 3 }, CTX));
+    expect(named.create_state.failed[0].members).toEqual([
+      { user_id: AVERY, login: 'aquill', reason: 'github_user_not_found' },
+      { user_id: BLAIR, login: null, reason: 'no_login' },
+    ]);
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+
+    mocks.auditCreate.mockClear();
+    const bare = parse(
+      await formTeamsGetTool.handler({ ...BASE, run: 3, include_people: false }, CTX)
+    );
+    expect(bare.create_state.failed[0]).toEqual({
+      team: 'pb-01',
+      reason: 'members_failed',
+      members_failed: 2,
+    });
+    expect(JSON.stringify(bare)).not.toContain(AVERY);
+    expect(JSON.stringify(bare)).not.toContain('aquill');
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('says who closed an option, and who is paired with whom, only in a view with people', async () => {
+    mocks.getSet.mockResolvedValue(SET_ROW);
+    mocks.getRun.mockResolvedValue({ ...RUN_ROW, status: 'INFEASIBLE' });
+    mocks.describeRun.mockResolvedValue({
+      ...RUN_VIEW,
+      status: 'INFEASIBLE',
+      teams: [],
+      core: [
+        {
+          src: 'f:together@0+1',
+          kind: 'rule',
+          label: 'Who? (together, must)',
+          user_ids: [AVERY, BLAIR],
+          people: [
+            { user_id: AVERY, name: 'Avery Quill' },
+            { user_id: BLAIR, name: 'Blair Stone' },
+          ],
+          pairs: [[0, 1]],
+          link: { tab: 'questions', field_id: 'f' },
+        },
+        {
+          src: 'option:opt-1',
+          kind: 'option',
+          label: "'Ledger' is closed",
+          option: {
+            id: 'opt-1',
+            label: 'Ledger',
+            open: 'closed',
+            note: null,
+            // No name resolved: the payload would fall back to the user id.
+            closed: { since_run: 2, by: { user_id: 'owner-1', name: null }, via: 'page' },
+          },
+          link: { tab: 'projects', option_id: 'opt-1' },
+        },
+      ],
+    });
+    const named = parse(await formTeamsGetTool.handler({ ...BASE, run: 3 }, CTX));
+    expect(named.run.core[0].pairs).toEqual([[0, 1]]);
+    expect(named.run.core[1].option.closed).toEqual({ since_run: 2, by: 'owner-1', via: 'page' });
+
+    const bare = parse(
+      await formTeamsGetTool.handler({ ...BASE, run: 3, include_people: false }, CTX)
+    );
+    expect(bare.run.core[0]).not.toHaveProperty('pairs');
+    expect(bare.run.core[1].option.closed).toEqual({ since_run: 2, via: 'page' });
+    expect(JSON.stringify(bare)).not.toContain('owner-1');
+  });
+
+  it('never forwards a person on the issues an error carries', async () => {
+    mocks.getSet.mockResolvedValue(SET_ROW);
+    mocks.startRun.mockRejectedValueOnce(
+      teamSetError('checks_failed', 'Blocked.', {
+        issues: [
+          {
+            level: 'error',
+            code: 'no_response',
+            message: '1 person hasn’t answered',
+            user_ids: [AVERY],
+            names: ['Avery Quill'],
+          },
+        ],
+      })
+    );
+    const error = (await formTeamsRunTool.handler(BASE, CTX).catch(e => e)) as ToolError;
+    expect(error.code).toBe('checks_failed');
+    expect((error.data as { issues: unknown[] }).issues).toEqual([
+      {
+        level: 'error',
+        code: 'no_response',
+        message: '1 person hasn’t answered',
+        hint: expect.any(String),
+      },
+    ]);
+    expect(JSON.stringify(error.data)).not.toContain(AVERY);
+  });
+});
+
+describe('team-set tools — how people who didn’t answer are placed', () => {
+  const BASE = { classroom: 'org/w26', form_id: FORM_ID };
+
+  it('shows the setting and the mode a run would use now in the setup view', async () => {
+    mocks.listForForm.mockResolvedValue([SUMMARY]);
+    mocks.getSet.mockResolvedValue(SET_ROW);
+    mocks.nonRespondentsFor.mockResolvedValue({ setting: null, resolved: 'include' });
+    const payload = parse(await formTeamsGetTool.handler(BASE, CTX));
+    expect(mocks.nonRespondentsFor).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      teamSetId: 'set-1',
+    });
+    expect(payload.set.non_respondents).toEqual({ setting: null, resolved: 'include' });
+    expect(payload.patch_help.other).toMatch(/non_respondents\.resolved/);
+  });
+
+  it('never echoes the retired allow_one_larger', async () => {
+    // The service drops it on every read; the tool drops it too.
+    const retired = { ...CONFIG, team_size: { min: 3, max: 4, allow_one_larger: true } };
+    mocks.listForForm.mockResolvedValue([SUMMARY]);
+    mocks.getSet.mockResolvedValue({ ...SET_ROW, config: retired });
+    const payload = parse(await formTeamsGetTool.handler(BASE, CTX));
+    expect(payload.set.config.team_size).toEqual({ min: 3, max: 4 });
+    expect(JSON.stringify(payload)).not.toContain('allow_one_larger');
+    mocks.checkPatch.mockResolvedValueOnce({
+      set: null,
+      name: 'x',
+      config: retired,
+      notes: [],
+      issues: [],
+    });
+    const checked = parse(await formTeamsRunTool.handler({ ...BASE, check: true }, CTX));
+    expect(checked.config.team_size).toEqual({ min: 3, max: 4 });
+  });
+
+  it('gives a check the would-be mode, closed vocabulary only', async () => {
+    mocks.checkPatch.mockResolvedValueOnce({
+      set: null,
+      name: 'x',
+      config: CONFIG,
+      notes: [],
+      issues: [],
+      non_respondents: { setting: null, resolved: 'include' },
+    });
+    const checked = parse(await formTeamsRunTool.handler({ ...BASE, check: true }, CTX));
+    expect(checked.non_respondents).toEqual({ setting: null, resolved: 'include' });
+
+    mocks.checkPatch.mockResolvedValueOnce({
+      set: null,
+      name: 'x',
+      config: CONFIG,
+      notes: [],
+      issues: [],
+      non_respondents: { setting: 'sideways', resolved: 'include' },
+    });
+    const odd = parse(await formTeamsRunTool.handler({ ...BASE, check: true }, CTX));
+    expect(odd).not.toHaveProperty('non_respondents');
+  });
+
+  it('relays what Discard left out of the run’s setup', async () => {
+    mocks.getSet.mockResolvedValue(SET_ROW);
+    mocks.revertToRun.mockResolvedValue({
+      ...SET_ROW,
+      notes: ['Left out of run 2’s setup: 1 pin.'],
+    });
+    const payload = parse(await formTeamsRunTool.handler({ ...BASE, revert_to_run: 2 }, CTX));
+    expect(payload.notes).toEqual(['Left out of run 2’s setup: 1 pin.']);
+    expect(payload.next).toMatch(/except what notes lists/);
+  });
+
+  it('maps set_busy to its own sentence', async () => {
+    mocks.getSet.mockResolvedValue(SET_ROW);
+    mocks.saveConfig.mockRejectedValueOnce(
+      teamSetError('set_busy', 'Another save or run held this set; this change was not saved.')
+    );
+    const error = (await formTeamsRunTool
+      .handler({ ...BASE, patch: { fairness: 60 } }, CTX)
+      .catch(e => e)) as ToolError;
+    expect(error).toBeInstanceOf(ToolError);
+    expect(error.code).toBe('set_busy');
+    expect(error.kind).toBe('invalid_params');
+    expect(error.message).toMatch(/not saved/);
+    expect(error.message).toMatch(/same arguments/);
+  });
+
+  it('asks for the same call again when a revert was the busy part (it has no patch)', async () => {
+    mocks.getSet.mockResolvedValue(SET_ROW);
+    mocks.revertToRun.mockRejectedValueOnce(
+      teamSetError('set_busy', 'Another save or run held this set; this change was not saved.')
+    );
+    const error = (await formTeamsRunTool
+      .handler({ ...BASE, revert_to_run: 2 }, CTX)
+      .catch(e => e)) as ToolError;
+    expect(error).toBeInstanceOf(ToolError);
+    expect(error.code).toBe('set_busy');
+    expect(error.message).toMatch(/not saved; call again with the same arguments/);
+    expect(error.message).not.toMatch(/patch/);
+  });
+
+  it('says no run was started when the run’s start was the busy part', async () => {
+    mocks.getSet.mockResolvedValue(SET_ROW);
+    mocks.startRun.mockRejectedValueOnce(
+      teamSetError('set_busy', 'Another save or run held this set; no run was started.', {
+        action: 'run',
+      })
+    );
+    const error = (await formTeamsRunTool
+      .handler({ ...BASE, patch: { fairness: 60 } }, CTX)
+      .catch(e => e)) as ToolError;
+    expect(error).toBeInstanceOf(ToolError);
+    expect(error.code).toBe('set_busy');
+    expect(error.message).toMatch(/no run was started \(a patch, if any, was saved\)/);
+  });
+
+  it('points the group hints at a second team per option, and at Spread', async () => {
+    const hintFor = async (code: string) => {
+      mocks.checkPatch.mockResolvedValueOnce({
+        set: null,
+        name: 'x',
+        config: CONFIG,
+        notes: [],
+        issues: [{ level: 'error', code, message: 'fact' }],
+      });
+      const payload = parse(await formTeamsRunTool.handler({ ...BASE, check: true }, CTX));
+      return payload.issues[0].hint as string;
+    };
+    expect(await hintFor('group_no_option')).toMatch(/grouping\.teams_per_option/);
+    expect(await hintFor('capacity')).toMatch(/Spread \(non_respondents: include\)/);
   });
 });

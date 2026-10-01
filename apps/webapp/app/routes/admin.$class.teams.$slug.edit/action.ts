@@ -35,6 +35,9 @@ const errorMessage = (error: TeamServiceError, slug: string) => {
       return 'No user with that login.';
     case 'tag_not_found':
       return 'That tag is not on this team.';
+    // Only removeTeamTag raises this here: a team keeps at least one tag.
+    case 'tag_required':
+      return `A team needs at least one tag, so the last tag on @${slug} can't be removed.`;
     default:
       return 'Could not complete this action.';
   }

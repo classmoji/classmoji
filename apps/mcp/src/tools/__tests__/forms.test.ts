@@ -48,12 +48,21 @@ const mocks = vi.hoisted(() => ({
   responseUpdateStaff: vi.fn(),
   responseCreate: vi.fn(),
   withoutTargetEmails: vi.fn(),
+  identityMaskForForm: vi.fn(),
+  responseNames: vi.fn(),
   auditCreate: vi.fn(),
 }));
 
 vi.mock('@classmoji/auth/server', () => ({
   assertProTier: (...a: unknown[]) => mocks.assertProTier(...a),
 }));
+
+// The identity tests run the REAL `formIdentity.service` (imported by path
+// below, since the barrel is mocked); its database reads go through this
+// schema-validating stub instead of a database.
+vi.mock('@classmoji/database', async () =>
+  (await import('../../__tests__/prismaSchemaStub.ts')).databaseModuleMock()
+);
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
@@ -89,6 +98,10 @@ vi.mock('@classmoji/services', () => ({
      * suite exists to run without one.
      */
     formTeam: { withoutTargetEmails: (...a: unknown[]) => mocks.withoutTargetEmails(...a) },
+    formIdentity: {
+      identityMaskForForm: (...a: unknown[]) => mocks.identityMaskForForm(...a),
+      responseNames: (...a: unknown[]) => mocks.responseNames(...a),
+    },
   },
 }));
 
@@ -104,6 +117,10 @@ const {
   formResponseCreateTool,
   formResponseUpdateTool,
 } = await import('../forms.ts');
+const { prismaCallsFor, resetPrismaStub, setPrismaRows } =
+  await import('../../__tests__/prismaSchemaStub.ts');
+const realFormIdentity =
+  await import('../../../../../packages/services/src/classmoji/formIdentity.service.ts');
 
 const ALL_TOOLS: ToolDefinition<never>[] = [
   listFormsTool,
@@ -202,6 +219,11 @@ beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.assertProTier.mockResolvedValue(undefined);
   mocks.auditCreate.mockResolvedValue(undefined);
+  // The shared fixtures have no identity questions. The identity tests below
+  // swap in the real service.
+  mocks.identityMaskForForm.mockResolvedValue(new Set());
+  // The real name rule; with no mask it keeps every stored name.
+  mocks.responseNames.mockImplementation(realFormIdentity.responseNames);
   mocks.formListRevisions.mockResolvedValue([]);
   mocks.responseStatusLabels.mockResolvedValue([]);
   // Stands in for the real projection: strips `email` from every target and
@@ -324,6 +346,40 @@ describe('forms tool definitions', () => {
     })).filter(tool => tool.bytes > 1500);
     expect(oversize).toEqual([]);
   });
+
+  /**
+   * The field-list documentation is a parameter description, not a tool
+   * description, but it ships in the same manifest (twice: form_create and
+   * form_update), so it is held to the same budget.
+   */
+  it('documents identity_question, exclusive and options_from on the field list', () => {
+    for (const tool of [formCreateTool, formUpdateTool]) {
+      const text = (tool.inputSchema.fields as z.ZodTypeAny).description ?? '';
+      expect(text).toContain('identity_question');
+      expect(text).toContain('exclusive');
+      expect(text).toContain('options_from');
+      // The contract's normalizations an author would otherwise trip on.
+      expect(text).toContain('replacing any options sent');
+      expect(text).toContain('identity_question: false and exclusive: false are dropped');
+      expect(new TextEncoder().encode(text).length).toBeLessThan(1500);
+    }
+    expect(formGetTool.description).toContain('identity_question');
+  });
+
+  it('offers include_identity_answers on form_response_get only, as an optional boolean', () => {
+    const flag = formResponseGetTool.inputSchema.include_identity_answers as z.ZodTypeAny;
+    expect(flag.safeParse(undefined).success).toBe(true);
+    expect(flag.safeParse(true).success).toBe(true);
+    expect(flag.safeParse('yes').success).toBe(false);
+    expect(formResponseGetTool.description).toContain('include_identity_answers');
+    // One response at a time: the list and the update have no way to ask.
+    for (const tool of [listFormResponsesTool, formResponseUpdateTool]) {
+      expect(tool.inputSchema, tool.name).not.toHaveProperty('include_identity_answers');
+      expect(tool.description, tool.name).not.toContain('include_identity_answers');
+      expect(tool.description, tool.name).toContain('identity questions');
+    }
+    expect(listFormResponsesTool.description).toContain('always left out');
+  });
 });
 
 // ─── The Pro gate (in-handler, on reads too) ────────────────────────────────
@@ -359,6 +415,7 @@ describe('Pro gating', () => {
       expect(mocks.formDelete).not.toHaveBeenCalled();
       expect(mocks.responseUpdateStaff).not.toHaveBeenCalled();
       expect(mocks.responseCreate).not.toHaveBeenCalled();
+      expect(mocks.identityMaskForForm).not.toHaveBeenCalled();
     }
   });
 
@@ -414,6 +471,8 @@ describe('cross-classroom scoping (S1)', () => {
       expect(mocks.formDelete).not.toHaveBeenCalled();
       expect(mocks.responseUpdateStaff).not.toHaveBeenCalled();
       expect(mocks.responseCreate).not.toHaveBeenCalled();
+      // The unauthorized mask service is never handed a foreign form's id.
+      expect(mocks.identityMaskForForm).not.toHaveBeenCalled();
     }
   });
 
@@ -1191,6 +1250,430 @@ describe('form_response_update', () => {
     expect(audit.data.tool).toBe('forms.responses.staff_update');
     expect(audit.data.mcp_tool).toBe('form_response_update');
     expect(audit.data.fields).toEqual(['staff_status', 'staff_note']);
+  });
+});
+
+// ─── Identity questions ─────────────────────────────────────────────────────
+
+/**
+ * Answers to a field flagged `identity_question: true` stay out of every
+ * response payload unless the caller asks, and the ask is audited. The tools
+ * take the mask from the shared `formIdentity.identityMaskForForm`, the one the
+ * pages responses page uses. Here that call is routed to the REAL service,
+ * which reads the form and its revisions from the schema-validating Prisma
+ * stub (`storeForm` below), so the rule itself runs, not a copy of it.
+ *
+ * The free-text answer is a sentinel that appears nowhere else, so its absence
+ * from the whole JSON proves the value did not ship. The multiselect answer is
+ * an option id, which the definition returned alongside also carries, so that
+ * one is checked inside `responses` only.
+ */
+describe('identity questions', () => {
+  const SELF_DESCRIBED = 'SELF-DESCRIBED-SENTINEL';
+
+  const identityFields = (flagged: boolean) => [
+    { id: 'f-name', type: 'short_text', label: 'Your name', required: true },
+    {
+      id: 'f-identity',
+      type: 'multiselect',
+      label: 'Which of these describe you?',
+      required: false,
+      ...(flagged ? { identity_question: true } : {}),
+      options: [
+        { id: 'opt-a', label: 'Answer A' },
+        { id: 'opt-b', label: 'Answer B' },
+        { id: 'opt-none', label: 'Prefer not to say', exclusive: true },
+      ],
+    },
+    {
+      id: 'f-self',
+      type: 'short_text',
+      label: 'If you prefer to self-describe, how?',
+      required: false,
+      ...(flagged ? { identity_question: true } : {}),
+    },
+  ];
+  const FLAGGED = { definition_version: 1, fields: identityFields(true) };
+  const UNFLAGGED = { definition_version: 1, fields: identityFields(false) };
+
+  const IDENTITY_FORM = {
+    ...FORM_ROW,
+    title: 'Project teams',
+    slug: 'project-teams',
+    access: 'CLASSROOM',
+    draft_fields: FLAGGED,
+  };
+
+  const IDENTITY_RESPONSE = {
+    ...RESPONSE_ROW,
+    name: 'Sam Lee',
+    email: 'sam.lee@example.edu',
+    email_normalized: 'sam.lee@example.edu',
+    answers: { 'f-name': 'Sam Lee', 'f-identity': ['opt-b'], 'f-self': SELF_DESCRIBED },
+  };
+
+  const LIST_ARGS = { classroom: 'org/w26', form_id: 'form-1' };
+  const GET_ARGS = { ...LIST_ARGS, response_id: 'resp-1' };
+  const UPDATE_ARGS = { ...GET_ARGS, staff_status: 'on roster' };
+
+  type Payload = {
+    responses?: Array<{ answers: Record<string, unknown> }>;
+    response?: { answers: Record<string, unknown> };
+    hidden_identity_field_ids?: string[];
+  };
+  const answersOf = (payload: Payload): Record<string, unknown> =>
+    (payload.responses?.[0] ?? payload.response)?.answers ?? {};
+  const auditData = () =>
+    (mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> }).data;
+
+  /** The masked shape, whichever tool produced it. */
+  function expectMasked(payload: Payload) {
+    const answers = answersOf(payload);
+    expect(answers).toEqual({ 'f-name': 'Sam Lee' });
+    // Removed, not nulled: a null would still say the question was answered.
+    expect(answers).not.toHaveProperty('f-identity');
+    expect(answers).not.toHaveProperty('f-self');
+    expect(JSON.stringify(payload.responses ?? payload.response)).not.toContain('opt-b');
+    expect(JSON.stringify(payload)).not.toContain(SELF_DESCRIBED);
+    expect(payload.hidden_identity_field_ids).toEqual(['f-identity', 'f-self']);
+  }
+
+  /**
+   * One stored form, seen consistently by the tools' own mocks (S1 load, the
+   * definition echoed alongside) and by the real mask service (the stub rows).
+   * `older` are earlier revisions' field lists; the current one is `rev-cur`.
+   */
+  function storeForm({
+    current,
+    draft,
+    older = [],
+  }: {
+    current: unknown;
+    draft: unknown;
+    older?: unknown[];
+  }) {
+    const currentId = current === null ? null : 'rev-cur';
+    mocks.formFindById.mockResolvedValue({
+      ...IDENTITY_FORM,
+      current_revision_id: currentId,
+      draft_fields: draft,
+    });
+    mocks.formGetCurrentRevision.mockResolvedValue(
+      currentId === null ? null : { id: currentId, fields: current }
+    );
+    setPrismaRows({
+      form: { findUnique: { current_revision_id: currentId, draft_fields: draft } },
+      formRevision: {
+        findMany: [
+          ...older.map((fields, index) => ({ id: `rev-old-${index + 1}`, fields })),
+          ...(currentId === null ? [] : [{ id: currentId, fields: current }]),
+        ],
+      },
+    });
+  }
+
+  beforeEach(() => {
+    resetPrismaStub();
+    mocks.identityMaskForForm.mockImplementation(realFormIdentity.identityMaskForForm);
+    storeForm({ current: FLAGGED, draft: FLAGGED });
+    mocks.responseListByFormId.mockResolvedValue([IDENTITY_RESPONSE]);
+    mocks.responseUpdateStaff.mockResolvedValue({
+      ...IDENTITY_RESPONSE,
+      staff_status: 'on roster',
+    });
+  });
+
+  it('list_form_responses leaves identity answers out by default', async () => {
+    const payload = parse(await listFormResponsesTool.handler(LIST_ARGS as never, CTX));
+    expectMasked(payload);
+    expect(auditData().identity_answers).toBe(false);
+    expect(auditData()).not.toHaveProperty('identity_field_ids');
+  });
+
+  it('asks the shared mask service about this form, once per call', async () => {
+    const tools: Array<[ToolDefinition<never>, Record<string, unknown>]> = [
+      [listFormResponsesTool as never, LIST_ARGS],
+      [formResponseGetTool as never, GET_ARGS],
+      [formResponseUpdateTool as never, UPDATE_ARGS],
+    ];
+    for (const [tool, args] of tools) {
+      mocks.identityMaskForForm.mockClear();
+      await tool.handler(args as never, CTX);
+      expect(mocks.identityMaskForForm, tool.name).toHaveBeenCalledTimes(1);
+      expect(mocks.identityMaskForForm).toHaveBeenCalledWith({ formId: 'form-1' });
+    }
+    // The real service ran: it read the form and its revisions (through the
+    // stub, which checks every query against the generated schema).
+    expect(prismaCallsFor('form', 'findUnique').length).toBeGreaterThan(0);
+    expect(prismaCallsFor('formRevision', 'findMany').length).toBeGreaterThan(0);
+  });
+
+  it('list_form_responses never includes them: a flag smuggled past the schema changes nothing', async () => {
+    const payload = parse(
+      await listFormResponsesTool.handler(
+        { ...LIST_ARGS, include_identity_answers: true } as never,
+        CTX
+      )
+    );
+    expectMasked(payload);
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(auditData()).toMatchObject({
+      tool: 'forms.responses.view',
+      mcp_tool: 'list_form_responses',
+      identity_answers: false,
+    });
+    expect(auditData()).not.toHaveProperty('identity_field_ids');
+    expect(auditData()).not.toHaveProperty('value');
+  });
+
+  it('form_response_get leaves identity answers out by default', async () => {
+    const payload = parse(await formResponseGetTool.handler(GET_ARGS as never, CTX));
+    expectMasked(payload);
+    expect(auditData().identity_answers).toBe(false);
+  });
+
+  it('form_response_get includes them when asked, and the audit row says so', async () => {
+    const payload = parse(
+      await formResponseGetTool.handler(
+        { ...GET_ARGS, include_identity_answers: true } as never,
+        CTX
+      )
+    );
+    expect(answersOf(payload)['f-identity']).toEqual(['opt-b']);
+    expect(answersOf(payload)['f-self']).toBe(SELF_DESCRIBED);
+    expect(payload).not.toHaveProperty('hidden_identity_field_ids');
+    expect(auditData()).toMatchObject({
+      tool: 'forms.responses.view',
+      mcp_tool: 'form_response_get',
+      response_id: 'resp-1',
+      value: 'resp-1',
+      identity_answers: true,
+      identity_field_ids: ['f-identity', 'f-self'],
+    });
+  });
+
+  /**
+   * The audit service coalesces rows with the same key inside a short window.
+   * The response id as the value keeps reveals of two responses two rows.
+   */
+  it('form_response_get records each reveal with its own response id as the value', async () => {
+    const other = { ...IDENTITY_RESPONSE, id: 'resp-2', email: 'other@example.edu' };
+    mocks.responseListByFormId.mockResolvedValue([IDENTITY_RESPONSE, other]);
+
+    for (const responseId of ['resp-1', 'resp-2']) {
+      await formResponseGetTool.handler(
+        { ...GET_ARGS, response_id: responseId, include_identity_answers: true } as never,
+        CTX
+      );
+    }
+    const rows = mocks.auditCreate.mock.calls.map(
+      call => call[0] as { resource_id: string; data: Record<string, unknown> }
+    );
+    expect(rows.map(row => [row.resource_id, row.data.value, row.data.identity_answers])).toEqual([
+      ['resp-1', 'resp-1', true],
+      ['resp-2', 'resp-2', true],
+    ]);
+
+    // A read that reveals nothing carries no value.
+    mocks.auditCreate.mockClear();
+    await formResponseGetTool.handler(GET_ARGS as never, CTX);
+    expect(auditData()).not.toHaveProperty('value');
+  });
+
+  it('form_response_update always masks the row it returns', async () => {
+    const payload = parse(await formResponseUpdateTool.handler(UPDATE_ARGS as never, CTX));
+    expect(payload.success).toBe(true);
+    expectMasked(payload);
+    // An include flag smuggled past the schema changes nothing.
+    const smuggled = parse(
+      await formResponseUpdateTool.handler(
+        { ...UPDATE_ARGS, include_identity_answers: true } as never,
+        CTX
+      )
+    );
+    expectMasked(smuggled);
+  });
+
+  it('hides a flag saved only in the draft', async () => {
+    storeForm({ current: UNFLAGGED, draft: FLAGGED });
+    expectMasked(parse(await listFormResponsesTool.handler(LIST_ARGS as never, CTX)));
+    expectMasked(parse(await formResponseGetTool.handler(GET_ARGS as never, CTX)));
+  });
+
+  it('keeps hiding a flag removed in the draft until that version is published', async () => {
+    storeForm({ current: FLAGGED, draft: UNFLAGGED });
+    expectMasked(parse(await listFormResponsesTool.handler(LIST_ARGS as never, CTX)));
+    expectMasked(parse(await formResponseGetTool.handler(GET_ARGS as never, CTX)));
+  });
+
+  it('shows the answers again once an un-flag is published', async () => {
+    storeForm({ current: UNFLAGGED, draft: UNFLAGGED, older: [FLAGGED] });
+    const payload = parse(await formResponseGetTool.handler(GET_ARGS as never, CTX));
+    expect(answersOf(payload)['f-self']).toBe(SELF_DESCRIBED);
+    expect(payload).not.toHaveProperty('hidden_identity_field_ids');
+  });
+
+  /**
+   * A response keeps the revision it was filled against. Deleting a flagged
+   * question from the form (rather than publishing it un-flagged) must not put
+   * its old answers back on show.
+   */
+  it('masks an old answer to an identity question since deleted from the form', async () => {
+    const withoutIdentity = { definition_version: 1, fields: [identityFields(true)[0]] };
+    storeForm({ current: withoutIdentity, draft: withoutIdentity, older: [FLAGGED] });
+    mocks.responseListByFormId.mockResolvedValue([
+      { ...IDENTITY_RESPONSE, revision_id: 'rev-old-1' },
+    ]);
+
+    const listed = parse(await listFormResponsesTool.handler(LIST_ARGS as never, CTX));
+    expectMasked(listed);
+    // The definition shipped alongside no longer has the question at all.
+    expect(listed.definition).toEqual(withoutIdentity);
+    expectMasked(parse(await formResponseGetTool.handler(GET_ARGS as never, CTX)));
+    expectMasked(parse(await formResponseUpdateTool.handler(UPDATE_ARGS as never, CTX)));
+  });
+
+  it('masks by the draft alone on a form that was never published', async () => {
+    storeForm({ current: null, draft: FLAGGED });
+    const payload = parse(await listFormResponsesTool.handler(LIST_ARGS as never, CTX));
+    expect(payload.definition).toBeNull();
+    expect(mocks.formGetCurrentRevision).not.toHaveBeenCalled();
+    expectMasked(payload);
+  });
+
+  it('records no reveal when the form has no identity questions', async () => {
+    storeForm({ current: DEFINITION, draft: DEFINITION });
+    mocks.responseListByFormId.mockResolvedValue([RESPONSE_ROW]);
+
+    const payload = parse(
+      await formResponseGetTool.handler(
+        { ...GET_ARGS, include_identity_answers: true } as never,
+        CTX
+      )
+    );
+    expect(payload.response.answers).toEqual(RESPONSE_ROW.answers);
+    expect(payload).not.toHaveProperty('hidden_identity_field_ids');
+    expect(auditData().identity_answers).toBe(false);
+    expect(auditData()).not.toHaveProperty('identity_field_ids');
+    expect(auditData()).not.toHaveProperty('value');
+
+    // Nothing hidden → nothing listed as hidden, by default too.
+    mocks.auditCreate.mockClear();
+    const plain = parse(await listFormResponsesTool.handler(LIST_ARGS as never, CTX));
+    expect(plain.responses[0].answers).toEqual(RESPONSE_ROW.answers);
+    expect(plain).not.toHaveProperty('hidden_identity_field_ids');
+  });
+
+  const RESPONSE_TOOLS = (): Array<[ToolDefinition<never>, Record<string, unknown>]> => [
+    [listFormResponsesTool as never, LIST_ARGS],
+    [formResponseGetTool as never, { ...GET_ARGS, include_identity_answers: true }],
+    [formResponseUpdateTool as never, UPDATE_ARGS],
+  ];
+
+  /**
+   * A stored definition the mask can't read must not become "no identity
+   * questions": the service throws, and the tools return nothing.
+   */
+  it('fails closed on a stored definition it cannot read', async () => {
+    storeForm({ current: FLAGGED, draft: { fields: 'x' } });
+
+    for (const [tool, args] of RESPONSE_TOOLS()) {
+      const error = await tool.handler(args as never, CTX).catch(e => e);
+      expect(error, `${tool.name} must refuse`).toBeInstanceOf(Error);
+      expect((error as { code?: string }).code).toBe('FORM_DEFINITION_INVALID');
+      // Not relabelled as the caller's bad input: the stored form is at fault.
+      expect(error).not.toBeInstanceOf(ToolError);
+    }
+    // No audit row claims a read that returned nothing, and nothing was written.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    expect(mocks.responseUpdateStaff).not.toHaveBeenCalled();
+  });
+
+  it('gives a form deleted mid-call the uniform not-found, with nothing returned', async () => {
+    mocks.identityMaskForForm.mockRejectedValue(
+      Object.assign(new Error('Form form-1 not found'), { code: 'FORM_NOT_FOUND' })
+    );
+
+    for (const [tool, args] of RESPONSE_TOOLS()) {
+      const error = await tool.handler(args as never, CTX).catch(e => e);
+      expect(error, `${tool.name} must refuse`).toBeInstanceOf(ToolError);
+      expect((error as ToolError).kind).toBe('not_found');
+      expect((error as ToolError).message).toBe('Form not found in this classroom');
+    }
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    expect(mocks.responseUpdateStaff).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A public fill copies a short-text "name" answer into the response's `name`.
+   * Stored before that question was flagged, the name is that answer, and the
+   * name is in every payload here: it is replaced by the account's name, or
+   * null without an account, and the list's search reads the replaced name.
+   */
+  describe('a stored name that is an identity answer', () => {
+    const CHOSEN = 'Chosen Name Sentinel';
+    const lifted = {
+      ...IDENTITY_RESPONSE,
+      name: CHOSEN,
+      answers: { ...IDENTITY_RESPONSE.answers, 'f-self': CHOSEN },
+    };
+    const anonymous = { ...lifted, id: 'resp-2', user_id: null, email: 'anon@example.edu' };
+
+    beforeEach(() => {
+      mocks.responseNames.mockImplementation(realFormIdentity.responseNames);
+      mocks.responseListByFormId.mockResolvedValue([lifted, anonymous]);
+      mocks.responseUpdateStaff.mockResolvedValue({ ...lifted, staff_status: 'on roster' });
+      setPrismaRows({
+        form: { findUnique: { current_revision_id: 'rev-cur', draft_fields: FLAGGED } },
+        formRevision: { findMany: [{ id: 'rev-cur', fields: FLAGGED }] },
+        user: { findMany: [{ id: 'user-9', name: 'Account Name', login: 'acct' }] },
+      });
+    });
+
+    it('is replaced by the account name, or null, in the list', async () => {
+      const payload = parse(await listFormResponsesTool.handler(LIST_ARGS as never, CTX));
+      expect(payload.responses.map((r: { name: string | null }) => r.name)).toEqual([
+        'Account Name',
+        null,
+      ]);
+      expect(JSON.stringify(payload)).not.toContain(CHOSEN);
+    });
+
+    it('is replaced in form_response_get and form_response_update too', async () => {
+      const got = parse(await formResponseGetTool.handler(GET_ARGS as never, CTX));
+      expect(got.response.name).toBe('Account Name');
+      expect(JSON.stringify(got)).not.toContain(CHOSEN);
+
+      const updated = parse(await formResponseUpdateTool.handler(UPDATE_ARGS as never, CTX));
+      expect(updated.response.name).toBe('Account Name');
+      expect(JSON.stringify(updated)).not.toContain(CHOSEN);
+    });
+
+    it('is not found by the name search; the email and the shown name still are', async () => {
+      const search = async (term: string) =>
+        parse(
+          await listFormResponsesTool.handler({ ...LIST_ARGS, search: term } as never, CTX)
+        ).responses.map((r: { id: string }) => r.id);
+
+      expect(await search('sentinel')).toEqual([]);
+      expect(await search('ANON@')).toEqual(['resp-2']);
+      expect(await search('account name')).toEqual(['resp-1']);
+      // The search runs over this form's rows, not a name-filtered query.
+      for (const call of mocks.responseListByFormId.mock.calls) {
+        expect(call[1]).not.toHaveProperty('search');
+      }
+    });
+
+    it('pages the search results with limit and offset', async () => {
+      const page = parse(
+        await listFormResponsesTool.handler(
+          { ...LIST_ARGS, search: 'example.edu', limit: 1, offset: 1 } as never,
+          CTX
+        )
+      );
+      expect(page.responses.map((r: { id: string }) => r.id)).toEqual(['resp-2']);
+      expect(page.returned).toBe(1);
+    });
   });
 });
 

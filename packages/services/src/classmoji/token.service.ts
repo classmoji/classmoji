@@ -1,4 +1,5 @@
-import getPrisma from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import { withLogins } from '@classmoji/utils';
 import type { Prisma, TokenTransactionType } from '@prisma/client';
 
 interface UpdateExtensionInput {
@@ -171,21 +172,23 @@ export const purchaseExtensionHours = async ({
 };
 
 export const findTransactions = async (query: Prisma.TokenTransactionWhereInput) => {
-  return getPrisma().tokenTransaction.findMany({
-    where: query,
-    include: {
-      student: true,
-      git_repo_assignment: {
-        include: {
-          assignment: true,
+  return withLogins(
+    await getPrisma().tokenTransaction.findMany({
+      where: query,
+      include: {
+        student: { include: GIT_IDENTITY },
+        git_repo_assignment: {
+          include: {
+            assignment: true,
+          },
         },
+        assignment_grade: true,
       },
-      assignment_grade: true,
-    },
-    orderBy: {
-      created_at: 'desc',
-    },
-  });
+      orderBy: {
+        created_at: 'desc',
+      },
+    })
+  );
 };
 
 export const assignToStudent = async (data: AssignToStudentInput) => {

@@ -4,8 +4,9 @@
  * A GitRepoAssignment represents a student's instance of an Assignment.
  * It tracks their progress, grades, and submission status.
  */
-import { repoNamespace } from '@classmoji/utils';
-import getPrisma from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import { repoNamespace, withLogins } from '@classmoji/utils';
+import { findClassroomGitProvider } from './classroomGitProvider.ts';
 import type { GitProvider, IssueStatus, Prisma } from '@prisma/client';
 import { getGitProvider } from '../git/index.ts';
 
@@ -26,23 +27,25 @@ interface GitRepoAssignmentUpdateData extends Omit<Prisma.GitRepoAssignmentUpdat
  * @returns {Promise<Object|null>}
  */
 export const findById = async (id: string) => {
-  return getPrisma().gitRepoAssignment.findUnique({
-    where: { id },
-    include: {
-      assignment: true,
-      git_repo: true,
-      grades: {
-        include: {
-          grader: true,
+  return withLogins(
+    await getPrisma().gitRepoAssignment.findUnique({
+      where: { id },
+      include: {
+        assignment: true,
+        git_repo: true,
+        grades: {
+          include: {
+            grader: { include: GIT_IDENTITY },
+          },
+        },
+        graders: {
+          include: {
+            grader: { include: GIT_IDENTITY },
+          },
         },
       },
-      graders: {
-        include: {
-          grader: true,
-        },
-      },
-    },
-  });
+    })
+  );
 };
 
 /** A usable id for a scoped `where`: a non-empty string, nothing else. */
@@ -70,7 +73,7 @@ export const findByIdInClassroom = async (
   if (repositoryId !== undefined && !isScopedId(repositoryId)) return null;
   if (assignmentId !== undefined && !isScopedId(assignmentId)) return null;
 
-  return getPrisma().gitRepoAssignment.findFirst({
+  const row = await getPrisma().gitRepoAssignment.findFirst({
     where: {
       id,
       ...(assignmentId ? { assignment_id: assignmentId } : {}),
@@ -81,9 +84,10 @@ export const findByIdInClassroom = async (
     },
     include: {
       git_repo: true,
-      graders: { include: { grader: true } },
+      graders: { include: { grader: { include: GIT_IDENTITY } } },
     },
   });
+  return withLogins(row, await findClassroomGitProvider(classroomId));
 };
 
 /**
@@ -94,40 +98,42 @@ export const findByIdInClassroom = async (
  * @returns {Promise<Object|null>}
  */
 export const findByProviderId = async (provider: GitProvider, providerId: string) => {
-  return getPrisma().gitRepoAssignment.findUnique({
-    where: {
-      provider_provider_id: {
-        provider,
-        provider_id: providerId,
+  return withLogins(
+    await getPrisma().gitRepoAssignment.findUnique({
+      where: {
+        provider_provider_id: {
+          provider,
+          provider_id: providerId,
+        },
       },
-    },
-    include: {
-      assignment: {
-        include: {
-          repository: {
-            include: {
-              classroom: {
-                include: {
-                  git_organization: true,
+      include: {
+        assignment: {
+          include: {
+            repository: {
+              include: {
+                classroom: {
+                  include: {
+                    git_organization: true,
+                  },
                 },
               },
             },
           },
         },
-      },
-      git_repo: {
-        include: {
-          student: true,
-          team: true,
+        git_repo: {
+          include: {
+            student: { include: GIT_IDENTITY },
+            team: true,
+          },
+        },
+        grades: {
+          include: {
+            grader: { include: GIT_IDENTITY },
+          },
         },
       },
-      grades: {
-        include: {
-          grader: true,
-        },
-      },
-    },
-  });
+    })
+  );
 };
 
 /**
@@ -151,38 +157,40 @@ export const findFirst = async (query: Prisma.GitRepoAssignmentWhereInput) => {
  * @returns {Promise<Object[]>}
  */
 export const findByClassroomId = async (classroomId: string) => {
-  return getPrisma().gitRepoAssignment.findMany({
-    where: {
-      git_repo: {
-        classroom_id: classroomId,
-      },
-    },
-    include: {
-      assignment: true,
-      // Commit count for the repository column, as of the last refresh.
-      analytics_snapshot: {
-        select: { total_commits: true, last_commit_at: true, fetched_at: true },
-      },
-      grades: {
-        include: {
-          token_transaction: true,
-          grader: true,
+  return withLogins(
+    await getPrisma().gitRepoAssignment.findMany({
+      where: {
+        git_repo: {
+          classroom_id: classroomId,
         },
       },
-      graders: {
-        include: {
-          grader: true,
+      include: {
+        assignment: true,
+        // Commit count for the repository column, as of the last refresh.
+        analytics_snapshot: {
+          select: { total_commits: true, last_commit_at: true, fetched_at: true },
+        },
+        grades: {
+          include: {
+            token_transaction: true,
+            grader: { include: GIT_IDENTITY },
+          },
+        },
+        graders: {
+          include: {
+            grader: { include: GIT_IDENTITY },
+          },
+        },
+        git_repo: {
+          include: {
+            repository: true,
+            student: { include: GIT_IDENTITY },
+            team: true,
+          },
         },
       },
-      git_repo: {
-        include: {
-          repository: true,
-          student: true,
-          team: true,
-        },
-      },
-    },
-  });
+    })
+  );
 };
 
 /**
@@ -208,17 +216,21 @@ export const findByAssignmentId = async (
     };
   }
 
-  return getPrisma().gitRepoAssignment.findMany({
+  const rows = await getPrisma().gitRepoAssignment.findMany({
     where,
     include: {
       git_repo: true,
       graders: {
         include: {
-          grader: true,
+          grader: { include: GIT_IDENTITY },
         },
       },
     },
   });
+  // A grader's `login` is their username on the classroom's provider: it is
+  // what gets assigned on the issue.
+  if (rows.length === 0) return withLogins(rows);
+  return withLogins(rows, await findClassroomGitProvider(rows[0].git_repo.classroom_id));
 };
 
 /**
@@ -227,44 +239,46 @@ export const findByAssignmentId = async (
  * @returns {Promise<Object[]>}
  */
 export const findForUser = async (query: Prisma.GitRepoAssignmentWhereInput) => {
-  return getPrisma().gitRepoAssignment.findMany({
-    where: query,
-    include: {
-      token_transactions: true,
-      // Commit count for the student's repository link.
-      analytics_snapshot: {
-        select: { total_commits: true, last_commit_at: true, fetched_at: true },
-      },
-      git_repo: {
-        include: {
-          student: true,
-          repository: true,
-          classroom: {
-            include: {
-              git_organization: true,
+  return withLogins(
+    await getPrisma().gitRepoAssignment.findMany({
+      where: query,
+      include: {
+        token_transactions: true,
+        // Commit count for the student's repository link.
+        analytics_snapshot: {
+          select: { total_commits: true, last_commit_at: true, fetched_at: true },
+        },
+        git_repo: {
+          include: {
+            student: { include: GIT_IDENTITY },
+            repository: true,
+            classroom: {
+              include: {
+                git_organization: true,
+              },
             },
           },
         },
-      },
-      assignment: true,
-      graders: {
-        include: {
-          grader: true,
+        assignment: true,
+        graders: {
+          include: {
+            grader: { include: GIT_IDENTITY },
+          },
+        },
+        grades: {
+          include: {
+            grader: { include: GIT_IDENTITY },
+            token_transaction: true,
+          },
         },
       },
-      grades: {
-        include: {
-          grader: true,
-          token_transaction: true,
+      orderBy: {
+        assignment: {
+          student_deadline: 'desc',
         },
       },
-    },
-    orderBy: {
-      assignment: {
-        student_deadline: 'desc',
-      },
-    },
-  });
+    })
+  );
 };
 
 /**
@@ -823,38 +837,40 @@ export const setLateOverride = async (id: string, override: boolean) => {
  * @returns {Promise<Object[]>}
  */
 export const findAllForStudent = async (studentId: string, classroomSlug: string) => {
-  return getPrisma().gitRepoAssignment.findMany({
-    where: {
-      git_repo: {
-        student_id: studentId,
-        classroom: { slug: classroomSlug },
-      },
-    },
-    include: {
-      token_transactions: true,
-      git_repo: {
-        include: {
-          student: true,
-          repository: true,
+  return withLogins(
+    await getPrisma().gitRepoAssignment.findMany({
+      where: {
+        git_repo: {
+          student_id: studentId,
+          classroom: { slug: classroomSlug },
         },
       },
-      assignment: true,
-      graders: {
-        include: {
-          grader: true,
+      include: {
+        token_transactions: true,
+        git_repo: {
+          include: {
+            student: { include: GIT_IDENTITY },
+            repository: true,
+          },
+        },
+        assignment: true,
+        graders: {
+          include: {
+            grader: { include: GIT_IDENTITY },
+          },
+        },
+        grades: {
+          include: {
+            grader: { include: GIT_IDENTITY },
+            token_transaction: true,
+          },
         },
       },
-      grades: {
-        include: {
-          grader: true,
-          token_transaction: true,
+      orderBy: {
+        assignment: {
+          student_deadline: 'desc',
         },
       },
-    },
-    orderBy: {
-      assignment: {
-        student_deadline: 'desc',
-      },
-    },
-  });
+    })
+  );
 };
