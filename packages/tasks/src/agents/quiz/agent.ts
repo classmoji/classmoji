@@ -15,8 +15,13 @@
  *   turn that answered the last admitted message (loop.ts). The close rides
  *   out on the turn's final record, so the chat stops taking messages and
  *   refreshes into the results.
+ * - `onTurnComplete` ends the run once it has used its compute budget
+ *   (runBudget.ts), before it can reach its `maxDuration` mid-turn. The next
+ *   message starts a new run, which loads the conversation from storage as
+ *   after any run that ended between turns.
  * - Every callback is sanitized: whatever it throws leaves as fixed copy.
  */
+import { usage } from '@trigger.dev/sdk';
 import { chat } from '@trigger.dev/sdk/ai';
 import type { ModelMessage, UIMessage } from 'ai';
 import { z } from 'zod';
@@ -25,6 +30,7 @@ import { buildTurnStatus, quizToolDefs, type QuizUIMessage } from '@classmoji/ut
 import { currentAdmission } from './admission.ts';
 import { attemptCompleted, attemptHasQuestion, loadAttemptContext } from './context.ts';
 import { runQuizTurn } from './loop.ts';
+import { QUIZ_RUN_MAX_DURATION_SECONDS, QUIZ_RUN_MAX_TURNS, shouldEndRun } from './runBudget.ts';
 import { evaluationNotice } from './prompt/index.ts';
 import { markServerText } from './serverNotice.ts';
 import { createQuizTranscriptStorage } from './storage.ts';
@@ -53,6 +59,15 @@ const quizTranscriptStorage = createQuizTranscriptStorage({
   log,
 });
 
+/**
+ * The compute this run's execution has used, in ms: the measure its
+ * `maxDuration` is checked against (this attempt's, not the run's total
+ * across retries).
+ */
+function computeUsedMs(): number {
+  return usage.getCurrent().compute.attempt.durationMs;
+}
+
 /** Text parts on a UI message (the admitted student row carries the hidden status as its second). */
 function textPartCount(message: UIMessage | undefined): number {
   return message ? message.parts.filter(p => p.type === 'text').length : 0;
@@ -63,10 +78,13 @@ export const quizAttemptAgent = chat.agent({
   // Exploration holds file reads in memory, as the explore-repo task does.
   machine: 'small-2x',
   oomMachine: 'medium-1x',
-  maxDuration: 3600,
+  maxDuration: QUIZ_RUN_MAX_DURATION_SECONDS,
   queue: { name: 'quiz-attempt', concurrencyLimit: QUIZ_AGENT_CONCURRENCY },
   idleTimeoutInSeconds: 10,
   turnTimeout: '1h',
+  // The SDK reads the next message before it checks this limit and ends the
+  // run without answering it, so a run must never reach it (runBudget.ts).
+  maxTurns: QUIZ_RUN_MAX_TURNS,
   chatAccessTokenTTL: '15m',
   // A hint at most, never identity or settings; absent when the client sends none.
   clientDataSchema: z.object({ timezone: z.string().max(64).optional() }).optional(),
@@ -144,6 +162,7 @@ export const quizAttemptAgent = chat.agent({
         finalized: attempt.progress.finalized.length,
         statusInChain: statusInChain === null ? 'n/a' : statusInChain ? 'yes' : 'no',
         action: admission.action ?? 'none',
+        computeMs: Math.round(computeUsedMs()),
       });
 
       const stream = runQuizTurn({
@@ -172,6 +191,27 @@ export const quizAttemptAgent = chat.agent({
     'onBeforeTurnComplete',
     async ({ chatId }: { chatId: string }) => {
       if (await attemptCompleted(chatId)) chat.close();
+    }
+  ),
+
+  // After every turn that ran, failed ones included. An action that runs no
+  // turn (a begin once the attempt is under way) and a message whose answer
+  // the run already holds skip this hook, and the run waits on unchecked; the
+  // next turn that runs checks again. The runtime reads the endRun request
+  // before it waits for the next message; a close from onBeforeTurnComplete
+  // is read first and ends the run the same way.
+  onTurnComplete: sanitized(
+    'onTurnComplete',
+    async ({ chatId, turn, runId }: { chatId: string; turn: number; runId: string }) => {
+      const usedMs = computeUsedMs();
+      if (!shouldEndRun(usedMs)) return;
+      log('[quiz-agent] run rollover', {
+        attemptId: chatId,
+        runId,
+        turnsInRun: turn + 1,
+        usedMs: Math.round(usedMs),
+      });
+      chat.endRun();
     }
   ),
 });
