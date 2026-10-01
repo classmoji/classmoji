@@ -26,6 +26,7 @@ import {
   withStepCacheBreakpoint,
   type QuizToolsFactory,
   type QuizTurnDeps,
+  type ServerCompletionFence,
 } from '../loop.ts';
 import { OFFER_AFTER_HINT_TEXT } from '../tools/errors.ts';
 import { serverNoticeMarker, serverNoticeToken } from '../serverNotice.ts';
@@ -95,6 +96,10 @@ function fakeAttempt(questionCount = 2, init: Partial<AttemptProgress> = {}) {
   const order: string[] = [];
   const persisted: Array<{ message: QuizUIMessage; final: boolean }> = [];
   let serverCompletions = 0;
+  // What happened once the turn's stream ended: each save, each submission at the limit.
+  const ends: string[] = [];
+  const limitSubmissions: ServerCompletionFence[] = [];
+  let submittedAtLimit = 0;
 
   const progress = (): AttemptProgress => ({
     questionCount,
@@ -189,13 +194,34 @@ function fakeAttempt(questionCount = 2, init: Partial<AttemptProgress> = {}) {
       return record('server');
     },
     persistAssistant: async (_id, message, o) => {
+      ends.push('persist');
       persisted.push({ message, final: o.final });
     },
     evaluationNotice: () => 'SYSTEM NOTICE: record the last result, then submit the evaluation.',
+    // As the service: an attempt already complete is left as it is.
+    submitAtLimit: async f => {
+      ends.push('submit');
+      limitSubmissions.push(f);
+      if (state.completed) return null;
+      submittedAtLimit += 1;
+      state.completed = true;
+      state.hasEvaluation = true;
+      return record('server');
+    },
     log: () => {},
   };
 
-  return { state, order, persisted, deps, progress, serverCompletions: () => serverCompletions };
+  return {
+    state,
+    order,
+    persisted,
+    deps,
+    progress,
+    ends,
+    limitSubmissions,
+    serverCompletions: () => serverCompletions,
+    submittedAtLimit: () => submittedAtLimit,
+  };
 }
 
 function ctxFor(progress: AttemptProgress, over: Partial<AttemptContext> = {}): AttemptContext {
@@ -361,6 +387,211 @@ describe('runQuizTurn: the messages left', () => {
       })
     );
     expect(leftChunks(chunks)).toHaveLength(0);
+  });
+});
+
+describe('runQuizTurn: the reply to the last admitted message', () => {
+  const fence: ServerCompletionFence = {
+    attemptId: 'attempt-1',
+    fence: 'fence-1',
+    inputMessageId: 'msg-1',
+    runId: 'run_1',
+  };
+
+  /** A model that writes some text, then waits until the turn is aborted. */
+  const textThenWait = (onStarted?: () => void) =>
+    new MockLanguageModelV4({
+      doStream: async ({ abortSignal }) =>
+        ({
+          stream: new ReadableStream({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              controller.enqueue({ type: 'text-start', id: 't' });
+              controller.enqueue({ type: 'text-delta', id: 't', delta: 'The loop runs' });
+              abortSignal?.addEventListener('abort', () => controller.error(abortSignal.reason));
+              onStarted?.();
+            },
+          }),
+        }) as never,
+    });
+
+  it('submits the attempt once the reply is saved, with the turn it answered', async () => {
+    const a = fakeAttempt(3, { presented: 2, finalized: [1] });
+    const model = scriptedModel([[...text('t', 'Close. What does the second line do?')]]);
+    const chunks = await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { messagesLeft: 0 }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
+    );
+    // The reply first, as it stands, then the submission.
+    expect(a.ends).toEqual(['persist', 'submit']);
+    expect(a.persisted).toHaveLength(1);
+    expect(a.persisted[0].final).toBe(true);
+    expect(a.limitSubmissions).toEqual([fence]);
+    expect(a.submittedAtLimit()).toBe(1);
+    expect(a.state.completed).toBe(true);
+    // The turn's own stream is over by then: the chat learns of it from the session's close.
+    expect(chunks.at(-1)?.type).toBe('finish');
+    expect(chunks.some(c => c.type === 'data-evaluation')).toBe(false);
+  });
+
+  it('submits it after a turn whose model call failed', async () => {
+    const a = fakeAttempt(3, { presented: 2, finalized: [1] });
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        throw new Error('overloaded');
+      },
+    });
+    const chunks = await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { messagesLeft: 0 }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
+    );
+    const notices = chunks.filter(c => c.type === 'data-notice') as Array<{
+      data: { code: string };
+    }>;
+    expect(notices.map(n => n.data.code)).toEqual(['reply_failed']);
+    expect(a.ends).toEqual(['persist', 'submit']);
+    expect(a.persisted[0].final).toBe(false);
+    expect(a.submittedAtLimit()).toBe(1);
+  });
+
+  it('submits it after a turn that ran out of time', async () => {
+    const a = fakeAttempt(3, { presented: 2, finalized: [1] });
+    await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { messagesLeft: 0 }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model: textThenWait(),
+        deadlineMs: 50,
+      })
+    );
+    expect(a.ends).toEqual(['persist', 'submit']);
+    expect(a.submittedAtLimit()).toBe(1);
+  });
+
+  it('submits it after a turn the student stopped, its partial reply saved first', async () => {
+    const a = fakeAttempt(3, { presented: 2, finalized: [1] });
+    const stop = new AbortController();
+    const chunks = await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { messagesLeft: 0 }),
+        messages: history,
+        signal: stop.signal,
+        deps: a.deps,
+        model: textThenWait(() => setTimeout(() => stop.abort(), 10)),
+      })
+    );
+    // A stop writes no notice.
+    expect(chunks.some(c => c.type === 'data-notice')).toBe(false);
+    expect(a.ends).toEqual(['persist', 'submit']);
+    expect(a.persisted[0].final).toBe(false);
+    expect(a.persisted[0].message.parts.some(p => p.type === 'text')).toBe(true);
+    expect(a.submittedAtLimit()).toBe(1);
+  });
+
+  it('leaves an attempt its own evaluation completed in the turn as it is', async () => {
+    const a = fakeAttempt(2, { presented: 2, finalized: [1, 2] });
+    const model = scriptedModel([[toolCall('e1', 'submit_quiz_evaluation', evaluationFeedback())]]);
+    await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { messagesLeft: 0 }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
+    );
+    // Asked, and the services found it complete: nothing more.
+    expect(a.ends).toEqual(['persist', 'submit']);
+    expect(a.submittedAtLimit()).toBe(0);
+    expect(a.serverCompletions()).toBe(0);
+  });
+
+  it("leaves an attempt the server's completion from the recorded results completed as it is", async () => {
+    const a = fakeAttempt(2, { presented: 2, finalized: [1, 2] });
+    const model = scriptedModel([[...text('t', 'Great work!')]]);
+    const chunks = await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { messagesLeft: 0 }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model,
+      })
+    );
+    expect(a.serverCompletions()).toBe(1);
+    expect(chunks.filter(c => c.type === 'data-evaluation')).toHaveLength(1);
+    expect(a.submittedAtLimit()).toBe(0);
+  });
+
+  it('submits nothing at the end of any other turn', async () => {
+    for (const over of [{ messagesLeft: 1 }, { messagesLeft: 150 }, {}, { inputMessageId: null }]) {
+      const a = fakeAttempt(2);
+      await collect(
+        runQuizTurn({
+          ctx: ctxFor(a.progress(), over),
+          messages: history,
+          signal: new AbortController().signal,
+          deps: a.deps,
+          model: scriptedModel([[toolCall('c1', 'present_question', question(1))]]),
+        })
+      );
+      expect(a.ends).toEqual(['persist']);
+      expect(a.limitSubmissions).toHaveLength(0);
+    }
+  });
+
+  it('submits it when the turn saved nothing', async () => {
+    const a = fakeAttempt(3, { presented: 2, finalized: [1] });
+    const stop = new AbortController();
+    stop.abort();
+    await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { messagesLeft: 0 }),
+        messages: history,
+        signal: stop.signal,
+        deps: a.deps,
+        model: textThenWait(),
+      })
+    );
+    expect(a.ends).toEqual(['submit']);
+    expect(a.submittedAtLimit()).toBe(1);
+  });
+
+  it('logs a failed submission with ids only and ends the turn as usual', async () => {
+    const a = fakeAttempt(3, { presented: 2, finalized: [1] });
+    const lines: Array<[string, Record<string, unknown>]> = [];
+    const deps: QuizTurnDeps = {
+      ...a.deps,
+      log: (line, fields) => lines.push([line, fields]),
+      submitAtLimit: async () => {
+        throw new Error('SENTINEL-db-detail');
+      },
+    };
+    const chunks = await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { messagesLeft: 0 }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps,
+        model: scriptedModel([[...text('t', 'Close.')]]),
+      })
+    );
+    expect(chunks.at(-1)?.type).toBe('finish');
+    expect(a.persisted).toHaveLength(1);
+    expect(lines.map(l => l[0])).toContain('[quiz-agent] submitAtLimit failed');
+    expect(JSON.stringify(lines)).not.toContain('SENTINEL');
   });
 });
 

@@ -1933,6 +1933,159 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     }
   }, 30_000);
 
+  /** Journal `count` more admitted student messages, as a long attempt would have. */
+  const seedAdmitted = (attemptId: string, count: number) =>
+    prisma.quizAttemptEvent.createMany({
+      data: Array.from({ length: count }, (_, k) => ({
+        attempt_id: attemptId,
+        seq: 1_000 + k,
+        type: 'input_admitted',
+        operation_id: `seeded-${k}`,
+        input_message_id: `seeded-${k}`,
+        payload: { kind: 'message' },
+      })),
+    });
+
+  /** An attempt whose 200th message was just admitted: question 1 recorded, question 2 open. */
+  const atTheLastMessage = async () => {
+    const attemptId = await newAttempt();
+    const turn = await begin(attemptId);
+    const answerTurn = await completeQuestion(attemptId, turn, 1, [
+      { level: 'correct', hints_before: 0 },
+    ]);
+    await grading.presentQuestion(call(answerTurn), question(2));
+    await seedAdmitted(attemptId, chat.MAX_STUDENT_TURNS - 2);
+    const lastId = msgId();
+    const last = await say(attemptId, 'the 200th', lastId);
+    expect(await chat.messageLimitOf(attemptId)).toEqual({ messagesLeft: 0, endedBy: null });
+    return { attemptId, last, lastId };
+  };
+
+  it('submits the attempt at the end of the turn that answered the 200th message, after its reply', async () => {
+    const { attemptId, last, lastId } = await atTheLastMessage();
+    const replyId = await replyWith(attemptId, [{ type: 'text', text: 'Close. Look again.' }]);
+
+    const record = await chat.submitAtMessageLimit(last);
+    expect(record).toMatchObject({ v: 2, source: 'server' });
+    // Question 1 keeps its result; the open question and the one never
+    // presented count as skipped, over every question.
+    const row = await attemptRow(attemptId);
+    expect(row.completed_at).not.toBeNull();
+    expect(row.session_status).toBe('completed');
+    expect(row.evaluation_json).toEqual(record);
+    expect(
+      (row.question_results_json as Record<string, unknown>[]).map(r => [
+        r.question_num,
+        r.skipped_by_end === true,
+        r.credit_earned,
+      ])
+    ).toEqual([
+      [1, false, 100],
+      [2, true, deriveResult([]).credit_earned],
+      [3, true, deriveResult([]).credit_earned],
+    ]);
+    const [completion] = await events(attemptId, 'evaluation_completed');
+    expect(completion.operation_id).toBe(grading.SERVER_COMPLETION_OPERATION_ID);
+    expect(completion.input_message_id).toBe(lastId);
+    expect(completion.payload).toMatchObject({
+      source: 'server',
+      ended_by: 'turn_limit',
+      ended_early: true,
+      skipped_by_end: [2, 3],
+    });
+    expect(await chat.messageLimitOf(attemptId)).toEqual({
+      messagesLeft: 0,
+      endedBy: 'turn_limit',
+    });
+    // The reply stays in the transcript, before the end.
+    const transcript = await chat.loadTranscriptForViewer(attemptId);
+    expect(transcript.at(-1)?.id).toBe(replyId);
+    // The turn that ended it can write nothing more, and a second call changes nothing.
+    expect(
+      await codeOf(
+        grading.finalizeQuestion(call(last), result(2, [{ level: 'correct', hints_before: 0 }]))
+      )
+    ).toBe('attempt_complete');
+    expect(await chat.submitAtMessageLimit(last)).toBeNull();
+    expect(await events(attemptId, 'evaluation_completed')).toHaveLength(1);
+    // A message after it finds the attempt complete.
+    await expect(
+      admit({ attemptId, message: { id: msgId(), text: 'one more' }, runId })
+    ).rejects.toMatchObject({ code: 'attempt_completed', kind: 'permanent' });
+  }, 30_000);
+
+  it('submits it after a 200th turn that failed or was stopped', async () => {
+    for (const parts of [
+      // Failed: its notice; its text is dropped.
+      [{ type: 'step-start' }, { type: 'text', text: 'Partly' }, noticePart('reply_failed')],
+      // Stopped: no notice; its text stays.
+      [{ type: 'step-start' }, { type: 'text', text: 'Partly' }],
+    ]) {
+      const { attemptId, last } = await atTheLastMessage();
+      await replyWith(attemptId, parts, false);
+      expect(await chat.submitAtMessageLimit(last)).toMatchObject({ source: 'server' });
+      expect((await attemptRow(attemptId)).completed_at).not.toBeNull();
+      expect(await chat.messageLimitOf(attemptId)).toEqual({
+        messagesLeft: 0,
+        endedBy: 'turn_limit',
+      });
+    }
+  }, 60_000);
+
+  it('leaves an attempt its 200th turn completed as it is', async () => {
+    const attemptId = await newAttempt();
+    const turn = await begin(attemptId);
+    const correct: Answer[] = [{ level: 'correct', hints_before: 0 }];
+    const second = await completeQuestion(attemptId, turn, 1, correct);
+    const third = await completeQuestion(attemptId, second, 2, correct);
+    await grading.presentQuestion(call(third), question(3));
+    await seedAdmitted(attemptId, chat.MAX_STUDENT_TURNS - 3);
+    const last = await say(attemptId, 'the 200th');
+    expect(await chat.messageLimitOf(attemptId)).toEqual({ messagesLeft: 0, endedBy: null });
+    await grading.finalizeQuestion(call(last), result(3, correct));
+    const record = await grading.completeWithEvaluation(last, { source: 'server' });
+
+    expect(await chat.submitAtMessageLimit(last)).toBeNull();
+    const row = await attemptRow(attemptId);
+    expect(row.evaluation_json).toEqual(record);
+    expect(
+      (row.question_results_json as Record<string, unknown>[]).every(r => !r.skipped_by_end)
+    ).toBe(true);
+    const completions = await events(attemptId, 'evaluation_completed');
+    expect(completions).toHaveLength(1);
+    expect(completions[0].payload).not.toHaveProperty('ended_by');
+    expect(await chat.messageLimitOf(attemptId)).toEqual({ messagesLeft: 0, endedBy: null });
+  }, 30_000);
+
+  it('submits nothing before the 200th message, or for a turn a newer one took over', async () => {
+    const attemptId = await newAttempt();
+    const turn = await begin(attemptId);
+    await grading.presentQuestion(call(turn), question(1));
+    await seedAdmitted(attemptId, chat.MAX_STUDENT_TURNS - 2);
+    const turn199 = await say(attemptId, 'the 199th');
+    expect(await chat.messageLimitOf(attemptId)).toEqual({ messagesLeft: 1, endedBy: null });
+    expect(await chat.submitAtMessageLimit(turn199)).toBeNull();
+    expect((await attemptRow(attemptId)).completed_at).toBeNull();
+
+    // The 200th, then a run that answers it again with a fresh fence.
+    const lastId = msgId();
+    const first = await say(attemptId, 'the 200th', lastId);
+    const again = await chat.admitStudentMessage({
+      attemptId,
+      message: { id: lastId, text: 'the 200th' },
+      runId,
+    });
+    expect(again).toMatchObject({ status: 'redelivered', messagesLeft: 0 });
+    // The superseded turn leaves it to the newer one, which submits it.
+    expect(await chat.submitAtMessageLimit(first)).toBeNull();
+    expect((await attemptRow(attemptId)).completed_at).toBeNull();
+    const newer = { ...first, fence: again.fence };
+    expect(await chat.submitAtMessageLimit(newer)).toMatchObject({ source: 'server' });
+    expect((await attemptRow(attemptId)).completed_at).not.toBeNull();
+    // Nothing for an attempt that does not exist.
+    expect(await chat.submitAtMessageLimit({ ...newer, attemptId: randomUUID() })).toBeNull();
+  }, 30_000);
+
   it('counts the messages left from admitted student messages alone, never a refused one', async () => {
     const attemptId = await newAttempt();
     expect(await chat.messageLimitOf(attemptId)).toEqual({ messagesLeft: 200, endedBy: null });

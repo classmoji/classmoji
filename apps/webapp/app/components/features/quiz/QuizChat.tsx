@@ -71,8 +71,11 @@ const { Text } = Typography;
  *
  * The message limit: once `MESSAGES_LEFT_NOTICE_AT` or fewer messages are
  * left, a muted line under the latest reply counts them down, from the
- * server's count (the loader's, then each reply's `data-messages-left`); an
- * attempt the server submitted at the limit says so above its results.
+ * server's count (the loader's, then each reply's `data-messages-left`),
+ * down to 1. There is no line at 0: the turn that answers the last message
+ * submits the attempt, its session closes with that turn, and the chat
+ * refreshes into the results. An attempt the server submitted at the limit
+ * says so above its results.
  */
 
 export type QuizChatStatus = 'streaming' | 'ready' | 'complete';
@@ -237,10 +240,10 @@ export const isPermanentSessionRefusal = (error: unknown) =>
 
 /**
  * The task's lines for a message refused for good: the attempt is complete
- * (at its message limit, the refusal completed it), past its deadline, gone,
- * or no longer the student's. The task closes the session with each of them,
- * but the close rides on the record after the error, which this tab may never
- * read, so the line itself says so.
+ * (a message past its limit is refused, and completes it if still open), past
+ * its deadline, gone, or no longer the student's. The task closes the session
+ * with each of them, but the close rides on the record after the error, which
+ * this tab may never read, so the line itself says so.
  */
 const ENDED_LINES: ReadonlySet<string> = new Set([
   QUIZ_REFUSAL_COPY.turn_limit,
@@ -1164,7 +1167,7 @@ interface TranscriptProps {
   endedAtLimit?: boolean;
   /**
    * How many more messages the attempt admits, shown under the latest reply
-   * once it is `MESSAGES_LEFT_NOTICE_AT` or fewer; null for none.
+   * from `MESSAGES_LEFT_NOTICE_AT` down to 1 (never 0); null for none.
    */
   messagesLeft?: number | null;
 }
@@ -1241,9 +1244,11 @@ export function QuizTranscript({
         opening: lastMessage !== undefined && lastMessage.id === openingId,
       })
     : null;
-  // Under the latest reply once it is in, while few messages are left.
+  // Under the latest reply once it is in, while few messages are left. None
+  // at 0: the reply to the last message ends the attempt, and its results
+  // follow.
   const messagesLeftLine =
-    !busy && messagesLeft !== null && messagesLeft <= MESSAGES_LEFT_NOTICE_AT
+    !busy && messagesLeft !== null && messagesLeft > 0 && messagesLeft <= MESSAGES_LEFT_NOTICE_AT
       ? QUIZ_MESSAGE_LIMIT_COPY.messagesLeft(messagesLeft)
       : null;
 
@@ -1890,9 +1895,10 @@ function LiveQuizChat({
   // Once the evaluation is in, or the attempt can take no more turns (the
   // session closed, or a refusal for good), and the reply has finished,
   // refresh the drawer once: its title, close prompt and results panel read
-  // the attempt as stored, which a refused turn may have completed (at the
-  // message limit, the refusal completes it, and the refresh brings its
-  // results).
+  // the attempt as stored, which the turn may have completed without an
+  // evaluation part (the reply to the last message the attempt admits
+  // submits it, and the session closes with that turn; a message after it is
+  // refused, and completes it if still open). The refresh brings its results.
   const ended = evaluationSeen || closedWhileOpen || refusedForGood;
   const refreshedRef = useRef(false);
   useEffect(() => {

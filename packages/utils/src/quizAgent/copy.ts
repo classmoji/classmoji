@@ -61,7 +61,7 @@ export const QUIZ_MESSAGE_LIMIT_COPY = {
   form: (limit: number) =>
     `Students can send up to ${limit} messages per attempt. At ${limit} the attempt is ` +
     'submitted, and unanswered questions count as skipped.',
-  /** Under the chat's latest reply, once `MESSAGES_LEFT_NOTICE_AT` or fewer are left. */
+  /** Under the chat's latest reply, from `MESSAGES_LEFT_NOTICE_AT` left down to 1. */
   messagesLeft: (left: number) =>
     `${left} ${left === 1 ? 'message' : 'messages'} left in this attempt.`,
   /** Above the results of an attempt the server submitted at the limit. */

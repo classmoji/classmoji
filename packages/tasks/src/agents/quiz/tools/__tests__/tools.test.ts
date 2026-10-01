@@ -907,6 +907,7 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
           hasEvaluation: false,
         }),
         completeFromGrades: vi.fn(),
+        submitAtLimit: vi.fn(),
         persistAssistant: async (_id, message) => {
           persisted.push(message as never);
         },
@@ -994,6 +995,7 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
           hasEvaluation: false,
         }),
         completeFromGrades: vi.fn(),
+        submitAtLimit: vi.fn(),
         persistAssistant: async (_id, message) => {
           persisted.push(message as never);
         },
@@ -1190,6 +1192,7 @@ describe('offer_next_step and submit_quiz_evaluation', () => {
             quizTools(c, { ...d, services: { grading: fakeGrading() } as never, log: vi.fn() }),
           getProgress: async () => progress,
           completeFromGrades: vi.fn(),
+          submitAtLimit: vi.fn(),
           persistAssistant: async (_id, message) => {
             persisted.push(message as never);
           },
@@ -1778,6 +1781,7 @@ describe('explore_codebase (fake pipeline)', () => {
           }),
         getProgress: async () => progressAt(4, [1, 2, 3]),
         completeFromGrades: vi.fn(),
+        submitAtLimit: vi.fn(),
         persistAssistant: async () => {},
         evaluationNotice: () => 'notice',
         log: vi.fn(),
@@ -1983,6 +1987,7 @@ describe('explore_codebase (fake pipeline)', () => {
           hasEvaluation: false,
         }),
         completeFromGrades: vi.fn(),
+        submitAtLimit: vi.fn(),
         persistAssistant: async () => {},
         evaluationNotice: () => 'notice',
         log: vi.fn(),
@@ -2653,6 +2658,7 @@ describe('present_question with code_quote', () => {
           }),
         getProgress: async () => progressAt(2, [1]),
         completeFromGrades: vi.fn(),
+        submitAtLimit: vi.fn(),
         persistAssistant: async (_id, message) => {
           persisted.push(message as never);
         },
