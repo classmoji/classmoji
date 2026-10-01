@@ -10,7 +10,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BUTTON_TEXT, type QuizUIMessage } from '@classmoji/utils/quiz-agent';
+import { BUTTON_TEXT, QUIZ_REFUSAL_COPY, type QuizUIMessage } from '@classmoji/utils/quiz-agent';
 
 vi.mock('~/hooks', () => ({ useDarkMode: () => ({ isDarkMode: false }) }));
 const revalidateMock = vi.fn();
@@ -39,12 +39,13 @@ const chatState: { messages: QuizUIMessage[]; status: string; error?: unknown } 
   status: 'ready',
 };
 const sendMessageMock = vi.fn();
+const setMessagesMock = vi.fn();
 const sendActionMock = vi.fn();
 const useChatOptions: Array<Record<string, unknown>> = [];
 vi.mock('@ai-sdk/react', () => ({
   useChat: (options: Record<string, unknown>) => {
     useChatOptions.push(options);
-    return { ...chatState, sendMessage: sendMessageMock };
+    return { ...chatState, sendMessage: sendMessageMock, setMessages: setMessagesMock };
   },
 }));
 let transportOptions: Record<string, (...a: unknown[]) => unknown> | null = null;
@@ -114,6 +115,7 @@ beforeEach(() => {
   revalidateMock.mockReset();
   metrics = { totalMs: 0, unfocusedMs: 0 };
   sendMessageMock.mockReset();
+  setMessagesMock.mockReset();
   sendActionMock.mockReset().mockResolvedValue(undefined);
   useChatOptions.length = 0;
   transportOptions = null;
@@ -466,7 +468,7 @@ describe('QuizChat live', () => {
     ).toEqual({ publicAccessToken: 'pat', closed: true });
 
     chatState.status = 'error';
-    chatState.error = new Error('This attempt has reached its message limit.');
+    chatState.error = new Error('This quiz reached its message limit and has been submitted.');
     await mount([buttonsMessage]);
     expect(revalidateMock).toHaveBeenCalledTimes(1);
     // Nothing more can be sent.
@@ -508,5 +510,184 @@ describe('QuizChat live', () => {
       transportOptions!.onSessionChange('attempt-1', null);
     });
     expect(window.sessionStorage.getItem('classmoji:quiz-chat-session:attempt-1')).toBeNull();
+  });
+
+  const SESSION_KEY = 'classmoji:quiz-chat-session:attempt-1';
+  const COMPLETED_RECORD = {
+    v: 2,
+    source: 'server',
+    partial_credit_percentage: 40,
+    first_attempt_percentage: 0,
+    question_results: [],
+  };
+
+  it('refreshes into the results when a message is refused at the message limit', async () => {
+    chatState.messages = [buttonsMessage];
+    await render(ATTEMPT);
+
+    // The refusal, with no session close seen by this tab (the close rides on
+    // the record after the error, which the tab may never read).
+    chatState.status = 'error';
+    chatState.error = new Error(QUIZ_REFUSAL_COPY.turn_limit);
+    await render(ATTEMPT);
+    expect(revalidateMock).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('[data-testid="quiz-error"]')?.textContent).toContain(
+      'This quiz reached its message limit and has been submitted.'
+    );
+    expect(editor()!.className).toContain('pointer-events-none');
+    expect(
+      [...container.querySelectorAll('[data-testid="quiz-next-step"] button')].every(
+        b => (b as HTMLButtonElement).disabled
+      )
+    ).toBe(true);
+
+    // The refresh brings the attempt the refusal completed, with its results.
+    await render({
+      ...ATTEMPT,
+      completed_at: '2026-09-30T12:00:00Z',
+      evaluation_json: COMPLETED_RECORD,
+    });
+    expect(revalidateMock).toHaveBeenCalledTimes(1);
+    expect(editor()).toBeNull();
+    expect(container.querySelector('[data-testid="quiz-results"]')).not.toBeNull();
+    expect(
+      container.querySelector('[data-testid="quiz-chat"]')!.getAttribute('data-quiz-status')
+    ).toBe('complete');
+  });
+
+  it('leaves nothing to send once a refusal holds for good', async () => {
+    for (const error of [
+      new QuizChatSessionError('This attempt can no longer be continued.', 'QUIZ_ATTEMPT_EXPIRED'),
+      new Error('This attempt can no longer be continued.'),
+      new Error('This quiz is already complete.'),
+    ]) {
+      chatState.messages = [buttonsMessage];
+      chatState.status = 'error';
+      chatState.error = error;
+      await render(ATTEMPT);
+      expect(editor()!.className).toContain('pointer-events-none');
+      const send = container.querySelector('[data-testid="quiz-send"]') as HTMLButtonElement;
+      await act(async () => send.click());
+      expect(sendMessageMock).not.toHaveBeenCalled();
+    }
+
+    // A refusal for now leaves the editor as it was.
+    chatState.error = new Error(QUIZ_REFUSAL_COPY.too_fast);
+    await render(ATTEMPT);
+    expect(editor()!.className).not.toContain('pointer-events-none');
+  });
+
+  it("drops the tab's session state on a session_ended refusal, so a reload starts a new session", async () => {
+    window.sessionStorage.setItem(SESSION_KEY, JSON.stringify({ publicAccessToken: 'pat' }));
+    chatState.messages = [buttonsMessage];
+    await mount([buttonsMessage]);
+    expect(transportOptions).toMatchObject({
+      sessions: { 'attempt-1': { publicAccessToken: 'pat' } },
+    });
+
+    chatState.status = 'error';
+    chatState.error = new Error(QUIZ_REFUSAL_COPY.session_ended);
+    await mount([buttonsMessage]);
+    expect(window.sessionStorage.getItem(SESSION_KEY)).toBeNull();
+    expect(container.querySelector('[data-testid="quiz-error"]')?.textContent).toContain(
+      'This session ended. Reload the page to continue.'
+    );
+
+    // The transport reports its state again (the turn's end): still nothing kept.
+    await act(async () => {
+      transportOptions!.onSessionChange('attempt-1', { publicAccessToken: 'pat' });
+    });
+    expect(window.sessionStorage.getItem(SESSION_KEY)).toBeNull();
+
+    // A reload of this tab: the transport has no session to reuse (the proxy
+    // for "the first send goes through startSession"), and starting one asks
+    // the session route, which writes a new grant.
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    chatState.status = 'ready';
+    chatState.error = undefined;
+    fetchMock.mockImplementation(async (url: string) =>
+      url === '/api/quiz-chat/session'
+        ? new Response(JSON.stringify({ publicAccessToken: 'pat-new' }), { status: 200 })
+        : new Response('{}', { status: 200 })
+    );
+    await mount([buttonsMessage]);
+    expect(transportOptions).not.toHaveProperty('sessions');
+    expect(useChatOptions.at(-1)).toMatchObject({ resume: false });
+    expect(
+      await transportOptions!.startSession({ chatId: 'attempt-1', taskId: 'quiz-attempt' })
+    ).toEqual({ publicAccessToken: 'pat-new' });
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/quiz-chat/session')).toHaveLength(
+      1
+    );
+
+    // That new session is kept again.
+    await act(async () => {
+      transportOptions!.onSessionChange('attempt-1', { publicAccessToken: 'pat-new' });
+    });
+    expect(JSON.parse(window.sessionStorage.getItem(SESSION_KEY)!)).toEqual({
+      publicAccessToken: 'pat-new',
+    });
+  });
+
+  it('keeps the session state on any other refusal', async () => {
+    window.sessionStorage.setItem(SESSION_KEY, JSON.stringify({ publicAccessToken: 'pat' }));
+    chatState.messages = [buttonsMessage];
+    chatState.status = 'error';
+    chatState.error = new Error(QUIZ_REFUSAL_COPY.too_fast);
+    await mount([buttonsMessage]);
+    expect(JSON.parse(window.sessionStorage.getItem(SESSION_KEY)!)).toEqual({
+      publicAccessToken: 'pat',
+    });
+  });
+
+  it('takes a button click the task refused before admitting it out of the chat', async () => {
+    const click = {
+      id: 'u2',
+      role: 'user',
+      parts: [{ type: 'text', text: BUTTON_TEXT.next }],
+    } as unknown as QuizUIMessage;
+    const opened = { id: 'a2', role: 'assistant', parts: [] } as unknown as QuizUIMessage;
+    chatState.messages = [buttonsMessage, click, opened];
+    chatState.status = 'error';
+    chatState.error = new Error(QUIZ_REFUSAL_COPY.too_fast);
+    await mount([buttonsMessage]);
+    expect(setMessagesMock).toHaveBeenCalledTimes(1);
+    expect(setMessagesMock).toHaveBeenCalledWith([buttonsMessage]);
+  });
+
+  it('keeps a typed message, and a click refused for any other reason', async () => {
+    const typed = {
+      id: 'u2',
+      role: 'user',
+      parts: [{ type: 'text', text: 'my answer' }],
+    } as unknown as QuizUIMessage;
+    const click = {
+      id: 'u2',
+      role: 'user',
+      parts: [{ type: 'text', text: BUTTON_TEXT.try_again }],
+    } as unknown as QuizUIMessage;
+    for (const [messages, error] of [
+      [[buttonsMessage, typed], new Error(QUIZ_REFUSAL_COPY.too_fast)],
+      // The turn was admitted, then failed: the server saved the click.
+      [
+        [buttonsMessage, click],
+        new Error("That reply couldn't be finished. Please send your message again."),
+      ],
+      // The session route's refusal can answer a token refresh after the message went in.
+      [
+        [buttonsMessage, click],
+        new QuizChatSessionError(
+          'This class is in read-only mode. The owner has locked it.',
+          'CLASSROOM_LOCKED'
+        ),
+      ],
+    ] as const) {
+      chatState.messages = [...messages];
+      chatState.status = 'error';
+      chatState.error = error;
+      await mount([buttonsMessage]);
+    }
+    expect(setMessagesMock).not.toHaveBeenCalled();
   });
 });

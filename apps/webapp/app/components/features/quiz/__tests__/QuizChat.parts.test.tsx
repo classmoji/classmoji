@@ -1255,7 +1255,7 @@ describe('errorLineFor', () => {
     "Quizzes aren't available in this class.",
     'This quiz is already complete.',
     'This attempt can no longer be continued.',
-    'This attempt has reached its message limit.',
+    'This quiz reached its message limit and has been submitted.',
     "That message couldn't be sent. Please try again.",
     'This quiz has already started.',
     "This quiz isn't available right now. Please try again later.",

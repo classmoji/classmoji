@@ -107,7 +107,12 @@ describe("api.quiz restartQuiz: a preview's repository", () => {
     });
     createNewMock.mockResolvedValue({ success: true, attemptId: NEW_ATTEMPT });
     updateAgentConfigMock.mockResolvedValue(undefined);
-    getAuthSessionMock.mockResolvedValue({ token: 'ghu_staff', session: {} });
+    // A sign-in with a GitHub account linked: its login and its user token.
+    getAuthSessionMock.mockResolvedValue({
+      token: 'ghu_staff',
+      userLogin: 'staff-gh',
+      session: {},
+    });
     reposGetMock.mockResolvedValue({ status: 200, data: { name: 'copied-test-repo' } });
     asStaff('OWNER');
   });
@@ -164,29 +169,63 @@ describe("api.quiz restartQuiz: a preview's repository", () => {
     expect(createNewMock).not.toHaveBeenCalled();
   });
 
-  it('asks the caller to sign in again when they have no GitHub token', async () => {
-    getAuthSessionMock.mockResolvedValue({ token: null, session: {} });
+  it('asks the caller to connect GitHub when their sign-in has no GitHub account', async () => {
+    // Signed in with email and password, GitHub never linked.
+    getAuthSessionMock.mockResolvedValue({ token: null, userLogin: '', session: {} });
 
     const response = await restart({ repoName: 'copied-test-repo' });
 
     expect(response.status).toBe(403);
     expect((await response.json()).message).toBe(
-      'Sign in with GitHub again to preview with a repository.'
+      'Connect your GitHub account to preview this quiz with a repository.'
+    );
+    expect(reposGetMock).not.toHaveBeenCalled();
+    expect(createNewMock).not.toHaveBeenCalled();
+    expect(updateAgentConfigMock).not.toHaveBeenCalled();
+  });
+
+  it('asks the caller to sign in with GitHub again when their linked account has no usable token', async () => {
+    getAuthSessionMock.mockResolvedValue({ token: null, userLogin: 'staff-gh', session: {} });
+
+    const response = await restart({ repoName: 'copied-test-repo' });
+
+    expect(response.status).toBe(403);
+    expect((await response.json()).message).toBe(
+      'Sign in with GitHub again to preview this quiz with a repository.'
     );
     expect(reposGetMock).not.toHaveBeenCalled();
     expect(createNewMock).not.toHaveBeenCalled();
   });
 
-  it('asks the caller to sign in again when GitHub refuses their token', async () => {
+  it('asks the caller to sign in with GitHub again when GitHub refuses their token', async () => {
     reposGetMock.mockRejectedValue(githubError(401));
 
     const response = await restart({ repoName: 'copied-test-repo' });
 
     expect(response.status).toBe(403);
     expect((await response.json()).message).toBe(
-      'Sign in with GitHub again to preview with a repository.'
+      'Sign in with GitHub again to preview this quiz with a repository.'
     );
     expect(createNewMock).not.toHaveBeenCalled();
+  });
+
+  it('names no mechanics in any of its refusals', async () => {
+    const linked = { token: 'ghu_staff', userLogin: 'staff-gh', session: {} };
+    const lines: string[] = [];
+    for (const [auth, failure] of [
+      [{ token: null, userLogin: '', session: {} }, null],
+      [{ token: null, userLogin: 'staff-gh', session: {} }, null],
+      [linked, githubError(404)],
+      [linked, githubError(403, { 'x-ratelimit-remaining': '0' })],
+    ] as const) {
+      getAuthSessionMock.mockResolvedValue(auth);
+      if (failure) reposGetMock.mockRejectedValue(failure);
+      lines.push((await (await restart({ repoName: 'copied-test-repo' })).json()).message);
+    }
+    expect(new Set(lines).size).toBe(4);
+    for (const line of lines) {
+      expect(line).not.toMatch(/token|installation|rate limit|OAuth|\bapp\b/i);
+    }
   });
 
   it('refuses, without storing anything, when GitHub cannot be asked', async () => {

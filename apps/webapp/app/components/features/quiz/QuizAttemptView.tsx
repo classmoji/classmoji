@@ -25,6 +25,8 @@ export type QuizAttemptViewProps = LegacyProps & {
   viewerOwnsAttempt?: boolean;
   /** A chat attempt's opening was admitted (see QuizChatProps). */
   chatStarted?: boolean;
+  /** When a chat attempt last admitted a turn (see QuizChatProps). */
+  chatActivity?: QuizChatProps['chatActivity'];
 };
 
 export const isChatRuntimeAttempt = (attempt: unknown) =>
@@ -60,6 +62,7 @@ function QuizAttemptView(props: QuizAttemptViewProps) {
       transcript,
       viewerOwnsAttempt,
       chatStarted,
+      chatActivity,
       readOnly,
       userLogin,
       userImage,
@@ -78,6 +81,7 @@ function QuizAttemptView(props: QuizAttemptViewProps) {
             transcript={transcript ?? []}
             viewerOwnsAttempt={viewerOwnsAttempt === true}
             chatStarted={chatStarted === true}
+            chatActivity={chatActivity ?? null}
             readOnly={Boolean(readOnly)}
             userLogin={userLogin ?? null}
             userImage={userImage ?? null}
@@ -92,6 +96,7 @@ function QuizAttemptView(props: QuizAttemptViewProps) {
     transcript: _transcript,
     viewerOwnsAttempt: _owns,
     chatStarted: _started,
+    chatActivity: _activity,
     ...legacyProps
   } = props;
   return <QuizAttemptInterface {...legacyProps} />;

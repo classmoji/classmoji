@@ -74,6 +74,8 @@ type SendOptions = { body?: { action?: unknown } };
 const sends: SendOptions[] = [];
 /** What a send's reply stream carries (a begin's, here). */
 let sendChunks: UIMessageChunk[] = OPENING;
+/** Held open, when set, after the chunks before it: the reply is still running. */
+let sendGate: { after: number; until: Promise<void> } | null = null;
 /** What the running opening's stream carries, read from its start. */
 let openingChunks: UIMessageChunk[] = OPENING;
 const sessions = new Map<string, { publicAccessToken: string; isStreaming?: boolean }>();
@@ -81,7 +83,19 @@ const sessions = new Map<string, { publicAccessToken: string; isStreaming?: bool
 const fakeTransport = {
   sendMessages: vi.fn(async (options: SendOptions) => {
     sends.push(options);
-    return streamOf(sendChunks);
+    const gate = sendGate;
+    if (!gate) return streamOf(sendChunks);
+    const chunks = sendChunks;
+    return new ReadableStream<UIMessageChunk>({
+      async start(controller) {
+        for (const [i, chunk] of chunks.entries()) {
+          if (i === gate.after) await gate.until;
+          controller.enqueue(chunk);
+          await new Promise(resolve => setTimeout(resolve, 1));
+        }
+        controller.close();
+      },
+    });
   }),
   // As Trigger's transport: nothing to resume without session state marked as
   // mid-reply.
@@ -141,7 +155,9 @@ const settle = async (ms: number) => {
   });
 };
 
-const view = (transcript: QuizUIMessage[], chatStarted: boolean) => (
+type Activity = { lastAt: string | null; readAt: string } | null;
+
+const view = (transcript: QuizUIMessage[], chatStarted: boolean, chatActivity: Activity) => (
   <StrictMode>
     <QuizChat
       quiz={QUIZ}
@@ -149,13 +165,18 @@ const view = (transcript: QuizUIMessage[], chatStarted: boolean) => (
       transcript={transcript}
       viewerOwnsAttempt
       chatStarted={chatStarted}
+      chatActivity={chatActivity}
     />
   </StrictMode>
 );
 
-const render = async (transcript: QuizUIMessage[], chatStarted: boolean) => {
+const render = async (
+  transcript: QuizUIMessage[],
+  chatStarted: boolean,
+  chatActivity: Activity = null
+) => {
   await act(async () => {
-    root.render(view(transcript, chatStarted));
+    root.render(view(transcript, chatStarted, chatActivity));
   });
 };
 
@@ -169,6 +190,7 @@ beforeEach(() => {
   sends.length = 0;
   sessions.clear();
   sendChunks = OPENING;
+  sendGate = null;
   openingChunks = OPENING;
   sessionAnswer = { status: 200, body: { publicAccessToken: 'pat-join' } };
   sessionGate = Promise.resolve();
@@ -356,5 +378,165 @@ describe('QuizChat on an attempt with no opening yet', () => {
     expect(fakeTransport.setSession).not.toHaveBeenCalled();
     expect(fakeTransport.reconnectToStream).not.toHaveBeenCalled();
     expect(container.textContent).toContain(QUESTION);
+  });
+});
+
+describe('QuizChat refreshed while its own opening runs', () => {
+  it('keeps reading the begin it sent, and never joins its own opening', async () => {
+    let release: () => void = () => {};
+    sendGate = { after: 4, until: new Promise<void>(resolve => (release = resolve)) };
+    await render([], false);
+    await settle(40);
+    expect(begins()).toHaveLength(1);
+    expect(container.textContent).toContain(WELCOME);
+
+    // The drawer refreshes mid-opening (another fetcher, say): the opening's
+    // hidden row is stored by now, so the loader says the chat has started.
+    await render([], true);
+    await settle(40);
+    release();
+    await settle(80);
+
+    expect(fakeTransport.setSession).not.toHaveBeenCalled();
+    expect(fakeTransport.reconnectToStream).not.toHaveBeenCalled();
+    expect(sessionRequests()).toBe(0);
+    expect(begins()).toHaveLength(1);
+    expect(container.textContent).toContain(QUESTION);
+    expect(query('quiz-typing')).toBeNull();
+    expect(query('quiz-error')).toBeNull();
+    expect(query('quiz-chat')?.getAttribute('data-quiz-status')).toBe('ready');
+  });
+});
+
+describe('QuizChat opened on an opening admitted longer ago than a turn can run', () => {
+  const at = (seconds: number) => new Date(Date.UTC(2026, 8, 30, 12, 0, seconds)).toISOString();
+
+  it('offers Start again at once, and its click sends begin', async () => {
+    // Admitted 5 minutes before the loader read the attempt; nothing saved.
+    await render([], true, { lastAt: at(0), readAt: at(300) });
+    await settle(40);
+
+    expect(fakeTransport.reconnectToStream).not.toHaveBeenCalled();
+    expect(sessionRequests()).toBe(0);
+    expect(query('quiz-typing')).toBeNull();
+    expect(query('quiz-error')?.textContent).toContain("The quiz couldn't start.");
+    expect(begins()).toHaveLength(0);
+
+    const retry = query('quiz-error')?.querySelector('button') as HTMLButtonElement;
+    expect(retry.textContent).toBe('Start again');
+    await act(async () => retry.click());
+    await settle(120);
+    expect(begins()).toHaveLength(1);
+    expect(container.textContent).toContain(QUESTION);
+  });
+
+  it('sends begin again, never a join, when its own Start again fails', async () => {
+    await render([], true, { lastAt: at(0), readAt: at(300) });
+    await settle(40);
+
+    sendChunks = [
+      {
+        type: 'error',
+        errorText: "That reply couldn't be finished. Please send your message again.",
+      },
+    ];
+    await act(async () =>
+      (query('quiz-error')?.querySelector('button') as HTMLButtonElement).click()
+    );
+    await settle(60);
+    expect(begins()).toHaveLength(1);
+    const retry = query('quiz-error')?.querySelector('button') as HTMLButtonElement;
+    expect(retry.textContent).toBe('Start again');
+
+    sendChunks = OPENING;
+    await act(async () => retry.click());
+    await settle(120);
+    expect(begins()).toHaveLength(2);
+    expect(fakeTransport.reconnectToStream).not.toHaveBeenCalled();
+    expect(container.textContent).toContain(QUESTION);
+  });
+
+  it("joins an opening still within a turn's time, by the server's clock alone", async () => {
+    // A minute old by the server's clock, though this browser's clock reads
+    // years later.
+    await render([], true, { lastAt: at(0), readAt: at(60) });
+    await settle(120);
+
+    expect(begins()).toHaveLength(0);
+    expect(fakeTransport.reconnectToStream).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain(QUESTION);
+    expect(query('quiz-error')).toBeNull();
+  });
+
+  it('joins as before when the loader has no activity time', async () => {
+    await render([], true, { lastAt: null, readAt: at(300) });
+    await settle(120);
+    expect(fakeTransport.reconnectToStream).toHaveBeenCalledTimes(1);
+    expect(begins()).toHaveLength(0);
+  });
+});
+
+describe('QuizChat when a button click is refused before it is admitted', () => {
+  const OFFER: QuizUIMessage[] = [
+    ...SAVED,
+    {
+      id: 'u1',
+      role: 'user',
+      parts: [{ type: 'text', text: 'Because it lines things up.' }],
+    } as QuizUIMessage,
+    {
+      id: 'feedback-reply',
+      role: 'assistant',
+      parts: [
+        {
+          type: 'tool-offer_next_step',
+          toolCallId: 'o1',
+          state: 'output-available',
+          input: { feedback: 'Not quite.', actions: ['try_again', 'next'] },
+          output: {
+            actions: ['try_again', 'next'],
+            lead_in: 'Would you like to try again or move on?',
+          },
+        },
+      ],
+    } as unknown as QuizUIMessage,
+  ];
+  const nextButton = () => query('quiz-next') as HTMLButtonElement;
+  const userBubbles = () => container.querySelectorAll('[data-message-role="user"]').length;
+
+  it('gives the buttons back, so the click can be made again', async () => {
+    // Too soon after the last message: the stream opens a reply, then refuses.
+    sendChunks = [
+      { type: 'start', messageId: 'refused-reply' },
+      { type: 'error', errorText: 'One message at a time, please. Send it again in a moment.' },
+    ];
+    await render(OFFER, true);
+    await settle(20);
+    expect(userBubbles()).toBe(1);
+
+    await act(async () => nextButton().click());
+    await settle(60);
+
+    expect(sends).toHaveLength(1);
+    expect(query('quiz-error')?.textContent).toContain('One message at a time, please.');
+    // The click left the chat, and its set is live again.
+    expect(userBubbles()).toBe(1);
+    expect(nextButton().disabled).toBe(false);
+    expect((query('quiz-try-again') as HTMLButtonElement).disabled).toBe(false);
+
+    // Clicked again, it goes through.
+    sendChunks = [
+      { type: 'start', messageId: 'next-reply' },
+      { type: 'text-start', id: 't9' },
+      { type: 'text-delta', id: 't9', delta: 'Question two: why grid?' },
+      { type: 'text-end', id: 't9' },
+      { type: 'finish' },
+    ];
+    await act(async () => nextButton().click());
+    await settle(60);
+    expect(sends).toHaveLength(2);
+    expect(query('quiz-error')).toBeNull();
+    expect(userBubbles()).toBe(2);
+    expect(container.textContent).toContain('Question two: why grid?');
   });
 });

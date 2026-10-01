@@ -216,6 +216,26 @@ export const attemptDrawerView = (attempt: {
   };
 };
 
+/** A timestamp as ISO text, or null when there is none to read. */
+const isoOrNull = (value: Date | string | null | undefined): string | null => {
+  if (value === null || value === undefined) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+};
+
+/**
+ * A chat attempt's activity for its drawer (QuizChat's `ChatActivity`): when
+ * the attempt last admitted a turn or recorded progress, and the server's
+ * time as the loader read it. Timestamps only.
+ */
+export const chatActivityView = (
+  attempt: { last_activity?: Date | string | null },
+  now: Date = new Date()
+): { lastAt: string | null; readAt: string } => ({
+  lastAt: isoOrNull(attempt.last_activity),
+  readAt: now.toISOString(),
+});
+
 /** The quiz fields the results page reads. */
 export interface QuizResultsQuizView {
   id: string;

@@ -383,6 +383,18 @@ describe('the Next after a hint', () => {
     expect(set.live).toEqual({ message: 4, hint: true });
   });
 
+  it('takes a message that is just "try again" as the click: the hint ends with Next alone', async () => {
+    for (const typed of ['try again', 'Try again!', '  TRY AGAIN. ']) {
+      const chat = [...answered, user('u2', typed), hint()];
+      expect(buttonSetsOf(chat)).toEqual({
+        live: { message: 4, hint: true },
+        hintReplies: new Set([4]),
+      });
+    }
+    await render([...answered, user('u2', 'Try again!'), hint()]);
+    expect(buttonSets()).toEqual([false, true]);
+  });
+
   it('is not added to a reply to anything but a Try again click', async () => {
     await render([...answered, user('u2', 'Give me a hint'), hint()]);
     expect(buttonSets()).toEqual([true]);
@@ -402,5 +414,86 @@ describe('the Next after a hint', () => {
     expect(buttonSets()).toEqual([false, false]);
     await render(hinted, { onButton: null });
     expect(buttonSets()).toEqual([false, false]);
+  });
+});
+
+describe('a click whose reply did not get through', () => {
+  const notice = (code = 'reply_failed') => ({
+    type: 'data-notice',
+    id: 'notice-1',
+    data: { code },
+  });
+  const step = { type: 'data-step', id: 'step-1', data: { kind: 'read_file', path: 'src/app.js' } };
+  const refused = { ...offer('o2'), state: 'output-error', errorText: 'An error occurred.' };
+  const OFFER_SET = { message: 2, part: 0 };
+
+  it('gives a Try again click its set back, with no Next under the notice', async () => {
+    const failed = [
+      ...answered,
+      user('u2', BUTTON_TEXT.try_again),
+      msg('a3', 'assistant', [notice()]),
+    ];
+    expect(buttonSetsOf(failed)).toEqual({ live: OFFER_SET, hintReplies: new Set() });
+
+    const onButton = vi.fn();
+    await render(failed, { onButton });
+    // One set on screen, the offer's, usable again; the notice's bubble has none.
+    expect(buttonSets()).toEqual([true]);
+    const tryAgain = container.querySelector('[data-testid="quiz-try-again"]') as HTMLButtonElement;
+    await act(async () => tryAgain.click());
+    expect(onButton).toHaveBeenCalledWith(BUTTON_TEXT.try_again, 'try_again');
+  });
+
+  it('gives a Next click its set back the same way, after a reply that was stopped', async () => {
+    const stopped = [
+      ...answered,
+      user('u2', BUTTON_TEXT.next),
+      msg('a3', 'assistant', [text('Moving on to'), notice('turn_stopped')]),
+    ];
+    expect(liveButtonsOf(stopped)).toEqual(OFFER_SET);
+    await render(stopped);
+    expect(buttonSets()).toEqual([true]);
+  });
+
+  it('gives the set back when the reply shows nothing: only files read, or only refused calls', async () => {
+    for (const parts of [[step], [refused], [step, refused]]) {
+      const empty = [...answered, user('u2', BUTTON_TEXT.try_again), msg('a3', 'assistant', parts)];
+      expect(buttonSetsOf(empty)).toEqual({ live: OFFER_SET, hintReplies: new Set() });
+    }
+    await render([...answered, user('u2', BUTTON_TEXT.try_again), msg('a3', 'assistant', [step])]);
+    expect(buttonSets()).toEqual([true]);
+  });
+
+  it("gives a failed Next click on a hint the hint's Next back", () => {
+    const hinted = [
+      ...answered,
+      user('u2', BUTTON_TEXT.try_again),
+      msg('a3', 'assistant', [text("Here's a hint. What do you think?")]),
+      user('u3', BUTTON_TEXT.next),
+      msg('a4', 'assistant', [notice()]),
+    ];
+    expect(liveButtonsOf(hinted)).toEqual({ message: 4, hint: true });
+  });
+
+  it('keeps the set used up when the reply moved the quiz on before it failed', () => {
+    expect(
+      liveButtonsOf([
+        ...answered,
+        user('u2', BUTTON_TEXT.next),
+        msg('a3', 'assistant', [divider(1), notice()]),
+      ])
+    ).toBeNull();
+  });
+
+  it('gives nothing back after a typed answer whose reply failed', () => {
+    expect(
+      liveButtonsOf([
+        ...answered,
+        user('u2', BUTTON_TEXT.next),
+        msg('a3', 'assistant', [divider(1), card(2)]),
+        user('u3', 'It is the cross axis.'),
+        msg('a4', 'assistant', [notice()]),
+      ])
+    ).toBeNull();
   });
 });

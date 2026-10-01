@@ -264,6 +264,61 @@ describe('api.quiz startQuiz — background task containment', () => {
     expect(unhandled).toEqual([]);
   });
 
+  describe("a staff preview's repository", () => {
+    const codeAware = () =>
+      buildAttempt({ repository_id: 'repository-1', include_code_context: true });
+    const startAsOwner = async (body: Record<string, unknown>) => {
+      assertAccessMock.mockResolvedValue({
+        userId: 'student-1',
+        classroom: { status: 'ACTIVE' },
+        membership: { role: 'OWNER' },
+      });
+      findWithMessagesMock
+        .mockReset()
+        .mockResolvedValueOnce({ attempt: codeAware() })
+        .mockResolvedValueOnce({ attempt: codeAware(), messages: [] });
+      initializeAgentMock.mockResolvedValue({ openingMessage: 'First code-aware question' });
+      const response = await action({
+        request: postRequest({ _action: 'startQuiz', quizId: 'quiz-1', ...body }),
+      } as unknown as Parameters<typeof action>[0]);
+      await vi.runAllTimersAsync();
+      return response;
+    };
+
+    it('reads the repository restartQuiz checked and stored, never one sent with the start', async () => {
+      quizAttemptFindByIdMock.mockResolvedValue({
+        ...codeAware(),
+        agent_config: { instructorRepoName: 'checked-repo' },
+      });
+
+      const response = await startAsOwner({ repoName: 'unchecked-repo' });
+
+      expect(response.status).toBe(200);
+      expect(updateAgentConfigMock).not.toHaveBeenCalled();
+      expect(initializeAgentMock).toHaveBeenCalledWith(
+        ATTEMPT_ID,
+        expect.any(Object),
+        expect.objectContaining({ orgLogin: 'test-org', repoName: 'checked-repo' }),
+        expect.anything()
+      );
+      expect(JSON.stringify(initializeAgentMock.mock.calls)).not.toContain('unchecked-repo');
+      expect(unhandled).toEqual([]);
+    });
+
+    it('reads no repository when only the start names one', async () => {
+      quizAttemptFindByIdMock.mockResolvedValue(codeAware());
+
+      const response = await startAsOwner({ repoName: 'unchecked-repo' });
+
+      expect(response.status).toBe(200);
+      expect(updateAgentConfigMock).not.toHaveBeenCalled();
+      expect(initializeAgentMock).not.toHaveBeenCalled();
+      // The start goes on without the code, as it does for any preview with no repository.
+      expect(addMessageMock).toHaveBeenCalledTimes(1);
+      expect(unhandled).toEqual([]);
+    });
+  });
+
   it('happy path: standard quiz inits successfully and writes NO fallback message', async () => {
     // Agent returns a real opening question — the success branch must not touch
     // the fallback path. This is the inverse of the rejection tests: it pins

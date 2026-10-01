@@ -5,7 +5,7 @@ import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { QuizAttemptInterface } from '~/components';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
-import { attemptDrawerView, quizDrawerView } from '~/utils/quizPayloads';
+import { attemptDrawerView, chatActivityView, quizDrawerView } from '~/utils/quizPayloads';
 import { isTriggerChatAttempt } from '~/utils/quizRuntime.server';
 import type { Route } from './+types/route';
 
@@ -91,6 +91,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     // The opening was admitted (its hidden row is stored), even when its reply
     // is not saved yet: a second tab joins it rather than beginning again.
     chatStarted: isChatAttempt && (attemptData.messages?.length ?? 0) > 0,
+    // When the attempt last admitted a turn, as timestamps only: an opening
+    // admitted longer ago than a turn can run, with nothing saved, is lost.
+    chatActivity: isChatAttempt ? chatActivityView(attemptData.attempt) : null,
     viewerOwnsAttempt: true,
     userLogin: attemptData.attempt.user?.login || null,
     userImage: attemptData.attempt.user?.image || null,

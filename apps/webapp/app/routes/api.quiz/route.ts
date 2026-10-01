@@ -172,16 +172,23 @@ const RESTART_FAILED_MESSAGE = "Couldn't start a new attempt. Please try again."
 
 /**
  * A staff preview's repository refused (see previewRepoAccess.server): fixed
- * copy by outcome, shown as-is by the preview page (it reads `message`).
+ * copy by outcome, shown as-is by the preview page (it reads `message`). No
+ * usable GitHub token splits in two: an account with no GitHub linked (signed
+ * up with email and password) connects one; a linked account whose token
+ * GitHub no longer takes signs in with GitHub again.
  */
 const PREVIEW_REPO_REFUSALS = {
   unreadable: {
     status: 403,
     message: "Your GitHub account can't open that repository. Pick one you have access to.",
   },
+  connect: {
+    status: 403,
+    message: 'Connect your GitHub account to preview this quiz with a repository.',
+  },
   sign_in: {
     status: 403,
-    message: 'Sign in with GitHub again to preview with a repository.',
+    message: 'Sign in with GitHub again to preview this quiz with a repository.',
   },
   unavailable: {
     status: 503,
@@ -787,16 +794,12 @@ export async function action({ request }: Route.ActionArgs) {
 
                 let repoName;
 
-                if (isInstructor && data.repoName) {
-                  // Instructor provided a repo to test with - save it for future calls
-                  repoName = data.repoName;
-                  // Store in agent_config so subsequent calls can use it
-                  await ClassmojiService.quizAttempt.updateAgentConfig(attempt.id, {
-                    instructorRepoName: repoName,
-                  });
-                } else if (isInstructor) {
-                  // Re-fetch the attempt to get the latest agent_config
-                  // (may have been updated by a concurrent call that saved instructorRepoName)
+                if (isInstructor) {
+                  // A preview reads only the repository restartQuiz stored
+                  // for it, once the caller's own GitHub account could open
+                  // it (previewRepoAccess.server). A name sent with the start
+                  // itself is never taken. Re-fetched for the latest
+                  // agent_config.
                   const freshAttempt = await ClassmojiService.quizAttempt.findById(attempt.id);
                   const agentConfig = (freshAttempt as Record<string, unknown>)?.agent_config as
                     | Record<string, unknown>
@@ -1489,6 +1492,10 @@ export async function action({ request }: Route.ActionArgs) {
               owner: access.classroom.git_organization?.login,
               repo: previewRepo,
             });
+            if (repoAccess === 'sign_in' && !authData?.userLogin) {
+              // No GitHub account linked to this sign-in at all.
+              return previewRepoRefusal('connect');
+            }
             if (repoAccess !== 'readable') return previewRepoRefusal(repoAccess);
           }
 

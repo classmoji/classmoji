@@ -138,6 +138,35 @@ describe('attempt loader — chat-runtime attempts', () => {
     expect((await load()).chatStarted).toBe(false);
   });
 
+  it('says when the chat last admitted a turn, as server timestamps and nothing more', async () => {
+    signInAs('student-1', 'STUDENT');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-30T12:05:00Z'));
+    try {
+      findWithMessagesMock.mockResolvedValue({
+        attempt: {
+          ...attemptOf('student-1', 'trigger_chat'),
+          last_activity: new Date('2026-09-30T12:00:00Z'),
+        },
+        messages: [RAW_ROWS[0]],
+      });
+      loadTranscriptMock.mockResolvedValue([]);
+      expect((await load()).chatActivity).toEqual({
+        lastAt: '2026-09-30T12:00:00.000Z',
+        readAt: '2026-09-30T12:05:00.000Z',
+      });
+
+      // None for an ai-agent attempt.
+      findWithMessagesMock.mockResolvedValue({
+        attempt: { ...attemptOf('student-1'), last_activity: new Date('2026-09-30T12:00:00Z') },
+        messages: RAW_ROWS,
+      });
+      expect((await load()).chatActivity).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("serves staff reading a student's chat attempt the staff transcript, not as owner", async () => {
     signInAs('assistant-1', 'ASSISTANT');
     findWithMessagesMock.mockResolvedValue({

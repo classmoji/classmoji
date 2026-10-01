@@ -71,7 +71,7 @@ export type QuizMessageMetadata = {
   hidden?: true;
   /** Internal parts of a visible message (the per-turn status part). */
   hiddenPartIndexes?: number[];
-  /** Set by admission when the student's text is exactly a button's text. */
+  /** Set by admission when the student's text names a button (`buttonActionFor`). */
   action?: 'next' | 'try_again';
 };
 
@@ -86,14 +86,21 @@ export const BUTTON_TEXT = {
   next: 'next',
 } as const;
 
+/** A message that is just "try again", with any trailing punctuation. */
+const TYPED_TRY_AGAIN = /^try\s+again[.!?…]*$/;
+
 /**
  * The button a student message's text names: a button's text, trimmed and in
- * any case (a typed "Next" is the Next button). Admission tags the message
- * with it; the chat reads it to know that a message used up the buttons.
+ * any case (a typed "Next" is the Next button), or a message that is just
+ * "try again" (trailing punctuation allowed), which the prompt takes as a Try
+ * again click too. Admission tags the message with it; the chat reads it to
+ * know that a message used up the buttons.
  */
 export function buttonActionFor(text: string): 'next' | 'try_again' | undefined {
   const typed = text.trim().toLowerCase();
-  if (typed === BUTTON_TEXT.try_again.toLowerCase()) return 'try_again';
+  if (typed === BUTTON_TEXT.try_again.toLowerCase() || TYPED_TRY_AGAIN.test(typed)) {
+    return 'try_again';
+  }
   if (typed === BUTTON_TEXT.next.toLowerCase()) return 'next';
   return undefined;
 }

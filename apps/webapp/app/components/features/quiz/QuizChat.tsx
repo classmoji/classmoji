@@ -12,6 +12,7 @@ import {
   QUIZ_AGENT_ERROR_COPY,
   QUIZ_FAILURE_COPY,
   QUIZ_REFUSAL_COPY,
+  QUIZ_REFUSAL_COPY_BY_KIND,
   buttonActionFor,
   type NextStepAction,
   type QuizEvaluationRecordV2,
@@ -91,12 +92,42 @@ export interface QuizChatProps {
    * its reply is saved yet (the loader found stored rows).
    */
   chatStarted?: boolean;
+  /** When the attempt last admitted a turn (see `ChatActivity`). */
+  chatActivity?: ChatActivity | null;
   readOnly?: boolean;
   userLogin?: string | null;
   userImage?: string | null;
   focusMetrics?: ResultsFocusMetrics | null;
   isVisible?: boolean;
 }
+
+/**
+ * When the attempt last admitted a turn or recorded progress
+ * (`attempt.last_activity`), and when the loader read it, both by the
+ * server's clock: timestamps only.
+ */
+export interface ChatActivity {
+  lastAt: string | null;
+  readAt: string;
+}
+
+/**
+ * How long after it was admitted an opening can still be running: the task's
+ * turn deadline (four minutes), with a margin. By then it has saved its reply
+ * or a notice.
+ */
+export const OPENING_TURN_MS = 240_000 + 30_000;
+
+/**
+ * Whether an opening admitted by the time the loader read the attempt has
+ * had longer than a turn can run. Measured on the server's clock alone, so a
+ * browser whose clock is off cannot take a running opening for a lost one.
+ */
+export const openingOverdue = (activity: ChatActivity | null | undefined): boolean => {
+  if (!activity?.lastAt) return false;
+  const age = Date.parse(activity.readAt) - Date.parse(activity.lastAt);
+  return Number.isFinite(age) && age > OPENING_TURN_MS;
+};
 
 // ---------------------------------------------------------------------------
 // Fixed copy
@@ -188,6 +219,43 @@ export const isPermanentSessionRefusal = (error: unknown) =>
   error instanceof QuizChatSessionError &&
   error.code !== null &&
   PERMANENT_SESSION_CODES.has(error.code);
+
+/**
+ * The task's lines for a message refused for good: the attempt is complete
+ * (at its message limit, the refusal completed it), past its deadline, gone,
+ * or no longer the student's. The task closes the session with each of them,
+ * but the close rides on the record after the error, which this tab may never
+ * read, so the line itself says so.
+ */
+const ENDED_LINES: ReadonlySet<string> = new Set([
+  QUIZ_REFUSAL_COPY.turn_limit,
+  QUIZ_REFUSAL_COPY.attempt_completed,
+  QUIZ_REFUSAL_COPY_BY_KIND.permanent,
+]);
+
+/** The error says the attempt can take no more messages. */
+export const isRefusalForGood = (error: unknown) =>
+  isPermanentSessionRefusal(error) || ENDED_LINES.has(errorLineFor(error));
+
+/**
+ * The task's lines for a message it refused before admitting it, for now:
+ * nothing of it was saved, and the student can send it again later. The
+ * session route's refusals are left out: one can answer a token refresh after
+ * the message went in.
+ */
+const NOT_ADMITTED_LINES: ReadonlySet<string> = new Set([
+  QUIZ_REFUSAL_COPY.too_fast,
+  QUIZ_REFUSAL_COPY.session_ended,
+  QUIZ_REFUSAL_COPY.classroom_locked,
+  QUIZ_REFUSAL_COPY.classroom_unpublished,
+  QUIZ_REFUSAL_COPY.quiz_unavailable,
+  QUIZ_REFUSAL_COPY.quizzes_unavailable,
+  QUIZ_REFUSAL_COPY_BY_KIND.temporary,
+]);
+
+/** The error is the task refusing a message before admitting it. */
+export const isRefusedBeforeAdmission = (error: unknown) =>
+  !(error instanceof QuizChatSessionError) && NOT_ADMITTED_LINES.has(errorLineFor(error));
 
 /**
  * The session route's answer for the attempt (start and refresh alike): a
@@ -414,17 +482,17 @@ const buttonActionOf = (message: QuizUIMessage) =>
 export const HINT_ACTIONS: readonly NextStepAction[] = ['next'];
 
 /**
- * Whether a reply to a Try again click is a hint, which ends with the Next
- * button alone (`HINT_ACTIONS`): it brings no buttons of its own (an accepted
- * offer), no card for a later question, no question result and no evaluation.
- * The current question's card shown again (`currentQuestion` is the highest
- * card number before this reply) does not count: the turn ends at that card,
- * and without the Next the student would be left with no button at all. A
- * refused call counts for nothing: the server refuses offer_next_step in a
- * Try again turn, so a hint often carries a refused offer ahead of its text.
+ * Whether a reply moves the quiz on: it brings buttons of its own (an
+ * accepted offer), the card of a later question, a question result or the
+ * evaluation. The current question's card shown again (`currentQuestion` is
+ * the highest card number before this reply) does not count: a Try again
+ * turn ends at that card, and without the hint's Next the student would be
+ * left with no button at all. A refused call counts for nothing: the server
+ * refuses offer_next_step in a Try again turn, so a hint often carries a
+ * refused offer ahead of its text.
  */
-const isHintReply = (message: QuizUIMessage, currentQuestion: number) =>
-  !visibleParts(message).some(
+const movesOn = (message: QuizUIMessage, currentQuestion: number) =>
+  visibleParts(message).some(
     part =>
       !isFailedToolPart(part) &&
       ((part.type === 'tool-offer_next_step' && part.state === 'output-available') ||
@@ -434,6 +502,19 @@ const isHintReply = (message: QuizUIMessage, currentQuestion: number) =>
         part.type === 'data-question-result' ||
         isEvaluationPart(part))
   );
+
+/**
+ * Whether a reply did not get through: it carries a notice (it couldn't be
+ * finished, and asks for the message again), or it shows nothing in a bubble
+ * (only the files read, only refused calls, or nothing yet while it streams).
+ */
+const fellThrough = (message: QuizUIMessage) => {
+  const parts = visibleParts(message);
+  return (
+    parts.some(part => part.type === 'data-notice') ||
+    !parts.some(part => part.type !== 'data-step' && rendersInBubble(part, false))
+  );
+};
 
 /**
  * A set of buttons that can still be clicked: an offer's Try again / Next,
@@ -449,11 +530,12 @@ export type LiveButtons = { message: number; part: number } | { message: number;
  * clicked, or null when none can.
  *
  * An offer (offer_next_step) brings its own set. So does a hint: the first
- * assistant reply after a Try again click (the stored action, or the button's
- * text, which the server takes as the click), when it is a hint
- * (`isHintReply`), ends with Next alone. The student answers the hint, which
- * brings feedback and a new offer, or moves on; a hint never ends with Try
- * again, so hints never chain from the buttons (Tim's decision).
+ * assistant reply after a Try again click (the stored action, or text the
+ * server takes as the click: `buttonActionFor`), when it gets through and
+ * does not move the quiz on (`fellThrough`, `movesOn`), ends with Next alone.
+ * The student answers the hint, which brings feedback and a new offer, or
+ * moves on; a hint never ends with Try again, so hints never chain from the
+ * buttons (Tim's decision).
  *
  * The latest set stays live until something supersedes it: one of its
  * buttons is clicked (or its text typed), a newer set arrives, the card of a
@@ -461,27 +543,33 @@ export type LiveButtons = { message: number; part: number } | { message: number;
  * Anything else leaves it live: a side question or an argument the student
  * types (the reply to it brings no buttons, so these stay the way on), the
  * current question's card shown again on request, or an earlier question's
- * revised result.
+ * revised result. A click whose reply did not get through gives its set back,
+ * so the click can be made again, as the reply's notice asks; the server
+ * counts a Try again click only once its hint has reached the student.
  */
 export const buttonSetsOf = (
   messages: readonly QuizUIMessage[]
 ): { live: LiveButtons | null; hintReplies: ReadonlySet<number> } => {
   let live: LiveButtons | null = null;
   let lastCard = 0;
-  // The next assistant message answers a Try again click.
-  let answersTryAgain = false;
+  // The button the latest student message used, and the set it used up,
+  // until the next assistant message answers it.
+  let clicked: NextStepAction | undefined;
+  let usedUp: LiveButtons | null = null;
   const hintReplies = new Set<number>();
   messages.forEach((message, position) => {
     if (message.metadata?.hidden) return;
     if (message.role === 'user') {
-      const action = buttonActionOf(message);
-      if (action) live = null;
-      answersTryAgain = action === 'try_again';
+      clicked = buttonActionOf(message);
+      usedUp = clicked ? live : null;
+      if (clicked) live = null;
       return;
     }
     if (message.role !== 'assistant') return;
-    const repliesToTryAgain = answersTryAgain;
-    answersTryAgain = false;
+    const answers = clicked;
+    const given = usedUp;
+    clicked = undefined;
+    usedUp = null;
     // The question open when this reply began: its own cards come after.
     const currentQuestion = lastCard;
     visibleParts(message).forEach((part, index) => {
@@ -498,7 +586,10 @@ export const buttonSetsOf = (
         live = null;
       }
     });
-    if (repliesToTryAgain && isHintReply(message, currentQuestion)) {
+    if (!answers || movesOn(message, currentQuestion)) return;
+    if (fellThrough(message)) {
+      live = given;
+    } else if (answers === 'try_again') {
       hintReplies.add(position);
       live = { message: position, hint: true };
     }
@@ -509,6 +600,28 @@ export const buttonSetsOf = (
 /** The one set of buttons that can still be clicked (`buttonSetsOf`), or null. */
 export const liveButtonsOf = (messages: readonly QuizUIMessage[]): LiveButtons | null =>
   buttonSetsOf(messages).live;
+
+/**
+ * The chat without a button click the task refused before admitting it
+ * (`isRefusedBeforeAdmission`): the last student message, when it names a
+ * button, and the empty reply the stream may have opened for it. The server
+ * saved neither, so without them the chat shows what a reload would, and the
+ * click's buttons are live again. Null when the chat does not end that way (a
+ * typed message stays: its text is the student's).
+ */
+export const withoutRefusedClick = (messages: readonly QuizUIMessage[]): QuizUIMessage[] | null => {
+  let end = messages.length;
+  while (
+    end > 0 &&
+    messages[end - 1].role === 'assistant' &&
+    messages[end - 1].parts.length === 0
+  ) {
+    end--;
+  }
+  const last = messages[end - 1];
+  if (!last || last.role !== 'user' || !buttonActionOf(last)) return null;
+  return messages.slice(0, end - 1);
+};
 
 /**
  * A part of the assistant's reply that renders: inside a bubble, or (a
@@ -1482,6 +1595,7 @@ function LiveQuizChat({
   attempt,
   transcript,
   chatStarted = false,
+  chatActivity = null,
   userLogin,
   userImage,
   focusMetrics,
@@ -1496,14 +1610,26 @@ function LiveQuizChat({
   const initialMessages = useMemo(() => transcript ?? [], []); // eslint-disable-line react-hooks/exhaustive-deps
   const [persisted] = useState(() => readPersistedSession(attemptId));
   const resuming = persisted?.isStreaming === true && !persisted.closed;
+  // Read once, as the drawer opens, like the transcript: a refresh of the
+  // drawer while this tab's own opening runs finds that opening stored, and
+  // must not turn the tab that began it into one that joins it.
+  const [startedAtOpen] = useState(chatStarted);
   // The opening was admitted but nothing of it is saved yet: its turn is
   // running for another tab or window (a reply is saved when its turn ends).
   // Sending begin again would start a second opening or be refused, so this
   // tab joins the running reply instead (see the join below).
-  const joinsOpening = chatStarted && initialMessages.length === 0 && !resuming;
+  const joinsOpening = startedAtOpen && initialMessages.length === 0 && !resuming;
+  // Unless it was admitted longer ago than a turn can run: then nothing is
+  // coming, and Start again is offered at once.
+  const [lostAtOpen] = useState(() => joinsOpening && openingOverdue(chatActivity));
   // The session closed while this chat was open: the task closes it on every
   // permanent refusal and once the attempt is complete.
   const [closedWhileOpen, setClosedWhileOpen] = useState(false);
+  // The task refused a message because the grant behind this tab's session
+  // no longer holds (`session_ended`). From then on the tab keeps no session
+  // state, so a reload asks the session route for a session, which writes a
+  // new grant, instead of reusing this one.
+  const sessionEndedRef = useRef(false);
 
   const transportRef = useRef<{ seedResumeCursor?: (chatId: string, cursor: string) => void }>(
     null
@@ -1522,7 +1648,7 @@ function LiveQuizChat({
     accessToken: ({ chatId }) => requestSessionToken(chatId),
     ...(persisted ? { sessions: { [attemptId]: persisted } } : {}),
     onSessionChange: (chatId, state) => {
-      persistSession(chatId, state);
+      persistSession(chatId, sessionEndedRef.current ? null : state);
       if (state?.closed) setClosedWhileOpen(true);
     },
   });
@@ -1569,18 +1695,19 @@ function LiveQuizChat({
   // and only then is begin offered again.
   const [joining, setJoining] = useState(false);
   const [awaitingSaved, setAwaitingSaved] = useState(false);
-  const [openingLost, setOpeningLost] = useState(false);
+  const [openingLost, setOpeningLost] = useState(lostAtOpen);
 
   const busy = status === 'submitted' || status === 'streaming' || joining || awaitingSaved;
   const evaluationSeen = hasEvaluation(messages);
   const complete = Boolean(attempt.completed_at) || evaluationSeen;
   // A session closed without an evaluation (the attempt can no longer take
-  // messages) leaves nothing to send to either.
+  // messages) leaves nothing to send to either; nor does a refusal for good.
   const sessionClosed =
     closedWhileOpen ||
     (typeof transport.sessionStatus === 'function' &&
       transport.sessionStatus(attemptId) === 'closed');
-  const canSend = !complete && !sessionClosed;
+  const refusedForGood = status === 'error' && isRefusalForGood(error);
+  const canSend = !complete && !sessionClosed && !refusedForGood;
 
   const time = useAttemptTime({
     attemptId,
@@ -1593,8 +1720,11 @@ function LiveQuizChat({
   // A new attempt starts with the typed `begin` action; its turn streams into
   // useChat like any reply. Not re-sent when a reply is being resumed.
   const beganRef = useRef(false);
+  // This tab has sent begin: a start it retries is a begin, never a join.
+  const [beganHere, setBeganHere] = useState(false);
   const begin = useCallback(() => {
     beganRef.current = true;
+    setBeganHere(true);
     setOpeningLost(false);
     void sendAction({ type: 'begin' });
   }, [sendAction]);
@@ -1605,7 +1735,7 @@ function LiveQuizChat({
   // server ran the turn but its reply never reached the drawer. A torn-down
   // mount cancels its pending send; the mount that stays sends it.
   useEffect(() => {
-    if (beganRef.current || initialMessages.length > 0 || resuming || chatStarted) {
+    if (beganRef.current || initialMessages.length > 0 || resuming || startedAtOpen) {
       return undefined;
     }
     let cancelled = false;
@@ -1615,7 +1745,7 @@ function LiveQuizChat({
     return () => {
       cancelled = true;
     };
-  }, [begin, initialMessages.length, resuming, chatStarted]);
+  }, [begin, initialMessages.length, resuming, startedAtOpen]);
 
   // Join the running opening: read its reply stream from the start. When that
   // brings no reply (the opening already finished, or its stream had nothing
@@ -1640,7 +1770,7 @@ function LiveQuizChat({
   // Started once the mount has held, for the reason begin is (above).
   const joinedRef = useRef(false);
   useEffect(() => {
-    if (!joinsOpening || joinedRef.current) return undefined;
+    if (!joinsOpening || lostAtOpen || joinedRef.current) return undefined;
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled || joinedRef.current) return;
@@ -1650,7 +1780,7 @@ function LiveQuizChat({
     return () => {
       cancelled = true;
     };
-  }, [joinsOpening, join]);
+  }, [joinsOpening, lostAtOpen, join]);
 
   // A begin refused because the quiz has already started (another tab began
   // it first) waits for the saved transcript too, rather than offering a
@@ -1691,10 +1821,11 @@ function LiveQuizChat({
   }, [awaitingSaved, transcript, setMessages, clearError]);
 
   // Once the evaluation is in, or the attempt can take no more turns (the
-  // session closed, or the session route refused it for good), and the reply
-  // has finished, refresh the drawer once: its title, close prompt and results
-  // panel read the attempt as stored, which a refused turn may have completed.
-  const refusedForGood = status === 'error' && isPermanentSessionRefusal(error);
+  // session closed, or a refusal for good), and the reply has finished,
+  // refresh the drawer once: its title, close prompt and results panel read
+  // the attempt as stored, which a refused turn may have completed (at the
+  // message limit, the refusal completes it, and the refresh brings its
+  // results).
   const ended = evaluationSeen || closedWhileOpen || refusedForGood;
   const refreshedRef = useRef(false);
   useEffect(() => {
@@ -1702,6 +1833,26 @@ function LiveQuizChat({
     refreshedRef.current = true;
     revalidateRef.current();
   }, [ended, busy]);
+
+  // A session_ended refusal: drop the tab's session state, and keep it
+  // dropped (`sessionEndedRef`).
+  const sessionEnded =
+    status === 'error' && errorLineFor(error) === QUIZ_REFUSAL_COPY.session_ended;
+  useEffect(() => {
+    if (!sessionEnded) return;
+    sessionEndedRef.current = true;
+    persistSession(attemptId, null);
+  }, [sessionEnded, attemptId]);
+
+  // A button click the task refused before admitting it (sent too soon after
+  // the last message, say) never happened on the server: it leaves the chat,
+  // and its buttons are live again (`withoutRefusedClick`).
+  const refusedBeforeAdmission = status === 'error' && isRefusedBeforeAdmission(error);
+  useEffect(() => {
+    if (!refusedBeforeAdmission) return;
+    const kept = withoutRefusedClick(messagesRef.current);
+    if (kept) setMessages(kept);
+  }, [refusedBeforeAdmission, error, setMessages]);
 
   const send = useCallback(
     (text: string) => {
@@ -1722,11 +1873,12 @@ function LiveQuizChat({
     attempt.completed_at || (evaluationSeen && !busy) ? 'complete' : busy ? 'streaming' : 'ready';
   const errorLine =
     status === 'error' && error ? errorLineFor(error) : openingLost ? START_FAILED_LINE : null;
-  const startFailed = Boolean(errorLine) && shown.length === 0;
+  // Nothing to start again once the attempt can take no more messages.
+  const startFailed = Boolean(errorLine) && shown.length === 0 && canSend;
   // A start that failed is tried again the way it was made: a join joins
-  // again, and begin is sent again only for an attempt with no opening, or
-  // one whose opening was lost.
-  const retryStart = chatStarted && !openingLost ? join : begin;
+  // again, and begin is sent again only for an attempt with no opening, one
+  // whose opening was lost, or one this tab began.
+  const retryStart = startedAtOpen && !openingLost && !beganHere ? join : begin;
 
   return (
     <div
@@ -1764,7 +1916,9 @@ function LiveQuizChat({
               loading={busy}
               disabled={!canSend}
               placeholder={
-                sessionClosed ? "This quiz can't continue right now." : EDITOR_PLACEHOLDER
+                sessionClosed || refusedForGood
+                  ? "This quiz can't continue right now."
+                  : EDITOR_PLACEHOLDER
               }
               sendButtonTestId="quiz-send"
             />
