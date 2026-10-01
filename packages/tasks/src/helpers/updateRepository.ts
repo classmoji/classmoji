@@ -207,7 +207,7 @@ async function updateGitLabRepository(
     await studentGit.push('origin', 'updates', ['--force', '-o', 'ci.skip']);
 
     const defaultBranch = await provider.getDefaultBranch(owner, repoName);
-    const description = `${prDescription}\n\n---\n\n## Template Update\n\nThis merge request brings the latest changes from the template project.\n\n### To merge\n\n1. Review the changes in the "Changes" tab\n2. Click "Merge"\n3. If conflicts occur, resolve them in your editor`;
+    const description = `${prDescription}\n\n---\n\n## Template Update\n\nThis brings the latest changes from the template repository.\n\n### To merge\n\n1. Review the changes in the "Changes" tab\n2. Click "Merge"\n3. If conflicts occur, resolve them in your editor`;
     const existing = await provider.findOpenMergeRequest(owner, repoName, 'updates', defaultBranch);
     const url = existing
       ? (await provider.updateMergeRequest(owner, repoName, existing.iid, prTitle, description)).url
@@ -223,7 +223,7 @@ async function updateGitLabRepository(
         ).url;
     logger.info(`Template update merge request: ${url}`);
     return {
-      message: existing ? 'Merge request updated' : 'Merge request created',
+      message: existing ? 'Pull request updated' : 'Pull request created',
       prUrl: url,
       hasChanges: true,
     };

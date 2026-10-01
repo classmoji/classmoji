@@ -47,7 +47,7 @@ export const rosterAddStudentTool: ToolDefinition<RosterAddStudentArgs> = {
   description:
     'Adds students to the classroom roster by email (bulk). Owner only. Existing Classmoji users ' +
     'are enrolled immediately (on Github still pending their org invite; on Gitlab active right away ' +
-    'if they already have Gitlab, with their projects created now, else on their first Gitlab sign-in); ' +
+    'if they already have Gitlab, with their repositories created now, else on their first Gitlab sign-in); ' +
     'unknown emails get an invitation row. Sends a real email to every student — NOT idempotent, ' +
     'calling twice emails twice.',
   scope: 'write',

@@ -447,10 +447,10 @@ export async function mergeBranch(
       state: 'opened',
     });
     const existing = (await api.api(`${mrApi}?${params.toString()}`)) as MergeRequest[];
-    if (!existing[0]) throw statusError(409, `Could not open a merge request for ${head}`);
+    if (!existing[0]) throw statusError(409, `Could not open a pull request for ${head}`);
     mr = existing[0];
   } else {
-    throw statusError(opened.status, `Gitlab merge request for ${head} failed (${opened.status})`);
+    throw statusError(opened.status, `Gitlab pull request for ${head} failed (${opened.status})`);
   }
 
   const close = () =>

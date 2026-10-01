@@ -812,7 +812,7 @@ export async function action({ request }: Route.ActionArgs) {
                     const group = gitOrganization.login.toLowerCase();
                     const ns = gitlabNamespace.toLowerCase();
                     if (ns !== group && !ns.startsWith(`${group}/`)) {
-                      throw new Error("That project is not in this classroom's Gitlab group.");
+                      throw new Error("That repository is not in this classroom's Gitlab group.");
                     }
                   } else {
                     gitlabNamespace = repoNamespace(

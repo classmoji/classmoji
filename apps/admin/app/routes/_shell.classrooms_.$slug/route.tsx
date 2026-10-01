@@ -78,7 +78,7 @@ const ClassroomDetail = () => {
           <span>
             <strong>{org.login}</strong>{' '}
             {org.provider === 'GITLAB'
-              ? 'has no Gitlab connection. Project operations for this classroom will fail.'
+              ? 'has no Gitlab connection. Repository operations for this classroom will fail.'
               : 'has no Github App installation id. Repository operations for this classroom will fail.'}
           </span>
         </div>

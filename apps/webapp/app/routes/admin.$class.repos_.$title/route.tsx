@@ -167,8 +167,7 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
         {assignmentRows.length === 0 && (
           <div className="rounded-xl border border-[#F4D8C5] dark:border-amber-800/40 bg-[#FEF3EC] dark:bg-amber-900/20 px-4 py-3 text-sm text-[#8a5b3a] dark:text-amber-200">
             No assignment submits through this {terms.repo} yet, so pushes to it are recorded but
-            count as nothing. Add a {web.isGitLab ? 'Project' : 'REPO'} assignment pointing at it to
-            start collecting submissions.
+            count as nothing. Add a REPO assignment pointing at it to start collecting submissions.
           </div>
         )}
 

@@ -572,7 +572,7 @@ const ModuleCard = ({
       target && target !== a.title
         ? target
         : ASSIGNMENT_TYPE_META[a.type]
-          ? assignmentTypeName(a.type, web.isGitLab)
+          ? assignmentTypeName(a.type)
           : null;
     return base ? `${base} · ${weight}` : weight;
   };
@@ -676,7 +676,7 @@ const ModuleCard = ({
             {contentItems.length > 0 && <GroupHeading>Content</GroupHeading>}
             {contentItems.map((item, itemIndex) => {
               const meta = TYPE_META[item.item_type];
-              const { label, published } = describeItem(item, web.isGitLab);
+              const { label, published } = describeItem(item);
               const edit = () => {
                 if (item.item_type === 'PAGE' && item.page) {
                   navigate(`/${rolePrefix}/${classSlug}/pages/${item.page.id}`);
@@ -697,7 +697,7 @@ const ModuleCard = ({
                   canEdit={canEdit}
                   icon={meta.icon}
                   title={label}
-                  kind={typeLabel(item.item_type, web.isGitLab)}
+                  kind={typeLabel(item.item_type)}
                   published={published}
                   onOpen={edit}
                   onEdit={edit}

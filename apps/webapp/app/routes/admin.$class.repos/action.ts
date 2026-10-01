@@ -67,8 +67,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       if (numReposToCreate + numIssuesToCreate == 0)
         return {
-          info:
-            terms.repo === 'project' ? 'No missing project or issue' : 'No missing repo or issue',
+          info: 'No missing repo or issue',
         };
 
       return res;

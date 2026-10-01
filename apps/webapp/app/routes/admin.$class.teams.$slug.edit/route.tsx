@@ -56,8 +56,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
   const { students, teamMembers, tags, team, repositoryCount, canRenameTeam, isGitLab } =
     loaderData;
   const host = isGitLab ? 'Gitlab' : 'Github';
-  const repoWord = (n: number) =>
-    isGitLab ? `project${n === 1 ? '' : 's'}` : `repositor${n === 1 ? 'y' : 'ies'}`;
+  const repoWord = (n: number) => `repositor${n === 1 ? 'y' : 'ies'}`;
   const [membersToAdd, setMembersToAdd] = useState<string[]>([]);
   const [tagsToAdd, setTagsToAdd] = useState<string[]>([]);
   const [renameValue, setRenameValue] = useState(team.name);
@@ -217,9 +216,8 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
               </Button>
             </div>
             <p className="mt-2 text-xs text-ink-3">
-              Renames the team on {host} and every linked {isGitLab ? 'project' : 'repository'} (
-              {repositoryCount} {repoWord(repositoryCount)}). Local clones need to update their git
-              remote.
+              Renames the team on {host} and every linked repository ({repositoryCount}{' '}
+              {repoWord(repositoryCount)}). Local clones need to update their git remote.
             </p>
           </Card>
         </>
@@ -230,7 +228,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
           className="mb-8 border-red-300 dark:border-red-700"
           title={
             <span className="text-red-700 dark:text-red-400">
-              {renameFailures.length} {isGitLab ? 'project' : 'repo'}
+              {renameFailures.length} repo
               {renameFailures.length === 1 ? '' : 's'} failed to rename
             </span>
           }

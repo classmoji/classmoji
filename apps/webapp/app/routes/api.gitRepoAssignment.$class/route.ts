@@ -298,7 +298,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         });
         return {
           action: ActionTypes.DELETE_GIT_REPO_ASSIGNMENT,
-          success: `Submission and ${full?.git_organization?.provider === 'GITLAB' ? 'project' : 'repository'} deleted`,
+          success: `Submission and repository deleted`,
         };
       }
 

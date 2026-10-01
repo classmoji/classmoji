@@ -309,9 +309,7 @@ const StepImportModules = ({
                         },
                         {
                           key: 'duplicateTemplates',
-                          label: isGitLab
-                            ? 'Duplicate template projects'
-                            : 'Duplicate template repos',
+                          label: 'Duplicate template repos',
                           count: distinctTemplates,
                           sublabel: isGitLab
                             ? "private copies in the group's templates subgroup, so terms stay independent"

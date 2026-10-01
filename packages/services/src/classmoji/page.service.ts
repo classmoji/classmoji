@@ -306,7 +306,7 @@ async function ensureContentRepoExists({ classroom, gitOrgLogin, repoName }: Con
       console.error('Failed to create content repository:', repoError);
       throw new Error(
         isGitLab
-          ? 'Failed to create the Gitlab content project. Please check your Gitlab group permissions'
+          ? 'Failed to create the Gitlab content repository. Please check your Gitlab group permissions'
           : 'Failed to create GitHub repository. Please check your GitHub organization permissions'
       );
     }

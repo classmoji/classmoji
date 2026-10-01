@@ -188,7 +188,7 @@ const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
       <div className="flex flex-col gap-14 pt-4">
         <Section
           title="Webhooks"
-          subtitle="Gitlab tells Classmoji about pushes and closed issues through a webhook on each project. If submissions stop showing up, repair them: every student and content project gets one working Classmoji webhook again. This also runs every night."
+          subtitle="Gitlab tells Classmoji about pushes and closed issues through a webhook on each repository. If submissions stop showing up, repair them: every student and content repository gets one working Classmoji webhook again. This also runs every night."
         >
           <Button
             loading={fetcher.state !== 'idle'}
@@ -335,7 +335,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     if ((input as { intent?: unknown } | null)?.intent === 'repairWebhooks') {
       await Tasks.repairGitlabWebhooksTask.trigger({ classroomId: classroom.id });
       return {
-        success: 'Repairing webhooks. Every project will be fixed within a few minutes.',
+        success: 'Repairing webhooks. Every repository will be fixed within a few minutes.',
         action: 'REPAIR_GITLAB_WEBHOOKS',
       };
     }

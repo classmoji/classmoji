@@ -39,7 +39,7 @@ export interface AssignmentRowData {
 
 /** "Repo · push" / "Repo · issue" for REPO assignments, the plain type otherwise. */
 export const assignmentTypeLabel = (a: AssignmentRowData, isGitLab = false): string => {
-  const base = assignmentTypeName(a.type, isGitLab);
+  const base = assignmentTypeName(a.type);
   if (a.type !== 'REPO') return base;
   return `${base} · ${a.submission_mode === 'REPO' ? 'push' : gitTerms(isGitLab).issue}`;
 };
@@ -50,9 +50,9 @@ export const ASSIGNMENT_TYPE_META: Record<string, { label: string; icon: Icon; c
   FORM: { label: 'Form', icon: IconForms, color: 'cyan' },
 };
 
-/** The type's display name; a Gitlab classroom's REPO assignment reads "Project". */
-export const assignmentTypeName = (type: string, isGitLab = false): string =>
-  type === 'REPO' && isGitLab ? 'Project' : (ASSIGNMENT_TYPE_META[type]?.label ?? type);
+/** The type's display name. */
+export const assignmentTypeName = (type: string): string =>
+  ASSIGNMENT_TYPE_META[type]?.label ?? type;
 
 /** The thing an assignment points at, by type. */
 export const assignmentTarget = (a: AssignmentRowData): string | null => {
@@ -265,7 +265,7 @@ const AssignmentsTable = ({
           <div className="text-center py-12 text-gray-500">
             <div className="font-medium">{emptyText}</div>
             <div className="text-sm">
-              {`An assignment is a ${web.isGitLab ? 'project work item' : 'repo issue'}${
+              {`An assignment is a repo issue${
                 quizzesVisible ? ', a quiz,' : ''
               } or a form, with a weight and a due date.`}
             </div>

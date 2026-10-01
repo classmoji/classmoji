@@ -366,7 +366,7 @@ export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
       .min(1)
       .max(200)
       .describe(
-        'Template students are provisioned from at publish: owner/name on Github, group/.../project on Gitlab'
+        'Template students are provisioned from at publish: owner/name on Github, group/.../repository on Gitlab'
       ),
     type: z
       .enum(['INDIVIDUAL', 'GROUP'])

@@ -551,7 +551,7 @@ const AssignmentFormModal = ({
                     rules={[
                       {
                         required: true,
-                        message: `Pick the tag whose teams get a ${web.isGitLab ? 'project' : 'repo'}`,
+                        message: `Pick the tag whose teams get a repo`,
                       },
                     ]}
                     extra={`Every team carrying this tag gets one ${terms.repo}.`}
@@ -639,10 +639,8 @@ const AssignmentFormModal = ({
                 </span>
               </Radio>
               <Radio value="ISSUE">
-                Close {web.isGitLab ? 'a work item' : `a ${web.label} issue`}{' '}
-                <span className="text-ink-3">
-                  — Classmoji opens one in each student {web.isGitLab ? 'project' : 'repo'}
-                </span>
+                Close {`a ${web.label} issue`}{' '}
+                <span className="text-ink-3">— Classmoji opens one in each student repo</span>
               </Radio>
             </Radio.Group>
           </Form.Item>

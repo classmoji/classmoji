@@ -52,15 +52,15 @@ const DangerZone = ({ loaderData }: Route.ComponentProps) => {
   // classroom's own import created, then every team.
   const artifactGroups = [
     {
-      heading: isGitLab ? 'Content project' : 'Content repository',
+      heading: 'Content repository',
       items: artifacts.filter(a => a.label === 'content repo'),
     },
     {
-      heading: isGitLab ? 'Assignment projects' : 'Assignment repositories',
+      heading: 'Assignment repositories',
       items: artifacts.filter(a => a.label === 'assignment repo'),
     },
     {
-      heading: isGitLab ? 'Imported template projects' : 'Imported template repositories',
+      heading: 'Imported template repositories',
       items: artifacts.filter(a => a.label === 'template repo'),
     },
     { heading: isGitLab ? 'Subgroups' : 'Teams', items: teams },
@@ -183,7 +183,7 @@ const DangerZone = ({ loaderData }: Route.ComponentProps) => {
                   <p className="font-medium text-gray-700 dark:text-gray-200">
                     {isGitLab ? (
                       <>
-                        Will delete {repos.length} project{repos.length === 1 ? '' : 's'} and{' '}
+                        Will delete {repos.length} repositor{repos.length === 1 ? 'y' : 'ies'} and{' '}
                         {teams.length} subgroup{teams.length === 1 ? '' : 's'}:
                       </>
                     ) : (
@@ -214,9 +214,8 @@ const DangerZone = ({ loaderData }: Route.ComponentProps) => {
               )}
               {withheld && (
                 <p className="mt-2 text-amber-600 dark:text-amber-400">
-                  Content {isGitLab ? 'project' : 'repo'}{' '}
-                  <span className="font-mono">{withheld.name}</span> is shared with classroom{' '}
-                  <span className="font-mono">{withheld.sharedWithSlug}</span>, so{' '}
+                  Content repo <span className="font-mono">{withheld.name}</span> is shared with
+                  classroom <span className="font-mono">{withheld.sharedWithSlug}</span>, so{' '}
                   {isGitLab ? 'Gitlab' : 'Github'} cleanup is blocked — uncheck this option to
                   remove the classroom only.
                 </p>
@@ -327,7 +326,7 @@ const removeClassroomHandler = async (
     }
 
     const bits: string[] = [];
-    const repoWord = isGitLab ? 'project' : 'repo';
+    const repoWord = 'repo';
     const teamWord = isGitLab ? 'subgroup' : 'team';
     if (summary.deleted_repos > 0)
       bits.push(`${summary.deleted_repos} ${repoWord}${summary.deleted_repos === 1 ? '' : 's'}`);

@@ -40,9 +40,8 @@ export const TYPE_META: Record<ModuleItemType, { label: string; icon: Icon }> = 
   FORM: { label: 'Form', icon: IconForms },
 };
 
-/** A type's display name; a Gitlab classroom's repository reads "Project". */
-export const typeLabel = (type: ModuleItemType, isGitLab = false): string =>
-  type === 'REPOSITORY' && isGitLab ? 'Project' : TYPE_META[type].label;
+/** A type's display name. */
+export const typeLabel = (type: ModuleItemType): string => TYPE_META[type].label;
 
 // A form's two lifecycle axes, as an instructor reads them. Both are exhaustive
 // Records over their enums, so adding a status or an access mode fails to
@@ -90,12 +89,12 @@ export interface ModuleItemLike {
   form_id?: string | null;
 }
 
-export const itemLabel = (item: ModuleItemLike, isGitLab = false): string => {
+export const itemLabel = (item: ModuleItemLike): string => {
   switch (item.item_type) {
     case 'PAGE':
       return item.page?.title ?? '(deleted page)';
     case 'REPOSITORY':
-      return item.repository?.title ?? (isGitLab ? '(deleted project)' : '(deleted repository)');
+      return item.repository?.title ?? '(deleted repository)';
     case 'QUIZ':
       return item.quiz?.name ?? '(deleted quiz)';
     case 'SLIDE':
@@ -115,15 +114,14 @@ export const itemLabel = (item: ModuleItemLike, isGitLab = false): string => {
 // a form carries two axes the other types don't (who may open it, and when it
 // stops accepting answers), and neither is recoverable from the Published pill.
 export const describeItem = (
-  item: ModuleItemLike,
-  isGitLab = false
+  item: ModuleItemLike
 ): { label: string; published: boolean; note?: string } => {
   switch (item.item_type) {
     case 'PAGE':
       return { label: itemLabel(item), published: !!item.page && !item.page.is_draft };
     case 'REPOSITORY':
       return {
-        label: itemLabel(item, isGitLab),
+        label: itemLabel(item),
         published: !!item.repository && item.repository.is_published,
       };
     case 'QUIZ':

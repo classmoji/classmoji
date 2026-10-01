@@ -53,8 +53,8 @@ const HealthCheck = ({ row }: { row: InstanceRow }) => {
                   : 'text-ink-3'
               }
             >
-              Reachable · {health.projectsChecked} projects checked · {health.missingHooks} missing,{' '}
-              {health.failingHooks} failing webhooks
+              Reachable · {health.projectsChecked} repositories checked · {health.missingHooks}{' '}
+              missing, {health.failingHooks} failing webhooks
             </span>
           )}
           {health.examples.length > 0 ? (

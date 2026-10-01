@@ -261,7 +261,7 @@ export default function DeleteSlidePage() {
                 </p>
                 <div className="font-mono text-xs bg-gray-100 dark:bg-gray-800 rounded p-3 overflow-x-auto">
                   <p className="text-gray-500 dark:text-gray-400 mb-1">
-                    # {platform === 'Gitlab' ? 'Project' : 'Repository'}: {github.repo}
+                    # Repository: {github.repo}
                   </p>
                   {github.files.map((file: string, i: number) => (
                     <p key={i} className="text-red-600 dark:text-red-400">

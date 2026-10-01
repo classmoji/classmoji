@@ -3,7 +3,6 @@ import { Tag } from 'antd';
 import { IconChevronDown, IconChevronRight, type Icon } from '@tabler/icons-react';
 
 import { usePagePeek } from '~/components/features/pages';
-import { useGitWeb } from '~/hooks/useGitWeb';
 import { TYPE_META, typeLabel } from './moduleItemMeta';
 import type { ModuleTreeNode } from './ReadOnlyModulesTree';
 
@@ -26,10 +25,10 @@ interface StudentModuleCardProps {
 }
 
 /** The kind a leaf reads as, and its icon, mirroring the admin card's rows. */
-const kindOf = (node: ModuleTreeNode, isGitLab: boolean): { label: string; icon: Icon } => {
+const kindOf = (node: ModuleTreeNode): { label: string; icon: Icon } => {
   if (node.kind === 'assignment') return { label: 'Assignment', icon: TYPE_META.REPOSITORY.icon };
   if (node.kind === 'repository' || node.kind === 'repo')
-    return { label: typeLabel('REPOSITORY', isGitLab), icon: TYPE_META.REPOSITORY.icon };
+    return { label: typeLabel('REPOSITORY'), icon: TYPE_META.REPOSITORY.icon };
   switch (node.resourceIcon) {
     case 'slide':
       return { label: 'Slides', icon: TYPE_META.SLIDE.icon };
@@ -71,7 +70,6 @@ const StudentModuleCard = ({
   isStaff,
 }: StudentModuleCardProps) => {
   const peek = usePagePeek();
-  const web = useGitWeb();
   // Content reads first, then what is due; each group keeps the module's order.
   const ordered = [
     ...leaves.filter(n => groupOf(n) === 'Content'),
@@ -136,7 +134,7 @@ const StudentModuleCard = ({
                       <span />
                     </li>
                   ) : null;
-                const { label, icon: RowIcon } = kindOf(node, web.isGitLab);
+                const { label, icon: RowIcon } = kindOf(node);
                 const titleText = typeof node.name === 'string' ? node.name : '';
                 // The whole row is the link: pages peek in place, everything
                 // else opens its own app. Repository rows keep their team action.

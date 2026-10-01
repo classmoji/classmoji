@@ -138,7 +138,7 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
 
       {/* Content Repository Link */}
       <SettingSection
-        title={web.isGitLab ? 'Content Project' : 'Content Repository'}
+        title="Content Repository"
         description={
           web.isGitLab
             ? 'Your course content (slides, pages, syllabus) is stored in a Gitlab repository.'
@@ -231,9 +231,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       await ClassmojiService.classroom.updateSettings(classroom.id, {
         content_repo_name: content_repo_name || null,
       });
-      const isGitLab = classroom.git_organization?.provider === 'GITLAB';
       return {
-        success: isGitLab ? 'Content project updated' : 'Content repository updated',
+        success: 'Content repository updated',
         action: ActionTypes.SAVE_CONTENT_SETTINGS,
       };
     },

@@ -19,7 +19,7 @@ type GitRepo = Awaited<ReturnType<typeof ClassmojiService.gitRepo.findByReposito
  */
 const skippedNote = (count: number) =>
   `${count} student${count === 1 ? '' : 's'} skipped: no Gitlab account connected yet. ` +
-  'Their projects are created when they connect Gitlab and open Classmoji.';
+  'Their repositories are created when they connect Gitlab and open Classmoji.';
 
 export const publishAssignment = async (
   classroomSlug: string,

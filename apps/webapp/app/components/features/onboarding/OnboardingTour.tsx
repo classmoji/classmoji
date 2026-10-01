@@ -54,7 +54,7 @@ const GITLAB_DESCRIPTIONS: Record<string, string> = {
   'new-class':
     'A classroom is backed by a Gitlab group, and you can run several classrooms (for example, different semesters of the same course) under one group. To create one you pick a group you own on your connected Gitlab account, then name the class; the URL slug is generated from the name and cannot be changed later.',
   import:
-    'Already taught a course in Classmoji? Start a new classroom from a previous one and bring its projects along. Imported content arrives with deadlines stripped and projects unpublished, so you can reuse coursework without exposing anything to students until you are ready.',
+    'Already taught a course in Classmoji? Start a new classroom from a previous one and bring its repositories along. Imported content arrives with deadlines stripped and repositories unpublished, so you can reuse coursework without exposing anything to students until you are ready.',
   'settings-general':
     'Your profile basics, name, email, and Gitlab username, live on the General tab. They are synced from Gitlab and shown read-only here.',
 };

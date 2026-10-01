@@ -127,8 +127,8 @@ const GitLabClassroomForm = ({
             <p className="text-sm font-semibold text-ink-0">Connect Gitlab</p>
             <p className="text-sm text-ink-3">
               Classmoji needs access to your Gitlab groups to create a subgroup for each class and
-              its student projects. You approve this once on Gitlab; it works like installing the
-              Github App.
+              its student repositories. You approve this once on Gitlab; it works like installing
+              the Github App.
             </p>
             {gitlab.host && (
               <p className="text-xs text-ink-3">
@@ -190,7 +190,7 @@ const GitLabClassroomForm = ({
                     : group &&
                       slug && (
                         <span>
-                          Student projects will live in{' '}
+                          Student repositories will live in{' '}
                           <span className="font-mono">
                             {group.full_path}/{slug}
                           </span>

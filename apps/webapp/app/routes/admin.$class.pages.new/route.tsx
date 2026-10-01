@@ -103,8 +103,7 @@ async function createPage({ request, params }: Route.ActionArgs, slot: { held: b
   // Stored, user-editable content repo name. Never re-derive it.
   const repoName = classroom.content_repo;
   if (!repoName) {
-    const isGitLab = classroom.git_organization?.provider === 'GITLAB';
-    return { error: `Classroom content ${isGitLab ? 'project' : 'repo'} not configured` };
+    return { error: `Classroom content repo not configured` };
   }
 
   // Single page import/create

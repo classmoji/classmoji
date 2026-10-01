@@ -287,7 +287,7 @@ export const buildRepositoryNode = (
           rel="noreferrer"
           className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
         >
-          {repoWeb.isGitLab ? 'Open project' : 'Open repo'}
+          Open repo
         </a>
       ) : null,
       children: bucket.items.map(a =>

@@ -190,9 +190,7 @@ const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
                             rel="noreferrer"
                             title={
                               row.issueUrl
-                                ? web.isGitLab
-                                  ? 'Open the work item for this assignment'
-                                  : `Open the ${web.label} issue for this assignment`
+                                ? `Open the ${web.label} issue for this assignment`
                                 : `Open the ${web.terms.repo} you submit this in`
                             }
                             className="inline-flex items-center gap-1.5 font-medium text-ink-0! hover:underline underline-offset-2"

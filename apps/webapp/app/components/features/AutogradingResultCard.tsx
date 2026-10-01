@@ -82,7 +82,7 @@ const AutogradingResultCard = ({
       <span className="text-xs text-ink-4">—</span>
     ) : (
       <div className="text-sm text-ink-4">
-        No autograding run yet. Push to your {web.isGitLab ? 'project' : 'repo'} to run the tests.
+        No autograding run yet. Push to your repo to run the tests.
       </div>
     );
   }

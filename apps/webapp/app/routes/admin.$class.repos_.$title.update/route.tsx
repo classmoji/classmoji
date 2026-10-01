@@ -119,9 +119,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const templateRef = resolveTemplateRef(repository.template, classroom.git_organization?.login);
   if (!templateRef) {
     return {
-      error: isGitLabClassroom(classroom)
-        ? 'This project has no template project to update from.'
-        : 'This repository has no template repository to update from.',
+      error: 'This repository has no template repository to update from.',
     };
   }
 
