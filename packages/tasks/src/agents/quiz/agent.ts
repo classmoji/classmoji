@@ -21,7 +21,12 @@ import { chat } from '@trigger.dev/sdk/ai';
 import type { ModelMessage, UIMessage } from 'ai';
 import { z } from 'zod';
 import { ClassmojiService } from '@classmoji/services';
-import { buildTurnStatus, quizToolDefs, type QuizUIMessage } from '@classmoji/utils/quiz-agent';
+import {
+  QUIZ_RUN_MAX_TURNS,
+  buildTurnStatus,
+  quizToolDefs,
+  type QuizUIMessage,
+} from '@classmoji/utils/quiz-agent';
 import { currentAdmission } from './admission.ts';
 import { attemptCompleted, attemptHasQuestion, loadAttemptContext } from './context.ts';
 import { runQuizTurn } from './loop.ts';
@@ -67,6 +72,9 @@ export const quizAttemptAgent = chat.agent({
   queue: { name: 'quiz-attempt', concurrencyLimit: QUIZ_AGENT_CONCURRENCY },
   idleTimeoutInSeconds: 10,
   turnTimeout: '1h',
+  // The SDK reads the next message before it checks this limit and ends the
+  // run without answering it, so one attempt must never reach it (limits.ts).
+  maxTurns: QUIZ_RUN_MAX_TURNS,
   chatAccessTokenTTL: '15m',
   // A hint at most, never identity or settings; absent when the client sends none.
   clientDataSchema: z.object({ timezone: z.string().max(64).optional() }).optional(),
