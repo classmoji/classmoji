@@ -142,15 +142,10 @@ const GitLabClassroomForm = ({
         </Card>
       ) : (
         <Card>
-          <div className="flex items-center justify-between mb-5 text-sm text-ink-3">
-            <span className="flex items-center gap-2">
-              <GitlabLogo size={14} />
-              Connected as @{gitlab.connection.username}
-              {gitlab.host && <span>on {new URL(gitlab.host).host}</span>}
-            </span>
-            <a href={CONNECT_URL} className="text-xs font-medium text-accent hover:underline">
-              Reconnect
-            </a>
+          <div className="flex items-center gap-2 mb-5 text-sm text-ink-3">
+            <GitlabLogo size={14} />
+            Connected as @{gitlab.connection.username}
+            {gitlab.host && <span>on {new URL(gitlab.host).host}</span>}
           </div>
 
           {gitlab.error ? (
@@ -159,6 +154,11 @@ const GitLabClassroomForm = ({
               showIcon
               message="Gitlab refused the connection"
               description={`${gitlab.error} Reconnect Gitlab to continue.`}
+              action={
+                <Button size="small" href={CONNECT_URL}>
+                  Reconnect
+                </Button>
+              }
             />
           ) : gitlab.groups.length === 0 ? (
             <Alert
