@@ -1,13 +1,13 @@
 /**
  * Quiz models on AI settings (llm_model, code_aware_model, exploration_model).
- * The quiz runtime runs only allow-listed models (isAllowedModel,
- * @classmoji/utils/ai-models) and falls back to the platform default for any
- * other, so:
+ * Both quiz runtimes (the ai-agent and the Trigger.dev quiz tasks) run only
+ * allow-listed models (isAllowedModel, @classmoji/utils/ai-models) and fall
+ * back to the platform default for any other, so:
  *   - the quiz selects offer only allow-listed models; Ask Moji's offers every
- *     model (its runtime has no allow-list);
+ *     model (it has no allow-list);
  *   - a stored quiz model off the list shows as the default it runs as;
  *   - the action refuses one, so the page and the API cannot store a model the
- *     runtime ignores.
+ *     runtimes ignore.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';

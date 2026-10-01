@@ -17,8 +17,10 @@ export const ALLOWED_MODELS = [
 export type AllowedModel = (typeof ALLOWED_MODELS)[number];
 
 /**
- * The quiz code default: what a quiz model slot runs when neither the
- * classroom's choice nor the platform's env value is allowed (or set).
+ * The code default for every AI surface: what a quiz model slot (quiz,
+ * exploration, prompt assistant) runs when neither the classroom's choice nor
+ * the platform's env value is allowed (or set), and what Ask Moji runs when
+ * SYLLABUS_BOT_MODEL and LLM_MODEL are both unset.
  */
 export const FALLBACK_MODEL: AllowedModel = 'claude-sonnet-5-5';
 
@@ -30,8 +32,9 @@ export const isAllowedModel = (id: string | null | undefined): id is string =>
 
 /**
  * The model a slot runs when the classroom names none: the platform's env value
- * (trimmed) when it is allowed, else FALLBACK_MODEL. The quiz runtime and the
- * "Default: X" on the AI settings page both read it, so they name the same model.
+ * (trimmed) when it is allowed, else FALLBACK_MODEL. Both quiz runtimes (the
+ * ai-agent and the Trigger.dev quiz tasks) and the "Default: X" on the AI
+ * settings page read it, so they name the same model.
  */
 export function platformDefaultModel(envValue: string | null | undefined): string {
   const id = typeof envValue === 'string' ? envValue.trim() : '';
