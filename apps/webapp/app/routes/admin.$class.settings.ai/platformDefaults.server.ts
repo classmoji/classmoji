@@ -3,10 +3,10 @@
  * own): the "Default: X" on each AI settings select.
  *
  * Quiz models (standard, code-aware, exploration) come from
- * platformDefaultModel in @classmoji/utils/ai-models, the resolver both quiz
- * runtimes use (the ai-agent's llm/utils/quizModel.js and the Trigger.dev
- * tasks' agents/quiz/settings.ts): LLM_MODEL or EXPLORATION_MODEL when it is on
- * the allow-list, else FALLBACK_MODEL. Code-aware quizzes fall through the same
+ * platformDefaultModel in @classmoji/utils/ai-models, the env step of
+ * pickQuizModel, the one rule both quiz runtimes import (the ai-agent and the
+ * Trigger.dev quiz tasks): LLM_MODEL or EXPLORATION_MODEL when it is on the
+ * allow-list, else FALLBACK_MODEL. Code-aware quizzes fall through the same
  * chain as standard ones.
  *
  * Ask Moji's model is SYLLABUS_BOT_MODEL, then LLM_MODEL, then the same

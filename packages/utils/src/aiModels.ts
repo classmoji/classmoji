@@ -44,24 +44,39 @@ export function platformDefaultModel(envValue: string | null | undefined): strin
 /** Thinking options for every model call of every agent. */
 export const THINKING = { type: 'adaptive', display: 'omitted' } as const;
 
-export type ResolvedModel = {
+export type QuizModelPick = {
+  /** The model the slot runs. */
   model: string;
-  /** requested: the stored/configured choice; platform_default / fallback: it was not allowed. */
-  source: 'requested' | 'platform_default' | 'fallback';
+  /**
+   * The NAMES of the settings that named a model off the allow-list and were
+   * skipped: the classroom setting, the env var, or both. Never their values.
+   */
+  fallbacks: string[];
 };
 
 /**
- * The model to run: the requested id when allowed, else the platform default when
- * allowed, else FALLBACK_MODEL. A null or empty request means "use the platform
- * default" and resolves the same way.
+ * One quiz model slot (standard or code-aware quiz, exploration, the prompt
+ * assistant), the one rule both quiz runtimes apply — the ai-agent and the
+ * Trigger.dev quiz tasks: the classroom's choice when it is allowed, else the
+ * platform's env value when it is allowed, else FALLBACK_MODEL. Values are
+ * trimmed, a dated id of an allowed model is allowed, and a blank value names
+ * nothing (it is not recorded as a fallback).
+ *
+ * The caller gates the classroom's choice on its key first and passes
+ * undefined for a classroom without one.
  */
-export function resolveAllowedModel(
-  requested: string | null | undefined,
-  platformDefault: string | null | undefined
-): ResolvedModel {
-  if (requested && isAllowedModel(requested)) return { model: requested, source: 'requested' };
-  if (platformDefault && isAllowedModel(platformDefault)) {
-    return { model: platformDefault, source: 'platform_default' };
+export function pickQuizModel(
+  classroomValue: string | null | undefined,
+  envValue: string | null | undefined,
+  names: { setting: string; env: string }
+): QuizModelPick {
+  const fallbacks: string[] = [];
+  const requested = typeof classroomValue === 'string' ? classroomValue.trim() : '';
+  if (requested) {
+    if (isAllowedModel(requested)) return { model: requested, fallbacks };
+    fallbacks.push(names.setting);
   }
-  return { model: FALLBACK_MODEL, source: 'fallback' };
+  const platform = typeof envValue === 'string' ? envValue.trim() : '';
+  if (platform && !isAllowedModel(platform)) fallbacks.push(names.env);
+  return { model: platformDefaultModel(envValue), fallbacks };
 }
