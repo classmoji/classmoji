@@ -480,7 +480,7 @@ const ModuleCard = ({
               },
             ]
           : []),
-        { key: 'ASSIGNMENT_FORM', icon: <IconForms size={15} />, label: 'Form assignment' },
+        { key: 'ASSIGNMENT_FORM', icon: <IconForms size={15} />, label: 'Form' },
       ],
     },
     {
