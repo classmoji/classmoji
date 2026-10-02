@@ -25,6 +25,9 @@ const provider = vi.hoisted(() => ({
   getRepository: vi.fn(),
   createPullRequest: vi.fn(),
   protectBranch: vi.fn(),
+  getAccessToken: vi.fn(),
+  listPulls: vi.fn(),
+  getOctokit: vi.fn(),
 }));
 
 vi.mock('@trigger.dev/sdk', () => ({
@@ -116,6 +119,9 @@ beforeEach(() => {
   provider.createRepository.mockResolvedValue({ id: '42' });
   provider.getRepository.mockResolvedValue({ id: '42' });
   provider.createPullRequest.mockResolvedValue({ id: 1, number: 1, url: '' });
+  provider.getAccessToken.mockResolvedValue(TOKEN);
+  provider.listPulls.mockResolvedValue({ data: [] });
+  provider.getOctokit.mockResolvedValue({ rest: { pulls: { list: provider.listPulls } } });
 });
 
 describe('parseRemoteHeads', () => {
@@ -237,7 +243,6 @@ describe('createRepository', () => {
       repoName,
       templateOwner: 'instructor',
       templateRepo,
-      token: TOKEN,
       organizationGithubPlan: 'team',
     });
 
@@ -298,17 +303,171 @@ describe('createRepository', () => {
     expect(provider.createPullRequest).not.toHaveBeenCalled();
   });
 
-  it('leaves a repository with more than a main branch alone', async () => {
+  it('mints its own installation token', async () => {
+    const { dir } = await makeTemplate('token', [100]);
+    await publish(dir, 'instructor', 'token');
+    await emptyStudentRepo('token-di');
+
+    await create('token-di', 'token');
+
+    expect(provider.getAccessToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a fully set-up repository alone', async () => {
+    const { dir, git } = await makeTemplate('done', [1000]);
+    await publish(dir, 'instructor', 'done');
+    const target = await emptyStudentRepo('done-ed');
+    for (const branch of ['main', 'feedback', 'updates']) {
+      await git.push(target, `+master:refs/heads/${branch}`);
+    }
+    const before = await remoteHeads(target);
+
+    await create('done-ed', 'done');
+
+    expect(await remoteHeads(target)).toEqual(before);
+    expect(provider.createPullRequest).not.toHaveBeenCalled();
+    expect(provider.listPulls).not.toHaveBeenCalled();
+  });
+
+  it('leaves a repository with branches it did not make alone', async () => {
     const { dir, git } = await makeTemplate('quiz', [1000]);
     await publish(dir, 'instructor', 'quiz');
     const target = await emptyStudentRepo('quiz-cy');
-    await git.push(target, '+master:refs/heads/main');
-    await git.push(target, '+master:refs/heads/feedback');
+    for (const branch of ['main', 'feedback', 'dev']) {
+      await git.push(target, `+master:refs/heads/${branch}`);
+    }
     const before = await remoteHeads(target);
 
     await create('quiz-cy', 'quiz');
 
     expect(await remoteHeads(target)).toEqual(before);
     expect(provider.createPullRequest).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Production: runs that failed after pushing `main` and `feedback` (the old
+ * `git add` of a gitignored CLASSMOJI.md) left repositories with no welcome
+ * commit, no Feedback pull request and no `updates`, and every re-run skipped
+ * them as "already has branches".
+ */
+describe('createRepository on a half-initialised repository', () => {
+  const create = (repoName: string, templateRepo: string) =>
+    createRepository({
+      classroom: { git_organization: { login: ORG, provider: 'GITHUB' } as never },
+      repoName,
+      templateOwner: 'instructor',
+      templateRepo,
+      organizationGithubPlan: 'team',
+    });
+
+  /** A template copied as far as `main` and `feedback`, both at its tip. */
+  const halfInitialised = async (name: string, extra?: (dir: string) => void) => {
+    const template = await makeTemplate(name, [1000, 1000], extra);
+    await publish(template.dir, 'instructor', name);
+    const target = await emptyStudentRepo(`${name}-student`);
+    // Serve partial clones as Github does, so the blob-less clone is one.
+    await run(target).addConfig('uploadpack.allowFilter', 'true');
+    await run(target).addConfig('uploadpack.allowAnySHA1InWant', 'true');
+    await template.git.push(target, '+master:refs/heads/main');
+    await template.git.push(target, '+master:refs/heads/feedback');
+    const tip = (await template.git.revparse(['master'])).trim();
+    return { template, target, tip, repoName: `${name}-student` };
+  };
+
+  const expectPullRequestOpened = (repoName: string) => {
+    expect(provider.listPulls).toHaveBeenCalledWith(
+      expect.objectContaining({
+        owner: ORG,
+        repo: repoName,
+        head: `${ORG}:main`,
+        base: 'feedback',
+      })
+    );
+    expect(provider.createPullRequest).toHaveBeenCalledWith(
+      ORG,
+      repoName,
+      'feedback',
+      'main',
+      'Feedback',
+      expect.any(String)
+    );
+  };
+
+  it('adds the welcome commit, the pull request and updates', async () => {
+    const { target, tip, repoName } = await halfInitialised('lab3');
+
+    await expect(create(repoName, 'lab3')).resolves.toBe('42');
+
+    const heads = await remoteHeads(target);
+    expect([...heads.keys()].sort()).toEqual(['feedback', 'main', 'updates']);
+    expect(heads.get('feedback')).toBe(tip);
+    const remote = run(target);
+    expect((await remote.raw(['rev-parse', 'main^'])).trim()).toBe(tip);
+    expect(await remote.raw(['diff', '--name-only', 'feedback', 'main'])).toBe('CLASSMOJI.md\n');
+    // The rest of the tree is untouched, though the clone held only the top level.
+    expect(await remote.raw(['ls-tree', '-r', '--name-only', 'main'])).toContain(
+      'Content/asset1.uasset'
+    );
+    expect(heads.get('updates')).toBe(heads.get('main'));
+    expectPullRequestOpened(repoName);
+    expect(provider.protectBranch).toHaveBeenCalledWith(ORG, repoName, 'updates');
+    expect(fs.existsSync(path.join(root, 'repos', repoName))).toBe(false);
+  });
+
+  it('adds an empty commit when the template gitignores CLASSMOJI.md', async () => {
+    const { target, tip, repoName } = await halfInitialised('ia', dir =>
+      fs.writeFileSync(path.join(dir, '.gitignore'), '*.md\n')
+    );
+
+    await create(repoName, 'ia');
+
+    const remote = run(target);
+    expect((await remote.raw(['rev-parse', 'main^'])).trim()).toBe(tip);
+    expect((await remote.raw(['log', '-1', '--format=%s', 'main'])).trim()).toBe(
+      'Start your feedback space'
+    );
+    expect(await remote.raw(['diff', '--name-only', 'feedback', 'main'])).toBe('');
+    expect((await remoteHeads(target)).has('updates')).toBe(true);
+    expectPullRequestOpened(repoName);
+  });
+
+  it('keeps the student commits on main and adds none of its own', async () => {
+    const { template, target, tip, repoName } = await halfInitialised('lab4');
+    await template.git.checkout(['-b', 'student', 'master']);
+    fs.writeFileSync(path.join(template.dir, 'solution.py'), 'print(1)\n');
+    await template.git.add('solution.py');
+    await template.git.commit('my solution');
+    const studentTip = (await template.git.revparse(['student'])).trim();
+    await template.git.push(target, 'student:refs/heads/main');
+
+    await create(repoName, 'lab4');
+
+    const heads = await remoteHeads(target);
+    expect(heads.get('main')).toBe(studentTip);
+    expect(heads.get('feedback')).toBe(tip);
+    expect(heads.get('updates')).toBe(studentTip);
+    expectPullRequestOpened(repoName);
+  });
+
+  it('does not open a second Feedback pull request', async () => {
+    const { target, repoName } = await halfInitialised('lab5');
+    provider.listPulls.mockResolvedValue({ data: [{ number: 7 }] });
+
+    await create(repoName, 'lab5');
+
+    expect(provider.listPulls).toHaveBeenCalledTimes(1);
+    expect(provider.createPullRequest).not.toHaveBeenCalled();
+    expect((await remoteHeads(target)).has('updates')).toBe(true);
+  });
+
+  it('still creates updates when the pull request check fails', async () => {
+    const { target, repoName } = await halfInitialised('lab6');
+    provider.listPulls.mockRejectedValue(new Error('Bad credentials'));
+
+    await create(repoName, 'lab6');
+
+    expect(provider.createPullRequest).not.toHaveBeenCalled();
+    expect((await remoteHeads(target)).has('updates')).toBe(true);
   });
 });

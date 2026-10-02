@@ -90,6 +90,11 @@ interface StandardCreateRepositoryTaskPayload extends Omit<CreateRepositoryPaylo
   team?: TeamRecord;
   /** See CreateRepositoriesTaskPayload.provisionOnly. */
   provisionOnly?: boolean;
+  /**
+   * Ignored and dropped. Runs queued before each run minted its own token
+   * still carry one, possibly expired; createRepository mints a fresh one.
+   */
+  token?: string;
 }
 
 interface LegacyCreateRepositoryTaskPayload {
@@ -145,6 +150,15 @@ const isLegacyCreateRepositoryPayload = (
   return 'organization' in payload;
 };
 
+/**
+ * The payload without the installation token that runs queued before each
+ * run minted its own still carry, so it is not forwarded into child payloads.
+ */
+const withoutQueuedToken = ({
+  token: _queuedToken,
+  ...payload
+}: StandardCreateRepositoryTaskPayload): StandardCreateRepositoryTaskPayload => payload;
+
 export const createRepositoriesTask = task({
   id: 'create_git_repos',
   queue: {
@@ -199,8 +213,10 @@ export const createRepositoriesTask = task({
     );
     const teams: TeamRecord[] = await ClassmojiService.team.findByClassroomId(classroom.id);
 
+    // No installation token in the payloads: each run mints its own. One
+    // minted here expired an hour later however long the runs queued, and sat
+    // in every payload on the dashboard.
     const gitProvider = getGitProvider(classroom.git_organization);
-    const token = await gitProvider.getAccessToken();
     const githubOrganization = await gitProvider.getOrganization(classroom.git_organization.login);
     const organizationGithubPlan = githubOrganization.plan?.name ?? 'free';
 
@@ -215,7 +231,6 @@ export const createRepositoriesTask = task({
         repository,
         templateOwner,
         templateRepo,
-        token,
         organizationGithubPlan,
         provisionOnly,
       };
@@ -304,7 +319,6 @@ export const createRepositoryTask = task({
               throw new Error('Missing Git organization login');
             }
 
-            const token = await gitProvider.getAccessToken();
             const githubOrganization = await gitProvider.getOrganization(orgLogin);
 
             return {
@@ -313,12 +327,11 @@ export const createRepositoryTask = task({
               repoName: payload.repoName,
               templateOwner: payload.templateOwner,
               templateRepo: payload.templateRepo,
-              token,
               organizationGithubPlan: githubOrganization.plan?.name ?? 'free',
               student: payload.student,
             };
           })()
-        : payload;
+        : withoutQueuedToken(payload);
       const { classroom } = normalizedPayload;
       const repoId = await createRepository(normalizedPayload);
 

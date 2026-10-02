@@ -270,3 +270,30 @@ describe('gh-create_git_repo — assignment release side effect', () => {
     expect(mocks.batchTriggerAssignments).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The installation token is minted inside each repository's run, not by the
+ * fan-out: one minted up front sat in every child payload on the dashboard and
+ * expired an hour later, however long the children queued.
+ */
+describe('installation token', () => {
+  it('create_git_repos neither mints a token nor puts one in the payloads', async () => {
+    await runCreateRepositories();
+
+    expect(mocks.getAccessToken).not.toHaveBeenCalled();
+    const [reposData] = mocks.batchTriggerCreateRepo.mock.calls[0] as [
+      Array<{ payload: Record<string, unknown> }>,
+    ];
+    expect(reposData).toHaveLength(1);
+    expect(reposData[0].payload).not.toHaveProperty('token');
+  });
+
+  it('gh-create_git_repo drops a token a queued run still carries', async () => {
+    // runCreateRepository passes `token: 'tok'`, as runs queued before did.
+    await runCreateRepository([]);
+
+    expect(mocks.createRepository.mock.calls[0][0]).not.toHaveProperty('token');
+    expect(mocks.addCollaborators.mock.calls[0][0]).not.toHaveProperty('token');
+    expect(mocks.createRepoInDatabase.mock.calls[0][0]).not.toHaveProperty('token');
+  });
+});
