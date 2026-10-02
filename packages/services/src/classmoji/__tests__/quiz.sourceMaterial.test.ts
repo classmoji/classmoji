@@ -13,6 +13,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const tx = {
+  // The assignment row lock update takes first.
+  $queryRaw: vi.fn(async () => []),
   quiz: {
     create: vi.fn(),
     update: vi.fn(),

@@ -33,6 +33,8 @@ vi.mock('@classmoji/database', () => {
     quiz: { update: (...a: unknown[]) => mocks.quizUpdate(...a) },
     // An interactive transaction runs its callback against the same client.
     $transaction: (fn: (tx: unknown) => unknown) => fn(client),
+    // The row lock taken before the previous values are read.
+    $queryRaw: async () => [],
   };
   return { default: () => client };
 });

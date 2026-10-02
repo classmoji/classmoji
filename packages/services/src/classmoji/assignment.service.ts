@@ -417,8 +417,11 @@ export const createMany = async (assignments: Prisma.AssignmentUncheckedCreateIn
  */
 export const update = async (id: string, updates: Prisma.AssignmentUpdateInput) => {
   // One transaction: a QUIZ row's quiz is mirrored from the row as written
-  // (read back, so any update shape the caller used is covered).
+  // (read back, so any update shape the caller used is covered). The row is
+  // locked before the previous values are read, so two writes at once see
+  // each other's result and a publish is announced once.
   const { previous, updated } = await getPrisma().$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM assignments WHERE id = ${id} FOR UPDATE`;
     const previous = await tx.assignment.findUnique({
       where: { id },
       select: { student_deadline: true, grades_released: true, is_published: true },
@@ -745,7 +748,14 @@ export const updateInClassroom = async (
   if (input.tokens_per_hour !== undefined) data.tokens_per_hour = input.tokens_per_hour;
   if (input.grades_released !== undefined) data.grades_released = input.grades_released;
 
-  const updated = await prisma.$transaction(async tx => {
+  const { before, updated } = await prisma.$transaction(async tx => {
+    // Locked, then read again: the publish state and deadline the
+    // notifications compare against are the ones this write replaced.
+    await tx.$queryRaw`SELECT id FROM assignments WHERE id = ${id} FOR UPDATE`;
+    const before = await tx.assignment.findUnique({
+      where: { id },
+      select: { student_deadline: true, grades_released: true, is_published: true },
+    });
     const row = await tx.assignment.update({
       where: { id },
       data,
@@ -753,10 +763,10 @@ export const updateInClassroom = async (
     });
     await syncContentLinks(id, input.page_ids, input.slide_ids, tx);
     if (row.type === 'QUIZ') await mirrorQuizFromAssignment(tx, row);
-    return row;
+    return { before, updated: row };
   });
 
-  await notifyAfterUpdate(id, data, previous, updated);
+  await notifyAfterUpdate(id, data, before ?? previous, updated);
 
   return updated;
 };

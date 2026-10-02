@@ -23,8 +23,16 @@ vi.mock('@classmoji/database', () => {
   const client = {
     // An interactive transaction runs its callback against the same client.
     $transaction: (fn: (tx: unknown) => unknown) => fn(client),
+    // The row lock taken before the previous values are read.
+    $queryRaw: async () => [],
     assignment: {
       findFirst: (...a: unknown[]) => mocks.assignmentFindFirst(...a),
+      // The values read again under the row lock.
+      findUnique: async () => ({
+        student_deadline: null,
+        grades_released: false,
+        is_published: false,
+      }),
       update: (...a: unknown[]) => mocks.assignmentUpdate(...a),
       create: (...a: unknown[]) => mocks.assignmentCreate(...a),
     },

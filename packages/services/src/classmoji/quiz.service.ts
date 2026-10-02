@@ -454,6 +454,9 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
   // connection and has a time limit, and a long-running quiz can have
   // hundreds of attempts.
   const result = await getPrisma().$transaction(async tx => {
+    // The quiz's assignment row is locked before it is read, so two saves at
+    // once see each other's result and a publish is announced once.
+    await tx.$queryRaw`SELECT id FROM assignments WHERE quiz_id = ${quizId} FOR UPDATE`;
     const current = await tx.quiz.findUnique({
       where: { id: quizId },
       select: {
