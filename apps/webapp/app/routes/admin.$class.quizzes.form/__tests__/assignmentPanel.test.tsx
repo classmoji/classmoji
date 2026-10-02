@@ -407,6 +407,33 @@ describe('editing a quiz as the owner or a teacher', () => {
     expect(byTestId('quiz-students-see-it-in')).toBeNull();
   });
 
+  it('asks before Delete, saying the quiz leaves its module, and deletes on Delete', async () => {
+    await render({ viewer: OWNER, quiz: formQuiz(), panel: assigned });
+
+    await click(deleteButton()!);
+    expect(mocks.submit).not.toHaveBeenCalled();
+    const dialog = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>('.ant-modal-confirm');
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    expect(dialog.textContent).toContain('Delete quiz');
+    expect(dialog.textContent).toContain(
+      'This deletes the quiz and every attempt at it, and removes it from Week 1.'
+    );
+
+    const confirm = [...dialog.querySelectorAll('button')].find(
+      b => b.textContent?.trim() === 'Delete'
+    )!;
+    await click(confirm);
+    await vi.waitFor(() =>
+      expect(mocks.submit).toHaveBeenCalledWith(
+        { _action: 'deleteQuiz', id: 'quiz-1' },
+        expect.objectContaining({ method: 'POST', action: `/admin/${CLASS_SLUG}/quizzes` })
+      )
+    );
+  });
+
   it('puts the panel before the quiz fields in the page, and last on a wide screen', async () => {
     await render({ viewer: OWNER, quiz: formQuiz(), panel: assigned });
 

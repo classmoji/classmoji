@@ -8,6 +8,7 @@ import {
   theme,
   Form,
   Input,
+  Modal,
   Select,
   Button,
   Switch,
@@ -243,6 +244,7 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
   const rolePrefix = useLocation().pathname.split('/')[1];
 
   const [form] = Form.useForm();
+  const [modal, modalHolder] = Modal.useModal();
   // I3: the owner or a teacher cannot save a quiz without a module. An
   // assistant's save carries content only, so it needs none.
   const chosenModuleId = Form.useWatch(['assignment', 'moduleId'], form) as string | undefined;
@@ -441,16 +443,26 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
   };
 
   const handleDelete = () => {
-    if (quiz?.id) {
-      fetcher.submit(
-        { _action: 'deleteQuiz', id: quiz.id },
-        {
-          method: 'POST',
-          action: `/${rolePrefix}/${classSlug}/quizzes`,
-          encType: 'application/json',
-        }
-      );
-    }
+    if (!quiz?.id) return;
+    const quizId = quiz.id;
+    modal.confirm({
+      title: 'Delete quiz',
+      content: assignmentPanel.moduleTitle
+        ? `This deletes the quiz and every attempt at it, and removes it from ${assignmentPanel.moduleTitle}.`
+        : 'This deletes the quiz and every attempt at it.',
+      okText: 'Delete',
+      okButtonProps: { danger: true },
+      cancelText: 'Cancel',
+      onOk: () =>
+        fetcher.submit(
+          { _action: 'deleteQuiz', id: quizId },
+          {
+            method: 'POST',
+            action: `/${rolePrefix}/${classSlug}/quizzes`,
+            encType: 'application/json',
+          }
+        ),
+    });
   };
 
   return (
@@ -459,6 +471,7 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
         algorithm: isDarkMode ? theme.darkAlgorithm : theme.defaultAlgorithm,
       }}
     >
+      {modalHolder}
       <Drawer
         title={
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
