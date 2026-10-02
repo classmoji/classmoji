@@ -1,5 +1,5 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { withLogin, withLogins } from '@classmoji/utils';
+import { openToStudents, withLogin, withLogins } from '@classmoji/utils';
 import { Prisma } from '@prisma/client';
 import type { AssignmentType, EventType } from '@prisma/client';
 import { pagesUrl } from '../emails/escape.ts';
@@ -58,6 +58,11 @@ interface CalendarAssignmentLink extends OccurrenceLink {
     title: string;
     slug: string | null;
     is_published: boolean;
+    // What the student-visibility rule (`openToStudents`) reads besides the
+    // publish flags: a quiz or form opens at `release_at`, and not while a draft.
+    release_at?: Date | null;
+    quiz?: { status: string } | null;
+    form?: { status: string } | null;
     repository: {
       id: string;
       title: string;
@@ -591,13 +596,16 @@ const mapLinksToDisplayFormat = (
     return [{ slide: { id: l.slide.id, title: l.slide.title, is_draft: l.slide.is_draft } }];
   });
 
-  // An assignment link follows the publication state of BOTH the assignment and
-  // the repository it lives in — the repositories view applies the same pair —
-  // so an unpublished repository hides its assignments' links too.
+  // An assignment link follows the student-visibility rule every student
+  // surface applies (`openToStudents`): the assignment published, a REPO one's
+  // repository published too, and a quiz or form neither a draft nor before
+  // its release date. Links to quiz assignments where quizzes are hidden were
+  // already dropped by the caller, so quizzes count as visible here.
+  const now = new Date();
   const assignments = (assignmentLinks || []).flatMap(l => {
     const assignment = l.assignment;
     if (!assignment) return [];
-    const published = assignment.is_published && assignment.repository?.is_published !== false;
+    const published = openToStudents(assignment, now, { quizzesVisible: true });
     if (!canSeeDrafts && !published) return [];
 
     if (l.featured) {
@@ -619,7 +627,10 @@ const mapLinksToDisplayFormat = (
           type: assignment.type,
           title: assignment.title,
           slug: assignment.slug,
-          is_published: assignment.is_published,
+          // Whether students can see it, which is what the link's Draft
+          // treatment marks: a draft quiz or a quiz not yet released reads as
+          // a draft to staff even while its assignment row is published.
+          is_published: assignment.type === 'REPO' ? assignment.is_published : published,
         },
         repository: assignment.repository
           ? {
@@ -946,11 +957,11 @@ export const getClassroomCalendar = async (
       },
       assignmentLinks: {
         include: {
-          // `is_published` on both rows is what decides whether this link is
-          // shown at all: a link to an assignment (or to a repository) that has
-          // not been published is staff-only. `type` is what drops a quiz
-          // assignment's link where quizzes are hidden, and it travels on to
-          // the display row.
+          // The student-visibility rule decides whether this link is shown at
+          // all: `is_published` on both rows, and for a quiz or form its
+          // `release_at` and draft status. A link students cannot see is
+          // staff-only. `type` is what drops a quiz assignment's link where
+          // quizzes are hidden, and it travels on to the display row.
           assignment: {
             select: {
               id: true,
@@ -958,6 +969,9 @@ export const getClassroomCalendar = async (
               title: true,
               slug: true,
               is_published: true,
+              release_at: true,
+              quiz: { select: { status: true } },
+              form: { select: { status: true } },
               repository: {
                 select: { id: true, title: true, slug: true, is_published: true },
               },
@@ -1131,6 +1145,11 @@ export const getFormCloseEventsForRange = async (
  * the student dashboard's week, the ICS feed and the MCP calendar reads — takes
  * its deadlines from here, so this is the one place they are dropped.
  *
+ * The student view (`includeUnpublished` false) lists only what students can
+ * see under `openToStudents`: a quiz deadline whose quiz is a DRAFT, or a quiz
+ * or form deadline before its `release_at`, is left out. The staff view keeps
+ * every deadline and flags those as `is_unpublished`.
+ *
  * @param {string} classroomId - The classroom ID
  * @param {Date} startDate - Start of date range
  * @param {Date} endDate - End of date range
@@ -1193,6 +1212,10 @@ export const getDeadlinesForRange = async (
           is_published: true,
         },
       },
+      // Read by the student-visibility rule: a quiz or form that is still a
+      // draft is not visible to students.
+      quiz: { select: { status: true } },
+      form: { select: { status: true } },
       pages: {
         // Draft pages are staff-only, the same rule the event-link leg applies
         ...(canSeeDrafts
@@ -1269,11 +1292,16 @@ export const getDeadlinesForRange = async (
 
   // Asked once, and only when a quiz deadline is in range, so a classroom with
   // none pays nothing for the lookup.
-  const hideQuizzes =
-    assignments.some(assignment => assignment.type === 'QUIZ') && !(await quizzesVisible());
-  const shown = hideQuizzes
-    ? assignments.filter(assignment => assignment.type !== 'QUIZ')
-    : assignments;
+  const showQuizzes =
+    assignments.some(assignment => assignment.type === 'QUIZ') && (await quizzesVisible());
+  const now = new Date();
+  // Hidden quizzes leave no trace in either view. Students then see only what
+  // the visibility rule admits; staff keep the rest, flagged below.
+  const shown = assignments.filter(
+    assignment =>
+      (assignment.type !== 'QUIZ' || showQuizzes) &&
+      (includeUnpublished || openToStudents(assignment, now, { quizzesVisible: showQuizzes }))
+  );
 
   return shown.map(assignment => {
     const repoAssignment = (
@@ -1292,10 +1320,9 @@ export const getDeadlinesForRange = async (
           : repoUrl;
     }
 
-    // Flag unpublished content for admin UI styling
-    const isUnpublished =
-      !assignment.is_published ||
-      (assignment.repository ? !assignment.repository.is_published : false);
+    // Flag, for the staff view, what students cannot see yet: an unpublished
+    // assignment or repository, a draft quiz, a quiz or form not yet released.
+    const isUnpublished = !openToStudents(assignment, now, { quizzesVisible: showQuizzes });
 
     const deadline: CalendarDeadlineItem = {
       id: `deadline-${assignment.id}`,

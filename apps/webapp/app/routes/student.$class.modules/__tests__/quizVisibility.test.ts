@@ -161,4 +161,20 @@ describe('modules loader — quizzes appear only when the classroom has them', (
     expect(loadQuizzesVisibleMock).not.toHaveBeenCalled();
     expect(listForClassroomMock).not.toHaveBeenCalled();
   });
+
+  // The student-visibility rule (draft quizzes, release dates) runs in the
+  // module service; the route's part is handing it the classroom's quiz answer.
+  it.each([[true], [false]])(
+    'hands the module list the quiz answer (%s) for the student view',
+    async visible => {
+      loadQuizzesVisibleMock.mockResolvedValue(visible);
+
+      await load();
+
+      expect(listForClassroomMock).toHaveBeenCalledWith(CLASS_SLUG, {
+        includeUnpublished: false,
+        quizzesVisible: visible,
+      });
+    }
+  );
 });

@@ -52,16 +52,25 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   }
 
   // The module list and the student's own repo-assignments are independent —
-  // fetch them in parallel.
+  // fetch them in parallel. The list takes the quiz answer: on the student
+  // view it applies the one student-visibility rule to assignments.
+  const quizzesVisiblePromise = loadQuizzesVisible(classroom.id);
   const [listedModules, repoAssignments, quizzesVisible] = await Promise.all([
-    ClassmojiService.module.listForClassroom(classSlug, { includeUnpublished: isStaff }),
+    quizzesVisiblePromise.then(visible =>
+      ClassmojiService.module.listForClassroom(classSlug, {
+        includeUnpublished: isStaff,
+        quizzesVisible: visible,
+      })
+    ),
     ClassmojiService.helper.findAllAssignmentsForStudent(userId, classSlug),
-    loadQuizzesVisible(classroom.id),
+    quizzesVisiblePromise,
   ]);
 
   // A classroom without quizzes (not Pro, or switched off) shows no trace of
   // them, staff preview included: its quiz assignments and quiz items never
-  // leave the loader, so no row, label or item count can mention one.
+  // leave the loader, so no row, label or item count can mention one. (The
+  // student view's assignments are already filtered by the service; this also
+  // covers the staff view and the module items.)
   const modules = quizzesVisible
     ? listedModules
     : listedModules.map(m => ({

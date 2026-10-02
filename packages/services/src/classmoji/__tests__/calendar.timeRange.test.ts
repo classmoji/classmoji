@@ -20,6 +20,8 @@ const calendarEvent = {
 const calendarEventOverride = { create: vi.fn(), update: vi.fn() };
 
 vi.mock('@classmoji/database', () => ({
+  // calendar.service reads it for its includes; its shape does not matter here.
+  GIT_IDENTITY: {},
   default: () => ({ calendarEvent, calendarEventOverride }),
 }));
 

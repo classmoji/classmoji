@@ -13,6 +13,11 @@
  * The lookup is asked at most once per call, and not at all when no quiz
  * deadline or quiz link falls in range — the web calendars and the ICS feed
  * read this on every request.
+ *
+ * Past the quiz gate, the student view (and the ICS feed, which reads it)
+ * applies the one student-visibility rule, `openToStudents`: a quiz deadline
+ * whose quiz is a DRAFT, or a quiz or form deadline before its `release_at`,
+ * is left out. The staff view keeps every deadline and flags those.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -23,6 +28,8 @@ const formFindMany = vi.fn();
 const quizzesVisible = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
+  // calendar.service reads it for its includes; its shape does not matter here.
+  GIT_IDENTITY: {},
   default: () => ({
     assignment: { findMany: assignmentFindMany },
     calendarEvent: { findMany: calendarEventFindMany },
@@ -39,16 +46,25 @@ const { getClassroomCalendar, getDeadlinesForRange } = await import('../calendar
 const START = new Date('2026-09-01T00:00:00Z');
 const END = new Date('2026-09-30T00:00:00Z');
 
-const row = (id: string, type: 'REPO' | 'QUIZ' | 'FORM', day: number) => ({
+const row = (
+  id: string,
+  type: 'REPO' | 'QUIZ' | 'FORM',
+  day: number,
+  over: Record<string, unknown> = {}
+) => ({
   id,
   type,
   title: `${type} ${id}`,
   is_published: true,
+  release_at: null,
   student_deadline: new Date(`2026-09-${String(day).padStart(2, '0')}T23:59:00Z`),
   module: { title: 'Week 1', classroom: { git_organization: { login: 'org' } } },
   repository: type === 'REPO' ? { id: `repo-${id}`, title: 'Lab', is_published: true } : null,
+  quiz: type === 'QUIZ' ? { status: 'PUBLISHED' } : null,
+  form: type === 'FORM' ? { status: 'OPEN' } : null,
   pages: [],
   slides: [],
+  ...over,
 });
 
 const REPO = row('a-repo', 'REPO', 3);
@@ -113,8 +129,88 @@ describe('getDeadlinesForRange — quiz deadlines', () => {
   });
 });
 
+describe('getDeadlinesForRange — the student-visibility rule', () => {
+  // Release dates either side of the real clock, which the service reads.
+  const FUTURE = new Date(Date.now() + 7 * 86_400_000);
+  const PAST = new Date(Date.now() - 7 * 86_400_000);
+
+  const DRAFT_QUIZ = row('a-draft-quiz', 'QUIZ', 9, { quiz: { status: 'DRAFT' } });
+  const LATER_QUIZ = row('a-later-quiz', 'QUIZ', 10, { release_at: FUTURE });
+  const OPENED_QUIZ = row('a-opened-quiz', 'QUIZ', 11, { release_at: PAST });
+  const CLOSED_QUIZ = row('a-closed-quiz', 'QUIZ', 12, { quiz: { status: 'CLOSED' } });
+  const DRAFT_FORM = row('a-draft-form', 'FORM', 13, { form: { status: 'DRAFT' } });
+  const LATER_FORM = row('a-later-form', 'FORM', 14, { release_at: FUTURE });
+  const ALL = [REPO, QUIZ, FORM, DRAFT_QUIZ, LATER_QUIZ, OPENED_QUIZ, CLOSED_QUIZ, DRAFT_FORM, LATER_FORM];
+
+  it('leaves out, for students, a draft quiz and anything not yet released', async () => {
+    assignmentFindMany.mockResolvedValue(ALL);
+
+    const items = await getDeadlinesForRange('class-1', START, END);
+
+    expect(ids(items)).toEqual(['a-repo', 'a-quiz', 'a-form', 'a-opened-quiz', 'a-closed-quiz']);
+    const serialized = JSON.stringify(items);
+    expect(serialized).not.toContain('a-draft-quiz');
+    expect(serialized).not.toContain('a-later-quiz');
+  });
+
+  it('keeps every deadline for staff, flagging what students cannot see yet', async () => {
+    assignmentFindMany.mockResolvedValue(ALL);
+
+    const items = await getDeadlinesForRange('class-1', START, END, null, true);
+
+    expect(Object.fromEntries(items.map(i => [i.assignment_id, i.is_unpublished]))).toEqual({
+      'a-repo': false,
+      'a-quiz': false,
+      'a-form': false,
+      'a-draft-quiz': true,
+      'a-later-quiz': true,
+      'a-opened-quiz': false,
+      'a-closed-quiz': false,
+      'a-draft-form': true,
+      'a-later-form': true,
+    });
+  });
+
+  it('flags for staff a repo assignment whose repository is unpublished', async () => {
+    assignmentFindMany.mockResolvedValue([
+      row('a-repo-hidden', 'REPO', 3, {
+        repository: { id: 'repo-x', title: 'Lab', is_published: false },
+      }),
+    ]);
+
+    const [item] = await getDeadlinesForRange('class-1', START, END, null, true);
+
+    expect(item.is_unpublished).toBe(true);
+  });
+
+  it('still drops every quiz deadline, for staff too, where quizzes are hidden', async () => {
+    quizzesVisible.mockResolvedValue(false);
+    assignmentFindMany.mockResolvedValue(ALL);
+
+    const items = await getDeadlinesForRange('class-1', START, END, null, true);
+
+    expect(items.some(i => i.assignment_id.includes('quiz'))).toBe(false);
+    expect(quizzesVisible).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the release date, quiz status and form status for the rule', async () => {
+    assignmentFindMany.mockResolvedValue([]);
+
+    await getDeadlinesForRange('class-1', START, END);
+
+    const { include } = assignmentFindMany.mock.calls[0][0];
+    expect(include.quiz).toEqual({ select: { status: true } });
+    expect(include.form).toEqual({ select: { status: true } });
+  });
+});
+
 describe('getClassroomCalendar — event links to quiz assignments', () => {
-  const link = (id: string, type: 'REPO' | 'QUIZ', featured = false) => ({
+  const link = (
+    id: string,
+    type: 'REPO' | 'QUIZ',
+    featured = false,
+    over: Record<string, unknown> = {}
+  ) => ({
     assignment_id: id,
     occurrence_date: null,
     featured,
@@ -124,10 +220,14 @@ describe('getClassroomCalendar — event links to quiz assignments', () => {
       title: `${type} ${id}`,
       slug: id,
       is_published: true,
+      release_at: null,
+      quiz: type === 'QUIZ' ? { status: 'PUBLISHED' } : null,
+      form: null,
       repository:
         type === 'REPO'
           ? { id: `repo-${id}`, title: 'Lab', slug: 'lab', is_published: true }
           : null,
+      ...over,
     },
   });
 
@@ -143,7 +243,7 @@ describe('getClassroomCalendar — event links to quiz assignments', () => {
     meeting_link: null,
     is_recurring: false,
     recurrence_rule: null,
-    creator: null,
+    creator: { id: 'owner-1', name: 'Prof', accounts: [] },
     overrides: [],
     pageLinks: [],
     slideLinks: [],
@@ -202,6 +302,35 @@ describe('getClassroomCalendar — event links to quiz assignments', () => {
 
     expect(quizzesVisible).not.toHaveBeenCalled();
     expect(event.assignments.map(a => a.assignment.id)).toEqual(['a-repo']);
+  });
+
+  it('hides a link to a draft or not-yet-released quiz from students, and flags it for staff', async () => {
+    const future = new Date(Date.now() + 7 * 86_400_000);
+    const links = () => [
+      link('a-quiz', 'QUIZ'),
+      link('a-draft', 'QUIZ', true, { quiz: { status: 'DRAFT' } }),
+      link('a-later', 'QUIZ', false, { release_at: future }),
+    ];
+
+    calendarEventFindMany.mockResolvedValue([lecture(links())]);
+    const asStudent = (
+      await getClassroomCalendar('class-1', START, END, null, false, false)
+    ).find(i => i.id === 'event-1') as unknown as LinkedEvent;
+
+    expect(asStudent.assignments.map(a => a.assignment.id)).toEqual(['a-quiz']);
+    expect(asStudent.featured_resource).toBeNull();
+    expect(JSON.stringify(asStudent)).not.toContain('a-draft');
+
+    calendarEventFindMany.mockResolvedValue([lecture(links())]);
+    const asStaff = (await loadEvent()) as unknown as {
+      assignments: Array<{ assignment: { id: string; is_published: boolean } }>;
+      featured_resource: { id: string; is_draft: boolean } | null;
+    };
+
+    expect(
+      Object.fromEntries(asStaff.assignments.map(a => [a.assignment.id, a.assignment.is_published]))
+    ).toEqual({ 'a-quiz': true, 'a-draft': false, 'a-later': false });
+    expect(asStaff.featured_resource).toMatchObject({ id: 'a-draft', is_draft: true });
   });
 
   it('asks once for the call when a quiz link and a quiz deadline are both in range', async () => {
