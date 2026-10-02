@@ -28,6 +28,8 @@ import {
   ASSISTANT_EVENT_TYPE_MESSAGE,
   assistantMayChangeEventType,
   assistantMayCreateEventType,
+  isMeetingLinkUrl,
+  MEETING_LINK_MESSAGE,
 } from '@classmoji/services/calendar-policy';
 import type { EventType, Prisma } from '@prisma/client';
 import { z } from 'zod';
@@ -59,6 +61,18 @@ interface CalendarEventCreateArgs {
   is_recurring?: boolean;
   recurrence_rule?: Record<string, unknown>;
 }
+
+/**
+ * A meeting link is one http(s) URL. `.url()` keeps `format: uri` in the
+ * published schema; the refinement adds what it does not check — the scheme,
+ * and whitespace, which the URL parser would otherwise encode into the path.
+ */
+const meetingLinkSchema = z
+  .string()
+  .url()
+  .max(500)
+  .refine(isMeetingLinkUrl, MEETING_LINK_MESSAGE)
+  .describe('Meeting URL (http or https)');
 
 /**
  * OWNER/TEACHER may modify any event; an ASSISTANT only their own. Checked
@@ -147,7 +161,7 @@ export const calendarEventCreateTool: ToolDefinition<CalendarEventCreateArgs> = 
     end_time: z.string().datetime({ offset: true }).describe('End (ISO 8601)'),
     description: z.string().max(2000).optional(),
     location: z.string().max(200).optional(),
-    meeting_link: z.string().url().max(500).optional(),
+    meeting_link: meetingLinkSchema.optional(),
     is_recurring: z.boolean().optional().describe('Whether the event repeats'),
     recurrence_rule: z
       .record(z.unknown())
@@ -232,7 +246,7 @@ export const calendarEventUpdateTool: ToolDefinition<CalendarEventUpdateArgs> = 
     end_time: z.string().datetime({ offset: true }).optional(),
     description: z.string().max(2000).optional(),
     location: z.string().max(200).optional(),
-    meeting_link: z.string().url().max(500).optional(),
+    meeting_link: meetingLinkSchema.optional(),
     edit_scope: z.enum(EDIT_SCOPES).optional().describe('Required for recurring events'),
     occurrence_date: z
       .string()

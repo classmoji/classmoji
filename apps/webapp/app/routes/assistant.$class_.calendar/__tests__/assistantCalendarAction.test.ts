@@ -55,7 +55,8 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
-const { ASSISTANT_EVENT_TYPE_MESSAGE } = await import('@classmoji/services/calendar-policy');
+const { ASSISTANT_EVENT_TYPE_MESSAGE, CalendarMeetingLinkError, MEETING_LINK_MESSAGE } =
+  await import('@classmoji/services/calendar-policy');
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
@@ -201,6 +202,37 @@ describe('the office-hours limit holds on update', () => {
     });
 
     expect(mocks.updateEvent).toHaveBeenCalled();
+  });
+});
+
+describe('a refused meeting link reaches the user', () => {
+  it('answers a create with the message, not a 500', async () => {
+    mocks.createEvent.mockRejectedValue(new CalendarMeetingLinkError());
+
+    const response = await submit({
+      intent: 'create',
+      eventData: JSON.stringify({
+        event_type: 'OFFICE_HOURS',
+        title: 'OH',
+        meeting_link: 'Meeting ID: 912 3456 7890',
+      }),
+    });
+
+    expect(response.init?.status).toBe(400);
+    expect(response.data?.error).toBe(MEETING_LINK_MESSAGE);
+  });
+
+  it('answers an update the same way', async () => {
+    mocks.updateEvent.mockRejectedValue(new CalendarMeetingLinkError());
+
+    const response = await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({ title: 'Office hours', meeting_link: 'See Canvas' }),
+    });
+
+    expect(response.init?.status).toBe(400);
+    expect(response.data?.error).toBe(MEETING_LINK_MESSAGE);
   });
 });
 

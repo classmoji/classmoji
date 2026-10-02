@@ -2,6 +2,7 @@
  * Calendar utility functions for date manipulation and event processing
  */
 
+import { checkMeetingLink } from '@classmoji/services/calendar-policy';
 import type { CalendarEventWithLinks } from './types';
 
 /** A value that can be converted to a Date via `new Date(value)` */
@@ -41,6 +42,20 @@ export const buildEventWindow = (
 
   return { start, end };
 };
+
+/**
+ * The event modals' meeting-link field rule: the same decision the save makes
+ * (`checkMeetingLink`), so a value the save would refuse is caught in the form.
+ * A pasted invitation passes; the save keeps its link and moves the text to the
+ * description. `stored` is the value the edit form was filled in with, which
+ * passes unchanged even when it holds no link.
+ */
+export const meetingLinkRule = (stored?: string | null) => ({
+  validator: (_rule: unknown, value: unknown): Promise<void> => {
+    const check = checkMeetingLink(typeof value === 'string' ? value : null, stored);
+    return check.ok ? Promise.resolve() : Promise.reject(new Error(check.message));
+  },
+});
 
 /**
  * The React key for one rendered occurrence.

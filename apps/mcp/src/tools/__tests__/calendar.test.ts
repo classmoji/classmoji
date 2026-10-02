@@ -13,6 +13,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import type { ToolContext } from '../../mcp/registry.ts';
 
 const mocks = vi.hoisted(() => ({
@@ -43,7 +44,8 @@ vi.mock('@classmoji/services', () => ({
 
 // The write policy is NOT mocked: it is a dependency-free module, so these
 // tests exercise the same decision the web calendar actions apply.
-const { ASSISTANT_EVENT_TYPE_MESSAGE } = await import('@classmoji/services/calendar-policy');
+const { ASSISTANT_EVENT_TYPE_MESSAGE, MEETING_LINK_MESSAGE } =
+  await import('@classmoji/services/calendar-policy');
 
 const { calendarEventCreateTool, calendarEventUpdateTool } = await import('../calendar.ts');
 
@@ -428,4 +430,63 @@ describe('calendar_event_update after a this_and_future split', () => {
     const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
     expect(audit.data).not.toHaveProperty('split_from_event_id');
   });
+});
+
+// ─── meeting_link is one http(s) URL ────────────────────────────────────────
+
+describe('meeting_link validation', () => {
+  const ZOOM = 'https://school.zoom.us/j/91234567890?pwd=abc';
+  const tools = [
+    {
+      name: 'calendar_event_create',
+      schema: z.object(calendarEventCreateTool.inputSchema),
+      base: {
+        ...CREATE_BASE,
+        start_time: '2026-07-20T10:00:00-04:00',
+        end_time: '2026-07-20T11:00:00-04:00',
+      },
+    },
+    {
+      name: 'calendar_event_update',
+      schema: z.object(calendarEventUpdateTool.inputSchema),
+      base: { classroom: 'org/winter-2025', event_id: '00000000-0000-4000-8000-000000000001' },
+    },
+  ];
+
+  it.each(tools)('$name accepts an http(s) link', ({ schema, base }) => {
+    expect(schema.safeParse({ ...base, meeting_link: ZOOM }).success).toBe(true);
+    expect(schema.safeParse({ ...base, meeting_link: 'http://example.edu/room' }).success).toBe(
+      true
+    );
+  });
+
+  it.each(tools)('$name refuses anything else', ({ schema, base }) => {
+    for (const meeting_link of [
+      `Join Zoom Meeting ${ZOOM} Meeting ID: 912 3456 7890`,
+      // `.url()` alone lets these through: the parser encodes the spaces, and
+      // it accepts any scheme.
+      `${ZOOM} Meeting ID: 912 3456 7890`,
+      'javascript:alert(1)',
+      'mailto:ta@example.edu',
+      'ftp://files.example.edu/x',
+      'zoom.us/j/1',
+    ]) {
+      const result = schema.safeParse({ ...base, meeting_link });
+      expect(result.success, meeting_link).toBe(false);
+    }
+  });
+
+  it.each(tools)('$name says what to enter', ({ schema, base }) => {
+    const result = schema.safeParse({ ...base, meeting_link: 'mailto:ta@example.edu' });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map(i => i.message)).toContain(MEETING_LINK_MESSAGE);
+  });
+
+  it.each([calendarEventCreateTool, calendarEventUpdateTool])(
+    '$name keeps the url check, which publishes the field as format uri',
+    tool => {
+      const field = tool.inputSchema.meeting_link as z.ZodOptional<z.ZodEffects<z.ZodString>>;
+      expect(field.unwrap().innerType().isURL).toBe(true);
+    }
+  );
 });
