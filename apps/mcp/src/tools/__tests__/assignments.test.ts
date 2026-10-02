@@ -643,17 +643,32 @@ describe('assignment_update: module_id (moving an assignment to another module)'
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
-  it.each(['QUIZ', 'FORM'])(
-    'moves a %s assignment, which has no repository to resolve it through',
-    async type => {
-      mocks.assignmentFindById.mockResolvedValue({ ...NOW, type, repository: null });
+  it('moves a FORM assignment, which has no repository to resolve it through', async () => {
+    mocks.assignmentFindById.mockResolvedValue({ ...NOW, type: 'FORM', repository: null });
 
-      const payload = parse(
-        await assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-2' }, CTX)
-      );
+    const payload = parse(await assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-2' }, CTX));
 
-      expect(payload.assignment.module_id).toBe('mod-2');
-      expect(mocks.assignmentMoveToModuleEnd).toHaveBeenCalledTimes(1);
+    expect(payload.assignment.module_id).toBe('mod-2');
+    expect(mocks.assignmentMoveToModuleEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['OWNER', CTX],
+    ['TEACHER', TEACHER_CTX],
+  ] as const)(
+    'refuses to move a QUIZ assignment for the %s and points at quiz_update',
+    async (_role, ctx) => {
+      mocks.assignmentFindById.mockResolvedValue({ ...NOW, type: 'QUIZ', repository: null });
+
+      const error = await assignmentUpdateTool
+        .handler({ ...ARGS, module_id: 'mod-2' }, ctx)
+        .catch(e => e);
+
+      expect(error).toMatchObject({ kind: 'invalid_params' });
+      expect(error.message).toMatch(/quiz_update module_id/);
+      expect(mocks.assignmentMoveToModuleEnd).not.toHaveBeenCalled();
+      expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+      expect(mocks.auditCreate).not.toHaveBeenCalled();
     }
   );
 
@@ -952,7 +967,6 @@ describe('assignment_update: the teacher tier depends on the assignment type', (
   );
 
   it.each([
-    ['QUIZ', QUIZ_ROW],
     ['REPO', REPO_ROW],
     ['FORM', FORM_ROW],
   ] as const)('keeps module_id OWNER only on a %s assignment', async (_type, row) => {
@@ -961,6 +975,19 @@ describe('assignment_update: the teacher tier depends on the assignment type', (
     await expect(
       assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-2', weight: 40 }, TEACHER_CTX)
     ).rejects.toMatchObject({ kind: 'forbidden', message: expect.stringMatching(/module_id/) });
+    expect(mocks.assignmentMoveToModuleEnd).not.toHaveBeenCalled();
+    expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+  });
+
+  it('sends a TEACHER moving a QUIZ assignment to quiz_update, which a teacher may use', async () => {
+    mocks.assignmentFindById.mockResolvedValue(QUIZ_ROW);
+
+    await expect(
+      assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-2', weight: 40 }, TEACHER_CTX)
+    ).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: expect.stringMatching(/quiz_update module_id/),
+    });
     expect(mocks.assignmentMoveToModuleEnd).not.toHaveBeenCalled();
     expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
   });

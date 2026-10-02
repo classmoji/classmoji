@@ -33,10 +33,13 @@
  *                                  refused there for every role.
  *   - grades_released on a QUIZ:   refused for every role: a quiz's score shows
  *                                  as soon as an attempt completes.
- *   - module_id (move):            OWNER only on every type (admin.$class.modules
- *                                  `moveAssignment` → requireClassroomAdmin →
+ *   - module_id (move):            OWNER only on REPO and FORM rows
+ *                                  (admin.$class.modules `moveAssignment` →
+ *                                  requireClassroomAdmin →
  *                                  assignment.moveToModule, the drag between
- *                                  module cards)
+ *                                  module cards). Refused on a QUIZ row for
+ *                                  every role: a quiz moves with quiz_update
+ *                                  module_id, as it does in the quiz form.
  * The tool declares ['OWNER','TEACHER'] and enforces the OWNER-only fields
  * in-handler, per assignment type (ownerOnlyAssignmentFields), so the
  * assignment is loaded before the role check.
@@ -147,8 +150,9 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
     'grades_released is refused on one. Pass null to clear grader_deadline, release_at or ' +
     'closes_at.\n' +
     'module_id MOVES the assignment into another module of the classroom (see list_modules), ' +
-    'at the end of that module’s assignments (module_reorder sets the order). This is how a lab, quiz or form assignment is ' +
-    'placed in a week: an assignment belongs to exactly one module. Only the module changes: ' +
+    'at the end of that module’s assignments (module_reorder sets the order). This is how a lab or form assignment is ' +
+    'placed in a week: an assignment belongs to exactly one module. A quiz moves with ' +
+    'quiz_update module_id instead. Only the module changes: ' +
     'weight, deadlines, grades and submissions travel with it and nobody is notified. The ' +
     'student module list shows it under the new module, so a move into an unpublished module ' +
     'takes it off that list until the module is published.',
@@ -200,7 +204,9 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       .string()
       .uuid()
       .optional()
-      .describe('Module to move the assignment into (see list_modules). Owner only'),
+      .describe(
+        'Module to move the assignment into (see list_modules). Owner only; a quiz moves with quiz_update'
+      ),
   },
   handler: async (args, ctx) => {
     const updates: Prisma.AssignmentUpdateInput = {};
@@ -257,6 +263,13 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       throw new ToolError(
         'invalid_params',
         'A quiz shows its score as soon as an attempt completes: grades_released does not apply'
+      );
+    }
+    // A quiz and its assignment move together, through the quiz.
+    if (assignment.type === 'QUIZ' && args.module_id !== undefined) {
+      throw new ToolError(
+        'invalid_params',
+        'A quiz is moved to another module with quiz_update module_id, not assignment_update'
       );
     }
     if (assignment.type !== 'QUIZ' && args.closes_at !== undefined) {

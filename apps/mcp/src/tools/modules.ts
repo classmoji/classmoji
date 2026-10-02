@@ -341,7 +341,8 @@ export const moduleDeleteTool: ToolDefinition<ModuleDeleteArgs> = {
   description:
     'Permanently deletes a module that owns no assignments. Owner only. A module that still ' +
     'owns assignments is refused and nothing is deleted: move them to another module first ' +
-    '(assignment_update with module_id), or delete a REPO one (assignment_delete); ' +
+    '(assignment_update with module_id; a quiz with quiz_update module_id), or delete a REPO ' +
+    'one (assignment_delete); ' +
     'list_modules shows what a module owns. The module’s content items go with it and are counted in the ' +
     'response: they are only its links to pages, slides and forms, and the pages, ' +
     'slides and forms themselves are untouched. THIS CANNOT BE UNDONE: the module and ' +
