@@ -112,7 +112,11 @@ const PREFIXES: Array<[string, Action]> = [
   ['assistant', assistantRoute.action],
 ];
 
-/** What the quiz form's save sends for an assistant: the quiz's content and name, nothing else. */
+/**
+ * What the quiz form's save sends for an assistant: the quiz's content and
+ * name, nothing else (no number of questions, max attempts or grading
+ * strategy, which are the authors').
+ */
 const CONTENT_SAVE = {
   _action: 'updateQuiz',
   id: 'quiz-1',
@@ -122,9 +126,6 @@ const CONTENT_SAVE = {
   rubricPrompt: 'Full credit for a correct base case and recursive step.',
   subject: 'Recursion',
   difficultyLevel: 'Intermediate',
-  questionCount: 6,
-  maxAttempts: 2,
-  gradingStrategy: 'HIGHEST',
   includeCodeContext: true,
   excludedPaths: ['tests/**'],
   sourceMaterial: [{ kind: 'page', id: 'p1' }],
@@ -147,6 +148,14 @@ const ASSIGNMENT_FIELD_SAVES: Array<[string, Record<string, unknown>]> = [
   ['isPublished (false)', { isPublished: false }],
   ['status', { status: 'PUBLISHED' }],
   ['status (CLOSED)', { status: 'CLOSED' }],
+];
+
+/** One body per quiz setting only an author changes, each refused from an assistant. */
+const AUTHOR_SETTING_SAVES: Array<[string, Record<string, unknown>]> = [
+  ['questionCount', { questionCount: 6 }],
+  ['maxAttempts', { maxAttempts: 2 }],
+  ['maxAttempts (0, unlimited)', { maxAttempts: 0 }],
+  ['gradingStrategy', { gradingStrategy: 'MOST_RECENT' }],
 ];
 
 type Intent = {
@@ -179,6 +188,14 @@ const INTENTS: Intent[] = [
     allowed: TEAM,
   },
   ...ASSIGNMENT_FIELD_SAVES.map(
+    ([field, fields]): Intent => ({
+      name: `updateQuiz carrying ${field}`,
+      body: { ...CONTENT_SAVE, ...fields },
+      write: () => mocks.update,
+      allowed: AUTHORS,
+    })
+  ),
+  ...AUTHOR_SETTING_SAVES.map(
     ([field, fields]): Intent => ({
       name: `updateQuiz carrying ${field}`,
       body: { ...CONTENT_SAVE, ...fields },

@@ -5,7 +5,7 @@ import { Table, Button, Typography, Tag, Space, Tooltip, Popconfirm } from 'antd
 import { IconSend, IconBook, IconCalendar, IconTrash } from '@tabler/icons-react';
 import { TableActionButtons, EditableCell, ButtonNew } from '~/components';
 import { ClassmojiService, QuizAccessError } from '@classmoji/services';
-import { canAuthorQuiz, quizAssignmentKeysIn } from '@classmoji/utils';
+import { canAuthorQuiz, quizAssignmentKeysIn, quizAuthorSettingKeysIn } from '@classmoji/utils';
 import { QUIZ_AUTHOR_ONLY, quizListStatus, type QuizListStatus } from './quizList';
 import { namedAction } from 'remix-utils/named-action';
 import {
@@ -393,8 +393,14 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     async updateQuiz() {
       // A teaching assistant saves content and the name; any assignment field
       // in the body (module, opens, due, closes, weight, tokens, published, or
-      // the old flat due date, weight and status) refuses the whole save.
-      if (!canAuthor && quizAssignmentKeysIn(data).length > 0) return authorOnly();
+      // the old flat due date, weight and status), or the number of
+      // questions, max attempts or grading strategy, refuses the whole save.
+      if (
+        !canAuthor &&
+        (quizAssignmentKeysIn(data).length > 0 || quizAuthorSettingKeysIn(data).length > 0)
+      ) {
+        return authorOnly();
+      }
       if (!(await loadQuizInClassroom(data.id))) return notFound();
       const repository = await resolveRepositoryId(data.repositoryId);
       if (!repository.ok) return notFound();
@@ -775,7 +781,8 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
             emptyText: (
               <div className="text-center py-12 text-gray-500">
                 <div className="font-medium">No quizzes created yet</div>
-                <div className="text-sm">Create your first quiz to get started!</div>
+                {/* Only the owner and teachers create quizzes. */}
+                {canAuthor && <div className="text-sm">Create your first quiz to get started!</div>}
               </div>
             ),
           }}

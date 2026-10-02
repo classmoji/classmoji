@@ -8,8 +8,9 @@
  *                  card's "Add → Quiz" opens the form with its module chosen.
  *   no modules:    the owner is pointed at the modules page; a teacher is told
  *                  the owner has to add one. Save stays disabled either way.
- *   assistant:     the panel is read-only, the save carries no assignment
- *                  field, and there is no Delete.
+ *   assistant:     the panel is read-only, as are the number of questions,
+ *                  max attempts and grading strategy; the save carries none of
+ *                  them, and there is no Delete.
  *   an edit:       sends only the panel fields changed in the form, so a form
  *                  opened before a change made elsewhere cannot undo it.
  *
@@ -24,7 +25,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import dayjs from 'dayjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { quizAssignmentKeysIn } from '@classmoji/utils';
+import { quizAssignmentKeysIn, quizAuthorSettingKeysIn } from '@classmoji/utils';
 import {
   changedPanelPayload,
   closesDateError,
@@ -75,6 +76,7 @@ vi.mock('react-router', () => ({
       {children}
     </a>
   ),
+  redirect: (url: string) => new Response(null, { status: 302, headers: { Location: url } }),
 }));
 // The Drawer's portal and motion are not what is under test.
 vi.mock('antd', async () => {
@@ -519,7 +521,21 @@ describe('a teaching assistant', () => {
     });
     expect(payload).not.toHaveProperty('assignment');
     expect(quizAssignmentKeysIn(payload)).toEqual([]);
+    // Nor the number of questions, max attempts or grading strategy.
+    expect(quizAuthorSettingKeysIn(payload)).toEqual([]);
     expect(options).toMatchObject({ action: `/assistant/${CLASS_SLUG}/quizzes` });
+  });
+
+  it('sees the number of questions, max attempts and grading strategy read-only', async () => {
+    await render({ viewer: ASSISTANT, quiz: formQuiz(), panel });
+
+    expect((byTestId('quiz-question-count') as HTMLInputElement).disabled).toBe(true);
+    expect((byTestId('quiz-max-attempts') as HTMLInputElement).disabled).toBe(true);
+    expect(
+      container.querySelector(
+        '.ant-select-disabled[data-testid="quiz-grading-strategy"], [data-testid="quiz-grading-strategy"].ant-select-disabled'
+      )
+    ).not.toBeNull();
   });
 
   it('can save a quiz that is in no module', async () => {
@@ -673,10 +689,21 @@ describe('the loader', () => {
     ['TEACHER', true, false],
     ['ASSISTANT', false, false],
   ])('%s: canAuthor %s, isOwner %s', async (role, canAuthor, isOwner) => {
-    const data = await load('', role);
+    mocks.quizFindById.mockResolvedValue(storedQuiz());
+    const data = await load('?quizId=quiz-1', role);
 
     expect(data.canAuthor).toBe(canAuthor);
     expect(data.isOwner).toBe(isOwner);
+  });
+
+  it('sends an assistant who opens the form with no quiz back to the quiz list', async () => {
+    mocks.findModules.mockClear();
+    const thrown = await load('', 'ASSISTANT').catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(Response);
+    expect((thrown as Response).status).toBe(302);
+    expect((thrown as Response).headers.get('Location')).toBe(`/admin/${CLASS_SLUG}/quizzes`);
+    expect(mocks.findModules).not.toHaveBeenCalled();
   });
 });
 

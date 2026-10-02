@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from 'react';
-import { useFetcher, useLocation, useNavigate, useParams } from 'react-router';
+import { redirect, useFetcher, useLocation, useNavigate, useParams } from 'react-router';
 import { useCallout } from '@classmoji/ui-components';
 import {
   Alert,
@@ -21,7 +21,7 @@ import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { ClassmojiService } from '@classmoji/services';
-import { canAuthorQuiz } from '@classmoji/utils';
+import { QUIZ_AUTHOR_SETTING_KEYS, canAuthorQuiz } from '@classmoji/utils';
 import { PromptAssistant, type PromptSuggestion } from '~/components/quiz/PromptAssistant';
 import {
   normalizeExcludedPaths,
@@ -105,6 +105,14 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   if (!(await quizzesVisibleOrThrow(classroom.id))) {
     throw new Response('Not Found', { status: 404 });
+  }
+
+  // Creating a quiz is the owner's and teachers' (the quizzes action refuses
+  // anyone else): a teaching assistant who opens the form with no quiz goes
+  // back to the quiz list it opens over, under the prefix they came by.
+  const canAuthor = canAuthorQuiz(membership?.role);
+  if (!quizId && !canAuthor) {
+    throw redirect(url.pathname.replace(/\/form\/?$/, '') || `/assistant/${classSlug}/quizzes`);
   }
 
   // Fetch repositories for linking
@@ -204,9 +212,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     org: classSlug,
     quiz,
     isEditing: Boolean(quizId),
-    // Decision 4(b): the owner and teachers edit the Assignment panel; it is
+    // Decision 4(b): the owner and teachers edit the Assignment panel, the
+    // number of questions, max attempts and grading strategy; they are
     // read-only for a teaching assistant. The quizzes action enforces it.
-    canAuthor: canAuthorQuiz(membership?.role),
+    canAuthor,
     isOwner: membership?.role === 'OWNER',
     modules,
     assignmentPanel,
@@ -409,6 +418,11 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
         // Absent while the quiz is not code-aware (the field is not shown): the
         // saved list is left as it is.
         const { excludedPaths: excludedPathsText, assignment, ...values } = allValues;
+        // An assistant sees the number of questions, max attempts and grading
+        // strategy read-only, and its save never carries them.
+        if (!canAuthor) {
+          for (const key of QUIZ_AUTHOR_SETTING_KEYS) delete values[key];
+        }
         // The Assignment panel, for the owner and teachers only: an
         // assistant's save never carries an assignment field. A new quiz
         // sends it whole; an edit sends only what changed here, so a form
@@ -695,6 +709,9 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                       }
                     </Form.Item>
 
+                    {/* The number of questions, max attempts and grading strategy
+                    are the owner's and teachers' to set: read-only for a
+                    teaching assistant, and left out of its save. */}
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                       <Form.Item
                         name="questionCount"
@@ -709,6 +726,8 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                           placeholder="Enter number of questions (e.g., 5)"
                           min={1}
                           max={20}
+                          disabled={!canAuthor}
+                          data-testid="quiz-question-count"
                         />
                       </Form.Item>
                     </div>
@@ -746,6 +765,8 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                               placeholder="Enter max attempts (0 = unlimited)"
                               min={0}
                               max={10}
+                              disabled={!canAuthor}
+                              data-testid="quiz-max-attempts"
                             />
                           </Form.Item>
                         )}
@@ -757,7 +778,11 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                         rules={[{ required: true, message: 'Please select a grading strategy' }]}
                         tooltip="How to calculate the final grade when students have multiple attempts"
                       >
-                        <Select placeholder="Select grading strategy">
+                        <Select
+                          placeholder="Select grading strategy"
+                          disabled={!canAuthor}
+                          data-testid="quiz-grading-strategy"
+                        >
                           <Option value="HIGHEST">Highest Score</Option>
                           <Option value="MOST_RECENT">Most Recent</Option>
                           <Option value="FIRST">First Attempt Only</Option>

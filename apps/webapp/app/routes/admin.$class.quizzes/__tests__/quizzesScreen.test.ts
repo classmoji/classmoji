@@ -256,6 +256,21 @@ describe('the status column', () => {
   });
 });
 
+describe('the empty list', () => {
+  it.each([
+    ['OWNER', true],
+    ['TEACHER', true],
+    ['ASSISTANT', false],
+  ])('%s: offers creating a first quiz only to those who can (%s)', async (role, offered) => {
+    mocks.findByClassroom.mockResolvedValue([]);
+
+    const html = renderAt(role === 'ASSISTANT' ? 'assistant' : 'admin', await loadAs(role));
+
+    expect(html).toContain('No quizzes created yet');
+    expect(html.includes('Create your first quiz')).toBe(offered);
+  });
+});
+
 // ─── The loader ─────────────────────────────────────────────────────────────
 
 describe('quiz list loader — who may author', () => {
