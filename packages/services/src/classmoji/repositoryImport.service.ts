@@ -1,8 +1,8 @@
 import getPrisma from '@classmoji/database';
-import { titleToIdentifier } from '@classmoji/utils';
+import { mirroredQuizStatus, mirroredQuizWeight, titleToIdentifier } from '@classmoji/utils';
 import type { Prisma } from '@prisma/client';
 
-type RepositoryImportClient = Prisma.TransactionClient | ReturnType<typeof getPrisma>;
+export type RepositoryImportClient = Prisma.TransactionClient | ReturnType<typeof getPrisma>;
 
 type SourceAssignmentWithLegacyFields = Prisma.AssignmentGetPayload<Record<string, never>> & {
   branch?: string | null;
@@ -173,6 +173,83 @@ export const cloneQuiz = async (
 };
 
 /**
+ * What an import copies from a source quiz's assignment: its module (to find
+ * the target classroom's counterpart), its schedule and its weight.
+ */
+export const SOURCE_QUIZ_ASSIGNMENT_SELECT = {
+  weight: true,
+  is_extra_credit: true,
+  tokens_per_hour: true,
+  student_deadline: true,
+  release_at: true,
+  closes_at: true,
+  module: { select: { id: true, title: true, slug: true, description: true, position: true } },
+} satisfies Prisma.AssignmentSelect;
+
+export type SourceQuizAssignment = Prisma.AssignmentGetPayload<{
+  select: typeof SOURCE_QUIZ_ASSIGNMENT_SELECT;
+}>;
+
+/**
+ * Give an imported quiz its assignment in the target module: the source
+ * assignment's weight, extra credit and tokens per hour, its Opens, due and
+ * close dates unless stripped, appended to the module, and unpublished
+ * (importing never publishes anything). The title is the quiz's name. The
+ * quiz's own due date, weight and status are written to agree with it, as
+ * every quiz save does.
+ *
+ * A quiz has at most one assignment, so a target quiz that already has one
+ * (made by the other import path, or by an earlier try of this one) is left
+ * as it is: nothing is written and null is returned.
+ */
+export const cloneQuizAssignment = async (
+  source: SourceQuizAssignment,
+  target: { quizId: string; name: string },
+  targetModuleId: string,
+  options: { stripDeadlines?: boolean } = {},
+  tx: RepositoryImportClient = getPrisma()
+) => {
+  const { stripDeadlines = true } = options;
+  const existing = await tx.assignment.findUnique({
+    where: { quiz_id: target.quizId },
+    select: { id: true },
+  });
+  if (existing) return null;
+
+  const last = await tx.assignment.findFirst({
+    where: { module_id: targetModuleId },
+    orderBy: { position: 'desc' },
+    select: { position: true },
+  });
+  const assignment = await tx.assignment.create({
+    data: {
+      module_id: targetModuleId,
+      type: 'QUIZ',
+      quiz_id: target.quizId,
+      title: target.name,
+      slug: titleToIdentifier(target.name),
+      position: last ? last.position + 1 : 0,
+      weight: source.weight,
+      is_extra_credit: source.is_extra_credit,
+      tokens_per_hour: source.tokens_per_hour,
+      is_published: false,
+      student_deadline: stripDeadlines ? null : source.student_deadline,
+      release_at: stripDeadlines ? null : source.release_at,
+      closes_at: stripDeadlines ? null : source.closes_at,
+    },
+  });
+  await tx.quiz.update({
+    where: { id: target.quizId },
+    data: {
+      due_date: assignment.student_deadline,
+      weight: mirroredQuizWeight(assignment.weight),
+      status: mirroredQuizStatus(assignment, new Date()),
+    },
+  });
+  return assignment;
+};
+
+/**
  * Find or create the target classroom's counterpart of a source module, by
  * title. Position/description are copied on create; an existing module of the
  * same title is reused so repeated imports do not multiply modules. Created
@@ -232,7 +309,7 @@ export const cloneModule = async (
     where: { id: sourceRepositoryId },
     include: {
       assignments: { include: { module: true } },
-      quizzes: true,
+      quizzes: { include: { assignment: { select: SOURCE_QUIZ_ASSIGNMENT_SELECT } } },
       tag: true,
     },
   });
@@ -325,7 +402,10 @@ export const cloneModule = async (
     }
   }
 
-  // Clone quizzes
+  // Clone quizzes. A quiz placed in a module (it has an assignment) gets its
+  // assignment here, ONCE, in the target counterpart of its module; the
+  // modules phase of a classroom import skips a quiz that already has one. A
+  // source quiz in no module lands in no module.
   if (includeQuizzes && sourceModule.quizzes.length > 0) {
     for (const quiz of sourceModule.quizzes) {
       const clonedQuiz = await cloneQuiz(
@@ -337,6 +417,17 @@ export const cloneModule = async (
       );
       results.quizzes.push(clonedQuiz);
       results.idMaps.quizzes[quiz.id] = clonedQuiz.id;
+      if (quiz.assignment) {
+        const targetModuleId = await targetModuleFor(quiz.assignment.module);
+        if (options.targetModuleId) moduleIdMap[quiz.assignment.module.id] = options.targetModuleId;
+        await cloneQuizAssignment(
+          quiz.assignment,
+          { quizId: clonedQuiz.id, name: clonedQuiz.name },
+          targetModuleId,
+          { stripDeadlines },
+          tx
+        );
+      }
     }
   }
 

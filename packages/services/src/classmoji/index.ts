@@ -80,6 +80,7 @@ import * as teamSetService from './teamSet.service.ts';
 import * as tokenService from './token.service.ts';
 import * as userService from './user.service.ts';
 import * as quizService from './quiz.service.ts';
+import * as quizAssignmentService from './quizAssignment.service.ts';
 import * as quizAttemptService from './quizAttempt.service.ts';
 import * as quizSourceMaterialService from './quizSourceMaterial.service.ts';
 import * as quizChatService from './quizChat.service.ts';
@@ -162,6 +163,8 @@ const ClassmojiService = {
   token: tokenService,
   user: userService,
   quiz: quizService,
+  // A quiz's assignment: the mirror onto the quiz and the one publish function.
+  quizAssignment: quizAssignmentService,
   quizAttempt: quizAttemptService,
   // A quiz's linked pages and decks: `load` (the prompt text, as the attempt's
   // user may read it), `countStartable` (the pre-attempt check), the budget.

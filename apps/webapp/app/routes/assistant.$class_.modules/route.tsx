@@ -12,7 +12,7 @@
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
-import { withoutQuizRows } from '../admin.$class.modules/quizRows.server';
+import { forStaffList } from '../admin.$class.modules/quizRows.server';
 import type { Route } from './+types/route';
 
 export { default } from '../admin.$class.modules/route';
@@ -37,10 +37,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
   // Same shape as the admin loader: the component reads all of it, and the
   // picker data stays harmless on a surface with no pickers. A classroom
-  // without quizzes sends no quiz rows or candidates here either. The one
-  // difference: no `hasUnlistedAssignments`, since this page offers no Delete.
+  // without quizzes sends no quiz rows or candidates here either, and no
+  // classroom sends legacy QUIZ items (a quiz is listed by its assignment).
+  // The one difference: no `hasUnlistedAssignments`, since this page offers
+  // no Delete.
   return {
-    modules: quizzesVisible ? modules : modules.map(withoutQuizRows),
+    modules: modules.map(m => forStaffList(m, quizzesVisible)),
     candidates: quizzesVisible ? candidates : { ...candidates, quizzes: [] },
     quizzesVisible,
     repositories: repositories.map(r => ({
@@ -52,9 +54,6 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     })),
     slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
     tags: tags.map(t => ({ id: t.id, name: t.name })),
-    boundQuizIds: quizzesVisible
-      ? (allAssignments.map(a => a.quiz_id).filter(Boolean) as string[])
-      : [],
     boundFormIds: allAssignments.map(a => a.form_id).filter(Boolean) as string[],
   };
 };

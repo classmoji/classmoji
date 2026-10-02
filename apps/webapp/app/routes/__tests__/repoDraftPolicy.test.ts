@@ -80,7 +80,6 @@ vi.mock('~/utils/routeAuth.server', () => ({
 // layers only need to import; none of them runs in a loader test.
 vi.mock('~/components/features/modules/ReadOnlyModulesTree', () => ({ default: () => null }));
 vi.mock('~/components/features/modules/studentTree', () => ({
-  buildRepositoryNode: () => ({}),
   buildAssignmentLeaf: () => ({}),
   resourceLeaves: () => [],
 }));

@@ -29,11 +29,22 @@ const mocks = vi.hoisted(() => ({
   findGitReposByRepository: vi.fn(),
   createRepositoriesTrigger: vi.fn(),
   createPublicToken: vi.fn(),
+  findByIdInClassroom: vi.fn(),
+  assignmentPublish: vi.fn(),
+  quizSourceMaterialAllDraft: vi.fn(),
+  quizzesVisibleOrThrow: vi.fn(),
 }));
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
-    assignment: { publishReleased: (...a: unknown[]) => mocks.publishReleased(...a) },
+    assignment: {
+      publishReleased: (...a: unknown[]) => mocks.publishReleased(...a),
+      findByIdInClassroom: (...a: unknown[]) => mocks.findByIdInClassroom(...a),
+      publish: (...a: unknown[]) => mocks.assignmentPublish(...a),
+    },
+    quizAssignment: {
+      quizSourceMaterialAllDraft: (...a: unknown[]) => mocks.quizSourceMaterialAllDraft(...a),
+    },
     classroom: { findById: (...a: unknown[]) => mocks.classroomFindById(...a) },
     repository: {
       findById: (...a: unknown[]) => mocks.repositoryFindById(...a),
@@ -56,7 +67,11 @@ vi.mock('@trigger.dev/sdk', () => ({
   auth: { createPublicToken: (...a: unknown[]) => mocks.createPublicToken(...a) },
 }));
 
-const { publishAssignment } = await import('../helpers.ts');
+vi.mock('~/utils/classroomProFlag.server', () => ({
+  quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a),
+}));
+
+const { publishAssignment, publishAssignmentAndRepository } = await import('../helpers.ts');
 
 const CLASSROOM_SLUG = 'cs52-26f';
 const CLASSROOM_ID = 'class-1';
@@ -253,5 +268,45 @@ describe('publishAssignment: template check', () => {
 
     expect(mocks.checkTemplate).not.toHaveBeenCalled();
     expect(mocks.setPublished).toHaveBeenCalledWith(REPOSITORY_ID, true, CLASSROOM_ID);
+  });
+});
+
+describe('publishAssignmentAndRepository — a quiz assignment', () => {
+  const QUIZ_ASSIGNMENT = {
+    id: 'asg-quiz',
+    type: 'QUIZ',
+    title: 'Recursion check',
+    quiz_id: 'quiz-1',
+    repository_id: null,
+  };
+
+  beforeEach(() => {
+    mocks.findByIdInClassroom.mockResolvedValue(QUIZ_ASSIGNMENT);
+    mocks.assignmentPublish.mockResolvedValue(undefined);
+    mocks.quizSourceMaterialAllDraft.mockResolvedValue(false);
+  });
+
+  it('publishes nothing where the classroom shows no quizzes: there is no quiz to publish', async () => {
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(false);
+
+    const thrown = await publishAssignmentAndRepository(
+      CLASSROOM_SLUG,
+      CLASSROOM_ID,
+      'asg-quiz',
+      'user-1'
+    ).catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(Response);
+    expect((thrown as Response).status).toBe(404);
+    expect(mocks.quizzesVisibleOrThrow).toHaveBeenCalledWith(CLASSROOM_ID);
+    expect(mocks.assignmentPublish).not.toHaveBeenCalled();
+  });
+
+  it('publishes it where quizzes show', async () => {
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
+
+    await publishAssignmentAndRepository(CLASSROOM_SLUG, CLASSROOM_ID, 'asg-quiz', 'user-1');
+
+    expect(mocks.assignmentPublish).toHaveBeenCalledWith('asg-quiz');
   });
 });

@@ -220,13 +220,20 @@ describe('modules read — assignments', () => {
     }
 
     // The service is what drops a student's unpublished rows (and a REPO
-    // assignment whose repository is unpublished, or a quiz or form still a
-    // draft); this layer's part is to ask. Quizzes count as visible in the ask:
-    // this resource drops them itself where they are hidden.
+    // assignment whose repository is unpublished, a quiz not yet open, or a
+    // form still a draft); this layer's part is to ask, with the classroom's
+    // own answer on quizzes.
     await read('STUDENT');
     expect(mocks.listForClassroom).toHaveBeenLastCalledWith('w26', {
       includeUnpublished: false,
       quizzesVisible: true,
+    });
+
+    mocks.quizzesVisible.mockResolvedValue(false);
+    await read('STUDENT');
+    expect(mocks.listForClassroom).toHaveBeenLastCalledWith('w26', {
+      includeUnpublished: false,
+      quizzesVisible: false,
     });
   });
 
@@ -277,15 +284,10 @@ describe('modules read — assignments', () => {
     }
   });
 
-  it('asks about quizzes when the only quiz row is an assignment', async () => {
+  it('asks about quizzes once per read, for the authorized classroom', async () => {
     await read('OWNER');
     expect(mocks.quizzesVisible).toHaveBeenCalledTimes(1);
     expect(mocks.quizzesVisible).toHaveBeenCalledWith('class-1');
-
-    mocks.quizzesVisible.mockClear();
-    mocks.listForClassroom.mockResolvedValue([{ ...MODULES[0], assignments: [LAB, FORM] }]);
-    await read('OWNER');
-    expect(mocks.quizzesVisible).not.toHaveBeenCalled();
   });
 
   it('leaves the content items as they were, legacy REPOSITORY rows included', async () => {

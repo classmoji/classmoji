@@ -219,26 +219,30 @@ const AssignmentsTable = ({
           >
             Edit
           </button>
-          <Popconfirm
-            title="Delete assignment"
-            description={
-              a.type === 'REPO'
-                ? 'This deletes the assignment and every student submission and grade under it.'
-                : `This removes the assignment from its module. The ${a.type === 'QUIZ' ? 'quiz' : 'form'} itself is kept.`
-            }
-            okText="Delete"
-            okButtonProps={{ danger: true }}
-            cancelText="Cancel"
-            onConfirm={() => onDelete(a)}
-          >
-            <button
-              type="button"
-              className="text-sm font-medium text-rose-600 hover:text-rose-700 dark:text-rose-400"
-              disabled={busy}
+          {/* A quiz's assignment goes with the quiz: delete the quiz, or move
+              it to another module in the quiz form. */}
+          {a.type !== 'QUIZ' && (
+            <Popconfirm
+              title="Delete assignment"
+              description={
+                a.type === 'REPO'
+                  ? 'This deletes the assignment and every student submission and grade under it.'
+                  : 'This removes the assignment from its module. The form itself is kept.'
+              }
+              okText="Delete"
+              okButtonProps={{ danger: true }}
+              cancelText="Cancel"
+              onConfirm={() => onDelete(a)}
             >
-              Delete
-            </button>
-          </Popconfirm>
+              <button
+                type="button"
+                className="text-sm font-medium text-rose-600 hover:text-rose-700 dark:text-rose-400"
+                disabled={busy}
+              >
+                Delete
+              </button>
+            </Popconfirm>
+          )}
         </div>
       ),
     },

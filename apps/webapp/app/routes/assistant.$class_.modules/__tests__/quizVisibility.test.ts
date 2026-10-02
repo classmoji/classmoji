@@ -77,7 +77,7 @@ beforeEach(() => {
 });
 
 describe('assistant Modules loader', () => {
-  it('sends no quiz rows, candidates or bindings without quizzes', async () => {
+  it('sends no quiz rows or candidates without quizzes', async () => {
     mocks.loadQuizzesVisible.mockResolvedValue(false);
     const result = await load();
 
@@ -86,19 +86,20 @@ describe('assistant Modules loader', () => {
     expect(result.modules[0].items.map(i => i.id)).toEqual(['item-page']);
     expect(result.modules[0].assignments.map(a => a.id)).toEqual(['asg-repo']);
     expect(result.candidates.quizzes).toEqual([]);
-    expect(result.boundQuizIds).toEqual([]);
     expect(JSON.stringify(result)).not.toContain('Recursion');
   });
 
-  it('keeps them when the classroom shows quizzes', async () => {
+  it('keeps quiz assignments when the classroom shows quizzes, but not legacy QUIZ items', async () => {
     mocks.loadQuizzesVisible.mockResolvedValue(true);
     const result = await load();
 
     expect(result.quizzesVisible).toBe(true);
-    expect(result.modules[0].items.map(i => i.id)).toEqual(['item-page', 'item-quiz']);
+    // A quiz is in the module through its assignment; the old QUIZ item that
+    // once placed it is listed nowhere.
+    expect(result.modules[0].items.map(i => i.id)).toEqual(['item-page']);
     expect(result.modules[0].assignments.map(a => a.id)).toEqual(['asg-repo', 'asg-quiz']);
     expect(result.candidates.quizzes).toHaveLength(1);
-    expect(result.boundQuizIds).toEqual(['q1']);
+    expect(result).not.toHaveProperty('boundQuizIds');
   });
 
   // The read-only card offers no Delete, so this page gets no Delete flag —

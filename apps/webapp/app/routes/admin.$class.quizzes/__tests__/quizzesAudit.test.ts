@@ -131,7 +131,13 @@ beforeEach(() => {
     membership: { id: 'm-1', role: 'TEACHER' },
   });
   mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
-  mocks.create.mockResolvedValue({ id: 'quiz-new', name: 'Week 1', repository_id: 'repo-1' });
+  mocks.create.mockResolvedValue({
+    id: 'quiz-new',
+    name: 'Week 1',
+    repository_id: 'repo-1',
+    // quiz.create writes the quiz's assignment in the same transaction.
+    assignment: { module_id: 'mod-1', is_published: false },
+  });
   mocks.update.mockResolvedValue({});
   mocks.remove.mockResolvedValue({});
   mocks.publish.mockResolvedValue({});
@@ -142,8 +148,8 @@ beforeEach(() => {
 });
 
 describe('admin quizzes action — audit rows', () => {
-  it('audits createQuiz as CREATE against the new quiz', async () => {
-    await submit({ _action: 'createQuiz', name: 'Week 1' });
+  it('audits createQuiz as CREATE against the new quiz, with the module it went in', async () => {
+    await submit({ _action: 'createQuiz', name: 'Week 1', assignment: { moduleId: 'mod-1' } });
 
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
       classroomId: 'class-1',
@@ -153,8 +159,59 @@ describe('admin quizzes action — audit rows', () => {
       action: 'CREATE',
       resourceType: 'QUIZ',
       resourceId: 'quiz-new',
-      metadata: { tool: 'web:quizzes.create', name: 'Week 1', repository_id: 'repo-1' },
+      metadata: {
+        tool: 'web:quizzes.create',
+        name: 'Week 1',
+        repository_id: 'repo-1',
+        module_id: 'mod-1',
+      },
     });
+  });
+
+  it('records no module for a created quiz the service returned without an assignment', async () => {
+    mocks.create.mockResolvedValue({ id: 'quiz-new', name: 'Week 1', repository_id: null });
+
+    await submit({ _action: 'createQuiz', name: 'Week 1' });
+
+    expect(auditEntry().metadata).toEqual({
+      tool: 'web:quizzes.create',
+      name: 'Week 1',
+      repository_id: null,
+      module_id: null,
+    });
+  });
+
+  it('audits an updateQuiz that carries the Assignment panel with its field names', async () => {
+    await submit({
+      _action: 'updateQuiz',
+      id: 'quiz-1',
+      name: 'Renamed',
+      assignment: { moduleId: 'mod-1', weight: 10, isPublished: false },
+    });
+
+    expect(auditEntry().metadata).toEqual({
+      tool: 'web:quizzes.update',
+      fields: ['name', 'assignment'],
+    });
+  });
+
+  it('writes no audit row for a refused assignment write', async () => {
+    mocks.update.mockRejectedValue(
+      Object.assign(new Error('Module not found in this classroom'), {
+        name: 'QuizAssignmentError',
+        code: 'module_not_found',
+        status: 404,
+      })
+    );
+
+    const response = (await submit({
+      _action: 'updateQuiz',
+      id: 'quiz-1',
+      assignment: { moduleId: 'mod-elsewhere' },
+    })) as Response;
+
+    expect(response.status).toBe(404);
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
   it('audits updateQuiz with field NAMES only', async () => {
@@ -198,6 +255,8 @@ describe('admin quizzes action — audit rows', () => {
   it('audits updateWeight with the weight it set', async () => {
     await submit({ _action: 'updateWeight', id: 'quiz-1', weight: 25 });
 
+    // The weight is the quiz's assignment's.
+    expect(mocks.update).toHaveBeenCalledWith('quiz-1', { assignment: { weight: 25 } });
     expect(auditEntry()).toMatchObject({
       action: 'UPDATE',
       resourceId: 'quiz-1',

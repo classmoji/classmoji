@@ -3,12 +3,11 @@ import { Link } from 'react-router';
 import Emoji from '~/components/ui/display/Emoji';
 import {
   type ModuleTreeNode,
+  type QuizLeafInput,
   buildResourceLeaves,
   prettyType,
   repoGithubUrl,
 } from '~/components/features/modules/ReadOnlyModulesTree';
-import AutogradingResultPill from '~/components/features/AutogradingResultPill';
-import type { AutogradingResultData } from '~/components/features/AutogradingResultCard';
 
 // These trees are assembled from loosely-typed Prisma includes that differ
 // slightly per route; the node builder only touches a well-known subset.
@@ -40,8 +39,6 @@ export interface StudentTreeCtx {
    * (GitRepoAssignment) has been created yet.
    */
   studentRepoByRepositoryId?: Record<string, { name: string }>;
-  /** The viewer's latest autograding result per repository unit, keyed by id. */
-  autogradingByRepositoryId?: Record<string, AutogradingResultData>;
   /**
    * Self-formed group repos on this page, keyed by repository id, with the
    * viewer's team state. Present only where the loader resolved it; a repo
@@ -91,7 +88,7 @@ export const resourceLeaves = (
   input: {
     pages?: Array<{ page: { id: string; title: string; is_draft?: boolean } }>;
     slides?: Array<{ slide: { id: string; title: string; is_draft?: boolean } }>;
-    quizzes?: Array<{ id: string; name: string; status?: string }>;
+    quizzes?: QuizLeafInput[];
     forms?: Array<{
       id: string;
       title: string;
@@ -209,167 +206,5 @@ export const buildAssignmentLeaf = (
         </a>
       ) : null),
     children: resourceLeaves({ pages: a.pages, slides: a.slides }, level + 1, `a-${a.id}`, ctx),
-  };
-};
-
-/**
- * Build the read-only subtree for a single repository: the repository node
- * (folder), its student git repos and assignments with submission status, and
- * any attached resources. `baseLevel` is the repository node's indent level
- * (0 when it's a top-level card, higher when nested inside a module).
- */
-export const buildRepositoryNode = (
-  repository: AnyRepository,
-  raByAssignmentId: Record<string, AnyRepoAssignment>,
-  ctx: StudentTreeCtx,
-  baseLevel = 0
-): ModuleTreeNode => {
-  const repositoryType = prettyType(repository.type);
-  const assignments: AnyRepository[] = repository.assignments ?? [];
-
-  // Group the student's assignments by the per-student git repo their RA belongs to.
-  const NONE = '__none__';
-  const buckets = new Map<
-    string,
-    { gitRepo: AnyRepoAssignment | undefined; items: AnyRepository[] }
-  >();
-  for (const a of assignments) {
-    const ra = raByAssignmentId[String(a.id)];
-    const key = ra?.git_repo?.id ?? NONE;
-    if (!buckets.has(key)) buckets.set(key, { gitRepo: ra?.git_repo, items: [] });
-    buckets.get(key)!.items.push(a);
-  }
-  const realRepoKeys = [...buckets.keys()].filter(k => k !== NONE);
-  // Common case: one git repo per repository unit — fold any RA-less assignments into it.
-  if (realRepoKeys.length === 1 && buckets.has(NONE)) {
-    buckets.get(realRepoKeys[0])!.items.push(...buckets.get(NONE)!.items);
-    buckets.delete(NONE);
-  }
-
-  const repositoryChildren: ModuleTreeNode[] = [];
-  for (const [key, bucket] of buckets) {
-    if (key === NONE) {
-      for (const a of bucket.items) {
-        repositoryChildren.push(
-          buildAssignmentLeaf(a, raByAssignmentId[String(a.id)], ctx, baseLevel + 1, repositoryType)
-        );
-      }
-      continue;
-    }
-    const gitRepo = bucket.gitRepo;
-    const login = gitRepo?.classroom?.git_organization?.login;
-    const url = gitRepo ? repoGithubUrl(gitRepo.name, login) : null;
-    repositoryChildren.push({
-      key: `repo-${gitRepo.id}`,
-      kind: 'repo',
-      level: baseLevel + 1,
-      name: gitRepo.name,
-      statusNode: <Tag>Active</Tag>,
-      actionNode: url ? (
-        <a
-          href={url}
-          target="_blank"
-          rel="noreferrer"
-          className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
-        >
-          Open repo
-        </a>
-      ) : null,
-      children: bucket.items.map(a =>
-        buildAssignmentLeaf(a, raByAssignmentId[String(a.id)], ctx, baseLevel + 2, repositoryType)
-      ),
-    });
-  }
-
-  // Repository-level resources (pages / slides / quizzes).
-  repositoryChildren.push(
-    ...resourceLeaves(
-      { pages: repository.pages, slides: repository.slides, quizzes: repository.quizzes },
-      baseLevel + 1,
-      `m-${repository.id}`,
-      ctx
-    )
-  );
-
-  // The top-level "View" link on the standalone Repositories tab: open the
-  // viewer's own repo for this unit when they have one, otherwise fall back to
-  // the repository's source/template repo so the link is always available
-  // (e.g. instructors previewing, or students who haven't accepted yet).
-  // Prefer the student's git repo looked up directly by repository id (works
-  // even before any GitHub issue exists), then any repo found via assignments,
-  // then the template.
-  const directRepo = ctx.studentRepoByRepositoryId?.[String(repository.id)];
-  const directRepoUrl = directRepo ? repoGithubUrl(directRepo.name, ctx.gitOrgLogin) : null;
-  const ownGitRepo = realRepoKeys.length > 0 ? buckets.get(realRepoKeys[0])?.gitRepo : undefined;
-  const ownRepoUrl = ownGitRepo
-    ? repoGithubUrl(ownGitRepo.name, ownGitRepo?.classroom?.git_organization?.login)
-    : null;
-  const sourceRepoUrl = repository.template
-    ? repoGithubUrl(repository.template, ctx.gitOrgLogin)
-    : null;
-  // The template fallback is deliberately NOT offered on a self-formed row: a
-  // student with no team has no repo of their own, and a "View" pointing at the
-  // instructor's template is how they end up committing and filing issues on
-  // it. Their own team repo still links normally once it exists.
-  const selfFormed = ctx.selfFormedByRepositoryId?.[String(repository.id)];
-  const repositoryUrl = selfFormed
-    ? (directRepoUrl ?? ownRepoUrl)
-    : (directRepoUrl ?? ownRepoUrl ?? sourceRepoUrl);
-
-  const autogradingResult = ctx.autogradingByRepositoryId?.[String(repository.id)];
-
-  const total = assignments.length;
-  const done = assignments.filter(a => raByAssignmentId[String(a.id)]?.status === 'CLOSED').length;
-
-  // A self-formed group repo is the one case where the row's job is to send the
-  // viewer somewhere in the app rather than to GitHub: until they are on a team
-  // there is no repo to open, and the team page was previously reachable only
-  // by a link the instructor pasted by hand (#313).
-  const teamHref = selfFormed
-    ? `/${ctx.rolePrefix ?? 'student'}/${ctx.classSlug}/repos/${selfFormed.slug}/team`
-    : null;
-  const selfFormedAction =
-    selfFormed && teamHref && !(selfFormed.deadlinePassed && !selfFormed.hasTeam) ? (
-      <Link to={teamHref}>
-        <Button size="small">{selfFormed.hasTeam ? 'View team' : 'Form a team'}</Button>
-      </Link>
-    ) : null;
-  // Only when there is no submission count to show, which is the state a repo
-  // awaiting a team is always in.
-  const selfFormedStatus =
-    selfFormed && !selfFormed.hasTeam ? (
-      <span className="text-xs font-medium text-ink-3">
-        {selfFormed.deadlinePassed ? 'Team formation closed' : 'No team yet'}
-      </span>
-    ) : null;
-
-  return {
-    key: `repository-${repository.id}`,
-    // Top-level (standalone Repositories tab) reads as a repository header;
-    // nested inside a module it's a plain repo row.
-    kind: baseLevel === 0 ? 'repository' : 'repo',
-    level: baseLevel,
-    name: repository.title,
-    typeText: repositoryType,
-    autogradingNode:
-      baseLevel === 0 && autogradingResult ? (
-        <AutogradingResultPill
-          result={autogradingResult}
-          org={ctx.gitOrgLogin}
-          repoName={directRepo?.name}
-        />
-      ) : null,
-    // The row itself opens the repo; only the team action needs a button.
-    href: repositoryUrl ?? undefined,
-    actionNode: baseLevel === 0 ? selfFormedAction : null,
-    statusNode:
-      total > 0 ? (
-        <span className="text-xs font-medium text-ink-2 tabular-nums">
-          {done}/{total} submitted
-        </span>
-      ) : (
-        selfFormedStatus
-      ),
-    children: repositoryChildren,
   };
 };

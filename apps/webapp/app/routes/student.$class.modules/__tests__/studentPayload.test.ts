@@ -68,6 +68,7 @@ const KEYS = {
     'is_published',
     'grades_released',
     'student_deadline',
+    'closes_at',
     'repository_id',
     'repository',
     'quiz',
@@ -76,13 +77,13 @@ const KEYS = {
     'slides',
   ],
   assignmentRepository: ['id', 'type'],
-  assignmentQuiz: ['id', 'status'],
+  // A quiz's publish state, due and close dates are its assignment's.
+  assignmentQuiz: ['id'],
   assignmentForm: ['id', 'slug', 'status'],
   pageLink: ['page'],
   slideLink: ['slide'],
   document: ['id', 'title', 'is_draft'],
-  item: ['id', 'item_type', 'page', 'slide', 'quiz', 'form'],
-  itemQuiz: ['id', 'name', 'status'],
+  item: ['id', 'item_type', 'page', 'slide', 'form'],
   itemForm: ['id', 'title', 'slug', 'status', 'access', 'closes_at'],
   submission: ['status', 'provider_issue_number', 'git_repo', 'grades'],
   submissionRepo: ['name', 'classroom'],
@@ -123,23 +124,6 @@ const slideRow = (id: string, title: string, isDraft: boolean) => ({
   updated_at: T0,
 });
 
-const quizRow = {
-  id: 'quiz-1',
-  classroom_id: 'class-1',
-  repository_id: null,
-  name: 'Recursion check',
-  status: 'PUBLISHED',
-  weight: 10,
-  question_count: 5,
-  difficulty_level: 'Beginner',
-  subject: 'Recursion',
-  include_code_context: false,
-  grading_strategy: 'HIGHEST',
-  max_attempts: 2,
-  created_at: T0,
-  updated_at: T0,
-};
-
 const formRow = {
   id: 'form-1',
   classroom_id: 'class-1',
@@ -170,6 +154,7 @@ const assignmentRow = (over: Record<string, unknown>) => ({
   grader_deadline: null,
   tokens_per_hour: 2,
   release_at: null,
+  closes_at: null,
   grades_released: false,
   student_deadline: new Date('2026-10-05T23:59:00Z'),
   repository_id: null,
@@ -220,7 +205,8 @@ const MODULE = {
       type: 'QUIZ',
       title: 'Recursion check',
       quiz_id: 'quiz-1',
-      quiz: { id: 'quiz-1', name: 'Recursion check', status: 'PUBLISHED' },
+      quiz: { id: 'quiz-1', name: 'Recursion check' },
+      closes_at: new Date('2026-10-09T23:59:00Z'),
     }),
     assignmentRow({
       id: 'asg-form',
@@ -245,7 +231,8 @@ const MODULE = {
       position: 1,
       slide: slideRow('deck-read', 'Lecture 1', false),
     },
-    { id: 'item-quiz', module_id: 'module-1', item_type: 'QUIZ', position: 2, quiz: quizRow },
+    // No QUIZ item: listForClassroom leaves legacy QUIZ items out; a quiz is
+    // in the module through its assignment above.
     { id: 'item-form', module_id: 'module-1', item_type: 'FORM', position: 3, form: formRow },
   ],
 };
@@ -326,19 +313,13 @@ describe('student modules loader — each object is sent with exactly its keys',
         expectKeys(item, KEYS.item);
         if (item.page) expectKeys(item.page, KEYS.document);
         if (item.slide) expectKeys(item.slide, KEYS.document);
-        if (item.quiz) expectKeys(item.quiz, KEYS.itemQuiz);
         if (item.form) expectKeys(item.form, KEYS.itemForm);
       }
     }
 
     // Every object type above was present to check.
     const [module] = data.modules as Json[];
-    expect((module.items as Json[]).map(i => i.item_type)).toEqual([
-      'PAGE',
-      'SLIDE',
-      'QUIZ',
-      'FORM',
-    ]);
+    expect((module.items as Json[]).map(i => i.item_type)).toEqual(['PAGE', 'SLIDE', 'FORM']);
     expect((module.assignments as Json[]).map(a => a.type)).toEqual(['REPO', 'QUIZ', 'FORM']);
   });
 
@@ -363,10 +344,11 @@ describe('student modules loader — each object is sent with exactly its keys',
     const data = await load();
     const [module] = data.modules;
 
-    expect(module.items.find(i => i.id === 'item-quiz')?.quiz).toEqual({
-      id: 'quiz-1',
-      name: 'Recursion check',
-      status: 'PUBLISHED',
+    // A quiz row carries the assignment's due and close dates.
+    expect(module.assignments.find(a => a.id === 'asg-quiz')).toMatchObject({
+      quiz: { id: 'quiz-1' },
+      student_deadline: new Date('2026-10-05T23:59:00Z'),
+      closes_at: new Date('2026-10-09T23:59:00Z'),
     });
     expect(module.items.find(i => i.id === 'item-form')?.form).toEqual({
       id: 'form-1',

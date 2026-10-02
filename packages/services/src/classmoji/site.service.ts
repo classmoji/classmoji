@@ -6,6 +6,7 @@ import {
   normalizeCustomDomain,
   isValidCustomDomain,
   isPlatformDomain,
+  openToStudents,
 } from '@classmoji/utils';
 import { isItemPublished, isItemPubliclyVisible } from './module.service.ts';
 import * as entitlementService from './entitlement.service.ts';
@@ -853,7 +854,8 @@ const SITE_ITEM_INCLUDE = {
       assignments: { where: { is_published: true }, select: { student_deadline: true } },
     },
   },
-  quiz: { select: { id: true, name: true, status: true, due_date: true } },
+  // No quiz: a QUIZ item is a legacy row that is never shown. A quiz is in a
+  // module through its assignment (SITE_QUIZ_ASSIGNMENT_SELECT below).
   // Narrow for the same reason as its siblings, but note what IS here: a form's
   // title and slug reach an anonymous request. That is not the leak the rest of
   // this include guards against — they are only ever RENDERED when
@@ -867,13 +869,55 @@ const SITE_ITEM_INCLUDE = {
   },
 } satisfies Prisma.ModuleItemInclude;
 
+/**
+ * A module's quizzes, as the schedule reads them: each QUIZ assignment's
+ * schedule columns and nothing it could print. The quiz's name is read for a
+ * member alone, in a query of its own (`quizNamesForMembers`), so an anonymous
+ * request never holds one.
+ */
+const SITE_QUIZ_ASSIGNMENT_SELECT = {
+  id: true,
+  type: true,
+  quiz_id: true,
+  is_published: true,
+  release_at: true,
+  student_deadline: true,
+} satisfies Prisma.AssignmentSelect;
+
+/** The order the Modules page lists a module's assignments in. */
+const SITE_ASSIGNMENT_ORDER = [
+  { position: 'asc' },
+  { student_deadline: { sort: 'asc', nulls: 'last' } },
+  { title: 'asc' },
+] satisfies Prisma.AssignmentOrderByWithRelationInput[];
+
+const SITE_MODULE_INCLUDE = {
+  items: { orderBy: { position: 'asc' }, include: SITE_ITEM_INCLUDE },
+  assignments: {
+    where: { type: 'QUIZ' },
+    orderBy: SITE_ASSIGNMENT_ORDER,
+    select: SITE_QUIZ_ASSIGNMENT_SELECT,
+  },
+} satisfies Prisma.ModuleInclude;
+
 type SiteModuleItem = Prisma.ModuleItemGetPayload<{ include: typeof SITE_ITEM_INCLUDE }>;
-type SiteModule = Prisma.ModuleGetPayload<{
-  include: { items: { include: typeof SITE_ITEM_INCLUDE } };
-}>;
+type SiteModule = Prisma.ModuleGetPayload<{ include: typeof SITE_MODULE_INCLUDE }>;
+type SiteQuizAssignment = SiteModule['assignments'][number];
 
 /** An item this viewer may open: carries its target, and renders as a link. */
 export type SiteScheduleVisibleItem = SiteModuleItem & { kind: 'visible' };
+
+/**
+ * A quiz a member may open: its assignment's id (a React key), the quiz's id
+ * and name, and its due date (the assignment's), as an anonymous visitor's
+ * placeholder carries it. Built only for a member.
+ */
+export type SiteScheduleQuizItem = {
+  kind: 'visible';
+  id: string;
+  item_type: 'QUIZ';
+  quiz: { id: string; name: string; due_at: Date | null };
+};
 
 /**
  * An item this viewer may NOT open, kept in place rather than deleted.
@@ -881,8 +925,9 @@ export type SiteScheduleVisibleItem = SiteModuleItem & { kind: 'visible' };
  * Deliberately not a narrowed `SiteModuleItem`: it is BUILT from three fields
  * rather than derived by omitting the rest, so the only way a title, slug,
  * template or link could reach an anonymous renderer is if someone added it to
- * this type on purpose. `id` is the ModuleItem's own uuid — a React key, not a
- * content identifier, and it resolves to nothing without a session.
+ * this type on purpose. `id` is the ModuleItem's own uuid (for a quiz, its
+ * assignment's) — a React key, not a content identifier, and it resolves to
+ * nothing without a session.
  */
 export type SiteSchedulePlaceholderItem = {
   kind: 'placeholder';
@@ -892,8 +937,13 @@ export type SiteSchedulePlaceholderItem = {
   due_at: Date | null;
 };
 
-export type SiteScheduleItem = SiteScheduleVisibleItem | SiteSchedulePlaceholderItem;
-export type SiteScheduleModule = Omit<SiteModule, 'items'> & { items: SiteScheduleItem[] };
+export type SiteScheduleItem =
+  | SiteScheduleVisibleItem
+  | SiteScheduleQuizItem
+  | SiteSchedulePlaceholderItem;
+export type SiteScheduleModule = Omit<SiteModule, 'items' | 'assignments'> & {
+  items: SiteScheduleItem[];
+};
 
 /**
  * The date a placeholder is allowed to show.
@@ -904,10 +954,12 @@ export type SiteScheduleModule = Omit<SiteModule, 'items'> & { items: SiteSchedu
  *
  * Repositories reduce to their EARLIEST published assignment deadline, the same
  * reduction the admin repo summary makes ("earliest assignment deadline =
- * repository due date"). Quizzes carry their own, and a FORM's `closes_at` is
- * its due date — which is how a members-only (CLASSROOM) form still tells the
- * public schedule "something is due Sep 12" without ever naming itself. Pages
- * and slides have no date at all, and get a bare placeholder.
+ * repository due date"). A FORM's `closes_at` is its due date — which is how a
+ * members-only (CLASSROOM) form still tells the public schedule "something is
+ * due Sep 12" without ever naming itself. Pages and slides have no date at all,
+ * and get a bare placeholder. A quiz's placeholder is built from its
+ * assignment, with the assignment's due date (`quizRows`); a legacy QUIZ item
+ * never gets this far.
  *
  * A switch rather than the if-chain this replaced: every type states its answer
  * out loud, and the `never` default means a sixth ModuleItemType cannot quietly
@@ -919,8 +971,9 @@ function placeholderDueAt(item: SiteModuleItem): Date | null {
     case 'PAGE':
     case 'SLIDE':
       return null;
+    // Legacy QUIZ items are dropped before any placeholder is made.
     case 'QUIZ':
-      return item.quiz?.due_date ?? null;
+      return null;
     case 'FORM':
       return item.form?.closes_at ?? null;
     case 'REPOSITORY': {
@@ -965,56 +1018,107 @@ function placeholderDueAt(item: SiteModuleItem): Date | null {
  * what kinds of work, when things are due — is exactly what a prospective
  * student should see; the titles are what they should not.
  *
- * Quiz items appear only where quizzes do (`entitlement.quizzesVisible`).
- * Otherwise they are dropped for every viewer, placeholder included, since a
- * "Quiz" placeholder would still show the classroom has quizzes.
+ * Quizzes come from each module's QUIZ assignments (a quiz is in a module
+ * through its assignment; legacy QUIZ items are ignored), after the module's
+ * content items, in the order the Modules page lists assignments. A quiz is
+ * on the schedule exactly when students can see it — the one rule every
+ * student surface applies (`openToStudents`: published, past its Opens date)
+ * — as a link for a member and a placeholder carrying its due date for an
+ * anonymous visitor, who never gets its name. Quizzes appear only where
+ * quizzes do (`entitlement.quizzesVisible`). Otherwise they are dropped for
+ * every viewer, placeholder included, since a "Quiz" placeholder would still
+ * show the classroom has quizzes.
  */
 export async function listPublicModulesForViewer(
   classroomId: string,
   role: SiteViewerRole
 ): Promise<SiteScheduleModule[]> {
-  const modules = await getPrisma().module.findMany({
+  const listed = await getPrisma().module.findMany({
     where: { classroom_id: classroomId, is_published: true, is_public: true },
-    include: { items: { orderBy: { position: 'asc' }, include: SITE_ITEM_INCLUDE } },
+    include: SITE_MODULE_INCLUDE,
     // Same ordering the app uses for modules everywhere else.
     orderBy: [{ position: 'asc' }, { created_at: 'asc' }],
   });
+  const modules = listed.map(({ assignments, ...module }) => ({
+    ...module,
+    items: module.items.filter(item => item.item_type !== 'QUIZ'),
+    quizzes: assignments ?? [],
+  }));
 
-  // Asked once, and only when a quiz item is present, so a classroom without
-  // quizzes pays nothing for the lookup.
-  const hideQuizzes =
-    modules.some(module => module.items.some(item => item.item_type === 'QUIZ')) &&
-    !(await entitlementService.quizzesVisible(classroomId));
-  const hidden = (item: SiteModuleItem) => hideQuizzes && item.item_type === 'QUIZ';
+  // Asked once, and only when a quiz assignment is present, so a classroom
+  // without quizzes pays nothing for the lookup.
+  const now = new Date();
+  const showQuizzes =
+    modules.some(module => module.quizzes.length > 0) &&
+    (await entitlementService.quizzesVisible(classroomId));
+  const openQuizzes = (quizzes: SiteQuizAssignment[]) =>
+    showQuizzes ? quizzes.filter(a => openToStudents(a, now, { quizzesVisible: true })) : [];
 
   if (role !== null) {
+    const names = await quizNamesForMembers(modules.flatMap(module => openQuizzes(module.quizzes)));
     return modules
-      .map(module => ({
+      .map(({ quizzes, ...module }) => ({
         ...module,
-        items: module.items
-          .filter(item => !hidden(item) && isItemPublished(item))
-          .map((item): SiteScheduleItem => ({ ...item, kind: 'visible' })),
+        items: [
+          ...module.items
+            .filter(item => isItemPublished(item))
+            .map((item): SiteScheduleItem => ({ ...item, kind: 'visible' })),
+          ...openQuizzes(quizzes).flatMap((a): SiteScheduleItem[] => {
+            const name = a.quiz_id ? names.get(a.quiz_id) : undefined;
+            return a.quiz_id && name !== undefined
+              ? [
+                  {
+                    kind: 'visible',
+                    id: a.id,
+                    item_type: 'QUIZ',
+                    quiz: { id: a.quiz_id, name, due_at: a.student_deadline },
+                  },
+                ]
+              : [];
+          }),
+        ],
       }))
       .filter(module => module.items.length > 0);
   }
 
-  return modules.map(module => ({
+  return modules.map(({ quizzes, ...module }) => ({
     ...module,
     // flatMap, not filter+map: the empty array is how "not published, so not
     // even a placeholder" is expressed, and item ORDER is preserved throughout
     // so placeholders sit at the positions the instructor put them.
-    items: module.items.flatMap((item): SiteScheduleItem[] => {
-      if (hidden(item)) return [];
-      if (isItemPubliclyVisible(item)) return [{ ...item, kind: 'visible' }];
-      if (!isItemPublished(item)) return [];
-      return [
-        {
+    items: [
+      ...module.items.flatMap((item): SiteScheduleItem[] => {
+        if (isItemPubliclyVisible(item)) return [{ ...item, kind: 'visible' }];
+        if (!isItemPublished(item)) return [];
+        return [
+          {
+            kind: 'placeholder',
+            id: item.id,
+            item_type: item.item_type,
+            due_at: placeholderDueAt(item),
+          },
+        ];
+      }),
+      // A quiz is never public: its name alone says what the work is.
+      ...openQuizzes(quizzes).map(
+        (a): SiteScheduleItem => ({
           kind: 'placeholder',
-          id: item.id,
-          item_type: item.item_type,
-          due_at: placeholderDueAt(item),
-        },
-      ];
-    }),
+          id: a.id,
+          item_type: 'QUIZ',
+          due_at: a.student_deadline,
+        })
+      ),
+    ],
   }));
+}
+
+/** The quizzes' names, by quiz id: read for a member's schedule only. */
+async function quizNamesForMembers(quizzes: SiteQuizAssignment[]): Promise<Map<string, string>> {
+  const ids = quizzes.flatMap(a => (a.quiz_id ? [a.quiz_id] : []));
+  if (ids.length === 0) return new Map();
+  const rows = await getPrisma().quiz.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, name: true },
+  });
+  return new Map(rows.map(row => [row.id, row.name]));
 }

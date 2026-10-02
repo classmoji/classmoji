@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     repository: { findByClassroomId: async () => [] },
+    module: { findByClassroomSlug: async () => [] },
     quizSourceMaterial: { listSourceMaterialOptions: async () => ({ pages: [], decks: [] }) },
     quiz: { findById: async () => null },
   },
@@ -74,6 +75,19 @@ Object.defineProperty(window, 'matchMedia', {
     dispatchEvent: () => false,
   }),
 });
+// A Form.Item showing a message reads its computed margin. jsdom's selector
+// engine throws matching antd's `:has(> .ant-switch:only-child)` rule against
+// an element whose class holds a colon (the drawer's Tailwind `lg:` classes);
+// a browser does not. Layout is not under test, so such a read falls back to
+// the body's style instead of failing the render.
+const realGetComputedStyle = window.getComputedStyle.bind(window);
+window.getComputedStyle = ((element: Element, pseudo?: string | null) => {
+  try {
+    return realGetComputedStyle(element, pseudo);
+  } catch {
+    return realGetComputedStyle(document.body);
+  }
+}) as typeof window.getComputedStyle;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const { default: QuizFormDrawer, loader } = await import('../route');
@@ -92,9 +106,6 @@ const formQuiz = (over: Record<string, unknown> = {}) => ({
   rubricPrompt: 'Grade the answers.',
   subject: 'CSS',
   difficultyLevel: 'Beginner',
-  dueDate: null,
-  status: 'DRAFT',
-  weight: 0,
   questionCount: 5,
   maxAttempts: 1,
   gradingStrategy: 'HIGHEST',
@@ -123,6 +134,19 @@ const render = async (
             assignments: [{ id: 'repo-1', title: 'Landing page' }],
             examplePrompts: [],
             sourceMaterialOptions: { pages: [], decks: [] },
+            // The owner, in a class with one module.
+            canAuthor: true,
+            isOwner: true,
+            modules: [{ id: 'mod-1', title: 'Week 1' }],
+            assignmentPanel: {
+              moduleId: quiz ? 'mod-1' : null,
+              moduleTitle: quiz ? 'Week 1' : null,
+              releaseAt: null,
+              dueDate: null,
+              closesAt: null,
+              weight: 0,
+              isPublished: false,
+            },
             ...(chatRuntime ? { chatRuntime } : {}),
           },
         } as unknown as Parameters<typeof QuizFormDrawer>[0])}
@@ -211,6 +235,7 @@ describe('the loader: which quizzes run on the chat runtime', () => {
     mocks.assertClassroomAccess.mockResolvedValue({
       userId: 'teacher-1',
       classroom: { id: 'class-1', slug: CLASS_SLUG },
+      membership: { role: 'TEACHER' },
     });
     mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
   });

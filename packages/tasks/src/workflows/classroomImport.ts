@@ -886,7 +886,16 @@ export async function importSlideRows({
 /**
  * Copy the module containers LAST: their items reference repositories, quizzes,
  * pages and slides by id, and every one of those maps was minted by an earlier
- * phase and carried here on the job row.
+ * phase and carried here on the job row — including the modules the
+ * repository copy already made, which are reused rather than created twice.
+ *
+ * Quizzes come along with the modules where the new classroom shows them
+ * (`selections.quizzes`, decided by the create action): every quiz placed in a
+ * source module, with or without a repository, except the quizzes of a
+ * repository the user chose to bring without them. A quiz the repository copy
+ * already brought (with its assignment) is not copied twice. The ids this
+ * phase resolves are saved as it finishes, and the service is idempotent, so a
+ * retry after a partial run reuses what is already there.
  */
 export const importModulesTask = task({
   id: 'import-modules',
@@ -901,12 +910,13 @@ export const importModulesTask = task({
     await writer.flush();
 
     const idMaps = job.progress.id_maps ?? {};
-    // No repository asked for its quizzes (a classroom without Pro never
-    // does), so a quiz item missing from the maps is expected, not a skip to
-    // report.
-    const quizzesImported = (job.selections.repositories ?? []).some(
-      r => r.includeQuizzes === true
-    );
+    const repositories = job.selections.repositories ?? [];
+    // A job saved before the action decided this for the whole classroom
+    // copies quizzes when any picked repository asked for its quizzes (then
+    // every placed quiz but those of a repository picked without them), and
+    // none otherwise.
+    const quizzesImported =
+      job.selections.quizzes ?? repositories.some(r => r.includeQuizzes === true);
     const summary = await ClassmojiService.classroomConfigImport.importModules(
       job.source_classroom_id,
       job.classroom_id,
@@ -915,10 +925,20 @@ export const importModulesTask = task({
         quizzes: idMaps.quizzes ?? {},
         pages: idMaps.pages ?? {},
         slides: idMaps.slides ?? {},
+        modules: idMaps.modules ?? {},
       },
-      { quizzesImported }
+      {
+        quizzesImported,
+        declinedQuizRepositoryIds: repositories
+          .filter(r => r.includeQuizzes !== true)
+          .map(r => r.id),
+      }
     );
 
+    writer.mergeIdMaps(summary.id_maps);
+    if (summary.quizzes > 0) {
+      writer.mergeCounts({ quizzes: (writer.progress.counts?.quizzes ?? 0) + summary.quizzes });
+    }
     writer.mergeCounts({ modules: summary.modules });
     if (summary.skipped_items > 0) {
       writer.addWarnings([

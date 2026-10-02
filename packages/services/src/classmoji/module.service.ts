@@ -53,7 +53,9 @@ const ITEM_INCLUDE = {
 // quiz, or the form) and the pages / slide decks attached to it.
 const ASSIGNMENT_INCLUDE = {
   repository: { select: { id: true, title: true, slug: true, type: true, is_published: true } },
-  quiz: { select: { id: true, name: true, status: true } },
+  // The quiz's name only: its publish state, due and close dates are the
+  // assignment's own columns.
+  quiz: { select: { id: true, name: true } },
   form: { select: { id: true, title: true, slug: true, status: true } },
   pages: { include: { page: true }, orderBy: { order: 'asc' } },
   slides: { include: { slide: true }, orderBy: { order: 'asc' } },
@@ -287,9 +289,13 @@ export const listForClassroom = async (
     orderBy: [{ position: 'asc' }, { created_at: 'asc' }],
   });
 
+  // Legacy QUIZ items are left out for every viewer: a quiz sits in a module
+  // through its assignment, which is listed with the module's assignments.
   const modulesWithScopedItems = modules.map(m => ({
     ...m,
-    items: m.items.filter(item => isItemTargetInClassroom(item, classroomId)),
+    items: m.items.filter(
+      item => item.item_type !== ModuleItemType.QUIZ && isItemTargetInClassroom(item, classroomId)
+    ),
   }));
 
   if (includeUnpublished) return modulesWithScopedItems;
@@ -449,7 +455,23 @@ export const updateForClassroom = async (
   return update(id, input);
 };
 
-export const deleteById = async (id: string, classroomId?: string) => {
+/**
+ * Delete a module. A module that still owns assignments is refused: deleting
+ * it would cascade into their submissions, grades and regrades.
+ *
+ * One exception, for a classroom whose quizzes are hidden (`quizzesHidden`,
+ * the caller's reading of the classroom): its owner cannot see quiz
+ * assignments, so a module whose only assignments are quiz ones would refuse
+ * for a reason nobody can see. There those QUIZ assignment rows go with the
+ * module; the quizzes and their attempts stay, and each quiz is set back to
+ * DRAFT, so it shows as an unpublished quiz in no module once quizzes are
+ * back. `deleted_quiz_assignment_ids` names them, so the caller can record it.
+ */
+export const deleteById = async (
+  id: string,
+  classroomId?: string,
+  { quizzesHidden = false }: { quizzesHidden?: boolean } = {}
+) => {
   if (classroomId) await assertModuleInClassroom(id, classroomId);
   return getPrisma().$transaction(async tx => {
     // The module row is locked for the check and the delete together. An
@@ -465,10 +487,32 @@ export const deleteById = async (id: string, classroomId?: string) => {
     if (locked.length === 0) throw new Error('Module not found in classroom');
     // A module that still owns assignments cannot go: deleting it would cascade
     // into their submissions, grades and regrades. Move or delete them first.
-    const owned = await tx.assignment.count({ where: { module_id: id } });
-    if (owned > 0) throw new Error('Module still has assignments');
+    const owned = await tx.assignment.findMany({
+      where: { module_id: id },
+      select: { id: true, type: true, quiz_id: true },
+    });
+    const onlyQuizzes = owned.length > 0 && owned.every(a => a.type === 'QUIZ');
+    if (owned.length > 0 && !(quizzesHidden && onlyQuizzes)) {
+      throw new Error('Module still has assignments');
+    }
+    const deletedQuizAssignmentIds = owned.map(a => a.id);
+    if (deletedQuizAssignmentIds.length > 0) {
+      await tx.assignment.deleteMany({
+        where: { id: { in: deletedQuizAssignmentIds }, type: 'QUIZ' },
+      });
+      // Each quiz comes back as a draft in no module, for the owner to place
+      // and publish again: a quiz with no assignment is shown to students by
+      // its own status, and none of them saw it while quizzes were hidden.
+      // After the assignments, so the rows are locked in the order every
+      // other writer takes them (assignment, then quiz).
+      const quizIds = owned.flatMap(a => (a.quiz_id ? [a.quiz_id] : []));
+      if (quizIds.length > 0) {
+        await tx.quiz.updateMany({ where: { id: { in: quizIds } }, data: { status: 'DRAFT' } });
+      }
+    }
     // ModuleItem rows cascade; the underlying pages/quizzes/slides/forms remain.
-    return tx.module.delete({ where: { id } });
+    const deleted = await tx.module.delete({ where: { id } });
+    return { ...deleted, deleted_quiz_assignment_ids: deletedQuizAssignmentIds };
   });
 };
 
@@ -495,11 +539,17 @@ export const setPublic = async (id: string, isPublic: boolean, classroomId?: str
   });
 };
 
+/** Why a QUIZ item is not added: a quiz reaches a module through its assignment. */
+export const QUIZ_ITEM_REFUSAL =
+  'A quiz is placed in a module from the quiz form (or quiz_create / quiz_update with module_id)';
+
 /**
  * Append a content item of the given type to a module (at max position + 1).
  * The unique (module, target) constraint prevents adding the same item twice.
  * REPOSITORY is not a content item any more: a repository reaches a module
- * only through a REPO assignment (see the legacy block at the bottom).
+ * only through a REPO assignment (see the legacy block at the bottom). Nor is
+ * QUIZ: a quiz is placed in a module by its assignment, which the quiz form
+ * writes; QUIZ items are no longer written and are ignored when ordering.
  */
 export const addItem = async (
   moduleId: string,
@@ -508,6 +558,7 @@ export const addItem = async (
   classroomId?: string
 ) => {
   const prisma = getPrisma();
+  if (type === ModuleItemType.QUIZ) throw new Error(QUIZ_ITEM_REFUSAL);
   if (!CONTENT_ITEM_TYPES.includes(type)) {
     throw new Error('Repositories are attached to assignments, not placed in modules as items');
   }
@@ -571,10 +622,11 @@ export const reorderItems = async (
   const prisma = getPrisma();
   if (classroomId) await assertModuleInClassroom(moduleId, classroomId);
 
-  // Legacy REPOSITORY items are hidden from the admin content list, so the
-  // caller orders only the content items; those rows keep their positions.
+  // Legacy REPOSITORY and QUIZ items are not part of the content list (a quiz
+  // is placed by its assignment), so the caller orders only the content
+  // items; those rows keep their positions.
   const existingItems = await prisma.moduleItem.findMany({
-    where: { module_id: moduleId, item_type: { not: 'REPOSITORY' } },
+    where: { module_id: moduleId, item_type: { notIn: LEGACY_ITEM_TYPES } },
     select: { id: true },
   });
   assertSameSet(
@@ -615,7 +667,7 @@ const isModuleItemDuplicate = (error: unknown): boolean => {
 const compactItems = async (moduleId: string) => {
   const prisma = getPrisma();
   const remaining = await prisma.moduleItem.findMany({
-    where: { module_id: moduleId, item_type: { not: 'REPOSITORY' } },
+    where: { module_id: moduleId, item_type: { notIn: LEGACY_ITEM_TYPES } },
     orderBy: { position: 'asc' },
     select: { id: true },
   });
@@ -647,8 +699,10 @@ export const moveItemToModule = async (
   });
   if (!item) throw new Error('Module item not found in classroom');
   // Legacy pointers are invisible in the UI and keep their positions; nothing
-  // should be able to drag one somewhere else.
+  // should be able to drag one somewhere else. A quiz moves with its
+  // assignment.
   if (item.item_type === 'REPOSITORY') throw new Error('Repository items cannot be moved');
+  if (item.item_type === 'QUIZ') throw new Error(QUIZ_ITEM_REFUSAL);
 
   const fromModuleId = item.module_id;
   if (fromModuleId !== toModuleId) {
@@ -696,12 +750,19 @@ export const reorderModules = async (classroomId: string, orderedModuleIds: stri
 };
 
 // The content item types callers (routes/UI) may add, without importing Prisma.
+// QUIZ is not one: a quiz reaches a module through its assignment.
 export const CONTENT_ITEM_TYPES: ContentItemType[] = [
   ModuleItemType.PAGE,
-  ModuleItemType.QUIZ,
   ModuleItemType.SLIDE,
   ModuleItemType.FORM,
 ];
+
+/**
+ * Item types kept read-only: no new rows, left out of every ordering. QUIZ
+ * items predate quiz assignments (the migration gave each quiz in a module
+ * an assignment) and are deleted in a later cleanup.
+ */
+const LEGACY_ITEM_TYPES: ModuleItemType[] = [ModuleItemType.REPOSITORY, ModuleItemType.QUIZ];
 
 // ── Legacy REPOSITORY items ──────────────────────────────────────────────────
 // `ModuleItemType.REPOSITORY` rows predate typed assignments. They are kept
@@ -711,5 +772,6 @@ export const CONTENT_ITEM_TYPES: ContentItemType[] = [
 /** @deprecated Use CONTENT_ITEM_TYPES; REPOSITORY is read-only. */
 export const MODULE_ITEM_TYPES: ModuleItemType[] = [
   ...CONTENT_ITEM_TYPES,
+  ModuleItemType.QUIZ,
   ModuleItemType.REPOSITORY,
 ];

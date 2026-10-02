@@ -143,6 +143,8 @@ const LOCKED_ATTEMPT_SELECT = {
       question_count: true,
       status: true,
       classroom: { select: { status: true } },
+      // Turn admission reads whether the quiz is still open to a student.
+      assignment: { select: { is_published: true, release_at: true } },
     },
   },
 } satisfies Prisma.QuizAttemptSelect;

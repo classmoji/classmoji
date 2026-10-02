@@ -253,6 +253,40 @@ describe.skipIf(!RUN)('assignment.moveToModuleEnd (integration)', () => {
     expect(await layout(foreignModule.id)).toEqual([]);
   });
 
+  it('moveToModule (the drag) refuses an ordering that is not the target plus the moved row, moving nothing', async () => {
+    const from = await makeModule();
+    const to = await makeModule();
+    const moving = await makeAssignment(from.id, { position: 0, title: 'moving' });
+    const stays = await makeAssignment(from.id, { position: 1, title: 'stays' });
+    const thereA = await makeAssignment(to.id, { position: 0, title: 'there-a' });
+    const thereB = await makeAssignment(to.id, { position: 1, title: 'there-b' });
+
+    const wrongOrderings = [
+      [thereA.id, thereB.id], // the moved row left out
+      [moving.id, thereA.id], // a row of the target left out
+      [moving.id, thereA.id, thereB.id, stays.id], // a row of another module
+      [moving.id, thereA.id, thereA.id], // a row twice
+    ];
+    for (const ordered of wrongOrderings) {
+      await expect(
+        assignmentService.moveToModule(moving.id, to.id, ordered, classroomId)
+      ).rejects.toThrow('Ordered assignment ids must match the module assignments');
+    }
+    expect(await layout(from.id)).toEqual(['moving@0', 'stays@1']);
+    expect(await layout(to.id)).toEqual(['there-a@0', 'there-b@1']);
+
+    // The ordering it was handed: the moved row lands where the list puts it,
+    // and the module it left closes up.
+    await assignmentService.moveToModule(
+      moving.id,
+      to.id,
+      [thereA.id, moving.id, thereB.id],
+      classroomId
+    );
+    expect(await layout(to.id)).toEqual(['there-a@0', 'moving@1', 'there-b@2']);
+    expect(await layout(from.id)).toEqual(['stays@0']);
+  });
+
   it('gives every one of several simultaneous moves into a module its own position', async () => {
     const sources = await Promise.all(Array.from({ length: 8 }, () => makeModule()));
     const to = await makeModule();

@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     repository: { findByClassroomId: (...a: unknown[]) => mocks.findByClassroomId(...a) },
+    module: { findByClassroomSlug: async () => [{ id: 'mod-1', title: 'Week 3' }] },
     quizSourceMaterial: {
       listSourceMaterialOptions: (...a: unknown[]) => mocks.listSourceMaterialOptions(...a),
     },
@@ -84,6 +85,7 @@ beforeEach(() => {
   mocks.assertClassroomAccess.mockResolvedValue({
     userId: 'teacher-1',
     classroom: { id: 'class-1', slug: CLASS_SLUG },
+    membership: { role: 'TEACHER' },
   });
   mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
   mocks.findByClassroomId.mockResolvedValue([]);

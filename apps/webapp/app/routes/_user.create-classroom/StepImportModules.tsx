@@ -302,7 +302,11 @@ const StepImportModules = ({
                           key: 'modules',
                           label: 'Modules',
                           count: sourceClassroom?._count?.modules ?? 0,
-                          sublabel: 'items link only to content you import',
+                          // A module brings the quizzes placed in it, where the
+                          // new classroom shows quizzes.
+                          sublabel: quizzesVisible
+                            ? 'with their quizzes; other items link only to content you import'
+                            : 'items link only to content you import',
                         },
                         {
                           key: 'duplicateTemplates',

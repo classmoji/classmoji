@@ -13,9 +13,11 @@
  *     could hide a repo assignment an owner published by hand.
  *   - REPO: its repository must be published too (until then no student repo
  *     exists to submit through).
- *   - QUIZ: only where the classroom has quizzes, and not while the quiz is a
- *     DRAFT. A CLOSED quiz stays visible, so a student keeps seeing the quiz
- *     they finished, with its score.
+ *   - QUIZ: only where the classroom has quizzes. The assignment owns the
+ *     quiz's publish state, so nothing on the quiz itself is read. A quiz
+ *     past its close date (`closes_at`) stays visible, so a student keeps
+ *     seeing the quiz they finished, with its score; it only takes no new
+ *     attempt (see `isClosed`).
  *   - FORM: not while the form is a DRAFT. A CLOSED form stays visible and
  *     reads as closed.
  *
@@ -28,7 +30,6 @@ export interface AssignmentVisibilityInput {
   is_published: boolean;
   release_at?: Date | string | null;
   repository?: { is_published: boolean } | null;
-  quiz?: { status: string } | null;
   form?: { status: string } | null;
 }
 
@@ -44,6 +45,13 @@ const toTime = (value: Date | string | number) =>
 export const isReleased = (releaseAt: Date | string | null | undefined, now: Date | number) =>
   releaseAt == null || toTime(releaseAt) <= toTime(now);
 
+/**
+ * Whether a close date has passed: from `closes_at` on, no new attempt can
+ * start. An empty one means "never closes".
+ */
+export const isClosed = (closesAt: Date | string | null | undefined, now: Date | number) =>
+  closesAt != null && toTime(closesAt) <= toTime(now);
+
 export const openToStudents = (
   assignment: AssignmentVisibilityInput,
   now: Date | number,
@@ -55,12 +63,7 @@ export const openToStudents = (
     case 'REPO':
       return assignment.repository?.is_published === true;
     case 'QUIZ':
-      return (
-        quizzesVisible &&
-        isReleased(assignment.release_at, now) &&
-        !!assignment.quiz &&
-        assignment.quiz.status !== 'DRAFT'
-      );
+      return quizzesVisible && isReleased(assignment.release_at, now);
     case 'FORM':
       return (
         isReleased(assignment.release_at, now) &&

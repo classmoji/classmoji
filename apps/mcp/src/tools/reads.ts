@@ -240,8 +240,8 @@ export const listQuizzesTool = mirrorResourceTool({
   description:
     'AI-graded quizzes with their source material (linked pages and decks, in order). Staff ' +
     '(OWNER/TEACHER/ASSISTANT) see all quizzes incl. drafts and prompts; students see published ' +
-    'quizzes, published material and their own attempt summary. Requires a Pro subscription ' +
-    'and quizzes_enabled.',
+    'quizzes (closed ones too, as CLOSED), published material and their own attempt summary. ' +
+    'Requires a Pro subscription and quizzes_enabled.',
 });
 
 export const listPagesTool = mirrorResourceTool({
@@ -258,9 +258,10 @@ export const listModulesTool = mirrorResourceTool({
   name: 'list_modules',
   title: 'List modules',
   description:
-    'Ordered curriculum modules, each with its content `items` (pages, slides, quizzes, forms) ' +
+    'Ordered curriculum modules, each with its content `items` (pages, slides, forms) ' +
     'and its `assignments` (REPO, QUIZ or FORM, in display order). An assignment belongs to ' +
-    'exactly one module; an owner moves it with assignment_update module_id. Staff see ' +
+    'exactly one module; an owner moves it with assignment_update module_id, and an owner or ' +
+    'teacher moves a quiz with quiz_update module_id. Staff see ' +
     'unpublished modules, items and assignments too, and for each assignment the repository, ' +
     'quiz or form it points at (target_id), weight and publish state. Students see published ' +
     'ones only, each assignment by title, type and due date. Returns {enabled:false} when the ' +

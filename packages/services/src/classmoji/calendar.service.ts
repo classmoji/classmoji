@@ -59,9 +59,9 @@ interface CalendarAssignmentLink extends OccurrenceLink {
     slug: string | null;
     is_published: boolean;
     // What the student-visibility rule (`openToStudents`) reads besides the
-    // publish flags: a quiz or form opens at `release_at`, and not while a draft.
+    // publish flags: a quiz or form opens at `release_at`, and a form not
+    // while a draft.
     release_at?: Date | null;
-    quiz?: { status: string } | null;
     form?: { status: string } | null;
     repository: {
       id: string;
@@ -958,10 +958,10 @@ export const getClassroomCalendar = async (
       assignmentLinks: {
         include: {
           // The student-visibility rule decides whether this link is shown at
-          // all: `is_published` on both rows, and for a quiz or form its
-          // `release_at` and draft status. A link students cannot see is
-          // staff-only. `type` is what drops a quiz assignment's link where
-          // quizzes are hidden, and it travels on to the display row.
+          // all: `is_published` on both rows, for a quiz or form its
+          // `release_at`, and a form's draft status. A link students cannot
+          // see is staff-only. `type` is what drops a quiz assignment's link
+          // where quizzes are hidden, and it travels on to the display row.
           assignment: {
             select: {
               id: true,
@@ -970,7 +970,6 @@ export const getClassroomCalendar = async (
               slug: true,
               is_published: true,
               release_at: true,
-              quiz: { select: { status: true } },
               form: { select: { status: true } },
               repository: {
                 select: { id: true, title: true, slug: true, is_published: true },
@@ -1234,9 +1233,8 @@ export const getDeadlinesForRange = async (
           is_published: true,
         },
       },
-      // Read by the student-visibility rule: a quiz or form that is still a
-      // draft is not visible to students.
-      quiz: { select: { status: true } },
+      // Read by the student-visibility rule: a form that is still a draft is
+      // not visible to students. (A quiz's publish state is the assignment's.)
       form: { select: { status: true } },
       pages: {
         // Draft pages are staff-only, the same rule the event-link leg applies

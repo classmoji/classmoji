@@ -254,9 +254,10 @@ describe('student quiz list — due date, closed quizzes, zero scores', () => {
   it('asks for closed quizzes too', async () => {
     await load();
 
-    expect(mocks.quizFindMany.mock.calls[0][0].where.status).toEqual({
-      in: ['PUBLISHED', 'CLOSED'],
-    });
+    // A quiz in no module is listed by its own status, closed ones included;
+    // one with an assignment by the assignment (and kept once it closes).
+    const [, legacy] = mocks.quizFindMany.mock.calls[0][0].where.OR;
+    expect(legacy.status).toEqual({ in: ['PUBLISHED', 'CLOSED'] });
   });
 
   it("shows the assignment's due date where the quiz has an assignment", async () => {
@@ -265,7 +266,13 @@ describe('student quiz list — due date, closed quizzes, zero scores', () => {
       {
         ...QUIZ_ROW,
         due_date: new Date('2026-09-30T18:00:00Z'),
-        assignment: { student_deadline: assignmentDue },
+        assignment: {
+          is_published: true,
+          release_at: null,
+          student_deadline: assignmentDue,
+          closes_at: null,
+          weight: 10,
+        },
       },
     ]);
 
@@ -290,9 +297,54 @@ describe('student quiz list — due date, closed quizzes, zero scores', () => {
 
     const [quiz] = (await load()).quizzes;
 
-    expect(quiz.status).toBe('CLOSED');
+    expect(quiz.closed).toBe(true);
     expect(quiz.score).toBe(85);
     expect(quiz.attemptsSummary.canCreateNew).toBe(false);
+  });
+
+  it("reads a quiz with an assignment as closed once the assignment's close date passes", async () => {
+    // The quiz's own status was written PUBLISHED when it was saved; the close
+    // date passed afterwards and nothing rewrote it.
+    mocks.quizFindMany.mockResolvedValue([
+      {
+        ...QUIZ_ROW,
+        status: 'PUBLISHED',
+        attempts: [],
+        assignment: {
+          is_published: true,
+          release_at: null,
+          student_deadline: null,
+          closes_at: new Date(Date.now() - 60_000),
+          weight: 10,
+        },
+      },
+    ]);
+
+    const [quiz] = (await load()).quizzes;
+
+    expect(quiz.closed).toBe(true);
+    expect(quiz.attemptsSummary.canCreateNew).toBe(false);
+  });
+
+  it("takes the weight from the quiz's assignment, so a weight-0 one reads as practice", async () => {
+    mocks.quizFindMany.mockResolvedValue([
+      {
+        ...QUIZ_ROW,
+        weight: 10,
+        assignment: {
+          is_published: true,
+          release_at: null,
+          student_deadline: null,
+          closes_at: null,
+          weight: 0,
+        },
+      },
+    ]);
+
+    const [quiz] = (await load()).quizzes;
+
+    expect(quiz.weight).toBe(0);
+    expect(quiz.closed).toBe(false);
   });
 
   it('reports a 0 as a score, not as no score', async () => {
