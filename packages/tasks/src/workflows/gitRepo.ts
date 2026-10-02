@@ -280,6 +280,10 @@ export const createRepositoryTask = task({
   queue: {
     concurrencyLimit: 6,
   },
+  // Copying a multi-gigabyte template (an Unreal project, say) is a full
+  // download plus an upload in several parts; the project-wide 15 minutes is
+  // not enough for it. Normal templates finish in seconds either way.
+  maxDuration: 3600,
   run: async (payload: CreateRepositoryTaskPayload, { ctx }: RepositoryTaskContext) => {
     try {
       // NOTE: this branch rebuilds the standard payload field-by-field and so

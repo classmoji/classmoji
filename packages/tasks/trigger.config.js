@@ -124,7 +124,9 @@ export default defineConfig({
         mode: 'legacy',
       }),
       aptGet({
-        packages: ['bash', 'git'],
+        // git-lfs: `gh-create_git_repo` copies templates that keep their
+        // files in Git LFS (see helpers/templatePush.ts).
+        packages: ['bash', 'git', 'git-lfs'],
       }),
       // For `media-video-process`. No version: the extension installs Debian's
       // `ffmpeg` package — on the node-22 image (bookworm) that is 5.1.x, a

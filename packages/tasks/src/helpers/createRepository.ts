@@ -4,6 +4,15 @@ import path from 'path';
 import fs from 'fs';
 
 import { CLASSMOJI_BOT_EMAIL, getGitProvider } from '@classmoji/services';
+import {
+  LOW_MEMORY_GIT_CONFIG,
+  fetchLfsObjects,
+  isAncestor,
+  parseRemoteHeads,
+  pushBranchInChunks,
+  pushLfsObjects,
+  usesLfs,
+} from './templatePush.ts';
 
 // Public fallback template used when an instructor's configured template repo has
 // no commits. An empty repo can't seed a student/team repo (the clone lands on an
@@ -69,18 +78,27 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
   const studentRepoUrl = `https://x-access-token:${token}@github.com/${gitOrgLogin}/${repoName}.git`;
   const templateRepoUrl = `https://x-access-token:${token}@github.com/${templateOwner}/${templateRepo}.git`;
 
-  const git = simpleGit();
+  const git = simpleGit({ config: LOW_MEMORY_GIT_CONFIG });
 
   try {
     if (fs.existsSync(localPath)) {
       fs.rmSync(localPath, { recursive: true, force: true });
     }
 
-    await git.clone(templateRepoUrl, localPath);
-    const repoGit = simpleGit(localPath);
+    // Only the template's default branch is pushed, so only it is fetched.
+    // `--sparse` checks out the top-level files alone: the working tree is
+    // needed just for the root .gitignore and CLASSMOJI.md, and a full
+    // checkout of a game project doubles the disk it takes. Every commit
+    // still carries the whole tree, so what is pushed is unchanged.
+    await git.clone(templateRepoUrl, localPath, ['--single-branch', '--no-tags', '--sparse']);
+    const repoGit = simpleGit({ baseDir: localPath, config: LOW_MEMORY_GIT_CONFIG });
 
     await repoGit.addConfig('user.name', 'Classmoji Bot');
     await repoGit.addConfig('user.email', CLASSMOJI_BOT_EMAIL);
+
+    // Templates that keep their files in Git LFS: the clone holds only the
+    // pointer files, so the objects are copied across separately.
+    const lfsReady = (await usesLfs(repoGit)) && (await fetchLfsObjects(repoGit, 'origin'));
 
     await repoGit.removeRemote('origin');
     await repoGit.addRemote('origin', studentRepoUrl);
@@ -90,9 +108,14 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
     // Sync will route it back through here — but if it already has branches it
     // may contain student work, and the force-push below would destroy it.
     // Skip template initialization and let the rest of the workflow heal the
-    // DB row / collaborators instead.
+    // DB row / collaborators instead. The one exception is a lone `main`
+    // holding part of the template's own history (checked once `main` exists
+    // locally, below): a large template is pushed in parts, and a run that
+    // stopped between them is resumed rather than left half-copied.
     const remoteHeads = await repoGit.listRemote(['--heads', 'origin']);
-    if (remoteHeads.trim().length > 0) {
+    const heads = parseRemoteHeads(remoteHeads);
+    const resumableMain = heads.size === 1 ? (heads.get('main') ?? null) : null;
+    if (remoteHeads.trim().length > 0 && !resumableMain) {
       logger.warn(
         `${gitOrgLogin}/${repoName} already has branches — skipping template initialization to avoid overwriting existing work`,
         { remoteHeads }
@@ -133,7 +156,29 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
       await repoGit.removeRemote('seed');
     }
 
-    await repoGit.push('origin', 'main', ['--force']);
+    if (resumableMain && !(await isAncestor(repoGit, resumableMain, 'main'))) {
+      logger.warn(
+        `${gitOrgLogin}/${repoName} already has a main branch that is not the template's — skipping template initialization to avoid overwriting existing work`,
+        { remoteHeads }
+      );
+      return repoId;
+    }
+    if (resumableMain) {
+      logger.info(`Resuming the template copy into ${gitOrgLogin}/${repoName}`, {
+        alreadyPushed: resumableMain,
+      });
+    }
+
+    // LFS objects first, so the branch never points at files Github lacks.
+    if (lfsReady) {
+      await pushLfsObjects(repoGit, 'origin');
+    }
+
+    await pushBranchInChunks(repoGit, {
+      remote: 'origin',
+      branch: 'main',
+      alreadyPushed: resumableMain,
+    });
     await repoGit.checkoutLocalBranch('feedback');
     await repoGit.push('origin', 'feedback', ['--set-upstream']);
     await repoGit.checkout('main');
