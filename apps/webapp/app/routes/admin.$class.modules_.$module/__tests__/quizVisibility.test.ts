@@ -1,11 +1,19 @@
 /**
- * The module detail page in a classroom that does not show quizzes: its
- * loader sends no quiz item, quiz assignment, candidate or binding, and the
- * "Add item" picker it opens (AddContentItemModal, no preset kind) offers no
- * Quiz type. Adding an item posts to the Modules action, which refuses a quiz
- * item on its own (see admin.$class.modules/__tests__/quizVisibility.test.ts).
- * A module that owns hidden quiz assignments cannot be deleted, whatever else
- * it lists: the loader flags it and the page renders no Delete button for it.
+ * The module detail page and quizzes.
+ *
+ * A quiz sits in a module through its QUIZ assignment, made in the quiz form:
+ * legacy QUIZ content items never leave the loader, the loader sends no quiz
+ * bindings, the "Add item" picker it opens (AddContentItemModal, no preset
+ * kind) offers no Quiz type with or without quizzes, and editing a quiz's
+ * assignment opens the quiz form. Adding an item posts to the Modules action,
+ * which refuses a quiz item on its own (see
+ * admin.$class.modules/__tests__/quizVisibility.test.ts).
+ *
+ * In a classroom that does not show quizzes the loader also sends no quiz
+ * assignment or candidate. A module that lists some assignments and owns
+ * hidden quiz ones cannot be deleted: the loader flags it and the page renders
+ * no Delete button for it. One whose only assignments are hidden quiz ones is
+ * deleted with them, so it is not flagged.
  */
 
 import { createElement } from 'react';
@@ -20,15 +28,19 @@ const mocks = vi.hoisted(() => ({
   listModuleContents: vi.fn(),
   getCandidateContent: vi.fn(),
   assignmentListForClassroom: vi.fn(),
+  navigate: vi.fn(),
+  // The tabs the page hands FolderTabs, so a test can reach the assignments
+  // table's handlers without rendering the tabs.
+  tabs: { items: [] as Array<{ key: string; children: unknown }> },
 }));
 
 vi.mock('react-router', async importOriginal => ({
   ...(await importOriginal<typeof import('react-router')>()),
   // The modal posts through a fetcher, which needs a data router; the markup
-  // does not depend on it. Nor on the page's params or navigation.
+  // does not depend on it. Nor on the page's params.
   useFetcher: () => ({ submit: vi.fn(), state: 'idle', data: undefined }),
   useParams: () => ({ class: 'cs52', module: 'week-1' }),
-  useNavigate: () => vi.fn(),
+  useNavigate: () => mocks.navigate,
 }));
 
 // antd's Modal portals its body, which renders nothing on the server. Reduced
@@ -71,7 +83,12 @@ vi.mock('@classmoji/services', () => ({
 }));
 
 // The page's own component tree is not under test.
-vi.mock('~/components/ui/FolderTabs', () => ({ default: () => null }));
+vi.mock('~/components/ui/FolderTabs', () => ({
+  default: ({ items }: { items: Array<{ key: string; children: unknown }> }) => {
+    mocks.tabs.items = items;
+    return null;
+  },
+}));
 vi.mock('~/components/features/assignments/AssignmentsTable', () => ({ default: () => null }));
 vi.mock('~/components/features/assignments/AssignmentFormModal', () => ({ default: () => null }));
 vi.mock('../../admin.$class.modules/ModuleFormModal', () => ({ default: () => null }));
@@ -90,6 +107,7 @@ const load = () =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.tabs.items = [];
   mocks.requireClassroomAdmin.mockResolvedValue({ classroom: { id: CLASSROOM_ID } });
   mocks.findByClassroomSlugAndModuleSlug.mockResolvedValue({ id: 'mod-1' });
   mocks.listModuleContents.mockResolvedValue({
@@ -116,7 +134,7 @@ beforeEach(() => {
 });
 
 describe('module detail loader', () => {
-  it('sends no quiz rows, candidates or bindings without quizzes', async () => {
+  it('sends no quiz rows or candidates without quizzes', async () => {
     mocks.loadQuizzesVisible.mockResolvedValue(false);
     const result = await load();
 
@@ -125,22 +143,29 @@ describe('module detail loader', () => {
     expect(result.module.items.map(i => i.id)).toEqual(['item-page']);
     expect(result.module.assignments.map(a => a.id)).toEqual(['asg-repo']);
     expect(result.candidates.quizzes).toEqual([]);
-    expect(result.boundQuizIds).toEqual([]);
     expect(JSON.stringify(result)).not.toContain('Recursion');
   });
 
-  it('keeps them when the classroom shows quizzes', async () => {
+  it('keeps quiz assignments and candidates when the classroom shows quizzes, and no quiz items', async () => {
     mocks.loadQuizzesVisible.mockResolvedValue(true);
     const result = await load();
 
     expect(result.quizzesVisible).toBe(true);
-    expect(result.module.items.map(i => i.id)).toEqual(['item-page', 'item-quiz']);
+    // A quiz is in a module through its assignment; the legacy item is not listed.
+    expect(result.module.items.map(i => i.id)).toEqual(['item-page']);
     expect(result.module.assignments.map(a => a.id)).toEqual(['asg-repo', 'asg-quiz']);
     expect(result.candidates.quizzes).toHaveLength(1);
-    expect(result.boundQuizIds).toEqual(['q1']);
   });
 
-  it('flags a module whose only assignments are hidden, and sends nothing else about them', async () => {
+  it.each([true, false])('sends no quiz bindings (quizzes visible: %s)', async visible => {
+    mocks.loadQuizzesVisible.mockResolvedValue(visible);
+    const result = await load();
+
+    expect(result).not.toHaveProperty('boundQuizIds');
+    expect(result.boundFormIds).toEqual([]);
+  });
+
+  it('does not flag a module whose only assignments are hidden quiz ones, and sends nothing about them', async () => {
     mocks.loadQuizzesVisible.mockResolvedValue(false);
     mocks.listModuleContents.mockResolvedValue({
       id: 'mod-1',
@@ -150,7 +175,8 @@ describe('module detail loader', () => {
     });
     const result = await load();
 
-    expect(result.module.hasUnlistedAssignments).toBe(true);
+    // Deleting it takes the quiz assignments with it, so it can be offered.
+    expect(result.module.hasUnlistedAssignments).toBe(false);
     expect(result.module.assignments).toEqual([]);
     expect(JSON.stringify(result)).not.toMatch(/Recursion|asg-quiz|"q1"/);
   });
@@ -185,42 +211,38 @@ describe('module detail loader', () => {
   });
 });
 
-describe('the module detail page’s Delete button', () => {
-  const renderPage = (module: {
-    assignments: Array<{ id: string; type: string }>;
+const renderPage = (
+  module: {
+    assignments: Array<{ id: string; type: string; quiz?: { id: string } }>;
     hasUnlistedAssignments: boolean;
-  }) =>
-    renderToStaticMarkup(
-      createElement(ModuleDetail, {
-        loaderData: {
-          module: {
-            id: 'mod-1',
-            title: 'Week 1',
-            slug: 'week-1',
-            description: null,
-            position: 0,
-            is_published: true,
-            items: [],
-            ...module,
-          },
-          candidates: { pages: [], slides: [], quizzes: [], forms: [] },
-          repositories: [],
-          boundQuizIds: [],
-          boundFormIds: [],
-          tags: [],
-          quizzesVisible: false,
+  },
+  quizzesVisible = false
+) =>
+  renderToStaticMarkup(
+    createElement(ModuleDetail, {
+      loaderData: {
+        module: {
+          id: 'mod-1',
+          title: 'Week 1',
+          slug: 'week-1',
+          description: null,
+          position: 0,
+          is_published: true,
+          items: [],
+          ...module,
         },
-      } as never)
-    );
+        candidates: { pages: [], slides: [], quizzes: [], forms: [] },
+        repositories: [],
+        boundFormIds: [],
+        tags: [],
+        quizzesVisible,
+      },
+    } as never)
+  );
+
+describe('the module detail page’s Delete button', () => {
   // antd's Button wraps its label in a span.
   const hasDelete = (html: string) => />Delete<\/span>/.test(html);
-
-  it('is not rendered for a module that lists no assignments but owns some', () => {
-    const html = renderPage({ assignments: [], hasUnlistedAssignments: true });
-    expect(hasDelete(html)).toBe(false);
-    expect(html).toContain('Week 1');
-    expect(html).not.toMatch(/quiz/i);
-  });
 
   it('is not rendered for a module that lists some assignments and owns others', () => {
     const html = renderPage({
@@ -228,11 +250,14 @@ describe('the module detail page’s Delete button', () => {
       hasUnlistedAssignments: true,
     });
     expect(hasDelete(html)).toBe(false);
+    expect(html).toContain('Week 1');
     expect(html).not.toMatch(/quiz/i);
   });
 
-  it('is rendered for a module with no assignments at all', () => {
-    expect(hasDelete(renderPage({ assignments: [], hasUnlistedAssignments: false }))).toBe(true);
+  it('is rendered for a module with no listed assignments and nothing else blocking it', () => {
+    const html = renderPage({ assignments: [], hasUnlistedAssignments: false });
+    expect(hasDelete(html)).toBe(true);
+    expect(html).not.toMatch(/quiz/i);
   });
 
   it('is rendered for a module that lists assignments (its confirm says to move them first)', () => {
@@ -244,14 +269,50 @@ describe('the module detail page’s Delete button', () => {
   });
 });
 
-describe('the Add item picker’s types', () => {
-  it('leaves Quiz out without quizzes', () => {
-    expect(contentTypesFor(false)).toEqual(['PAGE', 'SLIDE', 'FORM']);
+describe('editing a quiz’s assignment from the module page', () => {
+  /** The assignments table's onEdit, as the page wires it. */
+  const onEdit = () => {
+    const tab = mocks.tabs.items.find(item => item.key === 'assignments');
+    return (tab!.children as { props: { onEdit: (row: unknown) => void } }).props.onEdit;
+  };
+
+  it('opens the quiz form for that quiz', () => {
+    renderPage(
+      {
+        assignments: [{ id: 'asg-quiz', type: 'QUIZ', quiz: { id: 'q1' } }],
+        hasUnlistedAssignments: false,
+      },
+      true
+    );
+
+    onEdit()({ id: 'asg-quiz', type: 'QUIZ', quiz: { id: 'q1' } });
+
+    expect(mocks.navigate).toHaveBeenCalledExactlyOnceWith('/admin/cs52/quizzes/form?quizId=q1');
   });
 
-  it('offers every type when the classroom shows quizzes', () => {
-    expect(contentTypesFor(true)).toEqual(CONTENT_TYPES);
-    expect(contentTypesFor(true)).toContain('QUIZ');
+  it('does nothing for a quiz assignment whose quiz is not sent', () => {
+    renderPage({ assignments: [], hasUnlistedAssignments: false }, true);
+
+    onEdit()({ id: 'asg-quiz', type: 'QUIZ', quiz: null });
+
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  it('does not navigate for another kind of assignment', () => {
+    renderPage({ assignments: [], hasUnlistedAssignments: false }, true);
+
+    // It opens the assignment modal in place instead.
+    onEdit()({ id: 'asg-repo', type: 'REPO' });
+
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+});
+
+describe('the Add item picker’s types', () => {
+  it('never offers Quiz, with or without quizzes', () => {
+    expect(contentTypesFor(false)).toEqual(['PAGE', 'SLIDE', 'FORM']);
+    expect(contentTypesFor(true)).toEqual(['PAGE', 'SLIDE', 'FORM']);
+    expect(CONTENT_TYPES).toEqual(['PAGE', 'SLIDE', 'FORM']);
   });
 
   const render = (quizzesVisible?: boolean) =>
@@ -267,16 +328,13 @@ describe('the Add item picker’s types', () => {
       })
     );
 
-  it('renders no Quiz segment without quizzes, or when the flag is absent', () => {
-    for (const html of [render(false), render()]) {
+  it('renders no Quiz segment, whether quizzes show or not', () => {
+    for (const html of [render(false), render(), render(true)]) {
       expect(html).toContain('data-segment="PAGE"');
+      expect(html).toContain('data-segment="SLIDE"');
       expect(html).toContain('data-segment="FORM"');
       expect(html).not.toContain('data-segment="QUIZ"');
       expect(html).not.toContain('Quiz');
     }
-  });
-
-  it('renders the Quiz segment when the classroom shows quizzes', () => {
-    expect(render(true)).toContain('data-segment="QUIZ"');
   });
 });

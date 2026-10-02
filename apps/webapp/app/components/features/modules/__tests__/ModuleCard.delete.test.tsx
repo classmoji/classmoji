@@ -134,7 +134,6 @@ const render = ({
         onToggle={() => {}}
         candidates={{ pages: [], slides: [], quizzes: [], forms: [] }}
         repositories={[]}
-        boundQuizIds={new Set()}
         boundFormIds={new Set()}
         quizzesVisible={false}
         coursework={{

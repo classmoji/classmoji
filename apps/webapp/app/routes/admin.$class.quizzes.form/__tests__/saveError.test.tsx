@@ -62,6 +62,18 @@ const render = () =>
           assignments: [],
           examplePrompts: [],
           sourceMaterialOptions: { pages: [], decks: [] },
+          canAuthor: true,
+          isOwner: true,
+          modules: [{ id: 'mod-1', title: 'Week 1' }],
+          assignmentPanel: {
+            moduleId: 'mod-1',
+            moduleTitle: 'Week 1',
+            releaseAt: null,
+            dueDate: null,
+            closesAt: null,
+            weight: 0,
+            isPublished: false,
+          },
         },
       } as unknown as Parameters<typeof QuizFormDrawer>[0])}
     />
@@ -88,6 +100,15 @@ describe('the quiz form drawer after a refused save', () => {
     fetcher.data = { error: conflict };
 
     expect(render()).toContain('Someone else saved this quiz&#x27;s source material');
+  });
+
+  it('shows a refused assignment write the same way', () => {
+    fetcher.data = { error: 'Module not found in this classroom' };
+
+    const html = render();
+
+    expect(html).toContain('Module not found in this classroom');
+    expect(html).toContain('ant-alert-error');
   });
 
   it('shows nothing while the next save is on its way', () => {

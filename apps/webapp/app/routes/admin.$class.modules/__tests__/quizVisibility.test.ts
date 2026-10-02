@@ -1,19 +1,31 @@
 /**
- * The staff Modules page in a classroom that does not show quizzes (not Pro,
- * or switched off): no quiz row, candidate or binding leaves the loader, the
- * action refuses to add a quiz item, and a reorder or move still works in a
- * module that holds quiz rows the page never saw — the services take a
- * module's FULL list, so the action puts each hidden row back after the row it
- * follows now. A module that owns hidden quiz assignments cannot be deleted,
- * whatever else it lists; the loader flags it (a boolean, nothing else) so the
- * page offers no Delete, and a delete posted from a stale page gets a line
- * naming nothing.
+ * The staff Modules page and quizzes.
+ *
+ * A quiz sits in a module through its QUIZ assignment, made in the quiz form.
+ * Legacy QUIZ content items are kept in the data but never leave the loader,
+ * whether or not the classroom shows quizzes, and the action refuses to add
+ * one. Item ordering passes the page's list through as it is (the services
+ * leave legacy quiz items out of every ordering).
+ *
+ * In a classroom that does not show quizzes (not Pro, or switched off) no quiz
+ * assignment, candidate or binding leaves the loader either, and a reorder or
+ * move of assignments still works in a module that owns quiz assignments the
+ * page never saw: the service takes a module's FULL list, so the action puts
+ * each hidden row back after the row it follows now.
+ *
+ * Deleting: a module whose only assignments are hidden quiz ones is deleted
+ * with them (the service is told quizzes are hidden), and the audit log
+ * records which assignments went. A module that lists some assignments and
+ * owns hidden ones as well cannot be deleted; the loader flags it (a boolean,
+ * nothing else) so the page offers no Delete, and a delete posted from a stale
+ * page gets a line naming nothing.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   requireClassroomAdmin: vi.fn(),
+  addClassroomAuditLog: vi.fn(),
   loadQuizzesVisible: vi.fn(),
   listModuleContentsForClassroom: vi.fn(),
   listModuleContents: vi.fn(),
@@ -32,7 +44,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock('~/utils/routeAuth.server', () => ({
   requireClassroomAdmin: (...a: unknown[]) => mocks.requireClassroomAdmin(...a),
 }));
-vi.mock('~/utils/helpers', () => ({ assertClassroomMutationAllowed: vi.fn() }));
+vi.mock('~/utils/helpers', () => ({
+  assertClassroomMutationAllowed: vi.fn(),
+  addClassroomAuditLog: (...a: unknown[]) => mocks.addClassroomAuditLog(...a),
+}));
 vi.mock('~/utils/classroomProFlag.server', () => ({
   loadQuizzesVisible: (...a: unknown[]) => mocks.loadQuizzesVisible(...a),
 }));
@@ -97,7 +112,7 @@ const moduleRow = () => ({
 });
 
 // A module whose only assignment is a quiz one: without quizzes the page lists
-// no assignment for it, yet the service refuses to delete it.
+// no assignment for it, and deleting it takes the quiz assignment with it.
 const quizOnlyModule = () => ({
   id: 'mod-2',
   title: 'Week 2',
@@ -139,9 +154,12 @@ const post = (name: string, body: unknown) =>
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.requireClassroomAdmin.mockResolvedValue({
+    userId: 'owner-1',
     classroom: { id: CLASSROOM_ID, status: 'ACTIVE' },
     membership: { role: 'OWNER' },
   });
+  // Each test that depends on it says which; this is only the default.
+  mocks.loadQuizzesVisible.mockResolvedValue(true);
   mocks.listModuleContentsForClassroom.mockResolvedValue([moduleRow()]);
   mocks.listModuleContents.mockResolvedValue(moduleRow());
   mocks.getCandidateContent.mockResolvedValue({
@@ -156,6 +174,8 @@ beforeEach(() => {
   ]);
   mocks.repositoryFindByClassroomId.mockResolvedValue([]);
   mocks.tagFindByClassroomId.mockResolvedValue([]);
+  mocks.deleteById.mockResolvedValue({ id: 'mod-x', deleted_quiz_assignment_ids: [] });
+  mocks.addClassroomAuditLog.mockResolvedValue(undefined);
   for (const m of [
     mocks.addItem,
     mocks.reorderItems,
@@ -168,7 +188,7 @@ beforeEach(() => {
 });
 
 describe('Modules loader', () => {
-  it('sends no quiz items, quiz assignments, quiz candidates or quiz bindings without quizzes', async () => {
+  it('sends no quiz items, quiz assignments or quiz candidates without quizzes', async () => {
     mocks.loadQuizzesVisible.mockResolvedValue(false);
     const result = await load();
 
@@ -178,31 +198,37 @@ describe('Modules loader', () => {
     expect(result.modules[0].assignments.map(a => a.id)).toEqual(['asg-repo', 'asg-form']);
     expect(result.candidates.quizzes).toEqual([]);
     expect(result.candidates.pages).toHaveLength(1);
-    expect(result.boundQuizIds).toEqual([]);
     expect(result.boundFormIds).toEqual(['f1']);
     expect(JSON.stringify(result)).not.toMatch(/Recursion|Quiz 1/);
   });
 
-  it('keeps every quiz row when the classroom shows quizzes', async () => {
+  it('keeps quiz assignments when the classroom shows quizzes, and still no quiz items', async () => {
     mocks.loadQuizzesVisible.mockResolvedValue(true);
     const result = await load();
 
     expect(result.quizzesVisible).toBe(true);
-    expect(result.modules[0].items.map(i => i.id)).toEqual([
-      'item-page',
-      'item-quiz',
-      'item-slide',
-    ]);
+    // A quiz is in a module through its assignment; the legacy item is not listed.
+    expect(result.modules[0].items.map(i => i.id)).toEqual(['item-page', 'item-slide']);
     expect(result.modules[0].assignments.map(a => a.id)).toEqual([
       'asg-repo',
       'asg-quiz',
       'asg-form',
     ]);
     expect(result.candidates.quizzes).toHaveLength(1);
-    expect(result.boundQuizIds).toEqual(['q1']);
   });
 
-  it('flags every module that owns a hidden assignment, and sends nothing else about them', async () => {
+  it.each([true, false])(
+    'sends no quiz bindings (quizzes visible: %s): a quiz’s assignment is made in the quiz form',
+    async visible => {
+      mocks.loadQuizzesVisible.mockResolvedValue(visible);
+      const result = await load();
+
+      expect(result).not.toHaveProperty('boundQuizIds');
+      expect(result.boundFormIds).toEqual(['f1']);
+    }
+  );
+
+  it('flags a module that lists some assignments and owns hidden ones, and sends nothing else about them', async () => {
     mocks.loadQuizzesVisible.mockResolvedValue(false);
     mocks.listModuleContentsForClassroom.mockResolvedValue([
       moduleRow(),
@@ -214,7 +240,7 @@ describe('Modules loader', () => {
 
     expect(result.modules.map(m => [m.id, m.hasUnlistedAssignments])).toEqual([
       ['mod-1', true], // lists its repo and form assignments, owns a quiz one too
-      ['mod-2', true], // lists none, owns a quiz one
+      ['mod-2', false], // owns only quiz ones, which go with it: it can be deleted
       ['mod-3', false], // owns none
       ['mod-4', false], // lists every one it owns
     ]);
@@ -246,24 +272,78 @@ describe('Modules action — delete', () => {
   const refuse = () =>
     mocks.deleteById.mockRejectedValue(new Error('Module still has assignments'));
 
-  it('deletes a module the service lets go', async () => {
-    mocks.deleteById.mockResolvedValue({ id: 'mod-3' });
+  it('deletes a module the service lets go, telling it the classroom shows quizzes', async () => {
+    mocks.loadQuizzesVisible.mockResolvedValue(true);
+    mocks.deleteById.mockResolvedValue({ id: 'mod-3', deleted_quiz_assignment_ids: [] });
     const result = await post('delete', { id: 'mod-3' });
 
     expect(result).toEqual({ success: 'Module deleted' });
-    expect(mocks.deleteById).toHaveBeenCalledWith('mod-3', CLASSROOM_ID);
+    expect(mocks.deleteById).toHaveBeenCalledWith('mod-3', CLASSROOM_ID, {
+      quizzesHidden: false,
+    });
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
-  it('answers a stale delete blocked only by hidden assignments with a line naming none', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+  it('tells the service when the classroom hides quizzes', async () => {
     mocks.loadQuizzesVisible.mockResolvedValue(false);
-    mocks.listModuleContents.mockResolvedValue(quizOnlyModule());
-    refuse();
+    mocks.deleteById.mockResolvedValue({ id: 'mod-3', deleted_quiz_assignment_ids: [] });
+
+    expect(await post('delete', { id: 'mod-3' })).toEqual({ success: 'Module deleted' });
+    expect(mocks.loadQuizzesVisible).toHaveBeenCalledWith(CLASSROOM_ID);
+    expect(mocks.deleteById).toHaveBeenCalledWith('mod-3', CLASSROOM_ID, { quizzesHidden: true });
+    // Nothing went with it, so there is nothing to record.
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('records the quiz assignments that went with the module, and says only "Module deleted"', async () => {
+    mocks.loadQuizzesVisible.mockResolvedValue(false);
+    mocks.deleteById.mockResolvedValue({
+      id: 'mod-2',
+      deleted_quiz_assignment_ids: ['asg-quiz-2', 'asg-quiz-3'],
+    });
+
     const result = await post('delete', { id: 'mod-2' });
 
+    expect(result).toEqual({ success: 'Module deleted' });
+    expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      classroomId: CLASSROOM_ID,
+      userId: 'owner-1',
+      role: 'OWNER',
+      action: 'DELETE',
+      resourceType: 'MODULE',
+      resourceId: 'mod-2',
+      metadata: {
+        tool: 'web:modules.delete',
+        quiz_assignment_ids: ['asg-quiz-2', 'asg-quiz-3'],
+      },
+    });
+    // The audit row is written once the delete has landed.
+    expect(mocks.deleteById.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.addClassroomAuditLog.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('records nothing when the delete is refused', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.loadQuizzesVisible.mockResolvedValue(false);
+    refuse();
+
+    await post('delete', { id: 'mod-1' });
+
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('answers a stale delete of a module that lists some assignments and owns hidden ones with a line naming none', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.loadQuizzesVisible.mockResolvedValue(false);
+    mocks.listModuleContents.mockResolvedValue(moduleRow());
+    refuse();
+    const result = await post('delete', { id: 'mod-1' });
+
+    // Moving the listed ones would not unblock it, so the line does not ask to.
     expect(result).toEqual({ error: CANT_DELETE });
     expect(JSON.stringify(result)).not.toMatch(/quiz|assignment|hidden/i);
-    expect(mocks.listModuleContents).toHaveBeenCalledWith('mod-2', CLASSROOM_ID);
+    expect(mocks.listModuleContents).toHaveBeenCalledWith('mod-1', CLASSROOM_ID);
     // The refused delete was the only write attempted.
     expect(mocks.deleteById).toHaveBeenCalledTimes(1);
     for (const write of [
@@ -275,16 +355,6 @@ describe('Modules action — delete', () => {
     ]) {
       expect(write).not.toHaveBeenCalled();
     }
-  });
-
-  it('answers a module that lists some assignments but owns hidden ones with the same line', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    mocks.loadQuizzesVisible.mockResolvedValue(false);
-    mocks.listModuleContents.mockResolvedValue(moduleRow());
-    refuse();
-
-    // Moving the listed ones would not unblock it, so the line does not ask to.
-    expect(await post('delete', { id: 'mod-1' })).toEqual({ error: CANT_DELETE });
   });
 
   it('keeps the move-first line when the page lists every assignment', async () => {
@@ -316,87 +386,87 @@ describe('Modules action — delete', () => {
     });
   });
 
-  it('answers any other failure with the generic line', async () => {
+  it('answers any other failure with the generic line, looking nothing up', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.loadQuizzesVisible.mockResolvedValue(false);
     mocks.deleteById.mockRejectedValue(new Error('Module not found in classroom'));
 
     expect(await post('delete', { id: 'mod-x' })).toEqual({
       error: 'Failed to delete module. Please try again.',
     });
-    expect(mocks.loadQuizzesVisible).not.toHaveBeenCalled();
+    expect(mocks.listModuleContents).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 });
 
 describe('Modules action — addItem', () => {
-  it('refuses a quiz item without quizzes, and writes nothing', async () => {
+  it.each([true, false])(
+    'refuses a quiz item (quizzes visible: %s), says where quizzes are added, and writes nothing',
+    async visible => {
+      mocks.loadQuizzesVisible.mockResolvedValue(visible);
+      const result = await post('addItem', {
+        moduleId: 'mod-1',
+        itemType: 'QUIZ',
+        targetId: 'q1',
+      });
+
+      expect(result).toEqual({ error: 'Add a quiz from the quiz form.' });
+      expect(mocks.addItem).not.toHaveBeenCalled();
+      expect(mocks.loadQuizzesVisible).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['PAGE', 'SLIDE', 'FORM'])('still adds a %s item', async itemType => {
     mocks.loadQuizzesVisible.mockResolvedValue(false);
-    const result = await post('addItem', { moduleId: 'mod-1', itemType: 'QUIZ', targetId: 'q1' });
-
-    expect(result).toEqual({ error: "Quizzes aren't available in this class." });
-    expect(mocks.addItem).not.toHaveBeenCalled();
-  });
-
-  it('adds a quiz item when the classroom shows quizzes', async () => {
-    mocks.loadQuizzesVisible.mockResolvedValue(true);
-    const result = await post('addItem', { moduleId: 'mod-1', itemType: 'QUIZ', targetId: 'q1' });
+    const result = await post('addItem', { moduleId: 'mod-1', itemType, targetId: 't1' });
 
     expect(result.success).toBeDefined();
-    expect(mocks.addItem).toHaveBeenCalledWith('mod-1', 'QUIZ', 'q1', CLASSROOM_ID);
-  });
-
-  it('still adds other kinds without quizzes', async () => {
-    mocks.loadQuizzesVisible.mockResolvedValue(false);
-    const result = await post('addItem', { moduleId: 'mod-1', itemType: 'PAGE', targetId: 'p1' });
-
-    expect(result.success).toBeDefined();
-    expect(mocks.addItem).toHaveBeenCalledWith('mod-1', 'PAGE', 'p1', CLASSROOM_ID);
+    expect(mocks.addItem).toHaveBeenCalledWith('mod-1', itemType, 't1', CLASSROOM_ID);
   });
 });
 
 describe('Modules action — ordering around hidden quiz rows', () => {
-  it('reorderItems puts the hidden quiz item back after the item it follows', async () => {
-    mocks.loadQuizzesVisible.mockResolvedValue(false);
-    // The page saw [page, slide] and swapped them; the quiz follows the page.
-    const result = await post('reorderItems', {
-      moduleId: 'mod-1',
-      orderedItemIds: ['item-slide', 'item-page'],
-    });
+  it.each([true, false])(
+    'reorderItems passes the page order through as it is (quizzes visible: %s)',
+    async visible => {
+      mocks.loadQuizzesVisible.mockResolvedValue(visible);
+      // The page saw [page, slide] and swapped them. The legacy quiz item is
+      // in no ordering, so nothing is put back.
+      const result = await post('reorderItems', {
+        moduleId: 'mod-1',
+        orderedItemIds: ['item-slide', 'item-page'],
+      });
 
-    expect(result.success).toBeDefined();
-    expect(mocks.listModuleContents).toHaveBeenCalledWith('mod-1', CLASSROOM_ID);
-    expect(mocks.reorderItems).toHaveBeenCalledWith(
-      'mod-1',
-      ['item-slide', 'item-page', 'item-quiz'],
-      CLASSROOM_ID
-    );
-  });
+      expect(result.success).toBeDefined();
+      expect(mocks.listModuleContents).not.toHaveBeenCalled();
+      expect(mocks.reorderItems).toHaveBeenCalledWith(
+        'mod-1',
+        ['item-slide', 'item-page'],
+        CLASSROOM_ID
+      );
+    }
+  );
 
-  it('reorderItems passes the page order through when quizzes show', async () => {
-    mocks.loadQuizzesVisible.mockResolvedValue(true);
-    const ordered = ['item-slide', 'item-quiz', 'item-page'];
-    await post('reorderItems', { moduleId: 'mod-1', orderedItemIds: ordered });
+  it.each([true, false])(
+    'moveItem passes the target’s page order through as it is (quizzes visible: %s)',
+    async visible => {
+      mocks.loadQuizzesVisible.mockResolvedValue(visible);
+      // A page from another module dropped between the target's page and slide.
+      await post('moveItem', {
+        moduleItemId: 'item-other',
+        toModuleId: 'mod-1',
+        orderedItemIds: ['item-page', 'item-other', 'item-slide'],
+      });
 
-    expect(mocks.listModuleContents).not.toHaveBeenCalled();
-    expect(mocks.reorderItems).toHaveBeenCalledWith('mod-1', ordered, CLASSROOM_ID);
-  });
-
-  it('moveItem keeps the TARGET module’s hidden quiz item', async () => {
-    mocks.loadQuizzesVisible.mockResolvedValue(false);
-    // A page from another module dropped between the target's page and slide.
-    await post('moveItem', {
-      moduleItemId: 'item-other',
-      toModuleId: 'mod-1',
-      orderedItemIds: ['item-page', 'item-other', 'item-slide'],
-    });
-
-    expect(mocks.listModuleContents).toHaveBeenCalledWith('mod-1', CLASSROOM_ID);
-    expect(mocks.moveItemToModule).toHaveBeenCalledWith(
-      'item-other',
-      'mod-1',
-      ['item-page', 'item-quiz', 'item-other', 'item-slide'],
-      CLASSROOM_ID
-    );
-  });
+      expect(mocks.listModuleContents).not.toHaveBeenCalled();
+      expect(mocks.moveItemToModule).toHaveBeenCalledWith(
+        'item-other',
+        'mod-1',
+        ['item-page', 'item-other', 'item-slide'],
+        CLASSROOM_ID
+      );
+    }
+  );
 
   it('reorderAssignments puts the hidden quiz assignment back after the one it follows', async () => {
     mocks.loadQuizzesVisible.mockResolvedValue(false);
@@ -410,6 +480,15 @@ describe('Modules action — ordering around hidden quiz rows', () => {
       ['asg-form', 'asg-repo', 'asg-quiz'],
       CLASSROOM_ID
     );
+  });
+
+  it('reorderAssignments passes the page order through when quizzes show', async () => {
+    mocks.loadQuizzesVisible.mockResolvedValue(true);
+    const ordered = ['asg-form', 'asg-quiz', 'asg-repo'];
+    await post('reorderAssignments', { moduleId: 'mod-1', orderedAssignmentIds: ordered });
+
+    expect(mocks.listModuleContents).not.toHaveBeenCalled();
+    expect(mocks.reorderInModule).toHaveBeenCalledWith('mod-1', ordered, CLASSROOM_ID);
   });
 
   it('moveAssignment keeps the TARGET module’s hidden quiz assignment', async () => {
