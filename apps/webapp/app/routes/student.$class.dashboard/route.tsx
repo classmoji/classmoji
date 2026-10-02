@@ -3,12 +3,16 @@ import { Await, useParams } from 'react-router';
 import { Skeleton } from 'antd';
 import dayjs from 'dayjs';
 import getPrisma from '@classmoji/database';
-import { ClassmojiService } from '@classmoji/services';
+import {
+  ClassmojiService,
+  type CourseworkAssignment,
+  type StudentCourseworkRow,
+} from '@classmoji/services';
 import type { Route } from './+types/route';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import WeeklyCalendarCard, { type WeekEvent } from './WeeklyCalendarCard';
-import ModuleSpotlightCard, { type SpotlightModule } from './ModuleSpotlightCard';
+import UpNextCard, { type UpNextRow } from './UpNextCard';
 import { eventFetchWindow, startOfWeek } from './week';
 import RetroTabsCard, {
   type FeedbackItem,
@@ -20,7 +24,10 @@ import RetroTabsCard, {
 interface DashboardData {
   weekStart: string;
   weekEvents: WeekEvent[];
-  spotlight: SpotlightModule | null;
+  /** What the student still owes, soonest due first: every type, at most five. */
+  upNext: UpNextRow[];
+  /** Staff previewing the dashboard start a quiz from the quiz list instead. */
+  viewerIsStudent: boolean;
   feedback: FeedbackItem[];
   team: TeamSummary | null;
   needsTeam: SelfFormedNeedsTeam | null;
@@ -30,7 +37,7 @@ interface DashboardData {
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const classSlug = params.class!;
 
-  const { userId, classroom } = await assertClassroomAccess({
+  const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
@@ -51,60 +58,67 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     // Started alongside the reads below. It never rejects: a failed lookup
     // answers false.
     const quizzesVisiblePromise = loadQuizzesVisible(classroom.id);
-    const [weekEventsRaw, repositories, regradeRequests, allRepoAssignments] = await Promise.all([
-      ClassmojiService.calendar
-        .getClassroomCalendar(
-          classroom.id,
-          fetchWindow.from.toDate(),
-          fetchWindow.to.toDate(),
-          userId
-        )
-        .catch(() => [] as unknown[]),
-      getPrisma().repository.findMany({
-        where: { classroom_id: classroom.id, is_published: true },
-        include: {
-          assignments: {
-            where: { is_published: true },
-            select: {
-              id: true,
-              title: true,
-              student_deadline: true,
-              is_published: true,
-              grades_released: true,
-            },
-            orderBy: { student_deadline: 'asc' },
-          },
-          // Pages and slides are both filtered to published content here, so
-          // the spotlight counts the same set whichever resource type it lists.
-          pages: {
-            where: { page: { is_draft: false } },
-            include: { page: { select: { id: true, title: true } } },
-            orderBy: { order: 'asc' },
-          },
-          slides: {
-            where: { slide: { is_draft: false } },
-            include: { slide: { select: { id: true, title: true } } },
-            orderBy: { order: 'asc' },
-          },
-          quizzes: {
-            where: { status: 'PUBLISHED' },
-            select: { id: true, name: true },
-          },
-        },
-        orderBy: { created_at: 'asc' },
-      }),
-      ClassmojiService.regradeRequest.findMany({
-        student_id: userId,
-        classroom_id: classroom.id,
-      }),
-      ClassmojiService.helper
-        .findAllAssignmentsForStudent(userId, classSlug)
-        .catch(
-          () =>
-            [] as Awaited<ReturnType<typeof ClassmojiService.helper.findAllAssignmentsForStudent>>
-        ),
-    ]);
+    const courseworkContext = { classroomId: classroom.id, userId };
+    const [weekEventsRaw, repositories, regradeRequests, allRepoAssignments, assignmentListing] =
+      await Promise.all([
+        ClassmojiService.calendar
+          .getClassroomCalendar(
+            classroom.id,
+            fetchWindow.from.toDate(),
+            fetchWindow.to.toDate(),
+            userId
+          )
+          .catch(() => [] as unknown[]),
+        // The published repositories, for the team card: a self-formed group
+        // repository is where a student forms their team.
+        getPrisma().repository.findMany({
+          where: { classroom_id: classroom.id, is_published: true },
+          select: { id: true, slug: true, title: true, type: true, team_formation_mode: true },
+          orderBy: { created_at: 'asc' },
+        }),
+        ClassmojiService.regradeRequest.findMany({
+          student_id: userId,
+          classroom_id: classroom.id,
+        }),
+        ClassmojiService.helper
+          .findAllAssignmentsForStudent(userId, classSlug)
+          .catch(
+            () =>
+              [] as Awaited<ReturnType<typeof ClassmojiService.helper.findAllAssignmentsForStudent>>
+          ),
+        // The classroom's published assignments, for the coursework rows below.
+        ClassmojiService.studentCoursework
+          .listPublishedAssignments(classroom.id)
+          .catch((error): CourseworkAssignment[] | null => {
+            console.error(
+              '[student dashboard] assignment listing failed',
+              courseworkContext,
+              error
+            );
+            return null;
+          }),
+      ]);
     const quizzesVisible = await quizzesVisiblePromise;
+
+    // Every assignment the student can see, every type, the same rows the
+    // Assignments page lists (the submission rows and the listing read above
+    // are reused). A failed read is logged and leaves Up next empty.
+    const coursework: StudentCourseworkRow[] = assignmentListing
+      ? await ClassmojiService.studentCoursework
+          .listForStudent({
+            classroomId: classroom.id,
+            classroomSlug: classSlug,
+            userId,
+            quizzesVisible,
+            gitOrgLogin,
+            repoSubmissions: allRepoAssignments,
+            assignments: assignmentListing,
+          })
+          .catch((error): StudentCourseworkRow[] => {
+            console.error('[student dashboard] coursework read failed', courseworkContext, error);
+            return [];
+          })
+      : [];
 
     const weekEvents: WeekEvent[] = (weekEventsRaw as Array<Record<string, unknown>>).map(e => ({
       id: String(e.id),
@@ -114,79 +128,44 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       is_deadline: Boolean(e.is_deadline),
     }));
 
-    // Spotlight: repository containing the nearest upcoming OPEN assignment
-    const now = Date.now();
-    const upcomingByModule = allRepoAssignments
-      .filter(ra => ra.status === 'OPEN' && ra.assignment?.student_deadline)
-      .map(ra => ({
-        moduleId: ra.git_repo.repository_id as string,
-        deadlineMs: new Date(ra.assignment.student_deadline as Date).getTime(),
-      }))
-      .filter(x => x.deadlineMs >= now)
-      .sort((a, b) => a.deadlineMs - b.deadlineMs);
-
-    const spotlightId =
-      upcomingByModule[0]?.moduleId ?? repositories[repositories.length - 1]?.id ?? null;
-    const spotlightSrc = spotlightId
-      ? (repositories.find(m => m.id === spotlightId) ?? null)
-      : (repositories[repositories.length - 1] ?? null);
-
-    // The spotlight lists the module's Assignment records, which know nothing
-    // about this student, so join them to the student's own repo assignments to
-    // tell submitted from overdue. Same rules as the Assignments page, so the two
-    // screens agree: first row per assignment wins (individual before team, the
-    // order findAllAssignmentsForStudent returns), and CLOSED means submitted.
-    const submittedByAssignmentId = new Map<string, boolean>();
-    for (const ra of allRepoAssignments) {
-      const key = ra.assignment_id ?? ra.id;
-      if (!submittedByAssignmentId.has(key)) {
-        submittedByAssignmentId.set(key, ra.status === 'CLOSED');
-      }
-    }
-
-    const spotlight: SpotlightModule | null = spotlightSrc
-      ? {
-          id: spotlightSrc.id,
-          slug: spotlightSrc.slug,
-          title: spotlightSrc.title,
-          ordinal: repositories.findIndex(m => m.id === spotlightSrc.id) + 1,
-          assignments: spotlightSrc.assignments.map(a => ({
-            ...a,
-            submitted: submittedByAssignmentId.get(a.id) ?? false,
-          })),
-          pages: spotlightSrc.pages,
-          slides: spotlightSrc.slides,
-          // Without quizzes (not Pro, or switched off) the card gets none, so it
-          // draws neither a quiz row nor a quiz count.
-          quizzes: quizzesVisible
-            ? spotlightSrc.quizzes.map(q => ({ id: q.id, title: q.name }))
-            : [],
-        }
-      : null;
-
-    // Feedback: assignments with released grades, sorted by closed_at desc
-    const feedback: FeedbackItem[] = allRepoAssignments
-      .filter(ra => ra.assignment?.grades_released && (ra.grades?.length ?? 0) > 0)
+    // Recent grades: released repo grades (emoji, as on the Assignments page)
+    // and quiz scores (the counting attempt's percentage, shown as soon as it
+    // completes), newest first. Both come from the coursework rows, so a grade
+    // shows here only for an assignment the student can see there.
+    const repoFeedback: FeedbackItem[] = coursework.flatMap(row =>
+      row.repo && row.repo.gradesReleased && row.repo.grades.length > 0
+        ? [
+            {
+              id: row.repo.gitRepoAssignmentId,
+              assignmentTitle: row.title,
+              closedAt: row.repo.closedAt,
+              graders: row.repo.graders,
+              grades: row.repo.grades,
+              // The issue in ISSUE mode, the repo itself in REPO mode.
+              issueUrl: row.repo.issueUrl ?? row.repo.repoUrl,
+            },
+          ]
+        : []
+    );
+    const quizFeedback: FeedbackItem[] = coursework
+      .filter(row => row.type === 'QUIZ' && row.score !== null)
+      .map(row => ({
+        id: `quiz-${row.assignmentId}`,
+        assignmentTitle: row.title,
+        closedAt: row.scoredAt,
+        graders: [],
+        grades: [],
+        issueUrl: null,
+        score: row.score,
+        href: row.href,
+      }));
+    const feedback: FeedbackItem[] = [...repoFeedback, ...quizFeedback]
       .sort((a, b) => {
-        const at = a.closed_at ? new Date(a.closed_at).getTime() : 0;
-        const bt = b.closed_at ? new Date(b.closed_at).getTime() : 0;
+        const at = a.closedAt ? new Date(a.closedAt).getTime() : 0;
+        const bt = b.closedAt ? new Date(b.closedAt).getTime() : 0;
         return bt - at;
       })
-      .slice(0, 8)
-      .map(ra => ({
-        id: ra.id,
-        assignmentTitle: ra.assignment?.title ?? '',
-        closedAt: ra.closed_at,
-        graders: (ra.graders ?? []).map(g => ({ id: g.grader.id, name: g.grader.name })),
-        grades: (ra.grades ?? []).map(g => ({ id: g.id, emoji: g.emoji })),
-        // The issue in ISSUE mode, the repo itself in REPO mode.
-        issueUrl:
-          gitOrgLogin && ra.git_repo?.name
-            ? ra.provider_issue_number != null
-              ? `https://github.com/${gitOrgLogin}/${ra.git_repo.name}/issues/${ra.provider_issue_number}`
-              : `https://github.com/${gitOrgLogin}/${ra.git_repo.name}`
-            : null,
-      }));
+      .slice(0, 8);
 
     // Team: first SELF_FORMED repository where student is on a team, otherwise prompt
     let team: TeamSummary | null = null;
@@ -247,7 +226,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       // A plain date, which dayjs parses as local midnight on either side.
       weekStart: weekStart.format('YYYY-MM-DD'),
       weekEvents,
-      spotlight,
+      // The card shows no repo details, so none are sent.
+      upNext: ClassmojiService.studentCoursework
+        .upNext(coursework)
+        .map(({ repo: _repo, ...row }) => row),
+      viewerIsStudent: membership?.role === 'STUDENT',
       feedback,
       team,
       needsTeam,
@@ -270,7 +253,7 @@ const StudentDashboard = ({ loaderData }: Route.ComponentProps) => {
       <Suspense fallback={<Skeleton active paragraph={{ rows: 8 }} />}>
         <Await resolve={data} errorElement={null}>
           {(d: DashboardData) => (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-7 lg:grid-rows-[auto_1fr] lg:min-h-[calc(100vh-10rem)]">
+            <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)] gap-6 lg:gap-7 lg:grid-rows-[auto_1fr] lg:min-h-[calc(100vh-10rem)]">
               <div className="lg:col-span-2">
                 <WeeklyCalendarCard
                   events={d.weekEvents}
@@ -278,7 +261,7 @@ const StudentDashboard = ({ loaderData }: Route.ComponentProps) => {
                   classSlug={slug}
                 />
               </div>
-              <ModuleSpotlightCard repository={d.spotlight} classSlug={slug} />
+              <UpNextCard rows={d.upNext} classSlug={slug} viewerIsStudent={d.viewerIsStudent} />
               <RetroTabsCard
                 feedback={d.feedback}
                 team={d.team}

@@ -21,6 +21,81 @@ import {
 // assignments, and a REPO assignment only once its repository is published),
 // and repoDraftPolicy.test.ts pins that the flag flips with the role.
 
+type ListedModule = Awaited<ReturnType<typeof ClassmojiService.module.listForClassroom>>[number];
+type RepoSubmission = Awaited<
+  ReturnType<typeof ClassmojiService.helper.findAllAssignmentsForStudent>
+>[number];
+
+const docView = (doc: { id: string; title: string; is_draft: boolean }) => ({
+  id: doc.id,
+  title: doc.title,
+  is_draft: doc.is_draft,
+});
+
+/**
+ * One module as this page renders it (the card, its assignment rows and its
+ * content leaves), field by field: the service returns whole rows, and only
+ * these fields leave the loader. Pages and decks attached to an assignment
+ * are listed for students only once published, as on every student surface.
+ */
+const moduleView = (m: ListedModule, isStaff: boolean) => ({
+  id: m.id,
+  title: m.title,
+  description: m.description,
+  is_published: m.is_published,
+  assignments: m.assignments.map(a => ({
+    id: a.id,
+    type: a.type,
+    title: a.title,
+    is_published: a.is_published,
+    grades_released: a.grades_released,
+    student_deadline: a.student_deadline,
+    repository_id: a.repository_id,
+    repository: a.repository ? { id: a.repository.id, type: a.repository.type } : null,
+    quiz: a.quiz ? { id: a.quiz.id, status: a.quiz.status } : null,
+    form: a.form ? { id: a.form.id, slug: a.form.slug, status: a.form.status } : null,
+    pages: (a.pages ?? []).flatMap(link =>
+      link.page && (isStaff || !link.page.is_draft) ? [{ page: docView(link.page) }] : []
+    ),
+    slides: (a.slides ?? []).flatMap(link =>
+      link.slide && (isStaff || !link.slide.is_draft) ? [{ slide: docView(link.slide) }] : []
+    ),
+  })),
+  items: m.items.map(item => ({
+    id: item.id,
+    item_type: item.item_type,
+    page: item.page ? docView(item.page) : null,
+    slide: item.slide ? docView(item.slide) : null,
+    quiz: item.quiz ? { id: item.quiz.id, name: item.quiz.name, status: item.quiz.status } : null,
+    form: item.form
+      ? {
+          id: item.form.id,
+          title: item.form.title,
+          slug: item.form.slug,
+          status: item.form.status,
+          access: item.form.access,
+          closes_at: item.form.closes_at,
+        }
+      : null,
+  })),
+});
+
+/** The viewer's submission as the assignment row reads it; grades once released. */
+const submissionView = (ra: RepoSubmission) => ({
+  status: ra.status,
+  provider_issue_number: ra.provider_issue_number,
+  git_repo: {
+    name: ra.git_repo?.name,
+    classroom: {
+      git_organization: { login: ra.git_repo?.classroom?.git_organization?.login ?? null },
+    },
+  },
+  grades: ra.assignment?.grades_released
+    ? (ra.grades ?? []).map(g => ({ id: g.id, emoji: g.emoji }))
+    : [],
+});
+type SubmissionView = ReturnType<typeof submissionView>;
+
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const classSlug = params.class!;
 
@@ -51,24 +126,32 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     return { enabled: false as const };
   }
 
-  // The module list and the student's own repo-assignments are independent —
-  // fetch them in parallel.
+  // The module list, the student's own repo-assignments and the quiz answer are
+  // independent — fetch them in parallel. The list applies the student-
+  // visibility rule to the student view's assignments with quizzes counted as
+  // visible; the strip below removes every quiz where they are not.
   const [listedModules, repoAssignments, quizzesVisible] = await Promise.all([
-    ClassmojiService.module.listForClassroom(classSlug, { includeUnpublished: isStaff }),
+    ClassmojiService.module.listForClassroom(classSlug, {
+      includeUnpublished: isStaff,
+      quizzesVisible: true,
+    }),
     ClassmojiService.helper.findAllAssignmentsForStudent(userId, classSlug),
     loadQuizzesVisible(classroom.id),
   ]);
 
   // A classroom without quizzes (not Pro, or switched off) shows no trace of
   // them, staff preview included: its quiz assignments and quiz items never
-  // leave the loader, so no row, label or item count can mention one.
-  const modules = quizzesVisible
-    ? listedModules
-    : listedModules.map(m => ({
-        ...m,
-        assignments: m.assignments.filter(a => a.type !== 'QUIZ'),
-        items: m.items.filter(item => item.item_type !== 'QUIZ'),
-      }));
+  // leave the loader, so no row, label or item count can mention one. Every
+  // module is then sent as the fields this page renders, no more.
+  const modules = (
+    quizzesVisible
+      ? listedModules
+      : listedModules.map(m => ({
+          ...m,
+          assignments: m.assignments.filter(a => a.type !== 'QUIZ'),
+          items: m.items.filter(item => item.item_type !== 'QUIZ'),
+        }))
+  ).map(m => moduleView(m, isStaff));
 
   // Self-formed group repos: the viewer's team state per repository, so the
   // assignment row can send them to the team page. Students have no
@@ -104,10 +187,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     }
   }
 
-  // The student's own repo-assignments power submission status / issue links.
-  const raByAssignmentId: Record<string, (typeof repoAssignments)[number]> = {};
+  // The student's own repo-assignments power submission status / issue links,
+  // sent as the fields the assignment row reads; grades only once released.
+  const raByAssignmentId: Record<string, SubmissionView> = {};
   repoAssignments.forEach(ra => {
-    raByAssignmentId[ra.assignment_id] = ra;
+    raByAssignmentId[ra.assignment_id] = submissionView(ra);
   });
 
   return {

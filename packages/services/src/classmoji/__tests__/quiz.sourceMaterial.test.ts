@@ -16,6 +16,7 @@ const tx = {
   quiz: {
     create: vi.fn(),
     update: vi.fn(),
+    findUnique: vi.fn(),
     findUniqueOrThrow: vi.fn(),
   },
   page: { findMany: vi.fn() },
@@ -48,7 +49,7 @@ vi.mock('../contentManifest.service.ts', () => ({
 vi.mock('../notification.service.ts', () => ({}));
 
 const quizService = await import('../quiz.service.ts');
-const { QuizExcludedPathsError } = quizService;
+const { QuizExcludedPathsError, QuizStatusChangeError } = quizService;
 const { ResourceLinkServiceError } = await import('../resourceLink.service.ts');
 
 const CLASSROOM = 'classroom-1';
@@ -404,5 +405,130 @@ describe('quiz.getQuizzesForStudent', () => {
       focusMetrics: { totalMs: 1000, unfocusedMs: 100, focusedMs: 900, percentage: 90 },
     });
     expect(quiz.attempts[0]).not.toHaveProperty('agent_config');
+  });
+});
+
+describe('quiz.getQuizzesForStudent — closed quizzes and the counting score', () => {
+  const STUDENT = { role: 'STUDENT' as const, classroom_id: CLASSROOM, user_id: 'student-1' };
+  const attempt = (id: string, day: number, completed: boolean, pct: number | null) => ({
+    id,
+    started_at: new Date(`2026-09-0${day}T10:00:00Z`),
+    completed_at: completed ? new Date(`2026-09-0${day}T11:00:00Z`) : null,
+    partial_credit_percentage: pct,
+    first_attempt_percentage: pct,
+    total_duration_ms: null,
+    unfocused_duration_ms: null,
+  });
+  const quizRow = (over: Record<string, unknown>) => ({
+    id: 'quiz-1',
+    classroom_id: CLASSROOM,
+    status: 'PUBLISHED',
+    max_attempts: 2,
+    grading_strategy: 'HIGHEST',
+    assignment: null,
+    attempts: [],
+    page_links: [],
+    slide_links: [],
+    ...over,
+  });
+
+  it('lists published quizzes only, unless closed ones are asked for', async () => {
+    quizFindMany.mockResolvedValue([]);
+
+    await quizService.getQuizzesForStudent(CLASSROOM, 'student-1', STUDENT);
+    await quizService.getQuizzesForStudent(CLASSROOM, 'student-1', STUDENT, {
+      includeClosed: true,
+    });
+
+    expect(quizFindMany.mock.calls[0][0].where.status).toBe('PUBLISHED');
+    expect(quizFindMany.mock.calls[1][0].where.status).toEqual({ in: ['PUBLISHED', 'CLOSED'] });
+    // The assignment's due date travels with each quiz.
+    expect(quizFindMany.mock.calls[1][0].include.assignment).toEqual({
+      select: { student_deadline: true },
+    });
+  });
+
+  it('offers a student no new attempt on a closed quiz; staff may still preview it', async () => {
+    quizFindMany.mockResolvedValue([quizRow({ status: 'CLOSED' })]);
+
+    const [asStudent] = await quizService.getQuizzesForStudent(CLASSROOM, 'student-1', STUDENT, {
+      includeClosed: true,
+    });
+    const [asTeacher] = await quizService.getQuizzesForStudent(
+      CLASSROOM,
+      'teacher-1',
+      { role: 'TEACHER', classroom_id: CLASSROOM },
+      { includeClosed: true }
+    );
+
+    expect(asStudent.attemptsSummary.canCreateNew).toBe(false);
+    expect(asTeacher.attemptsSummary.canCreateNew).toBe(true);
+  });
+
+  it('keeps a 0 as the current score', async () => {
+    quizFindMany.mockResolvedValue([quizRow({ attempts: [attempt('a1', 1, true, 0)] })]);
+
+    const [quiz] = await quizService.getQuizzesForStudent(CLASSROOM, 'student-1', STUDENT);
+
+    expect(quiz.attemptsSummary.currentScore).toBe(0);
+    expect(quiz.attemptsSummary.countingAttemptId).toBe('a1');
+  });
+
+  it('does not let a running retake hide the finished attempt', async () => {
+    quizFindMany.mockResolvedValue([
+      quizRow({
+        grading_strategy: 'MOST_RECENT',
+        // Newest first, as the query orders them.
+        attempts: [attempt('retake', 2, false, null), attempt('a1', 1, true, 75)],
+      }),
+    ]);
+
+    const [quiz] = await quizService.getQuizzesForStudent(CLASSROOM, 'student-1', STUDENT);
+
+    expect(quiz.attemptsSummary.currentScore).toBe(75);
+    expect(quiz.attempts.find(a => a.id === 'a1')?.isCounting).toBe(true);
+    expect(quiz.attempts.find(a => a.id === 'retake')?.isCounting).toBe(false);
+  });
+});
+
+describe('quiz.update — closing a quiz', () => {
+  it('refuses to close a quiz that is still a draft, writing nothing', async () => {
+    tx.quiz.findUnique.mockResolvedValue({ status: 'DRAFT' });
+
+    const refusal = await quizService.update('quiz-1', { status: 'CLOSED' }).catch(e => e);
+
+    expect(refusal).toBeInstanceOf(QuizStatusChangeError);
+    expect(refusal.message).toBe('Publish the quiz before closing it');
+    expect(refusal.status).toBe(400);
+    expect(tx.quiz.update).not.toHaveBeenCalled();
+  });
+
+  it('closes a published quiz', async () => {
+    tx.quiz.findUnique.mockResolvedValue({ status: 'PUBLISHED' });
+
+    await quizService.update('quiz-1', { status: 'CLOSED' });
+
+    expect(tx.quiz.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'CLOSED' }) })
+    );
+  });
+
+  it('does not look the status up for any other change', async () => {
+    await quizService.update('quiz-1', { status: 'DRAFT', name: 'Renamed' });
+
+    expect(tx.quiz.findUnique).not.toHaveBeenCalled();
+    expect(tx.quiz.update).toHaveBeenCalled();
+  });
+});
+
+describe('quiz.findByClassroom — due date source', () => {
+  it("reads each quiz's assignment due date beside its own", async () => {
+    quizFindMany.mockResolvedValue([]);
+
+    await quizService.findByClassroom(CLASSROOM, { role: 'OWNER', classroom_id: CLASSROOM });
+
+    expect(quizFindMany.mock.calls[0][0].include.assignment).toEqual({
+      select: { student_deadline: true },
+    });
   });
 });

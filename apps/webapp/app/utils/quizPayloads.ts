@@ -19,6 +19,7 @@
  *     grading columns), so the view narrows again here.
  */
 
+import { countingQuizAttempt } from '@classmoji/utils';
 import type { QuizEvaluationRecordV2 } from '@classmoji/utils/quiz-agent';
 
 /** The attempt fields the student quiz list reads (table columns and tab filters). */
@@ -360,28 +361,6 @@ const score = (value: number | null | undefined) => (typeof value === 'number' ?
 
 const time = (value: Date | string | null) => (value ? new Date(value).getTime() : 0);
 
-/**
- * Which completed attempt counts toward the grade under `gradingStrategy`
- * (HIGHEST when the strategy is unknown), or null when none has completed.
- */
-const countingAttemptOf = (
-  completed: QuizResultAttempt[],
-  gradingStrategy: string | null | undefined
-): QuizResultAttempt | null => {
-  if (completed.length === 0) return null;
-  switch (gradingStrategy) {
-    case 'MOST_RECENT':
-      return [...completed].sort((a, b) => time(b.completed_at) - time(a.completed_at))[0];
-    case 'FIRST':
-      return [...completed].sort((a, b) => time(a.started_at) - time(b.started_at))[0];
-    case 'HIGHEST':
-    default:
-      return completed.reduce((max, a) =>
-        (a.partialCreditScore ?? 0) > (max.partialCreditScore ?? 0) ? a : max
-      );
-  }
-};
-
 export const buildQuizResultRows = ({
   attempts,
   gradingStrategy,
@@ -391,15 +370,19 @@ export const buildQuizResultRows = ({
   gradingStrategy: string | null | undefined;
   viewerId: string;
 }): { students: QuizResultStudent[]; viewerAttempt: QuizViewerAttempt | null } => {
-  const byStudent = new Map<string, { user: QuizResultUser; attempts: QuizResultAttempt[] }>();
+  const byStudent = new Map<
+    string,
+    { user: QuizResultUser; attempts: QuizResultAttempt[]; sources: QuizAttemptSource[] }
+  >();
 
   for (const attempt of attempts) {
     const userId = String(attempt.user_id);
     let student = byStudent.get(userId);
     if (!student) {
-      student = { user: toUser(userId, attempt.user), attempts: [] };
+      student = { user: toUser(userId, attempt.user), attempts: [], sources: [] };
       byStudent.set(userId, student);
     }
+    student.sources.push(attempt);
     student.attempts.push({
       id: attempt.id,
       started_at: attempt.started_at,
@@ -413,7 +396,9 @@ export const buildQuizResultRows = ({
 
   const students = Array.from(byStudent.entries()).map(([userId, student]) => {
     const completed = student.attempts.filter(a => a.completed_at && a.partialCreditScore !== null);
-    const counting = countingAttemptOf(completed, gradingStrategy);
+    // The shared selector, read over the attempt rows themselves.
+    const countingId = countingQuizAttempt(student.sources, gradingStrategy)?.id;
+    const counting = student.attempts.find(a => a.id === countingId) ?? null;
     const sorted = [...student.attempts].sort((a, b) => time(b.started_at) - time(a.started_at));
 
     return {

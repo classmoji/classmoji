@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => ({
   findLetterGradeMappings: vi.fn(),
   loadQuizzesVisible: vi.fn(),
   findAttemptsByQuiz: vi.fn(),
+  findGradingStrategies: vi.fn(),
   listResponsesByFormId: vi.fn(),
 }));
 
@@ -82,6 +83,7 @@ vi.mock('@classmoji/services', () => ({
       findByClassroomId: (...a: unknown[]) => mocks.findLetterGradeMappings(...a),
     },
     quizAttempt: { findByQuiz: (...a: unknown[]) => mocks.findAttemptsByQuiz(...a) },
+    quiz: { findGradingStrategies: (...a: unknown[]) => mocks.findGradingStrategies(...a) },
     formResponse: { listByFormId: (...a: unknown[]) => mocks.listResponsesByFormId(...a) },
   },
 }));
@@ -191,6 +193,7 @@ beforeEach(() => {
   mocks.findLetterGradeMappings.mockResolvedValue([]);
   mocks.loadQuizzesVisible.mockResolvedValue(true);
   mocks.findAttemptsByQuiz.mockResolvedValue([]);
+  mocks.findGradingStrategies.mockResolvedValue({});
   mocks.listResponsesByFormId.mockResolvedValue([]);
 });
 
@@ -328,10 +331,27 @@ describe('grades loader — quiz columns appear only where quizzes are visible',
     };
   };
 
+  /** An attempt row as `findByQuiz` returns it: newest first; `score` is never written. */
+  const attempt = (
+    id: string,
+    userId: string,
+    startedAt: string,
+    completedAt: string | null,
+    pct: number | null
+  ) => ({
+    id,
+    user_id: userId,
+    started_at: new Date(startedAt),
+    completed_at: completedAt ? new Date(completedAt) : null,
+    partial_credit_percentage: pct,
+    score: null,
+  });
+
   beforeEach(() => {
     mocks.listForClassroom.mockResolvedValue(ASSIGNMENT_ROWS);
+    mocks.findGradingStrategies.mockResolvedValue({ 'quiz-1': 'HIGHEST' });
     mocks.findAttemptsByQuiz.mockResolvedValue([
-      { user_id: 'student-1', completed_at: new Date(), score: 90 },
+      attempt('at-1', 'student-1', '2026-09-01T10:00:00Z', '2026-09-01T10:30:00Z', 90),
     ]);
   });
 
@@ -340,8 +360,42 @@ describe('grades loader — quiz columns appear only where quizzes are visible',
 
     expect(assignments.map(a => a.id)).toEqual(['a-repo', 'a-quiz', 'a-form']);
     expect(mocks.findAttemptsByQuiz).toHaveBeenCalledWith('quiz-1');
+    expect(mocks.findGradingStrategies).toHaveBeenCalledWith(['quiz-1']);
     expect(activity.quiz['a-quiz']).toEqual({ 'student-1': { completed: true, score: 90 } });
     expect(mocks.loadQuizzesVisible).toHaveBeenCalledWith('class-1');
+  });
+
+  it('scores from partial_credit_percentage under the quiz grading strategy', async () => {
+    mocks.findGradingStrategies.mockResolvedValue({ 'quiz-1': 'MOST_RECENT' });
+    mocks.findAttemptsByQuiz.mockResolvedValue([
+      attempt('at-2', 'student-1', '2026-09-02T10:00:00Z', '2026-09-02T10:30:00Z', 40),
+      attempt('at-1', 'student-1', '2026-09-01T10:00:00Z', '2026-09-01T10:30:00Z', 90),
+      attempt('at-3', 'student-2', '2026-09-01T10:00:00Z', '2026-09-01T10:30:00Z', 0),
+    ]);
+
+    const { activity } = await resolveColumns();
+
+    expect(activity.quiz['a-quiz']).toEqual({
+      'student-1': { completed: true, score: 40 },
+      // A 0 is a score, not "Completed".
+      'student-2': { completed: true, score: 0 },
+    });
+  });
+
+  it('does not let a running retake hide a finished attempt', async () => {
+    mocks.findAttemptsByQuiz.mockResolvedValue([
+      // Newest first: the retake is the row the old code took.
+      attempt('retake', 'student-1', '2026-09-05T10:00:00Z', null, null),
+      attempt('at-1', 'student-1', '2026-09-01T10:00:00Z', '2026-09-01T10:30:00Z', 90),
+      attempt('only-running', 'student-2', '2026-09-05T10:00:00Z', null, null),
+    ]);
+
+    const { activity } = await resolveColumns();
+
+    expect(activity.quiz['a-quiz']).toEqual({
+      'student-1': { completed: true, score: 90 },
+      'student-2': { completed: false, score: null },
+    });
   });
 
   it('drops the quiz column and never reads its attempts when quizzes are hidden', async () => {
@@ -352,6 +406,7 @@ describe('grades loader — quiz columns appear only where quizzes are visible',
     expect(assignments.map(a => a.id)).toEqual(['a-repo', 'a-form']);
     expect(activity.quiz).toEqual({});
     expect(mocks.findAttemptsByQuiz).not.toHaveBeenCalled();
+    expect(mocks.findGradingStrategies).not.toHaveBeenCalled();
     // Form activity is unaffected.
     expect(mocks.listResponsesByFormId).toHaveBeenCalledWith('form-1');
   });

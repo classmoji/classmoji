@@ -1,5 +1,5 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { withLogins } from '@classmoji/utils';
+import { countingQuizAttempt, withLogins } from '@classmoji/utils';
 import { normalizeExcludedPaths } from '@classmoji/utils/quiz-excluded-paths';
 import type { Prisma, QuizGradingStrategy, QuizStatus, Role } from '@prisma/client';
 import * as notificationService from './notification.service.ts';
@@ -123,6 +123,24 @@ export class QuizExcludedPathsError extends Error {
   }
 }
 
+/**
+ * quiz.update refuses a status change it cannot make: a DRAFT quiz cannot be
+ * CLOSED, because a closed quiz stays visible to students and a draft has
+ * never been published to them. Publish it first.
+ */
+export class QuizStatusChangeError extends Error {
+  code = 'invalid_status_change' as const;
+  /** HTTP status a web caller should answer with. */
+  status = 400;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'QuizStatusChangeError';
+  }
+}
+
+export const CLOSE_DRAFT_QUIZ_REFUSAL = 'Publish the quiz before closing it';
+
 /** The list to store, checked; throws `QuizExcludedPathsError` for a bad one. */
 function excludedPathsToStore(input: unknown): string[] {
   const result = normalizeExcludedPaths(input);
@@ -233,6 +251,12 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
   // are not loaded: an interactive transaction holds its connection and has a
   // time limit, and a long-running quiz can have hundreds of attempts.
   return getPrisma().$transaction(async tx => {
+    // DRAFT → CLOSED is refused (see QuizStatusChangeError), read in the same
+    // transaction as the write.
+    if (data.status === 'CLOSED') {
+      const current = await tx.quiz.findUnique({ where: { id: quizId }, select: { status: true } });
+      if (current?.status === 'DRAFT') throw new QuizStatusChangeError(CLOSE_DRAFT_QUIZ_REFUSAL);
+    }
     const quiz = await tx.quiz.update({ where: { id: quizId }, data: updateData });
     if (data.sourceMaterial !== undefined) {
       await setQuizSourceMaterial(tx, {
@@ -308,6 +332,8 @@ export const getQuizzesByOrganization = async (
     where: { classroom_id: classroomId },
     include: {
       repository: true,
+      // The quiz's assignment owns its due date where it has one.
+      assignment: { select: { student_deadline: true } },
       attempts: {
         include: {
           user: { include: GIT_IDENTITY },
@@ -368,10 +394,18 @@ const STUDENT_ATTEMPT_SELECT = {
   unfocused_duration_ms: true,
 } as const;
 
+/**
+ * The quizzes a member sees on the student quiz list, with their own attempts.
+ *
+ * Published quizzes only by default. `includeClosed` adds CLOSED quizzes, which
+ * take no new attempts from a student but stay visible, so a student keeps the
+ * quiz they finished and its score; the student quiz list asks for them.
+ */
 export const getQuizzesForStudent = async (
   classroomId: string,
   userId: string,
-  membership: QuizMembership | null
+  membership: QuizMembership | null,
+  { includeClosed = false }: { includeClosed?: boolean } = {}
 ) => {
   if (!membership) {
     throw new Error('Membership required to access student quizzes');
@@ -404,10 +438,12 @@ export const getQuizzesForStudent = async (
   const quizzes = await getPrisma().quiz.findMany({
     where: {
       classroom_id: classroomId,
-      status: 'PUBLISHED',
+      status: includeClosed ? { in: ['PUBLISHED', 'CLOSED'] } : 'PUBLISHED',
     },
     include: {
       repository: true,
+      // The quiz's assignment owns its due date where it has one.
+      assignment: { select: { student_deadline: true } },
       attempts: {
         where: { user_id: userId },
         orderBy: { started_at: 'desc' }, // Most recent first
@@ -427,9 +463,12 @@ export const getQuizzesForStudent = async (
 
     // Check if user can create new attempts. Staff preview quizzes repeatedly,
     // so they are not held to max_attempts — TEACHER included, or a teacher
-    // would be locked out of their own quiz after one preview.
+    // would be locked out of their own quiz after one preview. A student
+    // starts attempts on a PUBLISHED quiz only, as the start gate requires.
     const isInstructor = (QUIZ_STAFF_ROLES as readonly string[]).includes(membership.role);
-    const canCreateNew = isInstructor || hasUnlimitedAttempts || attemptCount < maxAttempts;
+    const canCreateNew =
+      isInstructor ||
+      (quiz.status === 'PUBLISHED' && (hasUnlimitedAttempts || attemptCount < maxAttempts));
 
     // Process all attempts with metadata (without counting flag yet)
     const baseAttempts = attempts.map((attempt, index) => {
@@ -465,64 +504,19 @@ export const getQuizzesForStudent = async (
       };
     });
 
-    const completedAttempts = baseAttempts.filter(
+    const scoredAttempts = baseAttempts.filter(
       attempt => attempt.completed_at && attempt.partialCreditScore !== null
     );
+    const bestScore =
+      scoredAttempts.length > 0
+        ? Math.max(...scoredAttempts.map(a => a.partialCreditScore ?? 0))
+        : null;
 
-    let countingAttemptId = null;
-    let currentScore = null;
-    let bestScore = null;
-
-    if (completedAttempts.length > 0) {
-      bestScore = Math.max(...completedAttempts.map(a => a.partialCreditScore ?? 0));
-
-      switch (quiz.grading_strategy) {
-        case 'HIGHEST': {
-          const highest = completedAttempts.reduce((max, attempt) =>
-            (attempt.partialCreditScore ?? 0) > (max.partialCreditScore ?? 0) ? attempt : max
-          );
-          countingAttemptId = highest.id;
-          currentScore = highest.partialCreditScore;
-          break;
-        }
-        case 'MOST_RECENT': {
-          const sorted = [...completedAttempts].sort((a, b) => {
-            const aTime = a.completed_at ? new Date(a.completed_at).getTime() : 0;
-            const bTime = b.completed_at ? new Date(b.completed_at).getTime() : 0;
-            return bTime - aTime;
-          });
-
-          const mostRecent = sorted[0];
-          if (mostRecent) {
-            countingAttemptId = mostRecent.id;
-            currentScore = mostRecent.partialCreditScore;
-          }
-          break;
-        }
-        case 'FIRST': {
-          const sorted = [...completedAttempts].sort((a, b) => {
-            const aTime = a.started_at ? new Date(a.started_at).getTime() : 0;
-            const bTime = b.started_at ? new Date(b.started_at).getTime() : 0;
-            return aTime - bTime;
-          });
-
-          const first = sorted[0];
-          if (first) {
-            countingAttemptId = first.id;
-            currentScore = first.partialCreditScore;
-          }
-          break;
-        }
-        default: {
-          const highest = completedAttempts.reduce((max, attempt) =>
-            (attempt.partialCreditScore ?? 0) > (max.partialCreditScore ?? 0) ? attempt : max
-          );
-          countingAttemptId = highest.id;
-          currentScore = highest.partialCreditScore;
-          break;
-        }
-      }
-    }
+    // The shared selector (@classmoji/utils quizScore), so this list, the
+    // results page, the gradebook and the Assignments page agree.
+    const counting = countingQuizAttempt(baseAttempts, quiz.grading_strategy);
+    const countingAttemptId = counting?.id ?? null;
+    const currentScore = counting?.partialCreditScore ?? null;
 
     const processedAttempts = baseAttempts.map(attempt => ({
       ...attempt,
@@ -572,6 +566,22 @@ export const publish = async (quizId: string) => {
     });
   }
   return quiz;
+};
+
+/**
+ * Each quiz's grading strategy, by quiz id: what the counting-attempt selector
+ * (`countingQuizAttempt` / `quizStanding` in @classmoji/utils) needs to know.
+ * Ids that match no quiz are simply absent.
+ */
+export const findGradingStrategies = async (
+  quizIds: string[]
+): Promise<Record<string, QuizGradingStrategy>> => {
+  if (quizIds.length === 0) return {};
+  const quizzes = await getPrisma().quiz.findMany({
+    where: { id: { in: quizIds } },
+    select: { id: true, grading_strategy: true },
+  });
+  return Object.fromEntries(quizzes.map(q => [q.id, q.grading_strategy]));
 };
 
 export const getStatsByClassroom = async (classroomId: string) => {

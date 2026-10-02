@@ -456,7 +456,17 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
           : (await loadRepositoryInClassroom(args.repository_id, ctx)).id;
     }
 
-    const updated = (await ClassmojiService.quiz.update(quiz.id, updates)) as QuizRow;
+    let updated: QuizRow;
+    try {
+      updated = (await ClassmojiService.quiz.update(quiz.id, updates)) as QuizRow;
+    } catch (error) {
+      // A draft quiz cannot be closed; the service says so in words a caller
+      // can act on ("Publish the quiz before closing it").
+      if ((error as { name?: unknown } | null)?.name === 'QuizStatusChangeError') {
+        throw new ToolError('invalid_params', (error as Error).message);
+      }
+      throw error;
+    }
 
     await writeAudit(ctx, {
       resource_type: 'QUIZ',

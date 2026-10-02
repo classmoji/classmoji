@@ -212,20 +212,28 @@ describe('modules read — assignments', () => {
   it('asks the service for drafts by role: staff yes, a student no', async () => {
     for (const role of ['OWNER', 'TEACHER', 'ASSISTANT'] as const) {
       const payload = await read(role);
-      expect(mocks.listForClassroom).toHaveBeenLastCalledWith('w26', { includeUnpublished: true });
+      expect(mocks.listForClassroom).toHaveBeenLastCalledWith('w26', {
+        includeUnpublished: true,
+        quizzesVisible: true,
+      });
       expect(payload.modules[0].assignments[0], role).toHaveProperty('is_published', true);
     }
 
     // The service is what drops a student's unpublished rows (and a REPO
-    // assignment whose repository is unpublished); this layer's part is to ask.
+    // assignment whose repository is unpublished, or a quiz or form still a
+    // draft); this layer's part is to ask. Quizzes count as visible in the ask:
+    // this resource drops them itself where they are hidden.
     await read('STUDENT');
-    expect(mocks.listForClassroom).toHaveBeenLastCalledWith('w26', { includeUnpublished: false });
+    expect(mocks.listForClassroom).toHaveBeenLastCalledWith('w26', {
+      includeUnpublished: false,
+      quizzesVisible: true,
+    });
   });
 
   it('gives a student exactly what their module row renders, never the target', async () => {
-    // What the service's student filter lets through: the ASSIGNMENT is
-    // published. It does not look at the quiz or form behind it, so both of
-    // these targets are still drafts, with names no student surface shows.
+    // Rows whose targets are drafts: the service's student filter leaves such
+    // rows out, but should one reach this layer, the student shape still
+    // names no target.
     const publishedOnDraftQuiz = {
       ...QUIZ,
       is_published: true,

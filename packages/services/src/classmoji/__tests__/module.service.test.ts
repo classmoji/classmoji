@@ -36,7 +36,11 @@ vi.mock('@classmoji/database', () => ({
   }),
 }));
 
-vi.mock('@classmoji/utils', () => ({ titleToIdentifier: (s: string) => s.toLowerCase() }));
+vi.mock('@classmoji/utils', async () => ({
+  titleToIdentifier: (s: string) => s.toLowerCase(),
+  // The real rule: the student view's assignment filter is under test below.
+  openToStudents: (await import('../../../../utils/src/assignmentVisibility.ts')).openToStudents,
+}));
 
 const {
   isItemPublished,
@@ -357,5 +361,70 @@ describe('listForClassroom', () => {
   it('returns [] when the classroom does not exist', async () => {
     classroomFindUnique.mockResolvedValue(null);
     expect(await listForClassroom('missing')).toEqual([]);
+  });
+
+  describe('assignments under the student-visibility rule', () => {
+    const FUTURE = new Date(Date.now() + 7 * 86_400_000);
+    const assignment = (id: string, type: string, over: Record<string, unknown> = {}) => ({
+      id,
+      type,
+      is_published: true,
+      release_at: null,
+      repository: type === 'REPO' ? { is_published: true } : null,
+      quiz: type === 'QUIZ' ? { status: 'PUBLISHED' } : null,
+      form: type === 'FORM' ? { status: 'OPEN' } : null,
+      ...over,
+    });
+    const MODULE = {
+      id: 'm1',
+      items: [],
+      assignments: [
+        assignment('repo', 'REPO'),
+        assignment('repo-unpublished-repo', 'REPO', { repository: { is_published: false } }),
+        assignment('unpublished', 'FORM', { is_published: false }),
+        assignment('quiz', 'QUIZ'),
+        assignment('quiz-closed', 'QUIZ', { quiz: { status: 'CLOSED' } }),
+        assignment('quiz-draft', 'QUIZ', { quiz: { status: 'DRAFT' } }),
+        assignment('quiz-later', 'QUIZ', { release_at: FUTURE }),
+        assignment('form', 'FORM'),
+        assignment('form-draft', 'FORM', { form: { status: 'DRAFT' } }),
+        assignment('form-later', 'FORM', { release_at: FUTURE }),
+      ],
+    };
+
+    it('shows students only what the rule admits', async () => {
+      moduleFindMany.mockResolvedValue([MODULE]);
+
+      const [module] = await listForClassroom('cls', { quizzesVisible: true });
+
+      expect(module.assignments.map(a => a.id)).toEqual(['repo', 'quiz', 'quiz-closed', 'form']);
+    });
+
+    it('shows students no quiz assignment where quizzes are hidden', async () => {
+      moduleFindMany.mockResolvedValue([MODULE]);
+
+      const [module] = await listForClassroom('cls', { quizzesVisible: false });
+
+      expect(module.assignments.map(a => a.id)).toEqual(['repo', 'form']);
+    });
+
+    it('treats quizzes as hidden unless the caller says otherwise', async () => {
+      moduleFindMany.mockResolvedValue([MODULE]);
+
+      const [module] = await listForClassroom('cls');
+
+      expect(module.assignments.some(a => a.type === 'QUIZ')).toBe(false);
+    });
+
+    it('leaves the teaching team every assignment', async () => {
+      moduleFindMany.mockResolvedValue([MODULE]);
+
+      const [module] = await listForClassroom('cls', {
+        includeUnpublished: true,
+        quizzesVisible: false,
+      });
+
+      expect(module.assignments).toHaveLength(MODULE.assignments.length);
+    });
   });
 });

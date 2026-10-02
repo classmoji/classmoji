@@ -325,3 +325,25 @@ describe('the all-drafts publish warning', () => {
     expect(body).toMatchObject({ quizId: 'quiz-1', warning: WARNING });
   });
 });
+
+describe('closing a draft quiz', () => {
+  it('answers the refusal with 400 and its message, auditing nothing', async () => {
+    mocks.update.mockRejectedValue(
+      Object.assign(new Error('Publish the quiz before closing it'), {
+        name: 'QuizStatusChangeError',
+        code: 'invalid_status_change',
+        status: 400,
+      })
+    );
+
+    const { status, body } = await submit({
+      _action: 'updateQuiz',
+      id: 'quiz-1',
+      status: 'CLOSED',
+    });
+
+    expect(status).toBe(400);
+    expect(body).toEqual({ error: 'Publish the quiz before closing it' });
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+});

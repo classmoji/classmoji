@@ -4,6 +4,7 @@ import { Skeleton } from 'antd';
 
 import GradesTable from './GradesTable';
 import { ClassmojiService } from '@classmoji/services';
+import { quizStanding } from '@classmoji/utils';
 import { addAuditLog, addClassroomAuditLog } from '~/utils/helpers';
 import { pickOwnerOnlyContactFields } from '~/utils/studentFields.server';
 import { requireClassroomStaff, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
@@ -113,17 +114,28 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const activity = promises.assignments.then(async assignments => {
     const quiz: Record<string, Record<string, { completed: boolean; score: number | null }>> = {};
     const form: Record<string, Record<string, { submitted: boolean }>> = {};
+    const quizIds = assignments.flatMap(a => (a.type === 'QUIZ' && a.quiz_id ? [a.quiz_id] : []));
+    const gradingStrategies =
+      quizIds.length > 0 ? ClassmojiService.quiz.findGradingStrategies(quizIds) : null;
     await Promise.all(
       assignments.map(async a => {
         if (a.type === 'QUIZ' && a.quiz_id) {
-          const attempts = await ClassmojiService.quizAttempt.findByQuiz(a.quiz_id);
-          quiz[a.id] = {};
+          const [attempts, strategies] = await Promise.all([
+            ClassmojiService.quizAttempt.findByQuiz(a.quiz_id),
+            gradingStrategies,
+          ]);
+          const byUser = new Map<string, typeof attempts>();
           for (const attempt of attempts) {
-            // Newest first, so the first one seen per student wins.
-            quiz[a.id][attempt.user_id] ??= {
-              completed: Boolean(attempt.completed_at),
-              score: attempt.score ?? null,
-            };
+            byUser.set(attempt.user_id, [...(byUser.get(attempt.user_id) ?? []), attempt]);
+          }
+          // Each student's counting attempt under the quiz's grading strategy
+          // (the shared selector): completed attempts only, scored by
+          // partial_credit_percentage, so a running retake never hides a
+          // finished attempt. Display only; totals do not read it.
+          quiz[a.id] = {};
+          for (const [userId, own] of byUser) {
+            const standing = quizStanding(own, strategies?.[a.quiz_id]);
+            quiz[a.id][userId] = { completed: standing.completed, score: standing.score };
           }
         } else if (a.type === 'FORM' && a.form_id) {
           const responses = await ClassmojiService.formResponse.listByFormId(a.form_id);

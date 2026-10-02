@@ -5,13 +5,24 @@ import dayjs from 'dayjs';
 import { IconArrowRight, IconBrandGithub } from '@tabler/icons-react';
 import Emoji from '~/components/ui/display/Emoji';
 
+/**
+ * A recent grade: a repo assignment's released emoji grades (as on the
+ * Assignments page), or a quiz's counting score, shown as soon as the attempt
+ * completes.
+ */
 export interface FeedbackItem {
   id: string;
   assignmentTitle: string;
+  /** When it was submitted (repo) or when the counting attempt completed (quiz). */
   closedAt: string | Date | null;
   graders: { id: string; name: string | null }[];
   grades: { id?: string; emoji: string }[];
+  /** The issue or repo on GitHub, for a repo grade. */
   issueUrl: string | null;
+  /** A quiz's percentage (0-100); absent for a repo grade. */
+  score?: number | null;
+  /** In-app link for a quiz score (the quiz list). */
+  href?: string | null;
 }
 
 export interface ResubmitItem {
@@ -88,9 +99,7 @@ const initials = (name: string | null, login: string | null) => {
 };
 
 const Eyebrow = ({ children }: { children: React.ReactNode }) => (
-  <div className="text-xs font-semibold tracking-[0.18em] text-ink-4 mb-2">
-    {children}
-  </div>
+  <div className="text-xs font-semibold tracking-[0.18em] text-ink-4 mb-2">{children}</div>
 );
 
 const PanelShell = ({
@@ -105,9 +114,7 @@ const PanelShell = ({
   footer?: React.ReactNode;
 }) => (
   <div className="h-full flex flex-col">
-    <h3 className="text-base sm:text-lg font-semibold text-ink-0 tracking-tight">
-      {title}
-    </h3>
+    <h3 className="text-base sm:text-lg font-semibold text-ink-0 tracking-tight">{title}</h3>
     {subtitle && <div className="text-xs text-ink-3 mt-0.5">{subtitle}</div>}
     <div className="flex-1 mt-4 min-h-0">{children}</div>
     {footer && (
@@ -118,10 +125,14 @@ const PanelShell = ({
   </div>
 );
 
+const viewLinkClass =
+  'text-xs font-medium text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 px-2 py-1 rounded ring-1 ring-line hover:bg-nav-hover transition-colors';
+
 const FeedbackPanel = ({ items }: { items: FeedbackItem[] }) => {
+  const subtitle = 'Released grades and quiz scores';
   if (items.length === 0) {
     return (
-      <PanelShell title="Recent feedback" subtitle="Released grades from your graders">
+      <PanelShell title="Recent feedback" subtitle={subtitle}>
         <div className="h-full flex flex-col items-center justify-center text-center">
           <p className="text-sm text-ink-3">No graded feedback yet</p>
         </div>
@@ -129,43 +140,53 @@ const FeedbackPanel = ({ items }: { items: FeedbackItem[] }) => {
     );
   }
   return (
-    <PanelShell title="Recent feedback" subtitle="Released grades from your graders">
+    <PanelShell title="Recent feedback" subtitle={subtitle}>
       <Eyebrow>RECENT GRADES</Eyebrow>
       <ul className="flex flex-col">
-        {items.map(item => (
-          <li
-            key={item.id}
-            className="flex items-center gap-3 py-2.5 border-b border-line/60 last:border-0"
-          >
-            <div className="flex items-center gap-1 shrink-0">
-              {item.grades.slice(0, 3).map((g, idx) => (
-                <Emoji key={g.id ?? idx} emoji={g.emoji} fontSize={18} />
-              ))}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-ink-0 truncate">
-                {item.assignmentTitle}
+        {items.map(item => {
+          const isQuiz = typeof item.score === 'number';
+          return (
+            <li
+              key={item.id}
+              className="flex items-center gap-3 py-2.5 border-b border-line/60 last:border-0"
+            >
+              <div className="flex items-center gap-1 shrink-0">
+                {isQuiz ? (
+                  <span className="min-w-[2.75rem] text-sm font-bold tabular-nums text-accent-ink">
+                    {Math.round(item.score! * 10) / 10}%
+                  </span>
+                ) : (
+                  item.grades
+                    .slice(0, 3)
+                    .map((g, idx) => <Emoji key={g.id ?? idx} emoji={g.emoji} fontSize={18} />)
+                )}
               </div>
-              <div className="text-xs text-ink-3 truncate">
-                {item.graders
-                  .map(g => g.name)
-                  .filter(Boolean)
-                  .join(', ') || 'Graded'}
-                {item.closedAt && <> · {fromNow(item.closedAt)}</>}
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-ink-0 truncate">
+                  {item.assignmentTitle}
+                </div>
+                <div className="text-xs text-ink-3 truncate">
+                  {isQuiz
+                    ? 'Quiz'
+                    : item.graders
+                        .map(g => g.name)
+                        .filter(Boolean)
+                        .join(', ') || 'Graded'}
+                  {item.closedAt && <> · {fromNow(item.closedAt)}</>}
+                </div>
               </div>
-            </div>
-            {item.issueUrl && (
-              <a
-                href={item.issueUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="text-xs font-medium text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 px-2 py-1 rounded ring-1 ring-line hover:bg-nav-hover transition-colors"
-              >
-                View
-              </a>
-            )}
-          </li>
-        ))}
+              {item.href ? (
+                <Link to={item.href} className={viewLinkClass}>
+                  View
+                </Link>
+              ) : item.issueUrl ? (
+                <a href={item.issueUrl} target="_blank" rel="noreferrer" className={viewLinkClass}>
+                  View
+                </a>
+              ) : null}
+            </li>
+          );
+        })}
       </ul>
     </PanelShell>
   );
@@ -212,11 +233,7 @@ const TeamPanel = ({
     return (
       <PanelShell
         title={team.teamName}
-        subtitle={
-          <span className="font-mono text-xs text-ink-3">
-            {team.moduleTitle}
-          </span>
-        }
+        subtitle={<span className="font-mono text-xs text-ink-3">{team.moduleTitle}</span>}
         footer={footer}
       >
         <Eyebrow>MEMBERS</Eyebrow>
@@ -297,12 +314,8 @@ const ResubmitsPanel = ({ items, classSlug }: { items: ResubmitItem[]; classSlug
             className="flex items-center gap-3 py-2.5 border-b border-line/60 last:border-0"
           >
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-ink-0 truncate">
-                {item.assignmentTitle}
-              </div>
-              <div className="text-xs text-ink-3">
-                {fromNow(item.createdAt)}
-              </div>
+              <div className="text-sm font-medium text-ink-0 truncate">{item.assignmentTitle}</div>
+              <div className="text-xs text-ink-3">{fromNow(item.createdAt)}</div>
             </div>
             <span
               className={`text-xs font-bold tracking-wider px-2 py-0.5 rounded-full ring-1 ${

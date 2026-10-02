@@ -194,11 +194,11 @@ function moduleItemSummary(item: ModuleItemRow, position: number) {
  *
  * A STUDENT gets what their module row renders and nothing else: the
  * assignment's own id and title, its type and its due date. Not the target: the
- * service's student filter checks the ASSIGNMENT's publish flag (and, for REPO,
- * the repository's), never the quiz's or form's status, so a published
- * assignment can sit on a DRAFT quiz or form whose name no student surface
- * shows. Not weight, extra credit or submission mode either: list_repos gives a
- * student those for the repositories they hold a git repo in.
+ * service's student filter (`openToStudents`) already leaves out an assignment
+ * whose quiz or form is a draft, but the target's own name is still not what a
+ * student's module row shows. Not weight, extra credit or submission mode
+ * either: list_repos gives a student those for the repositories they hold a
+ * git repo in.
  *
  * Staff get the placement in full: the target the type points at, as one
  * generic pair rather than three nullable id columns (a classroom without
@@ -250,8 +250,11 @@ export const modulesResource: ResourceDefinition = {
       return { enabled: false, modules: [] };
     }
 
+    // Quizzes are counted as visible here: this resource drops quiz items and
+    // quiz assignments itself below, for every role, where they are hidden.
     const modules = (await ClassmojiService.module.listForClassroom(vars.slug, {
       includeUnpublished: isStaff(role),
+      quizzesVisible: true,
     })) as ModuleRow[];
 
     // listForClassroom resolves by BARE slug. The slug is globally unique
@@ -304,6 +307,8 @@ interface QuizRow {
   name: string;
   status: string;
   due_date?: Date | null;
+  /** The quiz's assignment: it owns the due date where it exists. */
+  assignment?: { student_deadline: Date | null } | null;
   weight: number;
   question_count: number;
   max_attempts: number;
@@ -373,7 +378,9 @@ export const quizzesResource: ResourceDefinition = {
       id: q.id,
       name: q.name,
       status: q.status,
-      due_date: q.due_date ?? null,
+      // One due date for staff and students: the assignment's where the quiz
+      // has one, the quiz's own otherwise (as on the web).
+      due_date: q.assignment?.student_deadline ?? q.due_date ?? null,
       weight: q.weight,
       question_count: q.question_count,
       max_attempts: q.max_attempts,

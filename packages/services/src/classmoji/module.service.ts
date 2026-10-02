@@ -1,5 +1,5 @@
 import getPrisma from '@classmoji/database';
-import { titleToIdentifier } from '@classmoji/utils';
+import { openToStudents, titleToIdentifier } from '@classmoji/utils';
 import { ModuleItemType, type Prisma } from '@prisma/client';
 
 interface ModuleWriteInput {
@@ -264,11 +264,16 @@ export const findById = async (id: string) => {
 /**
  * List a classroom's modules with their ordered items for the read-only
  * student/assistant tree. Students (`includeUnpublished = false`) see only
- * published modules and published items; the teaching team sees everything.
+ * published modules and published items, and only the assignments the
+ * student-visibility rule admits (`openToStudents`, which reads
+ * `quizzesVisible` for quiz assignments); the teaching team sees everything.
  */
 export const listForClassroom = async (
   classroomSlug: string,
-  { includeUnpublished = false }: { includeUnpublished?: boolean } = {}
+  {
+    includeUnpublished = false,
+    quizzesVisible = false,
+  }: { includeUnpublished?: boolean; quizzesVisible?: boolean } = {}
 ) => {
   const classroomId = await findClassroomIdBySlug(classroomSlug);
   if (!classroomId) return [];
@@ -289,15 +294,17 @@ export const listForClassroom = async (
 
   if (includeUnpublished) return modulesWithScopedItems;
 
-  // Drop items and assignments that are not published. A REPO assignment also
-  // needs its repository published: until then no student repo exists to
-  // submit through. Module-level publish is already filtered in the query.
+  // Drop items that are not published, and assignments students cannot see
+  // under the one visibility rule the Assignments page, the dashboard and the
+  // calendar also apply: published, a REPO one's repository published (until
+  // then no student repo exists to submit through), a quiz only where quizzes
+  // are visible, a quiz or form neither a draft nor before `release_at`.
+  // Module-level publish is already filtered in the query.
+  const now = new Date();
   return modulesWithScopedItems.map(m => ({
     ...m,
     items: m.items.filter(isItemPublished),
-    assignments: (m.assignments ?? []).filter(
-      a => a.is_published && (a.type !== 'REPO' || a.repository?.is_published === true)
-    ),
+    assignments: (m.assignments ?? []).filter(a => openToStudents(a, now, { quizzesVisible })),
   }));
 };
 

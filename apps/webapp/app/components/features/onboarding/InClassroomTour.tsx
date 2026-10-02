@@ -388,9 +388,9 @@ const STUDENT_STEPS: FeatureStep[] = [
     link: '/dashboard',
     selector: '[data-tour="dashboard-spotlight"]',
     placement: 'bottom',
-    title: 'What’s next',
+    title: 'Up next',
     description:
-      'This spotlight highlights your current repository and what is coming up next so you always know what to work on. It saves you from hunting through every repo to find the next thing due.',
+      'Up next lists what you still owe, soonest due first: repository work, quizzes and forms, each with a button to open it or start it, so you always know what to work on.',
   },
   {
     link: '/dashboard',
@@ -410,7 +410,7 @@ const STUDENT_STEPS: FeatureStep[] = [
     link: '/assignments',
     title: 'Assignments',
     description:
-      'This page lists all of your assignments across every repository in one place. Each assignment is a GitHub issue in your repo, with a due date and its current status, so you can see everything you owe without opening each repo separately.',
+      'This page lists all of your assignments in one place: repository work, quizzes and forms, each with its due date and its current status, so you can see everything you owe without opening each module separately. A quiz opens its quiz page; a form opens the form.',
   },
   {
     link: '/assignments',
@@ -418,7 +418,7 @@ const STUDENT_STEPS: FeatureStep[] = [
     placement: 'bottom',
     title: 'Your progress',
     description:
-      'This bar shows how much of your work is submitted and graded at a glance, and the tabs below switch between current and completed assignments. You submit an assignment by closing its GitHub issue in your repo, which marks it as turned in here automatically.',
+      'This bar shows at a glance how much of your work is finished or closed and how much is still to do, and the tabs below switch between the two. Where a repository assignment has a GitHub issue, you submit it by closing that issue.',
   },
   {
     link: '/assignments',
