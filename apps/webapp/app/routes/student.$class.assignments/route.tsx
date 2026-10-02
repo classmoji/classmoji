@@ -49,12 +49,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       ClassmojiService.token.getBalance(classroom.id, userId).catch(() => 0),
     ]);
 
+    // A row with no per-student status (an open PUBLIC form) is neither owed
+    // nor done by this student, so it does not count toward their progress.
     const completed = rows.filter(r => r.done).length;
-    const counts: BucketCounts = {
-      completed,
-      current: rows.length - completed,
-      total: rows.length,
-    };
+    const current = rows.filter(r => !r.done && r.status !== null).length;
+    const counts: BucketCounts = { completed, current, total: completed + current };
 
     const subtitleParts = [gitOrgLogin].filter((p): p is string => Boolean(p));
 

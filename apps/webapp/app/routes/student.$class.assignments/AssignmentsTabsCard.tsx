@@ -16,12 +16,14 @@ import { formatDeadline } from './formatDeadline';
 /** The Current / Completed split: a done row is submitted, completed or closed. */
 export type AssignmentStatus = 'current' | 'completed';
 
+type TabKey = 'current' | 'completed' | 'all';
+
 interface AssignmentsTabsCardProps {
   rows: StudentCourseworkRow[];
   balance: number;
+  /** The tab shown first; Current unless said otherwise. */
+  initialTab?: TabKey;
 }
-
-type TabKey = 'current' | 'completed' | 'all';
 
 const TAB_ORDER: { key: TabKey; label: string }[] = [
   { key: 'current', label: 'Current' },
@@ -75,13 +77,19 @@ const TitleLink = ({ row }: { row: StudentCourseworkRow }) => {
   );
 };
 
-const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
-  const [active, setActive] = useState<TabKey>('current');
+const AssignmentsTabsCard = ({
+  rows,
+  balance,
+  initialTab = 'current',
+}: AssignmentsTabsCardProps) => {
+  const [active, setActive] = useState<TabKey>(initialTab);
   const reducedMotion = useReducedMotion();
   const { class: classSlug } = useParams();
 
-  const tabOf = (row: StudentCourseworkRow): AssignmentStatus =>
-    row.done ? 'completed' : 'current';
+  // A row with no per-student status (an open PUBLIC form) is neither still to
+  // do nor done for this student: it is listed under All only.
+  const tabOf = (row: StudentCourseworkRow): AssignmentStatus | null =>
+    row.done ? 'completed' : row.status === null ? null : 'current';
 
   const counts: Record<TabKey, number> = {
     current: rows.filter(r => tabOf(r) === 'current').length,
@@ -152,7 +160,8 @@ const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
               </thead>
               <tbody>
                 {filtered.map(row => {
-                  const tab = tabOf(row);
+                  // Only a row still to do counts down to (or past) its date.
+                  const tab = tabOf(row) ?? 'completed';
                   const repo = row.repo;
                   const canRequestRegrade =
                     !!repo && row.done && repo.gradesReleased && !!classSlug;

@@ -94,13 +94,13 @@ const FORM_PUBLIC: StudentCourseworkRow = {
   action: null,
 };
 
-const render = (rows: StudentCourseworkRow[]) =>
+const render = (rows: StudentCourseworkRow[], initialTab?: 'current' | 'completed' | 'all') =>
   renderToStaticMarkup(
     <MemoryRouter initialEntries={['/student/cs52/assignments']}>
       <Routes>
         <Route
           path="/student/:class/assignments"
-          element={<AssignmentsTabsCard rows={rows} balance={10} />}
+          element={<AssignmentsTabsCard rows={rows} balance={10} initialTab={initialTab} />}
         />
       </Routes>
     </MemoryRouter>
@@ -132,8 +132,9 @@ describe('AssignmentsTabsCard', () => {
     expect(html).toContain('Not started');
   });
 
-  it('shows a public form with no per-student status', () => {
-    const html = render([FORM_PUBLIC]);
+  it('shows a public form under All, with no per-student status', () => {
+    expect(render([FORM_PUBLIC])).not.toContain('Team sign-up');
+    const html = render([FORM_PUBLIC], 'all');
 
     expect(html).toContain('>FORM<');
     expect(html).toContain('href="https://pages.test/cs52/forms/signup"');
@@ -141,10 +142,11 @@ describe('AssignmentsTabsCard', () => {
     expect(html).not.toContain('Not submitted');
   });
 
-  it('counts every row in its tab', () => {
+  it('counts every row in its tab, an open public form under All only', () => {
     const done: StudentCourseworkRow = {
       ...QUIZ_OPEN,
       assignmentId: 'a-done',
+      title: 'Finished quiz',
       status: 'COMPLETED',
       done: true,
       score: 0,
@@ -157,11 +159,12 @@ describe('AssignmentsTabsCard', () => {
       m[2],
     ]);
     expect(tabCounts).toEqual([
-      ['Current', '3'],
+      ['Current', '2'],
       ['Completed', '1'],
       ['All', '4'],
     ]);
-    // The Current tab is shown: the completed quiz is not rendered.
-    expect(html).not.toContain('a-done');
+    // The Current tab is shown: neither the completed quiz nor the public form.
+    expect(html).not.toContain('Finished quiz');
+    expect(html).not.toContain('Team sign-up');
   });
 });

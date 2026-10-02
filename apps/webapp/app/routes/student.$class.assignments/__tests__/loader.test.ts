@@ -41,11 +41,12 @@ const loaderArgs = () =>
     request: new Request('http://localhost/student/test-class/assignments'),
   }) as unknown as Parameters<typeof loader>[0];
 
-const row = (assignmentId: string, type: string, done: boolean) => ({
+const row = (assignmentId: string, type: string, done: boolean, status: string | null = 'X') => ({
   assignmentId,
   type,
   title: assignmentId,
   done,
+  status,
 });
 
 beforeEach(() => {
@@ -103,6 +104,19 @@ describe('student assignments loader', () => {
     expect(data.balance).toBe(50);
     expect(data.classroomTitle).toBe('Test Class');
     expect(data.classroomSubtitle).toBe('test-org');
+  });
+
+  it('leaves an open public form, which has no per-student status, out of the progress', async () => {
+    listForStudentMock.mockResolvedValue([
+      row('quiz-done', 'QUIZ', true, 'COMPLETED'),
+      row('form-public-open', 'FORM', false, null),
+      row('form-public-closed', 'FORM', true, 'CLOSED'),
+    ]);
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.rows).toHaveLength(3);
+    expect(data.counts).toEqual({ completed: 2, current: 0, total: 2 });
   });
 
   it('resolves to an empty, non-error state when the read rejects', async () => {
