@@ -724,9 +724,42 @@ describe('quiz_update', () => {
     expect(dueDate.safeParse('next friday').success).toBe(false);
   });
 
-  it('takes no status, and published only as false', () => {
+  it.each([
+    ['CLOSED', { status: 'CLOSED' }],
+    ['DRAFT beside another field', { status: 'DRAFT', name: 'Renamed' }],
+  ])(
+    'refuses the removed status (%s) by name, naming what replaces it, before anything else',
+    async (_case, extra) => {
+      mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
+
+      await expect(
+        quizUpdateTool.handler({ classroom: 'org/w26', quiz_id: 'quiz-1', ...extra }, CTX)
+      ).rejects.toMatchObject({
+        kind: 'invalid_params',
+        message:
+          'status is no longer accepted: use published:false to unpublish, closes_at to stop ' +
+          'new attempts (null reopens), and quiz_publish to publish',
+      });
+      expect(mocks.assertProTier).not.toHaveBeenCalled();
+      expect(mocks.quizFindById).not.toHaveBeenCalled();
+      expect(mocks.quizUpdate).not.toHaveBeenCalled();
+      expect(mocks.auditCreate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('keeps status in the schema only so it reaches the refusal, not stripped unseen', () => {
+    // Unknown arguments are stripped before the handler runs.
+    const parsed = z.object(quizUpdateTool.inputSchema).safeParse({
+      classroom: 'org/w26',
+      quiz_id: '11111111-1111-4111-8111-111111111111',
+      status: 'CLOSED',
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data).toHaveProperty('status', 'CLOSED');
+  });
+
+  it('takes published only as false', () => {
     // A close is closes_at; publishing would skip the notification path.
-    expect(quizUpdateTool.inputSchema).not.toHaveProperty('status');
     const published = quizUpdateTool.inputSchema.published;
     expect(published.safeParse(false).success).toBe(true);
     expect(published.safeParse(undefined).success).toBe(true);

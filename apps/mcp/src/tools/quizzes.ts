@@ -462,6 +462,11 @@ interface QuizServiceUpdate {
   };
 }
 
+/** quiz_update's answer to the removed `status` argument. */
+const STATUS_REPLACED =
+  'status is no longer accepted: use published:false to unpublish, closes_at to stop new ' +
+  'attempts (null reopens), and quiz_publish to publish';
+
 interface QuizUpdateArgs {
   classroom: string;
   quiz_id: string;
@@ -476,6 +481,8 @@ interface QuizUpdateArgs {
   weight?: number;
   tokens_per_hour?: number;
   published?: false;
+  /** Removed: refused with the fields that replace it (see STATUS_REPLACED). */
+  status?: unknown;
   question_count?: number;
   difficulty_level?: string;
   subject?: string;
@@ -536,6 +543,13 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
       .literal(false)
       .optional()
       .describe('false unpublishes (hides it from students). To PUBLISH, use quiz_publish'),
+    // Kept in the schema only so an older caller's `status` is refused by name
+    // rather than dropped unseen (unknown arguments are stripped before the
+    // handler runs).
+    status: z
+      .unknown()
+      .optional()
+      .describe('No longer accepted: use published:false to unpublish, closes_at to close'),
     question_count: questionCountSchema.optional(),
     difficulty_level: z.string().max(100).optional().describe('Free-text difficulty label'),
     subject: z.string().max(200).optional().describe('Free-text subject label'),
@@ -549,6 +563,11 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
     max_attempts: maxAttemptsSchema.optional(),
   },
   handler: async (args, ctx) => {
+    // `status` was replaced; a caller still sending it is told what to use
+    // instead, before anything is read or written.
+    if (args.status !== undefined) {
+      throw new ToolError('invalid_params', STATUS_REPLACED);
+    }
     await assertQuizSurfaceEnabled(ctx);
 
     // Explicit field-by-field mapping (snake_case tool args → the service's
