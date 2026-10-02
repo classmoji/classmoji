@@ -256,3 +256,33 @@ describe('updateInClassroom — a quiz assignment’s deadline', () => {
     expect(mocks.createNotifications).toHaveBeenCalledOnce();
   });
 });
+
+describe('updateInClassroom — fields that do not apply to the row', () => {
+  it('refuses grades_released on a quiz assignment and writes nothing', async () => {
+    await expect(updateInClassroom('asg-1', 'class-1', { grades_released: true })).rejects.toThrow(
+      'A quiz shows its score as soon as an attempt completes'
+    );
+    expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a close date on a form or repository assignment and writes nothing', async () => {
+    for (const [type, message] of [
+      ['FORM', 'A form assignment closes with its form'],
+      ['REPO', 'Repository assignments have no close date'],
+    ] as const) {
+      mocks.assignmentFindFirst.mockResolvedValue({
+        id: 'asg-1',
+        type,
+        submission_mode: 'ISSUE',
+        student_deadline: OLD,
+        grades_released: false,
+        is_published: true,
+        _count: { git_repo_assignments: 0 },
+      });
+      await expect(updateInClassroom('asg-1', 'class-1', { closes_at: NEW })).rejects.toThrow(
+        message
+      );
+    }
+    expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+  });
+});

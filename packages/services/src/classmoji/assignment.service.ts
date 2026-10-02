@@ -401,6 +401,10 @@ export const createInTx = (tx: Db, data: Prisma.AssignmentUncheckedCreateInput) 
  * @returns {Promise<{count: number}>}
  */
 export const createMany = async (assignments: Prisma.AssignmentUncheckedCreateInput[]) => {
+  // A quiz's assignment is created with the quiz, by the quiz service.
+  if (assignments.some(a => a.type === 'QUIZ')) {
+    throw new QuizAssignmentError('quiz_assignment', QUIZ_ASSIGNMENT_CREATE_REFUSAL);
+  }
   return getPrisma().assignment.createMany({
     data: assignments.map(a => ({
       ...a,
@@ -740,10 +744,19 @@ export const updateInClassroom = async (
     },
   });
   if (!previous) throw new Error('Assignment not found in classroom');
-  // Repositories have no close date (yet): nothing that serves a repo
-  // assignment would read one.
-  if (input.closes_at !== undefined && previous.type === 'REPO') {
-    throw new Error('Repository assignments have no close date');
+  // Fields that do not apply to the row's type, refused as MCP
+  // assignment_update refuses them: only a quiz has a close date (nothing
+  // that serves a repo reads one; a form closes through the form itself),
+  // and a quiz shows its score as soon as an attempt completes.
+  if (input.closes_at !== undefined && previous.type !== 'QUIZ') {
+    throw new Error(
+      previous.type === 'REPO'
+        ? 'Repository assignments have no close date'
+        : 'A form assignment closes with its form'
+    );
+  }
+  if (input.grades_released !== undefined && previous.type === 'QUIZ') {
+    throw new Error('A quiz shows its score as soon as an attempt completes');
   }
 
   const data: Prisma.AssignmentUncheckedUpdateInput = {};
@@ -1111,8 +1124,10 @@ export const deleteById = async (id: string) => {
  * @returns {Promise<{count: number}>}
  */
 export const deleteMany = async (ids: string[]) => {
+  // A quiz's assignment goes with its quiz (see refuseQuizAssignmentDelete).
+  await refuseQuizAssignmentDelete({ id: { in: ids }, type: 'QUIZ' });
   return getPrisma().assignment.deleteMany({
-    where: { id: { in: ids } },
+    where: { id: { in: ids }, type: { not: 'QUIZ' } },
   });
 };
 

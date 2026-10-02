@@ -688,6 +688,27 @@ describe.skipIf(!RUN)('a quiz and its assignment (integration)', () => {
       expect(await prisma.assignment.count({ where: { id } })).toBe(1);
       expect(await prisma.quiz.count({ where: { id: quiz.id } })).toBe(1);
     });
+
+    it('createMany and deleteMany refuse QUIZ rows and write nothing', async () => {
+      const moduleId = await makeModule();
+      const unassigned = await quizWithoutAssignment({ status: 'PUBLISHED' });
+      const placed = await newQuiz(moduleId, {}, { isPublished: true });
+      const { id } = await assignmentOf(placed.id);
+
+      const created = await errorOf(
+        assignmentService.createMany([
+          { module_id: moduleId, type: 'QUIZ', quiz_id: unassigned.id, title: unassigned.name },
+        ])
+      );
+      const deleted = await errorOf(assignmentService.deleteMany([id]));
+
+      for (const error of [created, deleted]) {
+        expect(error).toBeInstanceOf(QuizAssignmentError);
+        expect(error).toMatchObject({ code: 'quiz_assignment' });
+      }
+      expect(await prisma.assignment.count({ where: { quiz_id: unassigned.id } })).toBe(0);
+      expect(await prisma.assignment.count({ where: { id } })).toBe(1);
+    });
   });
 
   // ─── quiz.publish ─────────────────────────────────────────────────────────
