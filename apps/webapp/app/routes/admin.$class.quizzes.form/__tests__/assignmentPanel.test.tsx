@@ -27,8 +27,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { quizAssignmentKeysIn } from '@classmoji/utils';
 import {
   changedPanelPayload,
+  closesDateError,
   panelFormValues,
   panelPayload,
+  panelStatus,
   studentsSeeItIn,
   type AssignmentPanelData,
 } from '../QuizAssignmentPanel';
@@ -68,7 +70,11 @@ vi.mock('react-router', () => ({
   useLocation: () => ({ pathname: mocks.pathname }),
   useNavigate: () => vi.fn(),
   useParams: () => ({ class: 'cs52-26f' }),
-  Link: ({ to, children }: { to: string; children: ReactNode }) => <a href={to}>{children}</a>,
+  Link: ({ to, children, ...rest }: { to: string; children: ReactNode }) => (
+    <a href={to} {...rest}>
+      {children}
+    </a>
+  ),
 }));
 // The Drawer's portal and motion are not what is under test.
 vi.mock('antd', async () => {
@@ -347,7 +353,9 @@ describe('editing a quiz as the owner or a teacher', () => {
   });
 
   it('Close now sets Closes to now, and the save carries it', async () => {
-    await render({ viewer: OWNER, quiz: formQuiz(), panel: assigned });
+    // Due has passed, so closing now is not before it.
+    const due = emptyPanel({ ...assigned, dueDate: '2026-09-01T16:00:00.000Z' });
+    await render({ viewer: OWNER, quiz: formQuiz(), panel: due });
     expect(byTestId('quiz-assignment-status')?.textContent).toContain('Published');
 
     const before = Date.now();
@@ -356,9 +364,47 @@ describe('editing a quiz as the owner or a teacher', () => {
 
     await click(saveButton());
     await vi.waitFor(() => expect(mocks.submit).toHaveBeenCalledTimes(1));
-    const closesAt = Date.parse(mocks.submit.mock.calls[0][0].assignment.closesAt);
+    const sent = mocks.submit.mock.calls[0][0].assignment;
+    expect(Object.keys(sent)).toEqual(['closesAt']);
+    const closesAt = Date.parse(sent.closesAt);
     expect(closesAt).toBeGreaterThanOrEqual(before - 1000);
     expect(closesAt).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('refuses a Closes date before Due: an inline error, and Save is disabled', async () => {
+    await render({ viewer: OWNER, quiz: formQuiz(), panel: assigned });
+    await vi.waitFor(() => expect(saveButton().disabled).toBe(false));
+
+    // Due is 2026-10-09; closing now comes before it.
+    await click(byTestId('quiz-close-now')!);
+
+    expect(editablePanel()!.textContent).toContain('Closes can’t be before Due');
+    expect(saveButton().disabled).toBe(true);
+    await click(saveButton());
+    expect(mocks.submit).not.toHaveBeenCalled();
+  });
+
+  it('does not hold up a content save over dates it did not change', async () => {
+    // Saved before the rule: closes before its due date.
+    await render({
+      viewer: OWNER,
+      quiz: formQuiz(),
+      panel: emptyPanel({ ...assigned, closesAt: '2026-10-01T16:00:00.000Z' }),
+    });
+
+    await vi.waitFor(() => expect(saveButton().disabled).toBe(false));
+    expect(editablePanel()!.textContent).not.toContain('can’t be before');
+  });
+
+  it('reads Scheduled with the Opens date, and lists nowhere students see it yet', async () => {
+    await render({
+      viewer: OWNER,
+      quiz: formQuiz(),
+      panel: emptyPanel({ ...assigned, releaseAt: dayjs().add(7, 'day').toISOString() }),
+    });
+
+    expect(byTestId('quiz-assignment-status')?.textContent).toMatch(/^Scheduled · /);
+    expect(byTestId('quiz-students-see-it-in')).toBeNull();
   });
 });
 
@@ -371,6 +417,9 @@ describe('a class with no modules', () => {
     const link = note.querySelector('a');
     expect(link?.getAttribute('href')).toBe(`/admin/${CLASS_SLUG}/modules`);
     expect(link?.textContent).toBe('Add a module');
+    // A new tab, so the quiz being written here is not lost.
+    expect(link?.getAttribute('target')).toBe('_blank');
+    expect(link?.getAttribute('rel')).toBe('noreferrer');
     expect(saveButton().disabled).toBe(true);
     // No module to choose from.
     expect(editablePanel()!.querySelector('.ant-select')).toBeNull();
@@ -676,6 +725,14 @@ describe('studentsSeeItIn', () => {
     expect(studentsSeeItIn({ ...published, weight: 0 })).not.toContain('Grades');
   });
 
+  it('is nothing until the quiz opens', () => {
+    const now = dayjs('2026-10-02T12:00:00Z');
+    expect(studentsSeeItIn({ ...published, releaseAt: '2026-10-09T13:00:00Z', now })).toEqual([]);
+    expect(studentsSeeItIn({ ...published, releaseAt: '2026-10-01T13:00:00Z', now })).toContain(
+      'Assignments'
+    );
+  });
+
   it('lists Assignments and Dashboard for a published quiz with nothing else set', () => {
     expect(
       studentsSeeItIn({ isPublished: true, moduleTitle: null, hasDueDate: false, weight: 0 })
@@ -713,5 +770,44 @@ describe('changedPanelPayload', () => {
         loaded
       )
     ).toEqual({});
+  });
+});
+
+describe('closesDateError', () => {
+  it('refuses Closes before Opens, then before Due', () => {
+    expect(
+      closesDateError({
+        releaseAt: '2026-10-05T00:00:00Z',
+        dueDate: '2026-10-09T00:00:00Z',
+        closesAt: '2026-10-04T00:00:00Z',
+      })
+    ).toBe('Closes can’t be before Opens');
+    expect(
+      closesDateError({
+        releaseAt: null,
+        dueDate: '2026-10-09T00:00:00Z',
+        closesAt: '2026-10-08T00:00:00Z',
+      })
+    ).toBe('Closes can’t be before Due');
+  });
+
+  it('takes Closes on or after both, or no Closes at all', () => {
+    const dates = { releaseAt: '2026-10-05T00:00:00Z', dueDate: '2026-10-09T00:00:00Z' };
+    expect(closesDateError({ ...dates, closesAt: '2026-10-09T00:00:00Z' })).toBeNull();
+    expect(closesDateError({ ...dates, closesAt: '2026-10-10T00:00:00Z' })).toBeNull();
+    expect(closesDateError({ ...dates, closesAt: null })).toBeNull();
+  });
+});
+
+describe('panelStatus', () => {
+  const now = dayjs('2026-10-02T12:00:00Z');
+
+  it('reads Draft, Scheduled with its date, Published and Closed', () => {
+    expect(panelStatus(false, null, null, now)).toBe('Draft');
+    expect(panelStatus(true, null, '2026-10-09T13:00:00Z', now)).toMatch(
+      /^Scheduled · Fri Oct 9 · /
+    );
+    expect(panelStatus(true, null, '2026-10-01T13:00:00Z', now)).toBe('Published');
+    expect(panelStatus(true, '2026-10-02T11:00:00Z', null, now)).toBe('Closed');
   });
 });

@@ -14,6 +14,7 @@ import {
   Space,
   Tooltip,
 } from 'antd';
+import type { Dayjs } from 'dayjs';
 import { RobotOutlined, DeleteOutlined, BulbOutlined } from '@ant-design/icons';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { assertClassroomAccess } from '~/utils/helpers';
@@ -41,6 +42,8 @@ import {
   EditableAssignmentPanel,
   ReadOnlyAssignmentPanel,
   changedPanelPayload,
+  closesDateError,
+  panelDatesChanged,
   panelFormValues,
   panelPayload,
   type AssignmentPanelData,
@@ -243,7 +246,18 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
   // I3: the owner or a teacher cannot save a quiz without a module. An
   // assistant's save carries content only, so it needs none.
   const chosenModuleId = Form.useWatch(['assignment', 'moduleId'], form) as string | undefined;
-  const saveBlocked = canAuthor && !chosenModuleId;
+  // Closes may not come before Opens or Due. Checked once a date is changed
+  // here, so dates saved before the rule existed do not block a content edit.
+  const watchedDates = {
+    releaseAt: Form.useWatch(['assignment', 'releaseAt'], form) as Dayjs | null | undefined,
+    dueDate: Form.useWatch(['assignment', 'dueDate'], form) as Dayjs | null | undefined,
+    closesAt: Form.useWatch(['assignment', 'closesAt'], form) as Dayjs | null | undefined,
+  };
+  const closesError =
+    canAuthor && panelDatesChanged(watchedDates, assignmentPanel)
+      ? closesDateError(watchedDates)
+      : null;
+  const saveBlocked = canAuthor && (!chosenModuleId || closesError !== null);
   const [selectedExample, setSelectedExample] = useState('');
   const [showAssistant, setShowAssistant] = useState(false);
   const [exampleRepoUrl, setExampleRepoUrl] = useState('');
@@ -803,6 +817,7 @@ Weigh understanding over wording; don't penalize minor syntax slips.`}
                         modules={modules}
                         isOwner={isOwner}
                         classSlug={org}
+                        closesError={closesError}
                       />
                     ) : (
                       <ReadOnlyAssignmentPanel data={assignmentPanel} />

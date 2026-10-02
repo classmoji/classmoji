@@ -39,6 +39,8 @@ export interface AssignmentPanelValues {
 }
 
 const DATE_FORMAT = 'ddd MMM D, YYYY · h:mm A';
+/** The short date a pill or a confirm names. */
+export const SHORT_DATE_FORMAT = 'ddd MMM D · h:mm A';
 
 const toDayjs = (iso: string | null) => (iso ? dayjs(iso) : null);
 
@@ -97,23 +99,69 @@ export const changedPanelPayload = (
   return changed;
 };
 
+/** Whether Opens, Due or Closes differ from what the loader showed. */
+export const panelDatesChanged = (
+  values: Pick<AssignmentPanelValues, 'releaseAt' | 'dueDate' | 'closesAt'>,
+  initial: AssignmentPanelData
+) => {
+  const changed = changedPanelPayload(values, initial);
+  return 'releaseAt' in changed || 'dueDate' in changed || 'closesAt' in changed;
+};
+
+type DateValue = Dayjs | string | null | undefined;
+
+const asDayjs = (value: DateValue) =>
+  value == null ? null : typeof value === 'string' ? dayjs(value) : value;
+
+/** Whether an Opens date is still ahead: the quiz is published but not open yet. */
+export const opensLater = (releaseAt: DateValue, now: Dayjs = dayjs()) => {
+  const opens = asDayjs(releaseAt);
+  return Boolean(opens && opens.isAfter(now));
+};
+
+/**
+ * What is wrong with the Closes date, or null: it may not come before Opens
+ * or Due (no attempt could start in between).
+ */
+export const closesDateError = ({
+  releaseAt,
+  dueDate,
+  closesAt,
+}: {
+  releaseAt: DateValue;
+  dueDate: DateValue;
+  closesAt: DateValue;
+}): string | null => {
+  const closes = asDayjs(closesAt);
+  if (!closes) return null;
+  const opens = asDayjs(releaseAt);
+  if (opens && closes.isBefore(opens)) return 'Closes can’t be before Opens';
+  const due = asDayjs(dueDate);
+  if (due && closes.isBefore(due)) return 'Closes can’t be before Due';
+  return null;
+};
+
 /**
  * Where students see the quiz, read off the panel: nowhere until it is
- * published; then the Assignments page, its module, the calendar when it has
- * a due date, the dashboard, and grades when its weight counts.
+ * published and open; then the Assignments page, its module, the calendar
+ * when it has a due date, the dashboard, and grades when its weight counts.
  */
 export const studentsSeeItIn = ({
   isPublished,
   moduleTitle,
   hasDueDate,
   weight,
+  releaseAt = null,
+  now = dayjs(),
 }: {
   isPublished: boolean;
   moduleTitle: string | null;
   hasDueDate: boolean;
   weight: number;
+  releaseAt?: DateValue;
+  now?: Dayjs;
 }): string[] => {
-  if (!isPublished) return [];
+  if (!isPublished || opensLater(releaseAt, now)) return [];
   return [
     'Assignments',
     ...(moduleTitle ? [moduleTitle] : []),
@@ -123,11 +171,22 @@ export const studentsSeeItIn = ({
   ];
 };
 
-/** Draft / Published / Closed, as the panel's header pill shows it. */
-const panelStatus = (isPublished: boolean, closesAt: Dayjs | string | null | undefined) => {
+/**
+ * Draft / Scheduled (with the Opens date) / Published / Closed, as the
+ * panel's header pill shows it.
+ */
+export const panelStatus = (
+  isPublished: boolean,
+  closesAt: DateValue,
+  releaseAt: DateValue = null,
+  now: Dayjs = dayjs()
+) => {
   if (!isPublished) return 'Draft';
-  const closes = typeof closesAt === 'string' ? dayjs(closesAt) : closesAt;
-  return closes && !closes.isAfter(dayjs()) ? 'Closed' : 'Published';
+  if (opensLater(releaseAt, now)) {
+    return `Scheduled · ${asDayjs(releaseAt)!.format(SHORT_DATE_FORMAT)}`;
+  }
+  const closes = asDayjs(closesAt);
+  return closes && !closes.isAfter(now) ? 'Closed' : 'Published';
 };
 
 const StatusPill = ({ status }: { status: string }) =>
@@ -175,14 +234,18 @@ export const EditableAssignmentPanel = ({
   modules,
   isOwner,
   classSlug,
+  closesError = null,
 }: {
   modules: ModuleOption[];
   isOwner: boolean;
   classSlug: string;
+  /** What is wrong with Closes (closesDateError), shown under the field. */
+  closesError?: string | null;
 }) => {
   const form = Form.useFormInstance();
   const moduleId = Form.useWatch(['assignment', 'moduleId'], form) as string | undefined;
   const isPublished = Form.useWatch(['assignment', 'isPublished'], form) === true;
+  const releaseAt = Form.useWatch(['assignment', 'releaseAt'], form) as Dayjs | null | undefined;
   const dueDate = Form.useWatch(['assignment', 'dueDate'], form) as Dayjs | null | undefined;
   const closesAt = Form.useWatch(['assignment', 'closesAt'], form) as Dayjs | null | undefined;
   const weight = Number(Form.useWatch(['assignment', 'weight'], form) ?? 0);
@@ -194,7 +257,7 @@ export const EditableAssignmentPanel = ({
         <h2 className="m-0 text-[15px] font-semibold text-gray-900 dark:text-gray-100">
           Assignment
         </h2>
-        <StatusPill status={panelStatus(isPublished, closesAt)} />
+        <StatusPill status={panelStatus(isPublished, closesAt, releaseAt)} />
       </div>
 
       {modules.length === 0 ? (
@@ -204,7 +267,16 @@ export const EditableAssignmentPanel = ({
         >
           {isOwner ? (
             <>
-              A quiz lives in a module. <Link to={`/admin/${classSlug}/modules`}>Add a module</Link>{' '}
+              A quiz lives in a module.{' '}
+              <Link
+                to={`/admin/${classSlug}/modules`}
+                target="_blank"
+                rel="noreferrer"
+                className="font-semibold text-blue-700 underline underline-offset-2 hover:text-blue-800 dark:text-blue-300 dark:hover:text-blue-200"
+                data-testid="quiz-add-module-link"
+              >
+                Add a module
+              </Link>{' '}
               first.
             </>
           ) : (
@@ -238,7 +310,12 @@ export const EditableAssignmentPanel = ({
         <DatePicker showTime format={DATE_FORMAT} placeholder="No due date" className="w-full" />
       </Form.Item>
 
-      <Form.Item label="Closes" className="mb-0">
+      <Form.Item
+        label="Closes"
+        className="mb-0"
+        validateStatus={closesError ? 'error' : undefined}
+        help={closesError ?? undefined}
+      >
         <div className="flex gap-2">
           <Form.Item name={['assignment', 'closesAt']} noStyle>
             <DatePicker
@@ -246,6 +323,8 @@ export const EditableAssignmentPanel = ({
               format={DATE_FORMAT}
               placeholder="Never"
               className="min-w-0 flex-1"
+              status={closesError ? 'error' : undefined}
+              data-testid="quiz-closes-at"
             />
           </Form.Item>
           <Button
@@ -274,6 +353,7 @@ export const EditableAssignmentPanel = ({
           moduleTitle,
           hasDueDate: Boolean(dueDate),
           weight,
+          releaseAt,
         })}
       />
     </section>
@@ -290,7 +370,7 @@ export const ReadOnlyAssignmentPanel = ({ data }: { data: AssignmentPanelData })
     ['Opens', formatDate(data.releaseAt, 'When published')],
     ['Due', formatDate(data.dueDate, 'No due date')],
     ['Closes', formatDate(data.closesAt, 'Never')],
-    ['Weight', String(data.weight)],
+    ['Weight', `${data.weight}%`],
     ['Published', data.isPublished ? 'Yes' : 'No'],
   ];
   return (
@@ -299,7 +379,7 @@ export const ReadOnlyAssignmentPanel = ({ data }: { data: AssignmentPanelData })
         <h2 className="m-0 text-[15px] font-semibold text-gray-900 dark:text-gray-100">
           Assignment
         </h2>
-        <StatusPill status={panelStatus(data.isPublished, data.closesAt)} />
+        <StatusPill status={panelStatus(data.isPublished, data.closesAt, data.releaseAt)} />
       </div>
       {!data.moduleId && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-200">
@@ -320,6 +400,7 @@ export const ReadOnlyAssignmentPanel = ({ data }: { data: AssignmentPanelData })
           moduleTitle: data.moduleTitle,
           hasDueDate: Boolean(data.dueDate),
           weight: data.weight,
+          releaseAt: data.releaseAt,
         })}
       />
     </section>
