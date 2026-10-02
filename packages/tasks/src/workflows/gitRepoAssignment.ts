@@ -3,6 +3,7 @@ import { ClassmojiService, HelperService, getGitProvider } from '@classmoji/serv
 import type { MoveGraderSlotPayload } from '@classmoji/services';
 import { titleToIdentifier } from '@classmoji/utils';
 import { createRepositoriesTask } from './gitRepo.ts';
+import { ensureGitInstallation, GitAppNotInstalledError } from '../helpers/gitInstallation.ts';
 import { nanoid } from 'nanoid';
 import dayjs from 'dayjs';
 
@@ -542,6 +543,40 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
 
       logger.info('Found assignments to release', { count: assignmentsToRelease.length });
 
+      // One installation check per Github org per run. Without it an org whose
+      // app was uninstalled spawned one failing create_git_repos run per
+      // unreleased repository, every night, all with the same error.
+      const installationChecks = new Map<string, Promise<GitOrganizationLike | null>>();
+      const checkInstallation = (
+        classroom: ClassroomRecord
+      ): Promise<GitOrganizationLike | null> => {
+        const gitOrg = classroom.git_organization;
+        const key = (gitOrg as { id?: string }).id ?? gitOrg.login ?? classroom.id;
+        let check = installationChecks.get(key);
+        if (!check) {
+          check = ensureGitInstallation(gitOrg).catch((error: unknown) => {
+            const message = getErrorMessage(error);
+            if (error instanceof GitAppNotInstalledError) {
+              logger.error('Skipping assignment release: Github App not installed', {
+                org: gitOrg.login,
+                classroomSlug: classroom.slug,
+                status: error.status,
+                message,
+              });
+            } else {
+              logger.warn('Skipping assignment release: installation check failed', {
+                org: gitOrg.login,
+                classroomSlug: classroom.slug,
+                message,
+              });
+            }
+            return null;
+          });
+          installationChecks.set(key, check);
+        }
+        return check;
+      };
+
       const moduleGroups: Record<string, ReleaseAssignmentRecord[]> = {};
       for (const assignment of assignmentsToRelease) {
         if (!moduleGroups[assignment.repository_id]) {
@@ -554,7 +589,8 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
         const moduleAssignments = moduleGroups[repositoryId];
         const repository = moduleAssignments[0].repository;
         const classroom = repository.classroom;
-        const gitOrg = classroom.git_organization;
+        const gitOrg = await checkInstallation(classroom);
+        if (!gitOrg) continue;
 
         let logins: string[] = [];
 

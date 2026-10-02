@@ -1,4 +1,4 @@
-import { task, logger } from '@trigger.dev/sdk';
+import { AbortTaskRunError, task, logger } from '@trigger.dev/sdk';
 import dayjs from 'dayjs';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore.js';
 dayjs.extend(isSameOrBefore);
@@ -14,6 +14,7 @@ import { createGithubRepositoryAssignmentTask } from './gitRepoAssignment.ts';
 import { updateRepository, type UpdateRepositoryPayload } from '../helpers/updateRepository.ts';
 import { createRepository, type CreateRepositoryPayload } from '../helpers/createRepository.ts';
 import { provisionAutogradeWorkflowForRepo } from './autograde.ts';
+import { ensureGitInstallation, GitAppNotInstalledError } from '../helpers/gitInstallation.ts';
 
 type GitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string | null };
 type StrictGitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string };
@@ -154,11 +155,31 @@ export const createRepositoriesTask = task({
     const uniqueLogins = [...new Set(logins.map(login => login.trim()).filter(Boolean))];
 
     const repository = await ClassmojiService.repository.findBySlugAndTitle(org, assignmentTitle);
-    const classroom = await ClassmojiService.classroom.findBySlug(org);
+    const loadedClassroom = await ClassmojiService.classroom.findBySlug(org);
 
-    if (!repository || !classroom || !classroom.git_organization.login) {
+    if (!repository || !loadedClassroom || !loadedClassroom.git_organization.login) {
       throw new Error(`Unable to load repository or classroom for ${org}/${assignmentTitle}`);
     }
+
+    // A Github org whose installation id went NULL is repaired here, ONCE, before
+    // anything builds a provider or fans out per-student runs. When the app is
+    // genuinely gone the run ends with one actionable error instead of N child
+    // runs all failing on "GitHub provider requires github_installation_id".
+    let gitOrganization: typeof loadedClassroom.git_organization;
+    try {
+      gitOrganization = await ensureGitInstallation(loadedClassroom.git_organization);
+    } catch (error: unknown) {
+      if (error instanceof GitAppNotInstalledError) {
+        logger.error('Github App installation missing; no repositories created', {
+          classroomSlug: org,
+          repositoryTitle: assignmentTitle,
+          status: error.status,
+        });
+        throw new AbortTaskRunError(error.message);
+      }
+      throw error;
+    }
+    const classroom = { ...loadedClassroom, git_organization: gitOrganization };
 
     // A template stored without an owner belongs to the classroom's own org,
     // which is where templates live. Splitting blindly used to leave the repo
