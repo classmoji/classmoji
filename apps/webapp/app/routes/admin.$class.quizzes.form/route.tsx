@@ -565,14 +565,28 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
               >
                 {/* Two columns on a wide screen (the quiz, then its Assignment
                     panel, as on board I1); one when the AI assistant shares
-                    the drawer or the screen is narrow. */}
+                    the drawer or the screen is narrow, the panel on top. The
+                    panel comes first in the page, so the tab order follows
+                    the narrow layout; on a wide screen it is placed last. */}
                 <div
                   className={
                     showAssistant
-                      ? 'flex flex-col-reverse gap-6'
-                      : 'flex flex-col-reverse gap-6 lg:grid lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start'
+                      ? 'flex flex-col gap-6'
+                      : 'flex flex-col gap-6 lg:grid lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start'
                   }
                 >
+                  <div className={showAssistant ? '' : 'lg:order-last lg:sticky lg:top-0'}>
+                    {canAuthor ? (
+                      <EditableAssignmentPanel
+                        modules={modules}
+                        isOwner={isOwner}
+                        classSlug={org}
+                        closesError={closesError}
+                      />
+                    ) : (
+                      <ReadOnlyAssignmentPanel data={assignmentPanel} />
+                    )}
+                  </div>
                   <div className="min-w-0">
                     <Form.Item
                       name="name"
@@ -809,19 +823,6 @@ Weigh understanding over wording; don't penalize minor syntax slips.`}
                         placeholder="Leave empty for defaults, or specify: question style (code-focused, multiple choice, discussion), tone (stricter for exams), prerequisites, special allowances..."
                       />
                     </Form.Item>
-                  </div>
-
-                  <div className={showAssistant ? '' : 'lg:sticky lg:top-0'}>
-                    {canAuthor ? (
-                      <EditableAssignmentPanel
-                        modules={modules}
-                        isOwner={isOwner}
-                        classSlug={org}
-                        closesError={closesError}
-                      />
-                    ) : (
-                      <ReadOnlyAssignmentPanel data={assignmentPanel} />
-                    )}
                   </div>
                 </div>
               </Form>

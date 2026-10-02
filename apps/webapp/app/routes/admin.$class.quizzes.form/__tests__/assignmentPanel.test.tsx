@@ -406,6 +406,16 @@ describe('editing a quiz as the owner or a teacher', () => {
     expect(byTestId('quiz-assignment-status')?.textContent).toMatch(/^Scheduled · /);
     expect(byTestId('quiz-students-see-it-in')).toBeNull();
   });
+
+  it('puts the panel before the quiz fields in the page, and last on a wide screen', async () => {
+    await render({ viewer: OWNER, quiz: formQuiz(), panel: assigned });
+
+    const name = container.querySelector('input#name')!;
+    expect(
+      editablePanel()!.compareDocumentPosition(name) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(editablePanel()!.parentElement!.className).toContain('lg:order-last');
+  });
 });
 
 describe('a class with no modules', () => {
