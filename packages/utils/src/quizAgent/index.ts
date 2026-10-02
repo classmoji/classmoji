@@ -24,7 +24,8 @@ export {
   FALLBACK_MODEL,
   THINKING,
   isAllowedModel,
-  resolveAllowedModel,
+  pickQuizModel,
+  platformDefaultModel,
   type AllowedModel,
-  type ResolvedModel,
+  type QuizModelPick,
 } from '../aiModels.ts';
