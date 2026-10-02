@@ -152,14 +152,24 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
     }
     await repoGit.push('origin', 'main');
 
-    await gitProvider.createPullRequest(
-      gitOrgLogin,
-      repoName,
-      'feedback',
-      'main',
-      'Feedback',
-      FeedbackPRMessage
-    );
+    // The Feedback pull request is where staff comment on the code. Nothing
+    // else depends on it, so a refusal (e.g. Github finding no commits
+    // between the branches) is logged and the student still gets their
+    // repository, rather than the whole creation failing.
+    try {
+      await gitProvider.createPullRequest(
+        gitOrgLogin,
+        repoName,
+        'feedback',
+        'main',
+        'Feedback',
+        FeedbackPRMessage
+      );
+    } catch (error: unknown) {
+      logger.warn(`Could not open the Feedback pull request on ${gitOrgLogin}/${repoName}`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     await repoGit.checkoutLocalBranch('updates');
     await repoGit.push('origin', 'updates', ['--set-upstream']);
