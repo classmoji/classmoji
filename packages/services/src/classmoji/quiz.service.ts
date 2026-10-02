@@ -480,9 +480,14 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
     }
 
     let assignment: QuizAssignmentRow | null = current.assignment;
-    let previous: { student_deadline: Date | null; is_published: boolean } | null = assignment && {
+    let previous: {
+      student_deadline: Date | null;
+      is_published: boolean;
+      release_at: Date | null;
+    } | null = assignment && {
       student_deadline: assignment.student_deadline,
       is_published: assignment.is_published,
+      release_at: assignment.release_at,
     };
 
     // An unassigned quiz saved without a module keeps the old behaviour for
@@ -563,7 +568,11 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
       });
       // Students already saw a published quiz, and its old due date: neither
       // is news.
-      previous = { student_deadline: current.due_date, is_published: wasPublished };
+      previous = {
+        student_deadline: current.due_date,
+        is_published: wasPublished,
+        release_at: null,
+      };
       await mirrorQuizFromAssignment(tx, assignment, now);
     }
 

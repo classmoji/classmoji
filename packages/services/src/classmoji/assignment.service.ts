@@ -425,7 +425,12 @@ export const update = async (id: string, updates: Prisma.AssignmentUpdateInput) 
     await tx.$queryRaw`SELECT id FROM assignments WHERE id = ${id} FOR UPDATE`;
     const previous = await tx.assignment.findUnique({
       where: { id },
-      select: { student_deadline: true, grades_released: true, is_published: true },
+      select: {
+        student_deadline: true,
+        grades_released: true,
+        is_published: true,
+        release_at: true,
+      },
     });
     const updated = await tx.assignment.update({
       where: { id },
@@ -449,6 +454,8 @@ type AssignmentNotificationSnapshot = {
   student_deadline: Date | null;
   grades_released: boolean;
   is_published: boolean;
+  /** Read for a QUIZ row's previous state; absent counts as "open when published". */
+  release_at?: Date | null;
 };
 
 /**
@@ -458,11 +465,13 @@ type AssignmentNotificationSnapshot = {
  *
  * A quiz assignment's due date change notifies nobody where the classroom's
  * quizzes are hidden (`entitlement.quizzesVisible`): no bell row, and so no
- * email, names a quiz there. Nor while the quiz is not open to students (a
- * draft, or before its Opens date): the notice names the quiz to every
- * student. Asked for QUIZ rows only; a failed lookup is caught by `runSafely`
- * and sends nothing. The graded branch needs no check: its recipients are
- * graded repository submissions, which a quiz never has.
+ * email, names a quiz there. Nor unless the quiz was open to students both
+ * before and after the write (published, past its Opens date): the notice
+ * names the quiz to every student, and a quiz that opens with this write
+ * (a draft saved as published with a new Due) is announced by its publish
+ * notice alone. Asked for QUIZ rows only; a failed lookup is caught by
+ * `runSafely` and sends nothing. The graded branch needs no check: its
+ * recipients are graded repository submissions, which a quiz never has.
  *
  * A QUIZ row that goes from unpublished to published tells the class through
  * the quiz publish notice (`notifyQuizPublished`), whichever path published it.
@@ -497,12 +506,21 @@ export const notifyAfterUpdate = async (
       const newDeadline = updated.student_deadline?.toISOString() ?? null;
       const oldDeadline = previous?.student_deadline?.toISOString() ?? null;
       if (newDeadline === oldDeadline) return;
-      if (
-        updated.type === 'QUIZ' &&
-        (!(await entitlementService.quizzesVisible(updated.module.classroom_id)) ||
-          !openToStudents(updated, now, { quizzesVisible: true }))
-      ) {
-        return;
+      if (updated.type === 'QUIZ') {
+        const wasOpen =
+          previous != null &&
+          openToStudents(
+            { type: 'QUIZ', is_published: previous.is_published, release_at: previous.release_at },
+            now,
+            { quizzesVisible: true }
+          );
+        if (
+          !wasOpen ||
+          !openToStudents(updated, now, { quizzesVisible: true }) ||
+          !(await entitlementService.quizzesVisible(updated.module.classroom_id))
+        ) {
+          return;
+        }
       }
       const { studentIds, classroomId } = await notificationService.getStudentsForAssignment(id);
       if (studentIds.length > 0) {
@@ -717,6 +735,7 @@ export const updateInClassroom = async (
       student_deadline: true,
       grades_released: true,
       is_published: true,
+      release_at: true,
       _count: { select: { git_repo_assignments: true } },
     },
   });
@@ -755,7 +774,12 @@ export const updateInClassroom = async (
     await tx.$queryRaw`SELECT id FROM assignments WHERE id = ${id} FOR UPDATE`;
     const before = await tx.assignment.findUnique({
       where: { id },
-      select: { student_deadline: true, grades_released: true, is_published: true },
+      select: {
+        student_deadline: true,
+        grades_released: true,
+        is_published: true,
+        release_at: true,
+      },
     });
     const row = await tx.assignment.update({
       where: { id },

@@ -167,6 +167,37 @@ describe('update — a quiz assignment’s deadline', () => {
     expect(mocks.createNotifications).not.toHaveBeenCalled();
   });
 
+  it('sends no due-date notice for a draft published in the same write with a new Due', async () => {
+    // Students never saw the old date: the publish notice alone announces it.
+    mocks.assignmentFindUnique.mockResolvedValue({
+      student_deadline: OLD,
+      grades_released: false,
+      is_published: false,
+      release_at: null,
+    });
+    mocks.assignmentUpdate.mockResolvedValue(updatedRow('QUIZ'));
+
+    await update('asg-1', { student_deadline: NEW, is_published: true });
+
+    expect(mocks.createNotifications).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'ASSIGNMENT_DUE_DATE_CHANGED' })
+    );
+  });
+
+  it('sends no due-date notice for a quiz that opens with this write', async () => {
+    mocks.assignmentFindUnique.mockResolvedValue({
+      student_deadline: OLD,
+      grades_released: false,
+      is_published: true,
+      release_at: FUTURE,
+    });
+    mocks.assignmentUpdate.mockResolvedValue(updatedRow('QUIZ', { release_at: null }));
+
+    await update('asg-1', { student_deadline: NEW, release_at: null });
+
+    expect(mocks.createNotifications).not.toHaveBeenCalled();
+  });
+
   it('mirrors the row onto its quiz: name, due date, rounded weight, status', async () => {
     mocks.assignmentUpdate.mockResolvedValue(updatedRow('QUIZ'));
 
