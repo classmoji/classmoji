@@ -498,7 +498,7 @@ export interface SeededQuiz {
 export const SEEDED_QUIZ_MODULE_TITLE = 'zz-E2E Quizzes';
 
 /** The classroom's seeded-quiz module, created on first use. */
-async function seededQuizModuleId(classroomId: string): Promise<string> {
+export async function seededQuizModuleId(classroomId: string): Promise<string> {
   const prisma = getTestPrisma();
   const module = await prisma.module.upsert({
     where: { classroom_id_title: { classroom_id: classroomId, title: SEEDED_QUIZ_MODULE_TITLE } },
