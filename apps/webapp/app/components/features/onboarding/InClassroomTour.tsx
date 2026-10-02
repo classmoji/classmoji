@@ -418,7 +418,7 @@ const STUDENT_STEPS: FeatureStep[] = [
     placement: 'bottom',
     title: 'Your progress',
     description:
-      'This bar shows how much of your work is submitted and graded at a glance, and the tabs below switch between current and completed assignments. You submit an assignment by closing its GitHub issue in your repo, which marks it as turned in here automatically.',
+      'This bar shows how much of your work is done at a glance: repository work you have submitted, quizzes you have completed and forms you have filled out. The tabs below switch between what is still to do and what is done.',
   },
   {
     link: '/assignments',
