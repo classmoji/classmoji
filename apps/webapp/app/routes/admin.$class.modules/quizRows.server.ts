@@ -1,6 +1,6 @@
 import { ClassmojiService } from '@classmoji/services';
 import { withHiddenRows } from '@classmoji/utils';
-import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
+import { loadQuizzesVisible, quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 
 /**
  * A module as the staff modules loaders hand it over, without its quiz items
@@ -85,9 +85,13 @@ export const ownsUnlistedAssignments = async (
   return Boolean(module?.assignments.some(a => a.type === 'QUIZ'));
 };
 
-/** Whether this classroom hides quizzes, for `module.deleteById`'s quiz-only case. */
+/**
+ * Whether this classroom hides quizzes, for `module.deleteById`'s quiz-only
+ * case, which deletes quiz assignments. Fails closed: a lookup that fails
+ * throws, so the delete is refused rather than read as "quizzes hidden".
+ */
 export const quizzesHiddenIn = async (classroomId: string): Promise<boolean> =>
-  !(await loadQuizzesVisible(classroomId));
+  !(await quizzesVisibleOrThrow(classroomId));
 
 // `withHiddenRows` puts the rows the page never saw back into an ordering it
 // sent. It lives in @classmoji/utils, shared with the MCP's module_reorder.

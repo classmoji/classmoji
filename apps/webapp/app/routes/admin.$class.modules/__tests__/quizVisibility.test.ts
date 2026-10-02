@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   requireClassroomAdmin: vi.fn(),
   addClassroomAuditLog: vi.fn(),
   loadQuizzesVisible: vi.fn(),
+  quizzesVisibleOrThrow: vi.fn(),
   listModuleContentsForClassroom: vi.fn(),
   listModuleContents: vi.fn(),
   getCandidateContent: vi.fn(),
@@ -50,6 +51,7 @@ vi.mock('~/utils/helpers', () => ({
 }));
 vi.mock('~/utils/classroomProFlag.server', () => ({
   loadQuizzesVisible: (...a: unknown[]) => mocks.loadQuizzesVisible(...a),
+  quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a),
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -160,6 +162,11 @@ beforeEach(() => {
   });
   // Each test that depends on it says which; this is only the default.
   mocks.loadQuizzesVisible.mockResolvedValue(true);
+  // The throwing reading answers as the rendering one does unless a test
+  // makes its lookup fail.
+  mocks.quizzesVisibleOrThrow.mockImplementation((...a: unknown[]) =>
+    mocks.loadQuizzesVisible(...a)
+  );
   mocks.listModuleContentsForClassroom.mockResolvedValue([moduleRow()]);
   mocks.listModuleContents.mockResolvedValue(moduleRow());
   mocks.getCandidateContent.mockResolvedValue({
@@ -289,9 +296,21 @@ describe('Modules action — delete', () => {
     mocks.deleteById.mockResolvedValue({ id: 'mod-3', deleted_quiz_assignment_ids: [] });
 
     expect(await post('delete', { id: 'mod-3' })).toEqual({ success: 'Module deleted' });
-    expect(mocks.loadQuizzesVisible).toHaveBeenCalledWith(CLASSROOM_ID);
+    expect(mocks.quizzesVisibleOrThrow).toHaveBeenCalledWith(CLASSROOM_ID);
     expect(mocks.deleteById).toHaveBeenCalledWith('mod-3', CLASSROOM_ID, { quizzesHidden: true });
     // Nothing went with it, so there is nothing to record.
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('deletes nothing when it cannot tell whether the classroom shows quizzes', async () => {
+    // Fails closed: a failed lookup is never read as "quizzes hidden", which
+    // would take quiz assignments with the module.
+    mocks.quizzesVisibleOrThrow.mockRejectedValue(new Error('db down'));
+
+    const result = await post('delete', { id: 'mod-2' });
+
+    expect(result).toEqual({ error: 'Failed to delete module. Please try again.' });
+    expect(mocks.deleteById).not.toHaveBeenCalled();
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
