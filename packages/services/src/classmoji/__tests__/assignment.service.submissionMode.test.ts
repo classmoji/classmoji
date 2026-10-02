@@ -19,8 +19,10 @@ const mocks = vi.hoisted(() => ({
   quizFindFirst: vi.fn(),
 }));
 
-vi.mock('@classmoji/database', () => ({
-  default: () => ({
+vi.mock('@classmoji/database', () => {
+  const client = {
+    // An interactive transaction runs its callback against the same client.
+    $transaction: (fn: (tx: unknown) => unknown) => fn(client),
     assignment: {
       findFirst: (...a: unknown[]) => mocks.assignmentFindFirst(...a),
       update: (...a: unknown[]) => mocks.assignmentUpdate(...a),
@@ -34,11 +36,13 @@ vi.mock('@classmoji/database', () => ({
     pageLink: { findMany: (...a: unknown[]) => mocks.pageLinkFindMany(...a) },
     slideLink: { findMany: (...a: unknown[]) => mocks.slideLinkFindMany(...a) },
     form: { findFirst: (...a: unknown[]) => mocks.formFindFirst(...a) },
-    quiz: { findFirst: (...a: unknown[]) => mocks.quizFindFirst(...a) },
-  }),
-}));
+    quiz: { findFirst: (...a: unknown[]) => mocks.quizFindFirst(...a), update: vi.fn() },
+  };
+  return { default: () => client };
+});
 
-vi.mock('@classmoji/utils', () => ({
+vi.mock('@classmoji/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/utils')>()),
   titleToIdentifier: (t: string) => t.toLowerCase().replace(/\s+/g, '-'),
 }));
 

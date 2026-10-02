@@ -8,10 +8,21 @@
  * progress on REPO assignments.
  */
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { titleToIdentifier, withLogins } from '@classmoji/utils';
-import type { Prisma } from '@prisma/client';
+import { openToStudents, titleToIdentifier, withLogins } from '@classmoji/utils';
+import type { AssignmentType, Prisma } from '@prisma/client';
 import * as entitlementService from './entitlement.service.ts';
 import * as notificationService from './notification.service.ts';
+import {
+  QUIZ_ASSIGNMENT_CREATE_REFUSAL,
+  QUIZ_ASSIGNMENT_DELETE_REFUSAL,
+  QuizAssignmentError,
+  mirrorQuizFromAssignment,
+  notifyQuizPublished,
+  setQuizAssignmentPublished,
+} from './quizAssignment.service.ts';
+
+/** The Prisma client, or an interactive transaction's client. */
+type Db = Prisma.TransactionClient;
 
 /**
  * Find an Assignment by ID
@@ -308,7 +319,7 @@ export type AssignmentTargetType = 'REPO' | 'QUIZ' | 'FORM';
  * A repository is storage a REPO assignment points at, not a module member,
  * so assignments in different modules may share one repository.
  */
-const validateTarget = async (data: Prisma.AssignmentUncheckedCreateInput) => {
+const validateTarget = async (data: Prisma.AssignmentUncheckedCreateInput, db: Db) => {
   const type = (data.type ?? 'REPO') as AssignmentTargetType;
   const targets = {
     repository_id: data.repository_id ?? null,
@@ -326,7 +337,7 @@ const validateTarget = async (data: Prisma.AssignmentUncheckedCreateInput) => {
     }
   }
   if (type === 'REPO') {
-    const repository = await getPrisma().repository.findUnique({
+    const repository = await db.repository.findUnique({
       where: { id: targets.repository_id! },
       select: { id: true },
     });
@@ -335,9 +346,13 @@ const validateTarget = async (data: Prisma.AssignmentUncheckedCreateInput) => {
   return type;
 };
 
-/** Where an assignment lands when nothing says otherwise: after the last one. */
-const nextPositionInModule = async (moduleId: string) => {
-  const last = await getPrisma().assignment.findFirst({
+/**
+ * Where an assignment lands when nothing says otherwise: after the last one.
+ * Takes a transaction's client so a write that creates the assignment with
+ * something else (a quiz) reads the module in the same transaction.
+ */
+export const nextPositionInModule = async (moduleId: string, db: Db = getPrisma()) => {
+  const last = await db.assignment.findFirst({
     where: { module_id: moduleId },
     orderBy: { position: 'desc' },
     select: { position: true },
@@ -345,17 +360,23 @@ const nextPositionInModule = async (moduleId: string) => {
   return last ? last.position + 1 : 0;
 };
 
-export const create = async (data: Prisma.AssignmentUncheckedCreateInput) => {
-  const type = await validateTarget(data);
-  return getPrisma().assignment.create({
+/**
+ * The weight to store. Only a missing weight takes the default: 0 is a real
+ * weight (a practice quiz, an ungraded check-in) and is kept.
+ */
+const weightToStore = (weight: number | undefined | null) => Number(weight ?? 100);
+
+const createWith = async (db: Db, data: Prisma.AssignmentUncheckedCreateInput) => {
+  const type = await validateTarget(data, db);
+  return db.assignment.create({
     data: {
       ...data,
       type,
       slug: titleToIdentifier(data.title),
-      weight: Number(data.weight || 100),
+      weight: weightToStore(data.weight),
       // Position 0 is the top of the module's list, so an assignment that does
       // not name one is appended instead of taking the column default.
-      position: data.position ?? (await nextPositionInModule(data.module_id)),
+      position: data.position ?? (await nextPositionInModule(data.module_id, db)),
     },
     include: {
       module: true,
@@ -365,6 +386,13 @@ export const create = async (data: Prisma.AssignmentUncheckedCreateInput) => {
     },
   });
 };
+
+export const create = async (data: Prisma.AssignmentUncheckedCreateInput) =>
+  createWith(getPrisma(), data);
+
+/** `create` inside the caller's transaction (the quiz service creates a quiz and its assignment together). */
+export const createInTx = (tx: Db, data: Prisma.AssignmentUncheckedCreateInput) =>
+  createWith(tx, data);
 
 /**
  * Create multiple Assignments
@@ -376,7 +404,7 @@ export const createMany = async (assignments: Prisma.AssignmentUncheckedCreateIn
     data: assignments.map(a => ({
       ...a,
       slug: titleToIdentifier(a.title),
-      weight: Number(a.weight || 100),
+      weight: weightToStore(a.weight),
     })),
   });
 };
@@ -388,26 +416,36 @@ export const createMany = async (assignments: Prisma.AssignmentUncheckedCreateIn
  * @returns {Promise<Object>}
  */
 export const update = async (id: string, updates: Prisma.AssignmentUpdateInput) => {
-  const previous = await getPrisma().assignment.findUnique({
-    where: { id },
-    select: { student_deadline: true, grades_released: true },
+  // One transaction: a QUIZ row's quiz is mirrored from the row as written
+  // (read back, so any update shape the caller used is covered).
+  const { previous, updated } = await getPrisma().$transaction(async tx => {
+    const previous = await tx.assignment.findUnique({
+      where: { id },
+      select: { student_deadline: true, grades_released: true, is_published: true },
+    });
+    const updated = await tx.assignment.update({
+      where: { id },
+      data: updates,
+      include: {
+        module: true,
+        repository: true,
+      },
+    });
+    if (updated.type === 'QUIZ') await mirrorQuizFromAssignment(tx, updated);
+    return { previous, updated };
   });
 
-  const updated = await getPrisma().assignment.update({
-    where: { id },
-    data: updates,
-    include: {
-      module: true,
-      repository: true,
-    },
-  });
-
+  // Notifications only once the write has committed.
   await notifyAfterUpdate(id, updates, previous, updated);
 
   return updated;
 };
 
-type AssignmentNotificationSnapshot = { student_deadline: Date | null; grades_released: boolean };
+type AssignmentNotificationSnapshot = {
+  student_deadline: Date | null;
+  grades_released: boolean;
+  is_published: boolean;
+};
 
 /**
  * Due-date-changed and graded notifications, shared by every update path.
@@ -416,20 +454,40 @@ type AssignmentNotificationSnapshot = { student_deadline: Date | null; grades_re
  *
  * A quiz assignment's due date change notifies nobody where the classroom's
  * quizzes are hidden (`entitlement.quizzesVisible`): no bell row, and so no
- * email, names a quiz there. Asked for QUIZ rows only; a failed lookup is
- * caught by `runSafely` and sends nothing. The graded branch needs no check:
- * its recipients are graded repository submissions, which a quiz never has.
+ * email, names a quiz there. Nor while the quiz is not open to students (a
+ * draft, or before its Opens date): the notice names the quiz to every
+ * student. Asked for QUIZ rows only; a failed lookup is caught by `runSafely`
+ * and sends nothing. The graded branch needs no check: its recipients are
+ * graded repository submissions, which a quiz never has.
+ *
+ * A QUIZ row that goes from unpublished to published tells the class through
+ * the quiz publish notice (`notifyQuizPublished`), whichever path published it.
  */
-const notifyAfterUpdate = async (
+export const notifyAfterUpdate = async (
   id: string,
-  updates: Prisma.AssignmentUpdateInput | Prisma.AssignmentUncheckedUpdateInput,
+  updates:
+    | Prisma.AssignmentUpdateInput
+    | Prisma.AssignmentUncheckedUpdateInput
+    | Record<string, unknown>,
   previous: AssignmentNotificationSnapshot | null,
   updated: AssignmentNotificationSnapshot & {
-    type: string;
+    type: AssignmentType;
     title: string;
+    quiz_id: string | null;
+    module_id: string;
+    release_at: Date | null;
+    closes_at: Date | null;
+    student_deadline: Date | null;
+    weight: number;
+    tokens_per_hour: number;
     module: { classroom_id: string };
   }
 ) => {
+  const now = new Date();
+  if (updated.type === 'QUIZ' && previous && !previous.is_published && updated.is_published) {
+    await notifyQuizPublished({ ...updated, id }, now);
+  }
+
   if ('student_deadline' in updates) {
     await notificationService.runSafely('assignment due date notification', async () => {
       const newDeadline = updated.student_deadline?.toISOString() ?? null;
@@ -437,7 +495,8 @@ const notifyAfterUpdate = async (
       if (newDeadline === oldDeadline) return;
       if (
         updated.type === 'QUIZ' &&
-        !(await entitlementService.quizzesVisible(updated.module.classroom_id))
+        (!(await entitlementService.quizzesVisible(updated.module.classroom_id)) ||
+          !openToStudents(updated, now, { quizzesVisible: true }))
       ) {
         return;
       }
@@ -497,6 +556,8 @@ export interface AssignmentWriteInput {
   student_deadline?: Date | string | null;
   grader_deadline?: Date | string | null;
   release_at?: Date | string | null;
+  /** QUIZ only: from then on no new attempt starts. Null = never closes. */
+  closes_at?: Date | string | null;
   tokens_per_hour?: number;
   grades_released?: boolean;
   /** Pages / slide decks attached to the assignment; replaces the current set when given. */
@@ -509,12 +570,12 @@ export interface AssignmentWriteInput {
  * leaves out are removed; links already present are kept (no churn on the
  * `order` column).
  */
-const syncContentLinks = async (
+export const syncContentLinks = async (
   assignmentId: string,
   pageIds: string[] | undefined,
-  slideIds: string[] | undefined
+  slideIds: string[] | undefined,
+  prisma: Db = getPrisma()
 ) => {
-  const prisma = getPrisma();
   if (pageIds) {
     const current = (
       await prisma.pageLink.findMany({
@@ -569,6 +630,11 @@ const toDate = (value: Date | string | null | undefined): Date | null | undefine
  */
 export const createInClassroom = async (classroomId: string, input: AssignmentWriteInput) => {
   const prisma = getPrisma();
+  // A quiz's assignment is created with the quiz, by the quiz service, so the
+  // two cannot disagree from the start.
+  if (input.type === 'QUIZ') {
+    throw new QuizAssignmentError('quiz_assignment', QUIZ_ASSIGNMENT_CREATE_REFUSAL);
+  }
   // Prisma drops an undefined id from a `where`, which would turn this scoped
   // lookup into "any module in the classroom". Refuse up front.
   if (typeof input.module_id !== 'string' || !input.module_id) {
@@ -627,7 +693,8 @@ export const createInClassroom = async (classroomId: string, input: AssignmentWr
 /**
  * Update an assignment the classroom owns. Type and target are immutable
  * (change the kind by deleting and recreating); everything else is editable.
- * Notifications fire exactly as they do for `update`.
+ * Notifications fire exactly as they do for `update`. On a QUIZ row the quiz
+ * is mirrored in the same transaction (a new title renames the quiz).
  */
 export const updateInClassroom = async (
   id: string,
@@ -645,10 +712,16 @@ export const updateInClassroom = async (
       submission_mode: true,
       student_deadline: true,
       grades_released: true,
+      is_published: true,
       _count: { select: { git_repo_assignments: true } },
     },
   });
   if (!previous) throw new Error('Assignment not found in classroom');
+  // Repositories have no close date (yet): nothing that serves a repo
+  // assignment would read one.
+  if (input.closes_at !== undefined && previous.type === 'REPO') {
+    throw new Error('Repository assignments have no close date');
+  }
 
   const data: Prisma.AssignmentUncheckedUpdateInput = {};
   // The mode may change only while no submission row exists: flipping it
@@ -668,15 +741,20 @@ export const updateInClassroom = async (
   if (input.student_deadline !== undefined) data.student_deadline = toDate(input.student_deadline);
   if (input.grader_deadline !== undefined) data.grader_deadline = toDate(input.grader_deadline);
   if (input.release_at !== undefined) data.release_at = toDate(input.release_at);
+  if (input.closes_at !== undefined) data.closes_at = toDate(input.closes_at);
   if (input.tokens_per_hour !== undefined) data.tokens_per_hour = input.tokens_per_hour;
   if (input.grades_released !== undefined) data.grades_released = input.grades_released;
 
-  const updated = await prisma.assignment.update({
-    where: { id },
-    data,
-    include: { module: true, repository: true, quiz: true, form: true },
+  const updated = await prisma.$transaction(async tx => {
+    const row = await tx.assignment.update({
+      where: { id },
+      data,
+      include: { module: true, repository: true, quiz: true, form: true },
+    });
+    await syncContentLinks(id, input.page_ids, input.slide_ids, tx);
+    if (row.type === 'QUIZ') await mirrorQuizFromAssignment(tx, row);
+    return row;
   });
-  await syncContentLinks(id, input.page_ids, input.slide_ids);
 
   await notifyAfterUpdate(id, data, previous, updated);
 
@@ -695,35 +773,49 @@ export const reorderInModule = async (
   moduleId: string,
   orderedAssignmentIds: string[],
   classroomId: string
-) => {
-  const prisma = getPrisma();
+) =>
+  getPrisma().$transaction(tx =>
+    reorderInModuleTx(tx, moduleId, orderedAssignmentIds, classroomId)
+  );
 
-  const module = await prisma.module.findFirst({
+/** Whether `ordered` names exactly the ids in `existing`, each once. */
+const sameIdSet = (existing: Iterable<string>, ordered: string[]) => {
+  const existingIds = new Set(existing);
+  const orderedIds = new Set(ordered);
+  return (
+    existingIds.size === ordered.length &&
+    orderedIds.size === ordered.length &&
+    ordered.every(id => existingIds.has(id))
+  );
+};
+
+/** `reorderInModule` inside the caller's transaction. */
+export const reorderInModuleTx = async (
+  tx: Db,
+  moduleId: string,
+  orderedAssignmentIds: string[],
+  classroomId: string
+) => {
+  const module = await tx.module.findFirst({
     where: { id: moduleId, classroom_id: classroomId },
     select: { id: true },
   });
   if (!module) throw new Error('Module not found in classroom');
 
-  const existing = await prisma.assignment.findMany({
+  const existing = await tx.assignment.findMany({
     where: { module_id: moduleId },
     select: { id: true },
   });
-  const existingIds = new Set(existing.map(a => a.id));
-  const orderedIds = new Set(orderedAssignmentIds);
-  const matches =
-    existingIds.size === orderedAssignmentIds.length &&
-    orderedIds.size === orderedAssignmentIds.length &&
-    orderedAssignmentIds.every(id => existingIds.has(id));
-  if (!matches) throw new Error('Ordered assignment ids must match the module assignments');
+  if (!sameIdSet(existing.map(a => a.id), orderedAssignmentIds)) {
+    throw new Error('Ordered assignment ids must match the module assignments');
+  }
 
-  await prisma.$transaction(
-    orderedAssignmentIds.map((id, index) =>
-      prisma.assignment.update({
-        where: { id, module_id: moduleId },
-        data: { position: index },
-      })
-    )
-  );
+  for (const [index, id] of orderedAssignmentIds.entries()) {
+    await tx.assignment.update({
+      where: { id, module_id: moduleId },
+      data: { position: index },
+    });
+  }
 };
 
 /**
@@ -741,42 +833,70 @@ export const moveToModule = async (
   toModuleId: string,
   orderedAssignmentIds: string[],
   classroomId: string
-) => {
-  const prisma = getPrisma();
+) =>
+  getPrisma().$transaction(tx =>
+    moveToModuleTx(tx, assignmentId, toModuleId, orderedAssignmentIds, classroomId)
+  );
 
-  const target = await prisma.module.findFirst({
+/**
+ * `moveToModule` inside the caller's transaction. Everything is checked
+ * before anything is written (the target module is in the classroom, the
+ * assignment is, and the ordering names exactly the target's assignments plus
+ * the moved one), then the move, the target's order and the source's
+ * compaction land together. Both module rows are locked in id order, as
+ * `moveToModuleEnd` and `module.deleteById` lock them.
+ */
+export const moveToModuleTx = async (
+  tx: Db,
+  assignmentId: string,
+  toModuleId: string,
+  orderedAssignmentIds: string[],
+  classroomId: string
+) => {
+  const target = await tx.module.findFirst({
     where: { id: toModuleId, classroom_id: classroomId },
     select: { id: true },
   });
   if (!target) throw new Error('Module not found in classroom');
 
-  const assignment = await prisma.assignment.findFirst({
+  const assignment = await tx.assignment.findFirst({
     where: { id: assignmentId, module: { classroom_id: classroomId } },
     select: { id: true, module_id: true },
   });
   if (!assignment) throw new Error('Assignment not found in classroom');
-
   const fromModuleId = assignment.module_id;
+
+  for (const moduleId of [...new Set([fromModuleId, toModuleId])].sort()) {
+    await tx.$queryRaw`SELECT id FROM modules WHERE id = ${moduleId} FOR UPDATE`;
+  }
+
+  const targetRows = await tx.assignment.findMany({
+    where: { module_id: toModuleId },
+    select: { id: true },
+  });
+  const expected = new Set(targetRows.map(row => row.id));
+  expected.add(assignmentId);
+  if (!sameIdSet(expected, orderedAssignmentIds)) {
+    throw new Error('Ordered assignment ids must match the module assignments');
+  }
+
   if (fromModuleId !== toModuleId) {
-    await prisma.assignment.update({
+    await tx.assignment.update({
       where: { id: assignmentId },
       data: { module_id: toModuleId },
     });
   }
-
-  await reorderInModule(toModuleId, orderedAssignmentIds, classroomId);
+  await reorderInModuleTx(tx, toModuleId, orderedAssignmentIds, classroomId);
 
   if (fromModuleId !== toModuleId) {
-    const remaining = await prisma.assignment.findMany({
+    const remaining = await tx.assignment.findMany({
       where: { module_id: fromModuleId },
       orderBy: { position: 'asc' },
       select: { id: true },
     });
-    await prisma.$transaction(
-      remaining.map((row, index) =>
-        prisma.assignment.update({ where: { id: row.id }, data: { position: index } })
-      )
-    );
+    for (const [index, row] of remaining.entries()) {
+      await tx.assignment.update({ where: { id: row.id }, data: { position: index } });
+    }
   }
 };
 
@@ -807,73 +927,97 @@ export const moveToModuleEnd = async (
   assignmentId: string,
   toModuleId: string,
   classroomId: string
+): Promise<{ moved: boolean; fromModuleId: string }> =>
+  getPrisma().$transaction(tx => moveToModuleEndTx(tx, assignmentId, toModuleId, classroomId));
+
+/**
+ * `moveToModuleEnd` inside the caller's transaction: the quiz form moves a
+ * quiz's assignment with the rest of the quiz save, so a refused move rolls
+ * the whole save back.
+ */
+export const moveToModuleEndTx = async (
+  tx: Db,
+  assignmentId: string,
+  toModuleId: string,
+  classroomId: string
 ): Promise<{ moved: boolean; fromModuleId: string }> => {
-  return getPrisma().$transaction(async tx => {
-    const target = await tx.module.findFirst({
-      where: { id: toModuleId, classroom_id: classroomId },
-      select: { id: true },
-    });
-    if (!target) throw new Error('Module not found in classroom');
-
-    const scoped = { id: assignmentId, module: { classroom_id: classroomId } };
-    const assignment = await tx.assignment.findFirst({
-      where: scoped,
-      select: { module_id: true },
-    });
-    if (!assignment) throw new Error('Assignment not found in classroom');
-
-    const fromModuleId = assignment.module_id;
-    if (fromModuleId === toModuleId) return { moved: false, fromModuleId };
-
-    // Module rows are the lock, taken in id order so two moves in opposite
-    // directions cannot deadlock. The assignment row itself is not locked
-    // first: a concurrent move renumbering it would wait on that lock while
-    // holding the module one.
-    for (const moduleId of [fromModuleId, toModuleId].sort()) {
-      await tx.$queryRaw`SELECT id FROM modules WHERE id = ${moduleId} FOR UPDATE`;
-    }
-
-    // Read again under the lock. The target may have been deleted while this
-    // move waited (module.deleteById holds the same lock), and another move of
-    // this same assignment may have finished.
-    const targetNow = await tx.module.findUnique({
-      where: { id: toModuleId },
-      select: { id: true },
-    });
-    if (!targetNow) throw new Error('Module not found in classroom');
-    const current = await tx.assignment.findFirst({ where: scoped, select: { module_id: true } });
-    if (!current) throw new Error('Assignment not found in classroom');
-    if (current.module_id === toModuleId) return { moved: false, fromModuleId };
-    if (current.module_id !== fromModuleId) throw new Error('Assignment moved concurrently');
-
-    const renumber = async (moduleId: string) => {
-      const rows = await tx.assignment.findMany({
-        where: { module_id: moduleId },
-        orderBy: MODULE_ORDER,
-        select: { id: true, position: true },
-      });
-      for (const [index, row] of rows.entries()) {
-        if (row.position !== index) {
-          await tx.assignment.update({ where: { id: row.id }, data: { position: index } });
-        }
-      }
-      return rows.length;
-    };
-
-    const end = await renumber(toModuleId);
-    await tx.assignment.update({
-      where: { id: assignmentId },
-      data: { module_id: toModuleId, position: end },
-    });
-    await renumber(fromModuleId);
-
-    return { moved: true, fromModuleId };
+  const target = await tx.module.findFirst({
+    where: { id: toModuleId, classroom_id: classroomId },
+    select: { id: true },
   });
+  if (!target) throw new Error('Module not found in classroom');
+
+  const scoped = { id: assignmentId, module: { classroom_id: classroomId } };
+  const assignment = await tx.assignment.findFirst({
+    where: scoped,
+    select: { module_id: true },
+  });
+  if (!assignment) throw new Error('Assignment not found in classroom');
+
+  const fromModuleId = assignment.module_id;
+  if (fromModuleId === toModuleId) return { moved: false, fromModuleId };
+
+  // Module rows are the lock, taken in id order so two moves in opposite
+  // directions cannot deadlock. The assignment row itself is not locked
+  // first: a concurrent move renumbering it would wait on that lock while
+  // holding the module one.
+  for (const moduleId of [fromModuleId, toModuleId].sort()) {
+    await tx.$queryRaw`SELECT id FROM modules WHERE id = ${moduleId} FOR UPDATE`;
+  }
+
+  // Read again under the lock. The target may have been deleted while this
+  // move waited (module.deleteById holds the same lock), and another move of
+  // this same assignment may have finished.
+  const targetNow = await tx.module.findUnique({
+    where: { id: toModuleId },
+    select: { id: true },
+  });
+  if (!targetNow) throw new Error('Module not found in classroom');
+  const current = await tx.assignment.findFirst({ where: scoped, select: { module_id: true } });
+  if (!current) throw new Error('Assignment not found in classroom');
+  if (current.module_id === toModuleId) return { moved: false, fromModuleId };
+  if (current.module_id !== fromModuleId) throw new Error('Assignment moved concurrently');
+
+  const renumber = async (moduleId: string) => {
+    const rows = await tx.assignment.findMany({
+      where: { module_id: moduleId },
+      orderBy: MODULE_ORDER,
+      select: { id: true, position: true },
+    });
+    for (const [index, row] of rows.entries()) {
+      if (row.position !== index) {
+        await tx.assignment.update({ where: { id: row.id }, data: { position: index } });
+      }
+    }
+    return rows.length;
+  };
+
+  const end = await renumber(toModuleId);
+  await tx.assignment.update({
+    where: { id: assignmentId },
+    data: { module_id: toModuleId, position: end },
+  });
+  await renumber(fromModuleId);
+
+  return { moved: true, fromModuleId };
+};
+
+/**
+ * A quiz's assignment is not deleted on its own: deleting the quiz removes
+ * it, and moving the quiz to another module moves it. (It would leave the
+ * quiz in no module, counting for nothing, without anyone deciding that.)
+ */
+const refuseQuizAssignmentDelete = async (where: Prisma.AssignmentWhereInput) => {
+  const row = await getPrisma().assignment.findFirst({ where, select: { type: true } });
+  if (row?.type === 'QUIZ') {
+    throw new QuizAssignmentError('quiz_assignment', QUIZ_ASSIGNMENT_DELETE_REFUSAL);
+  }
 };
 
 export const deleteInClassroom = async (id: string, classroomId: string) => {
+  await refuseQuizAssignmentDelete({ id, module: { classroom_id: classroomId } });
   const { count } = await getPrisma().assignment.deleteMany({
-    where: { id, module: { classroom_id: classroomId } },
+    where: { id, module: { classroom_id: classroomId }, type: { not: 'QUIZ' } },
   });
   if (count !== 1) throw new Error('Assignment not found in classroom');
   return { id };
@@ -920,6 +1064,7 @@ const getGradedRecipientsForAssignment = async (assignmentId: string): Promise<s
  * @returns {Promise<Object>}
  */
 export const deleteById = async (id: string) => {
+  await refuseQuizAssignmentDelete({ id });
   return getPrisma().assignment.delete({
     where: { id },
   });
@@ -942,6 +1087,13 @@ export const deleteMany = async (ids: string[]) => {
  * @returns {Promise<Object>}
  */
 export const publish = async (id: string) => {
+  // A quiz's assignment publishes through the one quiz publish function,
+  // which mirrors the quiz and tells the class once.
+  const row = await getPrisma().assignment.findUnique({ where: { id }, select: { type: true } });
+  if (row?.type === 'QUIZ') {
+    await setQuizAssignmentPublished(id, true);
+    return getPrisma().assignment.findUniqueOrThrow({ where: { id } });
+  }
   return getPrisma().assignment.update({
     where: { id },
     data: { is_published: true },

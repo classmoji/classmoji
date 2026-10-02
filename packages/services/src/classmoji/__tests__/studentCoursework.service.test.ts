@@ -191,7 +191,10 @@ describe('listForStudent — which assignments appear', () => {
   it('applies the student-visibility rule', async () => {
     mocks.listForClassroom.mockResolvedValue([
       assignment('q-ok', 'QUIZ'),
-      assignment('q-draft', 'QUIZ', { quiz: { id: 'quiz-q-draft', status: 'DRAFT' } }),
+      assignment('q-draft', 'QUIZ', {
+        is_published: false,
+        quiz: { id: 'quiz-q-draft', status: 'DRAFT' },
+      }),
       assignment('q-later', 'QUIZ', { release_at: at(48) }),
       assignment('f-draft', 'FORM', { form: { id: 'form-f-draft', status: 'DRAFT' } }),
       assignment('r-hidden', 'REPO', { repository: { id: 'repo-x', is_published: false } }),

@@ -11,7 +11,8 @@ const itemFindMany = vi.fn();
 const itemCreate = vi.fn();
 const itemUpdate = vi.fn();
 const itemDeleteMany = vi.fn();
-const assignmentCount = vi.fn();
+const assignmentFindMany = vi.fn();
+const assignmentDeleteMany = vi.fn();
 const queryRaw = vi.fn();
 const transaction = vi.fn();
 
@@ -168,7 +169,7 @@ describe('deleteById', () => {
   const txModuleDelete = vi.fn();
   const tx = {
     $queryRaw: queryRaw,
-    assignment: { count: assignmentCount },
+    assignment: { findMany: assignmentFindMany, deleteMany: assignmentDeleteMany },
     module: { delete: txModuleDelete },
   };
   beforeEach(() => {
@@ -179,18 +180,52 @@ describe('deleteById', () => {
   });
 
   it('refuses a module that owns any assignment, of any kind, and deletes nothing', async () => {
-    // One count over every assignment type: the refusal does not care whether
-    // the page listed them (a classroom without quizzes lists no QUIZ ones).
-    assignmentCount.mockResolvedValue(1);
+    // One read over every assignment type: the refusal does not care whether
+    // the page listed them.
+    for (const type of ['REPO', 'QUIZ', 'FORM']) {
+      assignmentFindMany.mockResolvedValue([{ id: 'a1', type }]);
 
-    await expect(deleteById('mod1', 'class-1')).rejects.toThrow('Module still has assignments');
-    expect(assignmentCount).toHaveBeenCalledWith({ where: { module_id: 'mod1' } });
+      await expect(deleteById('mod1', 'class-1')).rejects.toThrow('Module still has assignments');
+    }
+    expect(assignmentFindMany).toHaveBeenCalledWith({
+      where: { module_id: 'mod1' },
+      select: { id: true, type: true },
+    });
+    expect(assignmentDeleteMany).not.toHaveBeenCalled();
     expect(txModuleDelete).not.toHaveBeenCalled();
     expect(moduleDelete).not.toHaveBeenCalled();
   });
 
+  it('where quizzes are hidden, takes only-quiz assignments with the module and says which', async () => {
+    assignmentFindMany.mockResolvedValue([
+      { id: 'q1', type: 'QUIZ' },
+      { id: 'q2', type: 'QUIZ' },
+    ]);
+
+    const deleted = await deleteById('mod1', 'class-1', { quizzesHidden: true });
+
+    expect(assignmentDeleteMany).toHaveBeenCalledWith({
+      where: { id: { in: ['q1', 'q2'] }, type: 'QUIZ' },
+    });
+    expect(txModuleDelete).toHaveBeenCalledWith({ where: { id: 'mod1' } });
+    expect(deleted.deleted_quiz_assignment_ids).toEqual(['q1', 'q2']);
+  });
+
+  it('where quizzes are hidden, still refuses a module that also owns other assignments', async () => {
+    assignmentFindMany.mockResolvedValue([
+      { id: 'q1', type: 'QUIZ' },
+      { id: 'r1', type: 'REPO' },
+    ]);
+
+    await expect(deleteById('mod1', 'class-1', { quizzesHidden: true })).rejects.toThrow(
+      'Module still has assignments'
+    );
+    expect(assignmentDeleteMany).not.toHaveBeenCalled();
+    expect(txModuleDelete).not.toHaveBeenCalled();
+  });
+
   it('deletes a module with no assignments, leaving its items to the cascade', async () => {
-    assignmentCount.mockResolvedValue(0);
+    assignmentFindMany.mockResolvedValue([]);
 
     await deleteById('mod1', 'class-1');
 
@@ -209,7 +244,7 @@ describe('deleteById', () => {
   it('locks the module row before it counts, and counts before it deletes', async () => {
     // The order is the whole point: an assignment moved in at the same moment
     // must be either counted or kept out, never cascade-deleted.
-    assignmentCount.mockResolvedValue(0);
+    assignmentFindMany.mockResolvedValue([]);
 
     await deleteById('mod1', 'class-1');
 
@@ -219,8 +254,8 @@ describe('deleteById', () => {
     expect(queryRaw.mock.calls[0][1]).toBe('mod1');
     const at = (mock: { mock: { invocationCallOrder: number[] } }) =>
       mock.mock.invocationCallOrder[0];
-    expect(at(queryRaw)).toBeLessThan(at(assignmentCount));
-    expect(at(assignmentCount)).toBeLessThan(at(txModuleDelete));
+    expect(at(queryRaw)).toBeLessThan(at(assignmentFindMany));
+    expect(at(assignmentFindMany)).toBeLessThan(at(txModuleDelete));
   });
 
   it('reports a module another delete removed while this one waited for the row', async () => {
@@ -229,7 +264,7 @@ describe('deleteById', () => {
     queryRaw.mockResolvedValue([]);
 
     await expect(deleteById('mod1', 'class-1')).rejects.toThrow('Module not found in classroom');
-    expect(assignmentCount).not.toHaveBeenCalled();
+    expect(assignmentFindMany).not.toHaveBeenCalled();
     expect(txModuleDelete).not.toHaveBeenCalled();
   });
 
@@ -247,11 +282,16 @@ describe('addItem', () => {
     itemFindFirst.mockResolvedValue(null);
     itemCreate.mockResolvedValue({ id: 'mi1' });
 
-    await addItem('mod1', 'QUIZ', 'quiz1');
+    await addItem('mod1', 'SLIDE', 'slide1');
 
     expect(itemCreate).toHaveBeenCalledWith({
-      data: { module_id: 'mod1', item_type: 'QUIZ', position: 0, quiz_id: 'quiz1' },
+      data: { module_id: 'mod1', item_type: 'SLIDE', position: 0, slide_id: 'slide1' },
     });
+  });
+
+  it('refuses QUIZ: a quiz is placed in a module by its assignment', async () => {
+    await expect(addItem('mod1', 'QUIZ', 'quiz1')).rejects.toThrow('from the quiz form');
+    expect(itemCreate).not.toHaveBeenCalled();
   });
 
   it('refuses REPOSITORY: repositories are attached to assignments, not modules', async () => {
@@ -280,9 +320,9 @@ describe('reorderItems', () => {
     await reorderItems('mod1', ['b', 'a', 'c']);
 
     expect(itemFindMany).toHaveBeenCalledWith({
-      // Legacy REPOSITORY items are hidden from the content list and keep
+      // Legacy REPOSITORY and QUIZ items are not in the content list and keep
       // their positions; only content items take part in the exact-set check.
-      where: { module_id: 'mod1', item_type: { not: 'REPOSITORY' } },
+      where: { module_id: 'mod1', item_type: { notIn: ['REPOSITORY', 'QUIZ'] } },
       select: { id: true },
     });
     expect(itemUpdate).toHaveBeenNthCalledWith(1, {
@@ -383,8 +423,9 @@ describe('listForClassroom', () => {
         assignment('repo-unpublished-repo', 'REPO', { repository: { is_published: false } }),
         assignment('unpublished', 'FORM', { is_published: false }),
         assignment('quiz', 'QUIZ'),
-        assignment('quiz-closed', 'QUIZ', { quiz: { status: 'CLOSED' } }),
-        assignment('quiz-draft', 'QUIZ', { quiz: { status: 'DRAFT' } }),
+        // Past its close date: visible, it only takes no new attempt.
+        assignment('quiz-closed', 'QUIZ', { closes_at: new Date(Date.now() - 1000) }),
+        assignment('quiz-draft', 'QUIZ', { is_published: false }),
         assignment('quiz-later', 'QUIZ', { release_at: FUTURE }),
         assignment('form', 'FORM'),
         assignment('form-draft', 'FORM', { form: { status: 'DRAFT' } }),

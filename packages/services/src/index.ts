@@ -186,6 +186,16 @@ export {
   QuizStatusChangeError,
   QUIZ_STAFF_ROLES,
 } from './classmoji/quiz.service.ts';
+// A quiz assignment write that cannot be made (no module, a module outside the
+// classroom, a bad value, or an assignment path that cannot create or delete a
+// quiz's assignment). `code` and `status` let routes and MCP tools answer it.
+export {
+  QuizAssignmentError,
+  MODULE_REQUIRED_MESSAGE,
+  QUIZ_ASSIGNMENT_CREATE_REFUSAL,
+  QUIZ_ASSIGNMENT_DELETE_REFUSAL,
+} from './classmoji/quizAssignment.service.ts';
+export type { QuizAssignmentErrorCode } from './classmoji/quizAssignment.service.ts';
 // Quiz source material: the linked pages and decks a quiz is about. The
 // ai-agent reads them through `ClassmojiService.quizSourceMaterial.load`; the
 // flat names are for callers that want the functions and types directly.

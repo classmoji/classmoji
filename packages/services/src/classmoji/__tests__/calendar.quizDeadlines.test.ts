@@ -16,8 +16,9 @@
  *
  * Past the quiz gate, the student view (and the ICS feed, which reads it)
  * applies the one student-visibility rule, `openToStudents`: a quiz deadline
- * whose quiz is a DRAFT, or a quiz or form deadline before its `release_at`,
- * is left out. The staff view keeps every deadline and flags those.
+ * whose assignment is unpublished (a draft quiz), or a quiz or form deadline
+ * before its `release_at`, is left out. The staff view keeps every deadline
+ * and flags those.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -134,7 +135,11 @@ describe('getDeadlinesForRange — the student-visibility rule', () => {
   const FUTURE = new Date(Date.now() + 7 * 86_400_000);
   const PAST = new Date(Date.now() - 7 * 86_400_000);
 
-  const DRAFT_QUIZ = row('a-draft-quiz', 'QUIZ', 9, { quiz: { status: 'DRAFT' } });
+  // A draft quiz: its assignment is unpublished (the quiz's status mirrors it).
+  const DRAFT_QUIZ = row('a-draft-quiz', 'QUIZ', 9, {
+    is_published: false,
+    quiz: { status: 'DRAFT' },
+  });
   const LATER_QUIZ = row('a-later-quiz', 'QUIZ', 10, { release_at: FUTURE });
   const OPENED_QUIZ = row('a-opened-quiz', 'QUIZ', 11, { release_at: PAST });
   const CLOSED_QUIZ = row('a-closed-quiz', 'QUIZ', 12, { quiz: { status: 'CLOSED' } });
@@ -318,7 +323,7 @@ describe('getClassroomCalendar — event links to quiz assignments', () => {
     const future = new Date(Date.now() + 7 * 86_400_000);
     const links = () => [
       link('a-quiz', 'QUIZ'),
-      link('a-draft', 'QUIZ', true, { quiz: { status: 'DRAFT' } }),
+      link('a-draft', 'QUIZ', true, { is_published: false, quiz: { status: 'DRAFT' } }),
       link('a-later', 'QUIZ', false, { release_at: future }),
     ];
 
