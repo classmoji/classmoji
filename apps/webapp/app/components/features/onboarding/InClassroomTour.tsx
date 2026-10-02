@@ -410,7 +410,7 @@ const STUDENT_STEPS: FeatureStep[] = [
     link: '/assignments',
     title: 'Assignments',
     description:
-      'This page lists all of your assignments across every repository in one place. Each assignment is a GitHub issue in your repo, with a due date and its current status, so you can see everything you owe without opening each repo separately.',
+      'This page lists all of your assignments in one place: repository work, quizzes and forms, each with its due date and its current status, so you can see everything you owe without opening each module separately. A quiz opens its quiz page; a form opens the form.',
   },
   {
     link: '/assignments',
