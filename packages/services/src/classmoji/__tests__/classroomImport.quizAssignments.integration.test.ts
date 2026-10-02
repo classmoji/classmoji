@@ -374,6 +374,81 @@ describe.skipIf(!RUN)('classroom import: quizzes as assignments (integration)', 
     await expectMirrorsAgree(target);
   });
 
+  it('copies two quizzes of the same name in one module as two quizzes', async () => {
+    const source = await classroomIn('same-src');
+    const target = await classroomIn('same-dst');
+    const module = await prisma.module.create({
+      data: { classroom_id: source, title: 'Unit 1', is_published: true },
+    });
+    await placedQuiz(source, module.id, 'Check-in', { weight: 1 });
+    await placedQuiz(source, module.id, 'Check-in', { weight: 2, position: 1 });
+
+    const summary = await importModules(
+      source,
+      target,
+      { repositories: {}, quizzes: {}, pages: {}, slides: {} },
+      { quizzesImported: true }
+    );
+
+    expect(summary).toMatchObject({ quizzes: 2, quiz_assignments: 2 });
+    const copies = await prisma.quiz.findMany({
+      where: { classroom_id: target },
+      include: { assignment: true },
+      orderBy: { weight: 'asc' },
+    });
+    expect(copies.map(q => [q.name, q.assignment?.weight])).toEqual([
+      ['Check-in', 1],
+      ['Check-in', 2],
+    ]);
+    await expectMirrorsAgree(target);
+  });
+
+  it('copies a repo-less quiz named like one the repository copy brought as its own quiz', async () => {
+    const source = await classroomIn('twin-src');
+    const target = await classroomIn('twin-dst');
+    const module = await prisma.module.create({
+      data: { classroom_id: source, title: 'Unit 1', is_published: true },
+    });
+    const repo = await prisma.repository.create({
+      data: { classroom_id: source, title: 'lab', template: 'org/lab', type: 'INDIVIDUAL' },
+    });
+    await placedQuiz(source, module.id, 'Twin', { repositoryId: repo.id, weight: 1 });
+    await placedQuiz(source, module.id, 'Twin', { weight: 2, position: 1 });
+
+    const repoCopy = await cloneModulesWithRelations(
+      target,
+      [{ id: repo.id, includeQuizzes: true }],
+      { stripDeadlines: true }
+    );
+    const summary = await importModules(
+      source,
+      target,
+      {
+        repositories: repoCopy.idMaps.repositories,
+        quizzes: repoCopy.idMaps.quizzes,
+        pages: {},
+        slides: {},
+        modules: repoCopy.idMaps.modules,
+      },
+      { quizzesImported: true, declinedQuizRepositoryIds: [] }
+    );
+
+    expect(summary).toMatchObject({ quizzes: 1, quiz_assignments: 1 });
+    const copies = await prisma.quiz.findMany({
+      where: { classroom_id: target },
+      include: { assignment: true },
+      orderBy: { weight: 'asc' },
+    });
+    // The repository's quiz keeps its repository; the repo-less one has none,
+    // and each has its own assignment.
+    expect(copies).toHaveLength(2);
+    expect(copies[0]).toMatchObject({ name: 'Twin', weight: 1 });
+    expect(copies[0].repository_id).not.toBeNull();
+    expect(copies[1]).toMatchObject({ name: 'Twin', weight: 2, repository_id: null });
+    expect(copies.map(q => q.assignment?.weight)).toEqual([1, 2]);
+    await expectMirrorsAgree(target);
+  });
+
   it('copies no quiz where the new classroom shows none', async () => {
     const source = await classroomIn('none-src');
     const target = await classroomIn('none-dst');

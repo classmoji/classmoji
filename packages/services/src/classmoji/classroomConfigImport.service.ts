@@ -619,12 +619,20 @@ export const importModules = async (
           : null;
         if (!target) {
           // A retry after this quiz was copied but before its id was saved: its
-          // assignment (written with it) is in the target module by name.
+          // assignment (written with it) is in the target module by name. A
+          // copy some other source quiz already maps to is that quiz's, never
+          // this one's: two quizzes may share a name in one module, and a
+          // repo-less quiz may be named like one the repository copy brought.
+          const claimed = [
+            ...Object.values(idMaps.quizzes),
+            ...Object.values(summary.id_maps.quizzes),
+          ];
           target = await client.quiz.findFirst({
             where: {
               classroom_id: targetClassroomId,
               assignment: { module_id: targetModuleId, title: sourceQuiz.name },
               name: sourceQuiz.name,
+              ...(claimed.length > 0 ? { id: { notIn: claimed } } : {}),
             },
             select: { id: true, name: true },
           });
