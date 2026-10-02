@@ -665,28 +665,35 @@ describe('module_delete', () => {
       });
     });
 
-    it.each([['a quiz assignment beside a listed one', [lab, quizAssignment]]])(
-      'refuses a module held back by %s without naming any',
-      async (_label, assignments) => {
-        mocks.moduleFindById.mockResolvedValue(owning(assignments));
+    it('refuses a module that also owns a listed assignment, naming only that one', async () => {
+      // Moving the listed assignment is all it takes: the hidden quiz one then
+      // goes with the module. Nothing here may say a quiz exists.
+      mocks.moduleFindById.mockResolvedValue(owning([lab, quizAssignment]));
 
-        const error = await refusal();
+      const error = await refusal();
 
-        // The Modules page's own line: moving the listed assignments could never
-        // unblock it, and nothing here may say a quiz exists.
-        expect(error.kind).toBe('invalid_params');
-        expect(error.message).toBe('This module can’t be deleted.');
-        // Nothing that reaches the client says why: the web's own bar for this
-        // refusal (quizVisibility.test.ts) is no quiz, no assignment, no "hidden".
-        expect(error.code).toBeUndefined();
-        expect(error.data).toBeUndefined();
-        expect(JSON.stringify({ m: error.message, c: error.code, d: error.data })).not.toMatch(
-          /quiz|assignment|hidden/i
-        );
-        expect(mocks.quizzesVisible).toHaveBeenCalledWith('class-1');
-        expect(mocks.moduleDeleteById).not.toHaveBeenCalled();
-      }
-    );
+      expect(error).toMatchObject({ kind: 'invalid_params', code: 'MODULE_HAS_ASSIGNMENTS' });
+      expect(error.message).toMatch(/still owns 1 assignment\(s\)/);
+      expect(error.data).toEqual({
+        assignments: [{ id: 'asg-lab', title: 'Lab 1', type: 'REPO' }],
+      });
+      expect(JSON.stringify({ m: error.message, d: error.data })).not.toMatch(/quiz|hidden/i);
+      expect(mocks.quizzesVisible).toHaveBeenCalledWith('class-1');
+      expect(mocks.moduleDeleteById).not.toHaveBeenCalled();
+      expect(mocks.auditCreate).not.toHaveBeenCalled();
+    });
+  });
+
+  it('points a listed quiz assignment at quiz_update module_id', async () => {
+    mocks.quizzesVisible.mockResolvedValue(true);
+    mocks.moduleFindById.mockResolvedValue(owning([lab, quizAssignment]));
+
+    const error = await refusal();
+
+    expect(error).toMatchObject({ kind: 'invalid_params', code: 'MODULE_HAS_ASSIGNMENTS' });
+    expect(error.message).toMatch(/still owns 2 assignment\(s\)/);
+    expect(error.message).toMatch(/quiz_update module_id/);
+    expect(mocks.moduleDeleteById).not.toHaveBeenCalled();
   });
 
   it('leaves a legacy QUIZ item out of the count it reports, not out of the audit row', async () => {

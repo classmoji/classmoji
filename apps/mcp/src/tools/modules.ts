@@ -28,10 +28,10 @@
  * only links and go with it. Where the classroom shows no quizzes, its owner
  * cannot see quiz assignments, so a module whose only assignments are quiz
  * ones is deleted with them (module.deleteById's `quizzesHidden`, as the web
- * page does; the quizzes and their attempts stay, in no module) and the audit
- * row names them; a module that also owns listed assignments is refused, and
- * one that owns other unlisted ones is refused without naming them, as the
- * web's "This module can't be deleted." does.
+ * page does; the quizzes and their attempts stay, as drafts in no module) and
+ * the audit row names them. A module that also owns listed assignments is
+ * refused with MODULE_HAS_ASSIGNMENTS naming the listed ones only: once they
+ * are moved, the hidden quiz ones no longer hold it back.
  *
  * module_reorder is the Modules page's three drags in one tool (`kind`): the
  * assignments of a module, the content items of a module, or the modules of
@@ -389,20 +389,19 @@ export const moduleDeleteTool: ToolDefinition<ModuleDeleteArgs> = {
     // web Modules page.
     const onlyHiddenQuizzes = quizzesHidden && listed.length === 0;
 
+    // Reached only while the module owns listed assignments: one held back by
+    // hidden quiz ones alone is deleted above. Only the listed ones are named
+    // and counted (a hidden quiz is never confirmed), and moving them is
+    // enough: the hidden quiz assignments then go with the module.
     const refuseOwned = (): never => {
-      // Held back by assignments this classroom does not list: moving the
-      // listed ones could never unblock it, so say no more than that — the
-      // line the Modules page gives, which offers no Delete for such a module.
-      // No code either: MODULE_HAS_ASSIGNMENTS on a module list_modules shows
-      // as owning none would say what the message does not.
-      if (listed.length < module.assignments.length) {
-        throw new ToolError('invalid_params', 'This module can’t be deleted.');
-      }
+      const quizMove = listed.some(a => a.type === 'QUIZ')
+        ? '; a quiz with quiz_update module_id'
+        : '';
       throw new ToolError(
         'invalid_params',
         `This module still owns ${listed.length} assignment(s), so nothing was deleted. Move ` +
-          'each to another module (assignment_update with module_id), then retry. A REPO ' +
-          'assignment can be deleted instead (assignment_delete).',
+          `each to another module (assignment_update with module_id${quizMove}), then retry. A ` +
+          'REPO assignment can be deleted instead (assignment_delete).',
         'MODULE_HAS_ASSIGNMENTS',
         { assignments: listed.map(a => ({ id: a.id, title: a.title, type: a.type })) }
       );
