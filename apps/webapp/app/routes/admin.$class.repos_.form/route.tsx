@@ -1,5 +1,5 @@
 import { namedAction } from 'remix-utils/named-action';
-import { useNavigate, useParams } from 'react-router';
+import { useLocation, useNavigate, useParams } from 'react-router';
 import type { ShouldRevalidateFunctionArgs } from 'react-router';
 import { IconChevronLeft, IconFolder } from '@tabler/icons-react';
 
@@ -114,8 +114,12 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
   // Repositories are managed on the Repositories page; assignments that
   // submit through them live on the module page.
   const goBack = () => navigate(`/admin/${classSlug}/repos`);
-  // FormModule calls `close` on Discard and after a successful save.
-  const close = () => navigate(-1);
+  const location = useLocation();
+  // FormModule calls `close` on Discard and after a successful save: back to
+  // wherever in the app the form was opened from. Opened directly (a link, a
+  // reload, a new tab), there is no in-app page behind it, and going back
+  // would leave Classmoji, so it lands on the Repositories page.
+  const close = () => (location.key === 'default' ? goBack() : navigate(-1));
 
   return (
     <div className="min-h-full relative">
