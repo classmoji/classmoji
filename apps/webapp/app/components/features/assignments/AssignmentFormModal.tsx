@@ -19,7 +19,11 @@ import { titleToIdentifier } from '@classmoji/utils';
 
 import { type AssignmentRowData } from './AssignmentsTable';
 
-export type AssignmentKind = 'REPO' | 'QUIZ' | 'FORM';
+/**
+ * The kinds this modal creates and edits. Not QUIZ: a quiz and its assignment
+ * are made and edited together in the quiz form.
+ */
+export type AssignmentKind = 'REPO' | 'FORM';
 export type SubmissionMode = 'ISSUE' | 'REPO';
 
 export interface AssignmentFormModalProps {
@@ -37,13 +41,11 @@ export interface AssignmentFormModalProps {
     type?: string | null;
     is_published: boolean;
   }>;
-  quizzes: Array<{ id: string; name: string; status: string }>;
   forms: Array<{ id: string; title: string; status: string }>;
   /** Pages / slide decks the assignment can link as its resources. */
   pages?: Array<{ id: string; title: string | null }>;
   slides?: Array<{ id: string; title: string | null }>;
-  /** Quiz / form ids already bound to another assignment (each may bind once). */
-  boundQuizIds: Set<string>;
+  /** Form ids already bound to another assignment (each may bind once). */
   boundFormIds: Set<string>;
   /** Editing an existing assignment; null creates a new one. */
   assignment: AssignmentRowData | null;
@@ -176,8 +178,8 @@ interface FormValues {
 const toIso = (value: Dayjs | null | undefined) => (value ? value.toISOString() : null);
 
 /**
- * Create / edit one assignment. Pick how students submit (a repository, a
- * quiz, or a form). A repository can be created on the spot from a template,
+ * Create / edit one assignment. Pick how students submit (a repository or a
+ * form; a quiz is made in the quiz form). A repository can be created on the spot from a template,
  * named after the assignment title, or picked from the ones the class already
  * has. Kind and target are fixed once created; everything else is editable.
  * Posts to the class-level assignments action.
@@ -189,11 +191,9 @@ const AssignmentFormModal = ({
   moduleId,
   modules,
   repositories,
-  quizzes,
   forms,
   pages = [],
   slides = [],
-  boundQuizIds,
   boundFormIds,
   assignment,
   presetKind,
@@ -304,7 +304,6 @@ const AssignmentFormModal = ({
       submission_mode: assignment ? nextMode : 'REPO',
       target_id:
         assignment?.repository?.id ??
-        assignment?.quiz?.id ??
         assignment?.form?.id ??
         (nextKind === 'REPO' ? presetRepositoryId : undefined),
       title: assignment?.title ?? '',
@@ -364,10 +363,6 @@ const AssignmentFormModal = ({
               label: r.is_published ? name : `${name} · draft`,
             };
           });
-      case 'QUIZ':
-        return quizzes
-          .filter(q => !boundQuizIds.has(q.id) || q.id === assignment?.quiz?.id)
-          .map(q => ({ value: q.id, label: `${q.name} · ${q.status.toLowerCase()}` }));
       case 'FORM':
         return forms
           .filter(f => !boundFormIds.has(f.id) || f.id === assignment?.form?.id)
@@ -375,7 +370,7 @@ const AssignmentFormModal = ({
       default:
         return [];
     }
-  }, [kind, isTeam, repositories, quizzes, forms, boundQuizIds, boundFormIds, assignment]);
+  }, [kind, isTeam, repositories, forms, boundFormIds, assignment]);
 
   const newRepositoryHref = `/admin/${classSlug}/repos/form`;
   const emptyTargetHint = {
@@ -387,7 +382,6 @@ const AssignmentFormModal = ({
         </a>
       </>
     ),
-    QUIZ: 'No quizzes to bind. Create one on the Quizzes page first.',
     FORM: 'No forms to bind. Create one in the forms app first.',
   }[kind];
 
@@ -427,7 +421,7 @@ const AssignmentFormModal = ({
         payload.max_team_size = values.max_team_size ?? null;
         payload.tag_id = values.team_formation_mode === 'INSTRUCTOR' ? values.tag_id : null;
       }
-      payload.quiz_id = kind === 'QUIZ' ? values.target_id : null;
+      payload.quiz_id = null;
       payload.form_id = kind === 'FORM' ? values.target_id : null;
     }
     fetcher.submit(JSON.stringify(payload), {
@@ -731,7 +725,7 @@ const AssignmentFormModal = ({
         ) : (
           <Form.Item
             name="target_id"
-            label={{ REPO: 'Repository', QUIZ: 'Quiz', FORM: 'Form' }[kind]}
+            label={{ REPO: 'Repository', FORM: 'Form' }[kind]}
             extra={
               kind === 'REPO' && !isEdit
                 ? 'Students who already have a copy of this repository keep it; the assignment is added to it.'

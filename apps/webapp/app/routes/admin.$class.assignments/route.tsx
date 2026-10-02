@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useFetcher, useParams } from 'react-router';
+import { useFetcher, useNavigate, useParams } from 'react-router';
 import { Button, Select } from 'antd';
 import { IconPlus } from '@tabler/icons-react';
 import { namedAction } from 'remix-utils/named-action';
@@ -33,7 +33,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   ]);
 
   // A classroom without quizzes shows no trace of them: its quiz assignments
-  // and the quizzes a new one could bind never leave the loader.
+  // never leave the loader. (A quiz's assignment is made in the quiz form, so
+  // this page binds no quiz.)
   return {
     assignments: quizzesVisible ? assignments : assignments.filter(a => a.type !== 'QUIZ'),
     modules: modules.map(m => ({ id: m.id, title: m.title, slug: m.slug, position: m.position })),
@@ -44,7 +45,6 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       type: r.type,
       is_published: r.is_published,
     })),
-    quizzes: quizzesVisible ? candidates.quizzes : [],
     forms: candidates.forms,
     pages: candidates.pages,
     slides: candidates.slides,
@@ -89,11 +89,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           tag_id,
           ...assignmentData
         } = data;
-        // The page offers no quiz to bind when quizzes are hidden; a crafted
-        // post is refused here. Type is fixed at creation, so update needs no
-        // matching check.
-        if (assignmentData.type === 'QUIZ' && !(await loadQuizzesVisible(classroom.id))) {
-          return { error: "Quizzes aren't available in this class." };
+        // A quiz and its assignment are made together in the quiz form; the
+        // service refuses a QUIZ assignment on its own too. Type is fixed at
+        // creation, so update needs no matching check.
+        if (assignmentData.type === 'QUIZ') {
+          return { error: 'Add a quiz from the quiz form.' };
         }
         // A REPO assignment may bring its own repository: created here from
         // the template, named after the assignment, so each student's copy is
@@ -188,6 +188,10 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         await ClassmojiService.assignment.deleteInClassroom(data.id, classroom.id);
         return { success: 'Assignment deleted' };
       } catch (error: unknown) {
+        // A quiz's assignment goes with the quiz; the refusal says what to do.
+        if ((error as { name?: unknown } | null)?.name === 'QuizAssignmentError') {
+          return { error: (error as Error).message };
+        }
         console.error('[admin.assignments] Assignment delete error:', error);
         return { error: 'Failed to delete assignment. Please try again.' };
       }
@@ -200,7 +204,6 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
     assignments,
     modules,
     repositories,
-    quizzes,
     forms,
     pages,
     slides,
@@ -208,6 +211,7 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
     quizzesVisible,
   } = loaderData;
   const { class: classSlug } = useParams();
+  const navigate = useNavigate();
   const deleteFetcher = useFetcher<{ success?: string; error?: string }>();
 
   const [query, setQuery] = useState('');
@@ -233,7 +237,6 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
     .filter(a => !a.is_extra_credit && a.is_published)
     .reduce((sum, a) => sum + a.weight, 0);
 
-  const boundQuizIds = new Set(rows.map(a => a.quiz?.id).filter(Boolean) as string[]);
   const boundFormIds = new Set(rows.map(a => a.form?.id).filter(Boolean) as string[]);
 
   const openNew = () => {
@@ -241,6 +244,11 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
     setModalOpen(true);
   };
   const openEdit = (a: AssignmentRowData) => {
+    // A quiz's assignment is edited in the quiz form, with the quiz.
+    if (a.type === 'QUIZ') {
+      if (a.quiz) navigate(`/admin/${classSlug}/quizzes/form?quizId=${a.quiz.id}`);
+      return;
+    }
     setEditing(a);
     setModalOpen(true);
   };
@@ -305,11 +313,9 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
         classSlug={classSlug!}
         modules={modules}
         repositories={repositories}
-        quizzes={quizzes}
         forms={forms}
         pages={pages}
         slides={slides}
-        boundQuizIds={boundQuizIds}
         boundFormIds={boundFormIds}
         assignment={editing}
         tags={tags}

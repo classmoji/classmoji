@@ -9,7 +9,7 @@ import { useDragReorder, dragRowClass } from '~/hooks';
 import { ClassmojiService } from '@classmoji/services';
 import type { ModuleItemType } from '@prisma/client';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
-import { assertClassroomMutationAllowed } from '~/utils/helpers';
+import { addClassroomAuditLog, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import ModuleCard, { type ModuleCardData } from '~/components/features/modules/ModuleCard';
 import {
@@ -22,6 +22,7 @@ import {
   fullAssignmentOrder,
   fullItemOrder,
   ownsUnlistedAssignments,
+  quizzesHiddenIn,
 } from './quizRows.server';
 import type { Route } from './+types/route';
 
@@ -62,10 +63,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
     // Team tags, for an instructor-assigned team assignment created from a card.
     tags: tags.map(t => ({ id: t.id, name: t.name })),
-    // A quiz or form binds to at most one assignment in the classroom.
-    boundQuizIds: quizzesVisible
-      ? (allAssignments.map(a => a.quiz_id).filter(Boolean) as string[])
-      : [],
+    // A form binds to at most one assignment in the classroom. (A quiz's
+    // assignment is made with the quiz, in the quiz form.)
     boundFormIds: allAssignments.map(a => a.form_id).filter(Boolean) as string[],
   };
 };
@@ -73,7 +72,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom, membership } = await requireClassroomAdmin(request, classSlug!, {
+  const { classroom, membership, userId } = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'REPOSITORIES',
     action: 'manage_modules',
   });
@@ -123,7 +122,26 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
     async delete() {
       try {
-        await ClassmojiService.module.deleteById(data.id!, classroom.id);
+        // Where quizzes are hidden, a module whose only assignments are quiz
+        // ones goes with them (the quizzes and attempts stay, in no module);
+        // the audit row records which.
+        const deleted = await ClassmojiService.module.deleteById(data.id!, classroom.id, {
+          quizzesHidden: await quizzesHiddenIn(classroom.id),
+        });
+        if (deleted.deleted_quiz_assignment_ids.length > 0) {
+          await addClassroomAuditLog({
+            classroomId: classroom.id,
+            userId,
+            role: membership!.role,
+            action: 'DELETE',
+            resourceType: 'MODULE',
+            resourceId: data.id!,
+            metadata: {
+              tool: 'web:modules.delete',
+              quiz_assignment_ids: deleted.deleted_quiz_assignment_ids,
+            },
+          });
+        }
         return { success: 'Module deleted' };
       } catch (error: unknown) {
         console.error('Module delete error:', error);
@@ -172,10 +190,10 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       }
     },
     async addItem() {
-      // The picker offers no quiz where the classroom shows none; a page loaded
-      // before that changed is refused here.
-      if (data.itemType === 'QUIZ' && !(await loadQuizzesVisible(classroom.id))) {
-        return { error: "Quizzes aren't available in this class." };
+      // A quiz sits in a module through its assignment, set in the quiz form;
+      // a page loaded before that changed is refused here.
+      if (data.itemType === 'QUIZ') {
+        return { error: 'Add a quiz from the quiz form.' };
       }
       try {
         await ClassmojiService.module.addItem(
@@ -287,7 +305,6 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
     candidates,
     repositories,
     slidesUrl,
-    boundQuizIds,
     boundFormIds,
     tags,
     quizzesVisible,
@@ -381,7 +398,6 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
       return next;
     });
 
-  const quizSet = useMemo(() => new Set(boundQuizIds), [boundQuizIds]);
   const formSet = useMemo(() => new Set(boundFormIds), [boundFormIds]);
 
   return (
@@ -420,7 +436,6 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
             onToggle={() => toggle(m.id)}
             candidates={candidates}
             repositories={repositories}
-            boundQuizIds={quizSet}
             boundFormIds={formSet}
             quizzesVisible={quizzesVisible}
             tags={tags}

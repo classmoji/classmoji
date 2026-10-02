@@ -20,11 +20,16 @@ export const withoutQuizRows = <
 
 /**
  * A module as the admin modules loaders hand it over: as stored, or
- * `withoutQuizRows` in a classroom that does not show quizzes. Deleting a
- * module that owns any assignment is refused, so `hasUnlistedAssignments` says
- * when the module owns assignments the page does not list — the page then
- * offers no Delete, since moving the listed ones could never unblock it. It
- * says nothing more: not which rows, what they are or how many.
+ * `withoutQuizRows` in a classroom that does not show quizzes. Legacy QUIZ
+ * items are left out either way: a quiz sits in a module through its
+ * assignment now, and the item ordering ignores them.
+ *
+ * Deleting a module that owns any assignment is refused, except that in a
+ * classroom without quizzes a module whose only assignments are quiz ones is
+ * deleted with them (the owner cannot see them). `hasUnlistedAssignments`
+ * says when the module owns assignments the page does not list besides those
+ * — the page then offers no Delete, since moving the listed ones could never
+ * unblock it. It says nothing more: not which rows, what they are or how many.
  */
 export const forStaffPage = <
   M extends { items: Array<{ item_type: string }>; assignments: Array<{ type: string }> },
@@ -32,11 +37,19 @@ export const forStaffPage = <
   module: M,
   quizzesVisible: boolean
 ): M & { hasUnlistedAssignments: boolean } => {
-  if (quizzesVisible) return { ...module, hasUnlistedAssignments: false };
+  if (quizzesVisible) {
+    return {
+      ...module,
+      items: module.items.filter(item => item.item_type !== 'QUIZ'),
+      hasUnlistedAssignments: false,
+    };
+  }
   const listed = withoutQuizRows(module);
+  const onlyHiddenQuizzes = listed.assignments.length === 0;
   return {
     ...listed,
-    hasUnlistedAssignments: listed.assignments.length < module.assignments.length,
+    hasUnlistedAssignments:
+      !onlyHiddenQuizzes && listed.assignments.length < module.assignments.length,
   };
 };
 
@@ -54,6 +67,10 @@ export const ownsUnlistedAssignments = async (
   return Boolean(module?.assignments.some(a => a.type === 'QUIZ'));
 };
 
+/** Whether this classroom hides quizzes, for `module.deleteById`'s quiz-only case. */
+export const quizzesHiddenIn = async (classroomId: string): Promise<boolean> =>
+  !(await loadQuizzesVisible(classroomId));
+
 // `withHiddenRows` puts the rows the page never saw back into an ordering it
 // sent. It lives in @classmoji/utils, shared with the MCP's module_reorder.
 export { withHiddenRows };
@@ -62,22 +79,16 @@ export { withHiddenRows };
 // one. Without quizzes the page lists no quiz rows, so the list it sends needs
 // the module's hidden quiz rows added back before it reaches them.
 
-/** The full content-item order for `moduleId`, from the order the page sent. */
+/**
+ * The full content-item order for `moduleId`, from the order the page sent.
+ * Legacy QUIZ (and REPOSITORY) items are not in the content list the page
+ * shows or the service orders, so the page's list is already complete.
+ */
 export const fullItemOrder = async (
-  classroomId: string,
-  moduleId: string,
+  _classroomId: string,
+  _moduleId: string,
   orderedItemIds: string[]
-): Promise<string[]> => {
-  if (await loadQuizzesVisible(classroomId)) return orderedItemIds;
-  const module = await ClassmojiService.module.listModuleContents(moduleId, classroomId);
-  if (!module) return orderedItemIds;
-  return withHiddenRows(
-    module.items
-      .filter(item => item.item_type !== 'REPOSITORY')
-      .map(item => ({ id: item.id, hidden: item.item_type === 'QUIZ' })),
-    orderedItemIds
-  );
-};
+): Promise<string[]> => orderedItemIds;
 
 /** The full assignment order for `moduleId`, from the order the page sent. */
 export const fullAssignmentOrder = async (

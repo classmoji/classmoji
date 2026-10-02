@@ -72,14 +72,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       type: r.type,
       is_published: r.is_published,
     })),
-    boundQuizIds: quizzesVisible ? (bound.map(a => a.quiz_id).filter(Boolean) as string[]) : [],
     boundFormIds: bound.map(a => a.form_id).filter(Boolean) as string[],
   };
 };
 
 const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
-  const { module, candidates, repositories, boundQuizIds, boundFormIds, tags, quizzesVisible } =
-    loaderData;
+  const { module, candidates, repositories, boundFormIds, tags, quizzesVisible } = loaderData;
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
 
@@ -176,6 +174,11 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
           classSlug={classSlug!}
           showModuleColumn={false}
           onEdit={a => {
+            // A quiz's assignment is edited in the quiz form, with the quiz.
+            if (a.type === 'QUIZ') {
+              if (a.quiz) navigate(`/admin/${classSlug}/quizzes/form?quizId=${a.quiz.id}`);
+              return;
+            }
             setEditingAssignment(a);
             setAssignmentModalOpen(true);
           }}
@@ -199,8 +202,7 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
           <div className="text-center py-10 text-gray-500">
             <div className="font-medium">No content in this module</div>
             <div className="text-sm">
-              Use “Add item” to place pages, slides
-              {quizzesVisible ? ', quizzes' : ''} or forms in reading order.
+              Use “Add item” to place pages, slides or forms in reading order.
             </div>
           </div>
         ) : (
@@ -312,9 +314,7 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
               description={
                 ownsCoursework
                   ? 'Move or delete its assignments first; a module that still owns coursework cannot be deleted.'
-                  : `This removes the module. Its content items (${
-                      quizzesVisible ? 'pages, quizzes, slides, forms' : 'pages, slides, forms'
-                    }) are kept.`
+                  : 'This removes the module. Its content items (pages, slides, forms) are kept.'
               }
               okText="Delete"
               okButtonProps={{ danger: true, disabled: ownsCoursework }}
@@ -352,11 +352,9 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
         moduleId={module.id}
         modules={[moduleRef]}
         repositories={repositories}
-        quizzes={quizzesVisible ? candidates.quizzes : []}
         forms={candidates.forms}
         pages={candidates.pages}
         slides={candidates.slides}
-        boundQuizIds={new Set(boundQuizIds)}
         boundFormIds={new Set(boundFormIds)}
         assignment={editingAssignment}
         tags={tags}
