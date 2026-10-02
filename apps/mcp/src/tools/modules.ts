@@ -608,12 +608,25 @@ export const moduleReorderTool: ToolDefinition<ModuleReorderArgs> = {
         }
         rows = module.items
           .filter(item => item.item_type !== 'REPOSITORY')
-          .map(item => ({
-            id: item.id,
-            title:
-              item.page?.title ?? item.slide?.title ?? item.quiz?.name ?? item.form?.title ?? null,
-            hidden: quizzesHidden && item.item_type === 'QUIZ',
-          }));
+          .map(item => {
+            const target = item.page ?? item.slide ?? item.quiz ?? item.form ?? null;
+            return {
+              id: item.id,
+              title:
+                item.page?.title ??
+                item.slide?.title ??
+                item.quiz?.name ??
+                item.form?.title ??
+                null,
+              // Hidden from this caller, as list_modules hides it: a quiz item
+              // where quizzes are not shown, or a row whose target is not in
+              // this classroom (the service lists that row too, so it has to
+              // go back in, but nothing here may name it).
+              hidden:
+                (quizzesHidden && item.item_type === 'QUIZ') ||
+                target?.classroom_id !== classroom.classroomId,
+            };
+          });
         apply = full =>
           ClassmojiService.module.reorderItems(module.id, full, classroom.classroomId);
       }
@@ -628,8 +641,13 @@ export const moduleReorderTool: ToolDefinition<ModuleReorderArgs> = {
       if (error instanceof Error) {
         if (error.message === 'Module not found in classroom') throw scopedNotFound('Module');
         // The list changed between the read above and the write (a move, an
-        // add or a delete landed in between): the service refused the stale one.
-        if (error.message.startsWith('Ordered ')) {
+        // add or a delete landed in between). The service refuses a stale list
+        // ('Ordered … must match …'); a row that leaves between ITS read and
+        // its batch makes one update match nothing (P2025), and a batch that
+        // crosses a move's renumbering can be the one Postgres aborts (P2034).
+        // Each rolls the whole batch back.
+        const code = (error as { code?: unknown }).code;
+        if (error.message.startsWith('Ordered ') || code === 'P2025' || code === 'P2034') {
           throw new ToolError(
             'invalid_params',
             'The list changed while the reorder ran, so nothing was reordered. Read ' +
@@ -660,7 +678,10 @@ export const moduleReorderTool: ToolDefinition<ModuleReorderArgs> = {
       success: true,
       kind,
       ...(moduleId ? { module_id: moduleId } : {}),
-      order: ordered.map((id, position) => ({ position, id, title: titles.get(id) ?? null })),
+      // In the new order. No position number: the array is the order, and a
+      // number here would not match list_modules where it lists rows this
+      // list leaves out (legacy items).
+      order: ordered.map(id => ({ id, title: titles.get(id) ?? null })),
     });
   },
 };

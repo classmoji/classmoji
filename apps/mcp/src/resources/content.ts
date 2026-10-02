@@ -165,8 +165,13 @@ interface ModuleRow {
  * `isItemPublished` already hides a DRAFT form from students the same way it
  * hides a draft page — so nothing here has to re-decide visibility. A Form's
  * label lives in `title` (a Quiz is the odd one out with `name`).
+ *
+ * `position` is the item's place in the list as this caller sees it, not the
+ * stored column. The stored numbers run over every row of the module, so where
+ * quiz items are hidden a gap would say one sits there (exactly so after a
+ * reorder, which renumbers 0..n-1 over the full list).
  */
-function moduleItemSummary(item: ModuleItemRow) {
+function moduleItemSummary(item: ModuleItemRow, position: number) {
   const target = item.page ?? item.slide ?? item.quiz ?? item.repository ?? item.form ?? null;
   const title =
     item.page?.title ??
@@ -178,7 +183,7 @@ function moduleItemSummary(item: ModuleItemRow) {
   return {
     id: item.id,
     type: item.item_type,
-    position: item.position,
+    position,
     target_id: target?.id ?? null,
     title,
   };
@@ -283,7 +288,7 @@ export const modulesResource: ResourceDefinition = {
         ...(staff ? { is_published: m.is_published } : {}),
         items: m.items
           .filter(item => !(hideQuizzes && item.item_type === 'QUIZ'))
-          .map(moduleItemSummary),
+          .map((item, index) => moduleItemSummary(item, index)),
         assignments: (m.assignments ?? [])
           .filter(a => !(hideQuizzes && a.type === 'QUIZ'))
           .map(a => moduleAssignmentSummary(a, staff)),

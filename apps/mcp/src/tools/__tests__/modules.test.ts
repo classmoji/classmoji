@@ -760,11 +760,15 @@ describe('module_reorder', () => {
       { id: C, title: 'Team prefs', type: 'FORM' },
     ],
     items: [
-      { id: A, item_type: 'PAGE', page: { title: 'Intro' } },
-      { id: LEGACY, item_type: 'REPOSITORY', repository: { title: 'starterpack' } },
-      { id: Q, item_type: 'QUIZ', quiz: { name: 'Warm-up quiz' } },
-      { id: B, item_type: 'SLIDE', slide: { title: 'Deck' } },
-      { id: C, item_type: 'FORM', form: { title: 'Survey' } },
+      { id: A, item_type: 'PAGE', page: { title: 'Intro', classroom_id: 'class-1' } },
+      {
+        id: LEGACY,
+        item_type: 'REPOSITORY',
+        repository: { title: 'starterpack', classroom_id: 'class-1' },
+      },
+      { id: Q, item_type: 'QUIZ', quiz: { name: 'Warm-up quiz', classroom_id: 'class-1' } },
+      { id: B, item_type: 'SLIDE', slide: { title: 'Deck', classroom_id: 'class-1' } },
+      { id: C, item_type: 'FORM', form: { title: 'Survey', classroom_id: 'class-1' } },
     ],
   };
 
@@ -836,10 +840,10 @@ describe('module_reorder', () => {
         kind: 'ASSIGNMENTS',
         module_id: MODULE_ID,
         order: [
-          { position: 0, id: C, title: 'Team prefs' },
-          { position: 1, id: B, title: 'Lab 2' },
-          { position: 2, id: Q, title: 'Midterm quiz' },
-          { position: 3, id: A, title: 'Lab 1' },
+          { id: C, title: 'Team prefs' },
+          { id: B, title: 'Lab 2' },
+          { id: Q, title: 'Midterm quiz' },
+          { id: A, title: 'Lab 1' },
         ],
       });
     });
@@ -923,11 +927,32 @@ describe('module_reorder', () => {
           [C, A, Q, B],
           'class-1'
         );
-        // Neither the response nor the audit row names the hidden row.
+        // Neither the response nor the audit row names the hidden row, by
+        // title or by id.
         expect(payload.order.map((row: { id: string }) => row.id)).toEqual([C, A, B]);
-        const audit = mocks.auditCreate.mock.calls[0][0] as { data: { ordered_ids: string[] } };
+        const audit = mocks.auditCreate.mock.calls[0][0] as {
+          data: { ordered_ids: string[]; value: string };
+        };
         expect(audit.data.ordered_ids).toEqual([C, A, B]);
-        expect(JSON.stringify(payload).toLowerCase()).not.toContain('quiz');
+        expect(audit.data.value).toBe(`ASSIGNMENTS:${[C, A, B].join(',')}`);
+        for (const text of [JSON.stringify(payload), JSON.stringify(audit.data)]) {
+          expect(text.toLowerCase()).not.toContain('quiz');
+          expect(text).not.toContain(Q);
+        }
+        expect(mocks.quizzesVisible).toHaveBeenCalledWith('class-1');
+        expect(mocks.moduleFindById).toHaveBeenCalledWith(MODULE_ID);
+      });
+
+      it('sees a module that holds only hidden rows as one with nothing to reorder', async () => {
+        mocks.moduleFindById.mockResolvedValue({
+          ...MODULE,
+          assignments: MODULE.assignments.filter(a => a.type === 'QUIZ'),
+        });
+
+        // Whatever is sent is "not in the list"; nothing says a row is there.
+        const error = await refusal(args([STRANGER]));
+        expect(error.data).toEqual({ missing: [], unknown: [STRANGER], duplicated: [] });
+        noWrite();
       });
 
       it('does not count the hidden row as left out', async () => {
@@ -960,15 +985,36 @@ describe('module_reorder', () => {
       expect(mocks.quizzesVisible).not.toHaveBeenCalled();
     });
 
-    it('reports a list that changed during the reorder as a retry, with no audit row', async () => {
-      mocks.assignmentReorderInModule.mockRejectedValue(
-        new Error('Ordered assignment ids must match the module assignments')
-      );
+    it.each([
+      [
+        'the service refusing a stale list',
+        new Error('Ordered assignment ids must match the module assignments'),
+      ],
+      [
+        'a row leaving mid-batch (P2025)',
+        Object.assign(new Error('Record to update not found'), { code: 'P2025' }),
+      ],
+      [
+        'a batch Postgres aborted (P2034)',
+        Object.assign(new Error('write conflict or deadlock'), { code: 'P2034' }),
+      ],
+    ])('reports %s as a retry, with no audit row', async (_label, thrown) => {
+      mocks.assignmentReorderInModule.mockRejectedValue(thrown);
 
       const error = await refusal(args([C, B, Q, A]));
 
       expect(error).toMatchObject({ kind: 'invalid_params', code: 'ORDER_MISMATCH' });
       expect(error.message).toMatch(/changed while the reorder ran/);
+      expect(mocks.auditCreate).not.toHaveBeenCalled();
+    });
+
+    it('gives the uniform not_found when the module vanished before the write', async () => {
+      mocks.assignmentReorderInModule.mockRejectedValue(new Error('Module not found in classroom'));
+
+      expect(await refusal(args([C, B, Q, A]))).toMatchObject({
+        kind: 'not_found',
+        message: 'Module not found in this classroom',
+      });
       expect(mocks.auditCreate).not.toHaveBeenCalled();
     });
 
@@ -989,10 +1035,10 @@ describe('module_reorder', () => {
       expect(mocks.moduleReorderItems).toHaveBeenCalledWith(MODULE_ID, [C, B, A, Q], 'class-1');
       expect(mocks.assignmentReorderInModule).not.toHaveBeenCalled();
       expect(payload.order).toEqual([
-        { position: 0, id: C, title: 'Survey' },
-        { position: 1, id: B, title: 'Deck' },
-        { position: 2, id: A, title: 'Intro' },
-        { position: 3, id: Q, title: 'Warm-up quiz' },
+        { id: C, title: 'Survey' },
+        { id: B, title: 'Deck' },
+        { id: A, title: 'Intro' },
+        { id: Q, title: 'Warm-up quiz' },
       ]);
     });
 
@@ -1010,13 +1056,62 @@ describe('module_reorder', () => {
       expect(mocks.moduleReorderItems).toHaveBeenCalledTimes(1);
     });
 
-    it('puts a hidden quiz item back where it sits', async () => {
+    it('puts a hidden quiz item back where it sits, and names it nowhere', async () => {
       mocks.quizzesVisible.mockResolvedValue(false);
 
-      await run(args([B, C, A]));
+      const payload = parse(await run(args([B, C, A])));
 
       // Q follows A now (the legacy row between them is not in this list).
       expect(mocks.moduleReorderItems).toHaveBeenCalledWith(MODULE_ID, [B, C, A, Q], 'class-1');
+      const audit = mocks.auditCreate.mock.calls[0][0] as { data: unknown };
+      for (const text of [JSON.stringify(payload), JSON.stringify(audit.data)]) {
+        expect(text.toLowerCase()).not.toContain('quiz');
+        expect(text).not.toContain(Q);
+      }
+
+      // And its id is a stranger's, not a row that was "left out".
+      const error = await refusal(args([B, C, A, Q]));
+      expect(error.data).toEqual({ missing: [], unknown: [Q], duplicated: [] });
+    });
+
+    it('treats an item whose target is in another classroom as list_modules does: not there', async () => {
+      // list_modules filters such a row out, so the caller never saw it; the
+      // service still counts it, so it goes back in without being named.
+      mocks.moduleFindById.mockResolvedValue({
+        ...MODULE,
+        items: MODULE.items.map(item =>
+          item.id === B
+            ? { ...item, slide: { title: 'Foreign deck', classroom_id: 'class-2' } }
+            : item
+        ),
+      });
+
+      const payload = parse(await run(args([C, Q, A])));
+
+      expect(mocks.moduleReorderItems).toHaveBeenCalledWith(MODULE_ID, [C, Q, B, A], 'class-1');
+      expect(JSON.stringify(payload)).not.toContain('Foreign deck');
+      const error = await refusal(args([C, A]));
+      expect(JSON.stringify(error.data)).not.toContain('Foreign deck');
+      expect(error.data).toMatchObject({ missing: [{ id: Q, title: 'Warm-up quiz' }] });
+    });
+
+    it.each([
+      ['Ordered item ids must match module items', 'ITEMS', () => mocks.moduleReorderItems],
+      [
+        'Ordered module ids must match the classroom modules',
+        'MODULES',
+        () => mocks.moduleReorderModules,
+      ],
+    ])('translates the service message "%s" into the retry', async (message, kind, mock) => {
+      // The exact strings module.service throws: reworded there, this fails.
+      mock().mockRejectedValue(new Error(message));
+
+      const error = await refusal(
+        kind === 'ITEMS' ? args([A, Q, B, C]) : { kind, ordered_ids: [A, B, C] }
+      );
+
+      expect(error).toMatchObject({ kind: 'invalid_params', code: 'ORDER_MISMATCH' });
+      expect(error.message).toMatch(/changed while the reorder ran/);
     });
   });
 
@@ -1033,9 +1128,9 @@ describe('module_reorder', () => {
         success: true,
         kind: 'MODULES',
         order: [
-          { position: 0, id: C, title: 'Week 3' },
-          { position: 1, id: A, title: 'Week 1' },
-          { position: 2, id: B, title: 'Week 2' },
+          { id: C, title: 'Week 3' },
+          { id: A, title: 'Week 1' },
+          { id: B, title: 'Week 2' },
         ],
       });
       expect(
