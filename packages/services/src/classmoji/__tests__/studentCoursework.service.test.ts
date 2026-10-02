@@ -19,12 +19,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
+    // The published-assignment listing (listPublishedAssignments).
+    assignment: { findMany: (...a: unknown[]) => mocks.listForClassroom(...a) },
     quiz: { findMany: (...a: unknown[]) => mocks.quizFindMany(...a) },
     form: { findMany: (...a: unknown[]) => mocks.formFindMany(...a) },
   }),
-}));
-vi.mock('../assignment.service.ts', () => ({
-  listForClassroom: (...a: unknown[]) => mocks.listForClassroom(...a),
 }));
 vi.mock('../helper.service.ts', () => ({
   findAllAssignmentsForStudent: (...a: unknown[]) => mocks.findAllAssignmentsForStudent(...a),
@@ -150,9 +149,43 @@ beforeEach(() => {
 });
 
 describe('listForStudent — which assignments appear', () => {
-  it('reads the published assignments of the classroom', async () => {
+  it("reads the classroom's published assignments, with only the fields the rows read", async () => {
     await list();
-    expect(mocks.listForClassroom).toHaveBeenCalledWith('class-1', { publishedOnly: true });
+
+    const [query] = mocks.listForClassroom.mock.calls[0];
+    expect(query.where).toEqual({ module: { classroom_id: 'class-1' }, is_published: true });
+    expect(Object.keys(query.select).sort()).toEqual(
+      [
+        'id',
+        'type',
+        'title',
+        'is_published',
+        'is_extra_credit',
+        'release_at',
+        'student_deadline',
+        'quiz_id',
+        'form_id',
+        'module',
+        'repository',
+        'quiz',
+        'form',
+      ].sort()
+    );
+  });
+
+  it('uses the listing a caller already read', async () => {
+    const rows = await listForStudent({
+      classroomId: 'class-1',
+      classroomSlug: 'cs52',
+      userId: 'stu-1',
+      quizzesVisible: true,
+      assignments: [assignment('f-1', 'FORM')] as never,
+      now: NOW,
+    });
+
+    expect(mocks.listForClassroom).not.toHaveBeenCalled();
+    expect(mocks.formFindMany).toHaveBeenCalled();
+    expect(rows).toEqual([]);
   });
 
   it('applies the student-visibility rule', async () => {
@@ -227,6 +260,43 @@ describe('listForStudent — which assignments appear', () => {
     const rows = await list();
 
     expect(rows.map(r => r.assignmentId)).toEqual(['f-1']);
+  });
+
+  it('keeps the repo and form rows when a quiz read fails, and says which read failed', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.listForClassroom.mockResolvedValue([
+      assignment('r-1', 'REPO'),
+      assignment('q-1', 'QUIZ'),
+      assignment('f-1', 'FORM'),
+    ]);
+    mocks.findAllAssignmentsForStudent.mockResolvedValue([submission('ra-1', 'r-1')]);
+    mocks.findForUserByQuizIds.mockRejectedValue(new Error('timeout'));
+    mocks.formFindMany.mockResolvedValue([form('form-f-1')]);
+
+    const rows = await list();
+
+    expect(rows.map(r => r.assignmentId).sort()).toEqual(['f-1', 'r-1']);
+    expect(logged).toHaveBeenCalledWith(
+      '[studentCoursework] quiz lookup failed',
+      { classroomId: 'class-1', userId: 'stu-1' },
+      expect.any(Error)
+    );
+  });
+
+  it('keeps the repo and quiz rows when a form read fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.listForClassroom.mockResolvedValue([
+      assignment('r-1', 'REPO'),
+      assignment('q-1', 'QUIZ'),
+      assignment('f-1', 'FORM'),
+    ]);
+    mocks.findAllAssignmentsForStudent.mockResolvedValue([submission('ra-1', 'r-1')]);
+    mocks.quizFindMany.mockResolvedValue([quiz('quiz-q-1')]);
+    mocks.formFindMany.mockRejectedValue(new Error('timeout'));
+
+    const rows = await list();
+
+    expect(rows.map(r => r.assignmentId).sort()).toEqual(['q-1', 'r-1']);
   });
 });
 

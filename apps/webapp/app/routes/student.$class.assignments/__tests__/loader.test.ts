@@ -8,13 +8,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // degrades to an empty list instead of crashing the deferred render, and the
 // progress counts cover every row.
 const listForStudentMock = vi.fn();
+const listPublishedAssignmentsMock = vi.fn();
 const getBalanceMock = vi.fn();
 const assertAccessMock = vi.fn();
 const loadQuizzesVisibleMock = vi.fn();
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
-    studentCoursework: { listForStudent: (...a: unknown[]) => listForStudentMock(...a) },
+    studentCoursework: {
+      listForStudent: (...a: unknown[]) => listForStudentMock(...a),
+      listPublishedAssignments: (...a: unknown[]) => listPublishedAssignmentsMock(...a),
+    },
     token: { getBalance: (...a: unknown[]) => getBalanceMock(...a) },
   },
 }));
@@ -51,6 +55,8 @@ const row = (assignmentId: string, type: string, done: boolean, status: string |
 
 beforeEach(() => {
   listForStudentMock.mockReset();
+  listPublishedAssignmentsMock.mockReset();
+  listPublishedAssignmentsMock.mockResolvedValue([{ id: 'listed' }]);
   getBalanceMock.mockReset();
   assertAccessMock.mockReset();
   loadQuizzesVisibleMock.mockReset();
@@ -72,12 +78,15 @@ describe('student assignments loader', () => {
     ).data;
 
     expect(loadQuizzesVisibleMock).toHaveBeenCalledWith('class-1');
+    // The listing is read alongside the quiz answer and handed over.
+    expect(listPublishedAssignmentsMock).toHaveBeenCalledWith('class-1');
     expect(listForStudentMock).toHaveBeenCalledWith({
       classroomId: 'class-1',
       classroomSlug: 'test-class',
       userId: 'student-1',
       quizzesVisible: false,
       gitOrgLogin: 'test-org',
+      assignments: [{ id: 'listed' }],
     });
   });
 
@@ -119,7 +128,8 @@ describe('student assignments loader', () => {
     expect(data.counts).toEqual({ completed: 2, current: 0, total: 2 });
   });
 
-  it('resolves to an empty, non-error state when the read rejects', async () => {
+  it('resolves to an empty, non-error state when the read rejects, and logs it', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     listForStudentMock.mockRejectedValue(new Error('connection timeout'));
 
     // The deferred promise must resolve (not reject) so <Await> renders content.
@@ -128,6 +138,12 @@ describe('student assignments loader', () => {
     expect(data.rows).toEqual([]);
     expect(data.counts).toEqual({ completed: 0, current: 0, total: 0 });
     expect(data.classroomTitle).toBe('Test Class');
+    expect(logged).toHaveBeenCalledWith(
+      '[student assignments] coursework read failed',
+      { classroomId: 'class-1', userId: 'student-1' },
+      expect.any(Error)
+    );
+    logged.mockRestore();
   });
 
   it('shows a zero balance when the balance read fails', async () => {

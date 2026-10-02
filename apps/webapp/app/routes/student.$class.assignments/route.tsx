@@ -33,19 +33,32 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const dataPromise = (async (): Promise<AssignmentsData> => {
     const [rows, balance] = await Promise.all([
       // Every assignment the student can see, every type. Where quizzes are
-      // hidden (not Pro, or switched off) no quiz row is built. A failed read
-      // degrades to an empty list rather than failing the deferred render.
-      loadQuizzesVisible(classroom.id)
-        .then(quizzesVisible =>
+      // hidden (not Pro, or switched off) no quiz row is built. The quiz answer
+      // and the assignment listing are read together. A failed read is logged
+      // and degrades to an empty list rather than failing the deferred render
+      // (a failed quiz or form read alone already leaves the other rows).
+      Promise.all([
+        loadQuizzesVisible(classroom.id),
+        ClassmojiService.studentCoursework.listPublishedAssignments(classroom.id),
+      ])
+        .then(([quizzesVisible, assignments]) =>
           ClassmojiService.studentCoursework.listForStudent({
             classroomId: classroom.id,
             classroomSlug: classSlug,
             userId,
             quizzesVisible,
             gitOrgLogin,
+            assignments,
           })
         )
-        .catch((): StudentCourseworkRow[] => []),
+        .catch((error): StudentCourseworkRow[] => {
+          console.error(
+            '[student assignments] coursework read failed',
+            { classroomId: classroom.id, userId },
+            error
+          );
+          return [];
+        }),
       ClassmojiService.token.getBalance(classroom.id, userId).catch(() => 0),
     ]);
 

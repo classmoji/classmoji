@@ -25,7 +25,6 @@
 import getPrisma from '@classmoji/database';
 import { openToStudents, quizStanding, titleToIdentifier } from '@classmoji/utils';
 import { pagesUrl } from '../emails/escape.ts';
-import * as assignmentService from './assignment.service.ts';
 import * as formResponseService from './formResponse.service.ts';
 import * as helperService from './helper.service.ts';
 import * as quizAttemptService from './quizAttempt.service.ts';
@@ -117,6 +116,12 @@ export interface ListForStudentInput {
    * team card), so they are not read twice. Read here when absent.
    */
   repoSubmissions?: RepoSubmission[];
+  /**
+   * The classroom's published assignments (`listPublishedAssignments`), for a
+   * caller that started that read earlier alongside its own. Read here when
+   * absent.
+   */
+  assignments?: CourseworkAssignment[];
   now?: Date;
 }
 
@@ -197,6 +202,44 @@ const compareRows = (a: StudentCourseworkRow, b: StudentCourseworkRow) => {
   return a.title.localeCompare(b.title);
 };
 
+/**
+ * A classroom's published assignments, with the fields the coursework rows and
+ * the visibility rule read and no more (no linked pages or decks, no
+ * submission counts).
+ */
+export const listPublishedAssignments = (classroomId: string) =>
+  getPrisma().assignment.findMany({
+    where: { module: { classroom_id: classroomId }, is_published: true },
+    select: {
+      id: true,
+      type: true,
+      title: true,
+      is_published: true,
+      is_extra_credit: true,
+      release_at: true,
+      student_deadline: true,
+      quiz_id: true,
+      form_id: true,
+      module: { select: { id: true, title: true } },
+      repository: { select: { is_published: true } },
+      quiz: { select: { status: true } },
+      form: { select: { status: true } },
+    },
+  });
+
+export type CourseworkAssignment = Awaited<ReturnType<typeof listPublishedAssignments>>[number];
+
+/**
+ * A join that failed: logged with what it was for, and read as empty, so the
+ * rows of the other types still show.
+ */
+const degraded =
+  <T>(what: string, context: { classroomId: string; userId: string }, empty: T) =>
+  (error: unknown): T => {
+    console.error(`[studentCoursework] ${what} lookup failed`, context, error);
+    return empty;
+  };
+
 export const listForStudent = async ({
   classroomId,
   classroomSlug,
@@ -204,47 +247,55 @@ export const listForStudent = async ({
   quizzesVisible,
   gitOrgLogin = null,
   repoSubmissions: givenSubmissions,
+  assignments: givenAssignments,
   now = new Date(),
 }: ListForStudentInput): Promise<StudentCourseworkRow[]> => {
-  const assignments = (
-    await assignmentService.listForClassroom(classroomId, { publishedOnly: true })
-  ).filter(a => openToStudents(a, now, { quizzesVisible }));
+  const assignments = (givenAssignments ?? (await listPublishedAssignments(classroomId))).filter(
+    a => openToStudents(a, now, { quizzesVisible })
+  );
 
   const quizIds = assignments.flatMap(a => (a.type === 'QUIZ' && a.quiz_id ? [a.quiz_id] : []));
   const formIds = assignments.flatMap(a => (a.type === 'FORM' && a.form_id ? [a.form_id] : []));
   const hasRepos = assignments.some(a => a.type === 'REPO');
+  const context = { classroomId, userId };
 
-  const [repoSubmissions, quizzes, attempts, forms, submittedResponses] = await Promise.all([
+  // One read per type for this student. A type whose read fails shows no rows
+  // (its statuses would be guesses); the other types still show.
+  const [repoSubmissions, quizJoin, formJoin] = await Promise.all([
     givenSubmissions ??
       (hasRepos
-        ? helperService.findAllAssignmentsForStudent(userId, classroomSlug).catch(error => {
-            // The page degrades to its quiz and form rows rather than failing.
-            console.error('[studentCoursework] repo submissions lookup failed', error);
-            return [] as RepoSubmission[];
-          })
+        ? helperService
+            .findAllAssignmentsForStudent(userId, classroomSlug)
+            .catch(degraded('repo submissions', context, [] as RepoSubmission[]))
         : ([] as RepoSubmission[])),
     quizIds.length
-      ? getPrisma().quiz.findMany({
-          where: { id: { in: quizIds } },
-          select: {
-            id: true,
-            name: true,
-            status: true,
-            due_date: true,
-            max_attempts: true,
-            grading_strategy: true,
-          },
-        })
-      : [],
-    quizAttemptService.findForUserByQuizIds(userId, quizIds),
+      ? Promise.all([
+          getPrisma().quiz.findMany({
+            where: { id: { in: quizIds } },
+            select: {
+              id: true,
+              name: true,
+              status: true,
+              due_date: true,
+              max_attempts: true,
+              grading_strategy: true,
+            },
+          }),
+          quizAttemptService.findForUserByQuizIds(userId, quizIds),
+        ]).catch(degraded('quiz', context, null))
+      : null,
     formIds.length
-      ? getPrisma().form.findMany({
-          where: { id: { in: formIds } },
-          select: { id: true, slug: true, access: true, status: true, closes_at: true },
-        })
-      : [],
-    formResponseService.findSubmittedForUserByFormIds(userId, formIds),
+      ? Promise.all([
+          getPrisma().form.findMany({
+            where: { id: { in: formIds } },
+            select: { id: true, slug: true, access: true, status: true, closes_at: true },
+          }),
+          formResponseService.findSubmittedForUserByFormIds(userId, formIds),
+        ]).catch(degraded('form', context, null))
+      : null,
   ]);
+  const [quizzes, attempts] = quizJoin ?? [[], []];
+  const [forms, submittedResponses] = formJoin ?? [[], []];
 
   // First submission row per assignment wins: the student's own before their
   // team's, the order findAllAssignmentsForStudent returns them in.

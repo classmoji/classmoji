@@ -161,6 +161,7 @@ export type { RunOutcome } from './helper/runWait.ts';
 // A student's coursework rows (Assignments page, dashboard Up next).
 export type {
   CourseworkAction,
+  CourseworkAssignment,
   CourseworkStatus,
   CourseworkType,
   RepoRowFields,
