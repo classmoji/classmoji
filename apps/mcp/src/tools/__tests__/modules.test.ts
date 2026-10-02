@@ -13,7 +13,7 @@
  *   - The Pro gate runs on the FORM BRANCH ONLY. A free-tier classroom must
  *     keep adding pages and slides; it must not be able to attach a form. A
  *     quiz is not an item at all: it sits in a module through its assignment
- *     (quiz_create / quiz_update module_id), so QUIZ is not offered.
+ *     (quiz_create / quiz_update module_id), so QUIZ is refused by name.
  *   - S1: a form belonging to another classroom is refused by
  *     `module.service.assertTargetInClassroom` with a generic Error, and this
  *     layer must translate it into the same uniform `not_found` every other
@@ -149,16 +149,36 @@ describe('module tool definitions', () => {
     expect(moduleItemAddTool.roles).not.toContain('STUDENT');
   });
 
-  it('accepts the content item types (and REPOSITORY, to refuse it by name) and nothing else', () => {
+  it('accepts the content item types (and REPOSITORY and QUIZ, to refuse them by name) and nothing else', () => {
     const itemType = moduleItemAddTool.inputSchema.item_type as z.ZodTypeAny;
-    for (const type of ['PAGE', 'REPOSITORY', 'SLIDE', 'FORM']) {
+    for (const type of ['PAGE', 'REPOSITORY', 'QUIZ', 'SLIDE', 'FORM']) {
       expect(itemType.safeParse(type).success, type).toBe(true);
     }
-    // QUIZ is not offered: a quiz is placed by its assignment's module.
-    for (const bogus of ['QUIZ', 'ASSIGNMENT', 'form', 'Form', '', 'GRADE']) {
+    for (const bogus of ['ASSIGNMENT', 'form', 'Form', '', 'GRADE']) {
       expect(itemType.safeParse(bogus).success, bogus).toBe(false);
     }
     expect(itemType.safeParse(undefined).success).toBe(false);
+  });
+
+  it('refuses QUIZ by name before any lookup, pointing at the quiz tools', async () => {
+    const error = await moduleItemAddTool
+      .handler(
+        {
+          classroom: 'org/w26',
+          module_id: 'mod-1',
+          item_type: 'QUIZ',
+          target_id: 'quiz-1',
+        } as never,
+        CTX
+      )
+      .catch(e => e);
+
+    expect(error).toMatchObject({ kind: 'invalid_params' });
+    expect((error as ToolError).message).toMatch(/quiz_create/);
+    expect((error as ToolError).message).toMatch(/quiz_update with module_id/);
+    expect(mocks.moduleAddItem).not.toHaveBeenCalled();
+    expect(mocks.assertProTier).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('names forms in the tool description, with the Pro requirement', () => {
@@ -334,7 +354,7 @@ describe('cross-classroom scoping (S1)', () => {
 
   it('gives every content item type the identical refusal (FORM is not special)', async () => {
     const messages: string[] = [];
-    for (const item_type of ['PAGE', 'QUIZ', 'SLIDE', 'FORM']) {
+    for (const item_type of ['PAGE', 'SLIDE', 'FORM']) {
       mocks.moduleAddItem.mockRejectedValue(foreignTarget());
       const error = await moduleItemAddTool
         .handler(
@@ -472,7 +492,9 @@ describe('Pro gating of FORM items', () => {
 
 describe('module_item_add and quizzes', () => {
   it('points a quiz at its own module_id in the description, and asks nothing about quizzes', async () => {
-    expect(moduleItemAddTool.description).toContain('A quiz is placed by its own module_id');
+    expect(moduleItemAddTool.description).toContain(
+      'QUIZ is refused too: a quiz is placed by its own module_id'
+    );
     expect(moduleItemAddTool.inputSchema.target_id.description).not.toMatch(/quiz/);
     expect(Buffer.byteLength(moduleItemAddTool.description, 'utf8')).toBeLessThan(1500);
 

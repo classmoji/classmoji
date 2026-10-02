@@ -5,13 +5,14 @@
  * A Module ("Week 3: Recursion") holds two things: an ORDERED CONTENT LIST of
  * pages, slides and forms (ModuleItem rows, what module_item_add writes), and
  * the ASSIGNMENTS that belong to it (`Assignment.module_id`, set by
- * assignment_create, quiz_create and moved by assignment_update or
- * quiz_update). A repository is neither: it is the storage a REPO assignment
- * submits through and reaches a module only through that assignment, and a
- * quiz reaches a module through its QUIZ assignment. `ModuleItemType.REPOSITORY`
- * and `ModuleItemType.QUIZ` are legacy values nothing writes any more (old rows
- * are read-only and listed nowhere): module_item_add does not offer them.
- * Publishing a Module spawns nothing.
+ * assignment_create, quiz_create and moved by assignment_update or, for a
+ * quiz, quiz_update). A repository is neither: it is the storage a REPO
+ * assignment submits through and reaches a module only through that
+ * assignment, and a quiz reaches a module through its QUIZ assignment.
+ * `ModuleItemType.REPOSITORY` and `ModuleItemType.QUIZ` are legacy values
+ * nothing writes any more (old rows are read-only and listed nowhere):
+ * module_item_add accepts both only to refuse them by name, with the tool
+ * that places each instead. Publishing a Module spawns nothing.
  *
  * FORMS ARE THE GATED ITEM TYPE. The forms surface is a Pro feature everywhere
  * else it appears (apps/pages' `assertFormAdmin`, the whole forms tool batch),
@@ -225,7 +226,7 @@ export const modulePublishTool: ToolDefinition<ModulePublishArgs> = {
 interface ModuleItemAddArgs {
   classroom: string;
   module_id: string;
-  item_type: 'PAGE' | 'REPOSITORY' | 'SLIDE' | 'FORM';
+  item_type: 'PAGE' | 'REPOSITORY' | 'QUIZ' | 'SLIDE' | 'FORM';
   target_id: string;
 }
 
@@ -248,10 +249,10 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
   description:
     'Appends a content item to a module: a page, a slide deck, or a form. The target ' +
     'must belong to the same classroom. A repository is not a module item, so REPOSITORY is ' +
-    'refused: a lab sits in a module through its assignment. A quiz is placed by its own ' +
-    'module_id (quiz_create, or quiz_update to move it). To place an existing assignment ' +
-    'use assignment_update with module_id; assignment_create adds a NEW gradeable one. ' +
-    'Owner only.\n' +
+    'refused: a lab sits in a module through its assignment. QUIZ is refused too: a quiz is ' +
+    'placed by its own module_id (quiz_create, or quiz_update to move it). To place an existing ' +
+    'assignment use assignment_update with module_id; assignment_create adds a NEW gradeable ' +
+    'one. Owner only.\n' +
     'A FORM item links one of the classroom’s forms (list_forms / form_create) into the ' +
     'curriculum, so a waitlist, survey, team bid or peer review sits in the week it belongs to ' +
     'rather than as a link somebody has to remember to send. The form’s `closes_at` becomes the ' +
@@ -266,10 +267,11 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     module_id: z.string().uuid().describe('Module id'),
     item_type: z
-      .enum(['PAGE', 'REPOSITORY', 'SLIDE', 'FORM'])
+      .enum(['PAGE', 'REPOSITORY', 'QUIZ', 'SLIDE', 'FORM'])
       .describe(
         'What kind of content the item links. REPOSITORY is refused: to place a lab in a ' +
-          'module, move its assignment with assignment_update module_id.'
+          'module, move its assignment with assignment_update module_id. QUIZ is refused: use ' +
+          'quiz_create or quiz_update with module_id.'
       ),
     target_id: z.string().uuid().describe('Id of the page/slide/form to link'),
   },
@@ -296,11 +298,21 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
           'assignment_create only for a NEW assignment: it adds another gradeable entry.'
       );
     }
+    // Nor is a quiz: it sits in a module through its own assignment, which the
+    // quiz tools place. Refused by name before any lookup, so it says nothing
+    // about any quiz.
+    if (args.item_type === 'QUIZ') {
+      throw new ToolError(
+        'invalid_params',
+        'QUIZ is not a module item: a quiz is placed in a module by its own module_id. Use ' +
+          'quiz_create with module_id for a new quiz, or quiz_update with module_id to move one.'
+      );
+    }
 
     try {
       const item = await ClassmojiService.module.addItem(
         args.module_id,
-        args.item_type as Exclude<ModuleItemType, 'REPOSITORY'>,
+        args.item_type as Exclude<ModuleItemType, 'REPOSITORY' | 'QUIZ'>,
         args.target_id,
         classroom.classroomId
       );
