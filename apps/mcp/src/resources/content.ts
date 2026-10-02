@@ -11,9 +11,16 @@
  *   modules         — any member (mirrors student.$class.modules, which the
  *                     assistant route re-exports): show_modules=false →
  *                     {enabled:false}; staff see unpublished, students see
- *                     published modules with published items only. Quiz
- *                     items are dropped for every role unless
- *                     entitlement.quizzesVisible (Pro, quizzes on).
+ *                     published modules with published items and published
+ *                     assignments only (a REPO assignment only once its
+ *                     repository is published too — module.listForClassroom
+ *                     decides both). Each module carries its content `items`
+ *                     AND its `assignments`: which module an assignment lives
+ *                     in is readable nowhere else. Quiz items and quiz
+ *                     assignments are dropped for every role unless
+ *                     entitlement.quizzesVisible (Pro, quizzes on). Legacy
+ *                     REPOSITORY item rows are dropped, as on every web
+ *                     module screen.
  *   quizzes         — roles OWNER/TEACHER/ASSISTANT/STUDENT, matching the quiz
  *                     routes. Gate order mirrors the routes: role check →
  *                     Pro-tier → quizzes_enabled. NOTE:
@@ -113,9 +120,23 @@ interface ModuleItemRow {
   page?: { id: string; title?: string | null; is_draft?: boolean } | null;
   slide?: { id: string; title?: string | null; is_draft?: boolean } | null;
   quiz?: { id: string; name?: string | null; status?: string } | null;
-  repository?: { id: string; title?: string | null; is_published?: boolean } | null;
   /** Form is the fifth item type. It carries `title`, not `name`. */
   form?: { id: string; title?: string | null; status?: string; access?: string } | null;
+}
+
+/** An assignment as `module.listForClassroom` loads it, with its target resolved. */
+interface ModuleAssignmentRow {
+  id: string;
+  title: string;
+  type: string;
+  submission_mode?: string;
+  weight: number;
+  is_extra_credit?: boolean;
+  is_published: boolean;
+  student_deadline?: Date | null;
+  repository?: { id: string; title?: string | null } | null;
+  quiz?: { id: string; name?: string | null } | null;
+  form?: { id: string; title?: string | null } | null;
 }
 
 interface ModuleRow {
@@ -127,27 +148,24 @@ interface ModuleRow {
   position: number;
   is_published: boolean;
   items: ModuleItemRow[];
+  assignments?: ModuleAssignmentRow[];
 }
 
 /**
  * One item, reduced to {type, target id, title}.
  *
- * Exactly one of the five target columns is populated per row (the item_type
- * names which), so the `??` chain resolves whichever it is. Forms are included:
+ * Exactly one target column is populated per row (the item_type names which),
+ * so the `??` chain resolves whichever it is. Forms are included:
  * `module.listForClassroom`'s ITEM_INCLUDE already loads `form: true`, and its
  * `isItemPublished` already hides a DRAFT form from students the same way it
  * hides a draft page — so nothing here has to re-decide visibility. A Form's
- * label lives in `title` (a Quiz is the odd one out with `name`).
+ * label lives in `title` (a Quiz is the odd one out with `name`). Legacy
+ * REPOSITORY rows never reach this function.
  */
 function moduleItemSummary(item: ModuleItemRow) {
-  const target = item.page ?? item.slide ?? item.quiz ?? item.repository ?? item.form ?? null;
+  const target = item.page ?? item.slide ?? item.quiz ?? item.form ?? null;
   const title =
-    item.page?.title ??
-    item.slide?.title ??
-    item.quiz?.name ??
-    item.repository?.title ??
-    item.form?.title ??
-    null;
+    item.page?.title ?? item.slide?.title ?? item.quiz?.name ?? item.form?.title ?? null;
   return {
     id: item.id,
     type: item.item_type,
@@ -157,13 +175,43 @@ function moduleItemSummary(item: ModuleItemRow) {
   };
 }
 
+/**
+ * One assignment of a module, reduced to what places it: its own id and title,
+ * its type (REPO / QUIZ / FORM) and the target that type points at. The target
+ * is one generic pair, as on items, rather than three nullable id columns: a
+ * classroom without quizzes must not carry a key that names one.
+ *
+ * The array order IS the display order (the service sorts by the hand-arranged
+ * position, then deadline, then title), so no position is emitted: rows that
+ * were never dragged all store 0. Students get the fields list_repos already
+ * gives them for an assignment; `is_published` is staff-only, since a student's
+ * list holds published rows alone.
+ */
+function moduleAssignmentSummary(assignment: ModuleAssignmentRow, staff: boolean) {
+  const target = assignment.repository ?? assignment.quiz ?? assignment.form ?? null;
+  return {
+    id: assignment.id,
+    title: assignment.title,
+    type: assignment.type,
+    target_id: target?.id ?? null,
+    target_title:
+      assignment.repository?.title ?? assignment.quiz?.name ?? assignment.form?.title ?? null,
+    ...(assignment.type === 'REPO' ? { submission_mode: assignment.submission_mode ?? null } : {}),
+    weight: assignment.weight,
+    is_extra_credit: assignment.is_extra_credit ?? false,
+    student_deadline: assignment.student_deadline ?? null,
+    ...(staff ? { is_published: assignment.is_published } : {}),
+  };
+}
+
 export const modulesResource: ResourceDefinition = {
   name: 'modules',
   uriTemplate: 'classmoji://{org}/{slug}/modules',
   title: 'Modules (curriculum lists)',
   description:
-    'Ordered curriculum modules with their content items (pages, repos, quizzes, slides, forms). ' +
-    'Students see published modules/items only; staff also see unpublished. Returns ' +
+    'Ordered curriculum modules, each with its content items (pages, slides, quizzes, forms) and ' +
+    'the assignments that belong to it (REPO, QUIZ or FORM, in display order). Students see ' +
+    'published modules, items and assignments only; staff also see unpublished. Returns ' +
     '{enabled:false} when the classroom hides modules (show_modules).',
   scope: 'read',
   roles: MEMBER,
@@ -190,13 +238,17 @@ export const modulesResource: ResourceDefinition = {
       );
     }
 
-    // Quiz items appear only where quizzes do — the predicate the web app's
-    // module screens filter on too. Asked once, and only when a quiz item is
-    // present.
+    // Quiz items and quiz assignments appear only where quizzes do — the
+    // predicate the web app's module screens filter on too. Asked once, and
+    // only when a quiz row of either kind is present.
     const hideQuizzes =
-      modules.some(m => m.items.some(item => item.item_type === 'QUIZ')) &&
-      !(await ClassmojiService.entitlement.quizzesVisible(classroomId));
+      modules.some(
+        m =>
+          m.items.some(item => item.item_type === 'QUIZ') ||
+          (m.assignments ?? []).some(a => a.type === 'QUIZ')
+      ) && !(await ClassmojiService.entitlement.quizzesVisible(classroomId));
 
+    const staff = isStaff(role);
     return {
       enabled: true,
       modules: modules.map(m => ({
@@ -205,10 +257,16 @@ export const modulesResource: ResourceDefinition = {
         slug: m.slug ?? null,
         description: m.description ?? null,
         position: m.position,
-        ...(isStaff(role) ? { is_published: m.is_published } : {}),
+        ...(staff ? { is_published: m.is_published } : {}),
+        // A REPOSITORY item is a pre-assignment pointer no web screen renders:
+        // a repository reaches a module only through `assignments` below.
         items: m.items
+          .filter(item => item.item_type !== 'REPOSITORY')
           .filter(item => !(hideQuizzes && item.item_type === 'QUIZ'))
           .map(moduleItemSummary),
+        assignments: (m.assignments ?? [])
+          .filter(a => !(hideQuizzes && a.type === 'QUIZ'))
+          .map(a => moduleAssignmentSummary(a, staff)),
       })),
     };
   },

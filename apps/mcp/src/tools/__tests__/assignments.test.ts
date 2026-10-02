@@ -1,12 +1,14 @@
 /**
- * Unit tests for assignment_create / assignment_delete (Phase: assignment
- * lifecycle). Both fire ZERO external effects (pure DB — no GitHub, no
- * Trigger.dev, no email), so only the service boundary is mocked.
+ * Unit tests for assignment_create / assignment_delete / assignment_update
+ * (Phase: assignment lifecycle). All fire ZERO external effects (pure DB — no
+ * GitHub, no Trigger.dev, no email), so only the service boundary is mocked.
  *
  * The security-critical assertions: create re-verifies BOTH the module and the
  * repository's classroom (S1) and NEVER trusts a request classroom_id; delete re-verifies
  * the assignment's own classroom; both refuse cross-classroom targets with the
- * uniform scopedNotFound.
+ * uniform scopedNotFound. update resolves the assignment through its MODULE
+ * (any type, quiz and form included) and, for a move, the target module too,
+ * before anything is written.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -20,6 +22,8 @@ const mocks = vi.hoisted(() => ({
   assignmentCreate: vi.fn(),
   assignmentDeleteById: vi.fn(),
   assignmentUpdate: vi.fn(),
+  assignmentMoveToModule: vi.fn(),
+  quizzesVisible: vi.fn(),
   membershipFindByClassroomAndUser: vi.fn(),
   auditCreate: vi.fn(),
 }));
@@ -33,7 +37,9 @@ vi.mock('@classmoji/services', () => ({
       create: (...a: unknown[]) => mocks.assignmentCreate(...a),
       deleteById: (...a: unknown[]) => mocks.assignmentDeleteById(...a),
       update: (...a: unknown[]) => mocks.assignmentUpdate(...a),
+      moveToModule: (...a: unknown[]) => mocks.assignmentMoveToModule(...a),
     },
+    entitlement: { quizzesVisible: (...a: unknown[]) => mocks.quizzesVisible(...a) },
     classroomMembership: {
       findByClassroomAndUser: (...a: unknown[]) => mocks.membershipFindByClassroomAndUser(...a),
     },
@@ -225,6 +231,9 @@ describe('assignment_update: grader_deadline and release_at', () => {
     mocks.assignmentFindById.mockResolvedValue({
       id: 'asg-1',
       title: 'Lab 3',
+      type: 'REPO',
+      module_id: 'mod-1',
+      module: { id: 'mod-1', title: 'Week 1', classroom_id: 'class-1' },
       repository: { classroom_id: 'class-1' },
     });
     // Echo the write back the way Prisma would.
@@ -292,6 +301,8 @@ describe('assignment_update: grader_deadline and release_at', () => {
       assignment: {
         id: 'asg-1',
         title: 'Lab 3',
+        module_id: 'mod-1',
+        module_title: 'Week 1',
         student_deadline: new Date('2026-07-20T23:59:00-04:00').toISOString(),
         weight: 50,
         grades_released: false,
@@ -400,6 +411,9 @@ describe('assignment_update: grader_deadline and release_at', () => {
     mocks.assignmentFindById.mockResolvedValue({
       id: 'asg-1',
       title: 'Lab 3',
+      type: 'REPO',
+      module_id: 'mod-9',
+      module: { id: 'mod-9', title: 'Elsewhere', classroom_id: 'OTHER-class' },
       repository: { classroom_id: 'OTHER-class' },
     });
     await expect(
@@ -430,5 +444,288 @@ describe('assignment_update: grader_deadline and release_at', () => {
 
   it('keeps the description under the 1,500-byte connector limit', () => {
     expect(new TextEncoder().encode(assignmentUpdateTool.description).length).toBeLessThan(1500);
+  });
+});
+
+describe('assignment_update: module_id (moving an assignment to another module)', () => {
+  const ARGS = { classroom: 'org/winter-2025', assignment_id: 'asg-1' };
+  const NOW = {
+    id: 'asg-1',
+    title: 'Lab 3',
+    type: 'REPO',
+    module_id: 'mod-1',
+    module: { id: 'mod-1', title: 'Week 1', classroom_id: 'class-1' },
+    repository: { classroom_id: 'class-1' },
+    student_deadline: new Date('2026-07-20T23:59:00-04:00'),
+    weight: 50,
+    grades_released: false,
+    grader_deadline: null,
+    release_at: null,
+  };
+  /** The target module as module.findById loads it: its assignments in display order. */
+  const TARGET = {
+    id: 'mod-2',
+    title: 'Week 2',
+    classroom_id: 'class-1',
+    assignments: [{ id: 'asg-x' }, { id: 'asg-y' }],
+  };
+
+  beforeEach(() => {
+    mocks.assignmentFindById.mockResolvedValue(NOW);
+    mocks.moduleFindById.mockResolvedValue(TARGET);
+    mocks.assignmentMoveToModule.mockResolvedValue(undefined);
+    mocks.assignmentUpdate.mockImplementation(
+      async (id: string, data: Record<string, unknown>) => ({ ...NOW, id, ...data })
+    );
+    mocks.quizzesVisible.mockResolvedValue(true);
+    mocks.membershipFindByClassroomAndUser.mockResolvedValue(null);
+  });
+
+  it('moves through assignment.moveToModule, appended to the target’s full ordering', async () => {
+    const payload = parse(await assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-2' }, CTX));
+
+    // The web's move service, with the target module's list as it reads AFTER
+    // the move and the AUTHORIZED classroom id. Never a bare column write: that
+    // would leave `position` stale in both modules.
+    expect(mocks.moduleFindById).toHaveBeenCalledWith('mod-2');
+    expect(mocks.assignmentMoveToModule).toHaveBeenCalledTimes(1);
+    expect(mocks.assignmentMoveToModule).toHaveBeenCalledWith(
+      'asg-1',
+      'mod-2',
+      ['asg-x', 'asg-y', 'asg-1'],
+      'class-1'
+    );
+    expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+
+    expect(payload).toEqual({
+      success: true,
+      assignment: {
+        id: 'asg-1',
+        title: 'Lab 3',
+        module_id: 'mod-2',
+        module_title: 'Week 2',
+        student_deadline: NOW.student_deadline.toISOString(),
+        weight: 50,
+        grades_released: false,
+        grader_deadline: null,
+        release_at: null,
+      },
+      moved_from_module_id: 'mod-1',
+    });
+  });
+
+  it('audits the move with where it came from and where it went', async () => {
+    await assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-2' }, CTX);
+
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
+      resource_type: 'ASSIGNMENT',
+      resource_id: 'asg-1',
+      action: 'UPDATE',
+      data: {
+        tool: 'assignment_update',
+        fields: ['module_id'],
+        values: { module_id: 'mod-2' },
+        from_module_id: 'mod-1',
+        value: JSON.stringify({ module_id: 'mod-2' }),
+      },
+    });
+  });
+
+  it('moves and edits in one call: the move first, then the notifying update', async () => {
+    const payload = parse(
+      await assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-2', weight: 40 }, CTX)
+    );
+
+    expect(mocks.assignmentMoveToModule).toHaveBeenCalledTimes(1);
+    // module_id never reaches the column write.
+    expect(mocks.assignmentUpdate).toHaveBeenCalledWith('asg-1', { weight: 40 });
+    expect(mocks.assignmentMoveToModule.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.assignmentUpdate.mock.invocationCallOrder[0]
+    );
+    expect(payload.assignment).toMatchObject({ module_id: 'mod-2', weight: 40 });
+    expect((mocks.auditCreate.mock.calls[0][0] as { data: unknown }).data).toMatchObject({
+      fields: ['weight', 'module_id'],
+      values: { weight: 40, module_id: 'mod-2' },
+      from_module_id: 'mod-1',
+    });
+  });
+
+  it.each([
+    ['in another classroom', { ...TARGET, classroom_id: 'OTHER-class' }],
+    ['that does not exist', null],
+  ])('refuses a target module %s (S1) before any write', async (_label, module) => {
+    mocks.moduleFindById.mockResolvedValue(module);
+
+    const error = await assignmentUpdateTool
+      .handler({ ...ARGS, module_id: 'mod-2', weight: 40 }, CTX)
+      .catch(e => e);
+
+    // The same uniform refusal either way, naming nothing about the module.
+    expect(error).toMatchObject({
+      kind: 'not_found',
+      message: 'Module not found in this classroom',
+    });
+    expect(mocks.assignmentMoveToModule).not.toHaveBeenCalled();
+    expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a TEACHER: moving is the OWNER-only Modules page action', async () => {
+    await expect(
+      assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-2' }, TEACHER_CTX)
+    ).rejects.toMatchObject({ kind: 'forbidden', message: expect.stringMatching(/module_id/) });
+
+    expect(mocks.assignmentFindById).not.toHaveBeenCalled();
+    expect(mocks.moduleFindById).not.toHaveBeenCalled();
+    expect(mocks.assignmentMoveToModule).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a TEACHER’s mixed call without applying the teacher-tier field', async () => {
+    await expect(
+      assignmentUpdateTool.handler(
+        { ...ARGS, student_deadline: '2026-07-21T23:59:00-04:00', module_id: 'mod-2' },
+        TEACHER_CTX
+      )
+    ).rejects.toMatchObject({ kind: 'forbidden' });
+    expect(mocks.assignmentMoveToModule).not.toHaveBeenCalled();
+    expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+  });
+
+  it('treats the module it is already in as no move: nothing written, nothing audited', async () => {
+    const payload = parse(await assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-1' }, CTX));
+
+    // A retried move is a success, and its position in the module is left alone.
+    expect(payload.success).toBe(true);
+    expect(payload.assignment).toMatchObject({ module_id: 'mod-1', module_title: 'Week 1' });
+    expect(payload).not.toHaveProperty('moved_from_module_id');
+    expect(mocks.moduleFindById).not.toHaveBeenCalled();
+    expect(mocks.assignmentMoveToModule).not.toHaveBeenCalled();
+    expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('audits only what changed when the module is the current one and a field is not', async () => {
+    await assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-1', weight: 40 }, CTX);
+
+    expect(mocks.assignmentMoveToModule).not.toHaveBeenCalled();
+    expect(mocks.assignmentUpdate).toHaveBeenCalledWith('asg-1', { weight: 40 });
+    const data = (mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> }).data;
+    expect(data).toMatchObject({ fields: ['weight'], values: { weight: 40 } });
+    expect(data).not.toHaveProperty('from_module_id');
+  });
+
+  it.each(['QUIZ', 'FORM'])(
+    'moves a %s assignment, which has no repository to resolve it through',
+    async type => {
+      mocks.assignmentFindById.mockResolvedValue({ ...NOW, type, repository: null });
+
+      const payload = parse(
+        await assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-2' }, CTX)
+      );
+
+      expect(payload.assignment.module_id).toBe('mod-2');
+      expect(mocks.assignmentMoveToModule).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('does not name a quiz assignment where the classroom shows no quizzes', async () => {
+    mocks.assignmentFindById.mockResolvedValue({ ...NOW, type: 'QUIZ', repository: null });
+    mocks.quizzesVisible.mockResolvedValue(false);
+
+    const error = await assignmentUpdateTool
+      .handler({ ...ARGS, module_id: 'mod-2' }, CTX)
+      .catch(e => e);
+
+    // Indistinguishable from an id that does not exist: list_modules lists no
+    // quiz row there, so no tool may confirm one.
+    expect(error).toMatchObject({
+      kind: 'not_found',
+      message: 'Assignment not found in this classroom',
+    });
+    expect(mocks.quizzesVisible).toHaveBeenCalledWith('class-1');
+    expect(mocks.assignmentMoveToModule).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('asks about quizzes for a QUIZ assignment only', async () => {
+    await assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-2' }, CTX);
+    expect(mocks.quizzesVisible).not.toHaveBeenCalled();
+  });
+
+  it('refuses an assignment whose repository is in another classroom than its module', async () => {
+    mocks.assignmentFindById.mockResolvedValue({
+      ...NOW,
+      repository: { classroom_id: 'OTHER-class' },
+    });
+
+    await expect(
+      assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-2' }, CTX)
+    ).rejects.toMatchObject({ kind: 'not_found' });
+    expect(mocks.assignmentMoveToModule).not.toHaveBeenCalled();
+  });
+
+  it('reports a target module that changed mid-move as retryable, without an audit row', async () => {
+    mocks.assignmentMoveToModule.mockRejectedValue(
+      new Error('Ordered assignment ids must match the module assignments')
+    );
+
+    const error = await assignmentUpdateTool
+      .handler({ ...ARGS, module_id: 'mod-2', weight: 40 }, CTX)
+      .catch(e => e);
+
+    expect(error).toMatchObject({ kind: 'internal', message: expect.stringMatching(/retry/) });
+    expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('does not swallow an unexpected move failure', async () => {
+    mocks.assignmentMoveToModule.mockRejectedValue(new Error('connection lost'));
+
+    await expect(
+      assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-2' }, CTX)
+    ).rejects.toThrow('connection lost');
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('declares module_id as an optional uuid and names it when nothing is provided', async () => {
+    const schema = z.object(assignmentUpdateTool.inputSchema);
+    const base = { classroom: 'org/w26', assignment_id: '00000000-0000-4000-8000-000000000001' };
+    expect(schema.safeParse(base).success).toBe(true);
+    expect(
+      schema.safeParse({ ...base, module_id: '00000000-0000-4000-8000-000000000002' }).success
+    ).toBe(true);
+    expect(schema.safeParse({ ...base, module_id: 'week-2' }).success).toBe(false);
+    // An assignment always has a module: there is no clearing it.
+    expect(schema.safeParse({ ...base, module_id: null }).success).toBe(false);
+
+    await expect(assignmentUpdateTool.handler(ARGS, CTX)).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: expect.stringMatching(/module_id/),
+    });
+  });
+
+  it('says in the description that module_id is how an assignment is placed in a module', () => {
+    expect(assignmentUpdateTool.description).toMatch(/module_id MOVES the assignment/);
+    expect(assignmentUpdateTool.description).toMatch(/list_modules/);
+  });
+});
+
+describe('assignment_delete stays scoped through the repository', () => {
+  it('does not reach a quiz assignment: it has no repo submissions to delete', async () => {
+    mocks.assignmentFindById.mockResolvedValue({
+      id: 'asg-q',
+      title: 'Quiz 1',
+      type: 'QUIZ',
+      module: { id: 'mod-1', title: 'Week 1', classroom_id: 'class-1' },
+      repository: null,
+      git_repo_assignments: [],
+    });
+
+    await expect(
+      assignmentDeleteTool.handler({ classroom: 'org/winter-2025', assignment_id: 'asg-q' }, CTX)
+    ).rejects.toMatchObject({ kind: 'not_found' });
+    expect(mocks.assignmentDeleteById).not.toHaveBeenCalled();
   });
 });

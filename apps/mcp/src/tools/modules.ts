@@ -2,10 +2,13 @@
  * Module (curriculum) tools — module_create / module_update / module_publish /
  * module_item_add.
  *
- * A Module is an ORDERED CURRICULUM CONTENT LIST ("Week 3: Recursion") of
- * pages, repos (assignment containers), quizzes, slides, and forms — NOT the
- * assignment container (plan §2.2; that is `Repository`). A ModuleItem of type
- * REPOSITORY links a container, not a git repo. Publishing a Module spawns
+ * A Module ("Week 3: Recursion") holds two things: an ORDERED CONTENT LIST of
+ * pages, slides, quizzes and forms (ModuleItem rows, what module_item_add
+ * writes), and the ASSIGNMENTS that belong to it (`Assignment.module_id`, set
+ * by assignment_create and moved by assignment_update). A repository is neither:
+ * it is the storage a REPO assignment submits through and reaches a module only
+ * through that assignment. `ModuleItemType.REPOSITORY` is a legacy value no
+ * surface writes or renders any more, refused here. Publishing a Module spawns
  * nothing.
  *
  * FORMS AND QUIZZES ARE THE GATED ITEM TYPES. The forms surface is a Pro
@@ -66,8 +69,9 @@ export const moduleCreateTool: ToolDefinition<ModuleCreateArgs> = {
   annotations: { destructive: false },
   title: 'Create a module',
   description:
-    'Creates a curriculum module — an ordered list of content (pages, repos/labs, quizzes, ' +
-    'slides, forms) such as "Week 3: Recursion". Created unpublished. Owner only.',
+    'Creates a curriculum module such as "Week 3: Recursion": an ordered list of content ' +
+    '(pages, slides, quizzes, forms) plus the assignments placed in it (assignment_create, or ' +
+    'assignment_update with module_id for an existing one). Created unpublished. Owner only.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
@@ -223,8 +227,9 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
   title: 'Add an item to a module',
   description:
     'Appends a content item to a module: a page, a quiz, a slide deck, or a form. The target ' +
-    'must belong to the same classroom. Repositories are not module items: they are attached ' +
-    'to an assignment (assignment_create with type REPO), so REPOSITORY is refused here. ' +
+    'must belong to the same classroom. A repository is not a module item, so REPOSITORY is ' +
+    'refused: a lab sits in a module through its assignment. To place an existing assignment ' +
+    'use assignment_update with module_id; assignment_create adds a NEW gradeable one. ' +
     'Owner only.\n' +
     'A FORM item links one of the classroom’s forms (list_forms / form_create) into the ' +
     'curriculum, so a waitlist, survey, team bid or peer review sits in the week it belongs to ' +
@@ -243,8 +248,8 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
     item_type: z
       .enum(['PAGE', 'REPOSITORY', 'QUIZ', 'SLIDE', 'FORM'])
       .describe(
-        'What kind of content the item links. REPOSITORY is no longer an item: repositories ' +
-          'are attached to assignments (assignment_create with repository_id).'
+        'What kind of content the item links. REPOSITORY is refused: to place a lab in a ' +
+          'module, move its assignment with assignment_update module_id.'
       ),
     target_id: z.string().uuid().describe('Id of the page/quiz/slide/form to link'),
   },
@@ -269,12 +274,17 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
       );
     }
 
-    // Repositories are attached to assignments, not placed in modules as
-    // content items. Refused before any lookup.
+    // A repository is not a module item: it reaches a module through a REPO
+    // assignment. Refused before any lookup. The message names the move first,
+    // because the caller usually holds a lab that already has its assignment,
+    // and assignment_create there would add a second gradebook entry.
     if (args.item_type === 'REPOSITORY') {
       throw new ToolError(
         'invalid_params',
-        'Repositories are attached to assignments; use assignment_create with repository_id.'
+        'REPOSITORY is not a module item: a repository sits in a module through its ' +
+          'assignments. To place an existing assignment in this module, call assignment_update ' +
+          'with module_id (list_repos shows each assignment and the module it is in). Use ' +
+          'assignment_create only for a NEW assignment: it adds another gradeable entry.'
       );
     }
 

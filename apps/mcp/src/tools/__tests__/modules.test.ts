@@ -286,9 +286,27 @@ describe('cross-classroom scoping (S1)', () => {
       )
       .catch(e => e);
     expect((error as ToolError).kind).toBe('invalid_params');
-    expect((error as ToolError).message).toContain('assignment_create');
+    // The caller usually holds a lab that already HAS its assignment, so the
+    // message leads with the move. assignment_create is named only as the way
+    // to make a new one: followed blindly it adds a second gradebook entry.
+    const message = (error as ToolError).message;
+    expect(message).toMatch(/existing assignment.*assignment_update\s+with module_id/s);
+    expect(message).toMatch(/assignment_create only for a NEW assignment/);
+    expect(message.indexOf('assignment_update')).toBeLessThan(message.indexOf('assignment_create'));
     expect(mocks.moduleAddItem).not.toHaveBeenCalled();
     expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('points at the move wherever the tool list mentions REPOSITORY', () => {
+    const itemType = z.object(moduleItemAddTool.inputSchema).shape.item_type;
+    for (const text of [moduleItemAddTool.description, itemType.description ?? '']) {
+      expect(text).toMatch(/REPOSITORY is refused/);
+      expect(text).toMatch(/assignment_update/);
+      expect(text).toMatch(/module_id/);
+    }
+    // A module is no longer described as a list that holds repos.
+    expect(moduleCreateTool.description).not.toMatch(/repos/);
+    expect(moduleCreateTool.description).toMatch(/assignment_update with module_id/);
   });
 
   it('gives every content item type the identical refusal (FORM is not special)', async () => {
