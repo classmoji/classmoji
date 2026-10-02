@@ -304,7 +304,7 @@ interface QuizRow {
   name: string;
   status: string;
   due_date?: Date | null;
-  /** The quiz's assignment, on the student list: it owns the due date where it exists. */
+  /** The quiz's assignment: it owns the due date where it exists. */
   assignment?: { student_deadline: Date | null } | null;
   weight: number;
   question_count: number;
@@ -375,7 +375,9 @@ export const quizzesResource: ResourceDefinition = {
       id: q.id,
       name: q.name,
       status: q.status,
-      due_date: q.due_date ?? null,
+      // One due date for staff and students: the assignment's where the quiz
+      // has one, the quiz's own otherwise (as on the web).
+      due_date: q.assignment?.student_deadline ?? q.due_date ?? null,
       weight: q.weight,
       question_count: q.question_count,
       max_attempts: q.max_attempts,
@@ -404,8 +406,6 @@ export const quizzesResource: ResourceDefinition = {
       return {
         quizzes: quizzes.map(q => ({
           ...base(q),
-          // The date the student's Assignments page and calendar show.
-          due_date: q.assignment?.student_deadline ?? q.due_date ?? null,
           my_attempts: q.attemptsSummary ?? null,
         })),
       };

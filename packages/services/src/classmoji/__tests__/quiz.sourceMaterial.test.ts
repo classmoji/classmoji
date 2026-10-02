@@ -520,3 +520,15 @@ describe('quiz.update — closing a quiz', () => {
     expect(tx.quiz.update).toHaveBeenCalled();
   });
 });
+
+describe('quiz.findByClassroom — due date source', () => {
+  it("reads each quiz's assignment due date beside its own", async () => {
+    quizFindMany.mockResolvedValue([]);
+
+    await quizService.findByClassroom(CLASSROOM, { role: 'OWNER', classroom_id: CLASSROOM });
+
+    expect(quizFindMany.mock.calls[0][0].include.assignment).toEqual({
+      select: { student_deadline: true },
+    });
+  });
+});

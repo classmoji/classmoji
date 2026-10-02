@@ -330,6 +330,33 @@ describe('quizzes resource source_material (quiz source material)', () => {
     // The assignment itself is not part of the shape.
     expect('assignment' in result.quizzes[0]).toBe(false);
   });
+
+  it('gives staff the same due date students see', async () => {
+    const assignmentDue = new Date('2026-10-02T18:00:00Z');
+    const quizDue = new Date('2026-09-30T18:00:00Z');
+    const quiz = { status: 'PUBLISHED', weight: 0, question_count: 3, due_date: quizDue };
+    findByClassroom.mockResolvedValue([
+      {
+        ...quiz,
+        id: 'q1',
+        name: 'With assignment',
+        assignment: { student_deadline: assignmentDue },
+      },
+      { ...quiz, id: 'q2', name: 'Without', assignment: null },
+    ]);
+
+    const result = (await quizzesResource.handler(
+      VARS,
+      ownerCtx({ quizzes_enabled: true }),
+      new URL('classmoji://x')
+    )) as { quizzes: Array<{ id: string; due_date: Date | null }> };
+
+    expect(result.quizzes.map(q => [q.id, q.due_date])).toEqual([
+      ['q1', assignmentDue],
+      ['q2', quizDue],
+    ]);
+    expect('assignment' in result.quizzes[0]).toBe(false);
+  });
 });
 
 describe('calendar resource allowlist shaping (U5)', () => {

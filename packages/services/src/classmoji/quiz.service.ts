@@ -332,6 +332,8 @@ export const getQuizzesByOrganization = async (
     where: { classroom_id: classroomId },
     include: {
       repository: true,
+      // The quiz's assignment owns its due date where it has one.
+      assignment: { select: { student_deadline: true } },
       attempts: {
         include: {
           user: { include: GIT_IDENTITY },
