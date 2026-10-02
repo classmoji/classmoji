@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveQuizRunSettings } from '../settings.ts';
+import { FALLBACK_MODEL, resolveQuizRunSettings } from '../settings.ts';
 
 const env = {
   ANTHROPIC_API_KEY: 'platform-key',
@@ -69,9 +69,51 @@ describe('resolveQuizRunSettings', () => {
   });
 
   it('falls back to the code default when the platform default is not allowed', () => {
-    const s = resolveQuizRunSettings({}, { isCodeAware: false }, { ...env, LLM_MODEL: 'claude-3-haiku' });
-    expect(s.model).toBe('claude-sonnet-5');
+    const s = resolveQuizRunSettings(
+      {},
+      { isCodeAware: false },
+      { ...env, LLM_MODEL: 'claude-3-haiku' }
+    );
+    expect(s.model).toBe('claude-sonnet-5-5');
+    expect(s.model).toBe(FALLBACK_MODEL);
     expect(s.fallbacks).toContain('LLM_MODEL');
+  });
+
+  // The code default: Sonnet 5.5, for standard, code-aware and exploration.
+  it.each([[false], [true]])(
+    'runs Sonnet 5.5 with no platform model set (code-aware: %s)',
+    isCodeAware => {
+      const s = resolveQuizRunSettings({}, { isCodeAware }, { ANTHROPIC_API_KEY: 'platform-key' });
+      expect(s.model).toBe('claude-sonnet-5-5');
+      expect(s.exploration.model).toBe('claude-sonnet-5-5');
+      expect(s.fallbacks).toEqual([]);
+    }
+  );
+
+  it('treats a blank platform model as unset', () => {
+    const s = resolveQuizRunSettings(
+      {},
+      { isCodeAware: true },
+      { ANTHROPIC_API_KEY: 'platform-key', LLM_MODEL: '  ', EXPLORATION_MODEL: '' }
+    );
+    expect(s.model).toBe('claude-sonnet-5-5');
+    expect(s.exploration.model).toBe('claude-sonnet-5-5');
+    expect(s.fallbacks).toEqual([]);
+  });
+
+  it('runs Sonnet 5.5 for a stored Haiku when no platform model is set', () => {
+    const s = resolveQuizRunSettings(
+      {
+        anthropic_api_key: 'k',
+        llm_model: 'claude-haiku-4-5-20251001',
+        exploration_model: 'claude-haiku-4-5',
+      },
+      { isCodeAware: false },
+      { ANTHROPIC_API_KEY: 'platform-key' }
+    );
+    expect(s.model).toBe('claude-sonnet-5-5');
+    expect(s.exploration.model).toBe('claude-sonnet-5-5');
+    expect(s.fallbacks).toEqual(['llm_model', 'exploration_model']);
   });
 
   it('caps exploration effort at high and skips invalid values', () => {
@@ -90,7 +132,11 @@ describe('resolveQuizRunSettings', () => {
       { isCodeAware: true },
       env
     );
-    const keyless = resolveQuizRunSettings({ exploration_model: 'claude-opus-5' }, { isCodeAware: true }, env);
+    const keyless = resolveQuizRunSettings(
+      { exploration_model: 'claude-opus-5' },
+      { isCodeAware: true },
+      env
+    );
     expect(keyed.exploration.model).toBe('claude-opus-5');
     expect(keyless.exploration.model).toBe('claude-sonnet-5');
   });

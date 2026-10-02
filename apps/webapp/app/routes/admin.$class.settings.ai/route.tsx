@@ -5,6 +5,7 @@ import { IconInfoCircle } from '@tabler/icons-react';
 import { namedAction } from 'remix-utils/named-action';
 
 import { ClassmojiService, ClassroomSettingsEntitlementError } from '@classmoji/services';
+import { ALLOWED_MODELS, isAllowedModel } from '@classmoji/utils/ai-models';
 import { SettingSection } from '~/components';
 import { ActionTypes } from '~/constants';
 import { useGlobalFetcher } from '~/hooks';
@@ -26,6 +27,26 @@ const MODEL_FIELDS = [
   'exploration_model',
   'syllabus_bot_model',
 ] as const;
+
+/**
+ * The quiz model fields. Both quiz runtimes (the ai-agent and the Trigger.dev
+ * quiz tasks), and the prompt assistant that follows llm_model, run only
+ * allow-listed models (isAllowedModel, @classmoji/utils/ai-models) and fall
+ * back to the platform default for anything else, so these selects offer only
+ * those models and the action stores nothing else. Ask Moji has no allow-list.
+ */
+const QUIZ_MODEL_FIELDS = ['llm_model', 'code_aware_model', 'exploration_model'] as const;
+
+type QuizModelField = (typeof QUIZ_MODEL_FIELDS)[number];
+
+const isQuizModelField = (field: string): field is QuizModelField =>
+  (QUIZ_MODEL_FIELDS as readonly string[]).includes(field);
+
+const QUIZ_MODEL_LABELS: Record<QuizModelField, string> = {
+  llm_model: 'Standard quiz model',
+  code_aware_model: 'Code-aware quiz model',
+  exploration_model: 'Code exploration model',
+};
 
 /**
  * Per-classroom reasoning effort, per quiz phase and for Ask Moji. Null (or
@@ -119,8 +140,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     // Fallback models are already handled in getAllModels
   }
 
-  // The "Default: X" on each select: what the ai-agent runs when the
-  // classroom names nothing.
+  // The "Default: X" on each select: what runs when the classroom names
+  // nothing, on whichever runtime serves the quiz.
   const platformDefaults = getPlatformAIDefaults();
   const defaultLabels = {} as Record<SelectField, string>;
   for (const field of MODEL_FIELDS) {
@@ -130,14 +151,20 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     defaultLabels[field] = effortLabel(platformDefaults[field]);
   }
 
+  // The quiz selects offer only the models the quiz runtimes run.
+  const quizModels = models.anthropic.filter(model => isAllowedModel(model.value));
+
   // What the selects show. Without a classroom key every AI call runs on the
   // platform defaults, whatever is stored (a value left from before the key was
   // removed, or copied in by a config import), so the selects show the
   // defaults too. The stored values are kept and apply again once a key is
-  // added.
+  // added. A stored quiz model off the allow-list runs as the platform default
+  // as well, on either quiz runtime, so its select shows the default.
   const selectValues = {} as Record<SelectField, string | null>;
   for (const field of [...MODEL_FIELDS, ...EFFORT_FIELDS]) {
-    selectValues[field] = apiKey ? (settings?.[field] ?? null) : null;
+    const stored = apiKey ? (settings?.[field] ?? null) : null;
+    selectValues[field] =
+      stored && isQuizModelField(field) && !isAllowedModel(stored) ? null : stored;
   }
 
   // Return classroom with settings (excluding sensitive API keys). Without a
@@ -157,6 +184,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   return {
     organization: { ...classroom, settings: safeSettings },
     availableModels: models,
+    quizModels,
     aiAgentAvailable: isAIAgentConfigured(),
     quizzesProRequired: !quizzesEntitlement.allowed,
     askMojiProRequired: !askMojiEntitlement.allowed,
@@ -169,6 +197,7 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
   const {
     organization,
     availableModels,
+    quizModels,
     aiAgentAvailable,
     quizzesProRequired,
     askMojiProRequired,
@@ -183,8 +212,10 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
   // Use the computed flag from the loader (API key is never sent to client)
   const hasAnthropicKey = Boolean(settings.has_anthropic_key);
 
-  // Get model lists from loader data
+  // Get model lists from loader data: the quiz selects offer quizModels (the
+  // allow-listed subset), Ask Moji every model.
   const anthropicModels = availableModels?.anthropic || [];
+  const quizModelOptions = quizModels || [];
 
   const submit = (payload: Record<string, string | boolean | null>) => {
     fetcher!.submit(payload, {
@@ -221,11 +252,13 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
 
   const modelSelect = (field: (typeof MODEL_FIELDS)[number]) => (
     <Select allowClear disabled={!hasAnthropicKey} placeholder={`Default: ${defaultLabels[field]}`}>
-      {anthropicModels.map((model: { value: string; label: string }) => (
-        <Option key={model.value} value={model.value}>
-          {model.label}
-        </Option>
-      ))}
+      {(isQuizModelField(field) ? quizModelOptions : anthropicModels).map(
+        (model: { value: string; label: string }) => (
+          <Option key={model.value} value={model.value}>
+            {model.label}
+          </Option>
+        )
+      )}
     </Select>
   );
 
@@ -523,7 +556,16 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         if (!(field in data)) continue;
         const value = data[field];
         // '' and null both mean "platform default", stored as null.
-        updateData[field] = typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
+        const model = typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
+        // Both quiz runtimes fall back to the platform default for a model off
+        // the allow-list, so one is refused rather than stored and ignored.
+        if (model && isQuizModelField(field) && !isAllowedModel(model)) {
+          return {
+            error: `${QUIZ_MODEL_LABELS[field]} must be one of ${ALLOWED_MODELS.join(', ')}, or empty for the default.`,
+            action: ActionTypes.SAVE_QUIZ_SETTINGS,
+          };
+        }
+        updateData[field] = model;
       }
       for (const field of EFFORT_FIELDS) {
         if (!(field in data)) continue;

@@ -1,20 +1,22 @@
 /**
  * The two pure pieces of the AI settings page: the platform defaults behind
- * each "Default: X" (a mirror of the ai-agent's fallbacks), and the request
- * the form sends on Save.
+ * each "Default: X" (the quiz runtimes' resolver for the quiz models, the
+ * shared FALLBACK_MODEL for Ask Moji, a mirror of the ai-agent's fallbacks for
+ * the efforts), and the request the form sends on Save.
  */
 
 import { describe, expect, it } from 'vitest';
+import { FALLBACK_MODEL } from '@classmoji/utils/ai-models';
 import { buildLLMSettingsPayload } from '../llmSettingsPayload';
 import { getPlatformAIDefaults } from '../platformDefaults.server';
 
 describe('getPlatformAIDefaults', () => {
-  it("uses the ai-agent's code fallbacks when no env var is set", () => {
+  it('uses the code defaults when no env var is set: Sonnet 5.5 for quizzes and Ask Moji', () => {
     expect(getPlatformAIDefaults({})).toEqual({
-      llm_model: 'claude-sonnet-5',
-      code_aware_model: 'claude-sonnet-5',
-      exploration_model: 'claude-sonnet-5',
-      syllabus_bot_model: 'claude-sonnet-5',
+      llm_model: 'claude-sonnet-5-5',
+      code_aware_model: 'claude-sonnet-5-5',
+      exploration_model: 'claude-sonnet-5-5',
+      syllabus_bot_model: 'claude-sonnet-5-5',
       question_effort: 'medium',
       grading_effort: 'high',
       exploration_effort: 'low',
@@ -22,11 +24,21 @@ describe('getPlatformAIDefaults', () => {
     });
   });
 
-  it('reads the env vars the ai-agent reads', () => {
+  // One constant: the quiz runtimes and Ask Moji fall back to FALLBACK_MODEL,
+  // and the page names the same one.
+  it('names FALLBACK_MODEL for the three quiz models and Ask Moji', () => {
+    const defaults = getPlatformAIDefaults({});
+    expect(defaults.llm_model).toBe(FALLBACK_MODEL);
+    expect(defaults.code_aware_model).toBe(FALLBACK_MODEL);
+    expect(defaults.exploration_model).toBe(FALLBACK_MODEL);
+    expect(defaults.syllabus_bot_model).toBe(FALLBACK_MODEL);
+  });
+
+  it('reads the platform env vars', () => {
     expect(
       getPlatformAIDefaults({
         LLM_MODEL: 'claude-opus-5-5',
-        EXPLORATION_MODEL: 'claude-haiku-4-5-20251001',
+        EXPLORATION_MODEL: 'claude-fable-5',
         SYLLABUS_BOT_MODEL: 'claude-sonnet-5',
         QUIZ_QUESTION_EFFORT: 'low',
         QUIZ_GRADING_EFFORT: 'xhigh',
@@ -36,13 +48,30 @@ describe('getPlatformAIDefaults', () => {
     ).toEqual({
       llm_model: 'claude-opus-5-5',
       code_aware_model: 'claude-opus-5-5',
-      exploration_model: 'claude-haiku-4-5-20251001',
+      exploration_model: 'claude-fable-5',
       syllabus_bot_model: 'claude-sonnet-5',
       question_effort: 'low',
       grading_effort: 'xhigh',
       exploration_effort: 'medium',
       syllabus_bot_effort: 'high',
     });
+  });
+
+  // Both quiz runtimes ignore a platform model off the allow-list and run
+  // FALLBACK_MODEL; Ask Moji has no allow-list and takes it as is.
+  it('names FALLBACK_MODEL for a quiz env model off the allow-list, not for Ask Moji', () => {
+    const defaults = getPlatformAIDefaults({
+      LLM_MODEL: 'claude-haiku-4-5-20251001',
+      EXPLORATION_MODEL: 'claude-haiku-4-5',
+    });
+    expect(defaults.llm_model).toBe(FALLBACK_MODEL);
+    expect(defaults.code_aware_model).toBe(FALLBACK_MODEL);
+    expect(defaults.exploration_model).toBe(FALLBACK_MODEL);
+    expect(defaults.syllabus_bot_model).toBe('claude-haiku-4-5-20251001');
+  });
+
+  it('trims a quiz env model, as the quiz runtimes do', () => {
+    expect(getPlatformAIDefaults({ LLM_MODEL: ' claude-opus-5 ' }).llm_model).toBe('claude-opus-5');
   });
 
   it("falls back from SYLLABUS_BOT_MODEL to LLM_MODEL, as Ask Moji's service does", () => {

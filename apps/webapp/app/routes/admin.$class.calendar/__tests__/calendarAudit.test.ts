@@ -50,8 +50,12 @@ vi.mock('~/utils/classroomProFlag.server', () => ({
 
 // The write policy is NOT mocked: it is a dependency-free module, so the action
 // runs the real decision here and these tests cannot pass against a copy of it.
-const { CalendarTimeRangeError, ASSISTANT_EVENT_TYPE_MESSAGE } =
-  await import('@classmoji/services/calendar-policy');
+const {
+  CalendarMeetingLinkError,
+  CalendarTimeRangeError,
+  ASSISTANT_EVENT_TYPE_MESSAGE,
+  MEETING_LINK_MESSAGE,
+} = await import('@classmoji/services/calendar-policy');
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
@@ -626,6 +630,60 @@ describe('calendar action — a refused time range reaches the user', () => {
         eventData: JSON.stringify({ title: 'Whatever' }),
       })
     ).rejects.toThrow('connection reset');
+  });
+});
+
+describe('calendar action — a refused meeting link reaches the user', () => {
+  const INVITATION = 'Join Zoom Meeting https://zoom.us/j/1 Meeting ID: 1';
+
+  it('hands the meeting link to the service as typed — the service owns the rule', async () => {
+    await submit({
+      intent: 'create',
+      eventData: JSON.stringify({
+        title: 'Office hours',
+        event_type: 'OFFICE_HOURS',
+        meeting_link: INVITATION,
+      }),
+    });
+
+    expect(mocks.createEvent.mock.calls[0][2]).toMatchObject({ meeting_link: INVITATION });
+  });
+
+  it('answers a create with the message, not a 500', async () => {
+    mocks.createEvent.mockRejectedValue(new CalendarMeetingLinkError());
+
+    const response = (await submit({
+      intent: 'create',
+      eventData: JSON.stringify({
+        title: 'Office hours',
+        event_type: 'OFFICE_HOURS',
+        meeting_link: 'Meeting ID: 912 3456 7890',
+      }),
+    })) as { data?: { error?: string }; init?: { status?: number } };
+
+    expect(response.init?.status).toBe(400);
+    expect(response.data?.error).toBe(MEETING_LINK_MESSAGE);
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('answers a scoped update the same way, and writes no links after it', async () => {
+    mocks.updateEventWithScope.mockRejectedValue(new CalendarMeetingLinkError());
+
+    const response = (await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({
+        meeting_link: 'See Canvas',
+        editScope: 'this_only',
+        occurrenceDate: '2026-09-21T00:00:00.000Z',
+        linkedPageIds: ['p-1'],
+      }),
+    })) as { data?: { error?: string }; init?: { status?: number } };
+
+    expect(response.init?.status).toBe(400);
+    expect(response.data?.error).toBe(MEETING_LINK_MESSAGE);
+    expect(mocks.updateEventLinks).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 });
 

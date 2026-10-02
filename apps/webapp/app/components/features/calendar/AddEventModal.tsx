@@ -10,7 +10,12 @@ import {
   IconRepeat,
   IconLink,
 } from '@tabler/icons-react';
-import { buildEventWindow, getEventTypeDotColor, getEventTypeLabel } from './utils';
+import {
+  buildEventWindow,
+  getEventTypeDotColor,
+  getEventTypeLabel,
+  meetingLinkRule,
+} from './utils';
 import {
   buildLinkOptions,
   createLinkTagRender,
@@ -356,7 +361,12 @@ const AddEventModal = ({
           </InlineRow>
 
           <InlineRow icon={IconVideo}>
-            <Form.Item name="meeting_link" className="!mb-0 !mt-1">
+            <Form.Item
+              name="meeting_link"
+              rules={[meetingLinkRule()]}
+              validateTrigger="onBlur"
+              className="!mb-0 !mt-1"
+            >
               <Input variant="borderless" placeholder="Add meeting link" className="!px-0" />
             </Form.Item>
           </InlineRow>

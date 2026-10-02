@@ -1,6 +1,8 @@
 import getPrisma from '@classmoji/database';
 import type { Prisma } from '@prisma/client';
 import { ModuleItemType } from '@prisma/client';
+import { isAllowedModel } from '@classmoji/utils/ai-models';
+import { meetingLinkForCopy } from './calendarPolicy.ts';
 import * as entitlementService from './entitlement.service.ts';
 
 type RepositoryImportClient = Prisma.TransactionClient | ReturnType<typeof getPrisma>;
@@ -101,6 +103,18 @@ export const SETTINGS_FIELD_GROUPS: Record<
 };
 
 /**
+ * The quiz model columns. Both quiz runtimes run only allow-listed models
+ * (isAllowedModel, @classmoji/utils/ai-models), and the AI settings page
+ * refuses any other, so the import writes an off-list id as null — the
+ * platform default, which is what it would run as anyway.
+ */
+const QUIZ_MODEL_FIELDS: ReadonlySet<string> = new Set([
+  'llm_model',
+  'code_aware_model',
+  'exploration_model',
+]);
+
+/**
  * Pure helper: the union (in stable group order, de-duplicated) of
  * classroom_settings field names implied by the enabled selection groups.
  * apiKeys is included only when explicitly opted in. gradeScales/calendar are
@@ -137,7 +151,8 @@ export function selectedSettingsFields(selections: ConfigImportSelections): stri
  * Settings: builds a patch of ONLY the fields implied by the enabled groups
  * (via `selectedSettingsFields`). A source field is skipped when it is null or
  * undefined; booleans/numbers copy verbatim including false/0 (they are never
- * null/undefined for the non-nullable columns). The target's settings row is
+ * null/undefined for the non-nullable columns). A quiz model off the allow-list
+ * is written as null (QUIZ_MODEL_FIELDS). The target's settings row is
  * assumed to already exist and is updated by classroom_id. Never copies
  * content_repo_name, classroom_id, id, or timestamps.
  *
@@ -202,6 +217,12 @@ export const importClassroomConfig = async (
         skipped.push(field);
         continue;
       }
+      if (QUIZ_MODEL_FIELDS.has(field)) {
+        const id = typeof value === 'string' ? value.trim() : '';
+        patch[field] = isAllowedModel(id) ? id : null;
+        written.push(field);
+        continue;
+      }
       patch[field] = value;
       written.push(field);
     }
@@ -261,12 +282,12 @@ export const importClassroomConfig = async (
         classroom_id: targetClassroomId,
         created_by: createdByUserId,
         title: event.title,
-        description: event.description,
         event_type: event.event_type,
         start_time: event.start_time,
         end_time: event.end_time,
         location: event.location,
-        meeting_link: event.meeting_link,
+        // meeting_link and description: text that is not a web link moves to the description.
+        ...meetingLinkForCopy(event.meeting_link, event.description),
         is_recurring: event.is_recurring,
         // Nullable Json: omit when null to sidestep Prisma DbNull/JsonNull typing.
         ...(event.recurrence_rule === null

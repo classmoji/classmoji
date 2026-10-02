@@ -22,7 +22,12 @@ import {
   IconTrash,
 } from '@tabler/icons-react';
 import dayjs from 'dayjs';
-import { buildEventWindow, getEventTypeDotColor, getEventTypeLabel } from './utils';
+import {
+  buildEventWindow,
+  getEventTypeDotColor,
+  getEventTypeLabel,
+  meetingLinkRule,
+} from './utils';
 import EventLinks from './EventLinks';
 import type { CalendarEventWithLinks } from './types';
 import {
@@ -577,7 +582,12 @@ const EditEventModal = ({
           </InlineRow>
 
           <InlineRow icon={IconVideo}>
-            <Form.Item name="meeting_link" className="!mb-0 !mt-1">
+            <Form.Item
+              name="meeting_link"
+              rules={[meetingLinkRule(event.meeting_link)]}
+              validateTrigger="onBlur"
+              className="!mb-0 !mt-1"
+            >
               <Input variant="borderless" placeholder="Add meeting link" className="!px-0" />
             </Form.Item>
           </InlineRow>

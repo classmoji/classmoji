@@ -5,11 +5,15 @@ import type { AssignmentType, EventType } from '@prisma/client';
 import { pagesUrl } from '../emails/escape.ts';
 import * as entitlementService from './entitlement.service.ts';
 import {
+  addToDescription,
+  CalendarMeetingLinkError,
   CalendarTimeRangeError,
+  checkMeetingLink,
   isFeaturedLinkRow,
   resolveFeaturedLink,
   type FeaturedLinkKind,
   type FeaturedLinkRef,
+  type MeetingLinkCheck,
 } from './calendarPolicy.ts';
 
 type DateInput = Date | string;
@@ -348,9 +352,11 @@ export {
   ASSISTANT_EVENT_TYPE_MESSAGE,
   assistantMayChangeEventType,
   assistantMayCreateEventType,
+  CalendarMeetingLinkError,
   CalendarTimeRangeError,
   EDIT_SCOPE_THIS_ONLY,
   FEATURED_LINK_KINDS,
+  isCalendarMeetingLinkError,
   isCalendarTimeRangeError,
   isFeaturedLinkRow,
   resolveFeaturedLink,
@@ -382,6 +388,40 @@ const assertEndAfterStart = (
     throw new CalendarTimeRangeError();
   }
 };
+
+type MeetingLinkDecision = Extract<MeetingLinkCheck, { ok: true }>;
+
+/**
+ * Apply the meeting-link rule (`checkMeetingLink`) to a write. Null means the
+ * write does not touch the link.
+ *
+ * `stored` is the value the edit form showed. It is asked for only when the
+ * value would otherwise be refused, because all it can change is whether an
+ * unchanged note with no link is let through.
+ */
+const decideMeetingLink = async (
+  raw: string | null | undefined,
+  stored: () => Promise<string | null | undefined> | string | null | undefined
+): Promise<MeetingLinkDecision | null> => {
+  if (raw === undefined) return null;
+  let check = checkMeetingLink(raw);
+  if (!check.ok) check = checkMeetingLink(raw, await stored());
+  if (!check.ok) throw new CalendarMeetingLinkError(check.message);
+  return check;
+};
+
+/**
+ * The description a write stores. Without pasted invitation text it is what
+ * the write sent (undefined still leaves the column alone). With it, the text
+ * joins the description the event ends up with: the one sent, or the stored
+ * one when the write sent none.
+ */
+const descriptionWithMeetingText = (
+  decision: MeetingLinkDecision | null,
+  sent: string | null | undefined,
+  stored: string | null | undefined
+): string | null | undefined =>
+  decision?.text ? addToDescription(sent !== undefined ? sent : stored, decision.text) : sent;
 
 const isJsonObject = (
   value: Prisma.JsonValue | Prisma.InputJsonValue | null | undefined
@@ -1307,6 +1347,7 @@ export const createEvent = async (
   } = eventData;
 
   assertEndAfterStart(start_time, end_time);
+  const link = await decideMeetingLink(meeting_link, () => null);
 
   return withLogins(
     await getPrisma().calendarEvent.create({
@@ -1315,11 +1356,11 @@ export const createEvent = async (
         created_by: userId,
         event_type,
         title,
-        description,
+        description: descriptionWithMeetingText(link, description, null),
         start_time: toDate(start_time),
         end_time: toDate(end_time),
         location,
-        meeting_link,
+        meeting_link: link?.meetingLink,
         is_recurring: is_recurring || false,
         recurrence_rule: is_recurring ? toNullableJsonInput(recurrence_rule) : Prisma.JsonNull,
       },
@@ -1355,17 +1396,36 @@ export const updateEvent = async (eventId: string, eventData: CalendarEventUpdat
 
   assertEndAfterStart(start_time, end_time);
 
+  // The stored row is read at most once, and only when the link rule needs it:
+  // to recognise an unchanged note, or to find the description that text joins
+  // when this update leaves the description out.
+  let storedRow:
+    | Promise<{ meeting_link: string | null; description: string | null } | null>
+    | undefined;
+  const readStored = () =>
+    (storedRow ??= getPrisma().calendarEvent.findUnique({
+      where: { id: eventId },
+      select: { meeting_link: true, description: true },
+    }));
+
+  const link = await decideMeetingLink(
+    meeting_link,
+    async () => (await readStored())?.meeting_link
+  );
+  const storedDescription =
+    link?.text && description === undefined ? (await readStored())?.description : undefined;
+
   return withLogins(
     await getPrisma().calendarEvent.update({
       where: { id: eventId },
       data: {
         event_type,
         title,
-        description,
+        description: descriptionWithMeetingText(link, description, storedDescription),
         start_time: toOptionalUpdateDate(start_time),
         end_time: toOptionalUpdateDate(end_time),
         location,
-        meeting_link,
+        meeting_link: link?.meetingLink,
         is_recurring,
         recurrence_rule: is_recurring ? toNullableJsonInput(recurrence_rule) : Prisma.JsonNull,
       },
@@ -1417,12 +1477,38 @@ export const updateEventWithScope = async (
     throw new Error('Event not found');
   }
 
+  const existingOverride = event.overrides?.find(o => isSameDate(new Date(o.date), occurrenceDate));
+  const overrideMeetingLink = existingOverride?.new_meeting_link ?? null;
+
+  // A one-date edit is compared with the link the form showed for that date, as
+  // the calendar expands it. A series edit is compared with the series link. A
+  // note only this date's override holds, sent back unchanged from a series
+  // edit, is not the series' to take: the link counts as not mentioned.
+  const sendsOverrideNote = (): boolean => {
+    if (eventData.meeting_link === undefined || !overrideMeetingLink) return false;
+    if (checkMeetingLink(eventData.meeting_link, event.meeting_link).ok) return false;
+    const asOccurrence = checkMeetingLink(eventData.meeting_link, overrideMeetingLink);
+    return asOccurrence.ok && asOccurrence.unchangedNote;
+  };
+  const link =
+    editScope === 'this_only'
+      ? await decideMeetingLink(
+          eventData.meeting_link,
+          () => overrideMeetingLink || event.meeting_link
+        )
+      : sendsOverrideNote()
+        ? null
+        : await decideMeetingLink(eventData.meeting_link, () => event.meeting_link);
+
   switch (editScope) {
     case 'this_only': {
-      // Create or update an override for this specific occurrence
-      const existingOverride = event.overrides?.find(o =>
-        isSameDate(new Date(o.date), occurrenceDate)
-      );
+      // Create or update an override for this specific occurrence. An override
+      // has no description, so pasted invitation text has nowhere to go here —
+      // the same as a description edit at this scope; only its link is kept.
+      // An unchanged note is left where it is: editing one date does not
+      // rewrite the series. A null link is not "no link" on an override — the
+      // occurrence then shows the series link.
+      const overrideLink = link?.unchangedNote ? undefined : link?.meetingLink;
 
       if (existingOverride) {
         await getPrisma().calendarEventOverride.update({
@@ -1431,7 +1517,7 @@ export const updateEventWithScope = async (
             new_start_time: toOptionalDate(eventData.start_time, true),
             new_end_time: toOptionalDate(eventData.end_time, true),
             new_location: eventData.location,
-            new_meeting_link: eventData.meeting_link,
+            new_meeting_link: overrideLink,
           },
         });
       } else {
@@ -1442,7 +1528,7 @@ export const updateEventWithScope = async (
             new_start_time: toOptionalDate(eventData.start_time, true),
             new_end_time: toOptionalDate(eventData.end_time, true),
             new_location: eventData.location,
-            new_meeting_link: eventData.meeting_link,
+            new_meeting_link: overrideLink,
           },
         });
       }
@@ -1483,11 +1569,17 @@ export const updateEventWithScope = async (
             created_by: event.created_by,
             event_type: eventData.event_type || event.event_type,
             title: eventData.title || event.title,
-            description: eventData.description ?? event.description,
+            description: descriptionWithMeetingText(
+              link,
+              eventData.description ?? event.description,
+              event.description
+            ),
             start_time: eventData.start_time ? toDate(eventData.start_time) : event.start_time,
             end_time: eventData.end_time ? toDate(eventData.end_time) : event.end_time,
             location: eventData.location ?? event.location,
-            meeting_link: eventData.meeting_link ?? event.meeting_link,
+            // A cleared field clears the link here too; only a write that does
+            // not mention the link carries the old one over.
+            meeting_link: link ? link.meetingLink : event.meeting_link,
             is_recurring: eventData.is_recurring ?? event.is_recurring,
             recurrence_rule: toNullableJsonInput(
               eventData.recurrence_rule ?? toInputJsonObject(event.recurrence_rule)
@@ -1539,11 +1631,11 @@ export const updateEventWithScope = async (
         data: {
           event_type: eventData.event_type,
           title: eventData.title,
-          description: eventData.description,
+          description: descriptionWithMeetingText(link, eventData.description, event.description),
           start_time: toOptionalUpdateDate(eventData.start_time),
           end_time: toOptionalUpdateDate(eventData.end_time),
           location: eventData.location,
-          meeting_link: eventData.meeting_link,
+          meeting_link: link?.meetingLink,
           is_recurring: eventData.is_recurring,
           recurrence_rule:
             eventData.is_recurring === undefined
@@ -1689,6 +1781,8 @@ export const createOverride = async (
 ) => {
   const { is_cancelled, new_start_time, new_end_time, new_location, new_meeting_link } =
     overrideData;
+  // An override has no description, so only the link of pasted text is kept.
+  const link = await decideMeetingLink(new_meeting_link, () => null);
 
   return getPrisma().calendarEventOverride.create({
     data: {
@@ -1698,7 +1792,7 @@ export const createOverride = async (
       new_start_time: toOptionalDate(new_start_time, true),
       new_end_time: toOptionalDate(new_end_time, true),
       new_location,
-      new_meeting_link,
+      new_meeting_link: link?.meetingLink,
     },
   });
 };
@@ -1709,6 +1803,8 @@ export const createOverride = async (
 export const updateOverride = async (overrideId: string, overrideData: CalendarOverrideData) => {
   const { is_cancelled, new_start_time, new_end_time, new_location, new_meeting_link } =
     overrideData;
+  // An override has no description, so only the link of pasted text is kept.
+  const link = await decideMeetingLink(new_meeting_link, () => null);
 
   return getPrisma().calendarEventOverride.update({
     where: { id: overrideId },
@@ -1717,7 +1813,7 @@ export const updateOverride = async (overrideId: string, overrideData: CalendarO
       new_start_time: toOptionalDate(new_start_time, true),
       new_end_time: toOptionalDate(new_end_time, true),
       new_location,
-      new_meeting_link,
+      new_meeting_link: link?.meetingLink,
     },
   });
 };

@@ -1,6 +1,7 @@
 // eslint-disable-next-line import/no-unresolved -- trigger.dev v3 resolved at runtime
 import { task, logger, metadata } from '@trigger.dev/sdk/v3';
 import Anthropic from '@anthropic-ai/sdk';
+import { FALLBACK_MODEL } from '@classmoji/utils/ai-models';
 import { normalizeRepoPath } from '../agents/shared/exploration/excludedPaths.ts';
 
 console.log('[explore-repo] Repository loaded (v3: excerpts, result in metadata)');
@@ -1375,7 +1376,7 @@ export const exploreRepoTask = task({
       explorationEffort,
     } = payload;
 
-    const model = explorationModel || 'claude-sonnet-5';
+    const model = explorationModel || FALLBACK_MODEL;
     const requestedEffort = toEffortLevel(explorationEffort);
     if (explorationEffort && !requestedEffort) {
       logger.warn(`Ignoring unknown explorationEffort ${JSON.stringify(explorationEffort)}`);
