@@ -121,23 +121,19 @@ export const opensLater = (releaseAt: DateValue, now: Dayjs = dayjs()) => {
 
 /**
  * What is wrong with the Closes date, or null: it may not come before Opens
- * or Due (no attempt could start in between).
+ * (no attempt could start at all). Closing before Due is allowed: a quiz can
+ * be closed early.
  */
 export const closesDateError = ({
   releaseAt,
-  dueDate,
   closesAt,
 }: {
   releaseAt: DateValue;
-  dueDate: DateValue;
   closesAt: DateValue;
 }): string | null => {
   const closes = asDayjs(closesAt);
-  if (!closes) return null;
   const opens = asDayjs(releaseAt);
-  if (opens && closes.isBefore(opens)) return 'Closes can’t be before Opens';
-  const due = asDayjs(dueDate);
-  if (due && closes.isBefore(due)) return 'Closes can’t be before Due';
+  if (closes && opens && closes.isBefore(opens)) return 'Closes can’t be before Opens';
   return null;
 };
 

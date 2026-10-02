@@ -354,15 +354,17 @@ describe('editing a quiz as the owner or a teacher', () => {
     expect(mocks.submit.mock.calls[0][0].assignment).toEqual({ weight: 15 });
   });
 
-  it('Close now sets Closes to now, and the save carries it', async () => {
-    // Due has passed, so closing now is not before it.
-    const due = emptyPanel({ ...assigned, dueDate: '2026-09-01T16:00:00.000Z' });
-    await render({ viewer: OWNER, quiz: formQuiz(), panel: due });
+  it('Close now sets Closes to now, and the save carries it, even before Due', async () => {
+    // Due is still ahead: closing a quiz early is allowed.
+    const dueAhead = emptyPanel({ ...assigned, dueDate: dayjs().add(7, 'day').toISOString() });
+    await render({ viewer: OWNER, quiz: formQuiz(), panel: dueAhead });
     expect(byTestId('quiz-assignment-status')?.textContent).toContain('Published');
 
     const before = Date.now();
     await click(byTestId('quiz-close-now')!);
     expect(byTestId('quiz-assignment-status')?.textContent).toBe('Closed');
+    expect(editablePanel()!.textContent).not.toContain('can’t be before');
+    expect(saveButton().disabled).toBe(false);
 
     await click(saveButton());
     await vi.waitFor(() => expect(mocks.submit).toHaveBeenCalledTimes(1));
@@ -373,25 +375,33 @@ describe('editing a quiz as the owner or a teacher', () => {
     expect(closesAt).toBeLessThanOrEqual(Date.now());
   });
 
-  it('refuses a Closes date before Due: an inline error, and Save is disabled', async () => {
-    await render({ viewer: OWNER, quiz: formQuiz(), panel: assigned });
+  it('refuses Close now on a quiz that opens later: an inline error, and Save is disabled', async () => {
+    await render({
+      viewer: OWNER,
+      quiz: formQuiz(),
+      panel: emptyPanel({ ...assigned, releaseAt: dayjs().add(7, 'day').toISOString() }),
+    });
     await vi.waitFor(() => expect(saveButton().disabled).toBe(false));
 
-    // Due is 2026-10-09; closing now comes before it.
+    // Opens is next week; closing now comes before it.
     await click(byTestId('quiz-close-now')!);
 
-    expect(editablePanel()!.textContent).toContain('Closes can’t be before Due');
+    expect(editablePanel()!.textContent).toContain('Closes can’t be before Opens');
     expect(saveButton().disabled).toBe(true);
     await click(saveButton());
     expect(mocks.submit).not.toHaveBeenCalled();
   });
 
   it('does not hold up a content save over dates it did not change', async () => {
-    // Saved before the rule: closes before its due date.
+    // Saved before the rule: closes before it opens.
     await render({
       viewer: OWNER,
       quiz: formQuiz(),
-      panel: emptyPanel({ ...assigned, closesAt: '2026-10-01T16:00:00.000Z' }),
+      panel: emptyPanel({
+        ...assigned,
+        releaseAt: '2026-10-05T16:00:00.000Z',
+        closesAt: '2026-10-01T16:00:00.000Z',
+      }),
     });
 
     await vi.waitFor(() => expect(saveButton().disabled).toBe(false));
@@ -838,28 +848,18 @@ describe('changedPanelPayload', () => {
 });
 
 describe('closesDateError', () => {
-  it('refuses Closes before Opens, then before Due', () => {
+  it('refuses Closes before Opens', () => {
     expect(
-      closesDateError({
-        releaseAt: '2026-10-05T00:00:00Z',
-        dueDate: '2026-10-09T00:00:00Z',
-        closesAt: '2026-10-04T00:00:00Z',
-      })
+      closesDateError({ releaseAt: '2026-10-05T00:00:00Z', closesAt: '2026-10-04T00:00:00Z' })
     ).toBe('Closes can’t be before Opens');
-    expect(
-      closesDateError({
-        releaseAt: null,
-        dueDate: '2026-10-09T00:00:00Z',
-        closesAt: '2026-10-08T00:00:00Z',
-      })
-    ).toBe('Closes can’t be before Due');
   });
 
-  it('takes Closes on or after both, or no Closes at all', () => {
-    const dates = { releaseAt: '2026-10-05T00:00:00Z', dueDate: '2026-10-09T00:00:00Z' };
-    expect(closesDateError({ ...dates, closesAt: '2026-10-09T00:00:00Z' })).toBeNull();
-    expect(closesDateError({ ...dates, closesAt: '2026-10-10T00:00:00Z' })).toBeNull();
-    expect(closesDateError({ ...dates, closesAt: null })).toBeNull();
+  it('takes Closes on or after Opens, with no Opens, or no Closes at all', () => {
+    const releaseAt = '2026-10-05T00:00:00Z';
+    expect(closesDateError({ releaseAt, closesAt: '2026-10-05T00:00:00Z' })).toBeNull();
+    expect(closesDateError({ releaseAt, closesAt: '2026-10-06T00:00:00Z' })).toBeNull();
+    expect(closesDateError({ releaseAt: null, closesAt: '2026-10-01T00:00:00Z' })).toBeNull();
+    expect(closesDateError({ releaseAt, closesAt: null })).toBeNull();
   });
 });
 

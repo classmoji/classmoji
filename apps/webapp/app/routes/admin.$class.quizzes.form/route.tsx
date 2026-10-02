@@ -257,8 +257,9 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
   // I3: the owner or a teacher cannot save a quiz without a module. An
   // assistant's save carries content only, so it needs none.
   const chosenModuleId = Form.useWatch(['assignment', 'moduleId'], form) as string | undefined;
-  // Closes may not come before Opens or Due. Checked once a date is changed
-  // here, so dates saved before the rule existed do not block a content edit.
+  // Closes may not come before Opens (before Due is fine: a quiz can close
+  // early). Checked once a date is changed here, so dates saved before the
+  // rule existed do not block a content edit.
   const watchedDates = {
     releaseAt: Form.useWatch(['assignment', 'releaseAt'], form) as Dayjs | null | undefined,
     dueDate: Form.useWatch(['assignment', 'dueDate'], form) as Dayjs | null | undefined,
