@@ -11,6 +11,8 @@ const itemFindMany = vi.fn();
 const itemCreate = vi.fn();
 const itemUpdate = vi.fn();
 const itemDeleteMany = vi.fn();
+const assignmentCount = vi.fn();
+const queryRaw = vi.fn();
 const transaction = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
@@ -154,23 +156,32 @@ describe('setPublic', () => {
 });
 
 describe('deleteById', () => {
+  // deleteById runs its check and its delete inside one interactive
+  // transaction; hand it a client whose calls are the mocks below.
+  const tx = {
+    $queryRaw: queryRaw,
+    assignment: { count: assignmentCount },
+    module: { delete: moduleDelete },
+  };
+  beforeEach(() => {
+    transaction.mockImplementation(async (run: (client: typeof tx) => unknown) => run(tx));
+    queryRaw.mockResolvedValue([{ id: 'mod1' }]);
+  });
+
   it('refuses a module that owns any assignment, of any kind, and deletes nothing', async () => {
     // One count over every assignment type: the refusal does not care whether
     // the page listed them (a classroom without quizzes lists no QUIZ ones).
     moduleFindFirst.mockResolvedValue({ id: 'mod1' });
-    moduleFindUnique.mockResolvedValue({ _count: { assignments: 1 } });
+    assignmentCount.mockResolvedValue(1);
 
     await expect(deleteById('mod1', 'class-1')).rejects.toThrow('Module still has assignments');
-    expect(moduleFindUnique).toHaveBeenCalledWith({
-      where: { id: 'mod1' },
-      select: { _count: { select: { assignments: true } } },
-    });
+    expect(assignmentCount).toHaveBeenCalledWith({ where: { module_id: 'mod1' } });
     expect(moduleDelete).not.toHaveBeenCalled();
   });
 
   it('deletes a module with no assignments, leaving its items to the cascade', async () => {
     moduleFindFirst.mockResolvedValue({ id: 'mod1' });
-    moduleFindUnique.mockResolvedValue({ _count: { assignments: 0 } });
+    assignmentCount.mockResolvedValue(0);
     moduleDelete.mockResolvedValue({ id: 'mod1' });
 
     await deleteById('mod1', 'class-1');
@@ -185,11 +196,30 @@ describe('deleteById', () => {
     expect(itemDeleteMany).not.toHaveBeenCalled();
   });
 
+  it('locks the module row before it counts, and counts before it deletes', async () => {
+    // The order is the whole point: an assignment moved in at the same moment
+    // must be either counted or kept out, never cascade-deleted.
+    moduleFindFirst.mockResolvedValue({ id: 'mod1' });
+    assignmentCount.mockResolvedValue(0);
+    moduleDelete.mockResolvedValue({ id: 'mod1' });
+
+    await deleteById('mod1', 'class-1');
+
+    expect(transaction).toHaveBeenCalledTimes(1);
+    const [lock] = queryRaw.mock.calls[0] as [TemplateStringsArray, string];
+    expect(lock.join('?')).toMatch(/FROM modules WHERE id = \? FOR UPDATE/);
+    expect(queryRaw.mock.calls[0][1]).toBe('mod1');
+    const at = (mock: { mock: { invocationCallOrder: number[] } }) =>
+      mock.mock.invocationCallOrder[0];
+    expect(at(queryRaw)).toBeLessThan(at(assignmentCount));
+    expect(at(assignmentCount)).toBeLessThan(at(moduleDelete));
+  });
+
   it('refuses a module from another classroom before looking at it', async () => {
     moduleFindFirst.mockResolvedValue(null);
 
     await expect(deleteById('mod1', 'class-2')).rejects.toThrow('Module not found in classroom');
-    expect(moduleFindUnique).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
     expect(moduleDelete).not.toHaveBeenCalled();
   });
 });

@@ -833,8 +833,14 @@ export const moveToModuleEnd = async (
       await tx.$queryRaw`SELECT id FROM modules WHERE id = ${moduleId} FOR UPDATE`;
     }
 
-    // Read again under the lock: another move of this same assignment may have
-    // finished while this one waited.
+    // Read again under the lock. The target may have been deleted while this
+    // move waited (module.deleteById holds the same lock), and another move of
+    // this same assignment may have finished.
+    const targetNow = await tx.module.findUnique({
+      where: { id: toModuleId },
+      select: { id: true },
+    });
+    if (!targetNow) throw new Error('Module not found in classroom');
     const current = await tx.assignment.findFirst({ where: scoped, select: { module_id: true } });
     if (!current) throw new Error('Assignment not found in classroom');
     if (current.module_id === toModuleId) return { moved: false, fromModuleId };

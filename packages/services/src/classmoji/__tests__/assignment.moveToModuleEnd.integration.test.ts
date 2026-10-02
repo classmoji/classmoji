@@ -12,9 +12,13 @@
  * A fake Prisma would run every "concurrent" call one after another and agree
  * with whatever the service did.
  *
- * Also pinned here, because the MCP's module read leans on it: the student
- * filter in `module.listForClassroom` (published assignments only, and a REPO
- * one only once its repository is published).
+ * Also pinned here, on the same fixtures:
+ *   - `module.deleteById`, which takes the same module lock: a module that owns
+ *     an assignment is refused, and an assignment moved in while a delete runs
+ *     is never cascade-deleted with it;
+ *   - the student filter in `module.listForClassroom` (published assignments
+ *     only, and a REPO one only once its repository is published), which the
+ *     MCP's module read leans on.
  *
  * SAFETY: every fixture is namespaced with a fresh uuid and torn down in
  * afterAll by deleting the git organization (which cascades classroom → modules
@@ -46,6 +50,7 @@ describe.skipIf(!RUN)('assignment.moveToModuleEnd (integration)', () => {
   let otherClassroomId: string;
   let repositoryId: string;
   let draftRepositoryId: string;
+  let authorId: string;
 
   const makeModule = (inClassroom = classroomId) =>
     moduleService.create(inClassroom, { title: `Module ${randomUUID().slice(0, 8)} ${suite}` });
@@ -131,10 +136,17 @@ describe.skipIf(!RUN)('assignment.moveToModuleEnd (integration)', () => {
       });
     repositoryId = (await makeRepository('labs', true)).id;
     draftRepositoryId = (await makeRepository('draft-labs', false)).id;
+
+    const author = await prisma.user.create({
+      data: { email: `mvtest-${suite}@example.test`, name: `Move Test Author ${suite}` },
+      select: { id: true },
+    });
+    authorId = author.id;
   });
 
   afterAll(async () => {
     if (orgId) await prisma.gitOrganization.delete({ where: { id: orgId } }).catch(() => {});
+    if (authorId) await prisma.user.delete({ where: { id: authorId } }).catch(() => {});
   });
 
   it('puts the assignment at the end of the target and compacts the module it left', async () => {
@@ -306,6 +318,92 @@ describe.skipIf(!RUN)('assignment.moveToModuleEnd (integration)', () => {
     const landed = [await layout(left.id), await layout(right.id)];
     expect(landed.flat()).toEqual(['contested@0']);
     expect(await layout(from.id)).toEqual([]);
+  });
+
+  // ── module.deleteById ────────────────────────────────────────────────────
+
+  it('deletes a module that owns no assignments: its item rows go, the page stays', async () => {
+    const module = await makeModule();
+    const page = await prisma.page.create({
+      data: {
+        classroom_id: classroomId,
+        title: `Page ${suite}`,
+        content_path: `pages/mvtest-${suite}`,
+        created_by: authorId,
+      },
+      select: { id: true },
+    });
+    const item = await moduleService.addItem(module.id, 'PAGE', page.id, classroomId);
+
+    await moduleService.deleteById(module.id, classroomId);
+
+    expect(await prisma.module.findUnique({ where: { id: module.id } })).toBeNull();
+    expect(await prisma.moduleItem.findUnique({ where: { id: item.id } })).toBeNull();
+    expect(await prisma.page.findUnique({ where: { id: page.id } })).not.toBeNull();
+  });
+
+  it('refuses to delete a module that owns an assignment, and keeps both', async () => {
+    const module = await makeModule();
+    const assignment = await makeAssignment(module.id, { title: 'owned' });
+
+    await expect(moduleService.deleteById(module.id, classroomId)).rejects.toThrow(
+      'Module still has assignments'
+    );
+    await expect(moduleService.deleteById(module.id, otherClassroomId)).rejects.toThrow(
+      'Module not found in classroom'
+    );
+
+    expect(await prisma.module.findUnique({ where: { id: module.id } })).not.toBeNull();
+    expect(await prisma.assignment.findUnique({ where: { id: assignment.id } })).not.toBeNull();
+  });
+
+  it('never cascade-deletes an assignment moved in while the module is being deleted', async () => {
+    // Twenty rounds of the two calls started together. Whichever takes the
+    // module lock first decides: the move lands and the delete is refused, or
+    // the delete lands and the move finds no module. The assignment survives
+    // both, which is the one outcome the foreign key's cascade would not give.
+    const outcomes = new Set<string>();
+    for (let round = 0; round < 20; round++) {
+      const from = await makeModule();
+      const doomed = await makeModule();
+      const assignment = await makeAssignment(from.id, { title: 'survivor' });
+
+      const [move, del] = await Promise.allSettled(
+        round % 2 === 0
+          ? [
+              assignmentService.moveToModuleEnd(assignment.id, doomed.id, classroomId),
+              moduleService.deleteById(doomed.id, classroomId),
+            ]
+          : [
+              moduleService.deleteById(doomed.id, classroomId),
+              assignmentService.moveToModuleEnd(assignment.id, doomed.id, classroomId),
+            ].reverse()
+      );
+
+      const survivor = await prisma.assignment.findUnique({
+        where: { id: assignment.id },
+        select: { module_id: true },
+      });
+      expect(survivor, `round ${round}: the assignment was deleted`).not.toBeNull();
+      const moduleLeft = await prisma.module.findUnique({ where: { id: doomed.id } });
+
+      if (move.status === 'fulfilled') {
+        // The move won: the module must still exist, holding the assignment.
+        expect(del.status, `round ${round}`).toBe('rejected');
+        expect(String((del as PromiseRejectedResult).reason)).toContain('still has assignments');
+        expect(moduleLeft).not.toBeNull();
+        expect(survivor?.module_id).toBe(doomed.id);
+        outcomes.add('move-won');
+      } else {
+        // The delete won: the assignment is where it was.
+        expect(del.status, `round ${round}`).toBe('fulfilled');
+        expect(String(move.reason)).toContain('Module not found in classroom');
+        expect(moduleLeft).toBeNull();
+        expect(survivor?.module_id).toBe(from.id);
+        outcomes.add('delete-won');
+      }
+    }
+    expect(outcomes.size).toBeGreaterThan(0);
   });
 
   it('student module list: published assignments only, a REPO one only with its repository published', async () => {

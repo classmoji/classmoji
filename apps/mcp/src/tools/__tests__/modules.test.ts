@@ -1,6 +1,6 @@
 /**
  * Unit tests for the module (curriculum) tool batch — module_create /
- * module_update / module_publish / module_item_add.
+ * module_update / module_publish / module_item_add / module_delete.
  *
  * The focus is the FIFTH item type. `ModuleItemType` gained `FORM`, and a
  * module item that links a form is the one place the curriculum surface touches
@@ -36,6 +36,8 @@ const mocks = vi.hoisted(() => ({
   moduleUpdateForClassroom: vi.fn(),
   moduleSetPublished: vi.fn(),
   moduleAddItem: vi.fn(),
+  moduleFindById: vi.fn(),
+  moduleDeleteById: vi.fn(),
   auditCreate: vi.fn(),
 }));
 
@@ -50,20 +52,28 @@ vi.mock('@classmoji/services', () => ({
       updateForClassroom: (...a: unknown[]) => mocks.moduleUpdateForClassroom(...a),
       setPublished: (...a: unknown[]) => mocks.moduleSetPublished(...a),
       addItem: (...a: unknown[]) => mocks.moduleAddItem(...a),
+      findById: (...a: unknown[]) => mocks.moduleFindById(...a),
+      deleteById: (...a: unknown[]) => mocks.moduleDeleteById(...a),
     },
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
     entitlement: { quizzesVisible: (...a: unknown[]) => mocks.quizzesVisible(...a) },
   },
 }));
 
-const { moduleCreateTool, moduleUpdateTool, modulePublishTool, moduleItemAddTool } =
-  await import('../modules.ts');
+const {
+  moduleCreateTool,
+  moduleUpdateTool,
+  modulePublishTool,
+  moduleItemAddTool,
+  moduleDeleteTool,
+} = await import('../modules.ts');
 
 const ALL_TOOLS: ToolDefinition<never>[] = [
   moduleCreateTool,
   moduleUpdateTool,
   modulePublishTool,
   moduleItemAddTool,
+  moduleDeleteTool,
 ] as unknown as ToolDefinition<never>[];
 
 /** OWNER authorized in `class-1`, whose classroom slug is `w26`. */
@@ -497,5 +507,220 @@ describe('quiz gating of QUIZ items', () => {
   it('names the quiz requirement in the tool description', () => {
     expect(moduleItemAddTool.description).toContain('quizzes_enabled');
     expect(Buffer.byteLength(moduleItemAddTool.description, 'utf8')).toBeLessThan(1500);
+  });
+});
+
+// ─── module_delete ──────────────────────────────────────────────────────────
+
+describe('module_delete', () => {
+  const ARGS = { classroom: 'org/w26', module_id: 'mod-1' };
+  const lab = { id: 'asg-lab', title: 'Lab 1', type: 'REPO' };
+  const quizAssignment = { id: 'asg-quiz', title: 'Midterm quiz', type: 'QUIZ' };
+  const pageItem = { id: 'i-page', item_type: 'PAGE' };
+  const quizItem = { id: 'i-quiz', item_type: 'QUIZ' };
+
+  /** The module as module.findById loads it (DETAIL_INCLUDE). */
+  const owning = (
+    assignments: Array<{ id: string; title: string; type: string }>,
+    items: Array<{ id: string; item_type: string }> = []
+  ) => ({ ...MODULE_ROW, title: 'starterpack', slug: 'starterpack', assignments, items });
+
+  const run = () => moduleDeleteTool.handler(ARGS as never, CTX);
+  const refusal = async () => (await run().catch(e => e)) as ToolError;
+
+  beforeEach(() => {
+    mocks.moduleFindById.mockResolvedValue(owning([]));
+    mocks.moduleDeleteById.mockResolvedValue({ id: 'mod-1' });
+  });
+
+  it('is destructive, closed-world, and says what goes and what stays', () => {
+    expect(toolAnnotations(moduleDeleteTool as unknown as ToolDefinition<never>)).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    });
+    const text = moduleDeleteTool.description;
+    expect(text).toMatch(/owns no assignments/);
+    expect(text).toMatch(/assignment_update with module_id/);
+    expect(text).toMatch(/CANNOT BE UNDONE/);
+    expect(text).toMatch(/themselves are untouched/);
+    expect(Buffer.byteLength(text, 'utf8')).toBeLessThan(1500);
+    expect(
+      z.object(moduleDeleteTool.inputSchema).safeParse({ ...ARGS, module_id: 'x' }).success
+    ).toBe(false);
+  });
+
+  it('deletes a module that owns no assignments, scoped to the AUTHORIZED classroom', async () => {
+    const payload = parse(await run());
+
+    expect(mocks.moduleFindById).toHaveBeenCalledWith('mod-1');
+    expect(mocks.moduleDeleteById).toHaveBeenCalledWith('mod-1', 'class-1');
+    expect(payload).toEqual({
+      success: true,
+      deleted_module_id: 'mod-1',
+      title: 'starterpack',
+      items_removed: 0,
+    });
+  });
+
+  it('takes the content items with it and counts them: they are only links', async () => {
+    mocks.moduleFindById.mockResolvedValue(
+      owning([], [pageItem, { id: 'i-2', item_type: 'SLIDE' }])
+    );
+
+    const payload = parse(await run());
+
+    expect(payload.items_removed).toBe(2);
+    expect(mocks.moduleDeleteById).toHaveBeenCalledTimes(1);
+  });
+
+  it('audits the delete with what the module was', async () => {
+    mocks.moduleFindById.mockResolvedValue({ ...owning([], [pageItem]), is_published: true });
+
+    await run();
+
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
+      resource_type: 'MODULES',
+      resource_id: 'mod-1',
+      action: 'DELETE',
+      data: {
+        tool: 'module_delete',
+        title: 'starterpack',
+        slug: 'starterpack',
+        was_published: true,
+        items_removed: 1,
+      },
+    });
+  });
+
+  it('refuses a module that still owns assignments, names them, and deletes nothing', async () => {
+    mocks.moduleFindById.mockResolvedValue(
+      owning([lab, { id: 'a2', title: 'Lab 2', type: 'REPO' }])
+    );
+
+    const error = await refusal();
+
+    // Deleting would cascade into their submissions and grades.
+    expect(error).toMatchObject({ kind: 'invalid_params', code: 'MODULE_HAS_ASSIGNMENTS' });
+    expect(error.message).toMatch(/still owns 2 assignment\(s\)/);
+    expect(error.message).toMatch(/assignment_update with module_id/);
+    expect(error.data).toEqual({
+      assignments: [
+        { id: 'asg-lab', title: 'Lab 1', type: 'REPO' },
+        { id: 'a2', title: 'Lab 2', type: 'REPO' },
+      ],
+    });
+    expect(mocks.moduleDeleteById).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'in another classroom',
+      { ...MODULE_ROW, classroom_id: 'class-2', assignments: [], items: [] },
+    ],
+    ['that does not exist', null],
+  ])('refuses a module %s with the uniform not_found (S1)', async (_label, module) => {
+    mocks.moduleFindById.mockResolvedValue(module);
+
+    const error = await refusal();
+
+    expect(error).toMatchObject({
+      kind: 'not_found',
+      message: 'Module not found in this classroom',
+    });
+    expect(mocks.moduleDeleteById).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  describe('where the classroom shows no quizzes', () => {
+    beforeEach(() => {
+      mocks.quizzesVisible.mockResolvedValue(false);
+    });
+
+    it.each([
+      ['only a quiz assignment', [quizAssignment]],
+      ['a quiz assignment beside a listed one', [lab, quizAssignment]],
+    ])('refuses a module held back by %s without naming any', async (_label, assignments) => {
+      mocks.moduleFindById.mockResolvedValue(owning(assignments));
+
+      const error = await refusal();
+
+      // The Modules page's own line: moving the listed assignments could never
+      // unblock it, and nothing here may say a quiz exists.
+      expect(error).toMatchObject({ kind: 'invalid_params', code: 'MODULE_HAS_ASSIGNMENTS' });
+      expect(error.message).toBe('This module can’t be deleted.');
+      expect(error.data).toBeUndefined();
+      expect(JSON.stringify({ m: error.message, d: error.data }).toLowerCase()).not.toContain(
+        'quiz'
+      );
+      expect(mocks.quizzesVisible).toHaveBeenCalledWith('class-1');
+      expect(mocks.moduleDeleteById).not.toHaveBeenCalled();
+    });
+
+    it('leaves a hidden quiz item out of the count it reports, not out of the audit row', async () => {
+      mocks.moduleFindById.mockResolvedValue(owning([], [pageItem, quizItem]));
+
+      const payload = parse(await run());
+
+      expect(payload.items_removed).toBe(1);
+      expect(
+        (mocks.auditCreate.mock.calls[0][0] as { data: { items_removed: number } }).data
+          .items_removed
+      ).toBe(2);
+    });
+  });
+
+  it('names a quiz assignment where quizzes are visible', async () => {
+    mocks.moduleFindById.mockResolvedValue(owning([quizAssignment]));
+
+    const error = await refusal();
+
+    expect(error.message).toMatch(/still owns 1 assignment/);
+    expect(error.data).toEqual({
+      assignments: [{ id: 'asg-quiz', title: 'Midterm quiz', type: 'QUIZ' }],
+    });
+  });
+
+  it('asks about quizzes only when the module holds a quiz row', async () => {
+    mocks.moduleFindById.mockResolvedValue(owning([], [pageItem]));
+    await run();
+    expect(mocks.quizzesVisible).not.toHaveBeenCalled();
+  });
+
+  it('reports an assignment that arrived during the delete, and deletes nothing', async () => {
+    // The service re-checks under its lock; the read above saw an empty module.
+    mocks.moduleDeleteById.mockRejectedValue(new Error('Module still has assignments'));
+
+    const error = await refusal();
+
+    expect(error).toMatchObject({ kind: 'invalid_params', code: 'MODULE_HAS_ASSIGNMENTS' });
+    expect(error.message).toMatch(/moved into this module while the delete ran/);
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('gives the uniform not_found when the module vanished before the delete', async () => {
+    mocks.moduleDeleteById.mockRejectedValue(new Error('Module not found in classroom'));
+
+    expect(await refusal()).toMatchObject({
+      kind: 'not_found',
+      message: 'Module not found in this classroom',
+    });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('does not swallow an unexpected failure, and writes no audit row for it', async () => {
+    mocks.moduleDeleteById.mockRejectedValue(new Error('connection lost'));
+
+    await expect(run()).rejects.toThrow('connection lost');
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('is not Pro-gated: a free classroom can clear out its modules', async () => {
+    mocks.assertProTier.mockRejectedValue(proDenial());
+    expect(parse(await run()).success).toBe(true);
+    expect(mocks.assertProTier).not.toHaveBeenCalled();
   });
 });

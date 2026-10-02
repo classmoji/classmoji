@@ -1,6 +1,6 @@
 /**
  * Module (curriculum) tools — module_create / module_update / module_publish /
- * module_item_add.
+ * module_item_add / module_delete.
  *
  * A Module ("Week 3: Recursion") holds two things: an ORDERED CONTENT LIST of
  * pages, slides, quizzes and forms (ModuleItem rows, what module_item_add
@@ -22,8 +22,15 @@
  * Tier confirmed against apps/webapp/app/routes/admin.$class.modules/route.tsx:
  * requireClassroomAdmin — OWNER only.
  *
+ * module_delete mirrors the Modules page's Delete (same route, same tier): a
+ * module that still owns ASSIGNMENTS is refused, because the foreign key would
+ * cascade the delete into their submissions and grades; its content items are
+ * only links and go with it. Where the classroom shows no quizzes, a module
+ * held back by quiz assignments alone is refused without naming them, as the
+ * web's "This module can't be deleted." does.
+ *
  * Backbone (plan §6): module.create / updateForClassroom / setPublished (NOT
- * `publish` — no such method) / addItem. The *ForClassroom/classroomId-taking
+ * `publish` — no such method) / addItem / deleteById. The *ForClassroom/classroomId-taking
  * service variants enforce S1 inside packages/services (module AND item
  * target must belong to the classroom); their generic `Error` throws are
  * translated to non-leaking ToolErrors here.
@@ -315,5 +322,119 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
     } catch (error) {
       translateModuleError(error);
     }
+  },
+};
+
+interface ModuleDeleteArgs {
+  classroom: string;
+  module_id: string;
+}
+
+export const moduleDeleteTool: ToolDefinition<ModuleDeleteArgs> = {
+  name: 'module_delete',
+  // Removes the module and its item rows for good. Database only: nothing on
+  // GitHub, no notification.
+  annotations: { destructive: true, idempotent: false, openWorld: false },
+  title: 'Delete a module',
+  description:
+    'Permanently deletes a module that owns no assignments. Owner only. A module that still ' +
+    'owns assignments is refused and nothing is deleted: move them to another module first ' +
+    '(assignment_update with module_id), or delete a REPO one (assignment_delete); ' +
+    'list_modules shows what a module owns. The module’s content items go with it and are counted in the ' +
+    'response: they are only its links to pages, slides, quizzes and forms, and the pages, ' +
+    'slides, quizzes and forms themselves are untouched. THIS CANNOT BE UNDONE: the module and ' +
+    'the order of its items are gone. A published module is deleted like any other, so ' +
+    'students stop seeing it. Use it to clear out a module left empty once its assignments ' +
+    'were moved elsewhere.',
+  scope: 'write',
+  roles: OWNER_ONLY,
+  inputSchema: {
+    classroom: z.string().describe("Classroom reference as 'org/slug'"),
+    module_id: z.string().uuid().describe('Module id (see list_modules)'),
+  },
+  handler: async (args, ctx) => {
+    const classroom = requireClassroomCtx(ctx);
+
+    // S1: the module with what it owns, verified against the authorized
+    // classroom. Missing and foreign get the same not_found.
+    const module = await ClassmojiService.module.findById(args.module_id);
+    if (!module || module.classroom_id !== classroom.classroomId) {
+      throw scopedNotFound('Module');
+    }
+
+    // What this caller can see of it. A classroom that shows no quizzes lists
+    // no quiz assignment and no quiz item (list_modules), so neither may be
+    // named or counted here. Asked only when a quiz row is present.
+    const quizzesHidden =
+      (module.assignments.some(a => a.type === 'QUIZ') ||
+        module.items.some(item => item.item_type === 'QUIZ')) &&
+      !(await ClassmojiService.entitlement.quizzesVisible(classroom.classroomId));
+    const listed = module.assignments.filter(a => !(quizzesHidden && a.type === 'QUIZ'));
+
+    const refuseOwned = (): never => {
+      // Held back by assignments this classroom does not list: moving the
+      // listed ones could never unblock it, so say no more than that — the
+      // line the Modules page gives, which offers no Delete for such a module.
+      if (listed.length < module.assignments.length) {
+        throw new ToolError(
+          'invalid_params',
+          'This module can’t be deleted.',
+          'MODULE_HAS_ASSIGNMENTS'
+        );
+      }
+      throw new ToolError(
+        'invalid_params',
+        `This module still owns ${listed.length} assignment(s), so nothing was deleted. Move ` +
+          'each to another module (assignment_update with module_id), then retry. A REPO ' +
+          'assignment can be deleted instead (assignment_delete).',
+        'MODULE_HAS_ASSIGNMENTS',
+        { assignments: listed.map(a => ({ id: a.id, title: a.title, type: a.type })) }
+      );
+    };
+    if (module.assignments.length > 0) refuseOwned();
+
+    try {
+      await ClassmojiService.module.deleteById(module.id, classroom.classroomId);
+    } catch (error) {
+      if (error instanceof Error) {
+        // The service re-checks under a lock: an assignment moved in, or the
+        // module deleted, since the read above.
+        if (error.message === 'Module not found in classroom') throw scopedNotFound('Module');
+        if (error.message === 'Module still has assignments') {
+          throw new ToolError(
+            'invalid_params',
+            'An assignment was moved into this module while the delete ran, so nothing was ' +
+              'deleted. Check list_modules and retry.',
+            'MODULE_HAS_ASSIGNMENTS'
+          );
+        }
+      }
+      throw error;
+    }
+
+    const itemsRemoved = module.items.filter(
+      item => !(quizzesHidden && item.item_type === 'QUIZ')
+    ).length;
+
+    await writeAudit(ctx, {
+      resource_type: 'MODULES',
+      resource_id: module.id,
+      action: 'DELETE',
+      data: {
+        tool: 'module_delete',
+        title: module.title,
+        slug: module.slug,
+        was_published: module.is_published,
+        // The true count: the audit log is the owner's record, not a read surface.
+        items_removed: module.items.length,
+      },
+    });
+
+    return ok({
+      success: true,
+      deleted_module_id: module.id,
+      title: module.title,
+      items_removed: itemsRemoved,
+    });
   },
 };

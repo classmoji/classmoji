@@ -24,6 +24,7 @@ import {
   moduleUpdateTool,
   modulePublishTool,
   moduleItemAddTool,
+  moduleDeleteTool,
 } from './modules.ts';
 import {
   calendarEventCreateTool,
@@ -146,6 +147,7 @@ export function registerAllTools(): void {
   registerToolDefinition(moduleUpdateTool);
   registerToolDefinition(modulePublishTool);
   registerToolDefinition(moduleItemAddTool);
+  registerToolDefinition(moduleDeleteTool);
 
   // Calendar (teaching team; assistants own-events-only)
   registerToolDefinition(calendarEventCreateTool);
