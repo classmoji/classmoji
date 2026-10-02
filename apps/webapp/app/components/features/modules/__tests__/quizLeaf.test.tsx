@@ -30,10 +30,11 @@ const leafFor = (
     due: Date | null;
   }>,
   isStaff = false
-) => buildResourceLeaves({ quizzes: [{ id: 'quiz-1', name: 'Recursion', ...quiz }] }, 0, 'k', {
-  ...CTX,
-  isStaff,
-})[0];
+) =>
+  buildResourceLeaves({ quizzes: [{ id: 'quiz-1', name: 'Recursion', ...quiz }] }, 0, 'k', {
+    ...CTX,
+    isStaff,
+  })[0];
 
 let container: HTMLDivElement | null = null;
 const textOf = (node: unknown): string => {

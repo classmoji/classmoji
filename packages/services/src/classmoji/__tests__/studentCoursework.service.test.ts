@@ -519,7 +519,11 @@ describe('listForStudent — QUIZ rows', () => {
   });
 
   it('is Completed, not Closed, for a closed quiz the student finished', async () => {
-    const row = await quizRow([attempt('done', 'quiz-a-q', 30, true, 70)], {}, { closes_at: at(-1) });
+    const row = await quizRow(
+      [attempt('done', 'quiz-a-q', 30, true, 70)],
+      {},
+      { closes_at: at(-1) }
+    );
 
     expect(row).toMatchObject({ status: 'COMPLETED', score: 70 });
   });

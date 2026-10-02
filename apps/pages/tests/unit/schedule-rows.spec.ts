@@ -116,7 +116,8 @@ test.describe('visible rows', () => {
       {
         kind: 'link',
         label: 'Quiz 1',
-        href: 'https://app.example/student/cs52/quizzes',
+        // The quiz itself, on the member's quiz list.
+        href: 'https://app.example/student/cs52/quizzes?quiz=q1',
         typeLabel: 'Quiz',
         external: true,
         due: null,

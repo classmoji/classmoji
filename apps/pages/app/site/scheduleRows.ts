@@ -259,12 +259,14 @@ function toLinkRow(
         external: true,
         due: null,
       };
+    // A quiz reaches the schedule from its assignment (the service builds the
+    // item); the link opens that quiz on the member's quiz list.
     case 'QUIZ':
       if (!item.quiz) return null;
       return {
         kind: 'link',
         label: label(item.quiz.name),
-        href: `${targets.appBase}/quizzes`,
+        href: `${targets.appBase}/quizzes?quiz=${encodeURIComponent(item.quiz.id)}`,
         typeLabel: ITEM_TYPE_LABEL.QUIZ,
         external: true,
         due: null,
