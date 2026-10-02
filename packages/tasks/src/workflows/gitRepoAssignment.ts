@@ -4,6 +4,7 @@ import type { MoveGraderSlotPayload } from '@classmoji/services';
 import { titleToIdentifier } from '@classmoji/utils';
 import { createRepositoriesTask } from './gitRepo.ts';
 import { ensureGitInstallation, GitAppNotInstalledError } from '../helpers/gitInstallation.ts';
+import { retryOnDatabaseBlip } from '../helpers/databaseRetry.ts';
 import { nanoid } from 'nanoid';
 import dayjs from 'dayjs';
 
@@ -274,7 +275,41 @@ export const createGithubRepositoryAssignmentTask = task({
         assignment.title
       );
 
-      if (existingIssue) {
+      // An issue with this title may already be another submission row's: two
+      // assignments with the same title submitting through one repository, or
+      // a stale duplicate repo row. Adopting it would hand this row an issue id
+      // (its primary key) another row holds, so open a fresh issue instead.
+      const claimedBy = existingIssue
+        ? await ClassmojiService.gitRepoAssignment.findFirst({
+            provider: 'GITHUB',
+            provider_id: String(existingIssue.id),
+          })
+        : null;
+      if (
+        claimedBy &&
+        claimedBy.git_repo_id === studentRepo.id &&
+        claimedBy.assignment_id === assignment.id
+      ) {
+        // A concurrent run for this same pair got there first.
+        logger.info('Assignment issue was recorded by a concurrent run — skipping', {
+          repoName,
+          assignmentId: assignment.id,
+          gitRepoId: studentRepo.id,
+        });
+        return;
+      }
+      if (existingIssue && claimedBy) {
+        logger.warn('Existing issue with this title belongs to another submission row', {
+          repoName,
+          assignmentId: assignment.id,
+          studentRepoId: studentRepo.id,
+          issueNumber: existingIssue.number,
+          claimedByRowId: claimedBy.id,
+          claimedByAssignmentId: claimedBy.assignment_id,
+        });
+      }
+
+      if (existingIssue && !claimedBy) {
         logger.info('Found existing GitHub assignment issue; adopting it', {
           organization: organization.login,
           repoName,
@@ -353,6 +388,7 @@ export const createGithubRepositoryAssignmentTask = task({
 
 export const createDatabaseRepositoryAssignmentTask = task({
   id: 'cf-create_git_repo_assignment',
+  ...retryOnDatabaseBlip,
   run: async (payload: CreateDatabaseRepositoryAssignmentTaskPayload) => {
     const { assignment, studentRepo, issueNumber, id } = payload;
 
@@ -417,6 +453,7 @@ export const moveGraderSlotTask = task({
 
 export const updateRepositoryAssignmentTask = task({
   id: 'update_git_repo_assignment',
+  ...retryOnDatabaseBlip,
   run: async ({ payload }: UpdateRepositoryAssignmentTaskPayload) => {
     const { gitRepoAssignmentId, ...updates } = payload;
     return ClassmojiService.gitRepoAssignment.update(gitRepoAssignmentId, updates);
@@ -425,6 +462,7 @@ export const updateRepositoryAssignmentTask = task({
 
 export const repositoryAssignmentClosedHandlerTask = task({
   id: 'webhook-git_repo_assignment_closed_handler',
+  ...retryOnDatabaseBlip,
   run: async (payload: GitRepoAssignmentWebhookTaskPayload) => {
     const { issue } = payload;
     const repoAssignment = await ClassmojiService.gitRepoAssignment.findByProviderId(
@@ -449,6 +487,7 @@ export const repositoryAssignmentClosedHandlerTask = task({
 
 export const repositoryAssignmentReopenedHandlerTask = task({
   id: 'webhook-git_repo_assignment_reopened_handler',
+  ...retryOnDatabaseBlip,
   run: async (payload: GitRepoAssignmentWebhookTaskPayload) => {
     const { issue } = payload;
     // Resolves through the issue id, so a REPO-mode row (no issue) can never
@@ -475,9 +514,14 @@ export const repositoryAssignmentReopenedHandlerTask = task({
  * Classroom, the last push before the deadline (plus bought extension hours)
  * is the submission; later pushes do not count, graded rows are frozen, and a
  * late-delivered older webhook never moves the time backwards.
+ *
+ * Retried on a database blip (a lost push is a lost submission). Safe to
+ * repeat: both writes only move times forward, so a second run with the same
+ * `pushedAt` changes nothing, and an extra analytics refresh is harmless.
  */
 export const repositoryPushHandlerTask = task({
   id: 'webhook-git_repo_push_handler',
+  ...retryOnDatabaseBlip,
   run: async (payload: RepositoryPushTaskPayload) => {
     const pushedAt = new Date(payload.pushedAt);
     // The repo's own "last push", whatever it does to submissions below.
@@ -512,6 +556,7 @@ export const repositoryPushHandlerTask = task({
 
 export const repositoryAssignmentDeletedHandlerTask = task({
   id: 'webhook-git_repo_assignment_deleted_handler',
+  ...retryOnDatabaseBlip,
   run: async (payload: GitRepoAssignmentWebhookTaskPayload) => {
     const { issue } = payload;
     const repoAssignment = await ClassmojiService.gitRepoAssignment.findByProviderId(
