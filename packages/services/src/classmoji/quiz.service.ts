@@ -394,10 +394,12 @@ const translateMoveError = (error: unknown): never => {
 };
 
 /**
- * A save that found no assignment to lock, then, under the quiz row's lock,
- * the assignment another save created meanwhile. The save runs again.
+ * A save whose rows changed between its first read and its locks: it found no
+ * assignment to lock, then, under the quiz row's lock, the assignment another
+ * save created meanwhile; or it locked the modules of a move and then found
+ * the assignment moved to another module meanwhile. The save runs again.
  */
-class AssignmentAppearedError extends Error {}
+class SaveRaceError extends Error {}
 
 /**
  * Update a quiz and, when the save names any, its assignment, in ONE
@@ -418,7 +420,8 @@ class AssignmentAppearedError extends Error {}
  * Notifications (published, due date changed) go out after the commit.
  *
  * Two first saves of a quiz with no assignment, at once, take turns on the
- * quiz row: the second sees the first's assignment and saves onto it.
+ * quiz row: the second sees the first's assignment and saves onto it. A move
+ * whose quiz another save moved meanwhile runs again from where it now is.
  */
 export const update = async (quizId: string, data: QuizUpdateInput) => {
   const updateData: Prisma.QuizUpdateInput = {};
@@ -469,12 +472,16 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
     // take them), then the assignment row, then the quiz row. The assignment
     // row is locked before it is read, so two saves at once see each other's
     // result and a publish is announced once.
+    // The module the assignment was in when its move's locks were chosen
+    // (undefined when the save moves nothing).
+    let lockedFromModuleId: string | null | undefined;
     if (changes.moduleId) {
       const placed = await tx.quiz.findUnique({
         where: { id: quizId },
         select: { classroom_id: true, assignment: { select: { module_id: true } } },
       });
       if (placed) {
+        lockedFromModuleId = placed.assignment?.module_id ?? null;
         const moduleIds = [...new Set([placed.assignment?.module_id, changes.moduleId])]
           .filter((id): id is string => Boolean(id))
           .sort();
@@ -496,7 +503,7 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
         where: { quiz_id: quizId },
         select: { id: true },
       });
-      if (appeared) throw new AssignmentAppearedError();
+      if (appeared) throw new SaveRaceError();
     }
     // This attempt's own copy: a run that goes again starts from the input.
     const quizData: Prisma.QuizUpdateInput = { ...updateData };
@@ -512,6 +519,14 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
       },
     });
     if (!current) throw new QuizAssignmentError('not_found', 'Quiz not found', 404);
+    // Moved elsewhere between the read above and the locks: the module that
+    // is locked is not the one it leaves. Run again from the new module.
+    if (
+      lockedFromModuleId !== undefined &&
+      (current.assignment?.module_id ?? null) !== lockedFromModuleId
+    ) {
+      throw new SaveRaceError();
+    }
 
     // DRAFT → CLOSED is refused (see QuizStatusChangeError), read in the same
     // transaction as the write.
@@ -639,7 +654,7 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
       result = await getPrisma().$transaction(saveIn);
       break;
     } catch (error) {
-      if (error instanceof AssignmentAppearedError && attempt < 3) continue;
+      if (error instanceof SaveRaceError && attempt < 3) continue;
       throw error;
     }
   }

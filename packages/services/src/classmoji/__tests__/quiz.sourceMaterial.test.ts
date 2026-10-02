@@ -15,7 +15,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const tx = {
   // The row locks update takes first: the assignment's, and with none, the
   // quiz's.
-  $queryRaw: vi.fn(async () => []),
+  $queryRaw: vi.fn(async (..._args: unknown[]): Promise<unknown[]> => []),
   quiz: {
     create: vi.fn(),
     update: vi.fn(),
@@ -639,5 +639,41 @@ describe('quiz.create — the module', () => {
     });
     expect(refusal).toMatchObject({ code: 'module_not_found', status: 404 });
     expect(tx.quiz.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('quiz.update — a move that races another', () => {
+  const assigned = (moduleId: string) => ({
+    classroom_id: CLASSROOM,
+    status: 'PUBLISHED',
+    weight: 0,
+    due_date: null,
+    updated_at: T0,
+    assignment: { id: 'asg-1', module_id: moduleId, is_published: true, closes_at: null },
+  });
+
+  it('runs again when the quiz moved between its first read and its locks', async () => {
+    // Every lock finds its row.
+    tx.$queryRaw.mockImplementation(async () => [{ id: 'row' }]);
+    tx.quiz.findUnique
+      // First run: read in Week A, locked; then found already moved to Week B.
+      .mockResolvedValueOnce({ classroom_id: CLASSROOM, assignment: { module_id: 'mod-a' } })
+      .mockResolvedValueOnce(assigned('mod-b'))
+      // Second run: read in Week B; then the quiz is gone (stops the save here).
+      .mockResolvedValueOnce({ classroom_id: CLASSROOM, assignment: { module_id: 'mod-b' } })
+      .mockResolvedValueOnce(null);
+
+    const error = await quizService
+      .update('quiz-1', { assignment: { moduleId: 'mod-c' } })
+      .catch((e: unknown) => e);
+
+    expect(transaction).toHaveBeenCalledTimes(2);
+    // The second run locked the module the quiz was really in.
+    const lockedModules = tx.$queryRaw.mock.calls
+      .filter(([sql]) => (sql as TemplateStringsArray).join('?').includes('FROM modules'))
+      .map(([, id]) => id);
+    expect(lockedModules).toEqual(['mod-a', 'mod-c', 'mod-b', 'mod-c']);
+    expect(error).toMatchObject({ name: 'QuizAssignmentError', code: 'not_found' });
+    expect(tx.quiz.update).not.toHaveBeenCalled();
   });
 });
