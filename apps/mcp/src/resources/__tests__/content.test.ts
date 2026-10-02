@@ -277,6 +277,86 @@ describe('quizzes resource source_material (quiz source material)', () => {
 
     expect(result.quizzes[0].source_material).toEqual([]);
   });
+
+  it("students get the student list's counting score as is, a 0 included", async () => {
+    getQuizzesForStudent.mockResolvedValue([
+      {
+        id: 'q1',
+        name: 'Quiz 1',
+        status: 'PUBLISHED',
+        weight: 0,
+        question_count: 3,
+        attemptsSummary: { count: 1, canCreateNew: false, currentScore: 0, bestScore: 0 },
+      },
+    ]);
+    const ctx = studentCtx();
+    (ctx.classroom as unknown as { classroom: { slug: string } }).classroom.slug =
+      'authorized-slug';
+
+    const result = (await quizzesResource.handler(VARS, ctx, new URL('classmoji://x'))) as {
+      quizzes: Array<{ my_attempts: { currentScore: number | null } }>;
+    };
+
+    // The published list only: no options are passed, so closed quizzes stay out.
+    expect(getQuizzesForStudent.mock.calls[0]).toHaveLength(3);
+    expect(result.quizzes[0].my_attempts.currentScore).toBe(0);
+  });
+
+  it("gives students the assignment's due date, falling back to the quiz's own", async () => {
+    const assignmentDue = new Date('2026-10-02T18:00:00Z');
+    const quizDue = new Date('2026-09-30T18:00:00Z');
+    const quiz = { status: 'PUBLISHED', weight: 0, question_count: 3, due_date: quizDue };
+    getQuizzesForStudent.mockResolvedValue([
+      {
+        ...quiz,
+        id: 'q1',
+        name: 'With assignment',
+        assignment: { student_deadline: assignmentDue },
+      },
+      { ...quiz, id: 'q2', name: 'Without', assignment: null },
+    ]);
+    const ctx = studentCtx();
+    (ctx.classroom as unknown as { classroom: { slug: string } }).classroom.slug =
+      'authorized-slug';
+
+    const result = (await quizzesResource.handler(VARS, ctx, new URL('classmoji://x'))) as {
+      quizzes: Array<{ id: string; due_date: Date | null; assignment?: unknown }>;
+    };
+
+    expect(result.quizzes.map(q => [q.id, q.due_date])).toEqual([
+      ['q1', assignmentDue],
+      ['q2', quizDue],
+    ]);
+    // The assignment itself is not part of the shape.
+    expect('assignment' in result.quizzes[0]).toBe(false);
+  });
+
+  it('gives staff the same due date students see', async () => {
+    const assignmentDue = new Date('2026-10-02T18:00:00Z');
+    const quizDue = new Date('2026-09-30T18:00:00Z');
+    const quiz = { status: 'PUBLISHED', weight: 0, question_count: 3, due_date: quizDue };
+    findByClassroom.mockResolvedValue([
+      {
+        ...quiz,
+        id: 'q1',
+        name: 'With assignment',
+        assignment: { student_deadline: assignmentDue },
+      },
+      { ...quiz, id: 'q2', name: 'Without', assignment: null },
+    ]);
+
+    const result = (await quizzesResource.handler(
+      VARS,
+      ownerCtx({ quizzes_enabled: true }),
+      new URL('classmoji://x')
+    )) as { quizzes: Array<{ id: string; due_date: Date | null }> };
+
+    expect(result.quizzes.map(q => [q.id, q.due_date])).toEqual([
+      ['q1', assignmentDue],
+      ['q2', quizDue],
+    ]);
+    expect('assignment' in result.quizzes[0]).toBe(false);
+  });
 });
 
 describe('calendar resource allowlist shaping (U5)', () => {

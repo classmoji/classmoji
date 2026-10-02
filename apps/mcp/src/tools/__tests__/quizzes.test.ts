@@ -413,6 +413,23 @@ describe('quiz_update', () => {
     expect(audit.data.fields).toEqual(['name']);
   });
 
+  it('answers a refused close of a draft quiz with the service message, unaudited', async () => {
+    mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
+    mocks.quizUpdate.mockRejectedValue(
+      Object.assign(new Error('Publish the quiz before closing it'), {
+        name: 'QuizStatusChangeError',
+      })
+    );
+
+    await expect(
+      quizUpdateTool.handler({ classroom: 'org/w26', quiz_id: 'quiz-1', status: 'CLOSED' }, CTX)
+    ).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: 'Publish the quiz before closing it',
+    });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
   it('requires at least one field', async () => {
     await expect(
       quizUpdateTool.handler({ classroom: 'org/w26', quiz_id: 'quiz-1' }, CTX)

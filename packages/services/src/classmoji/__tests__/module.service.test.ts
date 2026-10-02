@@ -11,6 +11,8 @@ const itemFindMany = vi.fn();
 const itemCreate = vi.fn();
 const itemUpdate = vi.fn();
 const itemDeleteMany = vi.fn();
+const assignmentCount = vi.fn();
+const queryRaw = vi.fn();
 const transaction = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
@@ -34,7 +36,11 @@ vi.mock('@classmoji/database', () => ({
   }),
 }));
 
-vi.mock('@classmoji/utils', () => ({ titleToIdentifier: (s: string) => s.toLowerCase() }));
+vi.mock('@classmoji/utils', async () => ({
+  titleToIdentifier: (s: string) => s.toLowerCase(),
+  // The real rule: the student view's assignment filter is under test below.
+  openToStudents: (await import('../../../../utils/src/assignmentVisibility.ts')).openToStudents,
+}));
 
 const {
   isItemPublished,
@@ -154,24 +160,37 @@ describe('setPublic', () => {
 });
 
 describe('deleteById', () => {
+  // deleteById runs its check and its delete inside one interactive
+  // transaction; hand it a client whose calls are the mocks below. The
+  // transaction's delete is its OWN mock, apart from the root client's
+  // `moduleDelete`: a delete issued outside the transaction would not be under
+  // the lock, and has to fail these tests.
+  const txModuleDelete = vi.fn();
+  const tx = {
+    $queryRaw: queryRaw,
+    assignment: { count: assignmentCount },
+    module: { delete: txModuleDelete },
+  };
+  beforeEach(() => {
+    transaction.mockImplementation(async (run: (client: typeof tx) => unknown) => run(tx));
+    queryRaw.mockResolvedValue([{ id: 'mod1' }]);
+    moduleFindFirst.mockResolvedValue({ id: 'mod1' });
+    txModuleDelete.mockResolvedValue({ id: 'mod1' });
+  });
+
   it('refuses a module that owns any assignment, of any kind, and deletes nothing', async () => {
     // One count over every assignment type: the refusal does not care whether
     // the page listed them (a classroom without quizzes lists no QUIZ ones).
-    moduleFindFirst.mockResolvedValue({ id: 'mod1' });
-    moduleFindUnique.mockResolvedValue({ _count: { assignments: 1 } });
+    assignmentCount.mockResolvedValue(1);
 
     await expect(deleteById('mod1', 'class-1')).rejects.toThrow('Module still has assignments');
-    expect(moduleFindUnique).toHaveBeenCalledWith({
-      where: { id: 'mod1' },
-      select: { _count: { select: { assignments: true } } },
-    });
+    expect(assignmentCount).toHaveBeenCalledWith({ where: { module_id: 'mod1' } });
+    expect(txModuleDelete).not.toHaveBeenCalled();
     expect(moduleDelete).not.toHaveBeenCalled();
   });
 
   it('deletes a module with no assignments, leaving its items to the cascade', async () => {
-    moduleFindFirst.mockResolvedValue({ id: 'mod1' });
-    moduleFindUnique.mockResolvedValue({ _count: { assignments: 0 } });
-    moduleDelete.mockResolvedValue({ id: 'mod1' });
+    assignmentCount.mockResolvedValue(0);
 
     await deleteById('mod1', 'class-1');
 
@@ -179,18 +198,47 @@ describe('deleteById', () => {
       where: { id: 'mod1', classroom_id: 'class-1' },
       select: { id: true },
     });
-    expect(moduleDelete).toHaveBeenCalledWith({ where: { id: 'mod1' } });
+    // Inside the transaction, never on the root client.
+    expect(txModuleDelete).toHaveBeenCalledWith({ where: { id: 'mod1' } });
+    expect(moduleDelete).not.toHaveBeenCalled();
     // Its ModuleItem rows go with it through the foreign key (ON DELETE
     // CASCADE); the pages, quizzes, slides and forms they point at stay.
     expect(itemDeleteMany).not.toHaveBeenCalled();
+  });
+
+  it('locks the module row before it counts, and counts before it deletes', async () => {
+    // The order is the whole point: an assignment moved in at the same moment
+    // must be either counted or kept out, never cascade-deleted.
+    assignmentCount.mockResolvedValue(0);
+
+    await deleteById('mod1', 'class-1');
+
+    expect(transaction).toHaveBeenCalledTimes(1);
+    const [lock] = queryRaw.mock.calls[0] as [TemplateStringsArray, string];
+    expect(lock.join('?')).toMatch(/FROM modules WHERE id = \? FOR UPDATE/);
+    expect(queryRaw.mock.calls[0][1]).toBe('mod1');
+    const at = (mock: { mock: { invocationCallOrder: number[] } }) =>
+      mock.mock.invocationCallOrder[0];
+    expect(at(queryRaw)).toBeLessThan(at(assignmentCount));
+    expect(at(assignmentCount)).toBeLessThan(at(txModuleDelete));
+  });
+
+  it('reports a module another delete removed while this one waited for the row', async () => {
+    // The scoped check passed, then the lock came back with no row: the same
+    // refusal as a module that was never there, not a failed DELETE.
+    queryRaw.mockResolvedValue([]);
+
+    await expect(deleteById('mod1', 'class-1')).rejects.toThrow('Module not found in classroom');
+    expect(assignmentCount).not.toHaveBeenCalled();
+    expect(txModuleDelete).not.toHaveBeenCalled();
   });
 
   it('refuses a module from another classroom before looking at it', async () => {
     moduleFindFirst.mockResolvedValue(null);
 
     await expect(deleteById('mod1', 'class-2')).rejects.toThrow('Module not found in classroom');
-    expect(moduleFindUnique).not.toHaveBeenCalled();
-    expect(moduleDelete).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
+    expect(txModuleDelete).not.toHaveBeenCalled();
   });
 });
 
@@ -313,5 +361,70 @@ describe('listForClassroom', () => {
   it('returns [] when the classroom does not exist', async () => {
     classroomFindUnique.mockResolvedValue(null);
     expect(await listForClassroom('missing')).toEqual([]);
+  });
+
+  describe('assignments under the student-visibility rule', () => {
+    const FUTURE = new Date(Date.now() + 7 * 86_400_000);
+    const assignment = (id: string, type: string, over: Record<string, unknown> = {}) => ({
+      id,
+      type,
+      is_published: true,
+      release_at: null,
+      repository: type === 'REPO' ? { is_published: true } : null,
+      quiz: type === 'QUIZ' ? { status: 'PUBLISHED' } : null,
+      form: type === 'FORM' ? { status: 'OPEN' } : null,
+      ...over,
+    });
+    const MODULE = {
+      id: 'm1',
+      items: [],
+      assignments: [
+        assignment('repo', 'REPO'),
+        assignment('repo-unpublished-repo', 'REPO', { repository: { is_published: false } }),
+        assignment('unpublished', 'FORM', { is_published: false }),
+        assignment('quiz', 'QUIZ'),
+        assignment('quiz-closed', 'QUIZ', { quiz: { status: 'CLOSED' } }),
+        assignment('quiz-draft', 'QUIZ', { quiz: { status: 'DRAFT' } }),
+        assignment('quiz-later', 'QUIZ', { release_at: FUTURE }),
+        assignment('form', 'FORM'),
+        assignment('form-draft', 'FORM', { form: { status: 'DRAFT' } }),
+        assignment('form-later', 'FORM', { release_at: FUTURE }),
+      ],
+    };
+
+    it('shows students only what the rule admits', async () => {
+      moduleFindMany.mockResolvedValue([MODULE]);
+
+      const [module] = await listForClassroom('cls', { quizzesVisible: true });
+
+      expect(module.assignments.map(a => a.id)).toEqual(['repo', 'quiz', 'quiz-closed', 'form']);
+    });
+
+    it('shows students no quiz assignment where quizzes are hidden', async () => {
+      moduleFindMany.mockResolvedValue([MODULE]);
+
+      const [module] = await listForClassroom('cls', { quizzesVisible: false });
+
+      expect(module.assignments.map(a => a.id)).toEqual(['repo', 'form']);
+    });
+
+    it('treats quizzes as hidden unless the caller says otherwise', async () => {
+      moduleFindMany.mockResolvedValue([MODULE]);
+
+      const [module] = await listForClassroom('cls');
+
+      expect(module.assignments.some(a => a.type === 'QUIZ')).toBe(false);
+    });
+
+    it('leaves the teaching team every assignment', async () => {
+      moduleFindMany.mockResolvedValue([MODULE]);
+
+      const [module] = await listForClassroom('cls', {
+        includeUnpublished: true,
+        quizzesVisible: false,
+      });
+
+      expect(module.assignments).toHaveLength(MODULE.assignments.length);
+    });
   });
 });

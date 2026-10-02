@@ -1,5 +1,5 @@
 import getPrisma from '@classmoji/database';
-import { titleToIdentifier } from '@classmoji/utils';
+import { openToStudents, titleToIdentifier } from '@classmoji/utils';
 import { ModuleItemType, type Prisma } from '@prisma/client';
 
 interface ModuleWriteInput {
@@ -264,11 +264,16 @@ export const findById = async (id: string) => {
 /**
  * List a classroom's modules with their ordered items for the read-only
  * student/assistant tree. Students (`includeUnpublished = false`) see only
- * published modules and published items; the teaching team sees everything.
+ * published modules and published items, and only the assignments the
+ * student-visibility rule admits (`openToStudents`, which reads
+ * `quizzesVisible` for quiz assignments); the teaching team sees everything.
  */
 export const listForClassroom = async (
   classroomSlug: string,
-  { includeUnpublished = false }: { includeUnpublished?: boolean } = {}
+  {
+    includeUnpublished = false,
+    quizzesVisible = false,
+  }: { includeUnpublished?: boolean; quizzesVisible?: boolean } = {}
 ) => {
   const classroomId = await findClassroomIdBySlug(classroomSlug);
   if (!classroomId) return [];
@@ -289,15 +294,17 @@ export const listForClassroom = async (
 
   if (includeUnpublished) return modulesWithScopedItems;
 
-  // Drop items and assignments that are not published. A REPO assignment also
-  // needs its repository published: until then no student repo exists to
-  // submit through. Module-level publish is already filtered in the query.
+  // Drop items that are not published, and assignments students cannot see
+  // under the one visibility rule the Assignments page, the dashboard and the
+  // calendar also apply: published, a REPO one's repository published (until
+  // then no student repo exists to submit through), a quiz only where quizzes
+  // are visible, a quiz or form neither a draft nor before `release_at`.
+  // Module-level publish is already filtered in the query.
+  const now = new Date();
   return modulesWithScopedItems.map(m => ({
     ...m,
     items: m.items.filter(isItemPublished),
-    assignments: (m.assignments ?? []).filter(
-      a => a.is_published && (a.type !== 'REPO' || a.repository?.is_published === true)
-    ),
+    assignments: (m.assignments ?? []).filter(a => openToStudents(a, now, { quizzesVisible })),
   }));
 };
 
@@ -444,17 +451,25 @@ export const updateForClassroom = async (
 
 export const deleteById = async (id: string, classroomId?: string) => {
   if (classroomId) await assertModuleInClassroom(id, classroomId);
-  // A module that still owns assignments cannot go: deleting it would cascade
-  // into their submissions, grades and regrades. Move or delete them first.
-  const owned = await getPrisma().module.findUnique({
-    where: { id },
-    select: { _count: { select: { assignments: true } } },
+  return getPrisma().$transaction(async tx => {
+    // The module row is locked for the check and the delete together. An
+    // assignment being moved in at the same moment (assignment.moveToModuleEnd
+    // takes this lock; any other write of `module_id` needs a key-share on the
+    // row) either lands first and is counted below, or waits and finds the
+    // module gone. Without the lock it could land between the two statements
+    // and be cascade-deleted with its submissions.
+    const locked = await tx.$queryRaw<
+      Array<{ id: string }>
+    >`SELECT id FROM modules WHERE id = ${id} FOR UPDATE`;
+    // Another delete of this module finished while this one waited for the row.
+    if (locked.length === 0) throw new Error('Module not found in classroom');
+    // A module that still owns assignments cannot go: deleting it would cascade
+    // into their submissions, grades and regrades. Move or delete them first.
+    const owned = await tx.assignment.count({ where: { module_id: id } });
+    if (owned > 0) throw new Error('Module still has assignments');
+    // ModuleItem rows cascade; the underlying pages/quizzes/slides/forms remain.
+    return tx.module.delete({ where: { id } });
   });
-  if (owned && owned._count.assignments > 0) {
-    throw new Error('Module still has assignments');
-  }
-  // ModuleItem rows cascade; the underlying pages/quizzes/slides/forms remain.
-  return getPrisma().module.delete({ where: { id } });
 };
 
 export const setPublished = async (id: string, isPublished: boolean, classroomId?: string) => {

@@ -83,6 +83,7 @@ import * as quizService from './quiz.service.ts';
 import * as quizAttemptService from './quizAttempt.service.ts';
 import * as quizSourceMaterialService from './quizSourceMaterial.service.ts';
 import * as quizChatService from './quizChat.service.ts';
+import * as studentCourseworkService from './studentCoursework.service.ts';
 import * as quizGradingService from './quizGrading.service.ts';
 import * as repositoryImportService from './repositoryImport.service.ts';
 import * as contentImportService from './contentImport.service.ts';
@@ -170,6 +171,9 @@ const ClassmojiService = {
   // journaled grading writes their tools make.
   quizChat: quizChatService,
   quizGrading: quizGradingService,
+  // One row per assignment a student can see, every type, with their own
+  // state: the student Assignments page and the dashboard's Up next.
+  studentCoursework: studentCourseworkService,
   repositoryImport: repositoryImportService,
   contentImport: contentImportService,
   templateImport: templateImportService,
@@ -255,6 +259,7 @@ export {
   quizService,
   quizAttemptService,
   quizSourceMaterialService,
+  studentCourseworkService,
   repositoryImportService,
   contentImportService,
   templateImportService,

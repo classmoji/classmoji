@@ -24,6 +24,8 @@ const assignmentFindMany = vi.fn();
 const formFindMany = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
+  // calendar.service reads it for its includes; its shape does not matter here.
+  GIT_IDENTITY: {},
   default: () => ({
     calendarEvent: { findMany: calendarEventFindMany },
     assignment: { findMany: assignmentFindMany },
@@ -104,6 +106,7 @@ const assignmentLink = (
   featured,
   assignment: {
     id,
+    type: 'REPO',
     title,
     slug: `${id}-slug`,
     is_published,

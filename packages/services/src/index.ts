@@ -158,6 +158,15 @@ export type {
 } from './helper/index.ts';
 export { waitForRunOutcome } from './helper/runWait.ts';
 export type { RunOutcome } from './helper/runWait.ts';
+// A student's coursework rows (Assignments page, dashboard Up next).
+export type {
+  CourseworkAction,
+  CourseworkAssignment,
+  CourseworkStatus,
+  CourseworkType,
+  RepoRowFields,
+  StudentCourseworkRow,
+} from './classmoji/studentCoursework.service.ts';
 // GitHub organization repository settings: typed refusal + shared messages.
 export {
   OrgRepoSettingsError,
@@ -174,6 +183,7 @@ export type {
 export {
   QuizAccessError,
   QuizExcludedPathsError,
+  QuizStatusChangeError,
   QUIZ_STAFF_ROLES,
 } from './classmoji/quiz.service.ts';
 // Quiz source material: the linked pages and decks a quiz is about. The

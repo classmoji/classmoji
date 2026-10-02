@@ -125,6 +125,46 @@ describe('repos resource', () => {
     });
   });
 
+  it('tells staff which module each assignment belongs to, and not students', async () => {
+    const ASSIGNMENT = {
+      id: 'a-1',
+      module_id: 'mod-7',
+      title: 'Part 1',
+      slug: 'part-1',
+      weight: 100,
+      is_extra_credit: false,
+      is_published: true,
+      student_deadline: DEADLINE,
+      grader_deadline: null,
+      release_at: null,
+      grades_released: false,
+      tokens_per_hour: 0,
+    };
+    const row = { ...REPO_ROW, assignments: [ASSIGNMENT] };
+    const assignmentsOf = (payload: ReposPayload) =>
+      payload.repositories[0].assignments as Array<Record<string, unknown>>;
+
+    // The value assignment_update moves, readable beside the assignment's id.
+    findByClassroomId.mockResolvedValue([row]);
+    const staff = (await reposResource.handler(VARS, ctxFor('OWNER'), URI)) as ReposPayload;
+    expect(assignmentsOf(staff)[0]).toMatchObject({ id: 'a-1', module_id: 'mod-7' });
+
+    findPublished.mockResolvedValue([row]);
+    findForUser.mockResolvedValue([
+      {
+        id: 'sub-1',
+        status: 'OPEN',
+        assignment: { id: 'a-1' },
+        git_repo: { repository_id: 'repo-1', name: 'workshop-team-a' },
+        grades: [],
+        graders: [],
+      },
+    ]);
+    const student = (await reposResource.handler(VARS, ctxFor('STUDENT'), URI)) as ReposPayload;
+    expect(assignmentsOf(student)).toHaveLength(1);
+    expect(assignmentsOf(student)[0]).not.toHaveProperty('module_id');
+  });
+
   it('leaves the student view without any of the configuration fields', async () => {
     findPublished.mockResolvedValue([REPO_ROW]);
     findForUser.mockResolvedValue([

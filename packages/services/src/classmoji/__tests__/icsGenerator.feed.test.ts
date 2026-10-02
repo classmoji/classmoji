@@ -440,4 +440,19 @@ describe('the calendar feed', () => {
     expect(feed).toContain('END:VCALENDAR');
     expect(feed).not.toContain('BEGIN:VEVENT');
   });
+
+  it("reads the calendar's student view, so a draft quiz or a not-yet-released deadline stays out", async () => {
+    // The feed is shared by URL with the whole class. Passing no viewer and
+    // no options is what selects the published-only view, where
+    // getDeadlinesForRange applies the student-visibility rule
+    // (calendar.quizDeadlines.test.ts pins that rule itself).
+    getClassroomCalendar.mockResolvedValue([]);
+
+    await generateCalendarFeed('class-1', 'demo-class');
+
+    expect(getClassroomCalendar).toHaveBeenCalledTimes(1);
+    const args = getClassroomCalendar.mock.calls[0];
+    expect(args).toHaveLength(3);
+    expect(args[0]).toBe('class-1');
+  });
 });

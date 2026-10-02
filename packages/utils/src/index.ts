@@ -33,3 +33,6 @@ export * from './surveyQuestions.ts';
 export * from './timeZone.ts';
 export * from './repoLimits.ts';
 export * from './gitIdentity.ts';
+export * from './hiddenRows.ts';
+export * from './assignmentVisibility.ts';
+export * from './quizScore.ts';

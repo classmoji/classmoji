@@ -1,8 +1,10 @@
+/**
+ * Every assignment the student sees, every type: completed (submitted,
+ * completed or closed) and current (still to do) split the total.
+ */
 export interface BucketCounts {
-  graded: number;
-  submitted: number;
-  unlocked: number;
-  locked: number;
+  completed: number;
+  current: number;
   total: number;
 }
 
@@ -17,25 +19,24 @@ const ProgressSummaryCard = ({
   classroomSubtitle,
   counts,
 }: ProgressSummaryCardProps) => {
-  const { graded, submitted, unlocked, total } = counts;
-  const completed = graded + submitted;
-  const current = unlocked;
+  const { completed, current, total } = counts;
   const pct = total === 0 ? 0 : Math.round((completed / total) * 100);
 
   const completedPct = total === 0 ? 0 : (completed / total) * 100;
   const currentPct = total === 0 ? 0 : (current / total) * 100;
 
   return (
-    <section data-tour="assignments-progress" className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6">
+    <section
+      data-tour="assignments-progress"
+      className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6"
+    >
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <h2 className="text-lg sm:text-xl font-semibold text-ink-0 tracking-tight truncate">
             {classroomTitle}
           </h2>
           {classroomSubtitle && (
-            <p className="text-sm text-ink-3 mt-0.5 truncate">
-              {classroomSubtitle}
-            </p>
+            <p className="text-sm text-ink-3 mt-0.5 truncate">{classroomSubtitle}</p>
           )}
         </div>
         <div className="shrink-0 text-right">
@@ -61,9 +62,7 @@ const ProgressSummaryCard = ({
             />
           )}
         </div>
-        <span className="text-xs text-ink-3 shrink-0 tabular-nums">
-          {pct}% complete
-        </span>
+        <span className="text-xs text-ink-3 shrink-0 tabular-nums">{pct}% complete</span>
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-gray-600 dark:text-gray-300">
