@@ -192,6 +192,20 @@ describe('student dashboard loader — Up next', () => {
     expect(data.viewerIsStudent).toBe(true);
   });
 
+  it('sends Up next rows without the repo details the card never shows', async () => {
+    const repoRow = courseworkRow({
+      assignmentId: 'lab',
+      repo: { gitRepoAssignmentId: 'ra-1', grades: [], graders: [{ id: 'g', name: 'Grace' }] },
+    });
+    listForStudentMock.mockResolvedValue([repoRow]);
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.upNext.map(r => r.assignmentId)).toEqual(['lab']);
+    expect('repo' in data.upNext[0]).toBe(false);
+    expect(JSON.stringify(data.upNext)).not.toContain('Grace');
+  });
+
   it('tells the card when the viewer is staff', async () => {
     grant('TEACHER');
 

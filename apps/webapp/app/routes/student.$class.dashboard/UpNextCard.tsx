@@ -6,9 +6,12 @@ import type { StudentCourseworkRow } from '@classmoji/services';
 import { CourseworkTypeTag } from '~/components/features/assignments/CourseworkTags';
 import { useStartQuiz } from '~/components/features/quiz/useStartQuiz';
 
+/** An Up next row: a coursework row without the repo details the card never shows. */
+export type UpNextRow = Omit<StudentCourseworkRow, 'repo'>;
+
 interface UpNextCardProps {
   /** What the student still owes, soonest due first (studentCoursework.upNext). */
-  rows: StudentCourseworkRow[];
+  rows: UpNextRow[];
   classSlug: string;
   /**
    * Staff previewing this dashboard start a quiz from the quiz list, which
@@ -46,7 +49,7 @@ const UpNextCard = ({ rows, classSlug, viewerIsStudent }: UpNextCardProps) => {
   const hydrated = useHydrated();
   const { startQuiz, resumeQuiz, startingQuizId } = useStartQuiz(classSlug);
 
-  const actionFor = (row: StudentCourseworkRow) => {
+  const actionFor = (row: UpNextRow) => {
     const action = row.action;
     if (!action) return null;
     const label = ACTION_LABEL[action.kind];

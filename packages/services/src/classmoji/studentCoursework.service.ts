@@ -169,7 +169,10 @@ const repoFields = (ra: RepoSubmission, gitOrgLogin: string | null, now: Date): 
     issueUrl,
     moduleType: ra.git_repo?.repository?.type ?? null,
     gradesReleased: Boolean(ra.assignment?.grades_released && (ra.grades?.length ?? 0) > 0),
-    grades: (ra.grades ?? []).map(g => ({ id: g.id, emoji: g.emoji })),
+    // A student sees grades once they are released, so only then are they sent.
+    grades: ra.assignment?.grades_released
+      ? (ra.grades ?? []).map(g => ({ id: g.id, emoji: g.emoji }))
+      : [],
     graders,
     gradersSummary: graders
       .map(g => g.name)

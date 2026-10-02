@@ -8,7 +8,7 @@ import type { Route } from './+types/route';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import WeeklyCalendarCard, { type WeekEvent } from './WeeklyCalendarCard';
-import UpNextCard from './UpNextCard';
+import UpNextCard, { type UpNextRow } from './UpNextCard';
 import { eventFetchWindow, startOfWeek } from './week';
 import RetroTabsCard, {
   type FeedbackItem,
@@ -21,7 +21,7 @@ interface DashboardData {
   weekStart: string;
   weekEvents: WeekEvent[];
   /** What the student still owes, soonest due first: every type, at most five. */
-  upNext: StudentCourseworkRow[];
+  upNext: UpNextRow[];
   /** Staff previewing the dashboard start a quiz from the quiz list instead. */
   viewerIsStudent: boolean;
   feedback: FeedbackItem[];
@@ -202,7 +202,10 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       // A plain date, which dayjs parses as local midnight on either side.
       weekStart: weekStart.format('YYYY-MM-DD'),
       weekEvents,
-      upNext: ClassmojiService.studentCoursework.upNext(coursework),
+      // The card shows no repo details, so none are sent.
+      upNext: ClassmojiService.studentCoursework
+        .upNext(coursework)
+        .map(({ repo: _repo, ...row }) => row),
       viewerIsStudent: membership?.role === 'STUDENT',
       feedback,
       team,

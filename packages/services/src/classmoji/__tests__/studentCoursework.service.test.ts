@@ -309,6 +309,27 @@ describe('listForStudent — REPO rows keep every field the page showed', () => 
     });
   });
 
+  it('sends no grades until they are released', async () => {
+    mocks.listForClassroom.mockResolvedValue([assignment('r-1', 'REPO')]);
+    mocks.findAllAssignmentsForStudent.mockResolvedValue([
+      submission('ra-1', 'r-1', {
+        status: 'CLOSED',
+        grades: [{ id: 'gr-1', emoji: 'heart' }],
+        assignment: {
+          student_deadline: at(-1),
+          grades_released: false,
+          submission_mode: 'ISSUE',
+          tokens_per_hour: 0,
+        },
+      }),
+    ]);
+
+    const [row] = await list();
+
+    expect(row.repo).toMatchObject({ gradesReleased: false, grades: [] });
+    expect(JSON.stringify(row)).not.toContain('heart');
+  });
+
   it("links a push-mode repo to the repository, late by the push's time", async () => {
     mocks.listForClassroom.mockResolvedValue([assignment('r-1', 'REPO')]);
     mocks.findAllAssignmentsForStudent.mockResolvedValue([
