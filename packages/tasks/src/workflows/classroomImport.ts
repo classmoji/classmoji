@@ -912,7 +912,9 @@ export const importModulesTask = task({
     const idMaps = job.progress.id_maps ?? {};
     const repositories = job.selections.repositories ?? [];
     // A job saved before the action decided this for the whole classroom
-    // copies quizzes only where a repository asked for its quizzes.
+    // copies quizzes when any picked repository asked for its quizzes (then
+    // every placed quiz but those of a repository picked without them), and
+    // none otherwise.
     const quizzesImported =
       job.selections.quizzes ?? repositories.some(r => r.includeQuizzes === true);
     const summary = await ClassmojiService.classroomConfigImport.importModules(

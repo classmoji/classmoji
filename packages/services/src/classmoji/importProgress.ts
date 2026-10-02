@@ -171,8 +171,12 @@ export interface ImportJobSelections {
    * Whether quizzes may be copied into the new classroom at all (it shows
    * quizzes), decided by the create action. The modules phase copies the
    * source modules' quizzes on this, including quizzes linked to no
-   * repository. Absent on jobs created before it existed: those copy quizzes
-   * only where a repository asked for its quizzes.
+   * repository. Absent on jobs created before it existed: there the modules
+   * phase copies quizzes when at least one picked repository asked for its
+   * quizzes, and then copies every quiz placed in a source module the same
+   * way (quizzes linked to no repository, or to one not picked, included);
+   * when none asked, it copies none. Either way, a quiz linked to a
+   * repository picked WITHOUT its quizzes is left out.
    */
   quizzes?: boolean;
   content?: {
