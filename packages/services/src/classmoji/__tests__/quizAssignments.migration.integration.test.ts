@@ -201,8 +201,29 @@ describe.skipIf(!RUN)('quiz_assignments migration backfill (integration)', () =>
       },
     });
 
-  /** Run the backfill and `read` in one transaction, then roll it all back. */
+  /**
+   * Run the backfill and `read` in one transaction, then roll it all back.
+   * The backfill reads and writes every quiz and quiz assignment in the
+   * database, so another test file writing one at the same moment can make
+   * this snapshot fail to serialize (40001) or deadlock (40P01); the attempt
+   * wrote nothing, and is run again.
+   */
   const runBackfill = async <T>(read: (tx: typeof prisma) => Promise<T>): Promise<T> => {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await runBackfillOnce(read);
+      } catch (error) {
+        const { message, code } = (error ?? {}) as { message?: unknown; code?: unknown };
+        // Raw statements report the Postgres code in the message; Prisma's own
+        // queries report a write conflict or deadlock as P2034.
+        const retryable = code === 'P2034' || /\b(40001|40P01)\b/.test(String(message ?? ''));
+        if (!retryable || attempt >= 5) throw error;
+        await new Promise(resolve => setTimeout(resolve, 200 * attempt));
+      }
+    }
+  };
+
+  const runBackfillOnce = async <T>(read: (tx: typeof prisma) => Promise<T>): Promise<T> => {
     let result: T | undefined;
     await prisma
       .$transaction(
@@ -299,7 +320,8 @@ describe.skipIf(!RUN)('quiz_assignments migration backfill (integration)', () =>
     const closedBefore = await prisma.quiz.findUniqueOrThrow({ where: { id: closed.id } });
 
     const out = await runBackfill(async tx => {
-      const assignmentOf = (quizId: string) => tx.assignment.findUnique({ where: { quiz_id: quizId } });
+      const assignmentOf = (quizId: string) =>
+        tx.assignment.findUnique({ where: { quiz_id: quizId } });
       return {
         assigned: await assignmentOf(assigned.id),
         assignedQuiz: await tx.quiz.findUniqueOrThrow({ where: { id: assigned.id } }),

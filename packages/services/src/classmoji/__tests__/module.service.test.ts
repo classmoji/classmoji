@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const classroomFindUnique = vi.fn();
 const moduleFindMany = vi.fn();
@@ -49,6 +49,8 @@ const {
   setPublic,
   addItem,
   reorderItems,
+  moveItemToModule,
+  QUIZ_ITEM_REFUSAL,
   listForClassroom,
   deleteById,
 } = await import('../module.service.ts');
@@ -467,5 +469,94 @@ describe('listForClassroom', () => {
 
       expect(module.assignments).toHaveLength(MODULE.assignments.length);
     });
+  });
+});
+
+describe('moveItemToModule', () => {
+  const CONTENT_ONLY = { notIn: ['REPOSITORY', 'QUIZ'] };
+
+  beforeEach(() => {
+    // Both modules are in the classroom.
+    moduleFindFirst.mockResolvedValue({ id: 'scoped' });
+    itemUpdate.mockResolvedValue({});
+    transaction.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    itemFindFirst.mockReset();
+    itemFindMany.mockReset();
+    itemUpdate.mockReset();
+    moduleFindFirst.mockReset();
+    transaction.mockReset();
+  });
+
+  it('refuses a QUIZ item: a quiz moves with its assignment', async () => {
+    itemFindFirst.mockResolvedValue({ id: 'mi-quiz', module_id: 'from', item_type: 'QUIZ' });
+
+    await expect(moveItemToModule('mi-quiz', 'to', ['mi-quiz'], 'cls')).rejects.toThrow(
+      QUIZ_ITEM_REFUSAL
+    );
+    expect(itemUpdate).not.toHaveBeenCalled();
+    expect(itemFindMany).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it('refuses a REPOSITORY item', async () => {
+    itemFindFirst.mockResolvedValue({ id: 'mi-repo', module_id: 'from', item_type: 'REPOSITORY' });
+
+    await expect(moveItemToModule('mi-repo', 'to', ['mi-repo'], 'cls')).rejects.toThrow(
+      'Repository items cannot be moved'
+    );
+    expect(itemUpdate).not.toHaveBeenCalled();
+  });
+
+  it('moves a PAGE item, orders the target and compacts the source, content items only', async () => {
+    itemFindFirst.mockResolvedValue({ id: 'mi-page', module_id: 'from', item_type: 'PAGE' });
+    itemFindMany.mockImplementation(async ({ where }: { where: { module_id: string } }) =>
+      where.module_id === 'to' ? [{ id: 'there' }, { id: 'mi-page' }] : [{ id: 'a' }, { id: 'b' }]
+    );
+
+    await moveItemToModule('mi-page', 'to', ['mi-page', 'there'], 'cls');
+
+    expect(itemUpdate).toHaveBeenNthCalledWith(1, {
+      where: { id: 'mi-page' },
+      data: { module_id: 'to' },
+    });
+    // The target's ordering check and the source's compaction both read the
+    // content items only: legacy REPOSITORY and QUIZ rows keep their positions.
+    expect(itemFindMany).toHaveBeenCalledWith({
+      where: { module_id: 'to', item_type: CONTENT_ONLY },
+      select: { id: true },
+    });
+    expect(itemFindMany).toHaveBeenCalledWith({
+      where: { module_id: 'from', item_type: CONTENT_ONLY },
+      orderBy: { position: 'asc' },
+      select: { id: true },
+    });
+    expect(itemUpdate).toHaveBeenCalledWith({
+      where: { id: 'mi-page', module_id: 'to' },
+      data: { position: 0 },
+    });
+    expect(itemUpdate).toHaveBeenCalledWith({
+      where: { id: 'there', module_id: 'to' },
+      data: { position: 1 },
+    });
+    expect(itemUpdate).toHaveBeenCalledWith({ where: { id: 'a' }, data: { position: 0 } });
+    expect(itemUpdate).toHaveBeenCalledWith({ where: { id: 'b' }, data: { position: 1 } });
+    expect(transaction).toHaveBeenCalledTimes(2);
+  });
+
+  it('a reorder within the same module compacts nothing', async () => {
+    itemFindFirst.mockResolvedValue({ id: 'mi-page', module_id: 'same', item_type: 'PAGE' });
+    itemFindMany.mockResolvedValue([{ id: 'mi-page' }, { id: 'other' }]);
+
+    await moveItemToModule('mi-page', 'same', ['other', 'mi-page'], 'cls');
+
+    expect(itemFindMany).toHaveBeenCalledOnce();
+    expect(itemFindMany).toHaveBeenCalledWith({
+      where: { module_id: 'same', item_type: CONTENT_ONLY },
+      select: { id: true },
+    });
+    expect(transaction).toHaveBeenCalledOnce();
   });
 });

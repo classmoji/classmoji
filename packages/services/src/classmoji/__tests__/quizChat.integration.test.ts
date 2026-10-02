@@ -2715,4 +2715,155 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     const after = await prisma.aIConversation.findUniqueOrThrow({ where: { id: conv.id } });
     expect(after.context).toMatchObject({ keep: 1 });
   });
+
+  // ─── a quiz in a module: its assignment decides ───────────────────────────
+
+  describe('a quiz with an assignment', () => {
+    // A quiz of its own, so the shared quiz above is untouched. Its own status
+    // column stays PUBLISHED throughout: what changes is the assignment's,
+    // written straight to the table.
+    let assignedQuizId: string;
+    let assignmentId: string;
+
+    beforeAll(async () => {
+      const module = await prisma.module.create({
+        data: { classroom_id: classroomId, title: `Assigned quizzes ${suite}` },
+      });
+      const quiz = await prisma.quiz.create({
+        data: {
+          classroom_id: classroomId,
+          name: `Assigned quiz ${suite}`,
+          rubric_prompt: 'grade it',
+          question_count: 3,
+          status: 'PUBLISHED',
+          max_attempts: 0,
+        },
+      });
+      assignedQuizId = quiz.id;
+      const assignment = await prisma.assignment.create({
+        data: {
+          module_id: module.id,
+          type: 'QUIZ',
+          quiz_id: quiz.id,
+          title: quiz.name,
+          weight: 0,
+          is_published: true,
+        },
+      });
+      assignmentId = assignment.id;
+    });
+
+    const setAssignment = (data: {
+      is_published?: boolean;
+      release_at?: Date | null;
+      closes_at?: Date | null;
+    }) => prisma.assignment.update({ where: { id: assignmentId }, data });
+
+    /** A chat attempt on the assigned quiz with its owner's grant, as the session route leaves it. */
+    const assignedAttempt = async (userId = studentId, grant = grantFor(userId)) => {
+      const attempt = await prisma.quizAttempt.create({
+        data: {
+          quiz_id: assignedQuizId,
+          user_id: userId,
+          agent_runtime: 'trigger_chat',
+          contract_version: CONTRACT_VERSION,
+          session_expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          chat_grant: grant,
+        },
+      });
+      return attempt.id;
+    };
+
+    const studentMembership = (userId: string) => ({
+      classroom_id: classroomId,
+      role: 'STUDENT',
+      user_id: userId,
+    });
+
+    it('an attempt started while the quiz is open takes turns and submits after it closes', async () => {
+      const started = await createNew(assignedQuizId, studentId, studentMembership(studentId), {
+        agentRuntime: 'trigger_chat',
+      });
+      expect(started).toMatchObject({ success: true });
+      const attemptId = started.attemptId!;
+      // The session route writes the grant before handing out a session.
+      await prisma.quizAttempt.update({
+        where: { id: attemptId },
+        data: { chat_grant: grantFor(studentId) },
+      });
+      let turn = await begin(attemptId);
+
+      await setAssignment({ closes_at: new Date(Date.now() - 60_000) });
+      try {
+        // No new attempt starts once it has closed...
+        const late = await makeMember('late-student', 'STUDENT');
+        expect(
+          await createNew(assignedQuizId, late, studentMembership(late), {
+            agentRuntime: 'trigger_chat',
+          })
+        ).toMatchObject({ success: false, reason: 'quiz_closed' });
+
+        // ...and the one under way goes on to its end.
+        for (const n of [1, 2, 3]) {
+          turn = await completeQuestion(attemptId, turn, n, [
+            { level: 'correct', hints_before: 0 },
+          ]);
+        }
+        const record = await grading.completeWithEvaluation(turn, { source: 'server' });
+        expect(record.partial_credit_percentage).toBe(100);
+        expect((await attemptRow(attemptId)).completed_at).not.toBeNull();
+      } finally {
+        await setAssignment({ closes_at: null });
+      }
+    });
+
+    it("unpublishing the assignment refuses a student's next turn for now; staff previews go on", async () => {
+      const assistantId = await makeMember('assistant-assigned', 'ASSISTANT');
+      const studentAttempt = await assignedAttempt();
+      const staffAttempt = await assignedAttempt(
+        assistantId,
+        grantFor(assistantId, { role: 'ASSISTANT' })
+      );
+      await say(studentAttempt, 'before');
+
+      await setAssignment({ is_published: false });
+      try {
+        await expect(say(studentAttempt, 'still there?')).rejects.toMatchObject({
+          code: 'quiz_unavailable',
+          kind: 'temporary',
+        });
+        expect(await events(studentAttempt, 'input_admitted')).toHaveLength(1);
+        expect((await say(staffAttempt, 'preview')).fence).toBeTruthy();
+      } finally {
+        await setAssignment({ is_published: true });
+      }
+      expect((await say(studentAttempt, 'back again')).fence).toBeTruthy();
+    });
+
+    it("an Opens date moved into the future refuses a student's next turn for now", async () => {
+      const attemptId = await assignedAttempt();
+      await say(attemptId, 'before');
+
+      await setAssignment({ release_at: new Date(Date.now() + 24 * 60 * 60 * 1000) });
+      try {
+        await expect(say(attemptId, 'hello?')).rejects.toMatchObject({
+          code: 'quiz_unavailable',
+          kind: 'temporary',
+        });
+        await expect(begin(attemptId)).rejects.toMatchObject({ code: 'quiz_unavailable' });
+        expect(await events(attemptId, 'input_admitted')).toHaveLength(1);
+      } finally {
+        await setAssignment({ release_at: null });
+      }
+      expect((await say(attemptId, 'open again')).fence).toBeTruthy();
+
+      // An Opens date already past is open.
+      await setAssignment({ release_at: new Date(Date.now() - 60_000) });
+      try {
+        expect((await say(attemptId, 'still open')).fence).toBeTruthy();
+      } finally {
+        await setAssignment({ release_at: null });
+      }
+    });
+  });
 });
