@@ -19,6 +19,28 @@ export const withoutQuizRows = <
 });
 
 /**
+ * A module without its legacy QUIZ items, which no page lists: a quiz sits in
+ * a module through its assignment, and the item ordering ignores them.
+ */
+export const withoutQuizItems = <M extends { items: Array<{ item_type: string }> }>(
+  module: M
+): M => ({
+  ...module,
+  items: module.items.filter(item => item.item_type !== 'QUIZ'),
+});
+
+/**
+ * A module as the staff modules pages list it: `withoutQuizItems` where the
+ * classroom shows quizzes, `withoutQuizRows` where it does not.
+ */
+export const forStaffList = <
+  M extends { items: Array<{ item_type: string }>; assignments: Array<{ type: string }> },
+>(
+  module: M,
+  quizzesVisible: boolean
+): M => (quizzesVisible ? withoutQuizItems(module) : withoutQuizRows(module));
+
+/**
  * A module as the admin modules loaders hand it over: as stored, or
  * `withoutQuizRows` in a classroom that does not show quizzes. Legacy QUIZ
  * items are left out either way: a quiz sits in a module through its
@@ -38,11 +60,7 @@ export const forStaffPage = <
   quizzesVisible: boolean
 ): M & { hasUnlistedAssignments: boolean } => {
   if (quizzesVisible) {
-    return {
-      ...module,
-      items: module.items.filter(item => item.item_type !== 'QUIZ'),
-      hasUnlistedAssignments: false,
-    };
+    return { ...withoutQuizItems(module), hasUnlistedAssignments: false };
   }
   const listed = withoutQuizRows(module);
   const onlyHiddenQuizzes = listed.assignments.length === 0;
