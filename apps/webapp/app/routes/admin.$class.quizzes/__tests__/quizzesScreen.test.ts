@@ -240,8 +240,9 @@ describe('the quiz list for a teaching assistant', () => {
 
     it('still shows each weight, and Clear My Attempts', () => {
       expect(html).toContain('Clear My Attempts');
-      // The weights as text: 10, 20, 0 from the assignments, 5 from the loose quiz.
-      for (const weight of ['>10<', '>20<', '>0<', '>5<']) expect(html).toContain(weight);
+      // The weights as text, as the gradebook shows them: 10, 20, 0 from the
+      // assignments, 5 from the loose quiz.
+      for (const weight of ['>10%<', '>20%<', '>0%<', '>5%<']) expect(html).toContain(weight);
     });
   });
 });
@@ -253,6 +254,35 @@ describe('the status column', () => {
     for (const label of ['Draft', 'Published', 'Closed', 'No module']) {
       expect(html).toContain(`>${label}<`);
     }
+  });
+});
+
+describe('the attempts column', () => {
+  it('shows attempts and the average wherever there are any, a quiz in no module included', async () => {
+    mocks.findByClassroom.mockResolvedValue([
+      serviceQuiz({
+        id: 'quiz-draft',
+        name: 'Draft quiz',
+        attemptsCount: 1,
+        avgScore: 70,
+        assignment: { module: WEEK_1, student_deadline: null, weight: 0, is_published: false },
+      }),
+      serviceQuiz({
+        id: 'quiz-loose',
+        name: 'Loose quiz',
+        attemptsCount: 2,
+        avgScore: 80,
+        assignment: null,
+      }),
+      serviceQuiz({ id: 'quiz-new', name: 'New quiz', attemptsCount: 0, assignment: null }),
+    ]);
+
+    const html = renderAt('admin', await loadAs('OWNER'));
+
+    expect(html).toContain('1 attempts');
+    expect(html).toContain('2 attempts');
+    expect(html).toMatch(/Avg: (<!-- -->)?80(<!-- -->)?%/);
+    expect(count(html, ' attempts<')).toBe(2);
   });
 });
 

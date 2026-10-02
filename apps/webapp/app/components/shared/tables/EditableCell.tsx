@@ -14,8 +14,11 @@ interface EditableCellProps {
   record: EditableRecord;
   dataIndex: string;
   onUpdate: (recordId: string | number, value: ValueType) => void;
+  /** 'number' shows the value as a percentage (`N%`) and edits it as a plain number. */
   format?: 'text' | 'number';
   placeholder?: string;
+  /** The smallest number the editor takes (format 'number'). */
+  min?: number;
 }
 
 const EditableCell = ({
@@ -24,6 +27,7 @@ const EditableCell = ({
   onUpdate,
   format = 'text',
   placeholder,
+  min,
 }: EditableCellProps) => {
   const [editing, setEditing] = useState(false);
   const [inputValue, setInputValue] = useState<ValueType>(record?.[dataIndex] as ValueType);
@@ -61,7 +65,7 @@ const EditableCell = ({
           }
         }}
       >
-        {inputValue} {format === 'number' && '%'} {!inputValue && placeholder}
+        {format === 'number' ? `${inputValue ?? 0}%` : inputValue} {!inputValue && placeholder}
       </button>
     );
   }
@@ -77,7 +81,7 @@ const EditableCell = ({
       {format === 'number' ? (
         <InputNumber
           className="w-full"
-          formatter={value => `${value} %`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+          min={min}
           onKeyDown={handleKeyPress}
           onChange={value => setInputValue(value)}
           value={inputValue as number | null}

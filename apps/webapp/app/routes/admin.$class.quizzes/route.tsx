@@ -524,9 +524,13 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
   const { class: classSlug } = useParams();
   const callout = useCallout();
 
-  // A publish whose source material is all still draft succeeds with a warning.
+  // A publish whose source material is all still draft succeeds with a
+  // warning; a refused action (publish, weight, delete) says why.
   useEffect(() => {
-    if (fetcher.state === 'idle' && fetcher.data?.warning) {
+    if (fetcher.state !== 'idle') return;
+    if (typeof fetcher.data?.error === 'string') {
+      callout.show({ variant: 'error', title: fetcher.data.error });
+    } else if (fetcher.data?.warning) {
       callout.show({ variant: 'info', title: fetcher.data.warning });
     }
     // `callout` is stable per CalloutProvider.
@@ -648,9 +652,10 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
             dataIndex="weight"
             onUpdate={handleUpdateWeight}
             format="number"
+            min={0}
           />
         ) : (
-          <Text>{quiz.weight}</Text>
+          <Text>{`${quiz.weight}%`}</Text>
         ),
     },
     {
@@ -692,8 +697,10 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       title: 'Attempts',
       key: 'attempts',
       width: 110,
+      // Shown wherever there are attempts: a quiz unpublished or taken out
+      // of its module keeps the attempts already made.
       render: (_: unknown, record: AdminQuiz) =>
-        record.status === 'PUBLISHED' || record.status === 'CLOSED' ? (
+        record.attemptsCount > 0 ? (
           <Space direction="vertical" size={0}>
             <Text>{record.attemptsCount} attempts</Text>
             {record.avgScore !== null && (
