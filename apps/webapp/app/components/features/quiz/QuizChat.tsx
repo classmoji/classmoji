@@ -423,6 +423,210 @@ export const withoutReplayedMessages = (
 };
 
 // ---------------------------------------------------------------------------
+// Replies that never come
+// ---------------------------------------------------------------------------
+
+/**
+ * How long a reply may take to send its first chunk. A turn writes its
+ * `start` as it begins, before any model call (the task's loop.ts), and an
+ * ordinary reply shows text within 5 to 30 seconds of the message; this is
+ * three times that. A run that ended without reading the message (between
+ * turns, at its idle limit, in a crash) sends nothing at all.
+ */
+export const REPLY_START_MS = 90_000;
+/**
+ * How long a reply that has begun may go without a chunk: the task's turn
+ * deadline (four minutes), with a minute's margin. The stream carries no
+ * reasoning, so a turn that is thinking can be silent for minutes, but no
+ * turn runs past its deadline: it ends with a notice by then.
+ */
+export const REPLY_SILENCE_MS = 240_000 + 60_000;
+
+/** What ended a quiet: a chunk of the reply, the stream's own end, or `release`. */
+export type QuietEnd = 'chunk' | 'ended' | 'released';
+
+/** A reply stream as useChat reads it, watched for going quiet (`watchReply`). */
+export interface WatchedReply {
+  stream: ReadableStream<UIMessageChunk>;
+  /** No chunk within the current wait; the stream is still read. */
+  readonly quiet: boolean;
+  /** A chunk of the reply has come. */
+  readonly begun: boolean;
+  /**
+   * Stop reading the reply here: the transport's stream is cancelled, which
+   * ends this tab's reading of it and nothing else (only an abort of the
+   * request writes a stop, and stops the run's turn), and the stream ends as
+   * a finished reply would.
+   */
+  release: () => void;
+}
+
+/**
+ * Watches a reply stream for going quiet: no chunk within `startMs` of the
+ * start, or within `silenceMs` of the last chunk. Quiet, the reply is still
+ * read, so a late one shows as it comes; the chat takes a message meanwhile
+ * (and releases the reply first: `release`). A chunk ends the quiet, and so
+ * does the end of the stream; `onQuietChange` hears each change, and what
+ * ended a quiet. A tab coming back into view waits afresh: its timers ran on
+ * while it was hidden or asleep, and the transport reconnects then.
+ */
+export const watchReply = (
+  source: ReadableStream<UIMessageChunk>,
+  onQuietChange: (quiet: boolean, end?: QuietEnd) => void,
+  { startMs = REPLY_START_MS, silenceMs = REPLY_SILENCE_MS } = {}
+): WatchedReply => {
+  const reader = source.getReader();
+  let controller!: ReadableStreamDefaultController<UIMessageChunk>;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let over = false;
+  let begun = false;
+  let quiet = false;
+  const setQuiet = (next: boolean, end?: QuietEnd) => {
+    if (quiet === next) return;
+    quiet = next;
+    onQuietChange(next, end);
+  };
+  const arm = () => {
+    clearTimeout(timer);
+    if (over || quiet) return;
+    timer = setTimeout(() => setQuiet(true), begun ? silenceMs : startMs);
+  };
+  const onVisibility = () => {
+    if (document.visibilityState === 'visible') arm();
+  };
+  const watching = typeof document !== 'undefined';
+  /** Ends the watch, once: false when it had already ended. */
+  const finish = (end: QuietEnd) => {
+    if (over) return false;
+    over = true;
+    clearTimeout(timer);
+    if (watching) document.removeEventListener('visibilitychange', onVisibility);
+    setQuiet(false, end);
+    return true;
+  };
+  const stream = new ReadableStream<UIMessageChunk>({
+    start(c) {
+      controller = c;
+      arm();
+      if (watching) document.addEventListener('visibilitychange', onVisibility);
+      void (async () => {
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (over) return;
+            if (done) {
+              finish('ended');
+              controller.close();
+              return;
+            }
+            begun = true;
+            setQuiet(false, 'chunk');
+            arm();
+            controller.enqueue(value);
+          }
+        } catch (error) {
+          if (finish('ended')) controller.error(error);
+        }
+      })();
+    },
+    cancel(reason) {
+      finish('ended');
+      return reader.cancel(reason);
+    },
+  });
+  return {
+    stream,
+    get quiet() {
+      return quiet;
+    },
+    get begun() {
+      return begun;
+    },
+    release: () => {
+      if (!finish('released')) return;
+      reader.cancel().catch(() => {});
+      controller.close();
+    },
+  };
+};
+
+/**
+ * The stream from its first `start` on: what comes before it (the rest of a
+ * reply this tab stopped reading part way, which the stream reads on from)
+ * is dropped, but for an error, which is the new turn's own.
+ */
+export const fromFirstStart = (
+  stream: ReadableStream<UIMessageChunk>
+): ReadableStream<UIMessageChunk> => {
+  let started = false;
+  return stream.pipeThrough(
+    new TransformStream<UIMessageChunk, UIMessageChunk>({
+      transform(chunk, controller) {
+        if (chunk.type === 'start') started = true;
+        if (started || chunk.type === 'error') controller.enqueue(chunk);
+      },
+    })
+  );
+};
+
+/**
+ * The chat with each reply after the student message it answers. A message
+ * whose reply this tab stopped waiting for before it began (`waiting`) is
+ * answered by the run the next message wakes, ahead of that message, but both
+ * replies come after both messages; the first is put back after its message,
+ * as the saved transcript has it, so the button sets come out the same.
+ */
+export const inAnswerOrder = (
+  messages: QuizUIMessage[],
+  waiting: ReadonlySet<string>
+): QuizUIMessage[] => {
+  if (waiting.size === 0) return messages;
+  let out: QuizUIMessage[] | null = null;
+  for (let i = 0; i < (out ?? messages).length; i++) {
+    const list = out ?? messages;
+    if (list[i].role !== 'user' || !waiting.has(list[i].id) || list[i + 1]?.role !== 'user') {
+      continue;
+    }
+    let reply = i + 1;
+    while (reply < list.length && list[reply].role === 'user') reply++;
+    if (list[reply]?.role !== 'assistant') continue;
+    out ??= messages.slice();
+    const [moved] = out.splice(reply, 1);
+    out.splice(i + 1, 0, moved);
+  }
+  return out ?? messages;
+};
+
+/** Two parts with the same content. */
+const samePart = (a: QuizPart, b: QuizPart | undefined) =>
+  a === b || JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * The chat with each reply useChat folded into the next one taken back out.
+ * One reply stream can carry two replies: the message after one a run never
+ * answered wakes a run that answers both, and both replies come on the new
+ * message's stream (so does a turn a recovering run answers again). useChat
+ * builds one message per stream: a second reply's `start` renames that
+ * message and adds it again, holding the first reply's parts ahead of its
+ * own. So an assistant message right after another that opens with all of
+ * that one's parts holds them a second time, and they are dropped from it.
+ */
+export const withoutFoldedReplies = (messages: QuizUIMessage[]): QuizUIMessage[] => {
+  let out: QuizUIMessage[] | null = null;
+  for (let i = 1; i < messages.length; i++) {
+    const earlier = messages[i - 1];
+    const later = messages[i];
+    if (earlier.role !== 'assistant' || later.role !== 'assistant') continue;
+    const held = earlier.parts.length;
+    if (held === 0 || later.parts.length < held) continue;
+    if (!earlier.parts.every((part, k) => samePart(part, later.parts[k]))) continue;
+    out ??= messages.slice();
+    out[i] = { ...later, parts: later.parts.slice(held) } as QuizUIMessage;
+  }
+  return out ?? messages;
+};
+
+// ---------------------------------------------------------------------------
 // Transcript helpers
 // ---------------------------------------------------------------------------
 
@@ -1695,6 +1899,18 @@ function LiveQuizChat({
   // state, so a reload asks the session route for a session, which writes a
   // new grant, instead of reusing this one.
   const sessionEndedRef = useRef(false);
+  // The reply this tab reads has gone quiet (`watchReply`): while it is, the
+  // stored session state says no reply is running, so a reload does not wait
+  // on it again, and keeps the cursor it had when the reply went quiet
+  // (`quietCursorRef`), never one inside a reply. The transport's own state
+  // is left as it is: it still reads.
+  const quietRef = useRef(false);
+  const quietCursorRef = useRef<string | undefined>(undefined);
+  const quietCopy = (state: ChatSessionPersistedState): ChatSessionPersistedState => ({
+    ...state,
+    isStreaming: false,
+    lastEventId: quietCursorRef.current,
+  });
 
   const transportRef = useRef<{ seedResumeCursor?: (chatId: string, cursor: string) => void }>(
     null
@@ -1713,30 +1929,54 @@ function LiveQuizChat({
     accessToken: ({ chatId }) => requestSessionToken(chatId),
     ...(persisted ? { sessions: { [attemptId]: persisted } } : {}),
     onSessionChange: (chatId, state) => {
-      persistSession(chatId, sessionEndedRef.current ? null : state);
+      const stored = state && quietRef.current ? quietCopy(state) : state;
+      persistSession(chatId, sessionEndedRef.current ? null : stored);
       if (state?.closed) setClosedWhileOpen(true);
     },
   });
   transportRef.current = transport;
 
   // What useChat reads replies through: the transport, minus any reply the
-  // chat already holds (`withoutReplayedMessages`). A join's resume first
-  // readies the transport to read the running opening (`readyToJoinOpening`).
+  // chat already holds (`withoutReplayedMessages`), watched for going quiet
+  // (`watchReply`), the begin action's included. A message sent after this
+  // tab released a reply part way reads from the next reply's start
+  // (`fromFirstStart`). A join's resume first readies the transport to read
+  // the running opening (`readyToJoinOpening`).
   const messagesRef = useRef<readonly QuizUIMessage[]>(initialMessages);
   const joinNextRef = useRef(false);
+  /** The reply stream useChat reads now, watched. */
+  const watchRef = useRef<WatchedReply | null>(null);
+  /** The next message follows a reply released after it began. */
+  const afterPartReplyRef = useRef(false);
+  const quietChangeRef = useRef<
+    (chatId: string, reply: WatchedReply, quiet: boolean, end?: QuietEnd) => void
+  >(() => {});
   const chatTransport = useMemo((): ChatTransport<QuizUIMessage> => {
     const replayed = withoutReplayedMessages(
       transport as unknown as ChatTransport<QuizUIMessage>,
       () => messagesRef.current
     );
+    const watched = (stream: ReadableStream<UIMessageChunk>, chatId: string) => {
+      const reply: WatchedReply = watchReply(stream, (quiet, end) =>
+        quietChangeRef.current(chatId, reply, quiet, end)
+      );
+      watchRef.current = reply;
+      return reply.stream;
+    };
     return {
-      ...replayed,
+      sendMessages: async options => {
+        const afterPartReply = afterPartReplyRef.current;
+        afterPartReplyRef.current = false;
+        const stream = await replayed.sendMessages(options);
+        return watched(afterPartReply ? fromFirstStart(stream) : stream, options.chatId);
+      },
       reconnectToStream: async options => {
         if (joinNextRef.current) {
           joinNextRef.current = false;
           if (!(await readyToJoinOpening(transport, options.chatId))) return null;
         }
-        return replayed.reconnectToStream(options);
+        const stream = await replayed.reconnectToStream(options);
+        return stream ? watched(stream, options.chatId) : stream;
       },
     };
   }, [transport]);
@@ -1745,31 +1985,84 @@ function LiveQuizChat({
   // admits (`data-messages-left`, counted by admission; never saved).
   const [streamedLeft, setStreamedLeft] = useState<number | null>(null);
 
-  const { messages, sendMessage, status, error, resumeStream, setMessages, clearError } =
-    useChat<QuizUIMessage>({
-      id: attemptId,
-      messages: initialMessages,
-      transport: chatTransport,
-      // Re-attach to a reply this tab was streaming when the page was reloaded.
-      // Only then: a resume and a start must never race on one chat.
-      resume: resuming,
-      onData: part => {
-        if (part.type === 'data-messages-left') setStreamedLeft(part.data.remaining);
-      },
-    });
+  const {
+    messages: chatMessages,
+    sendMessage,
+    status,
+    error,
+    resumeStream,
+    setMessages,
+    clearError,
+  } = useChat<QuizUIMessage>({
+    id: attemptId,
+    messages: initialMessages,
+    transport: chatTransport,
+    // Re-attach to a reply this tab was streaming when the page was reloaded.
+    // Only then: a resume and a start must never race on one chat.
+    resume: resuming,
+    onData: part => {
+      if (part.type === 'data-messages-left') setStreamedLeft(part.data.remaining);
+    },
+  });
+  // The student messages whose replies this tab stopped waiting for before
+  // they began (`send`, `inAnswerOrder`).
+  const [waiting, setWaiting] = useState<ReadonlySet<string>>(() => new Set());
+  // Each reply in a message of its own (`withoutFoldedReplies`), after the
+  // message it answers (`inAnswerOrder`).
+  const messages = useMemo(
+    () => inAnswerOrder(withoutFoldedReplies(chatMessages), waiting),
+    [chatMessages, waiting]
+  );
   messagesRef.current = messages;
   const { sendAction } = useChatActions({ sendMessage });
 
   // Joining an opening that runs elsewhere (`joinsOpening`): first its reply
   // stream (`joining`), then, when that brought no reply, the saved transcript
-  // (`awaitingSaved`), refreshed until it has the opening. Nothing saved
-  // within SAVED_OPENING_WAIT_MS means the opening is lost (`openingLost`),
-  // and only then is begin offered again.
+  // (`awaitingSaved`), refreshed until it has the opening. An opening's reply
+  // that goes quiet (begin's, or one a reload re-reads) waits the same way.
+  // Nothing saved within SAVED_OPENING_WAIT_MS means the opening is lost
+  // (`openingLost`), and only then is begin offered again.
   const [joining, setJoining] = useState(false);
   const [awaitingSaved, setAwaitingSaved] = useState(false);
   const [openingLost, setOpeningLost] = useState(lostAtOpen);
 
-  const busy = status === 'submitted' || status === 'streaming' || joining || awaitingSaved;
+  // A reply that went quiet (`watchReply`): the chat takes a message (the
+  // next one wakes a run) while the reply is still read, and the stored
+  // session state says no reply is running, at the cursor it had then. A late
+  // chunk ends the quiet: the stored state says a reply is running again, at
+  // that same cursor (a reload reads the reply from its start, never from
+  // inside it). A release or the stream's own end leaves it as it is: the
+  // next message, or the transport, writes it. With no reply in the chat yet
+  // (the opening's, begin's own included), the reply is released and the
+  // saved transcript waited for, as after a join.
+  const [quiet, setQuiet] = useState(false);
+  quietChangeRef.current = (chatId, reply, nowQuiet, end) => {
+    quietRef.current = nowQuiet;
+    setQuiet(nowQuiet);
+    const session =
+      typeof transport.getSession === 'function' ? transport.getSession(chatId) : undefined;
+    if (!session || session.closed) return;
+    if (nowQuiet) {
+      quietCursorRef.current = (readPersistedSession(chatId) ?? session).lastEventId;
+      if (!sessionEndedRef.current) persistSession(chatId, quietCopy(session));
+    } else if (end === 'chunk' && !sessionEndedRef.current) {
+      const stored = readPersistedSession(chatId);
+      if (stored) persistSession(chatId, { ...stored, isStreaming: true });
+    }
+    if (nowQuiet && !messagesRef.current.some(m => m.role === 'assistant')) {
+      if (typeof transport.setSession === 'function') {
+        transport.setSession(chatId, { ...session, isStreaming: false, activeInputSeq: undefined });
+      }
+      setAwaitingSaved(true);
+      reply.release();
+    }
+  };
+  // A message sent while a reply was still read (quiet, or come back as the
+  // message was sent): it goes once useChat has let that reply go (`send`).
+  const [pendingText, setPendingText] = useState<string | null>(null);
+
+  const replyOpen = status === 'submitted' || status === 'streaming';
+  const busy = (replyOpen && !quiet) || joining || awaitingSaved || pendingText !== null;
   const evaluationSeen = hasEvaluation(messages);
   const complete = Boolean(attempt.completed_at) || evaluationSeen;
   // A session closed without an evaluation (the attempt can no longer take
@@ -1931,11 +2224,37 @@ function LiveQuizChat({
     (text: string) => {
       const trimmed = text.trim();
       if (!trimmed || busy || !canSend) return;
+      if (replyOpen) {
+        // A reply still being read: the message goes once useChat has let it
+        // go (sending into the open request would let that request's end mark
+        // the new one as finished). A quiet reply is released now, without
+        // stopping its run; one a chunk of which has just come is read to its
+        // end first. A student message still without a reply is answered by
+        // the run this message wakes, ahead of it (`inAnswerOrder`); a reply
+        // released part way leaves its rest ahead of the next one
+        // (`fromFirstStart`).
+        const reply = watchRef.current;
+        time.flush();
+        if (reply?.quiet) {
+          const last = messagesRef.current.at(-1);
+          if (last?.role === 'user') setWaiting(ids => new Set(ids).add(last.id));
+          if (reply.begun) afterPartReplyRef.current = true;
+          reply.release();
+        }
+        setPendingText(trimmed);
+        return;
+      }
       time.flush();
       void sendMessage({ text: trimmed });
     },
-    [busy, canSend, sendMessage, time]
+    [busy, canSend, replyOpen, sendMessage, time]
   );
+
+  useEffect(() => {
+    if (pendingText === null || replyOpen) return;
+    setPendingText(null);
+    void sendMessage({ text: pendingText });
+  }, [pendingText, replyOpen, sendMessage]);
 
   const onButton = useCallback((text: string) => send(text), [send]);
 
