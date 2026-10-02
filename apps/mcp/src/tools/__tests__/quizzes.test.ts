@@ -173,7 +173,8 @@ describe('role tiers', () => {
     }
     expect(quizUpdateTool.description).toContain(
       'an assistant may change the content and the name only, not module_id, release_at, ' +
-        'due_date, closes_at, weight, tokens_per_hour or published'
+        'due_date, closes_at, weight, tokens_per_hour, published, question_count, max_attempts ' +
+        'or grading_strategy'
     );
     for (const tool of [quizCreateTool, quizUpdateTool, quizPublishTool, quizDeleteTool]) {
       expect(new TextEncoder().encode(tool.description).length, tool.name).toBeLessThan(1500);
@@ -848,8 +849,45 @@ describe('quiz_update: an assistant edits content, not the assignment', () => {
   });
 
   it.each([
+    ['question_count', 7],
+    ['max_attempts', 3],
+    ['max_attempts', 0],
+    ['grading_strategy', 'MOST_RECENT'],
+  ] as const)(
+    'refuses %s (%s), how the quiz is taken and scored, before reading or writing anything',
+    async (field, value) => {
+      const error = await quizUpdateTool
+        .handler({ ...BASE, rubric_prompt: 'Ask about loops', [field]: value }, ASSISTANT_CTX)
+        .catch((e: unknown) => e);
+
+      expect(error).toMatchObject({
+        kind: 'forbidden',
+        code: 'INSUFFICIENT_ROLE',
+        message:
+          'Only the class owner or a teacher can change a quiz’s number of questions, max ' +
+          'attempts or grading strategy',
+      });
+      expect(mocks.quizFindById).not.toHaveBeenCalled();
+      expect(mocks.quizUpdate).not.toHaveBeenCalled();
+      expect(mocks.auditCreate).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ['question_count', 7, { questionCount: 7 }],
+    ['max_attempts', 3, { maxAttempts: 3 }],
+    ['grading_strategy', 'MOST_RECENT', { gradingStrategy: 'MOST_RECENT' }],
+  ] as const)('lets a teacher set %s', async (field, value, forwarded) => {
+    await quizUpdateTool.handler({ ...BASE, [field]: value }, TEACHER_CTX);
+    expect(mocks.quizUpdate).toHaveBeenCalledWith('quiz-1', forwarded);
+  });
+
+  it.each([
     ['name', 'Renamed', { name: 'Renamed' }],
     ['rubric_prompt', 'Ask about loops', { rubricPrompt: 'Ask about loops' }],
+    ['system_prompt', 'Be brief', { systemPrompt: 'Be brief' }],
+    ['include_code_context', true, { includeCodeContext: true }],
+    ['course_search_enabled', true, { courseSearchEnabled: true }],
     ['excluded_paths', ['tests/**'], { excludedPaths: ['tests/**'] }],
   ] as const)('lets %s through for an assistant', async (field, value, forwarded) => {
     const payload = parse(await quizUpdateTool.handler({ ...BASE, [field]: value }, ASSISTANT_CTX));

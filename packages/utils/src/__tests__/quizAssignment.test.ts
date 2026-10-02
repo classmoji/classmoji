@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   QUIZ_AUTHOR_ROLES,
+  QUIZ_AUTHOR_SETTING_KEYS,
   QUIZ_EDITOR_ROLES,
   canAuthorQuiz,
   mirroredQuizStatus,
   mirroredQuizWeight,
   ownerOnlyAssignmentFields,
   quizAssignmentKeysIn,
+  quizAuthorSettingKeysIn,
 } from '../quizAssignment.ts';
 
 const NOW = new Date('2026-10-02T12:00:00Z');
@@ -67,6 +69,38 @@ describe('quizAssignmentKeysIn', () => {
     ]) {
       expect(quizAssignmentKeysIn({ [key]: 1 })).toEqual([key]);
     }
+  });
+});
+
+describe('quizAuthorSettingKeysIn', () => {
+  it('names the question count, max attempts and grading strategy a save carries', () => {
+    expect(
+      quizAuthorSettingKeysIn({
+        name: 'N',
+        questionCount: 5,
+        maxAttempts: 0,
+        gradingStrategy: 'HIGHEST',
+      })
+    ).toEqual(['questionCount', 'maxAttempts', 'gradingStrategy']);
+    expect(QUIZ_AUTHOR_SETTING_KEYS).toEqual(['questionCount', 'maxAttempts', 'gradingStrategy']);
+  });
+
+  it('leaves the content an assistant edits alone, and ignores undefined', () => {
+    expect(
+      quizAuthorSettingKeysIn({
+        name: 'N',
+        rubricPrompt: 'r',
+        systemPrompt: 's',
+        sourceMaterial: [],
+        includeCodeContext: true,
+        repositoryId: 'repo',
+        excludedPaths: [],
+        courseSearchEnabled: true,
+        subject: 'JS',
+        difficultyLevel: 'Beginner',
+        maxAttempts: undefined,
+      })
+    ).toEqual([]);
   });
 });
 

@@ -9,8 +9,10 @@
  *   - quiz_update: QUIZ_STAFF (OWNER, TEACHER, ASSISTANT). An assistant may
  *     change a quiz's content and its name; a call carrying any assignment
  *     field (QUIZ_ASSIGNMENT_ARGS: module_id, release_at, due_date, closes_at,
- *     weight, tokens_per_hour, published) from a caller who holds neither
- *     OWNER nor TEACHER is refused before the quiz is read or written.
+ *     weight, tokens_per_hour, published) or author setting
+ *     (QUIZ_AUTHOR_SETTING_ARGS: question_count, max_attempts,
+ *     grading_strategy) from a caller who holds neither OWNER nor TEACHER is
+ *     refused before the quiz is read or written.
  *
  * A quiz is placed in a module by its assignment: quiz_create requires
  * module_id, and the module is checked against the authorized classroom
@@ -113,6 +115,13 @@ const QUIZ_ASSIGNMENT_ARGS = [
   'tokens_per_hour',
   'published',
 ] as const;
+
+/**
+ * quiz_update arguments that set how the quiz is taken and scored, which only
+ * a quiz author may change (the web form shows them read-only to an
+ * assistant): QUIZ_AUTHOR_SETTING_KEYS in @classmoji/utils.
+ */
+const QUIZ_AUTHOR_SETTING_ARGS = ['question_count', 'max_attempts', 'grading_strategy'] as const;
 
 /**
  * S1 for a module a quiz is placed in: it must be in the authorized classroom.
@@ -500,7 +509,8 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
   description:
     'Updates a quiz’s settings and prompts. Owner, teacher or assistant; an assistant may change ' +
     'the content and the name only, not module_id, release_at, due_date, closes_at, weight, ' +
-    'tokens_per_hour or published. Requires a Pro subscription and quizzes enabled. Provide at ' +
+    'tokens_per_hour, published, question_count, max_attempts or grading_strategy. Requires a ' +
+    'Pro subscription and quizzes enabled. Provide at ' +
     'least one field. module_id moves the quiz to another module (a quiz in no module needs one ' +
     'before any of those fields). closes_at stops new attempts (null reopens); published:false ' +
     'unpublishes. Publishing must go through quiz_publish, because only that path notifies ' +
@@ -630,6 +640,18 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
         'forbidden',
         'Only the class owner or a teacher can change a quiz’s module, dates, weight, ' +
           'tokens per hour or publish state',
+        'INSUFFICIENT_ROLE'
+      );
+    }
+    // How the quiz is taken and scored is the authors' too.
+    if (
+      QUIZ_AUTHOR_SETTING_ARGS.some(field => args[field] !== undefined) &&
+      !(await holdsRole(ctx, QUIZ_AUTHORS))
+    ) {
+      throw new ToolError(
+        'forbidden',
+        'Only the class owner or a teacher can change a quiz’s number of questions, max ' +
+          'attempts or grading strategy',
         'INSUFFICIENT_ROLE'
       );
     }

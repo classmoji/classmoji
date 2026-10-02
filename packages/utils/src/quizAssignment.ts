@@ -7,11 +7,13 @@
  * write them:
  *
  *   - OWNER and TEACHER create, publish, weight, schedule and delete quizzes
- *     (`QUIZ_AUTHOR_ROLES`).
- *   - ASSISTANT edits a quiz's content (rubric, prompts, questions, source
- *     material, excluded paths) and its name, and nothing on the assignment
- *     (`QUIZ_EDITOR_ROLES` minus the authors). A save from an assistant that
- *     carries any assignment field is refused whole.
+ *     (`QUIZ_AUTHOR_ROLES`), and set how many questions it asks, how many
+ *     attempts it allows and which attempt counts (`QUIZ_AUTHOR_SETTING_KEYS`).
+ *   - ASSISTANT edits a quiz's content (rubric, prompts, source material, the
+ *     code-context settings and excluded paths) and its name, and nothing on
+ *     the assignment (`QUIZ_EDITOR_ROLES` minus the authors). A save from an
+ *     assistant that carries any assignment field or author setting is
+ *     refused whole.
  */
 
 import { isClosed } from './assignmentVisibility.ts';
@@ -45,6 +47,21 @@ export const QUIZ_ASSIGNMENT_INPUT_KEYS = [
 /** The assignment keys a quiz save carries (present and not undefined). */
 export const quizAssignmentKeysIn = (input: Record<string, unknown>): string[] =>
   QUIZ_ASSIGNMENT_INPUT_KEYS.filter(key => key in input && input[key] !== undefined);
+
+/**
+ * The keys of a quiz save that only an author may change, beyond the
+ * assignment: how many questions the quiz asks, how many attempts it allows,
+ * and which attempt counts.
+ */
+export const QUIZ_AUTHOR_SETTING_KEYS = [
+  'questionCount',
+  'maxAttempts',
+  'gradingStrategy',
+] as const;
+
+/** The author-only setting keys a quiz save carries (present and not undefined). */
+export const quizAuthorSettingKeysIn = (input: Record<string, unknown>): string[] =>
+  QUIZ_AUTHOR_SETTING_KEYS.filter(key => key in input && input[key] !== undefined);
 
 /**
  * The `Quiz.status` an assignment implies at `now`, written as a mirror so a
