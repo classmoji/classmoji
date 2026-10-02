@@ -139,9 +139,6 @@ const list = (quizzesVisible = true) =>
     now: NOW,
   });
 
-const byId = (rows: Awaited<ReturnType<typeof list>>) =>
-  Object.fromEntries(rows.map(r => [r.assignmentId, r]));
-
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.listForClassroom.mockResolvedValue([]);

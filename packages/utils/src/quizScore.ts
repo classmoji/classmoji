@@ -55,9 +55,10 @@ export const countingQuizAttempt = <T extends ScorableQuizAttempt>(
       );
     case 'HIGHEST':
     default:
+      // Every attempt here is scored, so the fallbacks never apply.
       return pick(
         (a, b) =>
-          a.partial_credit_percentage! > b.partial_credit_percentage! ||
+          (a.partial_credit_percentage ?? 0) > (b.partial_credit_percentage ?? 0) ||
           (a.partial_credit_percentage === b.partial_credit_percentage &&
             time(a.completed_at) < time(b.completed_at))
       );
