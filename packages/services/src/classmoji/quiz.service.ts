@@ -480,11 +480,10 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
     }
 
     let assignment: QuizAssignmentRow | null = current.assignment;
-    let previous: { student_deadline: Date | null; is_published: boolean } | null =
-      assignment && {
-        student_deadline: assignment.student_deadline,
-        is_published: assignment.is_published,
-      };
+    let previous: { student_deadline: Date | null; is_published: boolean } | null = assignment && {
+      student_deadline: assignment.student_deadline,
+      is_published: assignment.is_published,
+    };
 
     // An unassigned quiz saved without a module keeps the old behaviour for
     // the old flat fields; the new assignment fields need a module.
@@ -802,12 +801,13 @@ export const getQuizzesForStudent = async (
     },
     include: {
       repository: true,
-      // The quiz's assignment owns its due date, schedule and weight where it
-      // has one.
+      // The quiz's assignment owns its module, due date, schedule and weight
+      // where it has one.
       assignment: {
         select: {
           id: true,
           module_id: true,
+          module: { select: { id: true, title: true } },
           is_published: true,
           release_at: true,
           student_deadline: true,
@@ -826,10 +826,7 @@ export const getQuizzesForStudent = async (
   });
 
   /** Past the assignment's close date, or (no assignment) a CLOSED quiz. */
-  const closedOf = (quiz: {
-    status: QuizStatus;
-    assignment: { closes_at: Date | null } | null;
-  }) =>
+  const closedOf = (quiz: { status: QuizStatus; assignment: { closes_at: Date | null } | null }) =>
     quiz.assignment ? isClosed(quiz.assignment.closes_at, now) : quiz.status === 'CLOSED';
   const quizzes = includeClosed ? listed : listed.filter(quiz => !closedOf(quiz));
 
@@ -948,7 +945,10 @@ export const publish = async (quizId: string) => {
     );
   }
   const result = await setQuizAssignmentPublished(quiz.assignment.id, true);
-  const row = await getPrisma().quiz.findUniqueOrThrow({ where: { id: quizId } });
+  const row = await getPrisma().quiz.findUniqueOrThrow({
+    where: { id: quizId },
+    include: { assignment: { include: { module: { select: { id: true, title: true } } } } },
+  });
   return {
     ...row,
     wasPublished: result.wasPublished,

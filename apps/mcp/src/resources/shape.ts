@@ -10,7 +10,7 @@
  */
 
 import type { Role } from '@prisma/client';
-import { gitUsername, type WithGitAccounts } from '@classmoji/utils';
+import { gitUsername, mirroredQuizStatus, type WithGitAccounts } from '@classmoji/utils';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext } from '../mcp/registry.ts';
 
@@ -58,6 +58,55 @@ export const MEMBER: readonly Role[] = ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDEN
 export const STUDENT_ONLY: readonly Role[] = ['STUDENT'];
 /** Quiz routes allow the whole teaching team plus STUDENT. */
 export const QUIZ_ROLES: readonly Role[] = ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'];
+
+// ─── A quiz's place in the course ────────────────────────────────────────────
+
+/** A quiz row as the quiz services return it, with its assignment when it has one. */
+export interface QuizPlacementSource {
+  status: string;
+  due_date?: Date | string | null;
+  weight?: number | null;
+  assignment?: {
+    is_published: boolean;
+    release_at?: Date | string | null;
+    student_deadline?: Date | string | null;
+    closes_at?: Date | string | null;
+    weight: number;
+    module?: { id: string; title: string } | null;
+  } | null;
+}
+
+/**
+ * Where a quiz sits and when, read from its QUIZ assignment, which owns them:
+ * the module, Opens (`release_at`), due and close dates, weight and publish
+ * state. `status` is DRAFT / PUBLISHED / CLOSED as of `now` (CLOSED once the
+ * close date has passed), not the quiz's own column, which is written only
+ * when the quiz is saved. A quiz in no module has no assignment and keeps its
+ * own due date, weight and status.
+ */
+export function quizPlacement(quiz: QuizPlacementSource, now: Date = new Date()) {
+  const a = quiz.assignment;
+  if (!a) {
+    return {
+      status: quiz.status,
+      published: quiz.status !== 'DRAFT',
+      module: null,
+      release_at: null,
+      due_date: quiz.due_date ?? null,
+      closes_at: null,
+      weight: quiz.weight ?? 0,
+    };
+  }
+  return {
+    status: mirroredQuizStatus(a, now),
+    published: a.is_published,
+    module: a.module ? { id: a.module.id, title: a.module.title } : null,
+    release_at: a.release_at ?? null,
+    due_date: a.student_deadline ?? null,
+    closes_at: a.closes_at ?? null,
+    weight: a.weight,
+  };
+}
 
 /**
  * "Staff" = the classroom's teaching team, exactly OWNER/TEACHER/ASSISTANT

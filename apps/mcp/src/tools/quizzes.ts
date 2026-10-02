@@ -49,7 +49,7 @@ import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import { assertProTier } from '../authz/proTier.ts';
-import { sanitizedSettings } from '../resources/shape.ts';
+import { quizPlacement, sanitizedSettings, type QuizPlacementSource } from '../resources/shape.ts';
 import {
   holdsRole,
   loadQuizInClassroom,
@@ -117,7 +117,7 @@ function allSourceMaterialDraft(
 }
 
 /** Row shape the quiz service returns (only the fields we echo are named). */
-interface QuizRow {
+interface QuizRow extends QuizPlacementSource {
   id: string;
   name: string;
   status: string;
@@ -129,6 +129,10 @@ interface QuizRow {
   difficulty_level?: string | null;
   due_date?: Date | string | null;
   weight?: number;
+  /** The quiz's assignment: module, dates, weight, tokens per hour, published. */
+  assignment?:
+    | (NonNullable<QuizPlacementSource['assignment']> & { tokens_per_hour?: number })
+    | null;
   question_count?: number;
   max_attempts?: number;
   grading_strategy?: string;
@@ -148,17 +152,17 @@ interface QuizPublishRow extends QuizRow {
 /**
  * Explicit response allowlist — mirrors the staff shape of the quizzes read
  * resource. Never spread the service row: it carries every attempt with the
- * student User record attached.
+ * student User record attached. Where the quiz sits and when (module, status,
+ * published, Opens, due and close dates, weight) is its assignment's, as of
+ * now.
  */
 function quizSummary(quiz: QuizRow) {
-  const dueDate = quiz.due_date;
   return {
     id: quiz.id,
     name: quiz.name,
-    status: quiz.status,
+    ...quizPlacement(quiz),
+    tokens_per_hour: quiz.assignment?.tokens_per_hour ?? 0,
     repository_id: quiz.repository_id ?? null,
-    due_date: dueDate instanceof Date ? dueDate.toISOString() : (dueDate ?? null),
-    weight: quiz.weight ?? 0,
     question_count: quiz.question_count ?? null,
     max_attempts: quiz.max_attempts ?? null,
     grading_strategy: quiz.grading_strategy ?? null,
@@ -593,6 +597,8 @@ export const quizPublishTool: ToolDefinition<QuizPublishArgs> = {
     // Publishing does not change the material, so the row loaded above says;
     // quiz.publish returns the bare row without it.
     const warning = allSourceMaterialDraft(quiz) ? SOURCE_MATERIAL_DRAFT_WARNING : null;
+    // As the assignment read before the publish, not the quiz's own column.
+    const previousStatus = quizPlacement(quiz as QuizRow).status;
 
     await writeAudit(ctx, {
       resource_type: 'QUIZ',
@@ -600,7 +606,7 @@ export const quizPublishTool: ToolDefinition<QuizPublishArgs> = {
       action: 'UPDATE',
       data: {
         tool: 'quiz_publish',
-        previous_status: quiz.status,
+        previous_status: previousStatus,
         students_notified: notified,
       },
     });
@@ -608,7 +614,7 @@ export const quizPublishTool: ToolDefinition<QuizPublishArgs> = {
     return ok({
       success: true,
       quiz: quizSummary(published),
-      previous_status: quiz.status,
+      previous_status: previousStatus,
       students_notified: notified,
       ...(warning ? { warning } : {}),
       message:

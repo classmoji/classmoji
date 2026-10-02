@@ -357,6 +357,64 @@ describe('quizzes resource source_material (quiz source material)', () => {
     ]);
     expect('assignment' in result.quizzes[0]).toBe(false);
   });
+
+  it("reads status, publish state, dates, weight and module off the quiz's assignment", async () => {
+    // The quiz's own columns say PUBLISHED, weight 10: written when it was
+    // saved. The close date has passed since, and the assignment owns all of it.
+    const closesAt = new Date(Date.now() - 60_000);
+    const releaseAt = new Date('2026-09-28T13:00:00Z');
+    findByClassroom.mockResolvedValue([
+      {
+        id: 'q1',
+        name: 'Recursion',
+        status: 'PUBLISHED',
+        weight: 10,
+        due_date: null,
+        question_count: 3,
+        assignment: {
+          is_published: true,
+          release_at: releaseAt,
+          student_deadline: null,
+          closes_at: closesAt,
+          weight: 2.5,
+          tokens_per_hour: 3,
+          module: { id: 'mod-1', title: 'Week 1' },
+        },
+      },
+      {
+        id: 'q2',
+        name: 'Unpublished',
+        status: 'PUBLISHED',
+        weight: 10,
+        question_count: 3,
+        assignment: { is_published: false, weight: 0, module: { id: 'mod-1', title: 'Week 1' } },
+      },
+      { id: 'q3', name: 'In no module', status: 'CLOSED', weight: 4, question_count: 3 },
+    ]);
+
+    const result = (await quizzesResource.handler(
+      VARS,
+      ownerCtx({ quizzes_enabled: true }),
+      new URL('classmoji://x')
+    )) as { quizzes: Array<Record<string, unknown>> };
+
+    expect(result.quizzes[0]).toMatchObject({
+      status: 'CLOSED',
+      published: true,
+      module: { id: 'mod-1', title: 'Week 1' },
+      release_at: releaseAt,
+      closes_at: closesAt,
+      weight: 2.5,
+      tokens_per_hour: 3,
+    });
+    expect(result.quizzes[1]).toMatchObject({ status: 'DRAFT', published: false, weight: 0 });
+    expect(result.quizzes[2]).toMatchObject({
+      status: 'CLOSED',
+      published: true,
+      module: null,
+      weight: 4,
+    });
+  });
 });
 
 describe('calendar resource allowlist shaping (U5)', () => {

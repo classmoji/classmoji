@@ -258,7 +258,7 @@ export const listModulesTool = mirrorResourceTool({
   name: 'list_modules',
   title: 'List modules',
   description:
-    'Ordered curriculum modules, each with its content `items` (pages, slides, quizzes, forms) ' +
+    'Ordered curriculum modules, each with its content `items` (pages, slides, forms) ' +
     'and its `assignments` (REPO, QUIZ or FORM, in display order). An assignment belongs to ' +
     'exactly one module; an owner moves it with assignment_update module_id. Staff see ' +
     'unpublished modules, items and assignments too, and for each assignment the repository, ' +

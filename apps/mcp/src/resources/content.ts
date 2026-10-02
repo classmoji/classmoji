@@ -19,9 +19,11 @@
  *                     shows. Staff get each assignment's target and grading
  *                     fields; a student gets only what their module row
  *                     renders (title, type, due date) — never the quiz or
- *                     form behind it, which may still be a draft. Quiz items
- *                     and quiz assignments are dropped for every role unless
- *                     entitlement.quizzesVisible (Pro, quizzes on). Legacy
+ *                     form behind it, which may still be a draft. Quiz
+ *                     assignments are dropped for every role unless
+ *                     entitlement.quizzesVisible (Pro, quizzes on); legacy
+ *                     QUIZ items are listed for nobody (a quiz is in a
+ *                     module through its assignment). Legacy
  *                     REPOSITORY item rows are passed through unchanged: the
  *                     member screens no longer draw them, but the public
  *                     course site still does.
@@ -57,7 +59,15 @@ import { ToolError } from '../mcp/errors.ts';
 import { renderZone } from '../mcp/localTimes.ts';
 import type { ResourceDefinition, ToolContext } from '../mcp/registry.ts';
 import { assertProTier } from '../authz/proTier.ts';
-import { MEMBER, QUIZ_ROLES, classroomCtx, isStaff, sanitizedSettings } from './shape.ts';
+import {
+  MEMBER,
+  QUIZ_ROLES,
+  classroomCtx,
+  isStaff,
+  quizPlacement,
+  sanitizedSettings,
+  type QuizPlacementSource,
+} from './shape.ts';
 
 // ─── pages ───────────────────────────────────────────────────────────────────
 
@@ -236,7 +246,7 @@ export const modulesResource: ResourceDefinition = {
   uriTemplate: 'classmoji://{org}/{slug}/modules',
   title: 'Modules (curriculum lists)',
   description:
-    'Ordered curriculum modules, each with its content items (pages, slides, quizzes, forms) and ' +
+    'Ordered curriculum modules, each with its content items (pages, slides, forms) and ' +
     'the assignments that belong to it (REPO, QUIZ or FORM, in display order). Students see ' +
     'published modules, items and assignments only, each assignment by title, type and due ' +
     'date; staff also see unpublished, with each assignment’s target and grading fields. ' +
@@ -250,11 +260,16 @@ export const modulesResource: ResourceDefinition = {
       return { enabled: false, modules: [] };
     }
 
-    // Quizzes are counted as visible here: this resource drops quiz items and
-    // quiz assignments itself below, for every role, where they are hidden.
+    // Quizzes appear only where quizzes do — the predicate the web app's module
+    // screens filter on too. The answer goes to listForClassroom, which applies
+    // the student-visibility rule to a student's assignments with it
+    // (published, past Opens, quizzes shown); staff, who see unpublished rows
+    // too, have quiz assignments dropped below where quizzes are hidden.
+    const staff = isStaff(role);
+    const quizzesVisible = await ClassmojiService.entitlement.quizzesVisible(classroomId);
     const modules = (await ClassmojiService.module.listForClassroom(vars.slug, {
-      includeUnpublished: isStaff(role),
-      quizzesVisible: true,
+      includeUnpublished: staff,
+      quizzesVisible,
     })) as ModuleRow[];
 
     // listForClassroom resolves by BARE slug. The slug is globally unique
@@ -269,17 +284,6 @@ export const modulesResource: ResourceDefinition = {
       );
     }
 
-    // Quiz items and quiz assignments appear only where quizzes do — the
-    // predicate the web app's module screens filter on too. Asked once, and
-    // only when a quiz row of either kind is present.
-    const hideQuizzes =
-      modules.some(
-        m =>
-          m.items.some(item => item.item_type === 'QUIZ') ||
-          (m.assignments ?? []).some(a => a.type === 'QUIZ')
-      ) && !(await ClassmojiService.entitlement.quizzesVisible(classroomId));
-
-    const staff = isStaff(role);
     return {
       enabled: true,
       modules: modules.map(m => ({
@@ -289,11 +293,13 @@ export const modulesResource: ResourceDefinition = {
         description: m.description ?? null,
         position: m.position,
         ...(staff ? { is_published: m.is_published } : {}),
+        // A quiz is in a module through its assignment: legacy QUIZ items are
+        // listed for nobody (listForClassroom leaves them out too).
         items: m.items
-          .filter(item => !(hideQuizzes && item.item_type === 'QUIZ'))
+          .filter(item => item.item_type !== 'QUIZ')
           .map((item, index) => moduleItemSummary(item, index)),
         assignments: (m.assignments ?? [])
-          .filter(a => !(hideQuizzes && a.type === 'QUIZ'))
+          .filter(a => quizzesVisible || a.type !== 'QUIZ')
           .map(a => moduleAssignmentSummary(a, staff)),
       })),
     };
@@ -302,13 +308,15 @@ export const modulesResource: ResourceDefinition = {
 
 // ─── quizzes ─────────────────────────────────────────────────────────────────
 
-interface QuizRow {
+interface QuizRow extends QuizPlacementSource {
   id: string;
   name: string;
   status: string;
   due_date?: Date | null;
-  /** The quiz's assignment: it owns the due date where it exists. */
-  assignment?: { student_deadline: Date | null } | null;
+  /** The quiz's assignment: it owns the module, dates, weight and publish state. */
+  assignment?:
+    | (NonNullable<QuizPlacementSource['assignment']> & { tokens_per_hour?: number })
+    | null;
   weight: number;
   question_count: number;
   max_attempts: number;
@@ -374,14 +382,14 @@ export const quizzesResource: ResourceDefinition = {
       throw new ToolError('forbidden', 'Quizzes are currently disabled for this classroom');
     }
 
+    // Where a quiz sits and when (module, status, published, Opens, due and
+    // close dates, weight) is read from its assignment, as of now; a quiz in
+    // no module keeps its own (as on the web).
+    const now = new Date();
     const base = (q: QuizRow) => ({
       id: q.id,
       name: q.name,
-      status: q.status,
-      // One due date for staff and students: the assignment's where the quiz
-      // has one, the quiz's own otherwise (as on the web).
-      due_date: q.assignment?.student_deadline ?? q.due_date ?? null,
-      weight: q.weight,
+      ...quizPlacement(q, now),
       question_count: q.question_count,
       max_attempts: q.max_attempts,
       grading_strategy: q.grading_strategy,
@@ -427,6 +435,7 @@ export const quizzesResource: ResourceDefinition = {
         rubric_prompt: q.rubric_prompt ?? null,
         // Staff only, like the prompts: quiz configuration.
         excluded_paths: q.excluded_paths ?? [],
+        tokens_per_hour: q.assignment?.tokens_per_hour ?? 0,
         attempts_count: q.attemptsCount ?? 0,
         avg_score: q.avgScore ?? null,
       })),
