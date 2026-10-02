@@ -34,6 +34,8 @@
  *                     gate, but neither quiz LIST loader checks it (it only
  *                     gates the attempt/action flow + nav) — route wins, so
  *                     the list resource does not check it. Students get the
+ *                     published quizzes, closed ones included (as the web
+ *                     list), with the
  *                     student route's field allowlist (no
  *                     system_prompt/rubric_prompt); staff get the admin one.
  *                     `source_material` (the linked pages and decks, in
@@ -369,8 +371,8 @@ export const quizzesResource: ResourceDefinition = {
   description:
     'AI-graded quizzes with their source material (linked pages and decks, in order). Staff ' +
     '(OWNER/TEACHER/ASSISTANT) see all quizzes incl. drafts and prompts; students see ' +
-    'published quizzes, published material and their own attempt summary. Requires a Pro ' +
-    'subscription and quizzes_enabled.',
+    'published quizzes (closed ones too, as CLOSED), published material and their own attempt ' +
+    'summary. Requires a Pro subscription and quizzes_enabled.',
   scope: 'read',
   roles: QUIZ_ROLES,
   handler: async (vars, ctx) => {
@@ -407,10 +409,13 @@ export const quizzesResource: ResourceDefinition = {
     });
 
     if (role === 'STUDENT') {
+      // Closed quizzes too, as the web list shows them: a student keeps the
+      // quiz they finished and its score, and a closed one reads as CLOSED.
       const quizzes = (await ClassmojiService.quiz.getQuizzesForStudent(
         classroomId,
         ctx.viewer.userId,
-        membership as never
+        membership as never,
+        { includeClosed: true }
       )) as QuizRow[];
       // Student allowlist (mirrors the student route's .map): NO system_prompt,
       // rubric_prompt, subject, difficulty_level, or class-wide stats.

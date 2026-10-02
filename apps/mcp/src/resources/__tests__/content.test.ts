@@ -216,7 +216,9 @@ describe('quizzes resource source_material (quiz source material)', () => {
       quizzes: Array<Record<string, unknown>>;
     };
 
-    expect(getQuizzesForStudent).toHaveBeenCalledWith('class-1', 'student-1', expect.anything());
+    expect(getQuizzesForStudent).toHaveBeenCalledWith('class-1', 'student-1', expect.anything(), {
+      includeClosed: true,
+    });
     expect(result.quizzes[0].source_material).toEqual([
       { kind: 'slide', id: 's1', title: 'Forms', is_draft: false, order: 0 },
     ]);
@@ -297,9 +299,40 @@ describe('quizzes resource source_material (quiz source material)', () => {
       quizzes: Array<{ my_attempts: { currentScore: number | null } }>;
     };
 
-    // The published list only: no options are passed, so closed quizzes stay out.
-    expect(getQuizzesForStudent.mock.calls[0]).toHaveLength(3);
     expect(result.quizzes[0].my_attempts.currentScore).toBe(0);
+  });
+
+  it('gives students closed quizzes too, as the web list does, reading as CLOSED', async () => {
+    // Past its close date: the service lists it when asked for closed ones.
+    getQuizzesForStudent.mockResolvedValue([
+      {
+        id: 'q1',
+        name: 'Quiz 1',
+        status: 'PUBLISHED',
+        weight: 0,
+        question_count: 3,
+        assignment: {
+          is_published: true,
+          release_at: null,
+          student_deadline: null,
+          closes_at: new Date(Date.now() - 60_000),
+          weight: 0,
+          module: { id: 'mod-1', title: 'Week 1' },
+        },
+        attemptsSummary: { count: 1, canCreateNew: false, currentScore: 70 },
+      },
+    ]);
+    const ctx = studentCtx();
+    (ctx.classroom as unknown as { classroom: { slug: string } }).classroom.slug =
+      'authorized-slug';
+
+    const result = (await quizzesResource.handler(VARS, ctx, new URL('classmoji://x'))) as {
+      quizzes: Array<Record<string, unknown>>;
+    };
+
+    expect(getQuizzesForStudent.mock.calls[0][3]).toEqual({ includeClosed: true });
+    expect(result.quizzes[0]).toMatchObject({ status: 'CLOSED', published: true });
+    expect(result.quizzes[0].my_attempts).toMatchObject({ currentScore: 70 });
   });
 
   it("gives students the assignment's due date, falling back to the quiz's own", async () => {

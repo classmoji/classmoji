@@ -240,8 +240,8 @@ export const listQuizzesTool = mirrorResourceTool({
   description:
     'AI-graded quizzes with their source material (linked pages and decks, in order). Staff ' +
     '(OWNER/TEACHER/ASSISTANT) see all quizzes incl. drafts and prompts; students see published ' +
-    'quizzes, published material and their own attempt summary. Requires a Pro subscription ' +
-    'and quizzes_enabled.',
+    'quizzes (closed ones too, as CLOSED), published material and their own attempt summary. ' +
+    'Requires a Pro subscription and quizzes_enabled.',
 });
 
 export const listPagesTool = mirrorResourceTool({
