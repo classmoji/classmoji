@@ -152,12 +152,13 @@ describe.skipIf(!RUN)('quiz_assignments migration backfill (integration)', () =>
   };
 
   let serial = 0;
-  const makeModule = (position: number, inClassroom = classroomId) =>
+  const makeModule = (position: number, inClassroom = classroomId, isPublished = false) =>
     prisma.module.create({
       data: {
         classroom_id: inClassroom,
         title: `Week ${position} ${suite} ${serial++}`,
         position,
+        is_published: isPublished,
       },
     });
 
@@ -191,6 +192,7 @@ describe.skipIf(!RUN)('quiz_assignments migration backfill (integration)', () =>
       weight: number;
       is_published: boolean;
       student_deadline: Date | null;
+      release_at: Date | null;
       position: number;
     }> = {}
   ) =>
@@ -203,6 +205,7 @@ describe.skipIf(!RUN)('quiz_assignments migration backfill (integration)', () =>
         weight: over.weight ?? 100,
         is_published: over.is_published ?? false,
         student_deadline: over.student_deadline ?? null,
+        release_at: over.release_at ?? null,
         position: over.position ?? 0,
       },
     });
@@ -535,5 +538,118 @@ describe.skipIf(!RUN)('quiz_assignments migration backfill (integration)', () =>
     } finally {
       await prisma.quiz.delete({ where: { id: outsideQuiz.id } });
     }
+  });
+
+  it('reports what changes on existing assignments, and places a quiz in a published module first', async () => {
+    const unpublished = await makeModule(20);
+    const published = await makeModule(21, classroomId, true);
+    const due = new Date('2026-10-20T18:00:00.000Z');
+    const opens = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+    // A CLOSED quiz that already has an (unpublished) assignment: published,
+    // closing at the quiz's last update.
+    const closed = await makeQuiz('Closed with row', { status: 'CLOSED' });
+    await addAssignment(unpublished.id, closed.id, { title: 'Closed with row', weight: 5 });
+    // A DRAFT quiz whose assignment was published: unpublished.
+    const draft = await makeQuiz('Draft with row', { status: 'DRAFT' });
+    await addAssignment(unpublished.id, draft.id, {
+      title: 'Draft with row',
+      weight: 5,
+      is_published: true,
+      position: 1,
+    });
+    // No due date on the quiz, one on the assignment: the quiz takes it.
+    const dated = await makeQuiz('Dated by row');
+    await addAssignment(unpublished.id, dated.id, {
+      title: 'Old name',
+      weight: 5,
+      is_published: true,
+      student_deadline: due,
+      position: 2,
+    });
+    // A published quiz whose assignment opens next month.
+    const later = await makeQuiz('Opens later');
+    await addAssignment(unpublished.id, later.id, {
+      title: 'Opens later',
+      weight: 5,
+      is_published: true,
+      release_at: opens,
+      position: 3,
+    });
+    // Items in an unpublished module first in order and a published one:
+    // the published module wins.
+    const placed = await makeQuiz('Placed twice');
+    await addItem(unpublished.id, placed.id, 0);
+    await addItem(published.id, placed.id, 0);
+
+    const closedBefore = await prisma.quiz.findUniqueOrThrow({ where: { id: closed.id } });
+
+    const out = await runBackfill(async tx => ({
+      closed: await tx.assignment.findUnique({ where: { quiz_id: closed.id } }),
+      closedQuiz: await tx.quiz.findUniqueOrThrow({ where: { id: closed.id } }),
+      draft: await tx.assignment.findUnique({ where: { quiz_id: draft.id } }),
+      draftQuiz: await tx.quiz.findUniqueOrThrow({ where: { id: draft.id } }),
+      datedQuiz: await tx.quiz.findUniqueOrThrow({ where: { id: dated.id } }),
+      later: await tx.assignment.findUnique({ where: { quiz_id: later.id } }),
+      placed: await tx.assignment.findUnique({ where: { quiz_id: placed.id } }),
+      reports: {
+        closedPublish: await reports(tx, 'quiz_publish_changed', closed.id),
+        draftPublish: await reports(tx, 'quiz_publish_changed', draft.id),
+        title: await reports(tx, 'quiz_assignment_title_changed', dated.id),
+        dueFromRow: await reports(tx, 'quiz_due_date_from_assignment', dated.id),
+        opensLater: await reports(tx, 'quiz_opens_in_future', later.id),
+        multiple: await reports(tx, 'quiz_in_multiple_modules', placed.id),
+        summary: await tx.courseworkMigrationReport.findMany({
+          where: { kind: 'quiz_assignments_summary' },
+          orderBy: { created_at: 'desc' },
+          take: 1,
+        }),
+      },
+    }));
+
+    expect(out.closed).toMatchObject({
+      is_published: true,
+      closes_at: closedBefore.updated_at,
+    });
+    expect(out.reports.closedPublish[0].details).toMatchObject({
+      old_is_published: false,
+      new_is_published: true,
+      quiz_status: 'CLOSED',
+    });
+
+    expect(out.draft?.is_published).toBe(false);
+    expect(out.draftQuiz.status).toBe('DRAFT');
+    expect(out.reports.draftPublish[0].details).toMatchObject({
+      old_is_published: true,
+      new_is_published: false,
+      quiz_status: 'DRAFT',
+    });
+
+    expect(out.datedQuiz.due_date).toEqual(due);
+    expect(out.reports.dueFromRow).toHaveLength(1);
+    expect(
+      String(
+        (out.reports.dueFromRow[0].details as { assignment_deadline: unknown }).assignment_deadline
+      )
+    ).toContain('2026-10-20T18:00');
+    expect(out.reports.title[0].details).toMatchObject({
+      old_title: 'Old name',
+      new_title: 'Dated by row',
+    });
+
+    expect(out.later).toMatchObject({ is_published: true, release_at: opens });
+    expect(out.reports.opensLater[0].details).toMatchObject({ quiz_status: 'PUBLISHED' });
+
+    expect(out.placed?.module_id).toBe(published.id);
+    expect(out.reports.multiple[0].details).toMatchObject({
+      module_id: unpublished.id,
+      canonical_module_id: published.id,
+    });
+
+    expect(out.reports.summary[0].details).toMatchObject({
+      titles_changed: expect.any(Number),
+      due_dates_from_assignment: expect.any(Number),
+      opens_in_future: expect.any(Number),
+    });
   });
 });
