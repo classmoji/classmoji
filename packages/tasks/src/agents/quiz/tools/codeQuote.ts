@@ -494,6 +494,8 @@ export type QuoteRepo = {
   owner: string;
   repo: string;
   gitOrganization: GitOrgLike;
+  /** The Gitlab instance origin the read goes to (`owner` is then the namespace); absent on Github. */
+  gitHost?: string | null;
   /** The quiz's excluded paths: a matching file is refused before anything is read. */
   excludedPaths?: readonly string[];
 };
@@ -547,7 +549,10 @@ export async function resolveCodeQuote(
     let content: string;
     try {
       content = await untilAborted(
-        read(where.owner, where.repo, path, token, { isExcluded }),
+        read(where.owner, where.repo, path, token, {
+          isExcluded,
+          ...(where.gitHost ? { gitHost: where.gitHost } : {}),
+        }),
         signal
       );
     } catch (error) {

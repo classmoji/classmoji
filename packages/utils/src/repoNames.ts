@@ -153,6 +153,34 @@ export function repoNamespace(classroom: {
 }
 
 /**
+ * The Gitlab project a code-aware quiz explores, as namespace and project
+ * name. A student's project is in the classroom's `projects` subgroup
+ * (`repoNamespace`). A staff preview (`fullPath`) may name a project by its
+ * full path instead (any project in the class's Gitlab group, e.g. a solution
+ * under templates/); that path must stay inside the group. Null when it does
+ * not, or when the classroom has no namespace to read from.
+ */
+export function gitlabQuizProject(
+  classroom: {
+    git_namespace?: string | null;
+    git_organization: { login: string | null };
+  },
+  repoName: string,
+  { fullPath = false }: { fullPath?: boolean } = {}
+): { namespace: string; repo: string } | null {
+  const slash = repoName.lastIndexOf('/');
+  if (fullPath && slash > 0) {
+    const namespace = repoName.slice(0, slash);
+    const group = (classroom.git_organization.login ?? '').toLowerCase();
+    const ns = namespace.toLowerCase();
+    if (!group || (ns !== group && !ns.startsWith(`${group}/`))) return null;
+    return { namespace, repo: repoName.slice(slash + 1) };
+  }
+  const namespace = repoNamespace(classroom);
+  return namespace ? { namespace, repo: repoName } : null;
+}
+
+/**
  * Where a classroom's own content repo lives: the class subgroup on GitLab,
  * the org on Github.
  */
@@ -173,9 +201,7 @@ export function teamsNamespace(classroom: {
   git_organization: { login: string | null; provider?: string | null };
 }): string | null {
   if (classroom.git_organization.provider === 'GITLAB') {
-    return classroom.git_namespace
-      ? `${classroom.git_namespace}/${GITLAB_TEAMS_SUBGROUP}`
-      : null;
+    return classroom.git_namespace ? `${classroom.git_namespace}/${GITLAB_TEAMS_SUBGROUP}` : null;
   }
   return classroom.git_organization.login;
 }

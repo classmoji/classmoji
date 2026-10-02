@@ -49,7 +49,7 @@ import {
 import {
   getQuestionProgressFromMessage,
   checkForCompletion,
-  repoNamespace,
+  gitlabQuizProject,
 } from '@classmoji/utils';
 import type { Role } from '@prisma/client';
 import type { Route } from './+types/route';
@@ -837,20 +837,16 @@ export async function action({ request }: Route.ActionArgs) {
                 // under templates/); that path must stay inside the group.
                 let gitlabNamespace: string | null = null;
                 if (gitOrganization.provider === 'GITLAB') {
-                  const slash = repoName.lastIndexOf('/');
-                  if (isInstructor && slash > 0) {
-                    gitlabNamespace = repoName.slice(0, slash);
-                    repoName = repoName.slice(slash + 1);
-                    const group = gitOrganization.login.toLowerCase();
-                    const ns = gitlabNamespace.toLowerCase();
-                    if (ns !== group && !ns.startsWith(`${group}/`)) {
-                      throw new Error("That repository is not in this classroom's Gitlab group.");
-                    }
-                  } else {
-                    gitlabNamespace = repoNamespace(
-                      attempt.quiz.classroom as Parameters<typeof repoNamespace>[0]
-                    );
+                  const project = gitlabQuizProject(
+                    attempt.quiz.classroom as Parameters<typeof gitlabQuizProject>[0],
+                    repoName,
+                    { fullPath: isInstructor }
+                  );
+                  if (!project) {
+                    throw new Error("That repository is not in this classroom's Gitlab group.");
                   }
+                  gitlabNamespace = project.namespace;
+                  repoName = project.repo;
                 }
                 const repoAccess = gitlabNamespace
                   ? await gitlabProjectAccess(gitOrganization, gitlabNamespace, repoName)

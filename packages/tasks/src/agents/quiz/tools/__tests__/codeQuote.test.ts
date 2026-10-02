@@ -814,6 +814,48 @@ describe('resolveCodeQuote: reading the file', () => {
     ).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ExplorationStoppedError);
   });
+
+  it('reads a Gitlab project from its namespace on its instance', async () => {
+    const readFile = vi.fn(async () => `${STYLE.join('\n')}\n`);
+    const mintRepoToken = vi.fn(async () => 'project-token');
+    const built = await resolveCodeQuote(
+      quote() as never,
+      {
+        attemptId: 'attempt-1',
+        owner: 'dept/cs10/projects',
+        repo: 'landing-page-ada',
+        gitOrganization: { provider: 'GITLAB', login: 'dept/cs10/projects' },
+        gitHost: 'https://gitlab.example.edu',
+      } as never,
+      { mintRepoToken, readFile, cache: new QuoteFileCache() },
+      signal()
+    );
+    expect(built.source.path).toBe('css/style.css');
+    expect(mintRepoToken).toHaveBeenCalledWith(
+      expect.objectContaining({ login: 'dept/cs10/projects' }),
+      'landing-page-ada'
+    );
+    const [owner, repo, path, token, options] = readFile.mock.calls[0] as unknown[];
+    expect([owner, repo, path, token]).toEqual([
+      'dept/cs10/projects',
+      'landing-page-ada',
+      'css/style.css',
+      'project-token',
+    ]);
+    expect(options).toMatchObject({ gitHost: 'https://gitlab.example.edu' });
+  });
+
+  it('passes no host on Github', async () => {
+    const readFile = vi.fn(async () => `${STYLE.join('\n')}\n`);
+    await resolveCodeQuote(
+      quote() as never,
+      where,
+      { mintRepoToken: async () => 'repo-token', readFile, cache: new QuoteFileCache() },
+      signal()
+    );
+    const options = (readFile.mock.calls[0] as unknown[])[4] as object;
+    expect(Object.keys(options)).toEqual(['isExcluded']);
+  });
 });
 
 describe('QuoteFileCache', () => {

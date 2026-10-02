@@ -163,8 +163,7 @@ async function handleInitSession(request: Request, formData: FormData) {
         gitlab_instance_id?: string | null;
       };
       const { ClassmojiService: services } = await import('@classmoji/services');
-      const host =
-        org.base_url || (await services.gitlabInstance.hostFor(org.gitlab_instance_id ?? null));
+      const host = await services.gitlabInstance.hostForOrganization(org);
       const repoInfo = parseGitLabProjectUrl(exampleRepoUrl, host);
       if (repoInfo) {
         const access = await gitlabProjectAccess(org, repoInfo.owner, repoInfo.repo);

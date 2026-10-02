@@ -118,6 +118,14 @@ export async function hostFor(instanceId: string | null | undefined): Promise<st
   return row.host;
 }
 
+/** The origin of a Gitlab organization's instance: its own `base_url`, else its instance's host. */
+export async function hostForOrganization(org: {
+  base_url?: string | null;
+  gitlab_instance_id?: string | null;
+}): Promise<string> {
+  return org.base_url || (await hostFor(org.gitlab_instance_id ?? null));
+}
+
 /**
  * The OAuth client for an instance. Throws when it can't be used. A disabled
  * instance refuses sign-in and new connections, but token refreshes for

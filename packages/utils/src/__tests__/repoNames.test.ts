@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   classroomContentRepoName,
   defaultContentRepoName,
+  gitlabQuizProject,
   maxContentNamespaceLength,
   sanitizeRepoName,
   suggestContentNamespace,
@@ -38,9 +39,9 @@ describe('classroomContentRepoName (legacy backfill pattern)', () => {
 
 describe('suggestContentNamespace', () => {
   it('strips the org login prefix from the slug', () => {
-    expect(suggestContentNamespace({ orgLogin: 'dartmouth-cs52', slug: 'dartmouth-cs52-26f' })).toBe(
-      '26f'
-    );
+    expect(
+      suggestContentNamespace({ orgLogin: 'dartmouth-cs52', slug: 'dartmouth-cs52-26f' })
+    ).toBe('26f');
   });
 
   it('matches the login case-insensitively (logins can be mixed-case, slugs are lowercase)', () => {
@@ -51,7 +52,10 @@ describe('suggestContentNamespace', () => {
 
   it('returns the full slug when it does not start with the login', () => {
     expect(
-      suggestContentNamespace({ orgLogin: 'classmoji-development', slug: 'classmoji-dev-winter-2025' })
+      suggestContentNamespace({
+        orgLogin: 'classmoji-development',
+        slug: 'classmoji-dev-winter-2025',
+      })
     ).toBe('classmoji-dev-winter-2025');
   });
 
@@ -131,11 +135,30 @@ describe('maxContentNamespaceLength', () => {
   it('leaves room for content-{login}- within the GitHub repo-name cap', () => {
     const login = 'dartmouth-cs52';
     const max = maxContentNamespaceLength(login);
-    expect(
-      classroomContentRepoName({ login, namespace: 'x'.repeat(max) }).length
-    ).toBe(GITHUB_REPO_NAME_MAX);
+    expect(classroomContentRepoName({ login, namespace: 'x'.repeat(max) }).length).toBe(
+      GITHUB_REPO_NAME_MAX
+    );
     expect(
       classroomContentRepoName({ login, namespace: 'x'.repeat(max + 1) }).length
     ).toBeGreaterThan(GITHUB_REPO_NAME_MAX);
+  });
+});
+
+describe('gitlabQuizProject', () => {
+  const classroom = { git_namespace: 'dept/cs10/fall', git_organization: { login: 'dept/cs10' } };
+
+  it("puts a student's project in the class's projects subgroup", () => {
+    expect(gitlabQuizProject(classroom, 'hw1-ada')).toEqual({
+      namespace: 'dept/cs10/fall/projects',
+      repo: 'hw1-ada',
+    });
+  });
+
+  it("reads a preview's full path only inside the class's group", () => {
+    expect(
+      gitlabQuizProject(classroom, 'Dept/CS10/fall/templates/hw1-solution', { fullPath: true })
+    ).toEqual({ namespace: 'Dept/CS10/fall/templates', repo: 'hw1-solution' });
+    expect(gitlabQuizProject(classroom, 'dept/cs101/hw1', { fullPath: true })).toBeNull();
+    expect(gitlabQuizProject(classroom, 'other/hw1', { fullPath: true })).toBeNull();
   });
 });

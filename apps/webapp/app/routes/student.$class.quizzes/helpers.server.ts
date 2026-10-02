@@ -24,16 +24,12 @@ export const getInstallationToken = async (gitOrganization: InstallationTokenOrg
  * token is a project access token, never the instructor's connection token.
  */
 export async function gitlabProjectAccess(
-  gitOrganization: InstallationTokenOrganization & { base_url?: string | null },
+  gitOrganization: InstallationTokenOrganization & { gitlab_instance_id?: string | null },
   namespace: string,
   repoName: string
 ): Promise<{ orgLogin: string; accessToken: string; gitHost: string }> {
   const { ClassmojiService } = await import('@classmoji/services');
-  const gitHost =
-    gitOrganization.base_url ||
-    (await ClassmojiService.gitlabInstance.hostFor(
-      (gitOrganization as { gitlab_instance_id?: string | null }).gitlab_instance_id ?? null
-    ));
+  const gitHost = await ClassmojiService.gitlabInstance.hostForOrganization(gitOrganization);
   const provider = getGitProvider({ ...gitOrganization, login: namespace });
   const { token } = await provider.getInstallationToken({ repositories: [repoName] });
   return { orgLogin: namespace, accessToken: token, gitHost };

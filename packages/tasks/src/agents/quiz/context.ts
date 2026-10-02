@@ -7,6 +7,7 @@
  */
 import getPrisma from '@classmoji/database';
 import { ClassmojiService, getGitProvider } from '@classmoji/services';
+import { gitlabQuizProject } from '@classmoji/utils';
 import type { AttemptProgress } from '@classmoji/utils/quiz-agent';
 import { buildQuizPrompt, quizWelcome, usableMaterial } from './prompt/index.ts';
 import { serverNoticeMarker } from './serverNotice.ts';
@@ -65,9 +66,16 @@ export type AttemptContext = {
   exploration: {
     model: string;
     effort: Effort | null;
+    /** The repository's owner: the org on Github, the project's namespace on Gitlab. */
     owner: string;
     repo: string;
+    /**
+     * Where the token is minted. On Gitlab its `login` is the project's
+     * namespace, so the token is a read-only access token for that project.
+     */
     gitOrganization: GitOrgLike;
+    /** The Gitlab instance origin the reads go to; absent on Github. */
+    gitHost?: string;
     /**
      * The quiz's "Paths to exclude" (`quiz.excluded_paths`): .gitignore-style
      * patterns whose files exploration never lists or reads and a code quote
@@ -170,7 +178,9 @@ function storedExcludedPaths(value: unknown): string[] {
  * repository when the attempt's own user holds a teaching-team role in the
  * classroom, else that user's own repository for the quiz's assignment.
  */
-async function explorationRepoName(attempt: LoadedAttempt): Promise<string | null> {
+async function explorationRepo(
+  attempt: LoadedAttempt
+): Promise<{ name: string; preview: boolean } | null> {
   const config = attempt.agent_config as Record<string, unknown> | null;
   const previewRepo = config?.instructorRepoName;
   if (typeof previewRepo === 'string' && previewRepo) {
@@ -182,14 +192,45 @@ async function explorationRepoName(attempt: LoadedAttempt): Promise<string | nul
       },
       select: { id: true },
     });
-    if (staff) return previewRepo;
+    if (staff) return { name: previewRepo, preview: true };
   }
   if (!attempt.quiz.repository_id) return null;
   const repo = await ClassmojiService.gitRepo.findByStudent(
     attempt.quiz.repository_id,
     attempt.user_id
   );
-  return repo?.name ?? null;
+  return repo?.name ? { name: repo.name, preview: false } : null;
+}
+
+/**
+ * Where an exploration reads the repository: the org on Github; on Gitlab the
+ * project's namespace (`gitlabQuizProject`) and the instance origin, with the
+ * token minted for that project alone. Null when a Gitlab preview names a
+ * project outside the class's group.
+ */
+async function explorationLocation(
+  classroom: NonNullable<LoadedAttempt['quiz']['classroom']>,
+  gitOrganization: GitOrgLike & { login: string },
+  repo: { name: string; preview: boolean }
+): Promise<Pick<
+  NonNullable<AttemptContext['exploration']>,
+  'owner' | 'repo' | 'gitOrganization' | 'gitHost'
+> | null> {
+  if (gitOrganization.provider !== 'GITLAB') {
+    return { owner: gitOrganization.login, repo: repo.name, gitOrganization };
+  }
+  const project = gitlabQuizProject(
+    classroom as Parameters<typeof gitlabQuizProject>[0],
+    repo.name,
+    { fullPath: repo.preview }
+  );
+  if (!project) return null;
+  return {
+    owner: project.namespace,
+    repo: project.repo,
+    gitOrganization: { ...gitOrganization, login: project.namespace },
+    gitHost: await ClassmojiService.gitlabInstance.hostForOrganization(gitOrganization),
+  };
 }
 
 async function loadStableParts(
@@ -207,14 +248,20 @@ async function loadStableParts(
   let exploration: AttemptContext['exploration'] = null;
   if (quizIsCodeAware) {
     const gitOrganization = quiz.classroom?.git_organization;
-    const repo = await explorationRepoName(attempt);
-    if (repo && gitOrganization?.login) {
+    const repo = await explorationRepo(attempt);
+    const location =
+      repo && quiz.classroom && gitOrganization?.login
+        ? await explorationLocation(
+            quiz.classroom,
+            gitOrganization as GitOrgLike & { login: string },
+            repo
+          )
+        : null;
+    if (location) {
       exploration = {
         model: '', // filled per turn from settings
         effort: null,
-        owner: gitOrganization.login,
-        repo,
-        gitOrganization: gitOrganization as GitOrgLike,
+        ...location,
       };
     } else {
       log('[quiz-agent] code-aware attempt has no repository to explore', {
