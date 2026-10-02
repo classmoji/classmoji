@@ -1,6 +1,6 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import type { MessageRole, Prisma } from '@prisma/client';
-import { DEFAULT_EMOJI_GRADE_MAPPINGS, withLogins } from '@classmoji/utils';
+import { DEFAULT_EMOJI_GRADE_MAPPINGS, isClosed, isReleased, withLogins } from '@classmoji/utils';
 import { CONTRACT_VERSION } from '@classmoji/utils/quiz-agent';
 
 /**
@@ -786,6 +786,27 @@ export const findByQuiz = async (quizId: string) => {
   return withLogins(attempts);
 };
 
+/**
+ * One user's attempts on the given quizzes, newest first, with only the
+ * columns the counting-attempt selector reads (`quizStanding` in
+ * @classmoji/utils). For a student's own Assignments page and a staff member's
+ * report on one student.
+ */
+export const findForUserByQuizIds = async (userId: string, quizIds: string[]) => {
+  if (quizIds.length === 0) return [];
+  return getPrisma().quizAttempt.findMany({
+    where: { user_id: userId, quiz_id: { in: quizIds } },
+    select: {
+      id: true,
+      quiz_id: true,
+      started_at: true,
+      completed_at: true,
+      partial_credit_percentage: true,
+    },
+    orderBy: { started_at: 'desc' },
+  });
+};
+
 export const findByUser = async (userId: string, organizationId: string | null = null) => {
   const whereClause: Prisma.QuizAttemptWhereInput = {
     user_id: userId.toString(),
@@ -876,22 +897,6 @@ export const deleteAttempt = async (attemptId: string) => {
   // Then delete the attempt
   return getPrisma().quizAttempt.delete({
     where: { id: attemptId },
-  });
-};
-
-export const getUserAttemptForQuiz = async (quizId: string, userId: string) => {
-  return getPrisma().quizAttempt.findFirst({
-    where: {
-      quiz_id: quizId,
-      user_id: userId.toString(),
-    },
-    include: {
-      quiz: {
-        include: {
-          repository: true,
-        },
-      },
-    },
   });
 };
 
@@ -1117,6 +1122,9 @@ export const createNew = async (
       max_attempts: true,
       name: true,
       status: true,
+      // The assignment owns when a student may start: published, opened,
+      // not yet closed. A quiz with none keeps the old status rule.
+      assignment: { select: { is_published: true, release_at: true, closes_at: true } },
     },
   });
 
@@ -1196,12 +1204,31 @@ export const createNew = async (
       };
     }
 
-    // Students can only take published quizzes
-    if (quiz.status !== 'PUBLISHED') {
+    // Students start only a quiz that is open to them now. With an
+    // assignment: published, past its Opens date, and not closed (a quiz past
+    // its close date stays visible but takes no new attempt; an attempt
+    // already under way may finish). With none: the quiz's own PUBLISHED.
+    const now = new Date();
+    const assignment = quiz.assignment;
+    if (assignment ? !assignment.is_published : quiz.status !== 'PUBLISHED') {
       return {
         success: false,
         message: 'Quiz is not published',
         reason: 'quiz_not_published',
+      };
+    }
+    if (assignment && !isReleased(assignment.release_at, now)) {
+      return {
+        success: false,
+        message: 'Quiz is not open yet',
+        reason: 'quiz_not_open',
+      };
+    }
+    if (assignment && isClosed(assignment.closes_at, now)) {
+      return {
+        success: false,
+        message: 'Quiz is closed',
+        reason: 'quiz_closed',
       };
     }
   }
@@ -1233,107 +1260,6 @@ export const createNew = async (
     maxAttempts: maxAttempts,
     attemptId: newAttempt.id,
     newAttempt: true,
-  };
-};
-
-/**
- * Calculate quiz score based on grading strategy
- * @param {string} quizId - The quiz ID
- * @param {string|BigInt} userId - The user ID
- * @returns {Promise<Object>} Score calculation result
- */
-export const calculateQuizScore = async (quizId: string, userId: string) => {
-  const quiz = await getPrisma().quiz.findUnique({
-    where: { id: quizId },
-    select: {
-      grading_strategy: true,
-      max_attempts: true,
-    },
-  });
-
-  if (!quiz) {
-    throw new Error('Quiz not found');
-  }
-
-  // Get all completed attempts
-  const attempts = await getPrisma().quizAttempt.findMany({
-    where: {
-      quiz_id: quizId,
-      user_id: userId.toString(),
-      completed_at: { not: null },
-      partial_credit_percentage: { not: null },
-    },
-    select: {
-      id: true,
-      partial_credit_percentage: true,
-      completed_at: true,
-      started_at: true,
-    },
-    orderBy: {
-      completed_at: 'asc',
-    },
-  });
-
-  if (attempts.length === 0) {
-    return {
-      score: null,
-      totalAttempts: 0,
-      strategy: quiz.grading_strategy,
-      countingAttemptId: null,
-    };
-  }
-
-  let finalScore = null;
-  let countingAttemptId = null;
-
-  switch (quiz.grading_strategy) {
-    case 'HIGHEST': {
-      // Use the highest score across all attempts
-      const highest = attempts.reduce((max, a) =>
-        (a.partial_credit_percentage ?? 0) > (max.partial_credit_percentage ?? 0) ? a : max
-      );
-      finalScore = highest.partial_credit_percentage;
-      countingAttemptId = highest.id;
-      break;
-    }
-
-    case 'MOST_RECENT': {
-      // Use the most recent completed attempt
-      const mostRecent = attempts[attempts.length - 1];
-      finalScore = mostRecent.partial_credit_percentage;
-      countingAttemptId = mostRecent.id;
-      break;
-    }
-
-    case 'FIRST': {
-      // Use the first completed attempt
-      const first = attempts[0];
-      finalScore = first.partial_credit_percentage;
-      countingAttemptId = first.id;
-      break;
-    }
-
-    default: {
-      // Default to highest if strategy is unknown
-      const highest = attempts.reduce((max, a) =>
-        (a.partial_credit_percentage ?? 0) > (max.partial_credit_percentage ?? 0) ? a : max
-      );
-      finalScore = highest.partial_credit_percentage;
-      countingAttemptId = highest.id;
-      break;
-    }
-  }
-
-  return {
-    score: finalScore,
-    totalAttempts: attempts.length,
-    strategy: quiz.grading_strategy,
-    countingAttemptId,
-    allScores: attempts.map(a => ({
-      attemptId: a.id,
-      score: a.partial_credit_percentage,
-      completedAt: a.completed_at,
-    })),
   };
 };
 

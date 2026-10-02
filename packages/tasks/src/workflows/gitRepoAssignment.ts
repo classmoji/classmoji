@@ -15,6 +15,8 @@ import {
   titleToIdentifier,
 } from '@classmoji/utils';
 import { createRepositoriesTask } from './gitRepo.ts';
+import { ensureGitInstallation, GitAppNotInstalledError } from '../helpers/gitInstallation.ts';
+import { retryOnDatabaseBlip } from '../helpers/databaseRetry.ts';
 import { nanoid } from 'nanoid';
 import dayjs from 'dayjs';
 
@@ -390,7 +392,41 @@ export const addAssignmentToRepo = async (payload: CreateGithubRepositoryAssignm
   try {
     const existingIssue = await gitProvider.findIssueByTitle(owner, repoName, assignment.title);
 
-    if (existingIssue) {
+    // An issue with this title may already be another submission row's: two
+    // assignments with the same title submitting through one repository, or
+    // a stale duplicate repo row. Adopting it would hand this row an issue id
+    // (its primary key) another row holds, so open a fresh issue instead.
+    const claimedBy = existingIssue
+      ? await ClassmojiService.gitRepoAssignment.findFirst({
+          provider,
+          provider_id: String(existingIssue.id),
+        })
+      : null;
+    if (
+      claimedBy &&
+      claimedBy.git_repo_id === studentRepo.id &&
+      claimedBy.assignment_id === assignment.id
+    ) {
+      // A concurrent run for this same pair got there first.
+      logger.info('Assignment issue was recorded by a concurrent run — skipping', {
+        repoName,
+        assignmentId: assignment.id,
+        gitRepoId: studentRepo.id,
+      });
+      return;
+    }
+    if (existingIssue && claimedBy) {
+      logger.warn('Existing issue with this title belongs to another submission row', {
+        repoName,
+        assignmentId: assignment.id,
+        studentRepoId: studentRepo.id,
+        issueNumber: existingIssue.number,
+        claimedByRowId: claimedBy.id,
+        claimedByAssignmentId: claimedBy.assignment_id,
+      });
+    }
+
+    if (existingIssue && !claimedBy) {
       logger.info('Found existing GitHub assignment issue; adopting it', {
         organization: organization.login,
         repoName,
@@ -491,6 +527,7 @@ export const createDatabaseRepositoryAssignment = async (
 
 export const createDatabaseRepositoryAssignmentTask = task({
   id: 'cf-create_git_repo_assignment',
+  ...retryOnDatabaseBlip,
   run: createDatabaseRepositoryAssignment,
 });
 
@@ -541,6 +578,7 @@ export const moveGraderSlotTask = task({
 
 export const updateRepositoryAssignmentTask = task({
   id: 'update_git_repo_assignment',
+  ...retryOnDatabaseBlip,
   run: async ({ payload }: UpdateRepositoryAssignmentTaskPayload) => {
     const { gitRepoAssignmentId, ...updates } = payload;
     return ClassmojiService.gitRepoAssignment.update(gitRepoAssignmentId, updates);
@@ -549,6 +587,7 @@ export const updateRepositoryAssignmentTask = task({
 
 export const repositoryAssignmentClosedHandlerTask = task({
   id: 'webhook-git_repo_assignment_closed_handler',
+  ...retryOnDatabaseBlip,
   run: async (payload: GitRepoAssignmentWebhookTaskPayload) => {
     const { issue } = payload;
     const repoAssignment = await ClassmojiService.gitRepoAssignment.findByProviderId(
@@ -573,6 +612,7 @@ export const repositoryAssignmentClosedHandlerTask = task({
 
 export const repositoryAssignmentReopenedHandlerTask = task({
   id: 'webhook-git_repo_assignment_reopened_handler',
+  ...retryOnDatabaseBlip,
   run: async (payload: GitRepoAssignmentWebhookTaskPayload) => {
     const { issue } = payload;
     // Resolves through the issue id, so a REPO-mode row (no issue) can never
@@ -599,9 +639,14 @@ export const repositoryAssignmentReopenedHandlerTask = task({
  * Classroom, the last push before the deadline (plus bought extension hours)
  * is the submission; later pushes do not count, graded rows are frozen, and a
  * late-delivered older webhook never moves the time backwards.
+ *
+ * Retried on a database blip (a lost push is a lost submission). Safe to
+ * repeat: both writes only move times forward, so a second run with the same
+ * `pushedAt` changes nothing, and an extra analytics refresh is harmless.
  */
 export const repositoryPushHandlerTask = task({
   id: 'webhook-git_repo_push_handler',
+  ...retryOnDatabaseBlip,
   run: async (payload: RepositoryPushTaskPayload) => {
     const delivered = new Date(payload.pushedAt);
     const pushedAt = payload.sha
@@ -639,6 +684,7 @@ export const repositoryPushHandlerTask = task({
 
 export const repositoryAssignmentDeletedHandlerTask = task({
   id: 'webhook-git_repo_assignment_deleted_handler',
+  ...retryOnDatabaseBlip,
   run: async (payload: GitRepoAssignmentWebhookTaskPayload) => {
     const { issue } = payload;
     const repoAssignment = await ClassmojiService.gitRepoAssignment.findByProviderId(
@@ -670,6 +716,40 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
 
       logger.info('Found assignments to release', { count: assignmentsToRelease.length });
 
+      // One installation check per Github org per run. Without it an org whose
+      // app was uninstalled spawned one failing create_git_repos run per
+      // unreleased repository, every night, all with the same error.
+      const installationChecks = new Map<string, Promise<GitOrganizationLike | null>>();
+      const checkInstallation = (
+        classroom: ClassroomRecord
+      ): Promise<GitOrganizationLike | null> => {
+        const gitOrg = classroom.git_organization;
+        const key = (gitOrg as { id?: string }).id ?? gitOrg.login ?? classroom.id;
+        let check = installationChecks.get(key);
+        if (!check) {
+          check = ensureGitInstallation(gitOrg).catch((error: unknown) => {
+            const message = getErrorMessage(error);
+            if (error instanceof GitAppNotInstalledError) {
+              logger.error('Skipping assignment release: Github App not installed', {
+                org: gitOrg.login,
+                classroomSlug: classroom.slug,
+                status: error.status,
+                message,
+              });
+            } else {
+              logger.warn('Skipping assignment release: installation check failed', {
+                org: gitOrg.login,
+                classroomSlug: classroom.slug,
+                message,
+              });
+            }
+            return null;
+          });
+          installationChecks.set(key, check);
+        }
+        return check;
+      };
+
       const moduleGroups: Record<string, ReleaseAssignmentRecord[]> = {};
       for (const assignment of assignmentsToRelease) {
         if (!moduleGroups[assignment.repository_id]) {
@@ -682,7 +762,8 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
         const moduleAssignments = moduleGroups[repositoryId];
         const repository = moduleAssignments[0].repository;
         const classroom = repository.classroom;
-        const gitOrg = classroom.git_organization;
+        const gitOrg = await checkInstallation(classroom);
+        if (!gitOrg) continue;
 
         let logins: string[] = [];
 

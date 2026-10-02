@@ -177,7 +177,8 @@ export const listReposTool = mirrorResourceTool({
     'assignments that submit through them. A repository has no module or weight of its own; each ' +
     'assignment and submission carries its submission_mode (REPO = push, ISSUE = close the issue) ' +
     'and repo_url. Staff see all incl. unpublished, with the template, team settings, tag_id and ' +
-    'project template repo_update edits; students see published-only repositories they ' +
+    'project template repo_update edits, and each assignment’s module_id (assignment_update ' +
+    'moves it); students see published-only repositories they ' +
     'have a git repo for, with their own submission status per assignment (grades only after ' +
     'release). Any member.',
 });
@@ -239,8 +240,8 @@ export const listQuizzesTool = mirrorResourceTool({
   description:
     'AI-graded quizzes with their source material (linked pages and decks, in order). Staff ' +
     '(OWNER/TEACHER/ASSISTANT) see all quizzes incl. drafts and prompts; students see published ' +
-    'quizzes, published material and their own attempt summary. Requires a Pro subscription ' +
-    'and quizzes_enabled.',
+    'quizzes (closed ones too, as CLOSED), published material and their own attempt summary. ' +
+    'Requires a Pro subscription and quizzes_enabled.',
 });
 
 export const listPagesTool = mirrorResourceTool({
@@ -257,10 +258,14 @@ export const listModulesTool = mirrorResourceTool({
   name: 'list_modules',
   title: 'List modules',
   description:
-    'Ordered curriculum modules with their content items (pages, repos, quizzes, slides, forms). ' +
-    'Students see published modules/items only; staff also see unpublished. Returns ' +
-    '{enabled:false} when ' +
-    'the classroom hides modules. Any member.',
+    'Ordered curriculum modules, each with its content `items` (pages, slides, forms) ' +
+    'and its `assignments` (REPO, QUIZ or FORM, in display order). An assignment belongs to ' +
+    'exactly one module; an owner moves it with assignment_update module_id, and an owner or ' +
+    'teacher moves a quiz with quiz_update module_id. Staff see ' +
+    'unpublished modules, items and assignments too, and for each assignment the repository, ' +
+    'quiz or form it points at (target_id), weight and publish state. Students see published ' +
+    'ones only, each assignment by title, type and due date. Returns {enabled:false} when the ' +
+    'classroom hides modules. Any member.',
 });
 
 export const listCalendarTool = mirrorResourceTool({

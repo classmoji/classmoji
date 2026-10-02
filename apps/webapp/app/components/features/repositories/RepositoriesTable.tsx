@@ -482,13 +482,9 @@ const RepositoriesTable = ({
             type: r.type,
             is_published: r.is_published,
           }))}
-          quizzes={editor.quizzes}
           forms={editor.forms}
           pages={editor.pages}
           slides={editor.slides}
-          boundQuizIds={
-            new Set(editor.assignments.map(a => a.quiz?.id).filter(Boolean) as string[])
-          }
           boundFormIds={
             new Set(editor.assignments.map(a => a.form?.id).filter(Boolean) as string[])
           }

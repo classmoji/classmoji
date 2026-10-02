@@ -11,7 +11,8 @@
  *
  * Classroom chains used (verified against schema.prisma):
  *   GitRepoAssignment → git_repo.classroom_id   (GitRepo carries classroom_id directly)
- *   Assignment        → repository.classroom_id
+ *   Assignment        → repository.classroom_id  (REPO assignments, repo-submission tools)
+ *                     → module.classroom_id      (any type: loadCourseworkAssignmentInClassroom)
  *   CalendarEvent     → classroom_id
  *   Page              → classroom_id
  *   RegradeRequest    → classroom_id
@@ -37,12 +38,19 @@ export const OWNER_TEACHER = ['OWNER', 'TEACHER'] as const;
 /** requireClassroomAdmin routes (modules, tokens, settings, grader assignment). */
 export const OWNER_ONLY = ['OWNER'] as const;
 /**
- * Quiz admin surface (admin.$class.quizzes loader + action, and the assistant
- * and teacher routes that re-export it): allowedRoles
- * ['OWNER','TEACHER','ASSISTANT']. Mirrors QUIZ_ROLES in resources/shape.ts
- * minus STUDENT, which has no write surface.
+ * Quiz editors: the whole teaching team, the tier of quiz_update. Mirrors
+ * QUIZ_ROLES in resources/shape.ts minus STUDENT, which has no write surface,
+ * and QUIZ_EDITOR_ROLES in @classmoji/utils (quizAssignment.ts). An ASSISTANT
+ * edits a quiz's content and name only; quiz_update refuses the assignment
+ * fields to anyone who is not also a quiz author.
  */
 export const QUIZ_STAFF = ['OWNER', 'TEACHER', 'ASSISTANT'] as const;
+/**
+ * Quiz authors: create, publish and delete a quiz, and change its assignment
+ * (due date, weight, status). Same set as QUIZ_AUTHOR_ROLES in
+ * @classmoji/utils (quizAssignment.ts); the quiz tool tests hold the two equal.
+ */
+export const QUIZ_AUTHORS = OWNER_TEACHER;
 /**
  * Forms surface: apps/pages' `assertFormAdmin`
  * (apps/pages/app/utils/formAuth.server.ts) composes `requireClassroomStaff`,
@@ -193,13 +201,46 @@ type AssignmentRecord = NonNullable<
   Awaited<ReturnType<typeof ClassmojiService.assignment.findById>>
 >;
 
-/** Load an Assignment and verify it via repository.classroom_id. */
+/**
+ * Load an Assignment and verify it via repository.classroom_id. A quiz or form
+ * assignment has no repository, so it is not_found here: this is the loader for
+ * tools that act on repo submissions (graders, late overrides, delete).
+ */
 export async function loadAssignmentInClassroom(
   id: string,
   ctx: ToolContext
 ): Promise<AssignmentRecord> {
   const record = await ClassmojiService.assignment.findById(id);
   if (!record || record.repository?.classroom_id !== requireClassroomCtx(ctx).classroomId) {
+    throw scopedNotFound('Assignment');
+  }
+  return record;
+}
+
+/**
+ * Load an Assignment of ANY type (REPO, QUIZ, FORM) and verify it via
+ * module.classroom_id: every assignment has a module, only a REPO one has a
+ * repository. A REPO assignment's repository has to agree with its module, so a
+ * row straddling two classrooms is refused rather than served.
+ *
+ * A QUIZ assignment is not_found where the classroom shows no quizzes
+ * (`entitlement.quizzesVisible`), the predicate list_modules drops it on: a tool
+ * must not name a row no read surface lists.
+ */
+export async function loadCourseworkAssignmentInClassroom(
+  id: string,
+  ctx: ToolContext
+): Promise<AssignmentRecord> {
+  const { classroomId } = requireClassroomCtx(ctx);
+  const record = await ClassmojiService.assignment.findById(id);
+  if (
+    !record ||
+    record.module?.classroom_id !== classroomId ||
+    (record.repository && record.repository.classroom_id !== classroomId)
+  ) {
+    throw scopedNotFound('Assignment');
+  }
+  if (record.type === 'QUIZ' && !(await ClassmojiService.entitlement.quizzesVisible(classroomId))) {
     throw scopedNotFound('Assignment');
   }
   return record;

@@ -277,11 +277,22 @@ describe('remapModuleItem', () => {
   });
 });
 
-describe('importModules — what counts as a skipped item', () => {
-  // One source module: a repository that came across, a page that did not, and
-  // a quiz that did not. A hand-rolled `tx` records what gets written.
-  const run = (options?: { quizzesImported?: boolean }) => {
-    const moduleItemCreate = vi.fn().mockResolvedValue({});
+describe('importModules — items, modules and quizzes', () => {
+  // One source module: a repository that came across, a page that did not, a
+  // legacy quiz item, and one quiz assignment. A hand-rolled `tx` records what
+  // gets written; it is not a full client, so each quiz is written on it
+  // directly rather than in a transaction of its own.
+  const QUIZ_ASSIGNMENT = {
+    weight: 4,
+    is_extra_credit: false,
+    tokens_per_hour: 1,
+    student_deadline: new Date('2026-09-10T23:59:00Z'),
+    release_at: null,
+    closes_at: null,
+    module: { id: 'm-src', title: 'Week 1', slug: 'week-1', description: null, position: 0 },
+    quiz: { id: 'q-src', name: 'Recursion', repository_id: null },
+  };
+  const setup = (sourceModule: Record<string, unknown> = {}) => {
     const tx = {
       module: {
         findMany: vi.fn().mockResolvedValue([
@@ -296,41 +307,258 @@ describe('importModules — what counts as a skipped item', () => {
               item({ item_type: 'PAGE', position: 1, page_id: 'p-src' }),
               item({ item_type: 'QUIZ', position: 2, quiz_id: 'q-src' }),
             ],
+            assignments: [QUIZ_ASSIGNMENT],
+            ...sourceModule,
           },
         ]),
-        // No module of that title yet in the target (see importModules).
         findFirst: vi.fn().mockResolvedValue(null),
-        create: vi.fn().mockResolvedValue({ id: 'm-dst' }),
+        upsert: vi.fn().mockResolvedValue({ id: 'm-dst' }),
       },
-      moduleItem: { create: moduleItemCreate },
+      moduleItem: {
+        findMany: vi.fn().mockResolvedValue([]),
+        create: vi.fn().mockResolvedValue({}),
+      },
+      quiz: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        findUnique: vi.fn().mockResolvedValue({ id: 'q-src', name: 'Recursion', weight: 4 }),
+        create: vi.fn().mockResolvedValue({ id: 'q-dst', name: 'Recursion' }),
+        update: vi.fn().mockResolvedValue({}),
+      },
+      assignment: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
+          id: 'a-dst',
+          ...data,
+        })),
+      },
     };
-    const summary = importModules(
-      'source-classroom',
-      'target-classroom',
-      emptyMaps({ repositories: { 'r-src': 'r-dst' } }),
-      options,
-      tx as never
-    );
-    return { summary, moduleItemCreate };
+    const run = (maps: Partial<ModuleImportIdMaps> = {}, options = {}) =>
+      importModules(
+        'source-classroom',
+        'target-classroom',
+        emptyMaps({ repositories: { 'r-src': 'r-dst' }, ...maps }),
+        options,
+        tx as never
+      );
+    return { tx, run };
   };
 
-  it('counts an unmapped quiz item when the import copied quizzes', async () => {
-    const { summary, moduleItemCreate } = run({ quizzesImported: true });
+  it('copies no legacy QUIZ item and counts none: a quiz comes with its assignment', async () => {
+    const { tx, run } = setup();
 
-    expect(await summary).toEqual({ modules: 1, items: 1, skipped_items: 2 });
-    expect(moduleItemCreate).toHaveBeenCalledTimes(1);
-  });
+    const summary = await run({}, { quizzesImported: false });
 
-  it('counts it by default, as before', async () => {
-    expect(await run().summary).toEqual({ modules: 1, items: 1, skipped_items: 2 });
-  });
-
-  it('leaves quiz items out uncounted when quizzes were not imported, and still counts the page', async () => {
-    const { summary, moduleItemCreate } = run({ quizzesImported: false });
-
-    expect(await summary).toEqual({ modules: 1, items: 1, skipped_items: 1 });
-    expect(moduleItemCreate).toHaveBeenCalledExactlyOnceWith({
+    expect(summary).toMatchObject({ modules: 1, items: 1, skipped_items: 1, quizzes: 0 });
+    expect(tx.moduleItem.create).toHaveBeenCalledExactlyOnceWith({
       data: expect.objectContaining({ item_type: 'REPOSITORY', repository_id: 'r-dst' }),
     });
+    expect(tx.quiz.create).not.toHaveBeenCalled();
+    expect(tx.assignment.create).not.toHaveBeenCalled();
+  });
+
+  it('finds or makes the target module by title, never a second of the same title', async () => {
+    const { tx, run } = setup();
+
+    const summary = await run({}, { quizzesImported: false });
+
+    expect(tx.module.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { classroom_id_title: { classroom_id: 'target-classroom', title: 'Week 1' } },
+        update: {},
+      })
+    );
+    expect(summary.id_maps.modules).toEqual({ 'm-src': 'm-dst' });
+  });
+
+  it('reuses the module the repository copy made for it', async () => {
+    const { tx, run } = setup();
+    tx.module.findFirst.mockResolvedValue({ id: 'm-made' });
+
+    const summary = await run({ modules: { 'm-src': 'm-made' } }, { quizzesImported: false });
+
+    expect(tx.module.findFirst).toHaveBeenCalledWith({
+      where: { id: 'm-made', classroom_id: 'target-classroom' },
+      select: { id: true },
+    });
+    expect(tx.module.upsert).not.toHaveBeenCalled();
+    expect(tx.moduleItem.create.mock.calls[0][0].data.module_id).toBe('m-made');
+    expect(summary.id_maps.modules).toEqual({ 'm-src': 'm-made' });
+  });
+
+  it('copies a quiz no repository brought, with its assignment, unpublished and undated', async () => {
+    const { tx, run } = setup();
+
+    const summary = await run();
+
+    expect(tx.quiz.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        classroom_id: 'target-classroom',
+        repository_id: null,
+        status: 'DRAFT',
+        due_date: null,
+      }),
+    });
+    expect(tx.assignment.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        module_id: 'm-dst',
+        type: 'QUIZ',
+        quiz_id: 'q-dst',
+        title: 'Recursion',
+        weight: 4,
+        tokens_per_hour: 1,
+        is_published: false,
+        student_deadline: null,
+        release_at: null,
+        closes_at: null,
+      }),
+    });
+    // The quiz's own copy agrees with its assignment.
+    expect(tx.quiz.update).toHaveBeenCalledWith({
+      where: { id: 'q-dst' },
+      data: { due_date: null, weight: 4, status: 'DRAFT' },
+    });
+    expect(summary).toMatchObject({ quizzes: 1, quiz_assignments: 1 });
+    expect(summary.id_maps.quizzes).toEqual({ 'q-src': 'q-dst' });
+  });
+
+  it('copies no quiz twice: one the repository copy brought keeps its assignment', async () => {
+    const { tx, run } = setup();
+    tx.quiz.findFirst.mockResolvedValue({ id: 'q-copied', name: 'Recursion' });
+    tx.assignment.findUnique.mockResolvedValue({ id: 'a-made' });
+
+    const summary = await run({ quizzes: { 'q-src': 'q-copied' } });
+
+    expect(tx.quiz.create).not.toHaveBeenCalled();
+    expect(tx.assignment.create).not.toHaveBeenCalled();
+    expect(summary).toMatchObject({ quizzes: 0, quiz_assignments: 0 });
+  });
+
+  it('maps a quiz’s repository through the repository map, or drops the link', async () => {
+    const { tx, run } = setup({
+      assignments: [
+        { ...QUIZ_ASSIGNMENT, quiz: { ...QUIZ_ASSIGNMENT.quiz, repository_id: 'r-src' } },
+      ],
+    });
+
+    await run();
+    expect(tx.quiz.create.mock.calls[0][0].data.repository_id).toBe('r-dst');
+  });
+
+  it('leaves out the quizzes of a repository brought without its quizzes', async () => {
+    const { tx, run } = setup({
+      assignments: [
+        { ...QUIZ_ASSIGNMENT, quiz: { ...QUIZ_ASSIGNMENT.quiz, repository_id: 'r-src' } },
+      ],
+    });
+
+    const summary = await run({}, { declinedQuizRepositoryIds: ['r-src'] });
+
+    expect(tx.quiz.create).not.toHaveBeenCalled();
+    expect(summary.quizzes).toBe(0);
+  });
+});
+
+describe('importModules — a target that already holds the module title', () => {
+  // The repository clone that runs before this phase creates each assignment's
+  // module in the target BY TITLE, so a blind create hit the
+  // (classroom_id, title) unique key on every such import.
+  const sourceModule = {
+    id: 'm-src',
+    title: 'Week 1',
+    slug: 'week-1',
+    description: 'Intro',
+    position: 3,
+    items: [
+      item({ item_type: 'PAGE', position: 0, page_id: 'p-src' }),
+      item({ item_type: 'SLIDE', position: 1, slide_id: 's-src' }),
+    ],
+    // No quiz placed in it (quiz assignments are covered above).
+    assignments: [],
+  };
+  const maps = emptyMaps({ pages: { 'p-src': 'p-dst' }, slides: { 's-src': 's-dst' } });
+  /** The summary of one module with both items in place and no quiz. */
+  const BOTH_ITEMS = {
+    modules: 1,
+    items: 2,
+    skipped_items: 0,
+    quizzes: 0,
+    quiz_assignments: 0,
+    id_maps: { modules: { 'm-src': 'm-existing' }, quizzes: {} },
+  };
+
+  const makeTx = (existingItems: Array<Record<string, string | null>> = []) => ({
+    module: {
+      findMany: vi.fn().mockResolvedValue([sourceModule]),
+      create: vi.fn(),
+      upsert: vi.fn().mockResolvedValue({ id: 'm-existing' }),
+    },
+    moduleItem: {
+      findMany: vi.fn().mockResolvedValue(existingItems),
+      create: vi.fn().mockResolvedValue({}),
+    },
+  });
+
+  it('finds-or-creates by (classroom_id, title) and leaves an existing module untouched', async () => {
+    const tx = makeTx();
+
+    const summary = await importModules(
+      'source-classroom',
+      'target-classroom',
+      maps,
+      {},
+      tx as never
+    );
+
+    expect(tx.module.create).not.toHaveBeenCalled();
+    expect(tx.module.upsert).toHaveBeenCalledTimes(1);
+    expect(tx.module.upsert).toHaveBeenCalledWith({
+      where: { classroom_id_title: { classroom_id: 'target-classroom', title: 'Week 1' } },
+      create: {
+        classroom_id: 'target-classroom',
+        title: 'Week 1',
+        slug: 'week-1',
+        description: 'Intro',
+        position: 3,
+        is_published: false,
+      },
+      update: {},
+      select: { id: true },
+    });
+    // Items land in the reused module.
+    expect(tx.moduleItem.create).toHaveBeenCalledTimes(2);
+    expect(tx.moduleItem.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ module_id: 'm-existing', page_id: 'p-dst' }),
+    });
+    expect(summary).toEqual(BOTH_ITEMS);
+  });
+
+  it('does not re-create items a previous partial run already added (retry)', async () => {
+    const tx = makeTx([{ page_id: 'p-dst', repository_id: null, quiz_id: null, slide_id: null }]);
+
+    const summary = await importModules(
+      'source-classroom',
+      'target-classroom',
+      maps,
+      {},
+      tx as never
+    );
+
+    expect(tx.moduleItem.create).toHaveBeenCalledTimes(1);
+    expect(tx.moduleItem.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ module_id: 'm-existing', slide_id: 's-dst' }),
+    });
+    expect(summary).toEqual(BOTH_ITEMS);
+  });
+
+  it('is a no-op on a full re-run', async () => {
+    const tx = makeTx([
+      { page_id: 'p-dst', repository_id: null, quiz_id: null, slide_id: null },
+      { page_id: null, repository_id: null, quiz_id: null, slide_id: 's-dst' },
+    ]);
+
+    await importModules('source-classroom', 'target-classroom', maps, {}, tx as never);
+
+    expect(tx.moduleItem.create).not.toHaveBeenCalled();
   });
 });

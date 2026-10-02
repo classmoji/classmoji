@@ -13,6 +13,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * false`. The flag is cleared on the configs the job row also stores, so the
  * background import cannot bring it back either.
  *
+ * Copying the modules brings the quizzes placed in them along (with or
+ * without a repository), so asking for the modules asks the same question, and
+ * the job row stores the answer (`selections.quizzes`) for the background
+ * modules phase, beside the modules the repository copy made (`id_maps`), which
+ * that phase reuses.
+ *
  * `~/utils/classroomProFlag.server` is NOT mocked: the action's answer comes
  * from the real helper, over the agent check and the entitlement service.
  */
@@ -78,12 +84,13 @@ vi.mock('@classmoji/services', () => ({
   ensureClassroomTeam: vi.fn().mockResolvedValue(undefined),
 }));
 
+const withIdMaps = vi.hoisted(() => vi.fn(() => ({})));
 vi.mock('@classmoji/services/import-progress', () => ({
   applyPhaseUpdates: vi.fn(() => ({})),
   buildInitialProgress: vi.fn(() => ({})),
   buildSummaryParts: vi.fn(() => []),
   withCounts: vi.fn(() => ({})),
-  withIdMaps: vi.fn(() => ({})),
+  withIdMaps,
 }));
 
 vi.mock('@classmoji/tasks', () => ({ default: {} }));
@@ -140,7 +147,9 @@ const REPOS = [
 
 const call = (
   repositories: Array<{ id: string; includeQuizzes?: boolean }> = REPOS,
-  config: Record<string, boolean> = {}
+  config: Record<string, boolean> = {},
+  // Modules alone: pure DB here, and enough to write the job row.
+  content: Record<string, boolean> = { modules: true }
 ) =>
   (
     action as unknown as (args: { request: Request; params: Record<string, string> }) => Promise<{
@@ -158,8 +167,7 @@ const call = (
           sourceClassroomId: 'source-1',
           repositories,
           config,
-          // Modules alone: pure DB here, and enough to write the job row.
-          content: { modules: true },
+          content,
         },
       }),
     }),
@@ -168,9 +176,13 @@ const call = (
 
 /** The repository configs as the clone saw them, and as the job row stored them. */
 const clonedConfigs = () => mocks.cloneModulesWithRelations.mock.calls[0]?.[1];
-const storedConfigs = () =>
-  (mocks.importJobCreate.mock.calls[0]?.[0] as { data: { selections: { repositories: unknown } } })
-    .data.selections.repositories;
+const storedSelections = () =>
+  (
+    mocks.importJobCreate.mock.calls[0]?.[0] as {
+      data: { selections: { repositories: unknown; quizzes?: boolean } };
+    }
+  ).data.selections;
+const storedConfigs = () => storedSelections().repositories;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -191,7 +203,7 @@ beforeEach(() => {
     repositories: [{ id: 'new-repo-1' }, { id: 'new-repo-2' }],
     assignments: [],
     quizzes: [],
-    idMaps: { repositories: {}, quizzes: {} },
+    idMaps: { repositories: {}, quizzes: {}, modules: { 'src-mod-1': 'new-mod-1' } },
   });
   mocks.importJobCreate.mockResolvedValue({ id: 'job-1' });
 });
@@ -270,12 +282,43 @@ describe('create-classroom quiz import', () => {
     expect(clonedConfigs()).toEqual(CLEARED);
   });
 
-  it('skips the lookup when no quizzes were asked for', async () => {
+  it('skips the lookup when no quizzes were asked for and no modules are copied', async () => {
+    const plain = [{ id: 'repo-1', includeQuizzes: false }, { id: 'repo-2' }];
+
+    await call(plain, {}, {});
+
+    expect(mocks.quizzesVisible).not.toHaveBeenCalled();
+    expect(clonedConfigs()).toEqual(plain);
+  });
+
+  it('asks when the modules are copied, even with no quizzes asked of a repository', async () => {
     const plain = [{ id: 'repo-1', includeQuizzes: false }, { id: 'repo-2' }];
 
     await call(plain);
 
-    expect(mocks.quizzesVisible).not.toHaveBeenCalled();
+    expect(mocks.quizzesVisible).toHaveBeenCalledExactlyOnceWith('new-classroom');
+    // A repository's own choice stands; the answer is for the modules phase.
     expect(clonedConfigs()).toEqual(plain);
+    expect(storedSelections().quizzes).toBe(true);
+  });
+
+  it('asks for a modules-only import too, and stores the answer for the modules phase', async () => {
+    mocks.quizzesVisible.mockResolvedValue(false);
+
+    await call([]);
+
+    expect(mocks.quizzesVisible).toHaveBeenCalledExactlyOnceWith('new-classroom');
+    expect(mocks.cloneModulesWithRelations).not.toHaveBeenCalled();
+    expect(storedSelections().quizzes).toBe(false);
+  });
+
+  it('hands the modules the repository copy made to the modules phase', async () => {
+    await call();
+
+    expect(withIdMaps).toHaveBeenCalledWith(expect.anything(), {
+      repositories: {},
+      quizzes: {},
+      modules: { 'src-mod-1': 'new-mod-1' },
+    });
   });
 });

@@ -333,4 +333,49 @@ describe.skipIf(!RUN)('calendar event links to quiz and form assignments (integr
     expect((await assignmentLinks(eventId))[quizAssignmentId]).toMatchObject({ featured: false });
     expect(await starCount(eventId)).toBe(1);
   });
+
+  // The read side, against the real select: a link to a form assignment shows
+  // on a student's calendar only once the student-visibility rule admits it —
+  // the assignment published AND the form out of draft. Staff always see it,
+  // marked as not yet visible to students. Runs last: it publishes the shared
+  // form assignment.
+  it('shows a student a form link only once the form is out of draft, and flags it for staff', async () => {
+    const eventId = await makeEvent();
+    await prisma.calendarEventAssignmentLink.create({
+      data: { event_id: eventId, assignment_id: formAssignmentId, occurrence_date: null, order: 0 },
+    });
+    const start = new Date('2026-09-20T00:00:00.000Z');
+    const end = new Date('2026-09-23T00:00:00.000Z');
+    const linkedIds = async (canSeeDrafts: boolean) => {
+      const items = await calendarService.getClassroomCalendar(
+        classroomId,
+        start,
+        end,
+        null,
+        false,
+        canSeeDrafts,
+        { canSeeDrafts }
+      );
+      const event = items.find(i => i.id === eventId) as unknown as {
+        assignments: Array<{ assignment: { id: string; is_published: boolean } }>;
+      };
+      return event.assignments.map(a => [a.assignment.id, a.assignment.is_published]);
+    };
+
+    // Assignment published, form still a draft (the fixture's default status).
+    await prisma.assignment.update({
+      where: { id: formAssignmentId },
+      data: { is_published: true },
+    });
+    expect(await linkedIds(false)).toEqual([]);
+    expect(await linkedIds(true)).toEqual([[formAssignmentId, false]]);
+
+    // The form opens: now students see it too.
+    const { form_id: formId } = await prisma.assignment.findUniqueOrThrow({
+      where: { id: formAssignmentId },
+      select: { form_id: true },
+    });
+    await prisma.form.update({ where: { id: formId! }, data: { status: 'OPEN' } });
+    expect(await linkedIds(false)).toEqual([[formAssignmentId, true]]);
+  });
 });

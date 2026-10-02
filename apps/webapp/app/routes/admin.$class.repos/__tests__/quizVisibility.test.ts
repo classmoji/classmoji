@@ -125,24 +125,23 @@ describe.each([
     () => repositoryPage.teachingTeamLoader(args(`/assistant/${CLASS_SLUG}/repos/lab-1`)),
   ],
 ])('the repository page under %s', (_prefix, load) => {
-  it('offers no quiz and names none as bound where quizzes are hidden', async () => {
+  it('offers no quiz and names none where quizzes are hidden', async () => {
     mocks.loadQuizzesVisible.mockResolvedValue(false);
 
     const payload = await load();
 
     expect(payload.candidates.quizzes).toEqual([]);
     expect(payload.candidates.forms).toEqual(CANDIDATES.forms);
-    expect(payload.boundQuizIds).toEqual([]);
     expect(payload.boundFormIds).toEqual(['form-9']);
     // Its own rows are the repository's assignments, which a quiz never is.
     expect(payload.assignments.map(a => a.id)).toEqual(['asg-repo']);
     expect(JSON.stringify(payload)).not.toContain('quiz-9');
   });
 
-  it('carries the quizzes where they show', async () => {
+  it('carries the quizzes where they show, and no quiz bindings (the modal binds no quiz)', async () => {
     const payload = await load();
 
     expect(payload.candidates.quizzes).toEqual(CANDIDATES.quizzes);
-    expect(payload.boundQuizIds).toEqual(['quiz-9']);
+    expect(payload).not.toHaveProperty('boundQuizIds');
   });
 });

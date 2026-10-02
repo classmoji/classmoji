@@ -1,6 +1,7 @@
 import getPrisma from '@classmoji/database';
-import { gitTerms, titleToIdentifier } from '@classmoji/utils';
+import { gitTerms, resolveTemplateRef, titleToIdentifier } from '@classmoji/utils';
 import type { RepositoryType, Prisma } from '@prisma/client';
+import { getGitProvider } from '../git/index.ts';
 import * as notificationService from './notification.service.ts';
 
 interface RepositoryQueryOptions {
@@ -615,4 +616,76 @@ export const assertInClassroom = async (repositoryId: string, classroomId: strin
   });
   if (!repository) throw new Error('Repository not found in classroom');
   return repository;
+};
+
+export type TemplateCheck =
+  | { ok: true }
+  | { ok: false; reason: 'TEMPLATE_EMPTY' | 'TEMPLATE_UNREACHABLE'; error: string };
+
+/**
+ * Whether a repository's template can be used to provision student copies,
+ * checked when the instructor publishes (or picks a template) rather than once
+ * per student later, in background runs nobody watches.
+ *
+ * Refused: no template at all (provisioning cannot name a repository to clone),
+ * and, on Github, a template the classroom's app installation cannot see (404:
+ * deleted, renamed away, or private to an account the app cannot read). One
+ * `GET /repos` with the installation token, through `repositoryExists`.
+ *
+ * A template that exists but has no commits is fine: provisioning seeds it from
+ * the shared empty template. Gitlab has no repository read yet (and no template
+ * provisioning), so only the empty case is checked there. Any other failure
+ * (rate limit, outage, a missing installation) is logged and lets the publish
+ * through: this check catches a bad template, it does not make publishing
+ * depend on Github being up.
+ */
+export const checkTemplate = async (
+  template: string | null | undefined,
+  classroomId: string
+): Promise<TemplateCheck> => {
+  const classroom = await getPrisma().classroom.findUnique({
+    where: { id: classroomId },
+    select: {
+      git_organization: {
+        select: {
+          provider: true,
+          login: true,
+          github_installation_id: true,
+          access_token: true,
+          base_url: true,
+        },
+      },
+    },
+  });
+  const gitOrg = classroom?.git_organization ?? null;
+
+  // Same resolution provisioning uses: a bare name lives in the classroom org.
+  const ref = resolveTemplateRef(template, gitOrg?.login);
+  if (!ref) {
+    return {
+      ok: false,
+      reason: 'TEMPLATE_EMPTY',
+      error: 'This repository has no template repository. Choose one before publishing.',
+    };
+  }
+
+  if (!gitOrg || gitOrg.provider !== 'GITHUB') return { ok: true };
+
+  let exists: boolean;
+  try {
+    exists = await getGitProvider(gitOrg).repositoryExists(ref.owner, ref.repo);
+  } catch (error: unknown) {
+    console.warn(`[repository] could not check template ${ref.owner}/${ref.repo}:`, error);
+    return { ok: true };
+  }
+  if (exists) return { ok: true };
+
+  return {
+    ok: false,
+    reason: 'TEMPLATE_UNREACHABLE',
+    error:
+      `The template repository ${ref.owner}/${ref.repo} can't be found on Github. ` +
+      "It may have been deleted or renamed, or the Classmoji Github app can't access it. " +
+      'Choose another template repository.',
+  };
 };

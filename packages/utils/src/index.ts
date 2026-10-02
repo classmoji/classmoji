@@ -35,3 +35,7 @@ export * from './gitWeb.ts';
 export * from './gitlabInstance.ts';
 export * from './repoLimits.ts';
 export * from './gitIdentity.ts';
+export * from './hiddenRows.ts';
+export * from './assignmentVisibility.ts';
+export * from './quizAssignment.ts';
+export * from './quizScore.ts';

@@ -13,7 +13,10 @@ vi.mock('@classmoji/database', () => ({
   }),
 }));
 
-vi.mock('@classmoji/utils', () => ({ titleToIdentifier: (s: string) => s.toLowerCase() }));
+vi.mock('@classmoji/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/utils')>()),
+  titleToIdentifier: (s: string) => s.toLowerCase(),
+}));
 
 vi.mock('../notification.service.ts', () => ({
   runSafely: vi.fn(),

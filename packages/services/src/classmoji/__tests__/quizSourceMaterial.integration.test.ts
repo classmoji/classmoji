@@ -146,10 +146,14 @@ describe.skipIf(!RUN)('quiz source material (integration)', () => {
     await insertIndexRow('page', draftPageId, 'Next Week', 'unreleased material');
     await insertIndexRow('slide', deckId, 'Forms Deck', 'label and input');
 
+    const module = await prisma.module.create({
+      data: { classroom_id: classroomId, title: `Week 1 ${suite}` },
+    });
     const quiz = await quizService.create({
       name: `Quiz ${suite}`,
       classroomId,
       rubricPrompt: 'grade it',
+      assignment: { moduleId: module.id },
       sourceMaterial: [
         { kind: 'slide', id: deckId },
         { kind: 'page', id: draftPageId },

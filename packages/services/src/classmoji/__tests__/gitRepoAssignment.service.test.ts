@@ -5,6 +5,8 @@ const findManyMock = vi.fn();
 const upsertMock = vi.fn();
 const updateManyMock = vi.fn();
 const findUniqueMock = vi.fn();
+const findFirstMock = vi.fn();
+const updateMock = vi.fn();
 const listCommitsMock = vi.fn();
 // `create` checks the repo and the assignment share a classroom before linking
 // them; both lookups resolve to the same classroom here so the write proceeds.
@@ -19,6 +21,8 @@ vi.mock('@classmoji/database', () => ({
       upsert: upsertMock,
       updateMany: updateManyMock,
       findUnique: findUniqueMock,
+      findFirst: findFirstMock,
+      update: updateMock,
     },
     gitRepo: { findUnique: gitRepoFindUniqueMock },
     assignment: { findUnique: assignmentFindUniqueMock },
@@ -178,6 +182,86 @@ describe('create', () => {
         assignment: true,
         git_repo: true,
       },
+    });
+  });
+
+  describe('a unique violation (two runs creating the same pair)', () => {
+    const issueRow = {
+      id: 'github-issue-id',
+      assignment_id: 'assignment-1',
+      git_repo_id: 'git-repo-1',
+      provider: 'GITHUB',
+      provider_id: 'github-issue-id',
+      provider_issue_number: 12,
+    };
+    // What production saw: Prisma reads, misses, inserts, and the pkey trips.
+    const pkeyConflict = () =>
+      Object.assign(new Error('Unique constraint failed on the fields: (`id`)'), {
+        code: 'P2002',
+        meta: { target: ['id'] },
+      });
+
+    beforeEach(() => {
+      upsertMock.mockReset();
+      findUniqueMock.mockReset();
+      findFirstMock.mockReset();
+      updateMock.mockReset();
+    });
+
+    it('returns the row the concurrent run created instead of failing', async () => {
+      upsertMock.mockRejectedValue(pkeyConflict());
+      findUniqueMock.mockResolvedValue({ id: 'github-issue-id', provider_id: 'github-issue-id' });
+
+      await expect(create(issueRow)).resolves.toEqual({
+        id: 'github-issue-id',
+        provider_id: 'github-issue-id',
+      });
+      expect(findUniqueMock).toHaveBeenCalledWith({
+        where: {
+          git_repo_id_assignment_id: { git_repo_id: 'git-repo-1', assignment_id: 'assignment-1' },
+        },
+        include: { assignment: true, git_repo: true },
+      });
+      // The winner's issue fields are left alone.
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it('fills in issue fields only when the winning row has none', async () => {
+      upsertMock.mockRejectedValue(pkeyConflict());
+      findUniqueMock.mockResolvedValue({ id: 'uuid-1', provider_id: null });
+      updateMock.mockResolvedValue({ id: 'uuid-1', provider_id: 'github-issue-id' });
+
+      await create(issueRow);
+
+      expect(updateMock).toHaveBeenCalledWith({
+        where: {
+          git_repo_id_assignment_id: { git_repo_id: 'git-repo-1', assignment_id: 'assignment-1' },
+        },
+        data: { provider: 'GITHUB', provider_id: 'github-issue-id', provider_issue_number: 12 },
+        include: { assignment: true, git_repo: true },
+      });
+    });
+
+    it('names the other row when the issue already belongs to a different pair', async () => {
+      upsertMock.mockRejectedValue(pkeyConflict());
+      findUniqueMock.mockResolvedValue(null);
+      findFirstMock.mockResolvedValue({
+        id: 'github-issue-id',
+        git_repo_id: 'git-repo-1',
+        assignment_id: 'assignment-other',
+      });
+
+      await expect(create(issueRow)).rejects.toThrow(
+        /already the submission row github-issue-id for repo git-repo-1 \/ assignment assignment-other/
+      );
+    });
+
+    it('passes other errors straight through', async () => {
+      const blip = Object.assign(new Error("Can't reach database server"), { code: 'P1001' });
+      upsertMock.mockRejectedValue(blip);
+
+      await expect(create(issueRow)).rejects.toBe(blip);
+      expect(findUniqueMock).not.toHaveBeenCalled();
     });
   });
 });

@@ -106,10 +106,16 @@ export interface CountedPhaseProgress {
  *
  * `templates` is keyed by source template ref (`owner/name`) rather than an id,
  * matching `TemplateDuplicationSummary.template_map`.
+ *
+ * `modules` maps a source module to the target module its contents landed in:
+ * the repository copy creates the modules its assignments (and quiz
+ * assignments) need, and the modules phase reuses them instead of creating a
+ * second module of the same title.
  */
 export interface ImportIdMaps {
   repositories?: Record<string, string>;
   quizzes?: Record<string, string>;
+  modules?: Record<string, string>;
   pages?: Record<string, string>;
   slides?: Record<string, string>;
   templates?: Record<string, string>;
@@ -161,6 +167,18 @@ export interface ImportJobSelections {
   config?: Record<string, boolean>;
   /** Source repository ids the user picked, with their per-repo quiz flag. */
   repositories?: Array<{ id: string; includeQuizzes?: boolean }>;
+  /**
+   * Whether quizzes may be copied into the new classroom at all (it shows
+   * quizzes), decided by the create action. The modules phase copies the
+   * source modules' quizzes on this, including quizzes linked to no
+   * repository. Absent on jobs created before it existed: there the modules
+   * phase copies quizzes when at least one picked repository asked for its
+   * quizzes, and then copies every quiz placed in a source module the same
+   * way (quizzes linked to no repository, or to one not picked, included);
+   * when none asked, it copies none. Either way, a quiz linked to a
+   * repository picked WITHOUT its quizzes is left out.
+   */
+  quizzes?: boolean;
   content?: {
     pages?: boolean;
     slides?: boolean;
@@ -315,6 +333,7 @@ export function withSummaryParts(progress: ImportProgress, parts: string[]): Imp
 const ID_MAP_KINDS: readonly (keyof ImportIdMaps)[] = [
   'repositories',
   'quizzes',
+  'modules',
   'pages',
   'slides',
   'templates',

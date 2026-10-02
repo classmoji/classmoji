@@ -10,7 +10,9 @@
  *   - Staff see every container + assignment incl. unpublished
  *     (repository.findByClassroomId, as the admin repos loader does), with
  *     every field repo_update edits (template, team settings, tag_id, project
- *     template) — staff view only; the student view does not carry them.
+ *     template) — staff view only; the student view does not carry them. Each
+ *     assignment also names the module it belongs to (`module_id`, the value
+ *     assignment_update moves), staff view only for the same reason.
  *   - Students see only is_published containers with is_published assignments
  *     (repository.findPublished), further narrowed — as the student route
  *     does — to containers they own a GitRepo for, each assignment annotated
@@ -46,6 +48,7 @@ import {
 
 interface AssignmentRow {
   id: string;
+  module_id?: string | null;
   title: string;
   slug?: string | null;
   weight: number;
@@ -99,8 +102,9 @@ export const reposResource: ResourceDefinition = {
   title: 'Assignment containers (repos)',
   description:
     'Assignment containers ("repos") with their due-dated assignments. Staff see all incl. ' +
-    'unpublished; students see published-only containers they have a git repo for, with their ' +
-    'own submission status per assignment (grades only after release).',
+    'unpublished, each assignment with the module_id it belongs to; students see published-only ' +
+    'containers they have a git repo for, with their own submission status per assignment ' +
+    '(grades only after release).',
   scope: 'read',
   roles: MEMBER,
   handler: async (_vars, ctx) => {
@@ -143,6 +147,9 @@ export const reposResource: ResourceDefinition = {
             id: a.id,
             title: a.title,
             slug: a.slug ?? null,
+            // The module the assignment lives in (see list_modules);
+            // assignment_update with module_id moves it.
+            module_id: a.module_id ?? null,
             weight: a.weight,
             is_extra_credit: a.is_extra_credit ?? false,
             is_published: a.is_published,

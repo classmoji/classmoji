@@ -2,7 +2,14 @@ import getPrisma from '@classmoji/database';
 import type { Prisma } from '@prisma/client';
 import { ModuleItemType } from '@prisma/client';
 import { isAllowedModel } from '@classmoji/utils/ai-models';
+import { meetingLinkForCopy } from './calendarPolicy.ts';
 import * as entitlementService from './entitlement.service.ts';
+import {
+  SOURCE_QUIZ_ASSIGNMENT_SELECT,
+  cloneQuiz,
+  cloneQuizAssignment,
+  ensureTargetModule,
+} from './repositoryImport.service.ts';
 
 type RepositoryImportClient = Prisma.TransactionClient | ReturnType<typeof getPrisma>;
 
@@ -281,12 +288,12 @@ export const importClassroomConfig = async (
         classroom_id: targetClassroomId,
         created_by: createdByUserId,
         title: event.title,
-        description: event.description,
         event_type: event.event_type,
         start_time: event.start_time,
         end_time: event.end_time,
         location: event.location,
-        meeting_link: event.meeting_link,
+        // meeting_link and description: text that is not a web link moves to the description.
+        ...meetingLinkForCopy(event.meeting_link, event.description),
         is_recurring: event.is_recurring,
         // Nullable Json: omit when null to sidestep Prisma DbNull/JsonNull typing.
         ...(event.recurrence_rule === null
@@ -315,6 +322,12 @@ export interface ModuleImportIdMaps {
   quizzes: Record<string, string>;
   pages: Record<string, string>;
   slides: Record<string, string>;
+  /**
+   * Source module → the target module the repository copy already put
+   * assignments in. Reused here rather than creating a second module of the
+   * same title (a module's title is unique in its classroom).
+   */
+  modules?: Record<string, string>;
 }
 
 /**
@@ -421,83 +434,163 @@ export function remapModuleItem(
   }
 }
 
+/** What `importModules` did, and the ids it resolved or minted (for resume). */
+export interface ImportModulesSummary {
+  /** Source modules brought over: reused from the repository copy, or created. */
+  modules: number;
+  /** Content items in place: written, or already held by the module. */
+  items: number;
+  /** Content items whose resource was not imported. */
+  skipped_items: number;
+  /** Quizzes this phase copied (those no repository copy brought over). */
+  quizzes: number;
+  /** Quiz assignments this phase created. */
+  quiz_assignments: number;
+  /** Source → target ids this run resolved: modules, and the quizzes it copied. */
+  id_maps: { modules: Record<string, string>; quizzes: Record<string, string> };
+}
+
 /**
- * Copy Module containers (and their items) from a source classroom into a
- * target classroom, remapping each item's resource reference through the
- * provided id maps. Modules are forced unpublished. Item ordering (position) is
- * preserved. Items whose referenced resource was not imported are skipped and
- * counted, except QUIZ items when quizzes were not part of the import at all:
- * those are left out without being counted, since nothing was asked of them.
+ * Copy Module containers, their content items and their quizzes from a source
+ * classroom into a target classroom. Modules are created unpublished. Item
+ * ordering (position) is preserved. Items whose referenced resource was not
+ * imported are skipped and counted.
+ *
+ * Idempotent, so a retried import picks up where a failed one stopped:
+ *   - a source module lands in the target module the repository copy already
+ *     made for it (`idMaps.modules`), else in the target module of the same
+ *     title (find-or-create by the module's unique key), else in a new one —
+ *     never in a second module of the same title. An existing module is left
+ *     as it is (never re-published or re-ordered);
+ *   - an item the module already holds is kept, not re-created (each resource
+ *     may appear only once per module), and counted as imported;
+ *   - a quiz already copied is not copied again, and one that already has an
+ *     assignment gets no second one.
+ *
+ * Quizzes reach a module through their QUIZ assignment, so legacy QUIZ items
+ * are not copied. Where quizzes are copied at all (`quizzesImported`: the new
+ * classroom shows them), every QUIZ assignment of a source module is: its quiz
+ * is copied unless an earlier phase copied it (`idMaps.quizzes`; that phase
+ * also gave it its assignment), with its repository link mapped through
+ * `idMaps.repositories` or dropped, and its assignment is created in the
+ * target module, unpublished, deadlines stripped unless `stripDeadlines` is
+ * false. A quiz whose repository the user chose to bring WITHOUT its quizzes
+ * (`declinedQuizRepositoryIds`) is left out. Each quiz and its assignment are
+ * written together, in one transaction when `tx` is not one already.
  *
  * @param {string} sourceClassroomId - Classroom to copy modules from
  * @param {string} targetClassroomId - Classroom to copy modules into
  * @param {ModuleImportIdMaps} idMaps - Source→target resource id maps
  * @param {Object} [options]
- * @param {boolean} [options.quizzesImported=true] - Whether the import copied quizzes
+ * @param {boolean} [options.quizzesImported=true] - Whether quizzes may be copied
+ * @param {boolean} [options.stripDeadlines=true] - Leave copied quiz dates empty
+ * @param {string[]} [options.declinedQuizRepositoryIds] - Source repositories copied without their quizzes
  * @param {Object} [tx] - Optional Prisma transaction client
- * @returns {Promise<{ modules: number; items: number; skipped_items: number }>}
  */
 export const importModules = async (
   sourceClassroomId: string,
   targetClassroomId: string,
   idMaps: ModuleImportIdMaps,
-  options: { quizzesImported?: boolean } = {},
+  options: {
+    quizzesImported?: boolean;
+    stripDeadlines?: boolean;
+    declinedQuizRepositoryIds?: string[];
+  } = {},
   tx: RepositoryImportClient = getPrisma()
-): Promise<{ modules: number; items: number; skipped_items: number }> => {
-  const { quizzesImported = true } = options;
+): Promise<ImportModulesSummary> => {
+  const { quizzesImported = true, stripDeadlines = true } = options;
+  const declined = new Set(options.declinedQuizRepositoryIds ?? []);
   const sourceModules = await tx.module.findMany({
     where: { classroom_id: sourceClassroomId },
-    include: { items: { orderBy: { position: 'asc' } } },
+    include: {
+      items: { orderBy: { position: 'asc' } },
+      assignments: {
+        where: { type: 'QUIZ' },
+        orderBy: [{ position: 'asc' }, { created_at: 'asc' }],
+        select: {
+          ...SOURCE_QUIZ_ASSIGNMENT_SELECT,
+          quiz: { select: { id: true, name: true, repository_id: true } },
+        },
+      },
+    },
     orderBy: { position: 'asc' },
   });
 
-  let modules = 0;
-  let items = 0;
-  let skipped_items = 0;
+  const summary: ImportModulesSummary = {
+    modules: 0,
+    items: 0,
+    skipped_items: 0,
+    quizzes: 0,
+    quiz_assignments: 0,
+    id_maps: { modules: {}, quizzes: {} },
+  };
+
+  /**
+   * The target module for a source module, reused when it already exists. The
+   * target usually ALREADY holds a module of this title: cloning a
+   * repository's assignments (before this phase runs) creates each
+   * assignment's module through `ensureTargetModule`, by title, and hands its
+   * id over in `idMaps.modules`. A blind create collided with it on every
+   * import that brought assignments and modules together; a retried modules
+   * phase collides with its own earlier rows. Reusing the row is right in both
+   * cases — it IS this source module's counterpart.
+   */
+  const targetModuleFor = async (sourceModule: (typeof sourceModules)[number]) => {
+    const mapped = idMaps.modules?.[sourceModule.id];
+    if (mapped) {
+      const existing = await tx.module.findFirst({
+        where: { id: mapped, classroom_id: targetClassroomId },
+        select: { id: true },
+      });
+      if (existing) return existing.id;
+    }
+    return (await ensureTargetModule(sourceModule, targetClassroomId, tx)).id;
+  };
+
+  // A quiz and its assignment are written together: in a transaction of
+  // their own, unless `tx` already is one (a transaction client has no
+  // callable `$transaction`).
+  const together = <T>(write: (client: RepositoryImportClient) => Promise<T>): Promise<T> =>
+    typeof (tx as { $transaction?: unknown }).$transaction === 'function'
+      ? (tx as ReturnType<typeof getPrisma>).$transaction(client => write(client))
+      : write(tx);
 
   for (const sourceModule of sourceModules) {
-    // The repository import already makes (by title) the module each copied
-    // assignment lands in, and titles are unique per classroom: reuse that
-    // module rather than fail on a second create.
-    const newModule =
-      (await tx.module.findFirst({
-        where: { classroom_id: targetClassroomId, title: sourceModule.title },
-        include: { items: true },
-      })) ??
-      (await tx.module.create({
-        data: {
-          classroom_id: targetClassroomId,
-          title: sourceModule.title,
-          slug: sourceModule.slug,
-          description: sourceModule.description,
-          position: sourceModule.position,
-          is_published: false,
-        },
-        include: { items: true },
-      }));
-    modules += 1;
+    const targetModuleId = await targetModuleFor(sourceModule);
+    summary.id_maps.modules[sourceModule.id] = targetModuleId;
+    summary.modules += 1;
+
+    // Items already in the module (a retry after a partial run) are kept, not
+    // re-created: each resource may appear only once per module.
+    const existing = await tx.moduleItem.findMany({
+      where: { module_id: targetModuleId },
+      select: { page_id: true, repository_id: true, quiz_id: true, slide_id: true },
+    });
+    const present = new Set(
+      existing.flatMap(row =>
+        [row.page_id, row.repository_id, row.quiz_id, row.slide_id].filter(
+          (id): id is string => id !== null
+        )
+      )
+    );
 
     for (const item of sourceModule.items) {
+      // A quiz is in a module through its assignment (below), not an item.
+      if (item.item_type === ModuleItemType.QUIZ) continue;
       const remapped = remapModuleItem(item, idMaps);
       if (!remapped) {
-        if (item.item_type !== ModuleItemType.QUIZ || quizzesImported) skipped_items += 1;
+        summary.skipped_items += 1;
         continue;
       }
-      // Already in the reused module (an item per resource per module).
-      if (
-        (newModule.items ?? []).some(
-          existing =>
-            (remapped.page_id && existing.page_id === remapped.page_id) ||
-            (remapped.repository_id && existing.repository_id === remapped.repository_id) ||
-            (remapped.quiz_id && existing.quiz_id === remapped.quiz_id) ||
-            (remapped.slide_id && existing.slide_id === remapped.slide_id)
-        )
-      ) {
+      const targetId =
+        remapped.page_id ?? remapped.repository_id ?? remapped.quiz_id ?? remapped.slide_id;
+      if (targetId && present.has(targetId)) {
+        summary.items += 1;
         continue;
       }
       await tx.moduleItem.create({
         data: {
-          module_id: newModule.id,
+          module_id: targetModuleId,
           item_type: remapped.item_type,
           position: remapped.position,
           page_id: remapped.page_id,
@@ -506,9 +599,70 @@ export const importModules = async (
           slide_id: remapped.slide_id,
         },
       });
-      items += 1;
+      if (targetId) present.add(targetId);
+      summary.items += 1;
+    }
+
+    if (!quizzesImported) continue;
+    for (const assignment of sourceModule.assignments) {
+      const sourceQuiz = assignment.quiz;
+      if (!sourceQuiz) continue;
+      if (sourceQuiz.repository_id && declined.has(sourceQuiz.repository_id)) continue;
+
+      const copiedId = idMaps.quizzes[sourceQuiz.id] ?? summary.id_maps.quizzes[sourceQuiz.id];
+      await together(async client => {
+        let target = copiedId
+          ? await client.quiz.findFirst({
+              where: { id: copiedId, classroom_id: targetClassroomId },
+              select: { id: true, name: true },
+            })
+          : null;
+        if (!target) {
+          // A retry after this quiz was copied but before its id was saved: its
+          // assignment (written with it) is in the target module by name. A
+          // copy some other source quiz already maps to is that quiz's, never
+          // this one's: two quizzes may share a name in one module, and a
+          // repo-less quiz may be named like one the repository copy brought.
+          const claimed = [
+            ...Object.values(idMaps.quizzes),
+            ...Object.values(summary.id_maps.quizzes),
+          ];
+          target = await client.quiz.findFirst({
+            where: {
+              classroom_id: targetClassroomId,
+              assignment: { module_id: targetModuleId, title: sourceQuiz.name },
+              name: sourceQuiz.name,
+              ...(claimed.length > 0 ? { id: { notIn: claimed } } : {}),
+            },
+            select: { id: true, name: true },
+          });
+        }
+        if (!target) {
+          const repositoryId = sourceQuiz.repository_id
+            ? (idMaps.repositories[sourceQuiz.repository_id] ?? null)
+            : null;
+          const cloned = await cloneQuiz(
+            sourceQuiz.id,
+            targetClassroomId,
+            repositoryId,
+            { setDraft: true, stripDeadlines },
+            client
+          );
+          target = { id: cloned.id, name: cloned.name };
+          summary.quizzes += 1;
+        }
+        summary.id_maps.quizzes[sourceQuiz.id] = target.id;
+        const created = await cloneQuizAssignment(
+          assignment,
+          { quizId: target.id, name: target.name },
+          targetModuleId,
+          { stripDeadlines },
+          client
+        );
+        if (created) summary.quiz_assignments += 1;
+      });
     }
   }
 
-  return { modules, items, skipped_items };
+  return summary;
 };

@@ -1,11 +1,10 @@
 import { Modal, Form, Input, Alert } from 'antd';
-import { isGitLabClassroom } from '~/utils/gitlabGuard.server';
 import { repoNamespace, resolveTemplateRef } from '@classmoji/utils';
 import { useNavigate, useParams } from 'react-router';
 import { useEffect } from 'react';
 import { auth, tasks } from '@trigger.dev/sdk';
 import { nanoid } from 'nanoid';
-import { ClassmojiService, getGitProvider, GitHubProvider } from '@classmoji/services';
+import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { useDisclosure, useGlobalFetcher } from '~/hooks';
 import { useGitWeb } from '~/hooks/useGitWeb';
@@ -138,26 +137,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     throw new Response('Github organization not configured', { status: 400 });
   }
 
-  // Github: a short-lived installation token the task clones and pushes with.
-  // GitLab: the task mints its own from the org's connection (they rotate).
-  let token = '';
-  if (!isGitLabClassroom(classroom)) {
-    const gitProvider = getGitProvider(classroom.git_organization);
-    const octokit = await (gitProvider as GitHubProvider).getOctokit();
-
-    const { data } = await octokit.request(
-      'POST /app/installations/{installation_id}/access_tokens',
-      {
-        installation_id: Number(classroom.git_organization.github_installation_id),
-        permissions: {
-          contents: 'write',
-          pull_requests: 'write',
-        },
-      }
-    );
-    token = data.token;
-  }
-
   const repositories = await ClassmojiService.gitRepo.findByRepository(classSlug!, repository.id);
   const { owner: templateOwner, repo: templateRepo } = templateRef;
 
@@ -171,8 +150,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         prDescription: values.description,
         templateOwner,
         templateRepo,
-        token,
-        // GitLab: student projects live in the class subgroup's `projects`.
+        // Gitlab: student projects live in the class subgroup's `projects`.
         repoOwner: classroom.git_namespace ? repoNamespace(classroom) : null,
       },
       options: { tags: [`session_${sessionId}`] },

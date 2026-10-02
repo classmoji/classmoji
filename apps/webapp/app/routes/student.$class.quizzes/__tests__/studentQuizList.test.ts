@@ -252,6 +252,115 @@ describe('student quiz list payload', () => {
   });
 });
 
+describe('student quiz list — due date, closed quizzes, zero scores', () => {
+  it('asks for closed quizzes too', async () => {
+    await load();
+
+    // A quiz in no module is listed by its own status, closed ones included;
+    // one with an assignment by the assignment (and kept once it closes).
+    const [, legacy] = mocks.quizFindMany.mock.calls[0][0].where.OR;
+    expect(legacy.status).toEqual({ in: ['PUBLISHED', 'CLOSED'] });
+  });
+
+  it("shows the assignment's due date where the quiz has an assignment", async () => {
+    const assignmentDue = new Date('2026-10-02T18:00:00Z');
+    mocks.quizFindMany.mockResolvedValue([
+      {
+        ...QUIZ_ROW,
+        due_date: new Date('2026-09-30T18:00:00Z'),
+        assignment: {
+          is_published: true,
+          release_at: null,
+          student_deadline: assignmentDue,
+          closes_at: null,
+          weight: 10,
+        },
+      },
+    ]);
+
+    const [quiz] = (await load()).quizzes;
+
+    expect(quiz.dueDate).toEqual(assignmentDue);
+  });
+
+  it("falls back to the quiz's own due date when it has no assignment", async () => {
+    const quizDue = new Date('2026-09-30T18:00:00Z');
+    mocks.quizFindMany.mockResolvedValue([{ ...QUIZ_ROW, due_date: quizDue, assignment: null }]);
+
+    const [quiz] = (await load()).quizzes;
+
+    expect(quiz.dueDate).toEqual(quizDue);
+  });
+
+  it('keeps a closed quiz, with its score, and offers no new attempt', async () => {
+    mocks.quizFindMany.mockResolvedValue([
+      { ...QUIZ_ROW, status: 'CLOSED', attempts: [COMPLETED] },
+    ]);
+
+    const [quiz] = (await load()).quizzes;
+
+    expect(quiz.closed).toBe(true);
+    expect(quiz.score).toBe(85);
+    expect(quiz.attemptsSummary.canCreateNew).toBe(false);
+  });
+
+  it("reads a quiz with an assignment as closed once the assignment's close date passes", async () => {
+    // The quiz's own status was written PUBLISHED when it was saved; the close
+    // date passed afterwards and nothing rewrote it.
+    mocks.quizFindMany.mockResolvedValue([
+      {
+        ...QUIZ_ROW,
+        status: 'PUBLISHED',
+        attempts: [],
+        assignment: {
+          is_published: true,
+          release_at: null,
+          student_deadline: null,
+          closes_at: new Date(Date.now() - 60_000),
+          weight: 10,
+        },
+      },
+    ]);
+
+    const [quiz] = (await load()).quizzes;
+
+    expect(quiz.closed).toBe(true);
+    expect(quiz.attemptsSummary.canCreateNew).toBe(false);
+  });
+
+  it("takes the weight from the quiz's assignment, so a weight-0 one reads as practice", async () => {
+    mocks.quizFindMany.mockResolvedValue([
+      {
+        ...QUIZ_ROW,
+        weight: 10,
+        assignment: {
+          is_published: true,
+          release_at: null,
+          student_deadline: null,
+          closes_at: null,
+          weight: 0,
+        },
+      },
+    ]);
+
+    const [quiz] = (await load()).quizzes;
+
+    expect(quiz.weight).toBe(0);
+    expect(quiz.closed).toBe(false);
+  });
+
+  it('reports a 0 as a score, not as no score', async () => {
+    mocks.quizFindMany.mockResolvedValue([
+      { ...QUIZ_ROW, attempts: [{ ...COMPLETED, partial_credit_percentage: 0 }] },
+    ]);
+
+    const [quiz] = (await load()).quizzes;
+
+    expect(quiz.score).toBe(0);
+    expect(quiz.attemptsSummary.currentScore).toBe(0);
+  });
+});
+
 describe('student quiz list without quizzes', () => {
   it('answers 404 before reading anything when the classroom has no quizzes', async () => {
     // Not Pro, or switched off: the URL names nothing, and says nothing about

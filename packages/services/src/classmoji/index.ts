@@ -40,11 +40,14 @@ export {
   ClassroomSettingsEntitlementError,
   ClassroomSettingsValidationError,
 } from './classroom.service.ts';
-// A refused calendar time range, so a caller can say so instead of 500ing,
-// plus the event-type policy every calendar write surface has to apply.
+// A refused calendar time range or meeting link, so a caller can say so
+// instead of 500ing, plus the event-type policy every calendar write surface
+// has to apply.
 export {
   CalendarTimeRangeError,
   isCalendarTimeRangeError,
+  CalendarMeetingLinkError,
+  isCalendarMeetingLinkError,
   ASSISTANT_EVENT_TYPE,
   ASSISTANT_EVENT_TYPE_MESSAGE,
   assistantMayCreateEventType,
@@ -77,9 +80,11 @@ import * as teamSetService from './teamSet.service.ts';
 import * as tokenService from './token.service.ts';
 import * as userService from './user.service.ts';
 import * as quizService from './quiz.service.ts';
+import * as quizAssignmentService from './quizAssignment.service.ts';
 import * as quizAttemptService from './quizAttempt.service.ts';
 import * as quizSourceMaterialService from './quizSourceMaterial.service.ts';
 import * as quizChatService from './quizChat.service.ts';
+import * as studentCourseworkService from './studentCoursework.service.ts';
 import * as quizGradingService from './quizGrading.service.ts';
 import * as repositoryImportService from './repositoryImport.service.ts';
 import * as contentImportService from './contentImport.service.ts';
@@ -160,6 +165,8 @@ const ClassmojiService = {
   token: tokenService,
   user: userService,
   quiz: quizService,
+  // A quiz's assignment: the mirror onto the quiz and the one publish function.
+  quizAssignment: quizAssignmentService,
   quizAttempt: quizAttemptService,
   // A quiz's linked pages and decks: `load` (the prompt text, as the attempt's
   // user may read it), `countStartable` (the pre-attempt check), the budget.
@@ -169,6 +176,9 @@ const ClassmojiService = {
   // journaled grading writes their tools make.
   quizChat: quizChatService,
   quizGrading: quizGradingService,
+  // One row per assignment a student can see, every type, with their own
+  // state: the student Assignments page and the dashboard's Up next.
+  studentCoursework: studentCourseworkService,
   repositoryImport: repositoryImportService,
   contentImport: contentImportService,
   templateImport: templateImportService,
@@ -256,6 +266,7 @@ export {
   quizService,
   quizAttemptService,
   quizSourceMaterialService,
+  studentCourseworkService,
   repositoryImportService,
   contentImportService,
   templateImportService,

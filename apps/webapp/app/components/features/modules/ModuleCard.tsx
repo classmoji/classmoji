@@ -80,7 +80,6 @@ interface ModuleCardProps {
   candidates: CandidateContent;
   /** Every repository in the classroom, for the REPO assignment picker. */
   repositories: Array<{ id: string; title: string; is_published: boolean }>;
-  boundQuizIds: Set<string>;
   boundFormIds: Set<string>;
   /**
    * Whether the classroom shows quizzes (`loadQuizzesVisible`). Without it the
@@ -294,7 +293,6 @@ const ModuleCard = ({
   onToggle,
   candidates,
   repositories,
-  boundQuizIds,
   boundFormIds,
   quizzesVisible = false,
   tags = [],
@@ -373,9 +371,8 @@ const ModuleCard = ({
   const removeAssignment = (a: AssignmentRowData) =>
     modal.confirm({
       title: 'Delete assignment',
-      content: `This deletes the assignment along with its submissions and grades. The ${
-        quizzesVisible ? `${terms.repo}, quiz or form` : `${terms.repo} or form`
-      } it points at is kept.`,
+      content:
+        'This deletes the assignment along with its submissions and grades. The repository or form it points at is kept.',
       okText: 'Delete',
       okButtonProps: { danger: true },
       cancelText: 'Cancel',
@@ -458,9 +455,10 @@ const ModuleCard = ({
     if (key === 'delete') confirmDelete();
   };
 
-  // "Add item" asks which kind. An assignment picks how students submit
-  // (a repository, a quiz or a form) in its own modal; a page or slide deck is
-  // placed in the module's reading order.
+  // "Add item" asks which kind. A repository or form assignment is set up in
+  // its own modal; a quiz opens the quiz form with this module chosen (a quiz
+  // and its assignment are one thing); a page or slide deck is placed in the
+  // module's reading order.
   const addItemMenu: MenuProps['items'] = [
     {
       type: 'group',
@@ -474,9 +472,9 @@ const ModuleCard = ({
         ...(quizzesVisible
           ? [
               {
-                key: 'ASSIGNMENT_QUIZ',
+                key: 'QUIZ',
                 icon: <IconHelpCircle size={15} />,
-                label: 'Quiz assignment',
+                label: 'Quiz',
               },
             ]
           : []),
@@ -492,9 +490,12 @@ const ModuleCard = ({
       ],
     },
   ];
+  // The quiz form, under the owner's quiz screens.
+  const quizFormHref = (query: string) => `/admin/${classSlug}/quizzes/form?${query}`;
+
   const onAddItem: MenuProps['onClick'] = ({ key }) => {
     if (key === 'ASSIGNMENT_REPO') openAssignmentModal('REPO');
-    else if (key === 'ASSIGNMENT_QUIZ') openAssignmentModal('QUIZ');
+    else if (key === 'QUIZ') navigate(quizFormHref(`moduleId=${encodeURIComponent(module.id)}`));
     else if (key === 'ASSIGNMENT_FORM') openAssignmentModal('FORM');
     else {
       setContentType(key as ContentItemType);
@@ -540,8 +541,16 @@ const ModuleCard = ({
 
   // "Edit" edits the assignment: its weight, deadlines, release and what it
   // submits through. Editing the thing it submits through (the repository
-  // form, the quiz editor, the form builder) is the ⋯ menu's job.
-  const editAssignment = (a: AssignmentRowData) => openAssignmentModal(undefined, a);
+  // form, the form builder) is the ⋯ menu's job. A quiz's assignment is
+  // edited in the quiz form, with the quiz.
+  const editAssignment = (a: AssignmentRowData) => {
+    if (a.type === 'QUIZ') {
+      if (a.quiz && quizzesVisible)
+        navigate(quizFormHref(`quizId=${encodeURIComponent(a.quiz.id)}`));
+      return;
+    }
+    openAssignmentModal(undefined, a);
+  };
 
   // Where the ⋯ "Edit repository / quiz / form" item goes, or null when the
   // assignment has no target yet.
@@ -550,7 +559,7 @@ const ModuleCard = ({
       return `/admin/${classSlug}/repos/form?title=${encodeURIComponent(a.repository.title)}`;
     }
     if (a.type === 'QUIZ' && a.quiz && quizzesVisible) {
-      return `/admin/${classSlug}/quizzes/form?quizId=${a.quiz.id}`;
+      return quizFormHref(`quizId=${encodeURIComponent(a.quiz.id)}`);
     }
     if (a.type === 'FORM') return formHref(a);
     return null;
@@ -770,6 +779,8 @@ const ModuleCard = ({
                             confirmPublishAssignment(a.id, {
                               needsRepo,
                               assignmentPublished: a.is_published,
+                              kind: a.type,
+                              opensAt: a.release_at,
                             }),
                         }
                       : repoId
@@ -784,10 +795,12 @@ const ModuleCard = ({
                             label: editTargetLabel(a),
                             icon: <IconPencil size={15} />,
                           },
-                          { type: 'divider' as const },
+                          ...(a.type === 'QUIZ' ? [] : [{ type: 'divider' as const }]),
                         ]
                       : []),
-                    deleteAssignmentItem,
+                    // A quiz's assignment goes with the quiz (delete the quiz,
+                    // or move it to another module in the quiz form).
+                    ...(a.type === 'QUIZ' ? [] : [deleteAssignmentItem]),
                   ]}
                   onMenuClick={key => {
                     if (key === 'edit-target') {
@@ -836,11 +849,9 @@ const ModuleCard = ({
         moduleId={module.id}
         modules={[moduleRef]}
         repositories={repositories}
-        quizzes={quizzesVisible ? candidates.quizzes : []}
         forms={candidates.forms}
         pages={candidates.pages}
         slides={candidates.slides}
-        boundQuizIds={boundQuizIds}
         boundFormIds={boundFormIds}
         assignment={editingAssignment}
         presetKind={presetKind}

@@ -1,5 +1,5 @@
-import { Outlet, useNavigate, useLocation, useRevalidator } from 'react-router';
-import { useState } from 'react';
+import { Outlet, useNavigate, useLocation } from 'react-router';
+import { useEffect, useState } from 'react';
 import { Table, Badge, Typography, Button, Modal, Tag, Tooltip, Space, Select, Spin } from 'antd';
 import { CheckCircleOutlined, PlayCircleOutlined, TrophyOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -10,6 +10,7 @@ import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { formatDuration } from '~/utils/quizUtils';
 import { useGitWeb } from '~/hooks/useGitWeb';
 import { studentQuizAttemptView, studentQuizAttemptsSummaryView } from '~/utils/quizPayloads';
+import { useStartQuiz } from '~/components/features/quiz/useStartQuiz';
 
 const { Text } = Typography;
 
@@ -45,7 +46,8 @@ interface StudentQuiz {
   repository_id: string | null;
   include_code_context: boolean;
   dueDate: string | Date | null;
-  status: string;
+  /** Past its close date: no new attempt starts. */
+  closed: boolean;
   weight: number;
   questionCount: number;
   maxAttempts: number;
@@ -60,40 +62,6 @@ interface StudentQuiz {
 interface GitHubRepo {
   name: string;
 }
-
-/** What /api/quiz's restartQuiz (and a failed startQuiz) answers with. */
-interface RestartQuizBody {
-  success?: boolean;
-  attemptId?: string;
-  reason?: string;
-  existingAttemptId?: string;
-  message?: string;
-}
-
-const RESTART_FAILED = "Couldn't start a new attempt. Please try again.";
-
-/**
- * The JSON body of an /api/quiz reply, or null when there is none to read. A
- * gate can answer with plain text, so a body that is not a JSON object counts
- * as no body rather than an exception thrown into the page.
- */
-const readJsonBody = async (response: Response): Promise<RestartQuizBody | null> => {
-  try {
-    const body: unknown = await response.json();
-    return body && typeof body === 'object' ? (body as RestartQuizBody) : null;
-  } catch {
-    return null;
-  }
-};
-
-/**
- * The server's own message when it sent one (restartQuiz, or the startQuiz
- * that follows it), otherwise ours. The server only sends fixed copy — among
- * it the QUIZZES_UNAVAILABLE refusal a page left open gets once the class no
- * longer has quizzes — so it is safe to show as is.
- */
-const restartFailureCopy = (body: RestartQuizBody | null) =>
-  typeof body?.message === 'string' && body.message.trim() ? body.message : RESTART_FAILED;
 
 const getGradingStrategyLabel = (strategy: string) => {
   switch (strategy) {
@@ -137,7 +105,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   let quizzes, user;
   try {
     [quizzes, user] = await Promise.all([
-      ClassmojiService.quiz.getQuizzesForStudent(classroom.id, userId, membership),
+      // CLOSED quizzes too: a student who finished one keeps seeing it, with
+      // its score, and one they never took reads as closed.
+      ClassmojiService.quiz.getQuizzesForStudent(classroom.id, userId, membership, {
+        includeClosed: true,
+      }),
       ClassmojiService.user.findById(userId),
     ]);
   } catch (error) {
@@ -155,9 +127,13 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       assignmentTitle: quiz.repository?.title || 'Unlinked',
       repository_id: quiz.repository_id,
       include_code_context: quiz.include_code_context,
-      dueDate: quiz.due_date,
-      status: quiz.status,
-      weight: quiz.weight,
+      // The quiz's assignment owns its due date, close date and weight where it
+      // has one, so this list shows what the Assignments page and the calendar
+      // show. A quiz in no module keeps its own (the service's `closed` reads
+      // the same way).
+      dueDate: quiz.assignment ? quiz.assignment.student_deadline : quiz.due_date,
+      closed: quiz.closed,
+      weight: quiz.assignment ? quiz.assignment.weight : quiz.weight,
       questionCount: quiz.question_count || 5,
       maxAttempts: quiz.max_attempts ?? 1,
       gradingStrategy: quiz.grading_strategy || 'HIGHEST',
@@ -171,7 +147,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       // Backward compatibility
       attemptStatus:
         quiz.attemptsSummary?.count > 0 ? quiz.attempts[0]?.status || 'in_progress' : null,
-      score: quiz.attemptsSummary?.currentScore || null,
+      // `??`, not `||`: a 0 is a score.
+      score: quiz.attemptsSummary?.currentScore ?? null,
     };
   });
 
@@ -185,14 +162,36 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   };
 }
 
+/**
+ * Which tab a quiz sits in. Done means a completed attempt, or a closed quiz
+ * with nothing left to resume — the same split the Assignments page makes, so
+ * a closed quiz never reads as still to do.
+ */
+const isDone = (quiz: StudentQuiz) =>
+  quiz.attempts.some(a => a.status === 'completed') ||
+  (quiz.closed && !quiz.attempts.some(a => a.status !== 'completed'));
+
 export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
+  const { terms } = useGitWeb();
   const { quizzes: rawQuizzes, org, userRole } = loaderData;
   const quizzes = rawQuizzes as unknown as StudentQuiz[];
-  const { terms } = useGitWeb();
-  const [activeTab, setActiveTab] = useState('current');
   const navigate = useNavigate();
   const location = useLocation();
-  const revalidator = useRevalidator();
+  const { startQuiz } = useStartQuiz(org ?? '');
+
+  // `?quiz=<id>` (from the Assignments page and Up next) opens the tab that
+  // holds that quiz, on the page that holds it, and highlights its row.
+  const focusQuizId = new URLSearchParams(location.search).get('quiz');
+  const focusQuiz = focusQuizId ? (quizzes.find(q => q.id === focusQuizId) ?? null) : null;
+  const [activeTab, setActiveTab] = useState(() =>
+    focusQuiz ? (isDone(focusQuiz) ? 'completed' : 'current') : 'current'
+  );
+  useEffect(() => {
+    if (!focusQuizId) return;
+    document
+      .querySelector<HTMLElement>(`[data-row-key="${CSS.escape(focusQuizId)}"]`)
+      ?.scrollIntoView({ block: 'center' });
+  }, [focusQuizId]);
 
   // Repo selection state for TAs/admins on code-aware quizzes
   const [repoModalVisible, setRepoModalVisible] = useState(false);
@@ -254,75 +253,8 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       return;
     }
 
-    // Create new attempt via API
-    try {
-      const response = await fetch('/api/quiz', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          _action: 'restartQuiz',
-          quizId: quiz!.id,
-          repoName, // Pass repo name for instructors
-        }),
-      });
-
-      const result = await readJsonBody(response);
-
-      if (!result?.success) {
-        // If there's an incomplete attempt, offer to resume it
-        if (result?.reason === 'incomplete_attempt_exists' && result.existingAttemptId) {
-          Modal.confirm({
-            title: 'Resume or Start New?',
-            content: 'You have an in-progress attempt. Would you like to resume it?',
-            okText: 'Resume',
-            cancelText: 'Cancel',
-            onOk: () => {
-              navigate(
-                `/${rolePrefix}/${org}/quizzes/${quiz!.id}/attempt/${result.existingAttemptId}`
-              );
-            },
-          });
-          return;
-        }
-        Modal.error({
-          title: 'Cannot Start Quiz',
-          content: restartFailureCopy(result),
-        });
-        return;
-      }
-
-      // Start the quiz
-      const startResponse = await fetch('/api/quiz', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          _action: 'startQuiz',
-          quizId: quiz!.id,
-          attemptId: result.attemptId,
-        }),
-      });
-
-      if (!startResponse.ok) {
-        // The new attempt may still exist though it didn't start, so the list
-        // shows it. (One refused for its source material has been removed.)
-        revalidator.revalidate();
-        Modal.error({
-          title: 'Cannot Start Quiz',
-          content: restartFailureCopy(await readJsonBody(startResponse)),
-        });
-        return;
-      }
-
-      // Navigate to the new attempt
-      navigate(`/${rolePrefix}/${org}/quizzes/${quiz!.id}/attempt/${result.attemptId}`);
-    } catch (error: unknown) {
-      // The raw error stays in the console; the page only ever shows fixed copy.
-      console.error('Error creating new attempt:', error);
-      Modal.error({
-        title: 'Cannot Start Quiz',
-        content: RESTART_FAILED,
-      });
-    }
+    // restartQuiz → startQuiz → open the attempt (shared with Up next).
+    await startQuiz(quiz!.id, repoName);
   };
 
   const handleRepoSelected = () => {
@@ -351,17 +283,18 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
 
   // Filter functions for different tabs
   const filterQuizzes = (quizzes: StudentQuiz[], tab: string) => {
-    const publishedQuizzes = quizzes.filter(q => q.status === 'PUBLISHED');
-
+    // The service lists what this viewer may see (open quizzes, and closed
+    // ones, which read as closed), so nothing is filtered here but the tab.
     switch (tab) {
       case 'current':
-        // Current = not yet completed (available, in-progress, or overdue)
-        return publishedQuizzes.filter(q => !q.attempts.some(a => a.status === 'completed'));
+        // Current = still to do (available, in progress, or overdue)
+        return quizzes.filter(q => !isDone(q));
       case 'completed':
-        return publishedQuizzes.filter(q => q.attempts.some(a => a.status === 'completed'));
+        // Completed, or closed with nothing left to resume
+        return quizzes.filter(isDone);
       case 'all':
       default:
-        return publishedQuizzes;
+        return quizzes;
     }
   };
 
@@ -509,6 +442,11 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       render: (name: string, record: StudentQuiz) => (
         <Space>
           <span className="font-medium text-ink-1">{name}</span>
+          {record.closed && (
+            <Tooltip title="This quiz takes no new attempts">
+              <Tag style={{ fontSize: '11px', margin: 0 }}>Closed</Tag>
+            </Tooltip>
+          )}
           {record.weight === 0 && (
             <Tooltip title="This quiz won't affect your grade">
               <Tag color="gold" style={{ fontSize: '11px', margin: 0 }}>
@@ -571,15 +509,17 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       key: 'actions',
       width: 200,
       render: (_: unknown, record: StudentQuiz) => {
-        const isPublished = record.status === 'PUBLISHED';
+        const isOpen = !record.closed;
         const { canCreateNew, count, maxAttempts } = record.attemptsSummary;
         const hasUnlimited = record.maxAttempts === 0;
 
-        const tooltipTitle = hasUnlimited
-          ? 'Start a new attempt (unlimited)'
-          : canCreateNew
-            ? `Start attempt ${count + 1} of ${maxAttempts}`
-            : `Maximum attempts reached (${maxAttempts})`;
+        const tooltipTitle = !isOpen
+          ? 'This quiz is closed'
+          : hasUnlimited
+            ? 'Start a new attempt (unlimited)'
+            : canCreateNew
+              ? `Start attempt ${count + 1} of ${maxAttempts}`
+              : `Maximum attempts reached (${maxAttempts})`;
 
         return (
           <Tooltip title={tooltipTitle}>
@@ -587,7 +527,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
               type="primary"
               size="small"
               icon={<PlayCircleOutlined />}
-              disabled={!isPublished || !canCreateNew}
+              disabled={!isOpen || !canCreateNew}
               onClick={() => handleNewAttempt(record)}
             >
               New Attempt
@@ -599,20 +539,23 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
   ];
 
   // Calculate counts for tabs
-  const publishedQuizzes = quizzes.filter(q => q.status === 'PUBLISHED');
+  const allQuizzes = filterQuizzes(quizzes, 'all');
   const currentCount = filterQuizzes(quizzes, 'current').length;
   const completedCount = filterQuizzes(quizzes, 'completed').length;
 
   const tabs = [
     { key: 'current', label: 'Current', count: currentCount },
     { key: 'completed', label: 'Completed', count: completedCount },
-    { key: 'all', label: 'All', count: publishedQuizzes.length },
+    { key: 'all', label: 'All', count: allQuizzes.length },
   ];
 
   const dataSource =
-    activeTab === 'all'
-      ? publishedQuizzes
-      : filterQuizzes(quizzes, activeTab as 'current' | 'completed');
+    activeTab === 'all' ? allQuizzes : filterQuizzes(quizzes, activeTab as 'current' | 'completed');
+
+  // Open on the page that holds the highlighted quiz.
+  const pageSize = activeTab === 'all' ? 50 : 25;
+  const focusIndex = focusQuizId ? dataSource.findIndex(q => q.id === focusQuizId) : -1;
+  const defaultPage = focusIndex >= 0 ? Math.floor(focusIndex / pageSize) + 1 : 1;
 
   const emptyText =
     activeTab === 'current' ? (
@@ -681,7 +624,8 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
           rowHoverable={false}
           size="small"
           scroll={{ x: 'max-content' }}
-          pagination={{ pageSize: activeTab === 'all' ? 50 : 25 }}
+          pagination={{ pageSize, defaultCurrent: defaultPage }}
+          rowClassName={record => (record.id === focusQuizId ? '[&>td]:bg-accent-soft!' : '')}
           expandable={{
             expandedRowRender: renderAttempts,
             rowExpandable: record => record.attemptCount > 0,

@@ -19,6 +19,7 @@
  */
 
 import getPrisma from '@classmoji/database';
+import { isReleased } from '@classmoji/utils';
 import type { Prisma } from '@prisma/client';
 import {
   MAX_STUDENT_TURNS,
@@ -304,9 +305,11 @@ const grantHolds = (attempt: LockedAttempt, now: number): boolean => {
  * - the chat grant still holds (temporary: the session route writes a new one);
  * - the classroom's status lets that role act (temporary: LOCKED or
  *   UNPUBLISHED can be lifted);
- * - a student's quiz is not back in DRAFT (temporary). CLOSED stops new
- *   attempts only (quizAttempt.service `createNew`), so an attempt already
- *   under way goes on to its end, as it did on the previous runtime;
+ * - a student's quiz is still open to them (temporary): its assignment is
+ *   published and past its Opens date, or, for a quiz in no module, the quiz
+ *   is not back in DRAFT. The close date stops new attempts only
+ *   (quizAttempt.service `createNew`), so an attempt already under way goes
+ *   on to its end;
  * - quizzes are visible in the classroom (temporary).
  */
 const revalidate = async (
@@ -343,8 +346,12 @@ const revalidate = async (
       status === 'LOCKED' ? 'classroom_locked' : 'classroom_unpublished'
     );
   }
-  if (role === 'STUDENT' && attempt.quiz.status === 'DRAFT') {
-    throw new QuizChatRefusal('temporary', 'quiz_unavailable');
+  if (role === 'STUDENT') {
+    const assignment = attempt.quiz.assignment;
+    const open = assignment
+      ? assignment.is_published && isReleased(assignment.release_at, now)
+      : attempt.quiz.status !== 'DRAFT';
+    if (!open) throw new QuizChatRefusal('temporary', 'quiz_unavailable');
   }
   if (!visible) throw new QuizChatRefusal('temporary', 'quizzes_unavailable');
   return attempt;

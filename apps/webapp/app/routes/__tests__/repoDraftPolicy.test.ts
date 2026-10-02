@@ -42,6 +42,11 @@ const mocks = vi.hoisted(() => ({
   assignmentListForClassroom: vi.fn(),
   moduleFindByClassroomSlug: vi.fn(),
   getCandidateContent: vi.fn(),
+  loadQuizzesVisible: vi.fn(),
+}));
+
+vi.mock('~/utils/classroomProFlag.server', () => ({
+  loadQuizzesVisible: (...a: unknown[]) => mocks.loadQuizzesVisible(...a),
 }));
 
 vi.mock('@classmoji/database', () => ({
@@ -88,7 +93,6 @@ vi.mock('~/utils/routeAuth.server', () => ({
 // layers only need to import; none of them runs in a loader test.
 vi.mock('~/components/features/modules/ReadOnlyModulesTree', () => ({ default: () => null }));
 vi.mock('~/components/features/modules/studentTree', () => ({
-  buildRepositoryNode: () => ({}),
   buildAssignmentLeaf: () => ({}),
   resourceLeaves: () => [],
 }));
@@ -146,6 +150,7 @@ beforeEach(() => {
   mocks.listForClassroom.mockResolvedValue([
     { id: 'm1', title: 'Week 1', is_published: true, items: [], assignments: [] },
   ]);
+  mocks.loadQuizzesVisible.mockResolvedValue(true);
 });
 
 describe('the staff repos loader hides nothing', () => {
@@ -191,7 +196,7 @@ describe('the shared modules loader filters by ROLE, not by URL prefix', () => {
     await runLoader('student.$class.modules', `/student/${CLASS_SLUG}/modules`);
 
     expect(mocks.listForClassroom).toHaveBeenCalledTimes(1);
-    expect(listOptions()).toEqual({ includeUnpublished: false });
+    expect(listOptions()).toEqual({ includeUnpublished: false, quizzesVisible: true });
   });
 
   it('asks for everything for staff', async () => {
@@ -199,7 +204,7 @@ describe('the shared modules loader filters by ROLE, not by URL prefix', () => {
 
     await runLoader('student.$class.modules', `/teacher/${CLASS_SLUG}/modules`);
 
-    expect(listOptions()).toEqual({ includeUnpublished: true });
+    expect(listOptions()).toEqual({ includeUnpublished: true, quizzesVisible: true });
   });
 
   // If `isStaff` were ever sniffed from the pathname rather than taken from the
@@ -208,7 +213,7 @@ describe('the shared modules loader filters by ROLE, not by URL prefix', () => {
   it('gives a STUDENT the published view even under a staff prefix', async () => {
     await runLoader('student.$class.modules', `/teacher/${CLASS_SLUG}/modules`);
 
-    expect(listOptions()).toEqual({ includeUnpublished: false });
+    expect(listOptions()).toEqual({ includeUnpublished: false, quizzesVisible: true });
   });
 
   it('gives a TEACHER everything even under the student prefix', async () => {
@@ -216,7 +221,16 @@ describe('the shared modules loader filters by ROLE, not by URL prefix', () => {
 
     await runLoader('student.$class.modules', `/student/${CLASS_SLUG}/modules`);
 
-    expect(listOptions()).toEqual({ includeUnpublished: true });
+    expect(listOptions()).toEqual({ includeUnpublished: true, quizzesVisible: true });
+  });
+
+  it('asks for the same published view whatever the quiz answer (the route strips hidden quizzes)', async () => {
+    mocks.loadQuizzesVisible.mockResolvedValue(false);
+
+    await runLoader('student.$class.modules', `/student/${CLASS_SLUG}/modules`);
+
+    expect(mocks.loadQuizzesVisible).toHaveBeenCalledWith(CLASSROOM.id);
+    expect(listOptions()).toEqual({ includeUnpublished: false, quizzesVisible: true });
   });
 
   it('never fetches repositories itself', async () => {

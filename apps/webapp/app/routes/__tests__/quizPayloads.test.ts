@@ -595,4 +595,25 @@ describe('buildQuizResultRows', () => {
   it('returns no viewer attempt for a viewer who has none', () => {
     expect(rows('HIGHEST').viewerAttempt).toBeNull();
   });
+
+  it('counts a 0 as a score and never counts a completed attempt without one', () => {
+    const zero = attemptRow('a-ada-zero', ADA, {
+      started_at: new Date('2026-03-04T10:00:00Z'),
+      completed_at: new Date('2026-03-04T10:20:00Z'),
+      partial_credit_percentage: 0,
+    });
+    const unscored = attemptRow('a-ada-unscored', ADA, {
+      started_at: new Date('2026-03-05T10:00:00Z'),
+      completed_at: new Date('2026-03-05T10:20:00Z'),
+      partial_credit_percentage: null,
+    });
+    const { students } = buildQuizResultRows({
+      attempts: [unscored, zero],
+      gradingStrategy: 'MOST_RECENT',
+      viewerId: 'nobody',
+    });
+
+    expect(students[0].countingAttemptId).toBe(zero.id);
+    expect(students[0].currentScore).toBe(0);
+  });
 });

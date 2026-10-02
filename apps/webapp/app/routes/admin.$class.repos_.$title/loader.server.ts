@@ -136,12 +136,10 @@ export const buildLoader =
         type: r.type,
         is_published: r.is_published,
       })),
-      // Where the classroom's quizzes are hidden the modal is offered no quiz,
-      // and no quiz id leaves as already bound.
+      // Where the classroom's quizzes are hidden no quiz leaves the loader.
+      // (The modal binds no quiz: a quiz's assignment is made in the quiz
+      // form.)
       candidates: quizzesVisible ? candidates : { ...candidates, quizzes: [] },
-      boundQuizIds: quizzesVisible
-        ? (allAssignments.map(a => a.quiz_id).filter(Boolean) as string[])
-        : [],
       boundFormIds: allAssignments.map(a => a.form_id).filter(Boolean) as string[],
     };
   };

@@ -1,4 +1,4 @@
-import { task, logger } from '@trigger.dev/sdk';
+import { AbortTaskRunError, task, logger } from '@trigger.dev/sdk';
 import dayjs from 'dayjs';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore.js';
 dayjs.extend(isSameOrBefore);
@@ -23,6 +23,7 @@ import { updateRepository, type UpdateRepositoryPayload } from '../helpers/updat
 import { createRepository, type CreateRepositoryPayload } from '../helpers/createRepository.ts';
 import { provisionAutogradeWorkflowForRepo } from './autograde.ts';
 import { reportStatus } from '../helpers/progress.ts';
+import { ensureGitInstallation, GitAppNotInstalledError } from '../helpers/gitInstallation.ts';
 
 type GitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string | null };
 type StrictGitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string };
@@ -106,6 +107,11 @@ interface StandardCreateRepositoryTaskPayload extends Omit<CreateRepositoryPaylo
   team?: TeamRecord;
   /** See CreateRepositoriesTaskPayload.provisionOnly. */
   provisionOnly?: boolean;
+  /**
+   * Ignored and dropped. Runs queued before each run minted its own token
+   * still carry one, possibly expired; createRepository mints a fresh one.
+   */
+  token?: string;
 }
 
 interface LegacyCreateRepositoryTaskPayload {
@@ -161,6 +167,15 @@ const isLegacyCreateRepositoryPayload = (
   return 'organization' in payload;
 };
 
+/**
+ * The payload without the installation token that runs queued before each
+ * run minted its own still carry, so it is not forwarded into child payloads.
+ */
+const withoutQueuedToken = ({
+  token: _queuedToken,
+  ...payload
+}: StandardCreateRepositoryTaskPayload): StandardCreateRepositoryTaskPayload => payload;
+
 export const createRepositoriesTask = task({
   id: 'create_git_repos',
   queue: {
@@ -171,11 +186,31 @@ export const createRepositoriesTask = task({
     const uniqueLogins = [...new Set(logins.map(login => login.trim()).filter(Boolean))];
 
     const repository = await ClassmojiService.repository.findBySlugAndTitle(org, assignmentTitle);
-    const classroom = await ClassmojiService.classroom.findBySlug(org);
+    const loadedClassroom = await ClassmojiService.classroom.findBySlug(org);
 
-    if (!repository || !classroom || !classroom.git_organization.login) {
+    if (!repository || !loadedClassroom || !loadedClassroom.git_organization.login) {
       throw new Error(`Unable to load repository or classroom for ${org}/${assignmentTitle}`);
     }
+
+    // A Github org whose installation id went NULL is repaired here, ONCE, before
+    // anything builds a provider or fans out per-student runs. When the app is
+    // genuinely gone the run ends with one actionable error instead of N child
+    // runs all failing on "GitHub provider requires github_installation_id".
+    let gitOrganization: typeof loadedClassroom.git_organization;
+    try {
+      gitOrganization = await ensureGitInstallation(loadedClassroom.git_organization);
+    } catch (error: unknown) {
+      if (error instanceof GitAppNotInstalledError) {
+        logger.error('Github App installation missing; no repositories created', {
+          classroomSlug: org,
+          repositoryTitle: assignmentTitle,
+          status: error.status,
+        });
+        throw new AbortTaskRunError(error.message);
+      }
+      throw error;
+    }
+    const classroom = { ...loadedClassroom, git_organization: gitOrganization };
 
     // A template stored without an owner belongs to the classroom's own org,
     // which is where templates live. Splitting blindly used to leave the repo
@@ -207,8 +242,10 @@ export const createRepositoriesTask = task({
           )
         : null;
 
+    // No installation token in the payloads: each run mints its own. One
+    // minted here expired an hour later however long the runs queued, and sat
+    // in every payload on the dashboard.
     const gitProvider = getGitProvider(classroom.git_organization);
-    const token = await gitProvider.getAccessToken();
     const githubOrganization = await gitProvider.getOrganization(classroom.git_organization.login);
     const organizationGithubPlan = githubOrganization.plan?.name ?? 'free';
 
@@ -243,7 +280,6 @@ export const createRepositoriesTask = task({
         repository,
         templateOwner,
         templateRepo,
-        token,
         organizationGithubPlan,
         provisionOnly,
       };
@@ -308,7 +344,11 @@ export const createRepositoryTask = task({
   queue: {
     concurrencyLimit: 6,
   },
-  run: async (payload: CreateRepositoryTaskPayload) => {
+  // Copying a multi-gigabyte template (an Unreal project, say) is a full
+  // download plus an upload in several parts; the project-wide 15 minutes is
+  // not enough for it. Normal templates finish in seconds either way.
+  maxDuration: 3600,
+  run: async (payload: CreateRepositoryTaskPayload, { ctx }: RepositoryTaskContext) => {
     try {
       // NOTE: this branch rebuilds the standard payload field-by-field and so
       // silently DROPS `provisionOnly` — a legacy payload always normalizes to
@@ -328,7 +368,6 @@ export const createRepositoryTask = task({
               throw new Error('Missing Git organization login');
             }
 
-            const token = await gitProvider.getAccessToken();
             const githubOrganization = await gitProvider.getOrganization(orgLogin);
 
             return {
@@ -337,12 +376,11 @@ export const createRepositoryTask = task({
               repoName: payload.repoName,
               templateOwner: payload.templateOwner,
               templateRepo: payload.templateRepo,
-              token,
               organizationGithubPlan: githubOrganization.plan?.name ?? 'free',
               student: payload.student,
             };
           })()
-        : payload;
+        : withoutQueuedToken(payload);
       const { classroom } = normalizedPayload;
       // Who the repo is for, in the status line the instructor sees.
       const who =

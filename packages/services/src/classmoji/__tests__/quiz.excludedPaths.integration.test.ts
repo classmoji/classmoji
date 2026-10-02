@@ -31,6 +31,8 @@ describe.skipIf(!RUN)('quiz excluded paths (integration)', () => {
   const orgIds: string[] = [];
   let classroomId: string;
   let targetClassroomId: string;
+  /** Every quiz lives in a module (its assignment's). */
+  let inModule: { assignment: { moduleId: string } };
 
   const classroomIn = async (tag: string) => {
     const org = await prisma.gitOrganization.create({
@@ -56,6 +58,10 @@ describe.skipIf(!RUN)('quiz excluded paths (integration)', () => {
   beforeAll(async () => {
     classroomId = await classroomIn('src');
     targetClassroomId = await classroomIn('dst');
+    const module = await prisma.module.create({
+      data: { classroom_id: classroomId, title: `Week 1 ${suite}` },
+    });
+    inModule = { assignment: { moduleId: module.id } };
   });
 
   afterAll(async () => {
@@ -65,7 +71,12 @@ describe.skipIf(!RUN)('quiz excluded paths (integration)', () => {
   });
 
   it('defaults to an empty list for a quiz saved without any', async () => {
-    const quiz = await quizService.create({ name: 'Plain', classroomId, rubricPrompt: 'r' });
+    const quiz = await quizService.create({
+      name: 'Plain',
+      classroomId,
+      rubricPrompt: 'r',
+      ...inModule,
+    });
     const read = await quizService.findById(quiz.id);
     expect(read?.excluded_paths).toEqual([]);
   });
@@ -75,6 +86,7 @@ describe.skipIf(!RUN)('quiz excluded paths (integration)', () => {
       name: 'Code-aware',
       classroomId,
       rubricPrompt: 'r',
+      ...inModule,
       includeCodeContext: true,
       excludedPaths: [' tests/** ', '**/*.spec.js', 'playwright.config.*', 'tests/**'],
     });
@@ -103,6 +115,7 @@ describe.skipIf(!RUN)('quiz excluded paths (integration)', () => {
       name: 'Guarded',
       classroomId,
       rubricPrompt: 'r',
+      ...inModule,
       excludedPaths: ['tests/**'],
     });
     await expect(

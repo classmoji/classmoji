@@ -108,6 +108,7 @@ const assignmentLink = (
   featured,
   assignment: {
     id,
+    type: 'REPO',
     title,
     slug: `${id}-slug`,
     is_published,

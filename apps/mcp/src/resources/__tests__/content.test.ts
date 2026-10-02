@@ -216,7 +216,9 @@ describe('quizzes resource source_material (quiz source material)', () => {
       quizzes: Array<Record<string, unknown>>;
     };
 
-    expect(getQuizzesForStudent).toHaveBeenCalledWith('class-1', 'student-1', expect.anything());
+    expect(getQuizzesForStudent).toHaveBeenCalledWith('class-1', 'student-1', expect.anything(), {
+      includeClosed: true,
+    });
     expect(result.quizzes[0].source_material).toEqual([
       { kind: 'slide', id: 's1', title: 'Forms', is_draft: false, order: 0 },
     ]);
@@ -276,6 +278,175 @@ describe('quizzes resource source_material (quiz source material)', () => {
     )) as { quizzes: Array<Record<string, unknown>> };
 
     expect(result.quizzes[0].source_material).toEqual([]);
+  });
+
+  it("students get the student list's counting score as is, a 0 included", async () => {
+    getQuizzesForStudent.mockResolvedValue([
+      {
+        id: 'q1',
+        name: 'Quiz 1',
+        status: 'PUBLISHED',
+        weight: 0,
+        question_count: 3,
+        attemptsSummary: { count: 1, canCreateNew: false, currentScore: 0, bestScore: 0 },
+      },
+    ]);
+    const ctx = studentCtx();
+    (ctx.classroom as unknown as { classroom: { slug: string } }).classroom.slug =
+      'authorized-slug';
+
+    const result = (await quizzesResource.handler(VARS, ctx, new URL('classmoji://x'))) as {
+      quizzes: Array<{ my_attempts: { currentScore: number | null } }>;
+    };
+
+    expect(result.quizzes[0].my_attempts.currentScore).toBe(0);
+  });
+
+  it('gives students closed quizzes too, as the web list does, reading as CLOSED', async () => {
+    // Past its close date: the service lists it when asked for closed ones.
+    getQuizzesForStudent.mockResolvedValue([
+      {
+        id: 'q1',
+        name: 'Quiz 1',
+        status: 'PUBLISHED',
+        weight: 0,
+        question_count: 3,
+        assignment: {
+          is_published: true,
+          release_at: null,
+          student_deadline: null,
+          closes_at: new Date(Date.now() - 60_000),
+          weight: 0,
+          module: { id: 'mod-1', title: 'Week 1' },
+        },
+        attemptsSummary: { count: 1, canCreateNew: false, currentScore: 70 },
+      },
+    ]);
+    const ctx = studentCtx();
+    (ctx.classroom as unknown as { classroom: { slug: string } }).classroom.slug =
+      'authorized-slug';
+
+    const result = (await quizzesResource.handler(VARS, ctx, new URL('classmoji://x'))) as {
+      quizzes: Array<Record<string, unknown>>;
+    };
+
+    expect(getQuizzesForStudent.mock.calls[0][3]).toEqual({ includeClosed: true });
+    expect(result.quizzes[0]).toMatchObject({ status: 'CLOSED', published: true });
+    expect(result.quizzes[0].my_attempts).toMatchObject({ currentScore: 70 });
+  });
+
+  it("gives students the assignment's due date, falling back to the quiz's own", async () => {
+    const assignmentDue = new Date('2026-10-02T18:00:00Z');
+    const quizDue = new Date('2026-09-30T18:00:00Z');
+    const quiz = { status: 'PUBLISHED', weight: 0, question_count: 3, due_date: quizDue };
+    getQuizzesForStudent.mockResolvedValue([
+      {
+        ...quiz,
+        id: 'q1',
+        name: 'With assignment',
+        assignment: { student_deadline: assignmentDue },
+      },
+      { ...quiz, id: 'q2', name: 'Without', assignment: null },
+    ]);
+    const ctx = studentCtx();
+    (ctx.classroom as unknown as { classroom: { slug: string } }).classroom.slug =
+      'authorized-slug';
+
+    const result = (await quizzesResource.handler(VARS, ctx, new URL('classmoji://x'))) as {
+      quizzes: Array<{ id: string; due_date: Date | null; assignment?: unknown }>;
+    };
+
+    expect(result.quizzes.map(q => [q.id, q.due_date])).toEqual([
+      ['q1', assignmentDue],
+      ['q2', quizDue],
+    ]);
+    // The assignment itself is not part of the shape.
+    expect('assignment' in result.quizzes[0]).toBe(false);
+  });
+
+  it('gives staff the same due date students see', async () => {
+    const assignmentDue = new Date('2026-10-02T18:00:00Z');
+    const quizDue = new Date('2026-09-30T18:00:00Z');
+    const quiz = { status: 'PUBLISHED', weight: 0, question_count: 3, due_date: quizDue };
+    findByClassroom.mockResolvedValue([
+      {
+        ...quiz,
+        id: 'q1',
+        name: 'With assignment',
+        assignment: { student_deadline: assignmentDue },
+      },
+      { ...quiz, id: 'q2', name: 'Without', assignment: null },
+    ]);
+
+    const result = (await quizzesResource.handler(
+      VARS,
+      ownerCtx({ quizzes_enabled: true }),
+      new URL('classmoji://x')
+    )) as { quizzes: Array<{ id: string; due_date: Date | null }> };
+
+    expect(result.quizzes.map(q => [q.id, q.due_date])).toEqual([
+      ['q1', assignmentDue],
+      ['q2', quizDue],
+    ]);
+    expect('assignment' in result.quizzes[0]).toBe(false);
+  });
+
+  it("reads status, publish state, dates, weight and module off the quiz's assignment", async () => {
+    // The quiz's own columns say PUBLISHED, weight 10: written when it was
+    // saved. The close date has passed since, and the assignment owns all of it.
+    const closesAt = new Date(Date.now() - 60_000);
+    const releaseAt = new Date('2026-09-28T13:00:00Z');
+    findByClassroom.mockResolvedValue([
+      {
+        id: 'q1',
+        name: 'Recursion',
+        status: 'PUBLISHED',
+        weight: 10,
+        due_date: null,
+        question_count: 3,
+        assignment: {
+          is_published: true,
+          release_at: releaseAt,
+          student_deadline: null,
+          closes_at: closesAt,
+          weight: 2.5,
+          tokens_per_hour: 3,
+          module: { id: 'mod-1', title: 'Week 1' },
+        },
+      },
+      {
+        id: 'q2',
+        name: 'Unpublished',
+        status: 'PUBLISHED',
+        weight: 10,
+        question_count: 3,
+        assignment: { is_published: false, weight: 0, module: { id: 'mod-1', title: 'Week 1' } },
+      },
+      { id: 'q3', name: 'In no module', status: 'CLOSED', weight: 4, question_count: 3 },
+    ]);
+
+    const result = (await quizzesResource.handler(
+      VARS,
+      ownerCtx({ quizzes_enabled: true }),
+      new URL('classmoji://x')
+    )) as { quizzes: Array<Record<string, unknown>> };
+
+    expect(result.quizzes[0]).toMatchObject({
+      status: 'CLOSED',
+      published: true,
+      module: { id: 'mod-1', title: 'Week 1' },
+      release_at: releaseAt,
+      closes_at: closesAt,
+      weight: 2.5,
+      tokens_per_hour: 3,
+    });
+    expect(result.quizzes[1]).toMatchObject({ status: 'DRAFT', published: false, weight: 0 });
+    expect(result.quizzes[2]).toMatchObject({
+      status: 'CLOSED',
+      published: true,
+      module: null,
+      weight: 4,
+    });
   });
 });
 

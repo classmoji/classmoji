@@ -311,32 +311,88 @@ export const create = async (data: GitRepoAssignmentCreateData) => {
     );
   }
 
+  const pair = {
+    git_repo_id_assignment_id: {
+      git_repo_id: data.git_repo_id,
+      assignment_id: data.assignment_id,
+    },
+  };
+  const include = { assignment: true, git_repo: true } as const;
+  const issueFields = {
+    provider,
+    ...(data.provider_id != null ? { provider_id: data.provider_id } : {}),
+    ...(data.provider_issue_number != null
+      ? { provider_issue_number: data.provider_issue_number }
+      : {}),
+  };
+
   // One row per (student repo, assignment) in either submission mode. A retry
   // that adopted an existing GitHub issue may fill in the issue fields; the
   // row's id is never rewritten.
-  return getPrisma().gitRepoAssignment.upsert({
-    where: {
-      git_repo_id_assignment_id: {
-        git_repo_id: data.git_repo_id,
-        assignment_id: data.assignment_id,
-      },
-    },
-    create: {
-      ...data,
-      provider,
-    },
-    update: {
-      provider,
-      ...(data.provider_id != null ? { provider_id: data.provider_id } : {}),
-      ...(data.provider_issue_number != null
-        ? { provider_issue_number: data.provider_issue_number }
-        : {}),
-    },
-    include: {
-      assignment: true,
-      git_repo: true,
-    },
-  });
+  try {
+    return await getPrisma().gitRepoAssignment.upsert({
+      where: pair,
+      create: { ...data, provider },
+      update: issueFields,
+      include,
+    });
+  } catch (error) {
+    if ((error as { code?: unknown })?.code !== 'P2002') throw error;
+    return recoverFromCreateConflict(data, pair, issueFields, include, error);
+  }
+};
+
+/**
+ * A unique violation out of `create`'s upsert. Because the create sets `id`
+ * (the issue id in ISSUE mode), Prisma cannot turn that upsert into one
+ * INSERT ... ON CONFLICT: it reads by (git repo, assignment) and then inserts,
+ * so two runs for the same pair can both miss the row and both insert. The
+ * loser trips the primary key first (Postgres checks the pkey index before the
+ * others), which is the "Unique constraint failed on the fields: (`id`)" a
+ * concurrent release produced in production.
+ *
+ * Losing that race is success: the pair's row exists, so return it. It only
+ * takes this run's issue fields when it has none of its own, so a row keyed on
+ * the winner's issue never ends up pointing at the loser's. Anything else (the
+ * issue is already another pair's submission row) is a genuine conflict and
+ * is reported with both sides named rather than as a bare P2002.
+ */
+const recoverFromCreateConflict = async (
+  data: GitRepoAssignmentCreateData,
+  pair: { git_repo_id_assignment_id: { git_repo_id: string; assignment_id: string } },
+  issueFields: Prisma.GitRepoAssignmentUncheckedUpdateInput,
+  include: { assignment: true; git_repo: true },
+  error: unknown
+) => {
+  const prisma = getPrisma();
+  const existing = await prisma.gitRepoAssignment.findUnique({ where: pair, include });
+  if (existing) {
+    if (existing.provider_id == null && data.provider_id != null) {
+      return prisma.gitRepoAssignment.update({ where: pair, data: issueFields, include });
+    }
+    return existing;
+  }
+
+  const holder = data.provider_id
+    ? await prisma.gitRepoAssignment.findFirst({
+        where: {
+          OR: [
+            { provider: data.provider as GitProvider, provider_id: data.provider_id },
+            ...(data.id ? [{ id: data.id }] : []),
+          ],
+        },
+        select: { id: true, git_repo_id: true, assignment_id: true },
+      })
+    : null;
+  if (holder) {
+    throw new Error(
+      `Issue ${data.provider_id} is already the submission row ${holder.id} for ` +
+        `repo ${holder.git_repo_id} / assignment ${holder.assignment_id}; refusing to ` +
+        `reuse it for repo ${data.git_repo_id} / assignment ${data.assignment_id}`,
+      { cause: error }
+    );
+  }
+  throw error;
 };
 
 /**

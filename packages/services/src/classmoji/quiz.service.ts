@@ -1,14 +1,50 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { withLogins } from '@classmoji/utils';
+import {
+  countingQuizAttempt,
+  isClosed,
+  isReleased,
+  mirroredQuizStatus,
+  mirroredQuizWeight,
+  withLogins,
+} from '@classmoji/utils';
 import { normalizeExcludedPaths } from '@classmoji/utils/quiz-excluded-paths';
 import type { Prisma, QuizGradingStrategy, QuizStatus, Role } from '@prisma/client';
-import * as notificationService from './notification.service.ts';
+import * as assignmentService from './assignment.service.ts';
+import {
+  MODULE_REQUIRED_MESSAGE,
+  QUIZ_ASSIGNMENT_SELECT,
+  QuizAssignmentError,
+  mirrorQuizFromAssignment,
+  notifyQuizPublished,
+  setQuizAssignmentPublished,
+  type QuizAssignmentRow,
+} from './quizAssignment.service.ts';
 import {
   SOURCE_MATERIAL_INCLUDE,
   setQuizSourceMaterial,
   sourceMaterialOf,
   type SourceMaterialRef,
 } from './quizSourceMaterial.service.ts';
+
+export { QuizAssignmentError } from './quizAssignment.service.ts';
+
+/**
+ * A quiz's place in the course, as the quiz form's Assignment panel writes
+ * it. Each field is optional on an update (absent = unchanged); `moduleId` is
+ * required to create a quiz. Dates take an ISO string, a Date, or null to
+ * clear; `weight` and `tokensPerHour` are numbers of 0 or more.
+ */
+export interface QuizAssignmentInput {
+  moduleId?: string | null;
+  /** Opens: students see the quiz from then on. Null = when published. */
+  releaseAt?: string | Date | null;
+  dueDate?: string | Date | null;
+  /** Closes: no new attempt from then on. Null = never closes. */
+  closesAt?: string | Date | null;
+  weight?: string | number | null;
+  tokensPerHour?: string | number | null;
+  isPublished?: boolean;
+}
 
 interface QuizCreateInput {
   name: string;
@@ -18,13 +54,18 @@ interface QuizCreateInput {
   rubricPrompt: string;
   subject?: string | null;
   difficultyLevel?: string | null;
+  /** Old shape, routed to the assignment's due date. */
   dueDate?: string | Date | null;
+  /** Old shape: DRAFT = unpublished, PUBLISHED = published, CLOSED = published and closed now. */
   status?: QuizStatus;
+  /** Old shape, routed to the assignment's weight. */
   weight?: string | number | null;
   questionCount?: string | number | null;
   includeCodeContext?: boolean;
   maxAttempts?: string | number | null;
   gradingStrategy?: QuizGradingStrategy;
+  /** The quiz's assignment; `moduleId` is required. */
+  assignment?: QuizAssignmentInput;
   /**
    * The documents the quiz is about, ONE ordered list across pages and decks.
    * Absent leaves the material alone; a list replaces it (an empty list clears
@@ -48,6 +89,7 @@ interface QuizUpdateInput {
   rubricPrompt?: string;
   subject?: string | null;
   difficultyLevel?: string | null;
+  /** Old shapes, as on QuizCreateInput: routed to the assignment when there is one. */
   dueDate?: string | Date | null;
   status?: QuizStatus;
   weight?: string | number | null;
@@ -55,6 +97,11 @@ interface QuizUpdateInput {
   includeCodeContext?: boolean;
   maxAttempts?: string | number | null;
   gradingStrategy?: QuizGradingStrategy;
+  /**
+   * Assignment changes. A quiz with no assignment yet gets one when this
+   * names a module; without a module, assignment fields are refused.
+   */
+  assignment?: QuizAssignmentInput;
   /** As on QuizCreateInput: absent = unchanged, a list replaces the material. */
   sourceMaterial?: SourceMaterialRef[];
   courseSearchEnabled?: boolean;
@@ -123,6 +170,24 @@ export class QuizExcludedPathsError extends Error {
   }
 }
 
+/**
+ * quiz.update refuses a status change it cannot make: a DRAFT quiz cannot be
+ * CLOSED, because a closed quiz stays visible to students and a draft has
+ * never been published to them. Publish it first.
+ */
+export class QuizStatusChangeError extends Error {
+  code = 'invalid_status_change' as const;
+  /** HTTP status a web caller should answer with. */
+  status = 400;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'QuizStatusChangeError';
+  }
+}
+
+export const CLOSE_DRAFT_QUIZ_REFUSAL = 'Publish the quiz before closing it';
+
 /** The list to store, checked; throws `QuizExcludedPathsError` for a bad one. */
 function excludedPathsToStore(input: unknown): string[] {
   const result = normalizeExcludedPaths(input);
@@ -131,11 +196,12 @@ function excludedPathsToStore(input: unknown): string[] {
 }
 
 /**
- * What create hands back: the row with its repository and attempts, as before
- * (a new quiz has no attempts, so this is one join).
+ * What create hands back: the row with its repository, attempts and
+ * assignment (a new quiz has no attempts, so that is one join).
  */
 const QUIZ_WRITE_INCLUDE = {
   repository: true,
+  assignment: { include: { module: { select: { id: true, title: true } } } },
   attempts: {
     include: {
       user: { include: GIT_IDENTITY },
@@ -143,16 +209,139 @@ const QUIZ_WRITE_INCLUDE = {
   },
 } as const;
 
+type Tx = Prisma.TransactionClient;
+
+/** A date field of the panel: undefined = unchanged, null or '' = cleared. */
+const dateInput = (label: string, value: string | Date | null | undefined) => {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new QuizAssignmentError('invalid_value', `${label} is not a date`);
+  }
+  return date;
+};
+
+/** A count field of the panel: undefined = unchanged, null or '' = 0. */
+const countInput = (
+  label: string,
+  value: string | number | null | undefined,
+  { integer }: { integer: boolean }
+) => {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return 0;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0 || (integer && !Number.isInteger(number))) {
+    throw new QuizAssignmentError(
+      'invalid_value',
+      `${label} must be ${integer ? 'a whole number' : 'a number'} of 0 or more`
+    );
+  }
+  return number;
+};
+
+/** The assignment columns a save changes, after the inputs are checked. */
+interface AssignmentChanges {
+  moduleId?: string;
+  release_at?: Date | null;
+  student_deadline?: Date | null;
+  closes_at?: Date | null;
+  weight?: number;
+  tokens_per_hour?: number;
+  is_published?: boolean;
+}
+
 /**
- * Create a quiz, and its source material when given, in ONE transaction: an
- * unknown or foreign document id rolls the quiz back with it.
+ * What a save asks of the quiz's assignment: the `assignment` object, with
+ * the old flat fields folded in where the object does not name the same
+ * thing (`dueDate` → due, `weight` → weight, `status` → published, and
+ * CLOSED also closes now). Throws QuizAssignmentError on a bad value.
+ */
+const assignmentChangesOf = (
+  data: Pick<QuizUpdateInput, 'assignment' | 'dueDate' | 'weight' | 'status'>,
+  now: Date
+): AssignmentChanges => {
+  const input = data.assignment ?? {};
+  const changes: AssignmentChanges = {};
+  if (typeof input.moduleId === 'string' && input.moduleId) changes.moduleId = input.moduleId;
+  const releaseAt = dateInput('Opens', input.releaseAt);
+  if (releaseAt !== undefined) changes.release_at = releaseAt;
+  const due = dateInput('Due', input.dueDate !== undefined ? input.dueDate : data.dueDate);
+  if (due !== undefined) changes.student_deadline = due;
+  const closes = dateInput('Closes', input.closesAt);
+  if (closes !== undefined) changes.closes_at = closes;
+  const weight = countInput('Weight', input.weight !== undefined ? input.weight : data.weight, {
+    integer: false,
+  });
+  if (weight !== undefined) changes.weight = weight;
+  const tokensPerHour = countInput('Tokens per hour', input.tokensPerHour, { integer: true });
+  if (tokensPerHour !== undefined) changes.tokens_per_hour = tokensPerHour;
+  if (input.isPublished !== undefined) changes.is_published = input.isPublished === true;
+  else if (data.status !== undefined) changes.is_published = data.status !== 'DRAFT';
+  if (data.status === 'CLOSED' && changes.closes_at === undefined) changes.closes_at = now;
+  return changes;
+};
+
+/** Whether the save names any assignment field in the new shape. */
+const namesAssignmentFields = (input: QuizAssignmentInput | undefined) =>
+  !!input && Object.values(input).some(value => value !== undefined);
+
+/** The module, if it is in the quiz's classroom; refused otherwise. */
+const requireModuleInClassroom = async (tx: Tx, moduleId: string, classroomId: string) => {
+  const module = await tx.module.findFirst({
+    where: { id: moduleId, classroom_id: classroomId },
+    select: { id: true },
+  });
+  if (!module) {
+    throw new QuizAssignmentError('module_not_found', 'Module not found in this classroom', 404);
+  }
+};
+
+/**
+ * Create a quiz and its assignment, and its source material when given, in
+ * ONE transaction: a module from another classroom, or an unknown or foreign
+ * document id, rolls everything back. The quiz's due date, weight and status
+ * are written as a mirror of the assignment. A quiz created published tells
+ * the class once it has committed.
  */
 export const create = async (data: QuizCreateInput) => {
-  // Checked before the transaction opens: a bad list writes nothing.
+  // Checked before the transaction opens: a bad value writes nothing.
   const excludedPaths =
     data.excludedPaths === undefined ? undefined : excludedPathsToStore(data.excludedPaths);
-  return getPrisma().$transaction(async tx => {
-    const quiz = await createQuizRow(tx, { ...data, excludedPaths });
+  const now = new Date();
+  const changes = assignmentChangesOf(data, now);
+  const moduleId = changes.moduleId;
+  if (!moduleId) throw new QuizAssignmentError('module_required', MODULE_REQUIRED_MESSAGE);
+
+  const { quizId, assignment } = await getPrisma().$transaction(async tx => {
+    await requireModuleInClassroom(tx, moduleId, data.classroomId);
+    const schedule = {
+      is_published: changes.is_published ?? false,
+      closes_at: changes.closes_at ?? null,
+      student_deadline: changes.student_deadline ?? null,
+      weight: changes.weight ?? 0,
+    };
+    const quiz = await createQuizRow(
+      tx,
+      { ...data, excludedPaths },
+      {
+        due_date: schedule.student_deadline,
+        weight: mirroredQuizWeight(schedule.weight),
+        status: mirroredQuizStatus(schedule, now),
+      }
+    );
+    const assignment = await assignmentService.createInTx(tx, {
+      module_id: moduleId,
+      type: 'QUIZ',
+      quiz_id: quiz.id,
+      title: data.name,
+      weight: schedule.weight,
+      is_published: schedule.is_published,
+      student_deadline: schedule.student_deadline,
+      release_at: changes.release_at ?? null,
+      closes_at: schedule.closes_at,
+      tokens_per_hour: changes.tokens_per_hour ?? 0,
+    });
     if (data.sourceMaterial !== undefined) {
       await setQuizSourceMaterial(tx, {
         quizId: quiz.id,
@@ -160,13 +349,22 @@ export const create = async (data: QuizCreateInput) => {
         material: data.sourceMaterial,
       });
     }
-    return withLogins(
-      await tx.quiz.findUniqueOrThrow({ where: { id: quiz.id }, include: QUIZ_WRITE_INCLUDE })
-    );
+    return { quizId: quiz.id, assignment };
   });
+
+  if (assignment.is_published) await notifyQuizPublished(assignment, now);
+
+  return withLogins(
+    await getPrisma().quiz.findUniqueOrThrow({ where: { id: quizId }, include: QUIZ_WRITE_INCLUDE })
+  );
 };
 
-const createQuizRow = (tx: Prisma.TransactionClient, data: QuizCreateInput) =>
+/** The quiz's own columns; due date, weight and status come from the assignment. */
+const createQuizRow = (
+  tx: Prisma.TransactionClient,
+  data: QuizCreateInput,
+  mirror: { due_date: Date | null; weight: number; status: QuizStatus }
+) =>
   tx.quiz.create({
     select: { id: true },
     data: {
@@ -177,9 +375,7 @@ const createQuizRow = (tx: Prisma.TransactionClient, data: QuizCreateInput) =>
       rubric_prompt: data.rubricPrompt,
       subject: data.subject || null,
       difficulty_level: data.difficultyLevel || null,
-      due_date: data.dueDate ? new Date(data.dueDate) : null,
-      status: data.status || 'DRAFT',
-      weight: parseInt(String(data.weight ?? 0), 10) || 0,
+      ...mirror,
       question_count: Math.min(20, Math.max(1, parseInt(String(data.questionCount ?? 5), 10) || 5)),
       include_code_context: data.includeCodeContext || false,
       max_attempts: data.maxAttempts !== undefined ? parseInt(String(data.maxAttempts), 10) : 1,
@@ -189,8 +385,48 @@ const createQuizRow = (tx: Prisma.TransactionClient, data: QuizCreateInput) =>
     },
   });
 
+/** The module-move refusals of assignment.moveToModuleEndTx, as quiz refusals. */
+const translateMoveError = (error: unknown): never => {
+  if (error instanceof Error && error.message === 'Module not found in classroom') {
+    throw new QuizAssignmentError('module_not_found', 'Module not found in this classroom', 404);
+  }
+  throw error;
+};
+
+/**
+ * A save whose rows changed between its first read and its locks: it found no
+ * assignment to lock, then, under the quiz row's lock, the assignment another
+ * save created meanwhile; or it locked the modules of a move and then found
+ * the assignment moved to another module meanwhile. The save runs again.
+ */
+class SaveRaceError extends Error {}
+
+/**
+ * Update a quiz and, when the save names any, its assignment, in ONE
+ * transaction.
+ *
+ * - Content fields (name, prompts, questions, source material, excluded
+ *   paths) are the quiz's. A new name renames the assignment too.
+ * - Assignment fields go to the quiz's assignment, and the quiz's due date,
+ *   weight and status are mirrored from it. A module change moves the
+ *   assignment to the end of the new module (refused for a module outside the
+ *   quiz's classroom).
+ * - A quiz with no assignment gets one when the save names a module; its
+ *   current due date, weight and publish state carry over unless the save
+ *   says otherwise (a CLOSED quiz closes at its last update). Without a
+ *   module, the old flat fields still write the quiz's own columns, as
+ *   before; new-shape assignment fields are refused.
+ *
+ * Notifications (published, due date changed) go out after the commit.
+ *
+ * Two first saves of a quiz with no assignment, at once, take turns on the
+ * quiz row: the second sees the first's assignment and saves onto it. A move
+ * whose quiz another save moved meanwhile runs again from where it now is.
+ */
 export const update = async (quizId: string, data: QuizUpdateInput) => {
   const updateData: Prisma.QuizUpdateInput = {};
+  const now = new Date();
+  const changes = assignmentChangesOf(data, now);
 
   if (data.name !== undefined) updateData.name = data.name;
   if (data.repositoryId !== undefined) {
@@ -205,10 +441,6 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
   if (data.rubricPrompt !== undefined) updateData.rubric_prompt = data.rubricPrompt;
   if (data.subject !== undefined) updateData.subject = data.subject;
   if (data.difficultyLevel !== undefined) updateData.difficulty_level = data.difficultyLevel;
-  if (data.dueDate !== undefined)
-    updateData.due_date = data.dueDate ? new Date(data.dueDate) : null;
-  if (data.status !== undefined) updateData.status = data.status;
-  if (data.weight !== undefined) updateData.weight = parseInt(String(data.weight), 10);
   if (data.questionCount !== undefined)
     updateData.question_count = Math.min(
       20,
@@ -226,14 +458,182 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
 
   // One transaction, as in create: the material is validated against the
   // quiz's own classroom (read back from the row, not taken from the caller),
-  // and a bad id rolls the field changes back with it.
+  // and a bad id or module rolls every change back with it.
   //
-  // Returns the quiz's own columns, which is all any caller reads (the MCP
-  // quiz_update summary; the web action ignores it). Attempts and their users
-  // are not loaded: an interactive transaction holds its connection and has a
-  // time limit, and a long-running quiz can have hundreds of attempts.
-  return getPrisma().$transaction(async tx => {
-    const quiz = await tx.quiz.update({ where: { id: quizId }, data: updateData });
+  // Returns the quiz's own columns and its assignment, which is all any caller
+  // reads (the MCP quiz_update summary; the web action ignores it). Attempts
+  // and their users are not loaded: an interactive transaction holds its
+  // connection and has a time limit, and a long-running quiz can have
+  // hundreds of attempts.
+  const saveIn = async (tx: Tx) => {
+    // Locks first, in the order every other writer of a quiz's assignment
+    // takes them, so two writers cannot wait on each other: the module rows a
+    // move touches (sorted by id, as moveToModuleEndTx and module.deleteById
+    // take them), then the assignment row, then the quiz row. The assignment
+    // row is locked before it is read, so two saves at once see each other's
+    // result and a publish is announced once.
+    // The module the assignment was in when its move's locks were chosen
+    // (undefined when the save moves nothing).
+    let lockedFromModuleId: string | null | undefined;
+    if (changes.moduleId) {
+      const placed = await tx.quiz.findUnique({
+        where: { id: quizId },
+        select: { classroom_id: true, assignment: { select: { module_id: true } } },
+      });
+      if (placed) {
+        lockedFromModuleId = placed.assignment?.module_id ?? null;
+        const moduleIds = [...new Set([placed.assignment?.module_id, changes.moduleId])]
+          .filter((id): id is string => Boolean(id))
+          .sort();
+        for (const moduleId of moduleIds) {
+          await tx.$queryRaw`SELECT id FROM modules WHERE id = ${moduleId} AND classroom_id = ${placed.classroom_id} FOR UPDATE`;
+        }
+      }
+    }
+    const locked = await tx.$queryRaw<
+      Array<{ id: string }>
+    >`SELECT id FROM assignments WHERE quiz_id = ${quizId} FOR UPDATE`;
+    if (locked.length === 0) {
+      // No assignment to lock: the quiz row is the lock, so two first saves
+      // at once take turns. One that waited may find the assignment the other
+      // created; it runs again, taking the assignment's lock first like
+      // every other writer.
+      await tx.$queryRaw`SELECT id FROM quizzes WHERE id = ${quizId} FOR UPDATE`;
+      const appeared = await tx.assignment.findUnique({
+        where: { quiz_id: quizId },
+        select: { id: true },
+      });
+      if (appeared) throw new SaveRaceError();
+    }
+    // This attempt's own copy: a run that goes again starts from the input.
+    const quizData: Prisma.QuizUpdateInput = { ...updateData };
+    const current = await tx.quiz.findUnique({
+      where: { id: quizId },
+      select: {
+        classroom_id: true,
+        status: true,
+        weight: true,
+        due_date: true,
+        updated_at: true,
+        assignment: { select: QUIZ_ASSIGNMENT_SELECT },
+      },
+    });
+    if (!current) throw new QuizAssignmentError('not_found', 'Quiz not found', 404);
+    // Moved elsewhere between the read above and the locks: the module that
+    // is locked is not the one it leaves. Run again from the new module.
+    if (
+      lockedFromModuleId !== undefined &&
+      (current.assignment?.module_id ?? null) !== lockedFromModuleId
+    ) {
+      throw new SaveRaceError();
+    }
+
+    // DRAFT → CLOSED is refused (see QuizStatusChangeError), read in the same
+    // transaction as the write.
+    if (data.status === 'CLOSED') {
+      const published = current.assignment
+        ? current.assignment.is_published
+        : current.status !== 'DRAFT';
+      if (!published) throw new QuizStatusChangeError(CLOSE_DRAFT_QUIZ_REFUSAL);
+    }
+
+    let assignment: QuizAssignmentRow | null = current.assignment;
+    let previous: {
+      student_deadline: Date | null;
+      is_published: boolean;
+      release_at: Date | null;
+    } | null = assignment && {
+      student_deadline: assignment.student_deadline,
+      is_published: assignment.is_published,
+      release_at: assignment.release_at,
+    };
+
+    // An unassigned quiz saved without a module keeps the old behaviour for
+    // the old flat fields; the new assignment fields need a module.
+    if (!assignment && !changes.moduleId) {
+      if (namesAssignmentFields(data.assignment)) {
+        throw new QuizAssignmentError('module_required', MODULE_REQUIRED_MESSAGE);
+      }
+      if (data.dueDate !== undefined) quizData.due_date = changes.student_deadline ?? null;
+      if (data.status !== undefined) quizData.status = data.status;
+      if (data.weight !== undefined) quizData.weight = mirroredQuizWeight(changes.weight ?? 0);
+    }
+
+    const quiz = await tx.quiz.update({ where: { id: quizId }, data: quizData });
+
+    if (assignment) {
+      const assignmentData: Prisma.AssignmentUncheckedUpdateInput = {};
+      if (data.name !== undefined) assignmentData.title = data.name;
+      if (changes.release_at !== undefined) assignmentData.release_at = changes.release_at;
+      if (changes.student_deadline !== undefined) {
+        assignmentData.student_deadline = changes.student_deadline;
+      }
+      if (changes.closes_at !== undefined) assignmentData.closes_at = changes.closes_at;
+      // The old "PUBLISHED" reopened a closed quiz; it still does.
+      if (
+        data.status === 'PUBLISHED' &&
+        changes.closes_at === undefined &&
+        isClosed(assignment.closes_at, now)
+      ) {
+        assignmentData.closes_at = null;
+      }
+      if (changes.weight !== undefined) assignmentData.weight = changes.weight;
+      if (changes.tokens_per_hour !== undefined) {
+        assignmentData.tokens_per_hour = changes.tokens_per_hour;
+      }
+      if (changes.is_published !== undefined) assignmentData.is_published = changes.is_published;
+
+      const moves = Boolean(changes.moduleId && changes.moduleId !== assignment.module_id);
+      if (moves) {
+        await assignmentService
+          .moveToModuleEndTx(tx, assignment.id, changes.moduleId!, quiz.classroom_id)
+          .catch(translateMoveError);
+      }
+      // A content-only save leaves the assignment (and the mirror) alone.
+      if (moves || Object.keys(assignmentData).length > 0) {
+        assignment = await tx.assignment.update({
+          where: { id: assignment.id },
+          data: assignmentData,
+          select: QUIZ_ASSIGNMENT_SELECT,
+        });
+        await mirrorQuizFromAssignment(tx, assignment, now);
+      }
+    } else if (changes.moduleId) {
+      // First module for a quiz that had none: what it had carries over.
+      await requireModuleInClassroom(tx, changes.moduleId, quiz.classroom_id);
+      const wasPublished = current.status !== 'DRAFT';
+      const created = await assignmentService.createInTx(tx, {
+        module_id: changes.moduleId,
+        type: 'QUIZ',
+        quiz_id: quiz.id,
+        title: quiz.name,
+        weight: changes.weight ?? current.weight,
+        is_published: changes.is_published ?? wasPublished,
+        student_deadline:
+          changes.student_deadline !== undefined ? changes.student_deadline : current.due_date,
+        release_at: changes.release_at ?? null,
+        closes_at:
+          changes.closes_at !== undefined
+            ? changes.closes_at
+            : current.status === 'CLOSED'
+              ? current.updated_at
+              : null,
+        tokens_per_hour: changes.tokens_per_hour ?? 0,
+      });
+      assignment = await tx.assignment.findUniqueOrThrow({
+        where: { id: created.id },
+        select: QUIZ_ASSIGNMENT_SELECT,
+      });
+      // Students already saw a published quiz, and its old due date: neither
+      // is news.
+      previous = {
+        student_deadline: current.due_date,
+        is_published: wasPublished,
+        release_at: null,
+      };
+      await mirrorQuizFromAssignment(tx, assignment, now);
+    }
+
     if (data.sourceMaterial !== undefined) {
       await setQuizSourceMaterial(tx, {
         quizId: quiz.id,
@@ -241,8 +641,38 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
         material: data.sourceMaterial,
       });
     }
-    return quiz;
-  });
+    const saved = await tx.quiz.findUniqueOrThrow({
+      where: { id: quizId },
+      include: { assignment: { include: { module: { select: { id: true, title: true } } } } },
+    });
+    return { saved, assignment, previous };
+  };
+
+  let result: Awaited<ReturnType<typeof saveIn>>;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      result = await getPrisma().$transaction(saveIn);
+      break;
+    } catch (error) {
+      if (error instanceof SaveRaceError && attempt < 3) continue;
+      throw error;
+    }
+  }
+
+  const { assignment, previous } = result;
+  if (assignment && previous) {
+    const notifyFields: Record<string, unknown> = {};
+    if (changes.student_deadline !== undefined) {
+      notifyFields.student_deadline = changes.student_deadline;
+    }
+    await assignmentService.notifyAfterUpdate(
+      assignment.id,
+      notifyFields,
+      { ...previous, grades_released: false },
+      { ...assignment, grades_released: false }
+    );
+  }
+  return result.saved;
 };
 
 const deleteQuiz = async (quizId: string) => {
@@ -253,7 +683,7 @@ const deleteQuiz = async (quizId: string) => {
 export { deleteQuiz as delete };
 
 /**
- * One quiz with its classroom, repository and attempts, plus `source_material`:
+ * One quiz with its classroom, repository, assignment and attempts, plus `source_material`:
  * the linked pages and decks in material order, drafts included (a staff and
  * server-side read; the student list below filters drafts out).
  */
@@ -263,6 +693,8 @@ export const findById = async (quizId: string) => {
     include: {
       repository: true,
       classroom: true,
+      // Its place in the course: module, schedule, weight, published.
+      assignment: { include: { module: { select: { id: true, title: true } } } },
       attempts: {
         include: {
           user: { include: GIT_IDENTITY },
@@ -308,6 +740,21 @@ export const getQuizzesByOrganization = async (
     where: { classroom_id: classroomId },
     include: {
       repository: true,
+      // The quiz's assignment owns its module, schedule, weight and publish
+      // state; a quiz with none is in no module.
+      assignment: {
+        select: {
+          id: true,
+          module_id: true,
+          module: { select: { id: true, title: true } },
+          release_at: true,
+          student_deadline: true,
+          closes_at: true,
+          weight: true,
+          tokens_per_hour: true,
+          is_published: true,
+        },
+      },
       attempts: {
         include: {
           user: { include: GIT_IDENTITY },
@@ -368,10 +815,22 @@ const STUDENT_ATTEMPT_SELECT = {
   unfocused_duration_ms: true,
 } as const;
 
+/**
+ * The quizzes a member sees on the student quiz list, with their own attempts.
+ *
+ * A quiz with an assignment is listed once the assignment is published and
+ * its Opens date (`release_at`) has passed. A quiz with no assignment (in no
+ * module) keeps the old rule: its own status is PUBLISHED. Closed quizzes —
+ * past the assignment's close date, or a CLOSED quiz with no assignment —
+ * take no new attempt from a student but stay visible when `includeClosed` is
+ * set, so a student keeps the quiz they finished and its score; the student
+ * quiz list asks for them. Each row carries `closed`.
+ */
 export const getQuizzesForStudent = async (
   classroomId: string,
   userId: string,
-  membership: QuizMembership | null
+  membership: QuizMembership | null,
+  { includeClosed = false }: { includeClosed?: boolean } = {}
 ) => {
   if (!membership) {
     throw new Error('Membership required to access student quizzes');
@@ -401,13 +860,39 @@ export const getQuizzesForStudent = async (
     }
   }
 
-  const quizzes = await getPrisma().quiz.findMany({
+  const now = new Date();
+  const listed = await getPrisma().quiz.findMany({
     where: {
       classroom_id: classroomId,
-      status: 'PUBLISHED',
+      OR: [
+        {
+          assignment: {
+            is_published: true,
+            OR: [{ release_at: null }, { release_at: { lte: now } }],
+          },
+        },
+        {
+          assignment: { is: null },
+          status: includeClosed ? { in: ['PUBLISHED', 'CLOSED'] } : 'PUBLISHED',
+        },
+      ],
     },
     include: {
       repository: true,
+      // The quiz's assignment owns its module, due date, schedule and weight
+      // where it has one.
+      assignment: {
+        select: {
+          id: true,
+          module_id: true,
+          module: { select: { id: true, title: true } },
+          is_published: true,
+          release_at: true,
+          student_deadline: true,
+          closes_at: true,
+          weight: true,
+        },
+      },
       attempts: {
         where: { user_id: userId },
         orderBy: { started_at: 'desc' }, // Most recent first
@@ -418,6 +903,11 @@ export const getQuizzesForStudent = async (
     orderBy: { created_at: 'desc' },
   });
 
+  /** Past the assignment's close date, or (no assignment) a CLOSED quiz. */
+  const closedOf = (quiz: { status: QuizStatus; assignment: { closes_at: Date | null } | null }) =>
+    quiz.assignment ? isClosed(quiz.assignment.closes_at, now) : quiz.status === 'CLOSED';
+  const quizzes = includeClosed ? listed : listed.filter(quiz => !closedOf(quiz));
+
   // Add attempt metadata for each quiz
   return quizzes.map(({ page_links, slide_links, ...quiz }) => {
     const attempts = quiz.attempts || [];
@@ -427,9 +917,16 @@ export const getQuizzesForStudent = async (
 
     // Check if user can create new attempts. Staff preview quizzes repeatedly,
     // so they are not held to max_attempts — TEACHER included, or a teacher
-    // would be locked out of their own quiz after one preview.
+    // would be locked out of their own quiz after one preview. A student
+    // starts attempts on an open quiz that has not closed, as the start gate
+    // (quizAttempt.createNew) requires.
     const isInstructor = (QUIZ_STAFF_ROLES as readonly string[]).includes(membership.role);
-    const canCreateNew = isInstructor || hasUnlimitedAttempts || attemptCount < maxAttempts;
+    const closed = closedOf(quiz);
+    const open = quiz.assignment
+      ? quiz.assignment.is_published && isReleased(quiz.assignment.release_at, now)
+      : quiz.status === 'PUBLISHED';
+    const canCreateNew =
+      isInstructor || (open && !closed && (hasUnlimitedAttempts || attemptCount < maxAttempts));
 
     // Process all attempts with metadata (without counting flag yet)
     const baseAttempts = attempts.map((attempt, index) => {
@@ -465,64 +962,19 @@ export const getQuizzesForStudent = async (
       };
     });
 
-    const completedAttempts = baseAttempts.filter(
+    const scoredAttempts = baseAttempts.filter(
       attempt => attempt.completed_at && attempt.partialCreditScore !== null
     );
+    const bestScore =
+      scoredAttempts.length > 0
+        ? Math.max(...scoredAttempts.map(a => a.partialCreditScore ?? 0))
+        : null;
 
-    let countingAttemptId = null;
-    let currentScore = null;
-    let bestScore = null;
-
-    if (completedAttempts.length > 0) {
-      bestScore = Math.max(...completedAttempts.map(a => a.partialCreditScore ?? 0));
-
-      switch (quiz.grading_strategy) {
-        case 'HIGHEST': {
-          const highest = completedAttempts.reduce((max, attempt) =>
-            (attempt.partialCreditScore ?? 0) > (max.partialCreditScore ?? 0) ? attempt : max
-          );
-          countingAttemptId = highest.id;
-          currentScore = highest.partialCreditScore;
-          break;
-        }
-        case 'MOST_RECENT': {
-          const sorted = [...completedAttempts].sort((a, b) => {
-            const aTime = a.completed_at ? new Date(a.completed_at).getTime() : 0;
-            const bTime = b.completed_at ? new Date(b.completed_at).getTime() : 0;
-            return bTime - aTime;
-          });
-
-          const mostRecent = sorted[0];
-          if (mostRecent) {
-            countingAttemptId = mostRecent.id;
-            currentScore = mostRecent.partialCreditScore;
-          }
-          break;
-        }
-        case 'FIRST': {
-          const sorted = [...completedAttempts].sort((a, b) => {
-            const aTime = a.started_at ? new Date(a.started_at).getTime() : 0;
-            const bTime = b.started_at ? new Date(b.started_at).getTime() : 0;
-            return aTime - bTime;
-          });
-
-          const first = sorted[0];
-          if (first) {
-            countingAttemptId = first.id;
-            currentScore = first.partialCreditScore;
-          }
-          break;
-        }
-        default: {
-          const highest = completedAttempts.reduce((max, attempt) =>
-            (attempt.partialCreditScore ?? 0) > (max.partialCreditScore ?? 0) ? attempt : max
-          );
-          countingAttemptId = highest.id;
-          currentScore = highest.partialCreditScore;
-          break;
-        }
-      }
-    }
+    // The shared selector (@classmoji/utils quizScore), so this list, the
+    // results page, the gradebook and the Assignments page agree.
+    const counting = countingQuizAttempt(baseAttempts, quiz.grading_strategy);
+    const countingAttemptId = counting?.id ?? null;
+    const currentScore = counting?.partialCreditScore ?? null;
 
     const processedAttempts = baseAttempts.map(attempt => ({
       ...attempt,
@@ -531,6 +983,7 @@ export const getQuizzesForStudent = async (
 
     return {
       ...quiz,
+      closed,
       // The student view names published documents only.
       source_material: sourceMaterialOf(
         { classroom_id: quiz.classroom_id, page_links, slide_links },
@@ -549,78 +1002,53 @@ export const getQuizzesForStudent = async (
   });
 };
 
+/**
+ * Publish a quiz: its assignment is published through the one quiz publish
+ * function (assignment row locked, quiz mirrored, the class told once, and
+ * only when the quiz is open now). A quiz with no module has no assignment
+ * to publish and is refused. Returns the quiz row with `notified` (whether
+ * the class was told) and `sourceMaterialAllDraft` (every linked document is
+ * still a draft, so students cannot start it yet).
+ */
 export const publish = async (quizId: string) => {
-  const previous = await getPrisma().quiz.findUnique({
+  const quiz = await getPrisma().quiz.findUnique({
     where: { id: quizId },
-    select: { status: true },
+    select: { assignment: { select: { id: true } } },
   });
-  const quiz = await getPrisma().quiz.update({
-    where: { id: quizId },
-    data: { status: 'PUBLISHED' },
-  });
-  if (previous && previous.status !== 'PUBLISHED') {
-    await notificationService.runSafely('quiz publish notification', async () => {
-      const studentIds = await notificationService.getStudentsInClassroom(quiz.classroom_id);
-      await notificationService.createNotifications({
-        type: 'QUIZ_PUBLISHED',
-        classroomId: quiz.classroom_id,
-        recipientUserIds: studentIds,
-        resourceType: 'quiz',
-        resourceId: quiz.id,
-        title: `Quiz published: ${quiz.name}`,
-      });
-    });
+  if (!quiz) throw new QuizAssignmentError('not_found', 'Quiz not found', 404);
+  if (!quiz.assignment) {
+    throw new QuizAssignmentError(
+      'module_required',
+      'Choose a module for this quiz before publishing it'
+    );
   }
-  return quiz;
-};
-
-export const getStatsByClassroom = async (classroomId: string) => {
-  return getQuizStatsByOrganization(classroomId);
-};
-
-export const getQuizStatsByOrganization = async (classroomId: string) => {
-  const quizzes = await getPrisma().quiz.findMany({
-    where: { classroom_id: classroomId },
-    include: {
-      _count: {
-        select: { attempts: true },
-      },
-      attempts: {
-        where: { completed_at: { not: null } },
-        select: { score: true, partial_credit_percentage: true },
-      },
-    },
+  const result = await setQuizAssignmentPublished(quiz.assignment.id, true);
+  const row = await getPrisma().quiz.findUniqueOrThrow({
+    where: { id: quizId },
+    include: { assignment: { include: { module: { select: { id: true, title: true } } } } },
   });
-
-  const stats: {
-    totalQuizzes: number;
-    publishedCount: number;
-    draftCount: number;
-    archivedCount: number;
-    totalWeight: number;
-    totalAttempts: number;
-    averageScore: number | null;
-  } = {
-    totalQuizzes: quizzes.length,
-    publishedCount: quizzes.filter(q => (q.status as string) === 'PUBLISHED').length,
-    draftCount: quizzes.filter(q => (q.status as string) === 'DRAFT').length,
-    archivedCount: quizzes.filter(q => (q.status as string) === 'ARCHIVED').length,
-    totalWeight: quizzes
-      .filter(q => (q.status as string) !== 'ARCHIVED')
-      .reduce((sum, q) => sum + (q.weight || 0), 0),
-    totalAttempts: quizzes.reduce((sum, q) => sum + q._count.attempts, 0),
-    averageScore: null,
+  return {
+    ...row,
+    wasPublished: result.wasPublished,
+    notified: result.notified,
+    sourceMaterialAllDraft: result.sourceMaterialAllDraft,
   };
+};
 
-  // Calculate overall average score
-  const allScores = quizzes
-    .flatMap(q => q.attempts.map(a => a.score ?? a.partial_credit_percentage))
-    .filter((s): s is number => s !== null && s !== undefined);
-  if (allScores.length > 0) {
-    stats.averageScore = Math.round(allScores.reduce((sum, s) => sum + s, 0) / allScores.length);
-  }
-
-  return stats;
+/**
+ * Each quiz's grading strategy, by quiz id: what the counting-attempt selector
+ * (`countingQuizAttempt` / `quizStanding` in @classmoji/utils) needs to know.
+ * Ids that match no quiz are simply absent.
+ */
+export const findGradingStrategies = async (
+  quizIds: string[]
+): Promise<Record<string, QuizGradingStrategy>> => {
+  if (quizIds.length === 0) return {};
+  const quizzes = await getPrisma().quiz.findMany({
+    where: { id: { in: quizIds } },
+    select: { id: true, grading_strategy: true },
+  });
+  return Object.fromEntries(quizzes.map(q => [q.id, q.grading_strategy]));
 };
 
 // Aliases for consistent naming across services
@@ -629,4 +1057,3 @@ export const updateQuiz = update;
 export const getQuizById = findById;
 export const getQuizzesByClassroom = findByClassroom;
 export const publishQuiz = publish;
-export const getQuizStatsByClassroom = getStatsByClassroom;

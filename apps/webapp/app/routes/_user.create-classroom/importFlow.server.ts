@@ -289,6 +289,8 @@ export async function runClassroomImport({
   } | null = null;
   /** Source repositories that survived the ownership filter (drives templates). */
   let repoConfigs: Array<{ id: string; includeQuizzes?: boolean }> = [];
+  /** Whether quizzes may be copied into the new classroom at all (see below). */
+  let copyQuizzes = false;
 
   if (importRequested && sourceClassroomId) {
     if (anyConfigSelected) {
@@ -305,6 +307,21 @@ export async function runClassroomImport({
       }
     }
 
+    // Quizzes are copied only into a classroom that shows them: Pro, quizzes
+    // not switched off, and the AI agent configured; the wizard offers them on
+    // the same terms. Decided on the classroom just created, after its owner
+    // membership exists and after the settings copy above, so a copied
+    // `quizzes_enabled: false` counts. A failed lookup copies none and the
+    // classroom is still created. Asked only when something would copy a quiz:
+    // a repository with its quizzes, or the modules, which bring the quizzes
+    // placed in them along (with or without a repository).
+    if (requestedRepos.some(r => r.includeQuizzes) || contentSelections.modules) {
+      copyQuizzes = await quizzesVisibleOrThrow(classroom.id).catch((error: unknown) => {
+        console.error('Quiz visibility lookup failed; copying no quizzes:', error);
+        return false;
+      });
+    }
+
     if (requestedRepos.length > 0) {
       // Repositories must belong to the (ownership-verified) source classroom.
       const sourceRepoIds = new Set(
@@ -319,19 +336,11 @@ export async function runClassroomImport({
       if (repoConfigs.length !== requestedRepos.length) {
         importWarnings.push('repositories outside the source classroom were skipped');
       }
-      // Quizzes are copied only into a classroom that shows them: Pro, quizzes
-      // not switched off, and the AI agent configured; the wizard offers them on
-      // the same terms. Decided on the classroom just created, after its owner
-      // membership exists and after the settings copy above, so a copied
-      // `quizzes_enabled: false` counts. A failed lookup copies none and the
-      // classroom is still created. Cleared on `repoConfigs` itself, which the
-      // job row also keeps, so nothing later can bring the flag back.
-      if (repoConfigs.some(r => r.includeQuizzes)) {
-        const copyQuizzes = await quizzesVisibleOrThrow(classroom.id).catch((error: unknown) => {
-          console.error('Quiz visibility lookup failed; copying no quizzes:', error);
-          return false;
-        });
-        if (!copyQuizzes) repoConfigs = repoConfigs.map(r => ({ ...r, includeQuizzes: false }));
+      // No quizzes where the new classroom shows none (decided above). Cleared
+      // on `repoConfigs` itself, which the job row also keeps, so nothing later
+      // can bring the flag back.
+      if (!copyQuizzes && repoConfigs.some(r => r.includeQuizzes)) {
+        repoConfigs = repoConfigs.map(r => ({ ...r, includeQuizzes: false }));
       }
       if (repoConfigs.length > 0) {
         try {
@@ -454,6 +463,9 @@ export async function runClassroomImport({
     progress = withIdMaps(progress, {
       repositories: importResult?.idMaps.repositories ?? {},
       quizzes: importResult?.idMaps.quizzes ?? {},
+      // The modules the repository copy made for its assignments: the modules
+      // phase reuses them rather than creating a second of the same title.
+      modules: importResult?.idMaps.modules ?? {},
     });
     progress = withCounts(progress, syncCounts);
 
@@ -468,6 +480,8 @@ export async function runClassroomImport({
             config: configSelections,
             repositories: repoConfigs,
             content: contentSelections,
+            // Whether the modules phase may copy the quizzes placed in them.
+            quizzes: copyQuizzes,
           },
           progress: progress as unknown as object,
           warnings: importWarnings as unknown as object,

@@ -19,6 +19,9 @@
  *   - SELF_FORMED teams: flip only (repos created when students form teams).
  *   - instructor-assigned teams: trigger repo creation per tagged team, flip.
  *   - instructor-assigned teams with no teams yet: flip only.
+ *   - every branch but the re-publish first refuses a template provisioning
+ *     could not clone (repository.checkTemplate), as repo_create and a
+ *     template change in repo_update do.
  * The web additionally mints a Trigger.dev public token so its UI can render
  * a live progress bar — that is a web-UI session concern and is not exposed
  * here (counts are returned instead).
@@ -96,6 +99,19 @@ async function refreshManifest(classroomId: string): Promise<void> {
   } catch (error) {
     console.error('[mcp] content manifest refresh failed:', error);
   }
+}
+
+/**
+ * Refuse a template provisioning could not clone: none at all, or (Github) one
+ * the classroom's app installation cannot see. One lookup, shared with the web
+ * (repository.checkTemplate).
+ */
+async function assertUsableTemplate(
+  template: string | null | undefined,
+  classroomId: string
+): Promise<void> {
+  const check = await ClassmojiService.repository.checkTemplate(template, classroomId);
+  if (!check.ok) throw new ToolError('invalid_params', check.error, check.reason);
 }
 
 /** A project template picker cleared in the web sends null; treat "" the same. */
@@ -188,6 +204,10 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
         message: `${gitTermsFor(ctx).Repo} re-published. Use Sync to update ${gitTermsFor(ctx).repos}.`,
       });
     }
+
+    // Route parity: a missing or unreachable template is refused now, not once
+    // per student in the background provisioning run.
+    await assertUsableTemplate(repository.template, classroom.classroomId);
 
     if (repository.type === 'INDIVIDUAL') {
       const students = await ClassmojiService.classroomMembership.findUsersByRole(
@@ -428,6 +448,8 @@ export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
         );
       }
     }
+    // Web form parity: a template that cannot be cloned is refused on save.
+    await assertUsableTemplate(args.template, classroom.classroomId);
 
     let created;
     try {
@@ -697,6 +719,11 @@ export const repoUpdateTool: ToolDefinition<RepoUpdateArgs> = {
           );
         }
       }
+    }
+
+    // Web form parity: a changed template that cannot be cloned is refused.
+    if (structuralChanges.includes('template')) {
+      await assertUsableTemplate(patch.template as string, classroom.classroomId);
     }
 
     const mergedType = (patch.type ?? repository.type) as 'INDIVIDUAL' | 'GROUP';

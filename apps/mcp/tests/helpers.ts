@@ -453,6 +453,8 @@ export const MCP_TOOL_NAMES = new Set([
   'module_update',
   'module_publish',
   'module_item_add',
+  'module_delete',
+  'module_reorder',
   'calendar_event_create',
   'calendar_event_update',
   'calendar_event_delete',

@@ -7,6 +7,7 @@ import dayjs from 'dayjs';
 import { ClassmojiService } from '@classmoji/services';
 import Tasks from '@classmoji/tasks';
 import { gitTerms } from '~/utils/gitWeb';
+import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 
 type Classroom = NonNullable<Awaited<ReturnType<typeof ClassmojiService.classroom.findBySlug>>>;
 type Repository = NonNullable<Awaited<ReturnType<typeof ClassmojiService.repository.findById>>>;
@@ -45,6 +46,15 @@ export const publishAssignment = async (
       await ClassmojiService.repository.setPublished(repositoryId, true, classroomId);
       return { success: `${terms.Repo} re-published. Use Sync to update ${terms.repos}.` };
     }
+
+    // Provisioning clones the template once per student in background runs the
+    // instructor never sees, so a missing or unreachable template is refused
+    // here, while the instructor is still looking.
+    const templateCheck = await ClassmojiService.repository.checkTemplate(
+      repository.template,
+      classroomId
+    );
+    if (!templateCheck.ok) return { error: templateCheck.error };
 
     let skippedNoGitLab = 0;
     let numReposToCreate = 0;
@@ -209,6 +219,12 @@ export const publishAssignmentAndRepository = async (
     classroomId
   );
   invariant(assignment != null, 'Assignment not found');
+  // A quiz's assignment is published only where the classroom shows quizzes
+  // (the quiz screens' own gate): elsewhere it is not there to publish, and a
+  // publish tells the class.
+  if (assignment.type === 'QUIZ' && !(await quizzesVisibleOrThrow(classroomId))) {
+    throw new Response('Not Found', { status: 404 });
+  }
 
   let repoResult: Awaited<ReturnType<typeof publishAssignment>> | null = null;
 
@@ -224,7 +240,26 @@ export const publishAssignmentAndRepository = async (
     }
   }
 
+  // The repository could not be published (its template is missing or
+  // unreachable): leave the assignment a draft too, since it would open to
+  // students with nothing to submit through.
+  if (repoResult && 'error' in repoResult) return repoResult;
+
+  // A quiz's assignment publishes through the one quiz publish function
+  // (assignment.publish routes it), which tells the class once.
   await ClassmojiService.assignment.publish(assignmentId);
+
+  // The quiz screens' warning, on this publish path too: a quiz whose every
+  // linked source document is still a draft cannot be started yet.
+  if (
+    assignment.type === 'QUIZ' &&
+    assignment.quiz_id &&
+    (await ClassmojiService.quizAssignment.quizSourceMaterialAllDraft(assignment.quiz_id))
+  ) {
+    return {
+      info: `Quiz "${assignment.title}" published. All source material is still draft; students will not be able to start this quiz.`,
+    };
+  }
 
   // Provisioning started: hand back the trigger session alone, exactly as the
   // repository publish does. Adding a `success` here would pop a "published"

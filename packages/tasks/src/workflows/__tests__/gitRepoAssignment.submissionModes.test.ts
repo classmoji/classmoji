@@ -162,6 +162,86 @@ describe('gh-create_git_repo_assignment in REPO mode', () => {
   });
 });
 
+describe('gh-create_git_repo_assignment adopting an issue by title', () => {
+  const issueProvider = () => ({
+    findIssueByTitle: vi.fn().mockResolvedValue({ id: 'issue-9', number: 9 }),
+    createIssue: vi.fn().mockResolvedValue({ id: 'issue-10', number: 10 }),
+    getIssueNodeId: vi.fn().mockResolvedValue('node'),
+    addIssueToProject: vi.fn(),
+  });
+
+  it('opens a fresh issue when the titled one is already another row’s submission', async () => {
+    const provider = issueProvider();
+    mocks.getGitProvider.mockReturnValue(provider);
+    // The pair guard finds nothing; the issue lookup finds another assignment's row.
+    mocks.findFirstGitRepoAssignment
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'issue-9', git_repo_id: 'gitrepo-1', assignment_id: 'a-other' });
+
+    await runTask(workflows.createGithubRepositoryAssignmentTask, {
+      repoName: 'lab-1-alice',
+      assignment: { id: 'a-1', title: 'Lab 1' },
+      studentRepo: STUDENT_REPO,
+      organization: ORG,
+    });
+
+    expect(mocks.findFirstGitRepoAssignment).toHaveBeenLastCalledWith({
+      provider: 'GITHUB',
+      provider_id: 'issue-9',
+    });
+    expect(provider.createIssue).toHaveBeenCalledTimes(1);
+    expect(mocks.createGitRepoAssignment).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'issue-10', provider_issue_number: 10 })
+    );
+  });
+
+  it('stops when a concurrent run already recorded this pair on that issue', async () => {
+    const provider = issueProvider();
+    mocks.getGitProvider.mockReturnValue(provider);
+    mocks.findFirstGitRepoAssignment
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'issue-9', git_repo_id: 'gitrepo-1', assignment_id: 'a-1' });
+
+    await runTask(workflows.createGithubRepositoryAssignmentTask, {
+      repoName: 'lab-1-alice',
+      assignment: { id: 'a-1', title: 'Lab 1' },
+      studentRepo: STUDENT_REPO,
+      organization: ORG,
+    });
+
+    expect(provider.createIssue).not.toHaveBeenCalled();
+    expect(mocks.createGitRepoAssignment).not.toHaveBeenCalled();
+  });
+});
+
+describe('retry on database blips', () => {
+  type RetryingTask = {
+    retry?: { maxAttempts: number };
+    catchError?: (p: { error: unknown }) => Promise<unknown>;
+  };
+  const neonBlip = Object.assign(
+    new Error("Can't reach database server at `ep-ancient-cell.neon.tech:5432`"),
+    { name: 'PrismaClientInitializationError', errorCode: 'P1001' }
+  );
+
+  it.each([
+    ['webhook-git_repo_push_handler', workflows.repositoryPushHandlerTask],
+    ['cf-create_git_repo_assignment', workflows.createDatabaseRepositoryAssignmentTask],
+  ])('%s retries a blip and nothing else', async (_id, t) => {
+    const config = t as unknown as RetryingTask;
+    expect(config.retry?.maxAttempts).toBeGreaterThan(1);
+    await expect(config.catchError?.({ error: neonBlip })).resolves.toBeUndefined();
+    await expect(config.catchError?.({ error: new Error('boom') })).resolves.toEqual({
+      skipRetrying: true,
+    });
+  });
+
+  it('does not opt the GitHub issue task into retries (a retry could open another issue)', () => {
+    const config = workflows.createGithubRepositoryAssignmentTask as unknown as RetryingTask;
+    expect(config.retry).toBeUndefined();
+  });
+});
+
 describe('cf-create_git_repo_assignment', () => {
   it('writes null issue fields and no id for a REPO-mode row', async () => {
     await runTask(workflows.createDatabaseRepositoryAssignmentTask, {

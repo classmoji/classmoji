@@ -137,7 +137,6 @@ describe.each(ROUTES)('%s', (_name, route, params) => {
           prDescription: 'Pulls in fixes',
           templateOwner: 'acme',
           templateRepo: 'lab-1-template',
-          token: 'install-token',
           // Github: repos live in the org, so no separate owner.
           repoOwner: null,
         },

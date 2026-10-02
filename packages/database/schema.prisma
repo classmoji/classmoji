@@ -980,6 +980,9 @@ model Assignment {
   grader_deadline  DateTime?
   tokens_per_hour  Int            @default(0)
   release_at       DateTime?
+  // QUIZ only for now: from this moment no new attempt can start (an attempt
+  // already under way may finish). Empty = never closes. REPO ignores it.
+  closes_at        DateTime?
   grades_released  Boolean        @default(false)
   created_at       DateTime       @default(now())
   updated_at       DateTime       @default(now()) @updatedAt

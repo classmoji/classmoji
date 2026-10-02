@@ -7,6 +7,10 @@ import { FetcherContext } from '~/contexts';
 import LocalStorage from '~/utils/localStorage';
 import { useGlobalFetcher } from '~/hooks';
 import { useGitWeb } from '~/hooks/useGitWeb';
+import {
+  publishAssignmentConfirm,
+  type PublishAssignmentConfirmInput,
+} from './publishAssignmentConfirm';
 
 interface RepositoryRef {
   id: string;
@@ -120,26 +124,12 @@ export const useRepositoryActions = (actionBase = '') => {
    * One button for "make this assignment work for students", whichever half is
    * outstanding: the assignment's own visibility, its repositories, or both.
    */
-  const confirmPublishAssignment = (
-    id: string,
-    opts: { needsRepo: boolean; assignmentPublished: boolean }
-  ) => {
-    // Already open to students, but nobody has repositories yet.
-    if (opts.assignmentPublished) {
-      return modal.confirm({
-        title: `Create student ${terms.repos}`,
-        content: `This assignment is already open to students, but its ${terms.repos} have not been created. This creates them.`,
-        okText: 'Create',
-        cancelText: 'Cancel',
-        onOk: () => publishAssignment(id),
-      });
-    }
+  const confirmPublishAssignment = (id: string, opts: PublishAssignmentConfirmInput) => {
+    const { title, content, okText } = publishAssignmentConfirm(opts);
     return modal.confirm({
-      title: 'Publish assignment',
-      content: opts.needsRepo
-        ? `This creates the student ${terms.repos} first, then opens the assignment to students.`
-        : `This opens the assignment to students. Its ${terms.repo} is already published.`,
-      okText: 'Publish',
+      title,
+      content,
+      okText,
       cancelText: 'Cancel',
       onOk: () => publishAssignment(id),
     });

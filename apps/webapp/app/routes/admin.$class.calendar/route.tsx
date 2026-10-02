@@ -11,6 +11,7 @@ import {
   ASSISTANT_EVENT_TYPE_MESSAGE,
   assistantMayChangeEventType,
   assistantMayCreateEventType,
+  isCalendarMeetingLinkError,
   isCalendarTimeRangeError,
   scopeCarriesLinks,
   toFeaturedLinkRef,
@@ -27,6 +28,7 @@ import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server'
 import type { Route } from './+types/route';
 import CourseCalendar from '~/components/features/calendar/CourseCalendar';
 import type { CalendarEventWithLinks } from '~/components/features/calendar/types';
+import { buildMovePayload } from '~/components/features/calendar/eventScope';
 import CalendarSubscriptionCard from '~/components/features/calendar/CalendarSubscriptionCard';
 import AddEventModal, { type AddEventDefaults } from '~/components/features/calendar/AddEventModal';
 import EditEventModal, {
@@ -216,9 +218,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     try {
       newEvent = await ClassmojiService.calendar.createEvent(classroom.id, userId, createData);
     } catch (error: unknown) {
-      // A refused time range is the user's to fix, so it comes back as a
-      // message the fetcher shows rather than as a 500.
-      if (isCalendarTimeRangeError(error)) {
+      // A refused time range or meeting link is the user's to fix, so it comes
+      // back as a message the fetcher shows rather than as a 500.
+      if (isCalendarTimeRangeError(error) || isCalendarMeetingLinkError(error)) {
         return data({ success: false, error: (error as Error).message }, { status: 400 });
       }
       throw error;
@@ -311,7 +313,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         await ClassmojiService.calendar.updateEvent(eventId as string, updateData);
       }
     } catch (error: unknown) {
-      if (isCalendarTimeRangeError(error)) {
+      if (isCalendarTimeRangeError(error) || isCalendarMeetingLinkError(error)) {
         return data({ success: false, error: (error as Error).message }, { status: 400 });
       }
       throw error;
@@ -591,27 +593,8 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
     });
     setOptimisticEvents(updatedEvents);
 
-    const eventData = {
-      title: event.title,
-      event_type: event.event_type,
-      start_time: newStartTime.toISOString(),
-      end_time: newEndTime.toISOString(),
-      location: event.location,
-      meeting_link: event.meeting_link,
-      description: event.description,
-      recurrence_rule: event.recurrence_rule,
-    };
-
-    // For recurring event occurrences, only move this single occurrence
-    const eventPayload: Record<string, unknown> = { ...eventData };
-    if (event.is_recurring && event.occurrence_date) {
-      eventPayload.editScope = 'this_only';
-      // Normalised, not passed through: `occurrence_date` arrives as a real
-      // Date over single fetch, and this only survived `JSON.stringify` because
-      // Date has a `toJSON`. The edit modal already sends an ISO string here,
-      // so the action sees one shape either way.
-      eventPayload.occurrenceDate = new Date(event.occurrence_date).toISOString();
-    }
+    // Times only, and a recurring occurrence on its own (see buildMovePayload).
+    const eventPayload = buildMovePayload(event, newStartTime, newEndTime);
 
     const formData = new FormData();
     formData.append('intent', 'update');

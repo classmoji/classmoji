@@ -7,9 +7,14 @@
  *     the action answers 404 and audits nothing (nothing was written). Its
  *     `conflict` code (another save of the same material committed first, and
  *     this one was rolled back) answers 409 with its own copy.
- *   - A save that leaves the quiz PUBLISHED while every linked document is
- *     still a draft succeeds WITH a warning: students cannot start it yet.
- *     Saving is allowed; the warning is the whole intervention.
+ *   - A save that leaves the quiz PUBLISHED (its assignment published) while
+ *     every linked document is still a draft succeeds WITH a warning: students
+ *     cannot start it yet. Saving is allowed; the warning is the whole
+ *     intervention.
+ *   - An assignment write the service cannot make (no module, a module of
+ *     another class, a value out of range) comes back as a
+ *     QuizAssignmentError; the action answers with its message at its status
+ *     and audits nothing.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -289,11 +294,11 @@ describe('the all-drafts publish warning', () => {
     expect(body).not.toHaveProperty('warning');
   });
 
-  it('updateQuiz to PUBLISHED reads the material AFTER the write and warns', async () => {
+  it('updateQuiz that publishes the assignment reads the material AFTER the write and warns', async () => {
     const { body } = await submit({
       _action: 'updateQuiz',
       id: 'quiz-1',
-      status: 'PUBLISHED',
+      assignment: { moduleId: 'mod-1', isPublished: true },
       sourceMaterial: [{ kind: 'page', id: 'p1' }],
     });
 
@@ -306,22 +311,165 @@ describe('the all-drafts publish warning', () => {
   });
 
   it('updateQuiz that leaves the quiz a draft: no warning, no extra read', async () => {
-    const { body } = await submit({ _action: 'updateQuiz', id: 'quiz-1', status: 'DRAFT' });
+    const { body } = await submit({
+      _action: 'updateQuiz',
+      id: 'quiz-1',
+      assignment: { moduleId: 'mod-1', isPublished: false },
+    });
 
     expect(body).toEqual({ success: 'Quiz updated successfully' });
     expect(mocks.findById).toHaveBeenCalledTimes(1);
   });
 
-  it('createQuiz straight to PUBLISHED warns the same way', async () => {
-    mocks.create.mockResolvedValue({ id: 'quiz-1', name: 'Q', status: 'PUBLISHED' });
+  it('updateQuiz that leaves the assignment alone: no warning, no extra read', async () => {
+    const { body } = await submit({ _action: 'updateQuiz', id: 'quiz-1', name: 'Renamed' });
+
+    expect(body).toEqual({ success: 'Quiz updated successfully' });
+    expect(mocks.findById).toHaveBeenCalledTimes(1);
+  });
+
+  it('createQuiz straight to published warns the same way', async () => {
+    mocks.create.mockResolvedValue({
+      id: 'quiz-1',
+      name: 'Q',
+      assignment: { module_id: 'mod-1', is_published: true },
+    });
 
     const { body } = await submit({
       _action: 'createQuiz',
       name: 'Q',
       rubricPrompt: 'r',
-      status: 'PUBLISHED',
+      assignment: { moduleId: 'mod-1', isPublished: true },
     });
 
     expect(body).toMatchObject({ quizId: 'quiz-1', warning: WARNING });
+  });
+
+  it('createQuiz as a draft: no warning, no read', async () => {
+    mocks.create.mockResolvedValue({
+      id: 'quiz-1',
+      name: 'Q',
+      assignment: { module_id: 'mod-1', is_published: false },
+    });
+
+    const { body } = await submit({
+      _action: 'createQuiz',
+      name: 'Q',
+      rubricPrompt: 'r',
+      assignment: { moduleId: 'mod-1', isPublished: false },
+    });
+
+    expect(body).toEqual({ success: 'Quiz created successfully', quizId: 'quiz-1' });
+    expect(mocks.findById).not.toHaveBeenCalled();
+  });
+});
+
+describe('a refused assignment write', () => {
+  const assignmentRefusal = (message: string, code: string, status?: number) =>
+    Object.assign(new Error(message), {
+      name: 'QuizAssignmentError',
+      code,
+      ...(status === undefined ? {} : { status }),
+    });
+
+  it('createQuiz without a module answers 400 with the reason, auditing nothing', async () => {
+    mocks.create.mockRejectedValue(
+      assignmentRefusal('Choose a module for this quiz', 'module_required', 400)
+    );
+
+    const { status, body } = await submit({ _action: 'createQuiz', name: 'Q', rubricPrompt: 'r' });
+
+    expect(status).toBe(400);
+    expect(body).toEqual({ error: 'Choose a module for this quiz' });
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('createQuiz passes the panel to the service with the authorized classroom', async () => {
+    mocks.create.mockResolvedValue({ id: 'quiz-new', name: 'Q', assignment: null });
+    const assignment = {
+      moduleId: 'mod-1',
+      releaseAt: null,
+      dueDate: '2026-10-09T16:00:00.000Z',
+      closesAt: null,
+      weight: 10,
+      isPublished: false,
+    };
+
+    await submit({ _action: 'createQuiz', name: 'Q', rubricPrompt: 'r', assignment });
+
+    expect(mocks.create.mock.calls[0][0]).toMatchObject({ classroomId: 'class-1', assignment });
+  });
+
+  it('updateQuiz to a module of another class answers at the status the service gives', async () => {
+    mocks.update.mockRejectedValue(
+      assignmentRefusal('Module not found in this classroom', 'module_not_found', 404)
+    );
+
+    const { status, body } = await submit({
+      _action: 'updateQuiz',
+      id: 'quiz-1',
+      assignment: { moduleId: 'mod-elsewhere' },
+    });
+
+    expect(status).toBe(404);
+    expect(body).toEqual({ error: 'Module not found in this classroom' });
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('answers 400 when the refusal carries no status', async () => {
+    mocks.update.mockRejectedValue(assignmentRefusal('Weight must be 0 or more', 'invalid_value'));
+
+    const { status, body } = await submit({
+      _action: 'updateQuiz',
+      id: 'quiz-1',
+      assignment: { moduleId: 'mod-1', weight: -1 },
+    });
+
+    expect(status).toBe(400);
+    expect(body).toEqual({ error: 'Weight must be 0 or more' });
+  });
+
+  it('publishQuiz without a module answers with the reason, auditing nothing', async () => {
+    mocks.publish.mockRejectedValue(
+      assignmentRefusal('Choose a module for this quiz', 'module_required', 400)
+    );
+
+    const { status, body } = await submit({ _action: 'publishQuiz', id: 'quiz-1' });
+
+    expect(status).toBe(400);
+    expect(body).toEqual({ error: 'Choose a module for this quiz' });
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('updateWeight answers the same way', async () => {
+    mocks.update.mockRejectedValue(assignmentRefusal('Weight must be 0 or more', 'invalid_value'));
+
+    const { status, body } = await submit({ _action: 'updateWeight', id: 'quiz-1', weight: -5 });
+
+    expect(status).toBe(400);
+    expect(body).toEqual({ error: 'Weight must be 0 or more' });
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+});
+
+describe('closing a draft quiz', () => {
+  it('answers the refusal with 400 and its message, auditing nothing', async () => {
+    mocks.update.mockRejectedValue(
+      Object.assign(new Error('Publish the quiz before closing it'), {
+        name: 'QuizStatusChangeError',
+        code: 'invalid_status_change',
+        status: 400,
+      })
+    );
+
+    const { status, body } = await submit({
+      _action: 'updateQuiz',
+      id: 'quiz-1',
+      status: 'CLOSED',
+    });
+
+    expect(status).toBe(400);
+    expect(body).toEqual({ error: 'Publish the quiz before closing it' });
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 });
