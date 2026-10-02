@@ -23,6 +23,7 @@ const SOURCE = {
   subject: 'recursion',
   include_code_context: true,
   course_search_enabled: true,
+  excluded_paths: ['tests/**', '**/*.spec.js'],
   grading_strategy: 'HIGHEST',
   max_attempts: 2,
   status: 'PUBLISHED',
@@ -53,6 +54,15 @@ describe('cloneQuiz', () => {
       status: 'DRAFT',
       due_date: null,
     });
+  });
+
+  it("carries the source's paths to exclude into the clone", async () => {
+    const tx = makeTx();
+    await cloneQuiz('quiz-src', 'classroom-dst', 'repo-dst', {}, tx as never);
+    expect(tx.quiz.create.mock.calls[0][0].data.excluded_paths).toEqual([
+      'tests/**',
+      '**/*.spec.js',
+    ]);
   });
 
   it('keeps course search off when the source has it off', async () => {

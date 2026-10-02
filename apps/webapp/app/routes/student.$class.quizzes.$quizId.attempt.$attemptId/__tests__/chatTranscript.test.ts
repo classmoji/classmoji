@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const quizFindByIdMock = vi.fn();
 const findWithMessagesMock = vi.fn();
 const loadTranscriptMock = vi.fn();
+const messageLimitMock = vi.fn();
 const assertAccessMock = vi.fn();
 const quizzesVisibleMock = vi.fn();
 
@@ -20,7 +21,10 @@ vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     quiz: { findById: (...a: unknown[]) => quizFindByIdMock(...a) },
     quizAttempt: { findWithMessages: (...a: unknown[]) => findWithMessagesMock(...a) },
-    quizChat: { loadTranscriptForViewer: (...a: unknown[]) => loadTranscriptMock(...a) },
+    quizChat: {
+      loadTranscriptForViewer: (...a: unknown[]) => loadTranscriptMock(...a),
+      messageLimitOf: (...a: unknown[]) => messageLimitMock(...a),
+    },
   },
   QuizAttemptNotFoundError: class QuizAttemptNotFoundError extends Error {},
 }));
@@ -92,6 +96,7 @@ beforeEach(() => {
   quizzesVisibleMock.mockResolvedValue(true);
   quizFindByIdMock.mockResolvedValue(QUIZ);
   loadTranscriptMock.mockResolvedValue(PROJECTED);
+  messageLimitMock.mockResolvedValue({ messagesLeft: 200, endedBy: null });
 });
 
 describe('attempt loader — chat-runtime attempts', () => {
@@ -104,7 +109,7 @@ describe('attempt loader — chat-runtime attempts', () => {
 
     const data = await load();
 
-    expect(loadTranscriptMock).toHaveBeenCalledWith('attempt-1');
+    expect(loadTranscriptMock).toHaveBeenCalledWith('attempt-1', 'student');
     expect(data.transcript).toEqual(PROJECTED);
     expect(data.messages).toEqual([]);
     expect(data.viewerOwnsAttempt).toBe(true);
@@ -112,7 +117,62 @@ describe('attempt loader — chat-runtime attempts', () => {
     expect(JSON.stringify(data)).not.toContain('ready. Begin');
   });
 
-  it("serves staff reading a student's chat attempt the same transcript, not as owner", async () => {
+  it("says whether the chat's opening was admitted, as a flag and nothing more", async () => {
+    signInAs('student-1', 'STUDENT');
+    // Only the hidden opening is stored: its reply is still being written.
+    findWithMessagesMock.mockResolvedValue({
+      attempt: attemptOf('student-1', 'trigger_chat'),
+      messages: [RAW_ROWS[0]],
+    });
+    loadTranscriptMock.mockResolvedValue([]);
+
+    const started = await load();
+    expect(started.chatStarted).toBe(true);
+    expect(started.transcript).toEqual([]);
+    expect(started.messages).toEqual([]);
+    expect(JSON.stringify(started)).not.toContain('ready. Begin');
+
+    findWithMessagesMock.mockResolvedValue({
+      attempt: attemptOf('student-1', 'trigger_chat'),
+      messages: [],
+    });
+    expect((await load()).chatStarted).toBe(false);
+
+    // Never for an ai-agent attempt, whose drawer is the legacy one.
+    findWithMessagesMock.mockResolvedValue({ attempt: attemptOf('student-1'), messages: RAW_ROWS });
+    expect((await load()).chatStarted).toBe(false);
+  });
+
+  it('says when the chat last admitted a turn, as server timestamps and nothing more', async () => {
+    signInAs('student-1', 'STUDENT');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-30T12:05:00Z'));
+    try {
+      findWithMessagesMock.mockResolvedValue({
+        attempt: {
+          ...attemptOf('student-1', 'trigger_chat'),
+          last_activity: new Date('2026-09-30T12:00:00Z'),
+        },
+        messages: [RAW_ROWS[0]],
+      });
+      loadTranscriptMock.mockResolvedValue([]);
+      expect((await load()).chatActivity).toEqual({
+        lastAt: '2026-09-30T12:00:00.000Z',
+        readAt: '2026-09-30T12:05:00.000Z',
+      });
+
+      // None for an ai-agent attempt.
+      findWithMessagesMock.mockResolvedValue({
+        attempt: { ...attemptOf('student-1'), last_activity: new Date('2026-09-30T12:00:00Z') },
+        messages: RAW_ROWS,
+      });
+      expect((await load()).chatActivity).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("serves staff reading a student's chat attempt the staff transcript, not as owner", async () => {
     signInAs('assistant-1', 'ASSISTANT');
     findWithMessagesMock.mockResolvedValue({
       attempt: attemptOf('student-1', 'trigger_chat'),
@@ -121,8 +181,22 @@ describe('attempt loader — chat-runtime attempts', () => {
 
     const data = await load();
 
+    expect(loadTranscriptMock).toHaveBeenCalledWith('attempt-1', 'staff');
     expect(data.transcript).toEqual(PROJECTED);
     expect(data.viewerOwnsAttempt).toBe(false);
+  });
+
+  it("serves staff their own chat attempt as a student's transcript", async () => {
+    signInAs('teacher-1', 'TEACHER');
+    findWithMessagesMock.mockResolvedValue({
+      attempt: attemptOf('teacher-1', 'trigger_chat'),
+      messages: RAW_ROWS,
+    });
+
+    const data = await load();
+
+    expect(loadTranscriptMock).toHaveBeenCalledWith('attempt-1', 'student');
+    expect(data.viewerOwnsAttempt).toBe(true);
   });
 
   it('serves an ai-agent attempt exactly as before', async () => {
@@ -134,5 +208,36 @@ describe('attempt loader — chat-runtime attempts', () => {
     expect(loadTranscriptMock).not.toHaveBeenCalled();
     expect(data.messages).toEqual(RAW_ROWS);
     expect(data.transcript).toBeNull();
+  });
+
+  it('says how many messages an open chat attempt admits, and how a completed one ended', async () => {
+    signInAs('student-1', 'STUDENT');
+    findWithMessagesMock.mockResolvedValue({
+      attempt: attemptOf('student-1', 'trigger_chat'),
+      messages: RAW_ROWS,
+    });
+    messageLimitMock.mockResolvedValue({ messagesLeft: 12, endedBy: null });
+    const open = await load();
+    expect(messageLimitMock).toHaveBeenCalledWith('attempt-1');
+    expect(open.messagesLeft).toBe(12);
+    expect(open.attempt.ended_by).toBeNull();
+
+    // Submitted at the limit: the results say so, and there is nothing left to count.
+    findWithMessagesMock.mockResolvedValue({
+      attempt: { ...attemptOf('student-1', 'trigger_chat'), completed_at: new Date() },
+      messages: RAW_ROWS,
+    });
+    messageLimitMock.mockResolvedValue({ messagesLeft: 0, endedBy: 'turn_limit' });
+    const ended = await load();
+    expect(ended.attempt.ended_by).toBe('turn_limit');
+    expect(ended.messagesLeft).toBeNull();
+
+    // Never for an ai-agent attempt.
+    messageLimitMock.mockClear();
+    findWithMessagesMock.mockResolvedValue({ attempt: attemptOf('student-1'), messages: RAW_ROWS });
+    const legacy = await load();
+    expect(messageLimitMock).not.toHaveBeenCalled();
+    expect(legacy.messagesLeft).toBeNull();
+    expect(legacy.attempt.ended_by).toBeNull();
   });
 });

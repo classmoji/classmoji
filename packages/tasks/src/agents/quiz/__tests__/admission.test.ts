@@ -135,6 +135,31 @@ describe('admitTurn', () => {
     });
   });
 
+  it("keeps admission's count of the messages left for run(), and none for begin", async () => {
+    const d = deps({
+      admitStudentMessage: vi.fn(async () => ({
+        status: 'admitted' as const,
+        fence: 'fence-1',
+        inputMessageId: 'msg_1',
+        messagesLeft: 0,
+      })),
+    });
+    await admitTurn(
+      'attempt-1',
+      { trigger: 'submit-message', incomingMessages: [userMessage()] },
+      'run_1',
+      d
+    );
+    expect(currentAdmission('attempt-1')).toEqual({
+      fence: 'fence-1',
+      inputMessageId: 'msg_1',
+      runId: 'run_1',
+      messagesLeft: 0,
+    });
+    await admitTurn('attempt-1', { trigger: 'action', incomingMessages: [] }, 'run_1', d);
+    expect(currentAdmission('attempt-1')).not.toHaveProperty('messagesLeft');
+  });
+
   it('admits the begin action with a fence and no message id', async () => {
     const d = deps();
     await admitTurn('attempt-1', { trigger: 'action', incomingMessages: [] }, 'run_1', d);

@@ -11,7 +11,9 @@
  *    - While viewing as another user, "the user" is that user: only their own
  *      attempts are reachable
  *    - restartQuiz: Ends the prior ai-agent session only when the named attempt
- *      is the caller's own attempt on the quiz being restarted
+ *      is the caller's own attempt on the quiz being restarted, and stores a
+ *      staff preview's repository only when the caller's own GitHub account
+ *      can open it
  * 4. Audit Logging: All unauthorized access attempts are logged
  * 5. Admin Access: Admins preview quizzes as themselves, creating their own attempts
  *    - This ensures data isolation between admin previews and student attempts
@@ -171,6 +173,40 @@ const isAttemptNotFinished = (error: unknown) =>
 const GENERIC_FAILURE_MESSAGE = 'Something went wrong. Please try again.';
 const REPLY_FAILED_MESSAGE = "That reply couldn't be finished. Please send your message again.";
 const RESTART_FAILED_MESSAGE = "Couldn't start a new attempt. Please try again.";
+
+/**
+ * A staff preview's repository refused (see previewRepoAccess.server): fixed
+ * copy by outcome, shown as-is by the preview page (it reads `message`). No
+ * usable GitHub token splits in two: an account with no GitHub linked (signed
+ * up with email and password) connects one; a linked account whose token
+ * GitHub no longer takes signs in with GitHub again.
+ */
+const PREVIEW_REPO_REFUSALS = {
+  unreadable: {
+    status: 403,
+    message: "Your GitHub account can't open that repository. Pick one you have access to.",
+  },
+  connect: {
+    status: 403,
+    message: 'Connect your GitHub account to preview this quiz with a repository.',
+  },
+  sign_in: {
+    status: 403,
+    message: 'Sign in with GitHub again to preview this quiz with a repository.',
+  },
+  unavailable: {
+    status: 503,
+    message: "Couldn't check that repository on GitHub. Please try again.",
+  },
+} as const;
+
+const previewRepoRefusal = (outcome: keyof typeof PREVIEW_REPO_REFUSALS) => {
+  const { status, message } = PREVIEW_REPO_REFUSALS[outcome];
+  return new Response(JSON.stringify({ success: false, code: 'PREVIEW_REPO_REFUSED', message }), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+};
 
 /**
  * ai-agent codes whose text is fixed copy meant for the student (see
@@ -763,16 +799,12 @@ export async function action({ request }: Route.ActionArgs) {
 
                 let repoName: string;
 
-                if (isInstructor && data.repoName) {
-                  // Instructor provided a repo to test with - save it for future calls
-                  repoName = data.repoName;
-                  // Store in agent_config so subsequent calls can use it
-                  await ClassmojiService.quizAttempt.updateAgentConfig(attempt.id, {
-                    instructorRepoName: repoName,
-                  });
-                } else if (isInstructor) {
-                  // Re-fetch the attempt to get the latest agent_config
-                  // (may have been updated by a concurrent call that saved instructorRepoName)
+                if (isInstructor) {
+                  // A preview reads only the repository restartQuiz stored
+                  // for it, once the caller's own GitHub account could open
+                  // it (previewRepoAccess.server). A name sent with the start
+                  // itself is never taken. Re-fetched for the latest
+                  // agent_config.
                   const freshAttempt = await ClassmojiService.quizAttempt.findById(attempt.id);
                   const agentConfig = (freshAttempt as Record<string, unknown>)?.agent_config as
                     | Record<string, unknown>
@@ -1470,6 +1502,34 @@ export async function action({ request }: Route.ActionArgs) {
 
           const agentRuntime = runtimeFor(context.quiz);
 
+          // A teaching-team preview of a code-aware quiz names the repository
+          // to test with (OWNER, TEACHER and ASSISTANT only, as in startQuiz).
+          // The chat runtime explores it with the GitHub App's installation
+          // token, which reaches every repository the app is installed on, so
+          // the name is taken only when the caller's own GitHub account can
+          // open it: a preview reads what that person can read, as the legacy
+          // start (which read it with their own token) did. Checked before
+          // anything changes, so a refusal ends no session and creates no
+          // attempt. The owner is the classroom's organization, never input.
+          const isInstructor = ['OWNER', 'ASSISTANT', 'TEACHER'].includes(access.membership!.role);
+          const previewRepo =
+            isInstructor && typeof data.repoName === 'string' && data.repoName
+              ? data.repoName
+              : null;
+          if (previewRepo) {
+            const { previewRepoAccess } = await import('./previewRepoAccess.server');
+            const repoAccess = await previewRepoAccess({
+              token: authData?.token,
+              owner: access.classroom.git_organization?.login,
+              repo: previewRepo,
+            });
+            if (repoAccess === 'sign_in' && !authData?.userLogin) {
+              // No GitHub account linked to this sign-in at all.
+              return previewRepoRefusal('connect');
+            }
+            if (repoAccess !== 'readable') return previewRepoRefusal(repoAccess);
+          }
+
           // Cleanup via ai-agent service BEFORE creating new attempt.
           // The attempt created below is the caller's own, so the only session
           // worth ending is the caller's own attempt on this same quiz. An id
@@ -1517,13 +1577,11 @@ export async function action({ request }: Route.ActionArgs) {
             });
           }
 
-          // A teaching-team preview of a code-aware quiz names the repository
-          // to test with; save it to agent_config so the auto-start uses it.
-          // Taken from OWNER, TEACHER and ASSISTANT only, as in startQuiz.
-          const isInstructor = ['OWNER', 'ASSISTANT', 'TEACHER'].includes(access.membership!.role);
-          if (isInstructor && typeof data.repoName === 'string' && data.repoName) {
+          // The preview's repository, checked above: saved to agent_config so
+          // the auto-start uses it.
+          if (previewRepo) {
             await ClassmojiService.quizAttempt.updateAgentConfig(result.attemptId!, {
-              instructorRepoName: data.repoName,
+              instructorRepoName: previewRepo,
             });
           }
 

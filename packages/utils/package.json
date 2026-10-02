@@ -16,6 +16,9 @@
     "./upload-limit": "./src/uploadLimit.ts",
     "./upload-concurrency": "./src/uploadConcurrency.ts",
     "./quiz-agent": "./src/quizAgent/index.ts",
+    "./quiz-agent/limits": "./src/quizAgent/limits.ts",
+    "./quiz-agent/copy": "./src/quizAgent/copy.ts",
+    "./quiz-excluded-paths": "./src/quizExcludedPaths.ts",
     "./agents/projection": "./src/agents/projection.ts",
     "./ai-models": "./src/aiModels.ts"
   },

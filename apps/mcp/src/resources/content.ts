@@ -227,6 +227,7 @@ interface QuizRow {
   grading_strategy: string;
   include_code_context: boolean;
   course_search_enabled?: boolean;
+  excluded_paths?: string[];
   repository_id?: string | null;
   source_material?: Array<{
     kind: string;
@@ -334,6 +335,8 @@ export const quizzesResource: ResourceDefinition = {
         difficulty_level: q.difficulty_level ?? null,
         system_prompt: q.system_prompt ?? null,
         rubric_prompt: q.rubric_prompt ?? null,
+        // Staff only, like the prompts: quiz configuration.
+        excluded_paths: q.excluded_paths ?? [],
         attempts_count: q.attemptsCount ?? 0,
         avg_score: q.avgScore ?? null,
       })),

@@ -19,6 +19,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
+import { MAX_STUDENT_TURNS } from '@classmoji/utils/quiz-agent/limits';
 import type { ToolContext } from '../../mcp/registry.ts';
 
 const mocks = vi.hoisted(() => ({
@@ -267,6 +268,125 @@ describe('course_search_enabled (quiz source material, Stage 2 tier)', () => {
       expect(new TextEncoder().encode(tool.description).length, tool.name).toBeLessThan(1500);
     }
     expect(quizCreateTool.description).toContain('resource_link_add');
+  });
+
+  it('states the per-attempt message limit from the shared constant', () => {
+    expect(MAX_STUDENT_TURNS).toBe(200);
+    for (const tool of [quizCreateTool, quizUpdateTool]) {
+      expect(tool.description, tool.name).toContain(
+        `Students can send up to ${MAX_STUDENT_TURNS} messages per attempt; at ` +
+          `${MAX_STUDENT_TURNS} the attempt is submitted and unanswered questions count as skipped.`
+      );
+    }
+  });
+});
+
+describe('excluded_paths (code-aware quizzes)', () => {
+  it('quiz_create forwards the list trimmed, repeats dropped, and echoes it', async () => {
+    mocks.quizCreate.mockResolvedValue({
+      ...QUIZ_ROW,
+      excluded_paths: ['tests/**', '**/*.spec.js'],
+    });
+
+    const payload = parse(
+      await quizCreateTool.handler(
+        {
+          classroom: 'org/w26',
+          name: 'Q',
+          rubric_prompt: 'r',
+          include_code_context: true,
+          excluded_paths: [' tests/** ', '**/*.spec.js', 'tests/**'],
+        },
+        CTX
+      )
+    );
+
+    expect(mocks.quizCreate.mock.calls[0][0]).toMatchObject({
+      excludedPaths: ['tests/**', '**/*.spec.js'],
+    });
+    expect(payload.quiz.excluded_paths).toEqual(['tests/**', '**/*.spec.js']);
+  });
+
+  it('quiz_create leaves it out when not given, and the summary reports none', async () => {
+    mocks.quizCreate.mockResolvedValue(QUIZ_ROW);
+
+    const payload = parse(
+      await quizCreateTool.handler({ classroom: 'org/w26', name: 'Q', rubric_prompt: 'r' }, CTX)
+    );
+
+    expect(mocks.quizCreate.mock.calls[0][0]).not.toHaveProperty('excludedPaths');
+    expect(payload.quiz.excluded_paths).toEqual([]);
+  });
+
+  it.each([
+    [['/etc/**'], 'is an absolute path'],
+    [['../other/**'], 'uses ".."'],
+    [[''], 'cannot be empty'],
+    [['!tests/**'], 'starts with "!"'],
+  ])('quiz_create refuses %j before writing, with the form’s reason', async (paths, reason) => {
+    const error = await quizCreateTool
+      .handler({ classroom: 'org/w26', name: 'Q', rubric_prompt: 'r', excluded_paths: paths }, CTX)
+      .catch((e: unknown) => e);
+
+    expect(error).toMatchObject({ kind: 'invalid_params' });
+    expect((error as Error).message).toContain('excluded_paths: ');
+    expect((error as Error).message).toContain(reason);
+    expect(mocks.quizCreate).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('quiz_update maps it alone as a field and audits the field name', async () => {
+    mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
+    mocks.quizUpdate.mockResolvedValue({ ...QUIZ_ROW, excluded_paths: ['e2e/'] });
+
+    const payload = parse(
+      await quizUpdateTool.handler(
+        { classroom: 'org/w26', quiz_id: 'quiz-1', excluded_paths: [' e2e/ '] },
+        CTX
+      )
+    );
+
+    expect(mocks.quizUpdate.mock.calls[0][1]).toEqual({ excludedPaths: ['e2e/'] });
+    expect(payload.quiz.excluded_paths).toEqual(['e2e/']);
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: { fields: string[] } };
+    expect(audit.data.fields).toEqual(['excluded_paths']);
+  });
+
+  it('quiz_update clears the list with []', async () => {
+    mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
+    mocks.quizUpdate.mockResolvedValue(QUIZ_ROW);
+
+    await quizUpdateTool.handler(
+      { classroom: 'org/w26', quiz_id: 'quiz-1', excluded_paths: [] },
+      CTX
+    );
+
+    expect(mocks.quizUpdate.mock.calls[0][1]).toEqual({ excludedPaths: [] });
+  });
+
+  it('quiz_update refuses a bad pattern before reading the quiz', async () => {
+    await expect(
+      quizUpdateTool.handler(
+        { classroom: 'org/w26', quiz_id: 'quiz-1', excluded_paths: ['C:\\repo\\tests'] },
+        CTX
+      )
+    ).rejects.toMatchObject({ kind: 'invalid_params' });
+    expect(mocks.quizFindById).not.toHaveBeenCalled();
+    expect(mocks.quizUpdate).not.toHaveBeenCalled();
+  });
+
+  it('is a list of at most 50 strings of at most 200 characters in both schemas', () => {
+    for (const tool of [quizCreateTool, quizUpdateTool]) {
+      const field = tool.inputSchema.excluded_paths as z.ZodTypeAny;
+      expect(field, tool.name).toBeDefined();
+      expect(field.safeParse(undefined).success).toBe(true);
+      expect(field.safeParse(['tests/**', '**/*.spec.js']).success).toBe(true);
+      expect(field.safeParse([]).success).toBe(true);
+      expect(field.safeParse('tests/**').success).toBe(false);
+      expect(field.safeParse([3]).success).toBe(false);
+      expect(field.safeParse(['a'.repeat(201)]).success).toBe(false);
+      expect(field.safeParse(Array.from({ length: 51 }, (_, i) => `d${i}/**`)).success).toBe(false);
+    }
   });
 });
 

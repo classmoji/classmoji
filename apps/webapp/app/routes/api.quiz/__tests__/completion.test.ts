@@ -97,6 +97,14 @@ vi.mock('@classmoji/auth/mcp-token', () => ({
   })),
 }));
 
+// GitHub, for a preview's repository: the caller's own account opens it
+// (previewRepoAccess.test.ts covers the refusals).
+vi.mock('@octokit/rest', () => ({
+  Octokit: class {
+    rest = { repos: { get: vi.fn(async () => ({ status: 200, data: {} })) } };
+  },
+}));
+
 const { action } = await import('../route.ts');
 
 const QUIZ_ID = 'quiz-1';
@@ -399,6 +407,18 @@ describe('api.quiz restartQuiz — the preview repository', () => {
     'saves the repository a %s names for a preview',
     async role => {
       signInAs('staff-1', { role });
+      // A repository their own GitHub account can open, in the class's org.
+      assertAccessMock.mockResolvedValue({
+        userId: 'staff-1',
+        classroom: {
+          id: 'class-1',
+          status: 'ACTIVE',
+          slug: 'test-class',
+          git_organization: { login: 'test-org' },
+        },
+        membership: { role },
+      });
+      getAuthSessionMock.mockResolvedValue({ userId: 'staff-1', token: 'ghu_staff', session: {} });
 
       const response = await post({
         _action: 'restartQuiz',

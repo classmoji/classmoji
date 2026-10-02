@@ -50,6 +50,7 @@ vi.mock('../contentManifest.service.ts', () => ({
 vi.mock('../notification.service.ts', () => ({}));
 
 const quizService = await import('../quiz.service.ts');
+const { QuizExcludedPathsError } = quizService;
 const { ResourceLinkServiceError } = await import('../resourceLink.service.ts');
 
 const CLASSROOM = 'classroom-1';
@@ -214,6 +215,72 @@ describe('quiz.update', () => {
     ).rejects.toBeInstanceOf(ResourceLinkServiceError);
     expect(tx.slideLink.deleteMany).not.toHaveBeenCalled();
     expect(saveManifest).not.toHaveBeenCalled();
+  });
+});
+
+describe('quiz excluded paths', () => {
+  it('create stores them trimmed, repeats dropped', async () => {
+    await quizService.create({
+      name: 'Q',
+      classroomId: CLASSROOM,
+      rubricPrompt: 'r',
+      includeCodeContext: true,
+      excludedPaths: [' tests/** ', '**/*.spec.js', 'tests/**'],
+    });
+    expect(tx.quiz.create.mock.calls[0][0].data).toMatchObject({
+      include_code_context: true,
+      excluded_paths: ['tests/**', '**/*.spec.js'],
+    });
+  });
+
+  it('create leaves them to the column default when none are given', async () => {
+    await quizService.create({ name: 'Q', classroomId: CLASSROOM, rubricPrompt: 'r' });
+    expect(tx.quiz.create.mock.calls[0][0].data).not.toHaveProperty('excluded_paths');
+  });
+
+  it('create refuses a bad pattern before anything is written', async () => {
+    const error = await quizService
+      .create({
+        name: 'Q',
+        classroomId: CLASSROOM,
+        rubricPrompt: 'r',
+        excludedPaths: ['tests/**', '../outside/**'],
+      })
+      .catch(e => e);
+    expect(error).toBeInstanceOf(QuizExcludedPathsError);
+    expect(error).toMatchObject({ status: 400, code: 'invalid_excluded_paths' });
+    expect(error.message).toBe(
+      '"../outside/**" uses "..". Paths to exclude stay inside the repository.'
+    );
+    expect(transaction).not.toHaveBeenCalled();
+    expect(tx.quiz.create).not.toHaveBeenCalled();
+  });
+
+  it('update sets them only when given; an empty list clears them', async () => {
+    await quizService.update('quiz-1', { excludedPaths: ['playwright.config.*'] });
+    expect(tx.quiz.update.mock.calls[0][0].data).toEqual({
+      excluded_paths: ['playwright.config.*'],
+    });
+
+    await quizService.update('quiz-1', { excludedPaths: [] });
+    expect(tx.quiz.update.mock.calls[1][0].data).toEqual({ excluded_paths: [] });
+
+    await quizService.update('quiz-1', { weight: 5 });
+    expect(tx.quiz.update.mock.calls[2][0].data).toEqual({ weight: 5 });
+  });
+
+  it('update refuses a bad list (absolute, too many, not a list) without writing', async () => {
+    for (const excludedPaths of [
+      ['/etc/**'],
+      Array.from({ length: 51 }, (_, i) => `d${i}/**`),
+      'tests/**' as unknown as string[],
+    ]) {
+      await expect(quizService.update('quiz-1', { excludedPaths })).rejects.toBeInstanceOf(
+        QuizExcludedPathsError
+      );
+    }
+    expect(transaction).not.toHaveBeenCalled();
+    expect(tx.quiz.update).not.toHaveBeenCalled();
   });
 });
 

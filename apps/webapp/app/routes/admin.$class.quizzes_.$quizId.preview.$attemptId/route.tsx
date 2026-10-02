@@ -5,7 +5,7 @@ import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { QuizAttemptInterface } from '~/components';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
-import { attemptDrawerView, quizDrawerView } from '~/utils/quizPayloads';
+import { attemptDrawerView, chatActivityView, quizDrawerView } from '~/utils/quizPayloads';
 import { isTriggerChatAttempt } from '~/utils/quizRuntime.server';
 import type { Route } from './+types/route';
 
@@ -71,11 +71,19 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const readOnly = Boolean(attemptData.attempt.completed_at);
 
   // 7. A chat-runtime attempt's transcript, projected exactly as a student
-  // sees theirs (hidden rows and internal parts removed). Its raw rows are
-  // never sent. Step 4 already made the caller its owner.
+  // sees theirs (hidden rows and internal parts removed, and no
+  // `expected_answer`). Its raw rows are never sent. Step 4 already made the
+  // caller its owner, who drives its chat session.
   const isChatAttempt = isTriggerChatAttempt(attemptData.attempt);
   const transcript = isChatAttempt
-    ? await ClassmojiService.quizChat.loadTranscriptForViewer(attemptData.attempt.id)
+    ? await ClassmojiService.quizChat.loadTranscriptForViewer(attemptData.attempt.id, 'student')
+    : null;
+
+  // A chat attempt's message limit: the messages it still admits (the chat's
+  // countdown) and whether the server submitted it at the limit (the results
+  // say so).
+  const messageLimit = isChatAttempt
+    ? await ClassmojiService.quizChat.messageLimitOf(attemptData.attempt.id)
     : null;
 
   // Send only what the drawer and QuizAttemptInterface read — see
@@ -83,10 +91,20 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // its user, quiz and classroom; the quiz to every attempt and its user.
   return {
     quiz: quizDrawerView(quiz),
-    attempt: attemptDrawerView(attemptData.attempt),
+    attempt: attemptDrawerView(attemptData.attempt, {
+      endedBy: messageLimit?.endedBy ?? null,
+    }),
     // Use unified messages from getAttemptWithMessages (ai-agent owns persistence)
     messages: isChatAttempt ? [] : attemptData.messages || [],
     transcript,
+    // The opening was admitted (its hidden row is stored), even when its reply
+    // is not saved yet: a second tab joins it rather than beginning again.
+    chatStarted: isChatAttempt && (attemptData.messages?.length ?? 0) > 0,
+    // When the attempt last admitted a turn, as timestamps only: an opening
+    // admitted longer ago than a turn can run, with nothing saved, is lost.
+    chatActivity: isChatAttempt ? chatActivityView(attemptData.attempt) : null,
+    // How many more messages an open chat attempt admits: a count only.
+    messagesLeft: messageLimit && !readOnly ? messageLimit.messagesLeft : null,
     viewerOwnsAttempt: true,
     userLogin: attemptData.attempt.user?.login || null,
     userImage: attemptData.attempt.user?.image || null,

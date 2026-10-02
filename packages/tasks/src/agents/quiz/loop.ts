@@ -10,9 +10,15 @@
  *   then the per-attempt block); nothing that changes per turn goes there.
  *   A code-aware quiz whose repository was not found this turn gets a fixed
  *   hidden user-role notice after the history instead (never persisted).
+ * - Every server text in the user role (each stored status part, each notice)
+ *   is opened by the attempt's marker line (serverNotice.ts), added to the
+ *   request only, never stored.
  * - The opening turn (the `begin` action's) starts with the fixed welcome
  *   (`ctx.welcome`), written before the first model call and saved with the
  *   reply.
+ * - The reply to a student message opens with a transient
+ *   `data-messages-left` part: the messages the attempt still admits, as
+ *   admission counted them (`ctx.messagesLeft`). Never saved.
  * - `prepareStep` rebuilds each step's messages and moves one cache
  *   breakpoint to the last message, so an older breakpoint never piles up.
  * - Tool calls that failed in EARLIER turns are left out of the history
@@ -28,15 +34,26 @@
  * - After the stream ends, persisted state decides whether the evaluation is
  *   still owed (for a Next click, only when the last question was already out
  *   before the turn began); if so, up to two more calls carry the evaluation
- *   notice. If
- *   every result is recorded and the evaluation still did not arrive, the
- *   server completes the attempt from the recorded grades and writes a
- *   `data-evaluation` part. If the last result is missing, a `reply_failed`
- *   notice is written and the student's next message retries.
+ *   notice (none after a model error). If every result is recorded and the
+ *   evaluation still did not arrive, the server completes the attempt from the
+ *   recorded grades and writes a `data-evaluation` part, after a model error
+ *   too, since that needs no model. If the last result is missing, a
+ *   `reply_failed` notice is written and the student's next message retries.
+ * - A turn the student stops writes no notice; one that fails or runs out of
+ *   time writes one (the server's completion after a model error writes its
+ *   evaluation instead). The services tell a stopped reply from a failed one
+ *   by that alone: a stopped reply's text stays in the transcript and the
+ *   history, and a Try again whose reply has text counts as a hint
+ *   (`replyShowsHint`).
  * - Everything the model or the tools write is persisted in `onEnd`, upstream
  *   of the projection; the returned stream is projected for the browser. A
  *   failed save is tried once more (the save is an upsert by message id); a
  *   refusal is not retried. Each failure logs ids only.
+ * - The turn that answers the attempt's last admitted message
+ *   (`ctx.messagesLeft === 0`) submits the attempt in `onEnd`, after its reply
+ *   is saved, however the turn ended (`submitAtLimit`; the services leave an
+ *   attempt the turn already completed as it is). `onBeforeTurnComplete`
+ *   (agent.ts) then finds the attempt complete and closes the session.
  * - Telemetry is off on every call. One log line per model call: ids, model,
  *   key source, token and cache counts. Never content.
  */
@@ -63,6 +80,7 @@ import type {
 import { THINKING } from '@classmoji/utils/ai-models';
 import type { AttemptContext } from './context.ts';
 import { CODE_UNAVAILABLE_NOTICE } from './prompt/index.ts';
+import { markServerText, markStatusParts } from './serverNotice.ts';
 import type { Effort } from './settings.ts';
 import { isRefusal, logDiagnostic, type DiagnosticLog } from '../shared/sanitize.ts';
 import { createToolQueue, type ToolQueue } from '../shared/toolQueue.ts';
@@ -124,6 +142,13 @@ export type QuizTurnDeps = {
     o: { final: boolean }
   ) => Promise<void>;
   evaluationNotice: (p: AttemptProgress) => string;
+  /**
+   * Submits the attempt at the end of the turn that answered its last
+   * admitted message, after the reply is saved: the results recorded so far,
+   * every other question counted as skipped. Null when the services leave the
+   * attempt as it is (already complete, or a newer turn holds it).
+   */
+  submitAtLimit: (f: ServerCompletionFence) => Promise<QuizEvaluationRecordV2 | null>;
   /** Removes tool parts left without a result by a stopped or failed turn. */
   cleanupParts?: (m: QuizUIMessage) => QuizUIMessage;
   log?: DiagnosticLog;
@@ -363,9 +388,62 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
   const cleanup = deps.cleanupParts ?? dropIncompleteToolParts;
   let failed = false;
 
+  /** Save the reply, once more after a failure that is not a refusal. */
+  const persist = async (message: QuizUIMessage, final: boolean) => {
+    try {
+      await deps.persistAssistant(ctx.attemptId, message, { final });
+    } catch (error) {
+      logDiagnostic('persistAssistant', error, ids, log);
+      if (isRefusal(error)) return;
+      await new Promise(resolve => setTimeout(resolve, PERSIST_RETRY_DELAY_MS));
+      try {
+        await deps.persistAssistant(ctx.attemptId, message, { final });
+        log('[quiz-agent] persistAssistant retry saved', {
+          attemptId: ctx.attemptId,
+          runId: ctx.runId,
+        });
+      } catch (retryError) {
+        logDiagnostic('persistAssistant_retry', retryError, ids, log);
+      }
+    }
+  };
+
+  /**
+   * Submit the attempt at the message limit. A failure is logged (ids only)
+   * and never thrown out of the turn: the attempt stays open, and the next
+   * message completes it in admission.
+   */
+  const submitAtLimit = async () => {
+    try {
+      const record = await deps.submitAtLimit({
+        attemptId: ctx.attemptId,
+        fence: ctx.fence,
+        inputMessageId: ctx.inputMessageId,
+        runId: ctx.runId,
+      });
+      if (record) {
+        log('[quiz-agent] submitted at the message limit', {
+          attemptId: ctx.attemptId,
+          runId: ctx.runId,
+        });
+      }
+    } catch (error) {
+      logDiagnostic('submitAtLimit', error, ids, log);
+    }
+  };
+
   const stream = createUIMessageStream<QuizUIMessage>({
     execute: async ({ writer }) => {
       writer.write({ type: 'start', messageId });
+      // How many more messages the attempt admits, for the chat's countdown:
+      // transient, so it is never part of the saved reply.
+      if (typeof ctx.messagesLeft === 'number') {
+        writer.write({
+          type: 'data-messages-left',
+          data: { remaining: ctx.messagesLeft },
+          transient: true,
+        });
+      }
       let noticeWritten = false;
       const notice = (code: 'turn_stopped' | 'reply_failed' | 'source_material_unavailable') => {
         if (noticeWritten) return;
@@ -495,10 +573,10 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
         // A code-aware quiz without a repository this turn: a fixed hidden notice
         // after the student's message, never persisted.
         const codeNotice: ModelMessage[] = ctx.codeUnavailable
-          ? [{ role: 'user', content: CODE_UNAVAILABLE_NOTICE }]
+          ? [{ role: 'user', content: markServerText(ctx.attemptId, CODE_UNAVAILABLE_NOTICE) }]
           : [];
         let history: ModelMessage[] = [
-          ...withoutEarlierFailedToolCalls(input.messages),
+          ...markStatusParts(ctx.attemptId, withoutEarlierFailedToolCalls(input.messages)),
           ...(input.extraMessages ?? []),
           ...codeNotice,
         ];
@@ -512,7 +590,10 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
           history = [
             ...history,
             ...response,
-            { role: 'user', content: deps.evaluationNotice(progress) },
+            {
+              role: 'user',
+              content: markServerText(ctx.attemptId, deps.evaluationNotice(progress)),
+            },
           ];
           log('[quiz-agent] recovery call', {
             attemptId: ctx.attemptId,
@@ -523,7 +604,10 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
           await pump(result);
         }
 
-        if (!deadline.aborted && !sawStreamError) {
+        // Server completion needs no model, so a model error does not stop
+        // it: every result is recorded, and the evaluation is written from them.
+        let completedByServer = false;
+        if (!deadline.aborted) {
           const progress = await deps.getProgress(ctx.attemptId);
           if (needsEvaluation(progress, turnStart)) {
             if (allResultsFinalized(progress)) {
@@ -533,6 +617,7 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
                 inputMessageId: ctx.inputMessageId,
                 runId: ctx.runId,
               });
+              completedByServer = true;
               log('[quiz-agent] server completion', { attemptId: ctx.attemptId, runId: ctx.runId });
               writer.write({ type: 'data-evaluation', data: record });
             } else {
@@ -542,7 +627,8 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
         }
         if (sawStreamError && !deadline.aborted) {
           failed = true;
-          notice('reply_failed');
+          // A completed attempt takes no more messages: no "send it again".
+          if (!completedByServer) notice('reply_failed');
         }
       } catch (error) {
         failed = true;
@@ -562,24 +648,12 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
     },
     onEnd: async ({ responseMessage, isAborted }) => {
       const message = cleanup(responseMessage as QuizUIMessage);
-      if (!message.parts || message.parts.length === 0) return;
-      const final = !isAborted && !failed && !deadline.aborted;
-      try {
-        await deps.persistAssistant(ctx.attemptId, message, { final });
-      } catch (error) {
-        logDiagnostic('persistAssistant', error, ids, log);
-        if (isRefusal(error)) return;
-        await new Promise(resolve => setTimeout(resolve, PERSIST_RETRY_DELAY_MS));
-        try {
-          await deps.persistAssistant(ctx.attemptId, message, { final });
-          log('[quiz-agent] persistAssistant retry saved', {
-            attemptId: ctx.attemptId,
-            runId: ctx.runId,
-          });
-        } catch (retryError) {
-          logDiagnostic('persistAssistant_retry', retryError, ids, log);
-        }
+      if (message.parts && message.parts.length > 0) {
+        await persist(message, !isAborted && !failed && !deadline.aborted);
       }
+      // The attempt's last admitted message: with its reply saved, the attempt
+      // is submitted, whether the turn finished, failed or was stopped.
+      if (ctx.messagesLeft === 0) await submitAtLimit();
     },
   });
 

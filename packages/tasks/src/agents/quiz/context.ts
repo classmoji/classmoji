@@ -9,6 +9,7 @@ import getPrisma from '@classmoji/database';
 import { ClassmojiService, getGitProvider } from '@classmoji/services';
 import type { AttemptProgress } from '@classmoji/utils/quiz-agent';
 import { buildQuizPrompt, quizWelcome, usableMaterial } from './prompt/index.ts';
+import { serverNoticeMarker } from './serverNotice.ts';
 import { resolveQuizRunSettings, type Effort } from './settings.ts';
 
 export type GitOrgLike = Parameters<typeof getGitProvider>[0];
@@ -21,6 +22,8 @@ export type TurnAdmission = {
   runId: string;
   /** Set when the admitted text was one of the two button texts. */
   action?: 'next' | 'try_again';
+  /** The messages the attempt admits after the admitted one; absent for `begin`. */
+  messagesLeft?: number;
 };
 
 /**
@@ -49,6 +52,11 @@ export type AttemptContext = {
   inputMessageId: string | null;
   runId: string;
   lastAction?: 'next' | 'try_again';
+  /**
+   * The messages the attempt admits after this turn's student message, as
+   * admission counted them; absent for the `begin` action's turn.
+   */
+  messagesLeft?: number;
   model: string;
   questionEffort: Effort;
   gradingEffort: Effort;
@@ -60,6 +68,12 @@ export type AttemptContext = {
     owner: string;
     repo: string;
     gitOrganization: GitOrgLike;
+    /**
+     * The quiz's "Paths to exclude" (`quiz.excluded_paths`): .gitignore-style
+     * patterns whose files exploration never lists or reads and a code quote
+     * refuses. None when absent or empty. Read every turn.
+     */
+    excludedPaths?: string[];
   } | null;
   prompt: { staticPrompt: string; dynamicPrompt: string };
   progress: AttemptProgress;
@@ -93,7 +107,9 @@ type LoadedAttempt = NonNullable<Awaited<ReturnType<typeof ClassmojiService.quiz
 /**
  * The per-attempt parts that do not change between turns (prompt, repository,
  * material state), kept for the life of this process so a warm run builds the
- * cached prompt once and sends byte-identical system blocks every turn.
+ * cached prompt once and sends byte-identical system blocks every turn. The
+ * quiz's excluded paths are not among them: they are read from the attempt
+ * every turn, so an edit to the list applies from the next turn.
  */
 type StableParts = {
   prompt: { staticPrompt: string; dynamicPrompt: string };
@@ -140,6 +156,13 @@ export function contentScopeFor(o: {
       title: typeof doc.title === 'string' ? doc.title : '',
     })),
   };
+}
+
+/** The quiz's stored excluded paths, strings only (the column is `String[]`). */
+function storedExcludedPaths(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((p): p is string => typeof p === 'string' && p.trim() !== '')
+    : [];
 }
 
 /**
@@ -248,6 +271,7 @@ async function loadStableParts(
     classroomRef,
     courseSearchEnabled,
     contentToolsAvailable: content !== null,
+    noticeMarker: serverNoticeMarker(attempt.id),
   });
 
   const parts: StableParts = {
@@ -321,6 +345,7 @@ export async function loadAttemptContext(
     inputMessageId: admission.inputMessageId,
     runId: admission.runId,
     lastAction: admission.action,
+    ...(typeof admission.messagesLeft === 'number' ? { messagesLeft: admission.messagesLeft } : {}),
     model: settings.model,
     questionEffort: settings.questionEffort,
     gradingEffort: settings.gradingEffort,
@@ -331,6 +356,8 @@ export async function loadAttemptContext(
           ...stable.exploration,
           model: settings.exploration.model,
           effort: settings.exploration.effort,
+          // From this turn's read of the attempt, never the cached parts.
+          excludedPaths: storedExcludedPaths(attempt.quiz.excluded_paths),
         }
       : null,
     prompt: stable.prompt,

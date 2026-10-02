@@ -45,6 +45,7 @@ describe('attemptDrawerView', () => {
       ],
       agent_runtime: 'ai_agent',
       evaluation_json: null,
+      ended_by: null,
     });
   });
 
@@ -79,6 +80,17 @@ describe('attemptDrawerView', () => {
     expect(attemptDrawerView({ ...chat, completed_at: null }).evaluation_json).toBeNull();
     expect(
       attemptDrawerView({ ...chat, evaluation_json: { quiz_complete: true } }).evaluation_json
+    ).toBeNull();
+  });
+
+  it('says a completed attempt was submitted at the message limit, and only then', () => {
+    const chat = { ...ATTEMPT, agent_runtime: 'trigger_chat' };
+    expect(attemptDrawerView(chat, { endedBy: 'turn_limit' }).ended_by).toBe('turn_limit');
+    expect(attemptDrawerView(chat, { endedBy: null }).ended_by).toBeNull();
+    expect(attemptDrawerView(chat).ended_by).toBeNull();
+    // Not before the attempt is complete.
+    expect(
+      attemptDrawerView({ ...chat, completed_at: null }, { endedBy: 'turn_limit' }).ended_by
     ).toBeNull();
   });
 });

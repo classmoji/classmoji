@@ -90,12 +90,15 @@ const MODELS = [
   { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
 ];
 
+/** The quiz selects' list, as the loader filters it: allow-listed models only. */
+const QUIZ_MODELS = MODELS.slice(0, 2);
+
 /** A choice in every select, none of them a default. */
 const STORED = {
   llm_model: 'claude-opus-5-5',
   code_aware_model: 'claude-opus-5-5',
-  exploration_model: 'claude-haiku-4-5-20251001',
-  syllabus_bot_model: 'claude-sonnet-5',
+  exploration_model: 'claude-sonnet-5',
+  syllabus_bot_model: 'claude-haiku-4-5-20251001',
   question_effort: 'high',
   grading_effort: 'max',
   exploration_effort: 'medium',
@@ -106,11 +109,11 @@ const STORED = {
 const STORED_LABELS = [
   'Claude Opus 5.5',
   'Claude Opus 5.5',
-  'Claude Haiku 4.5',
+  'Claude Sonnet 5',
   'High',
   'Max',
   'Medium',
-  'Claude Sonnet 5',
+  'Claude Haiku 4.5',
   'Extra high (xhigh)',
 ];
 
@@ -129,6 +132,7 @@ const loaderData = (hasKey: boolean) =>
         },
       },
       availableModels: { anthropic: MODELS },
+      quizModels: QUIZ_MODELS,
       aiAgentAvailable: true,
       quizzesProRequired: false,
       askMojiProRequired: false,
@@ -210,5 +214,37 @@ describe('AI settings form: Save buttons', () => {
   it('enables every Save with a key', async () => {
     await render(true);
     expect(saveButtons().map(button => button.disabled)).toEqual([false, false, false]);
+  });
+});
+
+/** Open the nth model/effort select (page order) and read the options it lists. */
+const optionsOf = async (index: number) => {
+  const selector = container.querySelectorAll('.ant-select-selector')[index];
+  await act(async () => {
+    selector.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+  });
+  const dropdowns = document.querySelectorAll('.ant-select-dropdown');
+  const dropdown = dropdowns[dropdowns.length - 1];
+  return [...dropdown.querySelectorAll('.ant-select-item-option')].map(option =>
+    option.getAttribute('title')
+  );
+};
+
+describe('AI settings form: model options', () => {
+  // The loader passes the quiz selects only allow-listed models (quizModels);
+  // Ask Moji's select gets every model.
+  it.each([
+    ['Standard quizzes', 0],
+    ['Code-aware quizzes', 1],
+    ['Code exploration', 2],
+  ])('lists only the quiz models in %s', async (_label, index) => {
+    await render(true);
+    expect(await optionsOf(index)).toEqual(QUIZ_MODELS.map(model => model.label));
+  });
+
+  it('lists every model for Ask Moji', async () => {
+    await render(true);
+    // Page order: three quiz models, three efforts, then Ask Moji's model.
+    expect(await optionsOf(6)).toEqual(MODELS.map(model => model.label));
   });
 });

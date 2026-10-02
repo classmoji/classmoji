@@ -14,7 +14,8 @@
  * - Every model must be on the adaptive-thinking allowlist. A stored model
  *   outside it falls back to the platform default for this run (the setting's
  *   name is logged, never its value's owner or the key); a platform default
- *   outside it falls back to the code default.
+ *   outside it falls back to the code default. That rule is pickQuizModel in
+ *   @classmoji/utils/ai-models, which the ai-agent applies too.
  * - Effort: classroom (keyed only) > env > code default; an invalid value at
  *   any tier is skipped. Exploration is capped at `high`. Every allowlisted
  *   model takes all five levels, so there is no per-model table.
@@ -22,7 +23,7 @@
  *   key pays for exploration. A classroom key that fails is never retried on
  *   the platform key.
  */
-import { FALLBACK_MODEL, isAllowedModel } from '@classmoji/utils/ai-models';
+import { FALLBACK_MODEL, pickQuizModel } from '@classmoji/utils/ai-models';
 
 export { FALLBACK_MODEL };
 
@@ -88,31 +89,6 @@ function present(value: unknown): value is string {
 }
 
 /**
- * One model slot: the classroom's choice when allowed, else the platform
- * default when allowed, else the code default. Records which named setting
- * was not used.
- */
-function pickModel(
-  classroomValue: string | null | undefined,
-  envValue: string | undefined,
-  settingName: string,
-  envName: string,
-  fallbacks: string[]
-): string {
-  if (present(classroomValue)) {
-    const id = classroomValue.trim();
-    if (isAllowedModel(id)) return id;
-    fallbacks.push(settingName);
-  }
-  if (present(envValue)) {
-    const id = envValue.trim();
-    if (isAllowedModel(id)) return id;
-    fallbacks.push(envName);
-  }
-  return FALLBACK_MODEL;
-}
-
-/**
  * Resolve the turn's model, efforts and key.
  *
  * @throws Error when neither the classroom nor the platform has a key
@@ -145,17 +121,20 @@ export function resolveQuizRunSettings(
     if (named) fallbacks.push('classroom_choices_without_key');
   }
 
-  const model = opts.isCodeAware
-    ? pickModel(choice(settings?.code_aware_model), env.LLM_MODEL, 'code_aware_model', 'LLM_MODEL', fallbacks)
-    : pickModel(choice(settings?.llm_model), env.LLM_MODEL, 'llm_model', 'LLM_MODEL', fallbacks);
-
-  const explorationModel = pickModel(
-    choice(settings?.exploration_model),
-    env.EXPLORATION_MODEL,
-    'exploration_model',
-    'EXPLORATION_MODEL',
-    fallbacks
-  );
+  // The one allow-list rule (pickQuizModel, @classmoji/utils/ai-models), the
+  // same function the ai-agent and the AI settings page's default use.
+  const quizSetting = opts.isCodeAware ? 'code_aware_model' : 'llm_model';
+  const quiz = pickQuizModel(choice(settings?.[quizSetting]), env.LLM_MODEL, {
+    setting: quizSetting,
+    env: 'LLM_MODEL',
+  });
+  const exploration = pickQuizModel(choice(settings?.exploration_model), env.EXPLORATION_MODEL, {
+    setting: 'exploration_model',
+    env: 'EXPLORATION_MODEL',
+  });
+  fallbacks.push(...quiz.fallbacks, ...exploration.fallbacks);
+  const model = quiz.model;
+  const explorationModel = exploration.model;
 
   return {
     model,

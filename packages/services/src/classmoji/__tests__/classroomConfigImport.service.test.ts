@@ -3,6 +3,7 @@ import {
   selectedSettingsFields,
   remapModuleItem,
   importModules,
+  importClassroomConfig,
   SETTINGS_FIELD_GROUPS,
 } from '../classroomConfigImport.service.ts';
 import type {
@@ -117,6 +118,68 @@ describe('selectedSettingsFields', () => {
     expect(selectedSettingsFields({ grading: true, gradeScales: true, calendar: true })).toEqual(
       selectedSettingsFields({ grading: true })
     );
+  });
+});
+
+describe('importClassroomConfig — quiz models', () => {
+  // A hand-rolled `tx`: the source's settings row, and the update the import
+  // writes to the target.
+  const run = async (source: Record<string, unknown>) => {
+    const update = vi.fn().mockResolvedValue({});
+    const tx = {
+      classroomSettings: { findUnique: vi.fn().mockResolvedValue(source), update },
+    };
+    const summary = await importClassroomConfig(
+      'source-classroom',
+      'target-classroom',
+      'user-1',
+      { aiConfig: true },
+      tx as never
+    );
+    return { summary, data: update.mock.calls[0]?.[0]?.data };
+  };
+
+  it('writes an off-list quiz model as null, the platform default it would run as', async () => {
+    const { data, summary } = await run({
+      llm_model: 'claude-haiku-4-5-20251001',
+      code_aware_model: 'claude-sonnet-4-5-20250929',
+      exploration_model: 'gpt-4o',
+    });
+
+    expect(data).toEqual({ llm_model: null, code_aware_model: null, exploration_model: null });
+    expect(summary.settings_fields).toEqual(['llm_model', 'code_aware_model', 'exploration_model']);
+  });
+
+  it('copies an allowed quiz model, a dated one included, trimmed', async () => {
+    const { data } = await run({
+      llm_model: 'claude-opus-5-5',
+      code_aware_model: ' claude-fable-5 ',
+      exploration_model: 'claude-sonnet-5-5-20260901',
+    });
+
+    expect(data).toEqual({
+      llm_model: 'claude-opus-5-5',
+      code_aware_model: 'claude-fable-5',
+      exploration_model: 'claude-sonnet-5-5-20260901',
+    });
+  });
+
+  it("copies Ask Moji's model as is: it has no allow-list", async () => {
+    const { data } = await run({
+      llm_model: 'claude-haiku-4-5-20251001',
+      syllabus_bot_model: 'claude-haiku-4-5-20251001',
+    });
+
+    expect(data).toEqual({
+      llm_model: null,
+      syllabus_bot_model: 'claude-haiku-4-5-20251001',
+    });
+  });
+
+  it('still skips a quiz model the source left unset', async () => {
+    const { data } = await run({ llm_model: null, exploration_model: 'claude-opus-5' });
+
+    expect(data).toEqual({ exploration_model: 'claude-opus-5' });
   });
 });
 

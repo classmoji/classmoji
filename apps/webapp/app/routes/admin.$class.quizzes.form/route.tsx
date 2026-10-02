@@ -24,6 +24,13 @@ import { ClassmojiService } from '@classmoji/services';
 import { PromptAssistant, type PromptSuggestion } from '~/components/quiz/PromptAssistant';
 import { useGitWeb } from '~/hooks/useGitWeb';
 import {
+  normalizeExcludedPaths,
+  parseExcludedPathsText,
+} from '@classmoji/utils/quiz-excluded-paths';
+import { MAX_STUDENT_TURNS } from '@classmoji/utils/quiz-agent/limits';
+import { QUIZ_MESSAGE_LIMIT_COPY } from '@classmoji/utils/quiz-agent/copy';
+import { runtimeFor } from '~/utils/quizRuntime.server';
+import {
   fromPickerValue,
   pickerLabel,
   pickerOptions,
@@ -39,6 +46,32 @@ import './quiz-form.css';
 
 const { TextArea } = Input;
 const { Option } = Select;
+
+const EXCLUDED_PATHS_PLACEHOLDER = 'tests/**\n**/*.spec.js\nplaywright.config.*';
+
+/** The loader's reading of the runtime switch: whether a new attempt runs on the chat runtime. */
+type ChatRuntimeFor = { codeAware: boolean; other: boolean };
+
+/**
+ * Whether a new attempt of the quiz, as the form has it now, runs on the chat
+ * runtime (whose message limit the form states). A quiz is code-aware there
+ * with a linked repository and code context on (quizRuntime.server.ts,
+ * isCodeAwareQuiz). Not shown when the loader sent no reading.
+ */
+const runsOnChatRuntime = (
+  chatRuntime: ChatRuntimeFor | undefined,
+  fields: { repositoryId?: unknown; includeCodeContext?: unknown }
+): boolean => {
+  if (!chatRuntime) return false;
+  const codeAware = Boolean(fields.repositoryId) && fields.includeCodeContext === true;
+  return codeAware ? chatRuntime.codeAware : chatRuntime.other;
+};
+
+/** The "Paths to exclude" textarea's rule: the same check the quiz service makes. */
+const validateExcludedPaths = (_rule: unknown, value: string | undefined) => {
+  const result = normalizeExcludedPaths(parseExcludedPathsText(value));
+  return result.ok ? Promise.resolve() : Promise.reject(new Error(result.error));
+};
 
 export async function loader({ params, request }: Route.LoaderArgs) {
   const classSlug = params.class!;
@@ -98,13 +131,25 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       // In material order, as picker values.
       sourceMaterial: toPickerValues(found.source_material),
       courseSearchEnabled: found.course_search_enabled,
+      // The textarea's text: one pattern per line.
+      excludedPaths: (found.excluded_paths ?? []).join('\n'),
     };
   }
+
+  // Whether a new attempt runs on the chat runtime, for a code-aware quiz and
+  // for any other, by the same switch attempt creation reads (runtimeFor).
+  // The form picks one as its repository and Code-Aware fields change.
+  const chatRuntime: ChatRuntimeFor = {
+    codeAware:
+      runtimeFor({ repository_id: 'linked', include_code_context: true }) === 'trigger_chat',
+    other: runtimeFor({}) === 'trigger_chat',
+  };
 
   return {
     org: classSlug,
     quiz,
     isEditing: Boolean(quizId),
+    chatRuntime,
     assignments: repositories, // Keep variable name for backward compat with component
     examplePrompts,
     // What the classroom offers, plus any linked document it does not.
@@ -113,7 +158,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 }
 
 function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
-  const { org, quiz, isEditing, assignments, examplePrompts, sourceMaterialOptions } = loaderData;
+  const { org, quiz, isEditing, assignments, examplePrompts, sourceMaterialOptions, chatRuntime } =
+    loaderData;
   const callout = useCallout();
   const { opened, close } = useRouteDrawer({});
   const web = useGitWeb();
@@ -271,24 +317,35 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
   };
 
   const handleSubmit = () => {
-    form.validateFields().then(values => {
-      const formData = {
-        ...values,
-        dueDate: values.dueDate ? values.dueDate.toISOString() : null,
-        // Selection order is material order: one list across pages and decks.
-        sourceMaterial: ((values.sourceMaterial ?? []) as string[]).map(fromPickerValue),
-        courseSearchEnabled: values.courseSearchEnabled === true,
-        _action: isEditing ? 'updateQuiz' : 'createQuiz',
-        id: quiz?.id,
-      };
+    form.validateFields().then(
+      allValues => {
+        // Absent while the quiz is not code-aware (the field is not shown): the
+        // saved list is left as it is.
+        const { excludedPaths: excludedPathsText, ...values } = allValues;
+        const formData = {
+          ...values,
+          ...(typeof excludedPathsText === 'string'
+            ? { excludedPaths: parseExcludedPathsText(excludedPathsText) }
+            : {}),
+          dueDate: values.dueDate ? values.dueDate.toISOString() : null,
+          // Selection order is material order: one list across pages and decks.
+          sourceMaterial: ((values.sourceMaterial ?? []) as string[]).map(fromPickerValue),
+          courseSearchEnabled: values.courseSearchEnabled === true,
+          _action: isEditing ? 'updateQuiz' : 'createQuiz',
+          id: quiz?.id,
+        };
 
-      // Submit to parent route's action
-      fetcher.submit(formData, {
-        method: 'POST',
-        action: `/${rolePrefix}/${classSlug}/quizzes`,
-        encType: 'application/json',
-      });
-    });
+        // Submit to parent route's action
+        fetcher.submit(formData, {
+          method: 'POST',
+          action: `/${rolePrefix}/${classSlug}/quizzes`,
+          encType: 'application/json',
+        });
+      },
+      () => {
+        // A field that fails its rule shows its own message; nothing is sent.
+      }
+    );
   };
 
   const handleDelete = () => {
@@ -407,6 +464,7 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                         difficultyLevel: 'Beginner',
                         status: 'DRAFT',
                         includeCodeContext: false,
+                        excludedPaths: '',
                         sourceMaterial: [],
                         courseSearchEnabled: false,
                       }
@@ -426,7 +484,7 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                   tooltip={`Optionally link this quiz to a specific ${terms.repo}`}
                 >
                   <Select
-                    placeholder={`Select a ${terms.repo} to link this quiz to (optional)`}
+                    placeholder="Select a repository to link this quiz to (optional)"
                     allowClear
                   >
                     {assignments?.map((repository: { id: string; title: string }) => (
@@ -487,6 +545,30 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                   <Switch checkedChildren="Enabled" unCheckedChildren="Disabled" />
                 </Form.Item>
 
+                {/* Only for a code-aware quiz. Read from the form's store, so it
+                    is right on the first render of an edit, not only after it. */}
+                <Form.Item
+                  noStyle
+                  shouldUpdate={(prev, next) => prev.includeCodeContext !== next.includeCodeContext}
+                >
+                  {({ getFieldValue }) =>
+                    getFieldValue('includeCodeContext') === true ? (
+                      <Form.Item
+                        name="excludedPaths"
+                        label="Paths to exclude"
+                        extra="One pattern per line, like .gitignore. The quiz never reads or quotes files that match."
+                        rules={[{ validator: validateExcludedPaths }]}
+                      >
+                        <TextArea
+                          autoSize={{ minRows: 3, maxRows: 10 }}
+                          spellCheck={false}
+                          placeholder={EXCLUDED_PATHS_PLACEHOLDER}
+                        />
+                      </Form.Item>
+                    ) : null
+                  }
+                </Form.Item>
+
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                   <Form.Item
                     name="weight"
@@ -518,18 +600,41 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                  {/* The per-attempt message limit, for a quiz whose attempts
+                      run on the chat runtime. Read from the form's store, so
+                      it is right on the first render of an edit. */}
                   <Form.Item
-                    name="maxAttempts"
-                    label="Max Attempts"
-                    rules={[{ required: true, message: 'Please enter maximum attempts' }]}
-                    tooltip="Maximum number of attempts allowed. Set to 0 for unlimited attempts."
+                    noStyle
+                    shouldUpdate={(prev, next) =>
+                      prev.includeCodeContext !== next.includeCodeContext ||
+                      prev.repositoryId !== next.repositoryId
+                    }
                   >
-                    <Input
-                      type="number"
-                      placeholder="Enter max attempts (0 = unlimited)"
-                      min={0}
-                      max={10}
-                    />
+                    {({ getFieldValue }) => (
+                      <Form.Item
+                        name="maxAttempts"
+                        label="Max Attempts"
+                        rules={[{ required: true, message: 'Please enter maximum attempts' }]}
+                        tooltip="Maximum number of attempts allowed. Set to 0 for unlimited attempts."
+                        extra={
+                          runsOnChatRuntime(chatRuntime, {
+                            repositoryId: getFieldValue('repositoryId'),
+                            includeCodeContext: getFieldValue('includeCodeContext'),
+                          }) ? (
+                            <span data-testid="quiz-form-message-limit">
+                              {QUIZ_MESSAGE_LIMIT_COPY.form(MAX_STUDENT_TURNS)}
+                            </span>
+                          ) : undefined
+                        }
+                      >
+                        <Input
+                          type="number"
+                          placeholder="Enter max attempts (0 = unlimited)"
+                          min={0}
+                          max={10}
+                        />
+                      </Form.Item>
+                    )}
                   </Form.Item>
 
                   <Form.Item

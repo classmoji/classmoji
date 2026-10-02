@@ -204,6 +204,58 @@ describe('create and update forward the material to the service', () => {
   });
 });
 
+describe('paths to exclude', () => {
+  const excludedPathsRefusal = (message: string) =>
+    Object.assign(new Error(message), {
+      name: 'QuizExcludedPathsError',
+      code: 'invalid_excluded_paths',
+      status: 400,
+    });
+
+  it('createQuiz and updateQuiz pass excludedPaths to the service', async () => {
+    const excludedPaths = ['tests/**', '**/*.spec.js'];
+
+    expect(
+      (await submit({ _action: 'createQuiz', name: 'Q', rubricPrompt: 'r', excludedPaths })).status
+    ).toBe(200);
+    expect(mocks.create.mock.calls[0][0]).toMatchObject({ classroomId: 'class-1', excludedPaths });
+
+    expect((await submit({ _action: 'updateQuiz', id: 'quiz-1', excludedPaths })).status).toBe(200);
+    expect(mocks.update.mock.calls[0][1]).toMatchObject({ excludedPaths });
+  });
+
+  it('answers a refused pattern with 400 and its reason, auditing nothing', async () => {
+    const reason =
+      '"/abs/**" is an absolute path. Write it relative to the repository root, like tests/e2e/.';
+    mocks.update.mockRejectedValue(excludedPathsRefusal(reason));
+
+    const { status, body } = await submit({
+      _action: 'updateQuiz',
+      id: 'quiz-1',
+      excludedPaths: ['/abs/**'],
+    });
+
+    expect(status).toBe(400);
+    expect(body).toEqual({ error: reason });
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('answers the same on create', async () => {
+    mocks.create.mockRejectedValue(excludedPathsRefusal('Paths to exclude must be a list.'));
+
+    const { status, body } = await submit({
+      _action: 'createQuiz',
+      name: 'Q',
+      rubricPrompt: 'r',
+      excludedPaths: 'tests/**',
+    });
+
+    expect(status).toBe(400);
+    expect(body).toEqual({ error: 'Paths to exclude must be a list.' });
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+});
+
 describe('the all-drafts publish warning', () => {
   it('publishQuiz: succeeds and warns when every linked document is a draft', async () => {
     const { status, body } = await submit({ _action: 'publishQuiz', id: 'quiz-1' });

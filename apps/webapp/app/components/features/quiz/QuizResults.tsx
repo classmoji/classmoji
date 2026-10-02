@@ -6,7 +6,7 @@ import {
   RocketOutlined,
   TrophyOutlined,
 } from '@ant-design/icons';
-import type { QuizEvaluationRecordV2 } from '@classmoji/utils/quiz-agent';
+import { QUIZ_MESSAGE_LIMIT_COPY, type QuizEvaluationRecordV2 } from '@classmoji/utils/quiz-agent';
 import Emoji from '~/components/ui/display/Emoji';
 import { formatDuration } from '~/utils/quizUtils';
 
@@ -18,7 +18,9 @@ const { Title, Text } = Typography;
  * evaluation tool part / `data-evaluation`). Scores and each question's emoji
  * are the stored values; nothing is recomputed here. A record the server
  * completed from the recorded results (`source: 'server'`) has no feedback
- * text, and the panel simply shows the scores and per-question results.
+ * text, and the panel simply shows its band, the scores and per-question
+ * results. An attempt the server submitted at its message limit
+ * (`submittedAtLimit`) says so above them.
  */
 export interface ResultsFocusMetrics {
   totalMs: number | null;
@@ -29,6 +31,8 @@ export interface ResultsFocusMetrics {
 interface QuizResultsProps {
   evaluation: QuizEvaluationRecordV2;
   focusMetrics?: ResultsFocusMetrics | null;
+  /** The server submitted the attempt at its message limit (its journal says so). */
+  submittedAtLimit?: boolean;
 }
 
 /** The same five bands the legacy evaluation card uses. */
@@ -48,8 +52,16 @@ const gradeIcon = (score: number | undefined) => {
 
 const roundScore = (value: number) => Math.round(Number(value || 0) * 10) / 10;
 
-function QuizResults({ evaluation, focusMetrics = null }: QuizResultsProps) {
+function QuizResults({
+  evaluation,
+  focusMetrics = null,
+  submittedAtLimit = false,
+}: QuizResultsProps) {
   const feedback = evaluation.feedback;
+  // The band the server stores on every completion, its own included; a
+  // record stored before it was added has it in the model's feedback only.
+  const band = evaluation.evaluation ?? feedback?.evaluation ?? null;
+  const bandScore = evaluation.numeric_score ?? feedback?.numeric_score;
   const score = roundScore(evaluation.partial_credit_percentage);
   const results = [...(evaluation.question_results ?? [])].sort(
     (a, b) => a.question_num - b.question_num
@@ -57,6 +69,15 @@ function QuizResults({ evaluation, focusMetrics = null }: QuizResultsProps) {
 
   return (
     <div className="mt-5" data-testid="quiz-results">
+      {submittedAtLimit && (
+        <Alert
+          data-testid="quiz-results-limit"
+          message={QUIZ_MESSAGE_LIMIT_COPY.submittedAtLimit}
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+        />
+      )}
       <Alert
         message="Quiz Complete!"
         description="Your responses have been evaluated. Here are your results:"
@@ -67,10 +88,10 @@ function QuizResults({ evaluation, focusMetrics = null }: QuizResultsProps) {
 
       <Card
         title={
-          feedback ? (
+          band ? (
             <Space>
-              {gradeIcon(feedback.numeric_score)}
-              <span>Quiz Evaluation: {feedback.evaluation}</span>
+              {gradeIcon(bandScore)}
+              <span>Quiz Evaluation: {band}</span>
             </Space>
           ) : (
             <span>Quiz Results</span>

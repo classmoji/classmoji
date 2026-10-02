@@ -169,7 +169,11 @@ export type {
   OrgOwnerStatus,
 } from './classmoji/orgRepoSettings.service.ts';
 // Quiz authorization refusal, so routes can answer 403 instead of 500.
-export { QuizAccessError, QUIZ_STAFF_ROLES } from './classmoji/quiz.service.ts';
+export {
+  QuizAccessError,
+  QuizExcludedPathsError,
+  QUIZ_STAFF_ROLES,
+} from './classmoji/quiz.service.ts';
 // Quiz source material: the linked pages and decks a quiz is about. The
 // ai-agent reads them through `ClassmojiService.quizSourceMaterial.load`; the
 // flat names are for callers that want the functions and types directly.

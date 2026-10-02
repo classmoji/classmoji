@@ -431,6 +431,7 @@ describe('staff attempt drawer payload', () => {
       question_results: [],
       agent_runtime: 'ai_agent',
       evaluation_json: null,
+      ended_by: null,
     });
     expect(payload.studentName).toBe('Ada Lovelace');
     expect(payload.userLogin).toBe('ada');
@@ -438,9 +439,12 @@ describe('staff attempt drawer payload', () => {
     expect(Object.keys(payload).sort()).toEqual(
       [
         'attempt',
+        'chatActivity',
+        'chatStarted',
         'focusMetrics',
         'isAdmin',
         'messages',
+        'messagesLeft',
         'quiz',
         'readOnly',
         'showTimestamps',
@@ -490,9 +494,12 @@ describe('student attempt drawer payload', () => {
     expect(Object.keys(payload).sort()).toEqual(
       [
         'attempt',
+        'chatActivity',
+        'chatStarted',
         'focusMetrics',
         'isAdmin',
         'messages',
+        'messagesLeft',
         'org',
         'quiz',
         'readOnly',
@@ -508,6 +515,7 @@ describe('student attempt drawer payload', () => {
       [
         'agent_runtime',
         'completed_at',
+        'ended_by',
         'evaluation_json',
         'first_attempt_percentage',
         'id',

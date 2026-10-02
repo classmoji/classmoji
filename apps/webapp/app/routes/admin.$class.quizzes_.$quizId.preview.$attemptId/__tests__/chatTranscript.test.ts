@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const quizFindByIdMock = vi.fn();
 const findWithMessagesMock = vi.fn();
 const loadTranscriptMock = vi.fn();
+const messageLimitMock = vi.fn();
 const assertAccessMock = vi.fn();
 const quizzesVisibleMock = vi.fn();
 
@@ -20,7 +21,10 @@ vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     quiz: { findById: (...a: unknown[]) => quizFindByIdMock(...a) },
     quizAttempt: { findWithMessages: (...a: unknown[]) => findWithMessagesMock(...a) },
-    quizChat: { loadTranscriptForViewer: (...a: unknown[]) => loadTranscriptMock(...a) },
+    quizChat: {
+      loadTranscriptForViewer: (...a: unknown[]) => loadTranscriptMock(...a),
+      messageLimitOf: (...a: unknown[]) => messageLimitMock(...a),
+    },
   },
   QuizAttemptNotFoundError: class QuizAttemptNotFoundError extends Error {},
 }));
@@ -92,6 +96,7 @@ beforeEach(() => {
   quizzesVisibleMock.mockResolvedValue(true);
   quizFindByIdMock.mockResolvedValue(QUIZ);
   loadTranscriptMock.mockResolvedValue(PROJECTED);
+  messageLimitMock.mockResolvedValue({ messagesLeft: 200, endedBy: null });
 });
 
 describe('preview loader — chat-runtime attempts', () => {
@@ -104,10 +109,23 @@ describe('preview loader — chat-runtime attempts', () => {
 
     const data = await load();
 
-    expect(loadTranscriptMock).toHaveBeenCalledWith('attempt-1');
+    // A preview is the caller's own attempt: the student transcript.
+    expect(loadTranscriptMock).toHaveBeenCalledWith('attempt-1', 'student');
     expect(data.transcript).toEqual(PROJECTED);
     expect(data.messages).toEqual([]);
     expect(data.viewerOwnsAttempt).toBe(true);
+    expect(data.chatStarted).toBe(true);
+  });
+
+  it('says a new chat preview has not begun, so its drawer sends begin', async () => {
+    signInAs('owner-1', 'OWNER');
+    findWithMessagesMock.mockResolvedValue({
+      attempt: attemptOf('owner-1', 'trigger_chat'),
+      messages: [],
+    });
+    loadTranscriptMock.mockResolvedValue([]);
+
+    expect((await load()).chatStarted).toBe(false);
   });
 
   it('serves an ai-agent preview exactly as before', async () => {
@@ -119,5 +137,20 @@ describe('preview loader — chat-runtime attempts', () => {
     expect(loadTranscriptMock).not.toHaveBeenCalled();
     expect(data.messages).toEqual(RAW_ROWS);
     expect(data.transcript).toBeNull();
+  });
+
+  it('says how many messages an open chat preview admits', async () => {
+    signInAs('owner-1', 'OWNER');
+    findWithMessagesMock.mockResolvedValue({
+      attempt: attemptOf('owner-1', 'trigger_chat'),
+      messages: RAW_ROWS,
+    });
+    messageLimitMock.mockResolvedValue({ messagesLeft: 3, endedBy: null });
+
+    const data = await load();
+
+    expect(messageLimitMock).toHaveBeenCalledWith('attempt-1');
+    expect(data.messagesLeft).toBe(3);
+    expect(data.attempt.ended_by).toBeNull();
   });
 });

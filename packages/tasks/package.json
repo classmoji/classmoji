@@ -34,6 +34,7 @@
     "ai": "7.0.122",
     "jsonwebtoken": "^9.0.2",
     "node-fetch": "^3.3.2",
+    "picomatch": "^4.0.5",
     "resend": "^6.20.0",
     "simple-git": "^3.36.0",
     "undici": "^7.19.0",

@@ -78,12 +78,13 @@ vi.mock('@classmoji/database', () => ({
  * were opened and disconnected — which is how "the lock did not ride the pool"
  * is asserted rather than assumed.
  */
-const lockSessions: Array<{ disconnected: boolean }> = [];
+const lockSessions: Array<{ disconnected: boolean; datasourceUrl?: string }> = [];
 
 vi.mock('@prisma/client', () => ({
   PrismaClient: class {
-    readonly handle = { disconnected: false };
-    constructor() {
+    readonly handle: { disconnected: boolean; datasourceUrl?: string };
+    constructor(options?: { datasourceUrl?: string }) {
+      this.handle = { disconnected: false, datasourceUrl: options?.datasourceUrl };
       lockSessions.push(this.handle);
     }
     $queryRaw(strings: TemplateStringsArray, ...params: unknown[]) {
@@ -612,6 +613,29 @@ describe('serialization', () => {
     await reconcileDocsIndex({ reader: stubReader() });
     expect(lockSessions).toHaveLength(1);
     expect(lockSessions[0].disconnected).toBe(true);
+  });
+
+  it('opens the lock connection on the direct endpoint, falling back to DATABASE_URL', async () => {
+    // Behind a transaction-mode pooler a session lock can be taken on one
+    // backend and released on another, so the lock session uses
+    // DATABASE_URL_UNPOOLED when it is set.
+    lockGranted = false;
+    vi.stubEnv('DATABASE_URL', 'postgresql://pooled.example/db');
+    try {
+      vi.stubEnv('DATABASE_URL_UNPOOLED', 'postgresql://direct.example/db');
+      await reconcileDocsIndex({ reader: stubReader() });
+      vi.stubEnv('DATABASE_URL_UNPOOLED', undefined);
+      await reconcileDocsIndex({ reader: stubReader() });
+      vi.stubEnv('DATABASE_URL_UNPOOLED', '');
+      await reconcileDocsIndex({ reader: stubReader() });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(lockSessions.map(session => session.datasourceUrl)).toEqual([
+      'postgresql://direct.example/db',
+      'postgresql://pooled.example/db',
+      'postgresql://pooled.example/db',
+    ]);
   });
 });
 

@@ -1400,6 +1400,12 @@ model Quiz {
   /// check whether the course covers something a student mentions. Off by
   /// default; independent of the linked material.
   course_search_enabled Boolean             @default(false)
+  /// "Paths to exclude": files a code-aware quiz's agent never sees in the
+  /// student's repository. Glob patterns relative to the repository root, one
+  /// per entry, read like .gitignore lines. Left out of the file tree
+  /// exploration lists, never read, never quoted. Empty by default. (No glob
+  /// examples: they would end this comment in the generated client.)
+  excluded_paths        String[]            @default([])
   created_at            DateTime            @default(now())
   updated_at            DateTime            @default(now()) @updatedAt
 

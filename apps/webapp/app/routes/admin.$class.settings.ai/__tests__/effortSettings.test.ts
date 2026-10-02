@@ -315,7 +315,7 @@ describe('loader', () => {
   const STORED = {
     llm_model: 'claude-opus-5-5',
     code_aware_model: 'claude-opus-5-5',
-    exploration_model: 'claude-haiku-4-5-20251001',
+    exploration_model: 'claude-sonnet-5',
     syllabus_bot_model: 'claude-sonnet-5',
     question_effort: 'high',
     grading_effort: 'max',
@@ -389,7 +389,7 @@ describe('loader', () => {
       expect(data.defaultLabels).toEqual({
         llm_model: 'label:claude-opus-5-5',
         code_aware_model: 'label:claude-opus-5-5',
-        exploration_model: 'label:claude-sonnet-5',
+        exploration_model: 'label:claude-sonnet-5-5',
         syllabus_bot_model: 'label:claude-opus-5-5',
         question_effort: 'Medium',
         grading_effort: 'Max',

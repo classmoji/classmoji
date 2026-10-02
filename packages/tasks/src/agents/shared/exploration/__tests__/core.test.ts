@@ -127,6 +127,46 @@ describe('exploreRepository on a fixture repository', () => {
     expect(calls[0].body.messages[0].content).not.toContain('.editorconfig');
   });
 
+  it('never lists, picks or reads a path the quiz excludes, not even for the excerpt call', async () => {
+    const gh = githubStub('landing-page');
+    vi.stubGlobal('fetch', gh.fetchImpl);
+    const { client, calls } = stubClient([
+      PICK,
+      JSON.stringify({
+        excerpts: [
+          { path: 'css/style.css', start_line: 1, end_line: 5, why: 'excluded file' },
+          { path: 'index.html', start_line: 16, end_line: 21, why: 'features section markup' },
+        ],
+      }),
+    ]);
+    const onFileRead = vi.fn();
+    const onFileContent = vi.fn();
+
+    const result = await exploreRepository(
+      input({ client, onFileRead, onFileContent, excludedPaths: ['css/**', 'js/'] })
+    );
+
+    // The picker's tree and the excerpt call's files leave them out (tree
+    // lines read "path (N KB)"; index.html's own markup still names its
+    // stylesheet, which is the student's code, not a listing).
+    for (const call of calls) {
+      const prompt = call.body.messages[0].content;
+      expect(prompt).not.toMatch(/(^|\n)css\/style\.css \(/);
+      expect(prompt).not.toMatch(/(^|\n)js\/main\.js \(/);
+      expect(prompt).not.toContain('FILE: css/style.css');
+    }
+    expect(calls[0].body.messages[0].content).toMatch(/(^|\n)index\.html \(/);
+    expect(calls[1].body.messages[0].content).toContain('FILE: index.html');
+    // Picked anyway, never fetched, never reported, never kept.
+    expect(gh.requested.some(url => url.includes('/contents/css/'))).toBe(false);
+    expect(onFileRead.mock.calls).toEqual([['index.html']]);
+    expect(onFileContent.mock.calls.map(([path]) => path)).toEqual(['index.html']);
+    expect(result.filesRead).toEqual(['index.html']);
+    expect(result.excerpts.map(e => e.path)).toEqual(['index.html']);
+    expect(result.excerptText).not.toContain('.hero');
+    expect(result.fileCount).toBe(2);
+  });
+
   it('marks a failed read as an error step, still with the path only', async () => {
     const gh = githubStub('landing-page', { failPaths: ['css/style.css'] });
     vi.stubGlobal('fetch', gh.fetchImpl);

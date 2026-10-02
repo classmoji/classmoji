@@ -1,6 +1,8 @@
 // eslint-disable-next-line import/no-unresolved -- trigger.dev v3 resolved at runtime
 import { task, logger, metadata } from '@trigger.dev/sdk/v3';
 import Anthropic from '@anthropic-ai/sdk';
+import { FALLBACK_MODEL } from '@classmoji/utils/ai-models';
+import { normalizeRepoPath } from '../agents/shared/exploration/excludedPaths.ts';
 
 console.log('[explore-repo] Repository loaded (v3: excerpts, result in metadata)');
 
@@ -173,8 +175,37 @@ export async function fetchRepoTree(
 }
 
 /**
+ * A file read refused by the rules for what exploration and code quotes may
+ * read: `not_explored` (a hidden path, a symlink, or an answer naming another
+ * file than the one asked for) or `excluded` (the caller's excluded paths).
+ * The message names only the path that was asked for.
+ */
+export class FileNotReadableError extends Error {
+  readonly reason: 'not_explored' | 'excluded';
+  constructor(path: string, reason: 'not_explored' | 'excluded') {
+    super(`GitHub contents (${path}): ${reason === 'excluded' ? 'excluded' : 'not explored'}`);
+    this.name = 'FileNotReadableError';
+    this.reason = reason;
+  }
+}
+
+/** What a file read may be told about the caller's rules. */
+export type FileReadOptions = {
+  /** The caller's excluded paths: checked on the path asked for and on the path GitHub answers with. */
+  isExcluded?: (path: string) => boolean;
+  /** A Gitlab host to read from instead of Github (`owner` is then the project's namespace). */
+  gitHost?: string | null;
+};
+
+/**
  * Fetch a single file's content via the GitHub Contents API.
  * Returns decoded UTF-8 text content.
+ *
+ * The path is read in its canonical form (`normalizeRepoPath`: no "." or
+ * empty parts, no ".."), so the checks see the path URL parsing would
+ * otherwise resolve to after them. The answer must name that same path: a
+ * symlink GitHub followed, or any other file, is refused, and so is a hidden
+ * or excluded path (`FileNotReadableError`).
  *
  * @param {string} owner - GitHub org/user
  * @param {string} repo - GitRepo name
@@ -187,23 +218,36 @@ export async function fetchFileContent(
   repo: string,
   path: string,
   token: string,
-  gitHost?: string | null
+  options: FileReadOptions = {}
 ): Promise<string> {
-  if (gitHost) return fetchGitlabFile(gitHost, owner, repo, path, token);
-  const encodedPath = path
+  const requested = normalizeRepoPath(path);
+  if (!requested || !isVisiblePath(requested)) {
+    throw new FileNotReadableError(path, 'not_explored');
+  }
+  if (options.isExcluded?.(requested)) throw new FileNotReadableError(path, 'excluded');
+  if (options.gitHost) return fetchGitlabFile(options.gitHost, owner, repo, requested, token);
+  const encodedPath = requested
     .split('/')
     .map(segment => encodeURIComponent(segment))
     .join('/');
   const url = `${GITHUB_API}/repos/${owner}/${repo}/contents/${encodedPath}`;
-  const res = await githubFetch(url, GITHUB_HEADERS(token), `GitHub contents (${path})`);
+  const res = await githubFetch(url, GITHUB_HEADERS(token), `GitHub contents (${requested})`);
 
   const data = await res.json();
 
   // Symlinks are not explored. The tree listing already leaves them out; the
-  // Contents API's own answer is held to the same rule, including the path it
-  // says it returned.
-  if (data?.type === 'symlink' || (typeof data?.path === 'string' && !isVisiblePath(data.path))) {
-    throw new Error(`GitHub contents (${path}): not explored`);
+  // Contents API's own answer is held to the same rule: no symlink (its type,
+  // or the target it names), and the path it says it returned must be the one
+  // asked for, visible and not excluded.
+  if (data?.type === 'symlink' || typeof data?.target === 'string') {
+    throw new FileNotReadableError(path, 'not_explored');
+  }
+  if (typeof data?.path === 'string') {
+    const answered = normalizeRepoPath(data.path);
+    if (answered !== requested || !isVisiblePath(answered)) {
+      throw new FileNotReadableError(path, 'not_explored');
+    }
+    if (options.isExcluded?.(answered)) throw new FileNotReadableError(path, 'excluded');
   }
 
   if (data.encoding === 'base64' && data.content) {
@@ -231,7 +275,7 @@ export async function fetchMultipleFiles(
   paths: string[],
   token: string,
   concurrency: number = 3,
-  gitHost: string | null = null
+  options: FileReadOptions = {}
 ): Promise<Array<{ path: string; content: string; error?: string }>> {
   const results = [];
   // Process in batches for concurrency control
@@ -239,7 +283,7 @@ export async function fetchMultipleFiles(
     const batch = paths.slice(i, i + concurrency);
     const batchResults = await Promise.allSettled(
       batch.map(async path => {
-        const content = await fetchFileContent(owner, repo, path, token, gitHost);
+        const content = await fetchFileContent(owner, repo, path, token, options);
         return { path, content };
       })
     );
@@ -289,14 +333,16 @@ export function isExplorableEntry(entry: { path: string; mode?: string }): boole
 /**
  * The picker's paths that may be read: each must name a file in the (already
  * filtered) tree, so a path the model made up, or one the tree left out, is
- * never fetched.
+ * never fetched. `isExcluded` (a quiz's excluded paths) is checked again here,
+ * so a picked path the caller excludes is never fetched either.
  */
 export function readablePickedPaths(
   picked: string[],
-  tree: ReadonlyArray<{ path: string }>
+  tree: ReadonlyArray<{ path: string }>,
+  isExcluded: (path: string) => boolean = () => false
 ): string[] {
   const inTree = new Set(tree.map(entry => entry.path));
-  return picked.filter(path => inTree.has(path) && isVisiblePath(path));
+  return picked.filter(path => inTree.has(path) && isVisiblePath(path) && !isExcluded(path));
 }
 
 /**
@@ -1402,7 +1448,7 @@ export const exploreRepoTask = task({
       explorationEffort,
     } = payload;
 
-    const model = explorationModel || 'claude-sonnet-5';
+    const model = explorationModel || FALLBACK_MODEL;
     const requestedEffort = toEffortLevel(explorationEffort);
     if (explorationEffort && !requestedEffort) {
       logger.warn(`Ignoring unknown explorationEffort ${JSON.stringify(explorationEffort)}`);
@@ -1487,7 +1533,7 @@ export const exploreRepoTask = task({
     metadata.set('currentStep', `Reading ${filePaths.length} files`);
     await metadata.flush();
 
-    const files = await fetchMultipleFiles(owner, repo, filePaths, accessToken, 3, gitHost);
+    const files = await fetchMultipleFiles(owner, repo, filePaths, accessToken, 3, { gitHost });
 
     const successCount = files.filter(f => !f.error).length;
     console.log(`[explore-repo] Step 3 done: read ${successCount}/${filePaths.length} files`);

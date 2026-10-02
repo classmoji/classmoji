@@ -51,6 +51,15 @@ const isSourceMaterialConflict = (error: unknown) =>
 const SOURCE_MATERIAL_CONFLICT =
   "Someone else saved this quiz's source material at the same time. Reload and save again.";
 
+/**
+ * quiz.create/update refuse "Paths to exclude" they cannot save (empty,
+ * absolute, "..", too many) with a QuizExcludedPathsError before writing
+ * anything; its message names the pattern and is shown as is. Matched by name,
+ * as above.
+ */
+const isExcludedPathsRefusal = (error: unknown): error is Error =>
+  (error as { name?: unknown } | null)?.name === 'QuizExcludedPathsError';
+
 interface AdminQuiz {
   id: string;
   name: string;
@@ -237,6 +246,12 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       headers: { 'Content-Type': 'application/json' },
     });
 
+  const excludedPathsRefused = (error: Error) =>
+    new Response(JSON.stringify({ error: error.message }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
   /** A ResourceLinkServiceError from quiz.create/update, as the form shows it. */
   const sourceMaterialRefused = (error: unknown) =>
     isSourceMaterialConflict(error) ? sourceMaterialConflict() : sourceMaterialNotFound();
@@ -302,6 +317,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         });
       } catch (error) {
         if (isSourceMaterialRefusal(error)) return sourceMaterialRefused(error);
+        if (isExcludedPathsRefusal(error)) return excludedPathsRefused(error);
         throw error;
       }
       await audit('CREATE', newQuiz.id, {
@@ -327,6 +343,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         await ClassmojiService.quiz.update(data.id, data);
       } catch (error) {
         if (isSourceMaterialRefusal(error)) return sourceMaterialRefused(error);
+        if (isExcludedPathsRefusal(error)) return excludedPathsRefused(error);
         throw error;
       }
       await audit('UPDATE', data.id, {

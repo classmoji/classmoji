@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const quizFindByIdMock = vi.fn();
 const findWithMessagesMock = vi.fn();
 const loadTranscriptMock = vi.fn();
+const messageLimitMock = vi.fn();
 const assertAccessMock = vi.fn();
 const quizzesVisibleMock = vi.fn();
 
@@ -20,7 +21,10 @@ vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     quiz: { findById: (...a: unknown[]) => quizFindByIdMock(...a) },
     quizAttempt: { findWithMessages: (...a: unknown[]) => findWithMessagesMock(...a) },
-    quizChat: { loadTranscriptForViewer: (...a: unknown[]) => loadTranscriptMock(...a) },
+    quizChat: {
+      loadTranscriptForViewer: (...a: unknown[]) => loadTranscriptMock(...a),
+      messageLimitOf: (...a: unknown[]) => messageLimitMock(...a),
+    },
   },
   QuizAttemptNotFoundError: class QuizAttemptNotFoundError extends Error {},
 }));
@@ -92,10 +96,11 @@ beforeEach(() => {
   quizzesVisibleMock.mockResolvedValue(true);
   quizFindByIdMock.mockResolvedValue(QUIZ);
   loadTranscriptMock.mockResolvedValue(PROJECTED);
+  messageLimitMock.mockResolvedValue({ messagesLeft: 200, endedBy: null });
 });
 
 describe('staff attempt loader — chat-runtime attempts', () => {
-  it("serves staff a student's chat attempt as its projected transcript, read-only", async () => {
+  it("serves staff a student's chat attempt as its staff transcript, read-only", async () => {
     signInAs('teacher-1', 'TEACHER');
     findWithMessagesMock.mockResolvedValue({
       attempt: attemptOf('student-1', 'trigger_chat'),
@@ -104,7 +109,7 @@ describe('staff attempt loader — chat-runtime attempts', () => {
 
     const data = await load();
 
-    expect(loadTranscriptMock).toHaveBeenCalledWith('attempt-1');
+    expect(loadTranscriptMock).toHaveBeenCalledWith('attempt-1', 'staff');
     expect(data.transcript).toEqual(PROJECTED);
     expect(data.messages).toEqual([]);
     expect(data.viewerOwnsAttempt).toBe(false);
@@ -112,7 +117,7 @@ describe('staff attempt loader — chat-runtime attempts', () => {
     expect(JSON.stringify(data)).not.toContain('ready. Begin');
   });
 
-  it("marks a staff member's own attempt as theirs", async () => {
+  it("marks a staff member's own attempt as theirs, with the student transcript", async () => {
     signInAs('teacher-1', 'TEACHER');
     findWithMessagesMock.mockResolvedValue({
       attempt: attemptOf('teacher-1', 'trigger_chat'),
@@ -122,6 +127,10 @@ describe('staff attempt loader — chat-runtime attempts', () => {
     const data = await load();
 
     expect(data.viewerOwnsAttempt).toBe(true);
+    // The owner drives the chat, whose stream never carries expected_answer.
+    expect(loadTranscriptMock).toHaveBeenCalledWith('attempt-1', 'student');
+    // Its opening was admitted: a second tab joins it rather than beginning.
+    expect(data.chatStarted).toBe(true);
   });
 
   it('serves an ai-agent attempt exactly as before', async () => {
@@ -134,5 +143,20 @@ describe('staff attempt loader — chat-runtime attempts', () => {
     expect(data.messages).toEqual(RAW_ROWS);
     expect(data.transcript).toBeNull();
     expect(data.attempt.agent_runtime).toBe('ai_agent');
+  });
+
+  it("tells staff a student's attempt was submitted at the message limit", async () => {
+    signInAs('teacher-1', 'TEACHER');
+    findWithMessagesMock.mockResolvedValue({
+      attempt: { ...attemptOf('student-1', 'trigger_chat'), completed_at: new Date() },
+      messages: RAW_ROWS,
+    });
+    messageLimitMock.mockResolvedValue({ messagesLeft: 0, endedBy: 'turn_limit' });
+
+    const data = await load();
+
+    expect(messageLimitMock).toHaveBeenCalledWith('attempt-1');
+    expect(data.attempt.ended_by).toBe('turn_limit');
+    expect(data.messagesLeft).toBeNull();
   });
 });
