@@ -59,21 +59,19 @@ const assignment = (
   is_extra_credit: false,
   release_at: null,
   student_deadline: at(24),
+  closes_at: null as Date | null,
   repository_id: type === 'REPO' ? `repo-${id}` : null,
   repository: type === 'REPO' ? { id: `repo-${id}`, is_published: true } : null,
   quiz_id: type === 'QUIZ' ? `quiz-${id}` : null,
-  quiz: type === 'QUIZ' ? { id: `quiz-${id}`, name: `Quiz ${id}`, status: 'PUBLISHED' } : null,
   form_id: type === 'FORM' ? `form-${id}` : null,
   form: type === 'FORM' ? { id: `form-${id}`, status: 'OPEN' } : null,
   ...over,
 });
 
-/** A quiz row as the service selects it. */
+/** A quiz row as the service selects it: its content, not its schedule. */
 const quiz = (id: string, over: Record<string, unknown> = {}) => ({
   id,
   name: `Quiz name ${id}`,
-  status: 'PUBLISHED',
-  due_date: null,
   max_attempts: 2,
   grading_strategy: 'HIGHEST',
   ...over,
@@ -163,11 +161,11 @@ describe('listForStudent — which assignments appear', () => {
         'is_extra_credit',
         'release_at',
         'student_deadline',
+        'closes_at',
         'quiz_id',
         'form_id',
         'module',
         'repository',
-        'quiz',
         'form',
       ].sort()
     );
@@ -191,10 +189,7 @@ describe('listForStudent — which assignments appear', () => {
   it('applies the student-visibility rule', async () => {
     mocks.listForClassroom.mockResolvedValue([
       assignment('q-ok', 'QUIZ'),
-      assignment('q-draft', 'QUIZ', {
-        is_published: false,
-        quiz: { id: 'quiz-q-draft', status: 'DRAFT' },
-      }),
+      assignment('q-draft', 'QUIZ', { is_published: false }),
       assignment('q-later', 'QUIZ', { release_at: at(48) }),
       assignment('f-draft', 'FORM', { form: { id: 'form-f-draft', status: 'DRAFT' } }),
       assignment('r-hidden', 'REPO', { repository: { id: 'repo-x', is_published: false } }),
@@ -507,20 +502,34 @@ describe('listForStudent — QUIZ rows', () => {
     expect(row).toMatchObject({ status: 'COMPLETED', score: 0 });
   });
 
-  it('is Closed, done and never overdue, for a closed quiz never taken', async () => {
-    const row = await quizRow([], { status: 'CLOSED' }, { student_deadline: at(-48) });
+  it('is Closed, done and never overdue, once its close date has passed and it was never taken', async () => {
+    const row = await quizRow([], {}, { student_deadline: at(-48), closes_at: at(-1) });
 
     expect(row).toMatchObject({ status: 'CLOSED', done: true, action: null });
   });
 
+  it("reads the close date off the assignment, whatever the quiz's own status says", async () => {
+    // The quiz's status is a mirror written at save time; a close date that
+    // passed since never rewrote it.
+    const closed = await quizRow([], { status: 'PUBLISHED' }, { closes_at: at(-1) });
+    expect(closed).toMatchObject({ status: 'CLOSED', action: null });
+
+    const open = await quizRow([], { status: 'CLOSED' }, { closes_at: at(1) });
+    expect(open).toMatchObject({ status: 'NOT_STARTED', action: { kind: 'START_QUIZ' } });
+  });
+
   it('is Completed, not Closed, for a closed quiz the student finished', async () => {
-    const row = await quizRow([attempt('done', 'quiz-a-q', 30, true, 70)], { status: 'CLOSED' });
+    const row = await quizRow([attempt('done', 'quiz-a-q', 30, true, 70)], {}, { closes_at: at(-1) });
 
     expect(row).toMatchObject({ status: 'COMPLETED', score: 70 });
   });
 
   it('can still be resumed when it closed during an attempt', async () => {
-    const row = await quizRow([attempt('run', 'quiz-a-q', 1, false, null)], { status: 'CLOSED' });
+    const row = await quizRow(
+      [attempt('run', 'quiz-a-q', 1, false, null)],
+      {},
+      { closes_at: at(-0.5) }
+    );
 
     expect(row).toMatchObject({ status: 'IN_PROGRESS', action: { kind: 'RESUME_QUIZ' } });
   });
@@ -531,13 +540,11 @@ describe('listForStudent — QUIZ rows', () => {
     expect(row).toMatchObject({ attemptsUsed: 1, maxAttempts: 0 });
   });
 
-  it("takes the assignment's due date, falling back to the quiz's own", async () => {
-    const quizDue = at(72);
-    expect((await quizRow([], { due_date: quizDue }, { student_deadline: null })).deadline).toBe(
-      quizDue.toISOString()
-    );
-    expect((await quizRow([], { due_date: quizDue }, { student_deadline: at(5) })).deadline).toBe(
-      at(5).toISOString()
+  it("takes the assignment's due date, and none when the assignment has none", async () => {
+    expect((await quizRow([], {}, { student_deadline: at(5) })).deadline).toBe(at(5).toISOString());
+    // The quiz's own due date is a mirror of the assignment's; it is not read.
+    expect((await quizRow([], { due_date: at(72) }, { student_deadline: null })).deadline).toBe(
+      null
     );
   });
 });

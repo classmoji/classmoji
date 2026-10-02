@@ -120,7 +120,8 @@ const LIST_INCLUDE = {
   repository: {
     select: { id: true, title: true, slug: true, type: true, template: true, is_published: true },
   },
-  quiz: { select: { id: true, name: true, status: true } },
+  // A quiz's schedule and publish state are this row's own columns.
+  quiz: { select: { id: true, name: true } },
   form: { select: { id: true, title: true, slug: true, status: true } },
   _count: { select: { git_repo_assignments: true } },
 } satisfies Prisma.AssignmentInclude;

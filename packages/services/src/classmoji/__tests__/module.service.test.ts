@@ -405,6 +405,22 @@ describe('listForClassroom', () => {
     expect(await listForClassroom('missing')).toEqual([]);
   });
 
+  it('leaves legacy QUIZ items out for every viewer: a quiz is listed by its assignment', async () => {
+    const items = [
+      { item_type: 'PAGE', page: { classroom_id: 'c1', is_draft: false } },
+      { item_type: 'QUIZ', quiz: { classroom_id: 'c1', status: 'PUBLISHED' } },
+    ];
+    moduleFindMany.mockResolvedValue([{ id: 'm1', items, assignments: [] }]);
+
+    for (const options of [
+      { quizzesVisible: true },
+      { includeUnpublished: true, quizzesVisible: true },
+    ]) {
+      const [module] = await listForClassroom('cls', options);
+      expect(module.items.map(i => i.item_type)).toEqual(['PAGE']);
+    }
+  });
+
   describe('assignments under the student-visibility rule', () => {
     const FUTURE = new Date(Date.now() + 7 * 86_400_000);
     const assignment = (id: string, type: string, over: Record<string, unknown> = {}) => ({
@@ -413,7 +429,7 @@ describe('listForClassroom', () => {
       is_published: true,
       release_at: null,
       repository: type === 'REPO' ? { is_published: true } : null,
-      quiz: type === 'QUIZ' ? { status: 'PUBLISHED' } : null,
+      quiz: type === 'QUIZ' ? { id: `quiz-${id}`, name: id } : null,
       form: type === 'FORM' ? { status: 'OPEN' } : null,
       ...over,
     });

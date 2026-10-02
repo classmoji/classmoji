@@ -53,7 +53,9 @@ const ITEM_INCLUDE = {
 // quiz, or the form) and the pages / slide decks attached to it.
 const ASSIGNMENT_INCLUDE = {
   repository: { select: { id: true, title: true, slug: true, type: true, is_published: true } },
-  quiz: { select: { id: true, name: true, status: true } },
+  // The quiz's name only: its publish state, due and close dates are the
+  // assignment's own columns.
+  quiz: { select: { id: true, name: true } },
   form: { select: { id: true, title: true, slug: true, status: true } },
   pages: { include: { page: true }, orderBy: { order: 'asc' } },
   slides: { include: { slide: true }, orderBy: { order: 'asc' } },
@@ -287,9 +289,13 @@ export const listForClassroom = async (
     orderBy: [{ position: 'asc' }, { created_at: 'asc' }],
   });
 
+  // Legacy QUIZ items are left out for every viewer: a quiz sits in a module
+  // through its assignment, which is listed with the module's assignments.
   const modulesWithScopedItems = modules.map(m => ({
     ...m,
-    items: m.items.filter(item => isItemTargetInClassroom(item, classroomId)),
+    items: m.items.filter(
+      item => item.item_type !== ModuleItemType.QUIZ && isItemTargetInClassroom(item, classroomId)
+    ),
   }));
 
   if (includeUnpublished) return modulesWithScopedItems;

@@ -208,13 +208,14 @@ describe('getDeadlinesForRange — the student-visibility rule', () => {
     expect(quizzesVisible).toHaveBeenCalledTimes(1);
   });
 
-  it('reads the release date, quiz status and form status for the rule', async () => {
+  it("reads the form's status for the rule, and nothing off the quiz", async () => {
     assignmentFindMany.mockResolvedValue([]);
 
     await getDeadlinesForRange('class-1', START, END);
 
+    // A quiz's publish state and Opens date are the assignment's own columns.
     const { include } = assignmentFindMany.mock.calls[0][0];
-    expect(include.quiz).toEqual({ select: { status: true } });
+    expect(include.quiz).toBeUndefined();
     expect(include.form).toEqual({ select: { status: true } });
   });
 });
