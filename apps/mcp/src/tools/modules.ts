@@ -375,12 +375,10 @@ export const moduleDeleteTool: ToolDefinition<ModuleDeleteArgs> = {
       // Held back by assignments this classroom does not list: moving the
       // listed ones could never unblock it, so say no more than that — the
       // line the Modules page gives, which offers no Delete for such a module.
+      // No code either: MODULE_HAS_ASSIGNMENTS on a module list_modules shows
+      // as owning none would say what the message does not.
       if (listed.length < module.assignments.length) {
-        throw new ToolError(
-          'invalid_params',
-          'This module can’t be deleted.',
-          'MODULE_HAS_ASSIGNMENTS'
-        );
+        throw new ToolError('invalid_params', 'This module can’t be deleted.');
       }
       throw new ToolError(
         'invalid_params',

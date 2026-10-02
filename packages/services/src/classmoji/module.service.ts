@@ -451,7 +451,11 @@ export const deleteById = async (id: string, classroomId?: string) => {
     // row) either lands first and is counted below, or waits and finds the
     // module gone. Without the lock it could land between the two statements
     // and be cascade-deleted with its submissions.
-    await tx.$queryRaw`SELECT id FROM modules WHERE id = ${id} FOR UPDATE`;
+    const locked = await tx.$queryRaw<
+      Array<{ id: string }>
+    >`SELECT id FROM modules WHERE id = ${id} FOR UPDATE`;
+    // Another delete of this module finished while this one waited for the row.
+    if (locked.length === 0) throw new Error('Module not found in classroom');
     // A module that still owns assignments cannot go: deleting it would cascade
     // into their submissions, grades and regrades. Move or delete them first.
     const owned = await tx.assignment.count({ where: { module_id: id } });

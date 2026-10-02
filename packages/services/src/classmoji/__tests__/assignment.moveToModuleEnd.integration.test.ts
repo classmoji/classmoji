@@ -362,7 +362,6 @@ describe.skipIf(!RUN)('assignment.moveToModuleEnd (integration)', () => {
     // module lock first decides: the move lands and the delete is refused, or
     // the delete lands and the move finds no module. The assignment survives
     // both, which is the one outcome the foreign key's cascade would not give.
-    const outcomes = new Set<string>();
     for (let round = 0; round < 20; round++) {
       const from = await makeModule();
       const doomed = await makeModule();
@@ -393,17 +392,107 @@ describe.skipIf(!RUN)('assignment.moveToModuleEnd (integration)', () => {
         expect(String((del as PromiseRejectedResult).reason)).toContain('still has assignments');
         expect(moduleLeft).not.toBeNull();
         expect(survivor?.module_id).toBe(doomed.id);
-        outcomes.add('move-won');
       } else {
         // The delete won: the assignment is where it was.
         expect(del.status, `round ${round}`).toBe('fulfilled');
         expect(String(move.reason)).toContain('Module not found in classroom');
         expect(moduleLeft).toBeNull();
         expect(survivor?.module_id).toBe(from.id);
-        outcomes.add('delete-won');
       }
     }
-    expect(outcomes.size).toBeGreaterThan(0);
+  });
+
+  /**
+   * The deterministic half of the race above. `write` is held open, uncommitted,
+   * inside its own transaction while a delete of the module starts; the delete
+   * has to WAIT for it (asserted), and once it commits the delete has to see
+   * the assignment and refuse. These are the writers that take no explicit
+   * lock: all that stops them is the key-share their foreign key takes on the
+   * module row, which only an exclusive lock in the delete conflicts with.
+   */
+  type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+  const deleteWhile = async (doomedId: string, write: (tx: Tx) => Promise<unknown>) => {
+    let release!: () => void;
+    const heldUntil = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const holder = prisma.$transaction(
+      async tx => {
+        await write(tx);
+        await heldUntil;
+      },
+      { timeout: 20000 }
+    );
+    // Let the holder's write land before the delete starts.
+    await new Promise(resolve => setTimeout(resolve, 150));
+
+    let settled = false;
+    const outcome = moduleService.deleteById(doomedId, classroomId).then(
+      () => {
+        settled = true;
+        return 'deleted';
+      },
+      (error: unknown) => {
+        settled = true;
+        return String(error);
+      }
+    );
+    await new Promise(resolve => setTimeout(resolve, 400));
+    const waited = !settled;
+
+    release();
+    await holder;
+    return { waited, outcome: await outcome };
+  };
+
+  it('waits out an uncommitted drag into the module, then refuses to delete it', async () => {
+    const from = await makeModule();
+    const doomed = await makeModule();
+    const assignment = await makeAssignment(from.id, { title: 'dragged-in' });
+
+    // What the web's moveToModule does first: a bare write of module_id.
+    const { waited, outcome } = await deleteWhile(doomed.id, tx =>
+      tx.assignment.update({ where: { id: assignment.id }, data: { module_id: doomed.id } })
+    );
+
+    // Without the lock the delete would have counted zero, then cascaded.
+    expect(waited).toBe(true);
+    expect(outcome).toContain('Module still has assignments');
+    expect(await prisma.module.findUnique({ where: { id: doomed.id } })).not.toBeNull();
+    expect(
+      await prisma.assignment.findUnique({
+        where: { id: assignment.id },
+        select: { module_id: true },
+      })
+    ).toEqual({ module_id: doomed.id });
+  });
+
+  it('waits out an uncommitted new assignment in the module, then refuses to delete it', async () => {
+    const doomed = await makeModule();
+    const title = `created-during-delete#${suite}`;
+
+    const { waited, outcome } = await deleteWhile(doomed.id, tx =>
+      tx.assignment.create({
+        data: { module_id: doomed.id, type: 'REPO', repository_id: repositoryId, title },
+      })
+    );
+
+    expect(waited).toBe(true);
+    expect(outcome).toContain('Module still has assignments');
+    expect(await prisma.assignment.count({ where: { module_id: doomed.id, title } })).toBe(1);
+  });
+
+  it('lets one of two simultaneous deletes of a module through, the other as not found', async () => {
+    const doomed = await makeModule();
+
+    const outcomes = await Promise.allSettled([
+      moduleService.deleteById(doomed.id, classroomId),
+      moduleService.deleteById(doomed.id, classroomId),
+    ]);
+
+    expect(outcomes.filter(o => o.status === 'fulfilled')).toHaveLength(1);
+    const lost = outcomes.find(o => o.status === 'rejected') as PromiseRejectedResult;
+    expect(String(lost.reason)).toContain('Module not found in classroom');
   });
 
   it('student module list: published assignments only, a REPO one only with its repository published', async () => {

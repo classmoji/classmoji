@@ -650,11 +650,14 @@ describe('module_delete', () => {
 
       // The Modules page's own line: moving the listed assignments could never
       // unblock it, and nothing here may say a quiz exists.
-      expect(error).toMatchObject({ kind: 'invalid_params', code: 'MODULE_HAS_ASSIGNMENTS' });
+      expect(error.kind).toBe('invalid_params');
       expect(error.message).toBe('This module can’t be deleted.');
+      // Nothing that reaches the client says why: the web's own bar for this
+      // refusal (quizVisibility.test.ts) is no quiz, no assignment, no "hidden".
+      expect(error.code).toBeUndefined();
       expect(error.data).toBeUndefined();
-      expect(JSON.stringify({ m: error.message, d: error.data }).toLowerCase()).not.toContain(
-        'quiz'
+      expect(JSON.stringify({ m: error.message, c: error.code, d: error.data })).not.toMatch(
+        /quiz|assignment|hidden/i
       );
       expect(mocks.quizzesVisible).toHaveBeenCalledWith('class-1');
       expect(mocks.moduleDeleteById).not.toHaveBeenCalled();

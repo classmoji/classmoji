@@ -157,32 +157,36 @@ describe('setPublic', () => {
 
 describe('deleteById', () => {
   // deleteById runs its check and its delete inside one interactive
-  // transaction; hand it a client whose calls are the mocks below.
+  // transaction; hand it a client whose calls are the mocks below. The
+  // transaction's delete is its OWN mock, apart from the root client's
+  // `moduleDelete`: a delete issued outside the transaction would not be under
+  // the lock, and has to fail these tests.
+  const txModuleDelete = vi.fn();
   const tx = {
     $queryRaw: queryRaw,
     assignment: { count: assignmentCount },
-    module: { delete: moduleDelete },
+    module: { delete: txModuleDelete },
   };
   beforeEach(() => {
     transaction.mockImplementation(async (run: (client: typeof tx) => unknown) => run(tx));
     queryRaw.mockResolvedValue([{ id: 'mod1' }]);
+    moduleFindFirst.mockResolvedValue({ id: 'mod1' });
+    txModuleDelete.mockResolvedValue({ id: 'mod1' });
   });
 
   it('refuses a module that owns any assignment, of any kind, and deletes nothing', async () => {
     // One count over every assignment type: the refusal does not care whether
     // the page listed them (a classroom without quizzes lists no QUIZ ones).
-    moduleFindFirst.mockResolvedValue({ id: 'mod1' });
     assignmentCount.mockResolvedValue(1);
 
     await expect(deleteById('mod1', 'class-1')).rejects.toThrow('Module still has assignments');
     expect(assignmentCount).toHaveBeenCalledWith({ where: { module_id: 'mod1' } });
+    expect(txModuleDelete).not.toHaveBeenCalled();
     expect(moduleDelete).not.toHaveBeenCalled();
   });
 
   it('deletes a module with no assignments, leaving its items to the cascade', async () => {
-    moduleFindFirst.mockResolvedValue({ id: 'mod1' });
     assignmentCount.mockResolvedValue(0);
-    moduleDelete.mockResolvedValue({ id: 'mod1' });
 
     await deleteById('mod1', 'class-1');
 
@@ -190,7 +194,9 @@ describe('deleteById', () => {
       where: { id: 'mod1', classroom_id: 'class-1' },
       select: { id: true },
     });
-    expect(moduleDelete).toHaveBeenCalledWith({ where: { id: 'mod1' } });
+    // Inside the transaction, never on the root client.
+    expect(txModuleDelete).toHaveBeenCalledWith({ where: { id: 'mod1' } });
+    expect(moduleDelete).not.toHaveBeenCalled();
     // Its ModuleItem rows go with it through the foreign key (ON DELETE
     // CASCADE); the pages, quizzes, slides and forms they point at stay.
     expect(itemDeleteMany).not.toHaveBeenCalled();
@@ -199,9 +205,7 @@ describe('deleteById', () => {
   it('locks the module row before it counts, and counts before it deletes', async () => {
     // The order is the whole point: an assignment moved in at the same moment
     // must be either counted or kept out, never cascade-deleted.
-    moduleFindFirst.mockResolvedValue({ id: 'mod1' });
     assignmentCount.mockResolvedValue(0);
-    moduleDelete.mockResolvedValue({ id: 'mod1' });
 
     await deleteById('mod1', 'class-1');
 
@@ -212,7 +216,17 @@ describe('deleteById', () => {
     const at = (mock: { mock: { invocationCallOrder: number[] } }) =>
       mock.mock.invocationCallOrder[0];
     expect(at(queryRaw)).toBeLessThan(at(assignmentCount));
-    expect(at(assignmentCount)).toBeLessThan(at(moduleDelete));
+    expect(at(assignmentCount)).toBeLessThan(at(txModuleDelete));
+  });
+
+  it('reports a module another delete removed while this one waited for the row', async () => {
+    // The scoped check passed, then the lock came back with no row: the same
+    // refusal as a module that was never there, not a failed DELETE.
+    queryRaw.mockResolvedValue([]);
+
+    await expect(deleteById('mod1', 'class-1')).rejects.toThrow('Module not found in classroom');
+    expect(assignmentCount).not.toHaveBeenCalled();
+    expect(txModuleDelete).not.toHaveBeenCalled();
   });
 
   it('refuses a module from another classroom before looking at it', async () => {
@@ -220,7 +234,7 @@ describe('deleteById', () => {
 
     await expect(deleteById('mod1', 'class-2')).rejects.toThrow('Module not found in classroom');
     expect(transaction).not.toHaveBeenCalled();
-    expect(moduleDelete).not.toHaveBeenCalled();
+    expect(txModuleDelete).not.toHaveBeenCalled();
   });
 });
 
