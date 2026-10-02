@@ -394,6 +394,12 @@ const translateMoveError = (error: unknown): never => {
 };
 
 /**
+ * A save that found no assignment to lock, then, under the quiz row's lock,
+ * the assignment another save created meanwhile. The save runs again.
+ */
+class AssignmentAppearedError extends Error {}
+
+/**
  * Update a quiz and, when the save names any, its assignment, in ONE
  * transaction.
  *
@@ -410,6 +416,9 @@ const translateMoveError = (error: unknown): never => {
  *   before; new-shape assignment fields are refused.
  *
  * Notifications (published, due date changed) go out after the commit.
+ *
+ * Two first saves of a quiz with no assignment, at once, take turns on the
+ * quiz row: the second sees the first's assignment and saves onto it.
  */
 export const update = async (quizId: string, data: QuizUpdateInput) => {
   const updateData: Prisma.QuizUpdateInput = {};
@@ -453,10 +462,44 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
   // and their users are not loaded: an interactive transaction holds its
   // connection and has a time limit, and a long-running quiz can have
   // hundreds of attempts.
-  const result = await getPrisma().$transaction(async tx => {
-    // The quiz's assignment row is locked before it is read, so two saves at
-    // once see each other's result and a publish is announced once.
-    await tx.$queryRaw`SELECT id FROM assignments WHERE quiz_id = ${quizId} FOR UPDATE`;
+  const saveIn = async (tx: Tx) => {
+    // Locks first, in the order every other writer of a quiz's assignment
+    // takes them, so two writers cannot wait on each other: the module rows a
+    // move touches (sorted by id, as moveToModuleEndTx and module.deleteById
+    // take them), then the assignment row, then the quiz row. The assignment
+    // row is locked before it is read, so two saves at once see each other's
+    // result and a publish is announced once.
+    if (changes.moduleId) {
+      const placed = await tx.quiz.findUnique({
+        where: { id: quizId },
+        select: { classroom_id: true, assignment: { select: { module_id: true } } },
+      });
+      if (placed) {
+        const moduleIds = [...new Set([placed.assignment?.module_id, changes.moduleId])]
+          .filter((id): id is string => Boolean(id))
+          .sort();
+        for (const moduleId of moduleIds) {
+          await tx.$queryRaw`SELECT id FROM modules WHERE id = ${moduleId} AND classroom_id = ${placed.classroom_id} FOR UPDATE`;
+        }
+      }
+    }
+    const locked = await tx.$queryRaw<
+      Array<{ id: string }>
+    >`SELECT id FROM assignments WHERE quiz_id = ${quizId} FOR UPDATE`;
+    if (locked.length === 0) {
+      // No assignment to lock: the quiz row is the lock, so two first saves
+      // at once take turns. One that waited may find the assignment the other
+      // created; it runs again, taking the assignment's lock first like
+      // every other writer.
+      await tx.$queryRaw`SELECT id FROM quizzes WHERE id = ${quizId} FOR UPDATE`;
+      const appeared = await tx.assignment.findUnique({
+        where: { quiz_id: quizId },
+        select: { id: true },
+      });
+      if (appeared) throw new AssignmentAppearedError();
+    }
+    // This attempt's own copy: a run that goes again starts from the input.
+    const quizData: Prisma.QuizUpdateInput = { ...updateData };
     const current = await tx.quiz.findUnique({
       where: { id: quizId },
       select: {
@@ -496,12 +539,12 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
       if (namesAssignmentFields(data.assignment)) {
         throw new QuizAssignmentError('module_required', MODULE_REQUIRED_MESSAGE);
       }
-      if (data.dueDate !== undefined) updateData.due_date = changes.student_deadline ?? null;
-      if (data.status !== undefined) updateData.status = data.status;
-      if (data.weight !== undefined) updateData.weight = mirroredQuizWeight(changes.weight ?? 0);
+      if (data.dueDate !== undefined) quizData.due_date = changes.student_deadline ?? null;
+      if (data.status !== undefined) quizData.status = data.status;
+      if (data.weight !== undefined) quizData.weight = mirroredQuizWeight(changes.weight ?? 0);
     }
 
-    const quiz = await tx.quiz.update({ where: { id: quizId }, data: updateData });
+    const quiz = await tx.quiz.update({ where: { id: quizId }, data: quizData });
 
     if (assignment) {
       const assignmentData: Prisma.AssignmentUncheckedUpdateInput = {};
@@ -588,7 +631,18 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
       include: { assignment: { include: { module: { select: { id: true, title: true } } } } },
     });
     return { saved, assignment, previous };
-  });
+  };
+
+  let result: Awaited<ReturnType<typeof saveIn>>;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      result = await getPrisma().$transaction(saveIn);
+      break;
+    } catch (error) {
+      if (error instanceof AssignmentAppearedError && attempt < 3) continue;
+      throw error;
+    }
+  }
 
   const { assignment, previous } = result;
   if (assignment && previous) {

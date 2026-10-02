@@ -13,7 +13,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const tx = {
-  // The assignment row lock update takes first.
+  // The row locks update takes first: the assignment's, and with none, the
+  // quiz's.
   $queryRaw: vi.fn(async () => []),
   quiz: {
     create: vi.fn(),
@@ -22,7 +23,9 @@ const tx = {
     findUniqueOrThrow: vi.fn(),
   },
   module: { findFirst: vi.fn() },
-  assignment: { create: vi.fn(), findFirst: vi.fn() },
+  // findUnique: whether an assignment appeared while update waited for the
+  // quiz row's lock (none here).
+  assignment: { create: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(async () => null) },
   page: { findMany: vi.fn() },
   slide: { findMany: vi.fn() },
   pageLink: { deleteMany: vi.fn(), createMany: vi.fn() },

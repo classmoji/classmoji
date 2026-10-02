@@ -482,6 +482,25 @@ describe.skipIf(!RUN)('a quiz and its assignment (integration)', () => {
   describe('a quiz with no assignment', () => {
     const DUE = new Date('2026-11-20T23:59:00.000Z');
 
+    it('two first saves at once give the quiz one assignment, and both land', async () => {
+      const moduleId = await makeModule();
+      const quiz = await quizWithoutAssignment({ status: 'DRAFT', weight: 7 });
+
+      const results = await Promise.allSettled([
+        quizService.update(quiz.id, { assignment: { moduleId, weight: 3 } }),
+        quizService.update(quiz.id, { assignment: { moduleId, dueDate: DUE } }),
+      ]);
+
+      expect(results.map(r => r.status)).toEqual(['fulfilled', 'fulfilled']);
+      expect(await prisma.assignment.count({ where: { quiz_id: quiz.id } })).toBe(1);
+      // The second save landed on the first one's assignment.
+      expect(await assignmentOf(quiz.id)).toMatchObject({
+        module_id: moduleId,
+        weight: 3,
+        student_deadline: DUE,
+      });
+    });
+
     it('refuses assignment fields without a module, and writes nothing from that save', async () => {
       const quiz = await quizWithoutAssignment({ status: 'PUBLISHED', weight: 7, due_date: DUE });
 
