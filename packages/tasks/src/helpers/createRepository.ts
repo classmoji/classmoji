@@ -1,4 +1,4 @@
-import { simpleGit } from 'simple-git';
+import { simpleGit, type SimpleGit } from 'simple-git';
 import { logger } from '@trigger.dev/sdk';
 import path from 'path';
 import fs from 'fs';
@@ -28,6 +28,10 @@ export interface CreateRepositoryPayload {
   token: string;
   organizationGithubPlan: string;
 }
+
+/** Whether the repository's .gitignore rules exclude `file`. */
+const isIgnored = async (repoGit: SimpleGit, file: string): Promise<boolean> =>
+  (await repoGit.checkIgnore([file])).length > 0;
 
 const isAlreadyExistsError = (error: unknown): error is { status: number; message?: string } => {
   return typeof error === 'object' && error !== null && 'status' in error;
@@ -134,11 +138,18 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
     await repoGit.push('origin', 'feedback', ['--set-upstream']);
     await repoGit.checkout('main');
 
-    const classmojiPath = path.join(localPath, 'CLASSMOJI.md');
-    fs.writeFileSync(classmojiPath, 'Hello! This is your gitRepo for the assignment. 📝\n');
-
-    await repoGit.add('CLASSMOJI.md');
-    await repoGit.commit('Add Classmoji welcome message');
+    // The Feedback pull request (main into feedback) needs `main` one commit
+    // ahead of `feedback`. That commit adds the welcome file, unless the
+    // template's .gitignore excludes it: the instructor's choice stands, and an
+    // empty commit opens the pull request instead.
+    if (await isIgnored(repoGit, 'CLASSMOJI.md')) {
+      await repoGit.commit('Start your feedback space', undefined, { '--allow-empty': null });
+    } else {
+      const classmojiPath = path.join(localPath, 'CLASSMOJI.md');
+      fs.writeFileSync(classmojiPath, 'Hello! This is your gitRepo for the assignment. 📝\n');
+      await repoGit.add('CLASSMOJI.md');
+      await repoGit.commit('Add Classmoji welcome message');
+    }
     await repoGit.push('origin', 'main');
 
     await gitProvider.createPullRequest(
