@@ -1,6 +1,7 @@
 /**
  * assignment_update — deadline / weight / grades_released / grader_deadline /
- * release_at / module_id (the move to another module).
+ * release_at / closes_at / tokens_per_hour / module_id (the move to another
+ * module).
  *
  * Route-derived per-field tiers (plan §4.2, verified in the tree):
  *   - general edits (weight, …):   OWNER only, but see QUIZ below
@@ -21,10 +22,17 @@
  *                                  updateGradeRelease → ['OWNER','TEACHER'])
  *   - student_deadline move:       OWNER + TEACHER (admin.$class.calendar
  *                                  update_deadline → isAdmin = OWNER/TEACHER)
- *   - weight, release_at on a QUIZ OWNER + TEACHER: teachers author quizzes,
- *     assignment:                  so a quiz's schedule and weight are theirs
- *                                  too (TEACHER_ASSIGNMENT_FIELDS in
- *                                  @classmoji/utils quizAssignment.ts)
+ *   - weight, release_at,          OWNER + TEACHER: teachers author quizzes,
+ *     closes_at, tokens_per_hour   so a quiz's schedule and weight are theirs
+ *     on a QUIZ assignment:        too (TEACHER_ASSIGNMENT_FIELDS in
+ *                                  @classmoji/utils quizAssignment.ts); on a
+ *                                  REPO or FORM row tokens_per_hour is OWNER
+ *                                  only, as every other general edit
+ *   - closes_at:                   QUIZ rows only. Repos ignore a close date and
+ *                                  a form closes through form_update, so it is
+ *                                  refused there for every role.
+ *   - grades_released on a QUIZ:   refused for every role: a quiz's score shows
+ *                                  as soon as an attempt completes.
  *   - module_id (move):            OWNER only on every type (admin.$class.modules
  *                                  `moveAssignment` → requireClassroomAdmin →
  *                                  assignment.moveToModule, the drag between
@@ -41,7 +49,9 @@
  * through the repository, so a quiz or form assignment is out of a teacher's
  * reach there, and grades_released on one is OWNER only here.
  *
- * Backbone: ClassmojiService.assignment.update — the NOTIFYING path (fires
+ * Backbone: ClassmojiService.assignment.update — the NOTIFYING path, which on
+ * a QUIZ row also writes the quiz's own copy of its due date, weight and status
+ * in the same transaction (fires
  * ASSIGNMENT_DUE_DATE_CHANGED on deadline change and ASSIGNMENT_GRADED on a
  * false→true grades_released flip). Never assignment.releaseGrades, which is
  * the same DB write with the notification silently skipped (plan §5.2 gap 7).
@@ -96,6 +106,8 @@ interface AssignmentUpdateArgs {
   grades_released?: boolean;
   grader_deadline?: string | null;
   release_at?: string | null;
+  closes_at?: string | null;
+  tokens_per_hour?: number;
   module_id?: string;
 }
 
@@ -125,12 +137,15 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
   title: 'Update an assignment',
   description:
     'Updates an assignment (a due-dated, gradeable unit of a module): student_deadline, ' +
-    'weight, grades_released, grader_deadline, release_at, and/or module_id. Owners can update ' +
-    'all fields; teachers only grades_released and student_deadline, and on a quiz assignment ' +
-    'student_deadline, weight and release_at. Releasing grades notifies ' +
-    'graded students; moving the student deadline notifies affected students. release_at is ' +
-    'when an unpublished assignment auto-releases to students (checked nightly). Pass null ' +
-    'to clear grader_deadline or release_at; a cleared release_at never auto-releases.\n' +
+    'weight, grades_released, grader_deadline, release_at, closes_at, tokens_per_hour and/or ' +
+    'module_id. Owners can update all fields; teachers only grades_released and ' +
+    'student_deadline, and on a quiz assignment student_deadline, weight, release_at, ' +
+    'closes_at and tokens_per_hour. Releasing grades notifies graded students; moving the ' +
+    'student deadline notifies affected students. release_at is when an unpublished repo ' +
+    'assignment auto-releases (checked nightly); on a quiz it is when a published quiz opens. ' +
+    'closes_at (quiz only) stops new attempts. A quiz shows its score at once, so ' +
+    'grades_released is refused on one. Pass null to clear grader_deadline, release_at or ' +
+    'closes_at.\n' +
     'module_id MOVES the assignment into another module of the classroom (see list_modules), ' +
     'at the end of that module’s assignments (module_reorder sets the order). This is how a lab, quiz or form assignment is ' +
     'placed in a week: an assignment belongs to exactly one module. Only the module changes: ' +
@@ -169,6 +184,18 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       .describe(
         'Auto-release date (ISO 8601); null clears it. Owner only, or a teacher on a quiz assignment'
       ),
+    closes_at: z
+      .string()
+      .datetime({ offset: true })
+      .nullable()
+      .optional()
+      .describe('Quiz only: no new attempt from then on (ISO 8601); null reopens it'),
+    tokens_per_hour: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe('Extension tokens per late hour (0 = no extensions)'),
     module_id: z
       .string()
       .uuid()
@@ -183,7 +210,7 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
     const values: Record<string, string | number | boolean | null> = {};
     const toDate = (iso: string | null) => (iso === null ? null : new Date(iso));
     const setDate = (
-      field: 'student_deadline' | 'grader_deadline' | 'release_at',
+      field: 'student_deadline' | 'grader_deadline' | 'release_at' | 'closes_at',
       iso: string | null
     ) => {
       const date = toDate(iso);
@@ -197,6 +224,10 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
     }
     if (args.grader_deadline !== undefined) setDate('grader_deadline', args.grader_deadline);
     if (args.release_at !== undefined) setDate('release_at', args.release_at);
+    if (args.closes_at !== undefined) setDate('closes_at', args.closes_at);
+    if (args.tokens_per_hour !== undefined) {
+      updates.tokens_per_hour = values.tokens_per_hour = args.tokens_per_hour;
+    }
 
     // What the caller asked to change, for the empty check and the role tier.
     // module_id is not a column write (see the header), so it is counted here
@@ -208,7 +239,8 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
     if (requested.length === 0) {
       throw new ToolError(
         'invalid_params',
-        'Provide at least one of: student_deadline, weight, grades_released, grader_deadline, release_at, module_id'
+        'Provide at least one of: student_deadline, weight, grades_released, grader_deadline, ' +
+          'release_at, closes_at, tokens_per_hour, module_id'
       );
     }
 
@@ -217,13 +249,32 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
     const classroom = requireClassroomCtx(ctx);
     const assignment = await loadCourseworkAssignmentInClassroom(args.assignment_id, ctx);
 
+    // Fields that do not apply to this type, refused for every role before
+    // the role check: a quiz's score shows as soon as an attempt completes, and
+    // only a quiz has a close date (repos ignore one; a form closes through
+    // form_update).
+    if (assignment.type === 'QUIZ' && args.grades_released !== undefined) {
+      throw new ToolError(
+        'invalid_params',
+        'A quiz shows its score as soon as an attempt completes: grades_released does not apply'
+      );
+    }
+    if (assignment.type !== 'QUIZ' && args.closes_at !== undefined) {
+      throw new ToolError(
+        'invalid_params',
+        assignment.type === 'REPO'
+          ? 'closes_at is for quiz assignments: repos ignore a close date'
+          : 'closes_at is for quiz assignments: a form closes with form_update closes_at'
+      );
+    }
+
     // Per-field tier: OWNER-only fields for this type need an OWNER membership
     // (checked via holdsRole so a multi-role OWNER whose gate resolved as
     // TEACHER passes). The web's teacher-tier grades_released route resolves
     // through the repository, so it never reaches a quiz or form assignment:
     // grades_released there is OWNER only too, and gets its own message.
     const ownerOnlyFields = ownerOnlyAssignmentFields(assignment.type, requested);
-    const gradesReleasedOffRepo = args.grades_released !== undefined && assignment.type !== 'REPO';
+    const gradesReleasedOffRepo = args.grades_released !== undefined && assignment.type === 'FORM';
     if (
       (ownerOnlyFields.length > 0 || gradesReleasedOffRepo) &&
       !(await holdsRole(ctx, ['OWNER']))
@@ -231,7 +282,7 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       throw new ToolError(
         'forbidden',
         gradesReleasedOffRepo
-          ? 'Only the classroom owner can update grades_released on a quiz or form assignment'
+          ? 'Only the classroom owner can update grades_released on a form assignment'
           : `Only the classroom owner can update: ${ownerOnlyFields.join(', ')}`,
         'INSUFFICIENT_ROLE'
       );
@@ -288,6 +339,8 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       | 'grades_released'
       | 'grader_deadline'
       | 'release_at'
+      | 'closes_at'
+      | 'tokens_per_hour'
     > = assignment;
     if (fields.length > 0) {
       updated = await ClassmojiService.assignment.update(assignment.id, updates);
@@ -313,6 +366,10 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
         grades_released: updated.grades_released,
         grader_deadline: updated.grader_deadline?.toISOString() ?? null,
         release_at: updated.release_at?.toISOString() ?? null,
+        ...(assignment.type === 'QUIZ'
+          ? { closes_at: updated.closes_at?.toISOString() ?? null }
+          : {}),
+        tokens_per_hour: updated.tokens_per_hour,
       },
       ...(movedFromModuleId ? { moved_from_module_id: movedFromModuleId } : {}),
     });
@@ -481,7 +538,8 @@ export const assignmentDeleteTool: ToolDefinition<AssignmentDeleteArgs> = {
     'grader assignments, regrade requests, token transactions, and analytics, plus its ' +
     'page/slide/calendar links. For an ISSUE-mode assignment it does NOT remove the GitHub issues ' +
     'already created in student repos (they are orphaned), and it does NOT reconcile student ' +
-    'token balances.',
+    'token balances. A quiz assignment is refused: it goes with its quiz (quiz_delete), or ' +
+    'moves with quiz_update module_id.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
@@ -489,6 +547,21 @@ export const assignmentDeleteTool: ToolDefinition<AssignmentDeleteArgs> = {
     assignment_id: z.string().uuid().describe('Assignment id'),
   },
   handler: async (args, ctx) => {
+    // A quiz's assignment is part of the quiz: refused by name, where the
+    // classroom lists quizzes (elsewhere it is not found, like any row no read
+    // surface shows).
+    const record = await ClassmojiService.assignment.findById(args.assignment_id);
+    if (
+      record?.type === 'QUIZ' &&
+      record.module?.classroom_id === requireClassroomCtx(ctx).classroomId
+    ) {
+      await loadCourseworkAssignmentInClassroom(args.assignment_id, ctx);
+      throw new ToolError(
+        'invalid_params',
+        'A quiz’s assignment goes with the quiz: delete the quiz (quiz_delete), or move it to ' +
+          'another module (quiz_update module_id).'
+      );
+    }
     const assignment = await loadAssignmentInClassroom(args.assignment_id, ctx);
     // Blast-radius count for the audit trail (findById includes the submissions).
     const submissionsDeleted = assignment.git_repo_assignments?.length ?? 0;

@@ -807,13 +807,25 @@ describe('assignment_update: grades_released on a quiz or form assignment', () =
     );
   });
 
-  it('refuses a TEACHER: the web’s teacher route only reaches repository assignments', async () => {
-    await expect(assignmentUpdateTool.handler(ARGS, TEACHER_CTX)).rejects.toMatchObject({
-      kind: 'forbidden',
-      message: expect.stringMatching(/quiz or form/),
-    });
+  it('refuses it on a QUIZ assignment for every role: a quiz shows its score at once', async () => {
+    for (const ctx of [CTX, TEACHER_CTX]) {
+      await expect(assignmentUpdateTool.handler(ARGS, ctx)).rejects.toMatchObject({
+        kind: 'invalid_params',
+        message:
+          'A quiz shows its score as soon as an attempt completes: grades_released does not apply',
+      });
+    }
     expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
     expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a TEACHER on a FORM assignment: the web’s teacher route only reaches repository assignments', async () => {
+    mocks.assignmentFindById.mockResolvedValue({ ...QUIZ_ASSIGNMENT, type: 'FORM' });
+    await expect(assignmentUpdateTool.handler(ARGS, TEACHER_CTX)).rejects.toMatchObject({
+      kind: 'forbidden',
+      message: 'Only the classroom owner can update grades_released on a form assignment',
+    });
+    expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
   });
 
   it('still lets a TEACHER flip it on a REPO assignment', async () => {
@@ -826,7 +838,8 @@ describe('assignment_update: grades_released on a quiz or form assignment', () =
     expect(payload.assignment.grades_released).toBe(true);
   });
 
-  it('lets the OWNER set it, as the owner’s web edit form does', async () => {
+  it('lets the OWNER set it on a FORM assignment, as the owner’s web edit form does', async () => {
+    mocks.assignmentFindById.mockResolvedValue({ ...QUIZ_ASSIGNMENT, type: 'FORM' });
     const payload = parse(await assignmentUpdateTool.handler(ARGS, CTX));
     expect(payload.assignment.grades_released).toBe(true);
     expect(mocks.assignmentUpdate).toHaveBeenCalledWith('asg-q', { grades_released: true });
@@ -887,6 +900,9 @@ describe('assignment_update: the teacher tier depends on the assignment type', (
     ['weight', 0, 0],
     ['release_at', RELEASE, new Date(RELEASE)],
     ['release_at', null, null],
+    ['closes_at', '2026-07-28T23:59:00-04:00', new Date('2026-07-28T23:59:00-04:00')],
+    ['closes_at', null, null],
+    ['tokens_per_hour', 3, 3],
   ] as const)('lets a TEACHER set %s (%s) on a QUIZ assignment', async (field, value, written) => {
     mocks.assignmentFindById.mockResolvedValue(QUIZ_ROW);
 
@@ -916,21 +932,24 @@ describe('assignment_update: the teacher tier depends on the assignment type', (
   it.each([
     ['REPO', REPO_ROW],
     ['FORM', FORM_ROW],
-  ] as const)('refuses a TEACHER weight and release_at on a %s assignment', async (_type, row) => {
-    mocks.assignmentFindById.mockResolvedValue(row);
+  ] as const)(
+    'refuses a TEACHER weight, release_at and tokens_per_hour on a %s assignment',
+    async (_type, row) => {
+      mocks.assignmentFindById.mockResolvedValue(row);
 
-    for (const args of [{ weight: 40 }, { release_at: RELEASE }]) {
-      await expect(
-        assignmentUpdateTool.handler({ ...ARGS, ...args }, TEACHER_CTX)
-      ).rejects.toMatchObject({
-        kind: 'forbidden',
-        code: 'INSUFFICIENT_ROLE',
-        message: `Only the classroom owner can update: ${Object.keys(args)[0]}`,
-      });
+      for (const args of [{ weight: 40 }, { release_at: RELEASE }, { tokens_per_hour: 2 }]) {
+        await expect(
+          assignmentUpdateTool.handler({ ...ARGS, ...args }, TEACHER_CTX)
+        ).rejects.toMatchObject({
+          kind: 'forbidden',
+          code: 'INSUFFICIENT_ROLE',
+          message: `Only the classroom owner can update: ${Object.keys(args)[0]}`,
+        });
+      }
+      expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+      expect(mocks.auditCreate).not.toHaveBeenCalled();
     }
-    expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
-    expect(mocks.auditCreate).not.toHaveBeenCalled();
-  });
+  );
 
   it.each([
     ['QUIZ', QUIZ_ROW],
@@ -1016,28 +1035,107 @@ describe('assignment_update: the teacher tier depends on the assignment type', (
     expect(payload.assignment.weight).toBe(0);
   });
 
+  it.each([
+    ['REPO', REPO_ROW, 'closes_at is for quiz assignments: repos ignore a close date'],
+    [
+      'FORM',
+      FORM_ROW,
+      'closes_at is for quiz assignments: a form closes with form_update closes_at',
+    ],
+  ] as const)(
+    'refuses closes_at on a %s assignment, for the owner too',
+    async (_type, row, message) => {
+      mocks.assignmentFindById.mockResolvedValue(row);
+
+      await expect(
+        assignmentUpdateTool.handler({ ...ARGS, closes_at: '2026-07-28T23:59:00-04:00' }, CTX)
+      ).rejects.toMatchObject({ kind: 'invalid_params', message });
+      expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('lets the OWNER set tokens_per_hour on a REPO assignment and returns it', async () => {
+    mocks.assignmentFindById.mockResolvedValue(REPO_ROW);
+
+    const payload = parse(await assignmentUpdateTool.handler({ ...ARGS, tokens_per_hour: 2 }, CTX));
+    expect(mocks.assignmentUpdate).toHaveBeenCalledWith('asg-1', { tokens_per_hour: 2 });
+    expect(payload.assignment.tokens_per_hour).toBe(2);
+    // A REPO row has no close date to report.
+    expect(payload.assignment).not.toHaveProperty('closes_at');
+  });
+
+  it('returns a QUIZ assignment’s close date', async () => {
+    mocks.assignmentFindById.mockResolvedValue(QUIZ_ROW);
+
+    const payload = parse(
+      await assignmentUpdateTool.handler(
+        { ...ARGS, closes_at: '2026-07-28T23:59:00-04:00' },
+        TEACHER_CTX
+      )
+    );
+    expect(payload.assignment.closes_at).toBe(new Date('2026-07-28T23:59:00-04:00').toISOString());
+  });
+
   it('says in the description what a teacher may set on a quiz assignment', () => {
     expect(assignmentUpdateTool.description).toContain(
-      'on a quiz assignment student_deadline, weight and release_at'
+      'on a quiz assignment student_deadline, weight, release_at, closes_at and tokens_per_hour'
     );
     expect(new TextEncoder().encode(assignmentUpdateTool.description).length).toBeLessThan(1500);
   });
 });
 
-describe('assignment_delete stays scoped through the repository', () => {
-  it('does not reach a quiz assignment: it has no repo submissions to delete', async () => {
-    mocks.assignmentFindById.mockResolvedValue({
-      id: 'asg-q',
-      title: 'Quiz 1',
-      type: 'QUIZ',
-      module: { id: 'mod-1', title: 'Week 1', classroom_id: 'class-1' },
-      repository: null,
-      git_repo_assignments: [],
+describe('assignment_create and assignment_delete descriptions', () => {
+  it('keep under the 1,500-byte connector limit', () => {
+    for (const tool of [assignmentCreateTool, assignmentDeleteTool]) {
+      expect(new TextEncoder().encode(tool.description).length, tool.name).toBeLessThan(1500);
+    }
+  });
+
+  it('says a quiz assignment is not deleted here', () => {
+    expect(assignmentDeleteTool.description).toContain('A quiz assignment is refused');
+  });
+});
+
+describe('assignment_delete and a quiz assignment', () => {
+  const QUIZ_ASSIGNMENT = {
+    id: 'asg-q',
+    title: 'Quiz 1',
+    type: 'QUIZ',
+    module: { id: 'mod-1', title: 'Week 1', classroom_id: 'class-1' },
+    repository: null,
+    git_repo_assignments: [],
+  };
+  const ARGS = { classroom: 'org/winter-2025', assignment_id: 'asg-q' };
+
+  it('refuses it by name: it goes with its quiz, or moves with it', async () => {
+    mocks.assignmentFindById.mockResolvedValue(QUIZ_ASSIGNMENT);
+    mocks.quizzesVisible.mockResolvedValue(true);
+
+    await expect(assignmentDeleteTool.handler(ARGS, CTX)).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message:
+        'A quiz’s assignment goes with the quiz: delete the quiz (quiz_delete), or move it to ' +
+        'another module (quiz_update module_id).',
+    });
+    expect(mocks.assignmentDeleteById).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('answers not_found where the classroom shows no quizzes, or the row is elsewhere', async () => {
+    mocks.assignmentFindById.mockResolvedValue(QUIZ_ASSIGNMENT);
+    mocks.quizzesVisible.mockResolvedValue(false);
+    await expect(assignmentDeleteTool.handler(ARGS, CTX)).rejects.toMatchObject({
+      kind: 'not_found',
     });
 
-    await expect(
-      assignmentDeleteTool.handler({ classroom: 'org/winter-2025', assignment_id: 'asg-q' }, CTX)
-    ).rejects.toMatchObject({ kind: 'not_found' });
+    mocks.assignmentFindById.mockResolvedValue({
+      ...QUIZ_ASSIGNMENT,
+      module: { id: 'mod-9', title: 'Elsewhere', classroom_id: 'OTHER-class' },
+    });
+    mocks.quizzesVisible.mockResolvedValue(true);
+    await expect(assignmentDeleteTool.handler(ARGS, CTX)).rejects.toMatchObject({
+      kind: 'not_found',
+    });
     expect(mocks.assignmentDeleteById).not.toHaveBeenCalled();
   });
 });
