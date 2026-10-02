@@ -110,10 +110,12 @@ const UpNextCard = ({ rows, classSlug, viewerIsStudent }: UpNextCardProps) => {
             return (
               <li
                 key={row.assignmentId}
-                className="flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-1.5 py-2.5 border-b border-line/60 last:border-0"
+                className="flex flex-wrap items-center gap-x-3 gap-y-1.5 py-2.5 border-b border-line/60 last:border-0"
               >
                 <CourseworkTypeTag type={row.type} />
-                <div className="flex-1 min-w-0">
+                {/* A real minimum width: on a narrow card the due date and the
+                    button wrap onto a second line rather than squeeze the title. */}
+                <div className="flex-1 min-w-[9rem]">
                   <div className="text-sm font-semibold text-ink-0 truncate">{row.title}</div>
                   <div className="text-xs text-ink-3 truncate">{row.module.title}</div>
                 </div>
@@ -124,7 +126,7 @@ const UpNextCard = ({ rows, classSlug, viewerIsStudent }: UpNextCardProps) => {
                 >
                   {due?.text ?? ''}
                 </span>
-                <div className="shrink-0 ml-auto sm:ml-0">{actionFor(row)}</div>
+                <div className="shrink-0 ml-auto">{actionFor(row)}</div>
               </li>
             );
           })}
