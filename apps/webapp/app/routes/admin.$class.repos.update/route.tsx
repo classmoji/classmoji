@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router';
 import { useEffect, useState, useRef } from 'react';
 import { auth, tasks } from '@trigger.dev/sdk';
 import { nanoid } from 'nanoid';
-import { ClassmojiService, getGitProvider, GitHubProvider } from '@classmoji/services';
+import { ClassmojiService } from '@classmoji/services';
 import { resolveTemplateRef } from '@classmoji/utils';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { useDisclosure, useGlobalFetcher } from '~/hooks';
@@ -149,20 +149,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     throw new Response('Git organization not configured', { status: 400 });
   }
 
-  const gitProvider = getGitProvider(classroom.git_organization);
-  const octokit = await (gitProvider as GitHubProvider).getOctokit();
-
-  const { data } = await octokit.request(
-    'POST /app/installations/{installation_id}/access_tokens',
-    {
-      installation_id: Number(classroom.git_organization.github_installation_id),
-      permissions: {
-        contents: 'write',
-        pull_requests: 'write',
-      },
-    }
-  );
-
   const repositories = await ClassmojiService.gitRepo.findByRepository(classSlug!, repository.id);
   const { owner: templateOwner, repo: templateRepo } = templateRef;
 
@@ -176,7 +162,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         prDescription: values.description,
         templateOwner,
         templateRepo,
-        token: data.token,
       },
       options: { tags: [`session_${sessionId}`] },
     };

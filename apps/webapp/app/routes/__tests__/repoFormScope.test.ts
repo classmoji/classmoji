@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   createFromFormData: vi.fn(),
   replaceTests: vi.fn(),
   saveManifest: vi.fn(),
+  checkTemplate: vi.fn(),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -64,6 +65,7 @@ vi.mock('@classmoji/services', () => ({
       updateFromForm: (...a: unknown[]) => mocks.updateFromForm(...a),
       create: (...a: unknown[]) => mocks.repositoryCreate(...a),
       createFromFormData: (...a: unknown[]) => mocks.createFromFormData(...a),
+      checkTemplate: (...a: unknown[]) => mocks.checkTemplate(...a),
     },
     autogradingTest: { replaceForRepository: (...a: unknown[]) => mocks.replaceTests(...a) },
     contentManifest: { saveManifest: (...a: unknown[]) => mocks.saveManifest(...a) },
@@ -133,6 +135,7 @@ beforeEach(() => {
   mocks.repositoryCreate.mockResolvedValue({ id: 'repo-new' });
   mocks.replaceTests.mockResolvedValue([]);
   mocks.saveManifest.mockResolvedValue(true);
+  mocks.checkTemplate.mockResolvedValue({ ok: true });
 });
 
 describe('repository form: update', () => {
@@ -301,5 +304,48 @@ describe('repository form: create', () => {
     expect(result).toMatchObject({ success: 'Repository created' });
     expect(mocks.createFromFormData).toHaveBeenCalledWith(expect.anything(), 'class-1', null);
     expect(mocks.tagsByClassroom).not.toHaveBeenCalled();
+  });
+});
+
+describe('repository form: template check', () => {
+  const UNREACHABLE = {
+    ok: false,
+    reason: 'TEMPLATE_UNREACHABLE',
+    error: "The template repository org/gone can't be found on Github.",
+  };
+
+  it('refuses a new repository whose template cannot be reached', async () => {
+    mocks.checkTemplate.mockResolvedValue(UNREACHABLE);
+    const { id: _id, ...body } = FORM_BODY;
+    const result = await submit('create', { ...body, template: 'org/gone' });
+
+    expect(mocks.checkTemplate).toHaveBeenCalledWith('org/gone', 'class-1');
+    expect(result).toMatchObject({ error: UNREACHABLE.error });
+    expect(mocks.repositoryCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a changed template that cannot be reached and writes nothing', async () => {
+    mocks.repositoryFindFirst.mockResolvedValue({ id: OWN_REPO, template: 'org/lab-template' });
+    mocks.checkTemplate.mockResolvedValue(UNREACHABLE);
+    const result = await submit('update', { ...FORM_BODY, template: 'org/gone' });
+
+    expect(result).toMatchObject({ error: UNREACHABLE.error });
+    expect(mocks.updateFromForm).not.toHaveBeenCalled();
+  });
+
+  it('does not ask Github when the template is unchanged', async () => {
+    mocks.repositoryFindFirst.mockResolvedValue({ id: OWN_REPO, template: 'org/lab-template' });
+    const result = await submit('update', FORM_BODY);
+
+    expect(result).toMatchObject({ success: 'Repository updated' });
+    expect(mocks.checkTemplate).not.toHaveBeenCalled();
+  });
+
+  it('saves a reachable template', async () => {
+    const { id: _id, ...body } = FORM_BODY;
+    const result = await submit('create', body);
+
+    expect(mocks.checkTemplate).toHaveBeenCalledWith('org/lab-template', 'class-1');
+    expect(result).toMatchObject({ success: 'Repository created' });
   });
 });

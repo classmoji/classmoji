@@ -425,7 +425,9 @@ export function remapModuleItem(
 /**
  * Copy Module containers (and their items) from a source classroom into a
  * target classroom, remapping each item's resource reference through the
- * provided id maps. Modules are forced unpublished. Item ordering (position) is
+ * provided id maps. Modules are created unpublished; a target module that
+ * already has the source module's title is reused, and items it already holds
+ * are not duplicated, so the phase can be re-run. Item ordering (position) is
  * preserved. Items whose referenced resource was not imported are skipped and
  * counted, except QUIZ items when quizzes were not part of the import at all:
  * those are left out without being counted, since nothing was asked of them.
@@ -457,8 +459,20 @@ export const importModules = async (
   let skipped_items = 0;
 
   for (const sourceModule of sourceModules) {
-    const newModule = await tx.module.create({
-      data: {
+    // Find-or-create by (classroom_id, title), the module's unique key. The
+    // target usually ALREADY holds a module of this title: cloning a
+    // repository's assignments (before this phase runs) creates each
+    // assignment's module through `ensureTargetModule`, by title. A blind
+    // create collided with it on every import that brought assignments and
+    // modules together; a retried modules phase collides with its own earlier
+    // rows. Reusing the row is right in both cases — it IS this source
+    // module's counterpart, and its assignments already point at it. An
+    // existing module is left as it is (never re-published or re-ordered).
+    const targetModule = await tx.module.upsert({
+      where: {
+        classroom_id_title: { classroom_id: targetClassroomId, title: sourceModule.title },
+      },
+      create: {
         classroom_id: targetClassroomId,
         title: sourceModule.title,
         slug: sourceModule.slug,
@@ -466,8 +480,24 @@ export const importModules = async (
         position: sourceModule.position,
         is_published: false,
       },
+      update: {},
+      select: { id: true },
     });
     modules += 1;
+
+    // Items already in the module (a retry after a partial run) are kept, not
+    // re-created: each resource may appear only once per module.
+    const existing = await tx.moduleItem.findMany({
+      where: { module_id: targetModule.id },
+      select: { page_id: true, repository_id: true, quiz_id: true, slide_id: true },
+    });
+    const present = new Set(
+      existing.flatMap(row =>
+        [row.page_id, row.repository_id, row.quiz_id, row.slide_id].filter(
+          (id): id is string => id !== null
+        )
+      )
+    );
 
     for (const item of sourceModule.items) {
       const remapped = remapModuleItem(item, idMaps);
@@ -475,9 +505,15 @@ export const importModules = async (
         if (item.item_type !== ModuleItemType.QUIZ || quizzesImported) skipped_items += 1;
         continue;
       }
+      const targetId =
+        remapped.page_id ?? remapped.repository_id ?? remapped.quiz_id ?? remapped.slide_id;
+      if (targetId && present.has(targetId)) {
+        items += 1;
+        continue;
+      }
       await tx.moduleItem.create({
         data: {
-          module_id: newModule.id,
+          module_id: targetModule.id,
           item_type: remapped.item_type,
           position: remapped.position,
           page_id: remapped.page_id,
@@ -486,6 +522,7 @@ export const importModules = async (
           slide_id: remapped.slide_id,
         },
       });
+      if (targetId) present.add(targetId);
       items += 1;
     }
   }
