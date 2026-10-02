@@ -158,15 +158,32 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
       key: 'assignments',
       label: 'Assignments',
       extra: (
-        <Button
-          icon={<IconPlus size={16} />}
-          onClick={() => {
-            setEditingAssignment(null);
-            setAssignmentModalOpen(true);
-          }}
-        >
-          New assignment
-        </Button>
+        <div className="flex gap-2">
+          {/* A quiz and its assignment are made together, in the quiz form,
+              with this module chosen. */}
+          {quizzesVisible && (
+            <Button
+              icon={<IconPlus size={16} />}
+              onClick={() =>
+                navigate(
+                  `/admin/${classSlug}/quizzes/form?moduleId=${encodeURIComponent(module.id)}`
+                )
+              }
+              data-testid="module-new-quiz"
+            >
+              New quiz
+            </Button>
+          )}
+          <Button
+            icon={<IconPlus size={16} />}
+            onClick={() => {
+              setEditingAssignment(null);
+              setAssignmentModalOpen(true);
+            }}
+          >
+            New assignment
+          </Button>
+        </div>
       ),
       children: (
         <AssignmentsTable

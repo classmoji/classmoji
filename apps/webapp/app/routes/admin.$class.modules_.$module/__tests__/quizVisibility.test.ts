@@ -308,6 +308,38 @@ describe('editing a quiz’s assignment from the module page', () => {
   });
 });
 
+describe('New quiz on the module page', () => {
+  type Element = { props: { children?: unknown; onClick?: () => void } };
+  /** The assignments tab's header buttons, as the page hands them to FolderTabs. */
+  const headerButtons = () => {
+    const tab = mocks.tabs.items.find(item => item.key === 'assignments') as unknown as {
+      extra: Element;
+    };
+    return ([] as unknown[])
+      .concat(tab.extra.props.children)
+      .filter((child): child is Element => Boolean(child));
+  };
+
+  it('opens the quiz form with this module chosen', () => {
+    renderPage({ assignments: [], hasUnlistedAssignments: false }, true);
+
+    const buttons = headerButtons();
+    expect(buttons).toHaveLength(2);
+    buttons[0].props.onClick!();
+
+    expect(mocks.navigate).toHaveBeenCalledExactlyOnceWith(
+      '/admin/cs52/quizzes/form?moduleId=mod-1'
+    );
+  });
+
+  it('is not offered where the classroom shows no quizzes', () => {
+    const html = renderPage({ assignments: [], hasUnlistedAssignments: false }, false);
+
+    expect(headerButtons()).toHaveLength(1);
+    expect(html).not.toMatch(/quiz/i);
+  });
+});
+
 describe('the Add item picker’s types', () => {
   it('never offers Quiz, with or without quizzes', () => {
     expect(contentTypesFor(false)).toEqual(['PAGE', 'SLIDE', 'FORM']);
