@@ -1,5 +1,5 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { withLogins } from '@classmoji/utils';
+import { countingQuizAttempt, withLogins } from '@classmoji/utils';
 import { normalizeExcludedPaths } from '@classmoji/utils/quiz-excluded-paths';
 import type { Prisma, QuizGradingStrategy, QuizStatus, Role } from '@prisma/client';
 import * as notificationService from './notification.service.ts';
@@ -465,64 +465,19 @@ export const getQuizzesForStudent = async (
       };
     });
 
-    const completedAttempts = baseAttempts.filter(
+    const scoredAttempts = baseAttempts.filter(
       attempt => attempt.completed_at && attempt.partialCreditScore !== null
     );
+    const bestScore =
+      scoredAttempts.length > 0
+        ? Math.max(...scoredAttempts.map(a => a.partialCreditScore ?? 0))
+        : null;
 
-    let countingAttemptId = null;
-    let currentScore = null;
-    let bestScore = null;
-
-    if (completedAttempts.length > 0) {
-      bestScore = Math.max(...completedAttempts.map(a => a.partialCreditScore ?? 0));
-
-      switch (quiz.grading_strategy) {
-        case 'HIGHEST': {
-          const highest = completedAttempts.reduce((max, attempt) =>
-            (attempt.partialCreditScore ?? 0) > (max.partialCreditScore ?? 0) ? attempt : max
-          );
-          countingAttemptId = highest.id;
-          currentScore = highest.partialCreditScore;
-          break;
-        }
-        case 'MOST_RECENT': {
-          const sorted = [...completedAttempts].sort((a, b) => {
-            const aTime = a.completed_at ? new Date(a.completed_at).getTime() : 0;
-            const bTime = b.completed_at ? new Date(b.completed_at).getTime() : 0;
-            return bTime - aTime;
-          });
-
-          const mostRecent = sorted[0];
-          if (mostRecent) {
-            countingAttemptId = mostRecent.id;
-            currentScore = mostRecent.partialCreditScore;
-          }
-          break;
-        }
-        case 'FIRST': {
-          const sorted = [...completedAttempts].sort((a, b) => {
-            const aTime = a.started_at ? new Date(a.started_at).getTime() : 0;
-            const bTime = b.started_at ? new Date(b.started_at).getTime() : 0;
-            return aTime - bTime;
-          });
-
-          const first = sorted[0];
-          if (first) {
-            countingAttemptId = first.id;
-            currentScore = first.partialCreditScore;
-          }
-          break;
-        }
-        default: {
-          const highest = completedAttempts.reduce((max, attempt) =>
-            (attempt.partialCreditScore ?? 0) > (max.partialCreditScore ?? 0) ? attempt : max
-          );
-          countingAttemptId = highest.id;
-          currentScore = highest.partialCreditScore;
-          break;
-        }
-      }
-    }
+    // The shared selector (@classmoji/utils quizScore), so this list, the
+    // results page, the gradebook and the Assignments page agree.
+    const counting = countingQuizAttempt(baseAttempts, quiz.grading_strategy);
+    const countingAttemptId = counting?.id ?? null;
+    const currentScore = counting?.partialCreditScore ?? null;
 
     const processedAttempts = baseAttempts.map(attempt => ({
       ...attempt,
