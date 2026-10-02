@@ -45,12 +45,19 @@ const loaderArgs = () =>
     request: new Request('http://localhost/student/test-class/assignments'),
   }) as unknown as Parameters<typeof loader>[0];
 
-const row = (assignmentId: string, type: string, done: boolean, status: string | null = 'X') => ({
+const row = (
+  assignmentId: string,
+  type: string,
+  done: boolean,
+  status: string | null = 'X',
+  tracked = true
+) => ({
   assignmentId,
   type,
   title: assignmentId,
   done,
   status,
+  tracked,
 });
 
 beforeEach(() => {
@@ -115,17 +122,18 @@ describe('student assignments loader', () => {
     expect(data.classroomSubtitle).toBe('test-org');
   });
 
-  it('leaves an open public form, which has no per-student status, out of the progress', async () => {
+  it('leaves public forms, open or closed, out of the progress', async () => {
     listForStudentMock.mockResolvedValue([
       row('quiz-done', 'QUIZ', true, 'COMPLETED'),
-      row('form-public-open', 'FORM', false, null),
-      row('form-public-closed', 'FORM', true, 'CLOSED'),
+      row('form-open', 'FORM', false, 'NOT_SUBMITTED'),
+      row('form-public-open', 'FORM', false, null, false),
+      row('form-public-closed', 'FORM', true, 'CLOSED', false),
     ]);
 
     const data = await (await loader(loaderArgs())).data;
 
-    expect(data.rows).toHaveLength(3);
-    expect(data.counts).toEqual({ completed: 2, current: 0, total: 2 });
+    expect(data.rows).toHaveLength(4);
+    expect(data.counts).toEqual({ completed: 1, current: 1, total: 2 });
   });
 
   it('resolves to an empty, non-error state when the read rejects, and logs it', async () => {

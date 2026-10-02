@@ -16,7 +16,8 @@
  *   - FORM: their SUBMITTED response. Status: Submitted > Closed > Not
  *     submitted, where Closed is a CLOSED form or one past its close date (the
  *     fill page treats both as closed). A PUBLIC form records no student
- *     identity, so its row carries no per-student status.
+ *     identity, so its row carries no per-student status (only Closed once
+ *     it closes) and is untracked: listed, but never counted or Up next.
  *
  * A done row (submitted, completed, or closed) sits under Completed and is
  * never Up next, so a closed row never reads as overdue.
@@ -85,7 +86,13 @@ export interface StudentCourseworkRow {
   deadline: string | null;
   /** Null for a PUBLIC form that is still open: no per-student state exists. */
   status: CourseworkStatus | null;
-  /** Under Completed, never Up next. */
+  /**
+   * False for a PUBLIC form: it records no student, so it has no per-student
+   * state. Such a row is listed (under All only), never counted toward
+   * progress, never Up next.
+   */
+  tracked: boolean;
+  /** Nothing left to do: under Completed, never Up next. */
   done: boolean;
   /** QUIZ: the counting attempt's percentage (0-100). */
   score: number | null;
@@ -316,6 +323,7 @@ export const listForStudent = async ({
       assignmentId: a.id,
       module: { id: a.module.id, title: a.module.title },
       isExtraCredit: a.is_extra_credit,
+      tracked: true,
       score: null,
       scoredAt: null,
       attemptsUsed: null,
@@ -402,6 +410,7 @@ export const listForStudent = async ({
         title: a.title,
         deadline: iso(a.student_deadline ?? form.closes_at),
         status,
+        tracked: !isPublic,
         done: status === 'SUBMITTED' || status === 'CLOSED',
         href,
         external: true,
@@ -415,11 +424,12 @@ export const listForStudent = async ({
 
 /**
  * The dashboard's Up next: what the student still owes, soonest due first
- * (overdue first, then by due date), never a done row nor a PUBLIC form.
+ * (overdue first, then by due date), never a done row nor an untracked one
+ * (a PUBLIC form).
  */
 export const upNext = (rows: StudentCourseworkRow[], limit = 5): StudentCourseworkRow[] =>
   rows
-    .filter(row => !row.done && row.status !== null && row.action !== null)
+    .filter(row => row.tracked && !row.done && row.action !== null)
     .sort((a, b) => {
       if (a.deadline === b.deadline) return a.title.localeCompare(b.title);
       if (a.deadline === null) return 1;

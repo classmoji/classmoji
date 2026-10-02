@@ -591,18 +591,24 @@ describe('listForStudent — FORM rows', () => {
     expect(row).toMatchObject({ status: 'SUBMITTED', done: true });
   });
 
-  it('shows a PUBLIC form with no per-student status, until it closes', async () => {
+  it('shows a PUBLIC form untracked, with no per-student status until it closes', async () => {
     // A public response records no student, so a "submitted" row there could
     // only be a guess; this one is ignored.
     expect(await formRow({ access: 'PUBLIC' }, true)).toMatchObject({
       status: null,
+      tracked: false,
       done: false,
       action: null,
     });
+    // Closed still reads Closed, and is still untracked: never counted.
     expect(await formRow({ access: 'PUBLIC', status: 'CLOSED' })).toMatchObject({
       status: 'CLOSED',
-      done: true,
+      tracked: false,
     });
+  });
+
+  it('tracks a CLASSROOM form, and every quiz and repo row', async () => {
+    expect((await formRow()).tracked).toBe(true);
   });
 
   it("takes the assignment's due date, falling back to the form's close date", async () => {

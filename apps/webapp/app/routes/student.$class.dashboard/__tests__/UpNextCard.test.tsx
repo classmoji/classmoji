@@ -25,6 +25,7 @@ const row = (over: Partial<StudentCourseworkRow>): StudentCourseworkRow => ({
   isExtraCredit: false,
   deadline: '2026-10-02T18:00:00.000Z',
   status: 'NOT_STARTED',
+  tracked: true,
   done: false,
   score: null,
   scoredAt: null,

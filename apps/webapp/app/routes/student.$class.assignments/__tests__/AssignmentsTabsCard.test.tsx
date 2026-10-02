@@ -31,6 +31,7 @@ const { default: AssignmentsTabsCard } = await import('../AssignmentsTabsCard');
 const base = {
   module: { id: 'm1', title: 'Week 1' },
   isExtraCredit: false,
+  tracked: true,
   score: null,
   scoredAt: null,
   attemptsUsed: null,
@@ -87,6 +88,7 @@ const FORM_PUBLIC: StudentCourseworkRow = {
   type: 'FORM',
   title: 'Team sign-up',
   status: null,
+  tracked: false,
   done: false,
   isExtraCredit: true,
   href: 'https://pages.test/cs52/forms/signup',
@@ -142,7 +144,7 @@ describe('AssignmentsTabsCard', () => {
     expect(html).not.toContain('Not submitted');
   });
 
-  it('counts every row in its tab, an open public form under All only', () => {
+  it('counts every row in its tab, public forms (open or closed) under All only', () => {
     const done: StudentCourseworkRow = {
       ...QUIZ_OPEN,
       assignmentId: 'a-done',
@@ -152,19 +154,34 @@ describe('AssignmentsTabsCard', () => {
       score: 0,
       action: null,
     };
-    const html = render([REPO_LATE, QUIZ_OPEN, FORM_PUBLIC, done]);
+    const closedPublic: StudentCourseworkRow = {
+      ...FORM_PUBLIC,
+      assignmentId: 'a-form-closed',
+      title: 'Waitlist',
+      status: 'CLOSED',
+      done: true,
+    };
+    const rows = [REPO_LATE, QUIZ_OPEN, FORM_PUBLIC, closedPublic, done];
+    const tabCounts = (html: string) =>
+      [...html.matchAll(/(Current|Completed|All)<span[^>]*>(\d+)</g)].map(m => [m[1], m[2]]);
 
-    const tabCounts = [...html.matchAll(/(Current|Completed|All)<span[^>]*>(\d+)</g)].map(m => [
-      m[1],
-      m[2],
-    ]);
-    expect(tabCounts).toEqual([
+    const current = render(rows);
+    expect(tabCounts(current)).toEqual([
       ['Current', '2'],
       ['Completed', '1'],
-      ['All', '4'],
+      ['All', '5'],
     ]);
-    // The Current tab is shown: neither the completed quiz nor the public form.
-    expect(html).not.toContain('Finished quiz');
-    expect(html).not.toContain('Team sign-up');
+    // The Current tab is shown: neither the completed quiz nor a public form.
+    expect(current).not.toContain('Finished quiz');
+    expect(current).not.toContain('Team sign-up');
+
+    const completed = render(rows, 'completed');
+    expect(completed).toContain('Finished quiz');
+    expect(completed).not.toContain('Waitlist');
+
+    // Under All, the closed public form still reads Closed.
+    const all = render(rows, 'all');
+    expect(all).toContain('Waitlist');
+    expect(all).toContain('>Closed<');
   });
 });

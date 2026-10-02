@@ -86,10 +86,10 @@ const AssignmentsTabsCard = ({
   const reducedMotion = useReducedMotion();
   const { class: classSlug } = useParams();
 
-  // A row with no per-student status (an open PUBLIC form) is neither still to
-  // do nor done for this student: it is listed under All only.
+  // An untracked row (a PUBLIC form, open or closed) is neither still to do
+  // nor done for this student: it is listed under All only.
   const tabOf = (row: StudentCourseworkRow): AssignmentStatus | null =>
-    row.done ? 'completed' : row.status === null ? null : 'current';
+    !row.tracked ? null : row.done ? 'completed' : 'current';
 
   const counts: Record<TabKey, number> = {
     current: rows.filter(r => tabOf(r) === 'current').length,
