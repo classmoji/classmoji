@@ -1033,6 +1033,7 @@ export const getClassroomCalendar = async (
   // Callers pass `canManageForms` from the resolved membership role.
   const formCloses = await getFormCloseEventsForRange(classroomId, startDate, endDate, {
     forStaff: canManageForms,
+    includeUnpublished,
   });
 
   // Combine and sort by start time
@@ -1073,6 +1074,10 @@ export type ClassroomCalendarItem = Awaited<ReturnType<typeof getClassroomCalend
  *     staff see flagged via `is_unpublished` — because a draft form's close date
  *     is routinely a placeholder from the builder.
  *   - A form with no `closes_at` has no deadline and therefore no event.
+ *   - A form that is an assignment follows the student-visibility rule
+ *     (`openToStudents`) like the assignment's own deadline: the student view
+ *     leaves its close out while the assignment is unpublished or before its
+ *     `release_at`; the staff view keeps it, flagged `is_unpublished`.
  *
  * @param {string} classroomId - The classroom ID
  * @param {Date} startDate - Start of date range
@@ -1080,12 +1085,17 @@ export type ClassroomCalendarItem = Awaited<ReturnType<typeof getClassroomCalend
  * @param {boolean} [options.forStaff=false] - Point the link at the responses view instead of the
  *   fill page. Only for callers who have established the viewer is OWNER or TEACHER: the responses
  *   view in apps/pages is gated to those two roles, so an assistant sent there gets a 403.
+ * @param {boolean} [options.includeUnpublished=false] - The staff view: keep the close of a form
+ *   whose assignment students cannot see yet, flagged. Defaults to the student view.
  */
 export const getFormCloseEventsForRange = async (
   classroomId: string,
   startDate: Date,
   endDate: Date,
-  { forStaff = false }: { forStaff?: boolean } = {}
+  {
+    forStaff = false,
+    includeUnpublished = false,
+  }: { forStaff?: boolean; includeUnpublished?: boolean } = {}
 ): Promise<CalendarFormCloseItem[]> => {
   const forms = await getPrisma().form.findMany({
     where: {
@@ -1102,13 +1112,25 @@ export const getFormCloseEventsForRange = async (
       access: true,
       closes_at: true,
       classroom: { select: { slug: true } },
+      // A form that is an assignment: what the visibility rule reads.
+      assignment: { select: { type: true, is_published: true, release_at: true } },
     },
     orderBy: { closes_at: 'asc' },
   });
 
   const base = pagesUrl();
+  const now = new Date();
+  // Visible to students: a standalone form always (drafts are filtered above);
+  // a form that is an assignment only once that assignment is.
+  const visibleToStudents = (form: (typeof forms)[number]) =>
+    !form.assignment ||
+    openToStudents({ ...form.assignment, form: { status: form.status } }, now, {
+      quizzesVisible: false,
+    });
 
-  return forms.map(form => {
+  const shown = includeUnpublished ? forms : forms.filter(visibleToStudents);
+
+  return shown.map(form => {
     const closesAt = form.closes_at!;
     const formPath = `${base}/${form.classroom.slug}/forms/${form.slug}`;
 
@@ -1121,9 +1143,9 @@ export const getFormCloseEventsForRange = async (
       end_time: closesAt,
       is_deadline: true as const,
       is_form_close: true as const,
-      // Draft forms are filtered out above, so nothing that reaches here is
-      // unpublished. The field exists for shape parity with deadline items.
-      is_unpublished: false,
+      // Draft forms are filtered out above; what can still be unseen by
+      // students is a form whose assignment is not visible yet (staff view).
+      is_unpublished: !visibleToStudents(form),
       form_id: form.id,
       form_slug: form.slug,
       form_status: form.status,

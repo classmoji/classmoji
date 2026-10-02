@@ -112,3 +112,53 @@ describe('getFormCloseEventsForRange', () => {
     expect(await getFormCloseEventsForRange('class-1', START, END)).toEqual([]);
   });
 });
+
+describe('getFormCloseEventsForRange — a form that is an assignment', () => {
+  const FUTURE = new Date(Date.now() + 7 * 86_400_000);
+  const PAST = new Date(Date.now() - 7 * 86_400_000);
+  const assigned = (id: string, assignment: Record<string, unknown>) =>
+    formRow({ id, slug: id, assignment: { type: 'FORM', release_at: null, ...assignment } });
+
+  const ROWS = () => [
+    formRow({ id: 'standalone', slug: 'standalone', assignment: null }),
+    assigned('published', { is_published: true }),
+    assigned('released', { is_published: true, release_at: PAST }),
+    assigned('unpublished', { is_published: false }),
+    assigned('not-yet-released', { is_published: true, release_at: FUTURE }),
+  ];
+
+  it('leaves out, for students, a form whose assignment they cannot see yet', async () => {
+    formFindMany.mockResolvedValue(ROWS());
+
+    const events = await getFormCloseEventsForRange('class-1', START, END);
+
+    expect(events.map(e => e.form_id)).toEqual(['standalone', 'published', 'released']);
+    expect(events.every(e => e.is_unpublished === false)).toBe(true);
+  });
+
+  it('keeps every close for staff, flagging what students cannot see yet', async () => {
+    formFindMany.mockResolvedValue(ROWS());
+
+    const events = await getFormCloseEventsForRange('class-1', START, END, {
+      includeUnpublished: true,
+    });
+
+    expect(Object.fromEntries(events.map(e => [e.form_id, e.is_unpublished]))).toEqual({
+      standalone: false,
+      published: false,
+      released: false,
+      unpublished: true,
+      'not-yet-released': true,
+    });
+  });
+
+  it('reads what the visibility rule needs from the assignment', async () => {
+    formFindMany.mockResolvedValue([]);
+
+    await getFormCloseEventsForRange('class-1', START, END);
+
+    expect(formFindMany.mock.calls[0][0].select.assignment).toEqual({
+      select: { type: true, is_published: true, release_at: true },
+    });
+  });
+});
