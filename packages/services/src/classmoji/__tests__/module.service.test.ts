@@ -169,10 +169,12 @@ describe('deleteById', () => {
   // `moduleDelete`: a delete issued outside the transaction would not be under
   // the lock, and has to fail these tests.
   const txModuleDelete = vi.fn();
+  const txQuizUpdateMany = vi.fn();
   const tx = {
     $queryRaw: queryRaw,
     assignment: { findMany: assignmentFindMany, deleteMany: assignmentDeleteMany },
     module: { delete: txModuleDelete },
+    quiz: { updateMany: txQuizUpdateMany },
   };
   beforeEach(() => {
     transaction.mockImplementation(async (run: (client: typeof tx) => unknown) => run(tx));
@@ -191,17 +193,18 @@ describe('deleteById', () => {
     }
     expect(assignmentFindMany).toHaveBeenCalledWith({
       where: { module_id: 'mod1' },
-      select: { id: true, type: true },
+      select: { id: true, type: true, quiz_id: true },
     });
     expect(assignmentDeleteMany).not.toHaveBeenCalled();
+    expect(txQuizUpdateMany).not.toHaveBeenCalled();
     expect(txModuleDelete).not.toHaveBeenCalled();
     expect(moduleDelete).not.toHaveBeenCalled();
   });
 
   it('where quizzes are hidden, takes only-quiz assignments with the module and says which', async () => {
     assignmentFindMany.mockResolvedValue([
-      { id: 'q1', type: 'QUIZ' },
-      { id: 'q2', type: 'QUIZ' },
+      { id: 'q1', type: 'QUIZ', quiz_id: 'quiz-1' },
+      { id: 'q2', type: 'QUIZ', quiz_id: 'quiz-2' },
     ]);
 
     const deleted = await deleteById('mod1', 'class-1', { quizzesHidden: true });
@@ -211,6 +214,27 @@ describe('deleteById', () => {
     });
     expect(txModuleDelete).toHaveBeenCalledWith({ where: { id: 'mod1' } });
     expect(deleted.deleted_quiz_assignment_ids).toEqual(['q1', 'q2']);
+  });
+
+  it('where quizzes are hidden, sets each cut-loose quiz back to DRAFT once its assignment is gone', async () => {
+    // A quiz with no assignment is shown to students by its own status: left
+    // PUBLISHED it would reappear to them, in no module, when quizzes return.
+    assignmentFindMany.mockResolvedValue([
+      { id: 'q1', type: 'QUIZ', quiz_id: 'quiz-1' },
+      { id: 'q2', type: 'QUIZ', quiz_id: 'quiz-2' },
+    ]);
+
+    await deleteById('mod1', 'class-1', { quizzesHidden: true });
+
+    expect(txQuizUpdateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['quiz-1', 'quiz-2'] } },
+      data: { status: 'DRAFT' },
+    });
+    const at = (mock: { mock: { invocationCallOrder: number[] } }) =>
+      mock.mock.invocationCallOrder[0];
+    // Assignment rows before quiz rows, the lock order every other writer takes.
+    expect(at(assignmentDeleteMany)).toBeLessThan(at(txQuizUpdateMany));
+    expect(at(txQuizUpdateMany)).toBeLessThan(at(txModuleDelete));
   });
 
   it('where quizzes are hidden, still refuses a module that also owns other assignments', async () => {

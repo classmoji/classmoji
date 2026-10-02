@@ -463,9 +463,9 @@ export const updateForClassroom = async (
  * the caller's reading of the classroom): its owner cannot see quiz
  * assignments, so a module whose only assignments are quiz ones would refuse
  * for a reason nobody can see. There those QUIZ assignment rows go with the
- * module; the quizzes and their attempts stay, and each quiz shows in no
- * module once quizzes are back. `deleted_quiz_assignment_ids` names them, so
- * the caller can record it.
+ * module; the quizzes and their attempts stay, and each quiz is set back to
+ * DRAFT, so it shows as an unpublished quiz in no module once quizzes are
+ * back. `deleted_quiz_assignment_ids` names them, so the caller can record it.
  */
 export const deleteById = async (
   id: string,
@@ -489,7 +489,7 @@ export const deleteById = async (
     // into their submissions, grades and regrades. Move or delete them first.
     const owned = await tx.assignment.findMany({
       where: { module_id: id },
-      select: { id: true, type: true },
+      select: { id: true, type: true, quiz_id: true },
     });
     const onlyQuizzes = owned.length > 0 && owned.every(a => a.type === 'QUIZ');
     if (owned.length > 0 && !(quizzesHidden && onlyQuizzes)) {
@@ -500,6 +500,15 @@ export const deleteById = async (
       await tx.assignment.deleteMany({
         where: { id: { in: deletedQuizAssignmentIds }, type: 'QUIZ' },
       });
+      // Each quiz comes back as a draft in no module, for the owner to place
+      // and publish again: a quiz with no assignment is shown to students by
+      // its own status, and none of them saw it while quizzes were hidden.
+      // After the assignments, so the rows are locked in the order every
+      // other writer takes them (assignment, then quiz).
+      const quizIds = owned.flatMap(a => (a.quiz_id ? [a.quiz_id] : []));
+      if (quizIds.length > 0) {
+        await tx.quiz.updateMany({ where: { id: { in: quizIds } }, data: { status: 'DRAFT' } });
+      }
     }
     // ModuleItem rows cascade; the underlying pages/quizzes/slides/forms remain.
     const deleted = await tx.module.delete({ where: { id } });
