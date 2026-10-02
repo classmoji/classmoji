@@ -173,6 +173,10 @@ export function gitlabQuizProject(
     const namespace = repoName.slice(0, slash);
     const group = (classroom.git_organization.login ?? '').toLowerCase();
     const ns = namespace.toLowerCase();
+    // Each segment a real name: `cs/../other` must not pass for inside `cs`.
+    if (ns.split('/').some(segment => segment === '' || segment === '.' || segment === '..')) {
+      return null;
+    }
     if (!group || (ns !== group && !ns.startsWith(`${group}/`))) return null;
     return { namespace, repo: repoName.slice(slash + 1) };
   }

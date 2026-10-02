@@ -161,4 +161,10 @@ describe('gitlabQuizProject', () => {
     expect(gitlabQuizProject(classroom, 'dept/cs101/hw1', { fullPath: true })).toBeNull();
     expect(gitlabQuizProject(classroom, 'other/hw1', { fullPath: true })).toBeNull();
   });
+
+  it('refuses dot segments that would climb out of the group', () => {
+    expect(gitlabQuizProject(classroom, 'dept/cs10/../evil/hw1', { fullPath: true })).toBeNull();
+    expect(gitlabQuizProject(classroom, 'dept/cs10/./hw1', { fullPath: true })).toBeNull();
+    expect(gitlabQuizProject(classroom, 'dept/cs10//hw1', { fullPath: true })).toBeNull();
+  });
 });
