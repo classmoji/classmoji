@@ -408,7 +408,7 @@ describe('quiz.getQuizzesForStudent', () => {
 });
 
 describe('quiz.getQuizzesForStudent — closed quizzes and the counting score', () => {
-  const STUDENT = { role: 'STUDENT', classroom_id: CLASSROOM, user_id: 'student-1' };
+  const STUDENT = { role: 'STUDENT' as const, classroom_id: CLASSROOM, user_id: 'student-1' };
   const attempt = (id: string, day: number, completed: boolean, pct: number | null) => ({
     id,
     started_at: new Date(`2026-09-0${day}T10:00:00Z`),
