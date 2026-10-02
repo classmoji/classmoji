@@ -908,14 +908,15 @@ type SiteQuizAssignment = SiteModule['assignments'][number];
 export type SiteScheduleVisibleItem = SiteModuleItem & { kind: 'visible' };
 
 /**
- * A quiz a member may open: its assignment's id (a React key) and the quiz's
- * id and name. Built only for a member.
+ * A quiz a member may open: its assignment's id (a React key), the quiz's id
+ * and name, and its due date (the assignment's), as an anonymous visitor's
+ * placeholder carries it. Built only for a member.
  */
 export type SiteScheduleQuizItem = {
   kind: 'visible';
   id: string;
   item_type: 'QUIZ';
-  quiz: { id: string; name: string };
+  quiz: { id: string; name: string; due_at: Date | null };
 };
 
 /**
@@ -1065,7 +1066,14 @@ export async function listPublicModulesForViewer(
           ...openQuizzes(quizzes).flatMap((a): SiteScheduleItem[] => {
             const name = a.quiz_id ? names.get(a.quiz_id) : undefined;
             return a.quiz_id && name !== undefined
-              ? [{ kind: 'visible', id: a.id, item_type: 'QUIZ', quiz: { id: a.quiz_id, name } }]
+              ? [
+                  {
+                    kind: 'visible',
+                    id: a.id,
+                    item_type: 'QUIZ',
+                    quiz: { id: a.quiz_id, name, due_at: a.student_deadline },
+                  },
+                ]
               : [];
           }),
         ],

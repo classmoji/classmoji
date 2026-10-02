@@ -845,7 +845,9 @@ describe('site.listPublicModulesForViewer', () => {
         title: 'Quizzes',
         items: [],
         assignments: [
-          quizAssignment('a-open', 'q-open'),
+          quizAssignment('a-open', 'q-open', {
+            student_deadline: new Date('2026-09-12T23:59:00Z'),
+          }),
           quizAssignment('a-draft', 'q-draft', { is_published: false }),
           quizAssignment('a-later', 'q-later', { release_at: new Date(Date.now() + 86_400_000) }),
           // Past its close date: still visible, it only takes no new attempt.
@@ -861,13 +863,14 @@ describe('site.listPublicModulesForViewer', () => {
         kind: 'visible',
         id: 'a-open',
         item_type: 'QUIZ',
-        quiz: { id: 'q-open', name: 'Quiz q-open' },
+        // With its due date, as an anonymous visitor's placeholder has it.
+        quiz: { id: 'q-open', name: 'Quiz q-open', due_at: new Date('2026-09-12T23:59:00Z') },
       },
       {
         kind: 'visible',
         id: 'a-closed',
         item_type: 'QUIZ',
-        quiz: { id: 'q-closed', name: 'Quiz q-closed' },
+        quiz: { id: 'q-closed', name: 'Quiz q-closed', due_at: null },
       },
     ]);
     // Only the names of the quizzes listed are read.

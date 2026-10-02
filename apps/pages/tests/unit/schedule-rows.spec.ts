@@ -93,9 +93,9 @@ test.describe('visible rows', () => {
       targets
     );
 
-    // `due: null` on all three is the assertion, not boilerplate: a repo or a
-    // quiz link is only ever shown to a MEMBER, who reads the real deadline in
-    // the app. A second copy printed here is a second copy to go stale.
+    // `due: null` on all three is the assertion, not boilerplate: a repo link
+    // is only ever shown to a MEMBER, who reads the real deadline in the app,
+    // and this quiz has no due date.
     expect(rows).toEqual([
       {
         kind: 'link',
@@ -123,6 +123,19 @@ test.describe('visible rows', () => {
         due: null,
       },
     ]);
+  });
+
+  test('a quiz row shows its due date, as its anonymous placeholder does', () => {
+    const due = '2026-09-13T03:59:00.000Z';
+    const [link] = toScheduleRows(
+      [{ kind: 'visible', item_type: 'QUIZ', quiz: { id: 'q1', name: 'Quiz 1', due_at: due } }],
+      targets
+    );
+    const [placeholderRow] = toScheduleRows([placeholder('i1', 'QUIZ', due)], targets);
+
+    expect(link).toMatchObject({ kind: 'link', label: 'Quiz 1', typeLabel: 'Quiz' });
+    expect(link.due).not.toBeNull();
+    expect(link.due).toBe(placeholderRow.due);
   });
 
   test('a public form links to the fill page on the canonical pages host', () => {
