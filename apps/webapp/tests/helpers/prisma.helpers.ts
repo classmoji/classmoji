@@ -494,15 +494,71 @@ export interface SeededQuiz {
   name: string;
 }
 
+/** The module seeded quizzes live in: every quiz is an assignment in a module. */
+export const SEEDED_QUIZ_MODULE_TITLE = 'zz-E2E Quizzes';
+
+/** The classroom's seeded-quiz module, created on first use. */
+async function seededQuizModuleId(classroomId: string): Promise<string> {
+  const prisma = getTestPrisma();
+  const module = await prisma.module.upsert({
+    where: { classroom_id_title: { classroom_id: classroomId, title: SEEDED_QUIZ_MODULE_TITLE } },
+    update: {},
+    create: {
+      classroom_id: classroomId,
+      title: SEEDED_QUIZ_MODULE_TITLE,
+      slug: 'zz-e2e-quizzes',
+      is_published: true,
+      position: 1000,
+    },
+    select: { id: true },
+  });
+  return module.id;
+}
+
+/**
+ * Create or move a quiz's QUIZ assignment into `moduleId`, written the way the
+ * quiz service writes it: title = quiz name, weight and publish state from the
+ * quiz, and the quiz's own columns left as their mirror. A quiz reaches a
+ * module only through its assignment.
+ */
+export async function placeQuizInModule(
+  quizId: string,
+  moduleId: string,
+  position = 0
+): Promise<{ id: string }> {
+  const prisma = getTestPrisma();
+  const quiz = await prisma.quiz.findUniqueOrThrow({
+    where: { id: quizId },
+    select: { name: true, weight: true, status: true, due_date: true, updated_at: true },
+  });
+  const fields = {
+    module_id: moduleId,
+    position,
+    title: quiz.name,
+    weight: quiz.weight,
+    is_published: quiz.status !== 'DRAFT',
+    student_deadline: quiz.due_date,
+    closes_at: quiz.status === 'CLOSED' ? quiz.updated_at : null,
+  };
+  return prisma.assignment.upsert({
+    where: { quiz_id: quizId },
+    update: fields,
+    create: { ...fields, type: 'QUIZ', quiz_id: quizId },
+    select: { id: true },
+  });
+}
+
 /**
  * Create a self-contained PUBLISHED quiz for a classroom so quiz-list/detail
- * specs have a real row to render and assert on. Deletes any prior row with the
- * same name first (so the helper is idempotent and deterministic).
+ * specs have a real row to render and assert on, as an assignment in the
+ * classroom's seeded-quiz module (every quiz lives in a module). Deletes any
+ * prior row with the same name first (so the helper is idempotent and
+ * deterministic); its assignment goes with it.
  */
 export async function seedQuiz(
   classroomId: string,
   name: string,
-  options: { status?: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED'; weight?: number } = {}
+  options: { status?: 'DRAFT' | 'PUBLISHED' | 'CLOSED'; weight?: number } = {}
 ): Promise<SeededQuiz> {
   const prisma = getTestPrisma();
   const { status = 'PUBLISHED', weight = 10 } = options;
@@ -523,6 +579,7 @@ export async function seedQuiz(
     },
     select: { id: true, name: true },
   });
+  await placeQuizInModule(quiz.id, await seededQuizModuleId(classroomId));
 
   return quiz;
 }
@@ -633,13 +690,18 @@ export async function seedModule(
   return { moduleId: module.id, title: module.title };
 }
 
-/** Append an item of the given type to a module at the given position. */
+/**
+ * Append an item of the given type to a module at the given position. A QUIZ
+ * is placed through its assignment (`placeQuizInModule`), as the app places
+ * one; the returned id is then the assignment's.
+ */
 export async function addModuleItem(
   moduleId: string,
   type: ModuleItemKind,
   targetId: string,
   position = 0
 ): Promise<{ id: string }> {
+  if (type === 'QUIZ') return placeQuizInModule(targetId, moduleId, position);
   const prisma = getTestPrisma();
   const item = await prisma.moduleItem.create({
     data: { module_id: moduleId, item_type: type, position, [MODULE_ITEM_COLUMN[type]]: targetId },
