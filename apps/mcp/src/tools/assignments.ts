@@ -26,9 +26,13 @@
  * The tool declares ['OWNER','TEACHER'] and enforces the OWNER-only fields
  * in-handler.
  *
- * Any assignment type can be updated (REPO, QUIZ, FORM), as on the web, so the
- * target is resolved through its module (loadCourseworkAssignmentInClassroom),
- * not its repository.
+ * Any assignment type can be updated (REPO, QUIZ, FORM), so the target is
+ * resolved through its module (loadCourseworkAssignmentInClassroom), not its
+ * repository. That matches the owner's web edit form (updateInClassroom) and
+ * the calendar's deadline move, which both resolve through the module. The one
+ * route that does not is the TEACHER's grades_released flip: it resolves
+ * through the repository, so a quiz or form assignment is out of a teacher's
+ * reach there, and grades_released on one is OWNER only here.
  *
  * Backbone: ClassmojiService.assignment.update — the NOTIFYING path (fires
  * ASSIGNMENT_DUE_DATE_CHANGED on deadline change and ASSIGNMENT_GRADED on a
@@ -41,11 +45,16 @@
  * student "locked" view; a null release_at is never auto-released.
  *
  * The move is NOT a column write. `Assignment.position` orders a module's
- * assignments, so module_id goes through assignment.moveToModule, which takes
- * the target module's full ordering and closes the gap left in the source. The
- * moved assignment lands at the end of the target; nothing else about it
+ * assignments, so module_id goes through assignment.moveToModuleEnd: one
+ * transaction that puts the assignment at the end of the target and closes the
+ * gap left in the source, with both modules locked so parallel moves into one
+ * module do not collide (the drag's moveToModule needs the caller's full
+ * ordering, which an agent does not hold). Nothing else about the assignment
  * changes (weight, deadlines, grades and submissions travel with it) and nobody
  * is notified.
+ *
+ * The move and the field edits are two writes, each audited as soon as it
+ * lands, so a failure in the second never leaves the first unrecorded.
  */
 
 import { ClassmojiService } from '@classmoji/services';
@@ -80,6 +89,26 @@ interface AssignmentUpdateArgs {
   grader_deadline?: string | null;
   release_at?: string | null;
   module_id?: string;
+}
+
+/**
+ * Translate moveToModuleEnd's generic Errors. It re-checks both rows inside its
+ * transaction, so a module or assignment deleted since the handler's own
+ * checks gets the uniform not_found; an assignment another caller moved
+ * somewhere else in the same instant is a retry.
+ */
+function translateMoveError(error: unknown): never {
+  if (error instanceof Error) {
+    if (error.message === 'Module not found in classroom') throw scopedNotFound('Module');
+    if (error.message === 'Assignment not found in classroom') throw scopedNotFound('Assignment');
+    if (error.message === 'Assignment moved concurrently') {
+      throw new ToolError(
+        'internal',
+        'The assignment was moved by another request at the same time. Check list_modules and retry.'
+      );
+    }
+  }
+  throw error;
 }
 
 /** Fields a TEACHER (non-OWNER) may update, per the web routes above. */
@@ -188,6 +217,20 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
     const classroom = requireClassroomCtx(ctx);
     const assignment = await loadCourseworkAssignmentInClassroom(args.assignment_id, ctx);
 
+    // The web's teacher-tier grades_released route resolves through the
+    // repository, so it never reaches a quiz or form assignment.
+    if (
+      args.grades_released !== undefined &&
+      assignment.type !== 'REPO' &&
+      !(await holdsRole(ctx, ['OWNER']))
+    ) {
+      throw new ToolError(
+        'forbidden',
+        'Only the classroom owner can update grades_released on a quiz or form assignment',
+        'INSUFFICIENT_ROLE'
+      );
+    }
+
     // S1 for the move target, resolved before anything is written: the module
     // has to be in this classroom, and a foreign or unknown one gets the same
     // not_found. Naming the module the assignment is already in is not a move.
@@ -198,53 +241,57 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       if (!target || target.classroom_id !== classroom.classroomId) {
         throw scopedNotFound('Module');
       }
-      // moveToModule takes the target's FULL list as it will read after the
-      // move: its assignments in their current display order, then this one.
+      let result;
       try {
-        await ClassmojiService.assignment.moveToModule(
+        result = await ClassmojiService.assignment.moveToModuleEnd(
           assignment.id,
           target.id,
-          [...target.assignments.map(a => a.id), assignment.id],
           classroom.classroomId
         );
       } catch (error) {
-        // The target's assignments changed between the read above and the
-        // write (another editor on the Modules page).
-        if (error instanceof Error && error.message.startsWith('Ordered assignment ids')) {
-          throw new ToolError(
-            'internal',
-            'The target module’s assignments changed during the move. Check list_modules and retry.'
-          );
-        }
-        throw error;
+        translateMoveError(error);
       }
       module = { id: target.id, title: target.title };
-      movedFromModuleId = assignment.module_id;
-      values.module_id = target.id;
+      // `moved` is false when another call put it there first: this one wrote
+      // nothing, so it records nothing.
+      if (result.moved) {
+        movedFromModuleId = result.fromModuleId;
+        const moveValues = { module_id: target.id };
+        await writeAudit(ctx, {
+          resource_type: 'ASSIGNMENT',
+          resource_id: assignment.id,
+          action: 'UPDATE',
+          data: {
+            tool: 'assignment_update',
+            fields: ['module_id'],
+            values: moveValues,
+            from_module_id: movedFromModuleId,
+            value: JSON.stringify({ ...moveValues, from_module_id: movedFromModuleId }),
+          },
+        });
+      }
     }
 
-    const fields = [...Object.keys(updates), ...(movedFromModuleId ? ['module_id'] : [])];
-    const updated =
-      Object.keys(updates).length > 0
-        ? await ClassmojiService.assignment.update(assignment.id, updates)
-        : assignment;
-
-    // Nothing written (module_id named the module it is already in, alone):
-    // no audit row claims a change.
+    const fields = Object.keys(updates);
+    let updated: Pick<
+      typeof assignment,
+      | 'id'
+      | 'title'
+      | 'student_deadline'
+      | 'weight'
+      | 'grades_released'
+      | 'grader_deadline'
+      | 'release_at'
+    > = assignment;
     if (fields.length > 0) {
+      updated = await ClassmojiService.assignment.update(assignment.id, updates);
       await writeAudit(ctx, {
         resource_type: 'ASSIGNMENT',
         resource_id: assignment.id,
         action: 'UPDATE',
-        data: {
-          tool: 'assignment_update',
-          fields,
-          values,
-          ...(movedFromModuleId ? { from_module_id: movedFromModuleId } : {}),
-          // `value` is what keeps two different edits inside audit's 5s dedup
-          // window from collapsing into one row; an identical re-send still dedups.
-          value: JSON.stringify(values),
-        },
+        // `value` is what keeps two different edits inside audit's 5s dedup window
+        // from collapsing into one row; an identical re-send still dedups.
+        data: { tool: 'assignment_update', fields, values, value: JSON.stringify(values) },
       });
     }
 

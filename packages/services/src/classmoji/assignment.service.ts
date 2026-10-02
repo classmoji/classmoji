@@ -780,6 +780,91 @@ export const moveToModule = async (
   }
 };
 
+// One module's assignments in display order: the hand-arranged position, then
+// the deadline and title tie-break rows that were never dragged fall back to.
+const MODULE_ORDER = [
+  { position: 'asc' },
+  { student_deadline: { sort: 'asc', nulls: 'last' } },
+  { title: 'asc' },
+] satisfies Prisma.AssignmentOrderByWithRelationInput[];
+
+/**
+ * Move an assignment to the END of `toModuleId`, for a caller that holds no
+ * ordering to hand over (the MCP's assignment_update; `moveToModule` is the
+ * drag, which does). Returns whether anything moved and the module it left;
+ * naming the module it is already in moves nothing.
+ *
+ * One transaction with both module rows locked, so several moves into the same
+ * module at once (an agent placing a week's labs in parallel) each land on
+ * their own position instead of reading the same list and colliding. The
+ * target keeps its display order and is renumbered 0..n-1 with the moved row
+ * at n; the module it left is compacted in display order behind it.
+ *
+ * Only the module changes: weight, deadlines, grades and submissions travel
+ * with the assignment.
+ */
+export const moveToModuleEnd = async (
+  assignmentId: string,
+  toModuleId: string,
+  classroomId: string
+): Promise<{ moved: boolean; fromModuleId: string }> => {
+  return getPrisma().$transaction(async tx => {
+    const target = await tx.module.findFirst({
+      where: { id: toModuleId, classroom_id: classroomId },
+      select: { id: true },
+    });
+    if (!target) throw new Error('Module not found in classroom');
+
+    const scoped = { id: assignmentId, module: { classroom_id: classroomId } };
+    const assignment = await tx.assignment.findFirst({
+      where: scoped,
+      select: { module_id: true },
+    });
+    if (!assignment) throw new Error('Assignment not found in classroom');
+
+    const fromModuleId = assignment.module_id;
+    if (fromModuleId === toModuleId) return { moved: false, fromModuleId };
+
+    // Module rows are the lock, taken in id order so two moves in opposite
+    // directions cannot deadlock. The assignment row itself is not locked
+    // first: a concurrent move renumbering it would wait on that lock while
+    // holding the module one.
+    for (const moduleId of [fromModuleId, toModuleId].sort()) {
+      await tx.$queryRaw`SELECT id FROM modules WHERE id = ${moduleId} FOR UPDATE`;
+    }
+
+    // Read again under the lock: another move of this same assignment may have
+    // finished while this one waited.
+    const current = await tx.assignment.findFirst({ where: scoped, select: { module_id: true } });
+    if (!current) throw new Error('Assignment not found in classroom');
+    if (current.module_id === toModuleId) return { moved: false, fromModuleId };
+    if (current.module_id !== fromModuleId) throw new Error('Assignment moved concurrently');
+
+    const renumber = async (moduleId: string) => {
+      const rows = await tx.assignment.findMany({
+        where: { module_id: moduleId },
+        orderBy: MODULE_ORDER,
+        select: { id: true, position: true },
+      });
+      for (const [index, row] of rows.entries()) {
+        if (row.position !== index) {
+          await tx.assignment.update({ where: { id: row.id }, data: { position: index } });
+        }
+      }
+      return rows.length;
+    };
+
+    const end = await renumber(toModuleId);
+    await tx.assignment.update({
+      where: { id: assignmentId },
+      data: { module_id: toModuleId, position: end },
+    });
+    await renumber(fromModuleId);
+
+    return { moved: true, fromModuleId };
+  });
+};
+
 export const deleteInClassroom = async (id: string, classroomId: string) => {
   const { count } = await getPrisma().assignment.deleteMany({
     where: { id, module: { classroom_id: classroomId } },

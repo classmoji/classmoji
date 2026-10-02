@@ -259,11 +259,12 @@ export const listModulesTool = mirrorResourceTool({
   title: 'List modules',
   description:
     'Ordered curriculum modules, each with its content `items` (pages, slides, quizzes, forms) ' +
-    'and its `assignments` (REPO, QUIZ or FORM, in display order, with the repository, quiz or ' +
-    'form each one points at). An assignment belongs to exactly one module; an owner moves it ' +
-    'with assignment_update module_id. Students see published modules, items and assignments ' +
-    'only; staff also see unpublished. Returns {enabled:false} when the classroom hides ' +
-    'modules. Any member.',
+    'and its `assignments` (REPO, QUIZ or FORM, in display order). An assignment belongs to ' +
+    'exactly one module; an owner moves it with assignment_update module_id. Staff see ' +
+    'unpublished modules, items and assignments too, and for each assignment the repository, ' +
+    'quiz or form it points at (target_id), weight and publish state. Students see published ' +
+    'ones only, each assignment by title, type and due date. Returns {enabled:false} when the ' +
+    'classroom hides modules. Any member.',
 });
 
 export const listCalendarTool = mirrorResourceTool({

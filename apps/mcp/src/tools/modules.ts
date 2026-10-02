@@ -7,9 +7,9 @@
  * writes), and the ASSIGNMENTS that belong to it (`Assignment.module_id`, set
  * by assignment_create and moved by assignment_update). A repository is neither:
  * it is the storage a REPO assignment submits through and reaches a module only
- * through that assignment. `ModuleItemType.REPOSITORY` is a legacy value no
- * surface writes or renders any more, refused here. Publishing a Module spawns
- * nothing.
+ * through that assignment. `ModuleItemType.REPOSITORY` is a legacy value
+ * nothing writes any more (old rows are read-only), refused here. Publishing a
+ * Module spawns nothing.
  *
  * FORMS AND QUIZZES ARE THE GATED ITEM TYPES. The forms surface is a Pro
  * feature everywhere else it appears (apps/pages' `assertFormAdmin`, the whole
@@ -212,7 +212,7 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
   name: 'module_item_add',
   annotations: {
     // Appends one ModuleItem row. Nothing is removed: the underlying page,
-    // repo, quiz, slide or form is untouched, and so is every item already in
+    // quiz, slide or form is untouched, and so is every item already in
     // the module.
     destructive: false,
     // Repeating the call with the same args has no ADDITIONAL effect — the

@@ -7,13 +7,18 @@
  * `assignments` beside its content `items`:
  *
  *   - in the order the service hands them over (the display order);
- *   - each reduced to an allowlist, with one generic target pair in place of
- *     three nullable id columns;
+ *   - for staff, reduced to an allowlist with one generic target pair in place
+ *     of three nullable id columns;
+ *   - for a student, reduced to what their module row renders — title, type
+ *     and due date — and never the quiz or form behind the assignment, which
+ *     the service's filter does not check and which may still be a draft;
  *   - filtered for students by the service (`includeUnpublished` follows the
- *     role), with `is_published` on a staff payload only;
+ *     role);
  *   - without quiz assignments where the classroom shows no quizzes, for every
- *     role, exactly as quiz items are;
- *   - and without the legacy REPOSITORY item rows no web screen renders.
+ *     role, exactly as quiz items are.
+ *
+ * Legacy REPOSITORY item rows are passed through as before: the public course
+ * site still draws them.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -191,32 +196,66 @@ describe('modules read — assignments', () => {
       student_deadline: null,
       is_published: false,
     });
-    expect(form).toMatchObject({
+    expect(form).toEqual({
+      id: 'a-form',
+      title: 'Team preferences',
       type: 'FORM',
       target_id: 'f1',
       target_title: 'Team prefs form',
+      weight: 100,
       is_extra_credit: true,
+      student_deadline: DEADLINE,
+      is_published: true,
     });
   });
 
-  it('asks the service for drafts by role, and marks publication for staff only', async () => {
+  it('asks the service for drafts by role: staff yes, a student no', async () => {
     for (const role of ['OWNER', 'TEACHER', 'ASSISTANT'] as const) {
       const payload = await read(role);
       expect(mocks.listForClassroom).toHaveBeenLastCalledWith('w26', { includeUnpublished: true });
       expect(payload.modules[0].assignments[0], role).toHaveProperty('is_published', true);
     }
 
-    // The service drops a student's unpublished rows (and a REPO assignment
-    // whose repository is unpublished); what is left is published by
-    // definition, so the flag is not sent.
-    mocks.listForClassroom.mockResolvedValue([{ ...MODULES[0], assignments: [LAB, FORM] }]);
-    const payload = await read('STUDENT');
+    // The service is what drops a student's unpublished rows (and a REPO
+    // assignment whose repository is unpublished); this layer's part is to ask.
+    await read('STUDENT');
     expect(mocks.listForClassroom).toHaveBeenLastCalledWith('w26', { includeUnpublished: false });
-    expect(assignmentIds(payload)).toEqual([['a-lab', 'a-form']]);
-    for (const assignment of payload.modules[0].assignments) {
-      expect(assignment).not.toHaveProperty('is_published');
+  });
+
+  it('gives a student exactly what their module row renders, never the target', async () => {
+    // What the service's student filter lets through: the ASSIGNMENT is
+    // published. It does not look at the quiz or form behind it, so both of
+    // these targets are still drafts, with names no student surface shows.
+    const publishedOnDraftQuiz = {
+      ...QUIZ,
+      is_published: true,
+      student_deadline: DEADLINE,
+      quiz: { id: 'q-draft', name: 'UNRELEASED midterm questions', status: 'DRAFT' },
+    };
+    const publishedOnDraftForm = {
+      ...FORM,
+      form: { id: 'f-draft', title: 'UNRELEASED team survey', slug: 'x', status: 'DRAFT' },
+    };
+    mocks.listForClassroom.mockResolvedValue([
+      { ...MODULES[0], assignments: [LAB, publishedOnDraftQuiz, publishedOnDraftForm] },
+    ]);
+
+    const payload = await read('STUDENT');
+
+    expect(payload.modules[0].assignments).toEqual([
+      {
+        id: 'a-lab',
+        title: 'Starterpack: Getting started with Vite',
+        type: 'REPO',
+        student_deadline: DEADLINE,
+      },
+      { id: 'a-quiz', title: 'React quiz', type: 'QUIZ', student_deadline: DEADLINE },
+      { id: 'a-form', title: 'Team preferences', type: 'FORM', student_deadline: DEADLINE },
+    ]);
+    const text = JSON.stringify(payload.modules[0].assignments);
+    for (const leak of ['UNRELEASED', 'q-draft', 'f-draft', 'repo-1', 'private staff notes']) {
+      expect(text, leak).not.toContain(leak);
     }
-    expect(JSON.stringify(payload)).not.toContain('private staff notes');
   });
 
   it('drops quiz assignments, and only those, for every role where quizzes are hidden', async () => {
@@ -241,10 +280,18 @@ describe('modules read — assignments', () => {
     expect(mocks.quizzesVisible).not.toHaveBeenCalled();
   });
 
-  it('drops legacy REPOSITORY items: a repository shows up through its assignment', async () => {
+  it('leaves the content items as they were, legacy REPOSITORY rows included', async () => {
     const payload = await read('OWNER');
-    expect(payload.modules[0].items.map(i => i.id)).toEqual(['i-page']);
-    expect(payload.modules[0].assignments[0]).toMatchObject({ type: 'REPO', target_id: 'repo-1' });
+    expect(payload.modules[0].items).toEqual([
+      { id: 'i-page', type: 'PAGE', position: 0, target_id: 'p1', title: 'Intro' },
+      {
+        id: 'i-legacy',
+        type: 'REPOSITORY',
+        position: 1,
+        target_id: 'repo-1',
+        title: 'starterpack',
+      },
+    ]);
   });
 
   it('reports a module that owns no assignments as an empty list', async () => {

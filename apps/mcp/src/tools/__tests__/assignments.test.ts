@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   assignmentCreate: vi.fn(),
   assignmentDeleteById: vi.fn(),
   assignmentUpdate: vi.fn(),
-  assignmentMoveToModule: vi.fn(),
+  assignmentMoveToModuleEnd: vi.fn(),
   quizzesVisible: vi.fn(),
   membershipFindByClassroomAndUser: vi.fn(),
   auditCreate: vi.fn(),
@@ -37,7 +37,7 @@ vi.mock('@classmoji/services', () => ({
       create: (...a: unknown[]) => mocks.assignmentCreate(...a),
       deleteById: (...a: unknown[]) => mocks.assignmentDeleteById(...a),
       update: (...a: unknown[]) => mocks.assignmentUpdate(...a),
-      moveToModule: (...a: unknown[]) => mocks.assignmentMoveToModule(...a),
+      moveToModuleEnd: (...a: unknown[]) => mocks.assignmentMoveToModuleEnd(...a),
     },
     entitlement: { quizzesVisible: (...a: unknown[]) => mocks.quizzesVisible(...a) },
     classroomMembership: {
@@ -462,18 +462,14 @@ describe('assignment_update: module_id (moving an assignment to another module)'
     grader_deadline: null,
     release_at: null,
   };
-  /** The target module as module.findById loads it: its assignments in display order. */
-  const TARGET = {
-    id: 'mod-2',
-    title: 'Week 2',
-    classroom_id: 'class-1',
-    assignments: [{ id: 'asg-x' }, { id: 'asg-y' }],
-  };
+  const TARGET = { id: 'mod-2', title: 'Week 2', classroom_id: 'class-1' };
+  const auditData = (call = 0) =>
+    (mocks.auditCreate.mock.calls[call][0] as { data: Record<string, unknown> }).data;
 
   beforeEach(() => {
     mocks.assignmentFindById.mockResolvedValue(NOW);
     mocks.moduleFindById.mockResolvedValue(TARGET);
-    mocks.assignmentMoveToModule.mockResolvedValue(undefined);
+    mocks.assignmentMoveToModuleEnd.mockResolvedValue({ moved: true, fromModuleId: 'mod-1' });
     mocks.assignmentUpdate.mockImplementation(
       async (id: string, data: Record<string, unknown>) => ({ ...NOW, id, ...data })
     );
@@ -481,20 +477,14 @@ describe('assignment_update: module_id (moving an assignment to another module)'
     mocks.membershipFindByClassroomAndUser.mockResolvedValue(null);
   });
 
-  it('moves through assignment.moveToModule, appended to the target’s full ordering', async () => {
+  it('moves through assignment.moveToModuleEnd, scoped to the authorized classroom', async () => {
     const payload = parse(await assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-2' }, CTX));
 
-    // The web's move service, with the target module's list as it reads AFTER
-    // the move and the AUTHORIZED classroom id. Never a bare column write: that
-    // would leave `position` stale in both modules.
+    // The transactional move service with the AUTHORIZED classroom id. Never a
+    // bare column write: that would leave `position` stale in both modules.
     expect(mocks.moduleFindById).toHaveBeenCalledWith('mod-2');
-    expect(mocks.assignmentMoveToModule).toHaveBeenCalledTimes(1);
-    expect(mocks.assignmentMoveToModule).toHaveBeenCalledWith(
-      'asg-1',
-      'mod-2',
-      ['asg-x', 'asg-y', 'asg-1'],
-      'class-1'
-    );
+    expect(mocks.assignmentMoveToModuleEnd).toHaveBeenCalledTimes(1);
+    expect(mocks.assignmentMoveToModuleEnd).toHaveBeenCalledWith('asg-1', 'mod-2', 'class-1');
     expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
 
     expect(payload).toEqual({
@@ -527,28 +517,48 @@ describe('assignment_update: module_id (moving an assignment to another module)'
         fields: ['module_id'],
         values: { module_id: 'mod-2' },
         from_module_id: 'mod-1',
-        value: JSON.stringify({ module_id: 'mod-2' }),
+        // Both ends are in the dedup key: a move here from somewhere else
+        // inside audit's 5s window is a different row.
+        value: JSON.stringify({ module_id: 'mod-2', from_module_id: 'mod-1' }),
       },
     });
   });
 
-  it('moves and edits in one call: the move first, then the notifying update', async () => {
+  it('moves and edits in one call, auditing each write as soon as it lands', async () => {
     const payload = parse(
       await assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-2', weight: 40 }, CTX)
     );
 
-    expect(mocks.assignmentMoveToModule).toHaveBeenCalledTimes(1);
     // module_id never reaches the column write.
     expect(mocks.assignmentUpdate).toHaveBeenCalledWith('asg-1', { weight: 40 });
-    expect(mocks.assignmentMoveToModule.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.assignmentUpdate.mock.invocationCallOrder[0]
-    );
     expect(payload.assignment).toMatchObject({ module_id: 'mod-2', weight: 40 });
-    expect((mocks.auditCreate.mock.calls[0][0] as { data: unknown }).data).toMatchObject({
-      fields: ['weight', 'module_id'],
-      values: { weight: 40, module_id: 'mod-2' },
-      from_module_id: 'mod-1',
+
+    // move → its audit row → field update → its audit row.
+    const order = (mock: { mock: { invocationCallOrder: number[] } }, call = 0) =>
+      mock.mock.invocationCallOrder[call];
+    expect(order(mocks.assignmentMoveToModuleEnd)).toBeLessThan(order(mocks.auditCreate, 0));
+    expect(order(mocks.auditCreate, 0)).toBeLessThan(order(mocks.assignmentUpdate));
+    expect(order(mocks.assignmentUpdate)).toBeLessThan(order(mocks.auditCreate, 1));
+    expect(auditData(0)).toMatchObject({ fields: ['module_id'], from_module_id: 'mod-1' });
+    expect(auditData(1)).toEqual({
+      tool: 'assignment_update',
+      fields: ['weight'],
+      values: { weight: 40 },
+      value: JSON.stringify({ weight: 40 }),
     });
+  });
+
+  it('leaves the move on record when the field edit after it fails', async () => {
+    mocks.assignmentUpdate.mockRejectedValue(new Error('connection lost'));
+
+    await expect(
+      assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-2', weight: 40 }, CTX)
+    ).rejects.toThrow('connection lost');
+
+    // The move committed, so its row is already written: a retry (which finds
+    // the assignment in mod-2 and moves nothing) leaves no unaudited change.
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(auditData(0)).toMatchObject({ fields: ['module_id'], from_module_id: 'mod-1' });
   });
 
   it.each([
@@ -566,7 +576,7 @@ describe('assignment_update: module_id (moving an assignment to another module)'
       kind: 'not_found',
       message: 'Module not found in this classroom',
     });
-    expect(mocks.assignmentMoveToModule).not.toHaveBeenCalled();
+    expect(mocks.assignmentMoveToModuleEnd).not.toHaveBeenCalled();
     expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
@@ -578,8 +588,14 @@ describe('assignment_update: module_id (moving an assignment to another module)'
 
     expect(mocks.assignmentFindById).not.toHaveBeenCalled();
     expect(mocks.moduleFindById).not.toHaveBeenCalled();
-    expect(mocks.assignmentMoveToModule).not.toHaveBeenCalled();
+    expect(mocks.assignmentMoveToModuleEnd).not.toHaveBeenCalled();
     expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a TEACHER naming even the module it is already in', async () => {
+    await expect(
+      assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-1' }, TEACHER_CTX)
+    ).rejects.toMatchObject({ kind: 'forbidden' });
   });
 
   it('refuses a TEACHER’s mixed call without applying the teacher-tier field', async () => {
@@ -589,7 +605,7 @@ describe('assignment_update: module_id (moving an assignment to another module)'
         TEACHER_CTX
       )
     ).rejects.toMatchObject({ kind: 'forbidden' });
-    expect(mocks.assignmentMoveToModule).not.toHaveBeenCalled();
+    expect(mocks.assignmentMoveToModuleEnd).not.toHaveBeenCalled();
     expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
   });
 
@@ -601,7 +617,7 @@ describe('assignment_update: module_id (moving an assignment to another module)'
     expect(payload.assignment).toMatchObject({ module_id: 'mod-1', module_title: 'Week 1' });
     expect(payload).not.toHaveProperty('moved_from_module_id');
     expect(mocks.moduleFindById).not.toHaveBeenCalled();
-    expect(mocks.assignmentMoveToModule).not.toHaveBeenCalled();
+    expect(mocks.assignmentMoveToModuleEnd).not.toHaveBeenCalled();
     expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
@@ -609,11 +625,21 @@ describe('assignment_update: module_id (moving an assignment to another module)'
   it('audits only what changed when the module is the current one and a field is not', async () => {
     await assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-1', weight: 40 }, CTX);
 
-    expect(mocks.assignmentMoveToModule).not.toHaveBeenCalled();
+    expect(mocks.assignmentMoveToModuleEnd).not.toHaveBeenCalled();
     expect(mocks.assignmentUpdate).toHaveBeenCalledWith('asg-1', { weight: 40 });
-    const data = (mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> }).data;
-    expect(data).toMatchObject({ fields: ['weight'], values: { weight: 40 } });
-    expect(data).not.toHaveProperty('from_module_id');
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(auditData()).toMatchObject({ fields: ['weight'], values: { weight: 40 } });
+    expect(auditData()).not.toHaveProperty('from_module_id');
+  });
+
+  it('records nothing when another request moved it there first', async () => {
+    mocks.assignmentMoveToModuleEnd.mockResolvedValue({ moved: false, fromModuleId: 'mod-1' });
+
+    const payload = parse(await assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-2' }, CTX));
+
+    expect(payload.assignment.module_id).toBe('mod-2');
+    expect(payload).not.toHaveProperty('moved_from_module_id');
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it.each(['QUIZ', 'FORM'])(
@@ -626,7 +652,33 @@ describe('assignment_update: module_id (moving an assignment to another module)'
       );
 
       expect(payload.assignment.module_id).toBe('mod-2');
-      expect(mocks.assignmentMoveToModule).toHaveBeenCalledTimes(1);
+      expect(mocks.assignmentMoveToModuleEnd).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it.each(['QUIZ', 'FORM'])(
+    'refuses a %s assignment whose MODULE is in another classroom (its only scope chain)',
+    async type => {
+      // No repository to fall back on: the module check is the whole boundary.
+      mocks.assignmentFindById.mockResolvedValue({
+        ...NOW,
+        type,
+        repository: null,
+        module_id: 'mod-9',
+        module: { id: 'mod-9', title: 'Elsewhere', classroom_id: 'OTHER-class' },
+      });
+
+      for (const args of [{ module_id: 'mod-2' }, { weight: 40 }]) {
+        await expect(assignmentUpdateTool.handler({ ...ARGS, ...args }, CTX)).rejects.toMatchObject(
+          {
+            kind: 'not_found',
+            message: 'Assignment not found in this classroom',
+          }
+        );
+      }
+      expect(mocks.assignmentMoveToModuleEnd).not.toHaveBeenCalled();
+      expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+      expect(mocks.auditCreate).not.toHaveBeenCalled();
     }
   );
 
@@ -645,7 +697,7 @@ describe('assignment_update: module_id (moving an assignment to another module)'
       message: 'Assignment not found in this classroom',
     });
     expect(mocks.quizzesVisible).toHaveBeenCalledWith('class-1');
-    expect(mocks.assignmentMoveToModule).not.toHaveBeenCalled();
+    expect(mocks.assignmentMoveToModuleEnd).not.toHaveBeenCalled();
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
@@ -663,13 +715,30 @@ describe('assignment_update: module_id (moving an assignment to another module)'
     await expect(
       assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-2' }, CTX)
     ).rejects.toMatchObject({ kind: 'not_found' });
-    expect(mocks.assignmentMoveToModule).not.toHaveBeenCalled();
+    expect(mocks.assignmentMoveToModuleEnd).not.toHaveBeenCalled();
   });
 
-  it('reports a target module that changed mid-move as retryable, without an audit row', async () => {
-    mocks.assignmentMoveToModule.mockRejectedValue(
-      new Error('Ordered assignment ids must match the module assignments')
-    );
+  it.each([
+    ['Module not found in classroom', 'not_found', 'Module not found in this classroom'],
+    ['Assignment not found in classroom', 'not_found', 'Assignment not found in this classroom'],
+  ])(
+    'translates the service’s own re-check (%s) into the uniform refusal',
+    async (thrown, kind, message) => {
+      // Deleted between the handler's check and the transaction's.
+      mocks.assignmentMoveToModuleEnd.mockRejectedValue(new Error(thrown));
+
+      await expect(
+        assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-2', weight: 40 }, CTX)
+      ).rejects.toMatchObject({ kind, message });
+      expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+      expect(mocks.auditCreate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('reports the same assignment moved elsewhere at the same instant as a retry', async () => {
+    // The service throws this BEFORE writing anything, so there is nothing to
+    // audit and a retry sees the real state.
+    mocks.assignmentMoveToModuleEnd.mockRejectedValue(new Error('Assignment moved concurrently'));
 
     const error = await assignmentUpdateTool
       .handler({ ...ARGS, module_id: 'mod-2', weight: 40 }, CTX)
@@ -681,7 +750,7 @@ describe('assignment_update: module_id (moving an assignment to another module)'
   });
 
   it('does not swallow an unexpected move failure', async () => {
-    mocks.assignmentMoveToModule.mockRejectedValue(new Error('connection lost'));
+    mocks.assignmentMoveToModuleEnd.mockRejectedValue(new Error('connection lost'));
 
     await expect(
       assignmentUpdateTool.handler({ ...ARGS, module_id: 'mod-2' }, CTX)
@@ -709,6 +778,73 @@ describe('assignment_update: module_id (moving an assignment to another module)'
   it('says in the description that module_id is how an assignment is placed in a module', () => {
     expect(assignmentUpdateTool.description).toMatch(/module_id MOVES the assignment/);
     expect(assignmentUpdateTool.description).toMatch(/list_modules/);
+  });
+});
+
+describe('assignment_update: grades_released on a quiz or form assignment', () => {
+  const ARGS = { classroom: 'org/winter-2025', assignment_id: 'asg-q', grades_released: true };
+  const QUIZ_ASSIGNMENT = {
+    id: 'asg-q',
+    title: 'Quiz 1',
+    type: 'QUIZ',
+    module_id: 'mod-1',
+    module: { id: 'mod-1', title: 'Week 1', classroom_id: 'class-1' },
+    repository: null,
+    student_deadline: null,
+    weight: 100,
+    grades_released: false,
+    grader_deadline: null,
+    release_at: null,
+  };
+
+  beforeEach(() => {
+    mocks.assignmentFindById.mockResolvedValue(QUIZ_ASSIGNMENT);
+    mocks.quizzesVisible.mockResolvedValue(true);
+    mocks.membershipFindByClassroomAndUser.mockResolvedValue(null);
+    mocks.assignmentUpdate.mockImplementation(
+      async (id: string, data: Record<string, unknown>) => ({ ...QUIZ_ASSIGNMENT, id, ...data })
+    );
+  });
+
+  it('refuses a TEACHER: the web’s teacher route only reaches repository assignments', async () => {
+    await expect(assignmentUpdateTool.handler(ARGS, TEACHER_CTX)).rejects.toMatchObject({
+      kind: 'forbidden',
+      message: expect.stringMatching(/quiz or form/),
+    });
+    expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('still lets a TEACHER flip it on a REPO assignment', async () => {
+    mocks.assignmentFindById.mockResolvedValue({
+      ...QUIZ_ASSIGNMENT,
+      type: 'REPO',
+      repository: { classroom_id: 'class-1' },
+    });
+    const payload = parse(await assignmentUpdateTool.handler(ARGS, TEACHER_CTX));
+    expect(payload.assignment.grades_released).toBe(true);
+  });
+
+  it('lets the OWNER set it, as the owner’s web edit form does', async () => {
+    const payload = parse(await assignmentUpdateTool.handler(ARGS, CTX));
+    expect(payload.assignment.grades_released).toBe(true);
+    expect(mocks.assignmentUpdate).toHaveBeenCalledWith('asg-q', { grades_released: true });
+  });
+
+  it('lets a TEACHER move a quiz assignment’s deadline, as the web calendar does', async () => {
+    const payload = parse(
+      await assignmentUpdateTool.handler(
+        {
+          classroom: ARGS.classroom,
+          assignment_id: 'asg-q',
+          student_deadline: '2026-07-21T23:59:00-04:00',
+        },
+        TEACHER_CTX
+      )
+    );
+    expect(payload.assignment.student_deadline).toBe(
+      new Date('2026-07-21T23:59:00-04:00').toISOString()
+    );
   });
 });
 
