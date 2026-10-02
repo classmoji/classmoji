@@ -11,7 +11,11 @@ export interface UpdateRepositoryPayload {
   repoName: string;
   prTitle: string;
   prDescription: string;
-  token: string;
+  /**
+   * Ignored. Runs queued before the token was minted here still carry one; it
+   * may have expired while they waited, so a fresh one is minted instead.
+   */
+  token?: string;
   templateOwner: string;
   templateRepo: string;
 }
@@ -25,7 +29,7 @@ interface UpdateRepositoryResult {
 export const updateRepository = async (
   payload: UpdateRepositoryPayload
 ): Promise<UpdateRepositoryResult> => {
-  const { gitOrganization, repoName, prTitle, prDescription, token, templateOwner, templateRepo } =
+  const { gitOrganization, repoName, prTitle, prDescription, templateOwner, templateRepo } =
     payload;
 
   if (!gitOrganization.login) {
@@ -35,6 +39,9 @@ export const updateRepository = async (
   const gitProvider = getGitProvider(gitOrganization);
   const octokit = await gitProvider.getOctokit();
   const orgLogin = gitOrganization.login;
+  // Minted per run: an installation token lasts an hour from minting, however
+  // long the run sat in the queue.
+  const token = await gitProvider.getAccessToken();
 
   const localPath = path.join(process.cwd(), 'repos', repoName);
   const studentRepoUrl = `https://x-access-token:${token}@github.com/${orgLogin}/${repoName}.git`;

@@ -298,9 +298,9 @@ describe('importModules — what counts as a skipped item', () => {
             ],
           },
         ]),
-        create: vi.fn().mockResolvedValue({ id: 'm-dst' }),
+        upsert: vi.fn().mockResolvedValue({ id: 'm-dst' }),
       },
-      moduleItem: { create: moduleItemCreate },
+      moduleItem: { create: moduleItemCreate, findMany: vi.fn().mockResolvedValue([]) },
     };
     const summary = importModules(
       'source-classroom',
@@ -330,5 +330,98 @@ describe('importModules — what counts as a skipped item', () => {
     expect(moduleItemCreate).toHaveBeenCalledExactlyOnceWith({
       data: expect.objectContaining({ item_type: 'REPOSITORY', repository_id: 'r-dst' }),
     });
+  });
+});
+
+describe('importModules — a target that already holds the module title', () => {
+  // The repository clone that runs before this phase creates each assignment's
+  // module in the target BY TITLE, so a blind create hit the
+  // (classroom_id, title) unique key on every such import.
+  const sourceModule = {
+    id: 'm-src',
+    title: 'Week 1',
+    slug: 'week-1',
+    description: 'Intro',
+    position: 3,
+    items: [
+      item({ item_type: 'PAGE', position: 0, page_id: 'p-src' }),
+      item({ item_type: 'SLIDE', position: 1, slide_id: 's-src' }),
+    ],
+  };
+  const maps = emptyMaps({ pages: { 'p-src': 'p-dst' }, slides: { 's-src': 's-dst' } });
+
+  const makeTx = (existingItems: Array<Record<string, string | null>> = []) => ({
+    module: {
+      findMany: vi.fn().mockResolvedValue([sourceModule]),
+      create: vi.fn(),
+      upsert: vi.fn().mockResolvedValue({ id: 'm-existing' }),
+    },
+    moduleItem: {
+      findMany: vi.fn().mockResolvedValue(existingItems),
+      create: vi.fn().mockResolvedValue({}),
+    },
+  });
+
+  it('finds-or-creates by (classroom_id, title) and leaves an existing module untouched', async () => {
+    const tx = makeTx();
+
+    const summary = await importModules(
+      'source-classroom',
+      'target-classroom',
+      maps,
+      {},
+      tx as never
+    );
+
+    expect(tx.module.create).not.toHaveBeenCalled();
+    expect(tx.module.upsert).toHaveBeenCalledTimes(1);
+    expect(tx.module.upsert).toHaveBeenCalledWith({
+      where: { classroom_id_title: { classroom_id: 'target-classroom', title: 'Week 1' } },
+      create: {
+        classroom_id: 'target-classroom',
+        title: 'Week 1',
+        slug: 'week-1',
+        description: 'Intro',
+        position: 3,
+        is_published: false,
+      },
+      update: {},
+      select: { id: true },
+    });
+    // Items land in the reused module.
+    expect(tx.moduleItem.create).toHaveBeenCalledTimes(2);
+    expect(tx.moduleItem.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ module_id: 'm-existing', page_id: 'p-dst' }),
+    });
+    expect(summary).toEqual({ modules: 1, items: 2, skipped_items: 0 });
+  });
+
+  it('does not re-create items a previous partial run already added (retry)', async () => {
+    const tx = makeTx([{ page_id: 'p-dst', repository_id: null, quiz_id: null, slide_id: null }]);
+
+    const summary = await importModules(
+      'source-classroom',
+      'target-classroom',
+      maps,
+      {},
+      tx as never
+    );
+
+    expect(tx.moduleItem.create).toHaveBeenCalledTimes(1);
+    expect(tx.moduleItem.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ module_id: 'm-existing', slide_id: 's-dst' }),
+    });
+    expect(summary).toEqual({ modules: 1, items: 2, skipped_items: 0 });
+  });
+
+  it('is a no-op on a full re-run', async () => {
+    const tx = makeTx([
+      { page_id: 'p-dst', repository_id: null, quiz_id: null, slide_id: null },
+      { page_id: null, repository_id: null, quiz_id: null, slide_id: 's-dst' },
+    ]);
+
+    await importModules('source-classroom', 'target-classroom', maps, {}, tx as never);
+
+    expect(tx.moduleItem.create).not.toHaveBeenCalled();
   });
 });
