@@ -12,7 +12,7 @@ import AssignmentsTable, {
 import AssignmentFormModal from '~/components/features/assignments/AssignmentFormModal';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
-import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
+import { loadQuizzesVisible, quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -172,6 +172,12 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     async update() {
       try {
         const { id, ...updates } = data;
+        // A quiz's assignment is written only where the classroom shows
+        // quizzes; elsewhere this page lists none, so there is none to write.
+        const target = await ClassmojiService.assignment.findByIdInClassroom(id, classroom.id);
+        if (target?.type === 'QUIZ' && !(await quizzesVisibleOrThrow(classroom.id))) {
+          return { error: 'Failed to update assignment. Please try again.' };
+        }
         const updated = await ClassmojiService.assignment.updateInClassroom(
           id,
           classroom.id,

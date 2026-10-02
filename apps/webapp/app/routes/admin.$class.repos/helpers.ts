@@ -6,6 +6,7 @@ import dayjs from 'dayjs';
 
 import { ClassmojiService } from '@classmoji/services';
 import Tasks from '@classmoji/tasks';
+import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 
 type Classroom = NonNullable<Awaited<ReturnType<typeof ClassmojiService.classroom.findBySlug>>>;
 type Repository = NonNullable<Awaited<ReturnType<typeof ClassmojiService.repository.findById>>>;
@@ -192,6 +193,12 @@ export const publishAssignmentAndRepository = async (
     classroomId
   );
   invariant(assignment != null, 'Assignment not found');
+  // A quiz's assignment is published only where the classroom shows quizzes
+  // (the quiz screens' own gate): elsewhere it is not there to publish, and a
+  // publish tells the class.
+  if (assignment.type === 'QUIZ' && !(await quizzesVisibleOrThrow(classroomId))) {
+    throw new Response('Not Found', { status: 404 });
+  }
 
   let repoResult: Awaited<ReturnType<typeof publishAssignment>> | null = null;
 

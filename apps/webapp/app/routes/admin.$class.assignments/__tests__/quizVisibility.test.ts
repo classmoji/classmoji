@@ -17,12 +17,15 @@ const mocks = vi.hoisted(() => ({
   requireClassroomAdmin: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
   loadQuizzesVisible: vi.fn(),
+  quizzesVisibleOrThrow: vi.fn(),
+  findByIdInClassroom: vi.fn(),
   listForClassroom: vi.fn(),
   findModules: vi.fn(),
   findRepositories: vi.fn(),
   getCandidateContent: vi.fn(),
   findTags: vi.fn(),
   createInClassroom: vi.fn(),
+  updateInClassroom: vi.fn(),
   deleteInClassroom: vi.fn(),
 }));
 
@@ -33,13 +36,16 @@ vi.mock('~/utils/routeAuth.server', () => ({
 
 vi.mock('~/utils/classroomProFlag.server', () => ({
   loadQuizzesVisible: (...a: unknown[]) => mocks.loadQuizzesVisible(...a),
+  quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a),
 }));
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     assignment: {
+      findByIdInClassroom: (...a: unknown[]) => mocks.findByIdInClassroom(...a),
       listForClassroom: (...a: unknown[]) => mocks.listForClassroom(...a),
       createInClassroom: (...a: unknown[]) => mocks.createInClassroom(...a),
+      updateInClassroom: (...a: unknown[]) => mocks.updateInClassroom(...a),
       deleteInClassroom: (...a: unknown[]) => mocks.deleteInClassroom(...a),
     },
     module: {
@@ -188,6 +194,35 @@ describe('assignments action — create refuses a quiz assignment', () => {
       expect.objectContaining({ type: 'FORM', form_id: 'f-2' })
     );
     expect(mocks.loadQuizzesVisible).not.toHaveBeenCalled();
+  });
+});
+
+describe('assignments action — updating a quiz assignment', () => {
+  it('writes nothing to a quiz assignment where quizzes are hidden', async () => {
+    mocks.findByIdInClassroom.mockResolvedValue({ id: 'a-quiz', type: 'QUIZ' });
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(false);
+
+    const result = await post('update', { id: 'a-quiz', weight: 5 });
+
+    expect(result).toEqual({ error: 'Failed to update assignment. Please try again.' });
+    expect(mocks.findByIdInClassroom).toHaveBeenCalledWith('a-quiz', 'class-1');
+    expect(mocks.updateInClassroom).not.toHaveBeenCalled();
+  });
+
+  it('updates a quiz assignment where quizzes show, and any other without asking', async () => {
+    mocks.updateInClassroom.mockResolvedValue({ title: 'Updated' });
+    mocks.findByIdInClassroom.mockResolvedValue({ id: 'a-quiz', type: 'QUIZ' });
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
+    expect(await post('update', { id: 'a-quiz', weight: 5 })).toEqual({
+      success: 'Assignment "Updated" updated',
+    });
+
+    mocks.quizzesVisibleOrThrow.mockClear();
+    mocks.findByIdInClassroom.mockResolvedValue({ id: 'a-repo', type: 'REPO' });
+    expect(await post('update', { id: 'a-repo', weight: 5 })).toEqual({
+      success: 'Assignment "Updated" updated',
+    });
+    expect(mocks.quizzesVisibleOrThrow).not.toHaveBeenCalled();
   });
 });
 
