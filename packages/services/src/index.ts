@@ -182,6 +182,7 @@ export type {
 export {
   QuizAccessError,
   QuizExcludedPathsError,
+  QuizStatusChangeError,
   QUIZ_STAFF_ROLES,
 } from './classmoji/quiz.service.ts';
 // Quiz source material: the linked pages and decks a quiz is about. The

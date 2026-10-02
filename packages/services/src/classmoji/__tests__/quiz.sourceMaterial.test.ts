@@ -16,6 +16,7 @@ const tx = {
   quiz: {
     create: vi.fn(),
     update: vi.fn(),
+    findUnique: vi.fn(),
     findUniqueOrThrow: vi.fn(),
   },
   page: { findMany: vi.fn() },
@@ -48,7 +49,7 @@ vi.mock('../contentManifest.service.ts', () => ({
 vi.mock('../notification.service.ts', () => ({}));
 
 const quizService = await import('../quiz.service.ts');
-const { QuizExcludedPathsError } = quizService;
+const { QuizExcludedPathsError, QuizStatusChangeError } = quizService;
 const { ResourceLinkServiceError } = await import('../resourceLink.service.ts');
 
 const CLASSROOM = 'classroom-1';
@@ -487,5 +488,35 @@ describe('quiz.getQuizzesForStudent — closed quizzes and the counting score', 
     expect(quiz.attemptsSummary.currentScore).toBe(75);
     expect(quiz.attempts.find(a => a.id === 'a1')?.isCounting).toBe(true);
     expect(quiz.attempts.find(a => a.id === 'retake')?.isCounting).toBe(false);
+  });
+});
+
+describe('quiz.update — closing a quiz', () => {
+  it('refuses to close a quiz that is still a draft, writing nothing', async () => {
+    tx.quiz.findUnique.mockResolvedValue({ status: 'DRAFT' });
+
+    const refusal = await quizService.update('quiz-1', { status: 'CLOSED' }).catch(e => e);
+
+    expect(refusal).toBeInstanceOf(QuizStatusChangeError);
+    expect(refusal.message).toBe('Publish the quiz before closing it');
+    expect(refusal.status).toBe(400);
+    expect(tx.quiz.update).not.toHaveBeenCalled();
+  });
+
+  it('closes a published quiz', async () => {
+    tx.quiz.findUnique.mockResolvedValue({ status: 'PUBLISHED' });
+
+    await quizService.update('quiz-1', { status: 'CLOSED' });
+
+    expect(tx.quiz.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'CLOSED' }) })
+    );
+  });
+
+  it('does not look the status up for any other change', async () => {
+    await quizService.update('quiz-1', { status: 'DRAFT', name: 'Renamed' });
+
+    expect(tx.quiz.findUnique).not.toHaveBeenCalled();
+    expect(tx.quiz.update).toHaveBeenCalled();
   });
 });

@@ -59,6 +59,14 @@ const SOURCE_MATERIAL_CONFLICT =
 const isExcludedPathsRefusal = (error: unknown): error is Error =>
   (error as { name?: unknown } | null)?.name === 'QuizExcludedPathsError';
 
+/**
+ * quiz.update refuses to close a quiz that is still a draft with a
+ * QuizStatusChangeError ("Publish the quiz before closing it"), shown as is.
+ * Matched by name, as above.
+ */
+const isStatusChangeRefusal = (error: unknown): error is Error =>
+  (error as { name?: unknown } | null)?.name === 'QuizStatusChangeError';
+
 interface AdminQuiz {
   id: string;
   name: string;
@@ -251,6 +259,13 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       headers: { 'Content-Type': 'application/json' },
     });
 
+  /** A QuizStatusChangeError from quiz.update: its message, as the form shows it. */
+  const statusChangeRefused = (error: Error) =>
+    new Response(JSON.stringify({ error: error.message }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
   /** A ResourceLinkServiceError from quiz.create/update, as the form shows it. */
   const sourceMaterialRefused = (error: unknown) =>
     isSourceMaterialConflict(error) ? sourceMaterialConflict() : sourceMaterialNotFound();
@@ -343,6 +358,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       } catch (error) {
         if (isSourceMaterialRefusal(error)) return sourceMaterialRefused(error);
         if (isExcludedPathsRefusal(error)) return excludedPathsRefused(error);
+        if (isStatusChangeRefusal(error)) return statusChangeRefused(error);
         throw error;
       }
       await audit('UPDATE', data.id, {

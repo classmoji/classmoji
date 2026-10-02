@@ -123,6 +123,24 @@ export class QuizExcludedPathsError extends Error {
   }
 }
 
+/**
+ * quiz.update refuses a status change it cannot make: a DRAFT quiz cannot be
+ * CLOSED, because a closed quiz stays visible to students and a draft has
+ * never been published to them. Publish it first.
+ */
+export class QuizStatusChangeError extends Error {
+  code = 'invalid_status_change' as const;
+  /** HTTP status a web caller should answer with. */
+  status = 400;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'QuizStatusChangeError';
+  }
+}
+
+export const CLOSE_DRAFT_QUIZ_REFUSAL = 'Publish the quiz before closing it';
+
 /** The list to store, checked; throws `QuizExcludedPathsError` for a bad one. */
 function excludedPathsToStore(input: unknown): string[] {
   const result = normalizeExcludedPaths(input);
@@ -233,6 +251,12 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
   // are not loaded: an interactive transaction holds its connection and has a
   // time limit, and a long-running quiz can have hundreds of attempts.
   return getPrisma().$transaction(async tx => {
+    // DRAFT → CLOSED is refused (see QuizStatusChangeError), read in the same
+    // transaction as the write.
+    if (data.status === 'CLOSED') {
+      const current = await tx.quiz.findUnique({ where: { id: quizId }, select: { status: true } });
+      if (current?.status === 'DRAFT') throw new QuizStatusChangeError(CLOSE_DRAFT_QUIZ_REFUSAL);
+    }
     const quiz = await tx.quiz.update({ where: { id: quizId }, data: updateData });
     if (data.sourceMaterial !== undefined) {
       await setQuizSourceMaterial(tx, {
