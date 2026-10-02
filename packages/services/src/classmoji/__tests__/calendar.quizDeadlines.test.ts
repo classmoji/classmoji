@@ -140,7 +140,17 @@ describe('getDeadlinesForRange — the student-visibility rule', () => {
   const CLOSED_QUIZ = row('a-closed-quiz', 'QUIZ', 12, { quiz: { status: 'CLOSED' } });
   const DRAFT_FORM = row('a-draft-form', 'FORM', 13, { form: { status: 'DRAFT' } });
   const LATER_FORM = row('a-later-form', 'FORM', 14, { release_at: FUTURE });
-  const ALL = [REPO, QUIZ, FORM, DRAFT_QUIZ, LATER_QUIZ, OPENED_QUIZ, CLOSED_QUIZ, DRAFT_FORM, LATER_FORM];
+  const ALL = [
+    REPO,
+    QUIZ,
+    FORM,
+    DRAFT_QUIZ,
+    LATER_QUIZ,
+    OPENED_QUIZ,
+    CLOSED_QUIZ,
+    DRAFT_FORM,
+    LATER_FORM,
+  ];
 
   it('leaves out, for students, a draft quiz and anything not yet released', async () => {
     assignmentFindMany.mockResolvedValue(ALL);
@@ -313,9 +323,9 @@ describe('getClassroomCalendar — event links to quiz assignments', () => {
     ];
 
     calendarEventFindMany.mockResolvedValue([lecture(links())]);
-    const asStudent = (
-      await getClassroomCalendar('class-1', START, END, null, false, false)
-    ).find(i => i.id === 'event-1') as unknown as LinkedEvent;
+    const asStudent = (await getClassroomCalendar('class-1', START, END, null, false, false)).find(
+      i => i.id === 'event-1'
+    ) as unknown as LinkedEvent;
 
     expect(asStudent.assignments.map(a => a.assignment.id)).toEqual(['a-quiz']);
     expect(asStudent.featured_resource).toBeNull();

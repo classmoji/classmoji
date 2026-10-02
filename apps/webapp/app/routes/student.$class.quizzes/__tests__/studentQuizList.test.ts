@@ -284,7 +284,9 @@ describe('student quiz list — due date, closed quizzes, zero scores', () => {
   });
 
   it('keeps a closed quiz, with its score, and offers no new attempt', async () => {
-    mocks.quizFindMany.mockResolvedValue([{ ...QUIZ_ROW, status: 'CLOSED', attempts: [COMPLETED] }]);
+    mocks.quizFindMany.mockResolvedValue([
+      { ...QUIZ_ROW, status: 'CLOSED', attempts: [COMPLETED] },
+    ]);
 
     const [quiz] = (await load()).quizzes;
 

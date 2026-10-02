@@ -326,7 +326,7 @@ describe.skipIf(!RUN)('calendar event links to quiz and form assignments (integr
   // the assignment published AND the form out of draft. Staff always see it,
   // marked as not yet visible to students. Runs last: it publishes the shared
   // form assignment.
-  it("shows a student a form link only once the form is out of draft, and flags it for staff", async () => {
+  it('shows a student a form link only once the form is out of draft, and flags it for staff', async () => {
     const eventId = await makeEvent();
     await prisma.calendarEventAssignmentLink.create({
       data: { event_id: eventId, assignment_id: formAssignmentId, occurrence_date: null, order: 0 },
@@ -350,7 +350,10 @@ describe.skipIf(!RUN)('calendar event links to quiz and form assignments (integr
     };
 
     // Assignment published, form still a draft (the fixture's default status).
-    await prisma.assignment.update({ where: { id: formAssignmentId }, data: { is_published: true } });
+    await prisma.assignment.update({
+      where: { id: formAssignmentId },
+      data: { is_published: true },
+    });
     expect(await linkedIds(false)).toEqual([]);
     expect(await linkedIds(true)).toEqual([[formAssignmentId, false]]);
 
