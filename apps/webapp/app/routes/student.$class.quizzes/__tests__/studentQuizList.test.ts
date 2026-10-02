@@ -254,9 +254,10 @@ describe('student quiz list — due date, closed quizzes, zero scores', () => {
   it('asks for closed quizzes too', async () => {
     await load();
 
-    expect(mocks.quizFindMany.mock.calls[0][0].where.status).toEqual({
-      in: ['PUBLISHED', 'CLOSED'],
-    });
+    // A quiz in no module is listed by its own status, closed ones included;
+    // one with an assignment by the assignment (and kept once it closes).
+    const [, legacy] = mocks.quizFindMany.mock.calls[0][0].where.OR;
+    expect(legacy.status).toEqual({ in: ['PUBLISHED', 'CLOSED'] });
   });
 
   it("shows the assignment's due date where the quiz has an assignment", async () => {
