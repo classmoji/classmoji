@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import Emoji from '~/components/ui/display/Emoji';
 import {
   type ModuleTreeNode,
+  type QuizLeafInput,
   buildResourceLeaves,
   prettyType,
   repoGithubUrl,
@@ -91,7 +92,7 @@ export const resourceLeaves = (
   input: {
     pages?: Array<{ page: { id: string; title: string; is_draft?: boolean } }>;
     slides?: Array<{ slide: { id: string; title: string; is_draft?: boolean } }>;
-    quizzes?: Array<{ id: string; name: string; status?: string }>;
+    quizzes?: QuizLeafInput[];
     forms?: Array<{
       id: string;
       title: string;

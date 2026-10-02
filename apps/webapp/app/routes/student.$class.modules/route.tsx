@@ -50,9 +50,11 @@ const moduleView = (m: ListedModule, isStaff: boolean) => ({
     is_published: a.is_published,
     grades_released: a.grades_released,
     student_deadline: a.student_deadline,
+    // A quiz takes no new attempt from its assignment's close date on.
+    closes_at: a.closes_at,
     repository_id: a.repository_id,
     repository: a.repository ? { id: a.repository.id, type: a.repository.type } : null,
-    quiz: a.quiz ? { id: a.quiz.id, status: a.quiz.status } : null,
+    quiz: a.quiz ? { id: a.quiz.id } : null,
     form: a.form ? { id: a.form.id, slug: a.form.slug, status: a.form.status } : null,
     pages: (a.pages ?? []).flatMap(link =>
       link.page && (isStaff || !link.page.is_draft) ? [{ page: docView(link.page) }] : []
@@ -66,7 +68,6 @@ const moduleView = (m: ListedModule, isStaff: boolean) => ({
     item_type: item.item_type,
     page: item.page ? docView(item.page) : null,
     slide: item.slide ? docView(item.slide) : null,
-    quiz: item.quiz ? { id: item.quiz.id, name: item.quiz.name, status: item.quiz.status } : null,
     form: item.form
       ? {
           id: item.form.id,
@@ -234,9 +235,21 @@ const buildModuleLeaves = (
         children: undefined,
       });
     } else if (a.type === 'QUIZ' && a.quiz) {
+      // Everything the leaf shows is the assignment's: published, close date,
+      // due date (the title is the quiz's name, kept in step with it).
       leaves.push(
         ...resourceLeaves(
-          { quizzes: [{ id: a.quiz.id, name: a.title, status: a.quiz.status }] },
+          {
+            quizzes: [
+              {
+                id: a.quiz.id,
+                name: a.title,
+                published: a.is_published,
+                closesAt: a.closes_at,
+                due: a.student_deadline,
+              },
+            ],
+          },
           0,
           `asg-${a.id}`,
           ctx
@@ -277,17 +290,6 @@ const buildModuleLeaves = (
             ...resourceLeaves({ slides: [{ slide: item.slide }] }, 0, `mi-${item.id}`, ctx)
           );
         break;
-      case 'QUIZ':
-        if (item.quiz)
-          leaves.push(
-            ...resourceLeaves(
-              { quizzes: [{ id: item.quiz.id, name: item.quiz.name }] },
-              0,
-              `mi-${item.id}`,
-              ctx
-            )
-          );
-        break;
       // listForClassroom already dropped DRAFT forms for students, so for them
       // anything here is OPEN or CLOSED; staff additionally see drafts, marked
       // as such. The close time is the leaf's deadline; access says who may
@@ -315,8 +317,10 @@ const buildModuleLeaves = (
           );
         break;
       // Legacy pointer rows; a repository reaches a module only through its
-      // assignments now.
+      // assignments now, and a quiz through its assignment (listForClassroom
+      // already leaves QUIZ items out).
       case 'REPOSITORY':
+      case 'QUIZ':
         break;
     }
   }
