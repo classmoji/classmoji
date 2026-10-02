@@ -52,8 +52,19 @@ export const panelFormValues = (data: AssignmentPanelData): AssignmentPanelValue
   isPublished: data.isPublished,
 });
 
+export type AssignmentPanelPayload = {
+  moduleId: string | null;
+  releaseAt: string | null;
+  dueDate: string | null;
+  closesAt: string | null;
+  weight: number;
+  isPublished: boolean;
+};
+
 /** The form's values, as the quiz action takes them. */
-export const panelPayload = (values: AssignmentPanelValues | undefined) => ({
+export const panelPayload = (
+  values: AssignmentPanelValues | undefined
+): AssignmentPanelPayload => ({
   moduleId: values?.moduleId ?? null,
   releaseAt: values?.releaseAt ? values.releaseAt.toISOString() : null,
   dueDate: values?.dueDate ? values.dueDate.toISOString() : null,
@@ -61,6 +72,30 @@ export const panelPayload = (values: AssignmentPanelValues | undefined) => ({
   weight: Number(values?.weight ?? 0),
   isPublished: values?.isPublished === true,
 });
+
+const sameInstant = (a: string | null, b: string | null) =>
+  a === b || (a !== null && b !== null && new Date(a).getTime() === new Date(b).getTime());
+
+/**
+ * Only the panel fields that differ from what the loader showed, for a save
+ * of an existing quiz. A form opened before someone else published the quiz,
+ * or moved its due date, then sends nothing it did not change and cannot put
+ * the old values back. Empty when nothing changed.
+ */
+export const changedPanelPayload = (
+  values: AssignmentPanelValues | undefined,
+  initial: AssignmentPanelData
+): Partial<AssignmentPanelPayload> => {
+  const now = panelPayload(values);
+  const changed: Partial<AssignmentPanelPayload> = {};
+  if (now.moduleId !== initial.moduleId) changed.moduleId = now.moduleId;
+  if (!sameInstant(now.releaseAt, initial.releaseAt)) changed.releaseAt = now.releaseAt;
+  if (!sameInstant(now.dueDate, initial.dueDate)) changed.dueDate = now.dueDate;
+  if (!sameInstant(now.closesAt, initial.closesAt)) changed.closesAt = now.closesAt;
+  if (now.weight !== initial.weight) changed.weight = now.weight;
+  if (now.isPublished !== initial.isPublished) changed.isPublished = now.isPublished;
+  return changed;
+};
 
 /**
  * Where students see the quiz, read off the panel: nowhere until it is

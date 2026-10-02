@@ -475,6 +475,22 @@ describe.skipIf(!RUN)('a quiz and its assignment (integration)', () => {
       expect(after.updated_at).toEqual(before.updated_at);
       expect(after).toEqual(before);
     });
+
+    it('a publish made elsewhere survives a content-only save from a form opened before it', async () => {
+      // The form was loaded while the quiz was a draft; meanwhile it was
+      // published from the quiz list. The form's save carries no panel field,
+      // since the panel was not changed, and so publishes nothing back.
+      const quiz = await newQuiz(await makeModule(), {}, { isPublished: false });
+      await quizService.publish(quiz.id);
+
+      await quizService.update(quiz.id, { name: quiz.name, rubricPrompt: 'edited' });
+
+      expect((await assignmentOf(quiz.id)).is_published).toBe(true);
+      expect(await quizRow(quiz.id)).toMatchObject({
+        status: 'PUBLISHED',
+        rubric_prompt: 'edited',
+      });
+    });
   });
 
   // ─── a quiz with no assignment ────────────────────────────────────────────

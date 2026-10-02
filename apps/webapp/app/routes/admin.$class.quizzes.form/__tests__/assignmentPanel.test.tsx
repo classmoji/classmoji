@@ -10,6 +10,8 @@
  *                  the owner has to add one. Save stays disabled either way.
  *   assistant:     the panel is read-only, the save carries no assignment
  *                  field, and there is no Delete.
+ *   an edit:       sends only the panel fields changed in the form, so a form
+ *                  opened before a change made elsewhere cannot undo it.
  *
  * And the loader that feeds it: the panel's values come from the quiz's
  * assignment (or, for a quiz in no module, from the quiz), a `?moduleId=`
@@ -24,6 +26,7 @@ import dayjs from 'dayjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { quizAssignmentKeysIn } from '@classmoji/utils';
 import {
+  changedPanelPayload,
   panelFormValues,
   panelPayload,
   studentsSeeItIn,
@@ -205,7 +208,9 @@ const chips = () =>
 const type = async (selector: string, text: string) => {
   const input = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)!;
   const proto =
-    input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    input instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
   const setValue = Object.getOwnPropertyDescriptor(proto, 'value')!.set!;
   await act(async () => {
     setValue.call(input, text);
@@ -308,7 +313,7 @@ describe('editing a quiz as the owner or a teacher', () => {
     isPublished: true,
   });
 
-  it('shows where students see it, and saves the panel with the quiz', async () => {
+  it('shows where students see it, and an unchanged panel sends nothing with the save', async () => {
     await render({ viewer: TEACHER, quiz: formQuiz(), panel: assigned });
 
     expect(chosenModule()).toBe('Week 1');
@@ -316,20 +321,29 @@ describe('editing a quiz as the owner or a teacher', () => {
     expect(deleteButton()).toBeDefined();
 
     await vi.waitFor(() => expect(saveButton().disabled).toBe(false));
+    await type('input#name', 'Recursion check-in, revised');
     await click(saveButton());
 
     await vi.waitFor(() => expect(mocks.submit).toHaveBeenCalledTimes(1));
-    expect(mocks.submit.mock.calls[0][0]).toMatchObject({
+    const [payload] = mocks.submit.mock.calls[0];
+    expect(payload).toMatchObject({
       _action: 'updateQuiz',
       id: 'quiz-1',
-      assignment: {
-        moduleId: 'mod-1',
-        dueDate: '2026-10-09T16:00:00.000Z',
-        closesAt: null,
-        weight: 10,
-        isPublished: true,
-      },
+      name: 'Recursion check-in, revised',
     });
+    // Published, due date and weight stay as whoever set them last left them.
+    expect(payload).not.toHaveProperty('assignment');
+    expect(quizAssignmentKeysIn(payload)).toEqual([]);
+  });
+
+  it('sends only the panel field that was changed', async () => {
+    await render({ viewer: OWNER, quiz: formQuiz(), panel: assigned });
+
+    await type('.ant-input-number input', '15');
+    await click(saveButton());
+
+    await vi.waitFor(() => expect(mocks.submit).toHaveBeenCalledTimes(1));
+    expect(mocks.submit.mock.calls[0][0].assignment).toEqual({ weight: 15 });
   });
 
   it('Close now sets Closes to now, and the save carries it', async () => {
@@ -666,5 +680,38 @@ describe('studentsSeeItIn', () => {
     expect(
       studentsSeeItIn({ isPublished: true, moduleTitle: null, hasDueDate: false, weight: 0 })
     ).toEqual(['Assignments', 'Dashboard']);
+  });
+});
+
+describe('changedPanelPayload', () => {
+  const loaded = emptyPanel({
+    moduleId: 'mod-1',
+    moduleTitle: 'Week 1',
+    releaseAt: '2026-10-05T13:00:00.000Z',
+    dueDate: '2026-10-09T16:00:00.000Z',
+    weight: 10,
+    isPublished: false,
+  });
+
+  it('is empty for the panel as the loader sent it', () => {
+    expect(changedPanelPayload(panelFormValues(loaded), loaded)).toEqual({});
+  });
+
+  it('names each field that changed, and nothing else', () => {
+    expect(
+      changedPanelPayload(
+        { ...panelFormValues(loaded), dueDate: null, isPublished: true, moduleId: 'mod-2' },
+        loaded
+      )
+    ).toEqual({ dueDate: null, isPublished: true, moduleId: 'mod-2' });
+  });
+
+  it('reads a date at the same instant as unchanged, whatever its spelling', () => {
+    expect(
+      changedPanelPayload(
+        { ...panelFormValues(loaded), dueDate: dayjs('2026-10-09T12:00:00-04:00') },
+        loaded
+      )
+    ).toEqual({});
   });
 });

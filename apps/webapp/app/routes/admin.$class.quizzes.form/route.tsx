@@ -40,6 +40,7 @@ import {
 import {
   EditableAssignmentPanel,
   ReadOnlyAssignmentPanel,
+  changedPanelPayload,
   panelFormValues,
   panelPayload,
   type AssignmentPanelData,
@@ -392,14 +393,19 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
         // Absent while the quiz is not code-aware (the field is not shown): the
         // saved list is left as it is.
         const { excludedPaths: excludedPathsText, assignment, ...values } = allValues;
+        // The Assignment panel, for the owner and teachers only: an
+        // assistant's save never carries an assignment field. A new quiz
+        // sends it whole; an edit sends only what changed here, so a form
+        // opened before someone else's change cannot undo it.
+        const panel = isEditing
+          ? changedPanelPayload(assignment, assignmentPanel)
+          : panelPayload(assignment);
         const formData = {
           ...values,
           ...(typeof excludedPathsText === 'string'
             ? { excludedPaths: parseExcludedPathsText(excludedPathsText) }
             : {}),
-          // The Assignment panel, for the owner and teachers only: an
-          // assistant's save never carries an assignment field.
-          ...(canAuthor ? { assignment: panelPayload(assignment) } : {}),
+          ...(canAuthor && Object.keys(panel).length > 0 ? { assignment: panel } : {}),
           // Selection order is material order: one list across pages and decks.
           sourceMaterial: ((values.sourceMaterial ?? []) as string[]).map(fromPickerValue),
           courseSearchEnabled: values.courseSearchEnabled === true,
