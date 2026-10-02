@@ -3,7 +3,11 @@ import { Await, useParams } from 'react-router';
 import { Skeleton } from 'antd';
 import dayjs from 'dayjs';
 import getPrisma from '@classmoji/database';
-import { ClassmojiService, type StudentCourseworkRow } from '@classmoji/services';
+import {
+  ClassmojiService,
+  type CourseworkAssignment,
+  type StudentCourseworkRow,
+} from '@classmoji/services';
 import type { Route } from './+types/route';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
@@ -54,47 +58,67 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     // Started alongside the reads below. It never rejects: a failed lookup
     // answers false.
     const quizzesVisiblePromise = loadQuizzesVisible(classroom.id);
-    const [weekEventsRaw, repositories, regradeRequests, allRepoAssignments] = await Promise.all([
-      ClassmojiService.calendar
-        .getClassroomCalendar(
-          classroom.id,
-          fetchWindow.from.toDate(),
-          fetchWindow.to.toDate(),
-          userId
-        )
-        .catch(() => [] as unknown[]),
-      // The published repositories, for the team card: a self-formed group
-      // repository is where a student forms their team.
-      getPrisma().repository.findMany({
-        where: { classroom_id: classroom.id, is_published: true },
-        select: { id: true, slug: true, title: true, type: true, team_formation_mode: true },
-        orderBy: { created_at: 'asc' },
-      }),
-      ClassmojiService.regradeRequest.findMany({
-        student_id: userId,
-        classroom_id: classroom.id,
-      }),
-      ClassmojiService.helper
-        .findAllAssignmentsForStudent(userId, classSlug)
-        .catch(
-          () =>
-            [] as Awaited<ReturnType<typeof ClassmojiService.helper.findAllAssignmentsForStudent>>
-        ),
-    ]);
+    const courseworkContext = { classroomId: classroom.id, userId };
+    const [weekEventsRaw, repositories, regradeRequests, allRepoAssignments, assignmentListing] =
+      await Promise.all([
+        ClassmojiService.calendar
+          .getClassroomCalendar(
+            classroom.id,
+            fetchWindow.from.toDate(),
+            fetchWindow.to.toDate(),
+            userId
+          )
+          .catch(() => [] as unknown[]),
+        // The published repositories, for the team card: a self-formed group
+        // repository is where a student forms their team.
+        getPrisma().repository.findMany({
+          where: { classroom_id: classroom.id, is_published: true },
+          select: { id: true, slug: true, title: true, type: true, team_formation_mode: true },
+          orderBy: { created_at: 'asc' },
+        }),
+        ClassmojiService.regradeRequest.findMany({
+          student_id: userId,
+          classroom_id: classroom.id,
+        }),
+        ClassmojiService.helper
+          .findAllAssignmentsForStudent(userId, classSlug)
+          .catch(
+            () =>
+              [] as Awaited<ReturnType<typeof ClassmojiService.helper.findAllAssignmentsForStudent>>
+          ),
+        // The classroom's published assignments, for the coursework rows below.
+        ClassmojiService.studentCoursework
+          .listPublishedAssignments(classroom.id)
+          .catch((error): CourseworkAssignment[] | null => {
+            console.error(
+              '[student dashboard] assignment listing failed',
+              courseworkContext,
+              error
+            );
+            return null;
+          }),
+      ]);
     const quizzesVisible = await quizzesVisiblePromise;
 
     // Every assignment the student can see, every type, the same rows the
-    // Assignments page lists (the submission rows read above are reused).
-    const coursework: StudentCourseworkRow[] = await ClassmojiService.studentCoursework
-      .listForStudent({
-        classroomId: classroom.id,
-        classroomSlug: classSlug,
-        userId,
-        quizzesVisible,
-        gitOrgLogin,
-        repoSubmissions: allRepoAssignments,
-      })
-      .catch((): StudentCourseworkRow[] => []);
+    // Assignments page lists (the submission rows and the listing read above
+    // are reused). A failed read is logged and leaves Up next empty.
+    const coursework: StudentCourseworkRow[] = assignmentListing
+      ? await ClassmojiService.studentCoursework
+          .listForStudent({
+            classroomId: classroom.id,
+            classroomSlug: classSlug,
+            userId,
+            quizzesVisible,
+            gitOrgLogin,
+            repoSubmissions: allRepoAssignments,
+            assignments: assignmentListing,
+          })
+          .catch((error): StudentCourseworkRow[] => {
+            console.error('[student dashboard] coursework read failed', courseworkContext, error);
+            return [];
+          })
+      : [];
 
     const weekEvents: WeekEvent[] = (weekEventsRaw as Array<Record<string, unknown>>).map(e => ({
       id: String(e.id),
@@ -106,23 +130,23 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
     // Recent grades: released repo grades (emoji, as on the Assignments page)
     // and quiz scores (the counting attempt's percentage, shown as soon as it
-    // completes), newest first.
-    const repoFeedback: FeedbackItem[] = allRepoAssignments
-      .filter(ra => ra.assignment?.grades_released && (ra.grades?.length ?? 0) > 0)
-      .map(ra => ({
-        id: ra.id,
-        assignmentTitle: ra.assignment?.title ?? '',
-        closedAt: ra.closed_at,
-        graders: (ra.graders ?? []).map(g => ({ id: g.grader.id, name: g.grader.name })),
-        grades: (ra.grades ?? []).map(g => ({ id: g.id, emoji: g.emoji })),
-        // The issue in ISSUE mode, the repo itself in REPO mode.
-        issueUrl:
-          gitOrgLogin && ra.git_repo?.name
-            ? ra.provider_issue_number != null
-              ? `https://github.com/${gitOrgLogin}/${ra.git_repo.name}/issues/${ra.provider_issue_number}`
-              : `https://github.com/${gitOrgLogin}/${ra.git_repo.name}`
-            : null,
-      }));
+    // completes), newest first. Both come from the coursework rows, so a grade
+    // shows here only for an assignment the student can see there.
+    const repoFeedback: FeedbackItem[] = coursework.flatMap(row =>
+      row.repo && row.repo.gradesReleased && row.repo.grades.length > 0
+        ? [
+            {
+              id: row.repo.gitRepoAssignmentId,
+              assignmentTitle: row.title,
+              closedAt: row.repo.closedAt,
+              graders: row.repo.graders,
+              grades: row.repo.grades,
+              // The issue in ISSUE mode, the repo itself in REPO mode.
+              issueUrl: row.repo.issueUrl ?? row.repo.repoUrl,
+            },
+          ]
+        : []
+    );
     const quizFeedback: FeedbackItem[] = coursework
       .filter(row => row.type === 'QUIZ' && row.score !== null)
       .map(row => ({

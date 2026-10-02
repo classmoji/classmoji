@@ -7,6 +7,7 @@ const regradeRequestsMock = vi.fn();
 const assertAccessMock = vi.fn();
 const loadQuizzesVisibleMock = vi.fn();
 const listForStudentMock = vi.fn();
+const listPublishedAssignmentsMock = vi.fn();
 const upNextMock = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
@@ -37,6 +38,7 @@ vi.mock('@classmoji/services', () => ({
     },
     studentCoursework: {
       listForStudent: (...a: unknown[]) => listForStudentMock(...a),
+      listPublishedAssignments: (...a: unknown[]) => listPublishedAssignmentsMock(...a),
       upNext: (...a: unknown[]) => upNextMock(...a),
     },
   },
@@ -95,6 +97,7 @@ beforeEach(() => {
   findAllAssignmentsMock.mockResolvedValue([]);
   loadQuizzesVisibleMock.mockResolvedValue(true);
   listForStudentMock.mockResolvedValue([]);
+  listPublishedAssignmentsMock.mockResolvedValue([{ id: 'listed' }]);
   upNextMock.mockImplementation((rows: Array<{ done: boolean }>) => rows.filter(r => !r.done));
 });
 
@@ -112,39 +115,36 @@ describe('student dashboard loader — assignment lookup guard', () => {
     expect(data.upNext).toEqual([]);
   });
 
-  it('still resolves when the coursework read rejects', async () => {
+  it('still resolves when the coursework read rejects, and logs it', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     listForStudentMock.mockRejectedValue(new Error('connection timeout'));
 
     const data = await (await loader(loaderArgs())).data;
 
     expect(data.upNext).toEqual([]);
     expect(data.feedback).toEqual([]);
+    expect(logged).toHaveBeenCalledWith(
+      '[student dashboard] coursework read failed',
+      { classroomId: 'class-1', userId: 'student-1' },
+      expect.any(Error)
+    );
+    logged.mockRestore();
   });
 
-  it('still maps released feedback when the assignment lookup succeeds', async () => {
-    findAllAssignmentsMock.mockResolvedValue([
-      {
-        id: 'ra-1',
-        status: 'CLOSED',
-        closed_at: new Date('2026-01-01T12:00:00Z'),
-        provider_issue_number: 42,
-        assignment: { title: 'Feedback Assignment', grades_released: true },
-        git_repo: { name: 'student-repo', repository_id: 'repo-module-1' },
-        graders: [{ grader: { id: 'grader-1', name: 'TA' } }],
-        grades: [{ id: 'grade-1', emoji: 'heart' }],
-      },
-    ]);
+  it('still resolves when the assignment listing rejects, and logs it', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    listPublishedAssignmentsMock.mockRejectedValue(new Error('connection timeout'));
 
     const data = await (await loader(loaderArgs())).data;
 
-    expect(data.feedback).toEqual([
-      expect.objectContaining({
-        id: 'ra-1',
-        assignmentTitle: 'Feedback Assignment',
-        issueUrl: 'https://github.com/test-org/student-repo/issues/42',
-        grades: [{ id: 'grade-1', emoji: 'heart' }],
-      }),
-    ]);
+    expect(data.upNext).toEqual([]);
+    expect(listForStudentMock).not.toHaveBeenCalled();
+    expect(logged).toHaveBeenCalledWith(
+      '[student dashboard] assignment listing failed',
+      { classroomId: 'class-1', userId: 'student-1' },
+      expect.any(Error)
+    );
+    logged.mockRestore();
   });
 
   it('sends the week start as a plain date and fetches events beyond it on both sides', async () => {
@@ -168,6 +168,7 @@ describe('student dashboard loader — Up next', () => {
       await loader(loaderArgs())
     ).data;
 
+    expect(listPublishedAssignmentsMock).toHaveBeenCalledWith('class-1');
     expect(listForStudentMock).toHaveBeenCalledWith({
       classroomId: 'class-1',
       classroomSlug: 'test-class',
@@ -175,6 +176,7 @@ describe('student dashboard loader — Up next', () => {
       quizzesVisible: false,
       gitOrgLogin: 'test-org',
       repoSubmissions: submissions,
+      assignments: [{ id: 'listed' }],
     });
     // One read of the submissions, shared with the coursework rows.
     expect(findAllAssignmentsMock).toHaveBeenCalledTimes(1);
@@ -216,19 +218,27 @@ describe('student dashboard loader — Up next', () => {
 });
 
 describe('student dashboard loader — recent grades', () => {
-  it('adds quiz scores beside released repo grades, newest first', async () => {
-    findAllAssignmentsMock.mockResolvedValue([
-      {
-        id: 'ra-old',
-        closed_at: new Date('2026-09-01T12:00:00Z'),
-        provider_issue_number: null,
-        assignment: { title: 'Lab 1', grades_released: true },
-        git_repo: { name: 'lab-1-ada' },
-        graders: [],
-        grades: [{ id: 'g-1', emoji: 'heart' }],
+  /** A REPO coursework row with a released grade. */
+  const gradedRepo = (over: Record<string, unknown> = {}) =>
+    courseworkRow({
+      assignmentId: 'a-lab',
+      title: 'Lab 1',
+      done: true,
+      repo: {
+        gitRepoAssignmentId: 'ra-old',
+        closedAt: '2026-09-01T12:00:00.000Z',
+        graders: [{ id: 'g-1', name: 'Grace' }],
+        grades: [{ id: 'grade-1', emoji: 'heart' }],
+        gradesReleased: true,
+        issueUrl: null,
+        repoUrl: 'https://github.com/test-org/lab-1-ada',
       },
-    ]);
+      ...over,
+    });
+
+  it('adds quiz scores beside released repo grades, newest first', async () => {
     listForStudentMock.mockResolvedValue([
+      gradedRepo(),
       courseworkRow({
         assignmentId: 'a-quiz',
         type: 'QUIZ',
@@ -255,12 +265,58 @@ describe('student dashboard loader — recent grades', () => {
         score: 0,
         href: '/student/test-class/quizzes?quiz=q-1',
       },
-      expect.objectContaining({
+      {
         id: 'ra-old',
         assignmentTitle: 'Lab 1',
+        closedAt: '2026-09-01T12:00:00.000Z',
+        graders: [{ id: 'g-1', name: 'Grace' }],
+        grades: [{ id: 'grade-1', emoji: 'heart' }],
         issueUrl: 'https://github.com/test-org/lab-1-ada',
+      },
+    ]);
+  });
+
+  it('shows a repo grade only for an assignment the Assignments page shows', async () => {
+    // A released grade on a submission whose assignment the student cannot
+    // see (its repository unpublished, say): listForStudent gives it no row.
+    findAllAssignmentsMock.mockResolvedValue([
+      {
+        id: 'ra-hidden',
+        assignment_id: 'a-hidden',
+        closed_at: new Date('2026-09-10T12:00:00Z'),
+        provider_issue_number: 3,
+        assignment: { title: 'Hidden lab', grades_released: true },
+        git_repo: { name: 'hidden-lab-ada' },
+        graders: [],
+        grades: [{ id: 'g-9', emoji: 'tada' }],
+      },
+    ]);
+    listForStudentMock.mockResolvedValue([gradedRepo()]);
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.feedback.map(f => f.id)).toEqual(['ra-old']);
+    expect(JSON.stringify(data.feedback)).not.toContain('Hidden lab');
+  });
+
+  it('shows no repo grade before it is released', async () => {
+    listForStudentMock.mockResolvedValue([
+      gradedRepo({
+        repo: {
+          gitRepoAssignmentId: 'ra-old',
+          closedAt: null,
+          graders: [],
+          grades: [],
+          gradesReleased: false,
+          issueUrl: null,
+          repoUrl: null,
+        },
       }),
     ]);
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.feedback).toEqual([]);
   });
 });
 
