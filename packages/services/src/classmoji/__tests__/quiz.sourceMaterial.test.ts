@@ -27,7 +27,11 @@ const transaction = vi.fn(async (fn: (client: typeof tx) => unknown) => fn(tx));
 const quizFindUnique = vi.fn();
 const quizFindMany = vi.fn();
 
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
   default: () => ({
     $transaction: (fn: (client: typeof tx) => unknown) => transaction(fn),
     quiz: {

@@ -107,7 +107,13 @@ describe.skipIf(!RUN)('FORM module items (integration)', () => {
 
     const user = await prisma.user.create({
       data: {
-        login: `mitest-${suite}-owner`,
+        accounts: {
+          create: {
+            provider_id: 'github',
+            account_id: `mitest-${suite}-owner`,
+            username: `mitest-${suite}-owner`,
+          },
+        },
         email: `mitest-${suite}-owner@example.test`,
         name: `Module Item Owner ${suite}`,
       },
@@ -118,7 +124,13 @@ describe.skipIf(!RUN)('FORM module items (integration)', () => {
   afterAll(async () => {
     if (orgId) await prisma.gitOrganization.delete({ where: { id: orgId } }).catch(() => {});
     await prisma.user
-      .deleteMany({ where: { login: { startsWith: `mitest-${suite}-` } } })
+      .deleteMany({
+        where: {
+          accounts: {
+            some: { provider_id: 'github', username: { startsWith: `mitest-${suite}-` } },
+          },
+        },
+      })
       .catch(() => {});
   });
 

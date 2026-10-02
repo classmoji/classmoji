@@ -27,13 +27,25 @@ const client = {
     deleteMany: (...args: unknown[]) => deleteManyMock(...args),
     delete: (...args: unknown[]) => deleteMock(...args),
   },
+  // Student logins are looked up on the classroom organization's provider.
+  classroom: {
+    findUnique: async () => ({
+      git_organization: { provider: 'GITHUB', gitlab_instance_id: null },
+    }),
+  },
   $queryRaw: (...args: unknown[]) => queryRawMock(...args),
   $transaction: (fn: (tx: unknown) => unknown) => transactionMock(fn),
 };
 
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
   default: () => client,
 }));
+
+const { GIT_IDENTITY, whereGitUsername } = await import('@classmoji/database/gitIdentity');
 
 const LAST_OWNER_ERROR = 'Cannot remove the last owner of a classroom';
 
@@ -311,13 +323,38 @@ describe('findStudentByLoginInClassroom', () => {
     await membershipService.findStudentByLoginInClassroom('c1', 'ada');
 
     expect(findFirstMock).toHaveBeenCalledExactlyOnceWith({
-      where: { classroom_id: 'c1', role: 'STUDENT', user: { login: 'ada' } },
+      where: { classroom_id: 'c1', role: 'STUDENT', user: whereGitUsername('ada', 'GITHUB') },
       select: {
         id: true,
         comment: true,
         letter_grade: true,
-        user: { select: { id: true, name: true, login: true, image: true, school_id: true } },
+        user: { select: { id: true, name: true, image: true, school_id: true, ...GIT_IDENTITY } },
       },
+    });
+  });
+
+  it('flattens the student identity to the Github login', async () => {
+    findFirstMock.mockResolvedValue({
+      id: 'm1',
+      comment: null,
+      letter_grade: null,
+      user: {
+        id: 'u1',
+        name: 'Ada',
+        image: null,
+        school_id: null,
+        accounts: [{ provider_id: 'github', account_id: '1', username: 'ada' }],
+      },
+    });
+
+    const found = await membershipService.findStudentByLoginInClassroom('c1', 'ada');
+
+    expect(found?.user).toEqual({
+      id: 'u1',
+      name: 'Ada',
+      image: null,
+      school_id: null,
+      login: 'ada',
     });
   });
 

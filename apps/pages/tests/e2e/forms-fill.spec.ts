@@ -340,14 +340,22 @@ test.beforeAll(async () => {
   // the payload the fill page used to hand to anonymous visitors.
   const roster = await prisma.classroomMembership.findMany({
     where: { classroom_id: classroomId, role: 'STUDENT' },
-    select: { user_id: true, user: { select: { name: true, login: true } } },
+    select: {
+      user_id: true,
+      user: {
+        select: {
+          name: true,
+          accounts: { where: { provider_id: 'github' }, select: { username: true } },
+        },
+      },
+    },
     take: 5,
   });
   if (roster.length === 0) throw new Error('no STUDENT memberships — is the dev database seeded?');
 
   const rosterOptions = roster.map(member => ({
     id: member.user_id,
-    label: `${member.user.name} (${member.user.login})`,
+    label: `${member.user.name} (${member.user.accounts[0]?.username})`,
   }));
   leakedLabel = rosterOptions[0].label;
 

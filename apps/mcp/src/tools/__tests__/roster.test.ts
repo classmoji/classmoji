@@ -13,7 +13,8 @@ import type { ToolContext } from '../../mcp/registry.ts';
 
 const mocks = vi.hoisted(() => ({
   addStudents: vi.fn(),
-  findByLogin: vi.fn(),
+  findByGitUsername: vi.fn(),
+  userFindUnique: vi.fn(),
   findByClassroomAndUser: vi.fn(),
   classroomFindById: vi.fn(),
   auditCreate: vi.fn(),
@@ -29,7 +30,7 @@ const { buildRemoveUserPayload } = await import('@classmoji/services/remove-user
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     roster: { addStudents: (...a: unknown[]) => mocks.addStudents(...a) },
-    user: { findByLogin: (...a: unknown[]) => mocks.findByLogin(...a) },
+    user: { findByGitUsername: (...a: unknown[]) => mocks.findByGitUsername(...a) },
     classroomMembership: {
       findByClassroomAndUser: (...a: unknown[]) => mocks.findByClassroomAndUser(...a),
     },
@@ -37,6 +38,14 @@ vi.mock('@classmoji/services', () => ({
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
   },
   buildRemoveUserPayload,
+}));
+
+// The removal reads the target's git identity (their Github account username).
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+  default: () => ({ user: { findUnique: (...a: unknown[]) => mocks.userFindUnique(...a) } }),
 }));
 
 vi.mock('@classmoji/tasks', () => ({
@@ -137,10 +146,13 @@ describe('roster_remove_student', () => {
       slug: 'w26',
       git_organization: { id: 'gorg-1', login: 'myorg', provider: 'GITHUB' },
     });
+    mocks.userFindUnique.mockResolvedValue({
+      accounts: [{ provider_id: 'github', account_id: '1', username: 'alice' }],
+    });
   });
 
   it('builds the removal payload from DB records (not client input) and fires the task', async () => {
-    mocks.findByLogin.mockResolvedValue({ id: 'stu-1', login: 'alice' });
+    mocks.findByGitUsername.mockResolvedValue({ id: 'stu-1', login: 'alice' });
     mocks.findByClassroomAndUser.mockResolvedValue({
       has_accepted_invite: true,
       user: { id: 'stu-1', login: 'alice', name: 'Alice' },
@@ -183,7 +195,7 @@ describe('roster_remove_student', () => {
       },
       settings: { openai_api_key: 'sk-secret', anthropic_api_key: 'sk-ant-secret' },
     });
-    mocks.findByLogin.mockResolvedValue({ id: 'stu-1', login: 'alice' });
+    mocks.findByGitUsername.mockResolvedValue({ id: 'stu-1', login: 'alice' });
     mocks.findByClassroomAndUser.mockResolvedValue({
       has_accepted_invite: true,
       user: { id: 'stu-1', login: 'alice', name: 'Alice' },
@@ -210,7 +222,7 @@ describe('roster_remove_student', () => {
   });
 
   it('refuses an unknown login (scopedNotFound) and never fires the task', async () => {
-    mocks.findByLogin.mockResolvedValue(null);
+    mocks.findByGitUsername.mockResolvedValue(null);
     await expect(rosterRemoveStudentTool.handler(ARGS, CTX)).rejects.toMatchObject({
       kind: 'not_found',
     });
@@ -218,7 +230,7 @@ describe('roster_remove_student', () => {
   });
 
   it('refuses a user who is not a STUDENT in this classroom (S1) and never fires', async () => {
-    mocks.findByLogin.mockResolvedValue({ id: 'stu-1', login: 'alice' });
+    mocks.findByGitUsername.mockResolvedValue({ id: 'stu-1', login: 'alice' });
     mocks.findByClassroomAndUser.mockResolvedValue(null); // not a member here
     await expect(rosterRemoveStudentTool.handler(ARGS, CTX)).rejects.toMatchObject({
       kind: 'not_found',

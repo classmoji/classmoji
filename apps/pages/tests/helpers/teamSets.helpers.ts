@@ -354,7 +354,14 @@ export async function removeTeamsFixture(key: string): Promise<void> {
   await prisma.gitOrganization.deleteMany({ where: { provider: 'GITHUB', provider_id: slug } });
   await prisma.classroom.deleteMany({ where: { slug } });
   await prisma.user.deleteMany({
-    where: { login: { in: personKeys().map(person => loginOf(key, person)) } },
+    where: {
+      accounts: {
+        some: {
+          provider_id: 'github',
+          username: { in: personKeys().map(person => loginOf(key, person)) },
+        },
+      },
+    },
   });
 }
 
@@ -408,7 +415,11 @@ export async function createTeamsFixture({
   const makeUser = async (person: string, name: string): Promise<TeamsPerson> => {
     const login = loginOf(key, person);
     const user = await prisma.user.create({
-      data: { login, name, email: `${login}@example.test` },
+      data: {
+        name,
+        email: `${login}@example.test`,
+        accounts: { create: { provider_id: 'github', account_id: login, username: login } },
+      },
     });
     return { key: person, id: user.id, name, login };
   };

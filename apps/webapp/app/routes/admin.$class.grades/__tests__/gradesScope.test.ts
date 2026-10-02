@@ -7,7 +7,7 @@
  * the loader projects each source down to the fields the table renders, and
  * these tests pin the resulting key set EXACTLY — the table's row type cannot
  * do it for them, and this surface is served to a TEACHER as well as an OWNER.
- * The contact trio is OWNER-only, matching the roster route it shares
+ * The contact pair is OWNER-only, matching the roster route it shares
  * `pickOwnerOnlyContactFields` with.
  *
  * ACTION. Authorization binds to the classroom in the URL, but `membership_id`
@@ -111,7 +111,6 @@ const STUDENT_ROW = {
   image: 'https://example.test/ada.png',
   git_repos: [{ id: 'repo-1', assignments: [] }],
   email: 'ada@school.test',
-  provider_email: 'ada@github.test',
   school_id: 'F00123',
   role: 'user',
   banned: false,
@@ -132,7 +131,7 @@ const MEMBERSHIP_ROW = {
   user: STUDENT_ROW,
 };
 
-const CONTACT_FIELDS = ['email', 'provider_email', 'school_id'] as const;
+const CONTACT_FIELDS = ['email', 'school_id'] as const;
 
 const actionArgs = (body: unknown) =>
   ({
@@ -259,14 +258,13 @@ describe('grades loader — the payload carries only what the table renders', ()
 });
 
 describe('grades loader — the contact fields are OWNER-only', () => {
-  it('sends an OWNER the contact trio', async () => {
+  it('sends an OWNER the contact pair', async () => {
     grantLoader('OWNER');
 
     const { students } = await resolveLoader();
 
     expect((students as Record<string, unknown>[])[0]).toMatchObject({
       email: 'ada@school.test',
-      provider_email: 'ada@github.test',
       school_id: 'F00123',
     });
   });

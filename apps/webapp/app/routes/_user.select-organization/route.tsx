@@ -257,7 +257,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         : null;
 
     return {
-      user,
+      // The signed-in user comes from the root loader (useUser), not from here:
+      // the service user carries whole membership and organization rows.
       gitMode,
       memberships: (typedUser.memberships as SelectOrganizationMembership[]).map(
         toLandingMembership

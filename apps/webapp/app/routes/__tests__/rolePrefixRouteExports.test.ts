@@ -62,6 +62,17 @@ const INTENTIONALLY_NO_ACTION: Record<string, Record<string, string>> = {
 };
 
 /**
+ * Routes that only redirect, and so render nothing on purpose: they re-export
+ * a loader and nothing else.
+ */
+const REDIRECT_ONLY: Record<string, string> = {
+  'teacher.$class_.settings':
+    'personal settings moved to account settings; old links are redirected there',
+  'assistant.$class_.settings':
+    'personal settings moved to account settings; old links are redirected there',
+};
+
+/**
  * How many routes each tree must have, so a bad glob cannot pass by finding
  * nothing. Floors, not exact counts — the /assistant tree carries more routes
  * with implementations of their own, so it has proportionally fewer
@@ -166,7 +177,12 @@ describe.each(['teacher', 'assistant'] as const)('the /%s route tree', prefix =>
     expect(unresolved.map(r => `${r.name} -> ${r.sourceSpecifier}`)).toEqual([]);
   });
 
-  it.each(ROUTES.map(r => [r.name, r] as const))('%s exports default', (_name, route) => {
+  it.each(ROUTES.map(r => [r.name, r] as const))('%s exports default', (name, route) => {
+    if (REDIRECT_ONLY[name]) {
+      // A redirect has nothing to render; its loader is all there is.
+      expect(route.exported).toEqual(['loader']);
+      return;
+    }
     // Without `default` the prefix renders nothing at all.
     expect(route.exported).toContain('default');
   });

@@ -61,7 +61,7 @@ const SERVICE_USER = {
   login: 'student-login',
   name: 'Student',
   email: 'student@example.edu',
-  provider_email: null,
+  emailVerified: true,
   classroom_memberships: [{ ...OWN_ROW, classroom: CLASSROOM }],
   memberships: [
     {
@@ -89,7 +89,7 @@ vi.mock('@classmoji/auth/invite-token', () => ({ verifyInviteToken: vi.fn(() => 
 vi.mock('~/utils/helpers', () => ({ checkAuth: (fn: unknown) => fn }));
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
-    user: { findById: vi.fn(async () => SERVICE_USER), findByLogin: vi.fn() },
+    user: { findById: vi.fn(async () => SERVICE_USER), findProviderUsernames: vi.fn() },
     classroomInvite: { claimPendingInvites: vi.fn(async () => ({ claimed: 0 })) },
   },
   GitHubProvider: { getUserOctokit: vi.fn() },
@@ -98,7 +98,14 @@ vi.mock('@classmoji/services', () => ({
   notificationService: { getForBell: vi.fn(async () => ({ items: [], unreadCount: 0 })) },
   pendingSurveyQuestions: vi.fn(async () => []),
 }));
-vi.mock('@classmoji/database', () => ({ default: vi.fn() }));
+vi.mock('@classmoji/database', () => ({
+  default: () => ({
+    // A Github-connected account, so the picker lists classrooms.
+    account: { findMany: vi.fn(async () => [{ provider_id: 'github', email: null }]) },
+    // No pending Gitlab course memberships to activate.
+    classroomMembership: { findMany: vi.fn(async () => []) },
+  }),
+}));
 vi.mock('@trigger.dev/sdk', () => ({ tasks: {} }));
 
 // Only the loader is under test; the view layer only needs to import.
@@ -123,6 +130,7 @@ describe('select-organization payload', () => {
 
     expect(Object.keys(data).sort()).toEqual(
       [
+        'gitMode',
         'githubAppName',
         'inviteEmailMismatch',
         'membershipRoles',

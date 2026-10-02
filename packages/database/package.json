@@ -17,6 +17,7 @@
   },
   "exports": {
     ".": "./index.ts",
+    "./gitIdentity": "./gitIdentity.ts",
     "./seed-fixtures": "./scripts/seed-fixtures.js"
   },
   "dependencies": {

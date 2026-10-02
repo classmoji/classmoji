@@ -23,7 +23,11 @@ const calendarEventFindMany = vi.fn();
 const assignmentFindMany = vi.fn();
 const formFindMany = vi.fn();
 
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
   default: () => ({
     calendarEvent: { findMany: calendarEventFindMany },
     assignment: { findMany: assignmentFindMany },
@@ -135,7 +139,11 @@ const storedEvent = (over: Record<string, unknown> = {}) => ({
   recurrence_rule: null,
   created_at: new Date('2026-09-01T00:00:00Z'),
   updated_at: new Date('2026-09-01T00:00:00Z'),
-  creator: { id: 'owner-1', name: 'Prof', login: 'prof' },
+  creator: {
+    id: 'owner-1',
+    name: 'Prof',
+    accounts: [{ provider_id: 'github', account_id: '1', username: 'prof' }],
+  },
   overrides: [],
   pageLinks: [
     pageLink('p-pub', 'Published page', false),

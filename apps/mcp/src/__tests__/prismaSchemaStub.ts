@@ -54,6 +54,7 @@
  */
 
 import { Prisma } from '@prisma/client';
+import * as gitIdentity from '@classmoji/database/gitIdentity';
 
 type DmmfModel = Prisma.DMMF.Model;
 type DmmfField = Prisma.DMMF.Field;
@@ -587,10 +588,11 @@ export const prismaCallsFor = shared.callsFor;
 /**
  * Module shape for `vi.mock('@classmoji/database', ...)` — both the default
  * export (`getPrisma`) and the named one, as `packages/database/index.ts`
- * exposes them.
+ * exposes them, plus the real (pure) git identity query helpers.
  */
 export function databaseModuleMock() {
   return {
+    ...gitIdentity,
     default: () => validatingPrisma,
     getPrisma: () => validatingPrisma,
   };

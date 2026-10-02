@@ -80,11 +80,31 @@ describe.skipIf(!RUN)('quiz source material (integration)', () => {
     classroomId = classroom.id;
 
     const student = await prisma.user.create({
-      data: { login: `qsm-${suite}-student`, email: `qsm-s-${suite}@example.test`, name: 'S' },
+      data: {
+        accounts: {
+          create: {
+            provider_id: 'github',
+            account_id: `qsm-${suite}-student`,
+            username: `qsm-${suite}-student`,
+          },
+        },
+        email: `qsm-s-${suite}@example.test`,
+        name: 'S',
+      },
     });
     studentId = student.id;
     const teacher = await prisma.user.create({
-      data: { login: `qsm-${suite}-teacher`, email: `qsm-t-${suite}@example.test`, name: 'T' },
+      data: {
+        accounts: {
+          create: {
+            provider_id: 'github',
+            account_id: `qsm-${suite}-teacher`,
+            username: `qsm-${suite}-teacher`,
+          },
+        },
+        email: `qsm-t-${suite}@example.test`,
+        name: 'T',
+      },
     });
     teacherId = teacher.id;
     await prisma.classroomMembership.createMany({

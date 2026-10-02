@@ -23,7 +23,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   getAuthSession: vi.fn(),
   getAuthenticated: vi.fn(),
-  findByLogin: vi.fn(),
+  findById: vi.fn(),
   repairInstallation: vi.fn(),
   graphql: vi.fn(),
   findUniqueGitOrg: vi.fn(),
@@ -43,7 +43,7 @@ vi.mock('~/utils/helpers', () => ({
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
-    user: { findByLogin: (...a: unknown[]) => mocks.findByLogin(...a) },
+    user: { findById: (...a: unknown[]) => mocks.findById(...a) },
     gitOrganization: {
       repairInstallation: (...a: unknown[]) => mocks.repairInstallation(...a),
     },
@@ -138,7 +138,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.getAuthSession.mockResolvedValue({ userId: 'user-1', token: 'gh-token' });
   mocks.getAuthenticated.mockResolvedValue({ data: { login: 'instructor' } });
-  mocks.findByLogin.mockResolvedValue({ id: 'user-1', login: 'instructor' });
+  mocks.findById.mockResolvedValue({ id: 'user-1', login: 'instructor' });
   mocks.findUniqueGitOrg.mockResolvedValue({ ...GIT_ORG });
   mocks.graphql.mockResolvedValue({
     organization: { login: 'cs52-org', viewerCanAdminister: true },

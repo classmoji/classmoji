@@ -20,7 +20,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   isAIAgentConfigured: vi.fn(),
   getAuthSession: vi.fn(),
-  findByLogin: vi.fn(),
+  findById: vi.fn(),
   membershipCreate: vi.fn(),
   quizzesVisible: vi.fn(),
   importClassroomConfig: vi.fn(),
@@ -44,7 +44,7 @@ vi.mock('~/utils/aiFeatures.server', () => ({
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
-    user: { findByLogin: (...a: unknown[]) => mocks.findByLogin(...a) },
+    user: { findById: (...a: unknown[]) => mocks.findById(...a) },
     entitlement: { quizzesVisible: (...a: unknown[]) => mocks.quizzesVisible(...a) },
     classroomConfigImport: {
       importClassroomConfig: (...a: unknown[]) => mocks.importClassroomConfig(...a),
@@ -178,7 +178,7 @@ beforeEach(() => {
   vi.stubEnv('TRIGGER_ACCESS_TOKEN', '');
   mocks.isAIAgentConfigured.mockReturnValue(true);
   mocks.getAuthSession.mockResolvedValue({ userId: 'user-1', token: 'gh-token' });
-  mocks.findByLogin.mockResolvedValue({ id: 'user-1', login: 'instructor' });
+  mocks.findById.mockResolvedValue({ id: 'user-1', login: 'instructor' });
   mocks.membershipCreate.mockResolvedValue({});
   mocks.quizzesVisible.mockResolvedValue(true);
   mocks.importClassroomConfig.mockResolvedValue({

@@ -22,7 +22,11 @@ const calendarEventFindMany = vi.fn();
 const formFindMany = vi.fn();
 const quizzesVisible = vi.fn();
 
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
   default: () => ({
     assignment: { findMany: assignmentFindMany },
     calendarEvent: { findMany: calendarEventFindMany },
@@ -143,7 +147,7 @@ describe('getClassroomCalendar — event links to quiz assignments', () => {
     meeting_link: null,
     is_recurring: false,
     recurrence_rule: null,
-    creator: null,
+    creator: { id: 'owner-1', name: 'Prof', accounts: [] },
     overrides: [],
     pageLinks: [],
     slideLinks: [],

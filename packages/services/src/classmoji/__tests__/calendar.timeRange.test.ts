@@ -19,13 +19,16 @@ const calendarEvent = {
 };
 const calendarEventOverride = { create: vi.fn(), update: vi.fn() };
 
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
   default: () => ({ calendarEvent, calendarEventOverride }),
 }));
 
-const { createEvent, updateEvent, updateEventWithScope, CalendarTimeRangeError } = await import(
-  '../calendar.service.ts'
-);
+const { createEvent, updateEvent, updateEventWithScope, CalendarTimeRangeError } =
+  await import('../calendar.service.ts');
 
 const OCCURRENCE = new Date('2026-09-28T13:00:00Z');
 /** 11 PM to midnight, stamped onto one date — a negative duration. */

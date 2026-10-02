@@ -22,7 +22,11 @@ const mocks = vi.hoisted(() => ({
   quizzesVisibleOrThrow: vi.fn(),
 }));
 
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
   default: () => ({ quiz: { findMany: (...a: unknown[]) => mocks.quizFindMany(...a) } }),
 }));
 // Pulled in by quiz.service; nothing here sends a notification.

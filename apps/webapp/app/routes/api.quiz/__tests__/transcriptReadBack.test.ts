@@ -49,7 +49,11 @@ const attemptRow = {
   },
 };
 
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
   default: () => ({
     quizAttempt: {
       findUnique: async ({ where }: { where: { id: string } }) =>
@@ -109,7 +113,10 @@ vi.mock('~/utils/classroomProFlag.server', () => ({
 vi.mock('~/utils/routeAuth.server', () => ({ assertClassroomMutationAllowed: vi.fn() }));
 vi.mock('~/utils/aiFeatures.server', () => ({ isAIAgentConfigured: () => true }));
 vi.mock('~/utils/backgroundTask.server', () => ({ runBackgroundTask: vi.fn() }));
-vi.mock('../../student.$class.quizzes/helpers.server', () => ({ getInstallationToken: vi.fn(), gitlabProjectAccess: vi.fn() }));
+vi.mock('../../student.$class.quizzes/helpers.server', () => ({
+  getInstallationToken: vi.fn(),
+  gitlabProjectAccess: vi.fn(),
+}));
 vi.mock('../../student.$class.quizzes/aiAgent.server', () => ({
   initializeQuizViaAgent: vi.fn(),
   sendMessageToAgent: (...a: unknown[]) => sendMessageToAgentMock(...a),

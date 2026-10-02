@@ -19,7 +19,11 @@ const db = vi.hoisted(() => ({
   membershipFindFirst: vi.fn(),
 }));
 
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
   default: () => ({
     gitRepo: {
       findFirst: (...a: unknown[]) => db.gitRepoFindFirst(...a),
@@ -28,6 +32,12 @@ vi.mock('@classmoji/database', () => ({
     gitRepoAssignment: { findFirst: (...a: unknown[]) => db.gitRepoAssignmentFindFirst(...a) },
     repository: { findFirst: (...a: unknown[]) => db.repositoryFindFirst(...a) },
     classroomMembership: { findFirst: (...a: unknown[]) => db.membershipFindFirst(...a) },
+    // Logins are read on the classroom organization's provider.
+    classroom: {
+      findUnique: async () => ({
+        git_organization: { provider: 'GITHUB', gitlab_instance_id: null },
+      }),
+    },
   }),
 }));
 
@@ -44,6 +54,8 @@ const gitRepo = await import('../gitRepo.service.ts');
 const gitRepoAssignment = await import('../gitRepoAssignment.service.ts');
 const repository = await import('../repository.service.ts');
 const graders = await import('../gitRepoAssignmentGrader.service.ts');
+
+const { GIT_IDENTITY } = await import('@classmoji/database/gitIdentity');
 
 const UNUSABLE_IDS: unknown[] = [undefined, null, '', 42, { not: '' }, ['id-1']];
 
@@ -118,7 +130,7 @@ describe('gitRepoAssignment.findByIdInClassroom', () => {
 
     expect(db.gitRepoAssignmentFindFirst).toHaveBeenCalledWith({
       where: { id: 'ra-1', git_repo: { classroom_id: 'class-1' } },
-      include: { git_repo: true, graders: { include: { grader: true } } },
+      include: { git_repo: true, graders: { include: { grader: { include: GIT_IDENTITY } } } },
     });
   });
 
@@ -189,7 +201,7 @@ describe('gitRepoAssignmentGrader.findEligibleGrader', () => {
         role: { in: ['ASSISTANT', 'TEACHER'] },
         is_grader: true,
       },
-      include: { user: true },
+      include: { user: { include: GIT_IDENTITY } },
     });
   });
 
