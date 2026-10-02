@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   quizPublish: vi.fn(),
   quizDelete: vi.fn(),
   quizFindById: vi.fn(),
+  moduleFindById: vi.fn(),
   repositoryFindById: vi.fn(),
   membershipFindByClassroomAndUser: vi.fn(),
   assertProTier: vi.fn(),
@@ -60,6 +61,7 @@ vi.mock('@classmoji/services', () => ({
       findById: (...a: unknown[]) => mocks.quizFindById(...a),
     },
     repository: { findById: (...a: unknown[]) => mocks.repositoryFindById(...a) },
+    module: { findById: (...a: unknown[]) => mocks.moduleFindById(...a) },
     classroomMembership: {
       findByClassroomAndUser: (...a: unknown[]) => mocks.membershipFindByClassroomAndUser(...a),
     },
@@ -110,6 +112,19 @@ function ctxAs(role: 'TEACHER' | 'ASSISTANT', userId: string): ToolContext {
 const ASSISTANT_CTX = ctxAs('ASSISTANT', 'ta-1');
 const TEACHER_CTX = ctxAs('TEACHER', 'teacher-1');
 
+const MODULE_ID = '22222222-2222-4222-8222-222222222222';
+
+/** The quiz's assignment: its module, dates, weight and publish state. */
+const ASSIGNMENT = {
+  is_published: false,
+  release_at: null,
+  student_deadline: null,
+  closes_at: null,
+  weight: 10,
+  tokens_per_hour: 0,
+  module: { id: MODULE_ID, title: 'Week 3' },
+};
+
 const QUIZ_ROW = {
   id: 'quiz-1',
   classroom_id: 'class-1',
@@ -117,6 +132,7 @@ const QUIZ_ROW = {
   status: 'DRAFT',
   rubric_prompt: 'Ask about recursion',
   weight: 10,
+  assignment: ASSIGNMENT,
   question_count: 5,
   max_attempts: 1,
   grading_strategy: 'HIGHEST',
@@ -133,6 +149,7 @@ beforeEach(() => {
   mocks.auditCreate.mockResolvedValue(undefined);
   mocks.assertProTier.mockResolvedValue(undefined);
   mocks.membershipFindByClassroomAndUser.mockResolvedValue(null);
+  mocks.moduleFindById.mockResolvedValue({ id: MODULE_ID, classroom_id: 'class-1' });
 });
 
 describe('role tiers', () => {
@@ -155,9 +172,12 @@ describe('role tiers', () => {
       expect(tool.description, tool.name).not.toMatch(/assistant/i);
     }
     expect(quizUpdateTool.description).toContain(
-      'an assistant may change the content and the name only, not due_date, weight or status'
+      'an assistant may change the content and the name only, not module_id, release_at, ' +
+        'due_date, closes_at, weight, tokens_per_hour or published'
     );
-    expect(new TextEncoder().encode(quizDeleteTool.description).length).toBeLessThan(1500);
+    for (const tool of [quizCreateTool, quizUpdateTool, quizPublishTool, quizDeleteTool]) {
+      expect(new TextEncoder().encode(tool.description).length, tool.name).toBeLessThan(1500);
+    }
   });
 });
 
@@ -166,23 +186,36 @@ describe('quiz_create', () => {
     classroom: 'org/w26',
     name: 'Week 3 concepts',
     rubric_prompt: 'Ask about recursion',
+    module_id: MODULE_ID,
     weight: 10,
     question_count: 5,
   };
 
-  it('creates a DRAFT under the ctx classroom and audits CREATE', async () => {
+  it('creates an unpublished quiz in its module under the ctx classroom and audits CREATE', async () => {
     mocks.quizCreate.mockResolvedValue(QUIZ_ROW);
 
     const payload = parse(await quizCreateTool.handler(ARGS, CTX));
     expect(payload.success).toBe(true);
-    expect(payload.quiz.id).toBe('quiz-1');
+    expect(payload.quiz).toMatchObject({
+      id: 'quiz-1',
+      status: 'DRAFT',
+      published: false,
+      module: { id: MODULE_ID, title: 'Week 3' },
+      weight: 10,
+    });
 
     const data = mocks.quizCreate.mock.calls[0][0] as Record<string, unknown>;
-    // classroomId comes from ctx, never from args, and status is pinned DRAFT:
-    // publishing must go through quiz_publish so students get notified.
+    // classroomId comes from ctx, never from args, and the assignment is
+    // created unpublished: publishing must go through quiz_publish so students
+    // get notified. Due date and weight are the assignment's.
     expect(data.classroomId).toBe('class-1');
-    expect(data.status).toBe('DRAFT');
+    expect(data.assignment).toEqual({ moduleId: MODULE_ID, isPublished: false, weight: 10 });
+    expect(data).not.toHaveProperty('status');
+    expect(data).not.toHaveProperty('dueDate');
+    expect(data).not.toHaveProperty('weight');
     expect(data.rubricPrompt).toBe('Ask about recursion');
+    // The module was checked against this classroom first (S1).
+    expect(mocks.moduleFindById).toHaveBeenCalledWith(MODULE_ID);
 
     const audit = mocks.auditCreate.mock.calls[0][0] as { action: string; classroom_id: string };
     expect(audit.action).toBe('CREATE');
@@ -220,17 +253,52 @@ describe('quiz_create', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
-  it('answers the service’s module refusal as invalid_params, unaudited', async () => {
-    // The service requires a module; this tool does not take one yet.
-    mocks.quizCreate.mockRejectedValue(
-      quizAssignmentError('module_required', 'Choose a module for this quiz')
-    );
+  it('requires module_id in the schema', () => {
+    const schema = z.object(quizCreateTool.inputSchema);
+    const { module_id: _moduleId, ...withoutModule } = ARGS;
+    expect(schema.safeParse(withoutModule).success).toBe(false);
+    expect(schema.safeParse({ ...ARGS, module_id: 'not-a-uuid' }).success).toBe(false);
+    expect(schema.safeParse(ARGS).success).toBe(true);
+  });
+
+  it.each([
+    ['in another classroom', { id: MODULE_ID, classroom_id: 'OTHER-class' }],
+    ['unknown', null],
+  ])('refuses a module %s (S1) and never creates', async (_case, module) => {
+    mocks.moduleFindById.mockResolvedValue(module);
 
     await expect(quizCreateTool.handler(ARGS, CTX)).rejects.toMatchObject({
-      kind: 'invalid_params',
-      message: 'Choose a module for this quiz',
+      kind: 'not_found',
+      message: 'Module not found in this classroom',
     });
+    expect(mocks.quizCreate).not.toHaveBeenCalled();
     expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('puts Opens, due and close dates, weight and tokens per hour on the assignment', async () => {
+    mocks.quizCreate.mockResolvedValue(QUIZ_ROW);
+
+    await quizCreateTool.handler(
+      {
+        ...ARGS,
+        release_at: '2026-10-05T09:00:00-04:00',
+        due_date: '2026-10-12T23:59:00-04:00',
+        closes_at: '2026-10-19T23:59:00-04:00',
+        weight: 0,
+        tokens_per_hour: 2,
+      },
+      CTX
+    );
+
+    expect((mocks.quizCreate.mock.calls[0][0] as { assignment: unknown }).assignment).toEqual({
+      moduleId: MODULE_ID,
+      isPublished: false,
+      releaseAt: '2026-10-05T09:00:00-04:00',
+      dueDate: '2026-10-12T23:59:00-04:00',
+      closesAt: '2026-10-19T23:59:00-04:00',
+      weight: 0,
+      tokensPerHour: 2,
+    });
   });
 
   it.each([
@@ -271,7 +339,7 @@ describe('quiz_create', () => {
 
   it('enforces the service clamps in the schema (question_count, max_attempts, weight)', () => {
     const schema = z.object(quizCreateTool.inputSchema);
-    const base = { classroom: 'org/w26', name: 'Q', rubric_prompt: 'r' };
+    const base = { classroom: 'org/w26', name: 'Q', rubric_prompt: 'r', module_id: MODULE_ID };
 
     expect(schema.safeParse({ ...base, question_count: 0 }).success).toBe(false);
     expect(schema.safeParse({ ...base, question_count: 21 }).success).toBe(false);
@@ -282,11 +350,19 @@ describe('quiz_create', () => {
     expect(schema.safeParse({ ...base, max_attempts: 0 }).success).toBe(true);
     expect(schema.safeParse({ ...base, max_attempts: -1 }).success).toBe(false);
 
+    // The assignment's weight: 0 (practice) up to 10000, as assignment_update.
     expect(schema.safeParse({ ...base, weight: 0 }).success).toBe(true);
-    expect(schema.safeParse({ ...base, weight: 101 }).success).toBe(false);
+    expect(schema.safeParse({ ...base, weight: 2.5 }).success).toBe(true);
+    expect(schema.safeParse({ ...base, weight: 101 }).success).toBe(true);
+    expect(schema.safeParse({ ...base, weight: -1 }).success).toBe(false);
+    expect(schema.safeParse({ ...base, weight: 10001 }).success).toBe(false);
+    expect(schema.safeParse({ ...base, tokens_per_hour: -1 }).success).toBe(false);
+    expect(schema.safeParse({ ...base, tokens_per_hour: 1.5 }).success).toBe(false);
 
     // rubric_prompt is required and non-empty.
-    expect(schema.safeParse({ classroom: 'org/w26', name: 'Q' }).success).toBe(false);
+    expect(
+      schema.safeParse({ classroom: 'org/w26', name: 'Q', module_id: MODULE_ID }).success
+    ).toBe(false);
     expect(schema.safeParse({ ...base, rubric_prompt: '' }).success).toBe(false);
   });
 });
@@ -301,6 +377,7 @@ describe('course_search_enabled (quiz source material, Stage 2 tier)', () => {
           classroom: 'org/w26',
           name: 'Q',
           rubric_prompt: 'r',
+          module_id: MODULE_ID,
           course_search_enabled: true,
         },
         CTX
@@ -315,7 +392,10 @@ describe('course_search_enabled (quiz source material, Stage 2 tier)', () => {
     mocks.quizCreate.mockResolvedValue(QUIZ_ROW);
 
     const payload = parse(
-      await quizCreateTool.handler({ classroom: 'org/w26', name: 'Q', rubric_prompt: 'r' }, CTX)
+      await quizCreateTool.handler(
+        { classroom: 'org/w26', name: 'Q', rubric_prompt: 'r', module_id: MODULE_ID },
+        CTX
+      )
     );
 
     expect(mocks.quizCreate.mock.calls[0][0]).not.toHaveProperty('courseSearchEnabled');
@@ -384,6 +464,7 @@ describe('excluded_paths (code-aware quizzes)', () => {
           classroom: 'org/w26',
           name: 'Q',
           rubric_prompt: 'r',
+          module_id: MODULE_ID,
           include_code_context: true,
           excluded_paths: [' tests/** ', '**/*.spec.js', 'tests/**'],
         },
@@ -401,7 +482,10 @@ describe('excluded_paths (code-aware quizzes)', () => {
     mocks.quizCreate.mockResolvedValue(QUIZ_ROW);
 
     const payload = parse(
-      await quizCreateTool.handler({ classroom: 'org/w26', name: 'Q', rubric_prompt: 'r' }, CTX)
+      await quizCreateTool.handler(
+        { classroom: 'org/w26', name: 'Q', rubric_prompt: 'r', module_id: MODULE_ID },
+        CTX
+      )
     );
 
     expect(mocks.quizCreate.mock.calls[0][0]).not.toHaveProperty('excludedPaths');
@@ -415,7 +499,16 @@ describe('excluded_paths (code-aware quizzes)', () => {
     [['!tests/**'], 'starts with "!"'],
   ])('quiz_create refuses %j before writing, with the form’s reason', async (paths, reason) => {
     const error = await quizCreateTool
-      .handler({ classroom: 'org/w26', name: 'Q', rubric_prompt: 'r', excluded_paths: paths }, CTX)
+      .handler(
+        {
+          classroom: 'org/w26',
+          name: 'Q',
+          rubric_prompt: 'r',
+          module_id: MODULE_ID,
+          excluded_paths: paths,
+        },
+        CTX
+      )
       .catch((e: unknown) => e);
 
     expect(error).toMatchObject({ kind: 'invalid_params' });
@@ -503,19 +596,56 @@ describe('quiz_update', () => {
     expect(audit.data.fields).toEqual(['name']);
   });
 
-  it('answers a refused close of a draft quiz with the service message, unaudited', async () => {
+  it('closes, reopens and unpublishes through the assignment', async () => {
     mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
+    mocks.quizUpdate.mockResolvedValue(QUIZ_ROW);
+    const base = { classroom: 'org/w26', quiz_id: 'quiz-1' };
+
+    await quizUpdateTool.handler({ ...base, closes_at: '2026-10-19T23:59:00-04:00' }, CTX);
+    expect(mocks.quizUpdate).toHaveBeenLastCalledWith('quiz-1', {
+      assignment: { closesAt: '2026-10-19T23:59:00-04:00' },
+    });
+
+    await quizUpdateTool.handler({ ...base, closes_at: null }, CTX);
+    expect(mocks.quizUpdate).toHaveBeenLastCalledWith('quiz-1', { assignment: { closesAt: null } });
+
+    await quizUpdateTool.handler({ ...base, published: false }, CTX);
+    expect(mocks.quizUpdate).toHaveBeenLastCalledWith('quiz-1', {
+      assignment: { isPublished: false },
+    });
+  });
+
+  it('moves the quiz to a module of this classroom, and refuses a foreign one (S1)', async () => {
+    mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
+    mocks.quizUpdate.mockResolvedValue(QUIZ_ROW);
+    const base = { classroom: 'org/w26', quiz_id: 'quiz-1', module_id: MODULE_ID };
+
+    await quizUpdateTool.handler({ ...base, weight: 3 }, CTX);
+    expect(mocks.quizUpdate).toHaveBeenLastCalledWith('quiz-1', {
+      assignment: { weight: 3, moduleId: MODULE_ID },
+    });
+    expect(mocks.auditCreate.mock.calls[0][0].data.fields).toEqual(['weight', 'module_id']);
+
+    mocks.quizUpdate.mockClear();
+    mocks.moduleFindById.mockResolvedValue({ id: MODULE_ID, classroom_id: 'OTHER-class' });
+    await expect(quizUpdateTool.handler(base, CTX)).rejects.toMatchObject({ kind: 'not_found' });
+    expect(mocks.quizUpdate).not.toHaveBeenCalled();
+  });
+
+  it('tells a caller to set module_id when the quiz is in no module', async () => {
+    mocks.quizFindById.mockResolvedValue({ ...QUIZ_ROW, assignment: null });
     mocks.quizUpdate.mockRejectedValue(
-      Object.assign(new Error('Publish the quiz before closing it'), {
-        name: 'QuizStatusChangeError',
-      })
+      quizAssignmentError('module_required', 'Choose a module for this quiz')
     );
 
     await expect(
-      quizUpdateTool.handler({ classroom: 'org/w26', quiz_id: 'quiz-1', status: 'CLOSED' }, CTX)
+      quizUpdateTool.handler(
+        { classroom: 'org/w26', quiz_id: 'quiz-1', due_date: '2026-10-12T23:59:00-04:00' },
+        CTX
+      )
     ).rejects.toMatchObject({
       kind: 'invalid_params',
-      message: 'Publish the quiz before closing it',
+      message: 'This quiz is in no module: set module_id too (see list_modules).',
     });
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
@@ -574,7 +704,7 @@ describe('quiz_update', () => {
 
     // null reaches the service as a clear; the service maps falsy → null.
     await quizUpdateTool.handler({ classroom: 'org/w26', quiz_id: 'quiz-1', due_date: null }, CTX);
-    expect(mocks.quizUpdate).toHaveBeenCalledWith('quiz-1', { dueDate: null });
+    expect(mocks.quizUpdate).toHaveBeenCalledWith('quiz-1', { assignment: { dueDate: null } });
     expect(mocks.auditCreate.mock.calls[0][0].data.fields).toEqual(['due_date']);
 
     await quizUpdateTool.handler(
@@ -582,7 +712,7 @@ describe('quiz_update', () => {
       CTX
     );
     expect(mocks.quizUpdate).toHaveBeenLastCalledWith('quiz-1', {
-      dueDate: '2026-07-20T23:59:00-04:00',
+      assignment: { dueDate: '2026-07-20T23:59:00-04:00' },
     });
   });
 
@@ -594,13 +724,13 @@ describe('quiz_update', () => {
     expect(dueDate.safeParse('next friday').success).toBe(false);
   });
 
-  it('rejects PUBLISHED and ARCHIVED in the status schema', () => {
-    const status = quizUpdateTool.inputSchema.status;
-    expect(status.safeParse('DRAFT').success).toBe(true);
-    expect(status.safeParse('CLOSED').success).toBe(true);
-    // PUBLISHED would skip the notification path; ARCHIVED is not in the enum.
-    expect(status.safeParse('PUBLISHED').success).toBe(false);
-    expect(status.safeParse('ARCHIVED').success).toBe(false);
+  it('takes no status, and published only as false', () => {
+    // A close is closes_at; publishing would skip the notification path.
+    expect(quizUpdateTool.inputSchema).not.toHaveProperty('status');
+    const published = quizUpdateTool.inputSchema.published;
+    expect(published.safeParse(false).success).toBe(true);
+    expect(published.safeParse(undefined).success).toBe(true);
+    expect(published.safeParse(true).success).toBe(false);
   });
 
   it('applies the same clamps as create', () => {
@@ -608,7 +738,8 @@ describe('quiz_update', () => {
     const base = { classroom: 'org/w26', quiz_id: '11111111-1111-4111-8111-111111111111' };
     expect(schema.safeParse({ ...base, question_count: 21 }).success).toBe(false);
     expect(schema.safeParse({ ...base, max_attempts: -1 }).success).toBe(false);
-    expect(schema.safeParse({ ...base, weight: 101 }).success).toBe(false);
+    expect(schema.safeParse({ ...base, weight: -1 }).success).toBe(false);
+    expect(schema.safeParse({ ...base, tokens_per_hour: -1 }).success).toBe(false);
     expect(schema.safeParse({ ...base, rubric_prompt: '' }).success).toBe(false);
   });
 
@@ -621,7 +752,7 @@ describe('quiz_update', () => {
   });
 
   it.each([
-    ['module_required', 'invalid_params'],
+    ['invalid_value', 'invalid_params'],
     ['module_not_found', 'not_found'],
   ])('maps the service’s QuizAssignmentError %s to %s, unaudited', async (code, kind) => {
     mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
@@ -643,12 +774,17 @@ describe('quiz_update: an assistant edits content, not the assignment', () => {
   });
 
   it.each([
+    ['module_id', MODULE_ID],
+    ['release_at', '2026-07-13T09:00:00-04:00'],
+    ['release_at', null],
     ['due_date', '2026-07-20T23:59:00-04:00'],
     ['due_date', null],
-    ['status', 'CLOSED'],
-    ['status', 'DRAFT'],
+    ['closes_at', '2026-07-27T23:59:00-04:00'],
+    ['closes_at', null],
     ['weight', 20],
     ['weight', 0],
+    ['tokens_per_hour', 2],
+    ['published', false],
   ] as const)('refuses %s (%s) before reading or writing anything', async (field, value) => {
     const error = await quizUpdateTool
       .handler({ ...BASE, [field]: value }, ASSISTANT_CTX)
@@ -657,7 +793,9 @@ describe('quiz_update: an assistant edits content, not the assignment', () => {
     expect(error).toMatchObject({
       kind: 'forbidden',
       code: 'INSUFFICIENT_ROLE',
-      message: 'Only the class owner or a teacher can change a quiz’s due date, weight or status',
+      message:
+        'Only the class owner or a teacher can change a quiz’s module, dates, weight, ' +
+        'tokens per hour or publish state',
     });
     // Asked whether the assistant also holds an author role, and nothing else.
     expect(mocks.membershipFindByClassroomAndUser).toHaveBeenCalledWith('class-1', 'ta-1', [
@@ -692,7 +830,7 @@ describe('quiz_update: an assistant edits content, not the assignment', () => {
   it('lets a teacher change the due date', async () => {
     await quizUpdateTool.handler({ ...BASE, due_date: '2026-07-20T23:59:00-04:00' }, TEACHER_CTX);
     expect(mocks.quizUpdate).toHaveBeenCalledWith('quiz-1', {
-      dueDate: '2026-07-20T23:59:00-04:00',
+      assignment: { dueDate: '2026-07-20T23:59:00-04:00' },
     });
     // TEACHER is an author on its own; no membership lookup needed.
     expect(mocks.membershipFindByClassroomAndUser).not.toHaveBeenCalled();
@@ -701,7 +839,7 @@ describe('quiz_update: an assistant edits content, not the assignment', () => {
   it('lets an assistant who also holds TEACHER change the weight', async () => {
     mocks.membershipFindByClassroomAndUser.mockResolvedValue({ id: 'm-9', role: 'TEACHER' });
     await quizUpdateTool.handler({ ...BASE, weight: 20 }, ASSISTANT_CTX);
-    expect(mocks.quizUpdate).toHaveBeenCalledWith('quiz-1', { weight: 20 });
+    expect(mocks.quizUpdate).toHaveBeenCalledWith('quiz-1', { assignment: { weight: 20 } });
   });
 });
 
@@ -712,6 +850,7 @@ describe('quiz_publish', () => {
   const publishResult = (wasPublished: boolean, notified: boolean) => ({
     ...QUIZ_ROW,
     status: 'PUBLISHED',
+    assignment: { ...ASSIGNMENT, is_published: true },
     wasPublished,
     notified,
     sourceMaterialAllDraft: false,
@@ -742,7 +881,11 @@ describe('quiz_publish', () => {
   });
 
   it('is idempotent: republishing reports that nobody was notified', async () => {
-    mocks.quizFindById.mockResolvedValue({ ...QUIZ_ROW, status: 'PUBLISHED' });
+    mocks.quizFindById.mockResolvedValue({
+      ...QUIZ_ROW,
+      status: 'PUBLISHED',
+      assignment: { ...ASSIGNMENT, is_published: true },
+    });
     mocks.quizPublish.mockResolvedValue(publishResult(true, false));
 
     const payload = parse(await quizPublishTool.handler(ARGS, CTX));
@@ -770,17 +913,29 @@ describe('quiz_publish', () => {
     expect(audit.data.students_notified).toBe(false);
   });
 
-  it('answers a quiz in no module as invalid_params, unaudited', async () => {
-    mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
-    mocks.quizPublish.mockRejectedValue(
-      quizAssignmentError('module_required', 'Choose a module for this quiz before publishing it')
-    );
+  it('refuses a quiz in no module before publishing, naming module_id, unaudited', async () => {
+    mocks.quizFindById.mockResolvedValue({ ...QUIZ_ROW, assignment: null });
 
     await expect(quizPublishTool.handler(ARGS, CTX)).rejects.toMatchObject({
       kind: 'invalid_params',
-      message: 'Choose a module for this quiz before publishing it',
+      message: 'This quiz is in no module: set its module_id with quiz_update, then publish it.',
     });
+    expect(mocks.quizPublish).not.toHaveBeenCalled();
     expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('reads the previous status off the assignment, not the quiz’s own column', async () => {
+    // The quiz's own status says PUBLISHED (written at its last save); its
+    // assignment is published and past its close date.
+    mocks.quizFindById.mockResolvedValue({
+      ...QUIZ_ROW,
+      status: 'PUBLISHED',
+      assignment: { ...ASSIGNMENT, is_published: true, closes_at: new Date(Date.now() - 1000) },
+    });
+    mocks.quizPublish.mockResolvedValue(publishResult(true, false));
+
+    const payload = parse(await quizPublishTool.handler(ARGS, CTX));
+    expect(payload.previous_status).toBe('CLOSED');
   });
 
   it('answers a quiz gone since it was loaded as not_found', async () => {

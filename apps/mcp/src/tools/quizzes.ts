@@ -8,8 +8,14 @@
  *     state live on its QUIZ Assignment, which only its authors change.
  *   - quiz_update: QUIZ_STAFF (OWNER, TEACHER, ASSISTANT). An assistant may
  *     change a quiz's content and its name; a call carrying any assignment
- *     field (due_date, weight, status) from a caller who holds neither OWNER
- *     nor TEACHER is refused before the quiz is read or written.
+ *     field (QUIZ_ASSIGNMENT_ARGS: module_id, release_at, due_date, closes_at,
+ *     weight, tokens_per_hour, published) from a caller who holds neither
+ *     OWNER nor TEACHER is refused before the quiz is read or written.
+ *
+ * A quiz is placed in a module by its assignment: quiz_create requires
+ * module_id, and the module is checked against the authorized classroom
+ * (S1, as assignment_create checks it) before the service, which checks it
+ * again inside its transaction.
  *
  * TWO EXTRA GATES run in-handler, because the registry pipeline (scope → rate
  * limit → role → mutation gate) does not know about them:
@@ -58,6 +64,7 @@ import {
   QUIZ_AUTHORS,
   QUIZ_STAFF,
   requireClassroomCtx,
+  scopedNotFound,
   writeAudit,
 } from './shared.ts';
 
@@ -79,8 +86,8 @@ async function assertQuizSurfaceEnabled(ctx: ToolContext): Promise<void> {
  * The quiz service's QuizAssignmentError as a tool error: no module chosen, a
  * value out of range, or an assignment-only path → invalid_params; a module or
  * quiz that is not there → not_found. The service writes nothing before it
- * throws, and its message is meant to be shown as is. Matched by name, as
- * QuizStatusChangeError is below, so it does not depend on class identity.
+ * throws, and its message is meant to be shown as is. Matched by name, so it
+ * does not depend on class identity.
  * Anything else is returned unchanged for the caller to rethrow.
  */
 function mapQuizAssignmentError(error: unknown): unknown {
@@ -94,11 +101,31 @@ function mapQuizAssignmentError(error: unknown): unknown {
 }
 
 /**
- * quiz_update arguments that write the quiz's assignment rather than the quiz:
- * the service routes the old flat due date, weight and status to it. Only a
- * quiz author (QUIZ_AUTHORS) may send them.
+ * quiz_update arguments that write the quiz's assignment rather than the quiz.
+ * Only a quiz author (QUIZ_AUTHORS) may send them.
  */
-const QUIZ_ASSIGNMENT_ARGS = ['due_date', 'status', 'weight'] as const;
+const QUIZ_ASSIGNMENT_ARGS = [
+  'module_id',
+  'release_at',
+  'due_date',
+  'closes_at',
+  'weight',
+  'tokens_per_hour',
+  'published',
+] as const;
+
+/**
+ * S1 for a module a quiz is placed in: it must be in the authorized classroom.
+ * A foreign or unknown one gets the same not_found, before anything is
+ * written.
+ */
+async function loadModuleInClassroom(moduleId: string, ctx: ToolContext): Promise<string> {
+  const module = await ClassmojiService.module.findById(moduleId);
+  if (!module || module.classroom_id !== requireClassroomCtx(ctx).classroomId) {
+    throw scopedNotFound('Module');
+  }
+  return module.id;
+}
 
 /**
  * Said alongside a successful publish while every document linked as the
@@ -191,7 +218,20 @@ const maxAttemptsSchema = z
   .min(0)
   .describe('Maximum attempts per student; 0 = unlimited (default 1)');
 
-const weightSchema = z.number().int().min(0).max(100).describe('Grading weight (default 0)');
+// The assignment's weight, as on assignment_update: 0 is a practice quiz.
+const weightSchema = z
+  .number()
+  .nonnegative()
+  .max(10000)
+  .describe('Grading weight beside the course’s other assignments (default 0 = practice)');
+
+const tokensPerHourSchema = z
+  .number()
+  .int()
+  .min(0)
+  .describe('Extension tokens per late hour (default 0 = no extensions)');
+
+const moduleIdSchema = z.string().uuid().describe('Module the quiz sits in (see list_modules)');
 
 const gradingStrategySchema = z
   .enum(['HIGHEST', 'MOST_RECENT', 'FIRST'])
@@ -228,16 +268,30 @@ function excludedPathsArg(value: string[] | undefined): string[] | undefined {
 const dueDateSchema = z
   .string()
   .datetime({ offset: true })
-  .describe('Due date (ISO 8601, e.g. 2026-07-20T23:59:00-04:00)');
+  .describe('Due date (ISO 8601, e.g. 2026-07-20T23:59:00-04:00); late after it');
+
+const releaseAtSchema = z
+  .string()
+  .datetime({ offset: true })
+  .describe('Opens (ISO 8601): students see it from then on, once published');
+
+const closesAtSchema = z
+  .string()
+  .datetime({ offset: true })
+  .describe('Closes (ISO 8601): no new attempt from then on; one under way may finish');
 
 interface QuizCreateArgs {
   classroom: string;
   name: string;
   rubric_prompt: string;
+  module_id: string;
   repository_id?: string;
   system_prompt?: string;
+  release_at?: string;
   due_date?: string;
+  closes_at?: string;
   weight?: number;
+  tokens_per_hour?: number;
   question_count?: number;
   difficulty_level?: string;
   subject?: string;
@@ -262,9 +316,10 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
     'repository for the linked repo while questioning them; excluded_paths lists files it ' +
     'must never see there (e.g. tests/**). Link source material (the pages ' +
     'and decks the questions come from) with resource_link_add target_type quiz. ' +
-    'Owner or teacher only; requires a Pro ' +
-    'subscription and quizzes enabled. ALWAYS created as a DRAFT (students see nothing) — use ' +
-    'quiz_publish to go live and notify students.',
+    'module_id is required: a quiz is an assignment of that module, and release_at, due_date, ' +
+    'closes_at, weight and tokens_per_hour are that assignment’s. Owner or teacher only; ' +
+    'requires a Pro subscription and quizzes enabled. ALWAYS created unpublished (students ' +
+    'see nothing) — use quiz_publish to go live and notify students.',
   scope: 'write',
   roles: QUIZ_AUTHORS,
   inputSchema: {
@@ -275,6 +330,7 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
       .min(1)
       .max(20000)
       .describe('Required. What the AI should ask about and how it should grade the answers'),
+    module_id: moduleIdSchema,
     system_prompt: z
       .string()
       .max(20000)
@@ -285,8 +341,11 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
       .uuid()
       .optional()
       .describe('Repo (assignment container) this quiz is about — required for code context'),
+    release_at: releaseAtSchema.optional(),
     due_date: dueDateSchema.optional(),
+    closes_at: closesAtSchema.optional(),
     weight: weightSchema.optional(),
+    tokens_per_hour: tokensPerHourSchema.optional(),
     question_count: questionCountSchema.optional(),
     difficulty_level: z
       .string()
@@ -308,33 +367,36 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
     await assertQuizSurfaceEnabled(ctx);
     const excludedPaths = excludedPathsArg(args.excluded_paths);
 
-    // S1: the quiz row does not exist yet, so a supplied repository is verified
-    // against the authorized classroom before it can be linked.
+    // S1: the quiz row does not exist yet, so the module it goes in and a
+    // supplied repository are verified against the authorized classroom
+    // before either can be linked.
+    const moduleId = await loadModuleInClassroom(args.module_id, ctx);
     let repositoryId: string | undefined;
     if (args.repository_id !== undefined) {
       repositoryId = (await loadRepositoryInClassroom(args.repository_id, ctx)).id;
     }
 
     // classroomId is ALWAYS the authorized classroom, never request input, and
-    // status is pinned to DRAFT — publishing is quiz_publish's job because only
-    // that path notifies students.
-    //
-    // The service requires the quiz's module (`assignment: { moduleId }`) and
-    // refuses without one, writing nothing: QuizAssignmentError
-    // 'module_required', "Choose a module for this quiz", answered here as
-    // invalid_params. This tool takes no module_id yet, so until that
-    // parameter is added every call ends in that refusal.
+    // the assignment is created unpublished — publishing is quiz_publish's job
+    // because only that path notifies students. The service creates the quiz
+    // and its assignment in one transaction, checking the module again there.
     let created: QuizRow;
     try {
       created = (await ClassmojiService.quiz.create({
         classroomId: classroom.classroomId,
         name: args.name,
         rubricPrompt: args.rubric_prompt,
-        status: 'DRAFT',
+        assignment: {
+          moduleId,
+          isPublished: false,
+          ...(args.release_at !== undefined ? { releaseAt: args.release_at } : {}),
+          ...(args.due_date !== undefined ? { dueDate: args.due_date } : {}),
+          ...(args.closes_at !== undefined ? { closesAt: args.closes_at } : {}),
+          ...(args.weight !== undefined ? { weight: args.weight } : {}),
+          ...(args.tokens_per_hour !== undefined ? { tokensPerHour: args.tokens_per_hour } : {}),
+        },
         ...(repositoryId !== undefined ? { repositoryId } : {}),
         ...(args.system_prompt !== undefined ? { systemPrompt: args.system_prompt } : {}),
-        ...(args.due_date !== undefined ? { dueDate: args.due_date } : {}),
-        ...(args.weight !== undefined ? { weight: args.weight } : {}),
         ...(args.question_count !== undefined ? { questionCount: args.question_count } : {}),
         ...(args.difficulty_level !== undefined ? { difficultyLevel: args.difficulty_level } : {}),
         ...(args.subject !== undefined ? { subject: args.subject } : {}),
@@ -356,7 +418,12 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
       resource_type: 'QUIZ',
       resource_id: created.id,
       action: 'CREATE',
-      data: { tool: 'quiz_create', name: created.name, repository_id: repositoryId ?? null },
+      data: {
+        tool: 'quiz_create',
+        name: created.name,
+        module_id: moduleId,
+        repository_id: repositoryId ?? null,
+      },
     });
 
     return ok({ success: true, quiz: quizSummary(created) });
@@ -367,8 +434,9 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
  * The subset of the quiz service's update input these tools may write, in the
  * service's own camelCase vocabulary. Declaring it explicitly is what makes
  * "never forward caller args" checkable: an argument reaches the service only
- * by being copied into one of these named keys. `status` is narrowed to the two
- * values quiz_update accepts — PUBLISHED is reachable only via quiz.publish.
+ * by being copied into one of these named keys. The assignment fields go in
+ * `assignment`; `isPublished` is only ever false here — publishing is
+ * reachable only via quiz.publish, the path that notifies students.
  */
 interface QuizServiceUpdate {
   name?: string;
@@ -377,16 +445,21 @@ interface QuizServiceUpdate {
   rubricPrompt?: string;
   subject?: string;
   difficultyLevel?: string;
-  /** null clears the due date; the service maps a falsy value to null. */
-  dueDate?: string | null;
-  status?: 'DRAFT' | 'CLOSED';
-  weight?: number;
   questionCount?: number;
   includeCodeContext?: boolean;
   courseSearchEnabled?: boolean;
   excludedPaths?: string[];
   maxAttempts?: number;
   gradingStrategy?: 'HIGHEST' | 'MOST_RECENT' | 'FIRST';
+  assignment?: {
+    moduleId?: string;
+    releaseAt?: string | null;
+    dueDate?: string | null;
+    closesAt?: string | null;
+    weight?: number;
+    tokensPerHour?: number;
+    isPublished?: false;
+  };
 }
 
 interface QuizUpdateArgs {
@@ -396,9 +469,13 @@ interface QuizUpdateArgs {
   rubric_prompt?: string;
   system_prompt?: string;
   repository_id?: string | null;
+  module_id?: string;
+  release_at?: string | null;
   due_date?: string | null;
-  status?: 'DRAFT' | 'CLOSED';
+  closes_at?: string | null;
   weight?: number;
+  tokens_per_hour?: number;
+  published?: false;
   question_count?: number;
   difficulty_level?: string;
   subject?: string;
@@ -415,14 +492,15 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
   title: 'Update a quiz',
   description:
     'Updates a quiz’s settings and prompts. Owner, teacher or assistant; an assistant may change ' +
-    'the content and the name only, not due_date, weight or status. Requires a Pro subscription ' +
-    'and quizzes enabled. Provide at least one field. status accepts only DRAFT (unpublish, ' +
-    'hiding it from students again) or CLOSED (stop new attempts); publishing must go through ' +
-    'quiz_publish, because only that path notifies students. Set repository_id to null to unlink ' +
-    'the repo, or due_date to null to clear the deadline. excluded_paths replaces the list ' +
-    '([] clears it). Editing prompts does not re-grade attempts already taken. Students can send ' +
-    `up to ${MAX_STUDENT_TURNS} messages per attempt; at ${MAX_STUDENT_TURNS} the attempt is ` +
-    'submitted and unanswered questions count as skipped.',
+    'the content and the name only, not module_id, release_at, due_date, closes_at, weight, ' +
+    'tokens_per_hour or published. Requires a Pro subscription and quizzes enabled. Provide at ' +
+    'least one field. module_id moves the quiz to another module (a quiz in no module needs one ' +
+    'before any of those fields). closes_at stops new attempts (null reopens); published:false ' +
+    'unpublishes. Publishing must go through quiz_publish, because only that path notifies ' +
+    'students. null clears repository_id, release_at or due_date. excluded_paths replaces the ' +
+    'list ([] clears it). Editing prompts does not re-grade attempts already taken. Students ' +
+    `can send up to ${MAX_STUDENT_TURNS} messages per attempt; at ${MAX_STUDENT_TURNS} the ` +
+    'attempt is submitted and unanswered questions count as skipped.',
   scope: 'write',
   roles: QUIZ_STAFF,
   inputSchema: {
@@ -446,14 +524,18 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
       .nullable()
       .optional()
       .describe('Repo (assignment container) this quiz is about; null unlinks it'),
+    module_id: moduleIdSchema.optional(),
     // Nullable here but not on quiz_create: an update has an existing value to
-    // clear, and `set()` forwards null while it skips undefined.
-    due_date: dueDateSchema.nullable().optional().describe('Due date (ISO 8601); null clears it'),
-    status: z
-      .enum(['DRAFT', 'CLOSED'])
-      .optional()
-      .describe('DRAFT unpublishes, CLOSED stops new attempts. To PUBLISH, use quiz_publish'),
+    // clear.
+    release_at: releaseAtSchema.nullable().optional(),
+    due_date: dueDateSchema.nullable().optional(),
+    closes_at: closesAtSchema.nullable().optional(),
     weight: weightSchema.optional(),
+    tokens_per_hour: tokensPerHourSchema.optional(),
+    published: z
+      .literal(false)
+      .optional()
+      .describe('false unpublishes (hides it from students). To PUBLISH, use quiz_publish'),
     question_count: questionCountSchema.optional(),
     difficulty_level: z.string().max(100).optional().describe('Free-text difficulty label'),
     subject: z.string().max(200).optional().describe('Free-text subject label'),
@@ -472,6 +554,7 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
     // Explicit field-by-field mapping (snake_case tool args → the service's
     // camelCase input): nothing the caller sends is forwarded wholesale.
     const updates: QuizServiceUpdate = {};
+    const assignment: NonNullable<QuizServiceUpdate['assignment']> = {};
     const fields: string[] = [];
     const set = <K extends keyof QuizServiceUpdate>(
       field: string,
@@ -482,12 +565,18 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
       updates[key] = value;
       fields.push(field);
     };
+    const setOnAssignment = <K extends keyof typeof assignment>(
+      field: string,
+      key: K,
+      value: (typeof assignment)[K] | undefined
+    ) => {
+      if (value === undefined) return;
+      assignment[key] = value;
+      fields.push(field);
+    };
     set('name', 'name', args.name);
     set('rubric_prompt', 'rubricPrompt', args.rubric_prompt);
     set('system_prompt', 'systemPrompt', args.system_prompt);
-    set('due_date', 'dueDate', args.due_date);
-    set('status', 'status', args.status);
-    set('weight', 'weight', args.weight);
     set('question_count', 'questionCount', args.question_count);
     set('difficulty_level', 'difficultyLevel', args.difficulty_level);
     set('subject', 'subject', args.subject);
@@ -496,31 +585,43 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
     set('excluded_paths', 'excludedPaths', excludedPathsArg(args.excluded_paths));
     set('grading_strategy', 'gradingStrategy', args.grading_strategy);
     set('max_attempts', 'maxAttempts', args.max_attempts);
+    setOnAssignment('release_at', 'releaseAt', args.release_at);
+    setOnAssignment('due_date', 'dueDate', args.due_date);
+    setOnAssignment('closes_at', 'closesAt', args.closes_at);
+    setOnAssignment('weight', 'weight', args.weight);
+    setOnAssignment('tokens_per_hour', 'tokensPerHour', args.tokens_per_hour);
+    setOnAssignment('published', 'isPublished', args.published);
     if (args.repository_id !== undefined) fields.push('repository_id');
+    if (args.module_id !== undefined) fields.push('module_id');
 
     if (fields.length === 0) {
       throw new ToolError('invalid_params', 'Provide at least one field to update');
     }
 
-    // The due date, weight and status live on the quiz's assignment, which
-    // only a quiz author changes; an assistant edits the content and the name.
-    // A call carrying any of them is refused whole, before the quiz is read.
-    // holdsRole, not ctx.classroom.role: a multi-role author whose gate
-    // resolved as ASSISTANT is still an author.
+    // A quiz's module, schedule, weight and publish state live on its
+    // assignment, which only a quiz author changes; an assistant edits the
+    // content and the name. A call carrying any of them is refused whole,
+    // before the quiz is read. holdsRole, not ctx.classroom.role: a multi-role
+    // author whose gate resolved as ASSISTANT is still an author.
     if (
       QUIZ_ASSIGNMENT_ARGS.some(field => args[field] !== undefined) &&
       !(await holdsRole(ctx, QUIZ_AUTHORS))
     ) {
       throw new ToolError(
         'forbidden',
-        'Only the class owner or a teacher can change a quiz’s due date, weight or status',
+        'Only the class owner or a teacher can change a quiz’s module, dates, weight, ' +
+          'tokens per hour or publish state',
         'INSUFFICIENT_ROLE'
       );
     }
 
-    // S1 before any write: the quiz must belong to the authorized classroom.
+    // S1 before any write: the quiz must belong to the authorized classroom,
+    // and so must a module it moves to or a repository it links.
     const quiz = await loadQuizInClassroom(args.quiz_id, ctx);
 
+    if (args.module_id !== undefined) {
+      assignment.moduleId = await loadModuleInClassroom(args.module_id, ctx);
+    }
     if (args.repository_id !== undefined) {
       // null disconnects; a value must first prove it lives in this classroom.
       updates.repositoryId =
@@ -528,15 +629,20 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
           ? null
           : (await loadRepositoryInClassroom(args.repository_id, ctx)).id;
     }
+    if (Object.keys(assignment).length > 0) updates.assignment = assignment;
 
     let updated: QuizRow;
     try {
       updated = (await ClassmojiService.quiz.update(quiz.id, updates)) as QuizRow;
     } catch (error) {
-      // A draft quiz cannot be closed; the service says so in words a caller
-      // can act on ("Publish the quiz before closing it").
-      if ((error as { name?: unknown } | null)?.name === 'QuizStatusChangeError') {
-        throw new ToolError('invalid_params', (error as Error).message);
+      // A quiz in no module takes no schedule, weight or publish change until
+      // it is given one ('module_required'): said so with the field to set.
+      const named = error as { name?: unknown; code?: unknown } | null;
+      if (named?.name === 'QuizAssignmentError' && named.code === 'module_required') {
+        throw new ToolError(
+          'invalid_params',
+          'This quiz is in no module: set module_id too (see list_modules).'
+        );
       }
       throw mapQuizAssignmentError(error);
     }
@@ -569,8 +675,9 @@ export const quizPublishTool: ToolDefinition<QuizPublishArgs> = {
     'published" notification, but only on the transition INTO published, so republishing an ' +
     'already-published quiz notifies nobody. The response reports whether students were ' +
     'notified. If every linked source document is still a draft, it also carries a warning: ' +
-    'students cannot start the quiz until one is published. Use quiz_update with status DRAFT ' +
-    'to unpublish.',
+    'students cannot start the quiz until one is published. A quiz in no module cannot be ' +
+    'published: set its module_id with quiz_update first. Use quiz_update with ' +
+    'published:false to unpublish.',
   scope: 'write',
   roles: QUIZ_AUTHORS,
   inputSchema: {
@@ -580,6 +687,13 @@ export const quizPublishTool: ToolDefinition<QuizPublishArgs> = {
   handler: async (args, ctx) => {
     await assertQuizSurfaceEnabled(ctx);
     const quiz = await loadQuizInClassroom(args.quiz_id, ctx);
+    // Publishing is the assignment's: a quiz in no module has none yet.
+    if (!quiz.assignment) {
+      throw new ToolError(
+        'invalid_params',
+        'This quiz is in no module: set its module_id with quiz_update, then publish it.'
+      );
+    }
 
     let published: QuizPublishRow;
     try {
@@ -643,8 +757,9 @@ export const quizDeleteTool: ToolDefinition<QuizDeleteArgs> = {
     'Permanently deletes a quiz. Owner or teacher only, destructive, requires confirm:true; ' +
     'requires a Pro subscription and quizzes enabled. THIS CANNOT BE UNDONE and cascades: every ' +
     'student attempt at this quiz — transcripts, scores, and focus metrics — is permanently ' +
-    'deleted with it, and the quiz is removed from any curriculum module that lists it. To take ' +
-    'a quiz out of circulation without losing student work, use quiz_update with status CLOSED.',
+    'deleted with it, and so is its assignment (its place in its module, its dates and ' +
+    'weight). To take a quiz out of circulation without losing student work, use quiz_update ' +
+    'with closes_at (no new attempts) or published:false.',
   scope: 'write',
   roles: QUIZ_AUTHORS,
   inputSchema: {
