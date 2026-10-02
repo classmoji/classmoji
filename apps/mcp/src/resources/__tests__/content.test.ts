@@ -277,6 +277,30 @@ describe('quizzes resource source_material (quiz source material)', () => {
 
     expect(result.quizzes[0].source_material).toEqual([]);
   });
+
+  it("students get the student list's counting score as is, a 0 included", async () => {
+    getQuizzesForStudent.mockResolvedValue([
+      {
+        id: 'q1',
+        name: 'Quiz 1',
+        status: 'PUBLISHED',
+        weight: 0,
+        question_count: 3,
+        attemptsSummary: { count: 1, canCreateNew: false, currentScore: 0, bestScore: 0 },
+      },
+    ]);
+    const ctx = studentCtx();
+    (ctx.classroom as unknown as { classroom: { slug: string } }).classroom.slug =
+      'authorized-slug';
+
+    const result = (await quizzesResource.handler(VARS, ctx, new URL('classmoji://x'))) as {
+      quizzes: Array<{ my_attempts: { currentScore: number | null } }>;
+    };
+
+    // The published list only: no options are passed, so closed quizzes stay out.
+    expect(getQuizzesForStudent.mock.calls[0]).toHaveLength(3);
+    expect(result.quizzes[0].my_attempts.currentScore).toBe(0);
+  });
 });
 
 describe('calendar resource allowlist shaping (U5)', () => {

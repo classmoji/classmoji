@@ -368,10 +368,18 @@ const STUDENT_ATTEMPT_SELECT = {
   unfocused_duration_ms: true,
 } as const;
 
+/**
+ * The quizzes a member sees on the student quiz list, with their own attempts.
+ *
+ * Published quizzes only by default. `includeClosed` adds CLOSED quizzes, which
+ * take no new attempts from a student but stay visible, so a student keeps the
+ * quiz they finished and its score; the student quiz list asks for them.
+ */
 export const getQuizzesForStudent = async (
   classroomId: string,
   userId: string,
-  membership: QuizMembership | null
+  membership: QuizMembership | null,
+  { includeClosed = false }: { includeClosed?: boolean } = {}
 ) => {
   if (!membership) {
     throw new Error('Membership required to access student quizzes');
@@ -404,10 +412,12 @@ export const getQuizzesForStudent = async (
   const quizzes = await getPrisma().quiz.findMany({
     where: {
       classroom_id: classroomId,
-      status: 'PUBLISHED',
+      status: includeClosed ? { in: ['PUBLISHED', 'CLOSED'] } : 'PUBLISHED',
     },
     include: {
       repository: true,
+      // The quiz's assignment owns its due date where it has one.
+      assignment: { select: { student_deadline: true } },
       attempts: {
         where: { user_id: userId },
         orderBy: { started_at: 'desc' }, // Most recent first
@@ -427,9 +437,12 @@ export const getQuizzesForStudent = async (
 
     // Check if user can create new attempts. Staff preview quizzes repeatedly,
     // so they are not held to max_attempts — TEACHER included, or a teacher
-    // would be locked out of their own quiz after one preview.
+    // would be locked out of their own quiz after one preview. A student
+    // starts attempts on a PUBLISHED quiz only, as the start gate requires.
     const isInstructor = (QUIZ_STAFF_ROLES as readonly string[]).includes(membership.role);
-    const canCreateNew = isInstructor || hasUnlimitedAttempts || attemptCount < maxAttempts;
+    const canCreateNew =
+      isInstructor ||
+      (quiz.status === 'PUBLISHED' && (hasUnlimitedAttempts || attemptCount < maxAttempts));
 
     // Process all attempts with metadata (without counting flag yet)
     const baseAttempts = attempts.map((attempt, index) => {

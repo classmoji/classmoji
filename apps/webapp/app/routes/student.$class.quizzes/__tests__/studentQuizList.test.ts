@@ -23,6 +23,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@classmoji/database', () => ({
+  // quiz.service reads it for its includes; its shape does not matter here.
+  GIT_IDENTITY: {},
   default: () => ({ quiz: { findMany: (...a: unknown[]) => mocks.quizFindMany(...a) } }),
 }));
 // Pulled in by quiz.service; nothing here sends a notification.
@@ -245,6 +247,61 @@ describe('student quiz list payload', () => {
     expect('rubric_prompt' in quiz).toBe(false);
     expect('systemPrompt' in quiz).toBe(false);
     expect('rubricPrompt' in quiz).toBe(false);
+  });
+});
+
+describe('student quiz list — due date, closed quizzes, zero scores', () => {
+  it('asks for closed quizzes too', async () => {
+    await load();
+
+    expect(mocks.quizFindMany.mock.calls[0][0].where.status).toEqual({
+      in: ['PUBLISHED', 'CLOSED'],
+    });
+  });
+
+  it("shows the assignment's due date where the quiz has an assignment", async () => {
+    const assignmentDue = new Date('2026-10-02T18:00:00Z');
+    mocks.quizFindMany.mockResolvedValue([
+      {
+        ...QUIZ_ROW,
+        due_date: new Date('2026-09-30T18:00:00Z'),
+        assignment: { student_deadline: assignmentDue },
+      },
+    ]);
+
+    const [quiz] = (await load()).quizzes;
+
+    expect(quiz.dueDate).toEqual(assignmentDue);
+  });
+
+  it("falls back to the quiz's own due date when it has no assignment", async () => {
+    const quizDue = new Date('2026-09-30T18:00:00Z');
+    mocks.quizFindMany.mockResolvedValue([{ ...QUIZ_ROW, due_date: quizDue, assignment: null }]);
+
+    const [quiz] = (await load()).quizzes;
+
+    expect(quiz.dueDate).toEqual(quizDue);
+  });
+
+  it('keeps a closed quiz, with its score, and offers no new attempt', async () => {
+    mocks.quizFindMany.mockResolvedValue([{ ...QUIZ_ROW, status: 'CLOSED', attempts: [COMPLETED] }]);
+
+    const [quiz] = (await load()).quizzes;
+
+    expect(quiz.status).toBe('CLOSED');
+    expect(quiz.score).toBe(85);
+    expect(quiz.attemptsSummary.canCreateNew).toBe(false);
+  });
+
+  it('reports a 0 as a score, not as no score', async () => {
+    mocks.quizFindMany.mockResolvedValue([
+      { ...QUIZ_ROW, attempts: [{ ...COMPLETED, partial_credit_percentage: 0 }] },
+    ]);
+
+    const [quiz] = (await load()).quizzes;
+
+    expect(quiz.score).toBe(0);
+    expect(quiz.attemptsSummary.currentScore).toBe(0);
   });
 });
 
