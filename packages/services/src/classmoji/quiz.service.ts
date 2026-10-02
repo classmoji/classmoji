@@ -603,7 +603,7 @@ const deleteQuiz = async (quizId: string) => {
 export { deleteQuiz as delete };
 
 /**
- * One quiz with its classroom, repository and attempts, plus `source_material`:
+ * One quiz with its classroom, repository, assignment and attempts, plus `source_material`:
  * the linked pages and decks in material order, drafts included (a staff and
  * server-side read; the student list below filters drafts out).
  */
@@ -613,6 +613,8 @@ export const findById = async (quizId: string) => {
     include: {
       repository: true,
       classroom: true,
+      // Its place in the course: module, schedule, weight, published.
+      assignment: { include: { module: { select: { id: true, title: true } } } },
       attempts: {
         include: {
           user: { include: GIT_IDENTITY },
