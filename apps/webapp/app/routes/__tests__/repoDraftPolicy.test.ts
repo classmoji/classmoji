@@ -220,13 +220,13 @@ describe('the shared modules loader filters by ROLE, not by URL prefix', () => {
     expect(listOptions()).toEqual({ includeUnpublished: true, quizzesVisible: true });
   });
 
-  it("hands the student view the classroom's quiz answer, so hidden quizzes stay out", async () => {
+  it('asks for the same published view whatever the quiz answer (the route strips hidden quizzes)', async () => {
     mocks.loadQuizzesVisible.mockResolvedValue(false);
 
     await runLoader('student.$class.modules', `/student/${CLASS_SLUG}/modules`);
 
     expect(mocks.loadQuizzesVisible).toHaveBeenCalledWith(CLASSROOM.id);
-    expect(listOptions()).toEqual({ includeUnpublished: false, quizzesVisible: false });
+    expect(listOptions()).toEqual({ includeUnpublished: false, quizzesVisible: true });
   });
 
   it('never fetches repositories itself', async () => {
