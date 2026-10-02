@@ -212,7 +212,21 @@ export const publishAssignmentAndRepository = async (
   // students with nothing to submit through.
   if (repoResult && 'error' in repoResult) return repoResult;
 
+  // A quiz's assignment publishes through the one quiz publish function
+  // (assignment.publish routes it), which tells the class once.
   await ClassmojiService.assignment.publish(assignmentId);
+
+  // The quiz screens' warning, on this publish path too: a quiz whose every
+  // linked source document is still a draft cannot be started yet.
+  if (
+    assignment.type === 'QUIZ' &&
+    assignment.quiz_id &&
+    (await ClassmojiService.quizAssignment.quizSourceMaterialAllDraft(assignment.quiz_id))
+  ) {
+    return {
+      info: `Quiz "${assignment.title}" published. All source material is still draft; students will not be able to start this quiz.`,
+    };
+  }
 
   // Provisioning started: hand back the trigger session alone, exactly as the
   // repository publish does. Adding a `success` here would pop a "published"
