@@ -10,10 +10,10 @@
  *   - S4 role parity: all four tools are OWNER-only (requireClassroomAdmin,
  *     admin.$class.modules), FORM included. Attaching a form does not widen the
  *     tier to the forms batch's OWNER|TEACHER — it is still a curriculum edit.
- *   - The Pro gate runs on the FORM BRANCH ONLY, and the quiz-visibility gate
- *     (`entitlement.quizzesVisible`) on the QUIZ branch only. A free-tier
- *     classroom must keep adding pages and slides; it must not be able to
- *     attach a form or a quiz.
+ *   - The Pro gate runs on the FORM BRANCH ONLY. A free-tier classroom must
+ *     keep adding pages and slides; it must not be able to attach a form. A
+ *     quiz is not an item at all: it sits in a module through its assignment
+ *     (quiz_create / quiz_update module_id), so QUIZ is not offered.
  *   - S1: a form belonging to another classroom is refused by
  *     `module.service.assertTargetInClassroom` with a generic Error, and this
  *     layer must translate it into the same uniform `not_found` every other
@@ -149,13 +149,13 @@ describe('module tool definitions', () => {
     expect(moduleItemAddTool.roles).not.toContain('STUDENT');
   });
 
-  it('accepts all five item types and rejects anything else', () => {
+  it('accepts the content item types (and REPOSITORY, to refuse it by name) and nothing else', () => {
     const itemType = moduleItemAddTool.inputSchema.item_type as z.ZodTypeAny;
-    for (const type of ['PAGE', 'REPOSITORY', 'QUIZ', 'SLIDE', 'FORM']) {
+    for (const type of ['PAGE', 'REPOSITORY', 'SLIDE', 'FORM']) {
       expect(itemType.safeParse(type).success, type).toBe(true);
     }
-    // The enum is the whole vocabulary: nothing outside ModuleItemType gets in.
-    for (const bogus of ['ASSIGNMENT', 'form', 'Form', '', 'GRADE']) {
+    // QUIZ is not offered: a quiz is placed by its assignment's module.
+    for (const bogus of ['QUIZ', 'ASSIGNMENT', 'form', 'Form', '', 'GRADE']) {
       expect(itemType.safeParse(bogus).success, bogus).toBe(false);
     }
     expect(itemType.safeParse(undefined).success).toBe(false);
@@ -468,58 +468,19 @@ describe('Pro gating of FORM items', () => {
   });
 });
 
-// ─── Quiz visibility, on the QUIZ branch only ───────────────────────────────
+// ─── Quizzes are not module items ──────────────────────────────────────────
 
-describe('quiz gating of QUIZ items', () => {
-  const ARGS = {
-    classroom: 'org/w26',
-    module_id: 'mod-1',
-    item_type: 'QUIZ' as const,
-    target_id: 'quiz-1',
-  };
+describe('module_item_add and quizzes', () => {
+  it('points a quiz at its own module_id in the description, and asks nothing about quizzes', async () => {
+    expect(moduleItemAddTool.description).toContain('A quiz is placed by its own module_id');
+    expect(moduleItemAddTool.inputSchema.target_id.description).not.toMatch(/quiz/);
+    expect(Buffer.byteLength(moduleItemAddTool.description, 'utf8')).toBeLessThan(1500);
 
-  it('refuses a QUIZ item where quizzes are not visible, before touching the service', async () => {
-    mocks.quizzesVisible.mockResolvedValue(false);
-
-    const error = await moduleItemAddTool.handler(ARGS as never, CTX).catch(e => e);
-
-    expect(error).toBeInstanceOf(ToolError);
-    expect((error as ToolError).kind).toBe('forbidden');
-    expect((error as ToolError).message).toContain('Pro subscription');
-    expect((error as ToolError).message).toContain('quizzes_enabled');
-    expect(mocks.moduleAddItem).not.toHaveBeenCalled();
-    expect(mocks.auditCreate).not.toHaveBeenCalled();
-  });
-
-  it('adds a QUIZ item where quizzes are visible', async () => {
-    mocks.moduleAddItem.mockResolvedValue({ ...ITEM_ROW, item_type: 'QUIZ' });
-
-    const payload = parse(await moduleItemAddTool.handler(ARGS as never, CTX));
-
-    expect(payload.success).toBe(true);
-    expect(mocks.moduleAddItem).toHaveBeenCalledWith('mod-1', 'QUIZ', 'quiz-1', 'class-1');
-    // Quizzes answer to their own predicate, not the forms gate.
-    expect(mocks.assertProTier).not.toHaveBeenCalled();
-  });
-
-  it('asks about the AUTHORIZED classroom id, never an argument', async () => {
-    await moduleItemAddTool.handler({ ...ARGS, classroom: 'other-org/other' } as never, CTX);
-
-    expect(mocks.quizzesVisible).toHaveBeenCalledTimes(1);
-    expect(mocks.quizzesVisible).toHaveBeenCalledWith('class-1');
-  });
-
-  it('does not ask on the FORM branch', async () => {
     await moduleItemAddTool.handler(
-      { classroom: 'org/w26', module_id: 'mod-1', item_type: 'FORM', target_id: 'form-1' } as never,
+      { classroom: 'org/w26', module_id: 'mod-1', item_type: 'PAGE', target_id: 'page-1' } as never,
       CTX
     );
     expect(mocks.quizzesVisible).not.toHaveBeenCalled();
-  });
-
-  it('names the quiz requirement in the tool description', () => {
-    expect(moduleItemAddTool.description).toContain('quizzes_enabled');
-    expect(Buffer.byteLength(moduleItemAddTool.description, 'utf8')).toBeLessThan(1500);
   });
 });
 
@@ -543,7 +504,7 @@ describe('module_delete', () => {
 
   beforeEach(() => {
     mocks.moduleFindById.mockResolvedValue(owning([]));
-    mocks.moduleDeleteById.mockResolvedValue({ id: 'mod-1' });
+    mocks.moduleDeleteById.mockResolvedValue({ id: 'mod-1', deleted_quiz_assignment_ids: [] });
   });
 
   it('is destructive, closed-world, and says what goes and what stays', () => {
@@ -568,7 +529,9 @@ describe('module_delete', () => {
     const payload = parse(await run());
 
     expect(mocks.moduleFindById).toHaveBeenCalledWith('mod-1');
-    expect(mocks.moduleDeleteById).toHaveBeenCalledWith('mod-1', 'class-1');
+    expect(mocks.moduleDeleteById).toHaveBeenCalledWith('mod-1', 'class-1', {
+      quizzesHidden: false,
+    });
     expect(payload).toEqual({
       success: true,
       deleted_module_id: 'mod-1',
@@ -653,40 +616,68 @@ describe('module_delete', () => {
       mocks.quizzesVisible.mockResolvedValue(false);
     });
 
-    it.each([
-      ['only a quiz assignment', [quizAssignment]],
-      ['a quiz assignment beside a listed one', [lab, quizAssignment]],
-    ])('refuses a module held back by %s without naming any', async (_label, assignments) => {
-      mocks.moduleFindById.mockResolvedValue(owning(assignments));
-
-      const error = await refusal();
-
-      // The Modules page's own line: moving the listed assignments could never
-      // unblock it, and nothing here may say a quiz exists.
-      expect(error.kind).toBe('invalid_params');
-      expect(error.message).toBe('This module can’t be deleted.');
-      // Nothing that reaches the client says why: the web's own bar for this
-      // refusal (quizVisibility.test.ts) is no quiz, no assignment, no "hidden".
-      expect(error.code).toBeUndefined();
-      expect(error.data).toBeUndefined();
-      expect(JSON.stringify({ m: error.message, c: error.code, d: error.data })).not.toMatch(
-        /quiz|assignment|hidden/i
-      );
-      expect(mocks.quizzesVisible).toHaveBeenCalledWith('class-1');
-      expect(mocks.moduleDeleteById).not.toHaveBeenCalled();
-    });
-
-    it('leaves a hidden quiz item out of the count it reports, not out of the audit row', async () => {
-      mocks.moduleFindById.mockResolvedValue(owning([], [pageItem, quizItem]));
+    it('deletes a module held back by quiz assignments alone, with them, saying nothing of them', async () => {
+      // The owner cannot see them: as on the web, they go with the module (the
+      // quizzes and attempts stay, in no module) and only the audit row names
+      // them.
+      mocks.moduleFindById.mockResolvedValue(owning([quizAssignment], [pageItem]));
+      mocks.moduleDeleteById.mockResolvedValue({
+        id: 'mod-1',
+        deleted_quiz_assignment_ids: ['asg-quiz'],
+      });
 
       const payload = parse(await run());
 
-      expect(payload.items_removed).toBe(1);
-      expect(
-        (mocks.auditCreate.mock.calls[0][0] as { data: { items_removed: number } }).data
-          .items_removed
-      ).toBe(2);
+      expect(mocks.moduleDeleteById).toHaveBeenCalledWith('mod-1', 'class-1', {
+        quizzesHidden: true,
+      });
+      expect(payload).toEqual({
+        success: true,
+        deleted_module_id: 'mod-1',
+        title: 'starterpack',
+        items_removed: 1,
+      });
+      expect(JSON.stringify(payload)).not.toMatch(/quiz/i);
+      expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
+        data: { tool: 'module_delete', quiz_assignment_ids: ['asg-quiz'] },
+      });
     });
+
+    it.each([['a quiz assignment beside a listed one', [lab, quizAssignment]]])(
+      'refuses a module held back by %s without naming any',
+      async (_label, assignments) => {
+        mocks.moduleFindById.mockResolvedValue(owning(assignments));
+
+        const error = await refusal();
+
+        // The Modules page's own line: moving the listed assignments could never
+        // unblock it, and nothing here may say a quiz exists.
+        expect(error.kind).toBe('invalid_params');
+        expect(error.message).toBe('This module can’t be deleted.');
+        // Nothing that reaches the client says why: the web's own bar for this
+        // refusal (quizVisibility.test.ts) is no quiz, no assignment, no "hidden".
+        expect(error.code).toBeUndefined();
+        expect(error.data).toBeUndefined();
+        expect(JSON.stringify({ m: error.message, c: error.code, d: error.data })).not.toMatch(
+          /quiz|assignment|hidden/i
+        );
+        expect(mocks.quizzesVisible).toHaveBeenCalledWith('class-1');
+        expect(mocks.moduleDeleteById).not.toHaveBeenCalled();
+      }
+    );
+  });
+
+  it('leaves a legacy QUIZ item out of the count it reports, not out of the audit row', async () => {
+    // A quiz is in a module through its assignment; the old item is listed
+    // for nobody, whether or not the classroom shows quizzes.
+    mocks.moduleFindById.mockResolvedValue(owning([], [pageItem, quizItem]));
+
+    const payload = parse(await run());
+
+    expect(payload.items_removed).toBe(1);
+    expect(
+      (mocks.auditCreate.mock.calls[0][0] as { data: { items_removed: number } }).data.items_removed
+    ).toBe(2);
   });
 
   it('names a quiz assignment where quizzes are visible', async () => {
@@ -700,8 +691,8 @@ describe('module_delete', () => {
     });
   });
 
-  it('asks about quizzes only when the module holds a quiz row', async () => {
-    mocks.moduleFindById.mockResolvedValue(owning([], [pageItem]));
+  it('asks about quizzes only when the module holds a quiz assignment', async () => {
+    mocks.moduleFindById.mockResolvedValue(owning([], [pageItem, quizItem]));
     await run();
     expect(mocks.quizzesVisible).not.toHaveBeenCalled();
   });
@@ -1029,49 +1020,36 @@ describe('module_reorder', () => {
     const args = (ordered_ids: string[]) => ({ kind: 'ITEMS', module_id: MODULE_ID, ordered_ids });
 
     it('orders the content items through module.reorderItems, legacy rows left out', async () => {
-      const payload = parse(await run(args([C, B, A, Q])));
+      const payload = parse(await run(args([C, B, A])));
 
-      // The service orders the content items around the legacy REPOSITORY row.
-      expect(mocks.moduleReorderItems).toHaveBeenCalledWith(MODULE_ID, [C, B, A, Q], 'class-1');
+      // The service orders the content items around the legacy REPOSITORY and
+      // QUIZ rows (a quiz sits in a module through its assignment).
+      expect(mocks.moduleReorderItems).toHaveBeenCalledWith(MODULE_ID, [C, B, A], 'class-1');
       expect(mocks.assignmentReorderInModule).not.toHaveBeenCalled();
       expect(payload.order).toEqual([
         { id: C, title: 'Survey' },
         { id: B, title: 'Deck' },
         { id: A, title: 'Intro' },
-        { id: Q, title: 'Warm-up quiz' },
       ]);
+      // Items never ask about quizzes: no quiz row is in the list.
+      expect(mocks.quizzesVisible).not.toHaveBeenCalled();
     });
 
-    it('refuses a list that names a legacy REPOSITORY item, saying to leave it out', async () => {
-      const error = await refusal(args([A, LEGACY, Q, B, C]));
+    it.each([
+      ['REPOSITORY', LEGACY],
+      ['QUIZ', Q],
+    ])('refuses a list that names a legacy %s item, saying to leave it out', async (_type, id) => {
+      const error = await refusal(args([A, id, B, C]));
 
       expect(error).toMatchObject({ kind: 'invalid_params', code: 'LEGACY_ITEM' });
       expect(error.message).toMatch(/Leave them out/);
-      expect(error.data).toEqual({ legacy_item_ids: [LEGACY] });
+      expect(error.data).toEqual({ legacy_item_ids: [id] });
       noWrite();
     });
 
-    it('does not ask for the legacy row: a list without it is complete', async () => {
-      await run(args([A, Q, B, C]));
+    it('does not ask for the legacy rows: a list without them is complete', async () => {
+      await run(args([A, B, C]));
       expect(mocks.moduleReorderItems).toHaveBeenCalledTimes(1);
-    });
-
-    it('puts a hidden quiz item back where it sits, and names it nowhere', async () => {
-      mocks.quizzesVisible.mockResolvedValue(false);
-
-      const payload = parse(await run(args([B, C, A])));
-
-      // Q follows A now (the legacy row between them is not in this list).
-      expect(mocks.moduleReorderItems).toHaveBeenCalledWith(MODULE_ID, [B, C, A, Q], 'class-1');
-      const audit = mocks.auditCreate.mock.calls[0][0] as { data: unknown };
-      for (const text of [JSON.stringify(payload), JSON.stringify(audit.data)]) {
-        expect(text.toLowerCase()).not.toContain('quiz');
-        expect(text).not.toContain(Q);
-      }
-
-      // And its id is a stranger's, not a row that was "left out".
-      const error = await refusal(args([B, C, A, Q]));
-      expect(error.data).toEqual({ missing: [], unknown: [Q], duplicated: [] });
     });
 
     it('treats an item whose target is in another classroom as list_modules does: not there', async () => {
@@ -1086,13 +1064,14 @@ describe('module_reorder', () => {
         ),
       });
 
-      const payload = parse(await run(args([C, Q, A])));
+      const payload = parse(await run(args([C, A])));
 
-      expect(mocks.moduleReorderItems).toHaveBeenCalledWith(MODULE_ID, [C, Q, B, A], 'class-1');
+      // B goes back after A, the row it follows now.
+      expect(mocks.moduleReorderItems).toHaveBeenCalledWith(MODULE_ID, [C, A, B], 'class-1');
       expect(JSON.stringify(payload)).not.toContain('Foreign deck');
-      const error = await refusal(args([C, A]));
+      const error = await refusal(args([C]));
       expect(JSON.stringify(error.data)).not.toContain('Foreign deck');
-      expect(error.data).toMatchObject({ missing: [{ id: Q, title: 'Warm-up quiz' }] });
+      expect(error.data).toMatchObject({ missing: [{ id: A, title: 'Intro' }] });
     });
 
     it.each([
@@ -1107,7 +1086,7 @@ describe('module_reorder', () => {
       mock().mockRejectedValue(new Error(message));
 
       const error = await refusal(
-        kind === 'ITEMS' ? args([A, Q, B, C]) : { kind, ordered_ids: [A, B, C] }
+        kind === 'ITEMS' ? args([A, B, C]) : { kind, ordered_ids: [A, B, C] }
       );
 
       expect(error).toMatchObject({ kind: 'invalid_params', code: 'ORDER_MISMATCH' });

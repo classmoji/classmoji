@@ -3,21 +3,20 @@
  * module_item_add / module_delete / module_reorder.
  *
  * A Module ("Week 3: Recursion") holds two things: an ORDERED CONTENT LIST of
- * pages, slides, quizzes and forms (ModuleItem rows, what module_item_add
- * writes), and the ASSIGNMENTS that belong to it (`Assignment.module_id`, set
- * by assignment_create and moved by assignment_update). A repository is neither:
- * it is the storage a REPO assignment submits through and reaches a module only
- * through that assignment. `ModuleItemType.REPOSITORY` is a legacy value
- * nothing writes any more (old rows are read-only), refused here. Publishing a
- * Module spawns nothing.
+ * pages, slides and forms (ModuleItem rows, what module_item_add writes), and
+ * the ASSIGNMENTS that belong to it (`Assignment.module_id`, set by
+ * assignment_create, quiz_create and moved by assignment_update or
+ * quiz_update). A repository is neither: it is the storage a REPO assignment
+ * submits through and reaches a module only through that assignment, and a
+ * quiz reaches a module through its QUIZ assignment. `ModuleItemType.REPOSITORY`
+ * and `ModuleItemType.QUIZ` are legacy values nothing writes any more (old rows
+ * are read-only and listed nowhere): module_item_add does not offer them.
+ * Publishing a Module spawns nothing.
  *
- * FORMS AND QUIZZES ARE THE GATED ITEM TYPES. The forms surface is a Pro
- * feature everywhere else it appears (apps/pages' `assertFormAdmin`, the whole
- * forms tool batch), so attaching a form is gated the same way. Quizzes appear
- * only where `entitlement.quizzesVisible` holds (Pro, and quizzes switched on),
- * the predicate list_modules and the web app filter on, so attaching a quiz is
- * refused anywhere else. Each gate runs on its own branch only: a free-tier
- * classroom keeps adding pages and slides exactly as before.
+ * FORMS ARE THE GATED ITEM TYPE. The forms surface is a Pro feature everywhere
+ * else it appears (apps/pages' `assertFormAdmin`, the whole forms tool batch),
+ * so attaching a form is gated the same way. The gate runs on its own branch
+ * only: a free-tier classroom keeps adding pages and slides exactly as before.
  *
  * Tier confirmed against apps/webapp/app/routes/admin.$class.modules/route.tsx:
  * requireClassroomAdmin — OWNER only.
@@ -25,8 +24,12 @@
  * module_delete mirrors the Modules page's Delete (same route, same tier): a
  * module that still owns ASSIGNMENTS is refused, because the foreign key would
  * cascade the delete into their submissions and grades; its content items are
- * only links and go with it. Where the classroom shows no quizzes, a module
- * held back by quiz assignments alone is refused without naming them, as the
+ * only links and go with it. Where the classroom shows no quizzes, its owner
+ * cannot see quiz assignments, so a module whose only assignments are quiz
+ * ones is deleted with them (module.deleteById's `quizzesHidden`, as the web
+ * page does; the quizzes and their attempts stay, in no module) and the audit
+ * row names them; a module that also owns listed assignments is refused, and
+ * one that owns other unlisted ones is refused without naming them, as the
  * web's "This module can't be deleted." does.
  *
  * module_reorder is the Modules page's three drags in one tool (`kind`): the
@@ -35,8 +38,9 @@
  * caller hands over the list in full, as the page does. Where the classroom
  * shows no quizzes the caller was never given the quiz rows, so they are put
  * back where they sit now (withHiddenRows, the helper the page's action uses)
- * before the list reaches a service. Legacy REPOSITORY item rows are not part
- * of the items list: the service orders the content items around them.
+ * before the list reaches a service. Legacy REPOSITORY and QUIZ item rows are
+ * not part of the items list: the service orders the content items around
+ * them.
  *
  * Backbone (plan §6): module.create / updateForClassroom / setPublished (NOT
  * `publish` — no such method) / addItem / deleteById. The *ForClassroom/classroomId-taking
@@ -221,7 +225,7 @@ export const modulePublishTool: ToolDefinition<ModulePublishArgs> = {
 interface ModuleItemAddArgs {
   classroom: string;
   module_id: string;
-  item_type: 'PAGE' | 'REPOSITORY' | 'QUIZ' | 'SLIDE' | 'FORM';
+  item_type: 'PAGE' | 'REPOSITORY' | 'SLIDE' | 'FORM';
   target_id: string;
 }
 
@@ -229,8 +233,7 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
   name: 'module_item_add',
   annotations: {
     // Appends one ModuleItem row. Nothing is removed: the underlying page,
-    // quiz, slide or form is untouched, and so is every item already in
-    // the module.
+    // slide or form is untouched, and so is every item already in the module.
     destructive: false,
     // Repeating the call with the same args has no ADDITIONAL effect — the
     // unique (module_id, target_id) constraint means the second attempt is
@@ -243,9 +246,10 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
   },
   title: 'Add an item to a module',
   description:
-    'Appends a content item to a module: a page, a quiz, a slide deck, or a form. The target ' +
+    'Appends a content item to a module: a page, a slide deck, or a form. The target ' +
     'must belong to the same classroom. A repository is not a module item, so REPOSITORY is ' +
-    'refused: a lab sits in a module through its assignment. To place an existing assignment ' +
+    'refused: a lab sits in a module through its assignment. A quiz is placed by its own ' +
+    'module_id (quiz_create, or quiz_update to move it). To place an existing assignment ' +
     'use assignment_update with module_id; assignment_create adds a NEW gradeable one. ' +
     'Owner only.\n' +
     'A FORM item links one of the classroom’s forms (list_forms / form_create) into the ' +
@@ -253,43 +257,31 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
     'rather than as a link somebody has to remember to send. The form’s `closes_at` becomes the ' +
     'item’s due date, so setting one (form_update) is what puts the module row on the schedule. ' +
     'A DRAFT form can be attached — the item is created now and simply stays hidden from members ' +
-    'until form_publish, exactly as a DRAFT quiz does. A CLOSED form stays ' +
-    'visible on purpose, reading as closed. Attaching a form requires a Pro subscription (the ' +
-    'forms surface is Pro everywhere); attaching a quiz requires Pro with quizzes_enabled on. ' +
-    'Pages and slides need neither.',
+    'until form_publish. A CLOSED form stays visible on purpose, reading as closed. Attaching a ' +
+    'form requires a Pro subscription (the forms surface is Pro everywhere); pages and slides ' +
+    'do not.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     module_id: z.string().uuid().describe('Module id'),
     item_type: z
-      .enum(['PAGE', 'REPOSITORY', 'QUIZ', 'SLIDE', 'FORM'])
+      .enum(['PAGE', 'REPOSITORY', 'SLIDE', 'FORM'])
       .describe(
         'What kind of content the item links. REPOSITORY is refused: to place a lab in a ' +
           'module, move its assignment with assignment_update module_id.'
       ),
-    target_id: z.string().uuid().describe('Id of the page/quiz/slide/form to link'),
+    target_id: z.string().uuid().describe('Id of the page/slide/form to link'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
 
     // The forms surface is Pro-gated on every other surface it has, so linking
-    // a form from a module is gated too. A quiz is refused wherever quizzes are
-    // not visible, the same predicate list_modules filters them out on. Both
-    // checks run on their own branch only, outside the try below so a refusal
-    // surfaces as `forbidden` rather than being rewritten by
-    // translateModuleError. Adding a page or slide is unchanged for a free-tier
-    // classroom.
+    // a form from a module is gated too. The check runs on its own branch only,
+    // outside the try below so a refusal surfaces as `forbidden` rather than
+    // being rewritten by translateModuleError. Adding a page or slide is
+    // unchanged for a free-tier classroom.
     if (args.item_type === 'FORM') await assertProTier(ctx);
-    if (
-      args.item_type === 'QUIZ' &&
-      !(await ClassmojiService.entitlement.quizzesVisible(classroom.classroomId))
-    ) {
-      throw new ToolError(
-        'forbidden',
-        'Quizzes are not available in this classroom: they require a Pro subscription with quizzes_enabled on'
-      );
-    }
 
     // A repository is not a module item: it reaches a module through a REPO
     // assignment. Refused before any lookup. The message names the move first,
@@ -351,8 +343,8 @@ export const moduleDeleteTool: ToolDefinition<ModuleDeleteArgs> = {
     'owns assignments is refused and nothing is deleted: move them to another module first ' +
     '(assignment_update with module_id), or delete a REPO one (assignment_delete); ' +
     'list_modules shows what a module owns. The module’s content items go with it and are counted in the ' +
-    'response: they are only its links to pages, slides, quizzes and forms, and the pages, ' +
-    'slides, quizzes and forms themselves are untouched. THIS CANNOT BE UNDONE: the module and ' +
+    'response: they are only its links to pages, slides and forms, and the pages, ' +
+    'slides and forms themselves are untouched. THIS CANNOT BE UNDONE: the module and ' +
     'the order of its items are gone. A published module is deleted like any other, so ' +
     'students stop seeing it. Use it to clear out a module left empty once its assignments ' +
     'were moved elsewhere.',
@@ -373,13 +365,16 @@ export const moduleDeleteTool: ToolDefinition<ModuleDeleteArgs> = {
     }
 
     // What this caller can see of it. A classroom that shows no quizzes lists
-    // no quiz assignment and no quiz item (list_modules), so neither may be
-    // named or counted here. Asked only when a quiz row is present.
+    // no quiz assignment (list_modules), so none may be named or counted here.
+    // Asked only when a quiz assignment is present.
     const quizzesHidden =
-      (module.assignments.some(a => a.type === 'QUIZ') ||
-        module.items.some(item => item.item_type === 'QUIZ')) &&
+      module.assignments.some(a => a.type === 'QUIZ') &&
       !(await ClassmojiService.entitlement.quizzesVisible(classroom.classroomId));
     const listed = module.assignments.filter(a => !(quizzesHidden && a.type === 'QUIZ'));
+    // Held back only by quiz assignments its owner cannot see: those go with
+    // the module (the quizzes and their attempts stay, in no module), as on the
+    // web Modules page.
+    const onlyHiddenQuizzes = quizzesHidden && listed.length === 0;
 
     const refuseOwned = (): never => {
       // Held back by assignments this classroom does not list: moving the
@@ -399,10 +394,14 @@ export const moduleDeleteTool: ToolDefinition<ModuleDeleteArgs> = {
         { assignments: listed.map(a => ({ id: a.id, title: a.title, type: a.type })) }
       );
     };
-    if (module.assignments.length > 0) refuseOwned();
+    if (module.assignments.length > 0 && !onlyHiddenQuizzes) refuseOwned();
 
+    let deletedQuizAssignmentIds: string[] = [];
     try {
-      await ClassmojiService.module.deleteById(module.id, classroom.classroomId);
+      const deleted = await ClassmojiService.module.deleteById(module.id, classroom.classroomId, {
+        quizzesHidden,
+      });
+      deletedQuizAssignmentIds = deleted.deleted_quiz_assignment_ids;
     } catch (error) {
       if (error instanceof Error) {
         // The service re-checks under a lock: an assignment moved in, or the
@@ -420,9 +419,9 @@ export const moduleDeleteTool: ToolDefinition<ModuleDeleteArgs> = {
       throw error;
     }
 
-    const itemsRemoved = module.items.filter(
-      item => !(quizzesHidden && item.item_type === 'QUIZ')
-    ).length;
+    // Legacy QUIZ items are listed for nobody (a quiz is in a module through
+    // its assignment), so they are not counted in the reply either.
+    const itemsRemoved = module.items.filter(item => item.item_type !== 'QUIZ').length;
 
     await writeAudit(ctx, {
       resource_type: 'MODULES',
@@ -435,6 +434,9 @@ export const moduleDeleteTool: ToolDefinition<ModuleDeleteArgs> = {
         was_published: module.is_published,
         // The true count: the audit log is the owner's record, not a read surface.
         items_removed: module.items.length,
+        ...(deletedQuizAssignmentIds.length > 0
+          ? { quiz_assignment_ids: deletedQuizAssignmentIds }
+          : {}),
       },
     });
 
@@ -518,7 +520,7 @@ export const moduleReorderTool: ToolDefinition<ModuleReorderArgs> = {
   description:
     'Sets the display order of one list, as dragging does on the Modules page. Owner only. ' +
     '`kind` picks the list: ASSIGNMENTS (the assignments of module_id), ITEMS (the content ' +
-    'items of module_id: its pages, slides, quizzes and forms) or MODULES (the modules of the ' +
+    'items of module_id: its pages, slides and forms) or MODULES (the modules of the ' +
     'classroom; omit module_id). ordered_ids is the WHOLE list in its new order, every id ' +
     'exactly once: assignment ids, module item ids (the `id` of an entry in `items`, not its ' +
     'target_id) or module ids, all from list_modules. A partial list is refused, naming what ' +
@@ -577,14 +579,13 @@ export const moduleReorderTool: ToolDefinition<ModuleReorderArgs> = {
       }
       moduleId = module.id;
 
-      // The rows list_modules does not show this caller: quiz rows where the
-      // classroom shows no quizzes. Asked only when the list holds one.
-      const holdsQuiz =
-        kind === 'ASSIGNMENTS'
-          ? module.assignments.some(a => a.type === 'QUIZ')
-          : module.items.some(item => item.item_type === 'QUIZ');
+      // The rows list_modules does not show this caller: quiz assignments
+      // where the classroom shows no quizzes. Asked only when the list holds
+      // one.
       const quizzesHidden =
-        holdsQuiz && !(await ClassmojiService.entitlement.quizzesVisible(classroom.classroomId));
+        kind === 'ASSIGNMENTS' &&
+        module.assignments.some(a => a.type === 'QUIZ') &&
+        !(await ClassmojiService.entitlement.quizzesVisible(classroom.classroomId));
 
       if (kind === 'ASSIGNMENTS') {
         rows = module.assignments.map(a => ({
@@ -595,36 +596,33 @@ export const moduleReorderTool: ToolDefinition<ModuleReorderArgs> = {
         apply = full =>
           ClassmojiService.assignment.reorderInModule(module.id, full, classroom.classroomId);
       } else {
-        const legacy = module.items.filter(item => item.item_type === 'REPOSITORY');
-        const named = legacy.filter(item => ordered.includes(item.id));
+        // Legacy REPOSITORY and QUIZ items are not in the content list (a
+        // repository and a quiz sit in a module through an assignment): the
+        // service orders the content items around them, so they are neither
+        // listed here nor accepted.
+        const isLegacy = (item: { item_type: string }) =>
+          item.item_type === 'REPOSITORY' || item.item_type === 'QUIZ';
+        const named = module.items.filter(item => isLegacy(item) && ordered.includes(item.id));
         if (named.length > 0) {
           throw new ToolError(
             'invalid_params',
-            `${named.length} of the ordered_ids are legacy REPOSITORY items, which cannot be ` +
+            `${named.length} of the ordered_ids are legacy items, which cannot be ` +
               'reordered. Leave them out and send the other content items. Nothing was reordered.',
             'LEGACY_ITEM',
             { legacy_item_ids: named.map(item => item.id) }
           );
         }
         rows = module.items
-          .filter(item => item.item_type !== 'REPOSITORY')
+          .filter(item => !isLegacy(item))
           .map(item => {
-            const target = item.page ?? item.slide ?? item.quiz ?? item.form ?? null;
+            const target = item.page ?? item.slide ?? item.form ?? null;
             return {
               id: item.id,
-              title:
-                item.page?.title ??
-                item.slide?.title ??
-                item.quiz?.name ??
-                item.form?.title ??
-                null,
-              // Hidden from this caller, as list_modules hides it: a quiz item
-              // where quizzes are not shown, or a row whose target is not in
-              // this classroom (the service lists that row too, so it has to
-              // go back in, but nothing here may name it).
-              hidden:
-                (quizzesHidden && item.item_type === 'QUIZ') ||
-                target?.classroom_id !== classroom.classroomId,
+              title: item.page?.title ?? item.slide?.title ?? item.form?.title ?? null,
+              // Hidden from this caller, as list_modules hides it: a row whose
+              // target is not in this classroom (the service lists that row
+              // too, so it has to go back in, but nothing here may name it).
+              hidden: target?.classroom_id !== classroom.classroomId,
             };
           });
         apply = full =>
