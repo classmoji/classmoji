@@ -547,9 +547,11 @@ export const importModules = async (
     return (await ensureTargetModule(sourceModule, targetClassroomId, tx)).id;
   };
 
-  // A quiz and its assignment are written together.
+  // A quiz and its assignment are written together: in a transaction of
+  // their own, unless `tx` already is one (a transaction client has no
+  // callable `$transaction`).
   const together = <T>(write: (client: RepositoryImportClient) => Promise<T>): Promise<T> =>
-    '$transaction' in tx
+    typeof (tx as { $transaction?: unknown }).$transaction === 'function'
       ? (tx as ReturnType<typeof getPrisma>).$transaction(client => write(client))
       : write(tx);
 
