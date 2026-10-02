@@ -542,6 +542,22 @@ export const publish = async (quizId: string) => {
   return quiz;
 };
 
+/**
+ * Each quiz's grading strategy, by quiz id: what the counting-attempt selector
+ * (`countingQuizAttempt` / `quizStanding` in @classmoji/utils) needs to know.
+ * Ids that match no quiz are simply absent.
+ */
+export const findGradingStrategies = async (
+  quizIds: string[]
+): Promise<Record<string, QuizGradingStrategy>> => {
+  if (quizIds.length === 0) return {};
+  const quizzes = await getPrisma().quiz.findMany({
+    where: { id: { in: quizIds } },
+    select: { id: true, grading_strategy: true },
+  });
+  return Object.fromEntries(quizzes.map(q => [q.id, q.grading_strategy]));
+};
+
 export const getStatsByClassroom = async (classroomId: string) => {
   return getQuizStatsByOrganization(classroomId);
 };

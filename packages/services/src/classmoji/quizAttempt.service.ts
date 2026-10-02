@@ -786,6 +786,27 @@ export const findByQuiz = async (quizId: string) => {
   return withLogins(attempts);
 };
 
+/**
+ * One user's attempts on the given quizzes, newest first, with only the
+ * columns the counting-attempt selector reads (`quizStanding` in
+ * @classmoji/utils). For a student's own Assignments page and a staff member's
+ * report on one student.
+ */
+export const findForUserByQuizIds = async (userId: string, quizIds: string[]) => {
+  if (quizIds.length === 0) return [];
+  return getPrisma().quizAttempt.findMany({
+    where: { user_id: userId, quiz_id: { in: quizIds } },
+    select: {
+      id: true,
+      quiz_id: true,
+      started_at: true,
+      completed_at: true,
+      partial_credit_percentage: true,
+    },
+    orderBy: { started_at: 'desc' },
+  });
+};
+
 export const findByUser = async (userId: string, organizationId: string | null = null) => {
   const whereClause: Prisma.QuizAttemptWhereInput = {
     user_id: userId.toString(),
@@ -876,22 +897,6 @@ export const deleteAttempt = async (attemptId: string) => {
   // Then delete the attempt
   return getPrisma().quizAttempt.delete({
     where: { id: attemptId },
-  });
-};
-
-export const getUserAttemptForQuiz = async (quizId: string, userId: string) => {
-  return getPrisma().quizAttempt.findFirst({
-    where: {
-      quiz_id: quizId,
-      user_id: userId.toString(),
-    },
-    include: {
-      quiz: {
-        include: {
-          repository: true,
-        },
-      },
-    },
   });
 };
 
