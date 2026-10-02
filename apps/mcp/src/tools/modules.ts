@@ -1,6 +1,6 @@
 /**
  * Module (curriculum) tools — module_create / module_update / module_publish /
- * module_item_add / module_delete.
+ * module_item_add / module_delete / module_reorder.
  *
  * A Module ("Week 3: Recursion") holds two things: an ORDERED CONTENT LIST of
  * pages, slides, quizzes and forms (ModuleItem rows, what module_item_add
@@ -29,6 +29,15 @@
  * held back by quiz assignments alone is refused without naming them, as the
  * web's "This module can't be deleted." does.
  *
+ * module_reorder is the Modules page's three drags in one tool (`kind`): the
+ * assignments of a module, the content items of a module, or the modules of
+ * the classroom. Each replaces every position of one list at once, so the
+ * caller hands over the list in full, as the page does. Where the classroom
+ * shows no quizzes the caller was never given the quiz rows, so they are put
+ * back where they sit now (withHiddenRows, the helper the page's action uses)
+ * before the list reaches a service. Legacy REPOSITORY item rows are not part
+ * of the items list: the service orders the content items around them.
+ *
  * Backbone (plan §6): module.create / updateForClassroom / setPublished (NOT
  * `publish` — no such method) / addItem / deleteById. The *ForClassroom/classroomId-taking
  * service variants enforce S1 inside packages/services (module AND item
@@ -37,6 +46,7 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
+import { withHiddenRows } from '@classmoji/utils';
 import type { ModuleItemType } from '@prisma/client';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
@@ -433,6 +443,224 @@ export const moduleDeleteTool: ToolDefinition<ModuleDeleteArgs> = {
       deleted_module_id: module.id,
       title: module.title,
       items_removed: itemsRemoved,
+    });
+  },
+};
+
+type ReorderKind = 'ASSIGNMENTS' | 'ITEMS' | 'MODULES';
+
+interface ModuleReorderArgs {
+  classroom: string;
+  kind: ReorderKind;
+  module_id?: string;
+  ordered_ids: string[];
+}
+
+/** One row of a list being reordered, as the caller may see it (or not). */
+interface ReorderRow {
+  id: string;
+  title: string | null;
+  hidden: boolean;
+}
+
+const REORDER_NOUN: Record<ReorderKind, string> = {
+  ASSIGNMENTS: 'assignment of the module',
+  ITEMS: 'content item of the module',
+  MODULES: 'module of the classroom',
+};
+
+/**
+ * `ordered` has to be exactly the rows the caller can see, each once. Anything
+ * else is refused before a service runs, naming what is off: the rows left out
+ * (with titles — they are the caller's own list), and the ids that are not in
+ * the list, echoed back as sent. A hidden row is not in `visible`, so an id of
+ * one is "not in the list" like any stranger: nothing here confirms it exists.
+ */
+function assertFullOrder(kind: ReorderKind, visible: ReorderRow[], ordered: string[]): void {
+  const seen = new Set<string>();
+  const repeats = new Set<string>();
+  for (const id of ordered) (seen.has(id) ? repeats : seen).add(id);
+  const duplicated = [...repeats];
+  const visibleIds = new Set(visible.map(row => row.id));
+  const unknown = [...seen].filter(id => !visibleIds.has(id));
+  const missing = visible.filter(row => !seen.has(row.id));
+  if (duplicated.length === 0 && unknown.length === 0 && missing.length === 0) return;
+
+  const parts = [
+    missing.length > 0 ? `${missing.length} left out` : null,
+    unknown.length > 0 ? `${unknown.length} not in the list` : null,
+    duplicated.length > 0 ? `${duplicated.length} given more than once` : null,
+  ].filter(Boolean);
+  throw new ToolError(
+    'invalid_params',
+    `ordered_ids must name every ${REORDER_NOUN[kind]} exactly once (see list_modules): ` +
+      `${parts.join(', ')}. Nothing was reordered.`,
+    'ORDER_MISMATCH',
+    {
+      missing: missing.map(row => ({ id: row.id, title: row.title })),
+      unknown,
+      duplicated,
+    }
+  );
+}
+
+export const moduleReorderTool: ToolDefinition<ModuleReorderArgs> = {
+  name: 'module_reorder',
+  annotations: {
+    // Rewrites positions only: nothing is added, removed or moved between
+    // modules.
+    destructive: false,
+    // The same list twice leaves the same order.
+    idempotent: true,
+    openWorld: false,
+  },
+  title: 'Reorder modules, or a module’s assignments or items',
+  description:
+    'Sets the display order of one list, as dragging does on the Modules page. Owner only. ' +
+    '`kind` picks the list: ASSIGNMENTS (the assignments of module_id), ITEMS (the content ' +
+    'items of module_id: its pages, slides, quizzes and forms) or MODULES (the modules of the ' +
+    'classroom; omit module_id). ordered_ids is the WHOLE list in its new order, every id ' +
+    'exactly once: assignment ids, module item ids (the `id` of an entry in `items`, not its ' +
+    'target_id) or module ids, all from list_modules. A partial list is refused, naming what ' +
+    'was left out, and nothing is reordered. Only the order changes; students see the new ' +
+    'order at once. It does not move anything between modules: assignment_update with ' +
+    'module_id does that (the assignment lands last; reorder afterwards). Items of type ' +
+    'REPOSITORY are legacy rows that cannot be reordered: leave them out of an ITEMS list.',
+  scope: 'write',
+  roles: OWNER_ONLY,
+  inputSchema: {
+    classroom: z.string().describe("Classroom reference as 'org/slug'"),
+    kind: z
+      .enum(['ASSIGNMENTS', 'ITEMS', 'MODULES'])
+      .describe('Which list to reorder: a module’s ASSIGNMENTS or ITEMS, or the MODULES'),
+    module_id: z
+      .string()
+      .uuid()
+      .optional()
+      .describe('The module whose list is reordered. Required for ASSIGNMENTS and ITEMS'),
+    ordered_ids: z
+      .array(z.string().uuid())
+      .min(1)
+      .max(500)
+      .describe('Every id of the list, once each, in the new order (first = top)'),
+  },
+  handler: async (args, ctx) => {
+    const classroom = requireClassroomCtx(ctx);
+    const { kind, ordered_ids: ordered } = args;
+
+    let rows: ReorderRow[];
+    let moduleId: string | null = null;
+    // The service call for this kind, given the full list.
+    let apply: (full: string[]) => Promise<unknown>;
+
+    if (kind === 'MODULES') {
+      if (args.module_id !== undefined) {
+        throw new ToolError(
+          'invalid_params',
+          'module_id does not apply to kind MODULES: the list is the classroom’s modules.'
+        );
+      }
+      const modules = await ClassmojiService.module.listModuleContentsForClassroom(
+        classroom.classroomId
+      );
+      rows = modules.map(m => ({ id: m.id, title: m.title, hidden: false }));
+      apply = full => ClassmojiService.module.reorderModules(classroom.classroomId, full);
+    } else {
+      if (args.module_id === undefined) {
+        throw new ToolError('invalid_params', `module_id is required for kind ${kind}.`);
+      }
+      // S1: the module with what it owns, verified against the authorized
+      // classroom. Missing and foreign get the same not_found.
+      const module = await ClassmojiService.module.findById(args.module_id);
+      if (!module || module.classroom_id !== classroom.classroomId) {
+        throw scopedNotFound('Module');
+      }
+      moduleId = module.id;
+
+      // The rows list_modules does not show this caller: quiz rows where the
+      // classroom shows no quizzes. Asked only when the list holds one.
+      const holdsQuiz =
+        kind === 'ASSIGNMENTS'
+          ? module.assignments.some(a => a.type === 'QUIZ')
+          : module.items.some(item => item.item_type === 'QUIZ');
+      const quizzesHidden =
+        holdsQuiz && !(await ClassmojiService.entitlement.quizzesVisible(classroom.classroomId));
+
+      if (kind === 'ASSIGNMENTS') {
+        rows = module.assignments.map(a => ({
+          id: a.id,
+          title: a.title,
+          hidden: quizzesHidden && a.type === 'QUIZ',
+        }));
+        apply = full =>
+          ClassmojiService.assignment.reorderInModule(module.id, full, classroom.classroomId);
+      } else {
+        const legacy = module.items.filter(item => item.item_type === 'REPOSITORY');
+        const named = legacy.filter(item => ordered.includes(item.id));
+        if (named.length > 0) {
+          throw new ToolError(
+            'invalid_params',
+            `${named.length} of the ordered_ids are legacy REPOSITORY items, which cannot be ` +
+              'reordered. Leave them out and send the other content items. Nothing was reordered.',
+            'LEGACY_ITEM',
+            { legacy_item_ids: named.map(item => item.id) }
+          );
+        }
+        rows = module.items
+          .filter(item => item.item_type !== 'REPOSITORY')
+          .map(item => ({
+            id: item.id,
+            title:
+              item.page?.title ?? item.slide?.title ?? item.quiz?.name ?? item.form?.title ?? null,
+            hidden: quizzesHidden && item.item_type === 'QUIZ',
+          }));
+        apply = full =>
+          ClassmojiService.module.reorderItems(module.id, full, classroom.classroomId);
+      }
+    }
+
+    const visible = rows.filter(row => !row.hidden);
+    assertFullOrder(kind, visible, ordered);
+    // The services take the full list: hidden rows go back where they sit now.
+    try {
+      await apply(withHiddenRows(rows, ordered));
+    } catch (error) {
+      if (error instanceof Error) {
+        if (error.message === 'Module not found in classroom') throw scopedNotFound('Module');
+        // The list changed between the read above and the write (a move, an
+        // add or a delete landed in between): the service refused the stale one.
+        if (error.message.startsWith('Ordered ')) {
+          throw new ToolError(
+            'invalid_params',
+            'The list changed while the reorder ran, so nothing was reordered. Read ' +
+              'list_modules again and retry.',
+            'ORDER_MISMATCH'
+          );
+        }
+      }
+      throw error;
+    }
+
+    await writeAudit(ctx, {
+      resource_type: 'MODULES',
+      resource_id: moduleId,
+      action: 'UPDATE',
+      data: {
+        tool: 'module_reorder',
+        kind,
+        ordered_ids: ordered,
+        // The dedup key: a different order inside audit's 5s window is a
+        // different row; the same order re-sent still dedups.
+        value: `${kind}:${ordered.join(',')}`,
+      },
+    });
+
+    const titles = new Map(visible.map(row => [row.id, row.title]));
+    return ok({
+      success: true,
+      kind,
+      ...(moduleId ? { module_id: moduleId } : {}),
+      order: ordered.map((id, position) => ({ position, id, title: titles.get(id) ?? null })),
     });
   },
 };

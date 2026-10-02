@@ -1,6 +1,7 @@
 /**
  * Unit tests for the module (curriculum) tool batch — module_create /
- * module_update / module_publish / module_item_add / module_delete.
+ * module_update / module_publish / module_item_add / module_delete /
+ * module_reorder.
  *
  * The focus is the FIFTH item type. `ModuleItemType` gained `FORM`, and a
  * module item that links a form is the one place the curriculum surface touches
@@ -38,6 +39,10 @@ const mocks = vi.hoisted(() => ({
   moduleAddItem: vi.fn(),
   moduleFindById: vi.fn(),
   moduleDeleteById: vi.fn(),
+  moduleListContents: vi.fn(),
+  moduleReorderModules: vi.fn(),
+  moduleReorderItems: vi.fn(),
+  assignmentReorderInModule: vi.fn(),
   auditCreate: vi.fn(),
 }));
 
@@ -54,6 +59,12 @@ vi.mock('@classmoji/services', () => ({
       addItem: (...a: unknown[]) => mocks.moduleAddItem(...a),
       findById: (...a: unknown[]) => mocks.moduleFindById(...a),
       deleteById: (...a: unknown[]) => mocks.moduleDeleteById(...a),
+      listModuleContentsForClassroom: (...a: unknown[]) => mocks.moduleListContents(...a),
+      reorderModules: (...a: unknown[]) => mocks.moduleReorderModules(...a),
+      reorderItems: (...a: unknown[]) => mocks.moduleReorderItems(...a),
+    },
+    assignment: {
+      reorderInModule: (...a: unknown[]) => mocks.assignmentReorderInModule(...a),
     },
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
     entitlement: { quizzesVisible: (...a: unknown[]) => mocks.quizzesVisible(...a) },
@@ -66,6 +77,7 @@ const {
   modulePublishTool,
   moduleItemAddTool,
   moduleDeleteTool,
+  moduleReorderTool,
 } = await import('../modules.ts');
 
 const ALL_TOOLS: ToolDefinition<never>[] = [
@@ -74,6 +86,7 @@ const ALL_TOOLS: ToolDefinition<never>[] = [
   modulePublishTool,
   moduleItemAddTool,
   moduleDeleteTool,
+  moduleReorderTool,
 ] as unknown as ToolDefinition<never>[];
 
 /** OWNER authorized in `class-1`, whose classroom slug is `w26`. */
@@ -724,6 +737,332 @@ describe('module_delete', () => {
   it('is not Pro-gated: a free classroom can clear out its modules', async () => {
     mocks.assertProTier.mockRejectedValue(proDenial());
     expect(parse(await run()).success).toBe(true);
+    expect(mocks.assertProTier).not.toHaveBeenCalled();
+  });
+});
+
+// ─── module_reorder ─────────────────────────────────────────────────────────
+
+describe('module_reorder', () => {
+  // Real-looking ids: the schema takes uuids only.
+  const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const [A, B, C, Q, LEGACY, STRANGER] = [1, 2, 3, 4, 5, 9].map(uuid);
+  const MODULE_ID = uuid(100);
+
+  /** The module as module.findById loads it (DETAIL_INCLUDE), in display order. */
+  const MODULE = {
+    ...MODULE_ROW,
+    id: MODULE_ID,
+    assignments: [
+      { id: A, title: 'Lab 1', type: 'REPO' },
+      { id: Q, title: 'Midterm quiz', type: 'QUIZ' },
+      { id: B, title: 'Lab 2', type: 'REPO' },
+      { id: C, title: 'Team prefs', type: 'FORM' },
+    ],
+    items: [
+      { id: A, item_type: 'PAGE', page: { title: 'Intro' } },
+      { id: LEGACY, item_type: 'REPOSITORY', repository: { title: 'starterpack' } },
+      { id: Q, item_type: 'QUIZ', quiz: { name: 'Warm-up quiz' } },
+      { id: B, item_type: 'SLIDE', slide: { title: 'Deck' } },
+      { id: C, item_type: 'FORM', form: { title: 'Survey' } },
+    ],
+  };
+
+  const run = (args: Record<string, unknown>) =>
+    moduleReorderTool.handler({ classroom: 'org/w26', ...args } as never, CTX);
+  const refusal = async (args: Record<string, unknown>) =>
+    (await run(args).catch(e => e)) as ToolError;
+  const noWrite = () => {
+    expect(mocks.assignmentReorderInModule).not.toHaveBeenCalled();
+    expect(mocks.moduleReorderItems).not.toHaveBeenCalled();
+    expect(mocks.moduleReorderModules).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  };
+
+  beforeEach(() => {
+    mocks.moduleFindById.mockResolvedValue(MODULE);
+    mocks.moduleListContents.mockResolvedValue([
+      { id: A, title: 'Week 1' },
+      { id: B, title: 'Week 2' },
+      { id: C, title: 'Week 3' },
+    ]);
+  });
+
+  it('is an idempotent, non-destructive write with a description that fits', () => {
+    expect(toolAnnotations(moduleReorderTool as unknown as ToolDefinition<never>)).toEqual({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    });
+    expect(Buffer.byteLength(moduleReorderTool.description, 'utf8')).toBeLessThan(1500);
+    expect(moduleReorderTool.description).toMatch(/WHOLE list/);
+    expect(moduleReorderTool.description).toMatch(/not its target_id/);
+  });
+
+  it('takes one of three kinds and a non-empty list of uuids', () => {
+    const schema = z.object(moduleReorderTool.inputSchema);
+    const base = { classroom: 'org/w26', kind: 'ASSIGNMENTS', module_id: MODULE_ID };
+    expect(schema.safeParse({ ...base, ordered_ids: [A, B] }).success).toBe(true);
+    expect(
+      schema.safeParse({ classroom: 'org/w26', kind: 'MODULES', ordered_ids: [A] }).success
+    ).toBe(true);
+    expect(schema.safeParse({ ...base, ordered_ids: [] }).success).toBe(false);
+    expect(schema.safeParse({ ...base, ordered_ids: ['lab-1'] }).success).toBe(false);
+    expect(schema.safeParse({ ...base, kind: 'PAGES', ordered_ids: [A] }).success).toBe(false);
+    expect(schema.safeParse({ ...base, kind: 'assignments', ordered_ids: [A] }).success).toBe(
+      false
+    );
+  });
+
+  describe('ASSIGNMENTS', () => {
+    const args = (ordered_ids: string[]) => ({
+      kind: 'ASSIGNMENTS',
+      module_id: MODULE_ID,
+      ordered_ids,
+    });
+
+    it('hands the module’s full list to assignment.reorderInModule, scoped to the classroom', async () => {
+      const payload = parse(await run(args([C, B, Q, A])));
+
+      expect(mocks.assignmentReorderInModule).toHaveBeenCalledWith(
+        MODULE_ID,
+        [C, B, Q, A],
+        'class-1'
+      );
+      expect(mocks.moduleReorderItems).not.toHaveBeenCalled();
+      expect(payload).toEqual({
+        success: true,
+        kind: 'ASSIGNMENTS',
+        module_id: MODULE_ID,
+        order: [
+          { position: 0, id: C, title: 'Team prefs' },
+          { position: 1, id: B, title: 'Lab 2' },
+          { position: 2, id: Q, title: 'Midterm quiz' },
+          { position: 3, id: A, title: 'Lab 1' },
+        ],
+      });
+    });
+
+    it('audits the new order', async () => {
+      await run(args([C, B, Q, A]));
+
+      expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+      expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
+        resource_type: 'MODULES',
+        resource_id: MODULE_ID,
+        action: 'UPDATE',
+        data: {
+          tool: 'module_reorder',
+          kind: 'ASSIGNMENTS',
+          ordered_ids: [C, B, Q, A],
+          value: `ASSIGNMENTS:${[C, B, Q, A].join(',')}`,
+        },
+      });
+    });
+
+    it('refuses a partial list, names what was left out, and reorders nothing', async () => {
+      const error = await refusal(args([B, A]));
+
+      expect(error).toMatchObject({ kind: 'invalid_params', code: 'ORDER_MISMATCH' });
+      expect(error.message).toMatch(/every assignment of the module exactly once/);
+      expect(error.message).toMatch(/2 left out/);
+      expect(error.data).toEqual({
+        missing: [
+          { id: Q, title: 'Midterm quiz' },
+          { id: C, title: 'Team prefs' },
+        ],
+        unknown: [],
+        duplicated: [],
+      });
+      noWrite();
+    });
+
+    it('refuses an id that is not in the list and one given twice, echoing only what was sent', async () => {
+      const error = await refusal(args([A, B, C, Q, STRANGER, A]));
+
+      expect(error).toMatchObject({ kind: 'invalid_params', code: 'ORDER_MISMATCH' });
+      expect(error.message).toMatch(/1 not in the list, 1 given more than once/);
+      expect(error.data).toEqual({ missing: [], unknown: [STRANGER], duplicated: [A] });
+      noWrite();
+    });
+
+    it('needs module_id', async () => {
+      const error = await refusal({ kind: 'ASSIGNMENTS', ordered_ids: [A] });
+      expect(error).toMatchObject({ kind: 'invalid_params' });
+      expect(error.message).toMatch(/module_id is required/);
+      expect(mocks.moduleFindById).not.toHaveBeenCalled();
+      noWrite();
+    });
+
+    it.each([
+      ['in another classroom', { ...MODULE, classroom_id: 'class-2' }],
+      ['that does not exist', null],
+    ])('refuses a module %s with the uniform not_found (S1)', async (_label, module) => {
+      mocks.moduleFindById.mockResolvedValue(module);
+
+      expect(await refusal(args([A, B, C, Q]))).toMatchObject({
+        kind: 'not_found',
+        message: 'Module not found in this classroom',
+      });
+      noWrite();
+    });
+
+    describe('where the classroom shows no quizzes', () => {
+      beforeEach(() => {
+        mocks.quizzesVisible.mockResolvedValue(false);
+      });
+
+      it('takes the list the caller can see and puts the quiz row back where it sits', async () => {
+        // list_modules showed A, B, C. The quiz sits after A now, so it follows
+        // A wherever A goes.
+        const payload = parse(await run(args([C, A, B])));
+
+        expect(mocks.assignmentReorderInModule).toHaveBeenCalledWith(
+          MODULE_ID,
+          [C, A, Q, B],
+          'class-1'
+        );
+        // Neither the response nor the audit row names the hidden row.
+        expect(payload.order.map((row: { id: string }) => row.id)).toEqual([C, A, B]);
+        const audit = mocks.auditCreate.mock.calls[0][0] as { data: { ordered_ids: string[] } };
+        expect(audit.data.ordered_ids).toEqual([C, A, B]);
+        expect(JSON.stringify(payload).toLowerCase()).not.toContain('quiz');
+      });
+
+      it('does not count the hidden row as left out', async () => {
+        const error = await refusal(args([A, B]));
+
+        expect(error.data).toMatchObject({ missing: [{ id: C, title: 'Team prefs' }] });
+        expect(JSON.stringify({ m: error.message, d: error.data }).toLowerCase()).not.toContain(
+          'quiz'
+        );
+        noWrite();
+      });
+
+      it('treats the hidden row’s id like any id that is not in the list', async () => {
+        const error = await refusal(args([A, B, C, Q]));
+
+        // Indistinguishable from a stranger: nothing confirms it exists.
+        expect(error.data).toEqual({ missing: [], unknown: [Q], duplicated: [] });
+        const stranger = await refusal(args([A, B, C, STRANGER]));
+        expect(stranger.message).toBe(error.message);
+        noWrite();
+      });
+    });
+
+    it('asks about quizzes only when the list holds one', async () => {
+      mocks.moduleFindById.mockResolvedValue({
+        ...MODULE,
+        assignments: MODULE.assignments.filter(a => a.type !== 'QUIZ'),
+      });
+      await run(args([C, B, A]));
+      expect(mocks.quizzesVisible).not.toHaveBeenCalled();
+    });
+
+    it('reports a list that changed during the reorder as a retry, with no audit row', async () => {
+      mocks.assignmentReorderInModule.mockRejectedValue(
+        new Error('Ordered assignment ids must match the module assignments')
+      );
+
+      const error = await refusal(args([C, B, Q, A]));
+
+      expect(error).toMatchObject({ kind: 'invalid_params', code: 'ORDER_MISMATCH' });
+      expect(error.message).toMatch(/changed while the reorder ran/);
+      expect(mocks.auditCreate).not.toHaveBeenCalled();
+    });
+
+    it('does not swallow an unexpected failure', async () => {
+      mocks.assignmentReorderInModule.mockRejectedValue(new Error('connection lost'));
+      await expect(run(args([C, B, Q, A]))).rejects.toThrow('connection lost');
+      expect(mocks.auditCreate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('ITEMS', () => {
+    const args = (ordered_ids: string[]) => ({ kind: 'ITEMS', module_id: MODULE_ID, ordered_ids });
+
+    it('orders the content items through module.reorderItems, legacy rows left out', async () => {
+      const payload = parse(await run(args([C, B, A, Q])));
+
+      // The service orders the content items around the legacy REPOSITORY row.
+      expect(mocks.moduleReorderItems).toHaveBeenCalledWith(MODULE_ID, [C, B, A, Q], 'class-1');
+      expect(mocks.assignmentReorderInModule).not.toHaveBeenCalled();
+      expect(payload.order).toEqual([
+        { position: 0, id: C, title: 'Survey' },
+        { position: 1, id: B, title: 'Deck' },
+        { position: 2, id: A, title: 'Intro' },
+        { position: 3, id: Q, title: 'Warm-up quiz' },
+      ]);
+    });
+
+    it('refuses a list that names a legacy REPOSITORY item, saying to leave it out', async () => {
+      const error = await refusal(args([A, LEGACY, Q, B, C]));
+
+      expect(error).toMatchObject({ kind: 'invalid_params', code: 'LEGACY_ITEM' });
+      expect(error.message).toMatch(/Leave them out/);
+      expect(error.data).toEqual({ legacy_item_ids: [LEGACY] });
+      noWrite();
+    });
+
+    it('does not ask for the legacy row: a list without it is complete', async () => {
+      await run(args([A, Q, B, C]));
+      expect(mocks.moduleReorderItems).toHaveBeenCalledTimes(1);
+    });
+
+    it('puts a hidden quiz item back where it sits', async () => {
+      mocks.quizzesVisible.mockResolvedValue(false);
+
+      await run(args([B, C, A]));
+
+      // Q follows A now (the legacy row between them is not in this list).
+      expect(mocks.moduleReorderItems).toHaveBeenCalledWith(MODULE_ID, [B, C, A, Q], 'class-1');
+    });
+  });
+
+  describe('MODULES', () => {
+    const args = (ordered_ids: string[]) => ({ kind: 'MODULES', ordered_ids });
+
+    it('orders the AUTHORIZED classroom’s modules through module.reorderModules', async () => {
+      const payload = parse(await run(args([C, A, B])));
+
+      expect(mocks.moduleListContents).toHaveBeenCalledWith('class-1');
+      expect(mocks.moduleReorderModules).toHaveBeenCalledWith('class-1', [C, A, B]);
+      expect(mocks.moduleFindById).not.toHaveBeenCalled();
+      expect(payload).toEqual({
+        success: true,
+        kind: 'MODULES',
+        order: [
+          { position: 0, id: C, title: 'Week 3' },
+          { position: 1, id: A, title: 'Week 1' },
+          { position: 2, id: B, title: 'Week 2' },
+        ],
+      });
+      expect(
+        (mocks.auditCreate.mock.calls[0][0] as { resource_id: string | null }).resource_id
+      ).toBeNull();
+    });
+
+    it('refuses a list that leaves a module out, or names one from elsewhere', async () => {
+      const short = await refusal(args([C, A]));
+      expect(short.data).toMatchObject({ missing: [{ id: B, title: 'Week 2' }] });
+
+      const foreign = await refusal(args([C, A, B, STRANGER]));
+      expect(foreign.data).toMatchObject({ unknown: [STRANGER] });
+      noWrite();
+    });
+
+    it('refuses a module_id: the list is the classroom’s', async () => {
+      const error = await refusal({ ...args([C, A, B]), module_id: MODULE_ID });
+      expect(error).toMatchObject({ kind: 'invalid_params' });
+      expect(error.message).toMatch(/does not apply to kind MODULES/);
+      noWrite();
+    });
+  });
+
+  it('is not Pro-gated', async () => {
+    mocks.assertProTier.mockRejectedValue(proDenial());
+    expect(parse(await run({ kind: 'MODULES', ordered_ids: [C, A, B] })).success).toBe(true);
     expect(mocks.assertProTier).not.toHaveBeenCalled();
   });
 });

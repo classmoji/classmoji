@@ -126,7 +126,7 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
     'when an unpublished assignment auto-releases to students (checked nightly). Pass null ' +
     'to clear grader_deadline or release_at; a cleared release_at never auto-releases.\n' +
     'module_id MOVES the assignment into another module of the classroom (see list_modules), ' +
-    'at the end of that module’s assignments. This is how a lab, quiz or form assignment is ' +
+    'at the end of that module’s assignments (module_reorder sets the order). This is how a lab, quiz or form assignment is ' +
     'placed in a week: an assignment belongs to exactly one module. Only the module changes: ' +
     'weight, deadlines, grades and submissions travel with it and nobody is notified. The ' +
     'student module list shows it under the new module, so a move into an unpublished module ' +
