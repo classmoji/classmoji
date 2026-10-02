@@ -18,12 +18,14 @@ import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UIMessageChunk } from 'ai';
-import type { QuizUIMessage } from '@classmoji/utils/quiz-agent';
+import { BUTTON_TEXT, type QuizUIMessage } from '@classmoji/utils/quiz-agent';
 
 vi.mock('~/hooks', () => ({ useDarkMode: () => ({ isDarkMode: false }) }));
 vi.mock('react-router', () => ({ useRevalidator: () => ({ revalidate: vi.fn() }) }));
 /** What the editor sends when its button is clicked. */
 let typed = 'Flexbox lays the items out in a row.';
+/** The submit handler of the editor as last rendered. */
+let editorSubmit: ((t: string) => void) | null = null;
 vi.mock('~/routes/student.$class.quizzes/ChatEditor', () => ({
   default: ({
     onSubmit,
@@ -31,11 +33,14 @@ vi.mock('~/routes/student.$class.quizzes/ChatEditor', () => ({
   }: {
     onSubmit: (t: string) => void;
     sendButtonTestId?: string;
-  }) => (
-    <button data-testid={sendButtonTestId} onClick={() => onSubmit(typed)}>
-      Send
-    </button>
-  ),
+  }) => {
+    editorSubmit = onSubmit;
+    return (
+      <button data-testid={sendButtonTestId} onClick={() => onSubmit(typed)}>
+        Send
+      </button>
+    );
+  },
 }));
 const snapshot = () => ({ totalMs: 0, unfocusedMs: 0 });
 vi.mock('~/components/features/quiz/useQuizFocusMetrics', () => ({
@@ -72,6 +77,7 @@ type Session = {
   publicAccessToken: string;
   isStreaming?: boolean;
   activeInputSeq?: number;
+  lastEventId?: string;
   closed?: boolean;
 };
 const sends: SendOptions[] = [];
@@ -107,6 +113,7 @@ const fakeTransport = {
       ...(sessions.get(options.chatId) ?? { publicAccessToken: 'pat' }),
       isStreaming: true,
       activeInputSeq: sends.length,
+      lastEventId: `before-${sends.length}`,
     });
     return next.stream;
   }),
@@ -408,6 +415,8 @@ const STALLED = 'Flexbox lays the items out in a row.';
 const NUDGE = 'you there?';
 const FIRST_REPLY = 'Right: the items sit in a row along the main axis.';
 const SECOND_REPLY = 'Yes, still here.';
+/** QuizChat's wait for a saved opening (SAVED_OPENING_WAIT_MS). */
+const SAVED_OPENING_WAIT = 5 * 60_000;
 
 let container: HTMLDivElement;
 let root: Root;
@@ -595,12 +604,13 @@ describe('QuizChat when a reply never comes', () => {
     expect(occurrences(NUDGE)).toBe(1);
     expect(occurrences(FIRST_REPLY)).toBe(1);
     expect(occurrences(SECOND_REPLY)).toBe(1);
-    // The opening's message, then one for each reply.
+    // The opening's message, then one for each reply, each after the message
+    // it answers, as the saved transcript has them.
     expect(assistantMessages()).toHaveLength(3);
     const all = container.textContent ?? '';
-    expect(all.indexOf(STALLED)).toBeLessThan(all.indexOf(NUDGE));
-    expect(all.indexOf(NUDGE)).toBeLessThan(all.indexOf(FIRST_REPLY));
-    expect(all.indexOf(FIRST_REPLY)).toBeLessThan(all.indexOf(SECOND_REPLY));
+    expect(all.indexOf(STALLED)).toBeLessThan(all.indexOf(FIRST_REPLY));
+    expect(all.indexOf(FIRST_REPLY)).toBeLessThan(all.indexOf(NUDGE));
+    expect(all.indexOf(NUDGE)).toBeLessThan(all.indexOf(SECOND_REPLY));
   });
 
   it('keeps waiting while a slow reply keeps sending', async () => {
@@ -672,17 +682,144 @@ describe('QuizChat when a reply never comes', () => {
     expect(sends).toHaveLength(1);
   });
 
-  it("leaves the begin action's stream to the opening's own wait", async () => {
+  it('a begin that sends nothing waits for the saved opening, then offers Start again', async () => {
     const opening = controlled();
-    sendStreams = [opening];
+    sendStreams = [opening, controlled()];
     await render([]);
     await advance(10);
     expect(sends).toHaveLength(1);
     expect(sends[0].body?.action).toEqual({ type: 'begin' });
 
-    await advance(REPLY_START_MS * 2);
-    expect(opening.cancelled).toBe(false);
+    await advance(REPLY_START_MS);
+    // Released without a stop, and no reply is marked as running.
+    expect(opening.cancelled).toBe(true);
+    expect(sends[0].abortSignal?.aborted ?? false).toBe(false);
+    expect(storedSession()).toMatchObject({ isStreaming: false });
+    // Waiting for the saved opening, as a join does: no message is taken yet.
+    expect(query('quiz-typing')).not.toBeNull();
+    expect(query('quiz-error')).toBeNull();
+
+    await advance(SAVED_OPENING_WAIT);
+    expect(query('quiz-typing')).toBeNull();
+    expect(query('quiz-error')?.textContent).toContain("The quiz couldn't start.");
+    const retry = query('quiz-error')?.querySelector('button') as HTMLButtonElement;
+    expect(retry.textContent).toBe('Start again');
+    await act(async () => retry.click());
+    await advance(10);
+    expect(sends).toHaveLength(2);
+    expect(sends[1].body?.action).toEqual({ type: 'begin' });
+  });
+
+  it('a reply that comes back after its quiet is stored as running from where it began', async () => {
+    const late = controlled();
+    sendStreams = [late];
+    await render();
+    await stall();
+    expect(storedSession()).toMatchObject({ isStreaming: false, lastEventId: 'before-1' });
+
+    // The transport reads on past the cursor it had; a token refresh meanwhile
+    // reports its state as it is, inside the reply.
+    sessions.set(ATTEMPT.id, { ...sessions.get(ATTEMPT.id)!, lastEventId: 'inside-1' });
+    transportOptions.onSessionChange?.(ATTEMPT.id, {
+      ...sessions.get(ATTEMPT.id)!,
+      publicAccessToken: 'pat-2',
+    });
+    expect(storedSession()).toMatchObject({
+      publicAccessToken: 'pat-2',
+      isStreaming: false,
+      lastEventId: 'before-1',
+    });
+
+    late.push({ type: 'start', messageId: 'reply-a' }, ...text('ta', FIRST_REPLY));
+    await advance(10);
+    // Running again, at the cursor before the reply: a reload reads it from
+    // its start, never from inside it.
+    expect(storedSession()).toMatchObject({ isStreaming: true, lastEventId: 'before-1' });
+  });
+
+  it('a released reply is not stored as running again', async () => {
+    const writes: Session[] = [];
+    const setItem = window.sessionStorage.setItem.bind(window.sessionStorage);
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation((key, value) => {
+      writes.push(JSON.parse(value) as Session);
+      setItem(key, value);
+    });
+    sendStreams = [controlled(), controlled()];
+    await render();
+    await stall();
+    const quietAt = writes.length;
+
+    await sendText(NUDGE);
+    await advance(10);
+    expect(sends).toHaveLength(2);
+    // After the quiet, only the new message's send says a reply is running.
+    const running = writes.slice(quietAt).filter(w => w.isStreaming);
+    expect(running.length).toBeGreaterThan(0);
+    expect(running.every(w => w.activeInputSeq === 2)).toBe(true);
+    spy.mockRestore();
+  });
+
+  it('a message sent as a quiet reply comes back waits for it, then goes', async () => {
+    const late = controlled();
+    sendStreams = [late, controlled()];
+    await render();
+    await stall();
+
+    // A chunk lands after the chat last rendered, before the click is handled
+    // (by the handler of that render, which still shows the reply quiet).
+    const submitAsRendered = editorSubmit!;
+    await act(async () => {
+      late.push({ type: 'start', messageId: 'reply-a' });
+      await vi.advanceTimersByTimeAsync(0);
+      submitAsRendered(NUDGE);
+    });
+    // Not dropped, not sent into the open reply: held, and the reply read on.
+    expect(sends).toHaveLength(1);
+    expect(late.cancelled).toBe(false);
     expect(status()).toBe('streaming');
+
+    late.push(...text('ta', FIRST_REPLY), { type: 'finish' });
+    late.close();
+    await advance(10);
+    expect(sends).toHaveLength(2);
+    expect(sends[1].messages.at(-1)?.parts).toEqual([{ type: 'text', text: NUDGE }]);
+    expect(occurrences(FIRST_REPLY)).toBe(1);
+    expect(occurrences(NUDGE)).toBe(1);
+  });
+
+  it("drops what is left of a reply released part way, up to the next reply's start", async () => {
+    const dying = controlled();
+    const next = controlled();
+    sendStreams = [dying, next];
+    await render();
+
+    await sendText(STALLED);
+    await advance(1_000);
+    dying.push({ type: 'start', messageId: 'reply-a' }, { type: 'text-start', id: 'ta' });
+    dying.push({ type: 'text-delta', id: 'ta', delta: 'Partly' });
+    await advance(REPLY_SILENCE_MS);
+    expect(status()).toBe('ready');
+
+    await sendText(NUDGE);
+    await advance(10);
+    expect(sends).toHaveLength(2);
+    // The new stream reads on from inside the released reply.
+    next.push(
+      { type: 'text-delta', id: 'ta', delta: ' and the rest.' },
+      { type: 'text-end', id: 'ta' },
+      { type: 'finish' },
+      { type: 'start', messageId: 'reply-b' },
+      ...text('tb', SECOND_REPLY),
+      { type: 'finish' }
+    );
+    next.close();
+    await advance(10);
+
+    expect(query('quiz-error')).toBeNull();
+    expect(status()).toBe('ready');
+    expect(occurrences('Partly')).toBe(1);
+    expect(occurrences('and the rest.')).toBe(0);
+    expect(occurrences(SECOND_REPLY)).toBe(1);
   });
 
   it("waits for the saved opening when a reload's re-read of it sends nothing", async () => {
@@ -707,5 +844,128 @@ describe('QuizChat when a reply never comes', () => {
     expect(query('quiz-typing')).not.toBeNull();
     expect(query('quiz-error')).toBeNull();
     expect(sends).toHaveLength(0);
+  });
+
+  /** The usable buttons, by assistant message: `<message>:<button>`. */
+  const usableButtons = (within: HTMLElement) =>
+    [...within.querySelectorAll('[data-message-role="assistant"]')].flatMap((message, i) =>
+      [
+        ...message.querySelectorAll<HTMLButtonElement>(
+          '[data-testid="quiz-try-again"], [data-testid="quiz-next"]'
+        ),
+      ]
+        .filter(button => !button.disabled)
+        .map(button => `${i}:${button.getAttribute('data-testid')}`)
+    );
+  /** What a reload shows: the saved transcript, read fresh. */
+  const reloadButtons = async (saved: QuizUIMessage[]) => {
+    const other = document.createElement('div');
+    document.body.appendChild(other);
+    const otherRoot = createRoot(other);
+    await act(async () => {
+      otherRoot.render(
+        <QuizChat
+          quiz={QUIZ}
+          attempt={{ ...ATTEMPT, id: 'attempt-reloaded' }}
+          transcript={saved}
+          viewerOwnsAttempt
+        />
+      );
+    });
+    const usable = usableButtons(other);
+    await act(async () => otherRoot.unmount());
+    other.remove();
+    return usable;
+  };
+  const OFFERED = assistant('offered', [textPart(QUESTION), offerPart('c0')]);
+  const offerChunks = (callId: string): UIMessageChunk[] => [
+    {
+      type: 'tool-input-available',
+      toolCallId: callId,
+      toolName: 'offer_next_step',
+      input: offerPart(callId).input,
+    },
+    { type: 'tool-output-available', toolCallId: callId, output: offerPart(callId).output },
+  ];
+  const HINT = 'Think about which axis justify-content works on.';
+
+  it('a click while a reply is quiet gets the buttons a reload shows, once the run answers both', async () => {
+    const woken = controlled();
+    sendStreams = [controlled(), woken];
+    await render([OFFERED]);
+    await stall();
+
+    // The offer's buttons are usable while the reply is quiet.
+    expect(usableButtons(container)).toEqual(['0:quiz-try-again', '0:quiz-next']);
+    await act(async () => (query('quiz-try-again') as HTMLButtonElement).click());
+    await advance(10);
+    expect(sends).toHaveLength(2);
+    expect(sends[1].messages.at(-1)?.parts).toEqual([
+      { type: 'text', text: BUTTON_TEXT.try_again },
+    ]);
+
+    // The waiting answer's reply (feedback and a new offer), then the hint.
+    woken.push(
+      { type: 'start', messageId: 'reply-a' },
+      ...text('ta', FIRST_REPLY),
+      ...offerChunks('c1'),
+      { type: 'finish' },
+      { type: 'start', messageId: 'reply-b' },
+      ...text('tb', HINT),
+      { type: 'finish' }
+    );
+    woken.close();
+    await advance(10);
+
+    const saved = [
+      OFFERED,
+      user('u1', STALLED),
+      assistant('reply-a', [textPart(FIRST_REPLY), offerPart('c1')]),
+      user('u2', BUTTON_TEXT.try_again),
+      assistant('reply-b', [textPart(HINT)]),
+    ];
+    const reloaded = await reloadButtons(saved);
+    // The hint ends with Next alone; the answered offer is used up.
+    expect(reloaded).toEqual(['2:quiz-next']);
+    expect(usableButtons(container)).toEqual(reloaded);
+  });
+
+  it('a click whose reply never came keeps its buttons given back after a typed message', async () => {
+    const woken = controlled();
+    sendStreams = [controlled(), woken];
+    await render([OFFERED]);
+
+    // The click is the message whose reply goes quiet.
+    await act(async () => (query('quiz-try-again') as HTMLButtonElement).click());
+    await advance(REPLY_START_MS + 10);
+    expect(status()).toBe('ready');
+    expect(usableButtons(container)).toEqual([]);
+
+    await sendText(NUDGE);
+    await advance(10);
+    expect(sends).toHaveLength(2);
+    // The click's reply did not get through (a notice), so its set is given
+    // back; the typed message's reply leaves it so.
+    woken.push(
+      { type: 'start', messageId: 'reply-a' },
+      { type: 'data-notice', data: { code: 'reply_failed' } } as UIMessageChunk,
+      { type: 'finish' },
+      { type: 'start', messageId: 'reply-b' },
+      ...text('tb', SECOND_REPLY),
+      { type: 'finish' }
+    );
+    woken.close();
+    await advance(10);
+
+    const saved = [
+      OFFERED,
+      user('u1', BUTTON_TEXT.try_again),
+      assistant('reply-a', [{ type: 'data-notice', data: { code: 'reply_failed' } }]),
+      user('u2', NUDGE),
+      assistant('reply-b', [textPart(SECOND_REPLY)]),
+    ];
+    const reloaded = await reloadButtons(saved);
+    expect(reloaded).toEqual(['0:quiz-try-again', '0:quiz-next']);
+    expect(usableButtons(container)).toEqual(reloaded);
   });
 });
