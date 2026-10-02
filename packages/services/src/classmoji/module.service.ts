@@ -444,17 +444,25 @@ export const updateForClassroom = async (
 
 export const deleteById = async (id: string, classroomId?: string) => {
   if (classroomId) await assertModuleInClassroom(id, classroomId);
-  // A module that still owns assignments cannot go: deleting it would cascade
-  // into their submissions, grades and regrades. Move or delete them first.
-  const owned = await getPrisma().module.findUnique({
-    where: { id },
-    select: { _count: { select: { assignments: true } } },
+  return getPrisma().$transaction(async tx => {
+    // The module row is locked for the check and the delete together. An
+    // assignment being moved in at the same moment (assignment.moveToModuleEnd
+    // takes this lock; any other write of `module_id` needs a key-share on the
+    // row) either lands first and is counted below, or waits and finds the
+    // module gone. Without the lock it could land between the two statements
+    // and be cascade-deleted with its submissions.
+    const locked = await tx.$queryRaw<
+      Array<{ id: string }>
+    >`SELECT id FROM modules WHERE id = ${id} FOR UPDATE`;
+    // Another delete of this module finished while this one waited for the row.
+    if (locked.length === 0) throw new Error('Module not found in classroom');
+    // A module that still owns assignments cannot go: deleting it would cascade
+    // into their submissions, grades and regrades. Move or delete them first.
+    const owned = await tx.assignment.count({ where: { module_id: id } });
+    if (owned > 0) throw new Error('Module still has assignments');
+    // ModuleItem rows cascade; the underlying pages/quizzes/slides/forms remain.
+    return tx.module.delete({ where: { id } });
   });
-  if (owned && owned._count.assignments > 0) {
-    throw new Error('Module still has assignments');
-  }
-  // ModuleItem rows cascade; the underlying pages/quizzes/slides/forms remain.
-  return getPrisma().module.delete({ where: { id } });
 };
 
 export const setPublished = async (id: string, isPublished: boolean, classroomId?: string) => {

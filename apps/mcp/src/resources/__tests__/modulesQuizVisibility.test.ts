@@ -96,6 +96,21 @@ describe('modules read — quiz items', () => {
     }
   });
 
+  it('numbers the items it lists 0..n-1, so a dropped quiz item leaves no gap', async () => {
+    // Stored positions run over every row of the module. Shown as stored, the
+    // slide at 2 with nothing at 1 would say a row sits between them.
+    mocks.quizzesVisible.mockResolvedValue(false);
+
+    const payload = (await read('OWNER')) as unknown as {
+      modules: Array<{ items: Array<{ id: string; position: number }> }>;
+    };
+
+    expect(payload.modules[0].items.map(i => [i.id, i.position])).toEqual([
+      ['i-page', 0],
+      ['i-slide', 1],
+    ]);
+  });
+
   it('asks about the authorized classroom once per read', async () => {
     await read('OWNER');
 
