@@ -111,10 +111,16 @@ export interface ListForStudentInput {
   quizzesVisible: boolean;
   /** The classroom's git organization, for repo links. */
   gitOrgLogin?: string | null;
+  /**
+   * The student's submission rows, for a caller that has already read them
+   * with `helper.findAllAssignmentsForStudent` (the dashboard does, for its
+   * team card), so they are not read twice. Read here when absent.
+   */
+  repoSubmissions?: RepoSubmission[];
   now?: Date;
 }
 
-type RepoSubmission = Awaited<
+export type RepoSubmission = Awaited<
   ReturnType<typeof helperService.findAllAssignmentsForStudent>
 >[number];
 
@@ -194,6 +200,7 @@ export const listForStudent = async ({
   userId,
   quizzesVisible,
   gitOrgLogin = null,
+  repoSubmissions: givenSubmissions,
   now = new Date(),
 }: ListForStudentInput): Promise<StudentCourseworkRow[]> => {
   const assignments = (
@@ -205,13 +212,14 @@ export const listForStudent = async ({
   const hasRepos = assignments.some(a => a.type === 'REPO');
 
   const [repoSubmissions, quizzes, attempts, forms, submittedResponses] = await Promise.all([
-    hasRepos
-      ? helperService.findAllAssignmentsForStudent(userId, classroomSlug).catch(error => {
-          // The page degrades to its quiz and form rows rather than failing.
-          console.error('[studentCoursework] repo submissions lookup failed', error);
-          return [] as RepoSubmission[];
-        })
-      : ([] as RepoSubmission[]),
+    givenSubmissions ??
+      (hasRepos
+        ? helperService.findAllAssignmentsForStudent(userId, classroomSlug).catch(error => {
+            // The page degrades to its quiz and form rows rather than failing.
+            console.error('[studentCoursework] repo submissions lookup failed', error);
+            return [] as RepoSubmission[];
+          })
+        : ([] as RepoSubmission[])),
     quizIds.length
       ? getPrisma().quiz.findMany({
           where: { id: { in: quizIds } },

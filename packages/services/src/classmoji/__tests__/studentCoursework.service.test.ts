@@ -201,6 +201,23 @@ describe('listForStudent — which assignments appear', () => {
     expect(rows.map(r => r.assignmentId)).toEqual(['r-1']);
   });
 
+  it('uses the submission rows a caller already read, without reading them again', async () => {
+    mocks.listForClassroom.mockResolvedValue([assignment('r-1', 'REPO')]);
+
+    const rows = await listForStudent({
+      classroomId: 'class-1',
+      classroomSlug: 'cs52',
+      userId: 'stu-1',
+      quizzesVisible: true,
+      gitOrgLogin: 'cs52-org',
+      repoSubmissions: [submission('ra-given', 'r-1')] as never,
+      now: NOW,
+    });
+
+    expect(mocks.findAllAssignmentsForStudent).not.toHaveBeenCalled();
+    expect(rows[0].repo!.gitRepoAssignmentId).toBe('ra-given');
+  });
+
   it('keeps the quiz and form rows when the repo lookup fails', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     mocks.listForClassroom.mockResolvedValue([

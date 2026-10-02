@@ -388,9 +388,9 @@ const STUDENT_STEPS: FeatureStep[] = [
     link: '/dashboard',
     selector: '[data-tour="dashboard-spotlight"]',
     placement: 'bottom',
-    title: 'What’s next',
+    title: 'Up next',
     description:
-      'This spotlight highlights your current repository and what is coming up next so you always know what to work on. It saves you from hunting through every repo to find the next thing due.',
+      'Up next lists what you still owe, soonest due first: repository work, quizzes and forms, each with a button to open it or start it, so you always know what to work on.',
   },
   {
     link: '/dashboard',
