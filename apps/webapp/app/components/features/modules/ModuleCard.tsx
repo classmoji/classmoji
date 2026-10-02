@@ -540,7 +540,8 @@ const ModuleCard = ({
   // edited in the quiz form, with the quiz.
   const editAssignment = (a: AssignmentRowData) => {
     if (a.type === 'QUIZ') {
-      if (a.quiz && quizzesVisible) navigate(quizFormHref(`quizId=${encodeURIComponent(a.quiz.id)}`));
+      if (a.quiz && quizzesVisible)
+        navigate(quizFormHref(`quizId=${encodeURIComponent(a.quiz.id)}`));
       return;
     }
     openAssignmentModal(undefined, a);
@@ -767,6 +768,8 @@ const ModuleCard = ({
                             confirmPublishAssignment(a.id, {
                               needsRepo,
                               assignmentPublished: a.is_published,
+                              kind: a.type,
+                              opensAt: a.release_at,
                             }),
                         }
                       : repoId

@@ -433,3 +433,27 @@ describe('quiz list loader — the viewer’s own attempt', () => {
     ).rejects.toThrow('db down');
   });
 });
+
+describe('the confirm copy', () => {
+  it('says when students get a quiz that opens later, and plainly otherwise', async () => {
+    const { publishQuizCopy } = await import('../quizList');
+    const now = new Date('2026-10-02T12:00:00.000Z');
+
+    expect(publishQuizCopy(new Date('2026-10-09T13:00:00.000Z'), now)).toMatch(
+      /^Students get this quiz on Fri Oct 9 · /
+    );
+    expect(publishQuizCopy(new Date('2026-10-01T13:00:00.000Z'), now)).toBe(
+      'This will make the quiz available to all students.'
+    );
+    expect(publishQuizCopy(null, now)).toBe('This will make the quiz available to all students.');
+  });
+
+  it('says a delete takes the quiz out of its module', async () => {
+    const { deleteQuizCopy } = await import('../quizList');
+
+    expect(deleteQuizCopy('Week 1')).toBe(
+      'This deletes the quiz and every attempt at it, and removes it from Week 1.'
+    );
+    expect(deleteQuizCopy(null)).toBe('This deletes the quiz and every attempt at it.');
+  });
+});

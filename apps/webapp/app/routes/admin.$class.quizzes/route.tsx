@@ -6,7 +6,13 @@ import { IconSend, IconBook, IconCalendar, IconTrash } from '@tabler/icons-react
 import { TableActionButtons, EditableCell, ButtonNew } from '~/components';
 import { ClassmojiService, QuizAccessError } from '@classmoji/services';
 import { canAuthorQuiz, quizAssignmentKeysIn, quizAuthorSettingKeysIn } from '@classmoji/utils';
-import { QUIZ_AUTHOR_ONLY, quizListStatus, type QuizListStatus } from './quizList';
+import {
+  QUIZ_AUTHOR_ONLY,
+  deleteQuizCopy,
+  publishQuizCopy,
+  quizListStatus,
+  type QuizListStatus,
+} from './quizList';
 import { namedAction } from 'remix-utils/named-action';
 import {
   addClassroomAuditLog,
@@ -88,6 +94,8 @@ interface AdminQuiz {
   subject: string;
   difficultyLevel: string;
   dueDate: string | Date | null;
+  /** Opens: students see the quiz from then on (null = when published). */
+  releaseAt: string | Date | null;
   status: QuizListStatus;
   weight: number;
   questionCount: number;
@@ -178,6 +186,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       subject: quiz.subject || '',
       difficultyLevel: quiz.difficulty_level || 'Beginner',
       dueDate: assignment ? assignment.student_deadline : quiz.due_date,
+      releaseAt: assignment?.release_at ?? null,
       status: quizListStatus(assignment, now),
       weight: assignment ? assignment.weight : quiz.weight,
       questionCount: quiz.question_count || 5,
@@ -721,6 +730,8 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
           onView={() => handleViewQuiz(record)}
           onEdit={() => handleEditQuiz(record)}
           onDelete={canAuthor ? () => handleDeleteQuiz(record.id) : undefined}
+          deleteConfirmTitle="Delete quiz"
+          deleteConfirmDescription={deleteQuizCopy(record.moduleTitle)}
         >
           {canAuthor && record.status === 'DRAFT' && (
             <ActionButton
@@ -729,7 +740,7 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
               color="green"
               popconfirmProps={{
                 title: 'Publish Quiz',
-                description: 'This will make the quiz available to all students.',
+                description: publishQuizCopy(record.releaseAt),
                 onConfirm: (e?: React.MouseEvent) => {
                   e?.stopPropagation();
                   handlePublishQuiz(record.id);

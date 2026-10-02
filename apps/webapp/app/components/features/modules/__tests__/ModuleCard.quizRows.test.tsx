@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CourseworkRow } from '../useCourseworkDrag';
 
 const router = vi.hoisted(() => ({ pathname: '/admin/cs52/modules', navigate: vi.fn() }));
+const actions = vi.hoisted(() => ({ confirmPublishAssignment: vi.fn() }));
 
 vi.mock('react-router', () => ({
   useFetcher: () => ({ submit: vi.fn(), state: 'idle', data: undefined }),
@@ -78,7 +79,7 @@ vi.mock('~/components/features/assignments/AssignmentsTable', () => ({
 vi.mock('../AddContentItemModal', () => ({ default: () => null }));
 vi.mock('~/components/features/repositories/useRepositoryActions', () => ({
   useRepositoryActions: () => ({
-    confirmPublishAssignment: vi.fn(),
+    confirmPublishAssignment: actions.confirmPublishAssignment,
     confirmSync: vi.fn(),
     pending: null,
   }),
@@ -103,6 +104,7 @@ type Row = {
   is_published?: boolean;
   quiz?: { id: string; name: string } | null;
   repository?: { id: string; title: string } | null;
+  release_at?: string | null;
 };
 
 const QUIZ_ROW: Row = {
@@ -125,10 +127,7 @@ const REPO_ROW: Row = {
 let container: HTMLDivElement;
 let root: Root;
 
-const render = ({
-  assignments = [QUIZ_ROW, REPO_ROW] as Row[],
-  quizzesVisible = true,
-} = {}) =>
+const render = ({ assignments = [QUIZ_ROW, REPO_ROW] as Row[], quizzesVisible = true } = {}) =>
   act(() => {
     root.render(
       <ModuleCard
@@ -250,5 +249,24 @@ describe('ModuleCard — a quiz assignment row', () => {
     render();
 
     expect(menuKeys(rowOf('Lab 1'))).toEqual(['edit-target', 'remove']);
+  });
+});
+
+describe('ModuleCard — publishing a draft quiz row', () => {
+  it('asks with the quiz’s own confirm: its kind and Opens date go along', () => {
+    const draft = { ...QUIZ_ROW, is_published: false, release_at: '2026-10-09T13:00:00.000Z' };
+    render({ assignments: [draft, REPO_ROW] });
+
+    const publish = [...rowOf('Recursion check').querySelectorAll('button')].find(
+      b => b.textContent === 'Publish'
+    )!;
+    act(() => publish.click());
+
+    expect(actions.confirmPublishAssignment).toHaveBeenCalledWith('asg-quiz', {
+      needsRepo: false,
+      assignmentPublished: false,
+      kind: 'QUIZ',
+      opensAt: '2026-10-09T13:00:00.000Z',
+    });
   });
 });
