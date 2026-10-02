@@ -7,6 +7,12 @@
  * writes survives, so the backfill can run again on every test without
  * touching the rows the applied migration already wrote.
  *
+ * The backfill and its guard read every quiz in the database, so before it
+ * runs, the same transaction takes every QUIZ assignment and QUIZ module item
+ * of any other classroom out of its sight (deleted, and restored by the
+ * rollback). What the test asserts, the guard included, then depends on its
+ * own fixtures alone, never on what else the database holds.
+ *
  * Shapes covered (plan §5): a quiz with an assignment; with one QUIZ item;
  * with items in two modules; an assignment in one module and an item in
  * another; a quiz in no module; a CLOSED quiz; a weight-0 quiz; differing due
@@ -228,6 +234,18 @@ describe.skipIf(!RUN)('quiz_assignments migration backfill (integration)', () =>
     await prisma
       .$transaction(
         async tx => {
+          // Only this file's classrooms are in sight of the backfill (see the
+          // header); the rollback below restores the rest.
+          await tx.$executeRaw`
+            DELETE FROM "module_items" mi
+            USING "quizzes" q
+            WHERE mi."quiz_id" = q."id" AND mi."item_type" = 'QUIZ'
+              AND q."classroom_id" NOT IN (${classroomId}, ${otherClassroomId})`;
+          await tx.$executeRaw`
+            DELETE FROM "assignments" a
+            USING "quizzes" q
+            WHERE a."quiz_id" = q."id" AND a."type" = 'QUIZ'
+              AND q."classroom_id" NOT IN (${classroomId}, ${otherClassroomId})`;
           for (const statement of backfillStatements()) {
             await tx.$executeRawUnsafe(statement);
           }
@@ -478,8 +496,44 @@ describe.skipIf(!RUN)('quiz_assignments migration backfill (integration)', () =>
     const quiz = await makeQuiz('Misplaced');
     await addAssignment(elsewhere.id, quiz.id, { title: 'Misplaced', weight: 5 });
 
-    await expect(runBackfill(async () => null)).rejects.toThrow(/disagree with their quiz/);
+    try {
+      await expect(runBackfill(async () => null)).rejects.toThrow(/disagree with their quiz/);
+    } finally {
+      // Never left behind for the next test, whatever happened above.
+      await prisma.quiz.delete({ where: { id: quiz.id } });
+    }
+  });
 
-    await prisma.quiz.delete({ where: { id: quiz.id } });
+  it('is not tripped by another classroom’s rows, only by its own', async () => {
+    // A QUIZ assignment in a classroom outside this file whose module is in yet
+    // another classroom: the guard would refuse it, but it is out of sight.
+    const outsider = await prisma.gitOrganization.create({
+      data: { provider: 'GITHUB', provider_id: `qam-out-${suite}`, login: `qam-out-${suite}` },
+    });
+    orgIds.push(outsider.id);
+    const outsideClassroom = await prisma.classroom.create({
+      data: {
+        slug: `qam-out-${suite}`,
+        git_org_id: outsider.id,
+        name: `Quiz migration outsider ${suite}`,
+        content_namespace: `qam-out-${suite}`,
+        content_repo: `content-qam-out-${suite}`,
+      },
+    });
+    const foreignModule = await makeModule(9, otherClassroomId);
+    const outsideQuiz = await makeQuiz('Outsider', {}, outsideClassroom.id);
+    await addAssignment(foreignModule.id, outsideQuiz.id, { title: 'Outsider' });
+    const own = await makeQuiz('Own');
+    const ownModule = await makeModule(10);
+    await addItem(ownModule.id, own.id, 0);
+
+    try {
+      const created = await runBackfill(tx =>
+        tx.assignment.findUnique({ where: { quiz_id: own.id } })
+      );
+      expect(created).toMatchObject({ module_id: ownModule.id, title: 'Own' });
+    } finally {
+      await prisma.quiz.delete({ where: { id: outsideQuiz.id } });
+    }
   });
 });
