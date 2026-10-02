@@ -205,6 +205,18 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const isTitleTaken = (error: unknown) => (error as { code?: unknown } | null)?.code === 'P2002';
   const TITLE_TAKEN = 'A repository with this title already exists.';
 
+  /**
+   * A template picked here is checked now, while the instructor is looking,
+   * rather than when students' repositories are created from it. Only a
+   * template that is set: the form itself requires one, and an empty template
+   * is refused at publish.
+   */
+  const unusableTemplate = async (template: unknown): Promise<string | null> => {
+    if (typeof template !== 'string' || !template.trim()) return null;
+    const check = await ClassmojiService.repository.checkTemplate(template, classroom.id);
+    return check.ok ? null : check.error;
+  };
+
   // Linked pages and slides are limited to this classroom's own; other ids are
   // ignored rather than linked.
   const classroomPageIds = async (ids: string[]) => {
@@ -322,6 +334,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         return saveError('Please choose a team tag from this classroom.');
       }
 
+      const templateError = await unusableTemplate(moduleData.template);
+      if (templateError) return saveError(templateError);
+
       try {
         // Form-owned columns only; the classroom always comes from the route.
         const createdModule = await ClassmojiService.repository.create(
@@ -358,10 +373,17 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       const repository = repositoryId
         ? await getPrisma().repository.findFirst({
             where: { id: repositoryId, classroom_id: classroom.id },
-            select: { id: true },
+            select: { id: true, template: true },
           })
         : null;
       if (!repository) return saveError('Repository not found.');
+
+      // Only a changed template: re-saving a description must not hinge on
+      // Github, and publish checks the stored template anyway.
+      if (moduleData.template !== repository.template) {
+        const templateError = await unusableTemplate(moduleData.template);
+        if (templateError) return saveError(templateError);
+      }
 
       // The tag only matters for a GROUP repository: the service ignores it
       // otherwise, and the form always sends the stored tag_id, so a leftover

@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   repositoryUpdate: vi.fn(),
   findDependents: vi.fn(),
   deleteIfUnprovisioned: vi.fn(),
+  checkTemplate: vi.fn(),
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -36,6 +37,7 @@ vi.mock('@classmoji/services', () => ({
       update: (...a: unknown[]) => mocks.repositoryUpdate(...a),
       findDependents: (...a: unknown[]) => mocks.findDependents(...a),
       deleteIfUnprovisioned: (...a: unknown[]) => mocks.deleteIfUnprovisioned(...a),
+      checkTemplate: (...a: unknown[]) => mocks.checkTemplate(...a),
     },
     organizationTag: {
       findByClassroomId: (...a: unknown[]) => mocks.findByClassroomId(...a),
@@ -80,6 +82,7 @@ beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.saveManifest.mockResolvedValue(undefined);
   mocks.auditCreate.mockResolvedValue(undefined);
+  mocks.checkTemplate.mockResolvedValue({ ok: true });
   mocks.moduleFindById.mockResolvedValue({ id: MODULE_ID, classroom_id: 'class-1' });
   mocks.repositoryCreate.mockResolvedValue({
     id: 'repo-new',
@@ -696,6 +699,92 @@ describe('repo_create manifest refresh', () => {
         .project_template_id
     ).toBeNull();
     errorSpy.mockRestore();
+  });
+});
+
+/**
+ * A template provisioning cannot clone used to fail only later, once per
+ * student, inside create_git_repos. repo_publish (and a template written by
+ * repo_create / repo_update) now refuses it up front via repository.checkTemplate.
+ */
+describe('template check', () => {
+  const PUBLISH_ARGS = { classroom: 'dev-org/cs1-w26', repository_id: 'repo-1' };
+  const EMPTY = {
+    ok: false,
+    reason: 'TEMPLATE_EMPTY',
+    error: 'This repository has no template repository. Choose one before publishing.',
+  };
+  const UNREACHABLE = {
+    ok: false,
+    reason: 'TEMPLATE_UNREACHABLE',
+    error: "The template repository org/gone can't be found on Github.",
+  };
+
+  beforeEach(() => {
+    mocks.repositoryFindById.mockResolvedValue(storedRepo({ id: 'repo-1', type: 'INDIVIDUAL' }));
+    mocks.setPublished.mockResolvedValue(undefined);
+    mocks.findGitReposByRepository.mockResolvedValue([]);
+    mocks.findUsersByRole.mockResolvedValue([{ id: 'u-1', login: 'student-a' }]);
+    mocks.createRepositoriesTrigger.mockResolvedValue({ id: 'run-1' });
+    mocks.findDependents.mockResolvedValue(dependents());
+    echoUpdate();
+  });
+
+  it.each([
+    ['an empty', EMPTY],
+    ['an unreachable', UNREACHABLE],
+  ])('repo_publish refuses %s template and publishes nothing', async (_label, check) => {
+    mocks.checkTemplate.mockResolvedValue(check);
+
+    await expect(repoPublishTool.handler(PUBLISH_ARGS, CTX)).rejects.toMatchObject({
+      kind: 'invalid_params',
+      code: check.reason,
+      message: check.error,
+    });
+    expect(mocks.setPublished).not.toHaveBeenCalled();
+    expect(mocks.createRepositoriesTrigger).not.toHaveBeenCalled();
+  });
+
+  it('repo_publish publishes and provisions with a reachable template', async () => {
+    const payload = parse(
+      (await repoPublishTool.handler(PUBLISH_ARGS, CTX)) as { content: Array<{ text: string }> }
+    );
+
+    expect(mocks.checkTemplate).toHaveBeenCalledExactlyOnceWith('org/workshop-template', 'class-1');
+    expect(payload).toMatchObject({ success: true, is_published: true });
+    expect(mocks.setPublished).toHaveBeenCalledWith('repo-1', true, 'class-1');
+    expect(mocks.createRepositoriesTrigger).toHaveBeenCalledTimes(1);
+  });
+
+  it('repo_create refuses an unreachable template and creates nothing', async () => {
+    mocks.checkTemplate.mockResolvedValue(UNREACHABLE);
+
+    await expect(
+      repoCreateTool.handler({ classroom: 'org/cs1-w26', title: 'Lab 1', template: 'gone' }, CTX)
+    ).rejects.toMatchObject({ kind: 'invalid_params', code: 'TEMPLATE_UNREACHABLE' });
+    expect(mocks.repositoryCreate).not.toHaveBeenCalled();
+  });
+
+  it('repo_update refuses a changed template that cannot be reached', async () => {
+    mocks.checkTemplate.mockResolvedValue(UNREACHABLE);
+
+    await expect(
+      repoUpdateTool.handler(
+        { classroom: 'org/cs1-w26', repository_id: REPO_ID, template: 'org/gone' },
+        CTX
+      )
+    ).rejects.toMatchObject({ kind: 'invalid_params', code: 'TEMPLATE_UNREACHABLE' });
+    expect(mocks.repositoryUpdate).not.toHaveBeenCalled();
+  });
+
+  it('repo_update does not check a template it is not changing', async () => {
+    await repoUpdateTool.handler(
+      { classroom: 'org/cs1-w26', repository_id: REPO_ID, description: 'New' },
+      CTX
+    );
+
+    expect(mocks.checkTemplate).not.toHaveBeenCalled();
+    expect(mocks.repositoryUpdate).toHaveBeenCalled();
   });
 });
 

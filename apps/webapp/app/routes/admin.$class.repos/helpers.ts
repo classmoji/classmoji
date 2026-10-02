@@ -40,6 +40,15 @@ export const publishAssignment = async (
       return { success: 'Repository re-published. Use Sync to update repositories.' };
     }
 
+    // Provisioning clones the template once per student in background runs the
+    // instructor never sees, so a missing or unreachable template is refused
+    // here, while the instructor is still looking.
+    const templateCheck = await ClassmojiService.repository.checkTemplate(
+      repository.template,
+      classroomId
+    );
+    if (!templateCheck.ok) return { error: templateCheck.error };
+
     let numReposToCreate = 0;
     let numIssuesToCreate = 0;
     let _numStudents = 0;
@@ -197,6 +206,11 @@ export const publishAssignmentAndRepository = async (
       );
     }
   }
+
+  // The repository could not be published (its template is missing or
+  // unreachable): leave the assignment a draft too, since it would open to
+  // students with nothing to submit through.
+  if (repoResult && 'error' in repoResult) return repoResult;
 
   await ClassmojiService.assignment.publish(assignmentId);
 
