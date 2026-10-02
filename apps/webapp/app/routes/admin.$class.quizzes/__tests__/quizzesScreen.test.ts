@@ -257,6 +257,48 @@ describe('the status column', () => {
   });
 });
 
+describe('a quiz that opens later', () => {
+  it('reads Scheduled with its Opens date, as the form panel does', async () => {
+    mocks.findByClassroom.mockResolvedValue([
+      serviceQuiz({
+        id: 'quiz-later',
+        name: 'Later quiz',
+        assignment: {
+          module: WEEK_1,
+          student_deadline: null,
+          weight: 0,
+          is_published: true,
+          closes_at: null,
+          release_at: new Date('2099-10-09T13:00:00.000Z'),
+        },
+      }),
+    ]);
+
+    const data = await loadAs('OWNER');
+    const html = renderAt('admin', data);
+
+    expect(data.quizzes[0]).toMatchObject({ status: 'SCHEDULED' });
+    expect(html).toMatch(/>Scheduled · Fri Oct 9 · /);
+    expect(html).not.toContain('>Published<');
+  });
+
+  it('reads Published once its Opens date has passed', async () => {
+    const { quizListStatus } = await import('../quizList');
+    const now = new Date('2026-10-02T12:00:00.000Z');
+    const published = { is_published: true, closes_at: null };
+
+    expect(quizListStatus({ ...published, release_at: '2026-10-01T00:00:00Z' }, now)).toBe(
+      'PUBLISHED'
+    );
+    expect(quizListStatus({ ...published, release_at: '2026-10-09T00:00:00Z' }, now)).toBe(
+      'SCHEDULED'
+    );
+    expect(
+      quizListStatus({ is_published: false, closes_at: null, release_at: '2026-10-09' }, now)
+    ).toBe('DRAFT');
+  });
+});
+
 describe('the attempts column', () => {
   it('shows attempts and the average wherever there are any, a quiz in no module included', async () => {
     mocks.findByClassroom.mockResolvedValue([

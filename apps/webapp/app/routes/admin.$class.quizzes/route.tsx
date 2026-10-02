@@ -11,6 +11,7 @@ import {
   deleteQuizCopy,
   publishQuizCopy,
   quizListStatus,
+  scheduledLabel,
   type QuizListStatus,
 } from './quizList';
 import { namedAction } from 'remix-utils/named-action';
@@ -521,6 +522,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
 const STATUS_TAGS: Record<QuizListStatus, { color: string; text: string }> = {
   PUBLISHED: { color: 'green', text: 'Published' },
+  SCHEDULED: { color: 'blue', text: 'Scheduled' },
   DRAFT: { color: 'orange', text: 'Draft' },
   CLOSED: { color: 'default', text: 'Closed' },
   NO_MODULE: { color: 'red', text: 'No module' },
@@ -691,13 +693,14 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
-      width: 110,
+      // Wide enough for "Scheduled" with its date.
+      width: 200,
       sorter: (a: AdminQuiz, b: AdminQuiz) => a.status.localeCompare(b.status),
-      render: (status: QuizListStatus) => {
+      render: (status: QuizListStatus, record: AdminQuiz) => {
         const config = STATUS_TAGS[status] ?? STATUS_TAGS.DRAFT;
         return (
           <Tag color={config.color} className="font-semibold">
-            {config.text}
+            {status === 'SCHEDULED' ? scheduledLabel(record.releaseAt) : config.text}
           </Tag>
         );
       },
