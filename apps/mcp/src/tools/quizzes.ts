@@ -1,10 +1,15 @@
 /**
  * Quiz tools — quiz_create / quiz_update / quiz_publish / quiz_delete.
  *
- * ROUTE-DERIVED TIER: the web actions live in
- * apps/webapp/app/routes/admin.$class.quizzes/route.tsx, gated by
- * assertClassroomAccess with allowedRoles ['OWNER','TEACHER','ASSISTANT'] (S4
- * role parity), so these tools use QUIZ_STAFF.
+ * ROLE TIERS (the rules in @classmoji/utils quizAssignment.ts, shared with the
+ * web quiz actions in apps/webapp/app/routes/admin.$class.quizzes/route.tsx):
+ *   - quiz_create, quiz_publish, quiz_delete: QUIZ_AUTHORS (OWNER, TEACHER,
+ *     = QUIZ_AUTHOR_ROLES). A quiz's module, schedule, weight and publish
+ *     state live on its QUIZ Assignment, which only its authors change.
+ *   - quiz_update: QUIZ_STAFF (OWNER, TEACHER, ASSISTANT). An assistant may
+ *     change a quiz's content and its name; a call carrying any assignment
+ *     field (due_date, weight, status) from a caller who holds neither OWNER
+ *     nor TEACHER is refused before the quiz is read or written.
  *
  * TWO EXTRA GATES run in-handler, because the registry pipeline (scope → rate
  * limit → role → mutation gate) does not know about them:
@@ -18,10 +23,11 @@
  *      quizzes off cannot be mutated through this surface either.
  *
  * Backbone: ClassmojiService.quiz.* — the same functions the web action calls.
- * quiz.publish is the ONLY path that notifies students (it reads the previous
- * status and fires QUIZ_PUBLISHED on a transition INTO published), which is why
- * quiz_update refuses to set PUBLISHED: a status flip through quiz.update would
- * publish the quiz silently.
+ * quiz.publish is the ONLY path that notifies students (it publishes the
+ * quiz's assignment and fires QUIZ_PUBLISHED on the change INTO published, and
+ * reports whether it did), which is why quiz_update refuses to set PUBLISHED:
+ * a status flip through quiz.update would publish the quiz silently. The
+ * service's QuizAssignmentError is mapped by mapQuizAssignmentError.
  *
  * S1: every tool resolves its target through loadQuizInClassroom, comparing
  * quiz.classroom_id against ctx.classroom.classroomId; a missing quiz and
@@ -45,9 +51,11 @@ import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import { assertProTier } from '../authz/proTier.ts';
 import { sanitizedSettings } from '../resources/shape.ts';
 import {
+  holdsRole,
   loadQuizInClassroom,
   loadRepositoryInClassroom,
   ok,
+  QUIZ_AUTHORS,
   QUIZ_STAFF,
   requireClassroomCtx,
   writeAudit,
@@ -66,6 +74,31 @@ async function assertQuizSurfaceEnabled(ctx: ToolContext): Promise<void> {
     throw new ToolError('forbidden', 'Quizzes are disabled for this classroom');
   }
 }
+
+/**
+ * The quiz service's QuizAssignmentError as a tool error: no module chosen, a
+ * value out of range, or an assignment-only path → invalid_params; a module or
+ * quiz that is not there → not_found. The service writes nothing before it
+ * throws, and its message is meant to be shown as is. Matched by name, as
+ * QuizStatusChangeError is below, so it does not depend on class identity.
+ * Anything else is returned unchanged for the caller to rethrow.
+ */
+function mapQuizAssignmentError(error: unknown): unknown {
+  const named = error as { name?: unknown; code?: unknown; message?: unknown } | null;
+  if (named?.name !== 'QuizAssignmentError') return error;
+  const message = typeof named.message === 'string' ? named.message : 'Quiz assignment refused';
+  if (named.code === 'module_not_found' || named.code === 'not_found') {
+    return new ToolError('not_found', message);
+  }
+  return new ToolError('invalid_params', message);
+}
+
+/**
+ * quiz_update arguments that write the quiz's assignment rather than the quiz:
+ * the service routes the old flat due date, weight and status to it. Only a
+ * quiz author (QUIZ_AUTHORS) may send them.
+ */
+const QUIZ_ASSIGNMENT_ARGS = ['due_date', 'status', 'weight'] as const;
 
 /**
  * Said alongside a successful publish while every document linked as the
@@ -102,6 +135,14 @@ interface QuizRow {
   include_code_context?: boolean;
   course_search_enabled?: boolean;
   excluded_paths?: string[];
+}
+
+/** What quiz.publish returns: the quiz row plus what the publish did. */
+interface QuizPublishRow extends QuizRow {
+  /** Published before this call. */
+  wasPublished?: boolean;
+  /** Whether QUIZ_PUBLISHED went out to the class. */
+  notified?: boolean;
 }
 
 /**
@@ -217,11 +258,11 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
     'repository for the linked repo while questioning them; excluded_paths lists files it ' +
     'must never see there (e.g. tests/**). Link source material (the pages ' +
     'and decks the questions come from) with resource_link_add target_type quiz. ' +
-    'Teaching-team only (owner, teacher or assistant); requires a Pro ' +
+    'Owner or teacher only; requires a Pro ' +
     'subscription and quizzes enabled. ALWAYS created as a DRAFT (students see nothing) — use ' +
     'quiz_publish to go live and notify students.',
   scope: 'write',
-  roles: QUIZ_STAFF,
+  roles: QUIZ_AUTHORS,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     name: z.string().min(1).max(200).describe('Quiz name'),
@@ -273,28 +314,39 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
     // classroomId is ALWAYS the authorized classroom, never request input, and
     // status is pinned to DRAFT — publishing is quiz_publish's job because only
     // that path notifies students.
-    const created = (await ClassmojiService.quiz.create({
-      classroomId: classroom.classroomId,
-      name: args.name,
-      rubricPrompt: args.rubric_prompt,
-      status: 'DRAFT',
-      ...(repositoryId !== undefined ? { repositoryId } : {}),
-      ...(args.system_prompt !== undefined ? { systemPrompt: args.system_prompt } : {}),
-      ...(args.due_date !== undefined ? { dueDate: args.due_date } : {}),
-      ...(args.weight !== undefined ? { weight: args.weight } : {}),
-      ...(args.question_count !== undefined ? { questionCount: args.question_count } : {}),
-      ...(args.difficulty_level !== undefined ? { difficultyLevel: args.difficulty_level } : {}),
-      ...(args.subject !== undefined ? { subject: args.subject } : {}),
-      ...(args.include_code_context !== undefined
-        ? { includeCodeContext: args.include_code_context }
-        : {}),
-      ...(args.course_search_enabled !== undefined
-        ? { courseSearchEnabled: args.course_search_enabled }
-        : {}),
-      ...(excludedPaths !== undefined ? { excludedPaths } : {}),
-      ...(args.grading_strategy !== undefined ? { gradingStrategy: args.grading_strategy } : {}),
-      ...(args.max_attempts !== undefined ? { maxAttempts: args.max_attempts } : {}),
-    })) as QuizRow;
+    //
+    // The service requires the quiz's module (`assignment: { moduleId }`) and
+    // refuses without one, writing nothing: QuizAssignmentError
+    // 'module_required', "Choose a module for this quiz", answered here as
+    // invalid_params. This tool takes no module_id yet, so until that
+    // parameter is added every call ends in that refusal.
+    let created: QuizRow;
+    try {
+      created = (await ClassmojiService.quiz.create({
+        classroomId: classroom.classroomId,
+        name: args.name,
+        rubricPrompt: args.rubric_prompt,
+        status: 'DRAFT',
+        ...(repositoryId !== undefined ? { repositoryId } : {}),
+        ...(args.system_prompt !== undefined ? { systemPrompt: args.system_prompt } : {}),
+        ...(args.due_date !== undefined ? { dueDate: args.due_date } : {}),
+        ...(args.weight !== undefined ? { weight: args.weight } : {}),
+        ...(args.question_count !== undefined ? { questionCount: args.question_count } : {}),
+        ...(args.difficulty_level !== undefined ? { difficultyLevel: args.difficulty_level } : {}),
+        ...(args.subject !== undefined ? { subject: args.subject } : {}),
+        ...(args.include_code_context !== undefined
+          ? { includeCodeContext: args.include_code_context }
+          : {}),
+        ...(args.course_search_enabled !== undefined
+          ? { courseSearchEnabled: args.course_search_enabled }
+          : {}),
+        ...(excludedPaths !== undefined ? { excludedPaths } : {}),
+        ...(args.grading_strategy !== undefined ? { gradingStrategy: args.grading_strategy } : {}),
+        ...(args.max_attempts !== undefined ? { maxAttempts: args.max_attempts } : {}),
+      })) as QuizRow;
+    } catch (error) {
+      throw mapQuizAssignmentError(error);
+    }
 
     await writeAudit(ctx, {
       resource_type: 'QUIZ',
@@ -358,7 +410,8 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
   annotations: { destructive: false, openWorld: false },
   title: 'Update a quiz',
   description:
-    'Updates a quiz’s settings and prompts. Teaching-team only (owner, teacher or assistant); requires a Pro subscription ' +
+    'Updates a quiz’s settings and prompts. Owner, teacher or assistant; an assistant may change ' +
+    'the content and the name only, not due_date, weight or status. Requires a Pro subscription ' +
     'and quizzes enabled. Provide at least one field. status accepts only DRAFT (unpublish, ' +
     'hiding it from students again) or CLOSED (stop new attempts); publishing must go through ' +
     'quiz_publish, because only that path notifies students. Set repository_id to null to unlink ' +
@@ -445,6 +498,22 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
       throw new ToolError('invalid_params', 'Provide at least one field to update');
     }
 
+    // The due date, weight and status live on the quiz's assignment, which
+    // only a quiz author changes; an assistant edits the content and the name.
+    // A call carrying any of them is refused whole, before the quiz is read.
+    // holdsRole, not ctx.classroom.role: a multi-role author whose gate
+    // resolved as ASSISTANT is still an author.
+    if (
+      QUIZ_ASSIGNMENT_ARGS.some(field => args[field] !== undefined) &&
+      !(await holdsRole(ctx, QUIZ_AUTHORS))
+    ) {
+      throw new ToolError(
+        'forbidden',
+        'Only the class owner or a teacher can change a quiz’s due date, weight or status',
+        'INSUFFICIENT_ROLE'
+      );
+    }
+
     // S1 before any write: the quiz must belong to the authorized classroom.
     const quiz = await loadQuizInClassroom(args.quiz_id, ctx);
 
@@ -465,7 +534,7 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
       if ((error as { name?: unknown } | null)?.name === 'QuizStatusChangeError') {
         throw new ToolError('invalid_params', (error as Error).message);
       }
-      throw error;
+      throw mapQuizAssignmentError(error);
     }
 
     await writeAudit(ctx, {
@@ -491,7 +560,7 @@ export const quizPublishTool: ToolDefinition<QuizPublishArgs> = {
   annotations: { destructive: false, idempotent: true, openWorld: false },
   title: 'Publish a quiz',
   description:
-    'Publishes a quiz so students can take it. Teaching-team only (owner, teacher or assistant); requires a Pro subscription ' +
+    'Publishes a quiz so students can take it. Owner or teacher only; requires a Pro subscription ' +
     'and quizzes enabled. This is the ONLY path that notifies students — they get a "Quiz ' +
     'published" notification, but only on the transition INTO published, so republishing an ' +
     'already-published quiz notifies nobody. The response reports whether students were ' +
@@ -499,7 +568,7 @@ export const quizPublishTool: ToolDefinition<QuizPublishArgs> = {
     'students cannot start the quiz until one is published. Use quiz_update with status DRAFT ' +
     'to unpublish.',
   scope: 'write',
-  roles: QUIZ_STAFF,
+  roles: QUIZ_AUTHORS,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     quiz_id: z.string().uuid().describe('Quiz id'),
@@ -508,12 +577,19 @@ export const quizPublishTool: ToolDefinition<QuizPublishArgs> = {
     await assertQuizSurfaceEnabled(ctx);
     const quiz = await loadQuizInClassroom(args.quiz_id, ctx);
 
-    // Read the pre-publish status from the record we already loaded: the
-    // service notifies only on a transition INTO published, and after the call
-    // the row says PUBLISHED either way.
-    const notified = quiz.status !== 'PUBLISHED';
-
-    const published = (await ClassmojiService.quiz.publish(quiz.id)) as QuizRow;
+    let published: QuizPublishRow;
+    try {
+      published = (await ClassmojiService.quiz.publish(quiz.id)) as QuizPublishRow;
+    } catch (error) {
+      // A quiz in no module has no assignment to publish ('module_required').
+      throw mapQuizAssignmentError(error);
+    }
+    // The service decides who is told and says so: the class hears once, on
+    // the change into published, and not where quizzes are hidden or before
+    // the quiz opens. `wasPublished` tells a republish apart from a publish
+    // that notified nobody.
+    const notified = published.notified === true;
+    const wasPublished = published.wasPublished === true;
     // Publishing does not change the material, so the row loaded above says;
     // quiz.publish returns the bare row without it.
     const warning = allSourceMaterialDraft(quiz) ? SOURCE_MATERIAL_DRAFT_WARNING : null;
@@ -538,7 +614,9 @@ export const quizPublishTool: ToolDefinition<QuizPublishArgs> = {
       message:
         (notified
           ? 'Quiz published — students have been notified.'
-          : 'Quiz was already published — nothing changed and no notifications were sent.') +
+          : wasPublished
+            ? 'Quiz was already published — nothing changed and no notifications were sent.'
+            : 'Quiz published — no notifications were sent.') +
         (warning ? ` Warning: ${warning}` : ''),
     });
   },
@@ -556,13 +634,13 @@ export const quizDeleteTool: ToolDefinition<QuizDeleteArgs> = {
   annotations: { destructive: true, openWorld: false },
   title: 'Delete a quiz',
   description:
-    'Permanently deletes a quiz. Teaching-team only (owner, teacher or assistant), destructive, requires confirm:true; ' +
+    'Permanently deletes a quiz. Owner or teacher only, destructive, requires confirm:true; ' +
     'requires a Pro subscription and quizzes enabled. THIS CANNOT BE UNDONE and cascades: every ' +
     'student attempt at this quiz — transcripts, scores, and focus metrics — is permanently ' +
     'deleted with it, and the quiz is removed from any curriculum module that lists it. To take ' +
     'a quiz out of circulation without losing student work, use quiz_update with status CLOSED.',
   scope: 'write',
-  roles: QUIZ_STAFF,
+  roles: QUIZ_AUTHORS,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     quiz_id: z.string().uuid().describe('Quiz id'),

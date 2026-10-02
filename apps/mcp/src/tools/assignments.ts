@@ -3,10 +3,12 @@
  * release_at / module_id (the move to another module).
  *
  * Route-derived per-field tiers (plan §4.2, verified in the tree):
- *   - general edits (weight, …):   OWNER only (admin.$class.assignments
- *                                  `update` → requireClassroomAdmin →
+ *   - general edits (weight, …):   OWNER only, but see QUIZ below
+ *                                  (admin.$class.assignments `update` →
+ *                                  requireClassroomAdmin →
  *                                  assignment.updateInClassroom)
- *   - grader_deadline, release_at: OWNER only, same route — the only web
+ *   - grader_deadline, release_at: OWNER only (release_at: see QUIZ below),
+ *                                  same route — the only web
  *                                  route that edits either field on an existing
  *                                  assignment (classroom import copies/strips
  *                                  them at create time). AssignmentFormModal
@@ -19,12 +21,17 @@
  *                                  updateGradeRelease → ['OWNER','TEACHER'])
  *   - student_deadline move:       OWNER + TEACHER (admin.$class.calendar
  *                                  update_deadline → isAdmin = OWNER/TEACHER)
- *   - module_id (move):            OWNER only (admin.$class.modules
+ *   - weight, release_at on a QUIZ OWNER + TEACHER: teachers author quizzes,
+ *     assignment:                  so a quiz's schedule and weight are theirs
+ *                                  too (TEACHER_ASSIGNMENT_FIELDS in
+ *                                  @classmoji/utils quizAssignment.ts)
+ *   - module_id (move):            OWNER only on every type (admin.$class.modules
  *                                  `moveAssignment` → requireClassroomAdmin →
  *                                  assignment.moveToModule, the drag between
  *                                  module cards)
  * The tool declares ['OWNER','TEACHER'] and enforces the OWNER-only fields
- * in-handler.
+ * in-handler, per assignment type (ownerOnlyAssignmentFields), so the
+ * assignment is loaded before the role check.
  *
  * Any assignment type can be updated (REPO, QUIZ, FORM), so the target is
  * resolved through its module (loadCourseworkAssignmentInClassroom), not its
@@ -58,6 +65,7 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
+import { ownerOnlyAssignmentFields } from '@classmoji/utils';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
@@ -111,9 +119,6 @@ function translateMoveError(error: unknown): never {
   throw error;
 }
 
-/** Fields a TEACHER (non-OWNER) may update, per the web routes above. */
-const TEACHER_ALLOWED_FIELDS = new Set(['grades_released', 'student_deadline']);
-
 export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
   name: 'assignment_update',
   annotations: { destructive: false },
@@ -121,7 +126,8 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
   description:
     'Updates an assignment (a due-dated, gradeable unit of a module): student_deadline, ' +
     'weight, grades_released, grader_deadline, release_at, and/or module_id. Owners can update ' +
-    'all fields; teachers only grades_released and student_deadline. Releasing grades notifies ' +
+    'all fields; teachers only grades_released and student_deadline, and on a quiz assignment ' +
+    'student_deadline, weight and release_at. Releasing grades notifies ' +
     'graded students; moving the student deadline notifies affected students. release_at is ' +
     'when an unpublished assignment auto-releases to students (checked nightly). Pass null ' +
     'to clear grader_deadline or release_at; a cleared release_at never auto-releases.\n' +
@@ -141,7 +147,8 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       .datetime({ offset: true })
       .optional()
       .describe('New student deadline (ISO 8601, e.g. 2026-07-20T23:59:00-04:00)'),
-    weight: z.number().positive().max(10000).optional().describe('Grading weight'),
+    // 0 is a real weight: a practice quiz or an ungraded check-in.
+    weight: z.number().nonnegative().max(10000).optional().describe('Grading weight'),
     grades_released: z
       .boolean()
       .optional()
@@ -159,7 +166,9 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       .datetime({ offset: true })
       .nullable()
       .optional()
-      .describe('Auto-release date (ISO 8601); null clears it. Owner only'),
+      .describe(
+        'Auto-release date (ISO 8601); null clears it. Owner only, or a teacher on a quiz assignment'
+      ),
     module_id: z
       .string()
       .uuid()
@@ -203,30 +212,27 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       );
     }
 
-    // Per-field tier: OWNER-only fields need an OWNER membership (checked via
-    // holdsRole so a multi-role OWNER whose gate resolved as TEACHER passes).
-    const ownerOnlyFields = requested.filter(f => !TEACHER_ALLOWED_FIELDS.has(f));
-    if (ownerOnlyFields.length > 0 && !(await holdsRole(ctx, ['OWNER']))) {
-      throw new ToolError(
-        'forbidden',
-        `Only the classroom owner can update: ${ownerOnlyFields.join(', ')}`,
-        'INSUFFICIENT_ROLE'
-      );
-    }
-
+    // The per-field tier depends on the assignment's type, so the row is
+    // loaded (S1) first; still nothing is written before the check.
     const classroom = requireClassroomCtx(ctx);
     const assignment = await loadCourseworkAssignmentInClassroom(args.assignment_id, ctx);
 
-    // The web's teacher-tier grades_released route resolves through the
-    // repository, so it never reaches a quiz or form assignment.
+    // Per-field tier: OWNER-only fields for this type need an OWNER membership
+    // (checked via holdsRole so a multi-role OWNER whose gate resolved as
+    // TEACHER passes). The web's teacher-tier grades_released route resolves
+    // through the repository, so it never reaches a quiz or form assignment:
+    // grades_released there is OWNER only too, and gets its own message.
+    const ownerOnlyFields = ownerOnlyAssignmentFields(assignment.type, requested);
+    const gradesReleasedOffRepo = args.grades_released !== undefined && assignment.type !== 'REPO';
     if (
-      args.grades_released !== undefined &&
-      assignment.type !== 'REPO' &&
+      (ownerOnlyFields.length > 0 || gradesReleasedOffRepo) &&
       !(await holdsRole(ctx, ['OWNER']))
     ) {
       throw new ToolError(
         'forbidden',
-        'Only the classroom owner can update grades_released on a quiz or form assignment',
+        gradesReleasedOffRepo
+          ? 'Only the classroom owner can update grades_released on a quiz or form assignment'
+          : `Only the classroom owner can update: ${ownerOnlyFields.join(', ')}`,
         'INSUFFICIENT_ROLE'
       );
     }
@@ -354,7 +360,8 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
       .optional()
       .describe('REPO (default): a push submits. ISSUE: closing a GitHub issue submits.'),
     title: z.string().min(1).max(200).describe('Assignment title (unique per repository)'),
-    weight: z.number().positive().max(10000).optional().describe('Grading weight (default 100)'),
+    // 0 is a real weight: an ungraded check-in.
+    weight: z.number().nonnegative().max(10000).optional().describe('Grading weight (default 100)'),
     is_extra_credit: z
       .boolean()
       .optional()

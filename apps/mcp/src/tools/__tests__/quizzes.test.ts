@@ -10,6 +10,9 @@
  *   - The notification invariant: publishing is quiz.publish's job only, so
  *     the update schema must refuse PUBLISHED (and ARCHIVED, which is not even
  *     in the Prisma enum).
+ *   - Role tiers: create/publish/delete are for quiz authors (OWNER, TEACHER);
+ *     an assistant reaches quiz_update for content and the name, and a call of
+ *     theirs carrying an assignment field is refused before any read or write.
  * Only the service boundary is mocked — these tools fire no external effects.
  *
  * Schema-level rules (clamps, the status enum, confirm:true) are asserted
@@ -19,6 +22,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
+import { QUIZ_AUTHOR_ROLES, QUIZ_EDITOR_ROLES } from '@classmoji/utils';
 import { MAX_STUDENT_TURNS } from '@classmoji/utils/quiz-agent/limits';
 import type { ToolContext } from '../../mcp/registry.ts';
 
@@ -29,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   quizDelete: vi.fn(),
   quizFindById: vi.fn(),
   repositoryFindById: vi.fn(),
+  membershipFindByClassroomAndUser: vi.fn(),
   assertProTier: vi.fn(),
   auditCreate: vi.fn(),
 }));
@@ -55,9 +60,17 @@ vi.mock('@classmoji/services', () => ({
       findById: (...a: unknown[]) => mocks.quizFindById(...a),
     },
     repository: { findById: (...a: unknown[]) => mocks.repositoryFindById(...a) },
+    classroomMembership: {
+      findByClassroomAndUser: (...a: unknown[]) => mocks.membershipFindByClassroomAndUser(...a),
+    },
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
   },
 }));
+
+/** The service's QuizAssignmentError, by name and code, as the tools match it. */
+function quizAssignmentError(code: string, message: string) {
+  return Object.assign(new Error(message), { name: 'QuizAssignmentError', code, status: 400 });
+}
 
 const { quizCreateTool, quizUpdateTool, quizPublishTool, quizDeleteTool } =
   await import('../quizzes.ts');
@@ -78,6 +91,24 @@ function ctxWithSettings(settings: Record<string, unknown>): ToolContext {
 }
 
 const CTX = ctxWithSettings({ quizzes_enabled: true });
+
+/** CTX with the registry's gate resolved as `role` for another user. */
+function ctxAs(role: 'TEACHER' | 'ASSISTANT', userId: string): ToolContext {
+  return {
+    ...CTX,
+    viewer: { userId, clientId: 'c', scopes: new Set(['read', 'write']) },
+    classroom: {
+      ...(CTX.classroom as object),
+      role,
+      membership: { id: `m-${userId}`, role },
+    },
+  } as unknown as ToolContext;
+}
+
+// holdsRole then asks classroomMembership whether the caller ALSO holds an
+// author role; the tests answer per case (null = assistant only).
+const ASSISTANT_CTX = ctxAs('ASSISTANT', 'ta-1');
+const TEACHER_CTX = ctxAs('TEACHER', 'teacher-1');
 
 const QUIZ_ROW = {
   id: 'quiz-1',
@@ -101,6 +132,33 @@ beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.auditCreate.mockResolvedValue(undefined);
   mocks.assertProTier.mockResolvedValue(undefined);
+  mocks.membershipFindByClassroomAndUser.mockResolvedValue(null);
+});
+
+describe('role tiers', () => {
+  it('create, publish and delete are for quiz authors: owner and teacher', () => {
+    for (const tool of [quizCreateTool, quizPublishTool, quizDeleteTool]) {
+      expect(tool.roles, tool.name).toEqual(['OWNER', 'TEACHER']);
+      // The same set the web actions and services read.
+      expect(tool.roles, tool.name).toEqual([...QUIZ_AUTHOR_ROLES]);
+    }
+  });
+
+  it('update stays open to the whole teaching team', () => {
+    expect(quizUpdateTool.roles).toEqual(['OWNER', 'TEACHER', 'ASSISTANT']);
+    expect(quizUpdateTool.roles).toEqual([...QUIZ_EDITOR_ROLES]);
+  });
+
+  it('says who may call each tool in its description', () => {
+    for (const tool of [quizCreateTool, quizPublishTool, quizDeleteTool]) {
+      expect(tool.description, tool.name).toContain('Owner or teacher only');
+      expect(tool.description, tool.name).not.toMatch(/assistant/i);
+    }
+    expect(quizUpdateTool.description).toContain(
+      'an assistant may change the content and the name only, not due_date, weight or status'
+    );
+    expect(new TextEncoder().encode(quizDeleteTool.description).length).toBeLessThan(1500);
+  });
 });
 
 describe('quiz_create', () => {
@@ -160,6 +218,38 @@ describe('quiz_create', () => {
     ).rejects.toMatchObject({ kind: 'not_found' });
     expect(mocks.quizCreate).not.toHaveBeenCalled();
     expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('answers the service’s module refusal as invalid_params, unaudited', async () => {
+    // The service requires a module; this tool does not take one yet.
+    mocks.quizCreate.mockRejectedValue(
+      quizAssignmentError('module_required', 'Choose a module for this quiz')
+    );
+
+    await expect(quizCreateTool.handler(ARGS, CTX)).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: 'Choose a module for this quiz',
+    });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['invalid_value', 'invalid_params'],
+    ['quiz_assignment', 'invalid_params'],
+    ['module_not_found', 'not_found'],
+    ['not_found', 'not_found'],
+  ])('maps QuizAssignmentError code %s to %s', async (code, kind) => {
+    mocks.quizCreate.mockRejectedValue(quizAssignmentError(code, `refused: ${code}`));
+    await expect(quizCreateTool.handler(ARGS, CTX)).rejects.toMatchObject({
+      kind,
+      message: `refused: ${code}`,
+    });
+  });
+
+  it('does not dress up an unrelated failure', async () => {
+    mocks.quizCreate.mockRejectedValue(new Error('connection lost'));
+    await expect(quizCreateTool.handler(ARGS, CTX)).rejects.toThrow('connection lost');
+    await expect(quizCreateTool.handler(ARGS, CTX)).rejects.not.toHaveProperty('kind');
   });
 
   it('denies a classroom without a Pro subscription before mutating', async () => {
@@ -529,22 +619,119 @@ describe('quiz_update', () => {
     await expect(quizUpdateTool.handler(ARGS, CTX)).rejects.toMatchObject({ kind: 'forbidden' });
     expect(mocks.quizFindById).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['module_required', 'invalid_params'],
+    ['module_not_found', 'not_found'],
+  ])('maps the service’s QuizAssignmentError %s to %s, unaudited', async (code, kind) => {
+    mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
+    mocks.quizUpdate.mockRejectedValue(quizAssignmentError(code, `refused: ${code}`));
+
+    await expect(
+      quizUpdateTool.handler({ ...ARGS, due_date: '2026-07-20T23:59:00-04:00' }, CTX)
+    ).rejects.toMatchObject({ kind, message: `refused: ${code}` });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('quiz_update: an assistant edits content, not the assignment', () => {
+  const BASE = { classroom: 'org/w26', quiz_id: 'quiz-1' };
+
+  beforeEach(() => {
+    mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
+    mocks.quizUpdate.mockResolvedValue(QUIZ_ROW);
+  });
+
+  it.each([
+    ['due_date', '2026-07-20T23:59:00-04:00'],
+    ['due_date', null],
+    ['status', 'CLOSED'],
+    ['status', 'DRAFT'],
+    ['weight', 20],
+    ['weight', 0],
+  ] as const)('refuses %s (%s) before reading or writing anything', async (field, value) => {
+    const error = await quizUpdateTool
+      .handler({ ...BASE, [field]: value }, ASSISTANT_CTX)
+      .catch((e: unknown) => e);
+
+    expect(error).toMatchObject({
+      kind: 'forbidden',
+      code: 'INSUFFICIENT_ROLE',
+      message: 'Only the class owner or a teacher can change a quiz’s due date, weight or status',
+    });
+    // Asked whether the assistant also holds an author role, and nothing else.
+    expect(mocks.membershipFindByClassroomAndUser).toHaveBeenCalledWith('class-1', 'ta-1', [
+      'OWNER',
+      'TEACHER',
+    ]);
+    expect(mocks.quizFindById).not.toHaveBeenCalled();
+    expect(mocks.quizUpdate).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a mixed call whole, without applying the content field', async () => {
+    await expect(
+      quizUpdateTool.handler({ ...BASE, name: 'Renamed', weight: 20 }, ASSISTANT_CTX)
+    ).rejects.toMatchObject({ kind: 'forbidden' });
+    expect(mocks.quizUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['name', 'Renamed', { name: 'Renamed' }],
+    ['rubric_prompt', 'Ask about loops', { rubricPrompt: 'Ask about loops' }],
+    ['excluded_paths', ['tests/**'], { excludedPaths: ['tests/**'] }],
+  ] as const)('lets %s through for an assistant', async (field, value, forwarded) => {
+    const payload = parse(await quizUpdateTool.handler({ ...BASE, [field]: value }, ASSISTANT_CTX));
+
+    expect(payload.success).toBe(true);
+    expect(mocks.quizUpdate).toHaveBeenCalledWith('quiz-1', forwarded);
+    // A content-only edit never needs the role lookup.
+    expect(mocks.membershipFindByClassroomAndUser).not.toHaveBeenCalled();
+  });
+
+  it('lets a teacher change the due date', async () => {
+    await quizUpdateTool.handler({ ...BASE, due_date: '2026-07-20T23:59:00-04:00' }, TEACHER_CTX);
+    expect(mocks.quizUpdate).toHaveBeenCalledWith('quiz-1', {
+      dueDate: '2026-07-20T23:59:00-04:00',
+    });
+    // TEACHER is an author on its own; no membership lookup needed.
+    expect(mocks.membershipFindByClassroomAndUser).not.toHaveBeenCalled();
+  });
+
+  it('lets an assistant who also holds TEACHER change the weight', async () => {
+    mocks.membershipFindByClassroomAndUser.mockResolvedValue({ id: 'm-9', role: 'TEACHER' });
+    await quizUpdateTool.handler({ ...BASE, weight: 20 }, ASSISTANT_CTX);
+    expect(mocks.quizUpdate).toHaveBeenCalledWith('quiz-1', { weight: 20 });
+  });
 });
 
 describe('quiz_publish', () => {
   const ARGS = { classroom: 'org/w26', quiz_id: 'quiz-1' };
 
+  /** What quiz.publish returns: the row plus what the publish did. */
+  const publishResult = (wasPublished: boolean, notified: boolean) => ({
+    ...QUIZ_ROW,
+    status: 'PUBLISHED',
+    wasPublished,
+    notified,
+    sourceMaterialAllDraft: false,
+  });
+
   it('publishes a draft and reports that students were notified', async () => {
     mocks.quizFindById.mockResolvedValue(QUIZ_ROW); // status DRAFT
-    mocks.quizPublish.mockResolvedValue({ ...QUIZ_ROW, status: 'PUBLISHED' });
+    mocks.quizPublish.mockResolvedValue(publishResult(false, true));
 
     const payload = parse(await quizPublishTool.handler(ARGS, CTX));
     expect(payload).toMatchObject({
       success: true,
       previous_status: 'DRAFT',
       students_notified: true,
+      message: 'Quiz published — students have been notified.',
     });
     expect(mocks.quizPublish).toHaveBeenCalledWith('quiz-1');
+    // The bookkeeping fields are not part of the quiz summary.
+    expect(payload.quiz).not.toHaveProperty('notified');
+    expect(payload.quiz).not.toHaveProperty('wasPublished');
 
     const audit = mocks.auditCreate.mock.calls[0][0] as {
       action: string;
@@ -556,12 +743,54 @@ describe('quiz_publish', () => {
 
   it('is idempotent: republishing reports that nobody was notified', async () => {
     mocks.quizFindById.mockResolvedValue({ ...QUIZ_ROW, status: 'PUBLISHED' });
-    mocks.quizPublish.mockResolvedValue({ ...QUIZ_ROW, status: 'PUBLISHED' });
+    mocks.quizPublish.mockResolvedValue(publishResult(true, false));
 
     const payload = parse(await quizPublishTool.handler(ARGS, CTX));
     expect(payload.students_notified).toBe(false);
     expect(payload.previous_status).toBe('PUBLISHED');
+    expect(payload.message).toBe(
+      'Quiz was already published — nothing changed and no notifications were sent.'
+    );
     expect(quizPublishTool.annotations?.idempotent).toBe(true);
+  });
+
+  it('takes students_notified from the service, not from the previous status', async () => {
+    // A draft published before it opens: the service tells nobody yet.
+    mocks.quizFindById.mockResolvedValue(QUIZ_ROW); // status DRAFT
+    mocks.quizPublish.mockResolvedValue(publishResult(false, false));
+
+    const payload = parse(await quizPublishTool.handler(ARGS, CTX));
+    expect(payload).toMatchObject({
+      success: true,
+      previous_status: 'DRAFT',
+      students_notified: false,
+      message: 'Quiz published — no notifications were sent.',
+    });
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: { students_notified: boolean } };
+    expect(audit.data.students_notified).toBe(false);
+  });
+
+  it('answers a quiz in no module as invalid_params, unaudited', async () => {
+    mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
+    mocks.quizPublish.mockRejectedValue(
+      quizAssignmentError('module_required', 'Choose a module for this quiz before publishing it')
+    );
+
+    await expect(quizPublishTool.handler(ARGS, CTX)).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: 'Choose a module for this quiz before publishing it',
+    });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('answers a quiz gone since it was loaded as not_found', async () => {
+    mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
+    mocks.quizPublish.mockRejectedValue(quizAssignmentError('not_found', 'Quiz not found'));
+
+    await expect(quizPublishTool.handler(ARGS, CTX)).rejects.toMatchObject({
+      kind: 'not_found',
+    });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   describe('source material all draft', () => {
@@ -579,7 +808,7 @@ describe('quiz_publish', () => {
     // row, so the warning must be decided from the findById read.
     async function publishWith(source_material: unknown[]) {
       mocks.quizFindById.mockResolvedValue({ ...QUIZ_ROW, source_material });
-      mocks.quizPublish.mockResolvedValue({ ...QUIZ_ROW, status: 'PUBLISHED' });
+      mocks.quizPublish.mockResolvedValue(publishResult(false, true));
       return parse(await quizPublishTool.handler(ARGS, CTX));
     }
 
