@@ -19,7 +19,6 @@ import { useNavigate, useLocation, useFetcher, useRouteLoaderData } from 'react-
 import { Tour, Button } from 'antd';
 import type { TourProps } from 'antd';
 import useStore from '~/store';
-import type { TourPhase } from '~/types';
 
 type Placement = NonNullable<TourProps['steps']>[number]['placement'];
 
@@ -572,20 +571,9 @@ export function InClassroomTour() {
   // to the classes screen — the example course is only for the guided tour.
   useEffect(() => {
     if (tourPhase !== 'idle' || !classroom?.is_example) return;
-    let saved: { phase?: TourPhase; step?: number } | null = null;
-    try {
-      saved = JSON.parse(sessionStorage.getItem('cm-tour') || 'null');
-    } catch {
-      saved = null;
-    }
-    // Only the in-classroom phases belong here; a saved 'landing' (or nothing)
-    // means no in-classroom tour to resume, so bounce out instead.
-    if (saved?.phase === 'instructor' || saved?.phase === 'student') {
-      setTourPhase(saved.phase);
-      setTourStep(typeof saved.step === 'number' ? saved.step : 0);
-    } else {
-      navigate('/select-organization', { replace: true });
-    }
+    // The tour is switched off, so a half-finished run is never resumed: the
+    // example course has nothing to show outside it, so bounce out.
+    navigate('/select-organization', { replace: true });
   }, [tourPhase, classroom, navigate, setTourPhase, setTourStep]);
 
   // Drive navigation: show each feature page (and keep in-page steps on it).

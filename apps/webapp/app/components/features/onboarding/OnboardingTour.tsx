@@ -26,7 +26,6 @@ import type { TourProps } from 'antd';
 import { useUser } from '~/hooks';
 import useStore from '~/store';
 import { useSurveyPending } from '~/components/features/survey';
-import type { TourPhase } from '~/types';
 import { browserTimeZone } from '~/utils/browserTimeZone';
 
 /** Target a landing `data-onboarding` element; null -> antd renders centered. */
@@ -178,19 +177,13 @@ export function OnboardingTour() {
     if (surveyPending) return;
     initRef.current = true;
 
-    let saved: { phase?: TourPhase; step?: number } | null = null;
+    // The tour is switched off: it neither starts on first sign-in nor resumes
+    // a half-finished run from an earlier session, whose saved step is dropped.
     try {
-      saved = JSON.parse(sessionStorage.getItem('cm-tour') || 'null');
+      sessionStorage.removeItem('cm-tour');
     } catch {
-      saved = null;
+      // Storage unavailable; nothing to drop.
     }
-    if (saved?.phase === 'landing') {
-      setTourPhase('landing');
-      setTourStep(typeof saved.step === 'number' ? saved.step : 0);
-      return;
-    }
-
-    // The first-sign-in auto-start is switched off for now.
   }, [
     user,
     onLanding,
