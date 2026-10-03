@@ -2,6 +2,7 @@ import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { titleToIdentifier, RESERVED_PAGE_SLUGS, withLogins } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import { getGitProvider } from '../git/index.ts';
+import type { GitLabProvider } from '../git/GitLabProvider.ts';
 import { recordContentAssets, removeContentAssetFolder } from './contentAssets.service.ts';
 import { shouldCreatePrivateContentRepo } from './contentDelivery.service.ts';
 import { indexOneFile } from './contentIndex.service.ts';
@@ -9,6 +10,7 @@ import * as contentManifestService from './contentManifest.service.ts';
 import * as notificationService from './notification.service.ts';
 import { blankPageContentJson, previewBranchName } from './pageContent.service.ts';
 import type { Prisma } from '@prisma/client';
+import * as gitlabInstanceService from './gitlabInstance.service.ts';
 
 interface PageQueryOptions {
   includeClassroom?: boolean;
@@ -277,24 +279,59 @@ async function deletePreviewBranchBestEffort({
 }
 
 async function ensureContentRepoExists({ classroom, gitOrgLogin, repoName }: ContentRepoContext) {
+  // Where the content project lives: the org on Github, the classroom's own
+  // subgroup on GitLab (next to its student projects).
+  const contentOwner =
+    classroom.git_organization?.provider === 'GITLAB' && classroom.git_namespace
+      ? classroom.git_namespace
+      : gitOrgLogin;
   const gitProvider = getGitProvider(classroom.git_organization!);
-  const repoExists = await gitProvider.repositoryExists(gitOrgLogin, repoName);
+  const repoExists = await gitProvider.repositoryExists(contentOwner, repoName);
   if (!repoExists) {
     try {
       await gitProvider.createContentRepository(
-        gitOrgLogin,
+        contentOwner,
         repoName,
         `Course content for ${classroom.name || gitOrgLogin}`,
-        shouldCreatePrivateContentRepo(classroom)
+        // A Gitlab content project is always private: only the delivery
+        // layer and the authenticated proxy read it, never a public raw URL.
+        classroom.git_organization?.provider === 'GITLAB' ||
+          shouldCreatePrivateContentRepo(classroom)
       );
 
       // Give GitHub a moment to initialize the repo
       await new Promise(resolve => setTimeout(resolve, 2000));
     } catch (repoError) {
-      console.error('Failed to create GitHub repository:', repoError);
+      const isGitLab = classroom.git_organization?.provider === 'GITLAB';
+      console.error('Failed to create content repository:', repoError);
       throw new Error(
-        'Failed to create GitHub repository. Please check your GitHub organization permissions'
+        isGitLab
+          ? 'Failed to create the Gitlab content repository. Please check your Gitlab group permissions'
+          : 'Failed to create GitHub repository. Please check your GitHub organization permissions'
       );
+    }
+  }
+
+  // Gitlab has no org-wide webhook on the free plan, so the content project
+  // gets its own push hook: edits made outside Classmoji refresh the asset map
+  // the way the Github App's push events do. Checked on every call (it is
+  // idempotent) so a project created before the hook existed picks it up.
+  if (classroom.git_organization?.provider === 'GITLAB') {
+    const url = gitlabInstanceService.webhookUrl();
+    const secret = gitlabInstanceService.webhookSecret(
+      classroom.git_organization.gitlab_instance_id
+    );
+    if (url && secret) {
+      try {
+        await (gitProvider as GitLabProvider).ensureProjectPushHook(
+          contentOwner,
+          repoName,
+          url,
+          secret
+        );
+      } catch (error: unknown) {
+        console.error('Failed to register the content project push hook:', error);
+      }
     }
   }
 

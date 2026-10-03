@@ -8,8 +8,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const provision = vi.fn();
 
 vi.mock('@classmoji/auth/server', () => ({ requireAuth: vi.fn(async () => ({ userId: 'u1' })) }));
-vi.mock('@classmoji/database', () => ({
-  default: () => ({ user: { findUnique: vi.fn(async () => ({ login: 'tim' })) } }),
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
+  default: () => ({
+    user: {
+      findUnique: vi.fn(async () => ({
+        accounts: [{ provider_id: 'github', account_id: '1', username: 'tim' }],
+      })),
+    },
+  }),
 }));
 vi.mock('@classmoji/services', () => ({
   provisionExampleClassroom: (...a: unknown[]) => provision(...a),

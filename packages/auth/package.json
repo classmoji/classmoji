@@ -23,7 +23,8 @@
     "@classmoji/database": "*",
     "@classmoji/services": "*",
     "@classmoji/utils": "*",
-    "better-auth": "^1.4.7"
+    "better-auth": "^1.4.7",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "vitest": "^4.1.5"

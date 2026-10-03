@@ -193,6 +193,8 @@ Need help, email us at hello@classmoji.io`,
       { key: 'STUDENT_NAME', type: 'string', fallbackValue: 'there' },
       { key: 'CLASSROOM_NAME', type: 'string' },
       { key: 'APP_URL', type: 'string' },
+      // The classroom's git provider: students sign in with that account.
+      { key: 'PROVIDER_LABEL', type: 'string', fallbackValue: 'Github' },
     ],
     html: shell({
       title: 'You are invited to join a classroom',
@@ -200,7 +202,7 @@ Need help, email us at hello@classmoji.io`,
       rows: [
         heading("You're invited to join {{{CLASSROOM_NAME}}}"),
         text(
-          'Hi {{{STUDENT_NAME}}}, sign in to get started. Classmoji uses your Github account, so there is no new password to remember.'
+          'Hi {{{STUDENT_NAME}}}, sign in to get started. Classmoji uses your {{{PROVIDER_LABEL}}} account, so there is no new password to remember.'
         ),
         button('{{{APP_URL}}}', 'Join the classroom'),
       ],

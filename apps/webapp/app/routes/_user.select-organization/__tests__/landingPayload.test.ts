@@ -61,7 +61,7 @@ const SERVICE_USER = {
   login: 'student-login',
   name: 'Student',
   email: 'student@example.edu',
-  provider_email: null,
+  emailVerified: true,
   classroom_memberships: [{ ...OWN_ROW, classroom: CLASSROOM }],
   memberships: [
     {
@@ -77,6 +77,10 @@ const SERVICE_USER = {
   ],
 };
 
+// A Github-connected account by default, so the picker lists classrooms.
+const accountFindMany = vi.fn();
+const findById = vi.fn();
+
 vi.mock('@classmoji/auth/server', () => ({
   getAuthSession: vi.fn(async () => ({
     userId: 'user-1',
@@ -89,7 +93,7 @@ vi.mock('@classmoji/auth/invite-token', () => ({ verifyInviteToken: vi.fn(() => 
 vi.mock('~/utils/helpers', () => ({ checkAuth: (fn: unknown) => fn }));
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
-    user: { findById: vi.fn(async () => SERVICE_USER), findByLogin: vi.fn() },
+    user: { findById: (...a: unknown[]) => findById(...a), findProviderUsernames: vi.fn() },
     classroomInvite: { claimPendingInvites: vi.fn(async () => ({ claimed: 0 })) },
   },
   GitHubProvider: { getUserOctokit: vi.fn() },
@@ -98,12 +102,18 @@ vi.mock('@classmoji/services', () => ({
   notificationService: { getForBell: vi.fn(async () => ({ items: [], unreadCount: 0 })) },
   pendingSurveyQuestions: vi.fn(async () => []),
 }));
-vi.mock('@classmoji/database', () => ({ default: vi.fn() }));
+vi.mock('@classmoji/database', () => ({
+  default: () => ({
+    account: { findMany: (...a: unknown[]) => accountFindMany(...a) },
+    // No pending Gitlab course memberships to activate.
+    classroomMembership: { findMany: vi.fn(async () => []) },
+  }),
+}));
 vi.mock('@trigger.dev/sdk', () => ({ tasks: {} }));
 
 // Only the loader is under test; the view layer only needs to import.
 vi.mock('antd', () => ({ Modal: () => null, Button: () => null }));
-vi.mock('@classmoji/ui-components', () => ({ useCallout: vi.fn() }));
+vi.mock('@classmoji/ui-components', () => ({ useCallout: vi.fn(), Button: () => null, IconGithub: () => null }));
 vi.mock('~/hooks', () => ({ useUser: vi.fn(), useDisclosure: vi.fn(), useGlobalFetcher: vi.fn() }));
 vi.mock('~/store', () => ({ default: vi.fn() }));
 vi.mock('~/components/features/landing', () => ({ ClassroomsLandingScreen: () => null }));
@@ -113,7 +123,14 @@ const { loader } = await import('../route.tsx');
 
 beforeEach(() => {
   vi.clearAllMocks();
+  accountFindMany.mockResolvedValue([{ provider_id: 'github', email: null }]);
+  findById.mockResolvedValue(SERVICE_USER);
 });
+
+const runLoader = async () =>
+  (await loader({
+    request: new Request('http://localhost/select-organization'),
+  } as unknown as Parameters<typeof loader>[0])) as Record<string, unknown>;
 
 describe('select-organization payload', () => {
   it('returns the fields the picker reads', async () => {
@@ -123,8 +140,10 @@ describe('select-organization payload', () => {
 
     expect(Object.keys(data).sort()).toEqual(
       [
+        'gitMode',
         'githubAppName',
         'inviteEmailMismatch',
+        'linkError',
         'membershipRoles',
         'memberships',
         'notifications',
@@ -174,6 +193,54 @@ describe('select-organization payload', () => {
       provider_id: '4242',
       login: 'test-org',
       avatar_url: 'https://avatars.githubusercontent.com/u/4242?v=4',
+      base_url: null,
     });
+  });
+});
+
+describe('select-organization before a Github or Gitlab account is connected', () => {
+  beforeEach(() => {
+    accountFindMany.mockResolvedValue([]);
+  });
+
+  it('still lists the classrooms they were invited to', async () => {
+    findById.mockResolvedValue({
+      ...SERVICE_USER,
+      memberships: SERVICE_USER.memberships.map(m => ({ ...m, has_accepted_invite: false })),
+    });
+
+    const data = await runLoader();
+
+    expect(data).not.toHaveProperty('needsGithub');
+    expect(data.memberships).toHaveLength(1);
+    expect((data.memberships as Array<Record<string, unknown>>)[0]).toMatchObject({
+      id: 'mem-1',
+      has_accepted_invite: false,
+    });
+  });
+
+  it('claims email invites before deciding there is nothing to show', async () => {
+    const { ClassmojiService } = await import('@classmoji/services');
+    findById.mockResolvedValueOnce({ ...SERVICE_USER, memberships: [] }).mockResolvedValueOnce({
+      ...SERVICE_USER,
+      memberships: SERVICE_USER.memberships.map(m => ({ ...m, has_accepted_invite: false })),
+    });
+    vi.mocked(ClassmojiService.classroomInvite.claimPendingInvites).mockResolvedValueOnce({
+      claimed: 1,
+      classroomIds: ['class-1'],
+    });
+
+    const data = await runLoader();
+
+    expect(ClassmojiService.classroomInvite.claimPendingInvites).toHaveBeenCalledWith('user-1');
+    expect(data.memberships).toHaveLength(1);
+  });
+
+  it('asks them to connect when they belong to no classroom', async () => {
+    findById.mockResolvedValue({ ...SERVICE_USER, memberships: [] });
+
+    const data = await runLoader();
+
+    expect(data).toEqual({ needsGithub: true, linkError: null });
   });
 });

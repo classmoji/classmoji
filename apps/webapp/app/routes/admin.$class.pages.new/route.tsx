@@ -97,13 +97,13 @@ async function createPage({ request, params }: Route.ActionArgs, slot: { held: b
   // Use git_organization.login for GitHub API calls, not the classroom slug
   const gitOrgLogin = classroom.git_organization?.login;
   if (!gitOrgLogin) {
-    return { error: 'Git organization not configured' };
+    return { error: 'No Github organization or Gitlab group configured' };
   }
 
   // Stored, user-editable content repo name. Never re-derive it.
   const repoName = classroom.content_repo;
   if (!repoName) {
-    return { error: 'Classroom content repo not configured' };
+    return { error: `Classroom content repo not configured` };
   }
 
   // Single page import/create
@@ -147,6 +147,7 @@ async function createPage({ request, params }: Route.ActionArgs, slot: { held: b
           repo: repoName,
           contentPath,
           assetsFolder,
+          provider: classroom.git_organization?.provider,
         }
       );
 
@@ -318,7 +319,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
     if (percent <= 15) return '🧙‍♂️ Casting markdown spells...';
     if (percent <= 30) return '🦄 Teaching unicorns to carry your files...';
     if (percent <= 45) return '🤝 Convincing the server this is important...';
-    if (percent <= 60) return '🐙 Negotiating with the GitHub octocats...';
+    if (percent <= 60) return '🐙 Negotiating with the git octocats...';
     if (percent <= 75) return '🏃‍♂️ Your content is sprinting to the cloud...';
     if (percent <= 90) return '💅 Making everything look fabulous...';
     return '🎊 Victory is near!';
@@ -333,7 +334,9 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
   useEffect(() => {
     if (fetcher.state === 'idle' && fetcher.data?.created && fetcher.data.page && !batchProgress) {
       callout.show({ variant: 'success', title: 'Page created successfully!' });
-      navigate(`/${rolePrefix}/${classroom.slug}/pages/${fetcher.data.page.id}`);
+      // Replace, not push: the editor lives on the pages app, and a /pages/new
+      // left in history reopens this form when the user comes back.
+      navigate(`/${rolePrefix}/${classroom.slug}/pages/${fetcher.data.page.id}`, { replace: true });
     }
   }, [fetcher.state, fetcher.data, navigate, classroom.slug, batchProgress, rolePrefix]);
 

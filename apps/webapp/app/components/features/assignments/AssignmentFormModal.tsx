@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import { useFetcher } from 'react-router';
 import {
   Button,
@@ -71,20 +72,29 @@ type TeamFormation = 'INSTRUCTOR' | 'SELF_FORMED';
 const WhoSubmits = ({
   value,
   onChange,
+  teamDisabledReason,
+  repoWord = 'repository',
 }: {
   value?: boolean;
   onChange?: (next: boolean) => void;
+  /** When set, "Each team" can't be picked, and this says why. */
+  teamDisabledReason?: string;
+  /** "repository" (Github) or "project" (Gitlab). */
+  repoWord?: string;
 }) => (
   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
     {[
-      { v: false, title: 'Each student', hint: 'one repository per person' },
-      { v: true, title: 'Each team', hint: 'one repository per team' },
+      { v: false, title: 'Each student', hint: `one ${repoWord} per person` },
+      { v: true, title: 'Each team', hint: teamDisabledReason ?? `one ${repoWord} per team` },
     ].map(option => {
       const selected = !!value === option.v;
+      const disabled = option.v && !!teamDisabledReason;
       return (
         <label
           key={String(option.v)}
-          className={`flex cursor-pointer flex-col gap-1 rounded-xl border px-4 py-3 transition-colors ${
+          className={`flex flex-col gap-1 rounded-xl border px-4 py-3 transition-colors ${
+            disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
+          } ${
             selected
               ? 'border-[#D97757] bg-[#FDF1EC] dark:border-amber-700 dark:bg-amber-900/20'
               : 'border-line bg-white dark:bg-neutral-900 hover:border-[#E0A98F] dark:hover:border-amber-700'
@@ -95,6 +105,7 @@ const WhoSubmits = ({
               type="radio"
               name="assignment-who-submits"
               checked={selected}
+              disabled={disabled}
               onChange={() => onChange?.(option.v)}
               className="h-4 w-4 accent-[#D97757] dark:accent-amber-500"
             />
@@ -202,6 +213,9 @@ const AssignmentFormModal = ({
   presetRepositoryId,
   tags = [],
 }: AssignmentFormModalProps) => {
+  // Github org or GitLab group: some options aren't on GitLab yet.
+  const web = useGitWeb();
+  const terms = web.terms;
   const fetcher = useFetcher<{ success?: string; error?: string }>();
   // Tag creation has its own fetcher so it never collides with the form submit.
   const tagFetcher = useFetcher<{ tag?: { id: string; name: string }; error?: string }>();
@@ -382,9 +396,9 @@ const AssignmentFormModal = ({
   const emptyTargetHint = {
     REPO: (
       <>
-        No {isTeam ? 'team' : 'individual'} repositories yet.{' '}
+        No {isTeam ? 'team' : 'individual'} {terms.repos} yet.{' '}
         <a href={newRepositoryHref} target="_blank" rel="noreferrer">
-          New repository
+          New {terms.repo}
         </a>
       </>
     ),
@@ -503,6 +517,8 @@ const AssignmentFormModal = ({
 
             <Form.Item name="is_team" className="mb-5">
               <WhoSubmits
+                repoWord={terms.repo}
+                teamDisabledReason={undefined}
                 onChange={next => {
                   form.setFieldValue('is_team', next);
                   if (!next) form.setFieldValue('tag_id', undefined);
@@ -533,8 +549,13 @@ const AssignmentFormModal = ({
                     name="tag_id"
                     label="Team tag"
                     className="md:col-span-2"
-                    rules={[{ required: true, message: 'Pick the tag whose teams get a repo' }]}
-                    extra="Every team carrying this tag gets one repository."
+                    rules={[
+                      {
+                        required: true,
+                        message: `Pick the tag whose teams get a repo`,
+                      },
+                    ]}
+                    extra={`Every team carrying this tag gets one ${terms.repo}.`}
                   >
                     <Select
                       showSearch
@@ -589,7 +610,7 @@ const AssignmentFormModal = ({
 
             {isTeam && repoSource === 'existing' && (
               <div className="-mt-2 mb-6 text-sm text-ink-3">
-                Team formation comes from the repository you pick below.
+                Team formation comes from the {terms.repo} you pick below.
               </div>
             )}
           </>
@@ -613,13 +634,13 @@ const AssignmentFormModal = ({
               className="flex flex-col gap-1"
             >
               <Radio value="REPO">
-                Push to the repository{' '}
+                Push to the {terms.repo}{' '}
                 <span className="text-ink-3">
                   — the last push before the deadline is the submission
                 </span>
               </Radio>
               <Radio value="ISSUE">
-                Close a GitHub issue{' '}
+                Close {`a ${web.label} issue`}{' '}
                 <span className="text-ink-3">— Classmoji opens one in each student repo</span>
               </Radio>
             </Radio.Group>
@@ -643,11 +664,11 @@ const AssignmentFormModal = ({
               className="flex flex-col gap-1"
             >
               <Radio value="new">
-                New repository from a template{' '}
+                New {terms.repo} from a template{' '}
                 <span className="text-ink-3">— starter code students get a copy of</span>
               </Radio>
               <Radio value="existing">
-                Existing repository{' '}
+                Existing {terms.repo}{' '}
                 <span className="text-ink-3">— one this class already uses</span>
               </Radio>
             </Radio.Group>
@@ -659,9 +680,9 @@ const AssignmentFormModal = ({
             {namesItsOwnRepo && (
               <Form.Item
                 name="repo_name"
-                label="Repository name"
-                rules={[{ required: true, message: 'Name the repository' }]}
-                extra="Every assignment that opens an issue in this repository shares it, so name the container rather than this one assignment."
+                label={`${terms.Repo} name`}
+                rules={[{ required: true, message: `Name the ${terms.repo}` }]}
+                extra={`Every assignment that opens ${terms.anIssue} in this ${terms.repo} shares it, so name the container rather than this one assignment.`}
               >
                 <Input placeholder="quizzes-2026" />
               </Form.Item>
@@ -669,11 +690,12 @@ const AssignmentFormModal = ({
 
             <Form.Item
               name="template"
-              label="Template repository"
+              label={`Template ${terms.repo}`}
               extra={
                 <>
                   Optional. Leave empty to create a blank, private{' '}
-                  <code className="text-ink-1">{repoSlug}-template</code>.
+                  <code className="text-ink-1">{repoSlug}-template</code>
+                  {web.isGitLab ? ' in your group’s templates subgroup' : ''}.
                 </>
               }
             >
@@ -691,8 +713,8 @@ const AssignmentFormModal = ({
                   ) : (
                     <span className="text-sm text-ink-3">
                       {templateQuery.trim().length >= 2
-                        ? 'No template repositories found'
-                        : 'Type to search GitHub for a template'}
+                        ? `No template ${terms.repos} found`
+                        : `Type to search ${web.label} for a template`}
                     </span>
                   )
                 }
@@ -725,7 +747,8 @@ const AssignmentFormModal = ({
                 {isTeam ? 'Each team gets' : 'Each student gets'}
               </span>
               <code className="rounded-md bg-stone-200/70 dark:bg-neutral-700 px-2 py-0.5 text-sm text-ink-1">
-                {repoSlug}-&lt;{isTeam ? 'team' : 'github-login'}&gt;
+                {repoSlug}-&lt;
+                {isTeam ? 'team' : web.isGitLab ? 'gitlab-username' : 'github-login'}&gt;
               </code>
             </div>
           </>
@@ -735,7 +758,7 @@ const AssignmentFormModal = ({
             label={{ REPO: 'Repository', FORM: 'Form' }[kind]}
             extra={
               kind === 'REPO' && !isEdit
-                ? 'Students who already have a copy of this repository keep it; the assignment is added to it.'
+                ? `Students who already have a copy of this ${terms.repo} keep it; the assignment is added to it.`
                 : undefined
             }
             rules={[{ required: true, message: 'Pick a target' }]}
@@ -792,10 +815,10 @@ const AssignmentFormModal = ({
         {kind === 'REPO' && (
           <Form.Item
             name="description"
-            label={mode === 'ISSUE' ? 'Issue body' : 'Instructions'}
+            label={mode === 'ISSUE' ? `${terms.Issue} body` : 'Instructions'}
             extra={
               mode === 'ISSUE'
-                ? 'Becomes the body of the issue created in each student repository.'
+                ? `Becomes the body of the ${terms.issue} created in each student ${terms.repo}.`
                 : 'Shown to students with the assignment.'
             }
           >

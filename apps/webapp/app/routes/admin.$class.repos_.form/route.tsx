@@ -5,9 +5,10 @@ import { IconChevronLeft, IconFolder } from '@tabler/icons-react';
 
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import FormModule from './FormModule';
-import { ClassmojiService } from '@classmoji/services';
+import { ClassmojiService, getGitProvider, type GitLabProvider } from '@classmoji/services';
 import getPrisma from '@classmoji/database';
 import { ActionTypes } from '~/constants';
+import { gitTerms } from '~/utils/gitWeb';
 import type { Route } from './+types/route';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
@@ -69,6 +70,19 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     orderBy: { title: 'asc' },
   });
 
+  // Gitlab: can CI run for this class at all? Without a runner the
+  // autograding pipelines never start, so the form says so up front.
+  const isGitLab = classroom.git_organization?.provider === 'GITLAB';
+  const gitlabRunner =
+    isGitLab && classroom.git_namespace
+      ? await Promise.race([
+          (getGitProvider(classroom.git_organization) as GitLabProvider)
+            .ciRunnerAvailability(classroom.git_namespace)
+            .catch(() => 'unknown' as const),
+          new Promise<'unknown'>(resolve => setTimeout(() => resolve('unknown'), 4000)),
+        ])
+      : null;
+
   return {
     repository,
     isNew: !repository,
@@ -78,6 +92,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     slides,
     hasReposWithProjects,
     hasProvisionedRepos,
+    isGitLab,
+    gitlabRunner,
   };
 };
 
@@ -108,8 +124,11 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
     slides,
     hasReposWithProjects,
     hasProvisionedRepos,
+    isGitLab,
+    gitlabRunner,
   } = loaderData;
   const navigate = useNavigate();
+  const terms = gitTerms(!!isGitLab);
   const { class: classSlug } = useParams();
   // Repositories are managed on the Repositories page; assignments that
   // submit through them live on the module page.
@@ -129,17 +148,17 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
           type="button"
           onClick={goBack}
           className="hover:text-ink-1"
-          aria-label="Back to repositories"
+          aria-label={`Back to ${terms.repos}`}
         >
           <IconChevronLeft size={18} />
         </button>
         <IconFolder size={18} className="text-gray-400" />
         <button type="button" onClick={goBack} className="hover:text-ink-1">
-          Repositories
+          {terms.Repos}
         </button>
         <span className="text-ink-3">/</span>
         <span className="font-semibold text-ink-1">
-          {isNew ? 'New repository' : (repository?.title ?? 'Edit repository')}
+          {isNew ? `New ${terms.repo}` : (repository?.title ?? `Edit ${terms.repo}`)}
         </span>
       </div>
 
@@ -153,6 +172,8 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
         slides={slides}
         hasReposWithProjects={hasReposWithProjects}
         hasProvisionedRepos={hasProvisionedRepos}
+        isGitLab={isGitLab}
+        gitlabRunner={gitlabRunner}
       />
     </div>
   );
@@ -170,6 +191,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     action: 'create_repository',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+  const terms = gitTerms(classroom.git_organization?.provider === 'GITLAB');
 
   const data = await request.json();
 
@@ -354,14 +376,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         await saveContentManifest();
 
         return {
-          success: 'Repository created',
+          success: `${terms.Repo} created`,
           action: ActionTypes.SAVE_ASSIGNMENT,
         };
       } catch (error: unknown) {
         if (isTitleTaken(error)) return saveError(TITLE_TAKEN);
         console.error('Repository create error:', error);
         return {
-          error: 'Failed to create repository. Please try again.',
+          error: `Failed to create ${terms.repo}. Please try again.`,
           action: ActionTypes.SAVE_ASSIGNMENT,
         };
       }
@@ -409,14 +431,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         await saveContentManifest();
 
         return {
-          success: 'Repository updated',
+          success: `${terms.Repo} updated`,
           action: ActionTypes.SAVE_ASSIGNMENT,
         };
       } catch (error: unknown) {
         if (isTitleTaken(error)) return saveError(TITLE_TAKEN);
         console.error('Repository update error:', error);
         return {
-          error: 'Failed to update repository. Please try again.',
+          error: `Failed to update ${terms.repo}. Please try again.`,
           action: ActionTypes.SAVE_ASSIGNMENT,
         };
       }

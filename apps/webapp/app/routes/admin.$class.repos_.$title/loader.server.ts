@@ -10,6 +10,7 @@ import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomAdmin, requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import type { LinkedPage } from './LinkedPages';
+import { gitTerms } from '~/utils/gitWeb';
 import { classroomForClient } from '~/utils/classroomForClient';
 
 type LoaderArgs = { params: Record<string, string | undefined>; request: Request };
@@ -93,7 +94,7 @@ export const buildLoader =
           id: link.id,
           pageId: link.page.id,
           title: link.page.title,
-          linkedTo: 'linked to repository',
+          linkedTo: `linked to ${gitTerms(classroom.git_organization?.provider === 'GITLAB').repo}`,
           isDraft: link.page.is_draft,
           updatedAt: link.page.updated_at,
         });

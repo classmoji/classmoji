@@ -4628,10 +4628,10 @@ function createdPositions(state: CreateState): Set<number> {
 const indexesOf = (positions: Set<number>): Set<number> => new Set([...positions].map(n => n - 1));
 
 /**
- * The classroom's git organization. A create makes one GitHub team per team,
- * so an organization on another provider is refused `provider_unsupported`
- * before anything else — a GitLab classroom must hear "GitHub only", not
- * "GitHub cannot be reached".
+ * The classroom's git organization. A create makes one team per team on the
+ * provider: a GitHub team, or a GitLab subgroup under the class's `teams`
+ * subgroup (teamAdmin.createTeam handles both). Other providers are refused
+ * `provider_unsupported` before anything else.
  */
 async function loadCreateOrg(classroomId: string) {
   const classroom = await getPrisma().classroom.findUnique({
@@ -4643,10 +4643,10 @@ async function loadCreateOrg(classroomId: string) {
     },
   });
   const org = classroom?.git_organization ?? null;
-  if (org && org.provider !== 'GITHUB') {
+  if (org && org.provider !== 'GITHUB' && org.provider !== 'GITLAB') {
     throw new TeamSetError(
       'provider_unsupported',
-      'Creating teams from a team set needs a GitHub organization; this classroom’s is not on GitHub.',
+      'Creating teams from a team set needs a Github organization or a Gitlab group.',
       { provider: org.provider }
     );
   }
@@ -4979,6 +4979,9 @@ async function githubPreflight({
   retry: boolean;
 }): Promise<{ names: string[]; warnings: string[] }> {
   const org = await loadCreateOrg(classroomId);
+  // GitLab: no up-front name probe. Each team's own create refuses a taken
+  // name (teamAdmin.createTeam checks the subgroup first), failing only it.
+  if (org?.provider === 'GITLAB') return { names, warnings: [] };
   if (!org?.login || !org.github_installation_id) throw githubUnavailable();
   const orgLogin = org.login;
 

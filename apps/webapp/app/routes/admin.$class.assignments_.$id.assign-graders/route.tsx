@@ -5,6 +5,7 @@ import { nanoid } from 'nanoid';
 import { auth } from '@trigger.dev/sdk';
 
 import { useDisclosure, useGlobalFetcher } from '~/hooks';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import { AssignGradersError, ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import { assignGradersToAssignmentsHandler } from './utils';
@@ -36,6 +37,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
 const AssignGraders = ({ loaderData }: Route.ComponentProps) => {
   const { assignment, siblings } = loaderData;
+  const web = useGitWeb();
 
   const [templateAssignmentId, setTemplateAssignmentId] = useState<string | null>(null);
   const [method, setMethod] = useState('RANDOM');
@@ -78,7 +80,7 @@ const AssignGraders = ({ loaderData }: Route.ComponentProps) => {
           <Radio.Group value={method} onChange={e => setMethod(e.target.value)}>
             <Radio value="RANDOM">Randomly</Radio>
             <Radio value="EXISTING" disabled={siblings.length === 0}>
-              Same graders as another assignment on this repository
+              Same graders as another assignment on this {web.terms.repo}
             </Radio>
           </Radio.Group>
         </Form.Item>

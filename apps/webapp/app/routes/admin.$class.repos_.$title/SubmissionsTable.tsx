@@ -1,7 +1,9 @@
 import { App, Button, Checkbox, Popover, Table, Tooltip } from 'antd';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { IconBrandGithub, IconLayoutKanban } from '@tabler/icons-react';
+import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 import {
   UserThumbnailView,
   TeamThumbnailView,
@@ -73,7 +75,7 @@ export interface SubmissionsRepo {
     slug?: string | null;
     [key: string]: unknown;
   } | null;
-  team?: { avatar_url: string; name: string; slug: string; [key: string]: unknown } | null;
+  team?: { avatar_url?: string | null; name: string; slug: string; [key: string]: unknown } | null;
   assignments?: RepoAssignmentEntry[];
   project_number?: number | null;
   metadata?: unknown;
@@ -118,6 +120,7 @@ const SubmissionsTable = ({
   org,
   canEdit = true,
 }: SubmissionsTableProps) => {
+  const web = useGitWeb();
   // Repo-only: a push IS the submission, so nothing here is about issues and
   // autograding (which runs off an issue workflow) has nothing to report.
   const isPushOnly = assignments.length > 0 && assignments.every(a => a.submission_mode === 'REPO');
@@ -219,22 +222,24 @@ const SubmissionsTable = ({
         ),
     },
     {
-      title: 'Repository',
+      title: web.terms.Repo,
       key: 'repo',
       width: 240,
       render: (_: unknown, repo) => {
-        const projectUrl = repo.project_number
-          ? `https://github.com/orgs/${org}/projects/${repo.project_number}`
-          : null;
+        const projectUrl = repo.project_number ? web.project(repo.project_number) : null;
         return (
           <div className="flex items-center gap-1 min-w-0">
             <a
-              href={`https://github.com/${org}/${repo.name}`}
+              href={web.repo(repo.name)}
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center gap-1.5 min-w-0 text-ink-1 hover:underline underline-offset-2"
             >
-              <IconBrandGithub size={14} className="shrink-0 text-gray-400" />
+              {web.isGitLab ? (
+                <GitlabLogo size={14} className="shrink-0" />
+              ) : (
+                <IconBrandGithub size={14} className="shrink-0 text-gray-900 dark:text-gray-100" />
+              )}
               <span className="truncate">{repo.name}</span>
             </a>
             {projectUrl && (
@@ -283,7 +288,7 @@ const SubmissionsTable = ({
               return (
                 <CommitCount
                   snapshot={snapshot}
-                  href={`https://github.com/${org}/${repo.name}/commits`}
+                  href={web.commits(repo.name)}
                   size="lg"
                   className="text-sm!"
                 />
@@ -336,7 +341,7 @@ const SubmissionsTable = ({
         // read as an affirmative action next to a destructive one.
         <div className="flex items-center gap-4 whitespace-nowrap">
           <a
-            href={`https://github.com/${org}/${repo.name}`}
+            href={web.repo(repo.name)}
             target="_blank"
             rel="noreferrer"
             className="text-sm font-medium text-ink-2! hover:text-ink-1! hover:underline underline-offset-2"
@@ -349,13 +354,13 @@ const SubmissionsTable = ({
               className="text-sm font-medium text-rose-600 hover:text-rose-700 dark:text-rose-400"
               onClick={() =>
                 modal.confirm({
-                  title: 'Delete repository',
-                  content: `This permanently deletes ${repo.name} on GitHub and every submission recorded against it.`,
+                  title: `Delete ${web.terms.repo}`,
+                  content: `This permanently deletes ${repo.name} on ${web.label} and every submission recorded against it.`,
                   okText: 'Delete',
                   okButtonProps: { danger: true },
                   cancelText: 'Cancel',
                   onOk: () => {
-                    notify(ActionTypes.DELETE_REPO, 'Deleting repository…');
+                    notify(ActionTypes.DELETE_REPO, `Deleting ${web.terms.repo}…`);
                     fetcher!.submit(
                       { action: ActionTypes.DELETE_REPO, repo: { id: repo.id, name: repo.name } },
                       { method: 'post', action: '?/deleteRepo', encType: 'application/json' }
@@ -504,7 +509,11 @@ const SubmissionsTable = ({
               <span className="inline-flex items-center gap-2">
                 <span className="text-ink-1">{assignment.title}</span>
                 <span className="text-xs font-normal text-ink-3">
-                  {isPushOnly ? '' : assignment.submission_mode === 'REPO' ? 'push' : 'issue'}
+                  {isPushOnly
+                    ? ''
+                    : assignment.submission_mode === 'REPO'
+                      ? 'push'
+                      : web.terms.issue}
                 </span>
               </span>
             ),
@@ -527,8 +536,8 @@ const SubmissionsTable = ({
       locale={{
         emptyText: (
           <div className="text-center py-12 text-gray-500">
-            <div className="font-medium">No student repositories yet</div>
-            <div className="text-sm">Publish the repository to create one per student.</div>
+            <div className="font-medium">No student {web.terms.repos} yet</div>
+            <div className="text-sm">Publish the {web.terms.repo} to create one per student.</div>
           </div>
         ),
       }}

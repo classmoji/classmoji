@@ -1,4 +1,4 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["index.js", "index.ts", "scripts/**/*.ts"]
+  "include": ["index.js", "index.ts", "gitIdentity.ts", "scripts/**/*.ts"]
 }

@@ -58,3 +58,32 @@ export const retryOnDatabaseBlip = {
   catchError: async ({ error }: { error: unknown }) =>
     isTransientDatabaseError(error) ? undefined : { skipRetrying: true },
 };
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * The same policy for one database write made inside a larger run (where the
+ * run itself must not repeat: it has already created things on Github or
+ * Gitlab). Retries `write` on a transient connection failure only, with the
+ * backoff above; anything else is thrown at once.
+ */
+export async function withDatabaseRetry<T>(
+  write: () => Promise<T>,
+  policy: Pick<
+    typeof DATABASE_BLIP_RETRY,
+    'maxAttempts' | 'factor' | 'minTimeoutInMs' | 'maxTimeoutInMs'
+  > = DATABASE_BLIP_RETRY
+): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await write();
+    } catch (error: unknown) {
+      if (attempt >= policy.maxAttempts || !isTransientDatabaseError(error)) throw error;
+      const delay = Math.min(
+        policy.minTimeoutInMs * policy.factor ** (attempt - 1),
+        policy.maxTimeoutInMs
+      );
+      await sleep(delay);
+    }
+  }
+}

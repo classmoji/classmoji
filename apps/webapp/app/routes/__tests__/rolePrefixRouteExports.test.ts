@@ -47,11 +47,29 @@ const INTENTIONALLY_NO_ACTION: Record<string, Record<string, string>> = {
       'staff mutation (add/update/remove teaching staff) stays on the owner-only /admin route',
   },
   assistant: {
+    'assistant.$class_.modules':
+      'read-only view of the admin modules page; every write stays behind requireClassroomAdmin on /admin',
+    'assistant.$class_.pages': 'read-only pages list; writes stay on /admin and /teacher',
+    'assistant.$class_.repos':
+      'read-only repositories view; every write stays behind requireClassroomAdmin on /admin',
+    'assistant.$class_.repos_.$title':
+      'read-only repository page (the submissions roster); writes stay behind requireClassroomAdmin on /admin',
     'assistant.$class_.students':
       'roster mutation (add/remove students) stays on the owner-only /admin route',
     'assistant.$class_.staff':
       'staff mutation (add/update/remove teaching staff) stays on the owner-only /admin route',
   },
+};
+
+/**
+ * Routes that only redirect, and so render nothing on purpose: they re-export
+ * a loader and nothing else.
+ */
+const REDIRECT_ONLY: Record<string, string> = {
+  'teacher.$class_.settings':
+    'personal settings moved to account settings; old links are redirected there',
+  'assistant.$class_.settings':
+    'personal settings moved to account settings; old links are redirected there',
 };
 
 /**
@@ -114,12 +132,20 @@ const collectRoutes = (prefix: string): PrefixedRoute[] =>
       return { name, exported: own, sourceFile: null, sourceSpecifier: null };
     }
 
+    // A route may re-export the page but define its own loader (a wider role
+    // gate over the same reads): those count as exported too.
+    const own = [...text.matchAll(/^export\s+(?:const|async function|function)\s+(\w+)/gm)].map(
+      m => m[1]
+    );
     return {
       name,
-      exported: reExport[1]
-        .split(',')
-        .map(s => s.trim())
-        .filter(Boolean),
+      exported: [
+        ...reExport[1]
+          .split(',')
+          .map(s => s.trim())
+          .filter(Boolean),
+        ...own,
+      ],
       sourceFile: resolveSource(file, reExport[2]),
       sourceSpecifier: reExport[2],
     };
@@ -151,7 +177,12 @@ describe.each(['teacher', 'assistant'] as const)('the /%s route tree', prefix =>
     expect(unresolved.map(r => `${r.name} -> ${r.sourceSpecifier}`)).toEqual([]);
   });
 
-  it.each(ROUTES.map(r => [r.name, r] as const))('%s exports default', (_name, route) => {
+  it.each(ROUTES.map(r => [r.name, r] as const))('%s exports default', (name, route) => {
+    if (REDIRECT_ONLY[name]) {
+      // A redirect has nothing to render; its loader is all there is.
+      expect(route.exported).toEqual(['loader']);
+      return;
+    }
     // Without `default` the prefix renders nothing at all.
     expect(route.exported).toContain('default');
   });

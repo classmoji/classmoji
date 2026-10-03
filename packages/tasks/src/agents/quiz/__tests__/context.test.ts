@@ -11,6 +11,7 @@ const fakes = vi.hoisted(() => ({
   findByStudent: vi.fn(),
   loadMaterial: vi.fn(),
   findFirst: vi.fn(),
+  hostForOrganization: vi.fn(),
 }));
 
 vi.mock('@classmoji/database', () => ({
@@ -24,6 +25,7 @@ vi.mock('@classmoji/services', () => ({
     quizGrading: { getProgress: fakes.getProgress },
     gitRepo: { findByStudent: fakes.findByStudent },
     quizSourceMaterial: { load: fakes.loadMaterial },
+    gitlabInstance: { hostForOrganization: fakes.hostForOrganization },
   },
 }));
 
@@ -244,5 +246,86 @@ describe('loadAttemptContext: the content tools', () => {
     const ctx = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });
     expect(ctx.content).toBeNull();
     expect(ctx.prompt.staticPrompt).not.toMatch(/content_(get|search)/);
+  });
+});
+
+describe('loadAttemptContext: where a code-aware attempt explores', () => {
+  const GITLAB_ORG = {
+    login: 'dept/cs10',
+    provider: 'GITLAB',
+    gitlab_connection_id: 'conn-1',
+    base_url: null,
+    gitlab_instance_id: 'instance-1',
+  };
+
+  function gitlabAttempt(agentConfig: Record<string, unknown> | null = null) {
+    const base = attempt();
+    return {
+      ...base,
+      agent_config: agentConfig,
+      quiz: {
+        ...base.quiz,
+        classroom: {
+          ...base.quiz.classroom,
+          git_namespace: 'dept/cs10/fall',
+          git_organization: GITLAB_ORG,
+        },
+      },
+    };
+  }
+
+  beforeEach(() => {
+    fakes.hostForOrganization.mockResolvedValue('https://gitlab.example.edu');
+  });
+
+  it("reads a Github student's repository from the org, with no host", async () => {
+    fakes.findByStudent.mockResolvedValue({ name: 'landing-page' });
+    const ctx = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });
+    expect(ctx.exploration).toMatchObject({
+      owner: 'sample-org',
+      repo: 'landing-page',
+      gitOrganization: { login: 'sample-org', provider: 'GITHUB', github_installation_id: '1' },
+    });
+    expect(ctx.exploration).not.toHaveProperty('gitHost');
+    expect(fakes.hostForOrganization).not.toHaveBeenCalled();
+  });
+
+  it("reads a Gitlab student's project from the class's projects subgroup on its instance", async () => {
+    fakes.findById.mockResolvedValue(gitlabAttempt());
+    fakes.findByStudent.mockResolvedValue({ name: 'landing-page-ada' });
+    const ctx = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });
+    expect(ctx.isCodeAware).toBe(true);
+    expect(ctx.exploration).toMatchObject({
+      owner: 'dept/cs10/fall/projects',
+      repo: 'landing-page-ada',
+      gitHost: 'https://gitlab.example.edu',
+      // The token is minted for this one project, in its namespace.
+      gitOrganization: { ...GITLAB_ORG, login: 'dept/cs10/fall/projects' },
+    });
+    expect(fakes.hostForOrganization).toHaveBeenCalledWith(GITLAB_ORG);
+  });
+
+  it("reads a staff preview's project by its full path inside the class's group", async () => {
+    fakes.findById.mockResolvedValue(
+      gitlabAttempt({ instructorRepoName: 'dept/cs10/fall/templates/landing-page-solution' })
+    );
+    fakes.findFirst.mockResolvedValue({ id: 'membership-1' });
+    const ctx = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });
+    expect(ctx.exploration).toMatchObject({
+      owner: 'dept/cs10/fall/templates',
+      repo: 'landing-page-solution',
+      gitHost: 'https://gitlab.example.edu',
+    });
+    expect(fakes.findByStudent).not.toHaveBeenCalled();
+  });
+
+  it("never reads a staff preview's project outside the class's group", async () => {
+    fakes.findById.mockResolvedValue(
+      gitlabAttempt({ instructorRepoName: 'someone-else/landing-page' })
+    );
+    fakes.findFirst.mockResolvedValue({ id: 'membership-1' });
+    const ctx = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });
+    expect(ctx.exploration).toBeNull();
+    expect(ctx.codeUnavailable).toBe(true);
   });
 });

@@ -42,7 +42,11 @@ interface StudentsTableProps {
   canManage: boolean;
 }
 
-const StudentsTable = ({ students, query, isOwner, canManage }: StudentsTableProps) => {
+const StudentsTable = ({ students, query, classroom, isOwner, canManage }: StudentsTableProps) => {
+  // Gitlab has no invite to accept, so enrollment status says nothing there.
+  const isGitLab =
+    (classroom?.git_organization as { provider?: string } | null | undefined)?.provider ===
+    'GITLAB';
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const { fetcher, notify } = useGlobalFetcher();
@@ -107,6 +111,51 @@ const StudentsTable = ({ students, query, isOwner, canManage }: StudentsTablePro
       ]
     : [];
 
+  const statusColumn = {
+    title: 'Status',
+    dataIndex: 'has_accepted_invite',
+    key: 'has_accepted_invite',
+    width: 110,
+    render: (_: unknown, student: Student) => {
+      if (student.has_accepted_invite) {
+        return (
+          <Tag color="green" className="font-semibold">
+            Active
+          </Tag>
+        );
+      }
+      // An invite nobody can claim looks identical to one that is merely
+      // waiting, which is what let a mistyped address sit pending for six
+      // days in production. `_hasAccount` is false only when no account uses
+      // this address under either email we hold, so the invite cannot resolve
+      // itself no matter how many times that person signs in.
+      if (student._isInvite && student._hasAccount === false) {
+        const days = student._invitedAt
+          ? Math.floor(
+              (Date.now() - new Date(student._invitedAt).getTime()) / (1000 * 60 * 60 * 24)
+            )
+          : null;
+        return (
+          <Tooltip
+            title={
+              'No Classmoji account uses this address, so this invite cannot be claimed. ' +
+              'Check the address, or ask the student which one they signed up with.'
+            }
+          >
+            <Tag color="red" className="font-semibold">
+              No account{days !== null && days > 0 ? ` · ${days}d` : ''}
+            </Tag>
+          </Tooltip>
+        );
+      }
+      return (
+        <Tag color="orange" className="font-semibold">
+          Pending
+        </Tag>
+      );
+    },
+  };
+
   const columns = [
     {
       title: 'Student',
@@ -118,50 +167,7 @@ const StudentsTable = ({ students, query, isOwner, canManage }: StudentsTablePro
       },
     },
     ...contactColumns,
-    {
-      title: 'Status',
-      dataIndex: 'has_accepted_invite',
-      key: 'has_accepted_invite',
-      width: 110,
-      render: (_: unknown, student: Student) => {
-        if (student.has_accepted_invite) {
-          return (
-            <Tag color="green" className="font-semibold">
-              Active
-            </Tag>
-          );
-        }
-        // An invite nobody can claim looks identical to one that is merely
-        // waiting, which is what let a mistyped address sit pending for six
-        // days in production. `_hasAccount` is false only when no account uses
-        // this address under either email we hold, so the invite cannot resolve
-        // itself no matter how many times that person signs in.
-        if (student._isInvite && student._hasAccount === false) {
-          const days = student._invitedAt
-            ? Math.floor(
-                (Date.now() - new Date(student._invitedAt).getTime()) / (1000 * 60 * 60 * 24)
-              )
-            : null;
-          return (
-            <Tooltip
-              title={
-                'No Classmoji account uses this address, so this invite cannot be claimed. ' +
-                'Check the address, or ask the student which one they signed up with.'
-              }
-            >
-              <Tag color="red" className="font-semibold">
-                No account{days !== null && days > 0 ? ` · ${days}d` : ''}
-              </Tag>
-            </Tooltip>
-          );
-        }
-        return (
-          <Tag color="orange" className="font-semibold">
-            Pending
-          </Tag>
-        );
-      },
-    },
+    ...(isGitLab ? [] : [statusColumn]),
     {
       title: 'Actions',
       key: 'actions',

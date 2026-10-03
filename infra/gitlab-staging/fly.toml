@@ -1,0 +1,44 @@
+# Staging Gitlab: a few real logins plus fake accounts. See README.md.
+app = "classmoji-gitlab-staging"
+primary_region = "iad"
+
+[env]
+  # Fly terminates HTTPS, so Gitlab serves plain HTTP on port 80.
+  # The rest keeps it comfortable in 4 GB (Gitlab's low-memory settings).
+  GITLAB_OMNIBUS_CONFIG = """
+external_url 'https://gitlab.classmoji.io'
+nginx['listen_port'] = 80
+nginx['listen_https'] = false
+letsencrypt['enable'] = false
+puma['worker_processes'] = 0
+sidekiq['concurrency'] = 5
+prometheus_monitoring['enable'] = false
+"""
+
+[[mounts]]
+  source = "gitlab_data"
+  destination = "/data"
+  initial_size = "5gb"
+
+[http_service]
+  internal_port = 80
+  force_https = true
+  # Gitlab takes minutes to boot, so never stop it on idle. Stop and start it
+  # by hand between test sessions instead (README.md).
+  auto_stop_machines = "off"
+  auto_start_machines = false
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    # The first boot runs every migration: 5 to 10 minutes.
+    grace_period = "600s"
+    interval = "30s"
+    method = "GET"
+    path = "/users/sign_in"
+    timeout = "10s"
+
+[[vm]]
+  # A dedicated CPU: on shared CPUs Gitlab's boot exhausts the burst allowance
+  # and crawls (a first boot stalled for 10+ minutes on shared-cpu-2x).
+  size = "performance-1x"
+  memory = "4gb"

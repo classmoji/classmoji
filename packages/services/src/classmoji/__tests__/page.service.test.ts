@@ -16,7 +16,11 @@ const repositoryFindFirstMock = vi.fn();
 const assignmentFindFirstMock = vi.fn();
 const pageLinkCreateMock = vi.fn();
 
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
   default: () => ({
     classroom: { findUnique: (...args: unknown[]) => classroomFindUniqueMock(...args) },
     repository: { findFirst: (...args: unknown[]) => repositoryFindFirstMock(...args) },

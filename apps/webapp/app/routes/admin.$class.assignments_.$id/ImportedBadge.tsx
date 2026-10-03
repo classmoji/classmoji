@@ -52,7 +52,12 @@ export default function ImportedBadge({ metadata }: { metadata: unknown }) {
       }
     >
       <Tag
-        icon={<IconBrandGithub size={12} className="inline -mt-0.5 mr-0.5" />}
+        icon={
+          <IconBrandGithub
+            size={12}
+            className="inline -mt-0.5 mr-0.5 text-gray-900 dark:text-gray-100"
+          />
+        }
         className="cursor-default text-gray-600 dark:text-gray-300"
       >
         {primary}

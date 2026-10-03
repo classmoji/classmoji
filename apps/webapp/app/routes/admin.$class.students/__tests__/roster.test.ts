@@ -5,9 +5,8 @@
  * one another:
  *
  *   READ  — the whole teaching team (OWNER/TEACHER/ASSISTANT) may see who is
- *           in the class, but contact details (email, provider_email,
- *           school_id) and the membership grade fields (letter_grade, comment)
- *           are OWNER-only. The split happens in the LOADER, so the fields are
+ *           in the class, but contact details (email, school_id) and the
+ *           membership grade fields (letter_grade, comment) are OWNER-only. The split happens in the LOADER, so the fields are
  *           never serialized into the page for other staff — there is nothing
  *           for the client to hide. The MCP roster resource applies the same
  *           split; the two are meant to stay in step.
@@ -87,7 +86,6 @@ const STUDENT_ROW = {
   login: 'ada',
   image: 'https://example.test/ada.png',
   email: 'ada@school.test',
-  provider_email: 'ada@github.test',
   school_id: 'F00123',
   stripe_customer_id: 'cus_123',
   banned: false,
@@ -106,13 +104,7 @@ const INVITE_ROW = {
   created_at: new Date('2026-09-01T00:00:00Z'),
 };
 
-const OWNER_ONLY_FIELDS = [
-  'email',
-  'provider_email',
-  'school_id',
-  'letter_grade',
-  'comment',
-] as const;
+const OWNER_ONLY_FIELDS = ['email', 'school_id', 'letter_grade', 'comment'] as const;
 
 const loaderArgs = (prefix: 'admin' | 'teacher' | 'assistant' = 'admin') =>
   ({
@@ -333,7 +325,6 @@ describe('students loader — field split', () => {
 
     expect(data.students[0]).toMatchObject({
       email: 'ada@school.test',
-      provider_email: 'ada@github.test',
       school_id: 'F00123',
       letter_grade: 'A-',
       comment: 'strong on recursion',

@@ -1,0 +1,154 @@
+/**
+ * Generate the `.gitlab-ci.yml` that autogrades a GitLab student project: the
+ * GitLab counterpart of generateClassroomWorkflow (GitHub Actions).
+ *
+ * GitHub's `classroom-resources` graders are Actions and can't run in GitLab
+ * CI, so each test runs as plain shell with the same semantics:
+ *   - COMMAND and the language presets: optional setup command, then the run
+ *     command under a timeout; exit code 0 passes.
+ *   - IO: the input on stdin, the output compared to the expected output
+ *     (INCLUDED / EXACT / REGEX).
+ * Each result is reported exactly as the graders report theirs (base64 of
+ * `{"status":"pass"|"fail"}`), to the same Trigger.dev callback with the same
+ * per-classroom HMAC, so `ingest_autograde_result` and the UI need no GitLab
+ * branch. Results are advisory, as on GitHub: a student can edit this file.
+ *
+ * User-supplied strings (commands, inputs, expected output, names) only ever
+ * reach the shell single-quoted, and the script sits in a YAML literal block,
+ * so neither YAML nor the shell interprets them.
+ */
+
+import type { GenerateWorkflowOptions, WorkflowTestInput } from './generateClassroomWorkflow.ts';
+
+/** POSIX single-quoted shell word. */
+function shq(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Stable, unique, lowercase id from a test name + index (same as GitHub's). */
+function testId(name: string, index: number): string {
+  const base = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return base ? `${base}-${index}` : `test-${index}`;
+}
+
+/** The shell that runs one test and appends its result to `$results`. */
+function testScript(test: WorkflowTestInput, id: string): string[] {
+  const timeout = test.timeout && test.timeout > 0 ? test.timeout : 10;
+  const lines: string[] = [];
+  lines.push(`# ${test.name.replace(/\n/g, ' ')}`);
+  lines.push('status=fail');
+  lines.push(`setup=${shq(test.setup_command ?? '')}`);
+  lines.push(`cmd=${shq(test.run_command ?? '')}`);
+  lines.push('if [ -z "$setup" ] || bash -c "$setup"; then');
+  if (test.method === 'IO') {
+    lines.push(`  input=${shq(test.input ?? '')}`);
+    lines.push(`  expected=${shq(test.expected_output ?? '')}`);
+    lines.push(
+      `  out=$(printf '%s' "$input" | with_timeout ${timeout}m bash -c "$cmd" 2>&1) || true`
+    );
+    switch (test.comparison_method ?? 'INCLUDED') {
+      case 'EXACT':
+        lines.push('  [ "$out" = "$expected" ] && status=pass');
+        break;
+      case 'REGEX':
+        lines.push(`  printf '%s' "$out" | grep -Eq -- "$expected" && status=pass`);
+        break;
+      default:
+        lines.push('  case "$out" in *"$expected"*) status=pass ;; esac');
+    }
+  } else {
+    lines.push(`  with_timeout ${timeout}m bash -c "$cmd" && status=pass`);
+  }
+  lines.push('fi');
+  lines.push('[ "$status" = pass ] || failed=1');
+  lines.push(`echo "[classmoji] ${id}: $status"`);
+  lines.push(`res=$(printf '{"status":"%s"}' "$status" | base64 | tr -d '\\n')`);
+  // `"<id>": {"name": <name>, "result": "` is precomputed JSON, single-quoted.
+  const prefix = `${JSON.stringify(id)}: {"name": ${JSON.stringify(test.name)}, "result": "`;
+  lines.push(`results="$results$sep"${shq(prefix)}"$res"'"}'`);
+  lines.push("sep=','");
+  return lines;
+}
+
+/**
+ * Line breaks as `\n` only. A carriage return inside the YAML literal block
+ * ends the line for YAML without the indentation this file relies on, which
+ * would break the file (or let a crafted value add YAML of its own). Test
+ * names become one line; multi-line inputs and outputs keep their `\n`s.
+ */
+function normalizeTest(test: WorkflowTestInput): WorkflowTestInput {
+  const lines = (value: string | null | undefined) =>
+    value == null ? value : value.replace(/\r\n?/g, '\n');
+  return {
+    ...test,
+    name: (test.name ?? '').replace(/[\r\n]+/g, ' '),
+    setup_command: lines(test.setup_command),
+    run_command: lines(test.run_command),
+    input: lines(test.input),
+    expected_output: lines(test.expected_output),
+  };
+}
+
+export function generateGitlabCi(
+  rawTests: WorkflowTestInput[],
+  options: GenerateWorkflowOptions = {}
+): string {
+  const tests = rawTests.map(normalizeTest);
+  const script: string[] = [
+    'set -u',
+    // `timeout` from coreutils when the image has it; otherwise untimed (the
+    // job-level CI timeout still bounds it).
+    'with_timeout() { if command -v timeout >/dev/null 2>&1; then timeout "$@"; else shift; "$@"; fi; }',
+    'failed=0',
+    "results='{'",
+    "sep=''",
+  ];
+  tests.forEach((test, i) => {
+    script.push('');
+    script.push(...testScript(test, testId(test.name, i)));
+  });
+  script.push('');
+  script.push(`results="$results}"`);
+
+  if (options.triggerUrl && tests.length) {
+    script.push('# Report per-test results to Classmoji (advisory, like GitHub).');
+    script.push(
+      `payload=$(printf '{"payload":{"classroomSlug":%s,"repo":"%s","sha":"%s","run_id":"%s","actor":"%s","token":%s,"results":%s}}' ` +
+        `${shq(JSON.stringify(options.classroomSlug ?? ''))} "$CI_PROJECT_PATH" "$CI_COMMIT_SHA" "$CI_PIPELINE_ID" "\${GITLAB_USER_LOGIN:-}" ` +
+        `${shq(JSON.stringify(options.hmacToken ?? ''))} "$results")`
+    );
+    const auth = options.triggerToken
+      ? `-H ${shq(`Authorization: Bearer ${options.triggerToken}`)} `
+      : '';
+    script.push(
+      `curl -sS --fail-with-body -X POST ${shq(options.triggerUrl)} ` +
+        auth +
+        `-H 'Content-Type: application/json' -d "$payload" ` +
+        `|| echo "[classmoji] Could not report autograding results to Classmoji"`
+    );
+  }
+  script.push('exit "$failed"');
+
+  const lines: string[] = [];
+  lines.push('# Generated by Classmoji — do not edit by hand.');
+  lines.push('# Runs the autograding tests on every push via GitLab CI.');
+  lines.push('classmoji-autograding:');
+  lines.push('  image: ubuntu:24.04');
+  lines.push('  rules:');
+  lines.push(`    - if: '$CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "web"'`);
+  lines.push('  before_script:');
+  lines.push(
+    '    - command -v curl >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq curl ca-certificates >/dev/null) || apk add --no-cache curl bash coreutils'
+  );
+  lines.push('  script:');
+  lines.push('    - |');
+  // Every physical line is indented, including the ones inside a multi-line
+  // quoted value: YAML strips exactly this indentation, restoring the value.
+  for (const line of script) {
+    for (const physical of line.split('\n')) lines.push(physical ? `      ${physical}` : '');
+  }
+  return lines.join('\n') + '\n';
+}

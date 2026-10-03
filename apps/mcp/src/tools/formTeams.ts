@@ -239,7 +239,7 @@ const TEAM_SET_ERRORS: ReadonlyMap<string, { kind: MappedKind; message: string }
     {
       kind: 'invalid_params',
       message:
-        'The classroom’s GitHub organization cannot be reached; check the Classmoji app is installed on it',
+        'The classroom’s Github organization or Gitlab group cannot be reached; check the Classmoji app is installed (Github) or Gitlab is connected (Gitlab)',
     },
   ],
   [
@@ -247,7 +247,7 @@ const TEAM_SET_ERRORS: ReadonlyMap<string, { kind: MappedKind; message: string }
     {
       kind: 'invalid_params',
       message:
-        'Some team names are already teams in the GitHub organization (see names); change team_name_template and run again',
+        'Some team names are already taken on Github or Gitlab (see names); change team_name_template and run again',
     },
   ],
   [
@@ -255,7 +255,7 @@ const TEAM_SET_ERRORS: ReadonlyMap<string, { kind: MappedKind; message: string }
     {
       kind: 'invalid_params',
       message:
-        'Creating teams from a team set is GitHub only; this classroom’s organization is not on GitHub',
+        'Creating teams from a team set needs a Github or Gitlab classroom; this one is on neither',
     },
   ],
   [
@@ -320,7 +320,7 @@ function refinedMessage(code: string, details: unknown): string | null {
         : null;
     case 'github_unavailable':
       return record.reason === 'timeout'
-        ? 'GitHub did not answer in time while checking team names; nothing was created. Try again in a minute'
+        ? 'Github or Gitlab did not answer in time while checking team names; nothing was created. Try again in a minute'
         : null;
     case 'set_locked': {
       // RUNNING (or a claim with no state yet): the create is under way.
@@ -2214,13 +2214,13 @@ export const formTeamsCreateTool: ToolDefinition<FormTeamsCreateArgs> = {
   annotations: { destructive: true, idempotent: false, openWorld: true },
   title: 'Create teams from a team-set run',
   description:
-    'Turns one SOLVED run of a team set into real teams: a Classmoji team and a GitHub team for ' +
+    'Turns one SOLVED run of a team set into real teams: a Classmoji team and a Github team (or Gitlab team subgroup) for ' +
     'each, with its members, all tagged with the set’s name. Owner only; requires Pro.\n' +
     'Without confirm it returns a preview and creates nothing. ALWAYS show the user that preview ' +
     '(team names and members) and get their explicit approval before calling again with ' +
     'confirm: true.\n' +
     'Refused when the run is not solved, is stale (answers or roster changed since; start a new ' +
-    'run), a team name is taken on GitHub, or the set’s teams were already created. Creation ' +
+    'run), a team name is taken on Github or Gitlab, or the set’s teams were already created. Creation ' +
     'runs in the background: follow it with form_teams_get (create_status, create_state). A ' +
     'create that failed can be previewed and confirmed again for the same run; teams already ' +
     'made are skipped. Nothing is deleted, and there is no undo tool.',

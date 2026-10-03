@@ -1,4 +1,5 @@
 import { Tag, Tooltip } from 'antd';
+import { useGitWeb } from '~/hooks/useGitWeb';
 
 interface RepositoryAssignmentStatusProps {
   repositoryAssignment?: {
@@ -18,6 +19,7 @@ const RepositoryAssignmentStatus = ({
   repositoryAssignment,
   isDropped,
 }: RepositoryAssignmentStatusProps) => {
+  const web = useGitWeb();
   const lateHours = repositoryAssignment?.num_late_hours ?? 0;
   const extensionHours = repositoryAssignment?.extension_hours ?? 0;
   const hasLateHours = lateHours > 0;
@@ -36,7 +38,7 @@ const RepositoryAssignmentStatus = ({
     isPushMode && submittedAt
       ? `Last push ${submittedAt.toLocaleString()}`
       : isPushMode
-        ? 'A push to the repository is the submission'
+        ? `A push to the ${web.terms.repo} is the submission`
         : undefined;
 
   return (
@@ -52,7 +54,7 @@ const RepositoryAssignmentStatus = ({
         )}
 
         {repositoryAssignment?.status === 'OPEN' && (
-          <Tooltip title={isPushMode ? 'No push to the repository yet' : undefined}>
+          <Tooltip title={isPushMode ? `No push to the ${web.terms.repo} yet` : undefined}>
             <Tag color="red" bordered={false}>
               Not submitted
             </Tag>

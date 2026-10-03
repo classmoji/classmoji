@@ -5,7 +5,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * fields the client reads.
  *
  *   - Each membership: `id`, `role` and its classroom.
- *   - A classroom's git organization: `id`, `provider`, `provider_id`, `login`.
+ *   - A classroom's git organization: `id`, `provider`, `provider_id`, `login`,
+ *     and `base_url` (a self-managed Gitlab's host, which its links need).
  *   - `session`: the session id and `impersonatedBy`, and the user's name and
  *     email (what the impersonation banner reads).
  *   - The top-level keys the app reads, and no others.
@@ -19,7 +20,13 @@ type Row = Record<string, unknown>;
 
 /** Applies a Prisma-style `select` or `include` to a full row. */
 const project = (row: Row, query: { select?: Row; include?: Row }): Row => {
-  const relations = new Set(['classroom_memberships', 'classroom', 'git_organization', 'settings']);
+  const relations = new Set([
+    'accounts',
+    'classroom_memberships',
+    'classroom',
+    'git_organization',
+    'settings',
+  ]);
   const out: Row = {};
   if (query.select) {
     for (const [key, spec] of Object.entries(query.select)) {
@@ -79,10 +86,20 @@ const CLASSROOM_ROW = {
 
 const USER_ROW = {
   id: 'user-1',
-  login: 'student-login',
   name: 'Student Name',
   email: 'student@example.edu',
-  provider_id: '1001',
+  emailVerified: true,
+  // Git identity lives on the Github account, not the user row.
+  accounts: [
+    {
+      provider_id: 'github',
+      account_id: '1001',
+      username: 'student-login',
+      image: null,
+      email: null,
+      access_token: 'gho_secret',
+    },
+  ],
   classroom_memberships: [
     {
       id: 'mem-1',
@@ -116,8 +133,16 @@ const findUniqueMock = vi.fn();
 const getAuthSessionMock = vi.fn();
 const getSessionMock = vi.fn();
 
-vi.mock('@classmoji/database', () => ({
-  default: () => ({ user: { findUnique: (...a: unknown[]) => findUniqueMock(...a) } }),
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
+  default: () => ({
+    user: { findUnique: (...a: unknown[]) => findUniqueMock(...a) },
+    // Password (credential) accounts, for has_password.
+    account: { count: async () => 0 },
+  }),
 }));
 
 vi.mock('@classmoji/auth/server', () => ({
@@ -181,7 +206,7 @@ describe('root loader payload', () => {
     const membershipSelect = include.classroom_memberships.select;
     expect(Object.keys(membershipSelect).sort()).toEqual(['classroom', 'id', 'role']);
     expect(membershipSelect.classroom.include.git_organization).toEqual({
-      select: { id: true, provider: true, provider_id: true, login: true },
+      select: { id: true, provider: true, provider_id: true, login: true, base_url: true },
     });
   });
 
@@ -202,12 +227,30 @@ describe('root loader payload', () => {
       provider: 'GITHUB',
       provider_id: '4242',
       login: 'test-org',
+      base_url: null,
     });
     expect((membership.organization.settings as Row).updated_at).toBeInstanceOf(Date);
     expect(membership.organization.updated_at).toBeInstanceOf(Date);
 
     const [organization] = data.organizations as Row[];
     expect(organization.git_organization).toEqual(membership.organization.git_organization);
+  });
+
+  it('returns the git identity from the accounts, without the account rows', async () => {
+    const data = await load('/student/test-class/dashboard');
+    const user = data.user as Row;
+
+    expect(user).toMatchObject({
+      login: 'student-login',
+      logins: { GITHUB: 'student-login', GITLAB: null },
+      has_github: true,
+      has_gitlab: false,
+      has_password: false,
+      provider: 'GITHUB',
+    });
+    expect(user).not.toHaveProperty('accounts');
+    expect(JSON.stringify(data)).not.toMatch(/gho_secret/);
+    expect(data.gitMode).toBe('GITHUB');
   });
 
   it('returns the session fields the impersonation banner reads', async () => {
@@ -238,6 +281,7 @@ describe('root loader payload', () => {
     expect(Object.keys(signedIn).sort()).toEqual(
       [
         'aiAgentAvailable',
+        'gitMode',
         'impersonationCookieDomain',
         'impersonationReturnUrl',
         'memberships',

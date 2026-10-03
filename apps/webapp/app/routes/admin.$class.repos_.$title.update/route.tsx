@@ -1,12 +1,13 @@
 import { Modal, Form, Input, Alert } from 'antd';
+import { repoNamespace, resolveTemplateRef } from '@classmoji/utils';
 import { useNavigate, useParams } from 'react-router';
 import { useEffect } from 'react';
 import { auth, tasks } from '@trigger.dev/sdk';
 import { nanoid } from 'nanoid';
 import { ClassmojiService } from '@classmoji/services';
-import { resolveTemplateRef } from '@classmoji/utils';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { useDisclosure, useGlobalFetcher } from '~/hooks';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import { parseUpdateRequest } from '../admin.$class.repos.update/updateRequest.server';
 import type { Route } from './+types/route';
 
@@ -33,6 +34,7 @@ const UpdateRepositories = ({ loaderData }: Route.ComponentProps) => {
   const { repository } = loaderData;
   const navigate = useNavigate();
   const [form] = Form.useForm();
+  const { terms } = useGitWeb();
   const { fetcher } = useGlobalFetcher();
   const { class: classSlug, title } = useParams();
 
@@ -70,21 +72,21 @@ const UpdateRepositories = ({ loaderData }: Route.ComponentProps) => {
       okText="Update"
     >
       <Form layout="vertical" form={form}>
-        <h2 className="font-bold text-lg">Update repositories</h2>
+        <h2 className="font-bold text-lg">Update {terms.repos}</h2>
         <Alert
-          description="Make sure to push your changes to the template repository before running this."
+          description={`Make sure to push your changes to the template ${terms.repo} before running this.`}
           type="warning"
           className="my-4"
         />
         <Form.Item
-          label="Pull request title"
+          label={`${terms.PR} title`}
           name="title"
           required
           rules={[{ required: true, message: 'Title is required' }]}
         >
           <Input />
         </Form.Item>
-        <Form.Item label="Pull request description" name="description">
+        <Form.Item label={`${terms.PR} description`} name="description">
           <Input.TextArea rows={6} />
         </Form.Item>
       </Form>
@@ -115,7 +117,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   if (!repository) return { error: 'Repository not found.' };
   const templateRef = resolveTemplateRef(repository.template, classroom.git_organization?.login);
   if (!templateRef) {
-    return { error: 'This repository has no template repository to update from.' };
+    return {
+      error: 'This repository has no template repository to update from.',
+    };
   }
 
   const sessionId = nanoid();
@@ -130,7 +134,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   // Use git_organization.login for GitHub API calls, not the classroom slug
   const gitOrgLogin = classroom.git_organization?.login;
   if (!gitOrgLogin) {
-    throw new Response('Git organization not configured', { status: 400 });
+    throw new Response('Github organization not configured', { status: 400 });
   }
 
   const repositories = await ClassmojiService.gitRepo.findByRepository(classSlug!, repository.id);
@@ -146,6 +150,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         prDescription: values.description,
         templateOwner,
         templateRepo,
+        // Gitlab: student projects live in the class subgroup's `projects`.
+        repoOwner: classroom.git_namespace ? repoNamespace(classroom) : null,
       },
       options: { tags: [`session_${sessionId}`] },
     };

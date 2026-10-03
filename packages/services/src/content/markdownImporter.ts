@@ -699,7 +699,14 @@ export function rewriteImagePaths(html: string, imageMap: Map<string, any>): str
 export async function processMarkdownImport(
   markdown: string,
   uploadedImages: Array<{ name: string }>,
-  options: { org: string; repo: string; contentPath: string; assetsFolder: string }
+  options: {
+    org: string;
+    repo: string;
+    contentPath: string;
+    assetsFolder: string;
+    /** 'GITLAB' for a Gitlab content project, whose files have no public raw URL. */
+    provider?: string | null;
+  }
 ): Promise<{
   html: string;
   imageMap: Map<string, any>;
@@ -744,7 +751,13 @@ export async function processMarkdownImport(
 
     const newFilename = `${sanitizedName.split('.')[0]}-${timestamp}.${sanitizedName.split('.').pop()}`;
     const newPath = `${options.assetsFolder}/${newFilename}`;
-    const githubUrl = `https://raw.githubusercontent.com/${options.org}/${options.repo}/main/${options.contentPath}/assets/${newFilename}`;
+    const assetPath = `${options.contentPath}/assets/${newFilename}`;
+    // A Gitlab content project is private: its files are read through the
+    // slides app's session-gated content proxy.
+    const githubUrl =
+      options.provider === 'GITLAB'
+        ? `${(process.env.SLIDES_URL || '').replace(/\/+$/, '')}/content/${options.org}/${options.repo}/${assetPath}`
+        : `https://raw.githubusercontent.com/${options.org}/${options.repo}/main/${assetPath}`;
 
     imageMapWithUrls.set(originalPath, {
       file,

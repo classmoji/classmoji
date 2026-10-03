@@ -719,7 +719,13 @@ async function resolveImportedUser(tx: ImportTx, s: ImportStudent, warnings: str
     // unique (provider_id, username) constraint mid-transaction.
     if (s.login && s.login !== byProvider.username) {
       const taken = await tx.account.findUnique({
-        where: { provider_id_username: { provider_id: 'github', username: s.login } },
+        where: {
+          provider_id_gitlab_instance_id_username: {
+            provider_id: 'github',
+            gitlab_instance_id: '',
+            username: s.login,
+          },
+        },
         select: { id: true },
       });
       if (!taken) accountData.username = s.login;

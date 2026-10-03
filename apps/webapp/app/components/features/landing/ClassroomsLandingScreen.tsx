@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect, useRef, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
 import { Button, IconGithub, IconPlus } from '@classmoji/ui-components';
@@ -18,9 +18,14 @@ interface Props {
   notifications?: BellNotification[];
   unreadCount?: number;
   membershipRoles?: Record<string, NotificationRole[]>;
+  /** The session's mode: a GitLab session gets no Github-only actions. */
+  gitMode?: 'GITHUB' | 'GITLAB';
+  /** Shown under the header, above the classes (e.g. an account to connect). */
+  notice?: ReactNode;
 }
 
 export function ClassroomsLandingScreen({
+  gitMode = 'GITHUB',
   user,
   classes,
   onOpenClass,
@@ -29,6 +34,7 @@ export function ClassroomsLandingScreen({
   notifications,
   unreadCount,
   membershipRoles,
+  notice,
 }: Props) {
   const [tourSpin, setTourSpin] = useState(false);
 
@@ -247,11 +253,14 @@ export function ClassroomsLandingScreen({
               Take a tour
             </Button>
           )}
-          <Link to="/import-classroom" data-onboarding="import">
-            <Button>
-              <IconGithub size={14} /> Import from GitHub Classroom
-            </Button>
-          </Link>
+          {gitMode === 'GITHUB' && (
+            <Link to="/import-classroom" data-onboarding="import">
+              <Button>
+                <IconGithub size={14} className="text-gray-900 dark:text-gray-100" /> Import from
+                GitHub Classroom
+              </Button>
+            </Link>
+          )}
           <Link to="/create-classroom" data-onboarding="new-class">
             <Button variant="primary">
               <IconPlus size={14} /> New class
@@ -259,6 +268,8 @@ export function ClassroomsLandingScreen({
           </Link>
         </div>
       </div>
+
+      {notice && <div className="-mt-2 mb-6">{notice}</div>}
 
       {pinned.length === 0 && active.length === 0 && archived.length === 0 ? (
         <div className="rounded-2xl border-2 border-dashed border-line p-10 text-center text-ink-4">

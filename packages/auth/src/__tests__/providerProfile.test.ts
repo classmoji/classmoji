@@ -4,7 +4,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { mapGitHubProfile, onAccountCreated } from '../providerProfile.ts';
+import { mapGitHubProfile, mapGitLabProfile, onAccountCreated } from '../providerProfile.ts';
 
 const prisma = {
   user: { update: vi.fn() },
@@ -71,6 +71,7 @@ describe('mapGitHubProfile', () => {
     expect(prisma.account.updateMany).toHaveBeenCalledWith({
       where: {
         provider_id: 'github',
+        gitlab_instance_id: '',
         username: { equals: 'jdoe', mode: 'insensitive' },
         NOT: { id: 'a1' },
       },
@@ -78,7 +79,12 @@ describe('mapGitHubProfile', () => {
     });
     expect(prisma.account.update).toHaveBeenCalledWith({
       where: { id: 'a1' },
-      data: { username: 'jdoe', email: 'jdoe@users.github.test', image: 'https://avatars.test/42' },
+      data: {
+        gitlab_instance_id: '',
+        username: 'jdoe',
+        email: 'jdoe@users.github.test',
+        image: 'https://avatars.test/42',
+      },
     });
     expect(prisma.user.update).toHaveBeenCalledWith({
       where: { id: 'u1' },
@@ -103,7 +109,12 @@ describe('onAccountCreated', () => {
 
     expect(prisma.account.update).toHaveBeenCalledWith({
       where: { id: 'a7' },
-      data: { username: 'newbie', email: profile.email, image: profile.avatar_url },
+      data: {
+        gitlab_instance_id: '',
+        username: 'newbie',
+        email: profile.email,
+        image: profile.avatar_url,
+      },
     });
     expect(prisma.user.update).toHaveBeenCalledWith({
       where: { id: 'u7' },
@@ -126,5 +137,82 @@ describe('onAccountCreated', () => {
     await onAccountCreated(db, { id: 'a9', providerId: 'github', accountId: '9', userId: 'u9' });
 
     expect(prisma.account.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('mapGitLabProfile', () => {
+  const gitlab = {
+    id: 5,
+    username: 'jdoe',
+    email: 'jdoe@gitlab.test',
+    avatar_url: 'https://gl.test/5',
+  };
+
+  it('leaves a new user unverified and never claims an account by username', async () => {
+    prisma.account.findFirst.mockResolvedValue(null);
+    await expect(mapGitLabProfile(db, gitlab)).resolves.toEqual({ emailVerified: false });
+    expect(prisma.account.update).not.toHaveBeenCalled();
+  });
+
+  it('parks the profile under the instance-scoped id', async () => {
+    prisma.account.findFirst.mockResolvedValue(null);
+    await mapGitLabProfile(db, gitlab, 'inst1');
+
+    await onAccountCreated(db, {
+      id: 'g1',
+      providerId: 'gitlab',
+      accountId: 'inst1:5',
+      userId: 'u5',
+    });
+
+    expect(prisma.account.update).toHaveBeenCalledWith({
+      where: { id: 'g1' },
+      data: {
+        gitlab_instance_id: 'inst1',
+        username: 'jdoe',
+        email: gitlab.email,
+        image: gitlab.avatar_url,
+      },
+    });
+    // No Github connected (findFirst finds none): the Gitlab avatar is shown.
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 'u5' },
+      data: { image: gitlab.avatar_url },
+    });
+  });
+
+  it('keeps the Github avatar when Github is connected too', async () => {
+    prisma.account.findFirst
+      .mockResolvedValueOnce({ id: 'g4', user_id: 'u4' }) // the Gitlab account
+      .mockResolvedValueOnce({ id: 'gh4' }); // a Github account exists
+    await mapGitLabProfile(db, gitlab);
+
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it("releases a stale username on the same server only, never another server's jdoe", async () => {
+    prisma.account.findFirst.mockResolvedValue({ id: 'g2', user_id: 'u2' });
+    await mapGitLabProfile(db, gitlab, 'inst1');
+
+    expect(prisma.account.updateMany).toHaveBeenCalledWith({
+      where: {
+        provider_id: 'gitlab',
+        gitlab_instance_id: 'inst1',
+        username: { equals: 'jdoe', mode: 'insensitive' },
+        NOT: { id: 'g2' },
+      },
+      data: { username: null },
+    });
+  });
+
+  it('keeps gitlab.com accounts on the empty server key', async () => {
+    prisma.account.findFirst.mockResolvedValue({ id: 'g3', user_id: 'u3' });
+    await mapGitLabProfile(db, gitlab);
+
+    expect(prisma.account.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ provider_id: 'gitlab', gitlab_instance_id: '' }),
+      })
+    );
   });
 });

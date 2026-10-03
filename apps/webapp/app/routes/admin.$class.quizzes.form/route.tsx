@@ -23,6 +23,7 @@ import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { ClassmojiService } from '@classmoji/services';
 import { QUIZ_AUTHOR_SETTING_KEYS, canAuthorQuiz } from '@classmoji/utils';
 import { PromptAssistant, type PromptSuggestion } from '~/components/quiz/PromptAssistant';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import {
   normalizeExcludedPaths,
   parseExcludedPathsText,
@@ -243,6 +244,8 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
   } = loaderData;
   const callout = useCallout();
   const { opened, close } = useRouteDrawer({});
+  const web = useGitWeb();
+  const { terms } = web;
   const { isDarkMode } = useDarkMode();
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
@@ -665,13 +668,17 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                     {/* Example Solution Repo (optional - for AI assistant code exploration) */}
                     <Form.Item
                       label="Example Solution Repository (Optional)"
-                      tooltip="Provide a GitHub URL to an example solution. The AI Prompt Assistant can explore this code to generate more targeted prompts."
+                      tooltip={`Provide a ${web.label} URL to an example solution. The AI Prompt Assistant can explore this code to generate more targeted prompts.`}
                       extra="Used by the AI Prompt Assistant to analyze code and generate context-aware quiz prompts"
                     >
                       <Input
                         value={exampleRepoUrl}
                         onChange={e => setExampleRepoUrl(e.target.value)}
-                        placeholder="https://github.com/org/example-solution"
+                        placeholder={
+                          web.isGitLab
+                            ? 'https://gitlab.com/group/example-solution'
+                            : 'https://github.com/org/example-solution'
+                        }
                       />
                     </Form.Item>
 

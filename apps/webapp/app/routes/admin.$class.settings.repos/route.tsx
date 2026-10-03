@@ -1,4 +1,4 @@
-import { Select, Switch, Alert } from 'antd';
+import { Select, Switch, Alert, Button } from 'antd';
 import { useParams } from 'react-router';
 import { useNotifiedFetcher } from '~/hooks';
 
@@ -13,7 +13,10 @@ import {
   isImpersonatingSession,
   ORG_SETTINGS_IMPERSONATION_MESSAGE,
 } from '~/utils/impersonationSession';
+import Tasks from '@classmoji/tasks';
 import InstallAppBanner from '~/components/features/InstallAppBanner';
+import { useGitWeb } from '~/hooks/useGitWeb';
+import { GITLAB_UNSUPPORTED, isGitLabClassroom } from '~/utils/gitlabGuard.server';
 import type { Route } from './+types/route';
 
 /** Why the controls are off when the settings themselves loaded fine. */
@@ -44,14 +47,32 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     githubAppName: process.env.GITHUB_APP_NAME,
   };
 
+  const isGitLab = isGitLabClassroom(classroom);
+
   if (!gitOrgLogin) {
     return {
       githubOrganization: null,
       gitOrgLogin: null,
       ...install,
+      isGitLab,
       canEdit: false,
       editBlockedReason: null,
-      error: 'This classroom is not connected to a GitHub organization.',
+      error: isGitLab
+        ? 'This classroom is not connected to a Gitlab group.'
+        : 'This classroom is not connected to a Github organization.',
+    };
+  }
+
+  // Gitlab: no org-level permission settings, only webhook upkeep.
+  if (isGitLab) {
+    return {
+      githubOrganization: null,
+      gitOrgLogin,
+      ...install,
+      isGitLab,
+      canEdit: false,
+      editBlockedReason: null,
+      error: null,
     };
   }
 
@@ -60,6 +81,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       githubOrganization: null,
       gitOrgLogin,
       ...install,
+      isGitLab,
       canEdit: false,
       editBlockedReason: null,
       error: `The Classmoji GitHub App isn't installed on "${gitOrgLogin}". Install it to manage repository settings.`,
@@ -99,6 +121,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       githubOrganization: null,
       gitOrgLogin,
       ...install,
+      isGitLab,
       canEdit: false,
       editBlockedReason: null,
       error:
@@ -118,6 +141,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     githubOrganization: organizationResult.data,
     gitOrgLogin,
     ...install,
+    isGitLab,
     canEdit: editBlockedReason === null,
     editBlockedReason,
     error: null,
@@ -151,11 +175,36 @@ const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
     isExample,
     gitProvider,
     githubAppName,
+    isGitLab,
     canEdit,
     editBlockedReason,
   } = loaderData;
   const { class: classSlug } = useParams();
   const { fetcher } = useNotifiedFetcher();
+  const { terms } = useGitWeb();
+
+  if (isGitLab && !error) {
+    return (
+      <div className="flex flex-col gap-14 pt-4">
+        <Section
+          title="Webhooks"
+          subtitle="Gitlab tells Classmoji about pushes and closed issues through a webhook on each repository. If submissions stop showing up, repair them: every student and content repository gets one working Classmoji webhook again. This also runs every night."
+        >
+          <Button
+            loading={fetcher.state !== 'idle'}
+            onClick={() =>
+              fetcher.submit(
+                { intent: 'repairWebhooks' },
+                { method: 'post', encType: 'application/json' }
+              )
+            }
+          >
+            Repair webhooks
+          </Button>
+        </Section>
+      </div>
+    );
+  }
 
   const showInstallBanner =
     !appInstalled && !isExample && Boolean(gitOrgLogin) && gitProvider === 'GITHUB';
@@ -174,7 +223,7 @@ const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
             offers the fix, so showing both repeats the diagnosis in vaguer
             words underneath the cure. */}
         {!showInstallBanner && (
-          <Alert message={error ?? 'Repository settings unavailable.'} type="warning" showIcon />
+          <Alert message={error ?? `${terms.Repo} settings unavailable.`} type="warning" showIcon />
         )}
       </div>
     );
@@ -188,9 +237,9 @@ const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
   };
 
   const permissionExplanations: Record<string, string> = {
-    none: 'Students are only able to view their personal or team repositories.',
-    read: 'Students are able to read other students repositories.',
-    write: 'Students are able to read and write to other students repositories.',
+    none: `Students are only able to view their personal or team ${terms.repos}.`,
+    read: `Students are able to read other students ${terms.repos}.`,
+    write: `Students are able to read and write to other students ${terms.repos}.`,
   };
   return (
     <div className="flex flex-col gap-14 pt-4">
@@ -213,7 +262,7 @@ const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
       )}
       <Section
         title="Base permissions"
-        subtitle="Default permissions for when student repositories are created."
+        subtitle={`Default permissions for when student ${terms.repos} are created.`}
       >
         <div>
           <Select
@@ -241,7 +290,10 @@ const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
           )}
         </div>
       </Section>
-      <Section title="Repository creation" subtitle="Allow students to create repositories.">
+      <Section
+        title={`${terms.Repo} creation`}
+        subtitle={`Allow students to create ${terms.repos}.`}
+      >
         <Switch
           disabled={!canEdit}
           checked={githubOrganization.members_can_create_repositories}
@@ -276,6 +328,18 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     input = await request.json();
   } catch {
     return { error: 'Expected the settings to change as JSON.', action: UPDATE_ACTION };
+  }
+
+  // Gitlab: no organization permission settings, only webhook upkeep.
+  if (isGitLabClassroom(classroom)) {
+    if ((input as { intent?: unknown } | null)?.intent === 'repairWebhooks') {
+      await Tasks.repairGitlabWebhooksTask.trigger({ classroomId: classroom.id });
+      return {
+        success: 'Repairing webhooks. Every repository will be fixed within a few minutes.',
+        action: 'REPAIR_GITLAB_WEBHOOKS',
+      };
+    }
+    throw new Response(GITLAB_UNSUPPORTED, { status: 400 });
   }
 
   // The requesting owner's own GitHub token, the same way the classroom delete

@@ -1540,6 +1540,54 @@ describe('explore_codebase (fake pipeline)', () => {
     );
   });
 
+  it('explores a Github repository from the org, with no host', async () => {
+    let seen: Record<string, unknown> = {};
+    const { tools } = exploreSetup(async i => {
+      seen = i;
+      return result(['a.css']);
+    });
+    await call(tools, 'explore_codebase', { focus_area: FOCUS });
+    expect(seen).toMatchObject({ owner: 'sample-org', repo: 'landing-page', token: 'repo-token' });
+    expect(seen).not.toHaveProperty('gitHost');
+  });
+
+  it("explores a Gitlab project from its namespace on the classroom's instance", async () => {
+    let seen: Record<string, unknown> = {};
+    const mintRepoToken = vi.fn(async () => 'project-token');
+    const gitlab = codeAware();
+    const { tools } = setup({
+      ctx: {
+        ...gitlab,
+        exploration: {
+          ...gitlab.exploration!,
+          owner: 'dept/cs10/projects',
+          repo: 'landing-page-ada',
+          gitOrganization: { provider: 'GITLAB', login: 'dept/cs10/projects' },
+          gitHost: 'https://gitlab.example.edu',
+        },
+      },
+      services: {
+        explore: vi.fn(async (i: Record<string, unknown>) => {
+          seen = i;
+          return result(['a.css']);
+        }) as never,
+        mintRepoToken,
+        anthropic: vi.fn(() => ({}) as Anthropic),
+      },
+    });
+    await call(tools, 'explore_codebase', { focus_area: FOCUS });
+    expect(mintRepoToken).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'GITLAB', login: 'dept/cs10/projects' }),
+      'landing-page-ada'
+    );
+    expect(seen).toMatchObject({
+      owner: 'dept/cs10/projects',
+      repo: 'landing-page-ada',
+      token: 'project-token',
+      gitHost: 'https://gitlab.example.edu',
+    });
+  });
+
   it('hands earlier explorations to the pipeline as context', async () => {
     let seen: Record<string, unknown> = {};
     const { tools, grading, log } = exploreSetup(async i => {

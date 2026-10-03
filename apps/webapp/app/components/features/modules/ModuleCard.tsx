@@ -29,9 +29,11 @@ import ModuleFormModal, {
 import AssignmentFormModal, {
   type AssignmentKind,
 } from '~/components/features/assignments/AssignmentFormModal';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import {
   ASSIGNMENT_TYPE_META,
   assignmentTarget,
+  assignmentTypeName,
   type AssignmentRowData,
 } from '~/components/features/assignments/AssignmentsTable';
 import AddContentItemModal from './AddContentItemModal';
@@ -40,6 +42,7 @@ import { useRepositoryActions } from '~/components/features/repositories/useRepo
 import {
   TYPE_META,
   describeItem,
+  typeLabel,
   type CandidateContent,
   type ContentItemType,
   type ModuleItemLike,
@@ -301,6 +304,8 @@ const ModuleCard = ({
   dragClassName = '',
 }: ModuleCardProps) => {
   const navigate = useNavigate();
+  const web = useGitWeb();
+  const terms = web.terms;
   // Every link below stays inside the section the viewer is already in, so an
   // assistant is never sent to an /admin route their loader would refuse.
   const rolePrefix = useLocation().pathname.split('/')[1] || 'admin';
@@ -457,12 +462,12 @@ const ModuleCard = ({
   const addItemMenu: MenuProps['items'] = [
     {
       type: 'group',
-      label: 'Assignments',
+      label: 'Submissions',
       children: [
         {
           key: 'ASSIGNMENT_REPO',
           icon: <IconFolder size={15} />,
-          label: 'Repository assignment',
+          label: terms.Repo,
         },
         ...(quizzesVisible
           ? [
@@ -473,7 +478,7 @@ const ModuleCard = ({
               },
             ]
           : []),
-        { key: 'ASSIGNMENT_FORM', icon: <IconForms size={15} />, label: 'Form assignment' },
+        { key: 'ASSIGNMENT_FORM', icon: <IconForms size={15} />, label: 'Form' },
       ],
     },
     {
@@ -560,7 +565,7 @@ const ModuleCard = ({
     return null;
   };
   const editTargetLabel = (a: AssignmentRowData) =>
-    a.type === 'REPO' ? 'Edit repository' : a.type === 'QUIZ' ? 'Edit quiz' : 'Edit form';
+    a.type === 'REPO' ? `Edit ${terms.repo}` : a.type === 'QUIZ' ? 'Edit quiz' : 'Edit form';
 
   const assignmentNote = (a: AssignmentRowData) => {
     const target = assignmentTarget(a);
@@ -569,11 +574,15 @@ const ModuleCard = ({
     // unless the repo carries the assignment's own name, which is the push-mode
     // default and would just say it twice.
     if (a.type === 'REPO' && target) {
-      const mode = a.submission_mode === 'REPO' ? 'push' : 'issue';
+      const mode = a.submission_mode === 'REPO' ? 'push' : web.terms.issue;
       return target === a.title ? `${mode} · ${weight}` : `${target} · ${mode} · ${weight}`;
     }
     const base =
-      target && target !== a.title ? target : (ASSIGNMENT_TYPE_META[a.type]?.label ?? null);
+      target && target !== a.title
+        ? target
+        : ASSIGNMENT_TYPE_META[a.type]
+          ? assignmentTypeName(a.type)
+          : null;
     return base ? `${base} · ${weight}` : weight;
   };
   const deleteAssignmentItem = {
@@ -697,7 +706,7 @@ const ModuleCard = ({
                   canEdit={canEdit}
                   icon={meta.icon}
                   title={label}
-                  kind={meta.label}
+                  kind={typeLabel(item.item_type)}
                   published={published}
                   onOpen={edit}
                   onEdit={edit}
@@ -763,7 +772,9 @@ const ModuleCard = ({
                     // done the row offers Sync, as the Repositories page does.
                     !a.is_published || needsRepo
                       ? {
-                          label: a.is_published ? 'Create repos' : 'Publish',
+                          label: a.is_published
+                            ? `Create ${web.isGitLab ? 'projects' : 'repos'}`
+                            : 'Publish',
                           onClick: () =>
                             confirmPublishAssignment(a.id, {
                               needsRepo,

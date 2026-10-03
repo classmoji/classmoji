@@ -8,13 +8,14 @@ import {
   FONT_SIZE_MAX,
   CONTRAST_MIN,
   CONTRAST_MAX,
+  DEFAULT_ACCENT,
   type BackgroundKey,
 } from '~/hooks/useDarkMode';
 import { SettingSection } from '~/components';
 
 // Inline personal "Tweaks" for accent color, light/dark appearance, and
-// background preset. Renders in the classroom settings page next to the
-// classroom Theme section. Replaces the floating Tweaks FAB.
+// background preset. Stored per browser, so it lives in account settings and
+// the in-classroom member settings page, never in a classroom's own settings.
 
 interface AccentPreset {
   name: string;
@@ -22,6 +23,7 @@ interface AccentPreset {
 }
 
 const ACCENTS: AccentPreset[] = [
+  { name: 'Classmoji', hex: DEFAULT_ACCENT },
   { name: 'Sky', hex: '#0ea5e9' },
   { name: 'Orange', hex: '#f97316' },
   { name: 'Rose', hex: '#f43f5e' },
@@ -214,9 +216,7 @@ const TweaksSection = () => {
             UI font size
           </div>
           <div className="flex items-center justify-between gap-4">
-            <div className="text-sm text-ink-3">
-              Adjust the base size used for the UI.
-            </div>
+            <div className="text-sm text-ink-3">Adjust the base size used for the UI.</div>
             <div className="flex items-center gap-2 shrink-0">
               <input
                 type="number"

@@ -46,7 +46,11 @@ import {
   isTriggerChatAttempt,
   runtimeFor,
 } from '~/utils/quizRuntime.server';
-import { getQuestionProgressFromMessage, checkForCompletion } from '@classmoji/utils';
+import {
+  getQuestionProgressFromMessage,
+  checkForCompletion,
+  gitlabQuizProject,
+} from '@classmoji/utils';
 import type { Role } from '@prisma/client';
 import type { Route } from './+types/route';
 
@@ -277,7 +281,8 @@ export async function action({ request }: Route.ActionArgs) {
 
   // Import server-only repositories
   const { ClassmojiService, QuizAttemptNotFoundError } = await import('@classmoji/services');
-  const { getInstallationToken } = await import('../student.$class.quizzes/helpers.server');
+  const { getInstallationToken, gitlabProjectAccess } =
+    await import('../student.$class.quizzes/helpers.server');
   const { initializeQuizViaAgent, sendMessageToAgent, endQuizSession } =
     await import('../student.$class.quizzes/aiAgent.server');
   try {
@@ -792,7 +797,7 @@ export async function action({ request }: Route.ActionArgs) {
                   access.membership!.role
                 );
 
-                let repoName;
+                let repoName: string;
 
                 if (isInstructor) {
                   // A preview reads only the repository restartQuiz stored
@@ -825,8 +830,30 @@ export async function action({ request }: Route.ActionArgs) {
                 // Prefer user's ghu_ token (per-user rate limits) with installation token fallback
                 // ai-agent validates the token with GitHub before use, falls back if invalid
                 const gitOrganization = attempt.quiz.classroom.git_organization;
-                const userToken = authData?.token;
-                const accessToken = userToken || (await getInstallationToken(gitOrganization));
+                // Gitlab: a read-only token for this one project, and where
+                // it lives (the class subgroup's `projects`).
+                // An instructor preview names a project by its full path
+                // (any project in the class's Gitlab group, e.g. a solution
+                // under templates/); that path must stay inside the group.
+                let gitlabNamespace: string | null = null;
+                if (gitOrganization.provider === 'GITLAB') {
+                  const project = gitlabQuizProject(
+                    attempt.quiz.classroom as Parameters<typeof gitlabQuizProject>[0],
+                    repoName,
+                    { fullPath: isInstructor }
+                  );
+                  if (!project) {
+                    throw new Error("That repository is not in this classroom's Gitlab group.");
+                  }
+                  gitlabNamespace = project.namespace;
+                  repoName = project.repo;
+                }
+                const repoAccess = gitlabNamespace
+                  ? await gitlabProjectAccess(gitOrganization, gitlabNamespace, repoName)
+                  : {
+                      orgLogin: gitOrganization.login,
+                      accessToken: authData?.token || (await getInstallationToken(gitOrganization)),
+                    };
 
                 // Load classroom settings for LLM configuration
                 const classroomSettings = attempt.quiz.classroom?.settings;
@@ -856,7 +883,7 @@ export async function action({ request }: Route.ActionArgs) {
                     explorationEffort: classroomSettings?.exploration_effort,
                   },
                   // Code-aware options
-                  { orgLogin: gitOrganization.login, repoName, accessToken },
+                  { ...repoAccess, repoName },
                   { mcpToken, onWelcomeMessage }
                 );
 

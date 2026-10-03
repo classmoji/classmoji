@@ -12,6 +12,8 @@ export type CommitRecord = {
 
 export type ContributorRecord = {
   login: string;
+  /** Gitlab reports authors by name + email; the email helps match them. */
+  email?: string | null;
   user_id: string | null;
   commits: number;
   additions: number;

@@ -1,4 +1,5 @@
 import { Button, Dropdown, Switch, Tag, Tooltip } from 'antd';
+import { gitContextFor, gitWeb, type ClassroomLike } from '~/utils/gitWeb';
 import type { MenuProps } from 'antd';
 import dayjs from 'dayjs';
 import { IconChevronLeft, IconDotsVertical, IconRobot } from '@tabler/icons-react';
@@ -221,6 +222,8 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
     boundFormIds,
   } = loaderData;
   const classSlug = classroom.slug;
+  const web = gitWeb(gitContextFor(classroom as ClassroomLike));
+  const terms = web.terms;
   const { fetcher, notify } = useGlobalFetcher();
   const navigate = useNavigate();
   const { pathname } = useLocation();
@@ -297,8 +300,8 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
       disabled: !autogradingTestCount || isAutograding,
     },
     { type: 'divider' },
-    { key: 'edit-repo', label: 'Edit repository' },
-    { key: 'update-repos', label: 'Update student repositories' },
+    { key: 'edit-repo', label: `Edit ${terms.repo}` },
+    { key: 'update-repos', label: `Update student ${terms.repos}` },
   ];
   const onMoreClick: MenuProps['onClick'] = ({ key }) => {
     if (key === 'autograde') handleAutograde();
@@ -346,13 +349,13 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
             <span>
               Repo ·{' '}
               <span className="text-ink-1 font-medium">
-                {assignment.submission_mode === 'REPO' ? 'push' : 'issue'}
+                {assignment.submission_mode === 'REPO' ? 'push' : terms.issue}
               </span>
             </span>
             <span>
-              Repository{' '}
+              {terms.Repo}{' '}
               <a
-                href={`https://github.com/${repository.template}`}
+                href={web.template(repository.template)}
                 target="_blank"
                 rel="noreferrer"
                 className="text-ink-1 font-medium hover:underline underline-offset-2"
@@ -371,16 +374,18 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
                 </Tag>
               )}
             </span>
-            <span>
-              Autograding{' '}
-              <span
-                className={`font-medium ${autogradingTestCount ? 'text-green-700 dark:text-green-400' : 'text-ink-1'}`}
-              >
-                {autogradingTestCount ? 'on' : 'off'}
+            {
+              <span>
+                Autograding{' '}
+                <span
+                  className={`font-medium ${autogradingTestCount ? 'text-green-700 dark:text-green-400' : 'text-ink-1'}`}
+                >
+                  {autogradingTestCount ? 'on' : 'off'}
+                </span>
               </span>
-            </span>
+            }
             <span>
-              {isIndividual ? 'Student repos' : 'Team repos'}{' '}
+              {isIndividual ? 'Student' : 'Team'} {web.isGitLab ? 'projects' : 'repos'}{' '}
               <span className="text-ink-1 font-medium">
                 {rows.length}
                 {isIndividual ? ` of ${studentCount}` : ''}

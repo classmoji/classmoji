@@ -44,6 +44,9 @@ export const TYPE_META: Record<ModuleItemType, { label: string; icon: Icon }> = 
   FORM: { label: 'Form', icon: IconForms },
 };
 
+/** A type's display name. */
+export const typeLabel = (type: ModuleItemType): string => TYPE_META[type].label;
+
 // A form's two lifecycle axes, as an instructor reads them. Both are exhaustive
 // Records over their enums, so adding a status or an access mode fails to
 // compile here rather than rendering the raw enum name.

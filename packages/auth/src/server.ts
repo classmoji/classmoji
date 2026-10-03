@@ -18,8 +18,9 @@ import {
   sessionTokenFromCookieHeader,
 } from './secret.ts';
 import { ASK_MOJI_CLIENT_ID } from './mcpToken.ts';
+import { GITLAB_INSTANCE_CALLBACK_PATH, gitlabInstances } from './gitlabInstances.ts';
 import { applyAppConnectionRules, type AppConnectionSession } from './appConnectionGuard.ts';
-import { mapGitHubProfile, onAccountCreated } from './providerProfile.ts';
+import { mapGitHubProfile, mapGitLabProfile, onAccountCreated } from './providerProfile.ts';
 
 export { AUTH_SECRET, COOKIE_PREFIX };
 export { CONNECT_APP_VIEWING_AS_MESSAGE } from './appConnectionGuard.ts';
@@ -428,6 +429,26 @@ export const auth = betterAuth({
       // placeholder accounts; see ./providerProfile.ts.
       mapProfileToUser: profile => mapGitHubProfile(getPrisma(), profile),
     },
+    // Registered only when configured, so an install without a GitLab app
+    // shows no GitLab button and exposes no GitLab callback.
+    ...(process.env.GITLAB_CLIENT_ID
+      ? {
+          gitlab: {
+            clientId: process.env.GITLAB_CLIENT_ID,
+            clientSecret: process.env.GITLAB_CLIENT_SECRET as string,
+            // Self-managed GitLab; unset means gitlab.com.
+            issuer: process.env.GITLAB_ISSUER || undefined,
+            // Default `read_user` scope only: identity, nothing on the user's projects.
+            // Records the Gitlab username/email/avatar on the account.
+            mapProfileToUser: (profile: {
+              id: number;
+              username: string;
+              email?: string | null;
+              avatar_url?: string | null;
+            }) => mapGitLabProfile(getPrisma(), profile),
+          },
+        }
+      : {}),
   },
   // Email + password sign-in. Addresses are confirmed with a 6-digit code (the
   // emailOTP plugin below), the same way registration confirms a school email.
@@ -466,18 +487,12 @@ export const auth = betterAuth({
       // address, and would then inherit that person's Github sign-in. Linking
       // happens only from a signed-in session (Connect Github).
       disableImplicitLinking: true,
-      trustedProviders: ['github'],
-      // A connected Github account may use a different email than the user's.
+      // better-auth refuses a link from an untrusted provider unless it reports
+      // a verified email, and its GitLab provider never does. Trusting both is
+      // safe here: a link needs a live session AND the provider's own consent.
+      trustedProviders: ['github', 'gitlab'],
+      // A connected Github or Gitlab account may use a different email than the user's.
       allowDifferentEmails: true,
-    },
-  },
-  databaseHooks: {
-    account: {
-      create: {
-        after: async account => {
-          await onAccountCreated(getPrisma(), account);
-        },
-      },
     },
   },
   session: {
@@ -497,8 +512,18 @@ export const auth = betterAuth({
       updatedAt: 'updated_at',
       impersonatedBy: 'impersonated_by',
     } as Record<string, string>,
+    // The provider the session signed in with: its GitLab/Github mode.
+    additionalFields: {
+      sign_in_provider: { type: 'string', required: false, input: false },
+    },
   },
   advanced: {
+    // Whose IP a request is (rate limits, sessions). On Fly, Fly-Client-IP is
+    // written by the proxy and can't be forged, unlike the first entry of
+    // X-Forwarded-For, which the client controls.
+    ...(process.env.NODE_ENV === 'production'
+      ? { ipAddress: { ipAddressHeaders: ['fly-client-ip'] } }
+      : {}),
     database: {
       generateId: 'uuid',
     },
@@ -566,6 +591,33 @@ export const auth = betterAuth({
    * /mcp/authorize while signed out and short-lived), in which case the rules
    * look the session up once.
    */
+  databaseHooks: {
+    session: {
+      create: {
+        // Record which provider this sign-in came through (the OAuth callback
+        // is `/callback/:id`). That provider is the session's mode: a GitLab
+        // session is shown only GitLab classrooms and GitLab identity.
+        before: async (session, ctx) => {
+          // A self-managed GitLab signs in through its own callback path.
+          if (ctx?.path === GITLAB_INSTANCE_CALLBACK_PATH) {
+            return { data: { ...session, sign_in_provider: 'GITLAB' } };
+          }
+          const id = (ctx?.params as { id?: string } | undefined)?.id;
+          if (id !== 'github' && id !== 'gitlab') return;
+          return { data: { ...session, sign_in_provider: id.toUpperCase() } };
+        },
+      },
+    },
+    account: {
+      create: {
+        // First sign-in or "Connect" in settings: record the provider profile
+        // on the new account (see providerProfile.ts).
+        after: async account => {
+          await onAccountCreated(getPrisma(), account);
+        },
+      },
+    },
+  },
   hooks: {
     before: createAuthMiddleware(async ctx => {
       if (ctx.path !== '/mcp/token') {
@@ -611,9 +663,15 @@ export const auth = betterAuth({
    */
   disabledPaths: ['/mcp/get-session', '/list-sessions', '/get-access-token', '/refresh-token'],
   // Password guessing and code guessing are throttled harder than the default
-  // (better-auth enables its limiter in production only).
+  // (better-auth enables its limiter in production only). Per client IP. Tight
+  // on the public Gitlab endpoints too: setup can be run against any
+  // Gitlab-looking server, and each request that gets through emails every
+  // platform admin (the setup callback also caps pending ones).
   rateLimit: {
     customRules: {
+      '/gitlab-instance/setup': { window: 60 * 60, max: 5 },
+      '/gitlab-instance/sign-in': { window: 60, max: 20 },
+      '/gitlab-instance/link': { window: 60, max: 10 },
       '/sign-in/email': { window: 60, max: 5 },
       '/sign-up/email': { window: 60, max: 3 },
       '/email-otp/send-verification-otp': { window: 60, max: 3 },
@@ -636,6 +694,8 @@ export const auth = betterAuth({
         await ClassmojiService.authEmail.sendAuthOtp(email, otp, type);
       },
     }),
+    // Self-managed GitLab instances (gitlab.com uses socialProviders.gitlab).
+    gitlabInstances(),
     admin({
       impersonationSessionDuration: 60 * 60, // 1 hour
       // Allow users with 'admin' role to impersonate

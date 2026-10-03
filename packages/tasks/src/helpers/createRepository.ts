@@ -3,7 +3,13 @@ import { logger } from '@trigger.dev/sdk';
 import path from 'path';
 import fs from 'fs';
 
-import { CLASSMOJI_BOT_EMAIL, getGitProvider } from '@classmoji/services';
+import {
+  CLASSMOJI_BOT_EMAIL,
+  ClassmojiService,
+  getGitProvider,
+  type GitLabProvider,
+} from '@classmoji/services';
+import { gitTerms, repoNamespace, type GitTerms } from '@classmoji/utils';
 import {
   LOW_MEMORY_GIT_CONFIG,
   fetchLfsObjects,
@@ -26,7 +32,26 @@ const FALLBACK_TEMPLATE_URL = `https://github.com/${FALLBACK_TEMPLATE_REPO}.git`
 type GitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string | null };
 
 interface ClassroomForRepositoryCreation {
+  /** GitLab: the class subgroup student repos live in. Null/absent on Github. */
+  git_namespace?: string | null;
   git_organization: GitOrganizationLike;
+}
+
+/**
+ * Authenticated HTTPS remote for `owner/repo` on the classroom's provider.
+ * Github installation tokens use `x-access-token`; GitLab OAuth tokens use
+ * `oauth2`, on the org's instance (its base_url; the default instance when unset).
+ */
+function authedRemote(
+  gitOrganization: GitOrganizationLike,
+  token: string,
+  fullPath: string
+): string {
+  if (gitOrganization.provider === 'GITLAB') {
+    const url = new URL(gitOrganization.base_url || ClassmojiService.gitlabInstance.defaultHost());
+    return `${url.protocol}//oauth2:${token}@${url.host}/${fullPath}.git`;
+  }
+  return `https://x-access-token:${token}@github.com/${fullPath}.git`;
 }
 
 export interface CreateRepositoryPayload {
@@ -37,13 +62,9 @@ export interface CreateRepositoryPayload {
   organizationGithubPlan: string;
 }
 
-/** Whether the repository's .gitignore rules exclude `file`. */
-const isIgnored = async (repoGit: SimpleGit, file: string): Promise<boolean> =>
-  (await repoGit.checkIgnore([file])).length > 0;
-
 /**
  * A repository a previous run left between pushing `feedback` and pushing
- * `updates`: exactly `main` and `feedback`. It lacks the welcome commit, the
+ * `updates`: exactly `main` and `feedback`. It lacks the feedback commit, the
  * Feedback pull request and `updates`, and is finished rather than skipped.
  */
 export const isHalfInitialised = (heads: Map<string, string>): boolean =>
@@ -54,23 +75,20 @@ interface SetupTarget {
   gitOrgLogin: string;
   repoName: string;
   organizationGithubPlan: string;
+  provider: string;
+  /** Extra `git push` arguments for setup pushes (Gitlab: skip CI). */
+  setupPush: string[];
+  terms: GitTerms;
 }
 
 /**
  * The commit that puts `main` one ahead of `feedback`, so the Feedback pull
- * request has something to show. It adds the welcome file, unless the
- * repository's .gitignore excludes it: the instructor's choice stands, and an
- * empty commit opens the pull request instead.
+ * request has something to open on. It is empty: the student's repository
+ * holds exactly what the instructor's template does, and nothing a template's
+ * .gitignore could refuse.
  */
-const commitWelcome = async (repoGit: SimpleGit, localPath: string): Promise<void> => {
-  if (await isIgnored(repoGit, 'CLASSMOJI.md')) {
-    await repoGit.commit('Start your feedback space', undefined, { '--allow-empty': null });
-  } else {
-    const classmojiPath = path.join(localPath, 'CLASSMOJI.md');
-    fs.writeFileSync(classmojiPath, 'Hello! This is your gitRepo for the assignment. 📝\n');
-    await repoGit.add('CLASSMOJI.md');
-    await repoGit.commit('Add Classmoji welcome message');
-  }
+const commitFeedbackStart = async (repoGit: SimpleGit): Promise<void> => {
+  await repoGit.commit('Start your feedback space', undefined, { '--allow-empty': null });
 };
 
 /**
@@ -83,11 +101,13 @@ const commitWelcome = async (repoGit: SimpleGit, localPath: string): Promise<voi
  * `feedback`, in any state, and leaves the repository alone if there is one.
  */
 const openFeedbackPullRequest = async (
-  { gitProvider, gitOrgLogin, repoName }: SetupTarget,
+  { gitProvider, gitOrgLogin, repoName, provider, terms }: SetupTarget,
   { unlessOneExists = false }: { unlessOneExists?: boolean } = {}
 ): Promise<void> => {
   try {
-    if (unlessOneExists) {
+    // Github: look first. Gitlab refuses a second open merge request for the
+    // same branches itself, and that refusal is logged below like any other.
+    if (unlessOneExists && provider !== 'GITLAB') {
       const octokit = await gitProvider.getOctokit();
       const { data } = await octokit.rest.pulls.list({
         owner: gitOrgLogin,
@@ -110,7 +130,7 @@ const openFeedbackPullRequest = async (
       'feedback',
       'main',
       'Feedback',
-      FeedbackPRMessage
+      feedbackMessage(terms)
     );
   } catch (error: unknown) {
     logger.warn(`Could not open the Feedback pull request on ${gitOrgLogin}/${repoName}`, {
@@ -119,16 +139,24 @@ const openFeedbackPullRequest = async (
   }
 };
 
-/** Branch `updates` off the checked-out `main`, and protect it on paid plans. */
+/**
+ * Branch `updates` off the checked-out `main` and protect it: on paid plans on
+ * Github, on every plan on Gitlab. Gitlab also protects `main` for Maintainers
+ * only, and students are Developers, so they are let push to it.
+ */
 const pushUpdatesBranch = async (
   repoGit: SimpleGit,
-  { gitProvider, gitOrgLogin, repoName, organizationGithubPlan }: SetupTarget
+  { gitProvider, gitOrgLogin, repoName, organizationGithubPlan, provider, setupPush }: SetupTarget
 ): Promise<void> => {
   await repoGit.checkoutLocalBranch('updates');
-  await repoGit.push('origin', 'updates', ['--set-upstream']);
+  await repoGit.push('origin', 'updates', ['--set-upstream', ...setupPush]);
 
-  if (organizationGithubPlan !== 'free') {
+  if (provider === 'GITLAB' || organizationGithubPlan !== 'free') {
     await gitProvider.protectBranch(gitOrgLogin, repoName, 'updates');
+  }
+
+  if (provider === 'GITLAB') {
+    await (gitProvider as GitLabProvider).allowDeveloperPushes(gitOrgLogin, repoName, 'main');
   }
 
   await repoGit.checkout('main');
@@ -140,12 +168,12 @@ const pushUpdatesBranch = async (
  * Its `main` may hold student work by now, so the student repository itself
  * is cloned (not the template), and `main` is only ever added to with a plain
  * push, never rewritten: a student push landing meanwhile makes that push
- * fail, and the retry then finds `main` ahead. The welcome commit goes on only
+ * fail, and the retry then finds `main` ahead. The feedback commit goes on only
  * while `main` is still where `feedback` is; once the student has committed,
  * `main` is already ahead and the pull request has something to show.
  *
- * At most one commit goes on top, so the clone is the tip alone, with file
- * contents only for the top-level files the welcome commit reads (.gitignore).
+ * At most one (empty) commit goes on top, so the clone is the tip alone, with
+ * file contents only for the top-level files.
  */
 const finishHalfInitialisedRepo = async (
   target: SetupTarget,
@@ -178,8 +206,8 @@ const finishHalfInitialisedRepo = async (
   await repoGit.addConfig('user.email', CLASSMOJI_BOT_EMAIL);
 
   if (needsWelcomeCommit) {
-    await commitWelcome(repoGit, localPath);
-    await repoGit.push('origin', 'main');
+    await commitFeedbackStart(repoGit);
+    await repoGit.push('origin', 'main', target.setupPush);
   }
 
   await openFeedbackPullRequest(target, { unlessOneExists: true });
@@ -195,7 +223,9 @@ const isAlreadyExistsError = (error: unknown): error is { status: number; messag
 export const createRepository = async (payload: CreateRepositoryPayload): Promise<string> => {
   const { classroom, repoName, templateOwner, templateRepo, organizationGithubPlan } = payload;
   const gitProvider = getGitProvider(classroom.git_organization);
-  const gitOrgLogin = classroom.git_organization.login;
+  // The org on Github; the class subgroup on GitLab. Named for the Github case
+  // it started as, since every call below takes it as the repo owner.
+  const gitOrgLogin = repoNamespace(classroom);
 
   if (!gitOrgLogin) {
     throw new Error('Missing Git organization login');
@@ -209,7 +239,9 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
     if (
       isAlreadyExistsError(error) &&
       error.status === 422 &&
-      error.message?.includes('name already exists')
+      // Github says "name already exists"; GitLab "has already been taken".
+      (error.message?.includes('name already exists') ||
+        error.message?.includes('has already been taken'))
     ) {
       logger.info(`GitRepo ${gitOrgLogin}/${repoName} already exists, fetching existing repo`);
       const existingRepo = await gitProvider.getRepository(gitOrgLogin, repoName);
@@ -222,11 +254,32 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
   // Minted by this run rather than handed down in the payload: a token lasts
   // an hour from minting, and runs can wait in the queue longer than that.
   const token = await gitProvider.getAccessToken();
-  const setupTarget: SetupTarget = { gitProvider, gitOrgLogin, repoName, organizationGithubPlan };
 
   const localPath = path.join(process.cwd(), 'repos', repoName);
-  const studentRepoUrl = `https://x-access-token:${token}@github.com/${gitOrgLogin}/${repoName}.git`;
-  const templateRepoUrl = `https://x-access-token:${token}@github.com/${templateOwner}/${templateRepo}.git`;
+  const provider = classroom.git_organization.provider;
+  // GitLab runs CI on every push to a project with a .gitlab-ci.yml, and these
+  // setup pushes run as the instructor's connection: without this, each new
+  // student project fires several pipelines (and failure emails) at them.
+  // Students' own pushes are untouched.
+  const setupPush = provider === 'GITLAB' ? ['-o', 'ci.skip'] : [];
+  const terms = gitTerms(provider === 'GITLAB');
+  const setupTarget: SetupTarget = {
+    gitProvider,
+    gitOrgLogin,
+    repoName,
+    organizationGithubPlan,
+    provider,
+    setupPush,
+    terms,
+  };
+  const org = classroom.git_organization;
+  if (provider === 'GITLAB') {
+    await ClassmojiService.gitlabInstance.assertPublicGitlabHost(
+      org.base_url || ClassmojiService.gitlabInstance.defaultHost()
+    );
+  }
+  const studentRepoUrl = authedRemote(org, token, `${gitOrgLogin}/${repoName}`);
+  const templateRepoUrl = authedRemote(org, token, `${templateOwner}/${templateRepo}`);
 
   const git = simpleGit({ config: LOW_MEMORY_GIT_CONFIG });
 
@@ -263,9 +316,9 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
     }
 
     // Only the template's default branch is pushed, so only it is fetched.
-    // `--sparse` checks out the top-level files alone: the working tree is
-    // needed just for the root .gitignore and CLASSMOJI.md, and a full
-    // checkout of a game project doubles the disk it takes. Every commit
+    // `--sparse` checks out the top-level files alone: nothing here edits the
+    // working tree, and a full checkout of a game project doubles the disk it
+    // takes. Every commit
     // still carries the whole tree, so what is pushed is unchanged.
     await git.clone(templateRepoUrl, localPath, ['--single-branch', '--no-tags', '--sparse']);
     const repoGit = simpleGit({ baseDir: localPath, config: LOW_MEMORY_GIT_CONFIG });
@@ -302,8 +355,7 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
       // Empty template (no commits — e.g. a freshly created "BlankProject"). Seed
       // from Classmoji's shared, public empty-template repo (which ships a README)
       // so the student/team repo gets a real `main` with content instead of an
-      // empty-tree commit. The CLASSMOJI.md commit further down still adds the
-      // welcome file on top.
+      // empty-tree commit. The feedback commit further down still goes on top.
       logger.warn(
         `Template ${templateOwner}/${templateRepo} has no commits; seeding from ${FALLBACK_TEMPLATE_REPO}`
       );
@@ -335,13 +387,14 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
       remote: 'origin',
       branch: 'main',
       alreadyPushed: resumableMain,
+      pushOptions: setupPush,
     });
     await repoGit.checkoutLocalBranch('feedback');
-    await repoGit.push('origin', 'feedback', ['--set-upstream']);
+    await repoGit.push('origin', 'feedback', ['--set-upstream', ...setupPush]);
     await repoGit.checkout('main');
 
-    await commitWelcome(repoGit, localPath);
-    await repoGit.push('origin', 'main');
+    await commitFeedbackStart(repoGit);
+    await repoGit.push('origin', 'main', setupPush);
 
     await openFeedbackPullRequest(setupTarget);
     await pushUpdatesBranch(repoGit, setupTarget);
@@ -356,16 +409,17 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
   }
 };
 
-const FeedbackPRMessage = `
-This PR is your feedback 📝 space! Your instructor will leave comments and suggestions on your code here.
+/** The Feedback PR/MR body, in the provider's own words. */
+const feedbackMessage = (terms: GitTerms) => `
+This ${terms.pr} is your feedback 📝 space! Your instructor will leave comments and suggestions on your code here.
 
 ### How it works
-- **Files changed** tab → See all your changes since the assignment started
+- **${terms.changesTab}** tab → See all your changes since the assignment started
 - **Commits** tab → Review your commit history
 - Your instructor can leave inline comments on specific lines of code
 
 ### ⚠️ Important
-Don't close or merge this PR unless your instructor tells you to!
+Don't close or merge this ${terms.pr} unless your instructor tells you to!
 
 ---
-*This PR updates automatically as you push to main* ✨`;
+*This ${terms.pr} updates automatically as you push to main* ✨`;

@@ -18,6 +18,7 @@
  *   5. Upsert the snapshot row (JSON columns + aggregate totals + stale/error flags).
  */
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import { repoNamespace } from '@classmoji/utils';
 import type { GitProvider } from '../git/GitProvider.ts';
 import { getGitProvider } from '../git/index.ts';
 import type {
@@ -65,8 +66,35 @@ function pickLatestSnapshot<T, S extends { fetched_at: Date | string }>(
 // Pure helpers (unit-tested)
 
 /**
- * Re-map `author_login` → `author_user_id` on a list of commit records using
- * the provided lookup map. Pure; returns a new array, does not mutate input.
+ * The lookup keys an author identity answers to: itself, lowercased, and for
+ * a Gitlab no-reply commit email (`123-alice@users.noreply.gitlab.example`)
+ * the username inside it. Github logins are case-insensitive, and Gitlab
+ * reports authors by name and email rather than username.
+ */
+export function identityKeys(value: string | null | undefined): string[] {
+  const v = (value ?? '').trim().toLowerCase();
+  if (!v) return [];
+  const noreply = v.match(/^(?:\d+-)?([^@]+)@users\.noreply\./);
+  return noreply ? [v, noreply[1]] : [v];
+}
+
+function lookupUser(
+  loginToUserId: Map<string, string>,
+  ...identities: Array<string | null | undefined>
+): string | null {
+  for (const identity of identities) {
+    for (const key of identityKeys(identity)) {
+      const id = loginToUserId.get(key);
+      if (id) return id;
+    }
+  }
+  return null;
+}
+
+/**
+ * Re-map `author_login` (or, on Gitlab, the author email) → `author_user_id`
+ * on a list of commit records using the provided lookup map. Pure; returns a
+ * new array, does not mutate input.
  */
 export function linkAuthorsToUsers(
   commits: CommitRecord[],
@@ -74,15 +102,12 @@ export function linkAuthorsToUsers(
 ): CommitRecord[] {
   return commits.map(c => ({
     ...c,
-    author_user_id:
-      c.author_login && loginToUserId.has(c.author_login)
-        ? (loginToUserId.get(c.author_login) ?? null)
-        : null,
+    author_user_id: lookupUser(loginToUserId, c.author_login, c.author_email),
   }));
 }
 
 /**
- * Re-map `login` → `user_id` on a list of contributor records. Pure.
+ * Re-map `login` (or its email) → `user_id` on a list of contributor records. Pure.
  */
 export function linkContributorsToUsers(
   contributors: ContributorRecord[],
@@ -90,7 +115,7 @@ export function linkContributorsToUsers(
 ): ContributorRecord[] {
   return contributors.map(c => ({
     ...c,
-    user_id: loginToUserId.has(c.login) ? (loginToUserId.get(c.login) ?? null) : null,
+    user_id: lookupUser(loginToUserId, c.login, c.email),
   }));
 }
 
@@ -199,9 +224,15 @@ export async function upsertSnapshot(
 // Link map builder
 
 /**
- * Build a `githubLogin → userId` map for a gitRepo. Starts with every
- * member's git username in the classroom, then overlays any
- * `GitRepoContributorLink` rows for this repo (manual overrides win).
+ * Build an `identity → userId` map for a gitRepo, keys lowercased (see
+ * identityKeys). Every classroom member answers to each of their git usernames
+ * (Github, Gitlab) and their email (Gitlab reports commit authors by email, and
+ * its no-reply addresses carry the username). Never by display name: anyone
+ * can commit as any name, and the contributor breakdown should not credit one
+ * student's commits to another on that alone. Then any
+ * `GitRepoContributorLink` rows for this repo overlay it (manual overrides
+ * win). Commit emails are self-asserted too, as on Github: attribution is a
+ * teaching aid, and a TA can relink.
  */
 async function buildLoginToUserIdMap(
   classroomId: string,
@@ -211,7 +242,7 @@ async function buildLoginToUserIdMap(
   const [memberships, links] = await Promise.all([
     prisma.classroomMembership.findMany({
       where: { classroom_id: classroomId },
-      include: { user: { select: { id: true, ...GIT_IDENTITY } } },
+      include: { user: { select: { id: true, email: true, ...GIT_IDENTITY } } },
     }),
     prisma.gitRepoContributorLink.findMany({
       where: { git_repo_id: repositoryId, user_id: { not: null } },
@@ -219,17 +250,18 @@ async function buildLoginToUserIdMap(
   ]);
 
   const map = new Map<string, string>();
+  const add = (identity: string | null | undefined, userId: string) => {
+    for (const key of identityKeys(identity)) if (!map.has(key)) map.set(key, userId);
+  };
   for (const m of memberships) {
-    for (const account of m.user?.accounts ?? []) {
-      const login = account.username;
-      if (login && !map.has(login)) {
-        map.set(login, m.user.id);
-      }
-    }
+    if (!m.user) continue;
+    for (const account of m.user.accounts ?? []) add(account.username, m.user.id);
+    add(m.user.email, m.user.id);
   }
   // Overrides take precedence.
   for (const l of links) {
-    if (l.user_id) map.set(l.github_login, l.user_id);
+    if (!l.user_id) continue;
+    for (const key of identityKeys(l.github_login)) map.set(key, l.user_id);
   }
   return map;
 }
@@ -247,13 +279,15 @@ async function fetchLinkedSnapshot(
   gitOrg: Parameters<typeof getGitProvider>[0] & { login: string | null },
   classroomId: string,
   gitRepoId: string,
-  repoName: string
+  repoName: string,
+  /** Where the repo lives: the class subgroup on GitLab, else the org. */
+  owner?: string | null
 ): Promise<{ payload: SnapshotPayload; pending: boolean }> {
   if (!gitOrg.login) throw new Error('GitOrganization.login is required');
 
   const provider = getGitProvider(gitOrg);
   const [{ payload, pending }, loginToUserId] = await Promise.all([
-    buildSnapshot(provider, gitOrg.login, repoName),
+    buildSnapshot(provider, owner || gitOrg.login, repoName),
     buildLoginToUserIdMap(classroomId, gitRepoId),
   ]);
 
@@ -305,7 +339,8 @@ export async function refreshOne(
       gitOrg,
       classroom.id,
       repo.id,
-      repo.name
+      repo.name,
+      repoNamespace(classroom)
     );
 
     await upsertSnapshot(repositoryAssignmentId, payload, { stale: pending });
@@ -384,7 +419,8 @@ export async function refreshRepo(
       gitOrg,
       classroom.id,
       repo.id,
-      repo.name
+      repo.name,
+      repoNamespace(classroom)
     );
 
     for (const id of rowIds) {

@@ -50,7 +50,7 @@ export const LOCAL_VENV_PYTHON = './python/.venv/bin/python';
  * set PYTHON_BIN_PATH=/opt/venv/bin/python (the build extension's layer), so
  * this is a no-op there — and the image has no `.venv` anyway (the scripts
  * glob skips dot-directories). Under `trigger dev` the extension's
- * `devPythonBinaryPath` is meant to set it, but the 4.6.3 CLI snapshots the
+ * `devPythonBinaryPath` is meant to set it, but the Trigger CLI can snapshot the
  * run processes' environment when the dev supervisor starts, BEFORE the first
  * build runs the extension that sets it, so a dev run would fall back to a bare
  * `python` without OR-Tools. The dev run's cwd is packages/tasks, where the

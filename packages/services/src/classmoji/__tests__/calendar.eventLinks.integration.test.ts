@@ -97,6 +97,13 @@ describe.skipIf(!RUN)('calendar event links to quiz and form assignments (integr
 
     const user = await prisma.user.create({
       data: {
+        accounts: {
+          create: {
+            provider_id: 'github',
+            account_id: `callinks-${suite}-owner`,
+            username: `callinks-${suite}-owner`,
+          },
+        },
         email: `callinks-${suite}-owner@example.test`,
         name: `Calendar Links Owner ${suite}`,
       },
@@ -121,7 +128,13 @@ describe.skipIf(!RUN)('calendar event links to quiz and form assignments (integr
   afterAll(async () => {
     if (orgId) await prisma.gitOrganization.delete({ where: { id: orgId } }).catch(() => {});
     await prisma.user
-      .deleteMany({ where: { email: { startsWith: `callinks-${suite}-` } } })
+      .deleteMany({
+        where: {
+          accounts: {
+            some: { provider_id: 'github', username: { startsWith: `callinks-${suite}-` } },
+          },
+        },
+      })
       .catch(() => {});
   });
 

@@ -1,6 +1,8 @@
 import { Popconfirm, Table, Tag } from 'antd';
 import { Link } from 'react-router';
 import dayjs from 'dayjs';
+import { useGitWeb } from '~/hooks/useGitWeb';
+import { gitTerms } from '~/utils/gitWeb';
 import {
   IconFileText,
   IconFolder,
@@ -37,10 +39,10 @@ export interface AssignmentRowData {
 }
 
 /** "Repo · push" / "Repo · issue" for REPO assignments, the plain type otherwise. */
-export const assignmentTypeLabel = (a: AssignmentRowData): string => {
-  const base = ASSIGNMENT_TYPE_META[a.type]?.label ?? a.type;
+export const assignmentTypeLabel = (a: AssignmentRowData, isGitLab = false): string => {
+  const base = assignmentTypeName(a.type);
   if (a.type !== 'REPO') return base;
-  return `${base} · ${a.submission_mode === 'REPO' ? 'push' : 'issue'}`;
+  return `${base} · ${a.submission_mode === 'REPO' ? 'push' : gitTerms(isGitLab).issue}`;
 };
 
 export const ASSIGNMENT_TYPE_META: Record<string, { label: string; icon: Icon; color: string }> = {
@@ -48,6 +50,10 @@ export const ASSIGNMENT_TYPE_META: Record<string, { label: string; icon: Icon; c
   QUIZ: { label: 'Quiz', icon: IconHelpCircle, color: 'purple' },
   FORM: { label: 'Form', icon: IconForms, color: 'cyan' },
 };
+
+/** The type's display name. */
+export const assignmentTypeName = (type: string): string =>
+  ASSIGNMENT_TYPE_META[type]?.label ?? type;
 
 /** The thing an assignment points at, by type. */
 export const assignmentTarget = (a: AssignmentRowData): string | null => {
@@ -92,6 +98,7 @@ const AssignmentsTable = ({
   emptyText = 'No assignments yet',
   quizzesVisible = false,
 }: AssignmentsTableProps) => {
+  const web = useGitWeb();
   const columns = [
     {
       title: 'Assignment',
@@ -124,7 +131,7 @@ const AssignmentsTable = ({
       width: 120,
       render: (_: unknown, a: AssignmentRowData) => {
         const meta = ASSIGNMENT_TYPE_META[a.type];
-        return <Tag color={meta?.color}>{assignmentTypeLabel(a)}</Tag>;
+        return <Tag color={meta?.color}>{assignmentTypeLabel(a, web.isGitLab)}</Tag>;
       },
     },
     {
@@ -263,9 +270,9 @@ const AssignmentsTable = ({
           <div className="text-center py-12 text-gray-500">
             <div className="font-medium">{emptyText}</div>
             <div className="text-sm">
-              {quizzesVisible
-                ? 'An assignment is a repo issue, a quiz, or a form, with a weight and a due date.'
-                : 'An assignment is a repo issue or a form, with a weight and a due date.'}
+              {`An assignment is a repo issue${
+                quizzesVisible ? ', a quiz,' : ''
+              } or a form, with a weight and a due date.`}
             </div>
           </div>
         ),

@@ -1,5 +1,7 @@
 import { namedAction } from 'remix-utils/named-action';
+import { isGitLabClassroom } from '~/utils/gitlabGuard.server';
 import { calculateContributions } from './helpers';
+import { gitTerms } from '~/utils/gitWeb';
 import { ClassmojiService, HelperService } from '@classmoji/services';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { ActionTypes } from '~/constants';
@@ -67,7 +69,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       });
       return {
         action: ActionTypes.DELETE_REPO,
-        success: 'Repository deleted',
+        success: `${gitTerms(isGitLabClassroom(classroom)).Repo} deleted`,
       };
     },
 
@@ -128,6 +130,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
 
     async createProjects() {
+      // Github Projects only: Gitlab has no counterpart, and the task would
+      // fail on every repo.
+      if (classroom.git_organization?.provider !== 'GITHUB') {
+        return {
+          action: 'CREATE_PROJECTS',
+          error: 'Project boards are only available for Github classrooms.',
+        };
+      }
       const repository = await ClassmojiService.repository.findByIdInClassroom(
         data?.repositoryId,
         classroom.id

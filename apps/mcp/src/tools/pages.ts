@@ -66,7 +66,7 @@ export const pageCreateTool: ToolDefinition<PageCreateArgs> = {
   annotations: { destructive: false, openWorld: true },
   title: 'Create a page',
   description:
-    "Creates a new course page in the classroom's shared content repo on GitHub (a blank " +
+    "Creates a new course page in the classroom's shared content repo on Github or Gitlab (a blank " +
     'block-based content.json plus index.html), the database record (created as a draft), and ' +
     'a content-manifest refresh. Edit its content with page_content_apply (start from ' +
     'page_content_outline); publish it with page_update (is_draft: false). The optional html ' +
@@ -223,7 +223,7 @@ export const pageDeleteTool: ToolDefinition<PageDeleteArgs> = {
   title: 'Delete a page',
   description:
     "Permanently deletes a course page: removes its folder from the classroom's content repo " +
-    'on GitHub and deletes the database record. This cannot be undone.',
+    '(Github or Gitlab) and deletes the database record. This cannot be undone.',
   scope: 'write',
   roles: OWNER_TEACHER,
   inputSchema: {

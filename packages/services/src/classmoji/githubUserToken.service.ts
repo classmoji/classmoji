@@ -196,14 +196,19 @@ export async function clearRevokedTokenForUser(
   userId: string,
   refusedToken?: string
 ): Promise<void> {
-  await getPrisma().account.updateMany({
-    where: {
-      user_id: userId,
-      provider_id: 'github',
-      // When the caller knows which token GitHub refused, clear only that one:
-      // a token refreshed in the meantime is left alone.
-      ...(refusedToken ? { access_token: refusedToken } : {}),
-    },
-    data: { access_token: null, access_token_expires_at: new Date(0) },
+  // When the caller knows which token GitHub refused, clear only that one: a
+  // token refreshed in the meantime is left alone. Tokens are stored encrypted
+  // (random IV), so the comparison happens here on the decrypted value, and the
+  // write is conditioned on the expiry so a refresh in between still wins.
+  const accounts = await getPrisma().account.findMany({
+    where: { user_id: userId, provider_id: 'github' },
+    select: { id: true, access_token: true, access_token_expires_at: true },
   });
+  for (const account of accounts) {
+    if (refusedToken && account.access_token !== refusedToken) continue;
+    await getPrisma().account.updateMany({
+      where: { id: account.id, access_token_expires_at: account.access_token_expires_at },
+      data: { access_token: null, access_token_expires_at: new Date(0) },
+    });
+  }
 }

@@ -29,6 +29,7 @@ const TABS = [
   { to: '/users', label: 'Users', end: false },
   { to: '/classrooms', label: 'Classrooms', end: false },
   { to: '/content-delivery', label: 'Content delivery', end: false },
+  { to: '/gitlab-instances', label: 'Gitlab', end: false },
 ];
 
 const AdminShell = () => {

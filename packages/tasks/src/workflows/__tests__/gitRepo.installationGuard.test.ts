@@ -59,7 +59,8 @@ vi.mock('@classmoji/services', () => ({
   getGitProvider: (...a: unknown[]) => mocks.getGitProvider(...a),
 }));
 
-vi.mock('@classmoji/utils', () => ({
+vi.mock('@classmoji/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/utils')>()),
   titleToIdentifier: (title: string) => title.toLowerCase().replace(/\s+/g, '-'),
   resolveTemplateRef: (template: string) => {
     const [owner, repo] = template.split('/');

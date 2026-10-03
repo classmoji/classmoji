@@ -25,7 +25,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  findByLogin: vi.fn(),
+  findByGitUsername: vi.fn(),
   findGitOrgById: vi.fn(),
   findMembershipsByUserId: vi.fn(),
   updateMembershipById: vi.fn(),
@@ -43,7 +43,7 @@ vi.mock('@trigger.dev/sdk', () => ({
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
-    user: { findByLogin: (...a: unknown[]) => mocks.findByLogin(...a) },
+    user: { findByGitUsername: (...a: unknown[]) => mocks.findByGitUsername(...a) },
     gitOrganization: { findById: (...a: unknown[]) => mocks.findGitOrgById(...a) },
     classroomMembership: {
       findByUserId: (...a: unknown[]) => mocks.findMembershipsByUserId(...a),
@@ -90,7 +90,7 @@ const run = (login = 'newstudent'): Promise<void> =>
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
 
-  mocks.findByLogin.mockResolvedValue({ id: 'user-1', login: 'newstudent' });
+  mocks.findByGitUsername.mockResolvedValue({ id: 'user-1', login: 'newstudent' });
   mocks.findGitOrgById.mockResolvedValue({ id: GIT_ORG_ID, login: 'dev-org' });
   mocks.findMembershipsByUserId.mockResolvedValue([
     {

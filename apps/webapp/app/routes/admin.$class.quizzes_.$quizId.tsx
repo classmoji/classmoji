@@ -8,6 +8,7 @@ import { TrophyOutlined, PlayCircleOutlined, ClearOutlined } from '@ant-design/i
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { UserThumbnailView, GradeBadge, SectionHeader } from '~/components';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import { formatDuration } from '~/utils/quizUtils';
 import {
   buildQuizResultRows,
@@ -159,6 +160,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 const QuizView = ({ loaderData }: Route.ComponentProps) => {
   const callout = useCallout();
   const { quiz, students, adminAttempt } = loaderData;
+  const { terms } = useGitWeb();
   const navigate = useNavigate();
   const { class: classSlug, quizId } = useParams();
   const fetcher = useFetcher();
@@ -193,12 +195,12 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
 
       // Restore last used repo from localStorage
       const lastUsed = localStorage.getItem(`lastTestRepo_${quizId}`);
-      if (lastUsed && data.some((r: Record<string, unknown>) => r.name === lastUsed)) {
+      if (lastUsed && data.some((r: Record<string, unknown>) => (r.ref ?? r.name) === lastUsed)) {
         setSelectedRepo(lastUsed);
       }
     } catch (error: unknown) {
       console.error('[Preview] Error fetching repos:', error);
-      callout.show({ variant: 'error', title: 'Could not load repositories' });
+      callout.show({ variant: 'error', title: `Could not load ${terms.repos}` });
     } finally {
       setLoadingRepos(false);
     }
@@ -304,7 +306,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
   // Handle repo selection confirmation (only used for new attempts now)
   const handleRepoSelected = () => {
     if (!selectedRepo) {
-      callout.show({ variant: 'info', title: 'Pick a repository first' });
+      callout.show({ variant: 'info', title: `Pick a ${terms.repo} first` });
       return;
     }
 
@@ -617,7 +619,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
 
       {/* Repository selection modal for code-aware quiz preview */}
       <Modal
-        title="Select Test Repository"
+        title={`Select Test ${terms.Repo}`}
         open={repoModalVisible}
         onOk={handleRepoSelected}
         onCancel={() => {
@@ -629,7 +631,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
         okButtonProps={{ disabled: !selectedRepo }}
       >
         <p className="mb-4 text-gray-600">
-          Select a repository to use for testing this code-aware quiz:
+          Select a {terms.repo} to use for testing this code-aware quiz:
         </p>
         {loadingRepos ? (
           <div className="flex justify-center py-4">
@@ -638,7 +640,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
         ) : (
           <Select
             style={{ width: '100%' }}
-            placeholder="Select a repository"
+            placeholder={`Select a ${terms.repo}`}
             value={selectedRepo}
             onChange={setSelectedRepo}
             showSearch
@@ -646,7 +648,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
               option!.label.toLowerCase().includes(input.toLowerCase())
             }
             options={repos.map((r: Record<string, unknown>) => ({
-              value: r.name as string,
+              value: ((r.ref as string | undefined) ?? r.name) as string,
               label: r.name as string,
             }))}
           />

@@ -13,17 +13,29 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const userFindFirst = vi.fn();
-const userUpsert = vi.fn();
-const accountUpsert = vi.fn();
+const userCreate = vi.fn();
+const accountFindUnique = vi.fn();
+const accountFindFirst = vi.fn();
+const accountUpdate = vi.fn();
+const classroomFindUnique = vi.fn();
 const membershipCreate = vi.fn();
 const membershipCount = vi.fn();
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
   default: () => ({
     user: {
       findFirst: (...a: unknown[]) => userFindFirst(...a),
-      upsert: (...a: unknown[]) => userUpsert(...a),
+      create: (...a: unknown[]) => userCreate(...a),
     },
-    account: { upsert: (...a: unknown[]) => accountUpsert(...a) },
+    account: {
+      findUnique: (...a: unknown[]) => accountFindUnique(...a),
+      findFirst: (...a: unknown[]) => accountFindFirst(...a),
+      update: (...a: unknown[]) => accountUpdate(...a),
+    },
+    classroom: { findUnique: (...a: unknown[]) => classroomFindUnique(...a) },
     classroomMembership: {
       create: (...a: unknown[]) => membershipCreate(...a),
       count: (...a: unknown[]) => membershipCount(...a),
@@ -71,6 +83,20 @@ const CLASSROOM = {
   git_organization: { id: 'org-1', login: 'cs1-org', provider: 'GITHUB' },
 };
 
+/** Ada's stored Github account (the provider id the canonical lookup matches on). */
+const storedAccount = (account_id = '999') => ({
+  id: 'acc-1',
+  account_id,
+  user: { id: 'u-1', name: 'Ada L' },
+});
+
+/** The case-insensitive Github username filter staff lookups use. */
+const usernameWhere = (username: string) => ({
+  accounts: {
+    some: { provider_id: 'github', username: { equals: username, mode: 'insensitive' } },
+  },
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   classroomFindById.mockResolvedValue(CLASSROOM);
@@ -78,7 +104,10 @@ beforeEach(() => {
   getUserByLogin.mockResolvedValue({ id: 999, login: 'ada', name: 'Ada L', email: 'ada@gh.dev' });
   isUserMemberOfOrganization.mockResolvedValue(false);
   userFindFirst.mockResolvedValue(null);
-  userUpsert.mockResolvedValue({ id: 'u-1', login: 'ada', name: 'Ada L' });
+  accountFindUnique.mockResolvedValue(null);
+  accountFindFirst.mockResolvedValue(null);
+  userCreate.mockResolvedValue({ id: 'u-1', name: 'Ada L' });
+  classroomFindUnique.mockResolvedValue({ git_organization: CLASSROOM.git_organization });
   triggerTask.mockResolvedValue({ id: 'run-1' });
   membershipCount.mockResolvedValue(2);
 });
@@ -98,13 +127,18 @@ describe('staff.addStaff', () => {
     expect(inviteToOrganization).toHaveBeenCalledWith('cs1-org', '999', [42]);
     expect(addTeamMember).not.toHaveBeenCalled();
 
-    // Instructor-supplied name/email win; the git profile fills provider_email.
-    expect(userUpsert.mock.calls[0][0].create).toMatchObject({
-      login: 'ada',
+    // Instructor-supplied name/email win; the git profile fills the account's email.
+    expect(userCreate.mock.calls[0][0].data).toMatchObject({
       name: 'Ada Lovelace',
       email: 'ada@school.edu',
-      provider_email: 'ada@gh.dev',
-      provider_id: '999',
+      accounts: {
+        create: {
+          provider_id: 'github',
+          account_id: '999',
+          username: 'ada',
+          email: 'ada@gh.dev',
+        },
+      },
     });
     expect(membershipCreate).toHaveBeenCalledWith({
       data: { classroom_id: 'class-1', user_id: 'u-1', role: 'ASSISTANT' },
@@ -146,6 +180,7 @@ describe('staff.addStaff', () => {
     // Ada is already an ASSISTANT here. The role-scoped pre-check asks only
     // about TEACHER, finds nothing, and the add proceeds.
     userFindFirst.mockResolvedValue({ id: 'u-1', login: 'ada', name: 'Ada L' });
+    accountFindUnique.mockResolvedValue(storedAccount());
     findByClassroomAndUser.mockResolvedValue(null);
 
     const result = await staff.addStaff({ classroomId: 'class-1', login: 'ada', role: 'TEACHER' });
@@ -160,7 +195,8 @@ describe('staff.addStaff', () => {
     });
     expect(updateById).not.toHaveBeenCalled();
     // The user record itself is left alone too.
-    expect(userUpsert.mock.calls[0][0].update).toEqual({});
+    expect(userCreate).not.toHaveBeenCalled();
+    expect(accountUpdate).not.toHaveBeenCalled();
     expect(result).toMatchObject({ created: true, alreadyExists: false, role: 'TEACHER' });
   });
 
@@ -177,6 +213,7 @@ describe('staff.addStaff', () => {
     expect(inviteToOrganization).not.toHaveBeenCalled();
     expect(triggerTask).toHaveBeenCalledWith('activate_membership', {
       login: 'ada',
+      githubUserId: '999',
       gitOrganizationId: 'org-1',
     });
     expect(result.alreadyOrgMember).toBe(true);
@@ -205,13 +242,14 @@ describe('staff.addStaff', () => {
 
     await staff.addStaff({ classroomId: 'class-1', login: 'Ada', role: 'ASSISTANT' });
 
-    expect(userFindFirst.mock.calls[0][0].where).toEqual({
-      login: { equals: 'Ada', mode: 'insensitive' },
-    });
+    expect(userFindFirst.mock.calls[0][0].where).toEqual(usernameWhere('Ada'));
   });
 
-  it('leaves an existing user record untouched: the upsert update branch is empty', async () => {
-    await staff.addStaff({
+  it('leaves an existing user record untouched: no user is created or rewritten', async () => {
+    accountFindUnique.mockResolvedValue(storedAccount());
+    findByClassroomAndUser.mockResolvedValue(null);
+
+    const result = await staff.addStaff({
       classroomId: 'class-1',
       login: 'ada',
       role: 'ASSISTANT',
@@ -219,20 +257,17 @@ describe('staff.addStaff', () => {
     });
 
     // Adding someone as staff must not rewrite any field of a user row that
-    // already exists — every value the service supplies belongs to `create` only.
-    expect(userUpsert.mock.calls[0][0].update).toEqual({});
+    // already exists — the supplied name only applies to a newly created user.
+    expect(userCreate).not.toHaveBeenCalled();
+    expect(accountUpdate).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ created: true, userId: 'u-1', name: 'Ada L' });
   });
 
   it('re-checks with the canonical casing after resolution and skips the GitHub writes', async () => {
     // The caller typed 'Ada'; nothing matches until the provider hands back the
     // canonical 'ada', which the second lookup finds with a live membership.
     getUserByLogin.mockResolvedValue({ id: 999, login: 'ada', name: 'Ada L' });
-    userFindFirst.mockResolvedValueOnce(null).mockResolvedValueOnce({
-      id: 'u-1',
-      login: 'ada',
-      name: 'Ada L',
-      provider_id: '999',
-    });
+    accountFindUnique.mockResolvedValue(storedAccount('999'));
     findByClassroomAndUser.mockResolvedValue({ id: 'm-1', role: 'ASSISTANT' });
 
     const result = await staff.addStaff({
@@ -252,18 +287,15 @@ describe('staff.addStaff', () => {
   });
 
   it('refuses when the stored row is keyed to a different provider account', async () => {
-    userFindFirst.mockResolvedValueOnce(null).mockResolvedValueOnce({
-      id: 'u-1',
-      login: 'ada',
-      name: 'Ada L',
-      provider_id: '111',
-    });
+    // No account carries the resolved provider id, but one stores the username.
+    accountFindFirst.mockResolvedValue(storedAccount('111'));
 
     await expect(
       staff.addStaff({ classroomId: 'class-1', login: 'ada', role: 'ASSISTANT' })
     ).rejects.toMatchObject({ code: 'login_conflict' });
     expect(ensureClassroomTeam).not.toHaveBeenCalled();
-    expect(userUpsert).not.toHaveBeenCalled();
+    expect(userCreate).not.toHaveBeenCalled();
+    expect(accountUpdate).not.toHaveBeenCalled();
   });
 
   it('maps only a 404 to git_user_not_found and propagates everything else', async () => {
@@ -352,9 +384,7 @@ describe('staff.updateStaff', () => {
       isGrader: true,
     });
 
-    expect(userFindFirst.mock.calls[0][0].where).toEqual({
-      login: { equals: 'ada', mode: 'insensitive' },
-    });
+    expect(userFindFirst.mock.calls[0][0].where).toEqual(usernameWhere('ada'));
     expect(updateById).toHaveBeenCalledWith('m-1', { is_grader: true });
   });
 });
@@ -381,6 +411,9 @@ describe('staff.removeStaff', () => {
             provider: 'GITHUB',
             github_installation_id: null,
             base_url: null,
+            gitlab_connection_id: null,
+            gitlab_instance_id: null,
+            provider_id: null,
           },
           classroom: { id: 'class-1', slug: 'cs1-25f' },
           role,
@@ -425,9 +458,7 @@ describe('staff.removeStaff', () => {
 
     await staff.removeStaff({ classroomId: 'class-1', login: '@ada', role: 'ASSISTANT' });
 
-    expect(userFindFirst.mock.calls[0][0].where).toEqual({
-      login: { equals: 'ada', mode: 'insensitive' },
-    });
+    expect(userFindFirst.mock.calls[0][0].where).toEqual(usernameWhere('ada'));
   });
 
   it('refuses to remove the LAST owner before anything is queued', async () => {
@@ -474,9 +505,12 @@ describe('staff.removeStaff', () => {
     expect(Object.keys(payload.gitOrganization as object).sort()).toEqual([
       'base_url',
       'github_installation_id',
+      'gitlab_connection_id',
+      'gitlab_instance_id',
       'id',
       'login',
       'provider',
+      'provider_id',
     ]);
     expect(JSON.stringify(payload)).not.toMatch(/secret/);
   });

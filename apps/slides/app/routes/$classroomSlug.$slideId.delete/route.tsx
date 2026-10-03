@@ -66,6 +66,8 @@ export const loader = async ({
       title: slideInfo.slide.title,
       contentPath,
     },
+    platform:
+      slideInfo.slide.classroom?.git_organization?.provider === 'GITLAB' ? 'Gitlab' : 'Github',
     mediaBacked,
     github:
       repoName && !mediaBacked
@@ -145,6 +147,7 @@ export default function DeleteSlidePage() {
     mediaBacked,
     themeName,
     otherSlidesUsingTheme,
+    platform,
     slideList,
     webappUrl,
     slidesListUrl,
@@ -244,7 +247,7 @@ export default function DeleteSlidePage() {
                   <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
                     {mediaBacked
                       ? "The slide will be permanently removed. Its file stays in this class's media."
-                      : 'The slide content will be permanently removed from both the database and GitHub.'}
+                      : `The slide content will be permanently removed from both the database and ${platform}.`}
                   </p>
                 </div>
               </div>
@@ -254,7 +257,7 @@ export default function DeleteSlidePage() {
             {github && (
               <div className="mb-6 p-4 bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-md">
                 <p className="font-medium text-gray-900 dark:text-white mb-2">
-                  Files to be deleted from GitHub:
+                  Files to be deleted from {platform}:
                 </p>
                 <div className="font-mono text-xs bg-gray-100 dark:bg-gray-800 rounded p-3 overflow-x-auto">
                   <p className="text-gray-500 dark:text-gray-400 mb-1">
@@ -305,7 +308,7 @@ export default function DeleteSlidePage() {
                         className="w-4 h-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
                       />
                       <span className="text-sm text-gray-700 dark:text-gray-300">
-                        Also delete the shared theme from GitHub
+                        Also delete the shared theme from {platform}
                       </span>
                     </label>
                   </>

@@ -19,6 +19,7 @@ const getGitProviderMock = vi.fn();
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     classroom: { findById: (...a: unknown[]) => findByIdMock(...a) },
+    gitlabInstance: { defaultHost: () => 'https://gitlab.com' },
   },
   getGitProvider: (...a: unknown[]) => getGitProviderMock(...a),
   describeTokenMintError: (org: string, error: unknown) =>
@@ -139,11 +140,32 @@ describe('POST /api/content/token', () => {
       repo: 'content-cs101',
       token: 'ghs_installationtoken',
       expiresAt: '2026-09-03T01:00:00Z',
+      provider: 'GITHUB',
     });
     // The token is minted through the classroom's OWN git organization —
     // installation access is per-org, so a provider built from anything else
     // would be a token for the wrong repo.
     expect(getGitProviderMock).toHaveBeenCalledWith(CLASSROOM.git_organization);
+  });
+
+  it('tells the Worker a Gitlab classroom is on Gitlab, and which instance', async () => {
+    findByIdMock.mockResolvedValue({
+      ...CLASSROOM,
+      git_organization: { ...CLASSROOM.git_organization, provider: 'GITLAB' },
+    });
+    getInstallationTokenMock.mockResolvedValue({
+      token: 'glpat-project',
+      expiresAt: '2026-09-03T01:00:00Z',
+    });
+
+    const res = await action(authed({ classroomId: CLASSROOM_ID }));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      token: 'glpat-project',
+      provider: 'GITLAB',
+      apiBase: expect.stringMatching(/^https?:\/\//),
+    });
   });
 
   it('mints a token narrowed to one repo, read-only', async () => {

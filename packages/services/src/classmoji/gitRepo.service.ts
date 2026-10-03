@@ -156,6 +156,30 @@ export const findByStudent = async (repositoryId: string, userId: string) => {
   );
 };
 
+/**
+ * A student's own repositories in a classroom: their individual repos and their
+ * teams' repos, for published repositories only. Listed whether or not an
+ * assignment uses them, so a repository handed out without one is still
+ * somewhere a student can find it.
+ */
+export const findForStudent = async (classroomId: string, userId: string) =>
+  getPrisma().gitRepo.findMany({
+    where: {
+      classroom_id: classroomId,
+      repository: { is_published: true },
+      OR: [{ student_id: userId }, { team: { memberships: { some: { user_id: userId } } } }],
+    },
+    select: {
+      id: true,
+      name: true,
+      last_push_at: true,
+      created_at: true,
+      repository: { select: { id: true, title: true, type: true } },
+      team: { select: { name: true } },
+    },
+    orderBy: { created_at: 'desc' },
+  });
+
 export const deleteById = async (repoId: string) => {
   return getPrisma().gitRepo.delete({
     where: {

@@ -1,4 +1,5 @@
 import { Suspense } from 'react';
+import { gitContextFor } from '~/utils/gitWeb';
 import { Await } from 'react-router';
 import { Skeleton } from 'antd';
 import { namedAction } from 'remix-utils/named-action';
@@ -48,6 +49,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
             userId,
             quizzesVisible,
             gitOrgLogin,
+            git: gitContextFor(classroom),
             assignments,
           })
         )

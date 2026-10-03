@@ -6,8 +6,7 @@
  */
 
 import { ContentService } from '@classmoji/content';
-import { ClassmojiService, GitHubProvider } from '@classmoji/services';
-import getPrisma from '@classmoji/database';
+import { ClassmojiService } from '@classmoji/services';
 
 const THEMES_FOLDER = '.slidesthemes';
 
@@ -33,56 +32,26 @@ function getBaseUrl(org: string, repoName: string): string {
  */
 export async function listSavedThemes(org: string, repoName: string) {
   try {
-    // Get git organization to access installation ID
-    // Query by provider + login since login alone is not unique
-    const gitOrg = await getPrisma().gitOrganization.findFirst({
-      where: { provider: 'GITHUB', login: org },
+    // Through ContentService, which resolves the org (Github or Gitlab) from the
+    // login and the content repo together.
+    const contents = await ContentService.listFolder({
+      orgLogin: org,
+      repo: repoName,
+      path: THEMES_FOLDER,
     });
-
-    if (!gitOrg || !gitOrg.github_installation_id) {
-      console.warn(`Git organization not found or missing installation ID: ${org}`);
-      return [];
-    }
-
-    // Create GitHub provider instance
-    const gitProvider = new GitHubProvider(gitOrg.github_installation_id, org);
-
-    const repoExists = await gitProvider.repositoryExists(org, repoName);
-    if (!repoExists) return [];
-
-    const octokit = await gitProvider.getOctokit();
-
-    let contents;
-    try {
-      const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
-        owner: org,
-        repo: repoName,
-        path: THEMES_FOLDER,
-      });
-      contents = Array.isArray(data) ? data : [];
-    } catch (error: unknown) {
-      if (error && typeof error === 'object' && 'status' in error && error.status === 404)
-        return [];
-      throw error;
-    }
 
     // Get theme.json from each theme folder
     const themes = [];
     for (const item of contents) {
       if (item.type === 'dir') {
         try {
-          const { data: manifestData } = await octokit.request(
-            'GET /repos/{owner}/{repo}/contents/{path}',
-            {
-              owner: org,
-              repo: repoName,
-              path: `${THEMES_FOLDER}/${item.name}/theme.json`,
-            }
-          );
-
-          const manifest = JSON.parse(
-            Buffer.from((manifestData as { content: string }).content, 'base64').toString('utf-8')
-          );
+          const manifestFile = await ContentService.getContent({
+            orgLogin: org,
+            repo: repoName,
+            path: `${THEMES_FOLDER}/${item.name}/theme.json`,
+          });
+          if (!manifestFile) throw new Error('no theme.json');
+          const manifest = JSON.parse(manifestFile.content);
           themes.push({
             name: item.name,
             bodyClasses: manifest.bodyClasses || '',
@@ -214,57 +183,34 @@ export async function getThemeUrls(org: string, repoName: string, themeName: str
   const baseUrl = getBaseUrl(org, repoName);
   const themePath = `${THEMES_FOLDER}/${themeName}`;
 
-  // Get git organization to access installation ID
-  // Query by provider + login since login alone is not unique
-  const gitOrg = await getPrisma().gitOrganization.findFirst({
-    where: { provider: 'GITHUB', login: org },
-  });
-
-  if (!gitOrg || !gitOrg.github_installation_id) {
-    throw new Error(`Git organization not found or missing installation ID: ${org}`);
-  }
-
-  // Create GitHub provider instance
-  const gitProvider = new GitHubProvider(gitOrg.github_installation_id, org);
-  const octokit = await gitProvider.getOctokit();
-
   // Get manifest for body classes
-  const { data: manifestData } = await octokit.request(
-    'GET /repos/{owner}/{repo}/contents/{path}',
-    {
-      owner: org,
-      repo: repoName,
-      path: `${themePath}/theme.json`,
-    }
-  );
-  const manifest = JSON.parse(
-    Buffer.from((manifestData as { content: string }).content, 'base64').toString('utf-8')
-  );
+  const manifestFile = await ContentService.getContent({
+    orgLogin: org,
+    repo: repoName,
+    path: `${themePath}/theme.json`,
+  });
+  if (!manifestFile) {
+    throw new Error(`Theme not found: ${themeName}`);
+  }
+  const manifest = JSON.parse(manifestFile.content);
 
   // Check which lib CSS exists (prefer v2)
-  let libCssFile = 'lib/offline-v2.css';
-  try {
-    await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
-      owner: org,
-      repo: repoName,
-      path: `${themePath}/lib/offline-v2.css`,
-    });
-  } catch {
-    libCssFile = 'lib/offline-v1.css';
-  }
+  const hasV2 = await ContentService.getMeta({
+    orgLogin: org,
+    repo: repoName,
+    path: `${themePath}/lib/offline-v2.css`,
+  });
+  const libCssFile = hasV2 ? 'lib/offline-v2.css' : 'lib/offline-v1.css';
 
   // Check if custom theme exists
-  let customThemeUrl: string | null = null;
-  try {
-    await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
-      owner: org,
-      repo: repoName,
-      path: `${themePath}/custom-theme.css`,
-    });
-    customThemeUrl = `${baseUrl}/${themePath}/custom-theme.css`;
-  } catch {
-    // No custom theme
-  }
+  const hasCustom = await ContentService.getMeta({
+    orgLogin: org,
+    repo: repoName,
+    path: `${themePath}/custom-theme.css`,
+  });
+  const customThemeUrl: string | null = hasCustom
+    ? `${baseUrl}/${themePath}/custom-theme.css`
+    : null;
 
   return {
     libCssUrl: `${baseUrl}/${themePath}/${libCssFile}`,

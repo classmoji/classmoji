@@ -1,6 +1,7 @@
 import { ClassmojiService } from '@classmoji/services';
 import { signInviteToken } from '@classmoji/auth/invite-token';
 import Tasks from '@classmoji/tasks';
+import { tasks } from '@trigger.dev/sdk';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
@@ -29,6 +30,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   if (result.emails.length > 0) {
     await Tasks.sendBatchEmailTask.trigger({ emails: result.emails.map(e => e.payload) });
+  }
+  // Gitlab students who already have Gitlab: create their projects now.
+  for (const activation of result.activations) {
+    await tasks.trigger('activate_membership', activation);
   }
 
   return {

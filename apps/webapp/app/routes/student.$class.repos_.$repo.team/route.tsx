@@ -8,9 +8,10 @@ import { ClassmojiService, getGitProvider, isReservedSlug } from '@classmoji/ser
 import { useCallout } from '@classmoji/ui-components';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { gitUsername, titleToIdentifier } from '@classmoji/utils';
+import { gitUsername, scopeGitlabId, teamsNamespace, titleToIdentifier } from '@classmoji/utils';
 import { tasks } from '@trigger.dev/sdk/v3';
 import { useClassroomStatusModals } from '~/utils/classroomStatusModals';
+import { gitTerms } from '~/utils/gitWeb';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const classSlug = params.class!;
@@ -23,6 +24,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     resourceType: 'TEAM',
     attemptedAction: 'view_teams',
   });
+  const terms = gitTerms(classroom.git_organization?.provider === 'GITLAB');
 
   // Get the repository
   const repository = await ClassmojiService.repository.findByClassroomSlugAndModuleSlug(
@@ -31,12 +33,12 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   );
 
   if (!repository) {
-    throw new Response('Repository not found', { status: 404 });
+    throw new Response(`${terms.Repo} not found`, { status: 404 });
   }
 
   // Only allow for GROUP repositories with SELF_FORMED mode
   if (repository.type !== 'GROUP' || repository.team_formation_mode !== 'SELF_FORMED') {
-    throw new Response('Team formation not available for this repository', { status: 400 });
+    throw new Response(`Team formation not available for this ${terms.repo}`, { status: 400 });
   }
 
   // Get the tag for this repository (if it exists)
@@ -80,6 +82,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     attemptedAction: 'modify_team',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+  const terms = gitTerms(classroom.git_organization?.provider === 'GITLAB');
 
   // Get the repository
   const repository = await ClassmojiService.repository.findByClassroomSlugAndModuleSlug(
@@ -92,7 +95,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     repository.type !== 'GROUP' ||
     repository.team_formation_mode !== 'SELF_FORMED'
   ) {
-    return { error: 'Team formation not available for this repository' };
+    return { error: `Team formation not available for this ${terms.repo}` };
   }
 
   // Check deadline
@@ -117,9 +120,11 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       login?: string;
     }
   );
-  const orgLogin = classroomWithOrg!.git_organization.login;
+  // Where teams live: the org on Github, `<class subgroup>/teams` on GitLab.
+  const orgLogin = teamsNamespace(classroomWithOrg!) ?? classroomWithOrg!.git_organization.login;
   const provider = classroomWithOrg!.git_organization.provider;
-  const providerName = provider === 'GITLAB' ? 'Gitlab' : 'Github';
+  const isGitLab = provider === 'GITLAB';
+  const providerName = isGitLab ? 'Gitlab' : 'Github';
 
   const identity = await getPrisma().user.findUnique({
     where: { id: userId },
@@ -180,7 +185,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       } catch (error: unknown) {
         console.error('Failed to create GitHub team:', error);
         return {
-          error: 'Failed to create team on GitHub. Please try again or contact your instructor.',
+          error: `Failed to create team on ${terms.platform}. Please try again or contact your instructor.`,
         };
       }
 
@@ -201,7 +206,13 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         name: teamName.trim(),
         slug: teamSlug,
         classroomId: classroom.id,
-        providerId: githubTeam.id,
+        providerId: isGitLab
+          ? scopeGitlabId(
+              classroomWithOrg!.git_organization.gitlab_instance_id ?? null,
+              githubTeam.id
+            )
+          : githubTeam.id,
+        provider: isGitLab ? 'GITLAB' : 'GITHUB',
         userId,
         tagId: tag.id,
       });
@@ -222,7 +233,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         sessionId: Date.now().toString(),
       });
 
-      return { success: `Team "${teamName}" created! Repository is being set up.` };
+      return { success: `Team "${teamName}" created! ${terms.Repo} is being set up.` };
     },
 
     async join() {
@@ -255,7 +266,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       // Check if team is for this repository
       if (!team.tags.some(t => t.tag_id === tag.id)) {
-        return { error: 'This team is not for this repository' };
+        return { error: `This team is not for this ${terms.repo}` };
       }
 
       // Check if team is full
@@ -386,9 +397,9 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
         >
           <div className="flex justify-between items-start">
             <div>
-              <h3 className="text-base font-semibold mb-2">{userTeam.name}</h3>
               <div className="flex items-center gap-2 mb-4">
-                <Tag color="blue">
+                <h3 className="text-base font-semibold m-0">{userTeam.name}</h3>
+                <Tag color="blue" className="m-0">
                   {userTeam.memberships.length}
                   {maxTeamSize ? `/${maxTeamSize}` : ''} members
                 </Tag>
@@ -396,10 +407,7 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
               <div className="flex gap-3">
                 {userTeam.memberships.map(membership => (
                   <div key={membership.user_id} className="flex items-center gap-2">
-                    <Avatar
-                      src={membership.user.image ?? undefined}
-                      size={32}
-                    >
+                    <Avatar src={membership.user.image ?? undefined} size={32}>
                       {membership.user.name?.[0] || membership.user.login?.[0]}
                     </Avatar>
                     <span className="text-sm">{membership.user.name || membership.user.login}</span>
@@ -505,11 +513,7 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
                           </Tag>
                           <div className="flex items-center gap-2">
                             {team.memberships.map(m => (
-                              <Avatar
-                                key={m.user_id}
-                                src={m.user.image ?? undefined}
-                                size={24}
-                              >
+                              <Avatar key={m.user_id} src={m.user.image ?? undefined} size={24}>
                                 {m.user.name?.[0] || m.user.login?.[0]}
                               </Avatar>
                             ))}

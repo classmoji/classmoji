@@ -48,7 +48,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
   const staffUser = await ClassmojiService.user.findByGitUsername(
     login!,
-    classroom.git_organization?.provider ?? 'GITHUB'
+    classroom.git_organization ?? 'GITHUB'
   );
 
   if (!staffUser) {

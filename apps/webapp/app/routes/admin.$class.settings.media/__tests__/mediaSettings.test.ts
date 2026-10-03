@@ -34,7 +34,11 @@ vi.mock('~/utils/routeAuth.server', () => ({
   requireClassroomAdmin: (...a: unknown[]) => mocks.requireClassroomAdmin(...a),
 }));
 
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
   default: () => ({ user: { findMany: (...a: unknown[]) => mocks.userFindMany(...a) } }),
 }));
 
@@ -114,7 +118,13 @@ beforeEach(() => {
   mocks.listMedia.mockResolvedValue([record()]);
   mocks.isMediaConfigured.mockReturnValue(true);
   mocks.canServeSignedContent.mockReturnValue(true);
-  mocks.userFindMany.mockResolvedValue([{ id: 'user-1', name: 'Tim', login: 'tregubov' }]);
+  mocks.userFindMany.mockResolvedValue([
+    {
+      id: 'user-1',
+      name: 'Tim',
+      accounts: [{ provider_id: 'github', account_id: '1', username: 'tregubov' }],
+    },
+  ]);
 });
 
 describe('loader', () => {
@@ -151,8 +161,16 @@ describe('loader', () => {
       record({ id: 'c', uploadedBy: 'user-1' }),
     ]);
     mocks.userFindMany.mockResolvedValue([
-      { id: 'user-1', name: 'Tim', login: 't' },
-      { id: 'user-2', name: null, login: 'pape' },
+      {
+        id: 'user-1',
+        name: 'Tim',
+        accounts: [{ provider_id: 'github', account_id: '1', username: 't' }],
+      },
+      {
+        id: 'user-2',
+        name: null,
+        accounts: [{ provider_id: 'github', account_id: '1', username: 'pape' }],
+      },
     ]);
 
     const data = await loader(args(get()));
@@ -161,7 +179,7 @@ describe('loader', () => {
     expect(mocks.userFindMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: { in: ['user-1', 'user-2'] } } })
     );
-    // Falls back to the login when there is no display name, and never to a raw id.
+    // Falls back to the git username when there is no display name, and never to a raw id.
     expect(data.items.map(item => item.uploadedByName)).toEqual(['Tim', 'pape', 'Tim']);
   });
 

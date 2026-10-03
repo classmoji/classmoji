@@ -2,7 +2,6 @@ import { useState, type FormEvent, type ReactNode } from 'react';
 import { authClient } from '@classmoji/auth/client';
 import { Emoji } from '~/components';
 import GitHubIcon from './github.svg';
-import GitLabIcon from '~/components/ui/display/gitlab.svg';
 
 type Mode = 'sign-in' | 'sign-up' | 'verify' | 'forgot' | 'reset';
 
@@ -12,14 +11,30 @@ interface SignInPageProps {
   callbackURL: string;
   /** A better-auth OAuth error code from `?error=`, if the last attempt failed. */
   oauthError?: string | null;
+  /** The Gitlab sign-in control; null when no Gitlab is available. */
+  gitlabSignIn?: ReactNode;
+  /** The Gitlab chooser is open: it gets the column, everything else steps aside. */
+  gitlabChoosing?: boolean;
   children?: ReactNode;
 }
 
+/**
+ * better-auth (and the Gitlab instance plugin) send a failed sign-in back here
+ * with `?error=<code>`. Only known codes get a sentence; anything else gets a
+ * generic one, so the query string never becomes page copy.
+ */
 const OAUTH_ERRORS: Record<string, string> = {
+  // Implicit linking is off: an email match never merges accounts.
   account_not_linked:
-    'An account with this email already exists. Sign in with your email and password, then connect Github from your account.',
+    'An account with this email already exists. Sign in the way you usually do, then connect this account from your settings.',
   account_already_linked_to_different_user:
-    'That Github account is already connected to another Classmoji account.',
+    'That account is already connected to another Classmoji account.',
+  access_denied: 'Sign-in was cancelled.',
+  gitlab_instance_unavailable: 'That Gitlab is no longer available for sign-in.',
+  gitlab_setup_credentials:
+    'Gitlab rejected that Application ID or Secret, or the callback URL on the application does not match. Check them and try again.',
+  gitlab_setup_failed: 'Could not save that Gitlab. Try again.',
+  email_is_missing: 'Your Gitlab account has no email address Classmoji can read.',
 };
 
 const inputClass =
@@ -33,7 +48,14 @@ const linkClass = 'text-gray-900 dark:text-gray-100 hover:underline cursor-point
 const errorMessage = (error: { message?: string; code?: string } | null | undefined) =>
   error?.message || 'Something went wrong. Please try again.';
 
-const SignInPage = ({ handleGitHubLogin, callbackURL, oauthError, children }: SignInPageProps) => {
+const SignInPage = ({
+  handleGitHubLogin,
+  callbackURL,
+  oauthError,
+  gitlabSignIn,
+  gitlabChoosing = false,
+  children,
+}: SignInPageProps) => {
   const [mode, setMode] = useState<Mode>('sign-in');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -169,7 +191,7 @@ const SignInPage = ({ handleGitHubLogin, callbackURL, oauthError, children }: Si
   return (
     <div className="min-h-screen bg-[#fafaf9] dark:bg-neutral-950 flex flex-col">
       <main className="flex-1 flex items-center justify-center px-4">
-        <div className="w-full max-w-xs">
+        <div className={`w-full ${gitlabChoosing ? 'max-w-md' : 'max-w-xs'}`}>
           {children}
           <div className="flex justify-center mb-3">
             <Emoji emoji="apple" fontSize="48px" logo />
@@ -192,33 +214,27 @@ const SignInPage = ({ handleGitHubLogin, callbackURL, oauthError, children }: Si
 
           {(mode === 'sign-in' || mode === 'sign-up') && (
             <>
-              <button
-                onClick={handleGitHubLogin}
-                className="w-full flex items-center justify-center gap-2 bg-gray-900 hover:bg-gray-800 dark:bg-white dark:hover:bg-gray-100 text-white dark:text-gray-900 font-medium rounded-lg px-4 py-2.5 transition-colors cursor-pointer"
-              >
-                <img src={GitHubIcon} alt="" className="w-5 h-5 dark:invert" />
-                Continue with Github
-              </button>
-              <button
-                type="button"
-                disabled
-                className="mt-2 w-full flex items-center justify-center gap-2 border border-stone-200 dark:border-neutral-800 bg-transparent text-gray-400 dark:text-gray-500 font-medium rounded-lg px-4 py-2.5 cursor-not-allowed"
-              >
-                <img src={GitLabIcon} alt="" className="w-5 h-5 opacity-60" />
-                Continue with Gitlab
-              </button>
-              <p className="mt-1.5 text-center text-xs text-gray-400 dark:text-gray-500">
-                Gitlab integration coming soon
-              </p>
-              <div className="flex items-center gap-3 my-5 text-xs text-gray-400 dark:text-gray-500">
-                <div className="h-px flex-1 bg-stone-200 dark:bg-neutral-800" />
-                or
-                <div className="h-px flex-1 bg-stone-200 dark:bg-neutral-800" />
-              </div>
+              {!gitlabChoosing && (
+                <button
+                  onClick={handleGitHubLogin}
+                  className="w-full flex items-center justify-center gap-2 bg-black hover:bg-neutral-800 text-white dark:ring-1 dark:ring-neutral-700 font-medium rounded-lg px-4 py-2.5 transition-colors cursor-pointer"
+                >
+                  <img src={GitHubIcon} alt="" className="w-5 h-5" />
+                  Continue with Github
+                </button>
+              )}
+              {gitlabSignIn && <div className={gitlabChoosing ? '' : 'mt-2'}>{gitlabSignIn}</div>}
+              {!gitlabChoosing && (
+                <div className="flex items-center gap-3 my-5 text-xs text-gray-400 dark:text-gray-500">
+                  <div className="h-px flex-1 bg-stone-200 dark:bg-neutral-800" />
+                  or
+                  <div className="h-px flex-1 bg-stone-200 dark:bg-neutral-800" />
+                </div>
+              )}
             </>
           )}
 
-          {mode === 'sign-in' && (
+          {mode === 'sign-in' && !gitlabChoosing && (
             <form onSubmit={onSignIn} className="flex flex-col gap-3">
               <input
                 className={inputClass}
@@ -252,7 +268,7 @@ const SignInPage = ({ handleGitHubLogin, callbackURL, oauthError, children }: Si
             </form>
           )}
 
-          {mode === 'sign-up' && (
+          {mode === 'sign-up' && !gitlabChoosing && (
             <form onSubmit={onSignUp} className="flex flex-col gap-3">
               <input
                 className={inputClass}
@@ -300,7 +316,8 @@ const SignInPage = ({ handleGitHubLogin, callbackURL, oauthError, children }: Si
                 {busy ? 'Creating account…' : 'Create account'}
               </button>
               <p className="text-xs text-gray-500 dark:text-gray-400">
-                You will connect your Github account before creating or joining a classroom.
+                You will connect your Github or Gitlab account before creating or joining a
+                classroom.
               </p>
               <button
                 type="button"

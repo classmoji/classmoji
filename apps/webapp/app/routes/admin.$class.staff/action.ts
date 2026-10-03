@@ -132,16 +132,20 @@ const removalMessage = (ungraded: UngradedSlotsOutcome | null): string => {
  * the failure. Anything that is not a StaffServiceError is a bug or an outage,
  * not a caller mistake, and keeps the generic fallback.
  */
-const staffErrorMessage = (error: unknown, fallback: string): string => {
+const staffErrorMessage = (error: unknown, fallback: string, isGitLab = false): string => {
   if (!(error instanceof StaffServiceError)) return fallback;
 
   switch (error.code) {
     case 'git_user_not_found':
-      return 'No GitHub user with that username. Check the spelling and try again.';
+      return isGitLab
+        ? 'No user with that username on Gitlab. Check the spelling and try again.'
+        : 'No Github user with that username. Check the spelling and try again.';
     case 'staff_not_found':
       return 'That person no longer holds that role in this class — reload the page.';
     case 'no_org_configured':
-      return 'This classroom has no linked GitHub organization, so staff cannot be managed yet.';
+      return isGitLab
+        ? 'This classroom has no linked Gitlab group, so staff cannot be managed yet.'
+        : 'This classroom has no linked Github organization, so staff cannot be managed yet.';
     case 'login_conflict':
       return 'That username belongs to a different account than the one already on file for it — contact support.';
     case 'last_owner':
@@ -174,6 +178,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     action: 'manage_staff',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+  const isGitLab = classroom.git_organization?.provider === 'GITLAB';
 
   // namedAction picks the branch from the query string, so the branch is known
   // even when the body is not readable — which is what decides the ActionTypes
@@ -209,7 +214,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       if (!login) {
         return {
           action: ActionTypes.SAVE_USER,
-          error: 'Enter the GitHub username of the person to add.',
+          error: `Enter the ${isGitLab ? 'Gitlab' : 'Github'} username of the person to add.`,
         };
       }
 
@@ -244,7 +249,11 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         console.error('createStaff failed:', error);
         return {
           action: ActionTypes.SAVE_USER,
-          error: staffErrorMessage(error, 'Failed to add staff member. Please try again.'),
+          error: staffErrorMessage(
+            error,
+            'Failed to add staff member. Please try again.',
+            isGitLab
+          ),
         };
       }
     },
@@ -291,7 +300,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         console.error('updateStaff failed:', error);
         return {
           action: ActionTypes.SAVE_USER,
-          error: staffErrorMessage(error, 'Failed to update staff member.'),
+          error: staffErrorMessage(error, 'Failed to update staff member.', isGitLab),
         };
       }
     },
@@ -346,7 +355,11 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         console.error('removeStaff failed:', error);
         return {
           action: ActionTypes.REMOVE_USER,
-          error: staffErrorMessage(error, 'Failed to remove staff member. Please try again.'),
+          error: staffErrorMessage(
+            error,
+            'Failed to remove staff member. Please try again.',
+            isGitLab
+          ),
         };
       }
 

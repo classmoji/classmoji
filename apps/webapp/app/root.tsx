@@ -1,4 +1,5 @@
 import '@ant-design/v5-patch-for-react-19';
+import { classroomSlugFromPath, fallbackMode } from '~/utils/sessionMode.server';
 import {
   Links,
   Meta,
@@ -9,6 +10,7 @@ import {
   redirect,
   useRouteError,
   isRouteErrorResponse,
+  type ShouldRevalidateFunction,
 } from 'react-router';
 import axios from 'axios';
 
@@ -95,9 +97,13 @@ const loadAppUser = async (userId: string): Promise<AppUser | null> => {
     ClassmojiService.subscription.getCurrent(userId),
   ]);
   if (!row) return null;
+  const logins = { GITHUB: gitUsername(row, 'GITHUB'), GITLAB: gitUsername(row, 'GITLAB') };
   const user: AppUser = {
-    ...withLogin(row, 'GITHUB'),
-    has_github: gitUsername(row, 'GITHUB') !== null,
+    // Github first, else Gitlab; the loader swaps in the classroom's own below.
+    ...withLogin(row),
+    logins,
+    has_github: logins.GITHUB !== null,
+    has_gitlab: logins.GITLAB !== null,
     has_password: passwordAccounts > 0,
   };
   if (subscription) user.subscription = subscription;
@@ -105,7 +111,7 @@ const loadAppUser = async (userId: string): Promise<AppUser | null> => {
 };
 
 // Paths an account that is not set up yet may still reach: the setup steps
-// themselves, signing out, and (for the Github step) account settings.
+// themselves, signing out, and (for the git account step) account settings.
 const EMAIL_STEP_PATHS = ['/registration', '/logout'];
 const GITHUB_STEP_PATHS = ['/select-organization', '/logout', '/settings'];
 
@@ -126,13 +132,32 @@ const accountSetupRedirect = (user: AppUser, url: URL): string | null => {
     const qs = params.toString();
     return `/registration${qs ? `?${qs}` : ''}`;
   }
-  if (!user.has_github) {
-    // The picker asks them to connect Github.
+  if (!user.has_github && !user.has_gitlab) {
+    // The picker asks them to connect Github or Gitlab.
     if (isUnder(url.pathname, [...GITHUB_STEP_PATHS, '/registration'])) return null;
     return '/select-organization';
   }
   return null;
 };
+
+/** The classroom a path is in (`/admin/<slug>/...`), mirroring classroomSlugFromPath. */
+const classroomSlugOf = (pathname: string): string | null => {
+  const [, prefix, slug] = pathname.split('/');
+  return ['admin', 'student', 'assistant', 'teacher'].includes(prefix ?? '') && slug ? slug : null;
+};
+
+/**
+ * The user's username follows the classroom (Github in a Github class, Gitlab
+ * in a Gitlab one), so moving between classrooms re-runs the loader even when
+ * no params changed the way React Router looks for.
+ */
+export const shouldRevalidate: ShouldRevalidateFunction = ({
+  currentUrl,
+  nextUrl,
+  defaultShouldRevalidate,
+}) =>
+  classroomSlugOf(currentUrl.pathname) !== classroomSlugOf(nextUrl.pathname) ||
+  defaultShouldRevalidate;
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const url = new URL(request.url);
@@ -166,6 +191,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     '/login',
     '/test-login',
     '/site-return',
+    // Connecting a self-managed Gitlab happens before its first sign-in.
+    '/gitlab/setup',
   ];
   const isPublicRoute = publicRoutes.some(
     route =>
@@ -200,21 +227,39 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   }
 
   // Before anything else, a signed-in person confirms a contact email
-  // (registration) and then connects Github: every classroom runs on it.
+  // (registration) and then connects Github or Gitlab: every classroom runs on one.
   // Staff viewing as someone skip both; they are looking, not joining.
   if (!isImpersonating) {
     const gate = accountSetupRedirect(user, url);
     if (gate) return redirect(gate);
   }
 
+  // Every classroom is listed, Github and Gitlab alike, whichever way the
+  // person signed in. Inside one, its provider decides the words and which of
+  // their usernames is "theirs" (repo names are built from it); outside, their
+  // Github username first, else their Gitlab one.
+  const slug = classroomSlugFromPath(url.pathname);
+  const currentClassroom = slug
+    ? user.classroom_memberships?.find(m => m.classroom.slug === slug)?.classroom
+    : undefined;
+  const gitMode: 'GITHUB' | 'GITLAB' = currentClassroom
+    ? currentClassroom.git_organization?.provider === 'GITLAB'
+      ? 'GITLAB'
+      : 'GITHUB'
+    : fallbackMode(user);
+  user.login = user.logins[gitMode] ?? user.login;
+  user.provider = gitMode;
+
   // For backward compat, map classroom_memberships to format expected by UI
   // TODO: Update UI to use classroom_memberships directly
   const memberships = user?.classroom_memberships?.map(m => {
-    // Construct avatar URL from GitHub org ID
+    // Github org avatars are addressable by org id; a GitLab group's id means
+    // nothing on Github, so GitLab classrooms get none.
     const gitOrgProviderId = m.classroom.git_organization?.provider_id;
-    const avatar_url = gitOrgProviderId
-      ? `https://avatars.githubusercontent.com/u/${gitOrgProviderId}?v=4`
-      : null;
+    const avatar_url =
+      gitOrgProviderId && m.classroom.git_organization?.provider !== 'GITLAB'
+        ? `https://avatars.githubusercontent.com/u/${gitOrgProviderId}?v=4`
+        : null;
 
     return {
       ...m,
@@ -237,6 +282,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     user,
     organizations,
     memberships,
+    gitMode,
     session: toClientSession(session),
     aiAgentAvailable: isAIAgentConfigured(),
     // Where "Stop viewing" should return to. Only set when apps/admin started
