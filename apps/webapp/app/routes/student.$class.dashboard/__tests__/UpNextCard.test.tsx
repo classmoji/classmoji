@@ -114,6 +114,16 @@ describe('formatDue', () => {
     });
   });
 
+  it('does not call a date overdue inside the hours the student bought', () => {
+    // Due Sep 30 noon, now Oct 1 noon: 24h past it.
+    expect(formatDue('2026-09-30T12:00:00', now, 30)).toEqual({
+      text: 'Sep 30 · +30h applied',
+      urgent: true,
+    });
+    // The hours bought have run out: overdue again.
+    expect(formatDue('2026-09-30T12:00:00', now, 10).text).toBe('Overdue · Sep 30');
+  });
+
   it('names today and tomorrow, with the time', () => {
     expect(formatDue('2026-10-01T17:00:00', now)).toEqual({ text: 'Today, 5:00 PM', urgent: true });
     expect(formatDue('2026-10-02T14:00:00', now)).toEqual({

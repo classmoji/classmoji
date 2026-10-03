@@ -165,6 +165,43 @@ describe('repos resource', () => {
     expect(assignmentsOf(student)[0]).not.toHaveProperty('module_id');
   });
 
+  it("reports an assignment's own price and what an hour actually costs", async () => {
+    const own = (id: string, tokens_per_hour: number | null) => ({
+      id,
+      module_id: 'mod-7',
+      title: id,
+      slug: id,
+      weight: 100,
+      is_extra_credit: false,
+      is_published: true,
+      student_deadline: DEADLINE,
+      grader_deadline: null,
+      release_at: null,
+      grades_released: false,
+      tokens_per_hour,
+    });
+    const row = {
+      ...REPO_ROW,
+      assignments: [own('follows', null), own('own-price', 5), own('off', 0)],
+    };
+    findByClassroomId.mockResolvedValue([row]);
+    const ctx = ctxFor('OWNER');
+    (ctx.classroom!.classroom as { settings: unknown }).settings = { default_tokens_per_hour: 2 };
+
+    const payload = (await reposResource.handler(VARS, ctx, URI)) as ReposPayload;
+    const prices = (payload.repositories[0].assignments as Array<Record<string, unknown>>).map(
+      a => [a.id, a.tokens_per_hour, a.effective_tokens_per_hour]
+    );
+
+    expect(prices).toEqual([
+      // Follows the classroom: its own value stays null, so writing it back changes nothing.
+      ['follows', null, 2],
+      ['own-price', 5, 5],
+      // A deliberate 0 is no extensions, whatever the classroom charges.
+      ['off', 0, 0],
+    ]);
+  });
+
   it('leaves the student view without any of the configuration fields', async () => {
     findPublished.mockResolvedValue([REPO_ROW]);
     findForUser.mockResolvedValue([

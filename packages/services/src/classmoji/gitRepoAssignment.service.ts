@@ -427,15 +427,17 @@ export const recordPush = async (gitRepoId: string, pushedAt: Date) => {
       id: true,
       closed_at: true,
       assignment: { select: { student_deadline: true } },
-      token_transactions: { where: { type: 'PURCHASE' }, select: { hours_purchased: true } },
+      // Every row, not PURCHASE alone: a cancelled purchase leaves a REFUND
+      // with negative hours, which takes its extension back.
+      token_transactions: { select: { hours_purchased: true } },
     },
   });
   const open = candidates.filter(c => {
     const deadline = c.assignment.student_deadline;
     if (!deadline) return true;
-    const extensionHours = c.token_transactions.reduce(
-      (sum, t) => sum + (t.hours_purchased ?? 0),
-      0
+    const extensionHours = Math.max(
+      0,
+      c.token_transactions.reduce((sum, t) => sum + (t.hours_purchased ?? 0), 0)
     );
     const cutoff = new Date(deadline).getTime() + extensionHours * 3_600_000;
     if (pushedAt.getTime() <= cutoff) return true;
@@ -548,24 +550,27 @@ const MS_PER_HOUR = 60 * 60 * 1000;
  * first line (`if (is_late_override) return false`): that field reads false
  * for every exempted row, so it cannot say whether an exempted — or
  * about-to-be-cleared — submission was actually late. Same rules otherwise:
- * no valid deadline → not late; not yet closed → late once the deadline has
- * passed (purchased extension hours are NOT subtracted, as in `is_late`);
- * closed → whole hours late (dayjs `diff(..., 'hours')` truncation, floored at
- * zero) minus purchased extension hours, late when positive.
+ * no valid deadline → not late; not yet closed → late once the deadline plus
+ * the purchased extension hours has passed (they can be bought ahead of the
+ * deadline), as in `is_late`; closed → whole hours late (dayjs
+ * `diff(..., 'hours')` truncation, floored at zero) minus purchased extension
+ * hours, late when positive.
  */
 export function isPastDeadlineIgnoringOverride(row: LateOverrideRow, now: Date = new Date()) {
   const deadline = row.assignment?.student_deadline;
   if (!deadline) return false;
   const deadlineMs = new Date(deadline).getTime();
   if (Number.isNaN(deadlineMs)) return false;
-  if (!row.closed_at) return now.getTime() > deadlineMs;
+  const extensionHours = (row.token_transactions ?? []).reduce(
+    (acc, t) => acc + (t.hours_purchased || 0),
+    0
+  );
+  if (!row.closed_at) {
+    return now.getTime() > deadlineMs + Math.max(extensionHours, 0) * MS_PER_HOUR;
+  }
 
   const hoursLate = Math.max(
     Math.trunc((new Date(row.closed_at).getTime() - deadlineMs) / MS_PER_HOUR),
-    0
-  );
-  const extensionHours = (row.token_transactions ?? []).reduce(
-    (acc, t) => acc + (t.hours_purchased || 0),
     0
   );
   return hoursLate - extensionHours > 0;

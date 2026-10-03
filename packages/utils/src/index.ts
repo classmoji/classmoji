@@ -39,3 +39,4 @@ export * from './hiddenRows.ts';
 export * from './assignmentVisibility.ts';
 export * from './quizAssignment.ts';
 export * from './quizScore.ts';
+export * from './extensionPrice.ts';

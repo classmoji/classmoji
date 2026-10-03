@@ -2,6 +2,7 @@ import { namedAction } from 'remix-utils/named-action';
 import { tasks } from '@trigger.dev/sdk';
 
 import { ClassmojiService } from '@classmoji/services';
+import { effectiveTokensPerHour } from '@classmoji/utils';
 import { ActionTypes } from '~/constants';
 import {
   assertClassroomAccess,
@@ -77,7 +78,12 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         };
       }
 
-      const tokensPerHour = repoAssignment.assignment?.tokens_per_hour ?? 0;
+      // The assignment's own price, else the classroom's default.
+      const tokensPerHour = effectiveTokensPerHour(
+        repoAssignment.assignment?.tokens_per_hour,
+        (classroom.settings as { default_tokens_per_hour?: number } | null | undefined)
+          ?.default_tokens_per_hour
+      );
       if (tokensPerHour <= 0) {
         return {
           action: ActionTypes.REQUEST_EXTENSION,

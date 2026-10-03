@@ -1091,6 +1091,27 @@ describe('assignment_update: the teacher tier depends on the assignment type', (
     expect(payload.assignment).not.toHaveProperty('closes_at');
   });
 
+  it("lets the OWNER clear tokens_per_hour so the assignment follows the classroom's price", async () => {
+    mocks.assignmentFindById.mockResolvedValue({ ...REPO_ROW, tokens_per_hour: 4 });
+
+    const payload = parse(
+      await assignmentUpdateTool.handler({ ...ARGS, tokens_per_hour: null }, CTX)
+    );
+    expect(mocks.assignmentUpdate).toHaveBeenCalledWith('asg-1', { tokens_per_hour: null });
+    expect(payload.assignment.tokens_per_hour).toBeNull();
+  });
+
+  it('accepts null for tokens_per_hour in the update schema, and still refuses a negative', () => {
+    const schema = z.object(assignmentUpdateTool.inputSchema);
+    const args = {
+      classroom: 'org/winter-2025',
+      assignment_id: '11111111-1111-4111-8111-111111111111',
+    };
+    expect(schema.safeParse({ ...args, tokens_per_hour: null }).success).toBe(true);
+    expect(schema.safeParse({ ...args, tokens_per_hour: 0 }).success).toBe(true);
+    expect(schema.safeParse({ ...args, tokens_per_hour: -1 }).success).toBe(false);
+  });
+
   it('returns a QUIZ assignment’s close date', async () => {
     mocks.assignmentFindById.mockResolvedValue(QUIZ_ROW);
 

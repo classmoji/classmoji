@@ -64,6 +64,8 @@ const REPO_LATE: StudentCourseworkRow = {
     numLateHours: 5,
     isLateOverride: false,
     tokensPerHour: 2,
+    extensionHours: 0,
+    submissionMode: 'ISSUE',
     closedAt: null,
   },
 };
@@ -125,6 +127,79 @@ describe('AssignmentsTabsCard', () => {
     expect(html).toContain('data-extend-for="gra-1"');
   });
 
+  describe('Extend: extension hours sell at any time', () => {
+    const repoRow = (
+      over: Partial<StudentCourseworkRow>,
+      repo: Partial<NonNullable<StudentCourseworkRow['repo']>>
+    ): StudentCourseworkRow => ({ ...REPO_LATE, ...over, repo: { ...REPO_LATE.repo!, ...repo } });
+
+    it('offers it before the deadline, on work that is not late', () => {
+      const html = render([repoRow({ deadline: '2099-01-01T12:00:00.000Z' }, { numLateHours: 0 })]);
+
+      expect(html).toContain('data-extend-for="gra-1"');
+      expect(html).not.toContain('h late');
+    });
+
+    it('offers it on submitted work, on time (push mode) or late, with how late it was', () => {
+      const submitted = { status: 'SUBMITTED', done: true } as const;
+      const onTime = render(
+        [repoRow(submitted, { numLateHours: 0, submissionMode: 'REPO' })],
+        'completed'
+      );
+      expect(onTime).toContain('data-extend-for="gra-1"');
+
+      const late = render([repoRow(submitted, { numLateHours: 3 })], 'completed');
+      expect(late).toContain('data-extend-for="gra-1"');
+      expect(late).toContain('3h late');
+      expect(late).not.toContain('overdue');
+    });
+
+    it('offers it next to Request regrade on graded work that was late', () => {
+      const html = render(
+        [repoRow({ status: 'SUBMITTED', done: true }, { gradesReleased: true, numLateHours: 2 })],
+        'completed'
+      );
+
+      expect(html).toContain('data-extend-for="gra-1"');
+      expect(html).toContain('Request regrade');
+    });
+
+    it('offers it on push-mode work submitted on time, before grading: a later push can still count', () => {
+      const html = render(
+        [repoRow({ status: 'SUBMITTED', done: true }, { submissionMode: 'REPO', numLateHours: 0 })],
+        'completed'
+      );
+      expect(html).toContain('data-extend-for="gra-1"');
+    });
+
+    it('does not offer it on issue-mode work submitted on time: closing the issue settled it', () => {
+      const html = render(
+        [
+          repoRow(
+            { status: 'SUBMITTED', done: true },
+            { submissionMode: 'ISSUE', numLateHours: 0 }
+          ),
+        ],
+        'completed'
+      );
+      expect(html).not.toContain('data-extend-for');
+    });
+
+    it('does not offer it where hours buy nothing', () => {
+      // Graded and on time.
+      const graded = render(
+        [repoRow({ status: 'SUBMITTED', done: true }, { gradesReleased: true, numLateHours: 0 })],
+        'completed'
+      );
+      expect(graded).toContain('Request regrade');
+      expect(graded).not.toContain('data-extend-for');
+
+      // No price per hour, or the late penalty is already waived.
+      expect(render([repoRow({}, { tokensPerHour: 0 })])).not.toContain('data-extend-for');
+      expect(render([repoRow({}, { isLateOverride: true })])).not.toContain('data-extend-for');
+    });
+  });
+
   it('shows a quiz row with its attempts and its own link', () => {
     const html = render([QUIZ_OPEN]);
 
@@ -183,5 +258,50 @@ describe('AssignmentsTabsCard', () => {
     const all = render(rows, 'all');
     expect(all).toContain('Waitlist');
     expect(all).toContain('>Closed<');
+  });
+
+  describe('the note under the date: the deadline stays, the hours applied are said', () => {
+    const DEADLINE = '2020-01-01T12:00:00.000Z';
+    const repoRow = (
+      over: Partial<StudentCourseworkRow>,
+      repo: Partial<NonNullable<StudentCourseworkRow['repo']>>
+    ): StudentCourseworkRow => ({
+      ...REPO_LATE,
+      deadline: DEADLINE,
+      ...over,
+      repo: { ...REPO_LATE.repo!, ...repo },
+    });
+
+    it('says a late submission was bought back, and keeps the date', () => {
+      const html = render(
+        [
+          repoRow(
+            { status: 'SUBMITTED', done: true },
+            { extensionHours: 5, numLateHours: 0, closedAt: '2020-01-01T17:10:00.000Z' }
+          ),
+        ],
+        'completed'
+      );
+      expect(html).toContain('+5h applied · no longer late');
+      expect(html).toContain('Jan 1');
+    });
+
+    it('says how late a submission still is when the hours did not cover it', () => {
+      const html = render(
+        [
+          repoRow(
+            { status: 'SUBMITTED', done: true },
+            { extensionHours: 2, numLateHours: 3, closedAt: '2020-01-01T17:10:00.000Z' }
+          ),
+        ],
+        'completed'
+      );
+      expect(html).toContain('+2h applied · 3h still late');
+      expect(html).toContain('3h late');
+    });
+
+    it('shows nothing when no hours were bought', () => {
+      expect(render([repoRow({}, { extensionHours: 0 })])).not.toContain('applied');
+    });
   });
 });

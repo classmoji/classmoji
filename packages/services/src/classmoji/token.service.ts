@@ -1,5 +1,5 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { withLogins } from '@classmoji/utils';
+import { effectiveTokensPerHour, withLogins } from '@classmoji/utils';
 import type { Prisma, TokenTransactionType } from '@prisma/client';
 
 interface UpdateExtensionInput {
@@ -74,18 +74,25 @@ export const updateExtension = async (data: UpdateExtensionInput) => {
 };
 
 /**
- * Student purchase of late-hour extensions (plan §5.2 gap 6, extract-first —
+ * Student purchase of extension hours (plan §5.2 gap 6, extract-first —
  * moved from the student.$class.assignments purchaseExtensionHours action).
  *
  * Price and eligibility are recomputed HERE from the DB — callers must never
  * trust a client-supplied price (S9). Re-enforces the popover's gates: no late
- * override, tokens_per_hour configured, deadline passed, and the purchasable
- * cap = hours past deadline minus hours already purchased (OPEN submissions
- * only). The balance check runs inside updateExtension's transaction.
+ * override, a price per hour (the assignment's own tokens_per_hour, else the
+ * classroom's default_tokens_per_hour) and a deadline to extend. The balance
+ * check runs inside updateExtension's transaction.
+ *
+ * Hours can be bought at any time: before the deadline (they push the
+ * student's own deadline out, which is the cutoff recordPush reads), while the
+ * work is late, and after it is submitted or graded (num_late_hours subtracts
+ * them, so the late penalty shrinks). There is no cap but the balance.
+ *
+ * The submission must be the paying student's own: their repo, or a repo of a
+ * team they are on. Anything else reads as not found.
  *
  * NOTE: callers are responsible for authorizing `studentId` (self-access or
- * teaching-team) and for verifying the submission belongs to that student
- * where required — this mirrors the original route contract.
+ * teaching-team).
  */
 export const purchaseExtensionHours = async ({
   classroomId,
@@ -109,54 +116,35 @@ export const purchaseExtensionHours = async ({
   if (!repoAssignment || repoAssignment.git_repo?.classroom_id !== classroomId) {
     throw new Error('Repository assignment not found.');
   }
+  const gitRepo = repoAssignment.git_repo;
+  const onTeam =
+    gitRepo.student_id !== studentId && gitRepo.team_id
+      ? await getPrisma().teamMembership.findFirst({
+          where: { team_id: gitRepo.team_id, user_id: studentId },
+          select: { id: true },
+        })
+      : null;
+  if (gitRepo.student_id !== studentId && !onTeam) {
+    throw new Error('Repository assignment not found.');
+  }
   if (repoAssignment.is_late_override) {
     throw new Error('Extensions are unavailable: a late override is in effect.');
   }
+  if (!repoAssignment.assignment?.student_deadline) {
+    throw new Error('Extensions are unavailable: this assignment has no deadline.');
+  }
 
-  const tokensPerHour = repoAssignment.assignment?.tokens_per_hour ?? 0;
+  // The assignment's own price, else the classroom's default.
+  const settings = await getPrisma().classroomSettings.findUnique({
+    where: { classroom_id: classroomId },
+    select: { default_tokens_per_hour: true },
+  });
+  const tokensPerHour = effectiveTokensPerHour(
+    repoAssignment.assignment?.tokens_per_hour,
+    settings?.default_tokens_per_hour
+  );
   if (tokensPerHour <= 0) {
     throw new Error('Token cost not configured for this assignment.');
-  }
-
-  const deadlineMs = repoAssignment.assignment?.student_deadline
-    ? new Date(repoAssignment.assignment.student_deadline).getTime()
-    : null;
-  if (deadlineMs === null || deadlineMs >= Date.now()) {
-    throw new Error('The deadline for this assignment has not passed yet.');
-  }
-
-  // Mirror the popover's num_late_hours cap: hours past the deadline minus
-  // hours already purchased. In ISSUE mode only an OPEN (unsubmitted) issue
-  // accrues late hours. In REPO mode the latest push is the submission, so a
-  // student who pushed late is late by the push time and may still buy hours.
-  const purchaseTransactions = await getPrisma().tokenTransaction.findMany({
-    where: {
-      git_repo_assignment_id: repoAssignment.id,
-      student_id: studentId,
-      type: 'PURCHASE',
-    },
-  });
-  const alreadyPurchasedHours = purchaseTransactions.reduce(
-    (sum, t) => sum + (t.hours_purchased ?? 0),
-    0
-  );
-  const isRepoMode = repoAssignment.assignment?.submission_mode === 'REPO';
-  const submittedAtMs =
-    isRepoMode && repoAssignment.closed_at ? new Date(repoAssignment.closed_at).getTime() : null;
-  const hoursPastDeadline = Math.max(
-    0,
-    Math.ceil(((submittedAtMs ?? Date.now()) - deadlineMs) / 3_600_000)
-  );
-  const accrues = isRepoMode || repoAssignment.status === 'OPEN';
-  const numLateHours = accrues ? Math.max(0, hoursPastDeadline - alreadyPurchasedHours) : 0;
-
-  if (numLateHours <= 0) {
-    throw new Error('No purchasable late hours remain for this assignment.');
-  }
-  if (hours > numLateHours) {
-    throw new Error(
-      `You can purchase at most ${numLateHours} more late hour(s) for this assignment.`
-    );
   }
 
   // Recompute the price; the balance check still runs inside updateExtension.
@@ -168,6 +156,47 @@ export const purchaseExtensionHours = async ({
     hours_purchased: hours,
     type: 'PURCHASE',
     description: `Purchase of ${hours} hour(s).`,
+  });
+};
+
+/**
+ * Cancel a purchase of extension hours and refund it, exactly once. Only a
+ * PURCHASE that is not yet cancelled qualifies; the flip to `is_cancelled` is
+ * conditional and shares a DB transaction with the REFUND row, so a repeated
+ * or concurrent request finds nothing to flip and refunds nothing. The REFUND
+ * carries the hours as a negative, which takes the extension back wherever
+ * hours are summed.
+ */
+export const cancelPurchase = async (transactionId: string) => {
+  return getPrisma().$transaction(async tx => {
+    const flipped = await tx.tokenTransaction.updateMany({
+      where: { id: transactionId, type: 'PURCHASE', is_cancelled: false },
+      data: { is_cancelled: true },
+    });
+    if (flipped.count !== 1) {
+      throw new Error('Only a purchase that is not already cancelled can be cancelled.');
+    }
+
+    const purchase = await tx.tokenTransaction.findUniqueOrThrow({ where: { id: transactionId } });
+    const latest = await tx.tokenTransaction.findFirst({
+      where: { classroom_id: purchase.classroom_id, student_id: purchase.student_id },
+      orderBy: { created_at: 'desc' },
+    });
+    const refund = Math.abs(purchase.amount);
+    const hours = purchase.hours_purchased ?? 0;
+
+    return tx.tokenTransaction.create({
+      data: {
+        classroom_id: purchase.classroom_id,
+        student_id: purchase.student_id,
+        git_repo_assignment_id: purchase.git_repo_assignment_id,
+        amount: refund,
+        hours_purchased: 0 - hours,
+        type: 'REFUND',
+        balance_after: (latest?.balance_after ?? 0) + refund,
+        description: `Refund of ${hours} hours.`,
+      },
+    });
   });
 };
 

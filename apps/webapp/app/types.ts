@@ -11,6 +11,10 @@ export const CLASSROOM_SETTINGS_SELECT = {
   show_pages: true,
   show_repos: true,
   theme: true,
+  // The extension price an assignment without its own pays (the assignment
+  // form shows it as the empty field's placeholder). Not sensitive: students
+  // see the price they would pay.
+  default_tokens_per_hour: true,
   updated_at: true,
 } as const satisfies Prisma.ClassroomSettingsSelect;
 

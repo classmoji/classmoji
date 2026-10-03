@@ -167,7 +167,7 @@ interface QuizRow extends QuizPlacementSource {
   weight?: number;
   /** The quiz's assignment: module, dates, weight, tokens per hour, published. */
   assignment?:
-    | (NonNullable<QuizPlacementSource['assignment']> & { tokens_per_hour?: number })
+    | (NonNullable<QuizPlacementSource['assignment']> & { tokens_per_hour?: number | null })
     | null;
   question_count?: number;
   max_attempts?: number;
@@ -197,7 +197,8 @@ function quizSummary(quiz: QuizRow) {
     id: quiz.id,
     name: quiz.name,
     ...quizPlacement(quiz),
-    tokens_per_hour: quiz.assignment?.tokens_per_hour ?? 0,
+    // Null = the classroom's default_tokens_per_hour.
+    tokens_per_hour: quiz.assignment?.tokens_per_hour ?? null,
     repository_id: quiz.repository_id ?? null,
     question_count: quiz.question_count ?? null,
     max_attempts: quiz.max_attempts ?? null,
@@ -238,7 +239,10 @@ const tokensPerHourSchema = z
   .number()
   .int()
   .min(0)
-  .describe('Extension tokens per late hour (default 0 = no extensions)');
+  .nullable()
+  .describe(
+    "Extension tokens per extension hour; null = the classroom's default_tokens_per_hour, 0 = no extensions"
+  );
 
 const moduleIdSchema = z.string().uuid().describe('Module the quiz sits in (see list_modules)');
 
@@ -300,7 +304,7 @@ interface QuizCreateArgs {
   due_date?: string;
   closes_at?: string;
   weight?: number;
-  tokens_per_hour?: number;
+  tokens_per_hour?: number | null;
   question_count?: number;
   difficulty_level?: string;
   subject?: string;
@@ -466,7 +470,7 @@ interface QuizServiceUpdate {
     dueDate?: string | null;
     closesAt?: string | null;
     weight?: number;
-    tokensPerHour?: number;
+    tokensPerHour?: number | null;
     isPublished?: false;
   };
 }
@@ -488,7 +492,7 @@ interface QuizUpdateArgs {
   due_date?: string | null;
   closes_at?: string | null;
   weight?: number;
-  tokens_per_hour?: number;
+  tokens_per_hour?: number | null;
   published?: false;
   /** Removed: refused with the fields that replace it (see STATUS_REPLACED). */
   status?: unknown;

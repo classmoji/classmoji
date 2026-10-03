@@ -33,6 +33,7 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
+import { effectiveTokensPerHour } from '@classmoji/utils';
 import type { ResourceDefinition, ToolContext } from '../mcp/registry.ts';
 import {
   MEMBER,
@@ -57,7 +58,8 @@ interface AssignmentRow {
   description?: string;
   student_deadline?: Date | null;
   grader_deadline?: Date | null;
-  tokens_per_hour: number;
+  /** Empty = the classroom's default price. */
+  tokens_per_hour: number | null;
   release_at?: Date | null;
   grades_released: boolean;
 }
@@ -110,6 +112,19 @@ export const reposResource: ResourceDefinition = {
   handler: async (_vars, ctx) => {
     const { classroomId, role, classroom } = classroomCtx(ctx);
     const staff = isStaff(role);
+    // An assignment without its own extension price pays the classroom's.
+    // tokens_per_hour stays the assignment's own value (null = follows the
+    // classroom), the same as every other tool reports and assignment_update
+    // writes, so reading it back and writing it never pins the classroom's
+    // price onto the assignment. effective_tokens_per_hour is what one hour
+    // actually costs.
+    const classroomTokensPerHour =
+      (classroom as unknown as { settings?: { default_tokens_per_hour?: number } | null }).settings
+        ?.default_tokens_per_hour ?? 0;
+    const price = (own: number | null) => ({
+      tokens_per_hour: own,
+      effective_tokens_per_hour: effectiveTokensPerHour(own, classroomTokensPerHour),
+    });
 
     if (!staff) {
       const settings = (classroom as unknown as { settings?: { show_repos?: boolean } | null })
@@ -157,7 +172,7 @@ export const reposResource: ResourceDefinition = {
             grader_deadline: a.grader_deadline ?? null,
             release_at: a.release_at ?? null,
             grades_released: a.grades_released,
-            tokens_per_hour: a.tokens_per_hour,
+            ...price(a.tokens_per_hour),
           })),
         })),
       };
@@ -194,7 +209,7 @@ export const reposResource: ResourceDefinition = {
               is_extra_credit: a.is_extra_credit ?? false,
               student_deadline: a.student_deadline ?? null,
               grades_released: a.grades_released,
-              tokens_per_hour: a.tokens_per_hour,
+              ...price(a.tokens_per_hour),
               my_submission: mine
                 ? {
                     id: mine.id,
