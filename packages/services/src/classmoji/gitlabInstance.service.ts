@@ -463,7 +463,13 @@ export async function assertPublicGitlabHost(host: string): Promise<void> {
 
 /**
  * Check a host really is a GitLab that Classmoji can reach: GitLab serves its
- * OpenID configuration publicly, with its own origin as the issuer.
+ * OpenID configuration publicly, with its OAuth endpoints under `/oauth/`.
+ *
+ * The configuration's `issuer` is NOT compared with the address typed. It comes
+ * from the server's `external_url`, which is often stale (a Gitlab moved to a
+ * new domain) or internal (behind a proxy), while the address people reach it
+ * at works fine. Nothing here relies on the issuer: sign-in reads the profile
+ * from the API, not from an ID token.
  */
 export async function probe(input: string): Promise<string> {
   const host = normalizeHost(input);
@@ -473,7 +479,7 @@ export async function probe(input: string): Promise<string> {
       'Enter your Gitlab address, like gitlab.school.edu'
     );
   await assertPublicHost(host);
-  let issuer: unknown;
+  let config: { authorization_endpoint?: unknown; token_endpoint?: unknown };
   try {
     const response = await gitlabFetch(`${host}/.well-known/openid-configuration`, {
       headers: { Accept: 'application/json' },
@@ -481,18 +487,37 @@ export async function probe(input: string): Promise<string> {
     });
     if (response.status >= 300 && response.status < 400) throw new Error('redirected');
     if (!response.ok) throw new Error(String(response.status));
-    issuer = ((await response.json()) as { issuer?: unknown }).issuer;
+    config = (await response.json()) as typeof config;
   } catch {
     throw new GitLabInstanceError(
       'unreachable',
       `Classmoji couldn't reach a Gitlab at ${host}.${allowlistHint()}`
     );
   }
-  if (typeof issuer !== 'string' || normalizeHost(issuer) !== host) {
+  if (!isGitlabOAuthConfig(config)) {
     throw new GitLabInstanceError('unreachable', `${host} doesn't look like a Gitlab`);
   }
   return host;
 }
+
+/** Gitlab's OpenID configuration names its own OAuth endpoints. */
+export const isGitlabOAuthConfig = (config: {
+  authorization_endpoint?: unknown;
+  token_endpoint?: unknown;
+}): boolean => {
+  const pathOf = (value: unknown) => {
+    if (typeof value !== 'string') return null;
+    try {
+      return new URL(value).pathname.replace(/\/+$/, '');
+    } catch {
+      return null;
+    }
+  };
+  return (
+    pathOf(config.authorization_endpoint)?.endsWith('/oauth/authorize') === true &&
+    pathOf(config.token_endpoint)?.endsWith('/oauth/token') === true
+  );
+};
 
 /** Who asked for an instance, from their Gitlab profile at setup. */
 export interface InstanceRequester {

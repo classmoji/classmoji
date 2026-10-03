@@ -177,3 +177,38 @@ describe('webhookSecret', () => {
     expect(svc.webhookSecret(null)).toBeNull();
   });
 });
+
+describe('isGitlabOAuthConfig', () => {
+  it('accepts a Gitlab whose issuer is another address (stale or internal external_url)', () => {
+    expect(
+      svc.isGitlabOAuthConfig({
+        issuer: 'https://classmoji-gitlab-staging.fly.dev',
+        authorization_endpoint: 'https://gitlab.classmoji.io/oauth/authorize',
+        token_endpoint: 'https://gitlab.classmoji.io/oauth/token',
+      } as Parameters<typeof svc.isGitlabOAuthConfig>[0])
+    ).toBe(true);
+  });
+
+  it('accepts a Gitlab served under a path', () => {
+    expect(
+      svc.isGitlabOAuthConfig({
+        authorization_endpoint: 'https://school.edu/gitlab/oauth/authorize',
+        token_endpoint: 'https://school.edu/gitlab/oauth/token',
+      })
+    ).toBe(true);
+  });
+
+  it('refuses another OpenID provider', () => {
+    expect(
+      svc.isGitlabOAuthConfig({
+        authorization_endpoint: 'https://accounts.example.com/o/oauth2/v2/auth',
+        token_endpoint: 'https://oauth2.example.com/token',
+      })
+    ).toBe(false);
+  });
+
+  it('refuses a configuration without endpoints', () => {
+    expect(svc.isGitlabOAuthConfig({})).toBe(false);
+    expect(svc.isGitlabOAuthConfig({ authorization_endpoint: 'not a url' })).toBe(false);
+  });
+});
