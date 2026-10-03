@@ -150,23 +150,35 @@ const repoFields = (ra: RepoSubmission, gitOrgLogin: string | null, now: Date): 
   const graders = (ra.graders ?? []).map(g => ({ id: g.grader.id, name: g.grader.name ?? null }));
 
   // Late hours: how many hours past the deadline the student still is, after
-  // the extension hours they bought with tokens. In ISSUE mode only an open
-  // (not yet submitted) assignment accrues late hours; in REPO mode the latest
-  // push is the submission, so a late push is late by that push's time.
-  const extensionHours = (ra.token_transactions ?? [])
-    .filter(t => t.type === 'PURCHASE')
-    .reduce((sum, t) => sum + (t.hours_purchased ?? 0), 0);
+  // the extension hours they bought with tokens. Work not yet submitted is late
+  // up to now, rounded up: that many hours bring the deadline past this
+  // moment. Submitted work is late by its submission's time (the push in REPO
+  // mode, the issue's close in ISSUE mode) in whole hours, which is what the
+  // late penalty counts (`num_late_hours`) and what hours bought afterwards
+  // pay down. Every row's hours are summed, as that field does: a cancelled
+  // purchase leaves a REFUND with negative hours.
+  const extensionHours = Math.max(
+    0,
+    (ra.token_transactions ?? []).reduce((sum, t) => sum + (t.hours_purchased ?? 0), 0)
+  );
   const deadlineMs = ra.assignment?.student_deadline
     ? new Date(ra.assignment.student_deadline).getTime()
     : null;
   const isRepoMode = ra.assignment?.submission_mode === 'REPO';
-  const submittedAtMs = isRepoMode && ra.closed_at ? new Date(ra.closed_at).getTime() : null;
+  const closedAtMs = ra.closed_at ? new Date(ra.closed_at).getTime() : null;
+  // A push is the submission in REPO mode; in ISSUE mode an open issue is not
+  // submitted, whatever an earlier close left behind.
+  const submittedAtMs = isRepoMode || ra.status !== 'OPEN' ? closedAtMs : null;
+  const stillOpen = isRepoMode ? closedAtMs === null : ra.status === 'OPEN';
   const hoursPastDeadline =
-    deadlineMs !== null
-      ? Math.max(0, Math.ceil(((submittedAtMs ?? now.getTime()) - deadlineMs) / 3_600_000))
-      : 0;
-  const numLateHours =
-    isRepoMode || ra.status === 'OPEN' ? Math.max(0, hoursPastDeadline - extensionHours) : 0;
+    deadlineMs === null
+      ? 0
+      : submittedAtMs !== null
+        ? Math.max(0, Math.floor((submittedAtMs - deadlineMs) / 3_600_000))
+        : stillOpen
+          ? Math.max(0, Math.ceil((now.getTime() - deadlineMs) / 3_600_000))
+          : 0;
+  const numLateHours = Math.max(0, hoursPastDeadline - extensionHours);
 
   return {
     gitRepoAssignmentId: ra.id,

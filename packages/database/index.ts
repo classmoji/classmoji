@@ -20,8 +20,17 @@ const calculateLateHours = (
 ): number => {
   let totalHoursLate = dayjs(closedAt || dayjs()).diff(studentDeadline, 'hours');
   totalHoursLate = Math.max(totalHoursLate, 0);
-  return totalHoursLate - calculateExtensionHours(tokenTransactions);
+  // Never negative: hours bought beyond the lateness (ahead of the deadline,
+  // say) are spare, not a credit.
+  return Math.max(totalHoursLate - calculateExtensionHours(tokenTransactions), 0);
 };
+
+/** The deadline pushed out by the extension hours bought with tokens. */
+const extendedDeadline = (
+  studentDeadline: Date | Dayjs | string | undefined,
+  tokenTransactions: TokenTransaction[] | undefined
+): Dayjs =>
+  dayjs(studentDeadline).add(Math.max(calculateExtensionHours(tokenTransactions ?? []), 0), 'hour');
 
 const DEFAULT_AVATAR_URL = 'https://cdn-icons-png.flaticon.com/512/25/25231.png';
 
@@ -155,7 +164,13 @@ function createPrismaClient() {
             const studentDeadline = dayjs(repoAssignment.assignment?.student_deadline);
 
             if (!studentDeadline.isValid()) return false;
-            if (!repoAssignment.closed_at) return dayjs().isAfter(studentDeadline);
+            // Not submitted yet: late once the deadline, plus any hours bought
+            // (they can be bought ahead of it), has passed.
+            if (!repoAssignment.closed_at) {
+              return dayjs().isAfter(
+                extendedDeadline(studentDeadline, repoAssignment.token_transactions)
+              );
+            }
 
             return (
               calculateLateHours(
@@ -180,10 +195,16 @@ function createPrismaClient() {
             grades: unknown[];
             status: string;
             is_late_override: boolean;
+            token_transactions?: TokenTransaction[];
           }) {
-            const hasDeadlinePassed = dayjs(repoAssignment.assignment?.student_deadline).isBefore(
-              dayjs()
-            );
+            // Hours bought with tokens push the deadline out, so missing work
+            // is not a zero inside that window. `token_transactions` is read
+            // when the query loaded it and is deliberately not in `needs`: a
+            // query without it still gets this field, on the plain deadline.
+            const hasDeadlinePassed = extendedDeadline(
+              repoAssignment.assignment?.student_deadline,
+              repoAssignment.token_transactions
+            ).isBefore(dayjs());
             const isOpen = repoAssignment.status === 'OPEN';
             return (
               hasDeadlinePassed &&

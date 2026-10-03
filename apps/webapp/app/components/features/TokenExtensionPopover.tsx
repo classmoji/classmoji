@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { Button, InputNumber, Popover } from 'antd';
 import { IconCalendarPlus } from '@tabler/icons-react';
 import { useRevalidator } from 'react-router';
-import dayjs from 'dayjs';
 import useSound from 'use-sound';
 
 import { useCallout } from '@classmoji/ui-components';
@@ -13,10 +12,10 @@ import coinsSound from '~/assets/sounds/coins.mp3';
 
 interface TokenPopupRepositoryAssignment {
   id: string;
+  /** Hours still late after what was already bought; only presets the field. */
   num_late_hours: number;
   is_late_override: boolean;
   assignment: {
-    student_deadline: string | Date;
     tokens_per_hour?: number | null;
   };
 }
@@ -27,8 +26,24 @@ interface TokenPopupFormProps {
   balance: number | null | undefined;
 }
 
+/**
+ * Hours can be bought at any time: ahead of the deadline, while the work is
+ * late, or after it is submitted. The only limits are the ones the server
+ * enforces too (token.purchaseExtensionHours): a price per hour is set, no late
+ * override is in effect, and the balance covers the cost.
+ */
 const TokenExtensionPopover = ({ repositoryAssignment, balance }: TokenPopupFormProps) => {
-  const [hours, setHours] = useState(1);
+  const tokensPerHour = repositoryAssignment.assignment.tokens_per_hour ?? 0;
+  // The most hours the balance pays for; unknown balance leaves the field open
+  // and the purchase handler reports it.
+  const maxHours =
+    balance === null || balance === undefined || tokensPerHour <= 0
+      ? undefined
+      : Math.floor(balance / tokensPerHour);
+  // Start at what clears the lateness, when the student is late and can pay.
+  const [hours, setHours] = useState(() =>
+    Math.max(1, Math.min(repositoryAssignment.num_late_hours, maxHours ?? Infinity))
+  );
   const { fetcher, notify } = useNotifiedFetcher();
   const [open, setOpen] = useState(false);
   const { user } = useUser();
@@ -42,6 +57,8 @@ const TokenExtensionPopover = ({ repositoryAssignment, balance }: TokenPopupForm
     if (fetcher.data?.action === 'PURCHASE_EXTENSION_HOURS' && fetcher.data?.success) {
       // This will re-run the parent loader, which automatically syncs to Zustand
       revalidator.revalidate();
+      // The hours just bought are no longer the ones to offer next.
+      setHours(1);
     }
   }, [fetcher.data, revalidator]);
 
@@ -55,7 +72,7 @@ const TokenExtensionPopover = ({ repositoryAssignment, balance }: TokenPopupForm
 
   const setTime = (time: number | null) => {
     if (time === null) return;
-    if (time > repositoryAssignment.num_late_hours || time < 0) return;
+    if (time < 1 || (maxHours !== undefined && time > Math.max(1, maxHours))) return;
     setHours(time);
   };
 
@@ -140,7 +157,13 @@ const TokenExtensionPopover = ({ repositoryAssignment, balance }: TokenPopupForm
           </p>
         )}
         <div className="mt-4">
-          <InputNumber addonAfter="hour(s)" value={hours} onChange={setTime} min={1} />
+          <InputNumber
+            addonAfter="hour(s)"
+            value={hours}
+            onChange={setTime}
+            min={1}
+            max={maxHours === undefined ? undefined : Math.max(1, maxHours)}
+          />
           <Button
             className="w-full mt-4"
             onClick={() => onPurchaseExtensionHours(hours, repositoryAssignment)}
@@ -153,16 +176,7 @@ const TokenExtensionPopover = ({ repositoryAssignment, balance }: TokenPopupForm
     );
   };
 
-  const hasDeadlinePassed = dayjs(repositoryAssignment.assignment.student_deadline).isBefore(
-    dayjs()
-  );
-
-  if (
-    hasDeadlinePassed == false ||
-    repositoryAssignment.num_late_hours == 0 ||
-    repositoryAssignment.is_late_override
-  )
-    return null;
+  if (tokensPerHour <= 0 || repositoryAssignment.is_late_override) return null;
 
   return (
     <Popover

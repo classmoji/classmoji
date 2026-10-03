@@ -200,14 +200,18 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
         selfAccessRoles: ['STUDENT'], // Students can cancel their own
       });
 
-      await cancelTokenTransactionHandler({
-        id: storedTransaction.id,
-        classroom_id: storedTransaction.classroom_id,
-        student_id: storedTransaction.student_id,
-        amount: storedTransaction.amount,
-        git_repo_assignment_id: storedTransaction.git_repo_assignment_id ?? '',
-        hours_purchased: storedTransaction.hours_purchased ?? 0,
-      });
+      // Only a purchase that is still standing can be cancelled, and only
+      // once: the service flips it and writes the refund in one transaction,
+      // so a repeated request refunds nothing.
+      if (storedTransaction.type !== 'PURCHASE' || storedTransaction.is_cancelled) {
+        return data({ error: 'This transaction cannot be cancelled.' }, { status: 400 });
+      }
+      try {
+        await ClassmojiService.token.cancelPurchase(storedTransaction.id);
+      } catch (error: unknown) {
+        console.error('cancelTokenTransaction failed:', error);
+        return data({ error: 'This transaction cannot be cancelled.' }, { status: 400 });
+      }
 
       return {
         action: 'CANCEL_TOKEN_TRANSACTION',
@@ -216,28 +220,3 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     },
   });
 });
-
-const cancelTokenTransactionHandler = async (transaction: {
-  id: string;
-  classroom_id: string;
-  student_id: string;
-  amount: number;
-  git_repo_assignment_id: string;
-  hours_purchased: number;
-}) => {
-  const { classroom_id, student_id, amount, git_repo_assignment_id, hours_purchased } = transaction;
-
-  await ClassmojiService.token.updateTransaction(transaction.id, {
-    is_cancelled: true,
-  });
-
-  await ClassmojiService.token.updateExtension({
-    classroom_id,
-    student_id,
-    git_repo_assignment_id,
-    amount: Math.abs(amount),
-    hours_purchased: hours_purchased * -1,
-    type: 'REFUND',
-    description: `Refund of ${hours_purchased} hours.`,
-  });
-};

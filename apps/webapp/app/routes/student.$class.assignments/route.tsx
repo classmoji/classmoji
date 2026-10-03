@@ -140,9 +140,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       }
 
       // Price and eligibility are recomputed server-side in the service — the
-      // client-supplied `amount` is never trusted, and the deadline /
-      // late-hour / override gates from the popover are re-enforced there so
-      // they cannot be bypassed by posting a crafted request body
+      // client-supplied `amount` is never trusted, and the popover's gates
+      // (a price is set, no late override) are re-enforced there so they
+      // cannot be bypassed by posting a crafted request body. It also checks
+      // the submission is the paying student's own, or their team's
       // (packages/services token.purchaseExtensionHours, plan §5.2 gap 6).
       await ClassmojiService.token.purchaseExtensionHours({
         classroomId: classroom.id,

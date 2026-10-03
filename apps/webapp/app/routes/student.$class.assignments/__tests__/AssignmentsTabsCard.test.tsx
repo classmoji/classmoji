@@ -125,6 +125,55 @@ describe('AssignmentsTabsCard', () => {
     expect(html).toContain('data-extend-for="gra-1"');
   });
 
+  describe('Extend: extension hours sell at any time', () => {
+    const repoRow = (
+      over: Partial<StudentCourseworkRow>,
+      repo: Partial<NonNullable<StudentCourseworkRow['repo']>>
+    ): StudentCourseworkRow => ({ ...REPO_LATE, ...over, repo: { ...REPO_LATE.repo!, ...repo } });
+
+    it('offers it before the deadline, on work that is not late', () => {
+      const html = render([repoRow({ deadline: '2099-01-01T12:00:00.000Z' }, { numLateHours: 0 })]);
+
+      expect(html).toContain('data-extend-for="gra-1"');
+      expect(html).not.toContain('h late');
+    });
+
+    it('offers it on submitted work, on time or late, with how late it was', () => {
+      const submitted = { status: 'SUBMITTED', done: true } as const;
+      const onTime = render([repoRow(submitted, { numLateHours: 0 })], 'completed');
+      expect(onTime).toContain('data-extend-for="gra-1"');
+
+      const late = render([repoRow(submitted, { numLateHours: 3 })], 'completed');
+      expect(late).toContain('data-extend-for="gra-1"');
+      expect(late).toContain('3h late');
+      expect(late).not.toContain('overdue');
+    });
+
+    it('offers it next to Request regrade on graded work that was late', () => {
+      const html = render(
+        [repoRow({ status: 'SUBMITTED', done: true }, { gradesReleased: true, numLateHours: 2 })],
+        'completed'
+      );
+
+      expect(html).toContain('data-extend-for="gra-1"');
+      expect(html).toContain('Request regrade');
+    });
+
+    it('does not offer it where hours buy nothing', () => {
+      // Graded and on time.
+      const graded = render(
+        [repoRow({ status: 'SUBMITTED', done: true }, { gradesReleased: true, numLateHours: 0 })],
+        'completed'
+      );
+      expect(graded).toContain('Request regrade');
+      expect(graded).not.toContain('data-extend-for');
+
+      // No price per hour, or the late penalty is already waived.
+      expect(render([repoRow({}, { tokensPerHour: 0 })])).not.toContain('data-extend-for');
+      expect(render([repoRow({}, { isLateOverride: true })])).not.toContain('data-extend-for');
+    });
+  });
+
   it('shows a quiz row with its attempts and its own link', () => {
     const html = render([QUIZ_OPEN]);
 

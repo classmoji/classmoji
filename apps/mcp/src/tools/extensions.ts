@@ -11,8 +11,9 @@
  *
  * All pricing and gating lives in packages/services
  * token.purchaseExtensionHours (S9 — price derives from
- * Assignment.tokens_per_hour; deadline, late-override, and purchasable-hour
- * caps re-enforced server-side; balance check inside the DB transaction).
+ * Assignment.tokens_per_hour; the late-override refusal is re-enforced
+ * server-side; balance check inside the DB transaction). Hours can be bought
+ * at any time, before or after the deadline, submitted or not.
  * (The dormant api.extension.$class createExtension endpoint is a separate
  * OWNER/TEACHER grant flow and is intentionally not mirrored.)
  */
@@ -39,9 +40,6 @@ const DOMAIN_ERROR_PREFIXES = [
   'Repository assignment not found',
   'Extensions are unavailable',
   'Token cost not configured',
-  'The deadline for this assignment has not passed yet',
-  'No purchasable late hours remain',
-  'You can purchase at most',
   'Insufficient token balance',
 ];
 
@@ -61,18 +59,20 @@ interface ExtensionPurchaseArgs {
 export const extensionPurchaseTool: ToolDefinition<ExtensionPurchaseArgs> = {
   name: 'extension_purchase',
   annotations: { destructive: false },
-  title: 'Purchase late-hour extension',
+  title: 'Purchase extension hours',
   description:
-    'Spends YOUR tokens to buy late hours on one of YOUR OWN overdue assignments (students ' +
-    'only). The price per hour comes from the assignment (tokens_per_hour); the deadline must ' +
-    'have passed, and you can buy at most the remaining late hours. Check your balance and ' +
-    'assignment cost first via the assignments/tokens resources.',
+    'Spends YOUR tokens to buy extension hours on one of YOUR OWN assignments (students ' +
+    'only). Works at any time: before the deadline the hours push your deadline out, after ' +
+    'it they reduce how late the submission counts. The price per hour comes from the ' +
+    'assignment (tokens_per_hour) and nothing but your balance limits how many you buy, so ' +
+    'buy no more hours than you need. An assignment with no deadline has nothing to extend. Check your balance and assignment cost first via the assignments/tokens ' +
+    'resources.',
   scope: 'write',
   roles: ['STUDENT'],
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     git_repo_assignment_id: submissionIdSchema().describe('Your submission (GitRepoAssignment) id'),
-    hours: z.number().int().positive().max(1000).describe('Late hours to purchase'),
+    hours: z.number().int().positive().max(1000).describe('Extension hours to purchase'),
   },
   handler: async (args, ctx) => {
     // S1 + self-scoping: the submission must exist in the authorized classroom
@@ -84,7 +84,7 @@ export const extensionPurchaseTool: ToolDefinition<ExtensionPurchaseArgs> = {
     }
 
     try {
-      // Pricing + deadline gates + cap + balance check all inside the service.
+      // Pricing + late-override gate + balance check all inside the service.
       const transaction = await ClassmojiService.token.purchaseExtensionHours({
         classroomId: gra.git_repo.classroom_id,
         studentId: ctx.viewer.userId,
