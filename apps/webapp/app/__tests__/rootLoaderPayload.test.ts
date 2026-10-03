@@ -5,7 +5,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * fields the client reads.
  *
  *   - Each membership: `id`, `role` and its classroom.
- *   - A classroom's git organization: `id`, `provider`, `provider_id`, `login`.
+ *   - A classroom's git organization: `id`, `provider`, `provider_id`, `login`,
+ *     and `base_url` (a self-managed Gitlab's host, which its links need).
  *   - `session`: the session id and `impersonatedBy`, and the user's name and
  *     email (what the impersonation banner reads).
  *   - The top-level keys the app reads, and no others.
@@ -205,7 +206,7 @@ describe('root loader payload', () => {
     const membershipSelect = include.classroom_memberships.select;
     expect(Object.keys(membershipSelect).sort()).toEqual(['classroom', 'id', 'role']);
     expect(membershipSelect.classroom.include.git_organization).toEqual({
-      select: { id: true, provider: true, provider_id: true, login: true },
+      select: { id: true, provider: true, provider_id: true, login: true, base_url: true },
     });
   });
 
@@ -226,6 +227,7 @@ describe('root loader payload', () => {
       provider: 'GITHUB',
       provider_id: '4242',
       login: 'test-org',
+      base_url: null,
     });
     expect((membership.organization.settings as Row).updated_at).toBeInstanceOf(Date);
     expect(membership.organization.updated_at).toBeInstanceOf(Date);

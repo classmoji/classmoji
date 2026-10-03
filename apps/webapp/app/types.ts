@@ -26,6 +26,8 @@ export const ROOT_GIT_ORGANIZATION_SELECT = {
   provider: true,
   provider_id: true,
   login: true,
+  // A self-managed Gitlab's host: without it every link falls back to gitlab.com.
+  base_url: true,
 } as const satisfies Prisma.GitOrganizationSelect;
 
 // Membership projection for the root loader: what the client reads of a
