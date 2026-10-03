@@ -40,7 +40,8 @@ const client = {
   $queryRaw: (...a: unknown[]) => queryRaw(...a),
   $transaction: (fn: (tx: unknown) => unknown) => transaction(fn),
 };
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/database')>()),
   default: () => client,
 }));
 
@@ -685,7 +686,9 @@ describe('teamAdmin.removeTeamMember', () => {
     });
 
     expect(userFindFirst.mock.calls[0][0].where).toEqual({
-      login: { equals: 'Ada', mode: 'insensitive' },
+      accounts: {
+        some: { provider_id: 'github', username: { equals: 'Ada', mode: 'insensitive' } },
+      },
     });
     expect(removeTeamMember).toHaveBeenCalledWith('cs1-org', 'blue-team', 'ada');
   });

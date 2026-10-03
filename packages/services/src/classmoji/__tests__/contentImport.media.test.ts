@@ -82,7 +82,8 @@ const pageCreate = vi.fn();
 const slideFindMany = vi.fn();
 const slideCreate = vi.fn();
 
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/database')>()),
   default: () => ({
     classroom: { findUnique: (...args: unknown[]) => classroomFindUnique(...args) },
     page: {

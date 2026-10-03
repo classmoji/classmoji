@@ -1,3 +1,4 @@
+import { GIT_IDENTITY } from '@classmoji/database';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // The membership mutation paths (remove/removeById/update/updateById) must never
@@ -18,6 +19,7 @@ const transactionMock = vi.fn((fn: (tx: unknown) => unknown) => fn(client));
 // hold whether a call went through `$transaction` or not, plus the raw query
 // used for the row lock.
 const client = {
+  classroom: { findUnique: vi.fn(async () => ({ git_organization: { provider: 'GITHUB' } })) },
   classroomMembership: {
     findFirst: (...args: unknown[]) => findFirstMock(...args),
     findUnique: (...args: unknown[]) => findUniqueMock(...args),
@@ -31,7 +33,8 @@ const client = {
   $transaction: (fn: (tx: unknown) => unknown) => transactionMock(fn),
 };
 
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/database')>()),
   default: () => client,
 }));
 
@@ -311,12 +314,20 @@ describe('findStudentByLoginInClassroom', () => {
     await membershipService.findStudentByLoginInClassroom('c1', 'ada');
 
     expect(findFirstMock).toHaveBeenCalledExactlyOnceWith({
-      where: { classroom_id: 'c1', role: 'STUDENT', user: { login: 'ada' } },
+      where: {
+        classroom_id: 'c1',
+        role: 'STUDENT',
+        user: {
+          accounts: {
+            some: { provider_id: 'github', username: { equals: 'ada', mode: 'insensitive' } },
+          },
+        },
+      },
       select: {
         id: true,
         comment: true,
         letter_grade: true,
-        user: { select: { id: true, name: true, login: true, image: true, school_id: true } },
+        user: { select: { id: true, name: true, image: true, school_id: true, ...GIT_IDENTITY } },
       },
     });
   });

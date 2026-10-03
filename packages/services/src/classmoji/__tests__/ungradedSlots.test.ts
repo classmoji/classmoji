@@ -39,8 +39,10 @@ const membershipCount = ({ where }: { where: Record<string, unknown> }) =>
     }).length
   );
 
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/database')>()),
   default: () => ({
+    classroom: { findUnique: vi.fn(async () => ({ git_organization: { provider: 'GITHUB' } })) },
     gitRepoAssignmentGrader: {
       findMany: (...a: unknown[]) => graderFindMany(...a),
       count: (...a: unknown[]) => graderCount(...a),

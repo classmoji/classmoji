@@ -63,7 +63,13 @@ describe.skipIf(!RUN)('forms team review', () => {
   const makeUser = async (label: string, name: string) => {
     const user = await prisma.user.create({
       data: {
-        login: `teamrev-${suite}-${label}`,
+        accounts: {
+          create: {
+            provider_id: 'github',
+            account_id: `teamrev-${suite}-${label}`,
+            username: `teamrev-${suite}-${label}`,
+          },
+        },
         email: `teamrev-${suite}-${label}@example.test`,
         name,
       },
@@ -193,7 +199,13 @@ describe.skipIf(!RUN)('forms team review', () => {
   afterAll(async () => {
     if (orgId) await prisma.gitOrganization.delete({ where: { id: orgId } }).catch(() => {});
     await prisma.user
-      .deleteMany({ where: { login: { startsWith: `teamrev-${suite}-` } } })
+      .deleteMany({
+        where: {
+          accounts: {
+            some: { provider_id: 'github', username: { startsWith: `teamrev-${suite}-` } },
+          },
+        },
+      })
       .catch(() => {});
   });
 

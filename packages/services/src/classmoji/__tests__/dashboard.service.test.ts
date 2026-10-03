@@ -1,8 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  computeGradeMedian,
-  emojiToGrade,
-} from '../dashboard.service.ts';
+import { computeGradeMedian, emojiToGrade } from '../dashboard.service.ts';
 
 describe('computeGradeMedian', () => {
   it('returns null on empty', () => {
@@ -29,11 +26,10 @@ describe('emojiToGrade', () => {
   });
 
   it('falls back to default mapping', () => {
-    expect(emojiToGrade('heart', new Map())).toBe(100);
+    expect(emojiToGrade('rocket', new Map())).toBe(100);
   });
 
   it('returns null for unknown emoji', () => {
     expect(emojiToGrade('unknown-emoji-xyz', new Map())).toBeNull();
   });
 });
-

@@ -140,7 +140,13 @@ describe.skipIf(!RUN)('forms builder lifecycle (integration)', () => {
 
     const user = await prisma.user.create({
       data: {
-        login: `formbuild-${suite}-owner`,
+        accounts: {
+          create: {
+            provider_id: 'github',
+            account_id: `formbuild-${suite}-owner`,
+            username: `formbuild-${suite}-owner`,
+          },
+        },
         email: `formbuild-${suite}-owner@example.test`,
         name: 'Forms Builder Owner',
       },
@@ -151,7 +157,13 @@ describe.skipIf(!RUN)('forms builder lifecycle (integration)', () => {
   afterAll(async () => {
     if (orgId) await prisma.gitOrganization.delete({ where: { id: orgId } }).catch(() => {});
     await prisma.user
-      .deleteMany({ where: { login: { startsWith: `formbuild-${suite}-` } } })
+      .deleteMany({
+        where: {
+          accounts: {
+            some: { provider_id: 'github', username: { startsWith: `formbuild-${suite}-` } },
+          },
+        },
+      })
       .catch(() => {});
   });
 
@@ -487,7 +499,13 @@ describe.skipIf(!RUN)('forms builder lifecycle (integration)', () => {
   it('refuses a CLASSROOM→PUBLIC flip on a form that has ever been published', async () => {
     const student = await prisma.user.create({
       data: {
-        login: `formbuild-${suite}-student`,
+        accounts: {
+          create: {
+            provider_id: 'github',
+            account_id: `formbuild-${suite}-student`,
+            username: `formbuild-${suite}-student`,
+          },
+        },
         email: `formbuild-${suite}-student@example.test`,
         name: 'Rostered Student',
       },

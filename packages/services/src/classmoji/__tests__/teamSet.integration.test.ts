@@ -213,7 +213,11 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
   const makeUser = async (label: string) => {
     const login = `tstest-${suite}-${label}`;
     const user = await prisma.user.create({
-      data: { login, email: `${login}@example.test`, name: `Team Test ${label}` },
+      data: {
+        accounts: { create: { provider_id: 'github', account_id: login, username: login } },
+        email: `${login}@example.test`,
+        name: `Team Test ${label}`,
+      },
     });
     logins.set(user.id, login);
     return user.id;
@@ -414,7 +418,13 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
     delete process.env.TRIGGER_SECRET_KEY;
     if (orgId) await prisma.gitOrganization.delete({ where: { id: orgId } }).catch(() => {});
     await prisma.user
-      .deleteMany({ where: { login: { startsWith: `tstest-${suite}-` } } })
+      .deleteMany({
+        where: {
+          accounts: {
+            some: { provider_id: 'github', username: { startsWith: `tstest-${suite}-` } },
+          },
+        },
+      })
       .catch(() => {});
   });
 
@@ -1355,9 +1365,9 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
       })
     );
     addTeamMembersMock.mockImplementation(async ({ logins: requested }: { logins: string[] }) => {
-      await prisma.user.update({
-        where: { login: requested[1]! },
-        data: { login: `${requested[1]}-renamed` },
+      await prisma.account.updateMany({
+        where: { provider_id: 'github', username: requested[1]! },
+        data: { username: `${requested[1]}-renamed` },
       });
       return {
         succeeded: requested.slice(2).map(login => ({ login })),
@@ -1392,9 +1402,9 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
       teams_failed: 0,
       members_failed: 3,
     });
-    await prisma.user.update({
-      where: { login: `${team2[1]}-renamed` },
-      data: { login: team2[1]! },
+    await prisma.account.updateMany({
+      where: { provider_id: 'github', username: `${team2[1]}-renamed` },
+      data: { username: team2[1]! },
     });
 
     // PARTIAL is final: the set is locked, and the rest is by hand on the Teams screen.

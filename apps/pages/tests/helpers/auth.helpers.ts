@@ -46,7 +46,10 @@ export async function loginAs(page: Page, role: TestRole, redirectTo: string = '
  */
 export async function loginAsLogin(page: Page, login: string): Promise<void> {
   const prisma = await getTestPrisma();
-  const user = await prisma.user.findFirst({ where: { login }, select: { id: true } });
+  const user = await prisma.user.findFirst({
+    where: { accounts: { some: { provider_id: 'github', username: login } } },
+    select: { id: true },
+  });
   if (!user) {
     throw new Error(`No seeded user with login '${login}' — is the dev database seeded?`);
   }

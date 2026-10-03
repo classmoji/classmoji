@@ -186,7 +186,10 @@ test.beforeAll(async () => {
   classroomId = await getClassroomIdBySlug(CLASS);
 
   for (const login of [S1, S2, S3, TA]) {
-    const user = await prisma.user.findFirst({ where: { login }, select: { id: true } });
+    const user = await prisma.user.findFirst({
+      where: { accounts: { some: { provider_id: 'github', username: login } } },
+      select: { id: true },
+    });
     if (!user) throw new Error(`missing seeded user '${login}' — run npm run db:seed`);
     userIds[login] = user.id;
   }

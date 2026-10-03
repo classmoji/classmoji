@@ -18,7 +18,10 @@
 
 import { describe, it, expect, vi } from 'vitest';
 
-vi.mock('@classmoji/database', () => ({ default: () => ({}) }));
+vi.mock('@classmoji/database', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/database')>()),
+  default: () => ({}),
+}));
 vi.mock('@trigger.dev/sdk', () => ({ tasks: { trigger: vi.fn(), batchTrigger: vi.fn() } }));
 
 const { rewriteContentUrls } = await import('../../classmoji/contentImport.service.ts');

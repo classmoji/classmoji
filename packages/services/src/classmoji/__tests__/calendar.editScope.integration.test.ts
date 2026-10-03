@@ -67,7 +67,13 @@ describe.skipIf(!RUN)('scoped calendar edits (integration)', () => {
 
     const user = await prisma.user.create({
       data: {
-        login: `caltest-${suite}-owner`,
+        accounts: {
+          create: {
+            provider_id: 'github',
+            account_id: `caltest-${suite}-owner`,
+            username: `caltest-${suite}-owner`,
+          },
+        },
         email: `caltest-${suite}-owner@example.test`,
         name: `Calendar Owner ${suite}`,
       },
@@ -89,7 +95,13 @@ describe.skipIf(!RUN)('scoped calendar edits (integration)', () => {
   afterAll(async () => {
     if (orgId) await prisma.gitOrganization.delete({ where: { id: orgId } }).catch(() => {});
     await prisma.user
-      .deleteMany({ where: { login: { startsWith: `caltest-${suite}-` } } })
+      .deleteMany({
+        where: {
+          accounts: {
+            some: { provider_id: 'github', username: { startsWith: `caltest-${suite}-` } },
+          },
+        },
+      })
       .catch(() => {});
   });
 

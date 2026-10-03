@@ -18,7 +18,8 @@ const getContributorStats = vi.fn();
 const getLanguages = vi.fn();
 const listPulls = vi.fn();
 
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/database')>()),
   default: () => ({
     gitRepo: { findUnique: (...a: unknown[]) => gitRepoFindUnique(...a) },
     gitRepoAnalyticsSnapshot: {

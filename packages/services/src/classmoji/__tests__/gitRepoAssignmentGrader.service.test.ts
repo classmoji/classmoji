@@ -12,8 +12,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const graderFindMany = vi.fn();
 const gradeFindMany = vi.fn();
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/database')>()),
   default: () => ({
+    classroom: { findUnique: vi.fn(async () => ({ git_organization: { provider: 'GITHUB' } })) },
     gitRepoAssignmentGrader: { findMany: (...a: unknown[]) => graderFindMany(...a) },
     assignmentGrade: { findMany: (...a: unknown[]) => gradeFindMany(...a) },
   }),
@@ -244,11 +246,11 @@ describe('gradingReport', () => {
   it('pairs assigned counts with graded counts, distribution and last_graded_at', async () => {
     graderFindMany.mockResolvedValue([
       {
-        grader: { id: 'ta-1', login: 'ada', name: 'Ada' },
+        grader: { id: 'ta-1', name: 'Ada', accounts: [{ provider_id: 'github', username: 'ada' }] },
         git_repo_assignment: { assignment_id: 'a-1', assignment },
       },
       {
-        grader: { id: 'ta-1', login: 'ada', name: 'Ada' },
+        grader: { id: 'ta-1', name: 'Ada', accounts: [{ provider_id: 'github', username: 'ada' }] },
         git_repo_assignment: { assignment_id: 'a-1', assignment },
       },
     ]);
@@ -258,7 +260,7 @@ describe('gradingReport', () => {
         emoji: '🌟',
         created_at: new Date('2026-01-01'),
         git_repo_assignment_id: 'ra-1',
-        grader: { id: 'ta-1', login: 'ada', name: 'Ada' },
+        grader: { id: 'ta-1', name: 'Ada', accounts: [{ provider_id: 'github', username: 'ada' }] },
         git_repo_assignment: { assignment_id: 'a-1', assignment },
       },
       // Second grade on the SAME submission → distribution 2, graded_count 1.
@@ -267,7 +269,7 @@ describe('gradingReport', () => {
         emoji: '✅',
         created_at: new Date('2026-02-01'),
         git_repo_assignment_id: 'ra-1',
-        grader: { id: 'ta-1', login: 'ada', name: 'Ada' },
+        grader: { id: 'ta-1', name: 'Ada', accounts: [{ provider_id: 'github', username: 'ada' }] },
         git_repo_assignment: { assignment_id: 'a-1', assignment },
       },
     ]);
@@ -326,7 +328,11 @@ describe('gradingReport', () => {
         emoji: '🌟',
         created_at: new Date('2026-01-01'),
         git_repo_assignment_id: 'ra-9',
-        grader: { id: 'ta-2', login: 'grace', name: 'Grace' },
+        grader: {
+          id: 'ta-2',
+          name: 'Grace',
+          accounts: [{ provider_id: 'github', username: 'grace' }],
+        },
         git_repo_assignment: { assignment_id: 'a-1', assignment },
       },
     ]);

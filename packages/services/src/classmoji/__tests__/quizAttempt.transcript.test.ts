@@ -16,7 +16,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const attemptFindUnique = vi.fn();
 const conversationFindFirst = vi.fn();
 
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/database')>()),
   default: () => ({
     quizAttempt: { findUnique: attemptFindUnique },
     aIConversation: { findFirst: conversationFindFirst },

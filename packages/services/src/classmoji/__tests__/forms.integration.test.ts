@@ -91,7 +91,13 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
   const makeUser = async (label: string) => {
     const user = await prisma.user.create({
       data: {
-        login: `formtest-${suite}-${label}`,
+        accounts: {
+          create: {
+            provider_id: 'github',
+            account_id: `formtest-${suite}-${label}`,
+            username: `formtest-${suite}-${label}`,
+          },
+        },
         email: `formtest-${suite}-${label}@example.test`,
         name: `Form Test ${label}`,
       },
@@ -166,7 +172,13 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
     // magic tokens. Users are deleted after, once nothing references them.
     if (orgId) await prisma.gitOrganization.delete({ where: { id: orgId } }).catch(() => {});
     await prisma.user
-      .deleteMany({ where: { login: { startsWith: `formtest-${suite}-` } } })
+      .deleteMany({
+        where: {
+          accounts: {
+            some: { provider_id: 'github', username: { startsWith: `formtest-${suite}-` } },
+          },
+        },
+      })
       .catch(() => {});
   });
 

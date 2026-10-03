@@ -10,7 +10,8 @@ const membershipFindMany = vi.fn();
 const gradeFindMany = vi.fn();
 const emojiFindMany = vi.fn();
 
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/database')>()),
   default: () => ({
     classroomMembership: { findMany: (...a: unknown[]) => membershipFindMany(...a) },
     assignmentGrade: { findMany: (...a: unknown[]) => gradeFindMany(...a) },

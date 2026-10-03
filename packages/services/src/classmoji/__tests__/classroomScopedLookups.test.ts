@@ -1,3 +1,4 @@
+import { GIT_IDENTITY } from '@classmoji/database';
 /**
  * The classroom-scoped lookups and delete behind the repository page's actions:
  *   - gitRepo.findByIdInClassroom / deleteInClassroom
@@ -19,8 +20,10 @@ const db = vi.hoisted(() => ({
   membershipFindFirst: vi.fn(),
 }));
 
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/database')>()),
   default: () => ({
+    classroom: { findUnique: vi.fn(async () => ({ git_organization: { provider: 'GITHUB' } })) },
     gitRepo: {
       findFirst: (...a: unknown[]) => db.gitRepoFindFirst(...a),
       deleteMany: (...a: unknown[]) => db.gitRepoDeleteMany(...a),
@@ -118,7 +121,7 @@ describe('gitRepoAssignment.findByIdInClassroom', () => {
 
     expect(db.gitRepoAssignmentFindFirst).toHaveBeenCalledWith({
       where: { id: 'ra-1', git_repo: { classroom_id: 'class-1' } },
-      include: { git_repo: true, graders: { include: { grader: true } } },
+      include: { git_repo: true, graders: { include: { grader: { include: GIT_IDENTITY } } } },
     });
   });
 
@@ -189,7 +192,7 @@ describe('gitRepoAssignmentGrader.findEligibleGrader', () => {
         role: { in: ['ASSISTANT', 'TEACHER'] },
         is_grader: true,
       },
-      include: { user: true },
+      include: { user: { include: GIT_IDENTITY } },
     });
   });
 
