@@ -560,7 +560,7 @@ describe.skipIf(!RUN)('a quiz and its assignment (integration)', () => {
         is_published: true,
         release_at: null,
         closes_at: null,
-        tokens_per_hour: 0,
+        tokens_per_hour: null,
         position: 1,
       });
       expect(await quizRow(quiz.id)).toMatchObject({

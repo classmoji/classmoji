@@ -237,3 +237,17 @@ export async function publicFormUrlFor(
   // The canonical pages route, which is where the bridge redirects to anyway.
   return formSlug => `${fallbackOrigin}/${classroomSlug}/forms/${formSlug}`;
 }
+
+/**
+ * The public gallery URL for a classroom's site, or null when the classroom
+ * has no serving site (archived, unpublished, no site, site disabled, or
+ * SITE_BASE_DOMAIN unset). `/projects` exists only on a site host.
+ */
+export async function galleryUrlFor(classroom: {
+  id: string;
+  status?: string;
+  is_archived?: boolean;
+}): Promise<string | null> {
+  const origin = await servingSiteOrigin(classroom);
+  return origin ? `${origin}/projects` : null;
+}

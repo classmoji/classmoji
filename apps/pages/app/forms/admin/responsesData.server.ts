@@ -41,6 +41,8 @@ export interface ResponseRow {
   name: string | null;
   email: string;
   userId: string | null;
+  /** PENDING | APPROVED | HIDDEN. Only shown on gallery forms. */
+  galleryStatus: string;
   /** ISO. Serialized here so the client never has to care what arrived. */
   submittedAt: string;
   verifiedAt: string | null;
@@ -109,6 +111,8 @@ export interface ResponsesContext extends FormAdminContext {
     status: string;
     savePartials: boolean;
     responseCap: number | null;
+    /** Non-null when the form feeds the org project gallery. */
+    galleryOrgId: string | null;
   };
   /**
    * The CURRENT revision's fields: the one column set that lines every response
@@ -177,6 +181,7 @@ export async function requireFormForResponses(
       status: form.status,
       savePartials: form.save_partials,
       responseCap: form.response_cap,
+      galleryOrgId: form.gallery_org_id,
     },
     currentFields,
     fieldsByRevision,
@@ -288,6 +293,8 @@ export function toResponseRow(
     submission_state: string;
     staff_status: string | null;
     staff_note: string | null;
+    /** Required, no fallback: typecheck fails if RESPONSE_SELECT ever drops it. */
+    gallery_status: string;
     revision_id: string;
     answers: unknown;
     resolved_context: unknown;
@@ -309,6 +316,7 @@ export function toResponseRow(
     name: row.name,
     email: row.email,
     userId: row.user_id,
+    galleryStatus: row.gallery_status,
     submittedAt: row.submitted_at.toISOString(),
     verifiedAt: row.verified_at ? row.verified_at.toISOString() : null,
     // Always null now. Unverified rows are kept for the life of the form, so

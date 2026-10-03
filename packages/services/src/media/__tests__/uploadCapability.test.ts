@@ -123,6 +123,21 @@ describe('uploadCapabilityFor', () => {
     expect(capability.media).not.toBeNull();
   });
 
+  it('reads the GitLab connection when building a media capability', async () => {
+    mocks.findUnique.mockImplementation(async ({ select }) => ({
+      content_delivery_enabled: true,
+      content_repo: 'content-repo',
+      git_organization: {
+        login: 'org',
+        provider: 'GITLAB',
+        ...(select.git_organization.select.gitlab_connection_id
+          ? { gitlab_connection_id: 'connection' }
+          : {}),
+      },
+    }));
+    expect((await uploadCapabilityFor({ id: 'class-1' })).media).not.toBeNull();
+  });
+
   it('never reports negative space', async () => {
     mocks.findMany.mockResolvedValue([
       { size_bytes: BigInt(11 * GIB), rendition_bytes: null, original_deleted_at: null },

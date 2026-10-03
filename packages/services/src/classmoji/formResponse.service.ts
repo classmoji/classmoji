@@ -22,8 +22,9 @@ import {
 } from './formTeamResolver.ts';
 import { escapeVars, pagesUrl } from '../emails/escape.ts';
 import { fieldsOf } from './form.service.ts';
+import { assertGalleryMediaAnswers } from './galleryMedia.ts';
 import { Prisma } from '@prisma/client';
-import type { Role, SubmissionState } from '@prisma/client';
+import type { GalleryStatus, Role, SubmissionState } from '@prisma/client';
 
 /**
  * Form Response Service
@@ -201,6 +202,7 @@ interface LockedFormRow {
   response_cap: number | null;
   allow_multiple: boolean;
   current_revision_id: string | null;
+  gallery_org_id: string | null;
 }
 
 /**
@@ -217,7 +219,7 @@ interface LockedFormRow {
  */
 async function lockForm(tx: Prisma.TransactionClient, formId: string): Promise<LockedFormRow> {
   const rows = await tx.$queryRaw<LockedFormRow[]>`
-    SELECT id, status, closes_at, response_cap, allow_multiple, current_revision_id
+    SELECT id, status, closes_at, response_cap, allow_multiple, current_revision_id, gallery_org_id
     FROM forms
     WHERE id = ${formId}
     FOR UPDATE
@@ -1232,6 +1234,7 @@ export async function confirmSubmission(rawToken: string, { answers }: { answers
         );
       }
       data.answers = parseAnswers(fields, answers) as unknown as Prisma.InputJsonValue;
+      data.gallery_status = 'PENDING';
     }
 
     // The token is left exactly as it is: not spent, not extended. It was
@@ -1421,6 +1424,7 @@ export async function submitVerifiedPublic({
         name: name ?? null,
         answers: validated as unknown as Prisma.InputJsonValue,
         submission_state: 'SUBMITTED',
+        gallery_status: 'PENDING' as GalleryStatus,
         verified_at: response.verified_at,
         // An edit of a response that is already counted keeps its place in the
         // queue; a first submission takes its place now.
@@ -1564,7 +1568,16 @@ export async function submitClassroom({
       }) as unknown as Prisma.InputJsonValue;
     }
 
-    const validated = parseAnswers(fields, answers, { resolved });
+    let validated = parseAnswers(fields, answers, { resolved });
+    if (form.gallery_org_id) {
+      validated = await assertGalleryMediaAnswers(tx, {
+        classroomId: preflight.classroom_id,
+        formId,
+        userId,
+        fields,
+        answers: validated,
+      });
+    }
 
     if (existing && existing.submission_state === 'SUBMITTED' && !form.allow_multiple) {
       throw serviceError(FORM_ALREADY_SUBMITTED, 'You have already responded to this form.');
@@ -1584,6 +1597,7 @@ export async function submitClassroom({
       name: name ?? null,
       answers: validated as unknown as Prisma.InputJsonValue,
       submission_state: 'SUBMITTED' as SubmissionState,
+      gallery_status: 'PENDING' as GalleryStatus,
       verified_at: existing?.verified_at ?? now,
       ...(snapshot ? { resolved_context: snapshot } : {}),
     };
@@ -2423,6 +2437,8 @@ const RESPONSE_SELECT = {
   added_by: true,
   staff_status: true,
   staff_note: true,
+  /** Gallery moderation — staff only, like the two columns above. */
+  gallery_status: true,
   submitted_at: true,
   created_at: true,
   updated_at: true,
@@ -2509,6 +2525,14 @@ export async function updateStaff({
     data.staff_note = staff_note === null ? null : staff_note.trim() || null;
   }
   return getPrisma().formResponse.update({ where: { id: responseId }, data });
+}
+
+/**
+ * Approve, hide, or reset one response's gallery status. No authorization:
+ * the route gates on the teaching team and scopes the id to the form.
+ */
+export async function setGalleryStatus(responseId: string, gallery_status: GalleryStatus) {
+  return getPrisma().formResponse.update({ where: { id: responseId }, data: { gallery_status } });
 }
 
 /**

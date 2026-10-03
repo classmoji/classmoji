@@ -97,7 +97,7 @@ describe('cross-file registry agreement', () => {
    * Adding an entry to the registry means adding a migration here too.
    */
   it('RESERVED_PAGE_SLUGS matches the migration that evicted pages holding them', () => {
-    expect(reservedArrayIn('20260902180000_reserve_forms_page_slug')).toEqual(
+    expect(reservedArrayIn('20260923120000_project_gallery')).toEqual(
       new Set(RESERVED_PAGE_SLUGS)
     );
   });
@@ -108,11 +108,16 @@ describe('cross-file registry agreement', () => {
    * from the registry but still appears in one of them would mean a page was
    * evicted from a path that is free again, which nothing else would catch.
    */
-  it('the first eviction migration lists only slugs still reserved today', () => {
-    for (const slug of reservedArrayIn('20260821003300_page_slug_backfill_and_unique')) {
-      expect(RESERVED_PAGE_SLUGS.has(slug), `${slug} was evicted but is no longer reserved`).toBe(
-        true
-      );
+  it('earlier eviction migrations list only slugs still reserved today', () => {
+    for (const migration of [
+      '20260821003300_page_slug_backfill_and_unique',
+      '20260902180000_reserve_forms_page_slug',
+    ]) {
+      for (const slug of reservedArrayIn(migration)) {
+        expect(RESERVED_PAGE_SLUGS.has(slug), `${slug} was evicted but is no longer reserved`).toBe(
+          true
+        );
+      }
     }
   });
 

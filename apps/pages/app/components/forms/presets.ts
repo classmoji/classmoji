@@ -169,6 +169,53 @@ const TEAM_REVIEW: FormPreset = {
   },
 };
 
+/**
+ * Feeds the org project gallery: the New Form action turns the gallery on for
+ * forms made from it. "Project title", not "Project name" — a short_text
+ * labelled "name" is read as the respondent's name by `identityPlan`.
+ */
+const PROJECT_SHOWCASE: FormPreset = {
+  key: 'showcase',
+  label: 'Project Showcase',
+  blurb: 'Title, summary, team and links. Approved entries appear in the org project gallery.',
+  access: 'CLASSROOM',
+  requiresClassroom: true,
+  suggestedTitle: 'Project Showcase',
+  fields: () => [
+    field('short_text', { label: 'Project title', required: true, gallery_role: 'title' }),
+    field('short_text', { label: 'Icon', help: 'One emoji.', gallery_role: 'icon' }),
+    field('short_text', { label: 'Tagline', help: 'One sentence.', gallery_role: 'tagline' }),
+    field('long_text', { label: 'Summary', required: true, gallery_role: 'summary' }),
+    field('short_text', {
+      label: 'Cover image',
+      help: 'Upload an image or paste an https:// image URL.',
+      gallery_role: 'cover',
+    }),
+    field('roster_select', {
+      label: 'Team members',
+      required: true,
+      multiple: true,
+      gallery_role: 'team',
+    }),
+    field('short_text', { label: 'Tags', help: 'Comma separated.', gallery_role: 'tags' }),
+    field('short_text', { label: 'Deployed URL', gallery_role: 'link' }),
+    field('short_text', {
+      label: 'Demo video',
+      gallery_role: 'video',
+      help: 'Upload a video or paste a demo link.',
+    }),
+    field('short_text', { label: 'GitHub frontend', gallery_role: 'link' }),
+    field('short_text', { label: 'GitHub backend', gallery_role: 'link' }),
+    field('short_text', { label: 'Figma', gallery_role: 'link' }),
+    field('short_text', {
+      label: 'Demo credentials',
+      help: 'Shown publicly on the project page. Use a throwaway demo account.',
+    }),
+    field('long_text', { label: 'What is the problem?', gallery_role: 'detail' }),
+    field('long_text', { label: 'Our solution', gallery_role: 'detail' }),
+  ],
+};
+
 // ─── Question presets ───────────────────────────────────────────────────────
 
 /**
@@ -276,6 +323,7 @@ export const FORM_PRESETS: FormPreset[] = [
   WAITLIST,
   PLANNING_SURVEY,
   TEAM_REVIEW,
+  PROJECT_SHOWCASE,
   PROJECT_BIDDING,
 ];
 

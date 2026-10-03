@@ -2136,30 +2136,27 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
     expect(probeSignals.every(signal => signal.aborted)).toBe(true);
   });
 
-  it('tells a classroom whose organization is not on GitHub that creating teams is GitHub only', async () => {
+  it('previews and claims GitLab teams without calling GitHub preflight', async () => {
     const set = await newSet('gitlab');
     const run = await solvedRun(set.id);
     await prisma.gitOrganization.update({ where: { id: orgId }, data: { provider: 'GITLAB' } });
     try {
-      expect(
-        await codeOf(
-          teamSetService.previewCreate({ classroomId, teamSetId: set.id, runRef: run.id })
-        )
-      ).toBe('provider_unsupported');
-      expect(
-        await codeOf(
-          teamSetService.claimCreate({
-            classroomId,
-            teamSetId: set.id,
-            runId: run.id,
-            userId: ownerId,
-          })
-        )
-      ).toBe('provider_unsupported');
+      await expect(
+        teamSetService.previewCreate({ classroomId, teamSetId: set.id, runRef: run.id })
+      ).resolves.toBeTruthy();
+      await teamSetService.claimCreate({
+        classroomId,
+        teamSetId: set.id,
+        runId: run.id,
+        userId: ownerId,
+      });
+      expect((await stateOf(set.id)).status).toBe('RUNNING');
+      expect(applyCalls()).toHaveLength(1);
+      expect(getOrganizationMock).not.toHaveBeenCalled();
+      expect(getTeamMock).not.toHaveBeenCalled();
     } finally {
       await prisma.gitOrganization.update({ where: { id: orgId }, data: { provider: 'GITHUB' } });
     }
-    expect(getOrganizationMock).not.toHaveBeenCalled();
   });
 
   // ── Release 2: Setup, stamps, changes, compare, why, identity, two stages ──

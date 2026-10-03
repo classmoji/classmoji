@@ -433,7 +433,7 @@ describe.skipIf(!RUN)('quiz_assignments migration backfill (integration)', () =>
       weight: 5,
       is_published: true,
       student_deadline: due,
-      tokens_per_hour: 0,
+      tokens_per_hour: null,
       closes_at: null,
     });
     expect(out.reports.created[0].details).toMatchObject({

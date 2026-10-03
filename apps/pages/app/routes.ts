@@ -17,7 +17,7 @@ import { flatRoutes } from '@react-router/fs-routes';
  *
  * Static segments outrank `:pageSlug` in React Router's ranking regardless of
  * declaration order, which is what keeps `RESERVED_PAGE_SLUGS`
- * (app / classmoji / sign-in / schedule / forms / robots.txt) from being
+ * (app / classmoji / sign-in / schedule / forms / robots.txt / projects) from being
  * shadowed by a page that claims one as its slug.
  *
  * The `/:classroomSlug/forms` subtree is declared here too, with its modules
@@ -47,6 +47,19 @@ export default [
   // `RESERVED_FORM_SLUGS` refuses `responses` at create, so neither of these can
   // ever be shadowed by a real form.
   route(':classroomSlug/forms/:formSlug/responses/export', 'forms/admin/responsesExport.ts'),
+  // Gallery Approve/Hide. A resource route beside `export`, gated on the
+  // teaching team rather than the OWNER/TEACHER responses gate.
+  route(':classroomSlug/forms/:formSlug/responses/gallery', 'forms/admin/responsesGallery.ts'),
+  // The teaching team's gallery queue: where assistants approve.
+  route(':classroomSlug/forms/:formSlug/gallery', 'forms/admin/galleryQueue.tsx'),
+  route(
+    ':classroomSlug/forms/:formSlug/media/:fieldId/uploads',
+    'forms/fill/galleryMediaUpload.ts'
+  ),
+  route(
+    ':classroomSlug/forms/:formSlug/media/:fieldId/uploads/:mediaId/:operation',
+    'forms/fill/galleryMedia.ts'
+  ),
 
   // Team sets built from a CLASSROOM form's responses. The set is a layout
   // (id 'team-set'): its loader carries the header every set page shows, and
@@ -101,6 +114,10 @@ export default [
       route('sign-in', 'site/sign-in.tsx'),
       route('schedule', 'site/schedule.tsx'),
       route('app', 'site/app.tsx'),
+      // The org project gallery. Static `projects` outranks `:pageSlug`, and
+      // `projects` is in RESERVED_PAGE_SLUGS so no page can hold it.
+      route('projects', 'site/projects.tsx'),
+      route('projects/:responseId', 'site/project.tsx'),
       route(':pageSlug', 'site/page.tsx'),
 
       // Everything else on a course site. Inside the layout ON PURPOSE: the

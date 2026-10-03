@@ -97,10 +97,12 @@ export function FormCanvas({
 export function FormHeader({
   title,
   description,
+  gallery = false,
   as: Heading = 'h1',
 }: {
   title: string;
   description?: string | null;
+  gallery?: boolean;
   /** `h2` where the header is not the page's own, as in the builder's preview. */
   as?: 'h1' | 'h2';
 }) {
@@ -112,6 +114,12 @@ export function FormHeader({
       {description ? (
         <p className="mt-2 whitespace-pre-line text-sm text-gray-600 dark:text-gray-300">
           {description}
+        </p>
+      ) : null}
+      {gallery ? (
+        <p className="mt-3 text-sm text-gray-600 dark:text-gray-300">
+          Approved project answers and uploads may appear in the public gallery. Identity questions
+          stay private.
         </p>
       ) : null}
     </header>
