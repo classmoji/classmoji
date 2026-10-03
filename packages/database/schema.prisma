@@ -2022,7 +2022,7 @@ model FormResponse {
   /// Staff-only note living with the submission. Same visibility rule.
   staff_note       String?
   /// Gallery moderation. New rows start PENDING; the teaching team approves or
-  /// hides. A student edit after approval keeps APPROVED (staff can hide).
+  /// hides. Editing a submitted gallery response resets it to PENDING.
   gallery_status   GalleryStatus   @default(PENDING)
 
   submitted_at DateTime @default(now())

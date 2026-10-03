@@ -115,3 +115,32 @@ test("the OWNER turns it on, for the classroom's own org", async ({ page }) => {
   await saveMeta(page, true);
   expect(await galleryOrgOf(formId)).toBe(gitOrgId);
 });
+
+test('a refused gallery change leaves the switch at the saved value', async ({ page }) => {
+  const prisma = await getTestPrisma();
+  const revision = await prisma.formRevision.create({
+    data: {
+      form_id: formId,
+      version: 1,
+      fields: {
+        definition_version: 1,
+        fields: [{ id: crypto.randomUUID(), type: 'short_text', label: 'Title' }],
+      },
+    },
+  });
+  await prisma.form.update({
+    where: { id: formId },
+    data: { gallery_org_id: null, status: 'OPEN', current_revision_id: revision.id },
+  });
+  await loginAs(page, 'owner');
+  await page.goto(`/${CLASS}/forms/${FORM_SLUG}/edit`);
+  const toggle = page.getByRole('checkbox', { name: 'Feed the org project gallery' });
+  await toggle.click();
+  await expect(
+    page.getByText('A gallery form needs exactly one field with the title gallery role', {
+      exact: false,
+    })
+  ).toBeVisible();
+  await expect(toggle).not.toBeChecked();
+  expect(await galleryOrgOf(formId)).toBeNull();
+});

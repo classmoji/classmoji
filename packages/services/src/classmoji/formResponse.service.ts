@@ -1234,6 +1234,7 @@ export async function confirmSubmission(rawToken: string, { answers }: { answers
         );
       }
       data.answers = parseAnswers(fields, answers) as unknown as Prisma.InputJsonValue;
+      if (lockedForm.gallery_org_id) data.gallery_status = 'PENDING';
     }
 
     // The token is left exactly as it is: not spent, not extended. It was
@@ -1423,6 +1424,7 @@ export async function submitVerifiedPublic({
         name: name ?? null,
         answers: validated as unknown as Prisma.InputJsonValue,
         submission_state: 'SUBMITTED',
+        ...(lockedForm.gallery_org_id ? { gallery_status: 'PENDING' as GalleryStatus } : {}),
         verified_at: response.verified_at,
         // An edit of a response that is already counted keeps its place in the
         // queue; a first submission takes its place now.

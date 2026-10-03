@@ -62,6 +62,37 @@ describe('gallery media ownership', () => {
     expect(findFirst).not.toHaveBeenCalled();
   });
 
+  it('canonicalizes its own signed URLs only after checking upload ownership', async () => {
+    const classroomId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    const signedClient = {
+      classroom: {
+        findUniqueOrThrow: async () => ({
+          id: classroomId,
+          content_repo: 'content',
+          git_organization: { login: 'org' },
+        }),
+      },
+      mediaObject: { findFirst },
+    } as unknown as Prisma.TransactionClient;
+    vi.stubEnv('CONTENT_DELIVERY_ORIGIN', 'https://content.test');
+    try {
+      const answers = {
+        [fields[0].id]: `https://content.test/c/${classroomId}/media/${id}/orig.png?sig=expired`,
+      };
+      const input = { classroomId, formId: 'form', userId: 'student', fields, answers };
+      findFirst.mockResolvedValue({ id });
+      expect(await assertGalleryMediaAnswers(signedClient, input)).toEqual({
+        [fields[0].id]: `media://${id}`,
+      });
+      findFirst.mockResolvedValue(null);
+      await expect(assertGalleryMediaAnswers(signedClient, input)).rejects.toMatchObject({
+        code: FORM_ANSWERS_INVALID,
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('refuses a gallery role on a private identity question', () => {
     expect(() =>
       parseFormDefinition([

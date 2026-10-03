@@ -260,4 +260,40 @@ describe.skipIf(!RUN)('project gallery (integration)', () => {
     await responseService.setGalleryStatus(id, 'APPROVED');
     expect((await galleryService.getForOrg(orgA, id))?.title).toBe('Second title');
   });
+  it.each(['confirm', 'verified'])('a public %s edit requires fresh moderation', async mode => {
+    const form = await formService.create({
+      classroomId: newerClassroom,
+      title: `Public showcase ${suite} ${mode}`,
+      access: 'PUBLIC',
+      createdBy: ownerId,
+      fields: SHOWCASE,
+    });
+    await formService.setGalleryOrg(form.id, true);
+    const { revision } = await formService.publish(form.id);
+    const titleId = formService.fieldsOf(revision.fields)[0].id;
+    const email = `gallery-${suite}-${mode}@example.test`;
+    const submission = await responseService.beginPublicSubmission({
+      formId: form.id,
+      email,
+      revisionId: revision.id,
+      answers: { [titleId]: 'Original' },
+    });
+    const token = submission.rawToken!;
+    const { response } = await responseService.confirmSubmission(token);
+    await responseService.setGalleryStatus(response.id, 'APPROVED');
+    const answers = { [titleId]: 'Changed' };
+    if (mode === 'confirm') await responseService.confirmSubmission(token, { answers });
+    else
+      await responseService.submitVerifiedPublic({
+        rawToken: token,
+        formId: form.id,
+        email,
+        revisionId: revision.id,
+        answers,
+      });
+    expect(
+      (await prisma.formResponse.findUniqueOrThrow({ where: { id: response.id } })).gallery_status
+    ).toBe('PENDING');
+    expect(await galleryService.getForOrg(orgA, response.id)).toBeNull();
+  });
 });

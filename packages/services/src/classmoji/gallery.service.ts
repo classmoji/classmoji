@@ -4,6 +4,7 @@ import { fieldsOf } from './form.service.ts';
 import {
   canonicalizeMany,
   parseMediaRef,
+  parseMediaUrl,
   resolveDelivery,
   type ResolveContext,
 } from './contentDelivery.service.ts';
@@ -284,7 +285,10 @@ async function publicProjects(rows: PublicRow[]): Promise<GalleryProject[]> {
             allowed.map(ref => canonical.get(ref) ?? ref)
           );
           urls = new Map(
-            refs.map(ref => [ref, resolved.urls.get(canonical.get(ref) ?? ref) ?? ref])
+            refs.flatMap(ref => {
+              const url = resolved.urls.get(canonical.get(ref) ?? ref);
+              return url ? [[ref, url] as const] : [];
+            })
           );
         } catch (error) {
           console.warn('[gallery] Media resolution failed:', error);
@@ -292,7 +296,9 @@ async function publicProjects(rows: PublicRow[]): Promise<GalleryProject[]> {
       }
       const displayUrl = (ref: string | null) => {
         if (!ref) return null;
-        const url = urls.get(ref) ?? ref;
+        const hosted = parseMediaRef(ref) || (ctx && parseMediaUrl(ctx, ref));
+        const url = urls.get(ref) ?? (hosted ? null : ref);
+        if (!url) return null;
         return webUrl(url, true);
       };
       for (const project of entries) {

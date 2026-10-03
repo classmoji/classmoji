@@ -10,7 +10,16 @@ vi.mock('@classmoji/database', () => ({
 }));
 vi.mock('../contentDelivery.service.ts', async importOriginal => ({
   ...(await importOriginal<typeof import('../contentDelivery.service.ts')>()),
-  canonicalizeMany: async (_ctx: unknown, refs: string[]) => new Map(refs.map(ref => [ref, ref])),
+  canonicalizeMany: async (ctx: unknown, refs: string[]) => {
+    const { parseMediaUrl } =
+      await importOriginal<typeof import('../contentDelivery.service.ts')>();
+    return new Map(
+      refs.map(ref => {
+        const id = parseMediaUrl(ctx as Parameters<typeof parseMediaUrl>[0], ref);
+        return [ref, id ? `media://${id}` : ref];
+      })
+    );
+  },
   resolveDelivery: mocks.resolve,
 }));
 import { getForOrg } from '../gallery.service.ts';
@@ -91,6 +100,19 @@ describe('public gallery media delivery', () => {
       });
     } finally {
       warn.mockRestore();
+    }
+  });
+  it('does not fall back to a hosted signed URL when media lookup fails', async () => {
+    vi.stubEnv('CONTENT_DELIVERY_ORIGIN', 'https://content.test');
+    const signed = `https://content.test/c/${sourceId}/media/${mediaId}/cover.png?signature=old`;
+    mocks.findFirst.mockResolvedValue({ ...response, answers: { [fieldId]: signed } });
+    mocks.findMany.mockRejectedValue(new Error('database unavailable'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect((await getForOrg('org', response.id))?.coverUrl).toBeNull();
+    } finally {
+      warn.mockRestore();
+      vi.unstubAllEnvs();
     }
   });
 });

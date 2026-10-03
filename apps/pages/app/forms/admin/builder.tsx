@@ -771,7 +771,8 @@ export default function FormBuilder() {
             <label className="mt-1 flex items-center gap-2 border border-transparent py-1 text-sm text-gray-700 dark:text-gray-200">
               <input
                 type="checkbox"
-                defaultChecked={data.form.gallery}
+                checked={data.form.gallery}
+                disabled={busy}
                 onChange={event => post({ intent: 'save-meta', gallery: event.target.checked })}
               />
               Feed the org project gallery
