@@ -2136,16 +2136,19 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
     expect(probeSignals.every(signal => signal.aborted)).toBe(true);
   });
 
-  it('tells a classroom whose organization is not on GitHub that creating teams is GitHub only', async () => {
+  it('lets a classroom on Gitlab preview and claim a create, with no Github pre-flight', async () => {
     const set = await newSet('gitlab');
     const run = await solvedRun(set.id);
     await prisma.gitOrganization.update({ where: { id: orgId }, data: { provider: 'GITLAB' } });
     try {
-      expect(
-        await codeOf(
-          teamSetService.previewCreate({ classroomId, teamSetId: set.id, runRef: run.id })
-        )
-      ).toBe('provider_unsupported');
+      // Gitlab teams are subgroups: no up-front name probe, each create
+      // refuses a taken name on its own.
+      const preview = await teamSetService.previewCreate({
+        classroomId,
+        teamSetId: set.id,
+        runRef: run.id,
+      });
+      expect(preview.teams.length).toBe(run.result!.teams.length);
       expect(
         await codeOf(
           teamSetService.claimCreate({
@@ -2155,11 +2158,12 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
             userId: ownerId,
           })
         )
-      ).toBe('provider_unsupported');
+      ).toBeUndefined();
     } finally {
       await prisma.gitOrganization.update({ where: { id: orgId }, data: { provider: 'GITHUB' } });
     }
     expect(getOrganizationMock).not.toHaveBeenCalled();
+    expect(getTeamMock).not.toHaveBeenCalled();
   });
 
   // ── Release 2: Setup, stamps, changes, compare, why, identity, two stages ──
