@@ -210,7 +210,9 @@ const AssignmentFormModal = ({
   const creatingTag = tagFetcher.state !== 'idle';
   const [form] = Form.useForm<FormValues>();
   // The price an assignment without its own pays: Settings > Extension.
-  const classroomTokensPerHour = useStore().classroom?.settings?.default_tokens_per_hour ?? 0;
+  const classroomTokensPerHour = useStore(
+    state => state.classroom?.settings?.default_tokens_per_hour ?? 0
+  );
   const [kind, setKind] = useState<AssignmentKind>('REPO');
   const [mode, setMode] = useState<SubmissionMode>('REPO');
   const isEdit = !!assignment;

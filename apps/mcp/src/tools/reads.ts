@@ -180,7 +180,8 @@ export const listReposTool = mirrorResourceTool({
     'project template repo_update edits, and each assignment’s module_id (assignment_update ' +
     'moves it); students see published-only repositories they ' +
     'have a git repo for, with their own submission status per assignment (grades only after ' +
-    'release). Any member.',
+    'release). Each assignment has tokens_per_hour (its own extension price; null = follows the ' +
+    "classroom's default) and effective_tokens_per_hour (what one extension hour costs). Any member.",
 });
 
 export const myGradesTool = mirrorResourceTool({

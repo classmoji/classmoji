@@ -303,7 +303,7 @@ export const listForStudent = async ({
 
   // One read per type for this student. A type whose read fails shows no rows
   // (its statuses would be guesses); the other types still show.
-  const [repoSubmissions, quizJoin, formJoin] = await Promise.all([
+  const [repoSubmissions, quizJoin, formJoin, classroomTokensPerHour] = await Promise.all([
     givenSubmissions ??
       (hasRepos
         ? helperService
@@ -335,18 +335,19 @@ export const listForStudent = async ({
           formResponseService.findSubmittedForUserByFormIds(userId, formIds),
         ]).catch(degraded('form', context, null))
       : null,
+    // The classroom's extension price, for repo rows whose assignment sets
+    // none. A failed read prices them at 0 (no Extend) rather than hiding the
+    // rows.
+    hasRepos
+      ? (async () =>
+          (
+            await getPrisma().classroomSettings.findUnique({
+              where: { classroom_id: classroomId },
+              select: { default_tokens_per_hour: true },
+            })
+          )?.default_tokens_per_hour ?? 0)().catch(degraded('extension price', context, 0))
+      : 0,
   ]);
-  // The classroom's extension price, for repo rows whose assignment sets none.
-  // A failed read prices them at 0 (no Extend) rather than hiding the rows.
-  const classroomTokensPerHour = hasRepos
-    ? await (async () =>
-        (
-          await getPrisma().classroomSettings.findUnique({
-            where: { classroom_id: classroomId },
-            select: { default_tokens_per_hour: true },
-          })
-        )?.default_tokens_per_hour ?? 0)().catch(degraded('extension price', context, 0))
-    : 0;
   const [quizzes, attempts] = quizJoin ?? [[], []];
   const [forms, submittedResponses] = formJoin ?? [[], []];
 

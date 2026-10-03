@@ -39,8 +39,8 @@ const SettingsExtensions = ({ loaderData }: Route.ComponentProps) => {
   const saveExtensionSettings = () => {
     fetcher!.submit(
       {
-        // An empty field is 0 (no extensions), never a malformed number.
-        default_tokens_per_hour: Number.parseInt(tokensPerHour, 10) || 0,
+        // An empty field is 0 (no extensions); never a malformed or negative number.
+        default_tokens_per_hour: Math.max(0, Number.parseInt(tokensPerHour, 10) || 0),
       },
       {
         action: '?/saveExtensionSettings',
@@ -60,6 +60,8 @@ const SettingsExtensions = ({ loaderData }: Route.ComponentProps) => {
           <Form.Item label="Tokens per hour">
             <Input
               type="number"
+              min={0}
+              step={1}
               value={tokensPerHour}
               onChange={e => setTokensPerHour(e.target.value)}
             />

@@ -113,12 +113,17 @@ export const reposResource: ResourceDefinition = {
     const { classroomId, role, classroom } = classroomCtx(ctx);
     const staff = isStaff(role);
     // An assignment without its own extension price pays the classroom's.
+    // tokens_per_hour stays the assignment's own value (null = follows the
+    // classroom), the same as every other tool reports and assignment_update
+    // writes, so reading it back and writing it never pins the classroom's
+    // price onto the assignment. effective_tokens_per_hour is what one hour
+    // actually costs.
     const classroomTokensPerHour =
       (classroom as unknown as { settings?: { default_tokens_per_hour?: number } | null }).settings
         ?.default_tokens_per_hour ?? 0;
     const price = (own: number | null) => ({
-      tokens_per_hour: effectiveTokensPerHour(own, classroomTokensPerHour),
-      tokens_per_hour_is_classroom_default: own === null,
+      tokens_per_hour: own,
+      effective_tokens_per_hour: effectiveTokensPerHour(own, classroomTokensPerHour),
     });
 
     if (!staff) {
