@@ -36,8 +36,8 @@ const fastify = Fastify({
   bodyLimit: MCP_BODY_LIMIT_BYTES,
 });
 
-// S5 process-level safety nets: a stray detached promise rejection (e.g. the
-// fire-and-forget token reversal on grade_remove) must not crash the server.
+// S5 process-level safety nets: a stray detached promise rejection (from any
+// code path that does not await its promise) must not crash the server.
 // unhandledRejection → log + keep serving; uncaughtException → log, best-effort
 // close, exit(1) (state may be corrupt; the process manager restarts clean).
 registerProcessSafetyNets(fastify.log, {

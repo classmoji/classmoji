@@ -843,7 +843,7 @@ class HelperService {
     );
 
     if (studentId) {
-      this.assignTokensToStudent(
+      await this.assignTokensToStudent(
         {
           organization: classroom,
           gitRepoAssignment,
@@ -853,7 +853,7 @@ class HelperService {
         assignmentGrade
       );
     } else if (teamId) {
-      this.assignTokensToTeam(
+      await this.assignTokensToTeam(
         {
           organization: classroom,
           gitRepoAssignment,
@@ -960,7 +960,7 @@ class HelperService {
         type: 'REMOVAL',
       };
 
-      ClassmojiService.token.assignToStudent(data);
+      await ClassmojiService.token.assignToStudent(data);
     } else if (teamId) {
       const team = (await ClassmojiService.team.findById(teamId)) as TeamWithMemberships | null;
       if (!team || !team.memberships) return;
@@ -975,7 +975,7 @@ class HelperService {
           type: 'REMOVAL',
         };
 
-        ClassmojiService.token.assignToStudent(data);
+        await ClassmojiService.token.assignToStudent(data);
       }
     }
   }
