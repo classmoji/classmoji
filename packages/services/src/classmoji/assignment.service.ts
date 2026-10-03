@@ -267,7 +267,7 @@ export const publishReleased = async (repositoryId: string) => {
       type: 'REPO',
       repository_id: repositoryId,
       is_published: false,
-      OR: [{ release_at: null }, { release_at: { lte: new Date() } }],
+      release_at: { lte: new Date() },
     },
     data: { is_published: true },
   });

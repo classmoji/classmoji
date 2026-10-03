@@ -262,24 +262,24 @@ describe('gh-create_git_repo — assignment release side effect', () => {
     expect(mocks.addAssignment).not.toHaveBeenCalled();
   });
 
-  it('treats an assignment with no release_at as released (released on publish)', async () => {
+  it('excludes an assignment with no release_at at all', async () => {
     await runCreateRepository([assignment('a-1', true, null)], true);
 
-    expect(mocks.addAssignment).toHaveBeenCalledTimes(1);
+    expect(mocks.addAssignment).not.toHaveBeenCalled();
   });
 });
 
 describe('gh-create_git_repo — step failures are not swallowed', () => {
   it('fails the run when adding collaborators failed', async () => {
     mocks.addCollaborator.mockRejectedValueOnce(new Error('no access'));
-    await expect(runCreateRepository([assignment('a-1', true, null)], true)).rejects.toThrow(
+    await expect(runCreateRepository([assignment('a-1', true)], true)).rejects.toThrow(
       'no access'
     );
   });
 
   it('fails the run when creating an assignment row failed', async () => {
     mocks.addAssignment.mockRejectedValueOnce(new Error('row write failed'));
-    await expect(runCreateRepository([assignment('a-1', true, null)], true)).rejects.toThrow(
+    await expect(runCreateRepository([assignment('a-1', true)], true)).rejects.toThrow(
       'row write failed'
     );
   });
@@ -287,7 +287,7 @@ describe('gh-create_git_repo — step failures are not swallowed', () => {
   it('still attempts every assignment before failing on the first error', async () => {
     mocks.addAssignment.mockRejectedValueOnce(new Error('row write failed'));
     await expect(
-      runCreateRepository([assignment('a-1', true, null), assignment('a-2', true, null)], true)
+      runCreateRepository([assignment('a-1', true), assignment('a-2', true)], true)
     ).rejects.toThrow('row write failed');
     expect(mocks.addAssignment).toHaveBeenCalledTimes(2);
   });

@@ -24,6 +24,7 @@ import { createRepository, type CreateRepositoryPayload } from '../helpers/creat
 import { provisionAutogradeWorkflowForRepo } from './autograde.ts';
 import { reportStatus } from '../helpers/progress.ts';
 import { ensureGitInstallation, GitAppNotInstalledError } from '../helpers/gitInstallation.ts';
+import { withDatabaseRetry } from '../helpers/databaseRetry.ts';
 
 type GitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string | null };
 type StrictGitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string };
@@ -449,7 +450,10 @@ export const createRepositoryTask = task({
       await addCollaboratorsToRepo(normalizedPayload);
 
       await reportStatus(`Saving ${normalizedPayload.repoName}`);
-      const studentRepo = await createRepoInDatabase({ ...normalizedPayload, repoId });
+      // Retried on a database blip, as its own task (cf-create_git_repo) was.
+      const studentRepo = await withDatabaseRetry(() =>
+        createRepoInDatabase({ ...normalizedPayload, repoId })
+      );
 
       if (
         normalizedPayload.repository.type === 'GROUP' &&
@@ -475,8 +479,7 @@ export const createRepositoryTask = task({
       // release semantics the daily cron and Publish depend on.
       const filteredAssignments = normalizedPayload.repository.assignments.filter(
         assignment =>
-          // No release date means released as soon as the repo is published.
-          (!assignment.release_at || dayjs(assignment.release_at).isSameOrBefore(dayjs())) &&
+          dayjs(assignment.release_at).isSameOrBefore(dayjs()) &&
           (!normalizedPayload.provisionOnly || assignment.is_published === true)
       );
 
