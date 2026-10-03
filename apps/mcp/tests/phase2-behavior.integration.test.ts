@@ -12,8 +12,9 @@
  *   4. Quiz prompt stripping: system_prompt/rubric_prompt are visible to the
  *      quiz staff tier and stripped for students.
  *
- * NOTE: HelperService token minting/reversal is intentionally fire-and-forget
- * (not awaited), so token assertions poll via waitUntil.
+ * NOTE: HelperService awaits the token rows it writes for a new grade, so they
+ * exist when grade_add returns. Token assertions still poll via waitUntil as a
+ * read-after-write guard.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -182,7 +183,7 @@ describe('token economy (GROUP grading)', () => {
     const starGrade = grades.find(g => g.emoji === '⭐');
     expect(starGrade).toBeDefined();
 
-    // Token minting is fire-and-forget inside HelperService — poll.
+    // HelperService awaits the token rows; poll anyway as a read-after-write guard.
     const gains = await waitUntil(
       async () => {
         const rows = await prisma.tokenTransaction.findMany({

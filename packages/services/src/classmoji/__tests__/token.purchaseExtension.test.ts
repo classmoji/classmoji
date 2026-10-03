@@ -12,6 +12,8 @@ const txFindFirstMock = vi.fn();
 const txCreateMock = vi.fn();
 const txUpdateManyMock = vi.fn();
 const txFindUniqueOrThrowMock = vi.fn();
+const txFindUniqueMock = vi.fn();
+const executeRawMock = vi.fn();
 const teamMembershipFindFirstMock = vi.fn();
 const settingsFindUniqueMock = vi.fn();
 
@@ -22,7 +24,9 @@ vi.mock('@classmoji/database', () => {
     create: (...args: unknown[]) => txCreateMock(...args),
     updateMany: (...args: unknown[]) => txUpdateManyMock(...args),
     findUniqueOrThrow: (...args: unknown[]) => txFindUniqueOrThrowMock(...args),
+    findUnique: (...args: unknown[]) => txFindUniqueMock(...args),
   };
+  const $executeRaw = (...args: unknown[]) => executeRawMock(...args);
   return {
     default: () => ({
       gitRepoAssignment: { findUnique: (...args: unknown[]) => graFindUniqueMock(...args) },
@@ -33,11 +37,14 @@ vi.mock('@classmoji/database', () => {
         findUnique: (...args: unknown[]) => settingsFindUniqueMock(...args),
       },
       tokenTransaction,
-      $transaction: (fn: (tx: { tokenTransaction: typeof tokenTransaction }) => unknown) =>
-        fn({ tokenTransaction }),
+      $transaction: (
+        fn: (tx: { tokenTransaction: typeof tokenTransaction; $executeRaw: unknown }) => unknown
+      ) => fn({ tokenTransaction, $executeRaw }),
     }),
   };
 });
+
+const LONG_AGO = new Date('2026-01-01T00:00:00Z');
 
 const { purchaseExtensionHours, cancelPurchase } = await import('../token.service.ts');
 
@@ -64,7 +71,7 @@ describe('token.purchaseExtensionHours', () => {
     vi.clearAllMocks();
     graFindUniqueMock.mockResolvedValue(baseRepoAssignment());
     txFindManyMock.mockResolvedValue([]);
-    txFindFirstMock.mockResolvedValue({ balance_after: 100 });
+    txFindFirstMock.mockResolvedValue({ balance_after: 100, created_at: LONG_AGO });
     settingsFindUniqueMock.mockResolvedValue({ default_tokens_per_hour: 0 });
     txCreateMock.mockImplementation((args: { data: Record<string, unknown> }) => ({
       id: 'tx-1',
@@ -216,9 +223,33 @@ describe('token.purchaseExtensionHours', () => {
   });
 
   it('propagates the insufficient-balance rejection from updateExtension', async () => {
-    txFindFirstMock.mockResolvedValue({ balance_after: 2 });
+    txFindFirstMock.mockResolvedValue({ balance_after: 2, created_at: LONG_AGO });
     await expect(purchase(2)).rejects.toThrow('Insufficient token balance');
     expect(txCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("locks the student's ledger before it reads the balance it checks", async () => {
+    await purchase(2);
+
+    expect(executeRawMock).toHaveBeenCalledTimes(1);
+    const [sql, ...values] = executeRawMock.mock.calls[0] as [string[], ...unknown[]];
+    expect(sql.join('?')).toContain('pg_advisory_xact_lock');
+    expect(values).toEqual(['class-1', 'student-1']);
+    expect(executeRawMock.mock.invocationCallOrder[0]).toBeLessThan(
+      txFindFirstMock.mock.invocationCallOrder[0]
+    );
+    const read = txFindFirstMock.mock.calls[0][0] as { orderBy: unknown };
+    expect(read.orderBy).toEqual([{ created_at: 'desc' }, { id: 'desc' }]);
+  });
+
+  it('stamps the purchase after the latest row, even when that row is dated ahead', async () => {
+    const ahead = new Date(Date.now() + 60_000);
+    txFindFirstMock.mockResolvedValue({ balance_after: 100, created_at: ahead });
+
+    await purchase(2);
+
+    const created = txCreateMock.mock.calls[0][0] as { data: { created_at: Date } };
+    expect(created.data.created_at.getTime()).toBe(ahead.getTime() + 1);
   });
 });
 
@@ -226,7 +257,7 @@ describe('token.purchaseExtensionHours in REPO mode (a push is the submission)',
   beforeEach(() => {
     vi.clearAllMocks();
     txFindManyMock.mockResolvedValue([]);
-    txFindFirstMock.mockResolvedValue({ balance_after: 100 });
+    txFindFirstMock.mockResolvedValue({ balance_after: 100, created_at: LONG_AGO });
     settingsFindUniqueMock.mockResolvedValue({ default_tokens_per_hour: 0 });
     txCreateMock.mockImplementation((args: { data: Record<string, unknown> }) => ({
       id: 'tx-1',
@@ -296,9 +327,10 @@ describe('token.cancelPurchase', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    txFindUniqueMock.mockResolvedValue({ classroom_id: 'class-1', student_id: 'student-1' });
     txUpdateManyMock.mockResolvedValue({ count: 1 });
     txFindUniqueOrThrowMock.mockResolvedValue(PURCHASE);
-    txFindFirstMock.mockResolvedValue({ balance_after: 10 });
+    txFindFirstMock.mockResolvedValue({ balance_after: 10, created_at: LONG_AGO });
     txCreateMock.mockImplementation((args: { data: Record<string, unknown> }) => ({
       id: 'tx-refund',
       ...args.data,
@@ -330,5 +362,34 @@ describe('token.cancelPurchase', () => {
 
     await expect(cancelPurchase('tx-9')).rejects.toThrow('not already cancelled');
     expect(txCreateMock).not.toHaveBeenCalled();
+  });
+
+  it('refunds nothing for a transaction that does not exist', async () => {
+    txFindUniqueMock.mockResolvedValue(null);
+
+    await expect(cancelPurchase('tx-missing')).rejects.toThrow('not already cancelled');
+    expect(executeRawMock).not.toHaveBeenCalled();
+    expect(txUpdateManyMock).not.toHaveBeenCalled();
+    expect(txCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("locks the purchase's ledger before it flips the purchase or reads the balance", async () => {
+    await cancelPurchase('tx-9');
+
+    const [, ...values] = executeRawMock.mock.calls[0] as [string[], ...unknown[]];
+    expect(values).toEqual(['class-1', 'student-1']);
+    const lockedAt = executeRawMock.mock.invocationCallOrder[0];
+    expect(lockedAt).toBeLessThan(txUpdateManyMock.mock.invocationCallOrder[0]);
+    expect(lockedAt).toBeLessThan(txFindFirstMock.mock.invocationCallOrder[0]);
+  });
+
+  it('stamps the refund after the latest row', async () => {
+    const latest = new Date(Date.now() + 60_000);
+    txFindFirstMock.mockResolvedValue({ balance_after: 10, created_at: latest });
+
+    await cancelPurchase('tx-9');
+
+    const created = txCreateMock.mock.calls[0][0] as { data: { created_at: Date } };
+    expect(created.data.created_at.getTime()).toBe(latest.getTime() + 1);
   });
 });
