@@ -118,6 +118,9 @@ export function ClassroomCard({
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-base font-bold text-ink-0 tracking-tight truncate">{c.name}</div>
+            <div className="text-sm text-ink-3 mt-0.5 truncate" title={c.githubOrg}>
+              @{c.githubOrg}
+            </div>
           </div>
 
           <div className="flex items-center gap-1.5 flex-shrink-0">
