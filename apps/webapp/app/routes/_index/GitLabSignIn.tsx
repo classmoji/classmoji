@@ -159,7 +159,7 @@ export default function GitLabSignIn({
           title={hostLabel(target.host)}
           className={buttonClassName}
         >
-          <img src={GitLabIcon} alt="" className={`w-5 h-5 shrink-0 ${GITLAB_BUTTON_LOGO}`} />
+          <img src={GitLabIcon} alt="" className={`w-4 h-4 shrink-0 ${GITLAB_BUTTON_LOGO}`} />
           {/* Name the server, so gitlab.com and a school's Gitlab never look alike. */}
           <span className="min-w-0 truncate whitespace-nowrap">
             Continue with {target.id === null ? 'Gitlab.com' : hostLabel(target.host)}
