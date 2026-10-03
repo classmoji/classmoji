@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useFetcher } from 'react-router';
 import { Avatar, Input, Card, Button, Alert } from 'antd';
-import { GithubOutlined, MailOutlined, UserOutlined } from '@ant-design/icons';
+import { MailOutlined, UserOutlined } from '@ant-design/icons';
 import { IconId } from '@tabler/icons-react';
 
 import useStore from '~/store';
@@ -221,13 +221,8 @@ const SettingsGeneral = () => {
             <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-2">
               {user?.name || 'User Name'}
             </h3>
+            {/* Git usernames live under Connections, one per connected account. */}
             <p className="text-ink-2 text-base mb-3">{user?.email}</p>
-            {user?.login && (
-              <div className="flex items-center gap-2 text-sm text-gray-500">
-                <GithubOutlined className="text-gray-900 dark:text-gray-100" />
-                <span>@{user.login}</span>
-              </div>
-            )}
           </div>
         </div>
 
@@ -284,17 +279,6 @@ const SettingsGeneral = () => {
                 variant="filled"
                 value={user?.email ?? ''}
                 prefix={<MailOutlined className="text-gray-400" />}
-                className={readOnlyInput}
-              />
-            </FieldRow>
-
-            <FieldRow htmlFor="account-login" label="Github Username">
-              <Input
-                id="account-login"
-                readOnly
-                variant="filled"
-                value={user?.login ?? ''}
-                prefix={<GithubOutlined className="text-gray-900 dark:text-gray-100" />}
                 className={readOnlyInput}
               />
             </FieldRow>
