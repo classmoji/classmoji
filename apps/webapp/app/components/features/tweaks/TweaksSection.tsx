@@ -8,6 +8,7 @@ import {
   FONT_SIZE_MAX,
   CONTRAST_MIN,
   CONTRAST_MAX,
+  DEFAULT_ACCENT,
   type BackgroundKey,
 } from '~/hooks/useDarkMode';
 import { SettingSection } from '~/components';
@@ -22,6 +23,7 @@ interface AccentPreset {
 }
 
 const ACCENTS: AccentPreset[] = [
+  { name: 'Classmoji', hex: DEFAULT_ACCENT },
   { name: 'Sky', hex: '#0ea5e9' },
   { name: 'Orange', hex: '#f97316' },
   { name: 'Rose', hex: '#f43f5e' },

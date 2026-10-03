@@ -511,9 +511,10 @@ const CommonLayout = ({
                   <div className="font-semibold text-sm text-ink-0 truncate leading-tight">
                     {user?.name}
                   </div>
-                  <div className="text-xs text-ink-3 capitalize truncate leading-tight">
-                    {role ? role.toLowerCase() : ''}
-                  </div>
+                  {/* Their username on this class's platform (Github or Gitlab). */}
+                  {user?.login && (
+                    <div className="text-xs text-ink-3 truncate leading-tight">@{user.login}</div>
+                  )}
                 </div>
               )}
             </button>

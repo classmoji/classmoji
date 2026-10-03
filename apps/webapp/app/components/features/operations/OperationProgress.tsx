@@ -464,8 +464,17 @@ const OperationRuns = ({
       return;
     }
 
-    // Looks over; end it only if nothing new arrives for a moment (SETTLE_MS).
-    // Any update re-runs this effect, which cancels the pending ending.
+    // Looks over: fill the bar first, whatever the count, so even a batch of one
+    // is seen to finish rather than vanishing from an empty bar. It stays full
+    // until the ending below, and ends only if nothing new arrives for a moment
+    // (SETTLE_MS). Any update re-runs this effect, which cancels the ending.
+    callout.update(operation.calloutId, {
+      variant: 'progress',
+      title: unit.running,
+      message: `${done} of ${total} ${unit.noun}`,
+      progress: 1,
+      persistent: true,
+    });
     const timer = setTimeout(() => {
       if (settled.current) return;
       // The work changed what the page is showing: repositories, graders, tokens.

@@ -53,13 +53,20 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   };
 };
 
+const inputClass =
+  'w-full rounded-md px-2.5 py-1.5 text-sm bg-white dark:bg-neutral-950 text-gray-900 dark:text-white ring-1 ring-stone-200 dark:ring-neutral-700 focus:outline-none focus:ring-2 focus:ring-primary';
+
 function CopyField({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <div className="flex items-center gap-2 rounded-md bg-stone-50 dark:bg-neutral-800 ring-1 ring-stone-200 dark:ring-neutral-700 px-2.5 py-1.5">
-      <code className="flex-1 min-w-0 truncate text-xs text-gray-800 dark:text-gray-200">
-        {value}
-      </code>
+    <div className="relative">
+      <input
+        type="text"
+        readOnly
+        value={value}
+        onFocus={e => e.currentTarget.select()}
+        className={`${inputClass} pr-16 truncate`}
+      />
       <button
         type="button"
         onClick={() => {
@@ -68,16 +75,13 @@ function CopyField({ value }: { value: string }) {
             setTimeout(() => setCopied(false), 1500);
           });
         }}
-        className="shrink-0 text-xs font-medium text-primary hover:underline cursor-pointer"
+        className="absolute inset-y-0 right-2.5 text-xs font-medium text-primary hover:underline cursor-pointer"
       >
         {copied ? 'Copied' : 'Copy'}
       </button>
     </div>
   );
 }
-
-const inputClass =
-  'w-full rounded-md px-2.5 py-1.5 text-sm bg-white dark:bg-neutral-950 text-gray-900 dark:text-white ring-1 ring-stone-200 dark:ring-neutral-700 focus:outline-none focus:ring-2 focus:ring-primary';
 
 export default function GitLabSetup({ loaderData }: Route.ComponentProps) {
   const { pending, callbackUrls, scopes, egressIps } = loaderData;
