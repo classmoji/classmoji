@@ -48,7 +48,7 @@ import { orgGit, orgProvider, type SubmissionLike } from '../resources/shape.ts'
 import { meResource } from '../resources/me.ts';
 import { classroomInfoResource } from '../resources/classroomInfo.ts';
 import { rosterResource, teamsResource } from '../resources/roster.ts';
-import { reposResource, gradesMineResource } from '../resources/repos.ts';
+import { reposResource, gradesMineResource, GRADES_MINE_DESCRIPTION } from '../resources/repos.ts';
 import {
   loadGradingQueueData,
   queueRow,
@@ -63,6 +63,7 @@ import {
   modulesResource,
   calendarResource,
   calendarRangeResource,
+  QUIZZES_DESCRIPTION,
 } from '../resources/content.ts';
 import { tokensResource } from '../resources/tokens.ts';
 
@@ -187,10 +188,8 @@ export const listReposTool = mirrorResourceTool({
 export const myGradesTool = mirrorResourceTool({
   resource: gradesMineResource,
   name: 'my_grades',
-  title: 'My released grades',
-  description:
-    'Your own graded submissions in this classroom — only assignments whose grades have been ' +
-    'released (Assignment.grades_released). Students only.',
+  title: 'My grades',
+  description: GRADES_MINE_DESCRIPTION,
 });
 
 export const getSubmissionTool = mirrorResourceTool({
@@ -238,11 +237,7 @@ export const listQuizzesTool = mirrorResourceTool({
   resource: quizzesResource,
   name: 'list_quizzes',
   title: 'List quizzes',
-  description:
-    'AI-graded quizzes with their source material (linked pages and decks, in order). Staff ' +
-    '(OWNER/TEACHER/ASSISTANT) see all quizzes incl. drafts and prompts; students see published ' +
-    'quizzes (closed ones too, as CLOSED), published material and their own attempt summary. ' +
-    'Requires a Pro subscription and quizzes_enabled.',
+  description: QUIZZES_DESCRIPTION,
 });
 
 export const listPagesTool = mirrorResourceTool({
@@ -308,7 +303,8 @@ export const myTokensTool = mirrorResourceTool({
   title: 'My token ledger',
   description:
     'Your token balance and transaction history in this classroom (grants, purchases, refunds, ' +
-    'removals). Students only.',
+    'removals). Each row names the assignment it is about (assignment_id, assignment_title), ' +
+    'quiz extensions included. Students only.',
 });
 
 // ─── list_submissions (grading-queue data + server-side filters) ────────────

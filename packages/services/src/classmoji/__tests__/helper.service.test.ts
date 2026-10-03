@@ -8,6 +8,8 @@ const getSettingsMock = vi.fn();
 const findEmojiMappingsMock = vi.fn();
 const findReposPerStudentMock = vi.fn();
 const calcGradeMock = vi.fn();
+const quizzesVisibleMock = vi.fn();
+const loadQuizGradeItemsMock = vi.fn();
 
 vi.mock('../classroom.service.ts', () => ({
   findBySlug: (...args: unknown[]) => findBySlugMock(...args),
@@ -16,6 +18,16 @@ vi.mock('../classroom.service.ts', () => ({
 
 vi.mock('../emojiMapping.service.ts', () => ({
   findByClassroomId: (...args: unknown[]) => findEmojiMappingsMock(...args),
+}));
+
+// Quiz visibility and the quiz grade items are resolved inside the service, so
+// every leaderboard caller counts quizzes the same way without passing anything.
+vi.mock('../entitlement.service.ts', () => ({
+  quizzesVisibleOrThrow: (...args: unknown[]) => quizzesVisibleMock(...args),
+}));
+
+vi.mock('../quizGradeItems.service.ts', () => ({
+  loadQuizGradeItems: (...args: unknown[]) => loadQuizGradeItemsMock(...args),
 }));
 
 vi.mock('../user.service.ts', () => ({
@@ -42,6 +54,10 @@ describe('calculateClassLeaderboard', () => {
     findEmojiMappingsMock.mockReset();
     findReposPerStudentMock.mockReset();
     calcGradeMock.mockReset();
+    quizzesVisibleMock.mockReset();
+    loadQuizGradeItemsMock.mockReset();
+    quizzesVisibleMock.mockResolvedValue(true);
+    loadQuizGradeItemsMock.mockResolvedValue(new Map());
   });
 
   it('throws a 404 Response when the classroom slug is not found', async () => {
@@ -57,6 +73,8 @@ describe('calculateClassLeaderboard', () => {
 
     // It must reject BEFORE touching settings/leaderboard computation.
     expect(getSettingsMock).not.toHaveBeenCalled();
+    expect(quizzesVisibleMock).not.toHaveBeenCalled();
+    expect(loadQuizGradeItemsMock).not.toHaveBeenCalled();
   });
 
   it('computes a per-student leaderboard sorted ascending by grade', async () => {
@@ -99,6 +117,97 @@ describe('calculateClassLeaderboard', () => {
     expect(findReposPerStudentMock).toHaveBeenCalledWith(classroom);
     // The grade calculator receives each student's repos plus the shared mappings/settings.
     expect(calcGradeMock).toHaveBeenCalledTimes(3);
-    expect(calcGradeMock).toHaveBeenCalledWith([{ score: 80 }], emojiMappings, settings);
+    expect(calcGradeMock).toHaveBeenCalledWith(
+      [{ score: 80 }],
+      emojiMappings,
+      settings,
+      true,
+      true,
+      []
+    );
+  });
+
+  describe('quiz grade items', () => {
+    const classroom = { id: 'class-1', slug: 'cs101' };
+    const settings = { late_penalty_points_per_hour: 2 };
+    const emojiMappings = { '✅': 100 };
+    const item = (assignmentId: string, grade: number, extra: Record<string, unknown> = {}) => ({
+      assignment_id: assignmentId,
+      module_id: 'mod-1',
+      weight: 10,
+      is_extra_credit: false,
+      grade,
+      raw_grade: grade,
+      counts_as_zero: false,
+      late_hours: 0,
+      ...extra,
+    });
+
+    beforeEach(() => {
+      findBySlugMock.mockResolvedValue(classroom);
+      findEmojiMappingsMock.mockResolvedValue(emojiMappings);
+      getSettingsMock.mockResolvedValue(settings);
+      findReposPerStudentMock.mockResolvedValue([
+        { id: 's-1', name: 'One', image: null, login: 'one', git_repos: [] },
+        { id: 's-2', name: 'Two', image: null, login: 'two', git_repos: [] },
+      ]);
+    });
+
+    it('loads the items once for the classroom with its quiz visibility and passes each student theirs', async () => {
+      const s1Items = [item('a-quiz', 80)];
+      loadQuizGradeItemsMock.mockResolvedValue(new Map([['s-1', s1Items]]));
+      calcGradeMock.mockReturnValue(50);
+
+      await calculateClassLeaderboard('cs101');
+
+      expect(quizzesVisibleMock).toHaveBeenCalledExactlyOnceWith('class-1');
+      expect(loadQuizGradeItemsMock).toHaveBeenCalledExactlyOnceWith({
+        classroomId: 'class-1',
+        quizzesVisible: true,
+      });
+      expect(calcGradeMock).toHaveBeenCalledWith([], emojiMappings, settings, true, true, s1Items);
+      // A student with no item gets an empty list, not another student's.
+      expect(calcGradeMock).toHaveBeenCalledWith([], emojiMappings, settings, true, true, []);
+    });
+
+    it('passes the hidden answer to the loader when quizzes are hidden', async () => {
+      quizzesVisibleMock.mockResolvedValue(false);
+      calcGradeMock.mockReturnValue(-1);
+
+      await calculateClassLeaderboard('cs101');
+
+      expect(loadQuizGradeItemsMock).toHaveBeenCalledWith({
+        classroomId: 'class-1',
+        quizzesVisible: false,
+      });
+    });
+
+    it('fails instead of dropping quizzes when the visibility lookup fails', async () => {
+      quizzesVisibleMock.mockRejectedValue(new Error('db down'));
+
+      await expect(calculateClassLeaderboard('cs101')).rejects.toThrow('db down');
+      expect(calcGradeMock).not.toHaveBeenCalled();
+    });
+
+    it('counts a quiz item in the real grade engine', async () => {
+      const { calculateStudentFinalGrade: realGrade } =
+        await vi.importActual<typeof import('@classmoji/utils')>('@classmoji/utils');
+      calcGradeMock.mockImplementation((...args: unknown[]) =>
+        (realGrade as (...a: unknown[]) => number)(...args)
+      );
+      loadQuizGradeItemsMock.mockResolvedValue(
+        new Map([
+          ['s-1', [item('a-quiz', 70)]],
+          ['s-2', [item('a-quiz', 0, { counts_as_zero: true })]],
+        ])
+      );
+
+      const leaderboard = await calculateClassLeaderboard('cs101');
+
+      expect(leaderboard).toEqual([
+        { id: 's-2', name: 'Two', grade: 0, avatar_url: null, login: 'two' },
+        { id: 's-1', name: 'One', grade: 70, avatar_url: null, login: 'one' },
+      ]);
+    });
   });
 });

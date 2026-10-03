@@ -15,20 +15,20 @@ An assignment is one graded piece of work. It lives in a [module](/docs/instruct
 - **Quiz** (`QUIZ`): students take a quiz in Classmoji
 - **Form** (`FORM`): students fill in a form
 
-The assignment carries everything grading needs: its **weight** (a percentage of the course grade), an **extra credit** flag, a **release date**, a **student deadline**, a **grader deadline**, and **tokens per hour** for deadline extensions. A [repository](/docs/instructors/repositories) is just storage; several assignments can submit through the same one.
+The assignment carries everything grading needs: its **weight** (how much it counts toward the course grade), an **extra credit** flag, a **release date**, a **student deadline**, a **grader deadline**, and **tokens per hour** for deadline extensions. A [repository](/docs/instructors/repositories) is just storage; several assignments can submit through the same one.
 
 <Screenshot src={modulesImg} alt="The Modules list showing a published module with items and a draft module" frame url="app.classmoji.io/admin/cs-101/modules" size="lg" />
 
 ### Creating an assignment
 
-Open a module and click **Add item** on the module card. Pick **Assignment**, then choose whether it's submitted through a repository, a quiz, or a form. Pages and slide decks are added from the same menu as content.
+Open a module and click **Add item** on the module card. Under **Submissions**, pick a repository, a quiz, or a form. A quiz opens the quiz form with this module chosen, and its assignment fields (due date, weight, tokens per hour, published) are set there; a repository or form assignment opens the assignment form below. Pages and slide decks are added from the same menu as content.
 
 The assignment form asks for:
 
 - **Title**: for a repository assignment this also names the repository, so each student's copy is `<title-slug>-<github-login>` (for example `react-intro-jdoe`).
 - **Repository** (repository assignments): **New repository from a template** searches Github for starter code and creates the repository on the spot, or **Existing repository** picks one the class already uses. Team repositories are created on the [Repositories](/docs/instructors/repositories) page.
 - **Quiz** or **Form** (quiz and form assignments): the one students complete.
-- **Weight**: percentage of the course grade. Mark it **Extra credit** to add on top instead of counting toward the 100%.
+- **Weight**: how much the assignment counts relative to the others (see [Weights and the course grade](#weights-and-the-course-grade)). Mark it **Extra credit** to add on top instead.
 - **Release date**: when the assignment is released into student repositories (in issue mode, that's when the issue is opened) and unlocks for students. Always set one: an assignment with no release date is never released on its own, even after the module and repository are published. Future-dated assignments are released by a daily job (04:01 UTC), so set the date to the day before if you want something available first thing in the morning.
 - **Student deadline**: the due date. Late penalties and token extensions count from here.
 - **Grader deadline**: when graders should finish. Internal only, students never see it.
@@ -78,7 +78,7 @@ Grading itself is covered in [Grade assignments](/docs/instructors/grading).
 
 ### Weights and the course grade
 
-Each assignment's weight is a percentage of the course grade. The course grade is the weighted mean of the graded, non-extra-credit assignments, plus any extra credit. There is no per-repository weight and no drop-lowest; the assignment is the only place a weight lives.
+Weights are relative: an assignment's share of the course grade is its weight divided by the total weight of the graded assignments, so they don't need to add up to 100. The course grade is the weighted mean of the graded, non-extra-credit assignments (repository and quiz alike), plus extra credit: each graded extra-credit assignment adds its grade × weight / 100 points on top. There is no per-repository weight and no drop-lowest; the assignment is the only place a weight lives. Forms carry no grade.
 
 ### What's next
 

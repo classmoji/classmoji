@@ -3,7 +3,8 @@
  * The quiz form's Assignment panel, MOUNTED in jsdom (boards I1 and I3).
  *
  *   owner/teacher: the panel is editable (Module, Opens, Due, Closes with
- *                  "Close now", Weight, Published, "Students see it in"); the
+ *                  "Close now", Weight, Tokens per hour, Published, "Students
+ *                  see it in"); the
  *                  quiz cannot be saved until a module is chosen. A module
  *                  card's "Add → Quiz" opens the form with its module chosen.
  *   no modules:    the owner is pointed at the modules page; a teacher is told
@@ -33,12 +34,13 @@ import {
   panelPayload,
   panelStatus,
   studentsSeeItIn,
+  tokensPerHourLabel,
   type AssignmentPanelData,
 } from '../QuizAssignmentPanel';
 
 const mocks = vi.hoisted(() => ({
   submit: vi.fn(),
-  pathname: '/admin/cs52-26f/quizzes/form',
+  pathname: '/admin/intro-101/quizzes/form',
   assertClassroomAccess: vi.fn(),
   quizzesVisibleOrThrow: vi.fn(),
   quizFindById: vi.fn(),
@@ -70,7 +72,7 @@ vi.mock('react-router', () => ({
   useFetcher: () => ({ state: 'idle', data: undefined, submit: mocks.submit }),
   useLocation: () => ({ pathname: mocks.pathname }),
   useNavigate: () => vi.fn(),
-  useParams: () => ({ class: 'cs52-26f' }),
+  useParams: () => ({ class: 'intro-101' }),
   Link: ({ to, children, ...rest }: { to: string; children: ReactNode }) => (
     <a href={to} {...rest}>
       {children}
@@ -123,7 +125,7 @@ window.getComputedStyle = ((element: Element, pseudo?: string | null) => {
 
 const { default: QuizFormDrawer, loader } = await import('../route');
 
-const CLASS_SLUG = 'cs52-26f';
+const CLASS_SLUG = 'intro-101';
 const MODULES = [
   { id: 'mod-1', title: 'Week 1' },
   { id: 'mod-2', title: 'Week 2' },
@@ -136,6 +138,7 @@ const emptyPanel = (over: Partial<AssignmentPanelData> = {}): AssignmentPanelDat
   dueDate: null,
   closesAt: null,
   weight: 0,
+  tokensPerHour: null,
   isPublished: false,
   ...over,
 });
@@ -192,6 +195,7 @@ const render = async ({
             ...viewer,
             modules,
             assignmentPanel: panel,
+            classroomTokensPerHour: 3,
           },
         } as unknown as Parameters<typeof QuizFormDrawer>[0])}
       />
@@ -241,7 +245,7 @@ const fillRequired = async () => {
 
 beforeEach(() => {
   mocks.submit.mockReset();
-  mocks.pathname = '/admin/cs52-26f/quizzes/form';
+  mocks.pathname = '/admin/intro-101/quizzes/form';
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -298,13 +302,26 @@ describe('the owner or a teacher creating a quiz', () => {
     expect(options).toMatchObject({ method: 'POST', action: `/admin/${CLASS_SLUG}/quizzes` });
   });
 
-  it('offers Module, Opens, Due, Closes with Close now, Weight and Published', async () => {
+  it('offers Module, Opens, Due, Closes with Close now, Weight, Tokens per hour and Published', async () => {
     await render({ viewer: OWNER });
 
     const text = editablePanel()!.textContent!;
-    for (const label of ['Module', 'Opens', 'Due', 'Closes', 'Close now', 'Weight', 'Published']) {
+    for (const label of [
+      'Module',
+      'Opens',
+      'Due',
+      'Closes',
+      'Close now',
+      'Weight',
+      'Tokens per hour',
+      'Published',
+    ]) {
       expect(text).toContain(label);
     }
+    // Empty means the classroom's rate, which the field names.
+    expect(
+      editablePanel()!.querySelector('input[placeholder="Classroom rate (3)"]')
+    ).not.toBeNull();
     expect(byTestId('quiz-close-now')).not.toBeNull();
     expect(byTestId('quiz-published-switch')).not.toBeNull();
     // Nothing students see while the quiz is unpublished.
@@ -352,6 +369,30 @@ describe('editing a quiz as the owner or a teacher', () => {
 
     await vi.waitFor(() => expect(mocks.submit).toHaveBeenCalledTimes(1));
     expect(mocks.submit.mock.calls[0][0].assignment).toEqual({ weight: 15 });
+  });
+
+  it('sends a price set on the quiz, a cleared one as the classroom rate, and says 0 is no extensions', async () => {
+    await render({ viewer: OWNER, quiz: formQuiz(), panel: assigned });
+
+    const priceInput = '.ant-input-number input[placeholder="Classroom rate (3)"]';
+    await type(priceInput, '0');
+    expect(editablePanel()!.textContent).toContain('No extensions');
+    await click(saveButton());
+    await vi.waitFor(() => expect(mocks.submit).toHaveBeenCalledTimes(1));
+    expect(mocks.submit.mock.calls[0][0].assignment).toEqual({ tokensPerHour: 0 });
+  });
+
+  it('sends an emptied price as null: back to the classroom rate', async () => {
+    await render({
+      viewer: OWNER,
+      quiz: formQuiz(),
+      panel: emptyPanel({ ...assigned, tokensPerHour: 4 }),
+    });
+
+    await type('.ant-input-number input[placeholder="Classroom rate (3)"]', '');
+    await click(saveButton());
+    await vi.waitFor(() => expect(mocks.submit).toHaveBeenCalledTimes(1));
+    expect(mocks.submit.mock.calls[0][0].assignment).toEqual({ tokensPerHour: null });
   });
 
   it('Close now sets Closes to now, and the save carries it, even before Due', async () => {
@@ -475,7 +516,7 @@ describe('a class with no modules', () => {
   });
 
   it('tells a teacher the class owner has to add one, with no link, and Save stays disabled', async () => {
-    mocks.pathname = '/teacher/cs52-26f/quizzes/form';
+    mocks.pathname = '/teacher/intro-101/quizzes/form';
     await render({ viewer: TEACHER, modules: [] });
 
     const note = byTestId('quiz-no-modules-note')!;
@@ -497,7 +538,7 @@ describe('a teaching assistant', () => {
   });
 
   beforeEach(() => {
-    mocks.pathname = '/assistant/cs52-26f/quizzes/form';
+    mocks.pathname = '/assistant/intro-101/quizzes/form';
   });
 
   it('sees the panel read-only, with no Delete', async () => {
@@ -511,6 +552,8 @@ describe('a teaching assistant', () => {
     const text = readOnlyPanel()!.textContent!;
     expect(text).toContain('Week 1');
     expect(text).toContain('Yes');
+    expect(text).toContain('Tokens per hour');
+    expect(text).toContain('Classroom rate (3)');
     expect(chips()).toEqual(['Assignments', 'Week 1', 'Calendar', 'Dashboard', 'Grades']);
     expect(deleteButton()).toBeUndefined();
   });
@@ -564,7 +607,7 @@ describe('the loader', () => {
   const load = async (query = '', role = 'OWNER') => {
     mocks.assertClassroomAccess.mockResolvedValue({
       userId: 'user-1',
-      classroom: { id: 'class-1', slug: CLASS_SLUG },
+      classroom: { id: 'class-1', slug: CLASS_SLUG, settings: { default_tokens_per_hour: 2 } },
       membership: { role },
     });
     return (await loader({
@@ -607,6 +650,12 @@ describe('the loader', () => {
     mocks.quizFindById.mockReset();
   });
 
+  it("passes the classroom's price per hour, which an empty field means", async () => {
+    const data = await load();
+
+    expect(data.classroomTokensPerHour).toBe(2);
+  });
+
   it("lists the class's modules as id and title", async () => {
     const data = await load();
 
@@ -636,6 +685,7 @@ describe('the loader', () => {
           student_deadline: new Date('2026-10-09T16:00:00.000Z'),
           closes_at: new Date('2026-10-10T16:00:00.000Z'),
           weight: 12.5,
+          tokens_per_hour: 0,
           is_published: true,
         },
       })
@@ -650,6 +700,7 @@ describe('the loader', () => {
       dueDate: '2026-10-09T16:00:00.000Z',
       closesAt: '2026-10-10T16:00:00.000Z',
       weight: 12.5,
+      tokensPerHour: 0,
       isPublished: true,
     });
   });
@@ -666,6 +717,7 @@ describe('the loader', () => {
       dueDate: '2026-12-01T00:00:00.000Z',
       closesAt: '2026-09-20T12:00:00.000Z',
       weight: 5,
+      tokensPerHour: null,
       isPublished: true,
     });
   });
@@ -727,6 +779,7 @@ describe('panelPayload', () => {
       dueDate: null,
       closesAt: null,
       weight: 0,
+      tokensPerHour: null,
       isPublished: false,
     });
   });
@@ -747,6 +800,7 @@ describe('panelPayload', () => {
       dueDate: '2026-10-09T16:00:00.000Z',
       closesAt: null,
       weight: 7,
+      tokensPerHour: null,
       isPublished: true,
     });
   });
@@ -837,6 +891,16 @@ describe('changedPanelPayload', () => {
     ).toEqual({ dueDate: null, isPublished: true, moduleId: 'mod-2' });
   });
 
+  it('tells the classroom rate (empty) and no extensions (0) apart', () => {
+    expect(changedPanelPayload({ ...panelFormValues(loaded), tokensPerHour: 0 }, loaded)).toEqual({
+      tokensPerHour: 0,
+    });
+    const priced = emptyPanel({ ...loaded, tokensPerHour: 0 });
+    expect(
+      changedPanelPayload({ ...panelFormValues(priced), tokensPerHour: null }, priced)
+    ).toEqual({ tokensPerHour: null });
+  });
+
   it('reads a date at the same instant as unchanged, whatever its spelling', () => {
     expect(
       changedPanelPayload(
@@ -873,5 +937,18 @@ describe('panelStatus', () => {
     );
     expect(panelStatus(true, null, '2026-10-01T13:00:00Z', now)).toBe('Published');
     expect(panelStatus(true, '2026-10-02T11:00:00Z', null, now)).toBe('Closed');
+  });
+});
+
+describe('tokensPerHourLabel', () => {
+  it("reads empty as the classroom's rate, and 0 as no extensions", () => {
+    expect(tokensPerHourLabel(null, 3)).toBe('Classroom rate (3)');
+    expect(tokensPerHourLabel(0, 3)).toBe('No extensions');
+    expect(tokensPerHourLabel(5, 3)).toBe('5');
+  });
+
+  it('reads empty as no extensions where the classroom rate is 0', () => {
+    expect(tokensPerHourLabel(null, 0)).toBe('No extensions');
+    expect(tokensPerHourLabel(4, 0)).toBe('4');
   });
 });
