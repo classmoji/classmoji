@@ -347,7 +347,7 @@ describe('createRepository', () => {
 
 /**
  * Production: runs that failed after pushing `main` and `feedback` (the old
- * `git add` of a gitignored CLASSMOJI.md) left repositories with no welcome
+ * `git add` of a gitignored CLASSMOJI.md) left repositories with no feedback
  * commit, no Feedback pull request and no `updates`, and every re-run skipped
  * them as "already has branches".
  */
@@ -394,7 +394,7 @@ describe('createRepository on a half-initialised repository', () => {
     );
   };
 
-  it('adds the welcome commit, the pull request and updates', async () => {
+  it('adds the empty feedback commit, the pull request and updates', async () => {
     const { target, tip, repoName } = await halfInitialised('lab3');
 
     await expect(create(repoName, 'lab3')).resolves.toBe('42');
@@ -404,7 +404,11 @@ describe('createRepository on a half-initialised repository', () => {
     expect(heads.get('feedback')).toBe(tip);
     const remote = run(target);
     expect((await remote.raw(['rev-parse', 'main^'])).trim()).toBe(tip);
-    expect(await remote.raw(['diff', '--name-only', 'feedback', 'main'])).toBe('CLASSMOJI.md\n');
+    // An empty commit: the student's tree is the template's, file for file.
+    expect((await remote.raw(['log', '-1', '--format=%s', 'main'])).trim()).toBe(
+      'Start your feedback space'
+    );
+    expect(await remote.raw(['diff', '--name-only', 'feedback', 'main'])).toBe('');
     // The rest of the tree is untouched, though the clone held only the top level.
     expect(await remote.raw(['ls-tree', '-r', '--name-only', 'main'])).toContain(
       'Content/asset1.uasset'
@@ -413,23 +417,6 @@ describe('createRepository on a half-initialised repository', () => {
     expectPullRequestOpened(repoName);
     expect(provider.protectBranch).toHaveBeenCalledWith(ORG, repoName, 'updates');
     expect(fs.existsSync(path.join(root, 'repos', repoName))).toBe(false);
-  });
-
-  it('adds an empty commit when the template gitignores CLASSMOJI.md', async () => {
-    const { target, tip, repoName } = await halfInitialised('ia', dir =>
-      fs.writeFileSync(path.join(dir, '.gitignore'), '*.md\n')
-    );
-
-    await create(repoName, 'ia');
-
-    const remote = run(target);
-    expect((await remote.raw(['rev-parse', 'main^'])).trim()).toBe(tip);
-    expect((await remote.raw(['log', '-1', '--format=%s', 'main'])).trim()).toBe(
-      'Start your feedback space'
-    );
-    expect(await remote.raw(['diff', '--name-only', 'feedback', 'main'])).toBe('');
-    expect((await remoteHeads(target)).has('updates')).toBe(true);
-    expectPullRequestOpened(repoName);
   });
 
   it('keeps the student commits on main and adds none of its own', async () => {

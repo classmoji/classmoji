@@ -1,10 +1,12 @@
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useRevalidator } from 'react-router';
 import { Modal, Tag } from 'antd';
-import { TriggerAuthContext, useRealtimeRunsWithTag } from '@trigger.dev/react-hooks';
+import { TriggerAuthContext, useApiClient } from '@trigger.dev/react-hooks';
 
 import { FetcherContext, type ActiveOperation } from '~/contexts';
 import { useCallout } from '@classmoji/ui-components';
+import { useGitWeb } from '~/hooks/useGitWeb';
+import { watchSessionRuns, type RunSource } from './sessionRuns';
 
 /**
  * Progress for background work, reported in the callout instead of a modal.
@@ -24,6 +26,11 @@ import { useCallout } from '@classmoji/ui-components';
 /** One unit of work, and the task that runs exactly once per unit. */
 interface UnitSpec {
   tasks: string[];
+  /**
+   * Runs of these tasks count as units too, but only when they carry `tag`:
+   * the same task also runs as a step inside a unit, where it must not count.
+   */
+  alsoTagged?: { tasks: string[]; tag: string };
   running: string;
   done: string;
   noun: string;
@@ -39,6 +46,8 @@ interface OperationSpec {
   units: UnitSpec[];
   /** The placeholder callout the caller opened, which this one replaces. */
   notifyKey?: string;
+  /** What to try when something did not finish, if there is a usual cause. */
+  failureHint?: string;
 }
 
 const OPERATIONS: Record<string, OperationSpec> = {
@@ -46,6 +55,9 @@ const OPERATIONS: Record<string, OperationSpec> = {
     units: [
       {
         tasks: ['gh-create_git_repo'],
+        // Sync also adds missing assignments to repos that already exist; each
+        // of those is one repo's whole job, tagged so by the caller.
+        alsoTagged: { tasks: ['gh-create_git_repo_assignment'], tag: 'standalone' },
         running: 'Creating student repositories',
         done: 'Student repositories created',
         noun: 'repositories',
@@ -103,6 +115,7 @@ const OPERATIONS: Record<string, OperationSpec> = {
   },
   AUTOGRADE: {
     notifyKey: 'AUTOGRADE_GIT_REPO_ASSIGNMENT',
+    failureHint: 'Check that the Classmoji app has the "workflows" permission, then try again.',
     units: [
       {
         tasks: ['gh-commit_autograde_workflow'],
@@ -113,6 +126,17 @@ const OPERATIONS: Record<string, OperationSpec> = {
     ],
   },
 };
+
+/** The spec copy says "repositories"; a Gitlab classroom says its own word. */
+const localizeUnit = (unit: UnitSpec, repos: string): UnitSpec =>
+  repos === 'repositories'
+    ? unit
+    : {
+        ...unit,
+        running: unit.running.replace(/repositories/g, repos),
+        done: unit.done.replace(/repositories/g, repos),
+        noun: unit.noun.replace(/repositories/g, repos),
+      };
 
 /** Which operation a task identifier belongs to. */
 const OPERATION_BY_TASK: Record<string, string> = {
@@ -129,10 +153,59 @@ const OPERATION_BY_TASK: Record<string, string> = {
   'gh-commit_autograde_workflow': 'AUTOGRADE',
 };
 
-const FAILED = ['FAILED', 'CRASHED', 'SYSTEM FAILURE', 'TIMED OUT', 'EXPIRED', 'CANCELED'];
+// Realtime reports statuses with underscores; both spellings are accepted so a
+// failed run is never mistaken for one still pending.
+const FAILED = [
+  'FAILED',
+  'CRASHED',
+  'INTERRUPTED',
+  'SYSTEM_FAILURE',
+  'SYSTEM FAILURE',
+  'TIMED_OUT',
+  'TIMED OUT',
+  'EXPIRED',
+  'CANCELED',
+];
 
 /** How long to wait for the first run before giving up on a silent batch. */
 const FIRST_RUN_TIMEOUT_MS = 30_000;
+
+/**
+ * A (re)connect replays its snapshot one run at a time, so the list can be
+ * briefly partial (see sessionRuns). The operation only counts as over once it
+ * has looked over for this long; a partial list whose first runs happen to be
+ * finished never ends it early.
+ */
+const SETTLE_MS = 2_000;
+
+const updatedAtOf = (run: OperationRun) => new Date(run.updatedAt ?? 0).getTime();
+
+/** Whether a run is one of a unit's own runs, rather than a step inside one. */
+const isUnitRun = (unit: UnitSpec, run: OperationRun) =>
+  unit.tasks.includes(run.taskIdentifier) ||
+  Boolean(
+    unit.alsoTagged?.tasks.includes(run.taskIdentifier) && run.tags?.includes(unit.alsoTagged.tag)
+  );
+
+/** Every run carrying the session tag, kept current (see sessionRuns). */
+const useSessionRuns = (tag: string, settled: boolean) => {
+  // `useApiClient` builds a new client on every render. Holding the first one
+  // keeps the connection open across renders; depending on the client
+  // reopened it on every update, and the aborted fetches read as failures.
+  const client = useRef(useApiClient() as unknown as RunSource);
+  const [runs, setRuns] = useState<OperationRun[]>([]);
+  const [error, setError] = useState<Error | null>(null);
+
+  useEffect(() => {
+    if (settled) return;
+    return watchSessionRuns<OperationRun>(client.current, tag, {
+      onRuns: setRuns,
+      onError: setError,
+    });
+  }, [tag, settled]);
+
+  return { runs, error };
+};
 
 /**
  * What a run carries about the work it was doing. Trigger hands the task's
@@ -148,11 +221,21 @@ interface RunPayload {
   issue?: { title?: string } | null;
 }
 
+/**
+ * What a unit's run says it is doing right now (packages/tasks helpers/progress).
+ */
+interface RunStatus {
+  current?: string;
+}
+
 export interface OperationRun {
   id: string;
   taskIdentifier: string;
   status: string;
+  tags?: string[];
+  updatedAt?: Date | string;
   payload?: RunPayload;
+  metadata?: RunStatus;
 }
 
 const outcome = (status: string) =>
@@ -182,7 +265,10 @@ const REASONS: Record<string, string> = {
   FAILED: 'Failed',
   CRASHED: 'Crashed',
   'SYSTEM FAILURE': 'Github did not respond',
+  SYSTEM_FAILURE: 'Github did not respond',
   'TIMED OUT': 'Timed out',
+  TIMED_OUT: 'Timed out',
+  INTERRUPTED: 'Interrupted',
   EXPIRED: 'Gave up waiting',
   CANCELED: 'Canceled',
 };
@@ -195,6 +281,7 @@ const REASONS: Record<string, string> = {
 export const OperationProgress = () => {
   const { operation } = useContext(FetcherContext);
   const [failures, setFailures] = useState<OperationRun[] | null>(null);
+  const web = useGitWeb();
 
   return (
     <>
@@ -231,7 +318,9 @@ export const OperationProgress = () => {
                 </span>
               </span>
               <Tag color="red" className="m-0 shrink-0 font-medium">
-                {REASONS[run.status] ?? run.status}
+                {run.status === 'SYSTEM FAILURE' || run.status === 'SYSTEM_FAILURE'
+                  ? `${web.label} did not respond`
+                  : (REASONS[run.status] ?? run.status)}
               </Tag>
             </li>
           ))}
@@ -260,31 +349,41 @@ const OperationRuns = ({
   operation: ActiveOperation;
   onFailures: (runs: OperationRun[]) => void;
 }) => {
-  const { runs, error } = useRealtimeRunsWithTag(`session_${operation.session.id}`);
   const { endOperation, dismissNotify } = useContext(FetcherContext);
   const callout = useCallout();
+  const { terms } = useGitWeb();
   const { revalidate } = useRevalidator();
   const settled = useRef(false);
+  const [over, setOver] = useState(false);
+  const { runs, error } = useSessionRuns(`session_${operation.session.id}`, over);
 
   const finish = (payload: Parameters<typeof callout.update>[1]) => {
     settled.current = true;
+    setOver(true);
     callout.update(operation.calloutId, payload);
     endOperation();
   };
 
   const progress = useMemo(() => {
-    const all = (runs ?? []) as unknown as OperationRun[];
+    const all = runs;
     if (all.length === 0) return null;
 
     const key = all.map(r => OPERATION_BY_TASK[r.taskIdentifier]).find(Boolean);
     const spec = key ? OPERATIONS[key] : undefined;
     if (!spec) return null;
 
-    // The first unit shape with runs in it is the one being done here.
-    const unit = spec.units.find(u => all.some(r => u.tasks.includes(r.taskIdentifier)));
+    // The first unit shape with runs in it is the one being done here. With
+    // none at all, the job ended (or failed) before fanning out, or had nothing
+    // to fan out to; once everything has settled that is still an ending.
+    const settledAll = all.every(r => outcome(r.status) !== 'pending');
+    const unit =
+      // Chosen by its own tasks only: a Sync that just adds assignments is not
+      // "creating repositories", even though its runs would count toward it.
+      spec.units.find(u => all.some(r => u.tasks.includes(r.taskIdentifier))) ??
+      (settledAll ? spec.units[0] : undefined);
     if (!unit) return null;
 
-    const unitRuns = all.filter(r => unit.tasks.includes(r.taskIdentifier));
+    const unitRuns = all.filter(r => isUnitRun(unit, r));
     let done = 0;
     let unitsFailed = 0;
     for (const run of unitRuns) {
@@ -297,14 +396,34 @@ const OperationRuns = ({
     // invite that never landed leaves a student locked out of their own repo.
     const failed = all.filter(r => outcome(r.status) === 'failed');
     // For the same reason, the job is not finished until every run has settled.
-    const complete = all.every(r => outcome(r.status) !== 'pending');
-    return { spec, unit, total: unitRuns.length, done, unitsFailed, failed, complete };
+    const complete = settledAll;
+    // A unit can sit a while between being counted, so the status line says
+    // what is happening now: the unit that reported most recently.
+    const current = unitRuns
+      .filter(r => outcome(r.status) === 'pending' && r.metadata?.current)
+      .sort((a, b) => updatedAtOf(b) - updatedAtOf(a))[0]?.metadata?.current;
+    return {
+      spec,
+      unit,
+      total: unitRuns.length,
+      done,
+      unitsFailed,
+      failed,
+      complete,
+      current,
+    };
   }, [runs]);
+
+  // Read through a ref: the timer below is set once, and `runs` in its
+  // closure would always be the empty first render, which dismissed every
+  // operation still going at the 30 second mark.
+  const runCount = useRef(0);
+  runCount.current = runs.length;
 
   // A batch that never reports anything would otherwise spin forever.
   useEffect(() => {
     const timer = setTimeout(() => {
-      if (settled.current || (runs ?? []).length > 0) return;
+      if (settled.current || runCount.current > 0) return;
       settled.current = true;
       callout.dismiss(operation.calloutId);
       endOperation();
@@ -328,7 +447,8 @@ const OperationRuns = ({
     }
     if (!progress) return;
 
-    const { spec, unit, total, done, unitsFailed, failed, complete } = progress;
+    const { spec, total, done, unitsFailed, failed, complete, current } = progress;
+    const unit = localizeUnit(progress.unit, terms.repos);
 
     // Whatever the caller put up before the work started is redundant now.
     if (spec.notifyKey) dismissNotify(spec.notifyKey);
@@ -337,37 +457,54 @@ const OperationRuns = ({
       callout.update(operation.calloutId, {
         variant: 'progress',
         title: unit.running,
-        message: `${done} of ${total} ${unit.noun}`,
+        message: `${done} of ${total} ${unit.noun}${current ? ` · ${current}` : ''}`,
         progress: total > 0 ? done / total : 0,
         persistent: true,
       });
       return;
     }
 
-    // The work changed what the page is showing: repositories, graders, tokens.
-    revalidate();
+    // Looks over: fill the bar first, whatever the count, so even a batch of one
+    // is seen to finish rather than vanishing from an empty bar. It stays full
+    // until the ending below, and ends only if nothing new arrives for a moment
+    // (SETTLE_MS). Any update re-runs this effect, which cancels the ending.
+    callout.update(operation.calloutId, {
+      variant: 'progress',
+      title: unit.running,
+      message: `${done} of ${total} ${unit.noun}`,
+      progress: 1,
+      persistent: true,
+    });
+    const timer = setTimeout(() => {
+      if (settled.current) return;
+      // The work changed what the page is showing: repositories, graders, tokens.
+      revalidate();
 
-    if (failed.length > 0) {
-      finish({
-        variant: 'error',
-        // Every unit can be done and the batch still have failures in the steps
-        // around them, so the title says which of the two happened.
-        title: unitsFailed > 0 ? `${done} of ${total} ${unit.noun} finished` : unit.done,
-        message: `${failed.length} step${failed.length === 1 ? '' : 's'} did not finish`,
-        persistent: true,
-        progress: undefined,
-        action: { label: 'Details', onClick: () => onFailures(failed) },
-      });
-    } else {
-      finish({
-        variant: 'success',
-        title: unit.done,
-        message: `${total} ${unit.noun}`,
-        persistent: false,
-        progress: undefined,
-        autoDismissMs: 4000,
-      });
-    }
+      if (failed.length > 0) {
+        finish({
+          variant: 'error',
+          // Every unit can be done and the batch still have failures in the steps
+          // around them, so the title says which of the two happened.
+          title: unitsFailed > 0 ? `${done} of ${total} ${unit.noun} finished` : unit.done,
+          message:
+            `${failed.length} step${failed.length === 1 ? '' : 's'} did not finish` +
+            (spec.failureHint ? `. ${spec.failureHint}` : ''),
+          persistent: true,
+          progress: undefined,
+          action: { label: 'Details', onClick: () => onFailures(failed) },
+        });
+      } else {
+        finish({
+          variant: 'success',
+          title: unit.done,
+          message: `${total} ${unit.noun}`,
+          persistent: false,
+          progress: undefined,
+          autoDismissMs: 4000,
+        });
+      }
+    }, SETTLE_MS);
+    return () => clearTimeout(timer);
     // `callout` is stable per provider; the rest are refs and setters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [progress, error]);

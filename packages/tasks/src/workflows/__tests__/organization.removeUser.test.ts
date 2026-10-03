@@ -52,6 +52,20 @@ vi.mock('@classmoji/services', () => ({
     `${classroom.slug}-${role === 'STUDENT' ? 'students' : 'assistants'}`,
 }));
 
+// The username removed is read from the user's stored Github account.
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+  default: () => ({
+    user: {
+      findUnique: async () => ({
+        accounts: [{ provider_id: 'github', account_id: '1', username: 'ada' }],
+      }),
+    },
+  }),
+}));
+
 // organization.ts imports the repo-provisioning pipeline at module scope; this
 // path never reaches it, so it is stubbed wholesale (same as the sibling test).
 vi.mock('../gitRepo.ts', () => ({

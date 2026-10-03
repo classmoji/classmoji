@@ -195,7 +195,7 @@ describe('multiline components are consumed whole', () => {
     expect(text).not.toContain('poster=');
     expect(text).not.toContain('src=');
     expect(text).not.toContain('title={');
-    expect(text.match(/^Video: /gm) ?? []).toHaveLength(3);
+    expect(text.match(/^Video: /gm) ?? []).toHaveLength(2);
     expect(text).toContain('Video: Getting started with Classmoji\nSet up your Classmoji account');
   });
 
@@ -544,16 +544,15 @@ describeLive('every page in the live docs tree extracts', () => {
     }
   });
 
-  it('consumes all six <Video> blocks across the whole corpus', () => {
-    // The plan says "video-tutorials.mdx: all six multiline <Video> blocks" —
-    // that file has three. The other three live in getting-started.mdx,
-    // create-classroom.mdx and import-github-classroom.mdx. Six is the CORPUS
-    // total, and this is where it is checked.
+  it('consumes every <Video> block across the whole corpus', () => {
+    // Four today: two in video-tutorials.mdx, one each in getting-started.mdx
+    // and create-classroom.mdx. The count is the CORPUS total; a docs edit
+    // that adds or removes a video updates it here.
     const videos = walk(DOCS_ROOT)
       .map(file => extractMdxText(readFileSync(file, 'utf8')).text)
       .join('\n')
       .match(/^Video: /gm);
-    expect(videos ?? []).toHaveLength(6);
+    expect(videos ?? []).toHaveLength(4);
   });
 
   it('keeps the copied fixtures byte-identical to the live pages', () => {

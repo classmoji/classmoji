@@ -77,7 +77,11 @@ export type ExploreGate = { questionOpen: () => boolean };
 /** Explorations one turn may start, successful and failed alike. */
 export const MAX_EXPLORATIONS_PER_TURN = 3;
 
-/** Mint a read-only installation token for one repository of the organization. */
+/**
+ * Mint a read-only token for one repository of the organization: a Github
+ * installation token, or on Gitlab a project access token (the context sets
+ * the organization's `login` to the project's namespace).
+ */
 export async function mintRepoToken(gitOrganization: GitOrgLike, repo: string): Promise<string> {
   const { getGitProvider } = await import('@classmoji/services');
   const { token } = await getGitProvider(gitOrganization).getInstallationToken({
@@ -166,6 +170,7 @@ export function exploreCodebaseTool(
               owner: exploration.owner,
               repo: exploration.repo,
               token,
+              ...(exploration.gitHost ? { gitHost: exploration.gitHost } : {}),
               model: exploration.model,
               effort: exploration.effort,
               focusArea: input.focus_area,

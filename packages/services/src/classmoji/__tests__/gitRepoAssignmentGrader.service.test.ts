@@ -12,7 +12,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const graderFindMany = vi.fn();
 const gradeFindMany = vi.fn();
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
   default: () => ({
     gitRepoAssignmentGrader: { findMany: (...a: unknown[]) => graderFindMany(...a) },
     assignmentGrade: { findMany: (...a: unknown[]) => gradeFindMany(...a) },
@@ -234,6 +238,13 @@ describe('assignGradersToAssignment — EXISTING', () => {
   });
 });
 
+/** A grader row as loaded with GIT_IDENTITY: the login lives on the Github account. */
+const ADA_GRADER = {
+  id: 'ta-1',
+  name: 'Ada',
+  accounts: [{ provider_id: 'github', account_id: '1', username: 'ada' }],
+};
+
 describe('gradingReport', () => {
   const assignment = {
     id: 'a-1',
@@ -244,11 +255,11 @@ describe('gradingReport', () => {
   it('pairs assigned counts with graded counts, distribution and last_graded_at', async () => {
     graderFindMany.mockResolvedValue([
       {
-        grader: { id: 'ta-1', login: 'ada', name: 'Ada' },
+        grader: ADA_GRADER,
         git_repo_assignment: { assignment_id: 'a-1', assignment },
       },
       {
-        grader: { id: 'ta-1', login: 'ada', name: 'Ada' },
+        grader: ADA_GRADER,
         git_repo_assignment: { assignment_id: 'a-1', assignment },
       },
     ]);
@@ -258,7 +269,7 @@ describe('gradingReport', () => {
         emoji: '🌟',
         created_at: new Date('2026-01-01'),
         git_repo_assignment_id: 'ra-1',
-        grader: { id: 'ta-1', login: 'ada', name: 'Ada' },
+        grader: ADA_GRADER,
         git_repo_assignment: { assignment_id: 'a-1', assignment },
       },
       // Second grade on the SAME submission → distribution 2, graded_count 1.
@@ -267,7 +278,7 @@ describe('gradingReport', () => {
         emoji: '✅',
         created_at: new Date('2026-02-01'),
         git_repo_assignment_id: 'ra-1',
-        grader: { id: 'ta-1', login: 'ada', name: 'Ada' },
+        grader: ADA_GRADER,
         git_repo_assignment: { assignment_id: 'a-1', assignment },
       },
     ]);

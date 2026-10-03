@@ -22,10 +22,11 @@ import { useDisclosure } from '@mantine/hooks';
 
 import AsyncAutocomplete from './AsyncAutocomplete';
 import ProjectTemplateSelect from './ProjectTemplateSelect';
-import { schema } from './schema';
+import { makeSchema } from './schema';
 import { useGlobalFetcher } from '~/hooks';
 
 import { useRepositoryFormStore } from './store';
+import { gitTerms } from '~/utils/gitWeb';
 import { SectionHeader } from '~/components';
 import AutogradingTestsTable from './AutogradingTestsTable';
 import FormAutogradingTest, {
@@ -84,6 +85,13 @@ interface FormModuleProps {
   hasReposWithProjects?: boolean;
   /** Repos already exist on GitHub: type and team formation are frozen. */
   hasProvisionedRepos?: boolean;
+  /** Gitlab classroom: Gitlab wording, and autograding runs in Gitlab CI. */
+  isGitLab?: boolean;
+  /**
+   * Gitlab only: whether a CI runner can pick up this class's pipelines
+   * (see GitLabProvider.ciRunnerAvailability). Null on Github.
+   */
+  gitlabRunner?: 'available' | 'offline' | 'none' | 'unknown' | null;
 }
 
 const FormModule = ({
@@ -96,8 +104,11 @@ const FormModule = ({
   slides = [],
   hasReposWithProjects = false,
   hasProvisionedRepos = false,
+  isGitLab = false,
+  gitlabRunner = null,
 }: FormModuleProps) => {
   const { template, setTemplate } = useRepositoryFormStore();
+  const terms = gitTerms(isGitLab);
 
   const { fetcher, notify } = useGlobalFetcher();
   const revalidator = useRevalidator();
@@ -206,7 +217,7 @@ const FormModule = ({
     setValue,
     formState: { errors },
   } = useForm({
-    resolver: zodResolver(schema),
+    resolver: zodResolver(makeSchema(`A template ${terms.repo} must be selected.`)),
     defaultValues: isNew ? newFormUpdateValues : updateFormDefaultValues,
   });
 
@@ -283,7 +294,7 @@ const FormModule = ({
       if (fetcherData?.error) {
         callout.show({
           variant: 'error',
-          title: fetcherData.error || 'Failed to save repository.',
+          title: fetcherData.error || `Failed to save ${terms.repo}.`,
         });
         return;
       }
@@ -311,7 +322,7 @@ const FormModule = ({
   };
 
   const onSubmit = (data: Record<string, unknown>) => {
-    const message = isNew ? 'Creating repository...' : 'Updating repository...';
+    const message = isNew ? `Creating ${terms.repo}...` : `Updating ${terms.repo}...`;
 
     notify(ActionTypes.SAVE_ASSIGNMENT, message);
     setIsSubmitting(true);
@@ -383,7 +394,7 @@ const FormModule = ({
           <Card className="shadow-xs mb-6">
             <SectionHeader
               title="Basic Information"
-              subtitle="Set up the core details for this repository"
+              subtitle={`Set up the core details for this ${terms.repo}`}
               size="md"
               className="mb-4"
             />
@@ -393,7 +404,7 @@ const FormModule = ({
                 {...{
                   control,
                   name: 'title',
-                  label: 'Repository title',
+                  label: `${terms.Repo} title`,
                   placeholder: 'intro-to-data-structures',
                 }}
               >
@@ -413,7 +424,7 @@ const FormModule = ({
                 label="Type"
                 extra={
                   hasProvisionedRepos
-                    ? 'Fixed: repositories have already been created for this one.'
+                    ? `Fixed: ${terms.repos} have already been created for this one.`
                     : undefined
                 }
               >
@@ -445,7 +456,7 @@ const FormModule = ({
                   name="team_formation_mode"
                   label="Team Formation"
                   extra={
-                    hasProvisionedRepos ? 'Fixed: team repositories already exist.' : undefined
+                    hasProvisionedRepos ? `Fixed: team ${terms.repos} already exist.` : undefined
                   }
                 >
                   <Select
@@ -550,30 +561,33 @@ const FormModule = ({
                 )}
               </div>
 
-              {/* GitHub Project Template */}
-              <div className="mt-4 pt-4 border-t border-gray-200 dark:border-neutral-700">
-                <SectionHeader
-                  title="GitHub Project"
-                  subtitle="Optionally create a GitHub Project board for each team"
-                  size="sm"
-                  className="mb-3"
-                />
-                <FormItem control={control} name="project_template_id" label="Project Template">
-                  <ProjectTemplateSelect
-                    disabled={hasReposWithProjects}
-                    onChange={(value, option) => {
-                      setValue('project_template_id', value || null);
-                      const opt = option as { title?: string } | undefined;
-                      setValue('project_template_title', opt?.title || null);
-                    }}
+              {/* Github Project template: Github Projects have no Gitlab
+                  counterpart, so Gitlab classrooms don't get the section. */}
+              {!isGitLab && (
+                <div className="mt-4 pt-4 border-t border-gray-200 dark:border-neutral-700">
+                  <SectionHeader
+                    title="Github Project"
+                    subtitle="Optionally create a Github Project board for each team"
+                    size="sm"
+                    className="mb-3"
                   />
-                </FormItem>
-                {hasReposWithProjects && (
-                  <p className="text-sm text-amber-600 mt-1">
-                    Project template cannot be changed after repos have projects.
-                  </p>
-                )}
-              </div>
+                  <FormItem control={control} name="project_template_id" label="Project Template">
+                    <ProjectTemplateSelect
+                      disabled={hasReposWithProjects}
+                      onChange={(value, option) => {
+                        setValue('project_template_id', value || null);
+                        const opt = option as { title?: string } | undefined;
+                        setValue('project_template_title', opt?.title || null);
+                      }}
+                    />
+                  </FormItem>
+                  {hasReposWithProjects && (
+                    <p className="text-sm text-amber-600 mt-1">
+                      Project template cannot be changed after repos have projects.
+                    </p>
+                  )}
+                </div>
+              )}
             </Card>
           )}
 
@@ -581,7 +595,7 @@ const FormModule = ({
           <Card className="shadow-xs mb-6">
             <SectionHeader
               title="Learning Objectives"
-              subtitle="Add a description for the learning objective of this repository"
+              subtitle={`Add a description for the learning objective of this ${terms.repo}`}
               size="md"
               className="mb-4"
             />
@@ -597,7 +611,7 @@ const FormModule = ({
           {/* Template Repository */}
           <Card className="shadow-xs mb-6">
             <SectionHeader
-              title="Template Repository"
+              title={`Template ${terms.Repo}`}
               subtitle="Provide starter code for students"
               size="md"
               className="mb-4"
@@ -612,33 +626,59 @@ const FormModule = ({
             />
           </Card>
 
-          {/* Autograding tests */}
-          <Card className="shadow-xs mb-6">
-            <div className="flex justify-between items-start mb-4">
-              <SectionHeader
-                title="Autograding tests"
-                subtitle="Run tests on every push using GitHub Actions"
-                size="md"
-              />
-              <Tooltip title="Add autograding test">
-                <Button type="primary" icon={<PlusOutlined />} onClick={openNewTest}>
-                  Add test
-                </Button>
-              </Tooltip>
-            </div>
+          {/* Autograding tests: Github Actions, or GitLab CI (a runner is needed). */}
+          {
+            <Card className="shadow-xs mb-6">
+              <div className="flex justify-between items-start mb-4">
+                <SectionHeader
+                  title="Autograding tests"
+                  subtitle={
+                    isGitLab
+                      ? 'Run tests on every push in a Gitlab CI pipeline'
+                      : 'Run tests on every push using Github Actions'
+                  }
+                  size="md"
+                />
+                <Tooltip title="Add autograding test">
+                  <Button type="primary" icon={<PlusOutlined />} onClick={openNewTest}>
+                    Add test
+                  </Button>
+                </Tooltip>
+              </div>
 
-            <AutogradingTestsTable
-              tests={autogradingTests}
-              onEdit={openEditTest}
-              onRemove={removeTest}
-            />
-          </Card>
+              {isGitLab && gitlabRunner && gitlabRunner !== 'available' && (
+                <Alert
+                  className="mb-4"
+                  showIcon
+                  type={gitlabRunner === 'unknown' ? 'info' : 'warning'}
+                  message={
+                    gitlabRunner === 'none'
+                      ? 'No CI runner is available to this class on your Gitlab, so the tests will not run.'
+                      : gitlabRunner === 'offline'
+                        ? 'The CI runners available to this class are offline right now, so tests will wait until one is back.'
+                        : 'Autograding needs a CI runner on your Gitlab. Classmoji could not check whether this class has one.'
+                  }
+                  description={
+                    gitlabRunner === 'none'
+                      ? 'Ask your Gitlab admin to enable shared runners or register a runner for your group. Classmoji adds the tests to student repositories once a runner is available (use Autograde on the repository to push them).'
+                      : undefined
+                  }
+                />
+              )}
+
+              <AutogradingTestsTable
+                tests={autogradingTests}
+                onEdit={openEditTest}
+                onRemove={removeTest}
+              />
+            </Card>
+          }
 
           {/* Linked Content */}
           <Card className="shadow-xs mb-6">
             <SectionHeader
               title="Linked Content"
-              subtitle="Link pages and slides to this repository"
+              subtitle={`Link pages and slides to this ${terms.repo}`}
               size="md"
               className="mb-4"
             />
@@ -744,7 +784,7 @@ const FormModule = ({
             htmlType="submit"
             style={{ backgroundColor: '#1f883d', borderColor: '#1f883d' }}
           >
-            {isNew ? 'Create repository' : 'Update repository'}
+            {isNew ? `Create ${terms.repo}` : `Update ${terms.repo}`}
           </Button>
         </div>
       </Form>

@@ -380,6 +380,10 @@ export const orgRepoSettingsUpdateTool: ToolDefinition<OrgRepoSettingsUpdateArgs
     // The git organization comes from the authorized classroom, never from
     // request input.
     const record = await ClassmojiService.classroom.findById(classroom.classroomId);
+    // Organization-wide repository settings are a Github App feature.
+    if (record?.git_organization?.provider === 'GITLAB') {
+      throw new ToolError('invalid_params', 'Not available for Gitlab classrooms yet.');
+    }
 
     // The caller's own GitHub token (refreshed if needed) — the same source the
     // webapp session uses. GitHub applies the caller's organization role.
@@ -451,7 +455,7 @@ export const orgRepoSettingsUpdateTool: ToolDefinition<OrgRepoSettingsUpdateArgs
       organization: result.org,
       updated_fields: fields,
       settings: result.settings,
-      message: `Updated organization-wide GitHub settings for '${result.org}' — this affects every classroom and repository in that organization.`,
+      message: `Updated organization-wide Github settings for '${result.org}' — this affects every classroom and repository in that organization.`,
     });
   },
 };

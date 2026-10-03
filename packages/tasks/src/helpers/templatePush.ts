@@ -102,10 +102,18 @@ export const pushBranchInChunks = async (
     branch,
     budgetBytes = PUSH_CHUNK_BYTES,
     alreadyPushed = null,
-  }: { remote: string; branch: string; budgetBytes?: number; alreadyPushed?: string | null }
+    pushOptions = [],
+  }: {
+    remote: string;
+    branch: string;
+    budgetBytes?: number;
+    alreadyPushed?: string | null;
+    /** Extra `git push` arguments for every push (Gitlab: `-o ci.skip`). */
+    pushOptions?: string[];
+  }
 ): Promise<number> => {
   if ((await localObjectBytes(git)) <= budgetBytes) {
-    await git.push(remote, branch, ['--force']);
+    await git.push(remote, branch, ['--force', ...pushOptions]);
     return 1;
   }
 
@@ -137,9 +145,9 @@ export const pushBranchInChunks = async (
     }
 
     if (best === commits.length - 1) {
-      await git.push(remote, branch, ['--force']);
+      await git.push(remote, branch, ['--force', ...pushOptions]);
     } else {
-      await git.push(remote, `+${commits[best]}:refs/heads/${branch}`);
+      await git.push(remote, `+${commits[best]}:refs/heads/${branch}`, pushOptions);
     }
     pushes += 1;
     logger.info(`Pushed ${branch} up to commit ${best + 1} of ${commits.length}`);

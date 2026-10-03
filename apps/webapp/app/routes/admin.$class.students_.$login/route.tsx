@@ -1,4 +1,5 @@
 import { Button, Input, Select, Tag, Tooltip } from 'antd';
+import { gitContextFor, gitWeb } from '~/utils/gitWeb';
 import dayjs from 'dayjs';
 import { IconChevronLeft } from '@tabler/icons-react';
 import { Link, useFetcher, useLocation, useNavigate } from 'react-router';
@@ -20,6 +21,7 @@ import { addAuditLog, addClassroomAuditLog } from '~/utils/helpers';
 import { requireClassroomStaff, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import { normalizeSchoolId } from '~/utils/schoolId';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import type { Route } from './+types/route';
 
 /**
@@ -125,6 +127,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     classroom: {
       slug: classroom.slug,
       gitOrgLogin: classroom.git_organization?.login ?? null,
+      git: gitContextFor(classroom),
     },
     student: {
       id: studentId,
@@ -344,6 +347,7 @@ const SchoolIdField = ({ value, editable }: { value: string | null; editable: bo
 };
 
 const StudentReport = ({ loaderData }: Route.ComponentProps) => {
+  const web = useGitWeb();
   const {
     rolePrefix,
     isOwner,
@@ -449,7 +453,7 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
     const Icon = meta?.icon;
     const due = fmt(a.student_deadline);
     const parts: string[] = [];
-    if (a.type === 'REPO') parts.push(a.submission_mode === 'REPO' ? 'push' : 'issue');
+    if (a.type === 'REPO') parts.push(a.submission_mode === 'REPO' ? 'push' : web.terms.issue);
     parts.push(`${a.weight}%${a.is_extra_credit ? ' extra credit' : ''}`);
     if (due) parts.push(`due ${due}`);
 
@@ -462,7 +466,7 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
     if (a.type === 'REPO') {
       const ra = byAssignment[a.id];
       if (!ra) {
-        status = <Pill tone="grey">No repository yet</Pill>;
+        status = <Pill tone="grey">No {web.terms.repo} yet</Pill>;
       } else {
         const submitted = ra.status === 'CLOSED';
         const graded = (ra.grades?.length ?? 0) > 0;
@@ -511,8 +515,11 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
             )}
           </div>
         );
+        const repoWeb = gitWeb(classroom.git);
         const repoUrl = classroom.gitOrgLogin
-          ? `https://github.com/${classroom.gitOrgLogin}/${ra.git_repo.name}${ra.provider_issue_number ? `/issues/${ra.provider_issue_number}` : ''}`
+          ? ra.provider_issue_number
+            ? repoWeb.issue(ra.git_repo.name, ra.provider_issue_number)
+            : repoWeb.repo(ra.git_repo.name)
           : null;
         actions = (
           <div className="flex items-center gap-2">

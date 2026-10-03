@@ -1,5 +1,9 @@
 import getPrisma from '@classmoji/database';
-import { canonicalTimeZone } from '@classmoji/utils';
+import {
+  canonicalTimeZone,
+  GITLAB_PROJECTS_SUBGROUP,
+  GITLAB_TEAMS_SUBGROUP,
+} from '@classmoji/utils';
 import { GitHubProvider } from '../git/index.ts';
 import * as entitlementService from './entitlement.service.ts';
 // The barrel, whose write half (and the S3 client behind it) loads only when a
@@ -348,8 +352,12 @@ export function ownedTemplateRepoNames(
     let name: string | null = null;
     if (segments.length === 1) {
       name = segments[0]!;
-    } else if (segments.length === 2 && segments[0]!.toLowerCase() === wantedOwner) {
-      name = segments[1]!;
+    } else if (
+      segments.length >= 2 &&
+      segments.slice(0, -1).join('/').toLowerCase() === wantedOwner
+    ) {
+      // `owner/name`, or a GitLab group path (`group/templates/name`).
+      name = segments[segments.length - 1]!;
     }
     if (!name) continue;
     const key = name.toLowerCase();
@@ -488,6 +496,9 @@ export const getClassroomGitHubArtifactPlan = async (
   if (!classroom?.git_organization?.login) {
     return { artifacts: [], withheld: null, unavailable: 'no git organization' };
   }
+  if (classroom.git_organization.provider === 'GITLAB') {
+    return gitlabArtifactPlan(classroom);
+  }
   if (classroom.git_organization.provider !== 'GITHUB') {
     return {
       artifacts: [],
@@ -549,6 +560,218 @@ export const getClassroomGitHubArtifactPlan = async (
   };
 };
 
+/**
+ * A GitLab classroom's cleanup plan. Everything the classroom owns lives in
+ * its class subgroup (content project at the root, student and team projects
+ * in `projects/`, team subgroups in `teams/`), so deleting that one subgroup
+ * removes it all; the plan still lists what is inside so the modal can show
+ * it. Import-created template copies live in the top group's `templates`
+ * subgroup and are listed (and deleted) one by one, with the same provenance
+ * and still-referenced guards as on Github.
+ */
+async function gitlabArtifactPlan(classroom: {
+  id: string;
+  git_org_id: string;
+  git_namespace: string | null;
+  git_namespace_created: boolean;
+  content_repo: string | null;
+  git_organization: { login: string | null };
+  git_repos: Array<{ name: string }>;
+  import_job: { progress: unknown } | null;
+}): Promise<ClassroomGitHubPlan> {
+  const orgLogin = classroom.git_organization.login as string;
+  const namespace = classroom.git_namespace;
+  // Only ever a subgroup strictly inside the classroom's top group: never the
+  // top group itself, whatever the row says.
+  if (!namespace || !namespace.toLowerCase().startsWith(`${orgLogin.toLowerCase()}/`)) {
+    return {
+      artifacts: [],
+      withheld: null,
+      unavailable: 'no Gitlab class subgroup recorded: nothing deleted on Gitlab',
+    };
+  }
+  const sharer = await getPrisma().classroom.findFirst({
+    where: { git_namespace: namespace, id: { not: classroom.id } },
+    select: { slug: true },
+  });
+  if (sharer) {
+    return {
+      artifacts: [],
+      withheld: null,
+      unavailable: `class subgroup ${namespace} is shared with classroom '${sharer.slug}': nothing deleted on Gitlab`,
+    };
+  }
+
+  const templatesGroup = `${orgLogin}/templates`;
+  const createdTemplateNames = importedTemplateRepoNames(classroom.import_job?.progress);
+  const templateNames = createdTemplateNames.length
+    ? exclusiveImportedTemplateNames({
+        createdNames: createdTemplateNames,
+        otherClassroomTemplateRefs: (
+          await getPrisma().repository.findMany({
+            where: {
+              classroom_id: { not: classroom.id },
+              classroom: { git_org_id: classroom.git_org_id },
+            },
+            select: { template: true },
+          })
+        ).map(row => row.template),
+        orgLogin: templatesGroup,
+      })
+    : [];
+  const teams = await getPrisma().team.findMany({
+    where: { classroom_id: classroom.id, provider: 'GITLAB', provider_id: { not: null } },
+    select: { slug: true },
+  });
+
+  const projects = `${namespace}/${GITLAB_PROJECTS_SUBGROUP}`;
+  const artifacts: GitHubArtifact[] = [];
+  if (classroom.content_repo) {
+    artifacts.push({
+      kind: 'repo',
+      org: namespace,
+      name: classroom.content_repo,
+      label: 'content repo',
+    });
+  }
+  for (const repo of classroom.git_repos) {
+    artifacts.push({ kind: 'repo', org: projects, name: repo.name, label: 'assignment repo' });
+  }
+  for (const name of templateNames) {
+    artifacts.push({ kind: 'repo', org: templatesGroup, name, label: 'template repo' });
+  }
+  // The whole subgroup only when Classmoji created it. A classroom that
+  // adopted an existing group (older classrooms could) gets its own projects
+  // and team subgroups removed one by one, and the group is left alone.
+  if (classroom.git_namespace_created) {
+    artifacts.push({
+      kind: 'team',
+      org: orgLogin,
+      name: namespace.slice(orgLogin.length + 1),
+      label: 'class subgroup',
+    });
+  }
+  for (const team of teams) {
+    artifacts.push({
+      kind: 'team',
+      org: `${namespace}/${GITLAB_TEAMS_SUBGROUP}`,
+      name: team.slug,
+      label: 'project team',
+    });
+  }
+  return { artifacts, withheld: null, unavailable: null };
+}
+
+/**
+ * GitLab cleanup: the import-created template copies one by one, then the
+ * class subgroup, which takes the content project, every student and team
+ * project and every team subgroup with it.
+ *
+ * Runs with the REQUESTER's own Gitlab connection, never the classroom's (the
+ * account that made it), for the same reason the Github path uses the
+ * requester's token: Gitlab then checks the person's own rights, so a
+ * co-owner can't delete through someone else's account. No connection on
+ * this Gitlab, nothing deleted.
+ */
+async function deleteGitLabArtifacts(
+  classroomId: string,
+  artifacts: GitHubArtifact[],
+  requesterUserId: string | null
+): Promise<GitHubCleanupSummary> {
+  const summary: GitHubCleanupSummary = {
+    deleted_repos: 0,
+    deleted_teams: 0,
+    skipped: 0,
+    failures: [],
+  };
+  const classroom = await getPrisma().classroom.findUnique({
+    where: { id: classroomId },
+    include: { git_organization: true },
+  });
+  if (!classroom?.git_organization) {
+    summary.failures.push('no Gitlab group: nothing deleted on Gitlab');
+    return summary;
+  }
+  const org = classroom.git_organization;
+  const connection = requesterUserId
+    ? await getPrisma().gitLabConnection.findFirst({
+        where: { user_id: requesterUserId },
+        select: { id: true, gitlab_instance_id: true },
+      })
+    : null;
+  if (!connection || (connection.gitlab_instance_id ?? null) !== (org.gitlab_instance_id ?? null)) {
+    summary.failures.push(
+      'Connect your own Gitlab account on this Gitlab (Settings) to delete the class on Gitlab: nothing deleted on Gitlab'
+    );
+    return summary;
+  }
+  const [{ GitLabProvider }, gitlabConnection, gitlabInstance] = await Promise.all([
+    import('../git/GitLabProvider.ts'),
+    import('./gitlabConnection.service.ts'),
+    import('./gitlabInstance.service.ts'),
+  ]);
+  const host = org.base_url || (await gitlabInstance.hostFor(org.gitlab_instance_id));
+  const provider = new GitLabProvider(
+    '',
+    null,
+    () => gitlabConnection.getConnectionToken(connection.id),
+    host
+  );
+
+  for (const artifact of artifacts.filter(a => a.label === 'template repo')) {
+    try {
+      await provider.deleteRepository(artifact.org, artifact.name);
+      summary.deleted_repos += 1;
+    } catch (error: unknown) {
+      if ((error as { status?: number })?.status === 404) {
+        summary.skipped += 1;
+        continue;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      summary.failures.push(`${artifact.label} ${artifact.name}: ${message}`);
+    }
+  }
+
+  const subgroup = artifacts.find(a => a.label === 'class subgroup');
+  if (!subgroup) {
+    // Not Classmoji's subgroup: only what Classmoji made in it goes.
+    for (const artifact of artifacts.filter(a => a.label !== 'template repo')) {
+      try {
+        if (artifact.kind === 'repo') {
+          await provider.deleteRepository(artifact.org, artifact.name);
+          summary.deleted_repos += 1;
+        } else if ((await provider.deleteGroup(`${artifact.org}/${artifact.name}`)) === 'missing') {
+          summary.skipped += 1;
+        } else {
+          summary.deleted_teams += 1;
+        }
+      } catch (error: unknown) {
+        if ((error as { status?: number })?.status === 404) {
+          summary.skipped += 1;
+          continue;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        summary.failures.push(`${artifact.label} ${artifact.name}: ${message}`);
+      }
+    }
+    return summary;
+  }
+  const inside = artifacts.filter(a => a.label !== 'template repo' && a !== subgroup);
+  try {
+    const outcome = await provider.deleteGroup(`${subgroup.org}/${subgroup.name}`);
+    if (outcome === 'missing') {
+      summary.skipped += 1 + inside.length;
+    } else {
+      summary.deleted_teams += 1 + inside.filter(a => a.kind === 'team').length;
+      summary.deleted_repos += inside.filter(a => a.kind === 'repo').length;
+    }
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    summary.failures.push(`${subgroup.label} ${subgroup.org}/${subgroup.name}: ${message}`);
+  }
+  return summary;
+}
+
 /** Result of the optional GitHub cleanup that precedes a classroom delete. */
 export interface GitHubCleanupSummary {
   deleted_repos: number;
@@ -585,14 +808,27 @@ export interface GitHubCleanupSummary {
  */
 export const deleteGitHubArtifacts = async (
   classroomId: string,
-  userToken: string
+  userToken: string,
+  { requesterUserId = null }: { requesterUserId?: string | null } = {}
 ): Promise<GitHubCleanupSummary> => {
+  const owner = await getPrisma().classroom.findUnique({
+    where: { id: classroomId },
+    select: { git_organization: { select: { provider: true } } },
+  });
+  if (owner?.git_organization?.provider === 'GITLAB') {
+    const { artifacts, unavailable } = await getClassroomGitHubArtifactPlan(classroomId);
+    if (unavailable) {
+      return { deleted_repos: 0, deleted_teams: 0, skipped: 0, failures: [unavailable] };
+    }
+    return deleteGitLabArtifacts(classroomId, artifacts, requesterUserId);
+  }
+
   if (!userToken) {
     return {
       deleted_repos: 0,
       deleted_teams: 0,
       skipped: 0,
-      failures: ['no GitHub user token — nothing deleted'],
+      failures: ['no Github user token — nothing deleted on Github'],
     };
   }
 

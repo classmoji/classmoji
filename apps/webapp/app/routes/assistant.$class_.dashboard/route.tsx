@@ -5,6 +5,7 @@ import { Skeleton } from 'antd';
 import type { Route } from './+types/route';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import InstallAppBanner from '~/components/features/InstallAppBanner';
 import GradingTabsCard from '../admin.$class.dashboard/GradingTabsCard';
 import {
@@ -85,6 +86,7 @@ const AssistantDashboard = ({ loaderData }: Route.ComponentProps) => {
   const { data, cockpit, role, appInstalled, isExample, gitOrgLogin, gitProvider, githubAppName } =
     loaderData;
   const { class: classSlug } = useParams();
+  const { terms } = useGitWeb();
 
   // Owners land here too when they browse under /teacher; assistants never
   // see it (they can't pass the repair gate).
@@ -139,13 +141,13 @@ const AssistantDashboard = ({ loaderData }: Route.ComponentProps) => {
                   <StatItem
                     label="Class assignments"
                     value={totalClass}
-                    subtitle={totalClass === 1 ? 'repository' : 'repositories'}
+                    subtitle={totalClass === 1 ? terms.repo : terms.repos}
                   />
                   <StatItem
                     label="My assigned"
                     value={myAssigned}
                     valueColor="#619462"
-                    subtitle={myAssigned === 1 ? 'repository' : 'repositories'}
+                    subtitle={myAssigned === 1 ? terms.repo : terms.repos}
                   />
                   <StatItem
                     label="My ungraded"

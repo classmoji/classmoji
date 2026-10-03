@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const findFirstMock = vi.fn();
 const updateMock = vi.fn();
+const instanceFindUniqueMock = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
@@ -9,14 +10,18 @@ vi.mock('@classmoji/database', () => ({
       findFirst: (...a: unknown[]) => findFirstMock(...a),
       update: (...a: unknown[]) => updateMock(...a),
     },
+    gitLabInstance: { findUnique: (...a: unknown[]) => instanceFindUniqueMock(...a) },
   }),
 }));
+
+const { encryptSecret } = await import('../gitlabInstance.service.ts');
 
 const { getGitLabTokenForUser } = await import('../gitlabUserToken.service.ts');
 
 beforeEach(() => {
   findFirstMock.mockReset();
   updateMock.mockReset();
+  instanceFindUniqueMock.mockReset();
   process.env.GITLAB_CLIENT_ID = 'cid';
   process.env.GITLAB_CLIENT_SECRET = 'csecret';
 });
@@ -45,6 +50,7 @@ describe('getGitLabTokenForUser', () => {
     const past = new Date(Date.now() - 1000);
     findFirstMock.mockResolvedValueOnce({
       id: 'a1',
+      account_id: '42',
       access_token: 'old',
       refresh_token: 'oldR',
       access_token_expires_at: past,
@@ -69,6 +75,39 @@ describe('getGitLabTokenForUser', () => {
     const updateArg = updateMock.mock.calls[0][0];
     expect(updateArg.data.access_token).toBe('new');
     expect(updateArg.data.refresh_token).toBe('newR');
+  });
+
+  it('refreshes a self-managed account on its own instance with its own client', async () => {
+    findFirstMock.mockResolvedValueOnce({
+      id: 'a1',
+      account_id: 'inst-1:42',
+      access_token: 'old',
+      refresh_token: 'oldR',
+      access_token_expires_at: new Date(Date.now() - 1000),
+    });
+    instanceFindUniqueMock.mockResolvedValueOnce({
+      id: 'inst-1',
+      host: 'https://gitlab.school.edu',
+      client_id: 'school-cid',
+      client_secret: encryptSecret('school-cs'),
+      disabled_at: null,
+      approved_at: new Date('2026-01-01'),
+    });
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => '',
+      json: async () => ({ access_token: 'new', refresh_token: 'newR', expires_in: 7200 }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await getGitLabTokenForUser('u2');
+
+    expect(result?.token).toBe('new');
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://gitlab.school.edu/oauth/token');
+    expect(String(init.body)).toContain('client_id=school-cid');
+    expect(String(init.body)).toContain('client_secret=school-cs');
   });
 
   it('returns null when the user has no GitLab account', async () => {

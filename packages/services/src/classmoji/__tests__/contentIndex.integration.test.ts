@@ -144,7 +144,13 @@ describe.skipIf(!RUN)('contentIndex (integration)', () => {
 
     const user = await prisma.user.create({
       data: {
-        login: `cindex-${suite}-owner`,
+        accounts: {
+          create: {
+            provider_id: 'github',
+            account_id: `cindex-${suite}-owner`,
+            username: `cindex-${suite}-owner`,
+          },
+        },
         email: `cindex-${suite}@example.test`,
         name: 'Content Index Owner',
       },

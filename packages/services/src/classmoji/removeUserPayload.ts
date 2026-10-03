@@ -25,6 +25,10 @@ export interface RemoveUserGitOrganization {
   provider: string;
   github_installation_id: string | null;
   base_url: string | null;
+  /** GitLab: the connection whose token acts on the group, and its instance. */
+  gitlab_connection_id: string | null;
+  gitlab_instance_id: string | null;
+  provider_id: string | null;
 }
 
 export interface RemoveUserPayload {
@@ -57,6 +61,9 @@ export const buildRemoveUserPayload = ({
       provider: string;
       github_installation_id?: string | null;
       base_url?: string | null;
+      gitlab_connection_id?: string | null;
+      gitlab_instance_id?: string | null;
+      provider_id?: string | null;
     } | null;
   };
   role: string;
@@ -77,6 +84,10 @@ export const buildRemoveUserPayload = ({
           provider: gitOrganization.provider,
           github_installation_id: gitOrganization.github_installation_id ?? null,
           base_url: gitOrganization.base_url ?? null,
+          // Without these a GitLab classroom's removal can't reach GitLab.
+          gitlab_connection_id: gitOrganization.gitlab_connection_id ?? null,
+          gitlab_instance_id: gitOrganization.gitlab_instance_id ?? null,
+          provider_id: gitOrganization.provider_id ?? null,
         }
       : null,
     role,

@@ -54,7 +54,11 @@ vi.mock('@trigger.dev/sdk', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
   default: () => ({
     gitOrganization: { findMany: (...a: unknown[]) => mocks.findManyOrgs(...a) },
     classroomMembership: { findMany: (...a: unknown[]) => mocks.findManyMemberships(...a) },

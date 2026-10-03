@@ -84,7 +84,7 @@ const SiteSignIn = () => {
         href={signInUrl}
         className="rounded-full bg-gray-900 px-5 py-2.5 text-sm font-medium text-white no-underline hover:bg-gray-700 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
       >
-        Sign in with GitHub →
+        Sign in to Classmoji →
       </a>
 
       {returnTo !== '/' ? (

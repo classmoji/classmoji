@@ -39,7 +39,7 @@ export const TWIN_REF = 'dev-org/classmoji-dev-winter-2025';
 export const FOREIGN_REF = 'dev-org/classmoji-other-class';
 
 // Deferred so the .env load above happens before Prisma is constructed.
-const { default: getPrisma } = await import('@classmoji/database');
+const { default: getPrisma, whereGitUsernameIn } = await import('@classmoji/database');
 export { getPrisma };
 
 // ─── Server lifecycle ────────────────────────────────────────────────────────
@@ -349,12 +349,15 @@ export async function loadFixtures(): Promise<Fixtures> {
     'fake-other-student',
   ] as const;
   const userRows = await prisma.user.findMany({
-    where: { login: { in: [...logins] } },
-    select: { id: true, login: true },
+    where: whereGitUsernameIn([...logins]),
+    select: {
+      id: true,
+      accounts: { where: { provider_id: 'github' }, select: { username: true } },
+    },
   });
   const users = Object.fromEntries(
     logins.map(login => {
-      const row = userRows.find(u => u.login === login);
+      const row = userRows.find(u => u.accounts.some(a => a.username === login));
       if (!row) throw new Error(`Seed user '${login}' missing — run npm run db:seed`);
       return [login, { id: row.id, login }];
     })

@@ -1,8 +1,9 @@
-import { useFetcher } from 'react-router';
+import { useFetcher, useRouteLoaderData } from 'react-router';
 import { requireAuth } from '@classmoji/auth/server';
 import { notificationService } from '@classmoji/services';
 import type { NotificationPreference } from '@prisma/client';
 import type { Route } from './+types/route';
+import { gitTerms } from '~/utils/gitWeb';
 
 type EmailPrefKey = Extract<keyof NotificationPreference, `email_${string}`>;
 
@@ -91,6 +92,13 @@ const Toggle = ({
 
 const SettingsNotifications = ({ loaderData }: Route.ComponentProps) => {
   const prefs = loaderData.prefs;
+  const gitMode = (useRouteLoaderData('root') as { gitMode?: string } | undefined)?.gitMode;
+  const terms = gitTerms(gitMode === 'GITLAB');
+  // The static labels say "Repository"; name the provider's word at render.
+  const labelFor = (p: PrefRow) =>
+    p.key === 'email_repository_published' || p.key === 'email_repository_unpublished'
+      ? p.label.replace('Repository', terms.Repo)
+      : p.label;
 
   return (
     <div className="max-w-2xl">
@@ -100,15 +108,13 @@ const SettingsNotifications = ({ loaderData }: Route.ComponentProps) => {
       </p>
 
       <section className="mb-8">
-        <h2 className="text-sm font-semibold text-ink-1 mb-2">
-          As a student
-        </h2>
+        <h2 className="text-sm font-semibold text-ink-1 mb-2">As a student</h2>
         <div className="rounded-xl border border-line px-4">
           {STUDENT_PREFS.map((p, i) => (
             <Toggle
               key={p.key}
               prefKey={p.key}
-              label={p.label}
+              label={labelFor(p)}
               checked={Boolean(prefs[p.key])}
               onboardingKey={i === 0 ? 'settings-notifications' : undefined}
             />
@@ -117,9 +123,7 @@ const SettingsNotifications = ({ loaderData }: Route.ComponentProps) => {
       </section>
 
       <section>
-        <h2 className="text-sm font-semibold text-ink-1 mb-2">
-          As a teaching assistant
-        </h2>
+        <h2 className="text-sm font-semibold text-ink-1 mb-2">As a teaching assistant</h2>
         <div className="rounded-xl border border-line px-4">
           {TA_PREFS.map(p => (
             <Toggle key={p.key} prefKey={p.key} label={p.label} checked={Boolean(prefs[p.key])} />

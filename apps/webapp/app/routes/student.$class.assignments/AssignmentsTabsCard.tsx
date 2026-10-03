@@ -13,6 +13,7 @@ import {
 } from '~/components/features/assignments/CourseworkTags';
 import { POP_SPRING } from '~/utils/motion';
 import { formatDeadline } from './formatDeadline';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import { extensionNote } from './extensionNote';
 
 const NOTE_TONE = {
@@ -60,6 +61,7 @@ const attemptsLine = (row: StudentCourseworkRow) => {
 
 /** The row's title, linked to where the student does the work. */
 const TitleLink = ({ row }: { row: StudentCourseworkRow }) => {
+  const web = useGitWeb();
   const className =
     'inline-flex items-center gap-1.5 font-medium text-ink-0! hover:underline underline-offset-2';
   if (!row.href) return <span className="font-medium text-ink-0">{row.title}</span>;
@@ -74,7 +76,7 @@ const TitleLink = ({ row }: { row: StudentCourseworkRow }) => {
     row.type === 'FORM'
       ? 'Open the form'
       : row.repo?.issueUrl
-        ? 'Open the GitHub issue for this assignment'
+        ? `Open the ${web.label} issue for this assignment`
         : 'Open the repository you submit this in';
   return (
     <a href={row.href} target="_blank" rel="noreferrer" title={title} className={className}>
@@ -89,6 +91,7 @@ const AssignmentsTabsCard = ({
   balance,
   initialTab = 'current',
 }: AssignmentsTabsCardProps) => {
+  const web = useGitWeb();
   const [active, setActive] = useState<TabKey>(initialTab);
   const reducedMotion = useReducedMotion();
   const { class: classSlug } = useParams();
@@ -232,7 +235,7 @@ const AssignmentsTabsCard = ({
                                   href={repo.repoUrl}
                                   target="_blank"
                                   rel="noreferrer"
-                                  title="Open your repository on GitHub"
+                                  title={`Open your repository on ${web.label}`}
                                   className="inline-flex items-center gap-1 max-w-[14rem] text-gray-700! dark:text-gray-200! hover:text-ink-0! hover:underline underline-offset-2 transition-colors"
                                 >
                                   <span className="truncate">

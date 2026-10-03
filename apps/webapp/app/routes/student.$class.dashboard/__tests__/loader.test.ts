@@ -175,6 +175,7 @@ describe('student dashboard loader — Up next', () => {
       userId: 'student-1',
       quizzesVisible: false,
       gitOrgLogin: 'test-org',
+      git: expect.objectContaining({ login: 'test-org' }),
       repoSubmissions: submissions,
       assignments: [{ id: 'listed' }],
     });

@@ -1,4 +1,5 @@
 import { Switch, Table, Tooltip, Skeleton, Alert } from 'antd';
+import { useGitContext, useGitWeb } from '~/hooks/useGitWeb';
 import { Link, useLocation, useParams } from 'react-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -158,6 +159,8 @@ const RepositoryAssignmentsTable = ({
   emojiMappings,
   instructionPages = {},
 }: RepositoryAssignmentsTableProps) => {
+  const gitCtx = useGitContext();
+  const web = useGitWeb();
   const [userQuery, setUserQuery] = useState('');
   const [showMyAssignments, setShowMyAssignments] = useState(true);
   const [active, setActive] = useState<TabKey>('overview');
@@ -355,7 +358,7 @@ const RepositoryAssignmentsTable = ({
       },
     },
     {
-      title: 'Repository',
+      title: web.terms.Repo,
       dataIndex: ['git_repo', 'repository', 'title'],
       key: 'repository',
       filters:
@@ -468,8 +471,7 @@ const RepositoryAssignmentsTable = ({
         <TableActionButtons
           onView={
             classroom?.git_organization?.login
-              ? () =>
-                  openRepositoryAssignmentInGithub(classroom.git_organization.login, repoAssignment)
+              ? () => openRepositoryAssignmentInGithub(gitCtx, repoAssignment)
               : undefined
           }
         >

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { data, redirect } from 'react-router';
 
 import { Alert } from 'antd';
@@ -6,6 +7,8 @@ import getPrisma from '@classmoji/database';
 import { isSafeRelativePath } from '@classmoji/auth/site-return';
 import { authClient } from '@classmoji/auth/client';
 import SignInPage from './SignInPage';
+import GitLabSignIn from './GitLabSignIn';
+import { loadGitLabSignIn } from './gitlabSignIn.server';
 import type { Route } from './+types/route';
 
 /**
@@ -49,6 +52,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         {
           isDev: process.env.NODE_ENV === 'development',
           multipleTokens: process.env.MULTIPLE_TOKENS === 'true',
+          gitlab: await loadGitLabSignIn(url, redirectPath),
           setupComplete: false,
           redirectPath,
           oauthError: null,
@@ -65,26 +69,38 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   return {
     isDev: process.env.NODE_ENV === 'development',
     multipleTokens: process.env.MULTIPLE_TOKENS === 'true',
+    // gitlab.com (when configured) and any self-managed instances.
+    gitlab: await loadGitLabSignIn(url, redirectPath),
     setupComplete: url.searchParams.get('setup') === 'complete',
     redirectPath,
-    // better-auth sends a failed Github sign-in back here with `?error=<code>`.
+    // A failed sign-in comes back here with `?error=<code>` (SignInPage words it).
     oauthError: url.searchParams.get('error'),
   };
 };
 
 const Index = ({ loaderData }: Route.ComponentProps) => {
-  const { isDev, setupComplete, multipleTokens, redirectPath, oauthError } = loaderData;
-  const callbackURL = redirectPath ?? '/select-organization';
+  const { isDev, setupComplete, multipleTokens, gitlab, redirectPath, oauthError } = loaderData;
 
+  // Use BetterAuth client for OAuth flow. `redirectPath` was validated in the
+  // loader; it is null unless it is a safe relative path.
+  const callbackURL = redirectPath ?? '/select-organization';
   const handleGitHubLogin = async () => {
-    // Use BetterAuth client for OAuth flow. `redirectPath` was validated in the
-    // loader; it is null unless it is a safe relative path.
-    await authClient.signIn.social({
-      provider: 'github',
-      callbackURL,
-      errorCallbackURL: '/',
-    });
+    await authClient.signIn.social({ provider: 'github', callbackURL, errorCallbackURL: '/' });
   };
+  // Sits under "Continue with Github", in the same shape.
+  const gitlabButtonClass =
+    'w-full flex items-center justify-center gap-2 bg-white hover:bg-stone-50 dark:bg-neutral-900 dark:hover:bg-neutral-800 text-gray-900 dark:text-white ring-1 ring-stone-200 dark:ring-neutral-700 font-medium rounded-lg px-4 py-2.5 transition-colors cursor-pointer';
+  // While the Gitlab chooser is open it takes the whole column: no Github button.
+  const [gitlabChoosing, setGitlabChoosing] = useState(false);
+  const gitlabSignIn = (buttonClassName: string) =>
+    gitlab.enabled ? (
+      <GitLabSignIn
+        options={gitlab}
+        callbackURL={callbackURL}
+        buttonClassName={buttonClassName}
+        onChoosingChange={setGitlabChoosing}
+      />
+    ) : null;
 
   const setupBanner = setupComplete && (
     <Alert
@@ -103,6 +119,8 @@ const Index = ({ loaderData }: Route.ComponentProps) => {
           handleGitHubLogin={handleGitHubLogin}
           callbackURL={callbackURL}
           oauthError={oauthError}
+          gitlabChoosing={gitlabChoosing}
+          gitlabSignIn={gitlabSignIn(gitlabButtonClass)}
         >
           <div className="mb-8 flex flex-col items-center">
             <div className="text-ink-3 text-sm mb-2">Development Login</div>
@@ -154,6 +172,8 @@ const Index = ({ loaderData }: Route.ComponentProps) => {
         handleGitHubLogin={handleGitHubLogin}
         callbackURL={callbackURL}
         oauthError={oauthError}
+        gitlabChoosing={gitlabChoosing}
+        gitlabSignIn={gitlabSignIn(gitlabButtonClass)}
       />
     </>
   );

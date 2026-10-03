@@ -40,9 +40,11 @@ export const FONT_SIZE_DEFAULT = 17;
 export const CONTRAST_MIN = 0;
 export const CONTRAST_MAX = 100;
 export const CONTRAST_DEFAULT = 50;
+/** Classmoji green: the accent everyone starts with. */
+export const DEFAULT_ACCENT = '#21883d';
 const DEFAULT_TWEAKS: TweaksState = {
   theme: 'system',
-  accent: '#21883d',
+  accent: DEFAULT_ACCENT,
   background: 'default',
   uiFontSize: FONT_SIZE_DEFAULT,
   translucentSidebar: false,

@@ -133,7 +133,7 @@ describe('identityMaskFromDefinitions', () => {
 describe('nameIsMaskedAnswer', () => {
   const mask = new Set([SELF]);
 
-  it('is true when the name is the response\'s answer to a masked question', () => {
+  it("is true when the name is the response's answer to a masked question", () => {
     expect(nameIsMaskedAnswer('Sam', { [SELF]: 'Sam', [REASON]: 'Curious' }, mask)).toBe(true);
     // The fill path stored the answer trimmed.
     expect(nameIsMaskedAnswer('Sam', { [SELF]: '  Sam ' }, mask)).toBe(true);
@@ -238,7 +238,13 @@ describe.skipIf(!RUN)('identityMaskForForm (integration)', () => {
     classroomId = classroom.id;
     const owner = await prisma.user.create({
       data: {
-        login: `identitytest-${suite}-owner`,
+        accounts: {
+          create: {
+            provider_id: 'github',
+            account_id: `identitytest-${suite}-owner`,
+            username: `identitytest-${suite}-owner`,
+          },
+        },
         email: `identitytest-${suite}-owner@example.test`,
         name: 'Identity Test Owner',
       },
@@ -249,7 +255,13 @@ describe.skipIf(!RUN)('identityMaskForForm (integration)', () => {
   afterAll(async () => {
     if (orgId) await prisma.gitOrganization.delete({ where: { id: orgId } }).catch(() => {});
     await prisma.user
-      .deleteMany({ where: { login: { startsWith: `identitytest-${suite}-` } } })
+      .deleteMany({
+        where: {
+          accounts: {
+            some: { provider_id: 'github', username: { startsWith: `identitytest-${suite}-` } },
+          },
+        },
+      })
       .catch(() => {});
   });
 
@@ -300,14 +312,26 @@ describe.skipIf(!RUN)('identityMaskForForm (integration)', () => {
   it('responseNames falls back to the account name, or the login, for a replaced name', async () => {
     const named = await prisma.user.create({
       data: {
-        login: `identitytest-${suite}-named`,
+        accounts: {
+          create: {
+            provider_id: 'github',
+            account_id: `identitytest-${suite}-named`,
+            username: `identitytest-${suite}-named`,
+          },
+        },
         email: `identitytest-${suite}-named@example.test`,
         name: 'Account Name',
       },
     });
     const unnamed = await prisma.user.create({
       data: {
-        login: `identitytest-${suite}-login`,
+        accounts: {
+          create: {
+            provider_id: 'github',
+            account_id: `identitytest-${suite}-login`,
+            username: `identitytest-${suite}-login`,
+          },
+        },
         email: `identitytest-${suite}-login@example.test`,
       },
     });

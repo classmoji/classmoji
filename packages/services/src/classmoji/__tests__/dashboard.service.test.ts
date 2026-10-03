@@ -29,7 +29,7 @@ describe('emojiToGrade', () => {
   });
 
   it('falls back to default mapping', () => {
-    expect(emojiToGrade('heart', new Map())).toBe(100);
+    expect(emojiToGrade('rocket', new Map())).toBe(100);
   });
 
   it('returns null for unknown emoji', () => {

@@ -5,6 +5,8 @@ import { IconChevronDown } from '@tabler/icons-react';
 import useStore from '~/store';
 import { roleSettings } from '~/constants/roleSettings';
 import type { MembershipWithOrganization } from '~/types';
+import { ClassMark } from '~/components/features/landing/ClassMark';
+import { hashHue } from '~/utils/hue';
 
 interface OrgSelectProps {
   memberships: MembershipWithOrganization[];
@@ -135,11 +137,21 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
                 );
               }}
             >
-              <Avatar
-                src={membershipOption.organization.avatar_url}
-                size={22}
-                className="shrink-0"
-              />
+              {/* The Github org's picture; a Gitlab class has none, so it gets the
+                  same class mark as its card on the classroom picker. */}
+              {membershipOption.organization.avatar_url ? (
+                <Avatar
+                  src={membershipOption.organization.avatar_url}
+                  size={22}
+                  className="shrink-0"
+                />
+              ) : (
+                <ClassMark
+                  hue={hashHue(membershipOption.organization.id)}
+                  name={membershipOption.organization.name ?? membershipOption.organization.login}
+                  size={22}
+                />
+              )}
               <div className="min-w-0 flex-1">
                 <div className="flex items-baseline gap-1.5 min-w-0">
                   <div className="font-medium text-sm text-ink-0 truncate leading-tight">

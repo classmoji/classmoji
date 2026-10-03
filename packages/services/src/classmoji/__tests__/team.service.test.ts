@@ -40,7 +40,11 @@ const client = {
   $queryRaw: (...a: unknown[]) => queryRaw(...a),
   $transaction: (fn: (tx: unknown) => unknown) => transaction(fn),
 };
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
   default: () => client,
 }));
 
@@ -152,7 +156,7 @@ describe('teamAdmin.createTeam', () => {
 
     expect(createTeam).toHaveBeenCalledWith('cs1-org', 'Blue Team');
     expect(teamCreate).toHaveBeenCalledWith({
-      providerId: 7,
+      providerId: '7',
       provider: 'GITHUB',
       name: 'Blue Team',
       slug: 'blue-team',
@@ -380,7 +384,6 @@ describe('team.create', () => {
 describe('teamAdmin.deleteTeam', () => {
   it('leaves the provider team alone unless asked, and removes the local row', async () => {
     const result = await teamAdmin.deleteTeam({ classroomId: 'class-1', slugOrId: 'blue-team' });
-
     expect(deleteTeam).not.toHaveBeenCalled();
     expect(teamDeleteBySlug).toHaveBeenCalledWith('class-1', 'blue-team');
     expect(result.removedFromProvider).toBe(false);
@@ -446,7 +449,11 @@ describe('teamAdmin.deleteTeam', () => {
   });
 
   it('scopes the lookup to the classroom, by slug or id', async () => {
-    await teamAdmin.deleteTeam({ classroomId: 'class-1', slugOrId: 'blue-team' });
+    await teamAdmin.deleteTeam({
+      classroomId: 'class-1',
+      slugOrId: 'blue-team',
+      deleteOnProvider: true,
+    });
 
     expect(teamFindFirst.mock.calls[0][0].where).toEqual({
       classroom_id: 'class-1',
@@ -510,10 +517,10 @@ describe('teamAdmin.renameTeam', () => {
     expect(teamRenameAndRepos).not.toHaveBeenCalled();
   });
 
-  it('refuses a non-GitHub organization before resolving anything', async () => {
+  it('refuses an unsupported provider before resolving anything', async () => {
     classroomFindById.mockResolvedValue({
       ...CLASSROOM,
-      git_organization: { ...CLASSROOM.git_organization, provider: 'GITLAB' },
+      git_organization: { ...CLASSROOM.git_organization, provider: 'GITEA' },
     });
 
     await expect(
@@ -685,7 +692,9 @@ describe('teamAdmin.removeTeamMember', () => {
     });
 
     expect(userFindFirst.mock.calls[0][0].where).toEqual({
-      login: { equals: 'Ada', mode: 'insensitive' },
+      accounts: {
+        some: { provider_id: 'github', username: { equals: 'Ada', mode: 'insensitive' } },
+      },
     });
     expect(removeTeamMember).toHaveBeenCalledWith('cs1-org', 'blue-team', 'ada');
   });

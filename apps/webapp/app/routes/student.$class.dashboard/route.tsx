@@ -1,4 +1,5 @@
 import { Suspense } from 'react';
+import { gitContextFor, gitWeb } from '~/utils/gitWeb';
 import { Await, useParams } from 'react-router';
 import { Skeleton } from 'antd';
 import dayjs from 'dayjs';
@@ -53,6 +54,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const weekStart = startOfWeek(serverNow);
   const fetchWindow = eventFetchWindow(serverNow);
   const gitOrgLogin = classroom.git_organization?.login ?? null;
+  const web = gitWeb(gitContextFor(classroom));
 
   const dataPromise = (async (): Promise<DashboardData> => {
     // Started alongside the reads below. It never rejects: a failed lookup
@@ -111,6 +113,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
             userId,
             quizzesVisible,
             gitOrgLogin,
+            git: gitContextFor(classroom),
             repoSubmissions: allRepoAssignments,
             assignments: assignmentListing,
           })
@@ -200,10 +203,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
             login: mb.user.login,
             image: mb.user.image ?? null,
           })),
-          repoUrl:
-            gitOrgLogin && teamRepoName
-              ? `https://github.com/${gitOrgLogin}/${teamRepoName}`
-              : null,
+          repoUrl: gitOrgLogin && teamRepoName ? web.repo(teamRepoName) : null,
         };
         break;
       }

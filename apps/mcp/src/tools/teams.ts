@@ -107,7 +107,7 @@ function mapTeamError(error: unknown, tagRequired?: keyof typeof TAG_REQUIRED_ME
     case 'no_org_configured':
       return new ToolError(
         'invalid_params',
-        'This classroom has no linked GitHub organization — teams cannot be managed'
+        'This classroom has no linked Github organization or Gitlab group — teams cannot be managed'
       );
     case 'invalid_name':
     case 'reserved_name':
@@ -394,10 +394,10 @@ export const teamDeleteTool: ToolDefinition<TeamDeleteArgs> = {
       deleted_repo_names: result.deletedRepoNames,
       message:
         (result.removedFromProvider
-          ? `Team '${result.slug}' was deleted on GitHub and removed from Classmoji.`
+          ? `Team '${result.slug}' was deleted on Github and removed from Classmoji.`
           : args.delete_on_github
             ? `Team '${result.slug}' was already gone on GitHub; the Classmoji record was removed.`
-            : `Team '${result.slug}' was removed from Classmoji; the GitHub team and repositories were left in place.`) +
+            : `Team '${result.slug}' was removed from Classmoji; the Github team and repositories were left in place.`) +
         repoNote,
     });
   },

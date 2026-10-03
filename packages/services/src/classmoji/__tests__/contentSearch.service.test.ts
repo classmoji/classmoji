@@ -210,7 +210,17 @@ beforeAll(async () => {
   ids.org = org.id;
 
   const author = await getPrisma().user.create({
-    data: { login: `p26-author-${ns}`, email: `p26-author-${ns}@example.test`, name: 'Fixture' },
+    data: {
+      accounts: {
+        create: {
+          provider_id: 'github',
+          account_id: `p26-author-${ns}`,
+          username: `p26-author-${ns}`,
+        },
+      },
+      email: `p26-author-${ns}@example.test`,
+      name: 'Fixture',
+    },
   });
   ids.author = author.id;
 

@@ -170,6 +170,12 @@ describe('ownedTemplateRepoNames', () => {
     ]);
   });
 
+  it('accepts a Gitlab group path as the owner (group/templates/name)', () => {
+    expect(
+      ownedTemplateRepoNames(['cs/templates/lab1', 'cs/lab2', 'cs/templates/x/y'], 'cs/templates')
+    ).toEqual(['lab1']);
+  });
+
   it('skips empty, null and over-segmented refs', () => {
     expect(ownedTemplateRepoNames([null, undefined, '', '   ', 'a/b/c'], 'cs52-org')).toEqual([]);
   });

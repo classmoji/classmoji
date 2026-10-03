@@ -19,7 +19,10 @@ import { sendRequest } from '~/services/aiAgentConnection.server';
 import { verifySessionOwnership, AgentType } from '~/utils/agentVerification.server';
 import agentStreamManager from '~/utils/agentStreamManager';
 import { v4 as uuidv4 } from 'uuid';
-import { getInstallationToken } from '~/routes/student.$class.quizzes/helpers.server';
+import {
+  getInstallationToken,
+  gitlabProjectAccess,
+} from '~/routes/student.$class.quizzes/helpers.server';
 import type { Route } from './+types/route';
 
 // Helper to create JSON responses
@@ -151,7 +154,28 @@ async function handleInitSession(request: Request, formData: FormData) {
   };
 
   // If example repo URL provided, parse and add clone info
-  if (exampleRepoUrl) {
+  if (exampleRepoUrl && classroom.git_organization?.provider === 'GITLAB') {
+    // Gitlab: only a project on this classroom's own Gitlab, read through a
+    // read-only token for that project alone.
+    try {
+      const org = classroom.git_organization as typeof classroom.git_organization & {
+        base_url?: string | null;
+        gitlab_instance_id?: string | null;
+      };
+      const { ClassmojiService: services } = await import('@classmoji/services');
+      const host = await services.gitlabInstance.hostForOrganization(org);
+      const repoInfo = parseGitLabProjectUrl(exampleRepoUrl, host);
+      if (repoInfo) {
+        const access = await gitlabProjectAccess(org, repoInfo.owner, repoInfo.repo);
+        Object.assign(payload, { ...access, repoName: repoInfo.repo });
+      }
+    } catch (error: unknown) {
+      console.warn(
+        '[prompt-assistant] Could not use the example Gitlab project:',
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  } else if (exampleRepoUrl) {
     try {
       const repoInfo = parseGitHubRepoUrl(exampleRepoUrl);
       if (repoInfo) {
@@ -327,6 +351,29 @@ async function handleEndSession(request: Request, formData: FormData) {
     console.error('[prompt-assistant] End session error (non-fatal):', error);
     return jsonResponse({ success: true });
   }
+}
+
+/**
+ * A Gitlab project URL on `host` (the classroom's own Gitlab), as its
+ * namespace (which may be nested: `cs/templates`) and project path. Anything
+ * on another host is refused: the token minted for it would go there.
+ * Supports https://host/group/sub/project(.git), with or without /-/… pages.
+ */
+function parseGitLabProjectUrl(url: string, host: string) {
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim());
+  } catch {
+    return null;
+  }
+  if (parsed.origin !== new URL(host).origin) return null;
+  const path = parsed.pathname
+    .split('/-/')[0]
+    .replace(/\.git$/, '')
+    .replace(/^\/+|\/+$/g, '');
+  const segments = path.split('/').filter(Boolean);
+  if (segments.length < 2) return null;
+  return { owner: segments.slice(0, -1).join('/'), repo: segments[segments.length - 1]! };
 }
 
 /**

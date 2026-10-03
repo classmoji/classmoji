@@ -14,7 +14,7 @@ import {
 import { ClassmojiService } from '@classmoji/services';
 import FolderTabs from '~/components/ui/FolderTabs';
 import AddContentItemModal from '~/components/features/modules/AddContentItemModal';
-import { TYPE_META, describeItem } from '~/components/features/modules/moduleItemMeta';
+import { TYPE_META, describeItem, typeLabel } from '~/components/features/modules/moduleItemMeta';
 import AssignmentsTable, {
   type AssignmentRowData,
 } from '~/components/features/assignments/AssignmentsTable';
@@ -257,7 +257,7 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
                   {note && (
                     <span className="shrink-0 text-xs text-ink-3 whitespace-nowrap">{note}</span>
                   )}
-                  <Tag className="shrink-0">{meta.label}</Tag>
+                  <Tag className="shrink-0">{typeLabel(item.item_type)}</Tag>
                   <Tag color={published ? 'green' : 'orange'} className="shrink-0">
                     {published ? 'Published' : 'Draft'}
                   </Tag>

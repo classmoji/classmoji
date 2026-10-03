@@ -18,6 +18,7 @@ import * as docsIndexTasks from './workflows/docsIndexReconcile.ts';
 import * as deckThumbnailTasks from './workflows/deckThumbnail.ts';
 import * as instructorContactTasks from './workflows/instructorContacts.ts';
 import * as exampleClassroomCleanupTasks from './workflows/exampleClassroomCleanup.ts';
+import * as gitlabWebhookTasks from './workflows/gitlabWebhooks.ts';
 // team-set-solve and team-set-apply (workflows/teamSet*.ts) are deliberately NOT
 // here: Trigger finds them through `dirs`, the service triggers them by string
 // id, and importing them would pull @trigger.dev/python into every app bundle
@@ -27,6 +28,7 @@ import * as exampleClassroomCleanupTasks from './workflows/exampleClassroomClean
 
 const Tasks = {
   ...repositoryTasks,
+  ...gitlabWebhookTasks,
   ...repositoryAssignmentTasks,
   ...organizationTasks,
   ...autogradeTasks,

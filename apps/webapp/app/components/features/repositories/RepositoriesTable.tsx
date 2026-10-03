@@ -1,5 +1,5 @@
 import { forwardRef, useMemo, useState } from 'react';
-import { Dropdown, Table, Tag } from 'antd';
+import { Dropdown, Table, Tag, Tooltip } from 'antd';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { titleToIdentifier } from '@classmoji/utils';
 import type { MenuProps } from 'antd';
@@ -17,6 +17,7 @@ import {
 } from '@tabler/icons-react';
 
 import { useRepositoryActions } from './useRepositoryActions';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import AssignmentFormModal from '~/components/features/assignments/AssignmentFormModal';
 import type { AssignmentRowData } from '~/components/features/assignments/AssignmentsTable';
 
@@ -136,6 +137,8 @@ const RepositoriesTable = ({
   // cards so the two surfaces cannot drift.
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
+  const web = useGitWeb();
+  const { terms } = web;
   // Stay in the section the viewer is already in: an assistant following a link
   // into /admin would only meet a loader that refuses them.
   const rolePrefix = useLocation().pathname.split('/')[1] || 'admin';
@@ -165,7 +168,7 @@ const RepositoriesTable = ({
           { key: 'autograde', label: 'Autograde', icon: <IconRobot size={15} /> },
           {
             key: 'update',
-            label: 'Update student repositories',
+            label: `Update student ${web.terms.repos}`,
             icon: <IconGitPullRequest size={15} />,
           },
           ...(r.type === 'GROUP'
@@ -251,7 +254,7 @@ const RepositoriesTable = ({
 
   const columns = [
     {
-      title: 'Repository',
+      title: terms.Repo,
       dataIndex: 'name',
       key: 'name',
       width: 240,
@@ -268,7 +271,7 @@ const RepositoriesTable = ({
                   color={a.submission_mode === 'REPO' ? 'geekblue' : 'purple'}
                   className="m-0 shrink-0 font-medium"
                 >
-                  {a.submission_mode === 'REPO' ? 'push' : 'issue'}
+                  {a.submission_mode === 'REPO' ? 'push' : terms.issue}
                 </Tag>
               )}
               {record.is_extra_credit && (
@@ -299,6 +302,17 @@ const RepositoriesTable = ({
               <Tag color="purple" className="m-0 shrink-0 font-medium">
                 issue
               </Tag>
+            )}
+            {/* Handed out on its own, it reaches students only through their
+                Repositories page: no module, deadline or grade. */}
+            {(r.assignments ?? []).length === 0 && (
+              <Tooltip
+                title={`Students only find this under ${terms.Repos}. Add it to an assignment in a module to give it a deadline, a grade and a place in their modules.`}
+              >
+                <Tag className="m-0 shrink-0 font-medium text-gray-600! dark:text-gray-300!">
+                  No assignment
+                </Tag>
+              </Tooltip>
             )}
           </span>
         );
@@ -455,13 +469,13 @@ const RepositoriesTable = ({
         pagination={{
           pageSize: 25,
           showSizeChanger: true,
-          showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} repositories`,
+          showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} ${terms.repos}`,
         }}
         locale={{
           emptyText: (
             <div className="text-center py-12 text-gray-500">
-              <div className="font-medium">No repositories created yet</div>
-              <div className="text-sm">Create your first repository to get started!</div>
+              <div className="font-medium">No {terms.repos} created yet</div>
+              <div className="text-sm">Create your first {terms.repo} to get started!</div>
             </div>
           ),
         }}
