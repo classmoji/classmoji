@@ -130,7 +130,7 @@ describe('grade_remove_all per-grade audit (U9)', () => {
       { id: 'g2', emoji: '🔴' },
       { id: 'g3', emoji: '🟡' },
     ]);
-    mocks.removeGradeFromGitRepoAssignment.mockResolvedValue(undefined);
+    mocks.removeGradeFromGitRepoAssignment.mockResolvedValue(true);
 
     const payload = parse(await gradeRemoveAllTool.handler(REMOVE_ARGS, CTX));
     expect(payload.removed_count).toBe(3);
@@ -142,6 +142,26 @@ describe('grade_remove_all per-grade audit (U9)', () => {
     expect(auditedGradeIds).toEqual(['g1', 'g2', 'g3']);
   });
 
+  it('counts and audits only the grades this call removed', async () => {
+    mocks.findByAssignmentId.mockResolvedValue([
+      { id: 'g1', emoji: '🟢' },
+      { id: 'g2', emoji: '🔴' },
+      { id: 'g3', emoji: '🟡' },
+    ]);
+    // g2 was already gone when its removal ran: nothing changed for it.
+    mocks.removeGradeFromGitRepoAssignment
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+
+    const payload = parse(await gradeRemoveAllTool.handler(REMOVE_ARGS, CTX));
+    expect(payload.removed_count).toBe(2);
+    const auditedGradeIds = mocks.auditCreate.mock.calls.map(
+      c => (c[0] as { data: { grade_id: string } }).data.grade_id
+    );
+    expect(auditedGradeIds).toEqual(['g1', 'g3']);
+  });
+
   it('still audits the completed removals when the loop throws partway', async () => {
     mocks.findByAssignmentId.mockResolvedValue([
       { id: 'g1', emoji: '🟢' },
@@ -149,7 +169,7 @@ describe('grade_remove_all per-grade audit (U9)', () => {
     ]);
     // First removal succeeds and is audited; the second throws.
     mocks.removeGradeFromGitRepoAssignment
-      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(true)
       .mockRejectedValueOnce(new Error('boom'));
 
     await expect(gradeRemoveAllTool.handler(REMOVE_ARGS, CTX)).rejects.toThrow('boom');
@@ -206,7 +226,7 @@ describe('numeric submission ids (ISSUE mode: id == GitHub issue id)', () => {
       emoji: '🟢',
       git_repo_assignment_id: NUMERIC_ID,
     });
-    mocks.removeGradeFromGitRepoAssignment.mockResolvedValue(undefined);
+    mocks.removeGradeFromGitRepoAssignment.mockResolvedValue(true);
 
     const payload = parse(
       await gradeRemoveTool.handler(
@@ -214,14 +234,41 @@ describe('numeric submission ids (ISSUE mode: id == GitHub issue id)', () => {
         CTX
       )
     );
-    expect(payload).toMatchObject({ success: true, removed: { id: GRADE_ID } });
+    expect(payload).toMatchObject({
+      success: true,
+      removed: { id: GRADE_ID },
+      already_removed: false,
+    });
     expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({ resource_id: NUMERIC_ID });
+  });
+
+  it('grade_remove writes no audit row when the grade was already removed', async () => {
+    mocks.findById.mockResolvedValue(numericGra([]));
+    mocks.gradeFindById.mockResolvedValue({
+      id: GRADE_ID,
+      emoji: '🟢',
+      git_repo_assignment_id: NUMERIC_ID,
+    });
+    mocks.removeGradeFromGitRepoAssignment.mockResolvedValue(false);
+
+    const payload = parse(
+      await gradeRemoveTool.handler(
+        { classroom: 'org/winter-2025', git_repo_assignment_id: NUMERIC_ID, grade_id: GRADE_ID },
+        CTX
+      )
+    );
+    expect(payload).toMatchObject({
+      success: true,
+      removed: { id: GRADE_ID },
+      already_removed: true,
+    });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
   it('grade_remove_all clears the numeric submission', async () => {
     mocks.findById.mockResolvedValue(numericGra([]));
     mocks.findByAssignmentId.mockResolvedValue([{ id: 'g1', emoji: '🟢' }]);
-    mocks.removeGradeFromGitRepoAssignment.mockResolvedValue(undefined);
+    mocks.removeGradeFromGitRepoAssignment.mockResolvedValue(true);
 
     const payload = parse(
       await gradeRemoveAllTool.handler(

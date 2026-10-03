@@ -30,9 +30,9 @@ const LATEST_FIRST: Prisma.TokenTransactionOrderByWithRelationInput[] = [
   { id: 'desc' },
 ];
 
-type LedgerTx = Prisma.TransactionClient;
+export type LedgerTx = Prisma.TransactionClient;
 
-const LEDGER_TX = { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted };
+export const LEDGER_TX = { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted };
 
 /**
  * Serialize writes to one student's ledger in one classroom, so each new row
@@ -51,6 +51,31 @@ const LEDGER_TX = { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitt
  */
 const lockLedger = async (tx: LedgerTx, classroomId: string, studentId: string) => {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${classroomId}::text || ':' || ${studentId}::text, 0))`;
+};
+
+/**
+ * Lock several students' ledgers in one classroom, for a transaction that
+ * writes to all of them (a team's grade). Each id is locked once, in sorted
+ * order, so two transactions over overlapping sets of students always take
+ * their locks in the same order and cannot wait on each other in a cycle.
+ */
+export const lockLedgers = async (tx: LedgerTx, classroomId: string, studentIds: string[]) => {
+  for (const studentId of [...new Set(studentIds)].sort()) {
+    await lockLedger(tx, classroomId, studentId);
+  }
+};
+
+/**
+ * Serialize grade changes on one submission (GitRepoAssignment). Grade
+ * transactions take this first, before any ledger lock, so two grade changes
+ * on the same submission run one after the other even when it pays nobody (a
+ * repo with no owner, or a team with no members) and so takes no ledger lock.
+ * Purchases and cancels take only ledger locks, so the order of locks stays
+ * the same everywhere. An advisory lock, not a row lock on the submission:
+ * ledger inserts already take key-share locks on that row.
+ */
+export const lockSubmission = async (tx: LedgerTx, gitRepoAssignmentId: string) => {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended('gra:' || ${gitRepoAssignmentId}::text, 0))`;
 };
 
 /** The latest row of a student's ledger. Call only after `lockLedger`. */
@@ -271,29 +296,42 @@ export const findTransactions = async (query: Prisma.TokenTransactionWhereInput)
   );
 };
 
-export const assignToStudent = async (data: AssignToStudentInput) => {
-  return getPrisma().$transaction(async tx => {
-    await lockLedger(tx, data.classroomId, data.studentId);
-    const transaction = await findLatest(tx, data.classroomId, data.studentId);
+/** The write behind assignToStudent. Call only after `lockLedger`. */
+const appendToLedger = async (tx: LedgerTx, data: AssignToStudentInput) => {
+  const transaction = await findLatest(tx, data.classroomId, data.studentId);
 
-    const studentBalance = transaction?.balance_after || 0;
-    const newBalance = studentBalance + data.amount;
+  const studentBalance = transaction?.balance_after || 0;
+  const newBalance = studentBalance + data.amount;
 
-    return tx.tokenTransaction.create({
-      data: {
-        type: (data.type as TokenTransactionType) || 'GAIN',
-        amount: data.amount,
-        balance_after: newBalance,
-        student_id: data.studentId,
-        classroom_id: data.classroomId,
-        // `description` is a non-nullable column (@default('')). A null here makes
-        // Prisma's create validation fail with a misleading "Argument `classroom`
-        // is missing", so coalesce null/undefined to an empty string.
-        description: data.description ?? '',
-        git_repo_assignment_id: data.repositoryAssignmentId,
-        created_at: nextCreatedAt(transaction),
-      },
-    });
+  return tx.tokenTransaction.create({
+    data: {
+      type: (data.type as TokenTransactionType) || 'GAIN',
+      amount: data.amount,
+      balance_after: newBalance,
+      student_id: data.studentId,
+      classroom_id: data.classroomId,
+      // `description` is a non-nullable column (@default('')). A null here makes
+      // Prisma's create validation fail with a misleading "Argument `classroom`
+      // is missing", so coalesce null/undefined to an empty string.
+      description: data.description ?? '',
+      git_repo_assignment_id: data.repositoryAssignmentId,
+      created_at: nextCreatedAt(transaction),
+    },
+  });
+};
+
+/**
+ * Append a row to a student's ledger. Without `tx` it runs in its own
+ * transaction and takes the student's ledger lock. With `tx` it writes inside
+ * the caller's transaction, so the row commits or rolls back with the rest of
+ * the caller's work; the caller must already hold the lock (`lockLedgers`)
+ * and run at read committed.
+ */
+export const assignToStudent = async (data: AssignToStudentInput, tx?: LedgerTx) => {
+  if (tx) return appendToLedger(tx, data);
+  return getPrisma().$transaction(async ownTx => {
+    await lockLedger(ownTx, data.classroomId, data.studentId);
+    return appendToLedger(ownTx, data);
   }, LEDGER_TX);
 };
 

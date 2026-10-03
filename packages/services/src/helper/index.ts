@@ -1,4 +1,6 @@
 import { tasks } from '@trigger.dev/sdk';
+import { Prisma } from '@prisma/client';
+import getPrisma from '@classmoji/database';
 import { GITLAB_PROJECTS_SUBGROUP, parseScoreEmoji } from '@classmoji/utils';
 import { getGitProvider } from '../git/index.ts';
 import ClassmojiService from '../classmoji/index.ts';
@@ -196,37 +198,14 @@ interface GradeAssignmentPayload {
   teamId?: string;
 }
 
-interface TokenAssignmentPayload {
-  organization: HelperClassroomRef;
-  gitRepoAssignment: GitRepoAssignmentRef;
-  grade: string;
-  studentId: string;
-}
-
-interface TeamTokenAssignmentPayload extends Omit<TokenAssignmentPayload, 'studentId'> {
-  teamId: string;
-}
-
 interface EmojiMappingWithTokens {
   emoji: string;
   extra_tokens: number;
 }
 
-interface AssignmentGradeRef {
-  id: string;
-}
-
 interface TokenTransactionRef {
   id: string;
   amount: number;
-}
-
-interface TeamMembershipRef {
-  user_id: string;
-}
-
-interface TeamWithMemberships {
-  memberships?: TeamMembershipRef[] | null;
 }
 
 interface GradeWithTokenTransaction {
@@ -239,6 +218,129 @@ interface RemoveGradePayload {
   classroom: HelperClassroomRef;
   gitRepoAssignment: GitRepoAssignmentRef;
   grade: GradeWithTokenTransaction;
+}
+
+/**
+ * Options for a grade transaction. Read committed, which the ledger locks rely
+ * on (see lockLedger in token.service), and a longer timeout than Prisma's 5 s
+ * default, since a team grade writes one ledger row per member. `maxWait` is
+ * how long to wait for a pooled connection (Prisma's default is 2 s), so a
+ * burst of grade changes queued on the same locks does not fail other requests
+ * waiting for a connection.
+ */
+const GRADE_TX = {
+  isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+  maxWait: 5_000,
+  timeout: 15_000,
+};
+
+/** One grade transaction's submission and the students its rewards go to. */
+interface GradeScope {
+  classroomId: string;
+  gitRepoAssignmentId: string;
+  /** The repo's student, or its team's members; sorted, each once. */
+  recipients: string[];
+}
+
+/**
+ * Start a grade transaction on a submission: lock the submission, read from
+ * the database who its token rewards go to (the student who owns the repo, or
+ * every current member of the team that owns it), then lock those ledgers for
+ * the rest of the transaction. Grades, their token rows and the link between
+ * them then commit together, and no other grade change on this submission or
+ * ledger write on these students interleaves. The submission lock comes
+ * first, then `lockLedgers` in sorted order, so the lock order is the same in
+ * every transaction.
+ */
+async function openGradeScope(
+  tx: Prisma.TransactionClient,
+  classroomId: string,
+  gitRepoAssignmentId: string
+): Promise<GradeScope> {
+  // Taken even when the submission pays nobody (no ledger locks follow), so
+  // two identical grade changes on it never run side by side.
+  await ClassmojiService.token.lockSubmission(tx, gitRepoAssignmentId);
+  const submission = await tx.gitRepoAssignment.findUnique({
+    where: { id: gitRepoAssignmentId },
+    select: { git_repo: { select: { student_id: true, team_id: true } } },
+  });
+  const repo = submission?.git_repo;
+  let recipients: string[] = [];
+  if (repo?.student_id) {
+    recipients = [repo.student_id];
+  } else if (repo?.team_id) {
+    const members = await tx.teamMembership.findMany({
+      where: { team_id: repo.team_id },
+      select: { user_id: true },
+    });
+    recipients = members.map(member => member.user_id);
+  }
+  recipients = [...new Set(recipients)].sort();
+  await ClassmojiService.token.lockLedgers(tx, classroomId, recipients);
+  return { classroomId, gitRepoAssignmentId, recipients };
+}
+
+/**
+ * Delete one grade of the scope's submission and reverse its token reward for
+ * every recipient. The delete is conditional: when the grade is already gone
+ * (another request removed it first), nothing is reversed and this returns
+ * false. The reward amount is read here, inside the transaction.
+ */
+async function removeGradeInScope(
+  tx: Prisma.TransactionClient,
+  scope: GradeScope,
+  gradeId: string
+): Promise<boolean> {
+  const where = { id: gradeId, git_repo_assignment_id: scope.gitRepoAssignmentId };
+  const grade = await tx.assignmentGrade.findFirst({
+    where,
+    select: { emoji: true, token_transaction: { select: { amount: true } } },
+  });
+  if (!grade) return false;
+
+  const { count } = await tx.assignmentGrade.deleteMany({ where });
+  if (count === 0) return false;
+  if (!grade.token_transaction) return true;
+
+  for (const studentId of scope.recipients) {
+    await ClassmojiService.token.assignToStudent(
+      {
+        classroomId: scope.classroomId,
+        studentId,
+        amount: grade.token_transaction.amount * -1,
+        description: `Removing ${grade.emoji}.`,
+        repositoryAssignmentId: scope.gitRepoAssignmentId,
+        type: 'REMOVAL',
+      },
+      tx
+    );
+  }
+  return true;
+}
+
+/**
+ * If the submission has an open (IN_REVIEW) regrade request, remove the grades
+ * that predate it, with their token rewards, inside the caller's transaction.
+ */
+async function clearStaleGradesInScope(
+  tx: Prisma.TransactionClient,
+  scope: GradeScope
+): Promise<void> {
+  const openRequest = await ClassmojiService.regradeRequest.findOpenByAssignmentId(
+    scope.gitRepoAssignmentId,
+    tx
+  );
+  if (!openRequest) return;
+
+  const grades = await ClassmojiService.assignmentGrade.findByAssignmentId(
+    scope.gitRepoAssignmentId,
+    tx
+  );
+  for (const grade of grades) {
+    if (grade.created_at <= openRequest.created_at) {
+      await removeGradeInScope(tx, scope, grade.id);
+    }
+  }
 }
 
 class HelperService {
@@ -781,35 +883,28 @@ class HelperService {
    * If the assignment has an open (IN_REVIEW) regrade request, remove the grades
    * that predate the request so a fresh grade replaces — rather than averages
    * with — the original. Grades applied after the request (deliberate multi-emoji
-   * grading during the re-grade) are left untouched. Token rewards are reversed via
-   * `removeGradeFromGitRepoAssignment`.
+   * grading during the re-grade) are left untouched. Each grade's token reward is
+   * reversed with it, in one transaction.
    */
   static async clearGradesForOpenRegradeRequest(
     classroom: HelperClassroomRef,
     gitRepoAssignment: GitRepoAssignmentRef
   ): Promise<void> {
-    const openRequest = await ClassmojiService.regradeRequest.findOpenByAssignmentId(
-      gitRepoAssignment.id
-    );
-    if (!openRequest) return;
-
-    const grades = await ClassmojiService.assignmentGrade.findByAssignmentId(gitRepoAssignment.id);
-    const staleGrades = grades.filter(grade => grade.created_at <= openRequest.created_at);
-
-    for (const grade of staleGrades) {
-      await this.removeGradeFromGitRepoAssignment({ classroom, gitRepoAssignment, grade });
-    }
+    await getPrisma().$transaction(async tx => {
+      const scope = await openGradeScope(tx, classroom.id, gitRepoAssignment.id);
+      await clearStaleGradesInScope(tx, scope);
+    }, GRADE_TX);
   }
 
+  /**
+   * Add a grade and pay its token reward, as one transaction: clearing grades
+   * that predate an open regrade request, replacing the grader's previous
+   * numeric score, creating the grade, its GAIN row(s) and the link to them
+   * either all commit or none do. The recipients come from the submission's
+   * repo; `studentId`/`teamId` in the payload are accepted but not used.
+   */
   static async addGradeToGitRepoAssignment(payload: GradeAssignmentPayload): Promise<void> {
-    const { classroom, gitRepoAssignment, graderId, grade, studentId, teamId } = payload;
-
-    // When a submission has an open resubmit (regrade) request, a new grade should
-    // replace the original grade rather than be averaged with it. Clear the grades
-    // captured at request time before adding the new one. The request's
-    // `previous_grade` snapshot keeps those emojis visible in the "Previous Grade"
-    // column for reference.
-    await this.clearGradesForOpenRegradeRequest(classroom, gitRepoAssignment);
+    const { classroom, gitRepoAssignment, graderId, grade } = payload;
 
     // Only emojis in the classroom's grading scale are grades. A classroom
     // with no scale yet (fresh import) accepts anything, as before.
@@ -820,178 +915,90 @@ class HelperService {
     if (scale.length > 0 && !scale.some(mapping => mapping.emoji === grade)) {
       throw new Error(`"${grade}" is not in this classroom's grading scale`);
     }
+    const reward = scale.find(mapping => mapping.emoji === grade)?.extra_tokens ?? 0;
 
-    // A numeric score is one number per grader, never a stack: a grader's new
-    // score replaces the score they gave before (tokens reversed with it).
-    // Other graders' scores stay and average, as separate opinions should.
-    if (parseScoreEmoji(grade) !== null) {
-      const existing = await ClassmojiService.assignmentGrade.findByAssignmentId(
-        gitRepoAssignment.id
-      );
-      for (const previous of existing) {
-        if (previous.grader_id !== graderId) continue;
-        if (parseScoreEmoji(previous.emoji) === null) continue;
-        if (previous.emoji === grade) return;
-        try {
-          await this.removeGradeFromGitRepoAssignment({
-            classroom,
-            gitRepoAssignment: { id: gitRepoAssignment.id, studentId, teamId },
-            grade: previous,
-          });
-        } catch (error) {
-          // Already removed by a concurrent request (a double submit from the
-          // same field): nothing to replace any more, carry on.
-          if ((error as { code?: string })?.code !== 'P2025') throw error;
+    await getPrisma().$transaction(async tx => {
+      const scope = await openGradeScope(tx, classroom.id, gitRepoAssignment.id);
+
+      // When a submission has an open resubmit (regrade) request, a new grade
+      // should replace the original grade rather than be averaged with it.
+      // Clear the grades captured at request time before adding the new one.
+      // The request's `previous_grade` snapshot keeps those emojis visible in
+      // the "Previous Grade" column for reference.
+      await clearStaleGradesInScope(tx, scope);
+
+      // A numeric score is one number per grader, never a stack: a grader's new
+      // score replaces the score they gave before (tokens reversed with it).
+      // Other graders' scores stay and average, as separate opinions should.
+      if (parseScoreEmoji(grade) !== null) {
+        const existing = await ClassmojiService.assignmentGrade.findByAssignmentId(
+          gitRepoAssignment.id,
+          tx
+        );
+        for (const previous of existing) {
+          if (previous.grader_id !== graderId) continue;
+          if (parseScoreEmoji(previous.emoji) === null) continue;
+          if (previous.emoji === grade) return;
+          // A score already removed by a concurrent request (a double submit
+          // from the same field) deletes nothing and reverses nothing.
+          await removeGradeInScope(tx, scope, previous.id);
         }
       }
-    }
 
-    if (await ClassmojiService.assignmentGrade.doesGradeExist(gitRepoAssignment.id, grade)) {
-      return;
-    }
+      if (await ClassmojiService.assignmentGrade.doesGradeExist(gitRepoAssignment.id, grade, tx)) {
+        return;
+      }
 
-    const assignmentGrade = await ClassmojiService.assignmentGrade.addGrade(
-      gitRepoAssignment.id,
-      graderId,
-      grade
-    );
-
-    if (studentId) {
-      await this.assignTokensToStudent(
-        {
-          organization: classroom,
-          gitRepoAssignment,
-          grade,
-          studentId,
-        },
-        assignmentGrade
+      const assignmentGrade = await ClassmojiService.assignmentGrade.addGrade(
+        gitRepoAssignment.id,
+        graderId,
+        grade,
+        tx
       );
-    } else if (teamId) {
-      await this.assignTokensToTeam(
-        {
-          organization: classroom,
-          gitRepoAssignment,
-          grade,
-          teamId,
-        },
-        assignmentGrade
-      );
-    }
-  }
 
-  static async assignTokensToStudent(
-    payload: TokenAssignmentPayload,
-    assignmentGrade: AssignmentGradeRef
-  ): Promise<void> {
-    const { organization, gitRepoAssignment, grade } = payload;
+      if (reward <= 0) return;
 
-    const emojiMapping = (await ClassmojiService.emojiMapping.findByClassroomId(
-      organization.id,
-      true
-    )) as EmojiMappingWithTokens[];
-    const emoji = emojiMapping.find(mapping => mapping.emoji === grade);
-
-    if (!emoji) return;
-
-    if (emoji.extra_tokens > 0) {
-      const data = {
-        classroomId: organization.id,
-        studentId: payload.studentId,
-        amount: emoji.extra_tokens,
-        description: `Tokens for getting a ${grade}.`,
-        repositoryAssignmentId: gitRepoAssignment.id,
-      };
-
-      const tokenTransaction = await ClassmojiService.token.assignToStudent(data);
-
-      await ClassmojiService.assignmentGrade.update(assignmentGrade.id, {
-        token_transaction_id: tokenTransaction.id,
-      });
-    }
-  }
-
-  static async assignTokensToTeam(
-    payload: TeamTokenAssignmentPayload,
-    assignmentGrade: AssignmentGradeRef
-  ): Promise<void> {
-    const { organization, gitRepoAssignment, grade, teamId } = payload;
-
-    const emojiMapping = (await ClassmojiService.emojiMapping.findByClassroomId(
-      organization.id,
-      true
-    )) as EmojiMappingWithTokens[];
-    const emoji = emojiMapping.find(mapping => mapping.emoji === grade);
-
-    if (!emoji) return;
-
-    if (emoji.extra_tokens > 0) {
-      const team = (await ClassmojiService.team.findById(teamId)) as TeamWithMemberships | null;
-      if (!team || !team.memberships || team.memberships.length === 0) return;
-
-      let firstTransaction = null;
-
-      for (const membership of team.memberships) {
-        const data = {
-          classroomId: organization.id,
-          studentId: membership.user_id,
-          amount: emoji.extra_tokens,
-          description: `Tokens for getting a ${grade}.`,
-          repositoryAssignmentId: gitRepoAssignment.id,
-        };
-
-        const tokenTransaction = await ClassmojiService.token.assignToStudent(data);
-
-        if (!firstTransaction) {
-          firstTransaction = tokenTransaction;
-        }
+      // One GAIN row per recipient; the grade links to the first, whose amount
+      // is what a removal reverses for each of them.
+      let firstTransaction: { id: string } | null = null;
+      for (const studentId of scope.recipients) {
+        const tokenTransaction = await ClassmojiService.token.assignToStudent(
+          {
+            classroomId: classroom.id,
+            studentId,
+            amount: reward,
+            description: `Tokens for getting a ${grade}.`,
+            repositoryAssignmentId: gitRepoAssignment.id,
+          },
+          tx
+        );
+        firstTransaction ??= tokenTransaction;
       }
 
       if (firstTransaction) {
-        await ClassmojiService.assignmentGrade.update(assignmentGrade.id, {
-          token_transaction_id: firstTransaction.id,
-        });
+        await ClassmojiService.assignmentGrade.update(
+          assignmentGrade.id,
+          { token_transaction_id: firstTransaction.id },
+          tx
+        );
       }
-    }
+    }, GRADE_TX);
   }
 
-  static async removeGradeFromGitRepoAssignment(payload: RemoveGradePayload): Promise<void> {
+  /**
+   * Remove a grade and reverse its token reward for the submission's student
+   * or every member of its team, as one transaction. Returns false, having
+   * changed nothing, when the grade was already removed (a concurrent remove
+   * got there first); the reversal is written exactly once. The recipients and
+   * the reward amount are read from the database, not from the payload.
+   */
+  static async removeGradeFromGitRepoAssignment(payload: RemoveGradePayload): Promise<boolean> {
     const { classroom, gitRepoAssignment, grade } = payload;
 
-    await ClassmojiService.assignmentGrade.removeGrade(grade.id);
-    // Remove tokens
-    if (!grade.token_transaction) return;
-
-    const studentId = gitRepoAssignment.studentId;
-    const teamId = gitRepoAssignment.teamId;
-
-    if (studentId) {
-      const data = {
-        classroomId: classroom.id,
-        studentId,
-        amount: grade.token_transaction.amount * -1,
-        description: `Removing ${grade.emoji}.`,
-        repositoryAssignmentId: gitRepoAssignment.id,
-        type: 'REMOVAL',
-      };
-
-      await ClassmojiService.token.assignToStudent(data);
-    } else if (teamId) {
-      const team = (await ClassmojiService.team.findById(teamId)) as TeamWithMemberships | null;
-      if (!team || !team.memberships) return;
-
-      for (const membership of team.memberships) {
-        const data = {
-          classroomId: classroom.id,
-          studentId: membership.user_id,
-          amount: grade.token_transaction.amount * -1,
-          description: `Removing ${grade.emoji}.`,
-          repositoryAssignmentId: gitRepoAssignment.id,
-          type: 'REMOVAL',
-        };
-
-        await ClassmojiService.token.assignToStudent(data);
-      }
-    }
+    return getPrisma().$transaction(async tx => {
+      const scope = await openGradeScope(tx, classroom.id, gitRepoAssignment.id);
+      return removeGradeInScope(tx, scope, grade.id);
+    }, GRADE_TX);
   }
 }
 
