@@ -1,10 +1,8 @@
 /**
  * Process-level safety nets (S5: "never a crashed process").
  *
- * A detached promise rejection — notably the fire-and-forget token reversal on
- * grade_remove paths (packages/services HelperService's unawaited
- * assignToStudent) — would, under Node 22's default unhandledRejection policy,
- * terminate the process. These handlers keep the resource server serving on a
+ * A detached promise rejection would, under Node 22's default
+ * unhandledRejection policy, terminate the process. These handlers keep the resource server serving on a
  * stray rejection and exit cleanly (after a best-effort close) only on a truly
  * uncaught exception, where process state may be corrupt.
  *

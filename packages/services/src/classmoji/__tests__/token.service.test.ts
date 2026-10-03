@@ -6,20 +6,25 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // assert exactly what row gets written.
 const createMock = vi.fn();
 const findFirstMock = vi.fn();
+const executeRawMock = vi.fn();
 
 vi.mock('@classmoji/database', () => {
   const tokenTransaction = {
     findFirst: (...args: unknown[]) => findFirstMock(...args),
     create: (...args: unknown[]) => createMock(...args),
   };
+  const $executeRaw = (...args: unknown[]) => executeRawMock(...args);
   return {
     default: () => ({
       tokenTransaction,
-      $transaction: (fn: (tx: { tokenTransaction: typeof tokenTransaction }) => unknown) =>
-        fn({ tokenTransaction }),
+      $transaction: (
+        fn: (tx: { tokenTransaction: typeof tokenTransaction; $executeRaw: unknown }) => unknown
+      ) => fn({ tokenTransaction, $executeRaw }),
     }),
   };
 });
+
+const LONG_AGO = new Date('2026-01-01T00:00:00Z');
 
 const { assignToStudent } = await import('../token.service.ts');
 
@@ -27,7 +32,8 @@ describe('token.assignToStudent', () => {
   beforeEach(() => {
     createMock.mockReset();
     findFirstMock.mockReset();
-    findFirstMock.mockResolvedValue({ balance_after: 10 });
+    executeRawMock.mockReset();
+    findFirstMock.mockResolvedValue({ balance_after: 10, created_at: LONG_AGO });
     createMock.mockImplementation((args: { data: Record<string, unknown> }) => ({
       id: 'tx-1',
       ...args.data,
@@ -58,5 +64,38 @@ describe('token.assignToStudent', () => {
 
     const createArg = createMock.mock.calls[0][0] as { data: Record<string, unknown> };
     expect(createArg.data.git_repo_assignment_id).toBeUndefined();
+  });
+
+  it("locks the student's ledger before it reads the latest row", async () => {
+    await assignToStudent({ classroomId: 'class-1', studentId: 'student-1', amount: 5 });
+
+    expect(executeRawMock).toHaveBeenCalledTimes(1);
+    const [sql, ...values] = executeRawMock.mock.calls[0] as [string[], ...unknown[]];
+    expect(sql.join('?')).toContain('pg_advisory_xact_lock');
+    expect(values).toEqual(['class-1', 'student-1']);
+    expect(executeRawMock.mock.invocationCallOrder[0]).toBeLessThan(
+      findFirstMock.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('stamps the new row strictly after the latest row it read', async () => {
+    const latest = new Date(Date.now() + 60_000);
+    findFirstMock.mockResolvedValue({ balance_after: 10, created_at: latest });
+
+    await assignToStudent({ classroomId: 'class-1', studentId: 'student-1', amount: 5 });
+
+    const createArg = createMock.mock.calls[0][0] as { data: { created_at: Date } };
+    expect(createArg.data.created_at.getTime()).toBe(latest.getTime() + 1);
+  });
+
+  it('stamps the first row of an empty ledger with the current time', async () => {
+    findFirstMock.mockResolvedValue(null);
+    const before = Date.now();
+
+    await assignToStudent({ classroomId: 'class-1', studentId: 'student-1', amount: 5 });
+
+    const createArg = createMock.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect((createArg.data.created_at as Date).getTime()).toBeGreaterThanOrEqual(before);
+    expect(createArg.data.balance_after).toBe(5);
   });
 });

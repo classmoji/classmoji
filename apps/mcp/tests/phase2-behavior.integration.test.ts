@@ -12,8 +12,8 @@
  *   4. Quiz prompt stripping: system_prompt/rubric_prompt are visible to the
  *      quiz staff tier and stripped for students.
  *
- * NOTE: HelperService token minting/reversal is intentionally fire-and-forget
- * (not awaited), so token assertions poll via waitUntil.
+ * NOTE: HelperService's token reward on a new grade is fire-and-forget (not
+ * awaited), so token assertions poll via waitUntil.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
