@@ -9,14 +9,18 @@ import {
   canonicalizeMany,
   fetchContentText,
   mappedAssetsBySha,
+  parseMediaRef,
   parseMissingUrl,
   resolveAssetUrl,
   signBlobUrlForClassroom,
   textReadBudget,
+  uploadFileTypes,
   warmContentText,
   type ResolveContext,
   type WarmContext,
 } from './contentDelivery.service.ts';
+import { assertRepoTarget, type CapabilityClassroom } from '../media/uploadCapability.ts';
+import { lookupReadyMedia } from '../media/mediaLookup.ts';
 import { indexOneFile } from './contentIndex.service.ts';
 import {
   dedupeMergedTreeIds,
@@ -684,8 +688,24 @@ async function recordPageFile(
 export async function uploadPageAsset(
   page: PageWithContentRepo,
   buffer: Buffer,
-  filename: string
+  filename: string,
+  /**
+   * `storedName`: store under this exact name and skip the write when the file
+   * is already there (`ContentService.upload`). The agent-upload placement
+   * passes one so a retried job does not commit the file twice.
+   */
+  options: { storedName?: string } = {}
 ): Promise<{ url: string; path: string; sha: string; displayUrl: string | null }> {
+  // The storage router first: a Pro video, or a file over the repository's cap
+  // on a classroom with media, belongs in media and is refused here with
+  // `MediaRoutingError('USE_MEDIA')` — before a GitHub round trip. Every
+  // caller of this function (the page editor, the page cover, MCP
+  // `page_asset_upload`) is covered by this one line.
+  await assertRepoTarget(page.classroom as unknown as CapabilityClassroom, {
+    name: filename,
+    size: buffer.length,
+  });
+
   const { gitOrganization, repo } = contentRepoFor(page);
 
   // Asked, not assumed — the same reason the asset sync asks. A content repo on
@@ -702,6 +722,10 @@ export async function uploadPageAsset(
     filename,
     branch,
     message: `Upload asset for ${page.title || 'page'}`,
+    // Any file type where the delivery layer serves this classroom; the
+    // image/PDF allowlist everywhere else.
+    fileTypes: uploadFileTypes(page.classroom as unknown as Parameters<typeof uploadFileTypes>[0]),
+    ...(options.storedName ? { storedName: options.storedName } : {}),
   });
 
   const classroomId = (page.classroom as { id?: unknown }).id;
@@ -791,7 +815,12 @@ export async function resolvePageAssetUrl(
  * undoes it, and undoes a `/missing/` placeholder the same way.
  *
  * Then require what is left to name ONE file in THIS classroom's content repo,
- * by the plain-path rule in `namesAPlainRepoFile` below. Deliberately stricter
+ * by the plain-path rule in `namesAPlainRepoFile` below — or ONE image in this
+ * classroom's media store: a `media://{id}` reference (or a signed media URL,
+ * which canonicalizes to one) is accepted only when the id is a READY row of
+ * THIS classroom whose kind is IMAGE, looked up with the classroom in the
+ * WHERE clause. A video, a deleted object, or another classroom's id is refused
+ * exactly like a foreign path. Deliberately stricter
  * than the web editor's cover control, which stores whatever URL it is given: a
  * cover is rendered on the public class site, and an agent acting on text it
  * read somewhere is a great deal easier to point at the wrong host than a
@@ -821,7 +850,44 @@ export async function canonicalizePageCoverRef(
     return null;
   }
 
+  if (parseMediaRef(canonical) !== null) {
+    return (await coverMediaRefAllowed(page, canonical)) ? canonical : null;
+  }
+
   return namesAPlainRepoFile(ctx, canonical) ? canonical : null;
+}
+
+/**
+ * May this (canonical) reference be stored as the page's cover, as far as MEDIA
+ * is concerned?
+ *
+ * Anything that is not a `media://` reference answers true — this is only the
+ * media half of the rule, for a caller (the pages editor's `set-header-image`)
+ * that keeps its own policy for repo paths and URLs. A `media://{id}` answers
+ * true only when the id is a READY row of THIS classroom whose kind is IMAGE,
+ * with the classroom in the WHERE clause: a video, a deleted object, another
+ * classroom's id, or a lookup that failed are all "no", and the caller answers
+ * them the way it answers an asset that is not there.
+ */
+export async function coverMediaRefAllowed(
+  page: PageWithContentRepo,
+  ref: string | null | undefined
+): Promise<boolean> {
+  if (typeof ref !== 'string') return true;
+  const mediaId = parseMediaRef(ref);
+  if (mediaId === null) return true;
+  const classroomId = (page.classroom as { id?: unknown }).id;
+  if (typeof classroomId !== 'string') return false;
+  try {
+    const rows = await lookupReadyMedia(classroomId, [mediaId]);
+    return rows.get(mediaId)?.kind === 'IMAGE';
+  } catch (error) {
+    console.warn(
+      '[pageContent] Could not look up a media cover reference:',
+      error instanceof Error ? error.message : error
+    );
+    return false;
+  }
 }
 
 /**

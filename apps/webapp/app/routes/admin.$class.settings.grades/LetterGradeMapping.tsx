@@ -55,7 +55,7 @@ const LetterGradeMapping = ({ letterGradeMappings }: LetterGradeMappingProps) =>
       });
     }
 
-    notify('Creating letter grade mapping...');
+    notify('LETTER_GRADE_CREATE', 'Creating letter grade mapping…');
 
     fetcher!.submit(
       {
@@ -74,7 +74,7 @@ const LetterGradeMapping = ({ letterGradeMappings }: LetterGradeMappingProps) =>
   };
 
   const deleteMapping = async (record: LetterGradeMap) => {
-    notify('Deleting letter grade mapping...');
+    notify('LETTER_GRADE_DELETE', 'Deleting letter grade mapping…');
 
     fetcher!.submit(
       {
@@ -89,7 +89,7 @@ const LetterGradeMapping = ({ letterGradeMappings }: LetterGradeMappingProps) =>
   };
 
   const populateDefaults = () => {
-    notify('Adding default letter grade mappings...');
+    notify('LETTER_GRADE_DEFAULTS', 'Adding the default letter grades…');
 
     fetcher!.submit(
       {},

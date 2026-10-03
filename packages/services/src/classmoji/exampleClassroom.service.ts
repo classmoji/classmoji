@@ -27,7 +27,7 @@
  */
 
 import getPrisma from '@classmoji/database';
-import { defaultContentRepoName } from '@classmoji/utils';
+import { canonicalTimeZone, defaultContentRepoName } from '@classmoji/utils';
 import { createWithUniqueClassroomSlug } from './classroomSlug.ts';
 
 const EXAMPLE_ORG = {
@@ -85,8 +85,11 @@ const LETTER_SCALE = [
 export async function provisionExampleClassroom(params: {
   ownerUserId: string;
   ownerLogin: string;
+  /** The creator's browser zone; validated here, dropped when invalid. */
+  timezone?: string | null;
 }): Promise<{ id: string; slug: string } | null> {
   const { ownerUserId, ownerLogin } = params;
+  const timezone = canonicalTimeZone(params.timezone);
   const prisma = getPrisma();
 
   // Shared mock org. Leave github_installation_id NULL on purpose. It's idempotent
@@ -137,7 +140,13 @@ export async function provisionExampleClassroom(params: {
   const { result } = await createWithUniqueClassroomSlug(
     { slug, orgLogin: EXAMPLE_ORG.login },
     classroomSlug =>
-      buildExampleSandbox({ ownerUserId, ownerLogin, gitOrgId: org.id, slug: classroomSlug })
+      buildExampleSandbox({
+        ownerUserId,
+        ownerLogin,
+        gitOrgId: org.id,
+        slug: classroomSlug,
+        timezone,
+      })
   );
   return result;
 }
@@ -154,8 +163,9 @@ function buildExampleSandbox(args: {
   ownerLogin: string;
   gitOrgId: string;
   slug: string;
+  timezone: string | null;
 }): Promise<{ id: string; slug: string }> {
-  const { ownerUserId, ownerLogin, gitOrgId, slug } = args;
+  const { ownerUserId, ownerLogin, gitOrgId, slug, timezone } = args;
   const prisma = getPrisma();
 
   return prisma.$transaction(
@@ -168,7 +178,9 @@ function buildExampleSandbox(args: {
           content_namespace: slug,
           content_repo: defaultContentRepoName(slug),
           is_example: true,
-          settings: { create: { show_grades_to_students: true, quizzes_enabled: true } },
+          settings: {
+            create: { show_grades_to_students: true, quizzes_enabled: true, timezone },
+          },
         },
       });
 
@@ -198,19 +210,28 @@ function buildExampleSandbox(args: {
       const studentUsers: { id: string; login: string }[] = [];
       for (const p of DEMO_PEOPLE) {
         const image = `https://github.com/identicons/${p.login}.png`;
-        const user = await tx.user.upsert({
-          where: { login: p.login },
-          update: { image },
-          create: {
-            provider: 'GITHUB',
-            provider_id: p.provider_id,
-            login: p.login,
-            name: p.name,
-            email: p.email,
-            image,
-            school_id: 'example',
-          },
+        const account = await tx.account.findUnique({
+          where: { provider_id_account_id: { provider_id: 'github', account_id: p.provider_id } },
+          select: { user_id: true },
         });
+        const user = account
+          ? await tx.user.update({ where: { id: account.user_id }, data: { image } })
+          : await tx.user.create({
+              data: {
+                name: p.name,
+                email: p.email,
+                image,
+                school_id: 'example',
+                accounts: {
+                  create: {
+                    provider_id: 'github',
+                    account_id: p.provider_id,
+                    username: p.login,
+                    image,
+                  },
+                },
+              },
+            });
         await tx.classroomMembership.create({
           data: {
             classroom_id: classroom.id,
@@ -462,6 +483,11 @@ export interface ExampleCleanupReport {
  * cascades through memberships, repositories, git repos, grades, and audit
  * rows, exactly as the danger-zone delete does for a real classroom; there is
  * no Github side to clean because the sandbox org has no installation.
+ *
+ * A sandbox with ANY media row is counted as used and kept. Media objects live
+ * in R2, the cascade would drop the only rows naming them, and this sweep does
+ * not purge the bucket the way `classroom.deleteById` does — so it simply never
+ * deletes a classroom that has any.
  */
 export async function deleteAbandonedExampleClassrooms(
   options: { olderThanDays?: number; now?: Date } = {}
@@ -476,13 +502,14 @@ export async function deleteAbandonedExampleClassrooms(
     select: {
       id: true,
       memberships: { where: { role: 'OWNER' }, select: { tour_completed_at: true } },
-      _count: { select: { audit_logs: true } },
+      _count: { select: { audit_logs: true, media_objects: true } },
     },
   });
 
   const abandoned = candidates
     .filter(c => c.memberships.every(m => m.tour_completed_at === null))
     .filter(c => c._count.audit_logs === 0)
+    .filter(c => (c._count.media_objects ?? 0) === 0)
     .map(c => c.id);
 
   if (abandoned.length > 0) {

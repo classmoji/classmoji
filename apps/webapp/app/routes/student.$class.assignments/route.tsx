@@ -2,44 +2,20 @@ import { Suspense } from 'react';
 import { Await } from 'react-router';
 import { Skeleton } from 'antd';
 import { namedAction } from 'remix-utils/named-action';
-import dayjs from 'dayjs';
-import { ClassmojiService } from '@classmoji/services';
+import { ClassmojiService, type StudentCourseworkRow } from '@classmoji/services';
 import type { Route } from './+types/route';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import ProgressSummaryCard, { type BucketCounts } from './ProgressSummaryCard';
-import AssignmentsTabsCard, {
-  type AssignmentRow,
-  type AssignmentStatus,
-} from './AssignmentsTabsCard';
+import AssignmentsTabsCard from './AssignmentsTabsCard';
 
 interface AssignmentsData {
   classroomTitle: string;
   classroomSubtitle: string | null;
   counts: BucketCounts;
-  rows: AssignmentRow[];
+  rows: StudentCourseworkRow[];
   balance: number;
 }
-
-type RepoAssignment = Awaited<
-  ReturnType<typeof ClassmojiService.helper.findAllAssignmentsForStudent>
->[number];
-
-type ProgressBucket = 'graded' | 'submitted' | 'unlocked' | 'locked';
-
-const classifyStatus = (ra: RepoAssignment): AssignmentStatus =>
-  ra.status === 'CLOSED' ? 'completed' : 'current';
-
-const classifyProgressBucket = (ra: RepoAssignment): ProgressBucket => {
-  const now = Date.now();
-  const releaseAt = ra.assignment?.release_at ? new Date(ra.assignment.release_at).getTime() : null;
-  const notYetReleased = releaseAt !== null && releaseAt > now;
-  const notPublished = ra.assignment?.is_published === false;
-
-  if (ra.status === 'OPEN' && (notPublished || notYetReleased)) return 'locked';
-  if (ra.status === 'OPEN') return 'unlocked';
-  const hasReleasedGrades = Boolean(ra.assignment?.grades_released && (ra.grades?.length ?? 0) > 0);
-  return hasReleasedGrades ? 'graded' : 'submitted';
-};
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const classSlug = params.class!;
@@ -55,101 +31,42 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const gitOrgLogin = classroom.git_organization?.login ?? null;
 
   const dataPromise = (async (): Promise<AssignmentsData> => {
-    const [repoAssignments, balance] = await Promise.all([
-      ClassmojiService.helper
-        .findAllAssignmentsForStudent(userId, classSlug)
-        .catch(
-          () =>
-            [] as Awaited<ReturnType<typeof ClassmojiService.helper.findAllAssignmentsForStudent>>
-        ),
+    const [rows, balance] = await Promise.all([
+      // Every assignment the student can see, every type. Where quizzes are
+      // hidden (not Pro, or switched off) no quiz row is built. The quiz answer
+      // and the assignment listing are read together. A failed read is logged
+      // and degrades to an empty list rather than failing the deferred render
+      // (a failed quiz or form read alone already leaves the other rows).
+      Promise.all([
+        loadQuizzesVisible(classroom.id),
+        ClassmojiService.studentCoursework.listPublishedAssignments(classroom.id),
+      ])
+        .then(([quizzesVisible, assignments]) =>
+          ClassmojiService.studentCoursework.listForStudent({
+            classroomId: classroom.id,
+            classroomSlug: classSlug,
+            userId,
+            quizzesVisible,
+            gitOrgLogin,
+            assignments,
+          })
+        )
+        .catch((error): StudentCourseworkRow[] => {
+          console.error(
+            '[student assignments] coursework read failed',
+            { classroomId: classroom.id, userId },
+            error
+          );
+          return [];
+        }),
       ClassmojiService.token.getBalance(classroom.id, userId).catch(() => 0),
     ]);
 
-    // Deduplicate by assignment_id — team assignments can appear twice
-    const byAssignmentId = new Map<string, RepoAssignment>();
-    for (const ra of repoAssignments) {
-      const key = ra.assignment_id ?? ra.id;
-      if (!byAssignmentId.has(key)) byAssignmentId.set(key, ra);
-    }
-    const unique = Array.from(byAssignmentId.values());
-
-    const rows: AssignmentRow[] = unique
-      .filter(ra => ra.assignment?.is_published !== false)
-      .map(ra => {
-        const status = classifyStatus(ra);
-        // The student's (or their team's) own copy of the repository. With the
-        // student Repositories screen gone, this row is where they reach it.
-        const repoUrl =
-          gitOrgLogin && ra.git_repo?.name
-            ? `https://github.com/${gitOrgLogin}/${ra.git_repo.name}`
-            : null;
-        const issueUrl =
-          repoUrl && ra.provider_issue_number
-            ? `${repoUrl}/issues/${ra.provider_issue_number}`
-            : null;
-        const gradersSummary = (ra.graders ?? [])
-          .map(g => g.grader?.name)
-          .filter(Boolean)
-          .join(', ');
-
-        // Late-hours: how many hours past the deadline the student still is, after
-        // subtracting any extension hours they've already bought with tokens. In
-        // ISSUE mode only OPEN (not-yet-submitted) assignments accrue late hours;
-        // in REPO mode the latest push is the submission, so a late push is late
-        // by that push's time.
-        const extensionHours = (ra.token_transactions ?? [])
-          .filter(t => t.type === 'PURCHASE')
-          .reduce((sum, t) => sum + (t.hours_purchased ?? 0), 0);
-        const deadlineMs = ra.assignment?.student_deadline
-          ? new Date(ra.assignment.student_deadline).getTime()
-          : null;
-        const isRepoMode = ra.assignment?.submission_mode === 'REPO';
-        const submittedAtMs = isRepoMode && ra.closed_at ? new Date(ra.closed_at).getTime() : null;
-        const hoursPastDeadline =
-          deadlineMs !== null
-            ? Math.max(0, Math.ceil(((submittedAtMs ?? Date.now()) - deadlineMs) / 3_600_000))
-            : 0;
-        const numLateHours =
-          isRepoMode || ra.status === 'OPEN' ? Math.max(0, hoursPastDeadline - extensionHours) : 0;
-
-        return {
-          id: ra.id,
-          assignmentTitle: ra.assignment?.title ?? 'Assignment',
-          repositoryTitle: ra.git_repo?.repository?.title ?? '',
-          moduleType: ra.git_repo?.repository?.type ?? null,
-          status,
-          gradesReleased: Boolean(ra.assignment?.grades_released && (ra.grades?.length ?? 0) > 0),
-          studentDeadline: ra.assignment?.student_deadline
-            ? new Date(ra.assignment.student_deadline).toISOString()
-            : null,
-          repoUrl,
-          commitCount: ra.analytics_snapshot?.total_commits ?? null,
-          issueUrl,
-          grades: (ra.grades ?? []).map(g => ({ id: g.id, emoji: g.emoji })),
-          gradersSummary,
-          numLateHours,
-          isLateOverride: Boolean(ra.is_late_override),
-          tokensPerHour: ra.assignment?.tokens_per_hour ?? 0,
-        };
-      })
-      .sort((a, b) => {
-        // Current (OPEN) first, sorted by soonest deadline
-        if (a.status !== b.status) return a.status === 'current' ? -1 : 1;
-        const aT = a.studentDeadline ? dayjs(a.studentDeadline).valueOf() : Infinity;
-        const bT = b.studentDeadline ? dayjs(b.studentDeadline).valueOf() : Infinity;
-        return a.status === 'current' ? aT - bT : bT - aT;
-      });
-
-    const progressBuckets = unique
-      .filter(ra => ra.assignment?.is_published !== false)
-      .map(classifyProgressBucket);
-    const counts: BucketCounts = {
-      graded: progressBuckets.filter(b => b === 'graded').length,
-      submitted: progressBuckets.filter(b => b === 'submitted').length,
-      unlocked: progressBuckets.filter(b => b === 'unlocked').length,
-      locked: progressBuckets.filter(b => b === 'locked').length,
-      total: progressBuckets.length,
-    };
+    // An untracked row (a PUBLIC form, open or closed) is neither owed nor
+    // done by this student, so it does not count toward their progress.
+    const completed = rows.filter(r => r.tracked && r.done).length;
+    const current = rows.filter(r => r.tracked && !r.done).length;
+    const counts: BucketCounts = { completed, current, total: completed + current };
 
     const subtitleParts = [gitOrgLogin].filter((p): p is string => Boolean(p));
 
@@ -223,9 +140,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       }
 
       // Price and eligibility are recomputed server-side in the service — the
-      // client-supplied `amount` is never trusted, and the deadline /
-      // late-hour / override gates from the popover are re-enforced there so
-      // they cannot be bypassed by posting a crafted request body
+      // client-supplied `amount` is never trusted, and the popover's gates
+      // (a price is set, no late override) are re-enforced there so they
+      // cannot be bypassed by posting a crafted request body. It also checks
+      // the submission is the paying student's own, or their team's
       // (packages/services token.purchaseExtensionHours, plan §5.2 gap 6).
       await ClassmojiService.token.purchaseExtensionHours({
         classroomId: classroom.id,

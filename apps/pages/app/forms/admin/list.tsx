@@ -10,6 +10,7 @@ import {
   IconPlus,
   IconSearch,
   IconTrash,
+  IconUsersGroup,
 } from '@tabler/icons-react';
 
 import { ClassmojiService, prisma } from '~/utils/db.server.ts';
@@ -386,6 +387,21 @@ export default function FormsList() {
                       >
                         <IconListDetails size={16} />
                       </Link>
+                      {/* Team sets are built from a classroom roster, so a
+                          PUBLIC form has none. The spacer keeps the icons of
+                          every row in the same columns. */}
+                      {form.access === 'CLASSROOM' ? (
+                        <Link
+                          to={`/${classroomSlug}/forms/${form.slug}/teams`}
+                          title="Team sets from this form"
+                          aria-label={`Teams from ${form.title}`}
+                          className="text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"
+                        >
+                          <IconUsersGroup size={16} />
+                        </Link>
+                      ) : (
+                        <span className="inline-block w-4" aria-hidden="true" />
+                      )}
                       <button
                         type="button"
                         onClick={() => copy(form.publicUrl, form.id)}

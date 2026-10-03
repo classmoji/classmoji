@@ -1,13 +1,19 @@
-import getPrisma from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import { openToStudents, withLogin, withLogins } from '@classmoji/utils';
 import { Prisma } from '@prisma/client';
-import type { EventType } from '@prisma/client';
+import type { AssignmentType, EventType } from '@prisma/client';
 import { pagesUrl } from '../emails/escape.ts';
+import * as entitlementService from './entitlement.service.ts';
 import {
+  addToDescription,
+  CalendarMeetingLinkError,
   CalendarTimeRangeError,
+  checkMeetingLink,
   isFeaturedLinkRow,
   resolveFeaturedLink,
   type FeaturedLinkKind,
   type FeaturedLinkRef,
+  type MeetingLinkCheck,
 } from './calendarPolicy.ts';
 
 type DateInput = Date | string;
@@ -48,9 +54,15 @@ interface CalendarAssignmentLink extends OccurrenceLink {
   featured: boolean;
   assignment: {
     id: string;
+    type: AssignmentType;
     title: string;
     slug: string | null;
     is_published: boolean;
+    // What the student-visibility rule (`openToStudents`) reads besides the
+    // publish flags: a quiz or form opens at `release_at`, and a form not
+    // while a draft.
+    release_at?: Date | null;
+    form?: { status: string } | null;
     repository: {
       id: string;
       title: string;
@@ -85,10 +97,15 @@ interface CalendarDisplaySlide {
   };
 }
 
-/** A linked assignment as the calendar DISPLAYS it, with its repository. */
+/**
+ * A linked assignment as the calendar DISPLAYS it, with its repository.
+ * `type` is what decides where the link goes: a form assignment has no screen
+ * under /assistant, so an assistant is shown it without a link.
+ */
 interface CalendarDisplayAssignment {
   assignment: {
     id: string;
+    type: AssignmentType;
     title: string;
     slug: string | null;
     is_published: boolean;
@@ -187,7 +204,7 @@ interface CalendarEventWithLinks {
   description: string | null;
   is_recurring: boolean;
   recurrence_rule: Prisma.JsonValue | null;
-  creator?: { id: string; name: string | null; login: string | null } | null;
+  creator?: { id: string; name: string | null; image?: string | null; login: string | null } | null;
   pageLinks: CalendarPageLink[];
   slideLinks: CalendarSlideLink[];
   assignmentLinks: CalendarAssignmentLink[];
@@ -220,7 +237,7 @@ interface CalendarExpandedEvent extends CalendarDisplayLinks {
   meeting_link: string | null;
   is_recurring: boolean;
   recurrence_rule: Prisma.JsonValue | null;
-  creator: { id: string; name: string | null; login: string | null } | null;
+  creator: { id: string; name: string | null; image?: string | null; login: string | null } | null;
   is_overridden: boolean;
   featured_resource: CalendarFeaturedResource | null;
   occurrence_date?: Date;
@@ -340,9 +357,11 @@ export {
   ASSISTANT_EVENT_TYPE_MESSAGE,
   assistantMayChangeEventType,
   assistantMayCreateEventType,
+  CalendarMeetingLinkError,
   CalendarTimeRangeError,
   EDIT_SCOPE_THIS_ONLY,
   FEATURED_LINK_KINDS,
+  isCalendarMeetingLinkError,
   isCalendarTimeRangeError,
   isFeaturedLinkRow,
   resolveFeaturedLink,
@@ -374,6 +393,40 @@ const assertEndAfterStart = (
     throw new CalendarTimeRangeError();
   }
 };
+
+type MeetingLinkDecision = Extract<MeetingLinkCheck, { ok: true }>;
+
+/**
+ * Apply the meeting-link rule (`checkMeetingLink`) to a write. Null means the
+ * write does not touch the link.
+ *
+ * `stored` is the value the edit form showed. It is asked for only when the
+ * value would otherwise be refused, because all it can change is whether an
+ * unchanged note with no link is let through.
+ */
+const decideMeetingLink = async (
+  raw: string | null | undefined,
+  stored: () => Promise<string | null | undefined> | string | null | undefined
+): Promise<MeetingLinkDecision | null> => {
+  if (raw === undefined) return null;
+  let check = checkMeetingLink(raw);
+  if (!check.ok) check = checkMeetingLink(raw, await stored());
+  if (!check.ok) throw new CalendarMeetingLinkError(check.message);
+  return check;
+};
+
+/**
+ * The description a write stores. Without pasted invitation text it is what
+ * the write sent (undefined still leaves the column alone). With it, the text
+ * joins the description the event ends up with: the one sent, or the stored
+ * one when the write sent none.
+ */
+const descriptionWithMeetingText = (
+  decision: MeetingLinkDecision | null,
+  sent: string | null | undefined,
+  stored: string | null | undefined
+): string | null | undefined =>
+  decision?.text ? addToDescription(sent !== undefined ? sent : stored, decision.text) : sent;
 
 const isJsonObject = (
   value: Prisma.JsonValue | Prisma.InputJsonValue | null | undefined
@@ -543,13 +596,16 @@ const mapLinksToDisplayFormat = (
     return [{ slide: { id: l.slide.id, title: l.slide.title, is_draft: l.slide.is_draft } }];
   });
 
-  // An assignment link follows the publication state of BOTH the assignment and
-  // the repository it lives in — the repositories view applies the same pair —
-  // so an unpublished repository hides its assignments' links too.
+  // An assignment link follows the student-visibility rule every student
+  // surface applies (`openToStudents`): the assignment published, a REPO one's
+  // repository published too, and a quiz or form neither a draft nor before
+  // its release date. Links to quiz assignments where quizzes are hidden were
+  // already dropped by the caller, so quizzes count as visible here.
+  const now = new Date();
   const assignments = (assignmentLinks || []).flatMap(l => {
     const assignment = l.assignment;
     if (!assignment) return [];
-    const published = assignment.is_published && assignment.repository?.is_published !== false;
+    const published = openToStudents(assignment, now, { quizzesVisible: true });
     if (!canSeeDrafts && !published) return [];
 
     if (l.featured) {
@@ -568,9 +624,13 @@ const mapLinksToDisplayFormat = (
       {
         assignment: {
           id: assignment.id,
+          type: assignment.type,
           title: assignment.title,
           slug: assignment.slug,
-          is_published: assignment.is_published,
+          // Whether students can see it, which is what the link's Draft
+          // treatment marks: a draft quiz or a quiz not yet released reads as
+          // a draft to staff even while its assignment row is published.
+          is_published: assignment.type === 'REPO' ? assignment.is_published : published,
         },
         repository: assignment.repository
           ? {
@@ -874,7 +934,8 @@ export const getClassroomCalendar = async (
         select: {
           id: true,
           name: true,
-          login: true,
+          image: true,
+          ...GIT_IDENTITY,
         },
       },
       overrides: true,
@@ -896,15 +957,20 @@ export const getClassroomCalendar = async (
       },
       assignmentLinks: {
         include: {
-          // `is_published` on both rows is what decides whether this link is
-          // shown at all: a link to an assignment (or to a repository) that has
-          // not been published is staff-only.
+          // The student-visibility rule decides whether this link is shown at
+          // all: `is_published` on both rows, for a quiz or form its
+          // `release_at`, and a form's draft status. A link students cannot
+          // see is staff-only. `type` is what drops a quiz assignment's link
+          // where quizzes are hidden, and it travels on to the display row.
           assignment: {
             select: {
               id: true,
+              type: true,
               title: true,
               slug: true,
               is_published: true,
+              release_at: true,
+              form: { select: { status: true } },
               repository: {
                 select: { id: true, title: true, slug: true, is_published: true },
               },
@@ -919,9 +985,34 @@ export const getClassroomCalendar = async (
     },
   });
 
+  // Quiz visibility, asked at most once for this call and only when a quiz
+  // shows up in range; the event links and the deadlines share the answer.
+  let quizzesVisibleAnswer: Promise<boolean> | undefined;
+  const quizzesVisible = () =>
+    (quizzesVisibleAnswer ??= entitlementService.quizzesVisible(classroomId));
+
+  // A link to a quiz assignment goes where quizzes are hidden, before the rows
+  // are expanded: the displayed chips, the starred resource and the raw links
+  // the edit modal prefills from all read these rows.
+  const hideQuizLinks =
+    events.some(event => event.assignmentLinks.some(l => l.assignment?.type === 'QUIZ')) &&
+    !(await quizzesVisible());
+  const shownEvents = hideQuizLinks
+    ? events.map(event => ({
+        ...event,
+        assignmentLinks: event.assignmentLinks.filter(l => l.assignment?.type !== 'QUIZ'),
+      }))
+    : events;
+
   // Expand recurring events (pass includeRawLinks for admin UI editing)
-  const expandedEvents = events.flatMap(event =>
-    expandRecurringEvent(event, startDate, endDate, includeRawLinks, canSeeDrafts)
+  const expandedEvents = shownEvents.flatMap(event =>
+    expandRecurringEvent(
+      { ...event, creator: withLogin(event.creator) },
+      startDate,
+      endDate,
+      includeRawLinks,
+      canSeeDrafts
+    )
   );
 
   // Get deadlines from Assignments (pass userId to include GitHub issue links)
@@ -931,7 +1022,7 @@ export const getClassroomCalendar = async (
     endDate,
     userId,
     includeUnpublished,
-    { canSeeDrafts }
+    { canSeeDrafts, quizzesVisible }
   );
 
   // Get form close dates. Where the click-through goes is a role question, and
@@ -941,6 +1032,7 @@ export const getClassroomCalendar = async (
   // Callers pass `canManageForms` from the resolved membership role.
   const formCloses = await getFormCloseEventsForRange(classroomId, startDate, endDate, {
     forStaff: canManageForms,
+    includeUnpublished,
   });
 
   // Combine and sort by start time
@@ -981,6 +1073,10 @@ export type ClassroomCalendarItem = Awaited<ReturnType<typeof getClassroomCalend
  *     staff see flagged via `is_unpublished` — because a draft form's close date
  *     is routinely a placeholder from the builder.
  *   - A form with no `closes_at` has no deadline and therefore no event.
+ *   - A form that is an assignment follows the student-visibility rule
+ *     (`openToStudents`) like the assignment's own deadline: the student view
+ *     leaves its close out while the assignment is unpublished or before its
+ *     `release_at`; the staff view keeps it, flagged `is_unpublished`.
  *
  * @param {string} classroomId - The classroom ID
  * @param {Date} startDate - Start of date range
@@ -988,12 +1084,17 @@ export type ClassroomCalendarItem = Awaited<ReturnType<typeof getClassroomCalend
  * @param {boolean} [options.forStaff=false] - Point the link at the responses view instead of the
  *   fill page. Only for callers who have established the viewer is OWNER or TEACHER: the responses
  *   view in apps/pages is gated to those two roles, so an assistant sent there gets a 403.
+ * @param {boolean} [options.includeUnpublished=false] - The staff view: keep the close of a form
+ *   whose assignment students cannot see yet, flagged. Defaults to the student view.
  */
 export const getFormCloseEventsForRange = async (
   classroomId: string,
   startDate: Date,
   endDate: Date,
-  { forStaff = false }: { forStaff?: boolean } = {}
+  {
+    forStaff = false,
+    includeUnpublished = false,
+  }: { forStaff?: boolean; includeUnpublished?: boolean } = {}
 ): Promise<CalendarFormCloseItem[]> => {
   const forms = await getPrisma().form.findMany({
     where: {
@@ -1010,13 +1111,25 @@ export const getFormCloseEventsForRange = async (
       access: true,
       closes_at: true,
       classroom: { select: { slug: true } },
+      // A form that is an assignment: what the visibility rule reads.
+      assignment: { select: { type: true, is_published: true, release_at: true } },
     },
     orderBy: { closes_at: 'asc' },
   });
 
   const base = pagesUrl();
+  const now = new Date();
+  // Visible to students: a standalone form always (drafts are filtered above);
+  // a form that is an assignment only once that assignment is.
+  const visibleToStudents = (form: (typeof forms)[number]) =>
+    !form.assignment ||
+    openToStudents({ ...form.assignment, form: { status: form.status } }, now, {
+      quizzesVisible: false,
+    });
 
-  return forms.map(form => {
+  const shown = includeUnpublished ? forms : forms.filter(visibleToStudents);
+
+  return shown.map(form => {
     const closesAt = form.closes_at!;
     const formPath = `${base}/${form.classroom.slug}/forms/${form.slug}`;
 
@@ -1029,9 +1142,9 @@ export const getFormCloseEventsForRange = async (
       end_time: closesAt,
       is_deadline: true as const,
       is_form_close: true as const,
-      // Draft forms are filtered out above, so nothing that reaches here is
-      // unpublished. The field exists for shape parity with deadline items.
-      is_unpublished: false,
+      // Draft forms are filtered out above; what can still be unseen by
+      // students is a form whose assignment is not visible yet (staff view).
+      is_unpublished: !visibleToStudents(form),
       form_id: form.id,
       form_slug: form.slug,
       form_status: form.status,
@@ -1047,6 +1160,17 @@ export const getFormCloseEventsForRange = async (
 
 /**
  * Get assignment deadlines as calendar items
+ *
+ * A quiz assignment's deadline appears only where quizzes do
+ * (`entitlement.quizzesVisible`). Every calendar surface — the web calendars,
+ * the student dashboard's week, the ICS feed and the MCP calendar reads — takes
+ * its deadlines from here, so this is the one place they are dropped.
+ *
+ * The student view (`includeUnpublished` false) lists only what students can
+ * see under `openToStudents`: a quiz deadline whose quiz is a DRAFT, or a quiz
+ * or form deadline before its `release_at`, is left out. The staff view keeps
+ * every deadline and flags those as `is_unpublished`.
+ *
  * @param {string} classroomId - The classroom ID
  * @param {Date} startDate - Start of date range
  * @param {Date} endDate - End of date range
@@ -1055,6 +1179,9 @@ export const getFormCloseEventsForRange = async (
  * @param {boolean} [options.canSeeDrafts=false] - Whether the viewer may see draft pages and decks
  *   attached to the assignment. Separate from `includeUnpublished`, which decides whether the
  *   assignment appears at all — see `getClassroomCalendar`.
+ * @param {Function} [options.quizzesVisible] - How to ask whether this classroom's quizzes are
+ *   visible. `getClassroomCalendar` passes its own so one call asks once; defaults to asking
+ *   `entitlement.quizzesVisible` directly.
  */
 export const getDeadlinesForRange = async (
   classroomId: string,
@@ -1062,7 +1189,10 @@ export const getDeadlinesForRange = async (
   endDate: Date,
   userId: string | null = null,
   includeUnpublished: boolean = false,
-  { canSeeDrafts = false }: { canSeeDrafts?: boolean } = {}
+  {
+    canSeeDrafts = false,
+    quizzesVisible = () => entitlementService.quizzesVisible(classroomId),
+  }: { canSeeDrafts?: boolean; quizzesVisible?: () => Promise<boolean> } = {}
 ) => {
   const assignments = await getPrisma().assignment.findMany({
     where: {
@@ -1103,6 +1233,9 @@ export const getDeadlinesForRange = async (
           is_published: true,
         },
       },
+      // Read by the student-visibility rule: a form that is still a draft is
+      // not visible to students. (A quiz's publish state is the assignment's.)
+      form: { select: { status: true } },
       pages: {
         // Draft pages are staff-only, the same rule the event-link leg applies
         ...(canSeeDrafts
@@ -1177,7 +1310,20 @@ export const getDeadlinesForRange = async (
     },
   });
 
-  return assignments.map(assignment => {
+  // Asked once, and only when a quiz deadline is in range, so a classroom with
+  // none pays nothing for the lookup.
+  const showQuizzes =
+    assignments.some(assignment => assignment.type === 'QUIZ') && (await quizzesVisible());
+  const now = new Date();
+  // Hidden quizzes leave no trace in either view. Students then see only what
+  // the visibility rule admits; staff keep the rest, flagged below.
+  const shown = assignments.filter(
+    assignment =>
+      (assignment.type !== 'QUIZ' || showQuizzes) &&
+      (includeUnpublished || openToStudents(assignment, now, { quizzesVisible: showQuizzes }))
+  );
+
+  return shown.map(assignment => {
     const repoAssignment = (
       'git_repo_assignments' in assignment ? (assignment.git_repo_assignments?.[0] ?? null) : null
     ) as DeadlineRepositoryAssignment | null;
@@ -1194,10 +1340,9 @@ export const getDeadlinesForRange = async (
           : repoUrl;
     }
 
-    // Flag unpublished content for admin UI styling
-    const isUnpublished =
-      !assignment.is_published ||
-      (assignment.repository ? !assignment.repository.is_published : false);
+    // Flag, for the staff view, what students cannot see yet: an unpublished
+    // assignment or repository, a draft quiz, a quiz or form not yet released.
+    const isUnpublished = !openToStudents(assignment, now, { quizzesVisible: showQuizzes });
 
     const deadline: CalendarDeadlineItem = {
       id: `deadline-${assignment.id}`,
@@ -1249,31 +1394,35 @@ export const createEvent = async (
   } = eventData;
 
   assertEndAfterStart(start_time, end_time);
+  const link = await decideMeetingLink(meeting_link, () => null);
 
-  return getPrisma().calendarEvent.create({
-    data: {
-      classroom_id: classroomId,
-      created_by: userId,
-      event_type,
-      title,
-      description,
-      start_time: toDate(start_time),
-      end_time: toDate(end_time),
-      location,
-      meeting_link,
-      is_recurring: is_recurring || false,
-      recurrence_rule: is_recurring ? toNullableJsonInput(recurrence_rule) : Prisma.JsonNull,
-    },
-    include: {
-      creator: {
-        select: {
-          id: true,
-          name: true,
-          login: true,
+  return withLogins(
+    await getPrisma().calendarEvent.create({
+      data: {
+        classroom_id: classroomId,
+        created_by: userId,
+        event_type,
+        title,
+        description: descriptionWithMeetingText(link, description, null),
+        start_time: toDate(start_time),
+        end_time: toDate(end_time),
+        location,
+        meeting_link: link?.meetingLink,
+        is_recurring: is_recurring || false,
+        recurrence_rule: is_recurring ? toNullableJsonInput(recurrence_rule) : Prisma.JsonNull,
+      },
+      include: {
+        creator: {
+          select: {
+            id: true,
+            name: true,
+            image: true,
+            ...GIT_IDENTITY,
+          },
         },
       },
-    },
-  });
+    })
+  );
 };
 
 /**
@@ -1294,30 +1443,52 @@ export const updateEvent = async (eventId: string, eventData: CalendarEventUpdat
 
   assertEndAfterStart(start_time, end_time);
 
-  return getPrisma().calendarEvent.update({
-    where: { id: eventId },
-    data: {
-      event_type,
-      title,
-      description,
-      start_time: toOptionalUpdateDate(start_time),
-      end_time: toOptionalUpdateDate(end_time),
-      location,
-      meeting_link,
-      is_recurring,
-      recurrence_rule: is_recurring ? toNullableJsonInput(recurrence_rule) : Prisma.JsonNull,
-    },
-    include: {
-      creator: {
-        select: {
-          id: true,
-          name: true,
-          login: true,
-        },
+  // The stored row is read at most once, and only when the link rule needs it:
+  // to recognise an unchanged note, or to find the description that text joins
+  // when this update leaves the description out.
+  let storedRow:
+    | Promise<{ meeting_link: string | null; description: string | null } | null>
+    | undefined;
+  const readStored = () =>
+    (storedRow ??= getPrisma().calendarEvent.findUnique({
+      where: { id: eventId },
+      select: { meeting_link: true, description: true },
+    }));
+
+  const link = await decideMeetingLink(
+    meeting_link,
+    async () => (await readStored())?.meeting_link
+  );
+  const storedDescription =
+    link?.text && description === undefined ? (await readStored())?.description : undefined;
+
+  return withLogins(
+    await getPrisma().calendarEvent.update({
+      where: { id: eventId },
+      data: {
+        event_type,
+        title,
+        description: descriptionWithMeetingText(link, description, storedDescription),
+        start_time: toOptionalUpdateDate(start_time),
+        end_time: toOptionalUpdateDate(end_time),
+        location,
+        meeting_link: link?.meetingLink,
+        is_recurring,
+        recurrence_rule: is_recurring ? toNullableJsonInput(recurrence_rule) : Prisma.JsonNull,
       },
-      overrides: true,
-    },
-  });
+      include: {
+        creator: {
+          select: {
+            id: true,
+            name: true,
+            image: true,
+            ...GIT_IDENTITY,
+          },
+        },
+        overrides: true,
+      },
+    })
+  );
 };
 
 /**
@@ -1353,12 +1524,38 @@ export const updateEventWithScope = async (
     throw new Error('Event not found');
   }
 
+  const existingOverride = event.overrides?.find(o => isSameDate(new Date(o.date), occurrenceDate));
+  const overrideMeetingLink = existingOverride?.new_meeting_link ?? null;
+
+  // A one-date edit is compared with the link the form showed for that date, as
+  // the calendar expands it. A series edit is compared with the series link. A
+  // note only this date's override holds, sent back unchanged from a series
+  // edit, is not the series' to take: the link counts as not mentioned.
+  const sendsOverrideNote = (): boolean => {
+    if (eventData.meeting_link === undefined || !overrideMeetingLink) return false;
+    if (checkMeetingLink(eventData.meeting_link, event.meeting_link).ok) return false;
+    const asOccurrence = checkMeetingLink(eventData.meeting_link, overrideMeetingLink);
+    return asOccurrence.ok && asOccurrence.unchangedNote;
+  };
+  const link =
+    editScope === 'this_only'
+      ? await decideMeetingLink(
+          eventData.meeting_link,
+          () => overrideMeetingLink || event.meeting_link
+        )
+      : sendsOverrideNote()
+        ? null
+        : await decideMeetingLink(eventData.meeting_link, () => event.meeting_link);
+
   switch (editScope) {
     case 'this_only': {
-      // Create or update an override for this specific occurrence
-      const existingOverride = event.overrides?.find(o =>
-        isSameDate(new Date(o.date), occurrenceDate)
-      );
+      // Create or update an override for this specific occurrence. An override
+      // has no description, so pasted invitation text has nowhere to go here —
+      // the same as a description edit at this scope; only its link is kept.
+      // An unchanged note is left where it is: editing one date does not
+      // rewrite the series. A null link is not "no link" on an override — the
+      // occurrence then shows the series link.
+      const overrideLink = link?.unchangedNote ? undefined : link?.meetingLink;
 
       if (existingOverride) {
         await getPrisma().calendarEventOverride.update({
@@ -1367,7 +1564,7 @@ export const updateEventWithScope = async (
             new_start_time: toOptionalDate(eventData.start_time, true),
             new_end_time: toOptionalDate(eventData.end_time, true),
             new_location: eventData.location,
-            new_meeting_link: eventData.meeting_link,
+            new_meeting_link: overrideLink,
           },
         });
       } else {
@@ -1378,7 +1575,7 @@ export const updateEventWithScope = async (
             new_start_time: toOptionalDate(eventData.start_time, true),
             new_end_time: toOptionalDate(eventData.end_time, true),
             new_location: eventData.location,
-            new_meeting_link: eventData.meeting_link,
+            new_meeting_link: overrideLink,
           },
         });
       }
@@ -1419,11 +1616,17 @@ export const updateEventWithScope = async (
             created_by: event.created_by,
             event_type: eventData.event_type || event.event_type,
             title: eventData.title || event.title,
-            description: eventData.description ?? event.description,
+            description: descriptionWithMeetingText(
+              link,
+              eventData.description ?? event.description,
+              event.description
+            ),
             start_time: eventData.start_time ? toDate(eventData.start_time) : event.start_time,
             end_time: eventData.end_time ? toDate(eventData.end_time) : event.end_time,
             location: eventData.location ?? event.location,
-            meeting_link: eventData.meeting_link ?? event.meeting_link,
+            // A cleared field clears the link here too; only a write that does
+            // not mention the link carries the old one over.
+            meeting_link: link ? link.meetingLink : event.meeting_link,
             is_recurring: eventData.is_recurring ?? event.is_recurring,
             recurrence_rule: toNullableJsonInput(
               eventData.recurrence_rule ?? toInputJsonObject(event.recurrence_rule)
@@ -1475,11 +1678,11 @@ export const updateEventWithScope = async (
         data: {
           event_type: eventData.event_type,
           title: eventData.title,
-          description: eventData.description,
+          description: descriptionWithMeetingText(link, eventData.description, event.description),
           start_time: toOptionalUpdateDate(eventData.start_time),
           end_time: toOptionalUpdateDate(eventData.end_time),
           location: eventData.location,
-          meeting_link: eventData.meeting_link,
+          meeting_link: link?.meetingLink,
           is_recurring: eventData.is_recurring,
           recurrence_rule:
             eventData.is_recurring === undefined
@@ -1597,19 +1800,22 @@ export const deleteEventWithScope = async (
  * Get a single calendar event by ID
  */
 export const getEventById = async (eventId: string) => {
-  return getPrisma().calendarEvent.findUnique({
-    where: { id: eventId },
-    include: {
-      creator: {
-        select: {
-          id: true,
-          name: true,
-          login: true,
+  return withLogins(
+    await getPrisma().calendarEvent.findUnique({
+      where: { id: eventId },
+      include: {
+        creator: {
+          select: {
+            id: true,
+            name: true,
+            image: true,
+            ...GIT_IDENTITY,
+          },
         },
+        overrides: true,
       },
-      overrides: true,
-    },
-  });
+    })
+  );
 };
 
 /**
@@ -1622,6 +1828,8 @@ export const createOverride = async (
 ) => {
   const { is_cancelled, new_start_time, new_end_time, new_location, new_meeting_link } =
     overrideData;
+  // An override has no description, so only the link of pasted text is kept.
+  const link = await decideMeetingLink(new_meeting_link, () => null);
 
   return getPrisma().calendarEventOverride.create({
     data: {
@@ -1631,7 +1839,7 @@ export const createOverride = async (
       new_start_time: toOptionalDate(new_start_time, true),
       new_end_time: toOptionalDate(new_end_time, true),
       new_location,
-      new_meeting_link,
+      new_meeting_link: link?.meetingLink,
     },
   });
 };
@@ -1642,6 +1850,8 @@ export const createOverride = async (
 export const updateOverride = async (overrideId: string, overrideData: CalendarOverrideData) => {
   const { is_cancelled, new_start_time, new_end_time, new_location, new_meeting_link } =
     overrideData;
+  // An override has no description, so only the link of pasted text is kept.
+  const link = await decideMeetingLink(new_meeting_link, () => null);
 
   return getPrisma().calendarEventOverride.update({
     where: { id: overrideId },
@@ -1650,7 +1860,7 @@ export const updateOverride = async (overrideId: string, overrideData: CalendarO
       new_start_time: toOptionalDate(new_start_time, true),
       new_end_time: toOptionalDate(new_end_time, true),
       new_location,
-      new_meeting_link,
+      new_meeting_link: link?.meetingLink,
     },
   });
 };
@@ -1692,6 +1902,13 @@ export const getUserEvents = async (userId: string, classroomId: string) => {
  * @param {object|null} featured - Which of those links the month view shows under the event on
  *   this date, as `{ kind, id }`. At most one, across all three kinds. A ref naming something
  *   this write is not linking is dropped silently rather than refused — see `resolveFeaturedLink`.
+ * @returns {object} `linked`: how many links of each kind this write created, once the ids that
+ *   did not validate were dropped. The web actions' audit rows record these counts.
+ *
+ * Where the classroom's quizzes are hidden (`entitlement.quizzesVisible`) the calendar read drops
+ * links to quiz assignments, so an edit made there saves without them. This write leaves such a
+ * link on this date in place instead of deleting it, and adds no new one, so the date's quiz
+ * links are back as they were when quizzes show again.
  */
 export const updateEventLinks = async (
   eventId: string,
@@ -1725,8 +1942,11 @@ export const updateEventLinks = async (
     ? new Date(new Date(occurrenceDate).toISOString().split('T')[0])
     : null;
 
-  // Validate all resources belong to this classroom
-  const [pages, slides, assignments] = await Promise.all([
+  // Validate all resources belong to this classroom. An assignment belongs to
+  // one through its module: quiz and form assignments have no repository.
+  // Alongside, how many quiz links this date already holds — the one fact the
+  // quiz rule below needs about what is stored.
+  const [pages, slides, assignments, storedQuizLinks] = await Promise.all([
     pageIds.length > 0
       ? getPrisma().page.findMany({
           where: { id: { in: pageIds }, classroom_id: classroomId },
@@ -1741,16 +1961,32 @@ export const updateEventLinks = async (
       : [],
     assignmentIds.length > 0
       ? getPrisma().assignment.findMany({
-          where: { id: { in: assignmentIds }, repository: { classroom_id: classroomId } },
-          select: { id: true },
+          where: { id: { in: assignmentIds }, module: { classroom_id: classroomId } },
+          select: { id: true, type: true },
         })
       : [],
+    getPrisma().calendarEventAssignmentLink.count({
+      where: { event_id: eventId, occurrence_date: normalizedDate, assignment: { type: 'QUIZ' } },
+    }),
   ]);
 
-  // Only use validated IDs (filter out any that don't belong to this classroom)
+  // The count above runs on every save: even one that links no assignment has
+  // to keep the stored quiz links where quizzes are hidden. The entitlement
+  // lookup is asked only when a quiz link is part of this write, as one being
+  // added or one already stored on this date. Asked before the transaction,
+  // not inside it: the star below is resolved against the ids that survive
+  // this rule.
+  const quizzesHidden =
+    (storedQuizLinks > 0 || assignments.some(a => a.type === 'QUIZ')) &&
+    !(await entitlementService.quizzesVisible(classroomId));
+
+  // Only use validated IDs (filter out any that don't belong to this classroom).
+  // A quiz assignment is dropped the same way where quizzes are hidden.
   const validPageIds = pages.map(p => p.id);
   const validSlideIds = slides.map(s => s.id);
-  const validAssignmentIds = assignments.map(a => a.id);
+  const validAssignmentIds = assignments
+    .filter(a => !(quizzesHidden && a.type === 'QUIZ'))
+    .map(a => a.id);
 
   // The star is resolved against the VALIDATED lists, so an id this write is
   // not actually linking — including one from another classroom, already
@@ -1798,9 +2034,31 @@ export const updateEventLinks = async (
     await tx.calendarEventSlideLink.deleteMany({
       where: { event_id: eventId, occurrence_date: normalizedDate },
     });
+    // Where quizzes are hidden the caller never saw this date's quiz links, so
+    // leaving them out of the save is not a request to remove them.
     await tx.calendarEventAssignmentLink.deleteMany({
-      where: { event_id: eventId, occurrence_date: normalizedDate },
+      where: {
+        event_id: eventId,
+        occurrence_date: normalizedDate,
+        ...(quizzesHidden ? { assignment: { type: { not: 'QUIZ' } } } : {}),
+      },
     });
+
+    // A kept quiz link may hold this date's star. A save that stars something
+    // else takes it over: one star per date, and the partial unique index on
+    // this table would refuse a second starred assignment row. Cleared before
+    // the inserts below for that reason.
+    if (quizzesHidden && featuredLink) {
+      await tx.calendarEventAssignmentLink.updateMany({
+        where: {
+          event_id: eventId,
+          occurrence_date: normalizedDate,
+          featured: true,
+          assignment: { type: 'QUIZ' },
+        },
+        data: { featured: false },
+      });
+    }
 
     // Create new links (only for validated IDs, preserving order)
     if (validPageIds.length > 0) {
@@ -1826,17 +2084,36 @@ export const updateEventLinks = async (
       });
     }
     if (validAssignmentIds.length > 0) {
+      // Kept quiz links keep their order, and the new rows go after them: the
+      // read sorts on `order` alone, so starting again at 0 would tie with the
+      // kept rows and leave the two to interleave when quizzes show again.
+      // After the delete above, the kept rows are all this bucket holds.
+      let firstOrder = 0;
+      if (quizzesHidden) {
+        const kept = await tx.calendarEventAssignmentLink.aggregate({
+          where: { event_id: eventId, occurrence_date: normalizedDate },
+          _max: { order: true },
+        });
+        firstOrder = (kept._max.order ?? -1) + 1;
+      }
       await tx.calendarEventAssignmentLink.createMany({
         data: validAssignmentIds.map((id, idx) => ({
           event_id: eventId,
           assignment_id: id,
           occurrence_date: normalizedDate,
-          order: idx,
+          order: firstOrder + idx,
           featured: isFeaturedLinkRow(featuredLink, 'assignment', id),
         })),
       });
     }
 
-    return { success: true };
+    return {
+      success: true,
+      linked: {
+        pages: validPageIds.length,
+        slides: validSlideIds.length,
+        assignments: validAssignmentIds.length,
+      },
+    };
   });
 };

@@ -1,0 +1,225 @@
+/**
+ * Unit tests for the `repos` resource (the read side of list_repos).
+ *
+ * Pinned here: the STAFF view carries every field repo_update edits — so an
+ * agent can read a repo before it writes one — while the existing `tag` (the
+ * tag's name) keeps its shape and `tag_id` is added beside it. The STUDENT view
+ * does not grow: none of those configuration fields reach a student.
+ */
+
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ToolContext } from '../../mcp/registry.ts';
+
+const findByClassroomId = vi.fn();
+const findPublished = vi.fn();
+const findForUser = vi.fn();
+
+vi.mock('@classmoji/services', () => ({
+  ClassmojiService: {
+    repository: {
+      findByClassroomId: (...a: unknown[]) => findByClassroomId(...a),
+      findPublished: (...a: unknown[]) => findPublished(...a),
+    },
+    gitRepoAssignment: { findForUser: (...a: unknown[]) => findForUser(...a) },
+  },
+}));
+
+const { reposResource } = await import('../repos.ts');
+
+const VARS = { org: 'test-org', slug: 'winter-2025' };
+const URI = new URL('classmoji://test-org/winter-2025/repos');
+
+function ctxFor(role: 'OWNER' | 'ASSISTANT' | 'STUDENT'): ToolContext {
+  return {
+    viewer: { userId: 'user-1', clientId: 'c', scopes: new Set(['read']) },
+    classroom: {
+      classroomId: 'class-1',
+      role,
+      status: 'ACTIVE',
+      membership: { id: 'm-1', role },
+      classroom: { settings: {}, git_organization: { login: 'test-org' } },
+    },
+  } as unknown as ToolContext;
+}
+
+const DEADLINE = new Date('2026-10-02T03:59:00.000Z');
+
+const REPO_ROW = {
+  id: 'repo-1',
+  title: 'workshop',
+  slug: 'workshop',
+  description: 'Pairs',
+  is_published: true,
+  type: 'GROUP',
+  template: 'org/workshop-template',
+  tag_id: 'tag-1',
+  tag: { id: 'tag-1', name: 'workshop-pairs' },
+  team_formation_mode: 'INSTRUCTOR',
+  team_formation_deadline: DEADLINE,
+  max_team_size: 2,
+  project_template_id: 'PVT_1',
+  project_template_title: 'Board',
+  assignments: [],
+};
+
+/** Every configuration field the staff view adds for repo_update. */
+const STAFF_ONLY_FIELDS = [
+  'template',
+  'tag_id',
+  'team_formation_mode',
+  'team_formation_deadline',
+  'max_team_size',
+  'project_template_id',
+  'project_template_title',
+  'tag',
+];
+
+type ReposPayload = { repositories: Array<Record<string, unknown>> };
+
+beforeEach(() => {
+  findByClassroomId.mockReset();
+  findPublished.mockReset();
+  findForUser.mockReset();
+});
+
+describe('repos resource', () => {
+  it('shows staff every field repo_update edits, keeping `tag` as the name', async () => {
+    findByClassroomId.mockResolvedValue([REPO_ROW]);
+
+    const payload = (await reposResource.handler(VARS, ctxFor('ASSISTANT'), URI)) as ReposPayload;
+
+    expect(findByClassroomId).toHaveBeenCalledWith('class-1');
+    expect(payload.repositories[0]).toMatchObject({
+      id: 'repo-1',
+      description: 'Pairs',
+      template: 'org/workshop-template',
+      tag: 'workshop-pairs',
+      tag_id: 'tag-1',
+      team_formation_mode: 'INSTRUCTOR',
+      team_formation_deadline: DEADLINE,
+      max_team_size: 2,
+      project_template_id: 'PVT_1',
+      project_template_title: 'Board',
+    });
+  });
+
+  it('reports absent configuration as null for staff', async () => {
+    findByClassroomId.mockResolvedValue([
+      {
+        ...REPO_ROW,
+        type: 'INDIVIDUAL',
+        tag_id: null,
+        tag: null,
+        team_formation_deadline: null,
+        project_template_id: null,
+        project_template_title: null,
+      },
+    ]);
+
+    const payload = (await reposResource.handler(VARS, ctxFor('OWNER'), URI)) as ReposPayload;
+    expect(payload.repositories[0]).toMatchObject({
+      tag: null,
+      tag_id: null,
+      team_formation_deadline: null,
+      project_template_id: null,
+    });
+  });
+
+  it('tells staff which module each assignment belongs to, and not students', async () => {
+    const ASSIGNMENT = {
+      id: 'a-1',
+      module_id: 'mod-7',
+      title: 'Part 1',
+      slug: 'part-1',
+      weight: 100,
+      is_extra_credit: false,
+      is_published: true,
+      student_deadline: DEADLINE,
+      grader_deadline: null,
+      release_at: null,
+      grades_released: false,
+      tokens_per_hour: 0,
+    };
+    const row = { ...REPO_ROW, assignments: [ASSIGNMENT] };
+    const assignmentsOf = (payload: ReposPayload) =>
+      payload.repositories[0].assignments as Array<Record<string, unknown>>;
+
+    // The value assignment_update moves, readable beside the assignment's id.
+    findByClassroomId.mockResolvedValue([row]);
+    const staff = (await reposResource.handler(VARS, ctxFor('OWNER'), URI)) as ReposPayload;
+    expect(assignmentsOf(staff)[0]).toMatchObject({ id: 'a-1', module_id: 'mod-7' });
+
+    findPublished.mockResolvedValue([row]);
+    findForUser.mockResolvedValue([
+      {
+        id: 'sub-1',
+        status: 'OPEN',
+        assignment: { id: 'a-1' },
+        git_repo: { repository_id: 'repo-1', name: 'workshop-team-a' },
+        grades: [],
+        graders: [],
+      },
+    ]);
+    const student = (await reposResource.handler(VARS, ctxFor('STUDENT'), URI)) as ReposPayload;
+    expect(assignmentsOf(student)).toHaveLength(1);
+    expect(assignmentsOf(student)[0]).not.toHaveProperty('module_id');
+  });
+
+  it("reports an assignment's own price and what an hour actually costs", async () => {
+    const own = (id: string, tokens_per_hour: number | null) => ({
+      id,
+      module_id: 'mod-7',
+      title: id,
+      slug: id,
+      weight: 100,
+      is_extra_credit: false,
+      is_published: true,
+      student_deadline: DEADLINE,
+      grader_deadline: null,
+      release_at: null,
+      grades_released: false,
+      tokens_per_hour,
+    });
+    const row = {
+      ...REPO_ROW,
+      assignments: [own('follows', null), own('own-price', 5), own('off', 0)],
+    };
+    findByClassroomId.mockResolvedValue([row]);
+    const ctx = ctxFor('OWNER');
+    (ctx.classroom!.classroom as { settings: unknown }).settings = { default_tokens_per_hour: 2 };
+
+    const payload = (await reposResource.handler(VARS, ctx, URI)) as ReposPayload;
+    const prices = (payload.repositories[0].assignments as Array<Record<string, unknown>>).map(
+      a => [a.id, a.tokens_per_hour, a.effective_tokens_per_hour]
+    );
+
+    expect(prices).toEqual([
+      // Follows the classroom: its own value stays null, so writing it back changes nothing.
+      ['follows', null, 2],
+      ['own-price', 5, 5],
+      // A deliberate 0 is no extensions, whatever the classroom charges.
+      ['off', 0, 0],
+    ]);
+  });
+
+  it('leaves the student view without any of the configuration fields', async () => {
+    findPublished.mockResolvedValue([REPO_ROW]);
+    findForUser.mockResolvedValue([
+      {
+        id: 'sub-1',
+        status: 'OPEN',
+        assignment: { id: 'a-1' },
+        git_repo: { repository_id: 'repo-1', name: 'workshop-team-a' },
+        grades: [],
+        graders: [],
+      },
+    ]);
+
+    const payload = (await reposResource.handler(VARS, ctxFor('STUDENT'), URI)) as ReposPayload;
+
+    expect(payload.repositories).toHaveLength(1);
+    for (const field of STAFF_ONLY_FIELDS) {
+      expect(payload.repositories[0], field).not.toHaveProperty(field);
+    }
+  });
+});

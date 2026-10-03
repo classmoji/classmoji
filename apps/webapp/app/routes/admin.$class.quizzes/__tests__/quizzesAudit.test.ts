@@ -27,7 +27,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
-  assertProTier: vi.fn(),
+  quizzesVisibleOrThrow: vi.fn(),
   addClassroomAuditLog: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
@@ -41,8 +41,13 @@ const mocks = vi.hoisted(() => ({
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => mocks.assertClassroomAccess(...a),
   assertClassroomMutationAllowed: (...a: unknown[]) => mocks.assertClassroomMutationAllowed(...a),
-  assertProTier: (...a: unknown[]) => mocks.assertProTier(...a),
   addClassroomAuditLog: (...a: unknown[]) => mocks.addClassroomAuditLog(...a),
+}));
+
+vi.mock('@classmoji/ui-components', () => ({ useCallout: () => ({ show: vi.fn() }) }));
+
+vi.mock('~/utils/classroomProFlag.server', () => ({
+  quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a),
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -125,7 +130,14 @@ beforeEach(() => {
     classroom: CLASSROOM,
     membership: { id: 'm-1', role: 'TEACHER' },
   });
-  mocks.create.mockResolvedValue({ id: 'quiz-new', name: 'Week 1', repository_id: 'repo-1' });
+  mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
+  mocks.create.mockResolvedValue({
+    id: 'quiz-new',
+    name: 'Week 1',
+    repository_id: 'repo-1',
+    // quiz.create writes the quiz's assignment in the same transaction.
+    assignment: { module_id: 'mod-1', is_published: false },
+  });
   mocks.update.mockResolvedValue({});
   mocks.remove.mockResolvedValue({});
   mocks.publish.mockResolvedValue({});
@@ -136,8 +148,8 @@ beforeEach(() => {
 });
 
 describe('admin quizzes action — audit rows', () => {
-  it('audits createQuiz as CREATE against the new quiz', async () => {
-    await submit({ _action: 'createQuiz', name: 'Week 1' });
+  it('audits createQuiz as CREATE against the new quiz, with the module it went in', async () => {
+    await submit({ _action: 'createQuiz', name: 'Week 1', assignment: { moduleId: 'mod-1' } });
 
     expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
       classroomId: 'class-1',
@@ -147,8 +159,59 @@ describe('admin quizzes action — audit rows', () => {
       action: 'CREATE',
       resourceType: 'QUIZ',
       resourceId: 'quiz-new',
-      metadata: { tool: 'web:quizzes.create', name: 'Week 1', repository_id: 'repo-1' },
+      metadata: {
+        tool: 'web:quizzes.create',
+        name: 'Week 1',
+        repository_id: 'repo-1',
+        module_id: 'mod-1',
+      },
     });
+  });
+
+  it('records no module for a created quiz the service returned without an assignment', async () => {
+    mocks.create.mockResolvedValue({ id: 'quiz-new', name: 'Week 1', repository_id: null });
+
+    await submit({ _action: 'createQuiz', name: 'Week 1' });
+
+    expect(auditEntry().metadata).toEqual({
+      tool: 'web:quizzes.create',
+      name: 'Week 1',
+      repository_id: null,
+      module_id: null,
+    });
+  });
+
+  it('audits an updateQuiz that carries the Assignment panel with its field names', async () => {
+    await submit({
+      _action: 'updateQuiz',
+      id: 'quiz-1',
+      name: 'Renamed',
+      assignment: { moduleId: 'mod-1', weight: 10, isPublished: false },
+    });
+
+    expect(auditEntry().metadata).toEqual({
+      tool: 'web:quizzes.update',
+      fields: ['name', 'assignment'],
+    });
+  });
+
+  it('writes no audit row for a refused assignment write', async () => {
+    mocks.update.mockRejectedValue(
+      Object.assign(new Error('Module not found in this classroom'), {
+        name: 'QuizAssignmentError',
+        code: 'module_not_found',
+        status: 404,
+      })
+    );
+
+    const response = (await submit({
+      _action: 'updateQuiz',
+      id: 'quiz-1',
+      assignment: { moduleId: 'mod-elsewhere' },
+    })) as Response;
+
+    expect(response.status).toBe(404);
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
   it('audits updateQuiz with field NAMES only', async () => {
@@ -192,6 +255,8 @@ describe('admin quizzes action — audit rows', () => {
   it('audits updateWeight with the weight it set', async () => {
     await submit({ _action: 'updateWeight', id: 'quiz-1', weight: 25 });
 
+    // The weight is the quiz's assignment's.
+    expect(mocks.update).toHaveBeenCalledWith('quiz-1', { assignment: { weight: 25 } });
     expect(auditEntry()).toMatchObject({
       action: 'UPDATE',
       resourceId: 'quiz-1',
@@ -228,6 +293,42 @@ describe('admin quizzes action — audit rows', () => {
     await expect(submit({ _action: 'deleteQuiz', id: 'quiz-1' })).rejects.toBeInstanceOf(Response);
     expect(mocks.remove).not.toHaveBeenCalled();
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The loader 404s a classroom whose quizzes are hidden, but a tab opened
+ * before that can still post here — and publishQuiz emails the class. The
+ * action carries its own check, so none of its branches writes.
+ */
+describe('admin quizzes action — hidden quizzes', () => {
+  it.each([
+    ['createQuiz', { _action: 'createQuiz', name: 'Week 1' }],
+    ['updateQuiz', { _action: 'updateQuiz', id: OWN_QUIZ, name: 'Renamed' }],
+    ['deleteQuiz', { _action: 'deleteQuiz', id: OWN_QUIZ }],
+    ['publishQuiz', { _action: 'publishQuiz', id: OWN_QUIZ }],
+    ['updateWeight', { _action: 'updateWeight', id: OWN_QUIZ, weight: 40 }],
+    ['clearMyAttempts', { _action: 'clearMyAttempts' }],
+  ])('%s answers 404 and writes nothing', async (_name, body) => {
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(false);
+
+    const thrown = await submit(body).catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(Response);
+    expect((thrown as Response).status).toBe(404);
+    expect(mocks.quizzesVisibleOrThrow).toHaveBeenCalledWith('class-1');
+    for (const write of [mocks.create, mocks.update, mocks.remove, mocks.publish]) {
+      expect(write).not.toHaveBeenCalled();
+    }
+    expect(mocks.clearForUser).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('asks only after the access gate has passed', async () => {
+    mocks.assertClassroomAccess.mockRejectedValue(new Response('Forbidden', { status: 403 }));
+
+    await expect(submit({ _action: 'publishQuiz', id: OWN_QUIZ })).rejects.toBeInstanceOf(Response);
+    expect(mocks.quizzesVisibleOrThrow).not.toHaveBeenCalled();
   });
 });
 

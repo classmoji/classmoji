@@ -24,7 +24,7 @@ const createNewMock = vi.fn();
 const updateAgentConfigMock = vi.fn();
 
 const assertAccessMock = vi.fn();
-const assertProTierMock = vi.fn();
+const quizzesVisibleMock = vi.fn();
 const assertMutationMock = vi.fn();
 const getAuthSessionMock = vi.fn();
 const endQuizSessionMock = vi.fn();
@@ -46,7 +46,10 @@ vi.mock('@classmoji/services', () => ({
 
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => assertAccessMock(...a),
-  assertProTier: (...a: unknown[]) => assertProTierMock(...a),
+}));
+
+vi.mock('~/utils/classroomProFlag.server', () => ({
+  quizzesVisibleOrThrow: (...a: unknown[]) => quizzesVisibleMock(...a),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -73,6 +76,15 @@ vi.mock('../../student.$class.quizzes/aiAgent.server', () => ({
 
 vi.mock('@classmoji/auth/server', () => ({
   getAuthSession: (...a: unknown[]) => getAuthSessionMock(...a),
+}));
+
+// The per-call MCP read token (quiz source material, Stage 2). Mocked so no
+// test here mints against a real database.
+vi.mock('@classmoji/auth/mcp-token', () => ({
+  mintMcpAccessToken: vi.fn(async () => ({
+    accessToken: 'mcp-token',
+    expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+  })),
 }));
 
 const { action } = await import('../route.ts');
@@ -130,7 +142,7 @@ describe('api.quiz restartQuiz — writes stay inside the authorized classroom',
       classroom: { status: 'ACTIVE', slug: 'test-class' },
       membership: { role: 'STUDENT' },
     });
-    assertProTierMock.mockResolvedValue(undefined);
+    quizzesVisibleMock.mockResolvedValue(true);
     assertMutationMock.mockReturnValue(undefined);
     getAuthSessionMock.mockResolvedValue({ token: 'ghu_token', session: {} });
   });
@@ -208,21 +220,31 @@ describe('api.quiz restartQuiz — writes stay inside the authorized classroom',
     expect(createNewMock).toHaveBeenCalledWith(QUIZ_ID, 'owner-1', { role: 'OWNER' });
   });
 
-  it('ends the session when an admin drives it through impersonation', async () => {
-    // Same exemption the other attempt-bound branches carry for "View As".
-    assertAccessMock.mockResolvedValue({
-      userId: 'owner-1',
-      classroom: { status: 'ACTIVE', slug: 'test-class' },
-      membership: { role: 'OWNER' },
-    });
+  it("while an admin views as a student, ends that student's own session on this quiz", async () => {
+    // "View As" resolves the session to the viewed student, so the caller IS
+    // that student: their own attempts are the ones in reach.
     getAuthSessionMock.mockResolvedValue({
       token: 'ghu_token',
-      session: { session: { impersonatedBy: 'owner-1' } },
+      session: { user: { id: 'student-1' }, session: { impersonatedBy: 'owner-1' } },
     });
 
-    await restart(PEER_ATTEMPT);
+    await restart(OWN_ATTEMPT);
 
-    expect(endQuizSessionMock).toHaveBeenCalledWith(PEER_ATTEMPT);
+    expect(endQuizSessionMock).toHaveBeenCalledWith(OWN_ATTEMPT);
+    expect(createNewMock).toHaveBeenCalledWith(QUIZ_ID, 'student-1', { role: 'STUDENT' });
+  });
+
+  it("while an admin views as a student, leaves another member's session running", async () => {
+    getAuthSessionMock.mockResolvedValue({
+      token: 'ghu_token',
+      session: { user: { id: 'student-1' }, session: { impersonatedBy: 'owner-1' } },
+    });
+
+    const response = await restart(PEER_ATTEMPT);
+
+    expect(response.status).toBe(200);
+    expect(endQuizSessionMock).not.toHaveBeenCalled();
+    expect(createNewMock).toHaveBeenCalledWith(QUIZ_ID, 'student-1', { role: 'STUDENT' });
   });
 
   it('restarts with no attemptId named at all — the plain student flow', async () => {

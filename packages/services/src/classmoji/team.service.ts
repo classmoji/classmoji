@@ -1,5 +1,5 @@
-import getPrisma from '@classmoji/database';
-import { sortNaturallyBy } from '@classmoji/utils';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import { sortNaturallyBy, withLogins } from '@classmoji/utils';
 import type { GitProvider, Prisma } from '@prisma/client';
 
 interface TeamCreatePayload {
@@ -15,7 +15,12 @@ interface TeamCreatePayload {
    */
   isVisible?: boolean;
   classroomId: string;
-  tag?: unknown;
+  /**
+   * Tags to attach, written in the same create as the team row. Ids must
+   * already be checked against the classroom; an unknown id fails the whole
+   * create.
+   */
+  tagIds?: string[];
 }
 
 interface TeamCreateWithMembershipAndTagPayload {
@@ -27,21 +32,22 @@ interface TeamCreateWithMembershipAndTagPayload {
   tagId: string;
 }
 
+/**
+ * Create a team row. The tags are a nested write, so Prisma inserts the row and
+ * its TeamTag rows in one transaction: either all of them exist or none do.
+ */
 export const create = async (payload: TeamCreatePayload) => {
-  const { providerId, provider, name, slug, isVisible = false, classroomId, tag } = payload;
-  const teamCreateData: unknown = {
+  const { providerId, provider, name, slug, isVisible = false, classroomId, tagIds = [] } = payload;
+  const data: Prisma.TeamUncheckedCreateInput = {
     provider_id: providerId ? String(providerId) : null,
     provider: provider || null,
     name: name,
     slug: slug,
-    tag: tag,
     classroom_id: classroomId,
     is_visible: isVisible,
+    tags: { create: tagIds.map(tag_id => ({ tag_id })) },
   };
-  // TODO: narrow further once legacy team relation writes are aligned with generated Prisma input types.
-  return getPrisma().team.create({
-    data: teamCreateData as Prisma.TeamUncheckedCreateInput,
-  });
+  return getPrisma().team.create({ data });
 };
 
 export const deleteBySlug = async (classroomId: string, slug: string) => {
@@ -68,7 +74,7 @@ export const findByClassroomId = async (classroomId: string) => {
       },
       memberships: {
         include: {
-          user: true,
+          user: { include: GIT_IDENTITY },
         },
       },
     },
@@ -76,30 +82,32 @@ export const findByClassroomId = async (classroomId: string) => {
 
   // Same human order as the repository tables, so a team sits in the same place
   // on both screens.
-  return teams.sort(sortNaturallyBy(team => team.name));
+  return withLogins(teams.sort(sortNaturallyBy(team => team.name)));
 };
 
 export const findBySlugAndClassroomId = async (slug: string, classroomId: string) => {
-  return getPrisma().team.findUnique({
-    where: {
-      classroom_id_slug: {
-        slug: slug,
-        classroom_id: classroomId,
-      },
-    },
-    include: {
-      tags: {
-        include: {
-          tag: true,
+  return withLogins(
+    await getPrisma().team.findUnique({
+      where: {
+        classroom_id_slug: {
+          slug: slug,
+          classroom_id: classroomId,
         },
       },
-      memberships: {
-        include: {
-          user: true,
+      include: {
+        tags: {
+          include: {
+            tag: true,
+          },
+        },
+        memberships: {
+          include: {
+            user: { include: GIT_IDENTITY },
+          },
         },
       },
-    },
-  });
+    })
+  );
 };
 
 export const findById = async (teamId: string) => {
@@ -149,41 +157,45 @@ export const renameAndRepos = async (payload: {
 };
 
 export const findByTagId = async (classroomId: string, tagId: string) => {
-  return getPrisma().team.findMany({
-    where: {
-      classroom_id: classroomId,
-      tags: { some: { tag_id: tagId } },
-    },
-    include: {
-      memberships: {
-        include: {
-          user: {
-            select: { id: true, name: true, login: true, provider_id: true },
+  return withLogins(
+    await getPrisma().team.findMany({
+      where: {
+        classroom_id: classroomId,
+        tags: { some: { tag_id: tagId } },
+      },
+      include: {
+        memberships: {
+          include: {
+            user: {
+              select: { id: true, name: true, image: true, ...GIT_IDENTITY },
+            },
           },
         },
       },
-    },
-    orderBy: { name: 'asc' },
-  });
+      orderBy: { name: 'asc' },
+    })
+  );
 };
 
 export const findUserTeamByTag = async (classroomId: string, tagId: string, userId: string) => {
-  return getPrisma().team.findFirst({
-    where: {
-      classroom_id: classroomId,
-      tags: { some: { tag_id: tagId } },
-      memberships: { some: { user_id: userId } },
-    },
-    include: {
-      memberships: {
-        include: {
-          user: {
-            select: { id: true, name: true, login: true, provider_id: true },
+  return withLogins(
+    await getPrisma().team.findFirst({
+      where: {
+        classroom_id: classroomId,
+        tags: { some: { tag_id: tagId } },
+        memberships: { some: { user_id: userId } },
+      },
+      include: {
+        memberships: {
+          include: {
+            user: {
+              select: { id: true, name: true, image: true, ...GIT_IDENTITY },
+            },
           },
         },
       },
-    },
-  });
+    })
+  );
 };
 
 export const createWithMembershipAndTag = async (

@@ -12,10 +12,16 @@ const pageCreateMock = vi.fn();
 const pageFindFirstMock = vi.fn();
 const pageFindUniqueMock = vi.fn();
 const pageDeleteMock = vi.fn();
+const repositoryFindFirstMock = vi.fn();
+const assignmentFindFirstMock = vi.fn();
+const pageLinkCreateMock = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
     classroom: { findUnique: (...args: unknown[]) => classroomFindUniqueMock(...args) },
+    repository: { findFirst: (...args: unknown[]) => repositoryFindFirstMock(...args) },
+    assignment: { findFirst: (...args: unknown[]) => assignmentFindFirstMock(...args) },
+    pageLink: { create: (...args: unknown[]) => pageLinkCreateMock(...args) },
     page: {
       create: (...args: unknown[]) => pageCreateMock(...args),
       findFirst: (...args: unknown[]) => pageFindFirstMock(...args),
@@ -79,6 +85,7 @@ const {
   deletePage,
   ensureContentRepo,
   isPageSlugConflict,
+  linkPage,
   pageContentPath,
   pageSlugCandidates,
   PAGE_SLUG_MAX_SUFFIX,
@@ -451,6 +458,92 @@ describe('page.createPage', () => {
     expect(recordContentAssetsMock).toHaveBeenCalledWith('class-1', [
       { path: 'pages/imported/index.html', sha: 'abc' },
     ]);
+  });
+});
+
+describe('page link targets', () => {
+  /** Answers only for rows of class-1, as the scoped `where` would. */
+  function scopedFindFirst(ownId: string) {
+    return async ({ where }: { where: Record<string, unknown> }) => {
+      const classroomOf =
+        (where.classroom_id as string | undefined) ??
+        ((where.module as { classroom_id?: string } | undefined)?.classroom_id as string);
+      return where.id === ownId && classroomOf === 'class-1' ? { id: ownId } : null;
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pageFindUniqueMock.mockResolvedValue({ classroom_id: 'class-1' });
+    repositoryFindFirstMock.mockImplementation(scopedFindFirst('repo-own'));
+    assignmentFindFirstMock.mockImplementation(scopedFindFirst('asg-own'));
+    pageLinkCreateMock.mockImplementation(async ({ data }: { data: unknown }) => data);
+  });
+
+  it('links a repository of the page’s own classroom', async () => {
+    await linkPage('page-1', { repositoryId: 'repo-own' });
+
+    expect(repositoryFindFirstMock).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'repo-own', classroom_id: 'class-1' } })
+    );
+    expect(pageLinkCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ page_id: 'page-1', repository_id: 'repo-own' }),
+      })
+    );
+  });
+
+  it('refuses a repository of another classroom as not found, and links nothing', async () => {
+    await expect(linkPage('page-1', { repositoryId: 'repo-elsewhere' })).rejects.toThrow(
+      'Repository not found'
+    );
+    expect(pageLinkCreateMock).not.toHaveBeenCalled();
+  });
+
+  it('links an assignment whose module is in the page’s classroom', async () => {
+    await linkPage('page-1', { assignmentId: 'asg-own' });
+
+    const where = assignmentFindFirstMock.mock.calls[0]![0].where;
+    expect(where).toMatchObject({ id: 'asg-own', module: { classroom_id: 'class-1' } });
+    // …and whose repository, when it has one, is there too.
+    expect(where.OR).toEqual([
+      { repository_id: null },
+      { repository: { classroom_id: 'class-1' } },
+    ]);
+    expect(pageLinkCreateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an assignment of another classroom as not found, and links nothing', async () => {
+    await expect(linkPage('page-1', { assignmentId: 'asg-elsewhere' })).rejects.toThrow(
+      'Assignment not found'
+    );
+    expect(pageLinkCreateMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses a page that does not exist', async () => {
+    pageFindUniqueMock.mockResolvedValue(null);
+    await expect(linkPage('nope', { repositoryId: 'repo-own' })).rejects.toThrow('Page not found');
+    expect(pageLinkCreateMock).not.toHaveBeenCalled();
+  });
+
+  it('createPage refuses a foreign link target before any GitHub or DB write', async () => {
+    classroomFindUniqueMock.mockResolvedValue(classroom);
+    pageFindFirstMock.mockResolvedValue(null);
+    repositoryExistsMock.mockResolvedValue(true);
+
+    await expect(
+      createPage({
+        classroomId: 'class-1',
+        title: 'Linked Page',
+        createdBy: 'user-1',
+        linkRepositoryId: 'repo-elsewhere',
+      })
+    ).rejects.toThrow('Repository not found');
+
+    expect(uploadBatchMock).not.toHaveBeenCalled();
+    expect(putMock).not.toHaveBeenCalled();
+    expect(pageCreateMock).not.toHaveBeenCalled();
+    expect(pageLinkCreateMock).not.toHaveBeenCalled();
   });
 });
 

@@ -4,7 +4,9 @@
  * A GitRepoAssignment represents a student's instance of an Assignment.
  * It tracks their progress, grades, and submission status.
  */
-import getPrisma from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import { withLogins } from '@classmoji/utils';
+import { findClassroomGitProvider } from './classroomGitProvider.ts';
 import type { GitProvider, IssueStatus, Prisma } from '@prisma/client';
 import { getGitProvider } from '../git/index.ts';
 
@@ -25,23 +27,67 @@ interface GitRepoAssignmentUpdateData extends Omit<Prisma.GitRepoAssignmentUpdat
  * @returns {Promise<Object|null>}
  */
 export const findById = async (id: string) => {
-  return getPrisma().gitRepoAssignment.findUnique({
-    where: { id },
-    include: {
-      assignment: true,
-      git_repo: true,
-      grades: {
-        include: {
-          grader: true,
+  return withLogins(
+    await getPrisma().gitRepoAssignment.findUnique({
+      where: { id },
+      include: {
+        assignment: true,
+        git_repo: true,
+        grades: {
+          include: {
+            grader: { include: GIT_IDENTITY },
+          },
+        },
+        graders: {
+          include: {
+            grader: { include: GIT_IDENTITY },
+          },
         },
       },
-      graders: {
-        include: {
-          grader: true,
-        },
+    })
+  );
+};
+
+/** A usable id for a scoped `where`: a non-empty string, nothing else. */
+const isScopedId = (value: unknown): value is string => typeof value === 'string' && value !== '';
+
+/**
+ * Find one submission (GitRepoAssignment) of a classroom, through its git
+ * repo's classroom, optionally narrowed to one Repository or one Assignment.
+ *
+ * Returns null — without querying — when an id is not a non-empty string:
+ * Prisma drops an `undefined` value from a `where`, and an id field also
+ * accepts a filter object, so an unchecked value would match an arbitrary
+ * submission of the classroom.
+ *
+ * Includes the git repo (its stored name) and the assigned graders with their
+ * users (their stored logins).
+ */
+export const findByIdInClassroom = async (
+  id: unknown,
+  classroomId: string,
+  options: { repositoryId?: string; assignmentId?: string } = {}
+) => {
+  if (!isScopedId(id) || !isScopedId(classroomId)) return null;
+  const { repositoryId, assignmentId } = options;
+  if (repositoryId !== undefined && !isScopedId(repositoryId)) return null;
+  if (assignmentId !== undefined && !isScopedId(assignmentId)) return null;
+
+  const row = await getPrisma().gitRepoAssignment.findFirst({
+    where: {
+      id,
+      ...(assignmentId ? { assignment_id: assignmentId } : {}),
+      git_repo: {
+        classroom_id: classroomId,
+        ...(repositoryId ? { repository_id: repositoryId } : {}),
       },
     },
+    include: {
+      git_repo: true,
+      graders: { include: { grader: { include: GIT_IDENTITY } } },
+    },
   });
+  return withLogins(row, await findClassroomGitProvider(classroomId));
 };
 
 /**
@@ -52,40 +98,42 @@ export const findById = async (id: string) => {
  * @returns {Promise<Object|null>}
  */
 export const findByProviderId = async (provider: GitProvider, providerId: string) => {
-  return getPrisma().gitRepoAssignment.findUnique({
-    where: {
-      provider_provider_id: {
-        provider,
-        provider_id: providerId,
+  return withLogins(
+    await getPrisma().gitRepoAssignment.findUnique({
+      where: {
+        provider_provider_id: {
+          provider,
+          provider_id: providerId,
+        },
       },
-    },
-    include: {
-      assignment: {
-        include: {
-          repository: {
-            include: {
-              classroom: {
-                include: {
-                  git_organization: true,
+      include: {
+        assignment: {
+          include: {
+            repository: {
+              include: {
+                classroom: {
+                  include: {
+                    git_organization: true,
+                  },
                 },
               },
             },
           },
         },
-      },
-      git_repo: {
-        include: {
-          student: true,
-          team: true,
+        git_repo: {
+          include: {
+            student: { include: GIT_IDENTITY },
+            team: true,
+          },
+        },
+        grades: {
+          include: {
+            grader: { include: GIT_IDENTITY },
+          },
         },
       },
-      grades: {
-        include: {
-          grader: true,
-        },
-      },
-    },
-  });
+    })
+  );
 };
 
 /**
@@ -109,38 +157,40 @@ export const findFirst = async (query: Prisma.GitRepoAssignmentWhereInput) => {
  * @returns {Promise<Object[]>}
  */
 export const findByClassroomId = async (classroomId: string) => {
-  return getPrisma().gitRepoAssignment.findMany({
-    where: {
-      git_repo: {
-        classroom_id: classroomId,
-      },
-    },
-    include: {
-      assignment: true,
-      // Commit count for the repository column, as of the last refresh.
-      analytics_snapshot: {
-        select: { total_commits: true, last_commit_at: true, fetched_at: true },
-      },
-      grades: {
-        include: {
-          token_transaction: true,
-          grader: true,
+  return withLogins(
+    await getPrisma().gitRepoAssignment.findMany({
+      where: {
+        git_repo: {
+          classroom_id: classroomId,
         },
       },
-      graders: {
-        include: {
-          grader: true,
+      include: {
+        assignment: true,
+        // Commit count for the repository column, as of the last refresh.
+        analytics_snapshot: {
+          select: { total_commits: true, last_commit_at: true, fetched_at: true },
+        },
+        grades: {
+          include: {
+            token_transaction: true,
+            grader: { include: GIT_IDENTITY },
+          },
+        },
+        graders: {
+          include: {
+            grader: { include: GIT_IDENTITY },
+          },
+        },
+        git_repo: {
+          include: {
+            repository: true,
+            student: { include: GIT_IDENTITY },
+            team: true,
+          },
         },
       },
-      git_repo: {
-        include: {
-          repository: true,
-          student: true,
-          team: true,
-        },
-      },
-    },
-  });
+    })
+  );
 };
 
 /**
@@ -166,17 +216,21 @@ export const findByAssignmentId = async (
     };
   }
 
-  return getPrisma().gitRepoAssignment.findMany({
+  const rows = await getPrisma().gitRepoAssignment.findMany({
     where,
     include: {
       git_repo: true,
       graders: {
         include: {
-          grader: true,
+          grader: { include: GIT_IDENTITY },
         },
       },
     },
   });
+  // A grader's `login` is their username on the classroom's provider: it is
+  // what gets assigned on the issue.
+  if (rows.length === 0) return withLogins(rows);
+  return withLogins(rows, await findClassroomGitProvider(rows[0].git_repo.classroom_id));
 };
 
 /**
@@ -185,44 +239,46 @@ export const findByAssignmentId = async (
  * @returns {Promise<Object[]>}
  */
 export const findForUser = async (query: Prisma.GitRepoAssignmentWhereInput) => {
-  return getPrisma().gitRepoAssignment.findMany({
-    where: query,
-    include: {
-      token_transactions: true,
-      // Commit count for the student's repository link.
-      analytics_snapshot: {
-        select: { total_commits: true, last_commit_at: true, fetched_at: true },
-      },
-      git_repo: {
-        include: {
-          student: true,
-          repository: true,
-          classroom: {
-            include: {
-              git_organization: true,
+  return withLogins(
+    await getPrisma().gitRepoAssignment.findMany({
+      where: query,
+      include: {
+        token_transactions: true,
+        // Commit count for the student's repository link.
+        analytics_snapshot: {
+          select: { total_commits: true, last_commit_at: true, fetched_at: true },
+        },
+        git_repo: {
+          include: {
+            student: { include: GIT_IDENTITY },
+            repository: true,
+            classroom: {
+              include: {
+                git_organization: true,
+              },
             },
           },
         },
-      },
-      assignment: true,
-      graders: {
-        include: {
-          grader: true,
+        assignment: true,
+        graders: {
+          include: {
+            grader: { include: GIT_IDENTITY },
+          },
+        },
+        grades: {
+          include: {
+            grader: { include: GIT_IDENTITY },
+            token_transaction: true,
+          },
         },
       },
-      grades: {
-        include: {
-          grader: true,
-          token_transaction: true,
+      orderBy: {
+        assignment: {
+          student_deadline: 'desc',
         },
       },
-    },
-    orderBy: {
-      assignment: {
-        student_deadline: 'desc',
-      },
-    },
-  });
+    })
+  );
 };
 
 /**
@@ -233,32 +289,110 @@ export const findForUser = async (query: Prisma.GitRepoAssignmentWhereInput) => 
 export const create = async (data: GitRepoAssignmentCreateData) => {
   const provider = data.provider as GitProvider;
 
+  // A submission row joins a student's repo to an assignment, and both belong
+  // to a classroom. Nothing in the schema stops those classrooms differing, and
+  // when they do the row leaks one classroom's grades into another's views —
+  // the student dashboard reads submissions by the REPO's classroom but renders
+  // the ASSIGNMENT's title and grades. Refuse rather than write it.
+  const [repo, assignment] = await Promise.all([
+    getPrisma().gitRepo.findUnique({
+      where: { id: data.git_repo_id },
+      select: { classroom_id: true },
+    }),
+    getPrisma().assignment.findUnique({
+      where: { id: data.assignment_id },
+      select: { module: { select: { classroom_id: true } } },
+    }),
+  ]);
+  if (repo && assignment && repo.classroom_id !== assignment.module.classroom_id) {
+    throw new Error(
+      `Refusing to link assignment ${data.assignment_id} to a repo in another classroom ` +
+        `(${assignment.module.classroom_id} vs ${repo.classroom_id})`
+    );
+  }
+
+  const pair = {
+    git_repo_id_assignment_id: {
+      git_repo_id: data.git_repo_id,
+      assignment_id: data.assignment_id,
+    },
+  };
+  const include = { assignment: true, git_repo: true } as const;
+  const issueFields = {
+    provider,
+    ...(data.provider_id != null ? { provider_id: data.provider_id } : {}),
+    ...(data.provider_issue_number != null
+      ? { provider_issue_number: data.provider_issue_number }
+      : {}),
+  };
+
   // One row per (student repo, assignment) in either submission mode. A retry
   // that adopted an existing GitHub issue may fill in the issue fields; the
   // row's id is never rewritten.
-  return getPrisma().gitRepoAssignment.upsert({
-    where: {
-      git_repo_id_assignment_id: {
-        git_repo_id: data.git_repo_id,
-        assignment_id: data.assignment_id,
-      },
-    },
-    create: {
-      ...data,
-      provider,
-    },
-    update: {
-      provider,
-      ...(data.provider_id != null ? { provider_id: data.provider_id } : {}),
-      ...(data.provider_issue_number != null
-        ? { provider_issue_number: data.provider_issue_number }
-        : {}),
-    },
-    include: {
-      assignment: true,
-      git_repo: true,
-    },
-  });
+  try {
+    return await getPrisma().gitRepoAssignment.upsert({
+      where: pair,
+      create: { ...data, provider },
+      update: issueFields,
+      include,
+    });
+  } catch (error) {
+    if ((error as { code?: unknown })?.code !== 'P2002') throw error;
+    return recoverFromCreateConflict(data, pair, issueFields, include, error);
+  }
+};
+
+/**
+ * A unique violation out of `create`'s upsert. Because the create sets `id`
+ * (the issue id in ISSUE mode), Prisma cannot turn that upsert into one
+ * INSERT ... ON CONFLICT: it reads by (git repo, assignment) and then inserts,
+ * so two runs for the same pair can both miss the row and both insert. The
+ * loser trips the primary key first (Postgres checks the pkey index before the
+ * others), which is the "Unique constraint failed on the fields: (`id`)" a
+ * concurrent release produced in production.
+ *
+ * Losing that race is success: the pair's row exists, so return it. It only
+ * takes this run's issue fields when it has none of its own, so a row keyed on
+ * the winner's issue never ends up pointing at the loser's. Anything else (the
+ * issue is already another pair's submission row) is a genuine conflict and
+ * is reported with both sides named rather than as a bare P2002.
+ */
+const recoverFromCreateConflict = async (
+  data: GitRepoAssignmentCreateData,
+  pair: { git_repo_id_assignment_id: { git_repo_id: string; assignment_id: string } },
+  issueFields: Prisma.GitRepoAssignmentUncheckedUpdateInput,
+  include: { assignment: true; git_repo: true },
+  error: unknown
+) => {
+  const prisma = getPrisma();
+  const existing = await prisma.gitRepoAssignment.findUnique({ where: pair, include });
+  if (existing) {
+    if (existing.provider_id == null && data.provider_id != null) {
+      return prisma.gitRepoAssignment.update({ where: pair, data: issueFields, include });
+    }
+    return existing;
+  }
+
+  const holder = data.provider_id
+    ? await prisma.gitRepoAssignment.findFirst({
+        where: {
+          OR: [
+            { provider: data.provider as GitProvider, provider_id: data.provider_id },
+            ...(data.id ? [{ id: data.id }] : []),
+          ],
+        },
+        select: { id: true, git_repo_id: true, assignment_id: true },
+      })
+    : null;
+  if (holder) {
+    throw new Error(
+      `Issue ${data.provider_id} is already the submission row ${holder.id} for ` +
+        `repo ${holder.git_repo_id} / assignment ${holder.assignment_id}; refusing to ` +
+        `reuse it for repo ${data.git_repo_id} / assignment ${data.assignment_id}`,
+      { cause: error }
+    );
+  }
+  throw error;
 };
 
 /**
@@ -293,15 +427,17 @@ export const recordPush = async (gitRepoId: string, pushedAt: Date) => {
       id: true,
       closed_at: true,
       assignment: { select: { student_deadline: true } },
-      token_transactions: { where: { type: 'PURCHASE' }, select: { hours_purchased: true } },
+      // Every row, not PURCHASE alone: a cancelled purchase leaves a REFUND
+      // with negative hours, which takes its extension back.
+      token_transactions: { select: { hours_purchased: true } },
     },
   });
   const open = candidates.filter(c => {
     const deadline = c.assignment.student_deadline;
     if (!deadline) return true;
-    const extensionHours = c.token_transactions.reduce(
-      (sum, t) => sum + (t.hours_purchased ?? 0),
-      0
+    const extensionHours = Math.max(
+      0,
+      c.token_transactions.reduce((sum, t) => sum + (t.hours_purchased ?? 0), 0)
     );
     const cutoff = new Date(deadline).getTime() + extensionHours * 3_600_000;
     if (pushedAt.getTime() <= cutoff) return true;
@@ -314,18 +450,6 @@ export const recordPush = async (gitRepoId: string, pushedAt: Date) => {
     data: { status: 'CLOSED', closed_at: pushedAt },
   });
   return open.map(c => ({ id: c.id }));
-};
-
-/**
- * Every submission row on one student repo, by id. A push refreshes commit
- * stats for all of them, whether or not it counted as a submission.
- */
-export const findIdsByGitRepoId = async (gitRepoId: string) => {
-  const rows = await getPrisma().gitRepoAssignment.findMany({
-    where: { git_repo_id: gitRepoId },
-    select: { id: true },
-  });
-  return rows.map(r => r.id);
 };
 
 /**
@@ -407,6 +531,172 @@ export const update = async (id: string, updates: GitRepoAssignmentUpdateData) =
       git_repo: true,
     },
   });
+};
+
+interface LateOverrideRow {
+  closed_at: Date | null;
+  assignment: { student_deadline: Date | null } | null;
+  token_transactions: { hours_purchased: number | null }[];
+}
+
+const MS_PER_HOUR = 60 * 60 * 1000;
+
+/**
+ * Whether a submission is past its deadline IGNORING `is_late_override`.
+ *
+ * Mirrors the `is_late` computed field in packages/database/index.ts minus its
+ * first line (`if (is_late_override) return false`): that field reads false
+ * for every exempted row, so it cannot say whether an exempted — or
+ * about-to-be-cleared — submission was actually late. Same rules otherwise:
+ * no valid deadline → not late; not yet closed → late once the deadline plus
+ * the purchased extension hours has passed (they can be bought ahead of the
+ * deadline), as in `is_late`; closed → whole hours late (dayjs
+ * `diff(..., 'hours')` truncation, floored at zero) minus purchased extension
+ * hours, late when positive.
+ */
+export function isPastDeadlineIgnoringOverride(row: LateOverrideRow, now: Date = new Date()) {
+  const deadline = row.assignment?.student_deadline;
+  if (!deadline) return false;
+  const deadlineMs = new Date(deadline).getTime();
+  if (Number.isNaN(deadlineMs)) return false;
+  const extensionHours = (row.token_transactions ?? []).reduce(
+    (acc, t) => acc + (t.hours_purchased || 0),
+    0
+  );
+  if (!row.closed_at) {
+    return now.getTime() > deadlineMs + Math.max(extensionHours, 0) * MS_PER_HOUR;
+  }
+
+  const hoursLate = Math.max(
+    Math.trunc((new Date(row.closed_at).getTime() - deadlineMs) / MS_PER_HOUR),
+    0
+  );
+  return hoursLate - extensionHours > 0;
+}
+
+export type LateOverrideSelector = { ids: string[] } | { assignmentId: string };
+
+export interface LateOverrideResult {
+  /** Ids this call actually flipped (returned by the scoped write itself). */
+  updatedIds: string[];
+  /** Matched ids already at the requested value — not written. */
+  unchangedIds: string[];
+  /** Requested ids (ids mode only) that are missing or in another classroom. */
+  notFoundIds: string[];
+  /** Setting only: matched rows skipped because they are not past the deadline. */
+  notLateIds: string[];
+  /** Setting by assignment only: matched rows skipped because nothing was turned in. */
+  notSubmittedIds: string[];
+  /** Matched rows past their deadline, ignoring any exemption. */
+  lateIds: string[];
+}
+
+const EMPTY_LATE_OVERRIDE_RESULT: LateOverrideResult = {
+  updatedIds: [],
+  unchangedIds: [],
+  notFoundIds: [],
+  notLateIds: [],
+  notSubmittedIds: [],
+  lateIds: [],
+};
+
+/**
+ * Set or clear the late-penalty exemption on submissions of ONE classroom.
+ *
+ * Which rows may be written (mirrors when the web offers its waive button —
+ * SubmissionsTable / LateOverrideButton show it only on `is_late ||
+ * is_late_override` rows):
+ *   - SETTING (true) writes only rows past their deadline ignoring any
+ *     exemption; the rest come back in `notLateIds`. Exempting an on-time row
+ *     would count it as late in getLatePercentage and the dashboard, and label
+ *     it "Late waived".
+ *   - SETTING by assignment also skips rows with nothing turned in (no
+ *     `closed_at`, the field `is_late` uses) → `notSubmittedIds`: an exemption
+ *     on an unsubmitted row switches off its `should_be_zero` missing-work zero,
+ *     and "waive the late penalty for the class" must not mean "waive missing
+ *     work". A row NAMED by id that is unsubmitted but past the deadline is
+ *     still written — the web offers waive on exactly that row.
+ *   - CLEARING (false) writes any row that currently carries the exemption.
+ *
+ * Both the read and the write carry `git_repo.classroom_id` in their WHERE
+ * clause, so an id from another classroom is never matched, never written, and
+ * comes back in `notFoundIds` exactly like an id that does not exist. The
+ * eligibility rules run in JS over the scoped read; only the vetted ids reach
+ * the write, which also filters on the current value, so `updatedIds` is what
+ * the database reports it wrote.
+ */
+export const setLateOverrideInClassroom = async ({
+  classroomId,
+  selector,
+  isLateOverride,
+  now = new Date(),
+}: {
+  classroomId: string;
+  selector: LateOverrideSelector;
+  isLateOverride: boolean;
+  now?: Date;
+}): Promise<LateOverrideResult> => {
+  if (!classroomId) throw new Error('setLateOverrideInClassroom requires a classroomId');
+  const requestedIds = 'ids' in selector ? [...new Set(selector.ids)] : null;
+  if (requestedIds && requestedIds.length === 0) {
+    return { ...EMPTY_LATE_OVERRIDE_RESULT };
+  }
+  const skipUnsubmitted = isLateOverride && 'assignmentId' in selector;
+
+  const rows = await getPrisma().gitRepoAssignment.findMany({
+    where: {
+      git_repo: { classroom_id: classroomId },
+      ...('ids' in selector
+        ? { id: { in: requestedIds ?? [] } }
+        : { assignment_id: selector.assignmentId }),
+    },
+    select: {
+      id: true,
+      is_late_override: true,
+      closed_at: true,
+      assignment: { select: { student_deadline: true } },
+      token_transactions: { select: { hours_purchased: true } },
+    },
+  });
+
+  const lateIds = rows.filter(r => isPastDeadlineIgnoringOverride(r, now)).map(r => r.id);
+  const late = new Set(lateIds);
+  const found = new Set(rows.map(r => r.id));
+  const notFoundIds = requestedIds ? requestedIds.filter(id => !found.has(id)) : [];
+
+  // Rows already at the value are left alone (reported unchanged below); of
+  // the rest, a SET is vetted against the eligibility rules above.
+  const notSubmittedIds: string[] = [];
+  const notLateIds: string[] = [];
+  const toUpdate: string[] = [];
+  for (const r of rows) {
+    if (r.is_late_override === isLateOverride) continue;
+    if (skipUnsubmitted && !r.closed_at) notSubmittedIds.push(r.id);
+    else if (isLateOverride && !late.has(r.id)) notLateIds.push(r.id);
+    else toUpdate.push(r.id);
+  }
+
+  let updatedIds: string[] = [];
+  if (toUpdate.length > 0) {
+    const written = await getPrisma().gitRepoAssignment.updateManyAndReturn({
+      where: {
+        id: { in: toUpdate },
+        git_repo: { classroom_id: classroomId },
+        is_late_override: !isLateOverride,
+      },
+      data: { is_late_override: isLateOverride },
+      select: { id: true },
+    });
+    updatedIds = written.map(r => r.id);
+  }
+
+  // Everything matched that was neither written nor skipped is already at the
+  // value — including a row a concurrent writer flipped between the read and
+  // the guarded write (the write's value filter drops it from updatedIds).
+  const settled = new Set([...updatedIds, ...notLateIds, ...notSubmittedIds]);
+  const unchangedIds = rows.filter(r => !settled.has(r.id)).map(r => r.id);
+
+  return { updatedIds, unchangedIds, notFoundIds, notLateIds, notSubmittedIds, lateIds };
 };
 
 /**
@@ -606,38 +896,40 @@ export const setLateOverride = async (id: string, override: boolean) => {
  * @returns {Promise<Object[]>}
  */
 export const findAllForStudent = async (studentId: string, classroomSlug: string) => {
-  return getPrisma().gitRepoAssignment.findMany({
-    where: {
-      git_repo: {
-        student_id: studentId,
-        classroom: { slug: classroomSlug },
-      },
-    },
-    include: {
-      token_transactions: true,
-      git_repo: {
-        include: {
-          student: true,
-          repository: true,
+  return withLogins(
+    await getPrisma().gitRepoAssignment.findMany({
+      where: {
+        git_repo: {
+          student_id: studentId,
+          classroom: { slug: classroomSlug },
         },
       },
-      assignment: true,
-      graders: {
-        include: {
-          grader: true,
+      include: {
+        token_transactions: true,
+        git_repo: {
+          include: {
+            student: { include: GIT_IDENTITY },
+            repository: true,
+          },
+        },
+        assignment: true,
+        graders: {
+          include: {
+            grader: { include: GIT_IDENTITY },
+          },
+        },
+        grades: {
+          include: {
+            grader: { include: GIT_IDENTITY },
+            token_transaction: true,
+          },
         },
       },
-      grades: {
-        include: {
-          grader: true,
-          token_transaction: true,
+      orderBy: {
+        assignment: {
+          student_deadline: 'desc',
         },
       },
-    },
-    orderBy: {
-      assignment: {
-        student_deadline: 'desc',
-      },
-    },
-  });
+    })
+  );
 };

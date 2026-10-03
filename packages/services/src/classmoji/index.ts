@@ -21,6 +21,7 @@ import * as calendarService from './calendar.service.ts';
 import * as icsGeneratorService from './icsGenerator.service.ts';
 import * as formService from './form.service.ts';
 import * as formResponseService from './formResponse.service.ts';
+import * as formIdentityService from './formIdentity.service.ts';
 import * as formTeamResolverService from './formTeamResolver.ts';
 import * as galleryService from './gallery.service.ts';
 import * as pageService from './page.service.ts';
@@ -36,12 +37,18 @@ import * as subscriptionService from './subscription.service.ts';
 import * as entitlementService from './entitlement.service.ts';
 import * as instructorAudienceService from './instructorAudience.service.ts';
 import * as surveyService from './survey.service.ts';
-export { ClassroomSettingsEntitlementError } from './classroom.service.ts';
-// A refused calendar time range, so a caller can say so instead of 500ing,
-// plus the event-type policy every calendar write surface has to apply.
+export {
+  ClassroomSettingsEntitlementError,
+  ClassroomSettingsValidationError,
+} from './classroom.service.ts';
+// A refused calendar time range or meeting link, so a caller can say so
+// instead of 500ing, plus the event-type policy every calendar write surface
+// has to apply.
 export {
   CalendarTimeRangeError,
   isCalendarTimeRangeError,
+  CalendarMeetingLinkError,
+  isCalendarMeetingLinkError,
   ASSISTANT_EVENT_TYPE,
   ASSISTANT_EVENT_TYPE_MESSAGE,
   assistantMayCreateEventType,
@@ -70,17 +77,25 @@ export type {
 import * as teamMembershipService from './teamMembership.service.ts';
 import * as teamService from './team.service.ts';
 import * as teamTagService from './teamTag.service.ts';
+import * as teamSetService from './teamSet.service.ts';
 import * as tokenService from './token.service.ts';
 import * as userService from './user.service.ts';
 import * as quizService from './quiz.service.ts';
+import * as quizAssignmentService from './quizAssignment.service.ts';
 import * as quizAttemptService from './quizAttempt.service.ts';
+import * as quizSourceMaterialService from './quizSourceMaterial.service.ts';
+import * as quizChatService from './quizChat.service.ts';
+import * as studentCourseworkService from './studentCoursework.service.ts';
+import * as quizGradingService from './quizGrading.service.ts';
 import * as repositoryImportService from './repositoryImport.service.ts';
 import * as contentImportService from './contentImport.service.ts';
 import * as templateImportService from './templateImport.service.ts';
 import * as classroomConfigImportService from './classroomConfigImport.service.ts';
 import * as githubClassroomImportService from './githubClassroomImport.service.ts';
 import * as githubUserTokenService from './githubUserToken.service.ts';
+import * as orgRepoSettingsService from './orgRepoSettings.service.ts';
 import * as classroomInviteService from './classroomInvite.service.ts';
+import * as authEmailService from './authEmail.service.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import * as contentAssetsService from './contentAssets.service.ts';
 import * as contentDeliveryService from './contentDelivery.service.ts';
@@ -96,6 +111,11 @@ import * as gitRepoAnalyticsService from './repoAnalytics.service.ts';
 import * as dashboardService from './dashboard.service.ts';
 import * as taDashboardService from './taDashboard.service.ts';
 import * as notificationService from './notification.service.ts';
+// Lives outside classmoji/ because it is a store rather than a classroom
+// entity: no GitHub, no content repo, and the only Prisma table it touches is
+// its own. Registered here because every app reaches services through
+// ClassmojiService.
+import * as mediaService from '../media/index.ts';
 
 const ClassmojiService = {
   // All services namespaced for consistency
@@ -118,6 +138,8 @@ const ClassmojiService = {
   icsGenerator: icsGeneratorService,
   form: formService,
   formResponse: formResponseService,
+  // Which questions' answers are hidden by default: one rule for every surface.
+  formIdentity: formIdentityService,
   formTeam: formTeamResolverService,
   gallery: galleryService,
   page: pageService,
@@ -137,17 +159,36 @@ const ClassmojiService = {
   team: teamService,
   teamAdmin: teamAdminService,
   teamTag: teamTagService,
+  // Team sets: configure, solve (Trigger `team-set-solve`) and create (Trigger
+  // `team-set-apply`) a grouping of a classroom form's respondents.
+  teamSet: teamSetService,
   token: tokenService,
   user: userService,
   quiz: quizService,
+  // A quiz's assignment: the mirror onto the quiz and the one publish function.
+  quizAssignment: quizAssignmentService,
   quizAttempt: quizAttemptService,
+  // A quiz's linked pages and decks: `load` (the prompt text, as the attempt's
+  // user may read it), `countStartable` (the pre-attempt check), the budget.
+  quizSourceMaterial: quizSourceMaterialService,
+  // Quiz attempts served as chat agents (`agent_runtime: 'trigger_chat'`):
+  // turn admission and conversation storage, and the locked, fenced,
+  // journaled grading writes their tools make.
+  quizChat: quizChatService,
+  quizGrading: quizGradingService,
+  // One row per assignment a student can see, every type, with their own
+  // state: the student Assignments page and the dashboard's Up next.
+  studentCoursework: studentCourseworkService,
   repositoryImport: repositoryImportService,
   contentImport: contentImportService,
   templateImport: templateImportService,
   classroomConfigImport: classroomConfigImportService,
   githubClassroomImport: githubClassroomImportService,
   githubUserToken: githubUserTokenService,
+  // The GitHub organization's repository defaults, changed with the user's own token.
+  orgRepoSettings: orgRepoSettingsService,
   classroomInvite: classroomInviteService,
+  authEmail: authEmailService,
   contentManifest: contentManifestService,
   contentAssets: contentAssetsService,
   contentDelivery: contentDeliveryService,
@@ -170,6 +211,7 @@ const ClassmojiService = {
   dashboard: dashboardService,
   taDashboard: taDashboardService,
   notification: notificationService,
+  media: mediaService,
   // Alias for AI conversation functions (delegates to quizAttempt)
   aiConversation: {
     addMessage: quizAttemptService.addMessage,
@@ -199,6 +241,7 @@ export {
   icsGeneratorService,
   formService,
   formResponseService,
+  formIdentityService,
   formTeamResolverService,
   galleryService,
   pageService,
@@ -216,10 +259,13 @@ export {
   teamService,
   teamAdminService,
   teamTagService,
+  teamSetService,
   tokenService,
   userService,
   quizService,
   quizAttemptService,
+  quizSourceMaterialService,
+  studentCourseworkService,
   repositoryImportService,
   contentImportService,
   templateImportService,
@@ -227,6 +273,7 @@ export {
   githubClassroomImportService,
   githubUserTokenService,
   classroomInviteService,
+  authEmailService,
   contentManifestService,
   contentAssetsService,
   contentDeliveryService,
@@ -240,4 +287,5 @@ export {
   dashboardService,
   taDashboardService,
   notificationService,
+  mediaService,
 };

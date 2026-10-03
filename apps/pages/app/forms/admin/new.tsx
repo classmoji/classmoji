@@ -227,7 +227,7 @@ export default function NewFormDrawer() {
                 setTouchedTitle(true);
                 setTitle(event.target.value);
               }}
-              placeholder="CS52 Waitlist"
+              placeholder="Course Waitlist"
               className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
             />
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
@@ -288,7 +288,7 @@ export default function NewFormDrawer() {
             </div>
             <p className="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
               {preset.requiresClassroom
-                ? 'This template uses team-review fields, which only exist inside a classroom.'
+                ? 'This template has fields that only exist on a classroom form.'
                 : 'This is fixed once the form is published — the two modes identify respondents differently.'}
             </p>
           </fieldset>

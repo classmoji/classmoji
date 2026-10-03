@@ -7,6 +7,8 @@ interface TabDef {
 
 const ALL_TABS: TabDef[] = [
   { key: 'general', label: 'General' },
+  { key: 'connections', label: 'Connections' },
+  { key: 'appearance', label: 'Appearance' },
   { key: 'notifications', label: 'Notifications' },
   { key: 'billing', label: 'Billing' },
 ];

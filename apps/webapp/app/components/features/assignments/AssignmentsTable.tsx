@@ -23,7 +23,8 @@ export interface AssignmentRowData {
   release_at: string | Date | null;
   student_deadline: string | Date | null;
   grader_deadline: string | Date | null;
-  tokens_per_hour: number;
+  /** Empty = the classroom's default price. */
+  tokens_per_hour: number | null;
   description?: string;
   module: { id: string; title: string; slug: string | null; position?: number };
   repository?: { id: string; title: string } | null;
@@ -74,6 +75,11 @@ interface AssignmentsTableProps {
   onDelete: (assignment: AssignmentRowData) => void;
   busy?: boolean;
   emptyText?: string;
+  /**
+   * Whether the classroom shows quizzes (`loadQuizzesVisible`). Without it the
+   * empty state names no quiz. Absent means hidden.
+   */
+  quizzesVisible?: boolean;
 }
 
 const AssignmentsTable = ({
@@ -84,6 +90,7 @@ const AssignmentsTable = ({
   onDelete,
   busy = false,
   emptyText = 'No assignments yet',
+  quizzesVisible = false,
 }: AssignmentsTableProps) => {
   const columns = [
     {
@@ -213,26 +220,30 @@ const AssignmentsTable = ({
           >
             Edit
           </button>
-          <Popconfirm
-            title="Delete assignment"
-            description={
-              a.type === 'REPO'
-                ? 'This deletes the assignment and every student submission and grade under it.'
-                : 'This removes the assignment from its module. The quiz or form itself is kept.'
-            }
-            okText="Delete"
-            okButtonProps={{ danger: true }}
-            cancelText="Cancel"
-            onConfirm={() => onDelete(a)}
-          >
-            <button
-              type="button"
-              className="text-sm font-medium text-rose-600 hover:text-rose-700 dark:text-rose-400"
-              disabled={busy}
+          {/* A quiz's assignment goes with the quiz: delete the quiz, or move
+              it to another module in the quiz form. */}
+          {a.type !== 'QUIZ' && (
+            <Popconfirm
+              title="Delete assignment"
+              description={
+                a.type === 'REPO'
+                  ? 'This deletes the assignment and every student submission and grade under it.'
+                  : 'This removes the assignment from its module. The form itself is kept.'
+              }
+              okText="Delete"
+              okButtonProps={{ danger: true }}
+              cancelText="Cancel"
+              onConfirm={() => onDelete(a)}
             >
-              Delete
-            </button>
-          </Popconfirm>
+              <button
+                type="button"
+                className="text-sm font-medium text-rose-600 hover:text-rose-700 dark:text-rose-400"
+                disabled={busy}
+              >
+                Delete
+              </button>
+            </Popconfirm>
+          )}
         </div>
       ),
     },
@@ -252,7 +263,9 @@ const AssignmentsTable = ({
           <div className="text-center py-12 text-gray-500">
             <div className="font-medium">{emptyText}</div>
             <div className="text-sm">
-              An assignment is a repo issue, a quiz, or a form, with a weight and a due date.
+              {quizzesVisible
+                ? 'An assignment is a repo issue, a quiz, or a form, with a weight and a due date.'
+                : 'An assignment is a repo issue or a form, with a weight and a due date.'}
             </div>
           </div>
         ),

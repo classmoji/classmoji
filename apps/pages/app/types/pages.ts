@@ -60,7 +60,6 @@ export interface PagesUser {
   id: string;
   login: string | null;
   name?: string | null;
-  provider_email?: string | null;
   classroom_memberships?: Array<{
     role: string;
     classroom: { slug: string; name: string };

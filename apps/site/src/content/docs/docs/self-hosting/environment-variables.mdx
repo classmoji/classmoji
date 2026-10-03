@@ -26,16 +26,22 @@ description: All environment variables required to run Classmoji
 
 ### AI features
 
-AI features (quizzes, syllabus bot, prompt assistant) run on **Anthropic Claude**. They are optional: when `AI_AGENT_URL` and `AI_AGENT_SHARED_SECRET` are unset, AI features are hidden and the related API routes return 503.
+AI features (quizzes, Ask Moji, prompt assistant) run on **Anthropic Claude**. They are optional: when `AI_AGENT_URL` and `AI_AGENT_SHARED_SECRET` are unset, AI features are hidden and the related API routes return 503.
 
 | Name | Required | Default | Description |
 |------|----------|---------|-------------|
 | `AI_AGENT_URL` | No | | URL of the AI agent service. Enables AI features when set with the shared secret. |
 | `AI_AGENT_SHARED_SECRET` | No | | Shared secret used to authenticate the webapp to the AI agent. |
 | `ANTHROPIC_API_KEY` | No | | Anthropic API key the AI agent uses to call Claude. |
-| `LLM_MODEL` | No | `claude-sonnet-4-5` | Claude model used for quiz and chat evaluation. |
-| `EXPLORATION_MODEL` | No | `claude-haiku-4-5` | Claude model used for code-aware quiz repository exploration. |
+| `LLM_MODEL` | No | `claude-sonnet-5-5` | Claude model used for quizzes and the quiz prompt assistant. These accept only the models listed in `packages/utils/src/aiModels.ts`; any other value runs the default. Set the same value in all three places that read it: the AI agent and the background jobs, which run quizzes, and the web app, which shows it as the default on AI settings. |
+| `EXPLORATION_MODEL` | No | `claude-sonnet-5-5` | Claude model used for code-aware quiz repository exploration. Same list and default as `LLM_MODEL`, read by the same three: the AI agent, the background jobs and the web app. |
 | `EXPLORATION_MODE` | No | | Controls the code-aware exploration behavior for quizzes. |
+| `QUIZ_QUESTION_EFFORT` | No | `medium` | Reasoning effort (`low`, `medium`, `high`, `xhigh`, `max`) for quiz question and conversation turns. A classroom with its own API key can override it. |
+| `QUIZ_GRADING_EFFORT` | No | `high` | Reasoning effort for final quiz grading. A classroom with its own API key can override it. |
+| `EXPLORATION_EFFORT` | No | `low` | Reasoning effort for the code-aware quiz's excerpt selection (`xhigh` and `max` run as `high`). A classroom with its own API key can override it. |
+| `SYLLABUS_BOT_MODEL` | No | `LLM_MODEL`, then `claude-sonnet-5-5` | Claude model used for Ask Moji. Any Claude model id works here; the quiz list does not apply. Read by the AI agent, and by the web app to show the default. A classroom with its own API key can override it. |
+| `SYLLABUS_BOT_EFFORT` | No | `low` | Reasoning effort for Ask Moji. A classroom with its own API key can override it. |
+| `AI_MAX_BUDGET_USD` | No | `1.00` | Per-call cost ceiling in USD for quiz and Ask Moji agent calls on the platform `ANTHROPIC_API_KEY`. A runaway guard, not a spend limit. |
 | `OPENAI_API_KEY` | No | | Reserved. Not used by any current feature. |
 | `LLM_PROVIDER` | No | | Reserved. Only Anthropic/Claude is wired today. |
 
@@ -63,8 +69,14 @@ AI features (quizzes, syllabus bot, prompt assistant) run on **Anthropic Claude*
 
 ### Media
 
+Large files (video, audio, big PDFs) go to a Cloudflare R2 bucket rather than into a classroom's content repo. The four `MEDIA_R2_*` variables are optional and all-or-nothing: with any of them unset, media upload is hidden in the UI and the media API routes return 503.
+
 | Name | Required | Default | Description |
 |------|----------|---------|-------------|
+| `MEDIA_R2_ACCOUNT_ID` | No | | Cloudflare account the media bucket lives in. Used to build the R2 S3 endpoint. |
+| `MEDIA_R2_ACCESS_KEY_ID` | No | | Access key of an R2 API token scoped to the media bucket (object read/write). |
+| `MEDIA_R2_SECRET_ACCESS_KEY` | No | | Secret of that R2 API token. It never leaves the server: uploads are presigned and the browser writes straight to R2. |
+| `MEDIA_R2_BUCKET` | No | | Name of the R2 bucket media objects are written to. |
 | `CLOUDINARY_CLOUD_NAME` | No | | Cloudinary cloud name for image and media uploads. |
 | `CLOUDINARY_API_KEY` | No | | Cloudinary API key for signed uploads. |
 | `CLOUDINARY_API_SECRET` | No | | Cloudinary API secret for signed uploads. |

@@ -9,23 +9,30 @@
  * leaves a ref the target org cannot even read (student provisioning clones the
  * template with the TARGET org's installation token).
  *
- * Mirrors contentImport.service: ContentService reads (raw base64, 1MB per-file
- * cap), ONE uploadBatch commit per template, warn() accumulation, and pure
- * helpers kept separable for unit tests.
+ * Mirrors contentImport.service: ContentService reads (raw base64 through the
+ * Git Blobs API, by the sha the directory listing already carries), ONE
+ * uploadBatch commit per template, warn() accumulation, and pure helpers kept
+ * separable for unit tests.
  *
  * Never touches the SOURCE classroom's rows or repos: every relink is scoped to
  * the caller-supplied imported row ids, and the duplicate is always a NEW repo.
  */
 
 import getPrisma from '@classmoji/database';
+import { REPO_REST_MAX_BYTES, formatMegabytes, repoFileSkippedWarning } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import { getGitProvider } from '../git/index.ts';
 
-/** GitHub Contents API caps single-file reads at 1MB — larger files are skipped. */
-const ONE_MB = 1024 * 1024;
-
 /** Templates are starter code, not monorepos: past this a template is skipped whole. */
 const MAX_TEMPLATE_FILES = 200;
+
+/**
+ * Past this many bytes in total a template is skipped whole, before any file is
+ * read. The duplicate is staged in memory and committed in ONE `uploadBatch`,
+ * so this is what bounds both; the per-file cap alone would let 200 files of
+ * 35 MB each through.
+ */
+export const MAX_TEMPLATE_TOTAL_BYTES = 200 * 1024 * 1024;
 
 /** Cap on retained warnings and on per-warning detail length (bounded output). */
 const MAX_WARNINGS = 50;
@@ -366,19 +373,28 @@ async function createRepositoryWithBackoff({
   }
 }
 
+/** One file of a template, as its directory listing describes it. */
+export interface RepoFileEntry {
+  path: string;
+  /** Blob sha — what the bytes are read by. */
+  sha: string;
+  /** Bytes, when the listing reported them. */
+  size?: number;
+}
+
 /**
- * Every file path in a repo's DEFAULT branch. Reads omit `ref` on purpose —
+ * Every file in a repo's DEFAULT branch. Reads omit `ref` on purpose —
  * templates are not content repos and their default branch is often not `main`;
  * the Contents API resolves the real default when no ref is given. Aborts as
  * soon as the count exceeds `cap` so an oversized template costs a directory
  * walk, not 200 content reads.
  */
-async function listRepoFilePaths(
+export async function listRepoFiles(
   gitOrganization: GitOrgRecord,
   repo: string,
   cap: number
-): Promise<{ paths: string[]; exceededCap: boolean }> {
-  const paths: string[] = [];
+): Promise<{ files: RepoFileEntry[]; exceededCap: boolean }> {
+  const files: RepoFileEntry[] = [];
 
   const walk = async (dirPath: string): Promise<boolean> => {
     const entries = await ContentService.listFolder({
@@ -392,57 +408,108 @@ async function listRepoFilePaths(
         if (await walk(entry.path)) return true;
         continue;
       }
-      paths.push(entry.path);
-      if (paths.length > cap) return true;
+      files.push({
+        path: entry.path,
+        sha: entry.sha,
+        ...(typeof entry.size === 'number' ? { size: entry.size } : {}),
+      });
+      if (files.length > cap) return true;
     }
     return false;
   };
 
   const exceededCap = await walk('');
-  return { paths, exceededCap };
+  return { files, exceededCap };
 }
 
 /**
- * Read each path as raw base64 off the default branch. Files over 1MB are
- * skipped with a warning (the Contents API returns no usable body for them).
+ * Read each file as raw base64 through the Git Blobs API, by the sha its
+ * listing carried — one request per file, and good to 100 MB where the
+ * Contents API's JSON body stops at 1 MB.
+ *
+ * A file over `REPO_REST_MAX_BYTES` is skipped with a warning rather than read:
+ * the duplicate is committed in one `uploadBatch`, and GitHub refusing one
+ * file there would refuse the whole template.
  */
-async function readRepoFiles({
+export async function readRepoFiles({
   gitOrganization,
   repo,
-  paths,
+  files: entries,
   scope,
   warn,
 }: {
   gitOrganization: GitOrgRecord;
   repo: string;
-  paths: string[];
+  files: RepoFileEntry[];
   scope: string;
   warn: WarnFn;
 }): Promise<BatchFile[]> {
   const files: BatchFile[] = [];
-  for (const path of paths) {
-    const meta = await ContentService.getMeta({
-      gitOrganization,
-      repo,
-      path,
-      skipCache: true,
-    });
-    if (meta && meta.size > ONE_MB) {
-      warn(scope, `skipped ${path} (>1MB, ${meta.size} bytes)`);
+  for (const entry of entries) {
+    if (typeof entry.size === 'number' && entry.size > REPO_REST_MAX_BYTES) {
+      warn(scope, repoFileSkippedWarning(entry.path, entry.size));
       continue;
     }
-    const file = await ContentService.getContent({
+    const blob = await ContentService.getBlobContent({
       gitOrganization,
       repo,
-      path,
+      sha: entry.sha,
       raw: true,
-      skipCache: true,
     });
-    if (!file) {
-      warn(scope, `could not read ${path}`);
+    if (!blob) {
+      warn(scope, `could not read ${entry.path}`);
       continue;
     }
-    files.push({ path, content: file.content, encoding: 'base64' });
+    files.push({ path: entry.path, content: blob.content, encoding: 'base64' });
+  }
+  return files;
+}
+
+/**
+ * The files to commit for one template, or null when it is skipped — each
+ * reason warned once under `scope`: too many files, none at all, more than
+ * `MAX_TEMPLATE_TOTAL_BYTES` in total (summed from the listing, before any byte
+ * is read), or nothing readable. Reads are sequential.
+ */
+export async function collectTemplateFiles({
+  gitOrganization,
+  repo,
+  scope,
+  warn,
+}: {
+  gitOrganization: GitOrgRecord;
+  repo: string;
+  scope: string;
+  warn: WarnFn;
+}): Promise<BatchFile[] | null> {
+  const { files: listed, exceededCap } = await listRepoFiles(
+    gitOrganization,
+    repo,
+    MAX_TEMPLATE_FILES
+  );
+  if (exceededCap) {
+    warn(scope, `skipped — more than ${MAX_TEMPLATE_FILES} files`);
+    return null;
+  }
+  if (listed.length === 0) {
+    warn(scope, 'skipped — no readable files on the default branch');
+    return null;
+  }
+
+  const totalBytes = listed.reduce((sum, entry) => sum + (entry.size ?? 0), 0);
+  if (totalBytes > MAX_TEMPLATE_TOTAL_BYTES) {
+    warn(
+      scope,
+      `skipped — ${formatMegabytes(totalBytes)} in total, over the ` +
+        `${formatMegabytes(MAX_TEMPLATE_TOTAL_BYTES)} a template may be`
+    );
+    return null;
+  }
+
+  const files = await readRepoFiles({ gitOrganization, repo, files: listed, scope, warn });
+  if (files.length === 0) {
+    warn(scope, 'skipped — every file was unreadable or oversized');
+    return null;
   }
   return files;
 }
@@ -619,31 +686,13 @@ export const duplicateImportedTemplates = async (
           continue;
         }
 
-        const { paths, exceededCap } = await listRepoFilePaths(
-          readerOrg,
-          group.ref.name,
-          MAX_TEMPLATE_FILES
-        );
-        if (exceededCap) {
-          warn(scope, `skipped — more than ${MAX_TEMPLATE_FILES} files`);
-          continue;
-        }
-        if (paths.length === 0) {
-          warn(scope, 'skipped — no readable files on the default branch');
-          continue;
-        }
-
-        const files = await readRepoFiles({
+        const files = await collectTemplateFiles({
           gitOrganization: readerOrg,
           repo: group.ref.name,
-          paths,
           scope,
           warn,
         });
-        if (files.length === 0) {
-          warn(scope, 'skipped — every file was unreadable or oversized');
-          continue;
-        }
+        if (!files) continue;
 
         const newName = await resolveFreeRepoName(
           targetProvider,

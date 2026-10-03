@@ -30,11 +30,13 @@
  */
 import { tasks } from '@trigger.dev/sdk';
 
-import getPrisma from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY, whereGitUsername } from '@classmoji/database';
+import { accountProviderId, withLogin } from '@classmoji/utils';
 import { getGitProvider, ensureClassroomTeam } from '../git/index.ts';
 import { buildRemoveUserPayload } from './removeUserPayload.ts';
 import * as classroomService from './classroom.service.ts';
 import * as classroomMembershipService from './classroomMembership.service.ts';
+import * as gitRepoAssignmentGraderService from './gitRepoAssignmentGrader.service.ts';
 
 /** The roles this service manages. STUDENT is the roster service's business. */
 export const STAFF_ROLES = ['ASSISTANT', 'TEACHER', 'OWNER'] as const;
@@ -71,13 +73,35 @@ export class StaffServiceError extends Error {
     | 'login_conflict'
     | 'last_owner'
     | 'grader_flag_invalid'
-    | 'invalid_role';
+    | 'invalid_role'
+    | 'ungraded_choice_required';
 
-  constructor(code: StaffServiceError['code'], message: string) {
+  /** Set with `ungraded_choice_required`: how many ungraded slots need a decision. */
+  ungradedCount?: number;
+
+  constructor(
+    code: StaffServiceError['code'],
+    message: string,
+    details: { ungradedCount?: number } = {}
+  ) {
     super(message);
     this.name = 'StaffServiceError';
     this.code = code;
+    if (details.ungradedCount !== undefined) this.ungradedCount = details.ungradedCount;
   }
+}
+
+export interface StaffRemovalPreview {
+  userId: string;
+  login: string;
+  name: string | null;
+  role: StaffRole;
+  /** true when another grader-flagged ASSISTANT or TEACHER membership remains. */
+  remainsGrader: boolean;
+  /** Ungraded grader slots that need a decision; 0 whenever remainsGrader. */
+  ungradedCount: number;
+  /** Ungraded grader slots they hold here at all, at stake or not. */
+  heldUngradedCount: number;
 }
 
 /** A git provider 404 — the login genuinely names nobody (same shape the providers throw). */
@@ -114,12 +138,22 @@ const assertStaffRole = (role: string): void => {
  * typed. Looking the same person up again therefore has to match the way
  * addStaff matched, or 'ada' would not find the user stored as 'Ada'.
  */
-const findUserByLoginInsensitive = async (login: string) => {
+const findUserByLoginInsensitive = async (login: string, provider: string = 'GITHUB') => {
   const cleanLogin = login.replace('@', '').trim();
-  return getPrisma().user.findFirst({
-    where: { login: { equals: cleanLogin, mode: 'insensitive' } },
-    select: { id: true, login: true, name: true },
+  const user = await getPrisma().user.findFirst({
+    where: whereGitUsername(cleanLogin, provider),
+    select: { id: true, name: true, ...GIT_IDENTITY },
   });
+  return user ? withLogin(user, provider) : null;
+};
+
+/** The git provider of a classroom's organization, which decides whose username `login` is. */
+const classroomProvider = async (classroomId: string): Promise<string> => {
+  const classroom = await getPrisma().classroom.findUnique({
+    where: { id: classroomId },
+    select: { git_organization: { select: { provider: true } } },
+  });
+  return classroom?.git_organization?.provider ?? 'GITHUB';
 };
 
 const loadClassroom = async (classroomId: string) => {
@@ -176,7 +210,7 @@ export const addStaff = async ({
   // re-add them to the team and then still fail on the unique constraint.
   // Scoped to the REQUESTED role: another role held here is an additional
   // grant, not a no-op.
-  const existingUser = await findUserByLoginInsensitive(cleanLogin);
+  const existingUser = await findUserByLoginInsensitive(cleanLogin, gitOrganization.provider);
   if (existingUser) {
     const existingMembership = await classroomMembershipService.findByClassroomAndUser(
       classroomId,
@@ -198,9 +232,17 @@ export const addStaff = async ({
 
   const gitProvider = getGitProvider(gitOrganization);
 
-  let gitUser: { id: number | string; login: string; name?: string | null; email?: string | null };
+  let gitUser: {
+    id: number | string;
+    login: string;
+    name?: string | null;
+    email?: string | null;
+    avatar_url?: string | null;
+  };
   try {
-    gitUser = await gitProvider.getUserByLogin(cleanLogin);
+    const found = await gitProvider.getUserByLogin(cleanLogin);
+    // GitLab names the field `username`; Github names it `login`.
+    gitUser = found && { ...found, login: found.login ?? found.username };
   } catch (error: unknown) {
     // Only a 404 means the username is wrong. A rate limit, a network blip or a
     // bad token must surface as itself — telling the operator "no such user"
@@ -215,15 +257,28 @@ export const addStaff = async ({
   // The provider hands back the canonical casing, which may differ from what the
   // caller typed. Re-check with it BEFORE any GitHub write (ensureClassroomTeam
   // creates the team) so a differently-cased login is still a no-op.
-  const canonicalUser = await getPrisma().user.findFirst({
-    where: { login: { equals: gitUser.login, mode: 'insensitive' } },
-    select: { id: true, login: true, name: true, provider_id: true },
-  });
+  const providerId = accountProviderId(gitOrganization.provider);
+  const gitUserId = String(gitUser.id);
+  const canonicalAccount =
+    (await getPrisma().account.findUnique({
+      where: { provider_id_account_id: { provider_id: providerId, account_id: gitUserId } },
+      select: { id: true, account_id: true, user: { select: { id: true, name: true } } },
+    })) ??
+    (await getPrisma().account.findFirst({
+      where: {
+        provider_id: providerId,
+        username: { equals: gitUser.login, mode: 'insensitive' },
+      },
+      select: { id: true, account_id: true, user: { select: { id: true, name: true } } },
+    }));
+  const canonicalUser = canonicalAccount?.user ?? null;
 
-  if (canonicalUser) {
+  if (canonicalAccount && canonicalUser) {
     // The stored row is keyed to a different provider account than the one this
     // login resolves to today — refuse rather than relink the existing record.
-    if (canonicalUser.provider_id && canonicalUser.provider_id !== String(gitUser.id)) {
+    // A placeholder (`unresolved:`) account has no id yet and is claimed below.
+    const storedId = canonicalAccount.account_id;
+    if (!storedId.startsWith('unresolved:') && storedId !== gitUserId) {
       throw new StaffServiceError(
         'login_conflict',
         `[staff] login ${gitUser.login} resolves to a different provider account than the stored user record`
@@ -240,7 +295,7 @@ export const addStaff = async ({
         created: false,
         alreadyExists: true,
         userId: canonicalUser.id,
-        login: canonicalUser.login ?? gitUser.login,
+        login: gitUser.login,
         name: canonicalUser.name,
         role,
         alreadyOrgMember: true,
@@ -270,39 +325,39 @@ export const addStaff = async ({
     }
   }
 
-  // Upsert user and account, then create the membership at the requested role.
-  // Target an already-known row by id: `where: { login }` is an exact match, so
-  // a row stored under different casing would be missed and duplicated.
-  // `update: {}` on purpose — adding someone as staff must not rewrite any
-  // field of a user record that already exists.
-  const user = await getPrisma().user.upsert({
-    where: canonicalUser ? { id: canonicalUser.id } : { login: gitUser.login },
-    create: {
-      login: gitUser.login,
-      name: name || gitUser.name || gitUser.login,
-      provider: gitOrganization.provider as 'GITHUB' | 'GITLAB' | 'BITBUCKET',
-      provider_id: String(gitUser.id),
-      role: 'user',
-      email: email ?? null,
-      provider_email: gitUser.email ?? null,
-    },
-    update: {},
-  });
-
-  await getPrisma().account.upsert({
-    where: {
-      provider_id_account_id: {
-        provider_id: gitOrganization.provider.toLowerCase(),
-        account_id: String(gitUser.id),
+  // Resolve user and account, then create the membership at the requested role.
+  // An already-known user is left as it is — adding someone as staff must not
+  // rewrite any field of a user record that already exists — apart from
+  // resolving a placeholder account to the provider's real id.
+  let user: { id: string; name: string | null };
+  if (canonicalAccount && canonicalUser) {
+    user = canonicalUser;
+    if (canonicalAccount.account_id !== gitUserId) {
+      await getPrisma().account.update({
+        where: { id: canonicalAccount.id },
+        data: { account_id: gitUserId, username: gitUser.login },
+      });
+    }
+  } else {
+    user = await getPrisma().user.create({
+      data: {
+        name: name || gitUser.name || gitUser.login,
+        role: 'user',
+        email: email ?? null,
+        image: gitUser.avatar_url ?? null,
+        accounts: {
+          create: {
+            provider_id: providerId,
+            account_id: gitUserId,
+            username: gitUser.login,
+            email: gitUser.email ?? null,
+            image: gitUser.avatar_url ?? null,
+          },
+        },
       },
-    },
-    create: {
-      provider_id: gitOrganization.provider.toLowerCase(),
-      account_id: String(gitUser.id),
-      user_id: String(user.id),
-    },
-    update: {},
-  });
+      select: { id: true, name: true },
+    });
+  }
 
   try {
     await getPrisma().classroomMembership.create({
@@ -321,7 +376,7 @@ export const addStaff = async ({
       created: false,
       alreadyExists: true,
       userId: user.id,
-      login: user.login ?? gitUser.login,
+      login: gitUser.login,
       name: user.name,
       role,
       alreadyOrgMember: alreadyMember,
@@ -333,6 +388,7 @@ export const addStaff = async ({
   if (alreadyMember) {
     await tasks.trigger('activate_membership', {
       login: gitUser.login,
+      ...(gitOrganization.provider === 'GITHUB' ? { githubUserId: gitUserId } : {}),
       gitOrganizationId: gitOrganization.id,
     });
   }
@@ -341,7 +397,7 @@ export const addStaff = async ({
     created: true,
     alreadyExists: false,
     userId: user.id,
-    login: user.login ?? gitUser.login,
+    login: gitUser.login,
     name: user.name,
     role,
     alreadyOrgMember: alreadyMember,
@@ -380,7 +436,7 @@ export const updateStaff = async ({
     );
   }
 
-  const user = await findUserByLoginInsensitive(login);
+  const user = await findUserByLoginInsensitive(login, await classroomProvider(classroomId));
   if (!user) {
     throw new StaffServiceError('staff_not_found', `[staff] user ${login} not found`);
   }
@@ -398,6 +454,189 @@ export const updateStaff = async ({
   }
 
   return classroomMembershipService.updateById(membership.id, { is_grader: isGrader });
+};
+
+/**
+ * What removing `role` from this person would leave behind on the grading side.
+ *
+ * Roles are additive, so the question is asked about the classroom AFTER this
+ * one (classroom, user, role) row is gone: do they still hold ASSISTANT or
+ * TEACHER here WITH is_grader set — i.e. are they still in the pool the
+ * pickers and reassignment draw from? If so nothing needs deciding. If not —
+ * including someone who stays an OWNER (owners are not in the pool) or keeps
+ * a non-grading assistant row — their ungraded slots are counted. Asking with
+ * the removed row excluded gives the same answer whether or not the background
+ * removal has deleted it yet. It cannot see ANOTHER removal still in flight,
+ * which is why callers wait for a run whenever the person holds ungraded slots
+ * at all (`heldUngradedCount`) — a second removal then sees the first done.
+ *
+ * Read-only; throws the same staff_not_found / invalid_role / last_owner as
+ * removeStaff, so callers refuse BEFORE asking any question about slots.
+ */
+export const previewRemoval = async ({
+  classroomId,
+  login,
+  role,
+}: {
+  classroomId: string;
+  login: string;
+  role: StaffRole;
+}): Promise<StaffRemovalPreview> => {
+  assertStaffRole(role);
+
+  const user = await findUserByLoginInsensitive(login, await classroomProvider(classroomId));
+  if (!user) {
+    throw new StaffServiceError('staff_not_found', `[staff] user ${login} not found`);
+  }
+
+  const membership = await classroomMembershipService.findByClassroomAndUser(
+    classroomId,
+    user.id,
+    role
+  );
+  if (!membership) {
+    throw new StaffServiceError(
+      'staff_not_found',
+      `[staff] ${login} does not hold the ${role} role in classroom ${classroomId}`
+    );
+  }
+
+  if (role === 'OWNER') await assertNotLastOwner(classroomId, login);
+
+  const otherGraderRoles = gitRepoAssignmentGraderService.GRADER_ROLES.filter(r => r !== role);
+  const remainsGrader =
+    otherGraderRoles.length > 0 &&
+    (await getPrisma().classroomMembership.count({
+      where: {
+        classroom_id: classroomId,
+        user_id: user.id,
+        role: { in: [...otherGraderRoles] },
+        is_grader: true,
+      },
+    })) > 0;
+
+  const heldUngradedCount = await gitRepoAssignmentGraderService.countUngradedSlotsForGrader(
+    classroomId,
+    user.id
+  );
+
+  return {
+    userId: user.id,
+    login: user.login ?? login,
+    name: user.name,
+    role,
+    remainsGrader,
+    ungradedCount: remainsGrader ? 0 : heldUngradedCount,
+    heldUngradedCount,
+  };
+};
+
+/**
+ * Ungraded slots stranded right now: 0 while they still hold a grader-flagged
+ * ASSISTANT/TEACHER role here, otherwise every ungraded slot they hold. Used to
+ * re-check after a removal finishes, when a parallel removal of their other
+ * role may have left nothing behind them.
+ */
+export const countStrandedSlots = async (classroomId: string, userId: string) => {
+  const stillGrader =
+    (await getPrisma().classroomMembership.count({
+      where: {
+        classroom_id: classroomId,
+        user_id: userId,
+        role: { in: [...gitRepoAssignmentGraderService.GRADER_ROLES] },
+        is_grader: true,
+      },
+    })) > 0;
+  if (stillGrader) return 0;
+  return gitRepoAssignmentGraderService.countUngradedSlotsForGrader(classroomId, userId);
+};
+
+/** How long a staff_remove follow-up stays open after the removal it finishes. */
+export const LEFTOVER_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The staff_remove audit markers that leave a removal open for a follow-up
+ * call with a choice: the removal was still running (`removal: 'pending'`), it
+ * finished but a parallel removal left the slots needing a decision
+ * (`needs_decision`), or it finished with too little time left to move them
+ * (`settle_deferred`).
+ */
+const FOLLOWUP_MARKERS = [
+  { data: { path: ['removal'], equals: 'pending' } },
+  { data: { path: ['needs_decision'], equals: true } },
+  { data: { path: ['settle_deferred'], equals: true } },
+];
+
+/**
+ * The follow-up to a staff_remove that could not finish settling: ungraded
+ * slots left behind by a removal of `role` that has since completed. ALL of:
+ *   - the person no longer holds `role` in this classroom;
+ *   - a staff_remove audit row for this classroom, this user and this role,
+ *     carrying one of the follow-up markers, is less than 24h old;
+ *   - they hold no grader-flagged ASSISTANT/TEACHER role here now;
+ *   - they still hold ungraded slots here.
+ * Anything else is staff_not_found — the same answer as any other miss, so the
+ * path cannot be used to act on someone who was never mid-removal.
+ */
+export const previewLeftoverSlots = async ({
+  classroomId,
+  login,
+  role,
+}: {
+  classroomId: string;
+  login: string;
+  role: StaffRole;
+}): Promise<{ userId: string; login: string; name: string | null; ungradedCount: number }> => {
+  assertStaffRole(role);
+  const notFound = new StaffServiceError(
+    'staff_not_found',
+    `[staff] ${login} has no open ${role} removal in classroom ${classroomId}`
+  );
+
+  const user = await findUserByLoginInsensitive(login, await classroomProvider(classroomId));
+  if (!user) throw notFound;
+
+  const stillHoldsRole = await classroomMembershipService.findByClassroomAndUser(
+    classroomId,
+    user.id,
+    role
+  );
+  if (stillHoldsRole) throw notFound;
+
+  const openRemoval = await getPrisma().auditLog.findFirst({
+    where: {
+      classroom_id: classroomId,
+      resource_type: 'STAFF',
+      resource_id: user.id,
+      action: 'DELETE',
+      timestamp: { gte: new Date(Date.now() - LEFTOVER_WINDOW_MS) },
+      AND: [
+        { data: { path: ['tool'], equals: 'staff_remove' } },
+        { data: { path: ['role'], equals: role } },
+        { OR: FOLLOWUP_MARKERS },
+      ],
+    },
+    select: { id: true },
+  });
+  if (!openRemoval) throw notFound;
+
+  const ungradedCount = await countStrandedSlots(classroomId, user.id);
+  if (ungradedCount === 0) throw notFound;
+
+  return { userId: user.id, login: user.login ?? login, name: user.name, ungradedCount };
+};
+
+/** Refuse to orphan the classroom — shared by previewRemoval and removeStaff. */
+const assertNotLastOwner = async (classroomId: string, login: string) => {
+  const ownerCount = await getPrisma().classroomMembership.count({
+    where: { classroom_id: classroomId, role: 'OWNER' },
+  });
+  if (ownerCount <= 1) {
+    throw new StaffServiceError(
+      'last_owner',
+      `[staff] ${login} is the only owner of classroom ${classroomId}`
+    );
+  }
 };
 
 /**
@@ -434,7 +673,7 @@ export const removeStaff = async ({
 
   const classroom = await loadClassroom(classroomId);
 
-  const user = await findUserByLoginInsensitive(login);
+  const user = await findUserByLoginInsensitive(login, classroom.git_organization.provider);
   if (!user) {
     throw new StaffServiceError('staff_not_found', `[staff] user ${login} not found`);
   }
@@ -454,17 +693,7 @@ export const removeStaff = async ({
   }
 
   // Refuse to orphan the classroom BEFORE the fire-and-forget trigger.
-  if (role === 'OWNER') {
-    const ownerCount = await getPrisma().classroomMembership.count({
-      where: { classroom_id: classroomId, role: 'OWNER' },
-    });
-    if (ownerCount <= 1) {
-      throw new StaffServiceError(
-        'last_owner',
-        `[staff] ${login} is the only owner of classroom ${classroomId}`
-      );
-    }
-  }
+  if (role === 'OWNER') await assertNotLastOwner(classroomId, login);
 
   const run = await tasks.trigger('remove_user_from_organization', {
     payload: buildRemoveUserPayload({

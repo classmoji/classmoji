@@ -1,0 +1,126 @@
+/**
+ * Pins the quiz filter on the modules read (the `modules` resource and its
+ * `list_modules` mirror, which share one handler).
+ *
+ * A quiz is in a module through its QUIZ assignment, so legacy QUIZ items are
+ * listed for nobody, whether or not the classroom shows quizzes, and every
+ * other item is untouched. The listed items are numbered 0..n-1, so a dropped
+ * QUIZ item leaves no gap. `entitlement.quizzesVisible` is asked once per
+ * read and handed to the service, which applies the student-visibility rule
+ * with it.
+ */
+
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ToolContext } from '../../mcp/registry.ts';
+
+const mocks = vi.hoisted(() => ({
+  listForClassroom: vi.fn(),
+  quizzesVisible: vi.fn(),
+}));
+
+vi.mock('@classmoji/auth/server', () => ({ assertProTier: vi.fn() }));
+
+vi.mock('@classmoji/services', () => ({
+  ClassmojiService: {
+    module: { listForClassroom: (...a: unknown[]) => mocks.listForClassroom(...a) },
+    entitlement: { quizzesVisible: (...a: unknown[]) => mocks.quizzesVisible(...a) },
+  },
+}));
+
+const { modulesResource } = await import('../content.ts');
+
+const ctxAs = (role: 'OWNER' | 'STUDENT'): ToolContext =>
+  ({
+    viewer: { userId: 'user-1', clientId: 'c', scopes: new Set(['read']) },
+    classroom: {
+      classroomId: 'class-1',
+      role,
+      status: 'ACTIVE',
+      membership: { id: 'm-1', role },
+      classroom: { slug: 'w26', settings: {} },
+    },
+  }) as unknown as ToolContext;
+
+const MODULES = [
+  {
+    id: 'mod-1',
+    classroom_id: 'class-1',
+    title: 'Week 1',
+    slug: 'week-1',
+    description: null,
+    position: 0,
+    is_published: true,
+    items: [
+      { id: 'i-page', item_type: 'PAGE', position: 0, page: { id: 'p1', title: 'Intro' } },
+      { id: 'i-quiz', item_type: 'QUIZ', position: 1, quiz: { id: 'q1', name: 'Recursion quiz' } },
+      { id: 'i-slide', item_type: 'SLIDE', position: 2, slide: { id: 's1', title: 'Deck' } },
+    ],
+  },
+  {
+    id: 'mod-2',
+    classroom_id: 'class-1',
+    title: 'Week 2',
+    slug: 'week-2',
+    description: null,
+    position: 1,
+    is_published: true,
+    items: [{ id: 'i-quiz-2', item_type: 'QUIZ', position: 0, quiz: { id: 'q2', name: 'Q2' } }],
+  },
+];
+
+type Payload = { enabled: boolean; modules: Array<{ id: string; items: Array<{ id: string }> }> };
+
+const URI = new URL('classmoji://org/w26/modules');
+
+const read = async (role: 'OWNER' | 'STUDENT') =>
+  (await modulesResource.handler({ org: 'org', slug: 'w26' }, ctxAs(role), URI)) as Payload;
+
+const itemIds = (payload: Payload) => payload.modules.map(m => m.items.map(i => i.id));
+
+beforeEach(() => {
+  mocks.listForClassroom.mockReset().mockResolvedValue(MODULES);
+  mocks.quizzesVisible.mockReset().mockResolvedValue(true);
+});
+
+describe('modules read — quiz items', () => {
+  it('lists no legacy QUIZ item where quizzes are visible, for staff and students alike', async () => {
+    for (const role of ['OWNER', 'STUDENT'] as const) {
+      expect(itemIds(await read(role)), role).toEqual([['i-page', 'i-slide'], []]);
+    }
+  });
+
+  it('lists no legacy QUIZ item where quizzes are hidden either, and leaves the rest', async () => {
+    mocks.quizzesVisible.mockResolvedValue(false);
+
+    for (const role of ['OWNER', 'STUDENT'] as const) {
+      const payload = await read(role);
+      expect(itemIds(payload), role).toEqual([['i-page', 'i-slide'], []]);
+      expect(JSON.stringify(payload), role).not.toContain('quiz');
+    }
+  });
+
+  it('numbers the items it lists 0..n-1, so a dropped quiz item leaves no gap', async () => {
+    // Stored positions run over every row of the module. Shown as stored, the
+    // slide at 2 with nothing at 1 would say a row sits between them.
+    const payload = (await read('OWNER')) as unknown as {
+      modules: Array<{ items: Array<{ id: string; position: number }> }>;
+    };
+
+    expect(payload.modules[0].items.map(i => [i.id, i.position])).toEqual([
+      ['i-page', 0],
+      ['i-slide', 1],
+    ]);
+  });
+
+  it('asks about the authorized classroom once per read and hands the answer on', async () => {
+    mocks.quizzesVisible.mockResolvedValue(false);
+    await read('STUDENT');
+
+    expect(mocks.quizzesVisible).toHaveBeenCalledTimes(1);
+    expect(mocks.quizzesVisible).toHaveBeenCalledWith('class-1');
+    expect(mocks.listForClassroom).toHaveBeenCalledWith('w26', {
+      includeUnpublished: false,
+      quizzesVisible: false,
+    });
+  });
+});

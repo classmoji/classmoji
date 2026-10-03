@@ -1,7 +1,8 @@
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect } from 'react';
 import { Space, Avatar, Collapse, Typography, Button } from 'antd';
 import {
   UserOutlined,
+  BookOutlined,
   FileTextOutlined,
   CodeOutlined,
   SearchOutlined,
@@ -28,7 +29,34 @@ interface ExplorationStep {
   toolName?: string;
   tool?: string;
   action: string;
+  /**
+   * The document a course-material step opened (content_get only), from the
+   * quiz's loaded material list, never from the call. Absent on code steps.
+   */
+  title?: string;
 }
+
+/** A tool's name without its MCP server prefix (mcp__classmoji__content_get → content_get). */
+const shortToolName = (toolName: string | undefined) =>
+  toolName?.includes('__') ? toolName.split('__').pop() : toolName;
+
+/** The course-content tools on the classmoji MCP server. */
+const CONTENT_TOOLS = new Set(['content_get', 'content_search', 'content_list']);
+
+const isContentStep = (step: ExplorationStep) =>
+  CONTENT_TOOLS.has(shortToolName(step.toolName || step.tool) ?? '');
+
+/**
+ * Steps that only looked at course material (a standard quiz's are always
+ * that) get neutral headers; the code-analysis ones stay for any run that
+ * explored code.
+ */
+const onlyContentSteps = (steps: ExplorationStep[]) =>
+  steps.length > 0 && steps.every(isContentStep);
+
+/** A step's line: its label, and the document it opened when there is one. */
+const stepLabel = (step: ExplorationStep) =>
+  step.title ? `${step.action} · ${step.title}` : step.action;
 
 interface ChatMessage {
   id: string | number;
@@ -309,7 +337,10 @@ const createMarkdownComponents = (
 // Function to get icon for tool (handles simple names, MCP-prefixed names, and trigger-mode names)
 const getToolIcon = (toolName: string | undefined) => {
   // Normalize: extract simple name from MCP-prefixed names like mcp__secure-tools__secure_read
-  const name = toolName?.includes('__') ? toolName.split('__').pop() : toolName;
+  const name = shortToolName(toolName);
+
+  // Course material (classmoji MCP content tools)
+  if (name && CONTENT_TOOLS.has(name)) return <BookOutlined style={{ color: '#0d9488' }} />;
 
   // Trigger-mode tool names
   if (name === 'explore_codebase') return <RocketOutlined style={{ color: '#3b82f6' }} />;
@@ -401,6 +432,7 @@ const renderExplorationSteps = (message: ChatMessage, isDarkMode: boolean) => {
   if (message.role?.toUpperCase() !== 'ASSISTANT' || !message.metadata?.explorationSteps?.length) {
     return null;
   }
+  const steps = message.metadata.explorationSteps;
 
   return (
     <div style={{ marginBottom: 8, maxWidth: '70%', width: '100%' }}>
@@ -412,13 +444,22 @@ const renderExplorationSteps = (message: ChatMessage, isDarkMode: boolean) => {
             key: '1',
             label: (
               <Text type="secondary" style={{ fontSize: '12px' }}>
-                <RocketOutlined style={{ color: '#3b82f6' }} /> Code Analysis (
-                {message.metadata.explorationSteps.length} steps)
+                {onlyContentSteps(steps) ? (
+                  <>
+                    <BookOutlined style={{ color: '#0d9488' }} /> Checked course material (
+                    {steps.length} {steps.length === 1 ? 'step' : 'steps'})
+                  </>
+                ) : (
+                  <>
+                    <RocketOutlined style={{ color: '#3b82f6' }} /> Code Analysis ({steps.length}{' '}
+                    steps)
+                  </>
+                )}
               </Text>
             ),
             children: (
               <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
-                {message.metadata.explorationSteps.map((step: ExplorationStep, idx: number) => (
+                {steps.map((step: ExplorationStep, idx: number) => (
                   <div
                     key={idx}
                     style={{
@@ -431,7 +472,7 @@ const renderExplorationSteps = (message: ChatMessage, isDarkMode: boolean) => {
                   >
                     {getToolIcon(step.toolName || step.tool)}
                     <Text type="secondary" style={{ fontSize: '12px' }}>
-                      {step.action}
+                      {stepLabel(step)}
                     </Text>
                   </div>
                 ))}
@@ -546,6 +587,7 @@ interface QuizMessageListProps {
   loading?: boolean;
   isDarkMode?: boolean;
   userLogin?: string | null;
+  userImage?: string | null;
   onQuickAction?: ((message: string) => void | Promise<void>) | null;
   readOnly?: boolean;
   showTimestamps?: boolean;
@@ -561,6 +603,7 @@ const QuizMessageList = ({
   loading = false,
   isDarkMode = false,
   userLogin = null,
+  userImage = null,
   onQuickAction = null,
   readOnly = false,
   showTimestamps: _showTimestamps = false,
@@ -572,28 +615,9 @@ const QuizMessageList = ({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const evaluationRef = useRef<HTMLDivElement>(null);
 
-  // Extract evaluation data from messages if not provided as prop
-  const [extractedEvaluationData, setExtractedEvaluationData] = useState<EvaluationData | null>(
-    null
-  );
-
-  useEffect(() => {
-    // In read-only mode, extract evaluation data from messages
-    if (readOnly && messages.length > 0 && !propEvaluationData) {
-      for (const msg of messages) {
-        if (msg?.role?.toUpperCase() === 'ASSISTANT') {
-          const completion = checkForCompletion(msg?.content ?? '');
-          if (completion) {
-            setExtractedEvaluationData(completion as unknown as EvaluationData);
-            break;
-          }
-        }
-      }
-    }
-  }, [messages, readOnly, propEvaluationData]);
-
-  // Use prop evaluation data if provided, otherwise use extracted
-  const evaluationData = propEvaluationData || extractedEvaluationData;
+  // The evaluation card's data comes from the attempt (QuizAttemptInterface
+  // passes it for a completed attempt only), never from a message.
+  const evaluationData = propEvaluationData;
   const isQuizComplete = propIsQuizComplete || Boolean(evaluationData);
 
   // Function to scroll to bottom
@@ -756,7 +780,7 @@ const QuizMessageList = ({
           {role === 'USER' &&
             (userLogin ? (
               <Avatar
-                src={`https://github.com/${userLogin}.png?size=40`}
+                src={userImage ?? undefined}
                 style={{ backgroundColor: '#52c41a' }}
               >
                 {userLogin[0]?.toUpperCase()}
@@ -823,7 +847,11 @@ const QuizMessageList = ({
                 >
                   <TypingIndicator color="#10b981" />
                   <Text type="secondary" style={{ marginLeft: 4 }}>
-                    {explorationSteps.length > 0 ? 'Exploring code...' : 'Thinking...'}
+                    {explorationSteps.length === 0
+                      ? 'Thinking...'
+                      : onlyContentSteps(explorationSteps)
+                        ? 'Looking things up…'
+                        : 'Exploring code...'}
                   </Text>
                 </div>
               </Space>
@@ -844,7 +872,15 @@ const QuizMessageList = ({
                     type="secondary"
                     style={{ fontSize: '11px', fontWeight: 500, display: 'block', marginBottom: 4 }}
                   >
-                    <RocketOutlined style={{ color: '#3b82f6' }} /> Analyzing your code...
+                    {onlyContentSteps(explorationSteps) ? (
+                      <>
+                        <BookOutlined style={{ color: '#0d9488' }} /> Checking course material…
+                      </>
+                    ) : (
+                      <>
+                        <RocketOutlined style={{ color: '#3b82f6' }} /> Analyzing your code...
+                      </>
+                    )}
                   </Text>
                   {explorationSteps.map((step: ExplorationStep, idx: number) => {
                     const isLastStep = idx === explorationSteps.length - 1;
@@ -862,7 +898,7 @@ const QuizMessageList = ({
                           {getToolIcon(step.toolName || step.tool)}
                         </span>
                         <Text type="secondary" style={{ fontSize: '11px' }}>
-                          {step.action}
+                          {stepLabel(step)}
                         </Text>
                       </div>
                     );

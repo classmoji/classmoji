@@ -1,39 +1,39 @@
 import type { ReactNode } from 'react';
-import { IconArrowRotate, IconBell, IconCheck, IconX } from '../icons/index.tsx';
+import { IconBell, IconCheck } from '../icons/index.tsx';
 import type { CalloutVariant } from './types.ts';
 
 export interface VariantConfig {
   defaultAutoDismissMs: number | null;
-  accentClassName: string;
-  iconColorClassName: string;
+  /**
+   * Colours the icon slot. Everything inside it inherits `currentColor`, which
+   * is what draws the spinner ring and the failure badge.
+   */
+  toneClassName: string;
   defaultIcon: ReactNode;
 }
 
 export const VARIANT_CONFIG: Record<CalloutVariant, VariantConfig> = {
   success: {
     defaultAutoDismissMs: 4000,
-    accentClassName: 'bg-emerald-500',
-    iconColorClassName: 'text-emerald-600 dark:text-emerald-400',
-    defaultIcon: <IconCheck size={18} />,
+    toneClassName: 'cm-callout-tone-accent',
+    defaultIcon: <IconCheck size={15} />,
   },
   error: {
     defaultAutoDismissMs: null,
-    accentClassName: 'bg-rose-500',
-    iconColorClassName: 'text-rose-600 dark:text-rose-400',
-    defaultIcon: <IconX size={18} />,
+    toneClassName: 'cm-callout-tone-rose',
+    // A badge rather than a glyph: it carries its own ground, so a failure
+    // reads at a glance without the card needing a coloured edge.
+    defaultIcon: <span className="cm-callout-badge">!</span>,
   },
   info: {
     defaultAutoDismissMs: null,
-    accentClassName: 'bg-sky-500',
-    iconColorClassName: 'text-sky-600 dark:text-sky-400',
-    defaultIcon: <IconBell size={18} />,
+    toneClassName: 'cm-callout-tone-sky',
+    defaultIcon: <IconBell size={15} />,
   },
   progress: {
     defaultAutoDismissMs: null,
-    accentClassName: 'bg-violet-500',
-    iconColorClassName: 'text-violet-600 dark:text-violet-400',
-    defaultIcon: (
-      <IconArrowRotate size={18} className="animate-spin" style={{ animationDuration: '1.6s' }} />
-    ),
+    toneClassName: 'cm-callout-tone-accent',
+    // A ring, not an icon: work in flight has no shape of its own.
+    defaultIcon: <span className="cm-callout-spinner" />,
   },
 };

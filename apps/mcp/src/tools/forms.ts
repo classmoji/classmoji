@@ -48,14 +48,35 @@
  * shaping itself is not duplicated here: it lives in apps/pages' components and
  * copying it into this app would be exactly the drift the audit standard exists
  * to prevent.
+ *
+ * IDENTITY QUESTIONS. A field flagged `identity_question: true` (gender, for
+ * one) has its answers left out of every response payload here. Only
+ * `form_response_get` includes them, for its one response, when the caller asks
+ * with `include_identity_answers`; that request is recorded on the call's audit
+ * row, with the response id as the row's `value`. The list never includes them.
+ * Which fields are masked is decided by the shared
+ * `formIdentity.identityMaskForForm`, the same rule the pages responses page and
+ * its CSV use, so the two surfaces can't disagree. Masked keys are removed, not
+ * nulled: a null would still say whether the question was answered. A response's
+ * `name` that is its own answer to one of those questions is replaced too
+ * (`formIdentity.responseNames`), and the list's name search reads the names
+ * this tool returns.
  */
 
 import { ClassmojiService } from '@classmoji/services';
+import { withoutAnswers } from '@classmoji/services/form-contract';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import { assertProTier } from '../authz/proTier.ts';
-import { FORMS_STAFF, ok, requireClassroomCtx, scopedNotFound, writeAudit } from './shared.ts';
+import {
+  FORMS_STAFF,
+  loadFormInClassroom as loadSharedFormInClassroom,
+  ok,
+  requireClassroomCtx,
+  scopedNotFound,
+  writeAudit,
+} from './shared.ts';
 
 /** Audit vocabulary, shared with the pages routes and the webapp redirect. */
 const FORMS_RESOURCE = 'FORMS';
@@ -180,20 +201,11 @@ interface FormRow {
 }
 
 /**
- * Load a Form and verify its classroom_id (S1). Form carries classroom_id
- * directly, so the comparison is a single hop — same uniform rejection as every
- * other loader in this server, so an unknown id and another classroom's form are
- * indistinguishable to the caller.
- *
- * `includeCreator` is never requested: it attaches the full creator User row.
+ * The S1 form loader (shared.ts — the team-set tools use the same one), typed
+ * with this file's row.
  */
-async function loadFormInClassroom(formId: string, ctx: ToolContext): Promise<FormRow> {
-  const form = (await ClassmojiService.form.findById(formId)) as FormRow | null;
-  if (!form || form.classroom_id !== requireClassroomCtx(ctx).classroomId) {
-    throw scopedNotFound('Form');
-  }
-  return form;
-}
+const loadFormInClassroom = (formId: string, ctx: ToolContext): Promise<FormRow> =>
+  loadSharedFormInClassroom<FormRow>(formId, ctx);
 
 /** The response columns these tools read. Mirrors the web's loader row. */
 interface ResponseRow {
@@ -280,11 +292,16 @@ function formSummary(form: FormRow) {
  * address, once per response" in a payload an agent will read and may quote.
  * The reviewer's own `email` is right there above it; the reviewees are
  * identified by name and user id, which is what every read surface displays.
+ *
+ * `mask` is required. `hidden`: the answers of those fields are removed; callers
+ * pass the identity-question ids (see `identityMask`), or an empty set only when
+ * form_response_get was asked for identity answers. `names`: the name each row
+ * shows, from `formIdentity.responseNames`; a row missing from it shows none.
  */
-function responseSummary(row: ResponseRow) {
+function responseSummary(row: ResponseRow, mask: ResponseMask) {
   return {
     id: row.id,
-    name: row.name ?? null,
+    name: mask.names.get(row.id) ?? null,
     email: row.email,
     user_id: row.user_id ?? null,
     submitted_at: iso(row.submitted_at),
@@ -300,7 +317,7 @@ function responseSummary(row: ResponseRow) {
     // has no other way to tell testimony from data entry: `revision_id` says
     // "what the person saw", which for a staff-added row is not true of anyone.
     added_by: row.added_by ?? null,
-    answers: (row.answers ?? {}) as Record<string, unknown>,
+    answers: withoutAnswers((row.answers ?? {}) as Record<string, unknown>, mask.hidden),
     resolved_context: ClassmojiService.formTeam.withoutTargetEmails(row.resolved_context ?? null),
   };
 }
@@ -316,6 +333,56 @@ async function currentDefinition(form: FormRow): Promise<unknown> {
     fields?: unknown;
   } | null;
   return revision?.fields ?? null;
+}
+
+/**
+ * The ids of the questions whose answers are hidden by default, from the shared
+ * rule (`formIdentity.identityMaskForForm`, which the pages responses page uses
+ * too). Call it with a form that has already passed S1.
+ *
+ * Fails closed: the service throws FORM_DEFINITION_INVALID on a stored
+ * definition it can't read, and that stays an internal error (it is not the
+ * caller's input), so the tool returns nothing. FORM_NOT_FOUND can only mean the
+ * form was deleted after the S1 check, and gets the same uniform not-found.
+ */
+async function identityMask(form: FormRow): Promise<Set<string>> {
+  try {
+    return await ClassmojiService.formIdentity.identityMaskForForm({ formId: form.id });
+  } catch (error) {
+    if ((error as { code?: string })?.code === 'FORM_NOT_FOUND') throw scopedNotFound('Form');
+    throw error;
+  }
+}
+
+/** What `responseSummary` withholds: answers by field id, and names by row. */
+interface ResponseMask {
+  hidden: ReadonlySet<string>;
+  names: ReadonlyMap<string, string | null>;
+}
+
+/** The name each row shows, under the identity mask. */
+const namesFor = (rows: readonly ResponseRow[], identityIds: ReadonlySet<string>) =>
+  ClassmojiService.formIdentity.responseNames(rows, identityIds);
+
+/**
+ * What a response read withholds, and what its audit row records. Nothing is
+ * withheld when the caller asked for identity answers (form_response_get only);
+ * `revealed` is true only when that request actually returned identity answers,
+ * i.e. the mask is not empty.
+ */
+function identityDisclosure(identityIds: Set<string>, include: boolean | undefined) {
+  const revealed = include === true && identityIds.size > 0;
+  return {
+    revealed,
+    hidden: include === true ? new Set<string>() : identityIds,
+    payload:
+      include === true || identityIds.size === 0
+        ? {}
+        : { hidden_identity_field_ids: [...identityIds] },
+    audit: revealed
+      ? { identity_answers: true, identity_field_ids: [...identityIds] }
+      : { identity_answers: false },
+  };
 }
 
 // ─── Shared input schemas ───────────────────────────────────────────────────
@@ -339,10 +406,19 @@ const fieldsArg = z
   .describe(
     'Field list: either an array of field objects or { definition_version: 1, fields: [...] }. ' +
       'Each field is { type, label, help?, required?, options?, optionSource?, scale?, ranks?, ' +
-      'matrix?, repeat?, fields? }. Field and option ids are minted server-side, so omit them ' +
+      'matrix?, repeat?, fields?, identity_question?, options_from? }; an option is a string or ' +
+      '{ label, description?, exclusive? }. Field and option ids are minted server-side, so omit them ' +
       'when authoring something NEW — but when EDITING an existing draft, send back the ids ' +
-      'exactly as get_form returned them: answers key on those ids, and a field that comes back ' +
+      'exactly as form_get returned them: answers key on those ids, and a field that comes back ' +
       'without one is minted a fresh id and orphans every response already collected for it. ' +
+      'identity_question: true (top-level short_text, long_text, number, dropdown, multiselect, ' +
+      'switch, opinion_scale) marks a question about the respondent, e.g. gender; response reads ' +
+      'omit its answers except form_response_get for one response, on request. exclusive: true ' +
+      '(multiselect options only): that choice can’t be combined with others. options_from: ' +
+      '<field id> (top-level dropdown only) copies the options, ids included, of a top-level ' +
+      'ranked_choice or dropdown with no options_from, ' +
+      'replacing any options sent; to link fields made in one call, give the source a uuid id. ' +
+      'identity_question: false and exclusive: false are dropped. ' +
       'Validated and normalized by the same contract the builder uses — an invalid definition ' +
       'comes back as FORM_DEFINITION_INVALID with the precise reason.'
   );
@@ -407,7 +483,10 @@ export const formGetTool: ToolDefinition<FormGetArgs> = {
     'Returns one form with its published definition (the current revision’s normalized field ' +
     'list), its working draft definition (what form_update edits), and the list of revisions. ' +
     'Staff only (owner or teacher); requires a Pro subscription. Field ids in the definition are ' +
-    'the keys response answers are stored under.',
+    'the keys response answers are stored under. A field may carry identity_question: true ' +
+    '(its answers are hidden on response reads by default), a dropdown options_from: <field id> ' +
+    '(options copied from that field), and a multiselect option exclusive: true (not combinable ' +
+    'with other choices); see form_update’s fields.',
   scope: 'read',
   annotations: { openWorld: false },
   roles: FORMS_STAFF,
@@ -861,6 +940,16 @@ const submissionStateArg = z
       'click. DRAFT = a saved partial that was never submitted.'
   );
 
+const includeIdentityAnswersArg = z
+  .boolean()
+  .optional()
+  .describe(
+    'Default false: answers to identity questions (fields with identity_question: true) are ' +
+      'left out and their field ids listed in hidden_identity_field_ids. true includes this ' +
+      'response’s answers to them, and the audit row records it. Set it only when the user ' +
+      'asks for this person’s answers.'
+  );
+
 interface ListFormResponsesArgs {
   classroom: string;
   form_id: string;
@@ -882,7 +971,9 @@ export const listFormResponsesTool: ToolDefinition<ListFormResponsesArgs> = {
     'do not repeat it into anywhere it does not belong, and every call is audit-logged.\n' +
     'Answers key on FIELD IDS, so the current revision’s definition is returned alongside; join ' +
     'them to read an answer. Filterable by submission_state, staff_status (pass null for ' +
-    '"unlabelled") and a name/email search.',
+    '"unlabelled") and a name/email search.\n' +
+    'Answers to identity questions are always left out (their field ids are in ' +
+    'hidden_identity_field_ids); form_response_get can include them for one response.',
   scope: 'read',
   annotations: { openWorld: false },
   roles: FORMS_STAFF,
@@ -903,14 +994,44 @@ export const listFormResponsesTool: ToolDefinition<ListFormResponsesArgs> = {
     await assertFormsSurfaceEnabled(ctx);
     const form = await loadFormInClassroom(args.form_id, ctx);
 
+    // Always masked: this tool has no include flag.
+    const identityIds = await identityMask(form);
+    const identity = identityDisclosure(identityIds, false);
+
     const take = args.limit ?? 50;
-    const rows = (await ClassmojiService.formResponse.listByFormId(form.id, {
+    const filters = {
       ...(args.submission_state !== undefined ? { submissionState: args.submission_state } : {}),
       ...(args.staff_status !== undefined ? { staffStatus: args.staff_status } : {}),
-      ...(args.search !== undefined ? { search: args.search } : {}),
-      take,
-      ...(args.offset !== undefined ? { skip: args.offset } : {}),
-    })) as ResponseRow[];
+    };
+    let rows: ResponseRow[];
+    let names: Map<string, string | null>;
+    if (args.search !== undefined && identityIds.size > 0) {
+      // A stored name can be an identity answer (see `responseNames`), so the
+      // search reads the names this tool returns, then pages, in the service's
+      // order and with its case-insensitive substring rule.
+      const all = (await ClassmojiService.formResponse.listByFormId(
+        form.id,
+        filters
+      )) as ResponseRow[];
+      names = await namesFor(all, identityIds);
+      const needle = args.search.toLowerCase();
+      const offset = args.offset ?? 0;
+      rows = all
+        .filter(
+          row =>
+            (names.get(row.id) ?? '').toLowerCase().includes(needle) ||
+            row.email.toLowerCase().includes(needle)
+        )
+        .slice(offset, offset + take);
+    } else {
+      rows = (await ClassmojiService.formResponse.listByFormId(form.id, {
+        ...filters,
+        ...(args.search !== undefined ? { search: args.search } : {}),
+        take,
+        ...(args.offset !== undefined ? { skip: args.offset } : {}),
+      })) as ResponseRow[];
+      names = await namesFor(rows, identityIds);
+    }
 
     const [definition, labels] = await Promise.all([
       currentDefinition(form),
@@ -937,6 +1058,7 @@ export const listFormResponsesTool: ToolDefinition<ListFormResponsesArgs> = {
           staff_status: args.staff_status === undefined ? undefined : args.staff_status,
           search: args.search ?? null,
         },
+        ...identity.audit,
       },
     });
 
@@ -944,7 +1066,8 @@ export const listFormResponsesTool: ToolDefinition<ListFormResponsesArgs> = {
       form: formSummary(form),
       definition,
       staff_status_labels: labels,
-      responses: rows.map(responseSummary),
+      responses: rows.map(row => responseSummary(row, { hidden: identity.hidden, names })),
+      ...identity.payload,
       returned: rows.length,
       limit: take,
       offset: args.offset ?? 0,
@@ -958,6 +1081,7 @@ interface FormResponseGetArgs {
   classroom: string;
   form_id: string;
   response_id: string;
+  include_identity_answers?: boolean;
 }
 
 export const formResponseGetTool: ToolDefinition<FormResponseGetArgs> = {
@@ -969,7 +1093,8 @@ export const formResponseGetTool: ToolDefinition<FormResponseGetArgs> = {
     'the repeat-group answers are keyed by. Staff only (owner or teacher); requires a Pro ' +
     'subscription.\n' +
     'CONTAINS PERSONAL DATA, and the call is audit-logged. The current revision’s definition is ' +
-    'returned alongside so field ids in the answers can be read as questions.',
+    'returned alongside so field ids in the answers can be read as questions. Answers to ' +
+    'identity questions are left out unless include_identity_answers is true.',
   scope: 'read',
   annotations: { openWorld: false },
   roles: FORMS_STAFF,
@@ -977,13 +1102,19 @@ export const formResponseGetTool: ToolDefinition<FormResponseGetArgs> = {
     classroom: classroomArg,
     form_id: formIdArg,
     response_id: z.string().uuid().describe('Response id, from list_form_responses'),
+    include_identity_answers: includeIdentityAnswersArg,
   },
   handler: async (args, ctx) => {
     await assertFormsSurfaceEnabled(ctx);
     const form = await loadFormInClassroom(args.form_id, ctx);
     const row = await loadResponseInForm(form.id, args.response_id);
 
-    const definition = await currentDefinition(form);
+    const [definition, identityIds] = await Promise.all([
+      currentDefinition(form),
+      identityMask(form),
+    ]);
+    const identity = identityDisclosure(identityIds, args.include_identity_answers);
+    const names = await namesFor([row], identityIds);
 
     await writeAudit(ctx, {
       resource_type: FORMS_RESOURCE,
@@ -996,13 +1127,18 @@ export const formResponseGetTool: ToolDefinition<FormResponseGetArgs> = {
         form_id: form.id,
         form_slug: form.slug,
         response_id: row.id,
+        // The response id as the value keeps reveals of different responses
+        // apart in the audit service's dedup window.
+        ...(identity.revealed ? { value: row.id } : {}),
+        ...identity.audit,
       },
     });
 
     return ok({
       form: formSummary(form),
       definition,
-      response: responseSummary(row),
+      response: responseSummary(row, { hidden: identity.hidden, names }),
+      ...identity.payload,
     });
   },
 };
@@ -1316,7 +1452,8 @@ export const formResponseUpdateTool: ToolDefinition<FormResponseUpdateArgs> = {
     'IS EVER VISIBLE TO THE RESPONDENT, on any surface. This tool NEVER touches the submitted ' +
     'answers — those are the respondent’s record. Pass null (or an empty/whitespace string) to ' +
     'clear a field; omit it to leave it alone. To act on a response — adding a waitlist ' +
-    'applicant to the roster, say — use roster_add_student and then label the response here.',
+    'applicant to the roster, say — use roster_add_student and then label the response here. ' +
+    'The returned row never includes answers to identity questions.',
   scope: 'write',
   roles: FORMS_STAFF,
   inputSchema: {
@@ -1348,6 +1485,12 @@ export const formResponseUpdateTool: ToolDefinition<FormResponseUpdateArgs> = {
     const form = await loadFormInClassroom(args.form_id, ctx);
     const row = await loadResponseInForm(form.id, args.response_id);
 
+    // The returned row is always masked (this tool has no include flag). The
+    // mask is computed before the write, so a definition it can't read refuses
+    // the call instead of writing and then failing.
+    const identityIds = await identityMask(form);
+    const identity = identityDisclosure(identityIds, false);
+
     // Only the two staff columns are ever passed; `answers` has no route here.
     // The service applies the trim-to-null rule the inline editors rely on.
     const updated = (await ClassmojiService.formResponse.updateStaff({
@@ -1373,6 +1516,13 @@ export const formResponseUpdateTool: ToolDefinition<FormResponseUpdateArgs> = {
       },
     });
 
-    return ok({ success: true, response: responseSummary(updated) });
+    return ok({
+      success: true,
+      response: responseSummary(updated, {
+        hidden: identity.hidden,
+        names: await namesFor([updated], identityIds),
+      }),
+      ...identity.payload,
+    });
   },
 };

@@ -165,6 +165,11 @@ const optionInput = z.union([
       id: z.string().uuid().optional(),
       label: labelText,
       description: helpText.optional(),
+      /**
+       * Choosing this option clears every other choice ("Prefer not to say").
+       * Multiselect options only; `parseFormDefinition` refuses it anywhere else.
+       */
+      exclusive: z.boolean().optional(),
     })
     .strict(),
 ]);
@@ -173,6 +178,8 @@ export interface FormOption {
   id: string;
   label: string;
   description?: string;
+  /** Multiselect only: an answer holding this option holds nothing else. */
+  exclusive?: true;
 }
 
 const optionSchema = optionInput.transform((raw): FormOption => {
@@ -181,6 +188,9 @@ const optionSchema = optionInput.transform((raw): FormOption => {
     id: raw.id ?? mintId(),
     label: raw.label,
     ...(raw.description === undefined ? {} : { description: raw.description }),
+    // Stored only when set, so an unflagged option looks exactly as it did
+    // before the flag existed.
+    ...(raw.exclusive === true ? { exclusive: true as const } : {}),
   };
 });
 
@@ -257,8 +267,17 @@ function fieldDispatch(allowed: () => string[], where = 'in a form'): z.ZodTypeA
     // rule every type shares, and doing it once means a new registry entry
     // cannot forget it. An id the caller supplied is kept — that is how an edit
     // of an existing draft preserves the ids its answers key on.
-    const { id, ...rest } = result.data as { id?: string } & Record<string, unknown>;
-    return { id: id ?? mintId(), ...rest };
+    // `identity_question: false` is dropped for the same reason: the flag is
+    // stored only when it is on, whatever the type.
+    const { id, identity_question, ...rest } = result.data as {
+      id?: string;
+      identity_question?: boolean;
+    } & Record<string, unknown>;
+    return {
+      id: id ?? mintId(),
+      ...rest,
+      ...(identity_question === true ? { identity_question: true } : {}),
+    };
   });
 }
 
@@ -271,6 +290,13 @@ const inputFieldBase = {
   required: z.boolean().default(false),
   placeholder: z.string().max(FORM_LIMITS.MAX_LABEL_CHARS).optional(),
   gallery_role: z.enum(GALLERY_ROLES).optional(),
+  /**
+   * The question asks about the respondent's identity (gender, for one). Its
+   * answers are hidden on staff surfaces until someone asks to see them. Only
+   * IDENTITY_QUESTION_TYPES may carry it, and never inside a repeat group;
+   * `parseFormDefinition` enforces both.
+   */
+  identity_question: z.boolean().optional(),
 };
 
 // ─── Definition schemas, per type ───────────────────────────────────────────
@@ -302,9 +328,29 @@ const numberDef = z
     }
   });
 
+/**
+ * `options_from` names another top-level field (a ranked_choice or a dropdown)
+ * whose options this dropdown uses, ids included. `resolveSharedOptions` copies
+ * them in during `parseFormDefinition`, so every stored definition carries
+ * the materialized list and nothing downstream has to follow the link. Any
+ * `options` sent alongside the link are replaced by the copy.
+ */
 const dropdownDef = z
-  .object({ ...inputFieldBase, type: z.literal('dropdown'), options: optionList(1) })
-  .strict();
+  .object({
+    ...inputFieldBase,
+    type: z.literal('dropdown'),
+    options: optionList(0).default([]),
+    options_from: z.string().uuid().optional(),
+  })
+  .strict()
+  .superRefine((field, ctx) => {
+    if (field.options_from === undefined && field.options.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'A dropdown needs at least one option, or options_from',
+      });
+    }
+  });
 
 const multiselectDef = z
   .object({ ...inputFieldBase, type: z.literal('multiselect'), options: optionList(1) })
@@ -619,14 +665,29 @@ export const FIELD_TYPE_REGISTRY = {
     classroomOnly: false,
     nestable: true,
     defSchema: multiselectDef,
-    answerSchema: field =>
-      z
+    answerSchema: field => {
+      // Enforced here, not only in the renderer, so an MCP or hand-posted
+      // answer obeys the same rule the checkboxes do.
+      const exclusive = new Map(
+        field.options.filter(option => option.exclusive).map(option => [option.id, option.label])
+      );
+      return z
         .array(oneOf(field.options))
         .min(field.required ? 1 : 0)
         .max(field.options.length)
         .refine(values => new Set(values).size === values.length, {
           message: 'Each option may be chosen once',
-        }),
+        })
+        .superRefine((values, ctx) => {
+          if (values.length < 2) return;
+          const chosen = values.find(value => exclusive.has(value));
+          if (chosen === undefined) return;
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `"${exclusive.get(chosen)}" can't be combined with other choices`,
+          });
+        });
+    },
   } satisfies FieldTypeSpec<z.infer<typeof multiselectDef>>,
 
   switch: {
@@ -844,6 +905,81 @@ const definitionSchema = definitionInput.pipe(
   })
 );
 
+// ─── Identity questions ─────────────────────────────────────────────────────
+
+/**
+ * The types that may carry `identity_question`. Left out on purpose: `email`
+ * is how a public form authenticates, `roster_select` answers are about other
+ * people, `ranked_choice` and `matrix` are preferences, and `repeat_group` is a
+ * container. Children of a repeat group may not carry the flag either: an
+ * answer given per teammate is about someone else.
+ */
+export const IDENTITY_QUESTION_TYPES: readonly FormFieldType[] = [
+  'short_text',
+  'long_text',
+  'number',
+  'dropdown',
+  'multiselect',
+  'switch',
+  'opinion_scale',
+];
+
+/** Is this field flagged as an identity question? */
+export function isIdentityQuestion(field: object | null | undefined): boolean {
+  return (field as { identity_question?: unknown } | null | undefined)?.identity_question === true;
+}
+
+type IdentityFieldList = ReadonlyArray<{ id: string; identity_question?: unknown }>;
+
+/**
+ * The ids of the identity questions across one or more field lists, top level
+ * only (a repeat-group child can't carry the flag). Callers pass the current
+ * revision's fields and the draft's, so a flag hides answers as soon as it is
+ * saved and an un-flag shows them only once the new version is published.
+ *
+ * Each argument is a field list or a stored definition (`{ fields }`, as
+ * FormRevision.fields and Form.draft_fields hold it). A missing one (a form
+ * with no draft yet) contributes nothing. Any other shape throws: masking
+ * built on a misread argument would come back empty and hide nothing.
+ *
+ * @throws Error with code FORM_DEFINITION_INVALID on an unrecognized argument.
+ */
+export function identityQuestionIds(
+  ...fieldLists: Array<IdentityFieldList | { fields: IdentityFieldList } | null | undefined>
+): Set<string> {
+  const ids = new Set<string>();
+  fieldLists.forEach((entry, index) => {
+    if (entry === null || entry === undefined) return;
+    const fields: unknown = Array.isArray(entry) ? entry : (entry as { fields?: unknown }).fields;
+    if (!Array.isArray(fields)) {
+      throw formContractError(
+        FORM_DEFINITION_INVALID,
+        `identityQuestionIds: argument ${index + 1} is neither a field list nor a stored definition with a fields array.`
+      );
+    }
+    for (const field of fields as IdentityFieldList) {
+      if (isIdentityQuestion(field)) ids.add(field.id);
+    }
+  });
+  return ids;
+}
+
+/**
+ * A copy of `answers` without the keys in `ids`. The key is removed, not set
+ * to null: a null would still tell the reader whether the question was
+ * answered. `ids` is required so a caller can't forget the mask.
+ */
+export function withoutAnswers<T>(
+  answers: Record<string, T>,
+  ids: ReadonlySet<string>
+): Record<string, T> {
+  const kept: Record<string, T> = {};
+  for (const [key, value] of Object.entries(answers)) {
+    if (!ids.has(key)) kept[key] = value;
+  }
+  return kept;
+}
+
 // ─── Parsing ────────────────────────────────────────────────────────────────
 
 /** Every field in the definition, repeat-group children included. */
@@ -909,10 +1045,94 @@ export function answersByteSize(answers: unknown): number {
   }
 }
 
+// ─── Shared options ─────────────────────────────────────────────────────────
+
+/** `"Label"` for a message, or the id when a field has no label. */
+const nameOf = (field: FormField): string =>
+  typeof field.label === 'string' ? `"${field.label}"` : field.id;
+
+/**
+ * Copy each linked dropdown's options from its `options_from` source, ids
+ * included, and return the new field list (unlinked fields are returned as
+ * they are). The source must be a top-level `ranked_choice` or `dropdown`
+ * that is not itself linked, and not the dropdown itself; the link is refused
+ * on a repeat-group child. The link stays on the field, so the next parse
+ * copies the source's options again.
+ *
+ * Runs inside `parseFormDefinition`; exported for the builder preview, which
+ * must catch the error while a draft is mid-edit.
+ *
+ * @throws Error with code FORM_DEFINITION_INVALID.
+ */
+export function resolveSharedOptions(fields: FormField[]): FormField[] {
+  for (const group of fields) {
+    if (group.type !== 'repeat_group') continue;
+    for (const child of (group.fields as FormField[] | undefined) ?? []) {
+      if (child.options_from !== undefined) {
+        throw formContractError(
+          FORM_DEFINITION_INVALID,
+          `${nameOf(child)} is inside a repeat group; options_from is allowed only on a top-level dropdown.`
+        );
+      }
+    }
+  }
+
+  const topLevel = new Map(fields.map(field => [field.id, field]));
+  return fields.map(field => {
+    const sourceId = field.options_from;
+    if (sourceId === undefined) return field;
+    if (field.type !== 'dropdown') {
+      throw formContractError(
+        FORM_DEFINITION_INVALID,
+        `${nameOf(field)} is a ${field.type} field; options_from is allowed only on a dropdown.`
+      );
+    }
+    if (sourceId === field.id) {
+      throw formContractError(
+        FORM_DEFINITION_INVALID,
+        `${nameOf(field)} names itself in options_from.`
+      );
+    }
+    const source = topLevel.get(sourceId as string);
+    if (!source) {
+      throw formContractError(
+        FORM_DEFINITION_INVALID,
+        `${nameOf(field)}: options_from ${String(sourceId)} is not a top-level field of this form.`
+      );
+    }
+    if (source.type !== 'ranked_choice' && source.type !== 'dropdown') {
+      throw formContractError(
+        FORM_DEFINITION_INVALID,
+        `${nameOf(field)}: options_from must name a ranked_choice or dropdown field; ${nameOf(source)} is a ${source.type} field.`
+      );
+    }
+    if (source.options_from !== undefined) {
+      throw formContractError(
+        FORM_DEFINITION_INVALID,
+        `${nameOf(field)}: options_from names ${nameOf(source)}, which takes its own options from another field.`
+      );
+    }
+    const options = ((source.options as FormOption[] | undefined) ?? []).map(option => ({
+      ...option,
+    }));
+    return { ...field, options };
+  });
+}
+
+/** Every option list a field carries: its choices, or a matrix's rows and columns. */
+function optionListsOf(field: FormField): FormOption[][] {
+  const lists: FormOption[][] = [];
+  if (Array.isArray(field.options)) lists.push(field.options as FormOption[]);
+  const matrix = field.matrix as { rows?: unknown; columns?: unknown } | undefined;
+  if (Array.isArray(matrix?.rows)) lists.push(matrix.rows as FormOption[]);
+  if (Array.isArray(matrix?.columns)) lists.push(matrix.columns as FormOption[]);
+  return lists;
+}
+
 /**
  * Validate and NORMALIZE a field definition. The return value is what belongs
  * in FormRevision.fields — ids minted, options expanded to objects, defaults
- * filled in.
+ * filled in, linked dropdown options copied from their source.
  *
  * @throws Error with code FORM_DEFINITION_INVALID / FORM_DEFINITION_TOO_LARGE.
  */
@@ -974,7 +1194,42 @@ export function parseFormDefinition(input: unknown): FormDefinition {
     );
   }
 
-  const bytes = definitionByteSize(definition);
+  for (const field of definition.fields) {
+    if (isIdentityQuestion(field) && !IDENTITY_QUESTION_TYPES.includes(field.type)) {
+      throw formContractError(
+        FORM_DEFINITION_INVALID,
+        `${nameOf(field)} is a ${field.type} field; identity_question is allowed only on ${IDENTITY_QUESTION_TYPES.join(', ')}.`
+      );
+    }
+    if (field.type !== 'repeat_group') continue;
+    for (const child of (field.fields as FormField[] | undefined) ?? []) {
+      if (isIdentityQuestion(child)) {
+        throw formContractError(
+          FORM_DEFINITION_INVALID,
+          `${nameOf(child)} is inside a repeat group; identity_question is not allowed there.`
+        );
+      }
+    }
+  }
+
+  for (const field of flattenFields(definition.fields)) {
+    if (field.type === 'multiselect') continue;
+    if (optionListsOf(field).some(options => options.some(option => option.exclusive))) {
+      throw formContractError(
+        FORM_DEFINITION_INVALID,
+        `${nameOf(field)}: exclusive is allowed only on multiselect options.`
+      );
+    }
+  }
+
+  // Copied before the size check: the cap guards what is stored, and a linked
+  // dropdown stores its own copy of the source's options.
+  const resolved: FormDefinition = {
+    ...definition,
+    fields: resolveSharedOptions(definition.fields),
+  };
+
+  const bytes = definitionByteSize(resolved);
   if (bytes > FORM_LIMITS.MAX_DEFINITION_BYTES) {
     throw formContractError(
       FORM_DEFINITION_TOO_LARGE,
@@ -982,7 +1237,7 @@ export function parseFormDefinition(input: unknown): FormDefinition {
     );
   }
 
-  return definition;
+  return resolved;
 }
 
 /**

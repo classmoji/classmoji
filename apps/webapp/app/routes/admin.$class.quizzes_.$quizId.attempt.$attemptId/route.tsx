@@ -3,7 +3,10 @@ import { useLocation, useNavigate, useParams } from 'react-router';
 import { Drawer, ConfigProvider, theme, Modal } from 'antd';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { QuizAttemptInterface } from '~/components';
-import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
+import { assertClassroomAccess } from '~/utils/helpers';
+import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
+import { attemptDrawerView, chatActivityView, quizDrawerView } from '~/utils/quizPayloads';
+import { isTriggerChatAttempt } from '~/utils/quizRuntime.server';
 import type { Route } from './+types/route';
 
 export async function loader({ params, request }: Route.LoaderArgs) {
@@ -14,7 +17,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   // 1. Authenticate and authorize (instructors only)
   const {
-    userId: _userId,
+    userId,
     classroom,
     membership: _membership,
   } = await assertClassroomAccess({
@@ -25,7 +28,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     attemptedAction: 'view_student_attempt',
   });
 
-  await assertProTier(classSlug);
+  if (!(await quizzesVisibleOrThrow(classroom.id))) {
+    throw new Response('Not Found', { status: 404 });
+  }
 
   // 2. Fetch quiz
   const quiz = await ClassmojiService.quiz.findById(quizId);
@@ -72,26 +77,49 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const studentName =
     attemptData.attempt.user?.name || attemptData.attempt.user?.login || 'Student';
 
-  // 8. Strip sensitive fields from attempt before sending to client
-  // agent_config may contain API keys - never expose to browser
-  // quiz.classroom.settings contains anthropic_api_key, openai_api_key
-  const { agent_config: _agent_config, ...attemptWithoutConfig } = attemptData.attempt;
-  const safeAttempt = {
-    ...attemptWithoutConfig,
-    quiz: {
-      ...attemptWithoutConfig.quiz,
-      classroom: attemptWithoutConfig.quiz?.classroom
-        ? { ...attemptWithoutConfig.quiz.classroom, settings: undefined }
-        : undefined,
-    },
-  };
+  // 8. A chat-runtime attempt's transcript, projected as its student sees it
+  // (hidden rows and internal parts removed), plus the answer each feedback
+  // was written against (`expected_answer`) for staff reading someone else's
+  // attempt. Its raw rows are never sent. Only the attempt's owner drives its
+  // chat session, and gets exactly what that session streamed.
+  const isChatAttempt = isTriggerChatAttempt(attemptData.attempt);
+  const viewerOwnsAttempt = attemptData.attempt.user_id.toString() === userId.toString();
+  const transcript = isChatAttempt
+    ? await ClassmojiService.quizChat.loadTranscriptForViewer(
+        attemptData.attempt.id,
+        viewerOwnsAttempt ? 'student' : 'staff'
+      )
+    : null;
 
+  // A chat attempt's message limit: the messages it still admits (the chat's
+  // countdown) and whether the server submitted it at the limit (the results
+  // say so).
+  const messageLimit = isChatAttempt
+    ? await ClassmojiService.quizChat.messageLimitOf(attemptData.attempt.id)
+    : null;
+
+  // 9. Send only what the drawer and QuizAttemptInterface read — see
+  // ~/utils/quizPayloads. Both rows arrive joined to much more: the attempt to
+  // its user, quiz and classroom; the quiz to every attempt and its user.
   return {
-    quiz,
-    attempt: safeAttempt,
+    quiz: quizDrawerView(quiz),
+    attempt: attemptDrawerView(attemptData.attempt, {
+      endedBy: messageLimit?.endedBy ?? null,
+    }),
     // Use unified messages from getAttemptWithMessages (ai-agent owns persistence)
-    messages: attemptData.messages || [],
-    userLogin: safeAttempt.user?.login || null,
+    messages: isChatAttempt ? [] : attemptData.messages || [],
+    transcript,
+    // The opening was admitted (its hidden row is stored), even when its reply
+    // is not saved yet: a second tab joins it rather than beginning again.
+    chatStarted: isChatAttempt && (attemptData.messages?.length ?? 0) > 0,
+    // When the attempt last admitted a turn, as timestamps only: an opening
+    // admitted longer ago than a turn can run, with nothing saved, is lost.
+    chatActivity: isChatAttempt ? chatActivityView(attemptData.attempt) : null,
+    // How many more messages an open chat attempt admits: a count only.
+    messagesLeft: messageLimit && !readOnly ? messageLimit.messagesLeft : null,
+    viewerOwnsAttempt,
+    userLogin: attemptData.attempt.user?.login || null,
+    userImage: attemptData.attempt.user?.image || null,
     studentName,
     isAdmin: true,
     readOnly,
@@ -106,7 +134,7 @@ export default function AdminQuizAttemptViewDrawer({ loaderData }: Route.Compone
   const { isDarkMode } = useDarkMode();
   const navigate = useNavigate();
   const { class: classSlug, quizId } = useParams();
-  // Served under every prefix this route's gate allows (/admin and /teacher).
+  // Served under every prefix this route's gate allows (/admin, /teacher and /assistant).
   const rolePrefix = useLocation().pathname.split('/')[1];
   const [showConfirm, setShowConfirm] = useState(false);
 

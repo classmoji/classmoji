@@ -4,8 +4,10 @@ import {
   getClassroomBySlug,
   getTestPrisma,
   seedQuiz,
+  seededQuizModuleId,
   ensureClassroomProTier,
   deleteQuizzesByNamePrefix,
+  SEEDED_QUIZ_MODULE_TITLE,
   type SeededQuiz,
 } from '../../helpers/prisma.helpers';
 import { TEST_CLASSROOM } from '../../helpers/env.helpers';
@@ -14,7 +16,9 @@ import { TEST_CLASSROOM } from '../../helpers/env.helpers';
  * Quiz CRUD tests for /admin/$class/quizzes.
  *
  * The dev seed creates no quizzes, so these specs seed their own throwaway,
- * uniquely-named quizzes via Prisma and clean them up afterwards.
+ * uniquely-named quizzes via Prisma and clean them up afterwards. Every quiz
+ * is an assignment in a module: seeded ones sit in the seeded-quiz module, and
+ * the create form needs a module chosen before it saves.
  */
 
 const QUIZ_PREFIX = 'E2E Owner Quiz';
@@ -59,7 +63,7 @@ test.describe('Quiz List', () => {
     const table = page.locator('table');
     await expect(table).toBeVisible();
     await expect(table.getByRole('columnheader', { name: 'Quiz Name' })).toBeVisible();
-    await expect(table.getByRole('columnheader', { name: 'Repository' })).toBeVisible();
+    await expect(table.getByRole('columnheader', { name: 'Module' })).toBeVisible();
     await expect(table.getByRole('columnheader', { name: 'Status' })).toBeVisible();
   });
 
@@ -78,8 +82,13 @@ test.describe('Quiz List', () => {
 });
 
 test.describe('Quiz Create Drawer', () => {
+  let moduleId: string;
+
   test.beforeAll(async () => {
     await ensureClassroomProTier(TEST_CLASSROOM);
+    // A module to put the new quiz in.
+    const classroom = await getClassroomBySlug(TEST_CLASSROOM);
+    moduleId = await seededQuizModuleId(classroom.id);
   });
 
   test.afterAll(async () => {
@@ -110,9 +119,13 @@ test.describe('Quiz Create Drawer', () => {
     await expect(drawer).toBeVisible({ timeout: 5000 });
 
     await expect(drawer.getByText('Quiz Name')).toBeVisible();
-    await expect(drawer.getByText('Weight (%)')).toBeVisible();
     await expect(drawer.getByText('Max Attempts')).toBeVisible();
     await expect(drawer.getByText('Subject')).toBeVisible();
+    // Its place in the course: the Assignment panel.
+    const panel = drawer.getByTestId('quiz-assignment-panel');
+    await expect(panel).toBeVisible();
+    await expect(panel.getByText('Module', { exact: true })).toBeVisible();
+    await expect(panel.getByText('Weight', { exact: true })).toBeVisible();
   });
 
   test('submitting the create form persists a new quiz row', async ({
@@ -129,13 +142,20 @@ test.describe('Quiz Create Drawer', () => {
 
     await drawer.getByLabel('Quiz Name').fill(newName);
     await drawer.getByLabel('Subject').fill('JavaScript Fundamentals');
-    await drawer.getByLabel('Rubric Prompt').fill('Assess understanding of closures and scope.');
+    await drawer.getByLabel('Grading rubric').fill('Assess understanding of closures and scope.');
+
+    // No module yet: Create stays disabled until one is chosen.
+    await expect(drawer.getByRole('button', { name: /^Create$/ })).toBeDisabled();
+    await drawer.getByTestId('quiz-module-select').click();
+    await page
+      .locator('.ant-select-item-option')
+      .filter({ hasText: SEEDED_QUIZ_MODULE_TITLE })
+      .click();
+    await expect(drawer.getByRole('button', { name: /^Create$/ })).toBeEnabled();
 
     const [createResponse] = await Promise.all([
       page.waitForResponse(
-        res =>
-          res.url().includes(`/admin/${testOrg}/quizzes`) &&
-          res.request().method() === 'POST',
+        res => res.url().includes(`/admin/${testOrg}/quizzes`) && res.request().method() === 'POST',
         { timeout: 10000 }
       ),
       drawer.getByRole('button', { name: /^Create$/ }).click(),
@@ -149,12 +169,26 @@ test.describe('Quiz Create Drawer', () => {
 
     const persisted = await getTestPrisma().quiz.findFirst({
       where: { classroom_id: classroom.id, name: newName },
-      select: { id: true, name: true, subject: true, rubric_prompt: true, status: true },
+      select: {
+        id: true,
+        name: true,
+        subject: true,
+        rubric_prompt: true,
+        status: true,
+        assignment: { select: { module_id: true, title: true, is_published: true, weight: true } },
+      },
     });
     expect(persisted).not.toBeNull();
     expect(persisted?.subject).toBe('JavaScript Fundamentals');
     expect(persisted?.rubric_prompt).toBe('Assess understanding of closures and scope.');
     expect(persisted?.status).toBe('DRAFT');
+    // Created as an unpublished assignment of the chosen module.
+    expect(persisted?.assignment).toEqual({
+      module_id: moduleId,
+      title: newName,
+      is_published: false,
+      weight: 0,
+    });
   });
 
   test('create form defaults Weight to 0', async ({ authenticatedPage: page }) => {
@@ -162,7 +196,9 @@ test.describe('Quiz Create Drawer', () => {
     const drawer = page.locator('.ant-drawer');
     await expect(drawer).toBeVisible({ timeout: 5000 });
 
-    const weightInput = drawer.locator('input[type="number"]').first();
+    const weightInput = drawer.getByTestId('quiz-assignment-panel').getByLabel('Weight', {
+      exact: true,
+    });
     await expect(weightInput).toHaveValue('0');
   });
 
@@ -201,7 +237,9 @@ test.describe('Quiz Detail View', () => {
     await quizRow.getByText('View').click();
 
     await page.waitForURL(new RegExp(`/quizzes/${quiz.id}`), { timeout: 10000 });
-    await expect(page.getByRole('heading', { level: 1, name: `Quiz: ${PRIMARY_QUIZ_NAME}` })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { level: 1, name: `Quiz: ${PRIMARY_QUIZ_NAME}` })
+    ).toBeVisible();
   });
 
   test('quiz detail page shows statistics and the attempts table', async ({
@@ -263,7 +301,10 @@ test.describe('Quiz Edit Drawer', () => {
     authenticatedPage: page,
     testOrg,
   }) => {
-    const quiz = await seedQuiz(classroomId, PRIMARY_QUIZ_NAME, { status: 'PUBLISHED', weight: 10 });
+    const quiz = await seedQuiz(classroomId, PRIMARY_QUIZ_NAME, {
+      status: 'PUBLISHED',
+      weight: 10,
+    });
     const editedName = `${QUIZ_PREFIX} Edited`;
 
     await page.goto(`/admin/${testOrg}/quizzes`);

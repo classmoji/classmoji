@@ -6,9 +6,14 @@
  * 2. Authorization: Users can only access their own quiz attempts
  * 3. Attempt Ownership Verification:
  *    - sendMessage: Verifies user owns the attempt before allowing messages
- *    - completeQuiz: Verifies user owns the attempt before marking complete
+ *    - completeQuiz: Verifies user owns the attempt before marking complete,
+ *      and completes it only once every question has a recorded result
+ *    - While viewing as another user, "the user" is that user: only their own
+ *      attempts are reachable
  *    - restartQuiz: Ends the prior ai-agent session only when the named attempt
- *      is the caller's own attempt on the quiz being restarted
+ *      is the caller's own attempt on the quiz being restarted, and stores a
+ *      staff preview's repository only when the caller's own GitHub account
+ *      can open it
  * 4. Audit Logging: All unauthorized access attempts are logged
  * 5. Admin Access: Admins preview quizzes as themselves, creating their own attempts
  *    - This ensures data isolation between admin previews and student attempts
@@ -16,16 +21,31 @@
  * ACTIONS:
  * - startQuiz: Creates or resumes a quiz attempt for the authenticated user
  * - sendMessage: Adds a message to a quiz attempt (ownership verified)
- * - completeQuiz: Marks a quiz attempt as complete (ownership verified)
+ * - completeQuiz: Marks a finished quiz attempt as complete (ownership verified)
  * - updateMetrics: Updates duration metrics for a quiz attempt
  * - recordModalClose: Records when the quiz modal is closed
  * - recordModalOpen: Calculates gap time and adds to unfocused duration when modal reopens
  * - restartQuiz: Deletes and restarts a quiz attempt (dev mode only)
+ *
+ * RUNTIMES: a new attempt is stamped with the runtime it runs on
+ * (`runtimeFor`, ~/utils/quizRuntime.server). An attempt on the chat runtime
+ * (`trigger_chat`) runs through api.quiz-chat.session and its Trigger task:
+ * startQuiz answers its id and touches nothing, sendMessage and completeQuiz
+ * answer 409, and restartQuiz ends no ai-agent session for it. The timing
+ * actions (updateMetrics, recordModalClose, recordModalOpen) serve both;
+ * updateMetrics also takes the final time of a chat attempt completed within
+ * the last ten minutes.
  */
-import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
+import { assertClassroomAccess } from '~/utils/helpers';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
+import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { runBackgroundTask } from '~/utils/backgroundTask.server';
+import {
+  isLegacyRuntimeAttempt,
+  isTriggerChatAttempt,
+  runtimeFor,
+} from '~/utils/quizRuntime.server';
 import { getQuestionProgressFromMessage, checkForCompletion } from '@classmoji/utils';
 import type { Role } from '@prisma/client';
 import type { Route } from './+types/route';
@@ -49,6 +69,201 @@ const extractDurationMetrics = (payload: Record<string, unknown> | null) => {
   if (unfocused !== undefined) metrics.unfocusedDurationMs = unfocused;
 
   return metrics;
+};
+
+/**
+ * The ai-agent's platform budget guard (AI_MAX_BUDGET_USD) stopped the turn.
+ * aiAgentConnection carries the ERROR payload's `code` onto the thrown error.
+ */
+const isBudgetExceeded = (error: unknown) =>
+  (error as { code?: unknown } | null)?.code === 'BUDGET_EXCEEDED';
+
+/**
+ * Saved in place of a first question when the opening turn was stopped before
+ * it produced one: by the budget guard, or for one of the
+ * START_INTERRUPTED_CODES below. It does not say "restart the quiz", because a
+ * student can't: createNew refuses a new attempt while this one is incomplete
+ * (the quiz list offers to resume it instead), and resuming doesn't re-run
+ * startQuiz, since the attempt now has messages. Sending a message does work:
+ * the ai-agent recovers the session it dropped and, with questions_asked still
+ * 0, presents Question 1. That is also why nothing here invents a question or
+ * advances questions_asked.
+ */
+const START_STOPPED_MESSAGE =
+  "Your first question couldn't be prepared. Send any message to try again.";
+
+/**
+ * ai-agent codes that end a start before its first question, with nothing of
+ * the question done: the turn's deadline stopped it (TURN_DEADLINE), the
+ * ai-agent was shutting down (SHUTTING_DOWN), or the connection to it dropped
+ * (AGENT_DISCONNECTED, from aiAgentConnection). Answered like a budget stop,
+ * with START_STOPPED_MESSAGE and no question counted, never with the invented
+ * fallback question below. Saved under their own errorType, which the
+ * transcript shows as saved (quizAttempt.service.ts, toTranscriptFields).
+ */
+const START_INTERRUPTED_CODES = ['TURN_DEADLINE', 'SHUTTING_DOWN', 'AGENT_DISCONNECTED'];
+
+/** The start-interrupting code on an ai-agent error, if it carries one. */
+const startInterruptedCode = (error: unknown): string | null => {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && START_INTERRUPTED_CODES.includes(code) ? code : null;
+};
+
+/**
+ * The refusal for a classroom whose quizzes are not visible (not on Pro, or
+ * quizzes switched off). `code` is what the quiz UI branches on; `message` is
+ * shown as-is (a page left open across a plan lapse lands here).
+ */
+const QUIZZES_UNAVAILABLE_BODY = {
+  success: false,
+  code: 'QUIZZES_UNAVAILABLE',
+  message: "Quizzes aren't available in this class.",
+};
+
+/**
+ * The refusal for completing an attempt that is not finished: some question
+ * has no recorded result yet. Fixed copy; the attempt is left as it was, and
+ * the quiz page reopens the chat (QuizAttemptInterface) so the quiz goes on.
+ */
+const QUIZ_NOT_FINISHED_BODY = {
+  success: false,
+  code: 'QUIZ_NOT_FINISHED',
+  message: "This quiz isn't finished yet. Send a message to continue.",
+};
+
+/**
+ * The refusal for a message to an attempt that is already complete. Fixed
+ * copy; nothing is sent to the ai-agent.
+ */
+const QUIZ_ALREADY_COMPLETE_BODY = {
+  success: false,
+  code: 'QUIZ_COMPLETE',
+  message: 'This quiz is already complete.',
+};
+
+/**
+ * The refusal for a legacy action (sendMessage, completeQuiz) on an attempt
+ * that runs on the chat runtime: that attempt takes its messages and completes
+ * through its chat session, never through these actions. Fixed copy.
+ */
+const QUIZ_RUNTIME_MISMATCH_BODY = {
+  success: false,
+  code: 'QUIZ_RUNTIME_MISMATCH',
+  message: 'Reload the page to continue this quiz.',
+};
+
+const runtimeMismatchResponse = () =>
+  new Response(JSON.stringify(QUIZ_RUNTIME_MISMATCH_BODY), {
+    status: 409,
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+/** The services' refusal to complete an unfinished attempt (by its code). */
+const isAttemptNotFinished = (error: unknown) =>
+  (error as { code?: unknown } | null)?.code === 'QUIZ_ATTEMPT_INCOMPLETE';
+
+/**
+ * Fixed copy for failures. Whatever went wrong is logged here and never sent to
+ * the browser or saved into the transcript.
+ */
+const GENERIC_FAILURE_MESSAGE = 'Something went wrong. Please try again.';
+const REPLY_FAILED_MESSAGE = "That reply couldn't be finished. Please send your message again.";
+const RESTART_FAILED_MESSAGE = "Couldn't start a new attempt. Please try again.";
+
+/**
+ * A staff preview's repository refused (see previewRepoAccess.server): fixed
+ * copy by outcome, shown as-is by the preview page (it reads `message`). No
+ * usable GitHub token splits in two: an account with no GitHub linked (signed
+ * up with email and password) connects one; a linked account whose token
+ * GitHub no longer takes signs in with GitHub again.
+ */
+const PREVIEW_REPO_REFUSALS = {
+  unreadable: {
+    status: 403,
+    message: "Your GitHub account can't open that repository. Pick one you have access to.",
+  },
+  connect: {
+    status: 403,
+    message: 'Connect your GitHub account to preview this quiz with a repository.',
+  },
+  sign_in: {
+    status: 403,
+    message: 'Sign in with GitHub again to preview this quiz with a repository.',
+  },
+  unavailable: {
+    status: 503,
+    message: "Couldn't check that repository on GitHub. Please try again.",
+  },
+} as const;
+
+const previewRepoRefusal = (outcome: keyof typeof PREVIEW_REPO_REFUSALS) => {
+  const { status, message } = PREVIEW_REPO_REFUSALS[outcome];
+  return new Response(JSON.stringify({ success: false, code: 'PREVIEW_REPO_REFUSED', message }), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+};
+
+/**
+ * ai-agent codes whose text is fixed copy meant for the student (see
+ * aiAgentConnection's USER_FACING_ERROR_CODES), so a failed reply may show it.
+ * Every other code, API_ERROR included, gets REPLY_FAILED_MESSAGE.
+ *
+ * This decides what an AGENT_FAILURE row is SAVED with. What the transcript
+ * SHOWS is decided by the list of the same name in @classmoji/services
+ * (quizAttempt.service.ts, toTranscriptFields), which rewrites any
+ * AGENT_FAILURE row whose code is not on it to the fixed line. That list is the
+ * one that counts, and this one must match it. A refused source-material
+ * recovery is therefore not saved as an AGENT_FAILURE at all (see sendMessage).
+ */
+const STUDENT_FACING_AGENT_CODES = ['BUDGET_EXCEEDED', 'turn_in_progress'];
+
+/**
+ * A quiz that links source material (pages and decks) is built from it, so a
+ * student who can see none of it has nothing to be quizzed on: every linked
+ * document is still a draft, or none has been indexed yet. Fixed copy, shown
+ * as-is by the quiz list and the attempt modal (they read `message`).
+ */
+const SOURCE_MATERIAL_UNAVAILABLE_MESSAGE =
+  "This quiz's source material isn't available yet. Ask your instructor.";
+
+/**
+ * The ai-agent's own refusal for the same state, raised when its load at
+ * attempt start (or on session recovery) finds no document for this user — a
+ * page unpublished between the pre-check and the init, say. aiAgentConnection
+ * carries the ERROR payload's `code` onto the thrown error.
+ */
+const isSourceMaterialUnavailable = (error: unknown) =>
+  (error as { code?: unknown } | null)?.code === 'source_material_unavailable';
+
+/** The 409 a start or restart answers when nothing linked is available. */
+const sourceMaterialUnavailableResponse = () =>
+  new Response(
+    JSON.stringify({
+      success: false,
+      code: 'SOURCE_MATERIAL_UNAVAILABLE',
+      message: SOURCE_MATERIAL_UNAVAILABLE_MESSAGE,
+      error: SOURCE_MATERIAL_UNAVAILABLE_MESSAGE,
+    }),
+    { status: 409, headers: { 'Content-Type': 'application/json' } }
+  );
+
+/**
+ * How long a start on a quiz with linked source material waits for the
+ * ai-agent's verdict on it (see startQuiz). The verdict normally lands well
+ * inside this — the welcome is saved right after the material loads — so the
+ * bound only matters when the ai-agent is slow or ignores a duplicate init;
+ * the start then answers as it always has.
+ */
+const SOURCE_MATERIAL_VERDICT_MS = 5000;
+
+/** The verdict, or `false` (not refused) once SOURCE_MATERIAL_VERDICT_MS passes. */
+const verdictWithin = (verdict: Promise<boolean>) => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const elapsed = new Promise<boolean>(resolve => {
+    timer = setTimeout(() => resolve(false), SOURCE_MATERIAL_VERDICT_MS);
+  });
+  return Promise.race([verdict, elapsed]).finally(() => clearTimeout(timer));
 };
 
 export async function action({ request }: Route.ActionArgs) {
@@ -285,8 +500,10 @@ export async function action({ request }: Route.ActionArgs) {
       attemptedAction: data._action,
       metadata: context.metadata,
     });
-    assertClassroomMutationAllowed({ status: access.classroom.status, role: access.membership!.role });
-    await assertProTier(access.classroom.slug);
+    assertClassroomMutationAllowed({
+      status: access.classroom.status,
+      role: access.membership!.role,
+    });
 
     // Check AI agent availability AFTER auth (preserves audit logging)
     if (!isAIAgentConfigured()) {
@@ -296,14 +513,108 @@ export async function action({ request }: Route.ActionArgs) {
       });
     }
 
+    // The same visibility rule every quiz surface uses (Pro, quizzes not
+    // switched off). Returned rather than thrown so the body is the fixed
+    // refusal the quiz UI knows how to show. A failed lookup throws, and the
+    // catch below answers it as any other failure (a 500 with fixed copy), so
+    // it neither serves the quiz nor tells the student quizzes are gone.
+    if (!(await quizzesVisibleOrThrow(context.classroomId))) {
+      return new Response(JSON.stringify(QUIZZES_UNAVAILABLE_BODY), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
     const { userId } = access;
 
-    // Check if admin is impersonating a student (for "View As" feature)
-    // Impersonating admins can interact with quiz attempts on behalf of students
+    /**
+     * The pre-attempt source-material check (quiz source material §4.3).
+     *
+     * A quiz with NO linked documents is ungrounded and behaves exactly as it
+     * always has: no extra query. One with links answers 409 when none of them
+     * would reach this user's prompt, BEFORE an attempt exists, so a refused
+     * start consumes no attempt. The ai-agent repeats the check at init.
+     */
+    const sourceMaterialRefusal = async (
+      quiz: { id: string; classroom_id: string; source_material?: unknown[] } | undefined
+    ): Promise<Response | null> => {
+      if (!quiz?.source_material?.length) return null;
+      const { configured, startable } = await ClassmojiService.quizSourceMaterial.countStartable({
+        quizId: quiz.id,
+        classroomId: quiz.classroom_id,
+        userId,
+      });
+      return configured > 0 && startable === 0 ? sourceMaterialUnavailableResponse() : null;
+    };
+
+    /**
+     * Removes an attempt nothing has happened on (no message saved, no
+     * question asked) once its start is refused for source material: left in
+     * place it would count toward max_attempts and block a new attempt, though
+     * the student never got a question. This is the race between the check
+     * above and a start (a document unpublished in between). An attempt with
+     * history is kept, and `false` says so. One already gone counts as removed.
+     */
+    const discardUnstartedAttempt = async (attemptId: string): Promise<boolean> => {
+      const current = await ClassmojiService.quizAttempt
+        .findWithMessages(attemptId)
+        .catch((error: unknown) => {
+          if (error instanceof QuizAttemptNotFoundError) return null;
+          throw error;
+        });
+      if (!current) return true;
+      if (current.messages.length > 0 || (current.questionsAsked ?? 0) > 0) return false;
+      try {
+        await ClassmojiService.quizAttempt.deleteAttempt(attemptId);
+      } catch (error) {
+        // A second refusal of the same start can remove it first (P2025).
+        if ((error as { code?: unknown } | null)?.code !== 'P2025') throw error;
+      }
+      return true;
+    };
+
+    /**
+     * The MCP read token this ai-agent call carries (quiz source material,
+     * Stage 2), minted for the caller the way Ask Moji mints it: every call,
+     * reusing a live token with time left. The quiz uses it to read linked
+     * documents in full and, when the quiz allows it, to search the course.
+     *
+     * A mint failure does NOT fail the turn: the quiz runs without that
+     * verification. NEVER LOG THE TOKEN; it goes only into the HMAC-signed
+     * payload, never to the browser and never into storage.
+     */
+    const mintQuizMcpToken = async (): Promise<
+      { accessToken: string; expiresAt: string } | undefined
+    > => {
+      try {
+        const { mintMcpAccessToken } = await import('@classmoji/auth/mcp-token');
+        const { accessToken, expiresAt } = await mintMcpAccessToken(userId);
+        return { accessToken, expiresAt: expiresAt.toISOString() };
+      } catch (error) {
+        console.error(
+          '[quiz] MCP token mint failed; continuing without course verification:',
+          error instanceof Error ? error.message : 'unknown error'
+        );
+        return undefined;
+      }
+    };
+
+    // The caller's session, for the GitHub user token a code-aware start
+    // prefers. While an admin views as a student ("View As"), the session and
+    // `userId` above are that student's, so the ownership checks below admit
+    // the student's own attempts and nobody else's.
     const { getAuthSession } = await import('@classmoji/auth/server');
     const authData = await getAuthSession(request);
-    const isImpersonating = !!(authData as { session?: { session?: { impersonatedBy?: string } } })
-      ?.session?.session?.impersonatedBy;
+
+    // Recorded on a refused attempt action: the caller's own role here, and
+    // the admin behind a "View As" session when there is one.
+    const viewingAsBy = (
+      authData as { session?: { session?: { impersonatedBy?: unknown } } } | null
+    )?.session?.session?.impersonatedBy;
+    const refusalContext = {
+      caller_role: access.membership!.role,
+      ...(typeof viewingAsBy === 'string' && viewingAsBy ? { impersonated_by: viewingAsBy } : {}),
+    };
 
     switch (data._action) {
       case 'startQuiz': {
@@ -311,13 +622,15 @@ export async function action({ request }: Route.ActionArgs) {
           // If attemptId is provided, use it (for resuming specific attempts)
           // Otherwise create a new attempt respecting max_attempts
           let attempt;
+          // Whether the source-material pre-check has already run for this call.
+          let materialChecked = false;
 
           if (data.attemptId) {
             // Resume specific attempt (e.g., admin preview with pre-created attempt).
             // Bound to `quizId`, because that is the quiz every gate above was
             // resolved from: the classroom membership, the mutation check and
-            // the pro-tier check all answer for THAT quiz's classroom, so an
-            // attempt on any other one would run under gates that never
+            // the quiz-visibility check all answer for THAT quiz's classroom, so
+            // an attempt on any other one would run under gates that never
             // examined it. `findWithMessages` throws when there is no such
             // attempt, so both cases land on the same 404 below — and only
             // that error does; anything else the query raises still surfaces.
@@ -331,6 +644,12 @@ export async function action({ request }: Route.ActionArgs) {
               !attemptData?.attempt ||
               attemptData.attempt.quiz_id.toString() !== data.quizId.toString()
             ) {
+              // A refused start removes its attempt (discardUnstartedAttempt),
+              // so a page still open on it learns why, not "not found". The
+              // check is this caller's, on the quiz already gated above; it
+              // says nothing about the attempt id.
+              const refusal = await sourceMaterialRefusal(context.quiz);
+              if (refusal) return refusal;
               return new Response(JSON.stringify({ error: 'Attempt not found' }), {
                 status: 404,
                 headers: { 'Content-Type': 'application/json' },
@@ -347,12 +666,31 @@ export async function action({ request }: Route.ActionArgs) {
 
             attempt = attemptData.attempt;
           } else {
-            // Create new attempt with max_attempts validation
-            const result = await ClassmojiService.quizAttempt.createNew(
-              data.quizId,
-              userId,
-              access.membership!
-            );
+            // Nothing linked is available to this user: refuse BEFORE the
+            // attempt row exists, so the refusal costs no attempt.
+            const refusal = await sourceMaterialRefusal(context.quiz);
+            if (refusal) return refusal;
+            materialChecked = true;
+
+            // Create new attempt with max_attempts validation, stamped with
+            // the runtime it runs on (quizRuntime.server). An ai-agent attempt
+            // is created exactly as it always was. A student with no
+            // repository for a code-aware quiz still gets an attempt: the
+            // chat runtime runs it on the concepts, as the ai-agent did.
+            const agentRuntime = runtimeFor(context.quiz);
+            const result =
+              agentRuntime === 'ai_agent'
+                ? await ClassmojiService.quizAttempt.createNew(
+                    data.quizId,
+                    userId,
+                    access.membership!
+                  )
+                : await ClassmojiService.quizAttempt.createNew(
+                    data.quizId,
+                    userId,
+                    access.membership!,
+                    { agentRuntime }
+                  );
 
             if (!result.success) {
               return new Response(JSON.stringify(result), {
@@ -368,6 +706,16 @@ export async function action({ request }: Route.ActionArgs) {
             attempt = attemptData.attempt;
           }
 
+          // An attempt on the chat runtime starts through its own session
+          // (api.quiz-chat.session) when its drawer opens; nothing here
+          // touches it. Its id goes back as for any started attempt, so the
+          // quiz list opens it the same way.
+          if (!isLegacyRuntimeAttempt(attempt)) {
+            return new Response(JSON.stringify({ attemptId: attempt.id }), {
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
+
           // Skip if already started - check AIConversation messages (not attempt.messages)
           // This prevents duplicate initialization when the browser makes multiple requests
           const messagesCheck = await ClassmojiService.quizAttempt.findWithMessages(attempt.id);
@@ -377,11 +725,67 @@ export async function action({ request }: Route.ActionArgs) {
             });
           }
 
+          // A fresh attempt made by restartQuiz (which ran the same check) is
+          // about to start: check again, since the material can have changed
+          // in between. An attempt already under way is never stopped here.
+          if (!materialChecked) {
+            const refusal = await sourceMaterialRefusal(context.quiz);
+            if (refusal) {
+              await discardUnstartedAttempt(attempt.id);
+              return refusal;
+            }
+          }
+
+          /**
+           * The ai-agent's verdict on this start: `true` once a refusal for
+           * source material has removed the attempt, `false` once it is plainly
+           * going ahead (the welcome it saves after loading the material, or
+           * the init's end, whatever the outcome). Only a quiz that links
+           * material can be refused, so only its start waits for this (bounded
+           * by SOURCE_MATERIAL_VERDICT_MS) and answers a refusal with the same
+           * 409 as the check above. The browser is then never sent to an
+           * attempt that is about to disappear, and never polls one.
+           */
+          const awaitsVerdict = Boolean(context.quiz?.source_material?.length);
+          let settleVerdict: (removed: boolean) => void = () => {};
+          const verdict = new Promise<boolean>(resolve => {
+            settleVerdict = resolve;
+          });
+          const onWelcomeMessage = () => settleVerdict(false);
+
+          /**
+           * The init's refusal for source material. A brand-new attempt is
+           * removed (discardUnstartedAttempt) and the start answers 409; one
+           * with history keeps its transcript and gets one fixed line in place
+           * of a question (no generic fallback, no count bump).
+           */
+          const refuseStart = async () => {
+            if (await discardUnstartedAttempt(attempt.id)) {
+              settleVerdict(true);
+              return;
+            }
+            await ClassmojiService.aiConversation.addMessage(
+              attempt.id,
+              'ASSISTANT',
+              SOURCE_MATERIAL_UNAVAILABLE_MESSAGE,
+              false,
+              { errorType: 'SOURCE_MATERIAL_UNAVAILABLE' }
+            );
+          };
+
+          /** 409 when the verdict removed the attempt, otherwise the attempt id. */
+          const startResponse = async () =>
+            awaitsVerdict && (await verdictWithin(verdict))
+              ? sourceMaterialUnavailableResponse()
+              : new Response(JSON.stringify({ attemptId: attempt.id }), {
+                  headers: { 'Content-Type': 'application/json' },
+                });
+
           // Check if this is a code-aware quiz (linked to a repository with code context enabled)
           if (attempt.quiz.repository_id && attempt.quiz.include_code_context) {
-            // Generate the first question in the background so the SSE connection isn't blocked.
-            setTimeout(() => {
-              runBackgroundTask('startQuiz:codeAware', async () => {
+            // Generate the first question in the background; the response
+            // waits for no more than the verdict (see startResponse).
+            runBackgroundTask('startQuiz:codeAware', async () => {
               try {
                 // Check if user is an instructor (OWNER or ASSISTANT)
                 const isInstructor = ['OWNER', 'ASSISTANT', 'TEACHER'].includes(
@@ -390,16 +794,12 @@ export async function action({ request }: Route.ActionArgs) {
 
                 let repoName;
 
-                if (isInstructor && data.repoName) {
-                  // Instructor provided a repo to test with - save it for future calls
-                  repoName = data.repoName;
-                  // Store in agent_config so subsequent calls can use it
-                  await ClassmojiService.quizAttempt.updateAgentConfig(attempt.id, {
-                    instructorRepoName: repoName,
-                  });
-                } else if (isInstructor) {
-                  // Re-fetch the attempt to get the latest agent_config
-                  // (may have been updated by a concurrent call that saved instructorRepoName)
+                if (isInstructor) {
+                  // A preview reads only the repository restartQuiz stored
+                  // for it, once the caller's own GitHub account could open
+                  // it (previewRepoAccess.server). A name sent with the start
+                  // itself is never taken. Re-fetched for the latest
+                  // agent_config.
                   const freshAttempt = await ClassmojiService.quizAttempt.findById(attempt.id);
                   const agentConfig = (freshAttempt as Record<string, unknown>)?.agent_config as
                     | Record<string, unknown>
@@ -430,6 +830,7 @@ export async function action({ request }: Route.ActionArgs) {
 
                 // Load classroom settings for LLM configuration
                 const classroomSettings = attempt.quiz.classroom?.settings;
+                const mcpToken = await mintQuizMcpToken();
 
                 // Initialize via WebSocket to ai-agent service
                 // ai-agent saves all messages (welcome, exploration steps, opening) to DB
@@ -444,9 +845,19 @@ export async function action({ request }: Route.ActionArgs) {
                     difficultyLevel: attempt.quiz.difficulty_level,
                     anthropicApiKey: classroomSettings?.anthropic_api_key,
                     model: classroomSettings?.code_aware_model,
+                    // Repo-exploration sub-agent. Runs on the platform key in
+                    // Trigger.dev regardless of anthropicApiKey.
+                    explorationModel: classroomSettings?.exploration_model,
+                    // Reasoning effort per phase; null = the ai-agent's
+                    // platform default. The ai-agent drops it for a model that
+                    // takes no effort.
+                    questionEffort: classroomSettings?.question_effort,
+                    gradingEffort: classroomSettings?.grading_effort,
+                    explorationEffort: classroomSettings?.exploration_effort,
                   },
                   // Code-aware options
-                  { orgLogin: gitOrganization.login, repoName, accessToken }
+                  { orgLogin: gitOrganization.login, repoName, accessToken },
+                  { mcpToken, onWelcomeMessage }
                 );
 
                 // ai-agent already saved the opening message to AIConversationMessage
@@ -464,6 +875,38 @@ export async function action({ request }: Route.ActionArgs) {
               } catch (error: unknown) {
                 console.error('[startQuiz] Quiz-agent initialization failed:', error);
 
+                // The ai-agent found nothing to build the quiz from.
+                if (isSourceMaterialUnavailable(error)) {
+                  await refuseStart();
+                  return;
+                }
+
+                // Stopped by the budget guard: say so, and ask no question.
+                if (isBudgetExceeded(error)) {
+                  await ClassmojiService.aiConversation.addMessage(
+                    attempt.id,
+                    'ASSISTANT',
+                    START_STOPPED_MESSAGE,
+                    false,
+                    { errorType: 'BUDGET_EXCEEDED' }
+                  );
+                  return;
+                }
+
+                // Stopped before its first question for another reason:
+                // the same line, and no question.
+                const interrupted = startInterruptedCode(error);
+                if (interrupted) {
+                  await ClassmojiService.aiConversation.addMessage(
+                    attempt.id,
+                    'ASSISTANT',
+                    START_STOPPED_MESSAGE,
+                    false,
+                    { errorType: 'START_INTERRUPTED', code: interrupted }
+                  );
+                  return;
+                }
+
                 // Fallback to standard LLM
                 const fallbackMessage =
                   error instanceof Error && error.message?.includes('No repository found')
@@ -477,40 +920,45 @@ export async function action({ request }: Route.ActionArgs) {
                   true
                 );
                 await ClassmojiService.quizAttempt.incrementQuestionsAsked(attempt.id);
+              } finally {
+                settleVerdict(false);
               }
-              });
-            }, 100); // Small delay to allow response to return first
-
-            // Return attemptId immediately — background task saves messages to DB,
-            // frontend picks them up via polling (revalidation)
-            return new Response(JSON.stringify({ attemptId: attempt.id }), {
-              headers: { 'Content-Type': 'application/json' },
             });
+
+            // The background task saves messages to the DB; the frontend picks
+            // them up via polling (revalidation).
+            return startResponse();
           } else {
-            // Standard quiz without code context - use ai-agent service
-            // Return attemptId immediately — frontend polls DB for new messages
-            const responsePromise = new Response(JSON.stringify({ attemptId: attempt.id }), {
-              headers: { 'Content-Type': 'application/json' },
-            });
-
-            // Generate the first question in the background so the SSE connection isn't blocked.
-            setTimeout(() => {
-              runBackgroundTask('startQuiz:standard', async () => {
+            // Standard quiz without code context - use ai-agent service.
+            // Generate the first question in the background; the response
+            // waits for no more than the verdict (see startResponse), and the
+            // frontend polls the DB for new messages.
+            runBackgroundTask('startQuiz:standard', async () => {
               try {
                 // Load classroom settings for LLM configuration
                 const classroomSettings = attempt.quiz.classroom?.settings;
 
+                const mcpToken = await mintQuizMcpToken();
+
                 // Initialize via WebSocket to ai-agent service (no code-aware options)
                 // ai-agent saves all messages to DB, frontend polls via revalidation
-                const result = await initializeQuizViaAgent(attempt.id, {
-                  systemPrompt: attempt.quiz.system_prompt,
-                  rubricPrompt: attempt.quiz.rubric_prompt,
-                  questionCount: attempt.quiz.question_count || 5,
-                  subject: attempt.quiz.subject,
-                  difficultyLevel: attempt.quiz.difficulty_level,
-                  anthropicApiKey: classroomSettings?.anthropic_api_key,
-                  model: classroomSettings?.llm_model,
-                });
+                const result = await initializeQuizViaAgent(
+                  attempt.id,
+                  {
+                    systemPrompt: attempt.quiz.system_prompt,
+                    rubricPrompt: attempt.quiz.rubric_prompt,
+                    questionCount: attempt.quiz.question_count || 5,
+                    subject: attempt.quiz.subject,
+                    difficultyLevel: attempt.quiz.difficulty_level,
+                    anthropicApiKey: classroomSettings?.anthropic_api_key,
+                    model: classroomSettings?.llm_model,
+                    // Reasoning effort per phase; null = the ai-agent's default.
+                    questionEffort: classroomSettings?.question_effort,
+                    gradingEffort: classroomSettings?.grading_effort,
+                  },
+                  null,
+                  { mcpToken, onWelcomeMessage }
+                );
 
                 // ai-agent already saved the opening message to AIConversationMessage
                 // Check first question was received
@@ -525,6 +973,39 @@ export async function action({ request }: Route.ActionArgs) {
                 // Frontend picks up new messages via DB polling (revalidation)
               } catch (llmError) {
                 console.error('[startQuiz] Quiz-agent error:', llmError);
+
+                // The ai-agent found nothing to build the quiz from.
+                if (isSourceMaterialUnavailable(llmError)) {
+                  await refuseStart();
+                  return;
+                }
+
+                // Stopped by the budget guard: say so, and ask no question.
+                if (isBudgetExceeded(llmError)) {
+                  await ClassmojiService.aiConversation.addMessage(
+                    attempt.id,
+                    'ASSISTANT',
+                    START_STOPPED_MESSAGE,
+                    false,
+                    { errorType: 'BUDGET_EXCEEDED' }
+                  );
+                  return;
+                }
+
+                // Stopped before its first question for another reason:
+                // the same line, and no question.
+                const interrupted = startInterruptedCode(llmError);
+                if (interrupted) {
+                  await ClassmojiService.aiConversation.addMessage(
+                    attempt.id,
+                    'ASSISTANT',
+                    START_STOPPED_MESSAGE,
+                    false,
+                    { errorType: 'START_INTERRUPTED', code: interrupted }
+                  );
+                  return;
+                }
+
                 const fallbackQuestion = `Let's begin with your first question. Can you tell me about your understanding of the key concepts we'll be covering today?`;
 
                 await ClassmojiService.aiConversation.addMessage(
@@ -534,11 +1015,12 @@ export async function action({ request }: Route.ActionArgs) {
                   true
                 );
                 await ClassmojiService.quizAttempt.incrementQuestionsAsked(attempt.id);
+              } finally {
+                settleVerdict(false);
               }
-              });
-            }, 100); // Small delay to allow response to return first
+            });
 
-            return responsePromise;
+            return startResponse();
           }
         } catch (error: unknown) {
           console.error('Error starting quiz:', error);
@@ -547,6 +1029,11 @@ export async function action({ request }: Route.ActionArgs) {
       }
 
       case 'sendMessage': {
+        // Set once the viewer is known to own the attempt; the catch below only
+        // writes to a transcript the viewer may write to.
+        let ownsAttempt = false;
+        // Set once the ai-agent has replied; its reply is already saved.
+        let agentReplied = false;
         try {
           // SECURITY: Verify the user owns this attempt before allowing message
           const attemptData = context.attemptData;
@@ -556,8 +1043,7 @@ export async function action({ request }: Route.ActionArgs) {
           }
 
           // SECURITY CHECK: Verify the authenticated user owns this quiz attempt
-          // Allow if admin is impersonating (View As feature)
-          if (attemptData!.attempt.user_id.toString() !== userId.toString() && !isImpersonating) {
+          if (attemptData!.attempt.user_id.toString() !== userId.toString()) {
             console.error(
               `[sendMessage] Security violation: User ${userId} tried to send message to attempt ${data.attemptId} owned by ${attemptData!.attempt.user_id}`
             );
@@ -566,7 +1052,7 @@ export async function action({ request }: Route.ActionArgs) {
             await ClassmojiService.audit.create({
               classroom_id: attemptData!.attempt.quiz.classroom_id,
               user_id: userId.toString(),
-              role: 'STUDENT',
+              role: access.membership!.role,
               resource_id: data.attemptId,
               resource_type: 'QUIZ_ATTEMPT_MESSAGE_UNAUTHORIZED',
               action: 'ACCESS_DENIED',
@@ -575,11 +1061,28 @@ export async function action({ request }: Route.ActionArgs) {
                 attempted_attempt_id: data.attemptId,
                 owner_user_id: attemptData!.attempt.user_id.toString(),
                 attempted_action: 'sendMessage',
+                ...refusalContext,
               },
             });
 
             return new Response(JSON.stringify({ error: 'Forbidden' }), {
               status: 403,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
+
+          ownsAttempt = true;
+
+          // An attempt on the chat runtime takes its messages through its
+          // chat session only.
+          if (!isLegacyRuntimeAttempt(attemptData!.attempt)) {
+            return runtimeMismatchResponse();
+          }
+
+          // A complete attempt takes no more messages.
+          if (attemptData!.attempt.completed_at) {
+            return new Response(JSON.stringify(QUIZ_ALREADY_COMPLETE_BODY), {
+              status: 409,
               headers: { 'Content-Type': 'application/json' },
             });
           }
@@ -593,43 +1096,56 @@ export async function action({ request }: Route.ActionArgs) {
             // Send message via WebSocket to ai-agent service
             // Both standard and code-aware quizzes use the same unified path
             // ai-agent saves all messages (user, exploration steps, response) to DB
-            const result = await sendMessageToAgent(data.attemptId, data.content);
+            const mcpToken = await mintQuizMcpToken();
+            const result = await sendMessageToAgent(data.attemptId, data.content, { mcpToken });
+            agentReplied = true;
 
             aiResponse = result.content;
           } catch (agentError) {
             console.error('[sendMessage] Quiz-agent failed:', agentError);
 
-            let friendlyError;
-
-            if (agentError instanceof Error && agentError.message?.includes('timeout')) {
-              // Timeout waiting for ai-agent (likely AI API slow/overloaded)
-              friendlyError =
-                `The AI API appears to be slow or overloaded right now. ` +
-                `This is on their end, not ours! Please wait a moment and try again—your quiz progress is saved.`;
-            } else {
-              // ai-agent returned an error message - use it directly if available
-              friendlyError =
-                (agentError instanceof Error ? agentError.message : null) ||
-                `I'm having trouble right now. Please try again—your quiz progress is saved.`;
-            }
-
-            aiResponse = friendlyError;
+            // Saved into the transcript, which the student and staff both
+            // read, so it is fixed copy: the ai-agent's own text only for the
+            // codes it writes for students, one line for anything else (a
+            // timeout included). The real error is in the log above.
+            const agentCode = (agentError as { code?: unknown } | null)?.code;
+            const code = typeof agentCode === 'string' ? agentCode : null;
+            // A recovery refused for source material is saved exactly as a
+            // refused start is: under its own errorType, which the transcript
+            // shows as saved. As an AGENT_FAILURE its code would have to be on
+            // the services' STUDENT_FACING_AGENT_CODES, or the student reads
+            // "That reply couldn't be finished" instead of why.
+            const sourceMaterialRefused = isSourceMaterialUnavailable(agentError);
+            aiResponse = sourceMaterialRefused
+              ? SOURCE_MATERIAL_UNAVAILABLE_MESSAGE
+              : code && STUDENT_FACING_AGENT_CODES.includes(code) && agentError instanceof Error
+                ? agentError.message || REPLY_FAILED_MESSAGE
+                : REPLY_FAILED_MESSAGE;
 
             await ClassmojiService.aiConversation.addMessage(
               data.attemptId,
               'ASSISTANT',
               aiResponse,
               false,
-              {
-                errorType: 'AGENT_FAILURE',
-                errorMessage: agentError instanceof Error ? agentError.message : String(agentError),
-              }
+              sourceMaterialRefused
+                ? { errorType: 'SOURCE_MATERIAL_UNAVAILABLE' }
+                : { errorType: 'AGENT_FAILURE', code }
             );
 
-            return new Response(JSON.stringify({ success: false, error: 'Agent failure' }), {
-              status: 200,
-              headers: { 'Content-Type': 'application/json' },
-            });
+            // `awaitingReply`: this message was refused because the attempt's
+            // previous turn is still running, and that turn's reply is still
+            // coming. The chat keeps waiting for it instead of unlocking.
+            return new Response(
+              JSON.stringify({
+                success: false,
+                error: 'Agent failure',
+                ...(code === 'turn_in_progress' ? { awaitingReply: true } : {}),
+              }),
+              {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              }
+            );
           }
 
           // Ensure we have a response
@@ -638,11 +1154,10 @@ export async function action({ request }: Route.ActionArgs) {
               'I apologize, but I encountered an issue generating a response. Please try again.';
           }
 
-          const questionProgress = getQuestionProgressFromMessage(aiResponse);
-          const currentQuestionsAsked = attemptData!.questionsAsked || 0;
-          const hasQuestion = Boolean(questionProgress);
-          const isNewQuestion =
-            hasQuestion && questionProgress!.questionNumber > currentQuestionsAsked;
+          // Whether the reply shows a question — for the buttons below only.
+          // questions_asked is the ai-agent's to keep, from the questions
+          // present_question accepted; nothing here reads it from the reply.
+          const hasQuestion = Boolean(getQuestionProgressFromMessage(aiResponse));
 
           const completionData = checkForCompletion(aiResponse);
 
@@ -651,44 +1166,54 @@ export async function action({ request }: Route.ActionArgs) {
             aiResponse = `${aiResponse.trim()}\n\n[BUTTON:TRY_AGAIN] [BUTTON:NEXT]`;
           }
 
-          // Note: ai-agent already saved assistant response and questions_asked via conversationStorage
-          // ai-agent sets absolute value, so no increment needed here
-
-          const updatedQuestionsAsked = isNewQuestion
-            ? questionProgress!.questionNumber
-            : currentQuestionsAsked;
-
-          // Check for quiz completion
-          const newQuestionsAsked = Math.max(
-            updatedQuestionsAsked,
-            questionProgress?.questionNumber || 0
-          );
-          if (newQuestionsAsked >= (attemptData!.questionCount || 5)) {
-            const completion = completionData || checkForCompletion(aiResponse);
-            if (completion) {
-              await ClassmojiService.quizAttempt.completeAttempt(data.attemptId);
-            }
+          // A reply carrying the evaluation completes the attempt. The
+          // services leave it open while a question has no recorded result.
+          if (completionData) {
+            await ClassmojiService.quizAttempt
+              .completeAttempt(data.attemptId)
+              .catch((error: unknown) => {
+                if (!isAttemptNotFinished(error)) throw error;
+              });
           }
 
           return new Response(JSON.stringify({ success: true }), {
             headers: { 'Content-Type': 'application/json' },
           });
         } catch (error: unknown) {
+          if (error instanceof Response) return error;
           console.error('[sendMessage] Error:', error);
 
-          const friendlyError = `I'm having trouble closing out your quiz right now. Please wait a moment and tap "Next" again, or refresh the page if it persists—your progress is already saved.`;
+          if (!ownsAttempt) {
+            return new Response(
+              JSON.stringify({ success: false, error: GENERIC_FAILURE_MESSAGE }),
+              {
+                status: 500,
+                headers: { 'Content-Type': 'application/json' },
+              }
+            );
+          }
 
+          // The reply is saved and the student sees it; the quiz page completes
+          // the attempt itself when the reply ends it. Nothing to resend.
+          if (agentReplied) {
+            return new Response(JSON.stringify({ success: true }), {
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
+
+          // Saved into the transcript like an ai-agent failure, so the same
+          // fixed line; the real error is in the log above.
           await ClassmojiService.aiConversation.addMessage(
             data.attemptId,
             'ASSISTANT',
-            friendlyError,
+            REPLY_FAILED_MESSAGE,
             false,
             {
               errorType: 'GENERAL_FAILURE',
             }
           );
 
-          return new Response(JSON.stringify({ success: false, error: friendlyError }), {
+          return new Response(JSON.stringify({ success: false, error: REPLY_FAILED_MESSAGE }), {
             status: 200,
             headers: { 'Content-Type': 'application/json' },
           });
@@ -708,8 +1233,7 @@ export async function action({ request }: Route.ActionArgs) {
           }
 
           // SECURITY CHECK: Verify the authenticated user owns this quiz attempt
-          // Allow if admin is impersonating (View As feature)
-          if (attempt.user_id.toString() !== userId.toString() && !isImpersonating) {
+          if (attempt.user_id.toString() !== userId.toString()) {
             console.error(
               `[completeQuiz] Security violation: User ${userId} tried to complete attempt ${data.attemptId} owned by ${attempt.user_id}`
             );
@@ -718,7 +1242,7 @@ export async function action({ request }: Route.ActionArgs) {
             await ClassmojiService.audit.create({
               classroom_id: attempt.quiz.classroom_id,
               user_id: userId.toString(),
-              role: 'STUDENT',
+              role: access.membership!.role,
               resource_id: data.attemptId,
               resource_type: 'QUIZ_ATTEMPT_COMPLETE_UNAUTHORIZED',
               action: 'ACCESS_DENIED',
@@ -727,6 +1251,7 @@ export async function action({ request }: Route.ActionArgs) {
                 attempted_attempt_id: data.attemptId,
                 owner_user_id: attempt.user_id.toString(),
                 attempted_action: 'completeQuiz',
+                ...refusalContext,
               },
             });
 
@@ -736,10 +1261,26 @@ export async function action({ request }: Route.ActionArgs) {
             });
           }
 
+          // An attempt on the chat runtime is completed by its own grading
+          // tools, never by this action.
+          if (!isLegacyRuntimeAttempt(attempt)) {
+            return runtimeMismatchResponse();
+          }
+
           const metrics = extractDurationMetrics(data);
 
-          // Complete the attempt after ownership verification
-          await ClassmojiService.quizAttempt.completeAttempt(data.attemptId, metrics);
+          // Complete the attempt after ownership verification. The services
+          // refuse one that is not finished (a question without a recorded
+          // result) and change nothing; that answers 409 with fixed copy.
+          try {
+            await ClassmojiService.quizAttempt.completeAttempt(data.attemptId, metrics);
+          } catch (error: unknown) {
+            if (!isAttemptNotFinished(error)) throw error;
+            return new Response(JSON.stringify(QUIZ_NOT_FINISHED_BODY), {
+              status: 409,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
 
           // Cleanup via ai-agent service
           await endQuizSession(data.attemptId);
@@ -771,15 +1312,19 @@ export async function action({ request }: Route.ActionArgs) {
             });
           }
 
-          if (attempt.user_id.toString() !== userId.toString() && !isImpersonating) {
+          if (attempt.user_id.toString() !== userId.toString()) {
             return new Response(JSON.stringify({ error: 'Forbidden' }), {
               status: 403,
               headers: { 'Content-Type': 'application/json' },
             });
           }
 
-          // CRITICAL: Reject updates for already-completed attempts
-          if (attempt.completed_at) {
+          // CRITICAL: Reject updates for already-completed attempts. An attempt
+          // on the chat runtime is completed by its task after the student's
+          // last message, so its drawer sends the time since then once it sees
+          // the completion; the service takes it only within ten minutes of
+          // the completion, and only ever raises its two durations.
+          if (attempt.completed_at && !isTriggerChatAttempt(attempt)) {
             return new Response(
               JSON.stringify({
                 success: false,
@@ -839,7 +1384,7 @@ export async function action({ request }: Route.ActionArgs) {
             });
           }
 
-          if (attempt.user_id.toString() !== userId.toString() && !isImpersonating) {
+          if (attempt.user_id.toString() !== userId.toString()) {
             return new Response(JSON.stringify({ error: 'Forbidden' }), {
               status: 403,
               headers: { 'Content-Type': 'application/json' },
@@ -888,7 +1433,7 @@ export async function action({ request }: Route.ActionArgs) {
             });
           }
 
-          if (attempt.user_id.toString() !== userId.toString() && !isImpersonating) {
+          if (attempt.user_id.toString() !== userId.toString()) {
             return new Response(JSON.stringify({ error: 'Forbidden' }), {
               status: 403,
               headers: { 'Content-Type': 'application/json' },
@@ -919,6 +1464,41 @@ export async function action({ request }: Route.ActionArgs) {
 
       case 'restartQuiz': {
         try {
+          // Nothing linked is available to this user: refuse before anything
+          // changes — no session is ended and no attempt is created.
+          const refusal = await sourceMaterialRefusal(context.quiz);
+          if (refusal) return refusal;
+
+          const agentRuntime = runtimeFor(context.quiz);
+
+          // A teaching-team preview of a code-aware quiz names the repository
+          // to test with (OWNER, TEACHER and ASSISTANT only, as in startQuiz).
+          // The chat runtime explores it with the GitHub App's installation
+          // token, which reaches every repository the app is installed on, so
+          // the name is taken only when the caller's own GitHub account can
+          // open it: a preview reads what that person can read, as the legacy
+          // start (which read it with their own token) did. Checked before
+          // anything changes, so a refusal ends no session and creates no
+          // attempt. The owner is the classroom's organization, never input.
+          const isInstructor = ['OWNER', 'ASSISTANT', 'TEACHER'].includes(access.membership!.role);
+          const previewRepo =
+            isInstructor && typeof data.repoName === 'string' && data.repoName
+              ? data.repoName
+              : null;
+          if (previewRepo) {
+            const { previewRepoAccess } = await import('./previewRepoAccess.server');
+            const repoAccess = await previewRepoAccess({
+              token: authData?.token,
+              owner: access.classroom.git_organization?.login,
+              repo: previewRepo,
+            });
+            if (repoAccess === 'sign_in' && !authData?.userLogin) {
+              // No GitHub account linked to this sign-in at all.
+              return previewRepoRefusal('connect');
+            }
+            if (repoAccess !== 'readable') return previewRepoRefusal(repoAccess);
+          }
+
           // Cleanup via ai-agent service BEFORE creating new attempt.
           // The attempt created below is the caller's own, so the only session
           // worth ending is the caller's own attempt on this same quiz. An id
@@ -934,18 +1514,30 @@ export async function action({ request }: Route.ActionArgs) {
           const isCallersAttemptOnThisQuiz =
             !!previousAttempt &&
             previousAttempt.quiz_id.toString() === data.quizId.toString() &&
-            (previousAttempt.user_id.toString() === userId.toString() || isImpersonating);
+            previousAttempt.user_id.toString() === userId.toString();
 
-          if (isCallersAttemptOnThisQuiz) {
+          // Only an ai-agent attempt has an ai-agent session to end; one on
+          // the chat runtime has none there.
+          if (isCallersAttemptOnThisQuiz && isLegacyRuntimeAttempt(previousAttempt)) {
             await endQuizSession(data.attemptId);
           }
 
-          // Create a new attempt using the service
-          const result = await ClassmojiService.quizAttempt.createNew(
-            data.quizId,
-            userId,
-            access.membership!
-          );
+          // Create a new attempt using the service, stamped with the runtime
+          // it runs on (quizRuntime.server). An ai-agent attempt is created
+          // exactly as it always was.
+          const result =
+            agentRuntime === 'ai_agent'
+              ? await ClassmojiService.quizAttempt.createNew(
+                  data.quizId,
+                  userId,
+                  access.membership!
+                )
+              : await ClassmojiService.quizAttempt.createNew(
+                  data.quizId,
+                  userId,
+                  access.membership!,
+                  { agentRuntime }
+                );
 
           if (!result.success) {
             return new Response(JSON.stringify(result), {
@@ -954,11 +1546,11 @@ export async function action({ request }: Route.ActionArgs) {
             });
           }
 
-          // If repoName provided (instructor preview), save to agent_config immediately
-          // This ensures it's available when QuizAttemptInterface auto-starts the quiz
-          if (data.repoName) {
+          // The preview's repository, checked above: saved to agent_config so
+          // the auto-start uses it.
+          if (previewRepo) {
             await ClassmojiService.quizAttempt.updateAgentConfig(result.attemptId!, {
-              instructorRepoName: data.repoName,
+              instructorRepoName: previewRepo,
             });
           }
 
@@ -966,17 +1558,12 @@ export async function action({ request }: Route.ActionArgs) {
             headers: { 'Content-Type': 'application/json' },
           });
         } catch (error: unknown) {
+          if (error instanceof Response) return error;
           console.error('[restartQuiz] Error:', error);
-          return new Response(
-            JSON.stringify({
-              success: false,
-              message: error instanceof Error ? error.message : String(error),
-            }),
-            {
-              status: 500,
-              headers: { 'Content-Type': 'application/json' },
-            }
-          );
+          return new Response(JSON.stringify({ success: false, message: RESTART_FAILED_MESSAGE }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' },
+          });
         }
       }
 
@@ -987,13 +1574,12 @@ export async function action({ request }: Route.ActionArgs) {
         });
     }
   } catch (error: unknown) {
+    // A gate's refusal (access, classroom status) goes back exactly as thrown.
+    if (error instanceof Response) return error;
     console.error('API Quiz action error:', error);
-    return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
-      {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' },
-      }
-    );
+    return new Response(JSON.stringify({ success: false, error: GENERIC_FAILURE_MESSAGE }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 }

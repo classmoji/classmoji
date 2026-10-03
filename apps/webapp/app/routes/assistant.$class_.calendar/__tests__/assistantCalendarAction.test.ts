@@ -10,6 +10,9 @@
  * owners and teachers as well) and by the MCP calendar tools. All three ask the
  * same dependency-free module, which is NOT mocked here, so this asserts the
  * real decision rather than a copy of it.
+ *
+ * The last block pins the loader's link picker: no quiz assignment on offer
+ * where the classroom's quizzes are hidden.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,6 +20,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
+  loadQuizzesVisible: vi.fn(),
+  assignmentFindMany: vi.fn(),
   createEvent: vi.fn(),
   updateEvent: vi.fn(),
   updateEventWithScope: vi.fn(),
@@ -29,6 +34,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => mocks.assertClassroomAccess(...a),
   assertClassroomMutationAllowed: (...a: unknown[]) => mocks.assertClassroomMutationAllowed(...a),
+}));
+
+vi.mock('~/utils/classroomProFlag.server', () => ({
+  loadQuizzesVisible: (...a: unknown[]) => mocks.loadQuizzesVisible(...a),
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -46,13 +55,14 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
-const { ASSISTANT_EVENT_TYPE_MESSAGE } = await import('@classmoji/services/calendar-policy');
+const { ASSISTANT_EVENT_TYPE_MESSAGE, CalendarMeetingLinkError, MEETING_LINK_MESSAGE } =
+  await import('@classmoji/services/calendar-policy');
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
-    page: { findMany: vi.fn() },
-    slide: { findMany: vi.fn() },
-    assignment: { findMany: vi.fn() },
+    page: { findMany: vi.fn(async () => []) },
+    slide: { findMany: vi.fn(async () => []) },
+    assignment: { findMany: (...a: unknown[]) => mocks.assignmentFindMany(...a) },
   }),
 }));
 
@@ -122,6 +132,8 @@ beforeEach(() => {
   });
   mocks.createEvent.mockResolvedValue({ id: 'event-new' });
   mocks.getEventById.mockResolvedValue(ownOfficeHours());
+  mocks.loadQuizzesVisible.mockResolvedValue(true);
+  mocks.assignmentFindMany.mockResolvedValue([]);
 });
 
 describe('the office-hours limit holds on create', () => {
@@ -190,6 +202,37 @@ describe('the office-hours limit holds on update', () => {
     });
 
     expect(mocks.updateEvent).toHaveBeenCalled();
+  });
+});
+
+describe('a refused meeting link reaches the user', () => {
+  it('answers a create with the message, not a 500', async () => {
+    mocks.createEvent.mockRejectedValue(new CalendarMeetingLinkError());
+
+    const response = await submit({
+      intent: 'create',
+      eventData: JSON.stringify({
+        event_type: 'OFFICE_HOURS',
+        title: 'OH',
+        meeting_link: 'Meeting ID: 912 3456 7890',
+      }),
+    });
+
+    expect(response.init?.status).toBe(400);
+    expect(response.data?.error).toBe(MEETING_LINK_MESSAGE);
+  });
+
+  it('answers an update the same way', async () => {
+    mocks.updateEvent.mockRejectedValue(new CalendarMeetingLinkError());
+
+    const response = await submit({
+      intent: 'update',
+      eventId: 'event-1',
+      eventData: JSON.stringify({ title: 'Office hours', meeting_link: 'See Canvas' }),
+    });
+
+    expect(response.init?.status).toBe(400);
+    expect(response.data?.error).toBe(MEETING_LINK_MESSAGE);
   });
 });
 
@@ -296,5 +339,36 @@ describe('an event still has to be this assistant’s own, in this classroom', (
 
     expect(response.init?.status).toBe(403);
     expect(mocks.updateEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('the link picker where quizzes are hidden', () => {
+  const load = () =>
+    route.loader({
+      params: { class: CLASS_SLUG },
+      request: new Request(`http://localhost/assistant/${CLASS_SLUG}/calendar`),
+    } as unknown as Parameters<typeof route.loader>[0]);
+
+  /** The `where` the picker's assignment query ran with. */
+  const assignmentWhere = () =>
+    (mocks.assignmentFindMany.mock.calls[0][0] as { where: Record<string, unknown> }).where;
+
+  it('offers no quiz assignment', async () => {
+    mocks.loadQuizzesVisible.mockResolvedValue(false);
+
+    await load();
+
+    expect(mocks.loadQuizzesVisible).toHaveBeenCalledWith('class-1');
+    expect(assignmentWhere()).toEqual({
+      module: { classroom_id: 'class-1' },
+      is_published: true,
+      type: { not: 'QUIZ' },
+    });
+  });
+
+  it('offers every published assignment where quizzes show', async () => {
+    await load();
+
+    expect(assignmentWhere()).toEqual({ module: { classroom_id: 'class-1' }, is_published: true });
   });
 });

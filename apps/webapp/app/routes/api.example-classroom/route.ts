@@ -13,7 +13,8 @@
  */
 
 import { requireAuth } from '@classmoji/auth/server';
-import getPrisma from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import { displayUsername } from '@classmoji/utils';
 import { provisionExampleClassroom } from '@classmoji/services';
 import type { Route } from './+types/route';
 
@@ -25,13 +26,23 @@ export const action = async ({ request }: Route.ActionArgs) => {
   const { userId } = await requireAuth(request);
   const user = await getPrisma().user.findUnique({
     where: { id: userId },
-    select: { login: true },
+    select: GIT_IDENTITY,
   });
-  if (!user?.login) {
-    return Response.json({ error: 'Account has no Github login yet.' }, { status: 400 });
+  const ownerLogin = displayUsername(user);
+  if (!ownerLogin) {
+    return Response.json({ error: 'Account has no Github or Gitlab username yet.' }, { status: 400 });
   }
 
-  const sandbox = await provisionExampleClassroom({ ownerUserId: userId, ownerLogin: user.login });
+  // Optional form field: the tour sends the browser's zone. Absent (an older
+  // client, or an empty body) simply means no initial zone.
+  const form = await request.formData().catch(() => null);
+  const timezone = form?.get('timezone');
+
+  const sandbox = await provisionExampleClassroom({
+    ownerUserId: userId,
+    ownerLogin,
+    timezone: typeof timezone === 'string' ? timezone : null,
+  });
   if (!sandbox) {
     return Response.json({ error: 'Could not create the example course.' }, { status: 500 });
   }

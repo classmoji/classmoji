@@ -70,17 +70,13 @@ export function NavigationProgress() {
   }, [active]);
 
   return (
-    <div
-      aria-hidden="true"
-      className="fixed inset-x-0 top-0 z-[2000] h-[3px] pointer-events-none"
-    >
+    <div aria-hidden="true" className="fixed inset-x-0 top-0 z-[2000] h-[3px] pointer-events-none">
       <div
         className="h-full rounded-r-full transition-[width,opacity] duration-200 ease-out"
         style={{
           width: `${progress}%`,
           opacity: visible ? 1 : 0,
           backgroundColor: 'var(--accent)',
-          boxShadow: '0 0 10px var(--accent), 0 0 4px var(--accent)',
         }}
       />
     </div>

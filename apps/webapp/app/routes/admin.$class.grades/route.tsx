@@ -4,17 +4,19 @@ import { Skeleton } from 'antd';
 
 import GradesTable from './GradesTable';
 import { ClassmojiService } from '@classmoji/services';
+import { quizStanding } from '@classmoji/utils';
 import { addAuditLog, addClassroomAuditLog } from '~/utils/helpers';
 import { pickOwnerOnlyContactFields } from '~/utils/studentFields.server';
 import { requireClassroomStaff, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
 
-  // OWNER and TEACHER. Letter grades and comments are a teaching-staff surface
-  // rather than an owner-only one, and this route is served under both the
-  // /admin and /teacher prefixes.
+  // OWNER and TEACHER. Letter grades are a teaching-staff surface rather than
+  // an owner-only one, and this route is served under both the /admin and
+  // /teacher prefixes.
   const { classroom, membership } = await requireClassroomStaff(request, classSlug!, {
     resourceType: 'GRADES',
     action: 'view_grades',
@@ -25,6 +27,9 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   // resolves as OWNER. Same split the roster route applies, and the contact
   // trio is shared with it so the two cannot drift.
   const isRealOwner = membership?.role === 'OWNER';
+
+  // Never rejects: a failed lookup answers false.
+  const quizzesVisible = loadQuizzesVisible(classroom.id);
 
   const promises = {
     emojiMappings: ClassmojiService.emojiMapping.findByClassroomId(classroom.id),
@@ -71,16 +76,20 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
         memberships.map(m => ({
           id: m.id,
           user_id: m.user_id,
-          comment: m.comment,
           letter_grade: m.letter_grade,
         }))
       ),
     // The columns: every published assignment, grouped under its module in the
     // grid (module order, then creation order). Grading weight lives here.
-    assignments: ClassmojiService.assignment
-      .listForClassroom(classroom.id, { publishedOnly: true })
-      .then(assignments =>
-        assignments.map(a => ({
+    // Where quizzes are hidden their assignments are no column at all, so the
+    // attempt lookups below never run for them either.
+    assignments: Promise.all([
+      ClassmojiService.assignment.listForClassroom(classroom.id, { publishedOnly: true }),
+      quizzesVisible,
+    ]).then(([assignments, showQuizzes]) =>
+      assignments
+        .filter(a => showQuizzes || a.type !== 'QUIZ')
+        .map(a => ({
           id: a.id,
           title: a.title,
           weight: a.weight,
@@ -96,7 +105,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
           submission_mode: a.submission_mode,
           grades_released: a.grades_released,
         }))
-      ),
+    ),
   };
 
   // Quiz and form assignments have no submission row; their per-student state
@@ -105,17 +114,28 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const activity = promises.assignments.then(async assignments => {
     const quiz: Record<string, Record<string, { completed: boolean; score: number | null }>> = {};
     const form: Record<string, Record<string, { submitted: boolean }>> = {};
+    const quizIds = assignments.flatMap(a => (a.type === 'QUIZ' && a.quiz_id ? [a.quiz_id] : []));
+    const gradingStrategies =
+      quizIds.length > 0 ? ClassmojiService.quiz.findGradingStrategies(quizIds) : null;
     await Promise.all(
       assignments.map(async a => {
         if (a.type === 'QUIZ' && a.quiz_id) {
-          const attempts = await ClassmojiService.quizAttempt.findByQuiz(a.quiz_id);
-          quiz[a.id] = {};
+          const [attempts, strategies] = await Promise.all([
+            ClassmojiService.quizAttempt.findByQuiz(a.quiz_id),
+            gradingStrategies,
+          ]);
+          const byUser = new Map<string, typeof attempts>();
           for (const attempt of attempts) {
-            // Newest first, so the first one seen per student wins.
-            quiz[a.id][attempt.user_id] ??= {
-              completed: Boolean(attempt.completed_at),
-              score: attempt.score ?? null,
-            };
+            byUser.set(attempt.user_id, [...(byUser.get(attempt.user_id) ?? []), attempt]);
+          }
+          // Each student's counting attempt under the quiz's grading strategy
+          // (the shared selector): completed attempts only, scored by
+          // partial_credit_percentage, so a running retake never hides a
+          // finished attempt. Display only; totals do not read it.
+          quiz[a.id] = {};
+          for (const [userId, own] of byUser) {
+            const standing = quizStanding(own, strategies?.[a.quiz_id]);
+            quiz[a.id][userId] = { completed: standing.completed, score: standing.score };
           }
         } else if (a.type === 'FORM' && a.form_id) {
           const responses = await ClassmojiService.formResponse.listByFormId(a.form_id);

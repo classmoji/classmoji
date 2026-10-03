@@ -424,9 +424,8 @@ describe('deleteSlide', () => {
     getContentMock.mockResolvedValue(null); // no theme by default
   });
 
-  it('deletes the content folder, invokes the video callback, deletes the row, refreshes the manifest', async () => {
-    const onDeleteVideos = vi.fn().mockResolvedValue({ deleted: true });
-    const result = await deleteSlide({ slideId: 'slide-1', onDeleteVideos });
+  it('deletes the content folder, deletes the row, refreshes the manifest', async () => {
+    const result = await deleteSlide({ slideId: 'slide-1' });
 
     expect(deleteFolderMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -435,7 +434,6 @@ describe('deleteSlide', () => {
         path: 'slides/doomed',
       })
     );
-    expect(onDeleteVideos).toHaveBeenCalledWith('slide-1');
     expect(slideDeleteMock).toHaveBeenCalledWith({ where: { id: 'slide-1' } });
     expect(saveManifestMock).toHaveBeenCalledWith('class-1');
     expect(result).toEqual({
@@ -444,11 +442,6 @@ describe('deleteSlide', () => {
       themeDeleted: false,
       otherSlidesUsingTheme: 0,
     });
-  });
-
-  it('works without a video callback (cloudinary stays app-local)', async () => {
-    const result = await deleteSlide({ slideId: 'slide-1' });
-    expect(result.success).toBe(true);
   });
 
   it('deletes the preview branch alongside the content folder (404/422-tolerant)', async () => {
@@ -522,6 +515,49 @@ describe('deleteSlide', () => {
   it('throws when the slide does not exist', async () => {
     slideFindUniqueMock.mockResolvedValue(null);
     await expect(deleteSlide({ slideId: 'nope' })).rejects.toThrow('Slide not found');
+  });
+
+  it('a file slide whose document is in media has no repo folder to delete', async () => {
+    slideFindUniqueMock.mockResolvedValue({
+      ...dbSlide,
+      kind: 'FILE',
+      source_path: null,
+      media_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    });
+    const result = await deleteSlide({ slideId: 'slide-1' });
+    expect(result.success).toBe(true);
+    // Never committed, so no GitHub delete — and the media object is left in
+    // the classroom's library (nothing here reaches the media store).
+    expect(deleteFolderMock).not.toHaveBeenCalled();
+    expect(slideDeleteMock).toHaveBeenCalledWith({ where: { id: 'slide-1' } });
+  });
+
+  it('media wins when a file slide carries BOTH media_id and source_path', async () => {
+    // A class-imported media slide: the copied object, and a remapped
+    // `source_path` that was never committed.
+    slideFindUniqueMock.mockResolvedValue({
+      ...dbSlide,
+      kind: 'FILE',
+      source_path: 'slides/doomed/doomed.pdf',
+      media_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    });
+    const result = await deleteSlide({ slideId: 'slide-1' });
+    expect(result.success).toBe(true);
+    expect(deleteFolderMock).not.toHaveBeenCalled();
+    expect(slideDeleteMock).toHaveBeenCalledWith({ where: { id: 'slide-1' } });
+  });
+
+  it('a repository-backed file slide still deletes its folder', async () => {
+    slideFindUniqueMock.mockResolvedValue({
+      ...dbSlide,
+      kind: 'FILE',
+      source_path: 'slides/doomed/doomed.pdf',
+      media_id: null,
+    });
+    await deleteSlide({ slideId: 'slide-1' });
+    expect(deleteFolderMock).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'slides/doomed' })
+    );
   });
 });
 

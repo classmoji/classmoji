@@ -792,6 +792,33 @@ describe('planClassroomIndex', () => {
     expect(plan.items).toHaveLength(0);
   });
 
+  /**
+   * A fresh document is filtered out of `items` on purpose — but "filtered out"
+   * and "never existed" produce the identical empty plan, and the count is the
+   * only thing that says which one a caller is holding.
+   */
+  it('counts a document already level with the repo rather than dropping it silently', async () => {
+    await indexOneFile({
+      classroomId: CLASSROOM,
+      path: PAGE_PATH,
+      sha: SHA,
+      body: '{"blocks":[]}',
+      docHint: { kind: 'page', id: PAGE_ID, title: 'Lab 1' },
+    });
+
+    const plan = await planClassroomIndex(CLASSROOM);
+    expect(plan.items).toHaveLength(0);
+    expect(plan.upToDate).toBe(1);
+  });
+
+  it('counts nothing as up to date when there was nothing to compare', async () => {
+    pageRows.length = 0;
+
+    const plan = await planClassroomIndex(CLASSROOM);
+    expect(plan.items).toHaveLength(0);
+    expect(plan.upToDate).toBe(0);
+  });
+
   it('picks up bot-context prose and skips the rest of the folder', async () => {
     assetShas.set(assetKey(CLASSROOM, 'bot-context/faq.md'), 'b'.repeat(40));
     assetShas.set(assetKey(CLASSROOM, 'bot-context/roster.csv'), 'c'.repeat(40));
@@ -934,12 +961,39 @@ describe('reconcileContentIndex', () => {
     expect(embedTextsMock).not.toHaveBeenCalled();
   });
 
+  /**
+   * The readiness gate reads this report and nothing else, so "the whole fleet
+   * is already indexed" and "the planner found no documents at all" must not
+   * arrive as the same all-zero line — the first is the healthiest run there
+   * is and the second is the shape a broken planner makes.
+   */
+  it('tells an already-indexed run apart from an empty one', async () => {
+    await reconcileContentIndex({ fetchBody, classroomIds: [CLASSROOM] });
+
+    const steady = await reconcileContentIndex({ fetchBody, classroomIds: [CLASSROOM] });
+    expect(steady.eligible).toBe(0);
+    expect(steady.byReason.up_to_date).toBe(1);
+
+    // A classroom with no pages, no slides and no assets: the same zeroes, and
+    // no reason whatsoever.
+    const empty = await reconcileContentIndex({
+      fetchBody,
+      classroomIds: ['empty-classroom'],
+    });
+    expect(empty.eligible).toBe(0);
+    expect(empty.byReason.up_to_date).toBeUndefined();
+  });
+
   it('refuses bytes whose sha is not the one the map names', async () => {
     // The CDN tier answers with a body and no object id at all.
     fetchBody.mockResolvedValueOnce({ text: '{"blocks":[]}', sha: null });
 
     const report = await reconcileContentIndex({ fetchBody, classroomIds: [CLASSROOM] });
-    expect(report).toMatchObject({ failed: 1, indexed: 0 });
+    // A SKIP, not a failure. A classroom served off the CDN answers without an
+    // object id every night, so counting this as failed would keep `failed`
+    // permanently non-zero on a perfectly healthy fleet. The reason still
+    // names it, which is where the signal lives.
+    expect(report).toMatchObject({ failed: 0, skipped: 1, indexed: 0 });
     expect(report.byReason.sha_mismatch).toBe(1);
     expect(indexRows).toHaveLength(0);
   });
@@ -1126,11 +1180,39 @@ describe('reconcileContentIndex', () => {
       });
       expect(report.byClassroom[1].error).toBeUndefined();
       expect(report.byClassroom[1].indexed).toBe(1);
+      expect(report.byClassroom[0].byReason).toMatchObject({ classroom_error: 1 });
+      expect(report.byClassroom[1].byReason.classroom_error).toBeUndefined();
     });
 
     it('keeps a per-document failure in `failed`, on its own classroom’s row', async () => {
-      // A body off the CDN tier, which names no sha: one document refused, the
-      // classroom itself perfectly healthy.
+      // The byte source came back with nothing at all for one classroom's only
+      // document: one document refused, the classroom itself perfectly healthy.
+      const missing = vi.fn(async (classroom: { id: string }, path: string) =>
+        classroom.id === CLASSROOM
+          ? null
+          : { text: '{"blocks":[]}', sha: assetShas.get(assetKey(classroom.id, path)) ?? null }
+      );
+
+      const report = await reconcileContentIndex({
+        fetchBody: missing,
+        classroomIds: [CLASSROOM, OTHER],
+      });
+
+      expect(report.failed).toBe(1);
+      expect(report.classroomErrors).toBe(0);
+      expect(report.byClassroom[0]).toMatchObject({ failed: 1, indexed: 0 });
+      expect(report.byClassroom[0].byReason).toEqual({ fetch: 1 });
+      expect(report.byClassroom[0].error).toBeUndefined();
+      expect(report.byClassroom[1]).toMatchObject({ failed: 0, indexed: 1 });
+    });
+
+    /**
+     * The counters say WHAT a run did and the reasons say WHY, but a fleet-wide
+     * `sha_mismatch: 300` is either one classroom whose delivery layer
+     * disagrees about every document or three hundred that each raced the map
+     * once. Same total, different incident — only the split tells them apart.
+     */
+    it('splits the reason tally per classroom, and they sum to the fleet’s', async () => {
       const cdn = vi.fn(async (classroom: { id: string }, path: string) =>
         classroom.id === CLASSROOM
           ? { text: '{"blocks":[]}', sha: null }
@@ -1142,11 +1224,16 @@ describe('reconcileContentIndex', () => {
         classroomIds: [CLASSROOM, OTHER],
       });
 
-      expect(report.failed).toBe(1);
-      expect(report.classroomErrors).toBe(0);
-      expect(report.byClassroom[0]).toMatchObject({ failed: 1, indexed: 0 });
-      expect(report.byClassroom[0].error).toBeUndefined();
-      expect(report.byClassroom[1]).toMatchObject({ failed: 0, indexed: 1 });
+      expect(report.byClassroom[0].byReason).toEqual({ sha_mismatch: 1 });
+      expect(report.byClassroom[1].byReason).toEqual({});
+
+      const summed: Record<string, number> = {};
+      for (const row of report.byClassroom) {
+        for (const [reason, times] of Object.entries(row.byReason)) {
+          summed[reason] = (summed[reason] ?? 0) + times;
+        }
+      }
+      expect(summed).toEqual(report.byReason);
     });
   });
 });
@@ -1281,6 +1368,9 @@ describe('non-deck slides', () => {
 
     const plan = await planClassroomIndex(CLASSROOM);
     expect(plan.metadataItems).toHaveLength(0);
+    // Dropped from the work, not from the tally: an indexed file slide is part
+    // of the steady state `upToDate` exists to make visible.
+    expect(plan.upToDate).toBe(1);
     // The row is live — sweeping it would delete a perfectly good document.
     expect(plan.orphans).toHaveLength(0);
   });

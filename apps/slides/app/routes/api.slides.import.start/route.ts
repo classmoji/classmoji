@@ -16,11 +16,13 @@
  *
  * The classroom arrives as a FORM FIELD (the import page posts a FormData built
  * from its own form), so the per-classroom gate cannot run until the body has
- * been parsed. Two things can, and do:
+ * been parsed. Three things can, and do:
  *
  *   - a SESSION. An anonymous caller is refused before 150 MB are buffered;
  *     the classroom gate below still decides whether this particular signed-in
  *     user may import into this particular classroom.
+ *   - the IMPORT SLOT (`importSlot.server.ts`): one import per process, so a
+ *     second one is refused before its ZIP is buffered beside the first.
  *   - the SIZE, through `readLimitedFormData`. `request.formData()` trusts the
  *     sender to stop; that counts the bytes as they arrive and cancels the
  *     stream the moment they cross the cap, so a missing or lying
@@ -29,16 +31,21 @@
 
 import { randomUUID } from 'crypto';
 import getPrisma from '@classmoji/database';
-import { ClassmojiService } from '@classmoji/services';
 import { getAuthSession, requireClassroomStaff } from '@classmoji/auth/server';
-import { cloudinaryVideoSelection } from '@classmoji/utils';
 import { processZipImport } from '~/utils/slidesComImporter.server';
-import { isCloudinaryConfigured } from '~/utils/cloudinaryService.server';
 import { importStreamManager } from '~/utils/importStreamManager';
-import { UploadTooLargeError, readLimitedFormData, uploadBodyLimit } from '~/utils/uploadLimit';
-
-// Max file size for ZIP uploads (in bytes)
-const MAX_FILE_SIZE = 150 * 1024 * 1024; // 150MB
+import {
+  UploadTooLargeError,
+  readLimitedFormData,
+  uploadBodyLimit,
+} from '@classmoji/utils/upload-limit';
+import { SLIDES_IMPORT_MAX_BYTES, SLIDES_IMPORT_MAX_LABEL } from '~/utils/importLimits';
+import {
+  IMPORT_BUSY_MESSAGE,
+  IMPORT_RETRY_AFTER_SECONDS,
+  acquireImportSlot,
+  releaseImportSlot,
+} from '~/utils/importSlot.server';
 
 export const action = async ({ request }: { request: Request }) => {
   // A session first — the cheapest thing that can be checked without the body,
@@ -50,14 +57,32 @@ export const action = async ({ request }: { request: Request }) => {
     return Response.json({ error: 'Unauthorized' }, { status: 403 });
   }
 
+  // One import at a time in this process (`importSlot.server.ts`), taken before
+  // the body is read: the ZIP it buffers is part of what an import holds.
+  if (!acquireImportSlot()) {
+    return Response.json(
+      { error: IMPORT_BUSY_MESSAGE },
+      { status: 503, headers: { 'Retry-After': String(IMPORT_RETRY_AFTER_SECONDS) } }
+    );
+  }
+  // Given back here when this answers without starting an import; once one is
+  // started, its own settle gives it back instead (`slot.held` goes false).
+  const slot = { held: true };
+  try {
+    return await startImport(request, slot);
+  } finally {
+    if (slot.held) releaseImportSlot();
+  }
+};
+
+async function startImport(request: Request, slot: { held: boolean }) {
   let formData: FormData;
   try {
-    formData = await readLimitedFormData(request, uploadBodyLimit(MAX_FILE_SIZE));
+    formData = await readLimitedFormData(request, uploadBodyLimit(SLIDES_IMPORT_MAX_BYTES));
   } catch (error: unknown) {
     if (error instanceof UploadTooLargeError) {
-      const maxMB = MAX_FILE_SIZE / 1024 / 1024;
       return Response.json(
-        { error: `ZIP file is too large. Maximum size is ${maxMB}MB.` },
+        { error: `ZIP file is too large. Maximum size is ${SLIDES_IMPORT_MAX_LABEL}.` },
         { status: 413 }
       );
     }
@@ -72,20 +97,6 @@ export const action = async ({ request }: { request: Request }) => {
   const useSavedTheme = (formData.get('useSavedTheme') as string | null) || null;
   const classroomSlug = formData.get('classroomSlug') as string;
 
-  // Parse Cloudinary video paths
-  let cloudinaryVideoPaths: string[] = [];
-  try {
-    const cloudinaryVideoPathsRaw = formData.get('cloudinaryVideoPaths') as string | null;
-    if (cloudinaryVideoPathsRaw) {
-      const parsed = JSON.parse(cloudinaryVideoPathsRaw);
-      // Client-supplied: valid JSON is not necessarily the array everything
-      // downstream assumes.
-      cloudinaryVideoPaths = Array.isArray(parsed) ? parsed.filter(p => typeof p === 'string') : [];
-    }
-  } catch (e: unknown) {
-    console.warn('Failed to parse cloudinaryVideoPaths:', e);
-  }
-
   // Determine theme settings
   const importTheme = themeOption === 'import';
 
@@ -98,10 +109,9 @@ export const action = async ({ request }: { request: Request }) => {
     return Response.json({ error: 'Please enter a title for the slides' }, { status: 400 });
   }
 
-  if (zipFile.size > MAX_FILE_SIZE) {
-    const maxMB = MAX_FILE_SIZE / 1024 / 1024;
+  if (zipFile.size > SLIDES_IMPORT_MAX_BYTES) {
     return Response.json(
-      { error: `ZIP file is too large. Maximum size is ${maxMB}MB.` },
+      { error: `ZIP file is too large. Maximum size is ${SLIDES_IMPORT_MAX_LABEL}.` },
       { status: 400 }
     );
   }
@@ -144,33 +154,10 @@ export const action = async ({ request }: { request: Request }) => {
     return Response.json({ error: 'Classroom content namespace not configured' }, { status: 400 });
   }
 
-  // Cloudinary video hosting is a Pro feature — Cloudinary bills per account,
-  // and the form field below is client-supplied, so this is the enforcement
-  // point rather than the import page's UI.
-  //
-  // A non-Pro classroom DEGRADES instead of being refused: an empty selection
-  // is exactly the state `slidesComImporter.server.ts` already handles when
-  // Cloudinary is unconfigured, so every video is committed to the content repo
-  // and the import still succeeds. Refusing here would break imports that
-  // worked yesterday for a reason the uploader cannot fix mid-upload.
-  //
-  // Reads the tier through `subscription.getProStateForClassroomId`, the single
-  // owner of what "Pro" means (it is what `assertProTier` calls too) — a second
-  // copy of the rule here is how a lapsed subscription keeps one surface open
-  // after it has closed in another.
-  const { isPro } = await ClassmojiService.subscription.getProStateForClassroomId(classroom.id);
-  const requestedCloudinaryVideoPaths = cloudinaryVideoPaths;
-  cloudinaryVideoPaths = cloudinaryVideoSelection({
-    isPro,
-    configured: isCloudinaryConfigured(),
-    requested: requestedCloudinaryVideoPaths,
-  });
-
-  if (!isPro && requestedCloudinaryVideoPaths.length > 0) {
-    console.info(
-      `[import.start] Classroom ${classroomSlug} is not Pro — ${requestedCloudinaryVideoPaths.length} video(s) requested for Cloudinary will be stored in the content repo instead`
-    );
-  }
+  // Where the ZIP's videos go is not a choice this form offers: the importer
+  // asks the storage router per entry, with the capability it builds from the
+  // classroom row — media on a classroom that has it, the content repo
+  // everywhere else. Nothing the client sends decides it.
 
   // Generate unique import ID for SSE routing
   // This is returned immediately while the actual slideId is created during import
@@ -185,12 +172,14 @@ export const action = async ({ request }: { request: Request }) => {
     filename?: string;
     slideId?: string;
     message?: string;
+    warnings?: string[];
   }) => {
     importStreamManager.publish(importId, event);
   };
 
-  // Start import asynchronously (fire and forget)
-  processZipImport({
+  // Start import asynchronously (fire and forget). It holds the import slot
+  // until it settles, however it ends.
+  const run = processZipImport({
     zipFile,
     title: title.trim(),
     repositoryId,
@@ -202,17 +191,20 @@ export const action = async ({ request }: { request: Request }) => {
     classroomId: classroom.id,
     contentNamespace,
     userId,
-    cloudinaryVideoPaths,
     onProgress,
-  }).catch(err => {
-    console.error('[import.start] Import failed:', err);
-    importStreamManager.publish(importId, {
-      type: 'error',
-      message: err.message || 'Import failed',
-    });
   });
+  slot.held = false;
+  run
+    .catch(err => {
+      console.error('[import.start] Import failed:', err);
+      importStreamManager.publish(importId, {
+        type: 'error',
+        message: err.message || 'Import failed',
+      });
+    })
+    .finally(releaseImportSlot);
 
   // Return importId immediately - client subscribes to SSE stream with this ID
   // The 'done' event from processZipImport will include the actual slideId
   return Response.json({ importId });
-};
+}

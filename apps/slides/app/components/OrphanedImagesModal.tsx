@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Modal, Checkbox, Button, message } from 'antd';
+import { Modal, Checkbox, Button } from 'antd';
+
+import { useToast } from '~/hooks';
 
 /**
  * OrphanedImagesModal - Confirm deletion of unused images
@@ -28,6 +30,7 @@ export default function OrphanedImagesModal({
   onDelete,
   isDeleting,
 }: OrphanedImagesModalProps) {
+  const toast = useToast();
   // Track which images are selected for deletion (all by default)
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
 
@@ -56,7 +59,7 @@ export default function OrphanedImagesModal({
 
   const handleDelete = () => {
     if (selectedPaths.length === 0) {
-      message.info('No images selected for deletion');
+      toast.info('No images selected for deletion');
       return;
     }
     onDelete(selectedPaths);

@@ -1,8 +1,10 @@
 import { Link } from 'react-router';
-import dayjs, { type Dayjs } from 'dayjs';
+import dayjs from 'dayjs';
+import { useHydrated } from 'remix-utils/use-hydrated';
 import { IconArrowRight } from '@tabler/icons-react';
 import { getEventTypeLightBg, getEventTypeDarkText } from '~/components/features/calendar/utils';
 import type { CalendarEventWithLinks } from '~/components/features/calendar/types';
+import { groupByDay, startOfWeek } from './week';
 
 /**
  * The card needs four fields, and it needs id/title to be PRESENT — the
@@ -20,7 +22,8 @@ export type WeekEvent = Pick<CalendarEventWithLinks, 'start_time' | 'is_deadline
 
 interface WeeklyCalendarCardProps {
   events: WeekEvent[];
-  weekStart: string | Date;
+  /** The server's week start as `YYYY-MM-DD`; only the first-render frame. */
+  weekStart: string;
   classSlug: string;
 }
 
@@ -36,24 +39,22 @@ const formatTime = (date: string | Date) => {
   return d.minute() === 0 ? d.format('h A') : d.format('h:mm A');
 };
 
-const groupByDay = (events: WeekEvent[], weekStart: Dayjs) => {
-  const grid: WeekEvent[][] = Array.from({ length: 7 }, () => []);
-  events.forEach(event => {
-    const d = dayjs(event.start_time);
-    const offset = d.diff(weekStart, 'day');
-    if (offset >= 0 && offset < 7) grid[offset].push(event);
-  });
-  grid.forEach(day =>
-    day.sort((a, b) => dayjs(a.start_time).valueOf() - dayjs(b.start_time).valueOf())
-  );
-  return grid;
-};
+const EMPTY_GRID: WeekEvent[][] = Array.from({ length: 7 }, () => []);
 
 const WeeklyCalendarCard = ({ events, weekStart, classSlug }: WeeklyCalendarCardProps) => {
-  const start = dayjs(weekStart).startOf('day');
+  // The week, "today" and each event's day and time all depend on the time
+  // zone, and the server renders in UTC. So the server render and the first
+  // client render (hydration) both show the server's week with no events and
+  // no today circle, and only once hydrated does the card switch to the
+  // browser's own week. The card used to take the server's UTC midnight and
+  // round it down in the browser, which started US students' strip on Saturday
+  // under SUN; computing local values on the first render instead would
+  // mismatch the server's markup (React error #418).
+  const hydrated = useHydrated();
+  const start = hydrated ? startOfWeek() : dayjs(weekStart);
   const end = start.add(6, 'day');
-  const today = dayjs().startOf('day');
-  const grid = groupByDay(events, start);
+  const today = hydrated ? dayjs().startOf('day') : null;
+  const grid = hydrated ? groupByDay(events, start) : EMPTY_GRID;
 
   // The date range, and only the date range. The card used to lead with
   // "Week 6:", counted from the start of the MONTH rather than the term — so it
@@ -84,7 +85,7 @@ const WeeklyCalendarCard = ({ events, weekStart, classSlug }: WeeklyCalendarCard
       <div className="grid grid-cols-7 border-t border-line">
         {grid.map((dayEvents, idx) => {
           const day = start.add(idx, 'day');
-          const isTodayDate = day.isSame(today, 'day');
+          const isTodayDate = today ? day.isSame(today, 'day') : false;
           const isWeekend = idx === 0 || idx === 6;
           const visible = dayEvents.slice(0, 3);
           const overflow = dayEvents.length - visible.length;

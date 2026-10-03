@@ -18,6 +18,7 @@ import { assertClassroomAccess } from '~/utils/helpers';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import { getContentRepoName } from '@classmoji/utils';
+import { sessionTimeZone } from './sessionTimeZone';
 import { sendRequest } from '~/services/aiAgentConnection.server';
 import agentStreamManager from '~/utils/agentStreamManager';
 import { v4 as uuidv4 } from 'uuid';
@@ -46,6 +47,38 @@ const BOT_ROLES = ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'] as const;
  * feature rather than two.
  */
 const SEND_MESSAGE_FAILED = 'Could not send your message. Please try again.';
+
+/**
+ * What a failed init says to the browser, whatever failed (the MCP mint, the
+ * ai-agent, the connection to it). The real error is logged.
+ */
+const INIT_FAILED = 'Could not start the assistant. Please try again.';
+
+/**
+ * What a turn says when the ai-agent's platform budget guard
+ * (AI_MAX_BUDGET_USD) stopped it. The ai-agent stores nothing for that turn and
+ * marks it retryable, so asking again is a real way forward. A fixed text, like
+ * SEND_MESSAGE_FAILED: the ai-agent's own message is not shown.
+ */
+const BUDGET_STOPPED_MESSAGE = "Ask Moji couldn't finish that answer. Please ask again.";
+
+/**
+ * What a turn says when the ai-agent no longer holds the conversation's live
+ * session (code SESSION_NOT_FOUND). The widget's "New conversation" button is
+ * the way forward; the transcript itself is saved.
+ */
+const SESSION_ENDED_MESSAGE = 'This conversation has ended. Start a new one to keep asking.';
+
+/**
+ * What the bot says to a classroom it does not serve: the AI agent is not set
+ * up, or the plan does not include it. Any member can read it, students on a
+ * widget left open included, so it names no plan and no setup.
+ */
+const ASK_MOJI_UNAVAILABLE = "Ask Moji isn't available in this class.";
+
+/** aiAgentConnection carries the ERROR payload's `code` onto the thrown error. */
+const agentErrorCode = (error: unknown) => (error as { code?: unknown } | null)?.code;
+const isBudgetExceeded = (error: unknown) => agentErrorCode(error) === 'BUDGET_EXCEEDED';
 
 /**
  * Mint the MCP bearer this turn will carry (plan P1-3).
@@ -240,7 +273,7 @@ export async function action({ params, request }: Route.ActionArgs) {
   const _action = formData.get('_action');
 
   if (!isAIAgentConfigured()) {
-    return jsonResponse({ error: 'AI features are not configured' }, 503);
+    return jsonResponse({ error: ASK_MOJI_UNAVAILABLE }, 503);
   }
 
   switch (_action) {
@@ -275,14 +308,14 @@ async function handleInitConversation(request: Request, classSlug: string, formD
   // After the access check, so this never reveals a classroom's plan to a non-member.
   const entitlement = await ClassmojiService.entitlement.canUseSyllabusBot(classroom.id);
   if (!entitlement.allowed) {
-    return jsonResponse({ error: 'The syllabus assistant requires a Pro subscription' }, 403);
+    return jsonResponse({ error: ASK_MOJI_UNAVAILABLE }, 403);
   }
 
   const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
 
   // Check if syllabus bot is enabled
   if (!settings?.syllabus_bot_enabled) {
-    return jsonResponse({ error: 'Syllabus bot is not enabled for this course' }, 403);
+    return jsonResponse({ error: 'Ask Moji is not enabled for this course.' }, 403);
   }
 
   // Use URL-based role context if provided, otherwise fall back to membership role
@@ -298,6 +331,7 @@ async function handleInitConversation(request: Request, classSlug: string, formD
     orgName: classroom.name,
     courseName: (settings as { course_name?: string })?.course_name || classroom.name,
     userRole: contextRole,
+    ...sessionTimeZone(settings?.timezone, formData.get('browserTimezone')),
   };
 
   // The MCP bearer this turn carries. Minted before anything is sent, so a mint
@@ -308,16 +342,20 @@ async function handleInitConversation(request: Request, classSlug: string, formD
   } catch (error: unknown) {
     // Deliberately logs the failure, never the token.
     console.error('[syllabus-bot] Failed to mint MCP token for init:', error);
-    return jsonResponse({ error: 'Could not start the assistant. Please try again.' }, 500);
+    return jsonResponse({ error: INIT_FAILED }, 500);
   }
 
   // Build payload for ai-agent (no conversationId - ai-agent generates it)
   const payload = {
     userId: userId.toString(),
     orgConfig,
+    // Ask Moji's own model and effort; null = the ai-agent's platform default
+    // (SYLLABUS_BOT_MODEL, SYLLABUS_BOT_EFFORT). Not the quiz model: Ask Moji
+    // used to borrow llm_model when it had none of its own.
     llmConfig: {
       anthropicApiKey: settings?.anthropic_api_key,
-      model: settings?.syllabus_bot_model || settings?.llm_model,
+      model: settings?.syllabus_bot_model,
+      effort: settings?.syllabus_bot_effort,
     },
     mcpToken,
   };
@@ -369,7 +407,7 @@ async function handleInitConversation(request: Request, classSlug: string, formD
     });
   } catch (error: unknown) {
     console.error('[syllabus-bot] Init failed:', error);
-    return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500);
+    return jsonResponse({ error: INIT_FAILED }, 500);
   }
 }
 
@@ -402,7 +440,7 @@ async function handleSendMessage(request: Request, classSlug: string, formData: 
   // already-open session can still be cleaned up.
   const smEntitlement = await ClassmojiService.entitlement.canUseSyllabusBot(smClassroom.id);
   if (!smEntitlement.allowed) {
-    return jsonResponse({ error: 'The syllabus assistant requires a Pro subscription' }, 403);
+    return jsonResponse({ error: ASK_MOJI_UNAVAILABLE }, 403);
   }
 
   if (!conversationId || !content) {
@@ -469,12 +507,22 @@ async function handleSendMessage(request: Request, classSlug: string, formData: 
     // stack-shaped detail. A chat member is not the audience for any of it, and
     // "what went wrong" is not something they can act on differently.
     //
-    // Both exits get the same generic line, because the SSE channel reaches the
-    // same browser as the response body — fixing one and not the other would
-    // leave the leak open through the other door.
+    // The exceptions are the failures they CAN act on: a budget-guard stop (ask
+    // again, or ask less at once) and a session the ai-agent no longer holds
+    // (start a new conversation). Each is picked out by the ai-agent's error
+    // code and gets its own fixed line; the ai-agent's text still stays here.
+    //
+    // Both exits get the same line, because the SSE channel reaches the same
+    // browser as the response body — fixing one and not the other would leave
+    // the leak open through the other door.
     console.error('[syllabus-bot] Send message failed:', error);
-    agentStreamManager.publishError(conversationId, SEND_MESSAGE_FAILED);
-    return jsonResponse({ error: SEND_MESSAGE_FAILED }, 500);
+    const message = isBudgetExceeded(error)
+      ? BUDGET_STOPPED_MESSAGE
+      : agentErrorCode(error) === 'SESSION_NOT_FOUND'
+        ? SESSION_ENDED_MESSAGE
+        : SEND_MESSAGE_FAILED;
+    agentStreamManager.publishError(conversationId, message);
+    return jsonResponse({ error: message }, 500);
   }
 }
 
@@ -528,7 +576,9 @@ async function handleEndConversation(request: Request, classSlug: string, formDa
 
     return jsonResponse({ success: true });
   } catch (error: unknown) {
-    console.error('[syllabus-bot] End conversation failed:', error);
-    return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500);
+    // Cleanup is best-effort (the widget has already closed its stream and
+    // does not read this reply), so the error is logged and the call succeeds.
+    console.error('[syllabus-bot] End conversation failed (non-fatal):', error);
+    return jsonResponse({ success: true });
   }
 }

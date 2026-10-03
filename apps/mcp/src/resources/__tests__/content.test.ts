@@ -61,7 +61,7 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
-const { calendarResource, quizzesResource } = await import('../content.ts');
+const { calendarResource, calendarRangeResource, quizzesResource } = await import('../content.ts');
 
 const VARS = { org: 'twin-org', slug: 'winter-2025' };
 
@@ -158,6 +158,295 @@ describe('quizzes resource Pro gate (A3)', () => {
     expect(err).not.toBeInstanceOf(ToolError);
     expect((err as Error).message).toBe('connection reset');
     expect(findByClassroom).not.toHaveBeenCalled();
+  });
+});
+
+describe('quizzes resource source_material (quiz source material)', () => {
+  const MATERIAL = [
+    { kind: 'slide', id: 's1', title: 'Forms', is_draft: false, order: 0, extra: 'x' },
+    { kind: 'page', id: 'p1', title: 'Next week', is_draft: true, order: 1 },
+  ];
+
+  it('staff get every linked document, drafts flagged, and course_search_enabled', async () => {
+    findByClassroom.mockResolvedValue([
+      {
+        id: 'q1',
+        name: 'Quiz 1',
+        status: 'DRAFT',
+        weight: 0,
+        question_count: 3,
+        course_search_enabled: true,
+        source_material: MATERIAL,
+      },
+    ]);
+
+    const result = (await quizzesResource.handler(
+      VARS,
+      ownerCtx({ quizzes_enabled: true }),
+      new URL('classmoji://x')
+    )) as { quizzes: Array<Record<string, unknown>> };
+
+    expect(result.quizzes[0].course_search_enabled).toBe(true);
+    // Allow-listed field by field: `extra` does not survive.
+    expect(result.quizzes[0].source_material).toEqual([
+      { kind: 'slide', id: 's1', title: 'Forms', is_draft: false, order: 0 },
+      { kind: 'page', id: 'p1', title: 'Next week', is_draft: true, order: 1 },
+    ]);
+  });
+
+  it('students get what the student list returns (published only) and no prompts', async () => {
+    getQuizzesForStudent.mockResolvedValue([
+      {
+        id: 'q1',
+        name: 'Quiz 1',
+        status: 'PUBLISHED',
+        weight: 0,
+        question_count: 3,
+        system_prompt: 'secret',
+        source_material: [MATERIAL[0]],
+      },
+    ]);
+
+    // The Pro gate reads the authorized classroom's slug, which studentCtx omits.
+    const ctx = studentCtx();
+    (ctx.classroom as unknown as { classroom: { slug: string } }).classroom.slug =
+      'authorized-slug';
+
+    const result = (await quizzesResource.handler(VARS, ctx, new URL('classmoji://x'))) as {
+      quizzes: Array<Record<string, unknown>>;
+    };
+
+    expect(getQuizzesForStudent).toHaveBeenCalledWith('class-1', 'student-1', expect.anything(), {
+      includeClosed: true,
+    });
+    expect(result.quizzes[0].source_material).toEqual([
+      { kind: 'slide', id: 's1', title: 'Forms', is_draft: false, order: 0 },
+    ]);
+    expect(result.quizzes[0].course_search_enabled).toBe(false);
+    expect(result.quizzes[0]).not.toHaveProperty('system_prompt');
+  });
+
+  it('staff get excluded_paths; students never do', async () => {
+    findByClassroom.mockResolvedValue([
+      {
+        id: 'q1',
+        name: 'Quiz 1',
+        status: 'DRAFT',
+        weight: 0,
+        question_count: 3,
+        include_code_context: true,
+        excluded_paths: ['tests/**', '**/*.spec.js'],
+      },
+      { id: 'q2', name: 'Quiz 2', status: 'DRAFT', weight: 0, question_count: 3 },
+    ]);
+    const staff = (await quizzesResource.handler(
+      VARS,
+      ownerCtx({ quizzes_enabled: true }),
+      new URL('classmoji://x')
+    )) as { quizzes: Array<Record<string, unknown>> };
+    expect(staff.quizzes[0].excluded_paths).toEqual(['tests/**', '**/*.spec.js']);
+    expect(staff.quizzes[1].excluded_paths).toEqual([]);
+
+    getQuizzesForStudent.mockResolvedValue([
+      {
+        id: 'q1',
+        name: 'Quiz 1',
+        status: 'PUBLISHED',
+        weight: 0,
+        question_count: 3,
+        excluded_paths: ['tests/**'],
+      },
+    ]);
+    const ctx = studentCtx();
+    (ctx.classroom as unknown as { classroom: { slug: string } }).classroom.slug =
+      'authorized-slug';
+    const student = (await quizzesResource.handler(VARS, ctx, new URL('classmoji://x'))) as {
+      quizzes: Array<Record<string, unknown>>;
+    };
+    expect(student.quizzes[0]).not.toHaveProperty('excluded_paths');
+  });
+
+  it('an unlinked quiz reports an empty list', async () => {
+    findByClassroom.mockResolvedValue([
+      { id: 'q1', name: 'Quiz 1', status: 'DRAFT', weight: 0, question_count: 3 },
+    ]);
+
+    const result = (await quizzesResource.handler(
+      VARS,
+      ownerCtx({ quizzes_enabled: true }),
+      new URL('classmoji://x')
+    )) as { quizzes: Array<Record<string, unknown>> };
+
+    expect(result.quizzes[0].source_material).toEqual([]);
+  });
+
+  it("students get the student list's counting score as is, a 0 included", async () => {
+    getQuizzesForStudent.mockResolvedValue([
+      {
+        id: 'q1',
+        name: 'Quiz 1',
+        status: 'PUBLISHED',
+        weight: 0,
+        question_count: 3,
+        attemptsSummary: { count: 1, canCreateNew: false, currentScore: 0, bestScore: 0 },
+      },
+    ]);
+    const ctx = studentCtx();
+    (ctx.classroom as unknown as { classroom: { slug: string } }).classroom.slug =
+      'authorized-slug';
+
+    const result = (await quizzesResource.handler(VARS, ctx, new URL('classmoji://x'))) as {
+      quizzes: Array<{ my_attempts: { currentScore: number | null } }>;
+    };
+
+    expect(result.quizzes[0].my_attempts.currentScore).toBe(0);
+  });
+
+  it('gives students closed quizzes too, as the web list does, reading as CLOSED', async () => {
+    // Past its close date: the service lists it when asked for closed ones.
+    getQuizzesForStudent.mockResolvedValue([
+      {
+        id: 'q1',
+        name: 'Quiz 1',
+        status: 'PUBLISHED',
+        weight: 0,
+        question_count: 3,
+        assignment: {
+          is_published: true,
+          release_at: null,
+          student_deadline: null,
+          closes_at: new Date(Date.now() - 60_000),
+          weight: 0,
+          module: { id: 'mod-1', title: 'Week 1' },
+        },
+        attemptsSummary: { count: 1, canCreateNew: false, currentScore: 70 },
+      },
+    ]);
+    const ctx = studentCtx();
+    (ctx.classroom as unknown as { classroom: { slug: string } }).classroom.slug =
+      'authorized-slug';
+
+    const result = (await quizzesResource.handler(VARS, ctx, new URL('classmoji://x'))) as {
+      quizzes: Array<Record<string, unknown>>;
+    };
+
+    expect(getQuizzesForStudent.mock.calls[0][3]).toEqual({ includeClosed: true });
+    expect(result.quizzes[0]).toMatchObject({ status: 'CLOSED', published: true });
+    expect(result.quizzes[0].my_attempts).toMatchObject({ currentScore: 70 });
+  });
+
+  it("gives students the assignment's due date, falling back to the quiz's own", async () => {
+    const assignmentDue = new Date('2026-10-02T18:00:00Z');
+    const quizDue = new Date('2026-09-30T18:00:00Z');
+    const quiz = { status: 'PUBLISHED', weight: 0, question_count: 3, due_date: quizDue };
+    getQuizzesForStudent.mockResolvedValue([
+      {
+        ...quiz,
+        id: 'q1',
+        name: 'With assignment',
+        assignment: { student_deadline: assignmentDue },
+      },
+      { ...quiz, id: 'q2', name: 'Without', assignment: null },
+    ]);
+    const ctx = studentCtx();
+    (ctx.classroom as unknown as { classroom: { slug: string } }).classroom.slug =
+      'authorized-slug';
+
+    const result = (await quizzesResource.handler(VARS, ctx, new URL('classmoji://x'))) as {
+      quizzes: Array<{ id: string; due_date: Date | null; assignment?: unknown }>;
+    };
+
+    expect(result.quizzes.map(q => [q.id, q.due_date])).toEqual([
+      ['q1', assignmentDue],
+      ['q2', quizDue],
+    ]);
+    // The assignment itself is not part of the shape.
+    expect('assignment' in result.quizzes[0]).toBe(false);
+  });
+
+  it('gives staff the same due date students see', async () => {
+    const assignmentDue = new Date('2026-10-02T18:00:00Z');
+    const quizDue = new Date('2026-09-30T18:00:00Z');
+    const quiz = { status: 'PUBLISHED', weight: 0, question_count: 3, due_date: quizDue };
+    findByClassroom.mockResolvedValue([
+      {
+        ...quiz,
+        id: 'q1',
+        name: 'With assignment',
+        assignment: { student_deadline: assignmentDue },
+      },
+      { ...quiz, id: 'q2', name: 'Without', assignment: null },
+    ]);
+
+    const result = (await quizzesResource.handler(
+      VARS,
+      ownerCtx({ quizzes_enabled: true }),
+      new URL('classmoji://x')
+    )) as { quizzes: Array<{ id: string; due_date: Date | null }> };
+
+    expect(result.quizzes.map(q => [q.id, q.due_date])).toEqual([
+      ['q1', assignmentDue],
+      ['q2', quizDue],
+    ]);
+    expect('assignment' in result.quizzes[0]).toBe(false);
+  });
+
+  it("reads status, publish state, dates, weight and module off the quiz's assignment", async () => {
+    // The quiz's own columns say PUBLISHED, weight 10: written when it was
+    // saved. The close date has passed since, and the assignment owns all of it.
+    const closesAt = new Date(Date.now() - 60_000);
+    const releaseAt = new Date('2026-09-28T13:00:00Z');
+    findByClassroom.mockResolvedValue([
+      {
+        id: 'q1',
+        name: 'Recursion',
+        status: 'PUBLISHED',
+        weight: 10,
+        due_date: null,
+        question_count: 3,
+        assignment: {
+          is_published: true,
+          release_at: releaseAt,
+          student_deadline: null,
+          closes_at: closesAt,
+          weight: 2.5,
+          tokens_per_hour: 3,
+          module: { id: 'mod-1', title: 'Week 1' },
+        },
+      },
+      {
+        id: 'q2',
+        name: 'Unpublished',
+        status: 'PUBLISHED',
+        weight: 10,
+        question_count: 3,
+        assignment: { is_published: false, weight: 0, module: { id: 'mod-1', title: 'Week 1' } },
+      },
+      { id: 'q3', name: 'In no module', status: 'CLOSED', weight: 4, question_count: 3 },
+    ]);
+
+    const result = (await quizzesResource.handler(
+      VARS,
+      ownerCtx({ quizzes_enabled: true }),
+      new URL('classmoji://x')
+    )) as { quizzes: Array<Record<string, unknown>> };
+
+    expect(result.quizzes[0]).toMatchObject({
+      status: 'CLOSED',
+      published: true,
+      module: { id: 'mod-1', title: 'Week 1' },
+      release_at: releaseAt,
+      closes_at: closesAt,
+      weight: 2.5,
+      tokens_per_hour: 3,
+    });
+    expect(result.quizzes[1]).toMatchObject({ status: 'DRAFT', published: false, weight: 0 });
+    expect(result.quizzes[2]).toMatchObject({
+      status: 'CLOSED',
+      published: true,
+      module: null,
+      weight: 4,
+    });
   });
 });
 
@@ -469,5 +758,114 @@ describe('calendar resource allowlist shaping (U5)', () => {
       expect(event.featured_resource).toBeNull();
       expect(JSON.stringify(event)).not.toContain('SECRET');
     });
+  });
+});
+
+describe('calendar windows are whole days in the classroom zone', () => {
+  function nyStudentCtx(): ToolContext {
+    const ctx = studentCtx();
+    Object.assign(ctx.classroom as object, {
+      timezone: 'America/New_York',
+      effectiveTimezone: { timeZone: 'America/New_York', source: 'classroom' },
+    });
+    return ctx;
+  }
+
+  function lastWindow(): { start: string; end: string } {
+    const [, start, end] = getClassroomCalendar.mock.lastCall as [string, Date, Date];
+    return { start: start.toISOString(), end: end.toISOString() };
+  }
+
+  it('reads a Mon-Sun range as New York days, so Sun 11:59 PM EDT is inside', async () => {
+    getClassroomCalendar.mockResolvedValue([]);
+    const result = (await calendarRangeResource.handler(
+      { org: 'o', slug: 's', start: '2026-09-21', end: '2026-09-27' },
+      nyStudentCtx(),
+      new URL('classmoji://x')
+    )) as { range: { start: string; end: string } };
+
+    // Lab2 is due 2026-09-28T03:59Z; a UTC-day window ending Sep 27 missed it.
+    expect(lastWindow()).toEqual({
+      start: '2026-09-21T04:00:00.000Z',
+      end: '2026-09-28T03:59:59.999Z',
+    });
+    expect(result.range).toEqual(lastWindow());
+  });
+
+  it('keeps plain UTC days when the classroom has no zone', async () => {
+    getClassroomCalendar.mockResolvedValue([]);
+    await calendarRangeResource.handler(
+      { org: 'o', slug: 's', start: '2026-09-21', end: '2026-09-27' },
+      studentCtx(),
+      new URL('classmoji://x')
+    );
+    expect(lastWindow()).toEqual({
+      start: '2026-09-21T00:00:00.000Z',
+      end: '2026-09-27T23:59:59.999Z',
+    });
+  });
+
+  it('refuses an impossible date instead of rolling it into the next month', async () => {
+    for (const [start, end] of [
+      ['2026-02-30', '2026-03-05'],
+      ['2026-02-30T00:00:00Z', '2026-03-05T00:00:00Z'],
+    ]) {
+      await expect(
+        calendarRangeResource.handler(
+          { org: 'o', slug: 's', start, end },
+          nyStudentCtx(),
+          new URL('classmoji://x')
+        )
+      ).rejects.toMatchObject({ kind: 'invalid_params' });
+    }
+  });
+
+  it('still refuses a reversed range', async () => {
+    await expect(
+      calendarRangeResource.handler(
+        { org: 'o', slug: 's', start: '2026-09-27', end: '2026-09-21' },
+        nyStudentCtx(),
+        new URL('classmoji://x')
+      )
+    ).rejects.toMatchObject({ kind: 'invalid_params' });
+  });
+
+  it('anchors the default month on the class calendar, not UTC', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      // Sep 30, 10 PM EDT: already October in UTC, still September in class.
+      vi.setSystemTime(new Date('2026-10-01T02:00:00Z'));
+      getClassroomCalendar.mockResolvedValue([]);
+      await calendarResource.handler(
+        { org: 'o', slug: 's' },
+        nyStudentCtx(),
+        new URL('classmoji://x')
+      );
+      expect(lastWindow()).toEqual({
+        start: '2026-08-29T04:00:00.000Z',
+        end: '2026-10-05T03:59:59.999Z',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('calendar windows follow the caller zone when the classroom has none', () => {
+  it('uses a caller-supplied zone (Ask Moji) for the day boundaries', async () => {
+    const ctx = studentCtx();
+    Object.assign(ctx.classroom as object, {
+      timezone: null,
+      effectiveTimezone: { timeZone: 'America/New_York', source: 'caller' },
+    });
+    getClassroomCalendar.mockResolvedValue([]);
+    await calendarRangeResource.handler(
+      { org: 'o', slug: 's', start: '2026-09-21', end: '2026-09-27' },
+      ctx,
+      new URL('classmoji://x')
+    );
+    const [, start, end] = getClassroomCalendar.mock.lastCall as [string, Date, Date];
+    expect(start.toISOString()).toBe('2026-09-21T04:00:00.000Z');
+    expect(end.toISOString()).toBe('2026-09-28T03:59:59.999Z');
   });
 });

@@ -192,6 +192,12 @@ model Account {
   refresh_token_expires_at DateTime?
   scope                    String?
   id_token                 String?
+  // Git identity lives here, not on User: a user can hold a Github account, a
+  // GitLab account and a password (credential) account at once.
+  // This provider's username (Github login / GitLab username).
+  username                 String?
+  email                    String? // The provider profile's email (unverified by us)
+  image                    String? // The provider profile's avatar URL
   password                 String?
   created_at               DateTime  @default(now())
   updated_at               DateTime  @default(now()) @updatedAt
@@ -199,6 +205,7 @@ model Account {
   user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@unique([provider_id, account_id])
+  @@unique([provider_id, username])
   @@index([user_id])
   @@map("accounts")
 }
@@ -302,16 +309,14 @@ model OauthConsent {
 // ============================================================================
 
 model User {
-  id             String       @id @default(uuid())
-  provider       GitProvider?
-  provider_id    String? // User's ID from the OAuth provider (GitHub user ID, GitLab ID, etc.)
-  provider_email String? // User's email from the OAuth provider
-  login          String?      @unique
-  email          String?      @unique
-  emailVerified  Boolean      @default(false) // BetterAuth required
-  name           String?
-  image          String? // BetterAuth required (avatar URL)
-  school_id      String? // School student ID
+  id            String  @id @default(uuid())
+  // Verified contact/school email; also the email+password sign-in email.
+  // Git usernames, ids and provider emails live on Account.
+  email         String? @unique
+  emailVerified Boolean @default(false) // BetterAuth required
+  name          String?
+  image         String? // BetterAuth required: the displayed avatar URL
+  school_id     String? // School student ID
 
   // better-auth fields
   role           String?
@@ -357,9 +362,9 @@ model User {
   /// Rows this user typed in on somebody else's behalf — see FormResponse.added_by.
   form_responses_added          FormResponse[]            @relation("FormResponseAddedBy")
   survey_responses              SurveyResponse[]
+  team_sets_created             TeamSet[]
+  team_set_runs_created         TeamSetRun[]
 
-  @@unique([provider, provider_id])
-  @@index([provider, login])
   @@map("users")
 }
 
@@ -491,6 +496,8 @@ model Classroom {
   forms                 Form[]
   content_assets        ContentAsset[]
   content_index         ContentIndex[]
+  media_objects         MediaObject[]
+  team_sets             TeamSet[]
 
   // Logically redundant now that slug is globally unique, but retained: it is
   // the compound key live upserts select on (githubClassroomImport, example
@@ -519,17 +526,48 @@ model ClassroomSettings {
   show_modules                 Boolean  @default(true)
   show_pages                   Boolean  @default(true)
   show_repos                   Boolean  @default(true)
+  // Ask Moji's model and reasoning effort (low|medium|high|xhigh|max). Null =
+  // the platform default (the ai-agent's SYLLABUS_BOT_MODEL and
+  // SYLLABUS_BOT_EFFORT). Only a classroom with its own key can set these on
+  // the settings page; the ai-agent drops effort for a model that takes none.
   syllabus_bot_model           String?
+  syllabus_bot_effort          String?
   llm_provider                 String?
   llm_model                    String?
+  // Legacy: no quiz call sends a temperature or token cap, and the settings page
+  // no longer edits these. Kept (not dropped) so old rows stay readable.
   llm_temperature              Float?
   llm_max_tokens               Int?
   openai_api_key               String?
   anthropic_api_key            String?
   code_aware_model             String?
+  // Model for the code-aware quiz's repository-exploration sub-agent. Null =
+  // the platform EXPLORATION_MODEL. Runs in a Trigger.dev task on the platform
+  // Anthropic key, not anthropic_api_key above.
+  exploration_model            String?
+  // Reasoning effort per quiz phase: question and conversation turns (both quiz
+  // types), final grading (both), and the exploration excerpt call. One of
+  // low|medium|high|xhigh|max; null = the platform default (the ai-agent's
+  // QUIZ_QUESTION_EFFORT, QUIZ_GRADING_EFFORT, EXPLORATION_EFFORT). Only a
+  // classroom with its own key can set these on the settings page; the ai-agent
+  // honors what is stored and drops it for a model that takes no effort.
+  question_effort              String?
+  grading_effort               String?
+  exploration_effort           String?
   content_repo_name            String?
   default_student_page         String   @default("dashboard")
   theme                        String   @default("stone")
+  // The course's IANA time zone, e.g. `America/New_York` — THE one place a
+  // classroom records its zone. Everything that formats a date on the server
+  // reads it through classroom.getTimeZone: the public /schedule, Ask Moji's
+  // "now" line and the MCP server's `<field>_local` renderings. Null = not set:
+  // Ask Moji then falls back to the asking user's browser zone, and everything
+  // else to UTC, labelled as UTC. Set at creation from the creator's browser.
+  //
+  // Validated in classroom.updateSettings against Intl (canonical spelling
+  // stored); the CHECK in classroom_settings_timezone is a shape floor only,
+  // same reasoning as the deprecated ClassroomSite.timezone it replaces.
+  timezone                     String?
   created_at                   DateTime @default(now())
   updated_at                   DateTime @default(now()) @updatedAt
 
@@ -561,6 +599,14 @@ model ClassroomSite {
   // repair, never delete the site row (and with it the claimed subdomain).
   home_page_id              String?
   show_schedule             Boolean   @default(true)
+  // DEPRECATED — superseded by ClassroomSettings.timezone (migration
+  // classroom_settings_timezone copied every non-null value there). Nothing
+  // reads or writes this column any more. It is left in place, not dropped, so
+  // a process still running the previous release during a rolling deploy (the
+  // pages app deploys separately) does not select a column that is gone. Drop it
+  // in a later migration once no deployed build references it.
+  //
+  // Original note, kept for history:
   // The IANA zone the PUBLIC schedule renders deadlines in, e.g.
   // `America/New_York`. Null = fall back to UTC, and the schedule then LABELS
   // the date as UTC rather than printing a bare, ambiguous one.
@@ -834,14 +880,22 @@ model Assignment {
   form_id          String?        @unique
   title            String
   slug             String? // Set once on creation from title, never updated
+  // Manual order inside the module, as the admin Modules screen arranges it.
+  // Ties (and rows created before the column existed) fall back to deadline.
+  position         Int            @default(0)
   weight           Float          @default(100)
   is_extra_credit  Boolean        @default(false)
   is_published     Boolean        @default(false)
   description      String         @default("")
   student_deadline DateTime?
   grader_deadline  DateTime?
-  tokens_per_hour  Int            @default(0)
+  // The price of one extension hour on this assignment. Empty = the
+  // classroom's ClassroomSettings.default_tokens_per_hour; 0 = no extensions.
+  tokens_per_hour  Int?
   release_at       DateTime?
+  // QUIZ only for now: from this moment no new attempt can start (an attempt
+  // already under way may finish). Empty = never closes. REPO ignores it.
+  closes_at        DateTime?
   grades_released  Boolean        @default(false)
   created_at       DateTime       @default(now())
   updated_at       DateTime       @default(now()) @updatedAt
@@ -1166,6 +1220,7 @@ model Tag {
   classroom    Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   repositories Repository[]
   teams        TeamTag[]
+  team_sets    TeamSet[]
 
   @@unique([classroom_id, name])
   @@map("tags")
@@ -1239,29 +1294,44 @@ model AuditLog {
 // ============================================================================
 
 model Quiz {
-  id                   String              @id @default(uuid())
-  classroom_id         String
-  repository_id        String?
-  name                 String
-  system_prompt        String?
-  rubric_prompt        String
-  due_date             DateTime?
-  status               QuizStatus          @default(DRAFT)
-  weight               Int                 @default(0)
-  question_count       Int                 @default(5)
-  difficulty_level     String?
-  subject              String?
-  include_code_context Boolean             @default(false)
-  grading_strategy     QuizGradingStrategy @default(HIGHEST)
-  max_attempts         Int                 @default(1)
-  created_at           DateTime            @default(now())
-  updated_at           DateTime            @default(now()) @updatedAt
+  id                    String              @id @default(uuid())
+  classroom_id          String
+  repository_id         String?
+  name                  String
+  system_prompt         String?
+  rubric_prompt         String
+  due_date              DateTime?
+  status                QuizStatus          @default(DRAFT)
+  weight                Int                 @default(0)
+  question_count        Int                 @default(5)
+  difficulty_level      String?
+  subject               String?
+  include_code_context  Boolean             @default(false)
+  grading_strategy      QuizGradingStrategy @default(HIGHEST)
+  max_attempts          Int                 @default(1)
+  /// Lets the quiz agent search the whole classroom's content (content_search
+  /// and content_list), not only the documents linked as source material, to
+  /// check whether the course covers something a student mentions. Off by
+  /// default; independent of the linked material.
+  course_search_enabled Boolean             @default(false)
+  /// "Paths to exclude": files a code-aware quiz's agent never sees in the
+  /// student's repository. Glob patterns relative to the repository root, one
+  /// per entry, read like .gitignore lines. Left out of the file tree
+  /// exploration lists, never read, never quoted. Empty by default. (No glob
+  /// examples: they would end this comment in the generated client.)
+  excluded_paths        String[]            @default([])
+  created_at            DateTime            @default(now())
+  updated_at            DateTime            @default(now()) @updatedAt
 
   classroom    Classroom     @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   repository   Repository?   @relation(fields: [repository_id], references: [id])
   attempts     QuizAttempt[]
   module_items ModuleItem[]
   assignment   Assignment?
+  /// Source material: the pages and slide decks the quiz is about, in prompt
+  /// order (`order`). The quiz target of the shared link tables.
+  page_links   PageLink[]
+  slide_links  SlideLink[]
 
   @@index([classroom_id])
   @@index([repository_id])
@@ -1290,16 +1360,57 @@ model QuizAttempt {
   session_status            String?   @default("active")
   codebase_path             String?
   agent_config              Json?
+  /// Which runtime serves this attempt: ai_agent | trigger_chat. Stamped once at
+  /// creation; picks the renderer and the endpoints that may act on the attempt.
+  agent_runtime             String    @default("ai_agent")
+  /// Tool-schema, prompt and grading-policy bundle the attempt is graded under.
+  contract_version          Int?
+  /// QuizEvaluationRecordV2 (packages/utils/src/quizAgent/records.ts).
+  evaluation_json           Json?
+  trigger_session_id        String?
+  session_expires_at        DateTime?
+  /// Set at each admitted turn; a write from a superseded run no longer matches.
+  turn_fence                String?
+  chat_grant                Json?
   created_at                DateTime  @default(now())
   updated_at                DateTime  @default(now()) @updatedAt
 
-  quiz         Quiz            @relation(fields: [quiz_id], references: [id], onDelete: Cascade)
-  user         User            @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  conversation AIConversation? @relation(fields: [conversation_id], references: [id])
+  quiz         Quiz               @relation(fields: [quiz_id], references: [id], onDelete: Cascade)
+  user         User               @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  conversation AIConversation?    @relation(fields: [conversation_id], references: [id])
+  events       QuizAttemptEvent[]
 
   @@index([quiz_id])
   @@index([user_id])
   @@map("quiz_attempts")
+}
+
+/// Append-only journal of a trigger_chat attempt: each accepted outcome is one
+/// row keyed by an operation id (a tool call id, or the admitted message id),
+/// written in the same transaction as the change it records.
+model QuizAttemptEvent {
+  id               String   @id @default(uuid())
+  attempt_id       String
+  seq              Int
+  /// input_admitted | question_presented | result_finalized | result_revised
+  /// | evaluation_completed | exploration_completed | turn_refused
+  type             String
+  operation_id     String
+  tool_call_id     String?
+  turn_fence       String?
+  input_message_id String?
+  run_id           String?
+  contract_version Int?
+  payload          Json
+  actor_user_id    String?
+  created_at       DateTime @default(now())
+
+  attempt QuizAttempt @relation(fields: [attempt_id], references: [id], onDelete: Cascade)
+
+  @@unique([attempt_id, operation_id])
+  @@unique([attempt_id, seq])
+  @@index([attempt_id, type])
+  @@map("quiz_attempt_events")
 }
 
 // ============================================================================
@@ -1367,14 +1478,22 @@ model Slide {
   source_size     Int?
   source_url      String?
 
+  // FILE only, and only on a Pro classroom whose document was too large for the
+  // repository: the media object the file lives in, instead of `source_path`.
+  // SET NULL on delete, so removing the media object leaves a FILE slide with
+  // nothing to download rather than taking the slide with it.
+  media_id String?
+
   classroom          Classroom                @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   creator            User                     @relation(fields: [created_by], references: [id])
+  media              MediaObject?             @relation(fields: [media_id], references: [id], onDelete: SetNull)
   links              SlideLink[]
   calendarEventLinks CalendarEventSlideLink[]
   module_items       ModuleItem[]
 
   @@unique([classroom_id, slug])
   @@index([classroom_id])
+  @@index([media_id])
   @@map("slides")
 }
 
@@ -1423,16 +1542,21 @@ model PageLink {
   page_id       String
   repository_id String?
   assignment_id String?
+  /// Set when the page is source material for a quiz. Unique per
+  /// (page_id, quiz_id) through a partial index the migration adds by hand.
+  quiz_id       String?
   order         Int      @default(0)
   created_at    DateTime @default(now())
 
   page       Page        @relation(fields: [page_id], references: [id], onDelete: Cascade)
   repository Repository? @relation(fields: [repository_id], references: [id], onDelete: Cascade)
   assignment Assignment? @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+  quiz       Quiz?       @relation(fields: [quiz_id], references: [id], onDelete: Cascade)
 
   @@unique([page_id, repository_id, assignment_id])
   @@index([repository_id])
   @@index([assignment_id])
+  @@index([quiz_id])
   @@map("page_links")
 }
 
@@ -1441,16 +1565,21 @@ model SlideLink {
   slide_id      String
   repository_id String?
   assignment_id String?
+  /// Set when the deck is source material for a quiz. Unique per
+  /// (slide_id, quiz_id) through a partial index the migration adds by hand.
+  quiz_id       String?
   order         Int      @default(0)
   created_at    DateTime @default(now())
 
   slide      Slide       @relation(fields: [slide_id], references: [id], onDelete: Cascade)
   repository Repository? @relation(fields: [repository_id], references: [id], onDelete: Cascade)
   assignment Assignment? @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+  quiz       Quiz?       @relation(fields: [quiz_id], references: [id], onDelete: Cascade)
 
   @@unique([slide_id, repository_id, assignment_id])
   @@index([repository_id])
   @@index([assignment_id])
+  @@index([quiz_id])
   @@map("slide_links")
 }
 
@@ -1590,15 +1719,27 @@ model AIConversation {
 }
 
 model AIConversationMessage {
-  id              String      @id @default(uuid())
-  conversation_id String
-  role            MessageRole
-  content         String
-  metadata        Json?
-  created_at      DateTime    @default(now())
+  id               String      @id @default(uuid())
+  conversation_id  String
+  role             MessageRole
+  content          String
+  metadata         Json?
+  /// UIMessage parts (format ui_message_v1); null for legacy_text rows.
+  parts            Json?
+  /// legacy_text | ui_message_v1
+  format           String      @default("legacy_text")
+  /// The UIMessage id the stream and the browser use; unique per conversation.
+  ui_message_id    String?
+  /// false while a streamed message is still partial.
+  final            Boolean     @default(true)
+  /// student | server_opening | model | server_completion
+  provenance       String?
+  contract_version Int?
+  created_at       DateTime    @default(now())
 
   conversation AIConversation @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
 
+  @@unique([conversation_id, ui_message_id])
   @@index([conversation_id])
   @@map("ai_conversation_messages")
 }
@@ -1794,6 +1935,7 @@ model Form {
   module_items ModuleItem[]
   assignment   Assignment?
   gallery_org  GitOrganization? @relation(fields: [gallery_org_id], references: [id], onDelete: SetNull)
+  team_sets    TeamSet[]
 
   @@unique([classroom_id, slug])
   @@index([classroom_id])
@@ -1942,6 +2084,115 @@ model FormMagicToken {
   /// the same id, and a duplicate must be a no-op rather than an error.
   @@index([provider_message_id])
   @@map("form_magic_tokens")
+}
+
+// ============================================================================
+// TEAM SETS
+// ============================================================================
+// A team set is one configured grouping of a CLASSROOM form's respondents
+// ("workshop-pairs"). A run is one solve of that configuration against the
+// responses as they stood when it started: a PROPOSAL, stored as ids and
+// integers only. Neither ever touches a Team row. Teams come into existence
+// only through a separate, owner-confirmed "create" step (teamSet.service
+// applyCreate), which adds teams under the set's tag and never deletes any —
+// a Team delete cascades to its repositories and their grades, so nothing on
+// this path is allowed to issue one.
+
+enum TeamSetRunStatus {
+  QUEUED
+  RUNNING
+  SOLVED
+  INFEASIBLE
+  FAILED
+  CANCELED
+}
+
+model TeamSet {
+  id             String   @id @default(uuid())
+  classroom_id   String
+  form_id        String
+  /// Slug-like; becomes the Tag name on create. Unique per form.
+  name           String
+  /// TeamSetConfig (version 1) — see teamSetConfig.ts. Carries provenance
+  /// stamps the service writes on save (pins: added_by/_via/_at; Closed
+  /// options: closed_by/_via/_at). Fixed once a create is claimed (the set is
+  /// locked; teamSet.service isSetLocked).
+  config         Json
+  /// Set by create: the Tag every created team carries.
+  tag_id         String?
+  /// The run whose teams were created. Null until a create is CLAIMED; the
+  /// claim is an `updateMany … WHERE created_run_id IS NULL`, which is what
+  /// makes a double-confirm create one set of teams rather than two.
+  created_run_id String?
+  /// CreateState (teamSet.service.ts): { status: 'RUNNING'|'DONE'|'PARTIAL'|'FAILED',
+  ///   run_id, run_number, total, done, failed: [{team, reason, members?}],
+  ///   teams: [{team_id, name, n, members_added?}], names, sizes, renamed?,
+  ///   counts, attempt, attempt_id, claimed_by, started_at, task_started_at,
+  ///   heartbeat_at, finished_at }
+  create_state   Json?
+  created_by     String
+  created_at     DateTime @default(now())
+  updated_at     DateTime @default(now()) @updatedAt
+
+  classroom Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  form      Form         @relation(fields: [form_id], references: [id], onDelete: Cascade)
+  tag       Tag?         @relation(fields: [tag_id], references: [id], onDelete: SetNull)
+  creator   User         @relation(fields: [created_by], references: [id])
+  runs      TeamSetRun[]
+
+  @@unique([form_id, name])
+  @@index([classroom_id])
+  @@map("team_sets")
+}
+
+model TeamSetRun {
+  id             String           @id @default(uuid())
+  team_set_id    String
+  /// 1..n per set, shown to humans ("run 3"). Allocated under the set's row lock.
+  number         Int
+  status         TeamSetRunStatus @default(QUEUED)
+  /// Snapshot of TeamSet.config at start, with non_respondents resolved
+  /// (always explicit on runs started since 'group' existed).
+  config         Json
+  /// TeamSetProblem — ids and integers only, no names or free text. This exact
+  /// JSON is what the solver reads. Version 2 adds options[].size and group.
+  /// Its soft counts and groups are sets of people built from answers, an
+  /// identity question's included: it never leaves the server.
+  problem        Json
+  /// TeamSetContext — ids and integers only; what metrics and explanations
+  /// need (plus clipped numeric answers of balance rules). Never identity
+  /// answers.
+  context        Json
+  /// Staleness snapshot: { revision_id, responses: [{id, user_id, updated_at,
+  /// answers_hash}], roster_user_ids }.
+  inputs         Json
+  seed           Int
+  /// e.g. "cpsat@9.15.6755"
+  engine         String
+  /// { teams: [{ slot, option_id, member_user_ids }] }
+  result         Json?
+  /// TeamSetMetrics (incl. top3, per-rule team counts, non_respondents). Never
+  /// which teams an identity rule missed.
+  metrics        Json?
+  /// SolverSummary: { status, objective, bound, wall_s, core_status?, stats?,
+  ///   stages? (two-stage solves) }
+  solver         Json?
+  /// { issues?: CheckIssue[], core?: [{src, label}] (labels name no one),
+  ///   core_status?, summary? (a facts sentence), mismatch? }
+  diagnostics    Json?
+  /// Closed-vocabulary code, never raw exception text.
+  error          String?
+  trigger_run_id String?
+  created_by     String
+  created_at     DateTime         @default(now())
+  started_at     DateTime?
+  finished_at    DateTime?
+
+  team_set TeamSet @relation(fields: [team_set_id], references: [id], onDelete: Cascade)
+  creator  User    @relation(fields: [created_by], references: [id])
+
+  @@unique([team_set_id, number])
+  @@map("team_set_runs")
 }
 
 /// Path → git object map for a classroom's content repo, refreshed from push
@@ -2142,4 +2393,137 @@ model DocsIndex {
 
   @@id([slug, chunk_ix])
   @@map("docs_index")
+}
+
+/// Lifecycle of one uploaded media object. UPLOADING is a reservation — the row
+/// exists and the multipart upload is open, but no bytes are addressable yet;
+/// READY means the object is complete and its size verified; DELETED means the
+/// R2 objects are gone and every reference to it now resolves to `/missing/`.
+/// STAGING is an agent upload (MCP `file_upload_start` / `file_import_url`)
+/// whose bytes sit under the bucket's `stage/` prefix until they are placed —
+/// in the course repository or in media. It holds a reservation exactly like
+/// UPLOADING and expires with the same window.
+enum MediaStatus {
+  UPLOADING
+  READY
+  DELETED
+  STAGING
+}
+
+/// What KIND of file this is, decided from the extension at create time. It
+/// picks the content type, decides whether the video options mean anything, and
+/// is what the media page groups by. Not a mime prefix: `key` and `pptx` are
+/// both DOCUMENT and share no mime family. OTHER is any extension the store has
+/// no type for — stored and served as `application/octet-stream`, a download.
+enum MediaKind {
+  VIDEO
+  AUDIO
+  DOCUMENT
+  ARCHIVE
+  IMAGE
+  OTHER
+}
+
+/// Where the video rendition job got to. NONE is the resting state for anything
+/// that is not an optimised video, and is what every non-video row keeps.
+enum MediaProcessing {
+  NONE
+  PENDING
+  DONE
+  FAILED
+}
+
+/// One uploaded file in a classroom's media store — the primary copy, in R2,
+/// outside git.
+///
+/// This is NOT a cache, which is the whole difference between it and
+/// `ContentAsset`: nothing here is derivable from a repo, so a lost row is a
+/// lost file. Content stores the reference `media://{id}` and the render-time
+/// resolver turns it into a signed `/media/` URL exactly as a repo path becomes
+/// a signed `/blob/` URL — same key, same tiers, same proof that the row
+/// belongs to the classroom doing the signing.
+///
+/// R2 keys are DERIVED: `m/{classroom_id}/{id}/{variant}` with the variant
+/// being `orig.{ext}`, `web-{hex12}.mp4` or `poster-{hex12}.jpg` (the hex being
+/// content-derived). `rendition_key`/`poster_key` record the job's output, but
+/// readers take only the variant from them and rebuild the key with
+/// `mediaKey()` in @classmoji/content-signing — the one copy of a shape the app
+/// and the Worker have to agree on byte for byte.
+///
+/// QUOTA is a SUM over these rows, deliberately without a counter column:
+/// `size_bytes` for READY rows whose original is still there, `rendition_bytes`
+/// for the ones whose original was dropped after processing, plus `size_bytes`
+/// for UPLOADING rows younger than the reservation window. A stale reservation
+/// therefore falls out of the sum by age alone, and R2 aborts the abandoned
+/// multipart itself at 7 days — no sweep job, nothing to run.
+model MediaObject {
+  id                  String          @id @default(uuid())
+  classroom_id        String
+  kind                MediaKind
+  /// The name the uploader chose, kept verbatim for display and for the
+  /// `dl` filename on a download URL. Never a path and never part of a key.
+  filename            String
+  /// Canonical lowercase extension of the ORIGINAL, e.g. "mov". It is half of
+  /// the `orig.{ext}` variant, so it is what a signed URL for the original is
+  /// built from.
+  ext                 String
+  /// Server-assigned from `ext` against an allowlist, never taken from the
+  /// client. The Worker answers with it and sends nosniff, so an uploaded
+  /// document can never be served as something executable.
+  content_type        String
+  /// Declared at create so the quota can be checked BEFORE any bytes move, then
+  /// verified against HeadObject at complete. A client that lies gets its
+  /// upload aborted and its row deleted.
+  size_bytes          BigInt
+  status              MediaStatus     @default(UPLOADING)
+  /// The S3 multipart id, held only while UPLOADING so parts can be signed and
+  /// the upload aborted.
+  upload_id           String?
+  uploaded_by         String
+  /// The three upload-dialog options. Video only — for every other kind they
+  /// are stored at fixed values: no optimise, keep the original, and
+  /// allow_download TRUE (a PDF or a zip is the file itself; the setting is
+  /// about keeping a lecture recording from being saved).
+  optimise            Boolean         @default(false)
+  keep_original       Boolean         @default(true)
+  allow_download      Boolean         @default(false)
+  processing          MediaProcessing @default(NONE)
+  processing_error    String?
+  /// Set by the video job (the full key of its `web-{hex12}.mp4`). Its presence
+  /// is the serve switch: a row with a rendition serves it, otherwise `orig.{ext}`.
+  rendition_key       String?
+  rendition_bytes     BigInt?
+  poster_key          String?
+  duration_ms         Int?
+  width               Int?
+  height              Int?
+  created_at          DateTime        @default(now())
+  ready_at            DateTime?
+  deleted_at          DateTime?
+  /// When the original was dropped after a verified rendition. From then on the
+  /// rendition's bytes are what this row costs against the quota.
+  original_deleted_at DateTime?
+
+  /// STAGING rows only (agent uploads) — all five NULL for a normal upload.
+  /// `destination` is where the staged bytes are going, decided by the storage
+  /// router when the stage opens: 'repo' (committed to the content repo) or
+  /// 'media' (copied into this store). `stage_target_type` ('page' | 'slide')
+  /// and `stage_target_id` name what the file is being added to.
+  /// `placed_ref` is the reference the placement produced (a repo path or
+  /// `media://{id}`), `placement_error` the refusal when it failed — what a
+  /// status poll answers with.
+  destination       String?
+  stage_target_type String?
+  stage_target_id   String?
+  placed_ref        String?
+  placement_error   String?
+
+  classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  /// FILE slides whose document lives here rather than in the content repo.
+  slides    Slide[]
+
+  /// Every read is classroom-scoped and status-filtered: the usage sum, the
+  /// media list, and the resolver's own lookup.
+  @@index([classroom_id, status])
+  @@map("media_objects")
 }

@@ -9,6 +9,7 @@ import {
   calculateAssignmentGrade,
   calculateGrades,
   calculateLetterGrade,
+  quizStanding,
   type LetterGradeMappingEntry,
   type OrganizationSettings,
 } from '@classmoji/utils';
@@ -17,6 +18,7 @@ import GradeBadges from '~/components/features/grading/GradeBadges';
 import { ASSIGNMENT_TYPE_META } from '~/components/features/assignments/AssignmentsTable';
 import { addAuditLog, addClassroomAuditLog } from '~/utils/helpers';
 import { requireClassroomStaff, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import { normalizeSchoolId } from '~/utils/schoolId';
 import type { Route } from './+types/route';
 
@@ -45,12 +47,13 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const studentId = enrollment.user.id;
 
   const [
-    assignments,
+    publishedAssignments,
     repoAssignments,
     emojiMappings,
     settingsRow,
     letterGradeMappings,
     tokenBalance,
+    quizzesVisible,
   ] = await Promise.all([
     ClassmojiService.assignment.listForClassroom(classroom.id, { publishedOnly: true }),
     // Individual repos AND team repos: a team member's submission row hangs
@@ -60,9 +63,26 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id),
     ClassmojiService.letterGradeMapping.findByClassroomId(classroom.id),
     ClassmojiService.token.getBalance(classroom.id, studentId),
+    loadQuizzesVisible(classroom.id),
   ]);
 
-  // Quiz attempts and form responses for this student, one lookup each.
+  // Where quizzes are hidden their assignments are no row here, and no attempt
+  // is looked up for them.
+  const assignments = quizzesVisible
+    ? publishedAssignments
+    : publishedAssignments.filter(a => a.type !== 'QUIZ');
+
+  // Quiz attempts for this student in one lookup, scored by each quiz's
+  // grading strategy through the shared selector (the gradebook's rule), and
+  // form responses one lookup each.
+  const quizIds = assignments.flatMap(a => (a.type === 'QUIZ' && a.quiz ? [a.quiz.id] : []));
+  const hasQuizzes = quizIds.length > 0;
+  const [quizAttempts, gradingStrategies] = await Promise.all([
+    hasQuizzes ? ClassmojiService.quizAttempt.findForUserByQuizIds(studentId, quizIds) : [],
+    hasQuizzes
+      ? ClassmojiService.quiz.findGradingStrategies(quizIds)
+      : ({} as Record<string, string>),
+  ]);
   const quizStatus: Record<
     string,
     { attempted: boolean; completed: boolean; score: number | null }
@@ -71,14 +91,15 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   await Promise.all(
     assignments.map(async a => {
       if (a.type === 'QUIZ' && a.quiz) {
-        const attempt = await ClassmojiService.quizAttempt.getUserAttemptForQuiz(
-          a.quiz.id,
-          studentId
+        const quizId = a.quiz.id;
+        const standing = quizStanding(
+          quizAttempts.filter(attempt => attempt.quiz_id === quizId),
+          gradingStrategies[quizId]
         );
         quizStatus[a.id] = {
-          attempted: Boolean(attempt),
-          completed: Boolean(attempt?.completed_at),
-          score: attempt?.score ?? null,
+          attempted: standing.attemptsUsed > 0,
+          completed: standing.completed,
+          score: standing.score,
         };
       } else if (a.type === 'FORM' && a.form) {
         const response = await ClassmojiService.formResponse.findOwnResponse(a.form.id, studentId);

@@ -16,16 +16,17 @@ import React, { useEffect } from 'react';
 import dayjs from 'dayjs';
 import { ConfigProvider, theme, App as AntdApp } from 'antd';
 import { IconMoodSad } from '@tabler/icons-react';
-import { auth as triggerAuth } from '@trigger.dev/sdk';
 
-import { GitHubProvider, ClassmojiService } from '@classmoji/services';
+import { ClassmojiService } from '@classmoji/services';
+import { gitUsername, withLogin } from '@classmoji/utils';
 import { CalloutProvider, CalloutSlot } from '@classmoji/ui-components';
+import OperationProgress from '~/components/features/operations/OperationProgress';
 import { auth, getAuthSession } from '@classmoji/auth/server';
 import { COOKIE_DOMAIN } from '@classmoji/auth/secret';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import type { Route } from './+types/root';
 import type { MembershipWithOrganization, AppUser, Role } from '~/types';
-import { CLASSROOM_SETTINGS_SELECT } from '~/types';
+import { ROOT_USER_INCLUDE } from '~/types';
 import type { ThemeConfig } from 'antd';
 import { useNotifiedFetcher, useDarkMode } from './hooks';
 import antdTheme from './config/antd';
@@ -69,6 +70,70 @@ export const meta = () => {
 const startedFromAdminApp = (request: Request): boolean =>
   /(?:^|;\s*)cm_impersonation_origin=admin(?:;|$)/.test(request.headers.get('cookie') ?? '');
 
+/**
+ * The session fields the browser reads: the session id (the impersonation
+ * banner's key), `impersonatedBy` (whether a "View As" is on) and the
+ * signed-in user's name and email (the banner's label).
+ */
+const toClientSession = (source: unknown) => {
+  if (!source || typeof source !== 'object') return null;
+  const { session, user } = source as {
+    session?: { id?: unknown; impersonatedBy?: unknown } | null;
+    user?: { name?: unknown; email?: unknown } | null;
+  };
+  const text = (value: unknown) => (typeof value === 'string' ? value : undefined);
+  return {
+    session: { id: text(session?.id), impersonatedBy: text(session?.impersonatedBy) },
+    user: { name: text(user?.name), email: text(user?.email) },
+  };
+};
+
+const loadAppUser = async (userId: string): Promise<AppUser | null> => {
+  const [row, passwordAccounts, subscription] = await Promise.all([
+    getPrisma().user.findUnique({ where: { id: userId }, include: ROOT_USER_INCLUDE }),
+    getPrisma().account.count({ where: { user_id: userId, provider_id: 'credential' } }),
+    ClassmojiService.subscription.getCurrent(userId),
+  ]);
+  if (!row) return null;
+  const user: AppUser = {
+    ...withLogin(row, 'GITHUB'),
+    has_github: gitUsername(row, 'GITHUB') !== null,
+    has_password: passwordAccounts > 0,
+  };
+  if (subscription) user.subscription = subscription;
+  return user;
+};
+
+// Paths an account that is not set up yet may still reach: the setup steps
+// themselves, signing out, and (for the Github step) account settings.
+const EMAIL_STEP_PATHS = ['/registration', '/logout'];
+const GITHUB_STEP_PATHS = ['/select-organization', '/logout', '/settings'];
+
+const isUnder = (pathname: string, paths: string[]) =>
+  paths.some(path => pathname === path || pathname.startsWith(`${path}/`));
+
+const accountSetupRedirect = (user: AppUser, url: URL): string | null => {
+  if (url.pathname === '/') return null;
+  const params = new URLSearchParams();
+  const next = `${url.pathname}${url.search}`;
+  if (!user.email || !user.emailVerified) {
+    if (isUnder(url.pathname, EMAIL_STEP_PATHS)) return null;
+    // A roster invite link lands on the picker with a signed invite token;
+    // hand it to registration or the address is never prefilled (#343).
+    const invite = url.searchParams.get('invite');
+    if (invite) params.set('invite', invite);
+    if (url.pathname !== '/select-organization') params.set('next', next);
+    const qs = params.toString();
+    return `/registration${qs ? `?${qs}` : ''}`;
+  }
+  if (!user.has_github) {
+    // The picker asks them to connect Github.
+    if (isUnder(url.pathname, [...GITHUB_STEP_PATHS, '/registration'])) return null;
+    return '/select-organization';
+  }
+  return null;
+};
+
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const url = new URL(request.url);
 
@@ -77,37 +142,16 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     return redirect('/setup');
   }
 
-  // Setup routes are public - bypass all auth and Trigger.dev logic
+  // Setup routes are public - bypass all auth
   if (url.pathname.startsWith('/setup')) {
     return { user: null };
-  }
-
-  // Create Trigger.dev public token for task monitoring. Only attempt this when a
-  // secret key is actually configured: without it the call cannot mint a usable
-  // token, and running it on every navigation (e.g. across an e2e suite) is pure
-  // waste — and real Trigger.dev API usage wherever a key is present. Gating on
-  // the key keeps production behaviour identical while making CI/e2e a no-op.
-  let publicToken = null;
-  if (process.env.TRIGGER_SECRET_KEY || process.env.TRIGGER_ACCESS_TOKEN) {
-    try {
-      publicToken = await triggerAuth.createPublicToken({
-        expirationTime: '1hr',
-        scopes: {
-          read: {
-            runs: true,
-          },
-        },
-      });
-    } catch {
-      // Trigger.dev not configured correctly - skip public token
-    }
   }
 
   if (url.pathname.endsWith('/invitation')) return { user: null };
 
   // Check if this is a public page route (e.g., /org-name/pages/page-id)
   const isPublicPageRoute = /^\/[^/]+\/pages\/[^/]+$/.test(url.pathname);
-  if (isPublicPageRoute) return { user: null, publicToken };
+  if (isPublicPageRoute) return { user: null };
 
   // Routes that don't require full auth (registration flow).
   //
@@ -141,116 +185,26 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
   if (!authData?.userId) {
     if (!isPublicRoute) return redirect('/');
-    return { user: null, organizations: [], publicToken, memberships: [] };
+    return { user: null, organizations: [], memberships: [] };
   }
 
-  // Check if we're impersonating - if so, fetch the impersonated user directly
+  // Check if we're impersonating - if so, the session user is the impersonated one
   const isImpersonating = !!betterAuthSession?.session?.impersonatedBy;
 
-  let user: AppUser | null = null;
+  const user = await loadAppUser(authData.userId);
 
-  if (isImpersonating) {
-    // When impersonating, fetch the impersonated user directly by their session user ID
-    user = await getPrisma().user.findUnique({
-      where: { id: authData.userId },
-      include: {
-        classroom_memberships: {
-          include: {
-            classroom: {
-              include: {
-                git_organization: true,
-                settings: { select: CLASSROOM_SETTINGS_SELECT },
-              },
-            },
-          },
-        },
-      },
-    });
+  if (!user) {
+    // A session whose user no longer exists (deleted account).
+    if (!isPublicRoute) return redirect('/');
+    return { user: null, organizations: [], memberships: [] };
+  }
 
-    // Fetch subscription for impersonated user
-    const subscription = await ClassmojiService.subscription.getCurrent(authData.userId);
-    if (user && subscription) {
-      user.subscription = subscription;
-    }
-  } else {
-    // Normal flow - first try to look up user by ID if we have a valid session
-    // This avoids GitHub API calls when user is already in our database
-    if (authData.userId) {
-      user = await getPrisma().user.findUnique({
-        where: { id: authData.userId },
-        include: {
-          classroom_memberships: {
-            include: {
-              classroom: {
-                include: {
-                  git_organization: true,
-                  settings: { select: CLASSROOM_SETTINGS_SELECT },
-                },
-              },
-            },
-          },
-        },
-      });
-
-      if (user) {
-        // User found in DB - fetch subscription
-        const subscription = await ClassmojiService.subscription.getCurrent(authData.userId);
-        if (subscription) {
-          user.subscription = subscription;
-        }
-      }
-    }
-
-    // If no user found by ID, fall back to GitHub API lookup (new user registration flow)
-    if (!user) {
-      const accessToken = authData?.token || null;
-
-      // NOTE: Do NOT fall back to auth.api.getAccessToken() here.
-      // BetterAuth's refresh silently fails for GitHub App tokens (HTTP 200 errors)
-      // and can corrupt the DB by storing undefined tokens. Our getAuthSession()
-      // already handles refresh properly via getValidGitHubToken().
-
-      if (accessToken) {
-        const octokit = GitHubProvider.getUserOctokit(accessToken);
-        const { data: githubUser } = await octokit.rest.users.getAuthenticated();
-
-        // Fetch subscription
-        const subscription = await ClassmojiService.subscription.getCurrent(authData.userId);
-
-        user = await getPrisma().user.findUnique({
-          where: { login: githubUser.login },
-          include: {
-            classroom_memberships: {
-              include: {
-                classroom: {
-                  include: {
-                    git_organization: true,
-                    settings: { select: CLASSROOM_SETTINGS_SELECT },
-                  },
-                },
-              },
-            },
-          },
-        });
-
-        // User authenticated with GitHub but not in our DB yet - redirect to registration
-        if (!user && !isPublicRoute) {
-          const params = new URLSearchParams();
-          if (url.pathname !== '/') params.set('next', url.pathname);
-          // A roster invite link lands on the picker with a signed invite token;
-          // this redirect fires before that loader, so hand the token to
-          // registration here or the address is never prefilled (#343).
-          const invite = url.searchParams.get('invite');
-          if (invite) params.set('invite', invite);
-          const qs = params.toString();
-          return redirect(`/registration${qs ? `?${qs}` : ''}`);
-        }
-
-        if (user && subscription) {
-          user.subscription = subscription;
-        }
-      }
-    }
+  // Before anything else, a signed-in person confirms a contact email
+  // (registration) and then connects Github: every classroom runs on it.
+  // Staff viewing as someone skip both; they are looking, not joining.
+  if (!isImpersonating) {
+    const gate = accountSetupRedirect(user, url);
+    if (gate) return redirect(gate);
   }
 
   // For backward compat, map classroom_memberships to format expected by UI
@@ -282,9 +236,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   return {
     user,
     organizations,
-    publicToken,
     memberships,
-    session,
+    session: toClientSession(session),
     aiAgentAvailable: isAIAgentConfigured(),
     // Where "Stop viewing" should return to. Only set when apps/admin started
     // this impersonation (it drops the breadcrumb cookie before handing off) —
@@ -302,8 +255,12 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 // Provides FetcherContext; must live inside CalloutProvider since
 // useNotifiedFetcher reads useCallout().
 const FetcherProvider = ({ children }: { children: React.ReactNode }) => {
-  const { fetcher, notify } = useNotifiedFetcher();
-  return <FetcherContext.Provider value={{ fetcher, notify }}>{children}</FetcherContext.Provider>;
+  const { fetcher, notify, operation, endOperation, dismissNotify } = useNotifiedFetcher();
+  return (
+    <FetcherContext.Provider value={{ fetcher, notify, operation, endOperation, dismissNotify }}>
+      {children}
+    </FetcherContext.Provider>
+  );
 };
 
 const App = ({ loaderData }: Route.ComponentProps) => {
@@ -368,13 +325,36 @@ const App = ({ loaderData }: Route.ComponentProps) => {
     }
   }, [user, setUser]);
 
+  // The classroom's tier, for the admin sidebar's Pro-only entries (the
+  // /teacher and /assistant layouts pass their own flag instead). The endpoint
+  // admits OWNER alone, so only an owner of THIS classroom asks. Anyone else —
+  // and a failed fetch — is left with no tier, never the previous classroom's.
+  const ownsCurrentClassroom =
+    !!classroom &&
+    !!user?.memberships?.some(
+      (m: MembershipWithOrganization) =>
+        m.organization.login === classroom.slug && m.role === 'OWNER'
+    );
+
   useEffect(() => {
-    const fetchSubscription = async () => {
-      const subscription = await axios.get(`/api/get-org-subscription?orgLogin=${classroom!.slug}`);
-      setSubscription(subscription.data);
+    if (!classroom) return;
+    if (!ownsCurrentClassroom) {
+      setSubscription(null);
+      return;
+    }
+    let cancelled = false;
+    axios
+      .get(`/api/get-org-subscription?orgLogin=${classroom.slug}`)
+      .then(response => {
+        if (!cancelled) setSubscription(response.data);
+      })
+      .catch(() => {
+        if (!cancelled) setSubscription(null);
+      });
+    return () => {
+      cancelled = true;
     };
-    if (classroom) fetchSubscription();
-  }, [classroom, setSubscription]);
+  }, [classroom, ownsCurrentClassroom, setSubscription]);
 
   return (
     <html lang="en" className={isDarkMode ? 'dark' : ''} suppressHydrationWarning>
@@ -476,9 +456,13 @@ const App = ({ loaderData }: Route.ComponentProps) => {
                         classroom layout (landing, registration, select-organization)
                         are buffered then silently dropped. */}
                     <CalloutSlot />
+                    {/* Background Trigger.dev work reports into the callout from
+                        here, above the router, so progress survives navigation
+                        and no route has to host a modal for it. */}
+                    <OperationProgress />
                     <NavigationProgress />
                     <ImpersonationBanner
-                      key={(session as Record<string, Record<string, string>>)?.session?.id}
+                      key={session?.session?.id}
                       session={session}
                       returnToAdminUrl={impersonationReturnUrl}
                       impersonationCookieDomain={impersonationCookieDomain}

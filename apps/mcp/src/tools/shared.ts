@@ -11,7 +11,8 @@
  *
  * Classroom chains used (verified against schema.prisma):
  *   GitRepoAssignment → git_repo.classroom_id   (GitRepo carries classroom_id directly)
- *   Assignment        → repository.classroom_id
+ *   Assignment        → repository.classroom_id  (REPO assignments, repo-submission tools)
+ *                     → module.classroom_id      (any type: loadCourseworkAssignmentInClassroom)
  *   CalendarEvent     → classroom_id
  *   Page              → classroom_id
  *   RegradeRequest    → classroom_id
@@ -23,6 +24,7 @@
 import { ClassmojiService } from '@classmoji/services';
 import { slideService } from '@classmoji/services/slides';
 import type { AuditLogAction, Prisma } from '@prisma/client';
+import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolResult } from '../mcp/registry.ts';
 import type { ClassroomContext } from '../authz/classroomContext.ts';
@@ -36,12 +38,19 @@ export const OWNER_TEACHER = ['OWNER', 'TEACHER'] as const;
 /** requireClassroomAdmin routes (modules, tokens, settings, grader assignment). */
 export const OWNER_ONLY = ['OWNER'] as const;
 /**
- * Quiz admin surface (admin.$class.quizzes loader + action, and the assistant
- * and teacher routes that re-export it): allowedRoles
- * ['OWNER','TEACHER','ASSISTANT']. Mirrors QUIZ_ROLES in resources/shape.ts
- * minus STUDENT, which has no write surface.
+ * Quiz editors: the whole teaching team, the tier of quiz_update. Mirrors
+ * QUIZ_ROLES in resources/shape.ts minus STUDENT, which has no write surface,
+ * and QUIZ_EDITOR_ROLES in @classmoji/utils (quizAssignment.ts). An ASSISTANT
+ * edits a quiz's content and name only; quiz_update refuses the assignment
+ * fields to anyone who is not also a quiz author.
  */
 export const QUIZ_STAFF = ['OWNER', 'TEACHER', 'ASSISTANT'] as const;
+/**
+ * Quiz authors: create, publish and delete a quiz, and change its assignment
+ * (due date, weight, status). Same set as QUIZ_AUTHOR_ROLES in
+ * @classmoji/utils (quizAssignment.ts); the quiz tool tests hold the two equal.
+ */
+export const QUIZ_AUTHORS = OWNER_TEACHER;
 /**
  * Forms surface: apps/pages' `assertFormAdmin`
  * (apps/pages/app/utils/formAuth.server.ts) composes `requireClassroomStaff`,
@@ -51,6 +60,53 @@ export const QUIZ_STAFF = ['OWNER', 'TEACHER', 'ASSISTANT'] as const;
  * which route it was derived from.
  */
 export const FORMS_STAFF = OWNER_TEACHER;
+
+// ─── Submission ids ──────────────────────────────────────────────────────────
+
+/**
+ * The shape of a submission (GitRepoAssignment) id. The schema default is a
+ * uuid, but ISSUE-mode provisioning (packages/tasks
+ * cf-create_git_repo_assignment) sets the row id to the GitHub issue id, a
+ * string of digits (id == provider_id, e.g. "5482151816"). REPO-mode rows,
+ * seeds and the example classroom keep the generated uuid. An id is one or the
+ * other, so `.uuid()` alone would reject every ISSUE-mode submission.
+ */
+export const SUBMISSION_ID_PATTERN =
+  /^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9]+)$/;
+
+/**
+ * A submission id argument: a non-empty string of at most 64 characters, a
+ * uuid or all digits. Every tool input naming a GitRepoAssignment uses this;
+ * ids of other records (users, assignments, grades, regrade requests) are
+ * uuids and keep `.uuid()`. Lookups compare the id as a plain string inside the
+ * classroom scope, so the shape changes nothing downstream.
+ *
+ * A numeric id looks like a number, so a client may send it as a JSON number
+ * (5482151816) rather than a string. A non-negative safe integer is turned
+ * into its digit string before validation; anything else (negative, fractional,
+ * past 2^53, where the digits would already be wrong) is left as is and fails
+ * the string check. The preprocess is invisible in the published JSON Schema,
+ * which still advertises a string with the pattern — the form ids come back in
+ * from list_submissions, and the one clients should send.
+ *
+ * A function, not a shared constant: the JSON Schema converter publishes a
+ * zod instance met twice in one tool as a `$ref` to its first use
+ * (submission_late_override's single id and its id list), which not every
+ * MCP client resolves. A fresh schema per use keeps every one inline.
+ */
+export function submissionIdSchema() {
+  return z.preprocess(
+    value =>
+      typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+        ? String(value)
+        : value,
+    z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(SUBMISSION_ID_PATTERN, 'Must be a submission id: a uuid or a numeric id')
+  );
+}
 
 // ─── Results & errors ────────────────────────────────────────────────────────
 
@@ -145,13 +201,46 @@ type AssignmentRecord = NonNullable<
   Awaited<ReturnType<typeof ClassmojiService.assignment.findById>>
 >;
 
-/** Load an Assignment and verify it via repository.classroom_id. */
+/**
+ * Load an Assignment and verify it via repository.classroom_id. A quiz or form
+ * assignment has no repository, so it is not_found here: this is the loader for
+ * tools that act on repo submissions (graders, late overrides, delete).
+ */
 export async function loadAssignmentInClassroom(
   id: string,
   ctx: ToolContext
 ): Promise<AssignmentRecord> {
   const record = await ClassmojiService.assignment.findById(id);
   if (!record || record.repository?.classroom_id !== requireClassroomCtx(ctx).classroomId) {
+    throw scopedNotFound('Assignment');
+  }
+  return record;
+}
+
+/**
+ * Load an Assignment of ANY type (REPO, QUIZ, FORM) and verify it via
+ * module.classroom_id: every assignment has a module, only a REPO one has a
+ * repository. A REPO assignment's repository has to agree with its module, so a
+ * row straddling two classrooms is refused rather than served.
+ *
+ * A QUIZ assignment is not_found where the classroom shows no quizzes
+ * (`entitlement.quizzesVisible`), the predicate list_modules drops it on: a tool
+ * must not name a row no read surface lists.
+ */
+export async function loadCourseworkAssignmentInClassroom(
+  id: string,
+  ctx: ToolContext
+): Promise<AssignmentRecord> {
+  const { classroomId } = requireClassroomCtx(ctx);
+  const record = await ClassmojiService.assignment.findById(id);
+  if (
+    !record ||
+    record.module?.classroom_id !== classroomId ||
+    (record.repository && record.repository.classroom_id !== classroomId)
+  ) {
+    throw scopedNotFound('Assignment');
+  }
+  if (record.type === 'QUIZ' && !(await ClassmojiService.entitlement.quizzesVisible(classroomId))) {
     throw scopedNotFound('Assignment');
   }
   return record;
@@ -344,6 +433,35 @@ export async function loadRepositoryInClassroom(
     throw scopedNotFound('Repo');
   }
   return record;
+}
+
+/** The Form columns every forms-surface loader relies on; callers type the rest. */
+export interface FormRecord {
+  id: string;
+  classroom_id: string;
+  current_revision_id?: string | null;
+}
+
+/**
+ * Load a Form and verify its classroom_id (S1). Form carries classroom_id
+ * directly, so the comparison is a single hop — same uniform rejection as every
+ * other loader in this server, so an unknown id and another classroom's form are
+ * indistinguishable to the caller. Shared by the forms tools and the team-set
+ * tools, which are two faces of one surface.
+ *
+ * `includeCreator` is never requested: it attaches the full creator User row.
+ * `T` lets a caller name the wider row it reads (the service returns the whole
+ * Form row); the check itself only reads `classroom_id`.
+ */
+export async function loadFormInClassroom<T extends FormRecord = FormRecord>(
+  formId: string,
+  ctx: ToolContext
+): Promise<T> {
+  const form = (await ClassmojiService.form.findById(formId)) as T | null;
+  if (!form || form.classroom_id !== requireClassroomCtx(ctx).classroomId) {
+    throw scopedNotFound('Form');
+  }
+  return form;
 }
 
 type QuizRecord = NonNullable<Awaited<ReturnType<typeof ClassmojiService.quiz.findById>>>;

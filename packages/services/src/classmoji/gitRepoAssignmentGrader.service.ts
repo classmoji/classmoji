@@ -6,11 +6,14 @@
 import _ from 'lodash';
 import { tasks } from '@trigger.dev/sdk';
 
-import getPrisma from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import { displayUsername, withLogin, withLogins, type GitIdentityAccount } from '@classmoji/utils';
+import { findClassroomGitProvider } from './classroomGitProvider.ts';
 import * as classroomService from './classroom.service.ts';
 import * as classroomMembershipService from './classroomMembership.service.ts';
 import * as gitRepoAssignmentService from './gitRepoAssignment.service.ts';
 import * as notificationService from './notification.service.ts';
+import { planGraderReassignment } from './graderReassignPlan.ts';
 
 const notifyGraderAssigned = async (repositoryAssignmentId: string, graderIds: string[]) => {
   if (graderIds.length === 0) return;
@@ -37,6 +40,7 @@ const notifyGraderAssigned = async (repositoryAssignmentId: string, graderIds: s
 interface GraderProgress {
   name: string | null;
   login: string | null;
+  image: string | null;
   id: string;
   total: number;
   completed: number;
@@ -59,7 +63,7 @@ export const findGradersProgress = async (classroomId: string) => {
       },
     },
     include: {
-      grader: true,
+      grader: { include: GIT_IDENTITY },
       git_repo_assignment: {
         include: {
           grades: true,
@@ -68,16 +72,19 @@ export const findGradersProgress = async (classroomId: string) => {
     },
   });
 
+  const provider = await findClassroomGitProvider(classroomId);
   const progress: Record<string, GraderProgress> = {};
 
   assignmentGraders.forEach(graderAssignment => {
-    const login = graderAssignment.grader.login;
+    const grader = withLogin(graderAssignment.grader, provider);
+    const login = grader.login;
     if (!login) return;
     if (!progress[login]) {
       progress[login] = {
-        name: graderAssignment.grader.name,
-        login: graderAssignment.grader.login,
-        id: graderAssignment.grader.id,
+        name: grader.name,
+        login,
+        image: grader.image,
+        id: grader.id,
         total: 0,
         completed: 0,
         progress: 0,
@@ -102,17 +109,56 @@ export const findGradersProgress = async (classroomId: string) => {
  * Add a grader to a GitRepoAssignment
  * @param {string} repositoryAssignmentId - UUID of the GitRepoAssignment
  * @param {string} graderId - UUID of the grader User
+ * @param options.notify - false skips the TA_GRADING_ASSIGNED notification
+ *   (a caller moving many slots sends one summary instead). Defaults to true.
  * @returns {Promise<Object>}
  */
-export const addGraderToAssignment = async (repositoryAssignmentId: string, graderId: string) => {
+export const addGraderToAssignment = async (
+  repositoryAssignmentId: string,
+  graderId: string,
+  { notify = true }: { notify?: boolean } = {}
+) => {
   const created = await getPrisma().gitRepoAssignmentGrader.create({
     data: {
       git_repo_assignment_id: repositoryAssignmentId,
       grader_id: graderId,
     },
   });
-  await notifyGraderAssigned(repositoryAssignmentId, [graderId]);
+  if (notify) await notifyGraderAssigned(repositoryAssignmentId, [graderId]);
   return created;
+};
+
+/**
+ * The staff roles that can be picked as a grader: the same pair the web grader
+ * pickers list and the RANDOM bulk assignment draws from. OWNER is not one.
+ */
+export const GRADER_ROLES = ['ASSISTANT', 'TEACHER'] as const;
+
+/**
+ * Find a user who may be picked as a grader in this classroom: a membership
+ * with a grader role and `is_grader` set — the pool the web pickers offer.
+ *
+ * One query over the membership row itself, with the role in the `where`: a
+ * user can hold several memberships in one classroom (one per role), so a
+ * user-first lookup would read an arbitrary one of them. Returns the user
+ * (whose stored login is the one to use), or null when not eligible or when
+ * either id is not a non-empty string.
+ */
+export const findEligibleGrader = async (classroomId: string, userId: unknown) => {
+  if (typeof userId !== 'string' || !userId) return null;
+  if (typeof classroomId !== 'string' || !classroomId) return null;
+
+  const membership = await getPrisma().classroomMembership.findFirst({
+    where: {
+      classroom_id: classroomId,
+      user_id: userId,
+      role: { in: [...GRADER_ROLES] },
+      is_grader: true,
+    },
+    include: { user: { include: GIT_IDENTITY } },
+  });
+  if (!membership) return null;
+  return withLogin(membership.user, await findClassroomGitProvider(classroomId));
 };
 
 /**
@@ -142,42 +188,46 @@ export const removeGraderFromAssignment = async (
  * @returns {Promise<Object[]>}
  */
 export const findAssignedByGrader = async (graderId: string, classroomId: string) => {
-  return getPrisma().gitRepoAssignmentGrader.findMany({
-    where: {
-      grader_id: graderId,
-      git_repo_assignment: {
-        git_repo: {
-          classroom_id: classroomId,
-        },
-      },
-    },
-    include: {
-      git_repo_assignment: {
-        include: {
-          assignment: true,
-          analytics_snapshot: { select: { total_commits: true, last_commit_at: true, fetched_at: true } },
-          grades: {
-            include: {
-              token_transaction: true,
-              grader: true,
-            },
-          },
-          graders: {
-            include: {
-              grader: true,
-            },
-          },
+  return withLogins(
+    await getPrisma().gitRepoAssignmentGrader.findMany({
+      where: {
+        grader_id: graderId,
+        git_repo_assignment: {
           git_repo: {
-            include: {
-              repository: true,
-              student: true,
-              team: true,
+            classroom_id: classroomId,
+          },
+        },
+      },
+      include: {
+        git_repo_assignment: {
+          include: {
+            assignment: true,
+            analytics_snapshot: {
+              select: { total_commits: true, last_commit_at: true, fetched_at: true },
+            },
+            grades: {
+              include: {
+                token_transaction: true,
+                grader: { include: GIT_IDENTITY },
+              },
+            },
+            graders: {
+              include: {
+                grader: { include: GIT_IDENTITY },
+              },
+            },
+            git_repo: {
+              include: {
+                repository: true,
+                student: { include: GIT_IDENTITY },
+                team: true,
+              },
             },
           },
         },
       },
-    },
-  });
+    })
+  );
 };
 
 /**
@@ -186,14 +236,16 @@ export const findAssignedByGrader = async (graderId: string, classroomId: string
  * @returns {Promise<Object[]>}
  */
 export const findByAssignmentId = async (repositoryAssignmentId: string) => {
-  return getPrisma().gitRepoAssignmentGrader.findMany({
-    where: {
-      git_repo_assignment_id: repositoryAssignmentId,
-    },
-    include: {
-      grader: true,
-    },
-  });
+  return withLogins(
+    await getPrisma().gitRepoAssignmentGrader.findMany({
+      where: {
+        git_repo_assignment_id: repositoryAssignmentId,
+      },
+      include: {
+        grader: { include: GIT_IDENTITY },
+      },
+    })
+  );
 };
 
 /**
@@ -455,7 +507,7 @@ export const gradingReport = async ({
         },
       },
       select: {
-        grader: { select: { id: true, login: true, name: true } },
+        grader: { select: { id: true, name: true, ...GIT_IDENTITY } },
         git_repo_assignment: {
           select: {
             assignment_id: true,
@@ -479,7 +531,7 @@ export const gradingReport = async ({
         emoji: true,
         created_at: true,
         git_repo_assignment_id: true,
-        grader: { select: { id: true, login: true, name: true } },
+        grader: { select: { id: true, name: true, ...GIT_IDENTITY } },
         git_repo_assignment: {
           select: {
             assignment_id: true,
@@ -498,14 +550,14 @@ export const gradingReport = async ({
   const rows = new Map<string, Bucket>();
 
   const bucketFor = (
-    grader: { id: string; login: string | null; name: string | null },
+    grader: { id: string; name: string | null; accounts: GitIdentityAccount[] },
     assignment: { id: string; title: string; repository: { title: string | null } | null }
   ): Bucket => {
     const key = `${grader.id}:${assignment.id}`;
     let bucket = rows.get(key);
     if (!bucket) {
       bucket = {
-        grader: { id: grader.id, login: grader.login, name: grader.name },
+        grader: { id: grader.id, login: displayUsername(grader), name: grader.name },
         assignment: {
           id: assignment.id,
           title: assignment.title,
@@ -549,4 +601,138 @@ export const gradingReport = async ({
         (a.grader.login ?? '').localeCompare(b.grader.login ?? '') ||
         a.assignment.title.localeCompare(b.assignment.title)
     );
+};
+
+// ─── Ungraded slots of a departing grader ────────────────────────────────────
+
+/**
+ * "Ungraded" means the submission carries NO AssignmentGrade at all — from
+ * anyone, including a null-grader grade. That is the rule the grader progress
+ * view uses (findGradersProgress: `grades.length > 0` is completed) and the
+ * staff drawer shows. grading_report's graded_count is per grader (grades FROM
+ * that grader), which is the wrong mirror here: once a co-grader has graded a
+ * submission it is done, and moving its slot would only create work.
+ *
+ * Graded slots are never returned: they are the history of who graded.
+ */
+const ungradedSlotWhere = (classroomId: string, graderId: string) => ({
+  grader_id: graderId,
+  git_repo_assignment: {
+    git_repo: { classroom_id: classroomId },
+    grades: { none: {} },
+  },
+});
+
+const isId = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
+
+/**
+ * The grader's rows on submissions of this classroom that have no grade yet.
+ * Classroom-scoped through git_repo.classroom_id; [] for a missing id.
+ */
+export const findUngradedSlotsForGrader = async (classroomId: string, graderId: string) => {
+  if (!isId(classroomId) || !isId(graderId)) return [];
+
+  return getPrisma().gitRepoAssignmentGrader.findMany({
+    where: ungradedSlotWhere(classroomId, graderId),
+    select: {
+      git_repo_assignment_id: true,
+      grader_id: true,
+      git_repo_assignment: {
+        select: {
+          id: true,
+          assignment_id: true,
+          git_repo_id: true,
+          graders: { select: { grader_id: true } },
+        },
+      },
+    },
+    orderBy: { git_repo_assignment_id: 'asc' },
+  });
+};
+
+export type UngradedSlot = Awaited<ReturnType<typeof findUngradedSlotsForGrader>>[number];
+
+/** How many ungraded slots this grader holds in this classroom. */
+export const countUngradedSlotsForGrader = async (classroomId: string, graderId: string) => {
+  if (!isId(classroomId) || !isId(graderId)) return 0;
+  return getPrisma().gitRepoAssignmentGrader.count({
+    where: ungradedSlotWhere(classroomId, graderId),
+  });
+};
+
+/**
+ * Ungraded-slot counts for every grader in the classroom, keyed by user id.
+ * One grouped query — the Teaching Staff screen needs it for every row.
+ */
+export const countUngradedSlotsByGrader = async (
+  classroomId: string
+): Promise<Record<string, number>> => {
+  if (!isId(classroomId)) return {};
+  const groups = await getPrisma().gitRepoAssignmentGrader.groupBy({
+    by: ['grader_id'],
+    where: {
+      git_repo_assignment: {
+        git_repo: { classroom_id: classroomId },
+        grades: { none: {} },
+      },
+    },
+    _count: { _all: true },
+  });
+  return Object.fromEntries(groups.map(g => [g.grader_id, g._count._all]));
+};
+
+/**
+ * Plan the reassignment of `fromGraderId`'s ungraded slots across the other
+ * eligible graders of the classroom (see ./graderReassignPlan.ts for the rule).
+ *
+ * The pool is the one the web pickers and RANDOM bulk assignment use —
+ * ASSISTANT or TEACHER with is_grader — minus the departing grader (their
+ * membership may not be deleted yet: the removal task runs in the background)
+ * and minus anyone without a stored login (the classroom-scoped helpers need
+ * one). Loads come from ONE query over the candidates' rows in this classroom.
+ */
+export const planUngradedReassignment = async ({
+  classroomId,
+  fromGraderId,
+  slots,
+}: {
+  classroomId: string;
+  fromGraderId: string;
+  slots: UngradedSlot[];
+}) => {
+  const pool = await classroomMembershipService.findUsersByRoles(classroomId, [...GRADER_ROLES], {
+    is_grader: true,
+  });
+  const candidates = pool
+    .filter(user => user.id !== fromGraderId && isId(user.login))
+    .map(user => ({ id: user.id, login: user.login as string }));
+
+  const loadRows =
+    candidates.length === 0
+      ? []
+      : await getPrisma().gitRepoAssignmentGrader.findMany({
+          where: {
+            grader_id: { in: candidates.map(c => c.id) },
+            git_repo_assignment: { git_repo: { classroom_id: classroomId } },
+          },
+          select: {
+            grader_id: true,
+            git_repo_assignment: { select: { assignment_id: true, git_repo_id: true } },
+          },
+        });
+
+  return planGraderReassignment({
+    slots: slots.map(slot => ({
+      gitRepoAssignmentId: slot.git_repo_assignment.id,
+      assignmentId: slot.git_repo_assignment.assignment_id,
+      gitRepoId: slot.git_repo_assignment.git_repo_id,
+      graderIds: slot.git_repo_assignment.graders.map(g => g.grader_id),
+    })),
+    candidates,
+    loadRows: loadRows.map(row => ({
+      graderId: row.grader_id,
+      assignmentId: row.git_repo_assignment.assignment_id,
+      gitRepoId: row.git_repo_assignment.git_repo_id,
+    })),
+  });
 };

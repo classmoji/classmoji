@@ -46,6 +46,65 @@ const ImmediateOctokit = Octokit.defaults({
 });
 
 /**
+ * Longest wait, in seconds, the throttling plugin may sleep out on a WRITE
+ * before retrying it itself.
+ */
+export const THROTTLE_MAX_WRITE_RETRY_AFTER_S = 60;
+
+type ThrottleHandler = (
+  retryAfter: number,
+  options: { method?: string; url?: string; request?: { retryCount?: number } },
+  octokit: { log: { warn: (message: string) => void; info: (message: string) => void } },
+  retryCount?: number
+) => boolean;
+
+/**
+ * Whether the throttling plugin should wait `retryAfter` seconds and retry a
+ * request GitHub refused with a 403 rate limit (plugin-throttling 8.x calls
+ * these hooks for 403s only; a 429 goes to the retry plugin instead).
+ *
+ * The umbrella's own hooks retry once, however long GitHub asks for — on a
+ * secondary limit that can be 300 s, on a primary limit up to an hour, all of
+ * it asleep inside a user's request. Writes are capped: retried once, and only
+ * when the wait is at most `THROTTLE_MAX_WRITE_RETRY_AFTER_S`. A longer wait
+ * surfaces the 403 to the caller at once: `uploadBatch` has its own bounded
+ * retry (which throws rather than wait past 120 s), and any other caller gets
+ * the error instead of a stalled request. Reads (GET/HEAD) keep the umbrella's behaviour: retried
+ * once, whatever the wait. GraphQL is a POST and so counts as a write, as it
+ * does in the plugin's own write limiter.
+ */
+const shouldRetryThrottled =
+  (kind: string): ThrottleHandler =>
+  (retryAfter, options, octokit, retryCount) => {
+    octokit.log.warn(`${kind} for request ${options.method} ${options.url}`);
+    const attempts = retryCount ?? options.request?.retryCount ?? 0;
+    if (attempts >= 1) return false;
+    const isRead = options.method === 'GET' || options.method === 'HEAD';
+    if (!isRead && retryAfter > THROTTLE_MAX_WRITE_RETRY_AFTER_S) return false;
+    octokit.log.info(`Retrying after ${retryAfter} seconds!`);
+    return true;
+  };
+
+/** The throttling hooks `CappedOctokit` uses. Exported for tests. */
+export const throttleHandlers: {
+  onRateLimit: ThrottleHandler;
+  onSecondaryRateLimit: ThrottleHandler;
+} = {
+  onRateLimit: shouldRetryThrottled('Request quota exhausted'),
+  onSecondaryRateLimit: shouldRetryThrottled('SecondaryRateLimit detected'),
+};
+
+/**
+ * The Octokit every ordinary client here is built on: the umbrella's, with its
+ * throttling hooks replaced by `throttleHandlers` so a rate-limited write is
+ * never slept on for more than a minute. `defaults` replaces `throttle`
+ * wholesale, so both hooks must be given.
+ */
+export const CappedOctokit = Octokit.defaults({
+  throttle: throttleHandlers,
+});
+
+/**
  * Generate a GitHub App JWT for direct API authentication
  * Used for simple installation token requests without Octokit overhead
  * @returns {string} JWT token (valid for 10 minutes)
@@ -162,6 +221,8 @@ export class GitHubProvider extends GitProvider {
           clientId: process.env.GITHUB_CLIENT_ID!,
           clientSecret: process.env.GITHUB_CLIENT_SECRET!,
         },
+        // A rate-limited write is not slept on past a minute; see `throttleHandlers`.
+        Octokit: CappedOctokit,
       });
 
       const octokit = await app.getInstallationOctokit(Number(this.installationId));
@@ -401,7 +462,7 @@ export class GitHubProvider extends GitProvider {
    * @returns {Promise<Object>} GitHub user data
    */
   async getCurrentUser(token: string): Promise<any> {
-    const octokit = new Octokit({ auth: token });
+    const octokit = new CappedOctokit({ auth: token });
     const { data } = await octokit.request('GET /user');
     return data;
   }
@@ -1168,6 +1229,86 @@ export class GitHubProvider extends GitProvider {
     return { id: data.id, slug: data.slug, name: data.name, node_id: data.node_id };
   }
 
+  // ─── Latency-bounded probes ────────────────────────────────────────────────
+
+  /**
+   * An installation client on `ImmediateOctokit`, for probes a caller has to
+   * answer within seconds (a create preview asking whether names are free).
+   *
+   * `#getOctokit` is the umbrella client: on a rate limit its throttling plugin
+   * sleeps for as long as GitHub asks (up to an hour) and its retry plugin
+   * retries a 5xx three times with growing backoff. A probe that must answer
+   * inside a request would hang behind either. This client throws a rate limit
+   * at once, and each probe passes `retries: 0` so a 5xx is thrown too. Cached
+   * apart from `#installationCache`: the two clients behave differently and
+   * must never be handed out in each other's place.
+   */
+  static #immediateCache: Map<string, { octokit: Octokit; expiresAt: number }> = new Map();
+
+  async #getImmediateOctokit(): Promise<Octokit> {
+    // Dependency injection hook (used by tests).
+    if (this._octokit) {
+      return this._octokit;
+    }
+    const cached = GitHubProvider.#immediateCache.get(this.installationId);
+    if (cached && Date.now() < cached.expiresAt) {
+      return cached.octokit;
+    }
+    const app = new App({
+      appId: process.env.GITHUB_APP_ID!,
+      privateKey: privateKey!,
+      Octokit: ImmediateOctokit,
+    });
+    const octokit = await app.getInstallationOctokit(Number(this.installationId));
+    GitHubProvider.#immediateCache.set(this.installationId, {
+      octokit,
+      expiresAt: Date.now() + GitHubProvider.#CACHE_TTL_MS,
+    });
+    return octokit;
+  }
+
+  /**
+   * Read the organization once — no throttle sleep, no retry, abortable.
+   * Throws on any failure; a dead installation can answer later team lookups
+   * with 404, so this is what tells "reachable" apart from "absent".
+   * @param {string} org - Organization login
+   * @param {Object} [options.signal] - Aborts the request
+   */
+  async probeOrganization(org: string, options: { signal?: AbortSignal } = {}): Promise<void> {
+    const octokit = await this.#getImmediateOctokit();
+    await octokit.request('GET /orgs/{org}', {
+      org,
+      request: { retries: 0, ...(options.signal ? { signal: options.signal } : {}) },
+    });
+  }
+
+  /**
+   * Whether a team slug exists in the organization: true, false on a 404, and
+   * any other answer (rate limit, 5xx, abort) thrown — never read as "free".
+   * No throttle sleep, no retry.
+   * @param {string} org - Organization login
+   * @param {string} teamSlug - Team slug
+   * @param {Object} [options.signal] - Aborts the request
+   */
+  async probeTeam(
+    org: string,
+    teamSlug: string,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<boolean> {
+    const octokit = await this.#getImmediateOctokit();
+    try {
+      await octokit.request('GET /orgs/{org}/teams/{team_slug}', {
+        org,
+        team_slug: teamSlug,
+        request: { retries: 0, ...(options.signal ? { signal: options.signal } : {}) },
+      });
+      return true;
+    } catch (error: unknown) {
+      if (isNotFound(error)) return false;
+      throw error;
+    }
+  }
+
   /**
    * Get all teams in organization
    * @param {string} org - Organization login
@@ -1753,7 +1894,19 @@ export class GitHubProvider extends GitProvider {
    * @returns {Octokit}
    */
   static getUserOctokit(token: string): Octokit {
-    return new Octokit({ auth: token });
+    return new CappedOctokit({ auth: token });
+  }
+
+  /**
+   * A user-token Octokit that reports a rate limit instead of waiting it out
+   * (see `ImmediateOctokit`). For calls made while a web or MCP request waits
+   * on the answer, where a throttled request should come back as an error the
+   * caller can explain rather than hold the request open.
+   * @param {string} token - The user's GitHub token
+   * @returns {Octokit}
+   */
+  static getImmediateUserOctokit(token: string): Octokit {
+    return new ImmediateOctokit({ auth: token });
   }
 
   /**
@@ -1790,17 +1943,5 @@ export class GitHubProvider extends GitProvider {
       clientId: process.env.GITHUB_CLIENT_ID!,
       clientSecret: process.env.GITHUB_CLIENT_SECRET!,
     });
-  }
-
-  /**
-   * Update organization settings
-   * @param {string} org - Organization login
-   * @param {Object} data - Settings to update
-   * @returns {Promise<Object>}
-   */
-  async updateOrganization(org: string, data: Record<string, any>): Promise<any> {
-    const octokit = await this.#getOctokit();
-    const { data: result } = await octokit.request('PATCH /orgs/{org}', { org, ...data });
-    return result;
   }
 }

@@ -46,7 +46,10 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     action: 'view_staff_member',
   });
 
-  const staffUser = await ClassmojiService.user.findByLogin(login!);
+  const staffUser = await ClassmojiService.user.findByGitUsername(
+    login!,
+    classroom.git_organization?.provider ?? 'GITHUB'
+  );
 
   if (!staffUser) {
     throw new Response('Staff member not found', { status: 404 });
@@ -114,8 +117,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     });
   });
 
-  // Field by field, not the raw rows: `user.findByLogin` returns the whole User
-  // record (email, provider_email, school_id, stripe_customer_id, the ban
+  // Field by field, not the raw rows: `user.findByGitUsername` returns the whole User
+  // record (email, school_id, stripe_customer_id, the ban
   // fields) and the membership include carries a nested user + classroom. The
   // drawer needs an identity and two flags, so that is all it is handed.
   return {
@@ -269,10 +272,7 @@ const AdminStaffDrawer = ({ loaderData }: Route.ComponentProps) => {
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-4">
               <img
-                src={
-                  staffMember.avatar_url ||
-                  `https://avatars.githubusercontent.com/${staffMember.login}`
-                }
+                src={staffMember.avatar_url ?? undefined}
                 alt={staffMember.name!}
                 className="w-16 h-16 rounded-full ring-2 ring-gray-200 dark:ring-neutral-700"
               />

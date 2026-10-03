@@ -54,6 +54,7 @@ export const loader = async (args: LoaderFunctionArgs) => {
   // the subdomain — because that is what the fill route is keyed on.
   const formsBase = `${pagesUrl()}/${site.classroom.slug}/forms`;
 
+  const courseTimeZone = await ClassmojiService.classroom.getTimeZone(site.classroom_id);
   const sections = toScheduleSections(modules, {
     pagePath: sitePagePath,
     slidesUrl: slidesUrl(),
@@ -62,8 +63,10 @@ export const loader = async (args: LoaderFunctionArgs) => {
     // The COURSE's zone, not the server's and not the reader's. This page ships
     // no JavaScript, so whatever is formatted here is final — there is no
     // client pass to re-render dates the way every member-facing view gets for
-    // free. Null (no zone chosen) renders in UTC and says so.
-    timezone: site.timezone,
+    // free. Null (no zone chosen) renders in UTC and says so. The CLASSROOM
+    // setting (classroom_settings.timezone) — the same zone Ask Moji and the
+    // MCP use; classroom_sites.timezone is deprecated.
+    timezone: courseTimeZone,
   });
 
   return data(

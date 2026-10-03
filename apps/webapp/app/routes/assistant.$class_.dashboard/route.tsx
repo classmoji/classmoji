@@ -67,7 +67,7 @@ interface StatItemProps {
 }
 
 const StatItem = ({ label, value, subtitle, valueColor }: StatItemProps) => (
-  <div className="flex-1 min-w-0 flex items-start justify-between gap-3 px-4 sm:px-5 py-4">
+  <div className="min-w-0 flex items-start justify-between gap-3 rounded-2xl bg-panel ring-1 ring-line px-4 sm:px-5 py-4">
     <div className="min-w-0">
       <div className="text-xs font-medium text-ink-3">{label}</div>
       <div
@@ -135,7 +135,7 @@ const AssistantDashboard = ({ loaderData }: Route.ComponentProps) => {
 
             return (
               <>
-                <div className="rounded-2xl bg-panel ring-1 ring-line overflow-hidden flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x divide-line">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <StatItem
                     label="Class assignments"
                     value={totalClass}

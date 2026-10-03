@@ -24,7 +24,12 @@ vi.mock('~/utils/routeAuth.server', () => ({
 
 vi.mock('~/services/aiAgentConnection.server', () => ({ sendRequest: vi.fn() }));
 vi.mock('~/utils/agentStreamManager', () => ({ default: {} }));
-vi.mock('@classmoji/utils', () => ({ getContentRepoName: () => '' }));
+// The real module, with only the repo-name helper stubbed: the route's session
+// time-zone resolution runs the real validator.
+vi.mock('@classmoji/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/utils')>()),
+  getContentRepoName: () => '',
+}));
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     classroom: { getClassroomSettingsForServer: vi.fn() },
@@ -82,6 +87,7 @@ describe('api.syllabus-bot AI gating', () => {
     isAIAgentConfiguredMock.mockReturnValue(false);
     const res = await action(actionArgs({ _action: 'initConversation' }));
     expect(res.status).toBe(503);
-    expect(await res.json()).toMatchObject({ error: expect.stringMatching(/not configured/i) });
+    // Fixed copy any member may read: nothing about setup.
+    expect(await res.json()).toEqual({ error: "Ask Moji isn't available in this class." });
   });
 });

@@ -63,6 +63,15 @@ export const classroomInfoResource: ResourceDefinition = {
           }
         : null,
       viewer_role: resolved.role,
+      // The zone every `*_local` field in this request is rendered in, and
+      // where it came from: 'classroom' (the course setting), 'caller' (the
+      // requester's browser zone, sent by Ask Moji when the course has none),
+      // or 'default' (UTC, because neither is set). `classroom_timezone` is the
+      // course setting itself, null when unset.
+      timezone: resolved.effectiveTimezone.timeZone,
+      timezone_source: resolved.effectiveTimezone.source,
+      classroom_timezone: resolved.timezone,
+      timezone_is_default: resolved.effectiveTimezone.source === 'default',
     };
   },
 };

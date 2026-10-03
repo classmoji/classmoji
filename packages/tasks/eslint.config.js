@@ -5,7 +5,8 @@ export default [
   ...nodeConfig,
   ...typescriptConfig,
   {
-    ignores: ['src/scripts/**', '.trigger/**', 'dist/**', 'build/**'],
+    // python/.venv is the local team-set solver venv; pip vendors JS into it.
+    ignores: ['src/scripts/**', '.trigger/**', 'dist/**', 'build/**', 'python/.venv/**'],
   },
   {
     rules: {

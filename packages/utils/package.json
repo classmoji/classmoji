@@ -11,7 +11,20 @@
   },
   "exports": {
     ".": "./src/index.ts",
-    "./themes": "./src/themes.ts"
+    "./themes": "./src/themes.ts",
+    "./repo-limits": "./src/repoLimits.ts",
+    "./upload-limit": "./src/uploadLimit.ts",
+    "./upload-concurrency": "./src/uploadConcurrency.ts",
+    "./quiz-agent": "./src/quizAgent/index.ts",
+    "./quiz-agent/limits": "./src/quizAgent/limits.ts",
+    "./quiz-agent/copy": "./src/quizAgent/copy.ts",
+    "./quiz-excluded-paths": "./src/quizExcludedPaths.ts",
+    "./agents/projection": "./src/agents/projection.ts",
+    "./ai-models": "./src/aiModels.ts"
+  },
+  "dependencies": {
+    "ai": "7.0.122",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "vitest": "^4.1.5"

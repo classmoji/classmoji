@@ -30,7 +30,11 @@ vi.mock('better-auth', () => ({
   betterAuth: () => ({ api: { getSession: vi.fn() } }),
 }));
 vi.mock('better-auth/adapters/prisma', () => ({ prismaAdapter: () => ({}) }));
-vi.mock('better-auth/plugins', () => ({ admin: () => ({}), mcp: () => ({}) }));
+vi.mock('better-auth/plugins', () => ({
+  admin: () => ({}),
+  emailOTP: () => ({}),
+  mcp: () => ({}),
+}));
 vi.mock('@classmoji/database', () => ({ default: () => ({}) }));
 
 vi.mock('@classmoji/services', () => ({

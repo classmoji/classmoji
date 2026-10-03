@@ -19,6 +19,7 @@ import {
   assertFileSlide,
   isCommitTooLargeRefusal,
   isDeckSlide,
+  isMediaBackedFileSlide,
   slideFileExtension,
   slideFileSourceProblem,
   slideFileStorageName,
@@ -319,6 +320,18 @@ describe('the kind guards', () => {
     expect(isDeckSlide({ kind: 'DECK' })).toBe(true);
     expect(isDeckSlide({ kind: 'FILE' })).toBe(false);
     expect(() => assertDeckSlide({}, 'Saving')).not.toThrow();
+  });
+
+  it('a FILE with a media_id is media-backed, whatever its source_path says', () => {
+    const id = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    // Whole slide rows, as the callers pass them — `source_path` included.
+    const both = { kind: 'FILE', media_id: id, source_path: 's/x/x.pdf' };
+    const repoOnly = { kind: 'FILE', media_id: null, source_path: 's/x/x.pdf' };
+    expect(isMediaBackedFileSlide({ kind: 'FILE', media_id: id })).toBe(true);
+    expect(isMediaBackedFileSlide(both)).toBe(true);
+    expect(isMediaBackedFileSlide(repoOnly)).toBe(false);
+    expect(isMediaBackedFileSlide({ kind: 'DECK', media_id: id })).toBe(false);
+    expect(isMediaBackedFileSlide(null)).toBe(false);
   });
 
   it('refuses the mismatch with a 409 a route can map', () => {

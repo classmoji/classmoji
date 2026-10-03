@@ -14,11 +14,15 @@
     "./secret": "./src/secret.ts",
     "./mcp-token": "./src/mcpToken.ts",
     "./site-return": "./src/siteReturnToken.ts",
-    "./invite-token": "./src/inviteToken.ts"
+    "./invite-token": "./src/inviteToken.ts",
+    "./app-connection": "./src/appConnectionMessages.ts",
+    "./media-http": "./src/mediaHttp.ts",
+    "./session-response": "./src/sessionResponse.ts"
   },
   "dependencies": {
     "@classmoji/database": "*",
     "@classmoji/services": "*",
+    "@classmoji/utils": "*",
     "better-auth": "^1.4.7"
   },
   "devDependencies": {

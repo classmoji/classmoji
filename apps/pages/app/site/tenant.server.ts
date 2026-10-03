@@ -2,6 +2,7 @@ import { redirect } from 'react-router';
 import type { Role } from '@prisma/client';
 
 import { prisma, ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
+import { highestRole } from '~/utils/classroomRole.ts';
 import { siteHeaders } from './headers.server.ts';
 import { siteOrigin } from './env.server.ts';
 // IMPORTED as well as re-exported below. `export { x } from 'y'` forwards a
@@ -9,6 +10,8 @@ import { siteOrigin } from './env.server.ts';
 // these would be a ReferenceError on every class-site page — which is exactly
 // what happened when this module first stopped defining them.
 import { canonicalOriginForSite, seoOriginFor } from '@classmoji/services';
+import { GIT_IDENTITY } from '@classmoji/database';
+import { displayUsername } from '@classmoji/utils';
 
 /**
  * Site types are derived from the service's own return type rather than
@@ -37,14 +40,6 @@ export type SiteViewerRole = Role | null;
  * work twice. A WeakMap is the right cache here precisely because there is
  * nothing to invalidate: the key dies with the request.
  */
-
-/** Role priority for multi-role members — `@@unique([classroom_id, user_id, role])` means one user really can hold several. */
-const ROLE_PRIORITY: Record<Role, number> = {
-  OWNER: 4,
-  TEACHER: 3,
-  ASSISTANT: 2,
-  STUDENT: 1,
-};
 
 const STAFF_ROLES: ReadonlySet<string> = new Set(['OWNER', 'TEACHER']);
 
@@ -183,7 +178,7 @@ async function resolveViewer(request: Request, classroomId: string): Promise<Sit
   const [user, memberships] = await Promise.all([
     prisma.user.findUnique({
       where: { id: authData.userId },
-      select: { id: true, login: true, name: true, image: true },
+      select: { id: true, name: true, image: true, ...GIT_IDENTITY },
     }),
     prisma.classroomMembership.findMany({
       where: {
@@ -198,15 +193,17 @@ async function resolveViewer(request: Request, classroomId: string): Promise<Sit
   if (!user) return ANONYMOUS;
 
   // Highest privilege wins: a TA who is also enrolled as a student sees the
-  // staff view, never the narrower one.
-  let role: SiteViewerRole = null;
-  for (const membership of memberships) {
-    if (role === null || ROLE_PRIORITY[membership.role] > ROLE_PRIORITY[role]) {
-      role = membership.role;
-    }
-  }
+  // staff view, never the narrower one — the rule the page editor and the
+  // download route share.
+  const role: SiteViewerRole = highestRole(memberships.map(membership => membership.role));
 
-  return { userId: user.id, login: user.login, name: user.name, image: user.image, role };
+  return {
+    userId: user.id,
+    login: displayUsername(user),
+    name: user.name,
+    image: user.image,
+    role,
+  };
 }
 
 /**

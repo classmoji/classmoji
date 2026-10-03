@@ -1,25 +1,42 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Link, data, useFetcher, useLoaderData } from 'react-router';
+import {
+  Link,
+  data,
+  useFetcher,
+  useLoaderData,
+  type ShouldRevalidateFunctionArgs,
+} from 'react-router';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { IconDownload, IconSearch, IconTrash, IconX } from '@tabler/icons-react';
+import {
+  IconDownload,
+  IconEye,
+  IconEyeOff,
+  IconSearch,
+  IconTrash,
+  IconX,
+} from '@tabler/icons-react';
 import type { FormField } from '@classmoji/services/form-contract';
 
 import AnswerView from '~/components/forms/AnswerView.tsx';
 import { BackToClassroom } from '~/components/forms/BackToClassroom.tsx';
 import { ConfirmDialog } from '~/components/forms/ConfirmDialog.tsx';
-import { answerColumnFields, formatAnswer } from '~/components/forms/answerFormat.ts';
+import { FormAdminTabs } from '~/components/forms/FormAdminTabs.tsx';
+import { formatAnswer } from '~/components/forms/answerFormat.ts';
 import { ClassmojiService } from '~/utils/db.server.ts';
 import { formMutationBlocked } from '~/utils/formAuth.server.ts';
-import { hasRepeatGroup } from './responsesCsv.server.ts';
+import { hasRepeatGroup, tableAnswerColumns } from './responsesCsv.server.ts';
 import { formsListUrl, galleryUrlFor } from './adminLinks.server.ts';
 import GalleryCell from '~/components/forms/GalleryCell.tsx';
 import {
   NO_STORE,
   auditResponses,
+  identityAudit,
+  loadIdentityAnswers,
   loadResponseRows,
   requireFormForResponses,
+  responsesGateAction,
   scopeResponseIds,
   type ResponseRow,
 } from './responsesData.server.ts';
@@ -49,6 +66,15 @@ dayjs.extend(relativeTime);
  * triage edit and delete writes an audit row. This surface exists BEFORE the
  * public fill route by design — never collect what you cannot yet inspect and
  * delete.
+ *
+ * ── Identity questions ─────────────────────────────────────────────────────
+ * Answers to questions flagged `identity_question` are stripped on the server:
+ * absent from the loader data, the table, the search and the CSV, and so is a
+ * `name` that is one of those answers. They are never table columns. The drawer
+ * shows them for its one response on request: the `reveal-identity` intent
+ * returns that response's answers and writes one VIEW audit row naming it
+ * (`identity_answers: true`, the response id as `value`, so reveals of two
+ * responses are two rows). Nothing shows them for more than one response.
  */
 
 /** How many responses one bulk action may touch. */
@@ -92,8 +118,10 @@ export const loader = async ({
     'list_responses'
   );
 
+  const identityIds = new Set(context.identityFieldIds);
+
   const [rows, suggestions] = await Promise.all([
-    loadResponseRows(context.form.id),
+    loadResponseRows(context.form.id, identityIds),
     ClassmojiService.formResponse.statusLabelSuggestions(context.form.id),
   ]);
 
@@ -101,7 +129,7 @@ export const loader = async ({
     context,
     tool: 'forms.responses.view',
     action: 'VIEW',
-    data: { count: rows.length },
+    data: { count: rows.length, ...identityAudit(context, false) },
   });
 
   const classroom = context.classroom as { name?: string | null; slug: string };
@@ -118,21 +146,96 @@ export const loader = async ({
       suggestions,
       currentFields: context.currentFields,
       fieldsByRevision: context.fieldsByRevision,
+      // The first few scalar fields with a single readable value, minus the
+      // ones standing as the Name and Email columns and minus every identity
+      // question. The drawer is where the whole response lives.
+      answerColumns: tableAnswerColumns(context.currentFields, identityIds, MAX_ANSWER_COLUMNS),
       offersLongExport: hasRepeatGroup(context.currentFields),
       galleryUrl,
+      /** The identity questions. Empty: the drawer offers no reveal. */
+      identityFieldIds: context.identityFieldIds,
     },
     { headers: NO_STORE }
   );
 };
 
-/** Re-emit the loader's `no-store` on the document response too. */
-export const headers = ({ loaderHeaders }: { loaderHeaders: Headers }) => loaderHeaders;
+/**
+ * Re-emit the loader's `no-store` on the document response too, and the
+ * action's on its single-fetch response (the reveal returns identity answers).
+ */
+export const headers = ({
+  loaderHeaders,
+  actionHeaders,
+}: {
+  loaderHeaders: Headers;
+  actionHeaders: Headers;
+}) => {
+  const merged = new Headers(loaderHeaders);
+  actionHeaders.forEach((value, key) => merged.set(key, value));
+  return merged;
+};
+
+/** The drawer's request for one response's identity answers (`responsesGateAction` names its gate). */
+const REVEAL_INTENT = 'reveal-identity';
+
+/**
+ * A reveal reads one response and changes nothing, so the page's data is not
+ * reloaded after it (a reload would also write another list VIEW row).
+ * Everything else revalidates as usual.
+ */
+export function shouldRevalidate({ json, defaultShouldRevalidate }: ShouldRevalidateFunctionArgs) {
+  const intent = (json as { intent?: unknown } | undefined)?.intent;
+  return intent === REVEAL_INTENT ? false : defaultShouldRevalidate;
+}
 
 interface ActionBody {
   intent?: string;
   responseIds?: string[];
+  responseId?: string;
   status?: string | null;
   note?: string | null;
+}
+
+/** What the reveal intent answers with. */
+export interface RevealResult {
+  intent: typeof REVEAL_INTENT;
+  responseId?: string;
+  identityAnswers?: Record<string, unknown>;
+  error?: string;
+}
+
+/**
+ * One response's identity answers, for the drawer, and the one VIEW audit row
+ * that names it. A read: no classroom-status gate, and `no-store` like the page.
+ */
+async function revealIdentity(
+  context: Awaited<ReturnType<typeof requireFormForResponses>>,
+  responseId: unknown
+) {
+  const identityIds = new Set(context.identityFieldIds);
+  const id = typeof responseId === 'string' ? responseId : '';
+  const answers =
+    id && identityIds.size > 0 ? await loadIdentityAnswers(context.form.id, id, identityIds) : null;
+  if (!answers) {
+    return data({ intent: REVEAL_INTENT, error: 'No matching response.' } satisfies RevealResult, {
+      headers: NO_STORE,
+    });
+  }
+
+  await auditResponses({
+    context,
+    tool: 'forms.responses.view',
+    action: 'VIEW',
+    responseId: id,
+    // The response id as the value keeps reveals of different responses apart
+    // in the audit service's dedup window.
+    data: { value: id, response_id: id, ...identityAudit(context, true) },
+  });
+
+  return data(
+    { intent: REVEAL_INTENT, responseId: id, identityAnswers: answers } satisfies RevealResult,
+    { headers: NO_STORE }
+  );
 }
 
 export const action = async ({
@@ -142,20 +245,32 @@ export const action = async ({
   params: Record<string, string | undefined>;
   request: Request;
 }) => {
+  // Read before the gate so the gate is named by the intent: a refused reveal
+  // is logged as one, not as a refused triage edit.
+  let body: ActionBody = {};
+  try {
+    const parsed: unknown = await request.json();
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      body = parsed as ActionBody;
+    }
+  } catch {
+    // Not JSON: no intent, so nothing below matches.
+  }
+
   const context = await requireFormForResponses(
     params.classroomSlug!,
     params.formSlug!,
     request,
-    'triage_responses'
+    responsesGateAction(body.intent)
   );
+
+  if (body.intent === REVEAL_INTENT) return revealIdentity(context, body.responseId);
 
   // Same classroom-status gate the phase-2 form mutations use: a LOCKED or
   // UNPUBLISHED classroom is read-only for everyone but its owner, and a triage
   // label is classroom data like any other.
   const blocked = formMutationBlocked(context.classroom, context.membership.role);
   if (blocked) return blocked;
-
-  const body = (await request.json()) as ActionBody;
   const requested = Array.isArray(body.responseIds) ? body.responseIds.slice(0, MAX_BULK) : [];
   // The ids came from a browser. Narrowing them to this form is what keeps a
   // response id from another classroom's form out of every call below.
@@ -280,8 +395,10 @@ export default function FormResponses() {
     suggestions,
     currentFields,
     fieldsByRevision,
+    answerColumns,
     offersLongExport,
     galleryUrl,
+    identityFieldIds,
   } = useLoaderData<typeof loader>();
   const galleryOn = Boolean(form.galleryOrgId);
   const pendingApproval = rows.filter(
@@ -294,17 +411,6 @@ export default function FormResponses() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [bulkStatusOpen, setBulkStatusOpen] = useState(false);
 
-  // The answer columns: the first few TOP-LEVEL fields with a single readable
-  // value, MINUS the ones already standing as the Name and Email columns. A
-  // matrix or a review block cannot be a column, and a form with twenty
-  // questions would produce an unreadable table — the drawer is where the whole
-  // response lives. See `answerColumnFields` for why the identity fields come
-  // out.
-  const answerColumns = useMemo(
-    () => answerColumnFields(currentFields as FormField[], MAX_ANSWER_COLUMNS),
-    [currentFields]
-  );
-
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return rows;
@@ -313,6 +419,11 @@ export default function FormResponses() {
         (row.name ?? '').toLowerCase().includes(needle) || row.email.toLowerCase().includes(needle)
     );
   }, [rows, query]);
+
+  const submittedCount = useMemo(
+    () => rows.filter(row => !PARTIAL_STATES.has(row.submissionState)).length,
+    [rows]
+  );
 
   // Tiles describe the FORM, not the current search — they are the counts an
   // instructor works the queue against.
@@ -399,23 +510,32 @@ export default function FormResponses() {
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <BackToClassroom href={classroomFormsUrl} name={classroomName} />
-          <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">
-            <Link
-              to={`/${classroomSlug}/forms`}
-              className="hover:text-gray-900 dark:hover:text-white"
-            >
-              Forms
-            </Link>
-            <span className="mx-1.5 text-gray-300 dark:text-gray-600">/</span>
-            <Link
-              to={`/${classroomSlug}/forms/${form.slug}/edit`}
-              className="text-gray-900 hover:text-blue-600 dark:text-white dark:hover:text-blue-400"
-            >
-              {form.title}
-            </Link>
-            <span className="mx-1.5 text-gray-300 dark:text-gray-600">/</span>
-            Responses
-          </h1>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">
+              <Link
+                to={`/${classroomSlug}/forms`}
+                className="hover:text-gray-900 dark:hover:text-white"
+              >
+                Forms
+              </Link>
+              <span className="mx-1.5 text-gray-300 dark:text-gray-600">/</span>
+              <Link
+                to={`/${classroomSlug}/forms/${form.slug}/edit`}
+                className="text-gray-900 hover:text-blue-600 dark:text-white dark:hover:text-blue-400"
+              >
+                {form.title}
+              </Link>
+              <span className="mx-1.5 text-gray-300 dark:text-gray-600">/</span>
+              Responses
+            </h1>
+            <FormAdminTabs
+              classroomSlug={classroomSlug}
+              formSlug={form.slug}
+              access={form.access === 'CLASSROOM' ? 'CLASSROOM' : 'PUBLIC'}
+              active="responses"
+              responses={submittedCount}
+            />
+          </div>
           {galleryOn ? (
             <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
               {`${pendingApproval} pending approval`}
@@ -436,7 +556,7 @@ export default function FormResponses() {
           ) : null}
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="relative">
             <IconSearch
               size={15}
@@ -625,8 +745,11 @@ export default function FormResponses() {
 
       {open ? (
         <ResponseDrawer
+          // Keyed by response: a revealed answer never outlives its drawer.
+          key={open.id}
           row={open}
           fields={(fieldsByRevision[open.revisionId] ?? currentFields) as FormField[]}
+          identityFieldIds={identityFieldIds}
           suggestions={suggestions}
           onClose={() => setOpenId(null)}
           onStatus={next => setStatus([open.id], next)}
@@ -663,6 +786,8 @@ export default function FormResponses() {
  * post lets the `Content-Disposition` do its job, keeps the page where it is,
  * and means the export is a server round trip — which is what makes it
  * auditable and `no-store`-able at all.
+ *
+ * The export never includes answers to identity questions.
  */
 function ExportButton({
   classroomSlug,
@@ -1217,6 +1342,7 @@ function ResponseTableRow({
 function ResponseDrawer({
   row,
   fields,
+  identityFieldIds,
   suggestions,
   onClose,
   onStatus,
@@ -1225,6 +1351,8 @@ function ResponseDrawer({
 }: {
   row: ResponseRow;
   fields: FormField[];
+  /** The form's identity questions: hidden, with a "Hidden" chip each. */
+  identityFieldIds: string[];
   suggestions: Array<{ label: string; count: number }>;
   onClose: () => void;
   onStatus: (next: string | null) => void;
@@ -1232,6 +1360,26 @@ function ResponseDrawer({
   onDelete: () => void;
 }) {
   const chip = STATE_CHIP[row.submissionState];
+
+  // This response's identity answers, fetched only when asked for. Each request
+  // is one audited VIEW of this one response; Hide only stops showing them.
+  const reveal = useFetcher<RevealResult>();
+  const [revealWanted, setRevealWanted] = useState(false);
+  const identityIds = new Set(identityFieldIds);
+  const asksIdentity = fields.some(field => identityIds.has(field.id));
+  const revealed =
+    revealWanted && reveal.state === 'idle' && reveal.data?.responseId === row.id
+      ? (reveal.data.identityAnswers ?? null)
+      : null;
+  const revealError = revealWanted && reveal.state === 'idle' ? (reveal.data?.error ?? null) : null;
+
+  const showIdentity = () => {
+    setRevealWanted(true);
+    reveal.submit({ intent: REVEAL_INTENT, responseId: row.id } as never, {
+      method: 'post',
+      encType: 'application/json',
+    });
+  };
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end">
@@ -1349,7 +1497,31 @@ function ResponseDrawer({
         </div>
 
         <div className="flex-1 px-6 py-4">
-          <AnswerView fields={fields} answers={row.answers} resolvedContext={row.resolvedContext} />
+          {asksIdentity ? (
+            <div className="mb-4 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                data-testid="forms-identity-reveal"
+                onClick={revealed ? () => setRevealWanted(false) : showIdentity}
+                disabled={reveal.state !== 'idle'}
+                className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800"
+              >
+                {revealed ? <IconEyeOff size={15} /> : <IconEye size={15} />}
+                {revealed ? 'Hide identity answers' : 'Show identity answers'}
+              </button>
+              {revealError ? (
+                <span role="alert" className="text-sm text-amber-700 dark:text-amber-300">
+                  {revealError}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+          <AnswerView
+            fields={fields}
+            answers={revealed ? { ...row.answers, ...revealed } : row.answers}
+            resolvedContext={row.resolvedContext}
+            hiddenFieldIds={revealed ? [] : identityFieldIds}
+          />
         </div>
 
         <div className="border-t border-gray-200 px-6 py-4 dark:border-gray-700">

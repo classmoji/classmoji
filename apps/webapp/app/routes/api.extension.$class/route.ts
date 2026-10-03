@@ -2,8 +2,13 @@ import { namedAction } from 'remix-utils/named-action';
 import { tasks } from '@trigger.dev/sdk';
 
 import { ClassmojiService } from '@classmoji/services';
+import { effectiveTokensPerHour } from '@classmoji/utils';
 import { ActionTypes } from '~/constants';
-import { assertClassroomAccess, waitForRunCompletion, assertClassroomMutationAllowed } from '~/utils/helpers';
+import {
+  assertClassroomAccess,
+  waitForRunCompletion,
+  assertClassroomMutationAllowed,
+} from '~/utils/helpers';
 import type { Route } from './+types/route';
 
 // TokenTransaction has no `status` column; this endpoint's status is only used
@@ -52,7 +57,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         };
       }
 
-      const repoAssignment = await ClassmojiService.gitRepoAssignment.findById(repositoryAssignmentId);
+      const repoAssignment =
+        await ClassmojiService.gitRepoAssignment.findById(repositoryAssignmentId);
       if (!repoAssignment || repoAssignment.git_repo?.classroom_id !== classroom.id) {
         return {
           action: ActionTypes.REQUEST_EXTENSION,
@@ -70,7 +76,12 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         };
       }
 
-      const tokensPerHour = repoAssignment.assignment?.tokens_per_hour ?? 0;
+      // The assignment's own price, else the classroom's default.
+      const tokensPerHour = effectiveTokensPerHour(
+        repoAssignment.assignment?.tokens_per_hour,
+        (classroom.settings as { default_tokens_per_hour?: number } | null | undefined)
+          ?.default_tokens_per_hour
+      );
       if (tokensPerHour <= 0) {
         return {
           action: ActionTypes.REQUEST_EXTENSION,

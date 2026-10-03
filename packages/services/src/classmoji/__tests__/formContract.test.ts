@@ -20,6 +20,7 @@ import {
   FORM_DEFINITION_TOO_LARGE,
   FORM_FIELD_ACCESS_VIOLATION,
   FORM_REPEAT_CONTEXT_MISSING,
+  IDENTITY_QUESTION_TYPES,
   answersByteSize,
   assertFieldsAllowedForAccess,
   assertGalleryRoles,
@@ -27,10 +28,15 @@ import {
   buildResponseSchema,
   exceedsMaxDepth,
   flattenFields,
+  identityQuestionIds,
+  isIdentityQuestion,
   parseAnswers,
   parseFormDefinition,
   requiresResolvedContext,
+  resolveSharedOptions,
+  withoutAnswers,
   type FormField,
+  type FormOption,
 } from '../formContract.ts';
 
 /** One valid raw definition entry per registry type, keyed by type. */
@@ -102,6 +108,15 @@ const codeOf = (fn: () => unknown): string | undefined => {
     return (error as { code?: string }).code;
   }
   return undefined;
+};
+
+const messageOf = (fn: () => unknown): string => {
+  try {
+    fn();
+  } catch (error) {
+    return (error as Error).message;
+  }
+  return '';
 };
 
 describe('formContract — definitions', () => {
@@ -723,5 +738,446 @@ describe('formContract — gallery roles', () => {
         ])
       )
     ).toBeUndefined();
+  });
+});
+
+describe('formContract — identity questions', () => {
+  it.each([...IDENTITY_QUESTION_TYPES])('accepts identity_question on %s', type => {
+    const field = parseOne({ ...SAMPLES[type], identity_question: true });
+    expect(field.identity_question).toBe(true);
+    expect(isIdentityQuestion(field)).toBe(true);
+  });
+
+  it('refuses it on every other input type', () => {
+    const refused = FIELD_TYPES.filter(
+      type => FIELD_TYPE_REGISTRY[type].kind === 'input' && !IDENTITY_QUESTION_TYPES.includes(type)
+    );
+    expect([...refused].sort()).toEqual([
+      'email',
+      'matrix',
+      'ranked_choice',
+      'repeat_group',
+      'roster_select',
+    ]);
+    for (const type of refused) {
+      const fn = () => parseFormDefinition([{ ...SAMPLES[type], identity_question: true }]);
+      expect(codeOf(fn)).toBe(FORM_DEFINITION_INVALID);
+      expect(messageOf(fn)).toContain(`is a ${type} field; identity_question is allowed only on`);
+    }
+  });
+
+  it('refuses it on a display block (no such key there)', () => {
+    expect(
+      codeOf(() => parseFormDefinition([{ ...SAMPLES.heading, identity_question: true }]))
+    ).toBe(FORM_DEFINITION_INVALID);
+  });
+
+  it('refuses it on a repeat-group child, even of an allowed type', () => {
+    const group = {
+      ...SAMPLES.repeat_group,
+      fields: [{ type: 'long_text', label: 'About this teammate', identity_question: true }],
+    };
+    const fn = () => parseFormDefinition([group]);
+    expect(codeOf(fn)).toBe(FORM_DEFINITION_INVALID);
+    expect(messageOf(fn)).toContain('is inside a repeat group; identity_question is not allowed');
+  });
+
+  it('drops identity_question: false, top level and nested', () => {
+    const { fields } = parseFormDefinition([
+      { ...SAMPLES.short_text, identity_question: false },
+      {
+        ...SAMPLES.repeat_group,
+        fields: [{ type: 'long_text', label: 'Comments', identity_question: false }],
+      },
+    ]);
+    expect(fields[0]).not.toHaveProperty('identity_question');
+    expect((fields[1].fields as FormField[])[0]).not.toHaveProperty('identity_question');
+    expect(isIdentityQuestion(fields[0])).toBe(false);
+  });
+
+  it('leaves an unflagged definition exactly as before', () => {
+    for (const type of FIELD_TYPES) {
+      expect(parseOne(SAMPLES[type])).not.toHaveProperty('identity_question');
+    }
+  });
+
+  it('keeps the flag through a re-parse', () => {
+    const once = parseFormDefinition([{ ...SAMPLES.multiselect, identity_question: true }]);
+    const twice = parseFormDefinition(once);
+    expect(twice.fields[0].identity_question).toBe(true);
+    expect(twice.fields[0].id).toBe(once.fields[0].id);
+  });
+
+  it('isIdentityQuestion is true only for the literal flag', () => {
+    expect(isIdentityQuestion({ identity_question: true })).toBe(true);
+    expect(isIdentityQuestion({ identity_question: 'true' })).toBe(false);
+    expect(isIdentityQuestion({})).toBe(false);
+    expect(isIdentityQuestion(null)).toBe(false);
+    expect(isIdentityQuestion(undefined)).toBe(false);
+  });
+
+  it('identityQuestionIds is the union of the lists, top level only', () => {
+    const current = parseFormDefinition([
+      { ...SAMPLES.multiselect, identity_question: true },
+      SAMPLES.short_text,
+    ]).fields;
+    const draft = parseFormDefinition([
+      { ...current[0] },
+      { ...current[1], identity_question: true },
+      { ...SAMPLES.dropdown, identity_question: true },
+    ]).fields;
+    const ids = identityQuestionIds(current, draft);
+    expect(ids).toEqual(new Set([current[0].id, current[1].id, draft[2].id]));
+    expect(identityQuestionIds(current)).toEqual(new Set([current[0].id]));
+
+    // A nested flag can't be saved, but a hand-built list still must not reach it.
+    const nestedId = '44444444-4444-4444-8444-444444444444';
+    const handBuilt = [
+      {
+        id: '55555555-5555-4555-8555-555555555555',
+        type: 'repeat_group',
+        fields: [{ id: nestedId, type: 'long_text', identity_question: true }],
+      },
+    ] as unknown as FormField[];
+    expect(identityQuestionIds(handBuilt).has(nestedId)).toBe(false);
+  });
+
+  it('identityQuestionIds tolerates a missing list', () => {
+    const current = parseFormDefinition([{ ...SAMPLES.switch, identity_question: true }]).fields;
+    expect(identityQuestionIds(null, current, undefined)).toEqual(new Set([current[0].id]));
+    expect(identityQuestionIds()).toEqual(new Set());
+  });
+
+  it('identityQuestionIds reads a stored definition object', () => {
+    const stored = parseFormDefinition([
+      { ...SAMPLES.multiselect, identity_question: true },
+      SAMPLES.short_text,
+    ]);
+    expect(stored).toHaveProperty('definition_version', DEFINITION_VERSION);
+    expect(identityQuestionIds(stored)).toEqual(new Set([stored.fields[0].id]));
+  });
+
+  it('identityQuestionIds mixes a stored definition and a list', () => {
+    const revision = parseFormDefinition([{ ...SAMPLES.dropdown, identity_question: true }]);
+    const draft = parseFormDefinition([
+      revision.fields[0],
+      { ...SAMPLES.number, identity_question: true },
+    ]).fields;
+    expect(identityQuestionIds(revision, draft)).toEqual(
+      new Set([revision.fields[0].id, draft[1].id])
+    );
+    expect(identityQuestionIds(draft, null, revision)).toEqual(
+      new Set([revision.fields[0].id, draft[1].id])
+    );
+  });
+
+  it('identityQuestionIds throws on a shape it does not recognize', () => {
+    const wrong = [
+      {},
+      { fields: null },
+      { fields: 'not a list' },
+      { definition_version: DEFINITION_VERSION },
+      'fields',
+      42,
+    ];
+    for (const value of wrong) {
+      const fn = () => identityQuestionIds([], value as never);
+      expect(codeOf(fn)).toBe(FORM_DEFINITION_INVALID);
+      expect(messageOf(fn)).toContain('argument 2 is neither a field list nor a stored definition');
+    }
+  });
+
+  it('withoutAnswers removes the keys without touching the input', () => {
+    const answers = { a: ['x'], b: 'kept', c: null };
+    const masked = withoutAnswers(answers, new Set(['a', 'c', 'not-there']));
+    expect(masked).toEqual({ b: 'kept' });
+    expect(masked).not.toHaveProperty('c');
+    expect(answers).toEqual({ a: ['x'], b: 'kept', c: null });
+    const unmasked = withoutAnswers(answers, new Set());
+    expect(unmasked).toEqual(answers);
+    expect(unmasked).not.toBe(answers);
+  });
+});
+
+describe('formContract — exclusive options', () => {
+  const withExclusive = {
+    type: 'multiselect',
+    label: 'Which apply?',
+    options: ['First', 'Second', { label: 'None of these', exclusive: true }],
+  };
+
+  it('keeps exclusive on a multiselect option, and only when true', () => {
+    const field = parseOne({
+      ...withExclusive,
+      options: [{ label: 'First', exclusive: false }, 'Second', { label: 'None', exclusive: true }],
+    });
+    const options = field.options as FormOption[];
+    expect(options[0]).toEqual({ id: expect.any(String), label: 'First' });
+    expect(options[1]).not.toHaveProperty('exclusive');
+    expect(options[2]).toEqual({ id: expect.any(String), label: 'None', exclusive: true });
+  });
+
+  it('accepts it on a multiselect inside a repeat group', () => {
+    const group = { ...SAMPLES.repeat_group, fields: [withExclusive] };
+    expect(() => parseFormDefinition([group])).not.toThrow();
+  });
+
+  it.each([
+    [
+      'dropdown',
+      { type: 'dropdown', label: 'Pick', options: ['A', { label: 'B', exclusive: true }] },
+    ],
+    [
+      'ranked_choice',
+      {
+        type: 'ranked_choice',
+        label: 'Rank',
+        options: ['A', { label: 'B', exclusive: true }],
+        ranks: 2,
+      },
+    ],
+    [
+      'roster_select',
+      {
+        type: 'roster_select',
+        label: 'Who',
+        optionSource: 'roster',
+        options: [{ label: 'Person', exclusive: true }],
+      },
+    ],
+    [
+      'matrix rows',
+      {
+        type: 'matrix',
+        label: 'Grid',
+        matrix: { rows: [{ label: 'Row', exclusive: true }], columns: ['A', 'B'] },
+      },
+    ],
+    [
+      'matrix columns',
+      {
+        type: 'matrix',
+        label: 'Grid',
+        matrix: { rows: ['Row'], columns: ['A', { label: 'B', exclusive: true }] },
+      },
+    ],
+  ])('refuses it on %s', (_where, raw) => {
+    const fn = () => parseFormDefinition([raw]);
+    expect(codeOf(fn)).toBe(FORM_DEFINITION_INVALID);
+    expect(messageOf(fn)).toContain('exclusive is allowed only on multiselect options');
+  });
+
+  it('refuses it on a dropdown inside a repeat group', () => {
+    const group = {
+      ...SAMPLES.repeat_group,
+      fields: [{ type: 'dropdown', label: 'Pick', options: [{ label: 'A', exclusive: true }] }],
+    };
+    const fn = () => parseFormDefinition([group]);
+    expect(codeOf(fn)).toBe(FORM_DEFINITION_INVALID);
+    expect(messageOf(fn)).toContain('exclusive is allowed only on multiselect options');
+  });
+
+  describe('answers', () => {
+    const fields = parseFormDefinition([withExclusive]).fields;
+    const field = fields[0];
+    const [first, second, none] = (field.options as FormOption[]).map(option => option.id);
+
+    it('accepts the exclusive option alone', () => {
+      expect(parseAnswers(fields, { [field.id]: [none] })).toEqual({ [field.id]: [none] });
+    });
+
+    it('accepts any mix of the other options', () => {
+      expect(() => parseAnswers(fields, { [field.id]: [first, second] })).not.toThrow();
+      expect(() => parseAnswers(fields, { [field.id]: [] })).not.toThrow();
+    });
+
+    it('refuses the exclusive option combined with another, in either order', () => {
+      expect(codeOf(() => parseAnswers(fields, { [field.id]: [first, none] }))).toBe(
+        FORM_ANSWERS_INVALID
+      );
+      expect(codeOf(() => parseAnswers(fields, { [field.id]: [none, second] }))).toBe(
+        FORM_ANSWERS_INVALID
+      );
+      let message = '';
+      try {
+        parseAnswers(fields, { [field.id]: [none, first, second] });
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message).toContain(`"None of these" can't be combined with other choices`);
+    });
+
+    it('refuses two exclusive options together', () => {
+      const two = parseFormDefinition([
+        {
+          type: 'multiselect',
+          label: 'Which apply?',
+          options: ['A', { label: 'No', exclusive: true }, { label: 'Skip', exclusive: true }],
+        },
+      ]).fields;
+      const [, no, skip] = (two[0].options as FormOption[]).map(option => option.id);
+      expect(codeOf(() => parseAnswers(two, { [two[0].id]: [no, skip] }))).toBe(
+        FORM_ANSWERS_INVALID
+      );
+    });
+  });
+});
+
+describe('formContract — options_from', () => {
+  const rankedId = '66666666-6666-4666-8666-666666666666';
+  const dropdownId = '77777777-7777-4777-8777-777777777777';
+  const ranked = {
+    id: rankedId,
+    type: 'ranked_choice',
+    label: 'Rank the projects',
+    options: [{ label: 'Project A', description: 'The first one' }, 'Project B', 'Project C'],
+    ranks: 2,
+  };
+  const pitched = {
+    id: dropdownId,
+    type: 'dropdown',
+    label: 'Which project did you pitch?',
+    options_from: rankedId,
+  };
+
+  it("copies the source's options, ids included, and keeps the link", () => {
+    const { fields } = parseFormDefinition([ranked, pitched]);
+    expect(fields[1].options).toEqual(fields[0].options);
+    expect(fields[1].options).not.toBe(fields[0].options);
+    expect((fields[1].options as FormOption[])[0]).not.toBe((fields[0].options as FormOption[])[0]);
+    expect(fields[1].options_from).toBe(rankedId);
+  });
+
+  it('takes options from a plain dropdown too, and the dependent may come first', () => {
+    const source = { id: rankedId, type: 'dropdown', label: 'Track', options: ['Design', 'Dev'] };
+    const { fields } = parseFormDefinition([pitched, source]);
+    expect(fields[0].options).toEqual(fields[1].options);
+  });
+
+  it('replaces any options sent alongside the link', () => {
+    const { fields } = parseFormDefinition([ranked, { ...pitched, options: ['Stale'] }]);
+    expect((fields[1].options as FormOption[]).map(option => option.label)).toEqual([
+      'Project A',
+      'Project B',
+      'Project C',
+    ]);
+  });
+
+  it('accepts an answer that is one of the copied options', () => {
+    const { fields } = parseFormDefinition([ranked, pitched]);
+    const optionId = (fields[0].options as FormOption[])[1].id;
+    expect(parseAnswers(fields, { [rankedId]: [], [dropdownId]: optionId })).toMatchObject({
+      [dropdownId]: optionId,
+    });
+  });
+
+  it('follows the source when the definition is parsed again', () => {
+    const once = parseFormDefinition([ranked, pitched]);
+    const edited = structuredClone(once);
+    const sourceOptions = edited.fields[0].options as FormOption[];
+    sourceOptions[0].label = 'Project A, renamed';
+    sourceOptions.push({ id: '88888888-8888-4888-8888-888888888888', label: 'Project D' });
+    const twice = parseFormDefinition(edited);
+    expect(twice.fields[1].options).toEqual(twice.fields[0].options);
+    expect((twice.fields[1].options as FormOption[]).map(option => option.label)).toEqual([
+      'Project A, renamed',
+      'Project B',
+      'Project C',
+      'Project D',
+    ]);
+  });
+
+  it('round-trips with the same ids', () => {
+    const once = parseFormDefinition([ranked, pitched]);
+    expect(parseFormDefinition(once)).toEqual(once);
+  });
+
+  it('still refuses a dropdown with neither options nor options_from', () => {
+    expect(codeOf(() => parseFormDefinition([{ type: 'dropdown', label: 'Pick' }]))).toBe(
+      FORM_DEFINITION_INVALID
+    );
+    expect(
+      codeOf(() => parseFormDefinition([{ type: 'dropdown', label: 'Pick', options: [] }]))
+    ).toBe(FORM_DEFINITION_INVALID);
+  });
+
+  it('refuses a source that is not in the form', () => {
+    const fn = () => parseFormDefinition([pitched]);
+    expect(codeOf(fn)).toBe(FORM_DEFINITION_INVALID);
+    expect(messageOf(fn)).toContain('is not a top-level field of this form');
+  });
+
+  it('refuses a source of the wrong type', () => {
+    const source = { id: rankedId, type: 'multiselect', label: 'Tools', options: ['A', 'B'] };
+    const fn = () => parseFormDefinition([source, pitched]);
+    expect(codeOf(fn)).toBe(FORM_DEFINITION_INVALID);
+    expect(messageOf(fn)).toContain('must name a ranked_choice or dropdown field');
+  });
+
+  it('refuses a chain', () => {
+    const middleId = '99999999-9999-4999-8999-999999999999';
+    const middle = { id: middleId, type: 'dropdown', label: 'Middle', options_from: rankedId };
+    const fn = () => parseFormDefinition([ranked, middle, { ...pitched, options_from: middleId }]);
+    expect(codeOf(fn)).toBe(FORM_DEFINITION_INVALID);
+    expect(messageOf(fn)).toContain('takes its own options from another field');
+  });
+
+  it('refuses a dropdown that names itself', () => {
+    const fn = () => parseFormDefinition([{ ...pitched, options_from: dropdownId }]);
+    expect(codeOf(fn)).toBe(FORM_DEFINITION_INVALID);
+    expect(messageOf(fn)).toContain('names itself in options_from');
+  });
+
+  it('refuses the link on a repeat-group child', () => {
+    const group = { ...SAMPLES.repeat_group, fields: [pitched] };
+    const fn = () => parseFormDefinition([ranked, group]);
+    expect(codeOf(fn)).toBe(FORM_DEFINITION_INVALID);
+    expect(messageOf(fn)).toContain('is inside a repeat group; options_from is allowed only');
+  });
+
+  it('refuses a source inside a repeat group', () => {
+    const group = {
+      ...SAMPLES.repeat_group,
+      fields: [{ id: rankedId, type: 'dropdown', label: 'Nested', options: ['A', 'B'] }],
+    };
+    const fn = () => parseFormDefinition([group, pitched]);
+    expect(codeOf(fn)).toBe(FORM_DEFINITION_INVALID);
+    expect(messageOf(fn)).toContain('is not a top-level field of this form');
+  });
+
+  it('refuses options_from on any type but dropdown', () => {
+    expect(
+      codeOf(() =>
+        parseFormDefinition([
+          ranked,
+          { type: 'multiselect', label: 'Pick', options: ['A'], options_from: rankedId },
+        ])
+      )
+    ).toBe(FORM_DEFINITION_INVALID);
+  });
+
+  it('measures the size cap after the copy', () => {
+    const big = {
+      ...ranked,
+      options: Array.from({ length: FORM_LIMITS.MAX_OPTIONS }, (_, o) => ({
+        label: `Project ${o}`,
+        description: 'd'.repeat(1100),
+      })),
+    };
+    // The source alone fits; with its copy it does not.
+    expect(() => parseFormDefinition([big])).not.toThrow();
+    expect(codeOf(() => parseFormDefinition([big, pitched]))).toBe(FORM_DEFINITION_TOO_LARGE);
+  });
+
+  it('resolveSharedOptions returns a new list and leaves unlinked fields alone', () => {
+    const { fields } = parseFormDefinition([ranked, pitched, SAMPLES.short_text]);
+    const unlinked = { ...fields[1], options: [] } as FormField;
+    const input = [fields[0], unlinked, fields[2]];
+    const resolved = resolveSharedOptions(input);
+    expect(resolved).not.toBe(input);
+    expect(resolved[0]).toBe(fields[0]);
+    expect(resolved[2]).toBe(fields[2]);
+    expect(resolved[1].options).toEqual(fields[0].options);
+    expect(unlinked.options).toEqual([]);
   });
 });

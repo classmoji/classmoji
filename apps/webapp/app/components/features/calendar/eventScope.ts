@@ -129,3 +129,38 @@ export const buildScopedEventData = <T extends object>(
   editScope,
   occurrenceDate,
 });
+
+/**
+ * The payload a drag-to-move submits.
+ *
+ * The meeting link and description are left out: a move changes neither, and
+ * sending them back would put a stored value through the save rules on a drag.
+ * A recurring occurrence moves alone ('this_only'), named by its date as an ISO
+ * string — `occurrence_date` can arrive as a Date over single fetch, and the
+ * edit modal already sends a string, so the action sees one shape either way.
+ */
+export const buildMovePayload = (
+  event: {
+    title?: string | null;
+    event_type?: string | null;
+    location?: string | null;
+    recurrence_rule?: unknown;
+    is_recurring?: boolean | null;
+    occurrence_date?: string | Date | null;
+  },
+  newStartTime: Date,
+  newEndTime: Date
+): Record<string, unknown> => ({
+  title: event.title,
+  event_type: event.event_type,
+  start_time: newStartTime.toISOString(),
+  end_time: newEndTime.toISOString(),
+  location: event.location,
+  recurrence_rule: event.recurrence_rule,
+  ...(event.is_recurring && event.occurrence_date
+    ? {
+        editScope: EDIT_SCOPES.THIS_ONLY,
+        occurrenceDate: new Date(event.occurrence_date).toISOString(),
+      }
+    : {}),
+});

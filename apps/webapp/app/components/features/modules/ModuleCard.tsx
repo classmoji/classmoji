@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useState } from 'react';
-import { useFetcher, useNavigate } from 'react-router';
+import { useFetcher, useLocation, useNavigate } from 'react-router';
 import { App, Dropdown, Switch, Tag, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
 import {
@@ -19,6 +19,8 @@ import {
   IconFolder,
   IconHelpCircle,
   IconForms,
+  IconGripVertical,
+  IconLoader2,
 } from '@tabler/icons-react';
 
 import ModuleFormModal, {
@@ -33,6 +35,8 @@ import {
   type AssignmentRowData,
 } from '~/components/features/assignments/AssignmentsTable';
 import AddContentItemModal from './AddContentItemModal';
+import { mergeDragProps, type CourseworkCardDrag } from './useCourseworkDrag';
+import { useRepositoryActions } from '~/components/features/repositories/useRepositoryActions';
 import {
   TYPE_META,
   describeItem,
@@ -52,7 +56,16 @@ export interface ModuleCardData {
   is_public: boolean;
   items: ModuleItemLike[];
   assignments: AssignmentRowData[];
+  /**
+   * True when the module owns assignments the page does not list
+   * (`forStaffPage`), whether or not it lists others. It cannot be deleted,
+   * and moving the listed ones would not change that, so it offers no Delete.
+   */
+  hasUnlistedAssignments?: boolean;
 }
+
+/** What a write from the card, or a drag into it, came back with. */
+type WriteResult = { success?: string; error?: string };
 
 interface ModuleCardProps {
   module: ModuleCardData;
@@ -64,8 +77,36 @@ interface ModuleCardProps {
   candidates: CandidateContent;
   /** Every repository in the classroom, for the REPO assignment picker. */
   repositories: Array<{ id: string; title: string; is_published: boolean }>;
-  boundQuizIds: Set<string>;
   boundFormIds: Set<string>;
+  /**
+   * Whether the classroom shows quizzes (`loadQuizzesVisible`). Without it the
+   * card offers no quiz assignment, quiz item or quiz link. Absent means hidden.
+   */
+  quizzesVisible?: boolean;
+  /** Team tags in this classroom, for an instructor-assigned team assignment. */
+  tags?: { id: string; name: string }[];
+  /**
+   * False for a viewer who may read the coursework but not change it (an
+   * ASSISTANT). The card keeps the owner's layout and every link, and drops
+   * every control that writes: drag handles, Edit, the row and module menus,
+   * the publish switch and "Add item".
+   */
+  canEdit?: boolean;
+  /** Drag-to-reorder wiring for the card itself; absent when searching. */
+  dragProps?: Record<string, unknown>;
+  dragHandleProps?: Record<string, unknown>;
+  dragClassName?: string;
+  /**
+   * This card's slice of the page-level coursework drag: the rows it shows, in
+   * the order they are being dragged into, and the handlers that move them
+   * within this module or into another one.
+   */
+  coursework: CourseworkCardDrag;
+  /**
+   * How the page's last coursework drag went, once it is back; absent unless
+   * this card is the module it landed in.
+   */
+  moveResult?: WriteResult;
 }
 
 // antd's Dropdown clones its trigger child to attach its own onClick and ref,
@@ -91,6 +132,34 @@ const IconMore = forwardRef<
 ));
 IconMore.displayName = 'IconMore';
 
+/**
+ * The grip that arms a drag. Dragging is armed from here rather than from the
+ * whole row, so the links, menus and switches inside a row keep working.
+ * `handleProps` is absent while the list cannot be reordered (during a search).
+ */
+const DragHandle = ({
+  props,
+  label,
+  // Which hover reveals it: a row inside a card, or the card itself. Written
+  // out in full because Tailwind only generates class names it can see.
+  reveal = 'group-hover/row:opacity-100',
+}: {
+  props?: Record<string, unknown>;
+  label: string;
+  reveal?: 'group-hover/row:opacity-100' | 'group-hover/card:opacity-100';
+}) => (
+  <span
+    {...props}
+    role="presentation"
+    title={props ? label : undefined}
+    className={`shrink-0 text-gray-300 dark:text-neutral-600 transition-opacity opacity-0 ${
+      props ? `cursor-grab active:cursor-grabbing ${reveal}` : ''
+    }`}
+  >
+    <IconGripVertical size={16} />
+  </span>
+);
+
 /** A small heading that splits the card's rows into Assignments and Content. */
 const GroupHeading = ({ children }: { children: string }) => (
   <li className="pt-5 pb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-3 first:pt-3">
@@ -112,8 +181,14 @@ const ItemRow = ({
   published,
   onOpen,
   onEdit,
+  action,
+  busyLabel,
   menuItems,
   onMenuClick,
+  canEdit,
+  dragProps,
+  dragHandleProps,
+  dragClassName = '',
 }: {
   icon: Icon;
   title: string;
@@ -122,10 +197,23 @@ const ItemRow = ({
   published: boolean;
   onOpen: () => void;
   onEdit: () => void;
+  /** An extra inline action beside Edit (a REPO assignment's Publish). */
+  action?: { label: string; onClick: () => void };
+  /** Set while that action's background work runs; it replaces the action. */
+  busyLabel?: string;
   menuItems: MenuProps['items'];
   onMenuClick: (key: string) => void;
+  /** False for a read-only viewer (an assistant): the row opens, nothing else. */
+  canEdit: boolean;
+  dragProps?: Record<string, unknown>;
+  dragHandleProps?: Record<string, unknown>;
+  dragClassName?: string;
 }) => (
-  <li className="flex items-center gap-3 py-2.5 px-2 -mx-2 rounded-lg transition-colors hover:bg-stone-50 dark:hover:bg-neutral-800">
+  <li
+    {...dragProps}
+    className={`group/row flex items-center gap-2 py-2.5 px-2 -mx-2 rounded-lg transition-colors hover:bg-stone-50 dark:hover:bg-neutral-800 ${dragClassName}`}
+  >
+    {canEdit && <DragHandle props={dragHandleProps} label={`Drag to reorder: ${title}`} />}
     {/* A real button, so the row opens from the keyboard too. It spans the
         label area; the pill, Edit and the menu sit beside it. */}
     <button
@@ -143,26 +231,47 @@ const ItemRow = ({
     <Tag color={published ? 'green' : 'orange'} className="m-0 shrink-0 font-medium">
       {published ? 'Published' : 'Draft'}
     </Tag>
-    <button
-      type="button"
-      onClick={onEdit}
-      className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
-    >
-      Edit
-    </button>
-    <Dropdown
-      trigger={['click']}
-      placement="bottomRight"
-      menu={{
-        items: menuItems,
-        onClick: ({ key, domEvent }) => {
-          domEvent.stopPropagation();
-          onMenuClick(String(key));
-        },
-      }}
-    >
-      <IconMore label={`Actions: ${title}`} />
-    </Dropdown>
+    {canEdit &&
+      (busyLabel ? (
+        <span className="inline-flex items-center gap-1.5 text-sm text-ink-3 whitespace-nowrap">
+          <IconLoader2 size={14} className="animate-spin" />
+          {busyLabel}
+        </span>
+      ) : (
+        action && (
+          <button
+            type="button"
+            onClick={action.onClick}
+            className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
+          >
+            {action.label}
+          </button>
+        )
+      ))}
+    {canEdit && (
+      <button
+        type="button"
+        onClick={onEdit}
+        className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
+      >
+        Edit
+      </button>
+    )}
+    {canEdit && (
+      <Dropdown
+        trigger={['click']}
+        placement="bottomRight"
+        menu={{
+          items: menuItems,
+          onClick: ({ key, domEvent }) => {
+            domEvent.stopPropagation();
+            onMenuClick(String(key));
+          },
+        }}
+      >
+        <IconMore label={`Actions: ${title}`} />
+      </Dropdown>
+    )}
   </li>
 );
 
@@ -181,13 +290,29 @@ const ModuleCard = ({
   onToggle,
   candidates,
   repositories,
-  boundQuizIds,
   boundFormIds,
+  quizzesVisible = false,
+  tags = [],
+  coursework,
+  moveResult,
+  canEdit = true,
+  dragProps,
+  dragHandleProps,
+  dragClassName = '',
 }: ModuleCardProps) => {
   const navigate = useNavigate();
+  // Every link below stays inside the section the viewer is already in, so an
+  // assistant is never sent to an /admin route their loader would refuse.
+  const rolePrefix = useLocation().pathname.split('/')[1] || 'admin';
+  // Publish acts on the repository a REPO assignment submits through, via the
+  // repositories route's action — the same one the Repositories page posts to,
+  // so the two surfaces cannot drift.
+  const { confirmPublishAssignment, confirmSync, pending } = useRepositoryActions(
+    `/${rolePrefix}/${classSlug}/repos`
+  );
   const { modal } = App.useApp();
-  const moduleFetcher = useFetcher<{ success?: string; error?: string }>();
-  const assignmentFetcher = useFetcher<{ success?: string; error?: string }>();
+  const moduleFetcher = useFetcher<WriteResult>();
+  const assignmentFetcher = useFetcher<WriteResult>();
 
   const [editOpen, setEditOpen] = useState(false);
   const [contentOpen, setContentOpen] = useState(false);
@@ -198,16 +323,29 @@ const ModuleCard = ({
   const [error, setError] = useState<string | null>(null);
 
   const busy = moduleFetcher.state !== 'idle';
-  const ownsCoursework = module.assignments.length > 0;
-  // Legacy REPOSITORY items are a pre-assignment pointer nobody renders now.
-  const contentItems = module.items.filter(i => i.item_type !== 'REPOSITORY');
-  const itemCount = module.assignments.length + contentItems.length;
+  // The rows as the page is showing them: its order, including a drag that has
+  // not come back from the server yet. Legacy REPOSITORY items are filtered out
+  // there, since they are a pre-assignment pointer nobody renders now.
+  const contentItems = coursework.content.items as ModuleItemLike[];
+  const assignments = coursework.assignments.items as AssignmentRowData[];
+  const ownsCoursework = assignments.length > 0;
+  const itemCount = assignments.length + contentItems.length;
 
+  // The line shows the latest write to come back, whichever fetcher sent it —
+  // the card's own two, or the page's drag into this card: an error stays up
+  // until a later write succeeds. Each result is watched on its own, so an
+  // older one never overrides a newer one.
+  const moduleResult = moduleFetcher.state === 'idle' ? moduleFetcher.data : undefined;
+  const assignmentResult = assignmentFetcher.state === 'idle' ? assignmentFetcher.data : undefined;
   useEffect(() => {
-    if (moduleFetcher.state === 'idle' && moduleFetcher.data?.error) {
-      setError(moduleFetcher.data.error);
-    }
-  }, [moduleFetcher.state, moduleFetcher.data]);
+    if (moduleResult) setError(moduleResult.error ?? null);
+  }, [moduleResult]);
+  useEffect(() => {
+    if (assignmentResult) setError(assignmentResult.error ?? null);
+  }, [assignmentResult]);
+  useEffect(() => {
+    if (moveResult) setError(moveResult.error ?? null);
+  }, [moveResult]);
 
   const post = (action: string, payload: Record<string, unknown>) =>
     moduleFetcher.submit(JSON.stringify(payload), {
@@ -229,7 +367,7 @@ const ModuleCard = ({
     modal.confirm({
       title: 'Delete assignment',
       content:
-        'This deletes the assignment along with its submissions and grades. The repository, quiz or form it points at is kept.',
+        'This deletes the assignment along with its submissions and grades. The repository or form it points at is kept.',
       okText: 'Delete',
       okButtonProps: { danger: true },
       cancelText: 'Cancel',
@@ -273,27 +411,49 @@ const ModuleCard = ({
     position: module.position,
   };
 
+  const confirmDelete = () =>
+    modal.confirm({
+      title: 'Delete module',
+      content: `This removes the module. Its content items (${
+        quizzesVisible ? 'pages, quizzes, slides, forms' : 'pages, slides, forms'
+      }) are kept.`,
+      okText: 'Delete',
+      okButtonProps: { danger: true },
+      cancelText: 'Cancel',
+      onOk: () => post('delete', { id: module.id }),
+    });
+
+  // A module that owns assignments cannot be deleted. When all of them are
+  // listed the entry stays, disabled, saying to move them; when it owns some
+  // the page does not list (`hasUnlistedAssignments`), moving the listed ones
+  // would never unblock it, so there is no entry.
+  const offerDelete = !module.hasUnlistedAssignments;
   const menuItems: MenuProps['items'] = [
     { key: 'edit', label: 'Edit title & description', icon: <IconPencil size={15} /> },
-    { type: 'divider' },
-    {
-      key: 'delete',
-      label: ownsCoursework ? 'Delete (move its items first)' : 'Delete module',
-      icon: <IconTrash size={15} />,
-      danger: true,
-      disabled: ownsCoursework,
-    },
+    ...(offerDelete
+      ? [
+          { type: 'divider' as const },
+          {
+            key: 'delete',
+            label: ownsCoursework ? 'Delete (move its assignments first)' : 'Delete module',
+            icon: <IconTrash size={15} />,
+            danger: true,
+            disabled: ownsCoursework,
+          },
+        ]
+      : []),
   ];
 
   const onMenuClick: MenuProps['onClick'] = ({ key, domEvent }) => {
     domEvent.stopPropagation();
     if (key === 'edit') setEditOpen(true);
-    if (key === 'delete') post('delete', { id: module.id });
+    if (key === 'delete') confirmDelete();
   };
 
-  // "Add item" asks which kind. An assignment picks how students submit
-  // (a repository, a quiz or a form) in its own modal; a page or slide deck is
-  // placed in the module's reading order.
+  // "Add item" asks which kind. A repository or form assignment is set up in
+  // its own modal; a quiz opens the quiz form with this module chosen (a quiz
+  // and its assignment are one thing); a page or slide deck is placed in the
+  // module's reading order.
   const addItemMenu: MenuProps['items'] = [
     {
       type: 'group',
@@ -304,7 +464,15 @@ const ModuleCard = ({
           icon: <IconFolder size={15} />,
           label: 'Repository assignment',
         },
-        { key: 'ASSIGNMENT_QUIZ', icon: <IconHelpCircle size={15} />, label: 'Quiz assignment' },
+        ...(quizzesVisible
+          ? [
+              {
+                key: 'QUIZ',
+                icon: <IconHelpCircle size={15} />,
+                label: 'Quiz',
+              },
+            ]
+          : []),
         { key: 'ASSIGNMENT_FORM', icon: <IconForms size={15} />, label: 'Form assignment' },
       ],
     },
@@ -317,9 +485,12 @@ const ModuleCard = ({
       ],
     },
   ];
+  // The quiz form, under the owner's quiz screens.
+  const quizFormHref = (query: string) => `/admin/${classSlug}/quizzes/form?${query}`;
+
   const onAddItem: MenuProps['onClick'] = ({ key }) => {
     if (key === 'ASSIGNMENT_REPO') openAssignmentModal('REPO');
-    else if (key === 'ASSIGNMENT_QUIZ') openAssignmentModal('QUIZ');
+    else if (key === 'QUIZ') navigate(quizFormHref(`moduleId=${encodeURIComponent(module.id)}`));
     else if (key === 'ASSIGNMENT_FORM') openAssignmentModal('FORM');
     else {
       setContentType(key as ContentItemType);
@@ -335,19 +506,27 @@ const ModuleCard = ({
   };
   // What the assignment submits through, unless that is just its own title
   // again (a quiz assignment usually carries the quiz's name); then the kind.
-  // The form's page in the forms app (builder + responses); the admin splat
-  // route hands off to it. Falls back to the Forms list for a form with no slug.
+  // The form's page in the forms app (builder + responses); the section's
+  // splat route hands off to it. Falls back to the Forms list for a form with
+  // no slug.
   const formHref = (a: AssignmentRowData) =>
-    `/admin/${classSlug}/forms${a.form?.slug ? `/${encodeURIComponent(a.form.slug)}` : ''}`;
+    `/${rolePrefix}/${classSlug}/forms${a.form?.slug ? `/${encodeURIComponent(a.form.slug)}` : ''}`;
 
   // Clicking an assignment row shows its submissions: the assignment page
   // (one roster with submission state and grades), the quiz's attempts, or
   // the form's responses.
   const openAssignment = (a: AssignmentRowData) => {
+    // A read-only viewer has no editor to open and no Forms section to reach,
+    // so every kind resolves to the assignment page — which is the one they
+    // came for: the roster with each submission's state and grade.
+    if (!canEdit) {
+      navigate(`/${rolePrefix}/${classSlug}/assignments/${a.id}`);
+      return;
+    }
     if (a.type === 'REPO' && a.repository) {
-      navigate(`/admin/${classSlug}/assignments/${a.id}`);
-    } else if (a.type === 'QUIZ' && a.quiz) {
-      navigate(`/admin/${classSlug}/quizzes/${a.quiz.id}`);
+      navigate(`/${rolePrefix}/${classSlug}/assignments/${a.id}`);
+    } else if (a.type === 'QUIZ' && a.quiz && quizzesVisible) {
+      navigate(`/${rolePrefix}/${classSlug}/quizzes/${a.quiz.id}`);
     } else if (a.type === 'FORM') {
       navigate(formHref(a));
     } else {
@@ -357,8 +536,16 @@ const ModuleCard = ({
 
   // "Edit" edits the assignment: its weight, deadlines, release and what it
   // submits through. Editing the thing it submits through (the repository
-  // form, the quiz editor, the form builder) is the ⋯ menu's job.
-  const editAssignment = (a: AssignmentRowData) => openAssignmentModal(undefined, a);
+  // form, the form builder) is the ⋯ menu's job. A quiz's assignment is
+  // edited in the quiz form, with the quiz.
+  const editAssignment = (a: AssignmentRowData) => {
+    if (a.type === 'QUIZ') {
+      if (a.quiz && quizzesVisible)
+        navigate(quizFormHref(`quizId=${encodeURIComponent(a.quiz.id)}`));
+      return;
+    }
+    openAssignmentModal(undefined, a);
+  };
 
   // Where the ⋯ "Edit repository / quiz / form" item goes, or null when the
   // assignment has no target yet.
@@ -366,7 +553,9 @@ const ModuleCard = ({
     if (a.type === 'REPO' && a.repository?.title) {
       return `/admin/${classSlug}/repos/form?title=${encodeURIComponent(a.repository.title)}`;
     }
-    if (a.type === 'QUIZ' && a.quiz) return `/admin/${classSlug}/quizzes/form?quizId=${a.quiz.id}`;
+    if (a.type === 'QUIZ' && a.quiz && quizzesVisible) {
+      return quizFormHref(`quizId=${encodeURIComponent(a.quiz.id)}`);
+    }
     if (a.type === 'FORM') return formHref(a);
     return null;
   };
@@ -376,9 +565,12 @@ const ModuleCard = ({
   const assignmentNote = (a: AssignmentRowData) => {
     const target = assignmentTarget(a);
     const weight = `${a.weight}%${a.is_extra_credit ? ' extra credit' : ''}`;
-    // A REPO assignment names its repo and how students submit through it.
+    // A REPO assignment names its repo and how students submit through it —
+    // unless the repo carries the assignment's own name, which is the push-mode
+    // default and would just say it twice.
     if (a.type === 'REPO' && target) {
-      return `${target} · ${a.submission_mode === 'REPO' ? 'push' : 'issue'} · ${weight}`;
+      const mode = a.submission_mode === 'REPO' ? 'push' : 'issue';
+      return target === a.title ? `${mode} · ${weight}` : `${target} · ${mode} · ${weight}`;
     }
     const base =
       target && target !== a.title ? target : (ASSIGNMENT_TYPE_META[a.type]?.label ?? null);
@@ -393,7 +585,10 @@ const ModuleCard = ({
 
   return (
     <div
-      className="rounded-2xl bg-panel ring-1 ring-line"
+      {...mergeDragProps(dragProps, coursework.cardProps)}
+      className={`group/card rounded-2xl bg-panel ring-1 transition-shadow ${
+        coursework.isDropTarget ? 'ring-2 ring-sky-500' : 'ring-line'
+      } ${dragClassName}`}
       data-testid={`module-card-${module.slug ?? module.id}`}
     >
       {/* Header row: number, title, count, visibility, menu */}
@@ -404,13 +599,20 @@ const ModuleCard = ({
         onKeyDown={e => {
           if (e.key === 'Enter' || e.key === ' ') onToggle();
         }}
-        className="flex items-center gap-3 px-4 sm:px-5 py-3.5 cursor-pointer select-none"
+        className="flex items-center gap-2 px-4 sm:px-5 py-3.5 cursor-pointer select-none"
       >
+        {canEdit && (
+          <DragHandle
+            props={dragHandleProps}
+            label={`Drag to reorder: ${module.title}`}
+            reveal="group-hover/card:opacity-100"
+          />
+        )}
         <span className="text-ink-3">
           {expanded ? <IconChevronDown size={18} /> : <IconChevronRight size={18} />}
         </span>
         <span className="w-6 text-right tabular-nums text-ink-3 font-semibold">{index + 1}</span>
-        <span className="h-5 border-l border-line" />
+        <span className="mx-1 h-5 border-l border-line" />
         <span className="min-w-0 flex-1 truncate font-semibold text-ink-1">{module.title}</span>
         <span className="hidden sm:inline text-xs text-ink-3 whitespace-nowrap">
           {itemCount} item{itemCount === 1 ? '' : 's'}
@@ -420,33 +622,52 @@ const ModuleCard = ({
             <IconWorld size={16} className="text-sky-500 shrink-0" />
           </Tooltip>
         )}
-        <Tooltip title="When on, students see this module (published items only).">
-          <div
-            role="presentation"
-            className="flex items-center gap-2 text-xs text-ink-2 cursor-pointer whitespace-nowrap"
-            onClick={e => e.stopPropagation()}
+        {canEdit ? (
+          <Tooltip title="When on, students see this module (published items only).">
+            <div
+              role="presentation"
+              className="flex items-center gap-2 text-xs text-ink-2 cursor-pointer whitespace-nowrap"
+              onClick={e => e.stopPropagation()}
+            >
+              <Switch
+                size="small"
+                checked={module.is_published}
+                loading={busy}
+                onChange={checked => post('setPublished', { id: module.id, isPublished: checked })}
+              />
+              Visible to students
+            </div>
+          </Tooltip>
+        ) : (
+          // Read-only: the state still matters to an assistant (a draft module
+          // is one students cannot see yet), so it reads as a tag, not a switch.
+          !module.is_published && (
+            <Tag color="orange" className="m-0 shrink-0 font-medium">
+              Hidden
+            </Tag>
+          )
+        )}
+        {canEdit && (
+          <Dropdown
+            trigger={['click']}
+            placement="bottomRight"
+            menu={{ items: menuItems, onClick: onMenuClick }}
           >
-            <Switch
-              size="small"
-              checked={module.is_published}
-              loading={busy}
-              onChange={checked => post('setPublished', { id: module.id, isPublished: checked })}
-            />
-            Visible to students
-          </div>
-        </Tooltip>
-        <Dropdown
-          trigger={['click']}
-          placement="bottomRight"
-          menu={{ items: menuItems, onClick: onMenuClick }}
-        >
-          <IconMore label={`Module actions: ${module.title}`} />
-        </Dropdown>
+            <IconMore label={`Module actions: ${module.title}`} />
+          </Dropdown>
+        )}
       </div>
+
+      {/* Under the header, so a collapsed card shows it too: a refused delete
+          is posted from the header's menu. */}
+      {error && (
+        <div role="alert" className="px-4 sm:px-5 pb-3 text-sm text-rose-600 dark:text-rose-400">
+          {error}
+        </div>
+      )}
 
       {expanded && (
         <div className="border-t border-line px-4 sm:px-5 pb-3">
-          {error && <div className="mt-3 text-sm text-rose-600 dark:text-rose-400">{error}</div>}
           {module.description && (
             <p className="mt-3 mb-1 text-sm text-ink-2 whitespace-pre-wrap">{module.description}</p>
           )}
@@ -458,18 +679,22 @@ const ModuleCard = ({
               const { label, published } = describeItem(item);
               const edit = () => {
                 if (item.item_type === 'PAGE' && item.page) {
-                  navigate(`/admin/${classSlug}/pages/${item.page.id}`);
+                  navigate(`/${rolePrefix}/${classSlug}/pages/${item.page.id}`);
                 } else if (item.item_type === 'SLIDE' && item.slide) {
                   window.open(`${slidesUrl}/${item.slide.id}`, '_blank');
-                } else if (item.item_type === 'QUIZ') {
-                  navigate(`/admin/${classSlug}/quizzes`);
-                } else if (item.item_type === 'FORM') {
-                  navigate(`/admin/${classSlug}/forms`);
+                } else if (item.item_type === 'QUIZ' && quizzesVisible) {
+                  navigate(`/${rolePrefix}/${classSlug}/quizzes`);
+                } else if (item.item_type === 'FORM' && canEdit) {
+                  // Forms live in the owner's and teacher's sections only;
+                  // there is nowhere to send a read-only viewer, so the row
+                  // simply does not open.
+                  navigate(`/${rolePrefix}/${classSlug}/forms`);
                 }
               };
               return (
                 <ItemRow
                   key={`item-${item.id}`}
+                  canEdit={canEdit}
                   icon={meta.icon}
                   title={label}
                   kind={meta.label}
@@ -497,62 +722,110 @@ const ModuleCard = ({
                     if (key === 'down') move(itemIndex, 1);
                     if (key === 'remove') removeContentItem(item.id);
                   }}
+                  dragProps={coursework.content.rowProps(item.id)}
+                  dragHandleProps={coursework.content.handleProps(item.id)}
+                  dragClassName={coursework.content.rowClassName(item.id)}
                 />
               );
             })}
-            {module.assignments.length > 0 && <GroupHeading>Assignments</GroupHeading>}
-            {module.assignments.map(a => (
-              <ItemRow
-                key={`assignment-${a.id}`}
-                icon={ASSIGNMENT_TYPE_META[a.type]?.icon ?? IconClipboardList}
-                title={a.title}
-                note={assignmentNote(a)}
-                kind="Assignment"
-                published={a.is_published}
-                onOpen={() => openAssignment(a)}
-                onEdit={() => editAssignment(a)}
-                menuItems={[
-                  ...(editTargetHref(a)
-                    ? [
-                        {
-                          key: 'edit-target',
-                          label: editTargetLabel(a),
-                          icon: <IconPencil size={15} />,
-                        },
-                        { type: 'divider' as const },
-                      ]
-                    : []),
-                  deleteAssignmentItem,
-                ]}
-                onMenuClick={key => {
-                  if (key === 'edit-target') {
-                    const href = editTargetHref(a);
-                    if (href) navigate(href);
+            {assignments.length > 0 && <GroupHeading>Assignments</GroupHeading>}
+            {assignments.map(a => {
+              // Publish is a property of the repository the assignment submits
+              // through, so only REPO assignments with one can offer it. Its
+              // published state comes from the classroom's repository list.
+              // Publishing opens the assignment to students; the action
+              // provisions its repository first when that has not happened yet.
+              const repoId = a.type === 'REPO' ? a.repository?.id : undefined;
+              const needsRepo = repoId
+                ? !(repositories.find(r => r.id === repoId)?.is_published ?? false)
+                : false;
+              return (
+                <ItemRow
+                  key={`assignment-${a.id}`}
+                  canEdit={canEdit}
+                  icon={ASSIGNMENT_TYPE_META[a.type]?.icon ?? IconClipboardList}
+                  title={a.title}
+                  note={assignmentNote(a)}
+                  kind="Assignment"
+                  published={a.is_published}
+                  onOpen={() => openAssignment(a)}
+                  onEdit={() => editAssignment(a)}
+                  busyLabel={
+                    // Publishing queues background work, so the row keeps
+                    // saying so until that work reports back.
+                    pending && (pending.id === a.id || pending.id === repoId)
+                      ? pending.label
+                      : undefined
                   }
-                  if (key === 'remove') removeAssignment(a);
-                }}
-              />
-            ))}
+                  action={
+                    // Something outstanding — the assignment is a draft, or its
+                    // repositories do not exist — offers Publish. Once both are
+                    // done the row offers Sync, as the Repositories page does.
+                    !a.is_published || needsRepo
+                      ? {
+                          label: a.is_published ? 'Create repos' : 'Publish',
+                          onClick: () =>
+                            confirmPublishAssignment(a.id, {
+                              needsRepo,
+                              assignmentPublished: a.is_published,
+                              kind: a.type,
+                              opensAt: a.release_at,
+                            }),
+                        }
+                      : repoId
+                        ? { label: 'Sync', onClick: () => confirmSync(repoId) }
+                        : undefined
+                  }
+                  menuItems={[
+                    ...(editTargetHref(a)
+                      ? [
+                          {
+                            key: 'edit-target',
+                            label: editTargetLabel(a),
+                            icon: <IconPencil size={15} />,
+                          },
+                          ...(a.type === 'QUIZ' ? [] : [{ type: 'divider' as const }]),
+                        ]
+                      : []),
+                    // A quiz's assignment goes with the quiz (delete the quiz,
+                    // or move it to another module in the quiz form).
+                    ...(a.type === 'QUIZ' ? [] : [deleteAssignmentItem]),
+                  ]}
+                  onMenuClick={key => {
+                    if (key === 'edit-target') {
+                      const href = editTargetHref(a);
+                      if (href) navigate(href);
+                    }
+                    if (key === 'remove') removeAssignment(a);
+                  }}
+                  dragProps={coursework.assignments.rowProps(a.id)}
+                  dragHandleProps={coursework.assignments.handleProps(a.id)}
+                  dragClassName={coursework.assignments.rowClassName(a.id)}
+                />
+              );
+            })}
           </ul>
 
-          <Dropdown
-            trigger={['click']}
-            placement="bottom"
-            menu={{ items: addItemMenu, onClick: onAddItem }}
-          >
-            <button
-              type="button"
-              data-tour={index === 0 ? 'modules-add-item' : undefined}
-              className="flex w-full items-center gap-3 py-2 text-sm text-ink-3 hover:text-ink-1"
+          {canEdit && (
+            <Dropdown
+              trigger={['click']}
+              placement="bottom"
+              menu={{ items: addItemMenu, onClick: onAddItem }}
             >
-              <span className="h-px flex-1 border-t border-dashed border-line" />
-              <span className="inline-flex items-center gap-1 whitespace-nowrap">
-                <IconPlus size={14} />
-                Add item
-              </span>
-              <span className="h-px flex-1 border-t border-dashed border-line" />
-            </button>
-          </Dropdown>
+              <button
+                type="button"
+                data-tour={index === 0 ? 'modules-add-item' : undefined}
+                className="flex w-full items-center gap-3 py-2 text-sm text-ink-3 hover:text-ink-1"
+              >
+                <span className="h-px flex-1 border-t border-dashed border-line" />
+                <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                  <IconPlus size={14} />
+                  Add item
+                </span>
+                <span className="h-px flex-1 border-t border-dashed border-line" />
+              </button>
+            </Dropdown>
+          )}
         </div>
       )}
 
@@ -565,14 +838,13 @@ const ModuleCard = ({
         moduleId={module.id}
         modules={[moduleRef]}
         repositories={repositories}
-        quizzes={candidates.quizzes}
         forms={candidates.forms}
         pages={candidates.pages}
         slides={candidates.slides}
-        boundQuizIds={boundQuizIds}
         boundFormIds={boundFormIds}
         assignment={editingAssignment}
         presetKind={presetKind}
+        tags={tags}
       />
 
       <AddContentItemModal
@@ -583,6 +855,7 @@ const ModuleCard = ({
         items={contentItems}
         candidates={candidates}
         presetType={contentType}
+        quizzesVisible={quizzesVisible}
       />
     </div>
   );

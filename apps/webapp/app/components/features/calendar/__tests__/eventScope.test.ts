@@ -8,6 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  buildMovePayload,
   buildScopedEventData,
   EDIT_SCOPES,
   filterLinksForOccurrence,
@@ -172,5 +173,51 @@ describe('has the user touched the links or the star?', () => {
       linkSelectionChanged({ ...PREFILL, featuredKind: null, featuredId: null }, PREFILL)
     ).toBe(true);
     expect(linkSelectionChanged({ ...PREFILL, featuredKind: 'slide' }, PREFILL)).toBe(true);
+  });
+});
+
+describe('what a drag-to-move submits', () => {
+  const START = new Date('2026-09-21T15:00:00.000Z');
+  const END = new Date('2026-09-21T16:00:00.000Z');
+  const EVENT = {
+    title: 'Office hours',
+    event_type: 'OFFICE_HOURS',
+    location: 'Room 101',
+    meeting_link: 'See Canvas',
+    description: 'Bring questions.',
+    recurrence_rule: null,
+    is_recurring: false,
+  };
+
+  it('sends the new times and leaves the meeting link and description out', () => {
+    const payload = buildMovePayload(EVENT, START, END);
+
+    expect(payload).toEqual({
+      title: 'Office hours',
+      event_type: 'OFFICE_HOURS',
+      start_time: START.toISOString(),
+      end_time: END.toISOString(),
+      location: 'Room 101',
+      recurrence_rule: null,
+    });
+    expect(payload).not.toHaveProperty('meeting_link');
+    expect(payload).not.toHaveProperty('description');
+  });
+
+  it('moves a recurring occurrence on its own, named by an ISO date', () => {
+    const payload = buildMovePayload(
+      {
+        ...EVENT,
+        is_recurring: true,
+        recurrence_rule: { days: ['monday'] },
+        occurrence_date: new Date(OCCURRENCE),
+      },
+      START,
+      END
+    );
+
+    expect(payload).toMatchObject({ editScope: 'this_only', occurrenceDate: OCCURRENCE });
+    expect(payload).not.toHaveProperty('meeting_link');
+    expect(payload).not.toHaveProperty('description');
   });
 });

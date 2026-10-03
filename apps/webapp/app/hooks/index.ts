@@ -9,3 +9,6 @@ export { useSubscription } from './useSubscription';
 export { useRefreshDetection } from './useRefreshDetection';
 export { default as useDarkMode } from './useDarkMode';
 export { useGitHubAppInstallPopup } from './useGitHubAppInstallPopup';
+export { useGitProvider } from './useGitProvider';
+export { useDragReorder, dragRowClass } from './useDragReorder';
+export type { DropTarget } from './useDragReorder';

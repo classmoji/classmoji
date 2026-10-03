@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useFetcher, useParams } from 'react-router';
+import { useFetcher, useNavigate, useParams } from 'react-router';
 import { Button, Select } from 'antd';
 import { IconPlus } from '@tabler/icons-react';
 import { namedAction } from 'remix-utils/named-action';
@@ -12,6 +12,7 @@ import AssignmentsTable, {
 import AssignmentFormModal from '~/components/features/assignments/AssignmentFormModal';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { loadQuizzesVisible, quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -22,25 +23,33 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     action: 'view_assignments',
   });
 
-  const [assignments, modules, repositories, candidates] = await Promise.all([
+  const [assignments, modules, repositories, candidates, tags, quizzesVisible] = await Promise.all([
     ClassmojiService.assignment.listForClassroom(classroom.id),
     ClassmojiService.module.findByClassroomSlug(classSlug!),
     ClassmojiService.repository.findByClassroomSlug(classSlug!),
     ClassmojiService.module.getCandidateContent(classroom.id),
+    ClassmojiService.organizationTag.findByClassroomId(classroom.id),
+    loadQuizzesVisible(classroom.id),
   ]);
 
+  // A classroom without quizzes shows no trace of them: its quiz assignments
+  // never leave the loader. (A quiz's assignment is made in the quiz form, so
+  // this page binds no quiz.)
   return {
-    assignments,
+    assignments: quizzesVisible ? assignments : assignments.filter(a => a.type !== 'QUIZ'),
     modules: modules.map(m => ({ id: m.id, title: m.title, slug: m.slug, position: m.position })),
     repositories: repositories.map(r => ({
       id: r.id,
       title: r.title,
+      slug: r.slug,
+      type: r.type,
       is_published: r.is_published,
     })),
-    quizzes: candidates.quizzes,
     forms: candidates.forms,
     pages: candidates.pages,
     slides: candidates.slides,
+    tags: tags.map(t => ({ id: t.id, name: t.name })),
+    quizzesVisible,
   };
 };
 
@@ -56,23 +65,54 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const data = await request.json();
 
   return namedAction(request, {
+    // Tags are made where they are needed. Upsert, so re-entering a name that
+    // exists simply hands back that tag instead of erroring.
+    async createTag() {
+      const name = typeof data.name === 'string' ? data.name.trim() : '';
+      if (!name) return { error: 'Enter a tag name.' };
+      try {
+        const tag = await ClassmojiService.organizationTag.upsert(classroom.id, name);
+        return { tag: { id: tag.id, name: tag.name } };
+      } catch (error: unknown) {
+        console.error('[admin.assignments] Tag create error:', error);
+        return { error: 'Could not create the tag. Try again.' };
+      }
+    },
     async create() {
       try {
-        const { template, ...assignmentData } = data;
+        const {
+          template,
+          repo_name,
+          repository_type,
+          team_formation_mode,
+          max_team_size,
+          tag_id,
+          ...assignmentData
+        } = data;
+        // A quiz and its assignment are made together in the quiz form; the
+        // service refuses a QUIZ assignment on its own too. Type is fixed at
+        // creation, so update needs no matching check.
+        if (assignmentData.type === 'QUIZ') {
+          return { error: 'Add a quiz from the quiz form.' };
+        }
         // A REPO assignment may bring its own repository: created here from
         // the template, named after the assignment, so each student's copy is
-        // `<title-slug>-<login>`. Published later from the Repositories page.
+        // `<title-slug>-<login>` (or `-<team>` for a team assignment).
+        // Published later from the Repositories page.
         if (assignmentData.type === 'REPO' && !assignmentData.repository_id) {
           const title = String(assignmentData.title ?? '').trim();
-          const slug = titleToIdentifier(title);
-          if (!slug) return { error: 'Enter a title the repository can be named after.' };
+          // The repository is named separately from the assignment: the form
+          // seeds it from the title but the instructor can name it anything.
+          const repoTitle = String(repo_name ?? '').trim() || title;
+          const slug = titleToIdentifier(repoTitle);
+          if (!slug) return { error: 'Enter a name the repository can be created under.' };
           const existing = await ClassmojiService.repository.findByClassroomAndTitle(
             classroom.id,
-            title
+            repoTitle
           );
           if (existing) {
             return {
-              error: `A repository named "${title}" already exists. Pick it under "Existing repository", or use another title.`,
+              error: `A repository named "${repoTitle}" already exists. Pick it under "Existing repository", or use another name.`,
             };
           }
           // No template picked: make a blank one in the classroom's own org
@@ -89,22 +129,33 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
               const blank = await ClassmojiService.templateImport.createBlankTemplateRepository({
                 gitOrganization: classroom.git_organization,
                 slug,
-                assignmentTitle: title,
+                assignmentTitle: repoTitle,
                 classroomName: classroom.name,
               });
               templateRef = blank.fullName;
             } catch (error: unknown) {
-              console.error('Blank template creation failed:', error);
+              console.error('[admin.assignments] Blank template creation failed:', error);
               return {
                 error: `Could not create a blank template repository in ${classroom.git_organization.login}. Pick a template repository instead.`,
               };
             }
           }
+          // Team config comes from the assignment form; provisioning is
+          // per-repository, so it has to land on the repository we create here.
+          const isTeam = repository_type === 'GROUP';
+          if (isTeam && team_formation_mode === 'INSTRUCTOR' && !tag_id) {
+            return { error: 'Pick the team tag whose teams each get a repository.' };
+          }
           const repository = await ClassmojiService.repository.create({
-            title,
+            title: repoTitle,
             template: templateRef,
-            type: 'INDIVIDUAL',
+            type: isTeam ? 'GROUP' : 'INDIVIDUAL',
             classroom_id: classroom.id,
+            ...(isTeam && {
+              team_formation_mode: team_formation_mode ?? 'INSTRUCTOR',
+              max_team_size: max_team_size ?? null,
+              tag_id: tag_id ?? null,
+            }),
           });
           assignmentData.repository_id = repository.id;
         }
@@ -114,13 +165,19 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         );
         return { success: `Assignment "${created.title}" created` };
       } catch (error: unknown) {
-        console.error('Assignment create error:', error);
-        return { error: error instanceof Error ? error.message : 'Failed to create assignment' };
+        console.error('[admin.assignments] Assignment create error:', error);
+        return { error: 'Failed to create assignment. Please try again.' };
       }
     },
     async update() {
       try {
         const { id, ...updates } = data;
+        // A quiz's assignment is written only where the classroom shows
+        // quizzes; elsewhere this page lists none, so there is none to write.
+        const target = await ClassmojiService.assignment.findByIdInClassroom(id, classroom.id);
+        if (target?.type === 'QUIZ' && !(await quizzesVisibleOrThrow(classroom.id))) {
+          return { error: 'Failed to update assignment. Please try again.' };
+        }
         const updated = await ClassmojiService.assignment.updateInClassroom(
           id,
           classroom.id,
@@ -128,8 +185,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         );
         return { success: `Assignment "${updated.title}" updated` };
       } catch (error: unknown) {
-        console.error('Assignment update error:', error);
-        return { error: error instanceof Error ? error.message : 'Failed to update assignment' };
+        console.error('[admin.assignments] Assignment update error:', error);
+        return { error: 'Failed to update assignment. Please try again.' };
       }
     },
     async delete() {
@@ -137,16 +194,30 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         await ClassmojiService.assignment.deleteInClassroom(data.id, classroom.id);
         return { success: 'Assignment deleted' };
       } catch (error: unknown) {
-        console.error('Assignment delete error:', error);
-        return { error: error instanceof Error ? error.message : 'Failed to delete assignment' };
+        // A quiz's assignment goes with the quiz; the refusal says what to do.
+        if ((error as { name?: unknown } | null)?.name === 'QuizAssignmentError') {
+          return { error: (error as Error).message };
+        }
+        console.error('[admin.assignments] Assignment delete error:', error);
+        return { error: 'Failed to delete assignment. Please try again.' };
       }
     },
   });
 };
 
 const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
-  const { assignments, modules, repositories, quizzes, forms, pages, slides } = loaderData;
+  const {
+    assignments,
+    modules,
+    repositories,
+    forms,
+    pages,
+    slides,
+    tags,
+    quizzesVisible,
+  } = loaderData;
   const { class: classSlug } = useParams();
+  const navigate = useNavigate();
   const deleteFetcher = useFetcher<{ success?: string; error?: string }>();
 
   const [query, setQuery] = useState('');
@@ -172,7 +243,6 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
     .filter(a => !a.is_extra_credit && a.is_published)
     .reduce((sum, a) => sum + a.weight, 0);
 
-  const boundQuizIds = new Set(rows.map(a => a.quiz?.id).filter(Boolean) as string[]);
   const boundFormIds = new Set(rows.map(a => a.form?.id).filter(Boolean) as string[]);
 
   const openNew = () => {
@@ -180,6 +250,11 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
     setModalOpen(true);
   };
   const openEdit = (a: AssignmentRowData) => {
+    // A quiz's assignment is edited in the quiz form, with the quiz.
+    if (a.type === 'QUIZ') {
+      if (a.quiz) navigate(`/admin/${classSlug}/quizzes/form?quizId=${a.quiz.id}`);
+      return;
+    }
     setEditing(a);
     setModalOpen(true);
   };
@@ -222,6 +297,7 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
           onEdit={openEdit}
           onDelete={remove}
           busy={deleteFetcher.state !== 'idle'}
+          quizzesVisible={quizzesVisible}
         />
         {rows.length > 0 && (
           <div className="mt-4 flex items-center justify-end gap-2 text-sm text-ink-2">
@@ -243,13 +319,12 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
         classSlug={classSlug!}
         modules={modules}
         repositories={repositories}
-        quizzes={quizzes}
         forms={forms}
         pages={pages}
         slides={slides}
-        boundQuizIds={boundQuizIds}
         boundFormIds={boundFormIds}
         assignment={editing}
+        tags={tags}
       />
     </div>
   );

@@ -88,7 +88,12 @@ vi.mock('~/utils/agentStreamManager', () => ({
   },
 }));
 
-vi.mock('@classmoji/utils', () => ({ getContentRepoName: () => '' }));
+// The real module, with only the repo-name helper stubbed: the route's session
+// time-zone resolution runs the real validator.
+vi.mock('@classmoji/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/utils')>()),
+  getContentRepoName: () => '',
+}));
 vi.mock('@classmoji/auth/mcp-token', () => ({
   mintMcpAccessToken: vi.fn(async () => ({
     accessToken: 'askmoji_test',

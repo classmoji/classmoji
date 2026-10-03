@@ -1,16 +1,29 @@
 import { useMemo, useState } from 'react';
-import { useParams } from 'react-router';
+import { useFetcher, useLocation, useParams } from 'react-router';
 import { Button } from 'antd';
 import { namedAction } from 'remix-utils/named-action';
 import { IconPlus } from '@tabler/icons-react';
 
-import { SearchInput, ButtonNew, RequireRole, TriggerProgress } from '~/components';
+import { SearchInput, ButtonNew, RequireRole } from '~/components';
+import { useDragReorder, dragRowClass } from '~/hooks';
 import { ClassmojiService } from '@classmoji/services';
 import type { ModuleItemType } from '@prisma/client';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
-import { assertClassroomMutationAllowed } from '~/utils/helpers';
+import { addClassroomAuditLog, assertClassroomMutationAllowed } from '~/utils/helpers';
+import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import ModuleCard, { type ModuleCardData } from '~/components/features/modules/ModuleCard';
+import {
+  useCourseworkDrag,
+  type CourseworkMove,
+} from '~/components/features/modules/useCourseworkDrag';
 import ModuleFormModal from './ModuleFormModal';
+import {
+  forStaffPage,
+  fullAssignmentOrder,
+  fullItemOrder,
+  ownsUnlistedAssignments,
+  quizzesHiddenIn,
+} from './quizRows.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -22,25 +35,36 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   });
 
   // Every module with everything it owns, plus what the pickers may add.
-  const [modules, candidates, allAssignments, repositories] = await Promise.all([
-    ClassmojiService.module.listModuleContentsForClassroom(classroom.id),
-    ClassmojiService.module.getCandidateContent(classroom.id),
-    ClassmojiService.assignment.listForClassroom(classroom.id),
-    ClassmojiService.repository.findByClassroomId(classroom.id),
-  ]);
+  const [modules, candidates, allAssignments, repositories, tags, quizzesVisible] =
+    await Promise.all([
+      ClassmojiService.module.listModuleContentsForClassroom(classroom.id),
+      ClassmojiService.module.getCandidateContent(classroom.id),
+      ClassmojiService.assignment.listForClassroom(classroom.id),
+      ClassmojiService.repository.findByClassroomId(classroom.id),
+      ClassmojiService.organizationTag.findByClassroomId(classroom.id),
+      loadQuizzesVisible(classroom.id),
+    ]);
 
+  // A classroom without quizzes (not Pro, or switched off) shows no trace of
+  // them: its quiz items, quiz assignments and quiz candidates never leave the
+  // loader, and `quizzesVisible` drops the quiz entries from the card menus.
   return {
-    modules,
-    candidates,
+    modules: modules.map(m => forStaffPage(m, quizzesVisible)),
+    candidates: quizzesVisible ? candidates : { ...candidates, quizzes: [] },
+    quizzesVisible,
     // A REPO assignment may submit through any repository in the classroom.
     repositories: repositories.map(r => ({
       id: r.id,
       title: r.title,
+      slug: r.slug,
+      type: r.type,
       is_published: r.is_published,
     })),
     slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
-    // A quiz or form binds to at most one assignment in the classroom.
-    boundQuizIds: allAssignments.map(a => a.quiz_id).filter(Boolean) as string[],
+    // Team tags, for an instructor-assigned team assignment created from a card.
+    tags: tags.map(t => ({ id: t.id, name: t.name })),
+    // A form binds to at most one assignment in the classroom. (A quiz's
+    // assignment is made with the quiz, in the quiz form.)
     boundFormIds: allAssignments.map(a => a.form_id).filter(Boolean) as string[],
   };
 };
@@ -48,7 +72,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom, membership } = await requireClassroomAdmin(request, classSlug!, {
+  const { classroom, membership, userId } = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'REPOSITORIES',
     action: 'manage_modules',
   });
@@ -65,6 +89,10 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     targetId?: string;
     moduleItemId?: string;
     orderedItemIds?: string[];
+    orderedModuleIds?: string[];
+    orderedAssignmentIds?: string[];
+    assignmentId?: string;
+    toModuleId?: string;
   };
 
   return namedAction(request, {
@@ -94,16 +122,45 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
     async delete() {
       try {
-        await ClassmojiService.module.deleteById(data.id!, classroom.id);
+        // Where quizzes are hidden, a module whose only assignments are quiz
+        // ones goes with them (the quizzes and attempts stay, in no module);
+        // the audit row records which.
+        const deleted = await ClassmojiService.module.deleteById(data.id!, classroom.id, {
+          quizzesHidden: await quizzesHiddenIn(classroom.id),
+        });
+        if (deleted.deleted_quiz_assignment_ids.length > 0) {
+          await addClassroomAuditLog({
+            classroomId: classroom.id,
+            userId,
+            role: membership!.role,
+            action: 'DELETE',
+            resourceType: 'MODULE',
+            resourceId: data.id!,
+            metadata: {
+              tool: 'web:modules.delete',
+              quiz_assignment_ids: deleted.deleted_quiz_assignment_ids,
+            },
+          });
+        }
         return { success: 'Module deleted' };
       } catch (error: unknown) {
         console.error('Module delete error:', error);
         const message = error instanceof Error ? error.message : '';
-        return {
-          error: message.includes('still has')
-            ? 'Move or delete this module’s assignments first.'
-            : 'Failed to delete module. Please try again.',
-        };
+        const failed = { error: 'Failed to delete module. Please try again.' };
+        if (!message.includes('still has')) return failed;
+        // The page offers Delete only for a module that owns no assignments,
+        // so this is a page loaded before that changed. A module that owns
+        // some the page does not list gets a line naming none.
+        try {
+          return {
+            error: (await ownsUnlistedAssignments(classroom.id, data.id!))
+              ? 'This module can’t be deleted.'
+              : 'Move or delete this module’s assignments first.',
+          };
+        } catch (lookupError: unknown) {
+          console.error('Module delete lookup error:', lookupError);
+          return failed;
+        }
       }
     },
     async setPublished() {
@@ -133,11 +190,16 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       }
     },
     async addItem() {
+      // A quiz sits in a module through its assignment, set in the quiz form;
+      // a page loaded before that changed is refused here.
+      if (data.itemType === 'QUIZ') {
+        return { error: 'Add a quiz from the quiz form.' };
+      }
       try {
         await ClassmojiService.module.addItem(
           data.moduleId!,
-          // Repositories join a module through Repository.module_id, not as
-          // an item; the service refuses REPOSITORY at runtime as well.
+          // A repository reaches a module only through a REPO assignment, not
+          // as an item; the service refuses REPOSITORY at runtime as well.
           data.itemType! as Exclude<ModuleItemType, 'REPOSITORY'>,
           data.targetId!,
           classroom.id
@@ -161,13 +223,72 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       try {
         await ClassmojiService.module.reorderItems(
           data.moduleId!,
-          data.orderedItemIds ?? [],
+          await fullItemOrder(classroom.id, data.moduleId!, data.orderedItemIds ?? []),
           classroom.id
         );
         return { success: 'Module order updated' };
       } catch (error: unknown) {
         console.error('Module reorderItems error:', error);
         return { error: 'Failed to reorder items. Please try again.' };
+      }
+    },
+    async reorderAssignments() {
+      try {
+        await ClassmojiService.assignment.reorderInModule(
+          data.moduleId!,
+          await fullAssignmentOrder(classroom.id, data.moduleId!, data.orderedAssignmentIds ?? []),
+          classroom.id
+        );
+        return { success: 'Module order updated' };
+      } catch (error: unknown) {
+        console.error('Module reorderAssignments error:', error);
+        return { error: 'Failed to reorder assignments. Please try again.' };
+      }
+    },
+    async moveItem() {
+      try {
+        await ClassmojiService.module.moveItemToModule(
+          data.moduleItemId!,
+          data.toModuleId!,
+          await fullItemOrder(classroom.id, data.toModuleId!, data.orderedItemIds ?? []),
+          classroom.id
+        );
+        return { success: 'Item moved' };
+      } catch (error: unknown) {
+        console.error('Module moveItem error:', error);
+        const message = error instanceof Error ? error.message : '';
+        return {
+          error: message.includes('already has')
+            ? message
+            : 'Failed to move the item. Please try again.',
+        };
+      }
+    },
+    async moveAssignment() {
+      try {
+        await ClassmojiService.assignment.moveToModule(
+          data.assignmentId!,
+          data.toModuleId!,
+          await fullAssignmentOrder(
+            classroom.id,
+            data.toModuleId!,
+            data.orderedAssignmentIds ?? []
+          ),
+          classroom.id
+        );
+        return { success: 'Assignment moved' };
+      } catch (error: unknown) {
+        console.error('Module moveAssignment error:', error);
+        return { error: 'Failed to move the assignment. Please try again.' };
+      }
+    },
+    async reorderModules() {
+      try {
+        await ClassmojiService.module.reorderModules(classroom.id, data.orderedModuleIds ?? []);
+        return { success: 'Modules reordered' };
+      } catch (error: unknown) {
+        console.error('Module reorderModules error:', error);
+        return { error: 'Failed to reorder modules. Please try again.' };
       }
     },
   });
@@ -179,21 +300,94 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
  * assignments and content in place. Nothing needs the module detail page.
  */
 const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
-  const { modules, candidates, repositories, slidesUrl, boundQuizIds, boundFormIds } = loaderData;
+  const {
+    modules,
+    candidates,
+    repositories,
+    slidesUrl,
+    boundFormIds,
+    tags,
+    quizzesVisible,
+  } = loaderData;
   const { class: classSlug } = useParams();
+  const orderFetcher = useFetcher<{ success?: string; error?: string }>();
+  // The module the last coursework drag landed in: its card shows how the
+  // move went. A module reorder has no card, so it clears this.
+  const [moveTarget, setMoveTarget] = useState<string | null>(null);
+  const moveResult = orderFetcher.state === 'idle' ? orderFetcher.data : undefined;
   const [query, setQuery] = useState('');
   const [formOpen, setFormOpen] = useState(false);
+  // The assistant section renders this same page read-only. The URL is the
+  // authority: /admin is OWNER-gated in the loader, so being here at all is
+  // the permission. The create buttons below already gate on RequireRole; this
+  // is what turns off the rest — dragging and every control inside a card.
+  const canEdit = useLocation().pathname.split('/')[1] === 'admin';
   // Every module starts expanded; the user collapses what they are done with.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   const cards = modules as unknown as ModuleCardData[];
+  const searching = Boolean(query.trim());
+
+  // Cards are dragged into order on the page. A reorder rewrites every
+  // position at once, so it has to see the whole list: dragging is off while a
+  // search hides part of it.
+  const drag = useDragReorder(
+    cards,
+    orderedModuleIds => {
+      setMoveTarget(null);
+      orderFetcher.submit(JSON.stringify({ orderedModuleIds }), {
+        method: 'post',
+        action: `/admin/${classSlug}/modules?/reorderModules`,
+        encType: 'application/json',
+      });
+    },
+    !searching && canEdit
+  );
+
   const filtered = useMemo(
     () =>
-      query.trim()
-        ? cards.filter(m => m.title.toLowerCase().includes(query.trim().toLowerCase()))
-        : cards,
-    [cards, query]
+      searching
+        ? drag.ordered.filter(m => m.title.toLowerCase().includes(query.trim().toLowerCase()))
+        : drag.ordered,
+    [drag.ordered, query, searching]
   );
+
+  // The rows every card holds, in one place: a page or an assignment dragged
+  // out of one module and into another is a single gesture across two cards,
+  // so the page owns that state rather than each card owning its own list.
+  // Legacy REPOSITORY items are a pre-assignment pointer nobody renders.
+  const lists = useMemo(
+    () =>
+      cards.map(m => ({
+        id: m.id,
+        content: m.items.filter(i => i.item_type !== 'REPOSITORY'),
+        assignments: m.assignments,
+      })),
+    [cards]
+  );
+
+  const submitMove = ({ scope, rowId, toModuleId, orderedIds }: CourseworkMove) => {
+    setMoveTarget(toModuleId);
+    orderFetcher.submit(
+      JSON.stringify(
+        scope === 'content'
+          ? { moduleItemId: rowId, toModuleId, orderedItemIds: orderedIds }
+          : { assignmentId: rowId, toModuleId, orderedAssignmentIds: orderedIds }
+      ),
+      {
+        method: 'post',
+        action: `/admin/${classSlug}/modules?/${scope === 'content' ? 'moveItem' : 'moveAssignment'}`,
+        encType: 'application/json',
+      }
+    );
+  };
+
+  const coursework = useCourseworkDrag({
+    lists,
+    onMove: submitMove,
+    enabled: canEdit,
+    result: moveResult,
+  });
   const allCollapsed = filtered.length > 0 && filtered.every(m => collapsed.has(m.id));
 
   const toggle = (id: string) =>
@@ -204,7 +398,6 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
       return next;
     });
 
-  const quizSet = useMemo(() => new Set(boundQuizIds), [boundQuizIds]);
   const formSet = useMemo(() => new Set(boundFormIds), [boundFormIds]);
 
   return (
@@ -231,21 +424,27 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
           </RequireRole>
         </div>
       </div>
-
       <div className="flex flex-col gap-3">
         {filtered.map(m => (
           <ModuleCard
             key={m.id}
             module={m}
-            index={cards.indexOf(m)}
+            index={drag.ordered.indexOf(m)}
             classSlug={classSlug!}
             slidesUrl={slidesUrl}
             expanded={!collapsed.has(m.id)}
             onToggle={() => toggle(m.id)}
             candidates={candidates}
             repositories={repositories}
-            boundQuizIds={quizSet}
             boundFormIds={formSet}
+            quizzesVisible={quizzesVisible}
+            tags={tags}
+            coursework={coursework.forModule(m.id)}
+            moveResult={m.id === moveTarget ? moveResult : undefined}
+            canEdit={canEdit}
+            dragProps={drag.rowProps(m.id)}
+            dragHandleProps={drag.handleProps(m.id)}
+            dragClassName={dragRowClass(m.id, drag.draggingId, drag.dropTarget)}
           />
         ))}
 
@@ -276,19 +475,7 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
             <span className="h-px flex-1 border-t border-dashed border-line" />
           </button>
         </RequireRole>
-      </div>
-
-      <TriggerProgress
-        operation="PUBLISH_OR_SYNC_ASSIGNMENT"
-        validIdentifiers={[
-          'gh-create_git_repo',
-          'cf-create_git_repo',
-          'gh-create_git_repo_assignment',
-          'cf-create_git_repo_assignment',
-          'gh-add_collaborator_to_repo',
-        ]}
-      />
-
+      </div>{' '}
       <ModuleFormModal open={formOpen} module={null} onClose={() => setFormOpen(false)} />
     </div>
   );

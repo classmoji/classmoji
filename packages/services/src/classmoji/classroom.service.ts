@@ -1,6 +1,10 @@
 import getPrisma from '@classmoji/database';
+import { canonicalTimeZone } from '@classmoji/utils';
 import { GitHubProvider } from '../git/index.ts';
 import * as entitlementService from './entitlement.service.ts';
+// The barrel, whose write half (and the S3 client behind it) loads only when a
+// classroom is actually deleted.
+import { purgeClassroomMedia } from '../media/index.ts';
 import type { Prisma, Role } from '@prisma/client';
 
 /**
@@ -20,6 +24,20 @@ export class ClassroomSettingsEntitlementError extends Error {
 }
 
 /**
+ * A settings value refused as malformed, with a machine-readable `code` the web
+ * actions and the MCP registry map to a caller error (never a 500).
+ */
+export class ClassroomSettingsValidationError extends Error {
+  readonly code: 'TIMEZONE_INVALID';
+
+  constructor(code: 'TIMEZONE_INVALID', message: string) {
+    super(message);
+    this.name = 'ClassroomSettingsValidationError';
+    this.code = code;
+  }
+}
+
+/**
  * Whitelist of setting fields that are SAFE to expose to the client.
  * NEVER add secret fields (API keys, tokens, etc.) to this list.
  */
@@ -29,8 +47,13 @@ const SAFE_SETTINGS_FIELDS = [
   'llm_temperature',
   'llm_max_tokens',
   'code_aware_model',
+  'exploration_model',
+  'question_effort',
+  'grading_effort',
+  'exploration_effort',
   'syllabus_bot_enabled',
   'syllabus_bot_model',
+  'syllabus_bot_effort',
   'content_repo_name',
   'slides_enabled',
   'quizzes_enabled',
@@ -43,6 +66,7 @@ const SAFE_SETTINGS_FIELDS = [
   'default_student_page',
   'recent_viewers_enabled',
   'theme',
+  'timezone',
 ];
 
 /**
@@ -218,11 +242,21 @@ export const update = async (id: string, updates: Prisma.ClassroomUpdateInput) =
 };
 
 /**
- * Delete a Classroom by ID
+ * Delete a Classroom by ID.
+ *
+ * The classroom's media objects in R2 go FIRST. Its `media_objects` rows
+ * cascade away with the classroom, and after that nothing names the objects —
+ * they would sit in the bucket unreachable and unbilled. A purge that fails
+ * throws and the classroom is NOT deleted, so the caller can say so and the
+ * delete can be retried; the purge is idempotent. A deployment with no media
+ * store skips it, and so does a classroom that has never had a media row, so
+ * an R2 outage cannot block deleting a classroom with nothing in the bucket.
+ *
  * @param {string} id - UUID of the Classroom
  * @returns {Promise<Object>}
  */
 export const deleteById = async (id: string) => {
+  await purgeClassroomMedia(id);
   return getPrisma().classroom.delete({
     where: { id },
   });
@@ -725,10 +759,33 @@ export const updateSettings = async (
   if (updates.syllabus_bot_enabled !== undefined && updates.syllabus_bot_enabled !== false) {
     const entitlement = await entitlementService.canUseSyllabusBot(classroomId);
     if (!entitlement.allowed) {
-      throw new ClassroomSettingsEntitlementError(
-        'The syllabus assistant requires a Pro subscription'
-      );
+      throw new ClassroomSettingsEntitlementError('Ask Moji requires a Pro subscription.');
     }
+  }
+
+  // Turning AI quizzes ON is Pro-only too, by the same rule and for the same
+  // callers; turning them OFF is always allowed.
+  //
+  // Unlike the syllabus bot, `quizzes_enabled` defaults to TRUE (schema), and
+  // the creation paths leave it true for every classroom, Free included — they
+  // write raw, never through here, so this gate never fires on create. What
+  // keeps a Free classroom from being served quizzes is the serve-time
+  // `assertProTier` on the quiz routes, not this flag. Config import needs no
+  // gate of its own: its only caller copies onto a newly created classroom,
+  // which is already `true`, so copying `true` changes nothing.
+  if (updates.quizzes_enabled !== undefined && updates.quizzes_enabled !== false) {
+    const entitlement = await entitlementService.canUseQuizzes(classroomId);
+    if (!entitlement.allowed) {
+      throw new ClassroomSettingsEntitlementError('AI Quizzes requires a Pro subscription.');
+    }
+  }
+
+  // The course time zone: canonical IANA spelling, blank = cleared. Resolved
+  // BEFORE the write so a refused zone costs nothing, and here rather than in
+  // the callers because the web Settings page, classroom creation/import and the
+  // MCP tool all write through this upsert.
+  if (updates.timezone !== undefined) {
+    updates = { ...updates, timezone: normalizeTimeZoneSetting(updates.timezone) };
   }
 
   return getPrisma().classroomSettings.upsert({
@@ -739,4 +796,39 @@ export const updateSettings = async (
     },
     update: updates,
   });
+};
+
+/**
+ * A submitted time-zone setting as it should be stored: null for a clear (null
+ * or blank), the canonical IANA name for a zone Intl knows, and a
+ * ClassroomSettingsValidationError for anything else.
+ */
+export function normalizeTimeZoneSetting(value: unknown): string | null {
+  if (value === null || (typeof value === 'string' && value.trim() === '')) return null;
+  const canonical = canonicalTimeZone(value);
+  if (!canonical) {
+    // The rejected value is echoed back to the caller, so it is capped: an
+    // arbitrary-length body must not come back verbatim in the error.
+    const shown = String(value);
+    const echo = shown.length > 64 ? `${shown.slice(0, 64)}…` : shown;
+    throw new ClassroomSettingsValidationError(
+      'TIMEZONE_INVALID',
+      `'${echo}' is not a time zone we recognize. Pick one from the list, or clear it.`
+    );
+  }
+  return canonical;
+}
+
+/**
+ * The classroom's own time zone (classroom_settings.timezone), or null when none
+ * is set. THE reader for every server-side date rendering: the public schedule,
+ * Ask Moji and the MCP server. Callers resolve the fallback order with
+ * @classmoji/utils resolveEffectiveTimeZone (classroom, then caller, then UTC).
+ */
+export const getTimeZone = async (classroomId: string): Promise<string | null> => {
+  const settings = await getPrisma().classroomSettings.findUnique({
+    where: { classroom_id: classroomId },
+    select: { timezone: true },
+  });
+  return settings?.timezone ?? null;
 };

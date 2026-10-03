@@ -1,30 +1,47 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const classroomFindUnique = vi.fn();
 const moduleFindMany = vi.fn();
 const moduleFindFirst = vi.fn();
+const moduleFindUnique = vi.fn();
 const moduleUpdate = vi.fn();
+const moduleDelete = vi.fn();
 const itemFindFirst = vi.fn();
 const itemFindMany = vi.fn();
 const itemCreate = vi.fn();
 const itemUpdate = vi.fn();
+const itemDeleteMany = vi.fn();
+const assignmentFindMany = vi.fn();
+const assignmentDeleteMany = vi.fn();
+const queryRaw = vi.fn();
 const transaction = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
     classroom: { findUnique: classroomFindUnique },
-    module: { findMany: moduleFindMany, findFirst: moduleFindFirst, update: moduleUpdate },
+    module: {
+      findMany: moduleFindMany,
+      findFirst: moduleFindFirst,
+      findUnique: moduleFindUnique,
+      update: moduleUpdate,
+      delete: moduleDelete,
+    },
     moduleItem: {
       findFirst: itemFindFirst,
       findMany: itemFindMany,
       create: itemCreate,
       update: itemUpdate,
+      deleteMany: itemDeleteMany,
     },
     $transaction: transaction,
   }),
 }));
 
-vi.mock('@classmoji/utils', () => ({ titleToIdentifier: (s: string) => s.toLowerCase() }));
+vi.mock('@classmoji/utils', async () => ({
+  titleToIdentifier: (s: string) => s.toLowerCase(),
+  // The real rule: the student view's assignment filter is under test below.
+  openToStudents: (await import('../../../../utils/src/assignmentVisibility.ts')).openToStudents,
+}));
 
 const {
   isItemPublished,
@@ -32,7 +49,10 @@ const {
   setPublic,
   addItem,
   reorderItems,
+  moveItemToModule,
+  QUIZ_ITEM_REFUSAL,
   listForClassroom,
+  deleteById,
 } = await import('../module.service.ts');
 
 beforeEach(() => {
@@ -142,16 +162,162 @@ describe('setPublic', () => {
   });
 });
 
+describe('deleteById', () => {
+  // deleteById runs its check and its delete inside one interactive
+  // transaction; hand it a client whose calls are the mocks below. The
+  // transaction's delete is its OWN mock, apart from the root client's
+  // `moduleDelete`: a delete issued outside the transaction would not be under
+  // the lock, and has to fail these tests.
+  const txModuleDelete = vi.fn();
+  const txQuizUpdateMany = vi.fn();
+  const tx = {
+    $queryRaw: queryRaw,
+    assignment: { findMany: assignmentFindMany, deleteMany: assignmentDeleteMany },
+    module: { delete: txModuleDelete },
+    quiz: { updateMany: txQuizUpdateMany },
+  };
+  beforeEach(() => {
+    transaction.mockImplementation(async (run: (client: typeof tx) => unknown) => run(tx));
+    queryRaw.mockResolvedValue([{ id: 'mod1' }]);
+    moduleFindFirst.mockResolvedValue({ id: 'mod1' });
+    txModuleDelete.mockResolvedValue({ id: 'mod1' });
+  });
+
+  it('refuses a module that owns any assignment, of any kind, and deletes nothing', async () => {
+    // One read over every assignment type: the refusal does not care whether
+    // the page listed them.
+    for (const type of ['REPO', 'QUIZ', 'FORM']) {
+      assignmentFindMany.mockResolvedValue([{ id: 'a1', type }]);
+
+      await expect(deleteById('mod1', 'class-1')).rejects.toThrow('Module still has assignments');
+    }
+    expect(assignmentFindMany).toHaveBeenCalledWith({
+      where: { module_id: 'mod1' },
+      select: { id: true, type: true, quiz_id: true },
+    });
+    expect(assignmentDeleteMany).not.toHaveBeenCalled();
+    expect(txQuizUpdateMany).not.toHaveBeenCalled();
+    expect(txModuleDelete).not.toHaveBeenCalled();
+    expect(moduleDelete).not.toHaveBeenCalled();
+  });
+
+  it('where quizzes are hidden, takes only-quiz assignments with the module and says which', async () => {
+    assignmentFindMany.mockResolvedValue([
+      { id: 'q1', type: 'QUIZ', quiz_id: 'quiz-1' },
+      { id: 'q2', type: 'QUIZ', quiz_id: 'quiz-2' },
+    ]);
+
+    const deleted = await deleteById('mod1', 'class-1', { quizzesHidden: true });
+
+    expect(assignmentDeleteMany).toHaveBeenCalledWith({
+      where: { id: { in: ['q1', 'q2'] }, type: 'QUIZ' },
+    });
+    expect(txModuleDelete).toHaveBeenCalledWith({ where: { id: 'mod1' } });
+    expect(deleted.deleted_quiz_assignment_ids).toEqual(['q1', 'q2']);
+  });
+
+  it('where quizzes are hidden, sets each cut-loose quiz back to DRAFT once its assignment is gone', async () => {
+    // A quiz with no assignment is shown to students by its own status: left
+    // PUBLISHED it would reappear to them, in no module, when quizzes return.
+    assignmentFindMany.mockResolvedValue([
+      { id: 'q1', type: 'QUIZ', quiz_id: 'quiz-1' },
+      { id: 'q2', type: 'QUIZ', quiz_id: 'quiz-2' },
+    ]);
+
+    await deleteById('mod1', 'class-1', { quizzesHidden: true });
+
+    expect(txQuizUpdateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['quiz-1', 'quiz-2'] } },
+      data: { status: 'DRAFT' },
+    });
+    const at = (mock: { mock: { invocationCallOrder: number[] } }) =>
+      mock.mock.invocationCallOrder[0];
+    // Assignment rows before quiz rows, the lock order every other writer takes.
+    expect(at(assignmentDeleteMany)).toBeLessThan(at(txQuizUpdateMany));
+    expect(at(txQuizUpdateMany)).toBeLessThan(at(txModuleDelete));
+  });
+
+  it('where quizzes are hidden, still refuses a module that also owns other assignments', async () => {
+    assignmentFindMany.mockResolvedValue([
+      { id: 'q1', type: 'QUIZ' },
+      { id: 'r1', type: 'REPO' },
+    ]);
+
+    await expect(deleteById('mod1', 'class-1', { quizzesHidden: true })).rejects.toThrow(
+      'Module still has assignments'
+    );
+    expect(assignmentDeleteMany).not.toHaveBeenCalled();
+    expect(txModuleDelete).not.toHaveBeenCalled();
+  });
+
+  it('deletes a module with no assignments, leaving its items to the cascade', async () => {
+    assignmentFindMany.mockResolvedValue([]);
+
+    await deleteById('mod1', 'class-1');
+
+    expect(moduleFindFirst).toHaveBeenCalledWith({
+      where: { id: 'mod1', classroom_id: 'class-1' },
+      select: { id: true },
+    });
+    // Inside the transaction, never on the root client.
+    expect(txModuleDelete).toHaveBeenCalledWith({ where: { id: 'mod1' } });
+    expect(moduleDelete).not.toHaveBeenCalled();
+    // Its ModuleItem rows go with it through the foreign key (ON DELETE
+    // CASCADE); the pages, quizzes, slides and forms they point at stay.
+    expect(itemDeleteMany).not.toHaveBeenCalled();
+  });
+
+  it('locks the module row before it counts, and counts before it deletes', async () => {
+    // The order is the whole point: an assignment moved in at the same moment
+    // must be either counted or kept out, never cascade-deleted.
+    assignmentFindMany.mockResolvedValue([]);
+
+    await deleteById('mod1', 'class-1');
+
+    expect(transaction).toHaveBeenCalledTimes(1);
+    const [lock] = queryRaw.mock.calls[0] as [TemplateStringsArray, string];
+    expect(lock.join('?')).toMatch(/FROM modules WHERE id = \? FOR UPDATE/);
+    expect(queryRaw.mock.calls[0][1]).toBe('mod1');
+    const at = (mock: { mock: { invocationCallOrder: number[] } }) =>
+      mock.mock.invocationCallOrder[0];
+    expect(at(queryRaw)).toBeLessThan(at(assignmentFindMany));
+    expect(at(assignmentFindMany)).toBeLessThan(at(txModuleDelete));
+  });
+
+  it('reports a module another delete removed while this one waited for the row', async () => {
+    // The scoped check passed, then the lock came back with no row: the same
+    // refusal as a module that was never there, not a failed DELETE.
+    queryRaw.mockResolvedValue([]);
+
+    await expect(deleteById('mod1', 'class-1')).rejects.toThrow('Module not found in classroom');
+    expect(assignmentFindMany).not.toHaveBeenCalled();
+    expect(txModuleDelete).not.toHaveBeenCalled();
+  });
+
+  it('refuses a module from another classroom before looking at it', async () => {
+    moduleFindFirst.mockResolvedValue(null);
+
+    await expect(deleteById('mod1', 'class-2')).rejects.toThrow('Module not found in classroom');
+    expect(transaction).not.toHaveBeenCalled();
+    expect(txModuleDelete).not.toHaveBeenCalled();
+  });
+});
+
 describe('addItem', () => {
   it('appends at position 0 when the module is empty', async () => {
     itemFindFirst.mockResolvedValue(null);
     itemCreate.mockResolvedValue({ id: 'mi1' });
 
-    await addItem('mod1', 'QUIZ', 'quiz1');
+    await addItem('mod1', 'SLIDE', 'slide1');
 
     expect(itemCreate).toHaveBeenCalledWith({
-      data: { module_id: 'mod1', item_type: 'QUIZ', position: 0, quiz_id: 'quiz1' },
+      data: { module_id: 'mod1', item_type: 'SLIDE', position: 0, slide_id: 'slide1' },
     });
+  });
+
+  it('refuses QUIZ: a quiz is placed in a module by its assignment', async () => {
+    await expect(addItem('mod1', 'QUIZ', 'quiz1')).rejects.toThrow('from the quiz form');
+    expect(itemCreate).not.toHaveBeenCalled();
   });
 
   it('refuses REPOSITORY: repositories are attached to assignments, not modules', async () => {
@@ -180,9 +346,9 @@ describe('reorderItems', () => {
     await reorderItems('mod1', ['b', 'a', 'c']);
 
     expect(itemFindMany).toHaveBeenCalledWith({
-      // Legacy REPOSITORY items are hidden from the content list and keep
+      // Legacy REPOSITORY and QUIZ items are not in the content list and keep
       // their positions; only content items take part in the exact-set check.
-      where: { module_id: 'mod1', item_type: { not: 'REPOSITORY' } },
+      where: { module_id: 'mod1', item_type: { notIn: ['REPOSITORY', 'QUIZ'] } },
       select: { id: true },
     });
     expect(itemUpdate).toHaveBeenNthCalledWith(1, {
@@ -261,5 +427,176 @@ describe('listForClassroom', () => {
   it('returns [] when the classroom does not exist', async () => {
     classroomFindUnique.mockResolvedValue(null);
     expect(await listForClassroom('missing')).toEqual([]);
+  });
+
+  it('leaves legacy QUIZ items out for every viewer: a quiz is listed by its assignment', async () => {
+    const items = [
+      { item_type: 'PAGE', page: { classroom_id: 'c1', is_draft: false } },
+      { item_type: 'QUIZ', quiz: { classroom_id: 'c1', status: 'PUBLISHED' } },
+    ];
+    moduleFindMany.mockResolvedValue([{ id: 'm1', items, assignments: [] }]);
+
+    for (const options of [
+      { quizzesVisible: true },
+      { includeUnpublished: true, quizzesVisible: true },
+    ]) {
+      const [module] = await listForClassroom('cls', options);
+      expect(module.items.map(i => i.item_type)).toEqual(['PAGE']);
+    }
+  });
+
+  describe('assignments under the student-visibility rule', () => {
+    const FUTURE = new Date(Date.now() + 7 * 86_400_000);
+    const assignment = (id: string, type: string, over: Record<string, unknown> = {}) => ({
+      id,
+      type,
+      is_published: true,
+      release_at: null,
+      repository: type === 'REPO' ? { is_published: true } : null,
+      quiz: type === 'QUIZ' ? { id: `quiz-${id}`, name: id } : null,
+      form: type === 'FORM' ? { status: 'OPEN' } : null,
+      ...over,
+    });
+    const MODULE = {
+      id: 'm1',
+      items: [],
+      assignments: [
+        assignment('repo', 'REPO'),
+        assignment('repo-unpublished-repo', 'REPO', { repository: { is_published: false } }),
+        assignment('unpublished', 'FORM', { is_published: false }),
+        assignment('quiz', 'QUIZ'),
+        // Past its close date: visible, it only takes no new attempt.
+        assignment('quiz-closed', 'QUIZ', { closes_at: new Date(Date.now() - 1000) }),
+        assignment('quiz-draft', 'QUIZ', { is_published: false }),
+        assignment('quiz-later', 'QUIZ', { release_at: FUTURE }),
+        assignment('form', 'FORM'),
+        assignment('form-draft', 'FORM', { form: { status: 'DRAFT' } }),
+        assignment('form-later', 'FORM', { release_at: FUTURE }),
+      ],
+    };
+
+    it('shows students only what the rule admits', async () => {
+      moduleFindMany.mockResolvedValue([MODULE]);
+
+      const [module] = await listForClassroom('cls', { quizzesVisible: true });
+
+      expect(module.assignments.map(a => a.id)).toEqual(['repo', 'quiz', 'quiz-closed', 'form']);
+    });
+
+    it('shows students no quiz assignment where quizzes are hidden', async () => {
+      moduleFindMany.mockResolvedValue([MODULE]);
+
+      const [module] = await listForClassroom('cls', { quizzesVisible: false });
+
+      expect(module.assignments.map(a => a.id)).toEqual(['repo', 'form']);
+    });
+
+    it('treats quizzes as hidden unless the caller says otherwise', async () => {
+      moduleFindMany.mockResolvedValue([MODULE]);
+
+      const [module] = await listForClassroom('cls');
+
+      expect(module.assignments.some(a => a.type === 'QUIZ')).toBe(false);
+    });
+
+    it('leaves the teaching team every assignment', async () => {
+      moduleFindMany.mockResolvedValue([MODULE]);
+
+      const [module] = await listForClassroom('cls', {
+        includeUnpublished: true,
+        quizzesVisible: false,
+      });
+
+      expect(module.assignments).toHaveLength(MODULE.assignments.length);
+    });
+  });
+});
+
+describe('moveItemToModule', () => {
+  const CONTENT_ONLY = { notIn: ['REPOSITORY', 'QUIZ'] };
+
+  beforeEach(() => {
+    // Both modules are in the classroom.
+    moduleFindFirst.mockResolvedValue({ id: 'scoped' });
+    itemUpdate.mockResolvedValue({});
+    transaction.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    itemFindFirst.mockReset();
+    itemFindMany.mockReset();
+    itemUpdate.mockReset();
+    moduleFindFirst.mockReset();
+    transaction.mockReset();
+  });
+
+  it('refuses a QUIZ item: a quiz moves with its assignment', async () => {
+    itemFindFirst.mockResolvedValue({ id: 'mi-quiz', module_id: 'from', item_type: 'QUIZ' });
+
+    await expect(moveItemToModule('mi-quiz', 'to', ['mi-quiz'], 'cls')).rejects.toThrow(
+      QUIZ_ITEM_REFUSAL
+    );
+    expect(itemUpdate).not.toHaveBeenCalled();
+    expect(itemFindMany).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it('refuses a REPOSITORY item', async () => {
+    itemFindFirst.mockResolvedValue({ id: 'mi-repo', module_id: 'from', item_type: 'REPOSITORY' });
+
+    await expect(moveItemToModule('mi-repo', 'to', ['mi-repo'], 'cls')).rejects.toThrow(
+      'Repository items cannot be moved'
+    );
+    expect(itemUpdate).not.toHaveBeenCalled();
+  });
+
+  it('moves a PAGE item, orders the target and compacts the source, content items only', async () => {
+    itemFindFirst.mockResolvedValue({ id: 'mi-page', module_id: 'from', item_type: 'PAGE' });
+    itemFindMany.mockImplementation(async ({ where }: { where: { module_id: string } }) =>
+      where.module_id === 'to' ? [{ id: 'there' }, { id: 'mi-page' }] : [{ id: 'a' }, { id: 'b' }]
+    );
+
+    await moveItemToModule('mi-page', 'to', ['mi-page', 'there'], 'cls');
+
+    expect(itemUpdate).toHaveBeenNthCalledWith(1, {
+      where: { id: 'mi-page' },
+      data: { module_id: 'to' },
+    });
+    // The target's ordering check and the source's compaction both read the
+    // content items only: legacy REPOSITORY and QUIZ rows keep their positions.
+    expect(itemFindMany).toHaveBeenCalledWith({
+      where: { module_id: 'to', item_type: CONTENT_ONLY },
+      select: { id: true },
+    });
+    expect(itemFindMany).toHaveBeenCalledWith({
+      where: { module_id: 'from', item_type: CONTENT_ONLY },
+      orderBy: { position: 'asc' },
+      select: { id: true },
+    });
+    expect(itemUpdate).toHaveBeenCalledWith({
+      where: { id: 'mi-page', module_id: 'to' },
+      data: { position: 0 },
+    });
+    expect(itemUpdate).toHaveBeenCalledWith({
+      where: { id: 'there', module_id: 'to' },
+      data: { position: 1 },
+    });
+    expect(itemUpdate).toHaveBeenCalledWith({ where: { id: 'a' }, data: { position: 0 } });
+    expect(itemUpdate).toHaveBeenCalledWith({ where: { id: 'b' }, data: { position: 1 } });
+    expect(transaction).toHaveBeenCalledTimes(2);
+  });
+
+  it('a reorder within the same module compacts nothing', async () => {
+    itemFindFirst.mockResolvedValue({ id: 'mi-page', module_id: 'same', item_type: 'PAGE' });
+    itemFindMany.mockResolvedValue([{ id: 'mi-page' }, { id: 'other' }]);
+
+    await moveItemToModule('mi-page', 'same', ['other', 'mi-page'], 'cls');
+
+    expect(itemFindMany).toHaveBeenCalledOnce();
+    expect(itemFindMany).toHaveBeenCalledWith({
+      where: { module_id: 'same', item_type: CONTENT_ONLY },
+      select: { id: true },
+    });
+    expect(transaction).toHaveBeenCalledOnce();
   });
 });

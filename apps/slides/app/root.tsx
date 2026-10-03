@@ -10,6 +10,7 @@ import {
 } from 'react-router';
 import React, { useEffect } from 'react';
 
+import { CalloutProvider, CalloutSlot } from '@classmoji/ui-components';
 import useStore from '~/store';
 import type { SlideUser } from '~/store';
 import type { loader } from './root.server';
@@ -75,7 +76,13 @@ const App = () => {
         />
       </head>
       <body className="bg-white dark:bg-gray-900" suppressHydrationWarning>
-        <Outlet />
+        {/* One notification surface, shared with the webapp: slides used to
+            reach for antd's message API, which renders its own chrome and
+            ignores the theme entirely. */}
+        <CalloutProvider>
+          <CalloutSlot />
+          <Outlet />
+        </CalloutProvider>
         <ScrollRestoration />
         <Scripts />
       </body>

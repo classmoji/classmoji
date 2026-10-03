@@ -29,6 +29,14 @@ export interface Viewer {
   clientId: string | null;
   /** Granted scopes, parsed from the token row's space-delimited string. */
   scopes: ReadonlySet<string>;
+  /**
+   * A caller-supplied IANA zone (the `X-Classmoji-Timezone` header), already
+   * validated against Intl; null/absent when none was sent or it was invalid.
+   * A RENDERING hint only — it never reaches an authorization decision. Used
+   * for `_local` fields when the classroom has no zone of its own (Ask Moji
+   * passes the student's browser zone; the Claude.ai connector sends none).
+   */
+  timezoneHint?: string | null;
 }
 
 /** Shape of the oauth_access_tokens row `getMcpSession` returns (better-auth 1.4.18). */

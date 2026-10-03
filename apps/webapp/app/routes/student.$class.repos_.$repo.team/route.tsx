@@ -7,7 +7,8 @@ import type { Route } from './+types/route';
 import { ClassmojiService, getGitProvider, isReservedSlug } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
-import { titleToIdentifier } from '@classmoji/utils';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import { gitUsername, titleToIdentifier } from '@classmoji/utils';
 import { tasks } from '@trigger.dev/sdk/v3';
 import { useClassroomStatusModals } from '~/utils/classroomStatusModals';
 
@@ -102,9 +103,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     return { error: 'Team formation deadline has passed' };
   }
 
-  // Get user info for GitHub operations
-  const user = await ClassmojiService.user.findById(userId);
-
   // Get or create tag for this repository
   const tag = await ClassmojiService.organizationTag.upsert(classroom.id, repository.slug!);
 
@@ -120,6 +118,17 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     }
   );
   const orgLogin = classroomWithOrg!.git_organization.login;
+  const provider = classroomWithOrg!.git_organization.provider;
+  const providerName = provider === 'GITLAB' ? 'Gitlab' : 'Github';
+
+  const identity = await getPrisma().user.findUnique({
+    where: { id: userId },
+    select: GIT_IDENTITY,
+  });
+  const username = gitUsername(identity, provider);
+  if (!username) {
+    return { error: `Connect your ${providerName} account before joining a team.` };
+  }
 
   return namedAction(request, {
     async create() {
@@ -199,7 +208,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       // Add user to GitHub team
       try {
-        await gitProvider.addTeamMember(orgLogin, teamSlug, user!.login!);
+        await gitProvider.addTeamMember(orgLogin, teamSlug, username);
       } catch (error: unknown) {
         console.error('Failed to add user to GitHub team:', error);
         // Team was created, but user wasn't added - still return success
@@ -259,7 +268,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       // Add user to GitHub team
       try {
-        await gitProvider.addTeamMember(orgLogin, team.slug, user!.login!);
+        await gitProvider.addTeamMember(orgLogin, team.slug, username);
       } catch (error: unknown) {
         console.error('Failed to add user to GitHub team:', error);
         // DB was updated, GitHub failed - still return success
@@ -281,7 +290,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       // Remove user from GitHub team
       try {
-        await gitProvider.removeTeamMember(orgLogin, userTeam.slug, user!.login!);
+        await gitProvider.removeTeamMember(orgLogin, userTeam.slug, username);
       } catch (error: unknown) {
         console.error('Failed to remove user from GitHub team:', error);
         // DB was updated, GitHub failed - still return success
@@ -388,7 +397,7 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
                 {userTeam.memberships.map(membership => (
                   <div key={membership.user_id} className="flex items-center gap-2">
                     <Avatar
-                      src={`https://avatars.githubusercontent.com/u/${membership.user.provider_id}?v=4`}
+                      src={membership.user.image ?? undefined}
                       size={32}
                     >
                       {membership.user.name?.[0] || membership.user.login?.[0]}
@@ -498,7 +507,7 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
                             {team.memberships.map(m => (
                               <Avatar
                                 key={m.user_id}
-                                src={`https://avatars.githubusercontent.com/u/${m.user.provider_id}?v=4`}
+                                src={m.user.image ?? undefined}
                                 size={24}
                               >
                                 {m.user.name?.[0] || m.user.login?.[0]}

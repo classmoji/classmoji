@@ -14,6 +14,7 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
+import { resolveEffectiveTimeZone, type EffectiveTimeZone } from '@classmoji/utils';
 import type { ClassroomStatus, Role } from '@prisma/client';
 import { ToolError } from '../mcp/errors.ts';
 import type { Viewer } from '../auth/resolveViewer.ts';
@@ -34,6 +35,18 @@ export interface ClassroomContext {
   classroom: ReturnType<typeof ClassmojiService.classroom.getClassroomForUI<Classroom>>;
   /** Raw status kept alongside because handlers need it for mutation gating. */
   status: ClassroomStatus;
+  /**
+   * The classroom's OWN time zone setting (`classroom_settings.timezone`), or
+   * null when none is set.
+   */
+  timezone: string | null;
+  /**
+   * The zone this request renders in, and where it came from: the classroom's
+   * setting, else the caller's validated `X-Classmoji-Timezone` hint (Ask
+   * Moji), else UTC (`source: 'default'`, labelled as UTC). Every `_local`
+   * field and every calendar window uses this.
+   */
+  effectiveTimezone: EffectiveTimeZone;
   /** The membership that satisfied the tool's role requirement. */
   membership: Membership;
   /** The caller's HIGHEST-privilege role among those satisfying the gate. */
@@ -95,13 +108,16 @@ export async function resolveClassroomContext(
   const candidateRoles = rolesFilter
     ? ROLE_PRIORITY.filter(role => rolesFilter.includes(role))
     : [...ROLE_PRIORITY];
-  const found = await Promise.all(
-    candidateRoles.map(role =>
-      ClassmojiService.classroomMembership.findByClassroomAndUser(classroom.id, viewer.userId, [
-        role,
-      ])
-    )
-  );
+  const [found, timezone] = await Promise.all([
+    Promise.all(
+      candidateRoles.map(role =>
+        ClassmojiService.classroomMembership.findByClassroomAndUser(classroom.id, viewer.userId, [
+          role,
+        ])
+      )
+    ),
+    ClassmojiService.classroom.getTimeZone(classroom.id),
+  ]);
   let memberships = found.filter((m): m is Membership => Boolean(m));
   if (memberships.length === 0 && rolesFilter) {
     // Distinguish "not a member" from "insufficient role" for the error message.
@@ -122,6 +138,8 @@ export async function resolveClassroomContext(
     classroomId: classroom.id,
     classroom: ClassmojiService.classroom.getClassroomForUI(classroom),
     status: classroom.status,
+    timezone,
+    effectiveTimezone: resolveEffectiveTimeZone(timezone, viewer.timezoneHint),
     membership: effective,
     role: effective.role,
     roles: memberships.map(m => m.role),

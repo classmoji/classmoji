@@ -3,9 +3,9 @@ import { useFetcher } from 'react-router';
 import { Modal, Segmented, Select } from 'antd';
 
 import {
-  CONTENT_TYPES,
   TYPE_META,
   candidateOptions,
+  contentTypesFor,
   type CandidateContent,
   type ContentItemType,
   type ModuleItemLike,
@@ -21,6 +21,8 @@ interface AddContentItemModalProps {
   candidates: CandidateContent;
   /** Fix the kind (the caller already asked which kind to add). */
   presetType?: ContentItemType;
+  /** Whether the classroom shows quizzes; without it QUIZ is not offered. */
+  quizzesVisible?: boolean;
 }
 
 /**
@@ -35,6 +37,7 @@ const AddContentItemModal = ({
   items,
   candidates,
   presetType,
+  quizzesVisible = false,
 }: AddContentItemModalProps) => {
   const fetcher = useFetcher<{ success?: string; error?: string }>();
   const [type, setType] = useState<ContentItemType>('PAGE');
@@ -82,16 +85,23 @@ const AddContentItemModal = ({
         <div className="mb-3 text-sm text-rose-600 dark:text-rose-400">{fetcher.data.error}</div>
       )}
       <div className="flex flex-col gap-3 mt-2">
-        <Segmented
-          block
-          disabled={!!presetType}
-          value={type}
-          onChange={value => {
-            setType(value as ContentItemType);
-            setTargetId(undefined);
-          }}
-          options={CONTENT_TYPES.map(t => ({ value: t, label: TYPE_META[t].label }))}
-        />
+        {/* Only a question when the caller has not already answered it. Coming
+            from "Add item", the kind was chosen in that menu and the title says
+            so, which left a row of dead tabs under it. */}
+        {!presetType && (
+          <Segmented
+            block
+            value={type}
+            onChange={value => {
+              setType(value as ContentItemType);
+              setTargetId(undefined);
+            }}
+            options={contentTypesFor(quizzesVisible).map(t => ({
+              value: t,
+              label: TYPE_META[t].label,
+            }))}
+          />
+        )}
         <Select
           showSearch
           allowClear

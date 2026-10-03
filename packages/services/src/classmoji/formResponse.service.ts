@@ -2343,6 +2343,21 @@ export async function findOwnResponse(formId: string, userId: string) {
 }
 
 /**
+ * Which of these forms the user has SUBMITTED a response to (a draft or an
+ * unverified response does not count), for the student Assignments page.
+ * Only the form id and the submission time are read; no answers.
+ *
+ * The same rule as findOwnResponse: `userId` comes from the session.
+ */
+export async function findSubmittedForUserByFormIds(userId: string, formIds: string[]) {
+  if (formIds.length === 0) return [];
+  return getPrisma().formResponse.findMany({
+    where: { user_id: userId, form_id: { in: formIds }, submission_state: 'SUBMITTED' },
+    select: { form_id: true, submitted_at: true },
+  });
+}
+
+/**
  * An anonymous filler's own partial, by the opaque draft-token cookie.
  *
  * Same rule as findOwnResponse: the token is the bearer credential, so it must

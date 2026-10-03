@@ -1,7 +1,7 @@
 import { betterAuth } from 'better-auth';
-import { APIError, createAuthMiddleware } from 'better-auth/api';
+import { APIError, createAuthMiddleware, getSession } from 'better-auth/api';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
-import { admin, mcp } from 'better-auth/plugins';
+import { admin, emailOTP, mcp } from 'better-auth/plugins';
 import getPrisma from '@classmoji/database';
 import type { Role } from '@prisma/client';
 import { ClassmojiService } from '@classmoji/services';
@@ -18,8 +18,39 @@ import {
   sessionTokenFromCookieHeader,
 } from './secret.ts';
 import { ASK_MOJI_CLIENT_ID } from './mcpToken.ts';
+import { applyAppConnectionRules, type AppConnectionSession } from './appConnectionGuard.ts';
+import { mapGitHubProfile, onAccountCreated } from './providerProfile.ts';
 
 export { AUTH_SECRET, COOKIE_PREFIX };
+export { CONNECT_APP_VIEWING_AS_MESSAGE } from './appConnectionGuard.ts';
+
+/**
+ * The current session, read from inside `hooks.before` the way better-auth's
+ * own `getSessionFromCtx` does (api/routes/session.mjs:242-259), with two
+ * differences: an error is thrown rather than read as "signed out", so the
+ * caller can tell a failed lookup from no session; and the lookup leaves no
+ * trace on the request (no session refresh, and `ctx.context.session` is put
+ * back), so the endpoint then runs exactly as it would have.
+ */
+async function lookupSessionForHook(ctx: {
+  context: { session?: unknown };
+  headers?: Headers;
+}): Promise<AppConnectionSession> {
+  const previous = ctx.context.session;
+  try {
+    const result = await (getSession() as unknown as (c: unknown) => Promise<unknown>)({
+      ...ctx,
+      asResponse: false,
+      headers: ctx.headers,
+      returnHeaders: false,
+      returnStatus: false,
+      query: { disableRefresh: true },
+    });
+    return (result ?? null) as AppConnectionSession;
+  } finally {
+    ctx.context.session = previous;
+  }
+}
 
 /**
  * Platform admins, by User.id, from `PLATFORM_ADMIN_USER_IDS` (comma-separated).
@@ -272,14 +303,18 @@ export function clearTokenCache(userId: string | null = null): void {
  * Clear a revoked token from both cache and DB when GitHub returns 401.
  * Call this when you get "Bad credentials" from GitHub API.
  * @param {string} userId - The user ID whose token was revoked
+ * @param {string} [refusedToken] - The token GitHub refused. When given, the
+ *   stored token is cleared only if it is still that one, so a token refreshed
+ *   in the meantime survives. The in-memory cache is cleared either way (it is
+ *   re-read from the database on the next request).
  */
-export async function clearRevokedToken(userId: string): Promise<void> {
+export async function clearRevokedToken(userId: string, refusedToken?: string): Promise<void> {
   // Clear from memory cache (webapp session-layer cache, not the shared service).
   clearTokenCache(userId);
 
   // DB clear (sets access_token=null, expires_at=epoch so refresh still fires)
   // lives in the shared token service so workers can reuse it.
-  await ClassmojiService.githubUserToken.clearRevokedTokenForUser(userId);
+  await ClassmojiService.githubUserToken.clearRevokedTokenForUser(userId, refusedToken);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -389,71 +424,59 @@ export const auth = betterAuth({
       clientId: process.env.GITHUB_CLIENT_ID as string,
       clientSecret: process.env.GITHUB_CLIENT_SECRET as string,
       scope: [], // scopes are ignored for GitHub App auth; permissions come from App config
-      mapProfileToUser: async profile => {
-        // GitHub profile includes: login, id, name, email, avatar_url, etc.
-        const githubId = String(profile.id);
-        const login = profile.login;
-
-        // ── Link existing users instead of colliding on the unique `login` ──────
-        // Users can already exist in our DB without a linked GitHub account:
-        //  - pre-provisioned by username via ClassmojiService.user.create (login
-        //    set, no provider_id / no account row), e.g. roster/assistant invites
-        //  - a prior login whose account row was removed
-        // This hook runs BEFORE BetterAuth's findOAuthUser lookup. If we link the
-        // account here, findOAuthUser finds it and takes the (non-destructive) link
-        // path — instead of falling through to createOAuthUser, which would throw
-        // `unable to create user` on the `login`/`provider` unique constraints.
-        try {
-          const existing = await getPrisma().user.findFirst({
-            where: {
-              OR: [{ provider: 'GITHUB', provider_id: githubId }, { login }],
-            },
-            include: {
-              accounts: { where: { provider_id: 'github' }, select: { id: true } },
-            },
-          });
-
-          if (existing && existing.accounts.length === 0) {
-            // Backfill provider linkage on the existing record (login-only invites
-            // have a null provider_id) so the (provider, provider_id) unique key and
-            // future lookups resolve correctly.
-            await getPrisma().user.update({
-              where: { id: existing.id },
-              data: {
-                provider: 'GITHUB',
-                provider_id: githubId,
-                login: existing.login ?? login,
-              },
-            });
-
-            // Create the account link BetterAuth looks up by (provider_id, account_id).
-            // Tokens are intentionally left null — BetterAuth fills them on this same
-            // sign-in once it resolves the linked account.
-            await getPrisma().account.upsert({
-              where: {
-                provider_id_account_id: { provider_id: 'github', account_id: githubId },
-              },
-              update: {},
-              create: {
-                user_id: existing.id,
-                provider_id: 'github',
-                account_id: githubId,
-              },
-            });
-          }
-        } catch (error: unknown) {
-          // Never block sign-in on the linking attempt; if it fails, BetterAuth
-          // proceeds with its default behavior and we surface its error as before.
-          console.error('[auth] mapProfileToUser account-link failed', error);
-        }
-
-        // Map these to our custom User fields (used when BetterAuth creates a
-        // genuinely new user — i.e. no existing record was linked above).
-        return {
-          login, // GitHub username
-          provider: 'GITHUB',
-          provider_id: githubId, // GitHub user ID as string
-        };
+      // Records the Github username/email/avatar on the account and claims
+      // placeholder accounts; see ./providerProfile.ts.
+      mapProfileToUser: profile => mapGitHubProfile(getPrisma(), profile),
+    },
+  },
+  // Email + password sign-in. Addresses are confirmed with a 6-digit code (the
+  // emailOTP plugin below), the same way registration confirms a school email.
+  emailAndPassword: {
+    enabled: true,
+    requireEmailVerification: true,
+    minPasswordLength: 8,
+    autoSignIn: false,
+    revokeSessionsOnPasswordReset: true,
+  },
+  emailVerification: {
+    // Both send a code through the emailOTP plugin (it overrides the default
+    // link email): on sign-up, and again when an unverified account tries to
+    // sign in.
+    sendOnSignUp: true,
+    sendOnSignIn: true,
+    autoSignInAfterVerification: true,
+  },
+  account: {
+    modelName: 'Account',
+    fields: {
+      userId: 'user_id',
+      accountId: 'account_id',
+      providerId: 'provider_id',
+      accessToken: 'access_token',
+      refreshToken: 'refresh_token',
+      accessTokenExpiresAt: 'access_token_expires_at',
+      refreshTokenExpiresAt: 'refresh_token_expires_at',
+      idToken: 'id_token',
+      createdAt: 'created_at',
+      updatedAt: 'updated_at',
+    },
+    accountLinking: {
+      // Never attach a provider account to an existing user just because the
+      // emails match: anyone can sign up with a password under someone else's
+      // address, and would then inherit that person's Github sign-in. Linking
+      // happens only from a signed-in session (Connect Github).
+      disableImplicitLinking: true,
+      trustedProviders: ['github'],
+      // A connected Github account may use a different email than the user's.
+      allowDifferentEmails: true,
+    },
+  },
+  databaseHooks: {
+    account: {
+      create: {
+        after: async account => {
+          await onAccountCreated(getPrisma(), account);
+        },
       },
     },
   },
@@ -498,44 +521,19 @@ export const auth = betterAuth({
   // Map to your existing schema conventions
   user: {
     modelName: 'User', // Prisma model name
-    // Tell BetterAuth about custom fields so mapProfileToUser can save them
     additionalFields: {
-      login: {
-        type: 'string',
-        required: false,
-      },
-      provider: {
-        type: 'string',
-        required: false,
-      },
-      provider_id: {
-        type: 'string',
-        required: false,
-      },
+      // Optional on email sign-up; registration asks for it otherwise.
+      school_id: { type: 'string', required: false, input: true },
     },
+    // better-auth's `email` is users.email: the verified contact/school email,
+    // also the password sign-in email. Git usernames live on Account.
     fields: {
       createdAt: 'created_at',
       updatedAt: 'updated_at',
       // Admin plugin fields
       banReason: 'ban_reason',
       banExpires: 'ban_expires_at',
-      email: 'provider_email',
     } as Record<string, string>,
-  },
-  account: {
-    modelName: 'Account',
-    fields: {
-      userId: 'user_id',
-      accountId: 'account_id',
-      providerId: 'provider_id',
-      accessToken: 'access_token',
-      refreshToken: 'refresh_token',
-      accessTokenExpiresAt: 'access_token_expires_at',
-      refreshTokenExpiresAt: 'refresh_token_expires_at',
-      idToken: 'id_token',
-      createdAt: 'created_at',
-      updatedAt: 'updated_at',
-    },
   },
   verification: {
     modelName: 'Verification',
@@ -561,12 +559,23 @@ export const auth = betterAuth({
    *
    * This hook runs before EVERY endpoint (better-auth gives user hooks a
    * `() => true` matcher — dist/api/to-auth-endpoints.mjs:159-170), including
-   * hot in-process `auth.api.*` calls, so the non-matching path must stay a
-   * single string comparison.
+   * hot in-process `auth.api.*` calls, so the non-matching path must stay
+   * cheap: string comparisons plus, for the app-connection rules, one anchored
+   * match on the cookie header. It does no session lookup, UNLESS the request
+   * carries the saved-authorization cookie (`oidc_login_prompt`, set by
+   * /mcp/authorize while signed out and short-lived), in which case the rules
+   * look the session up once.
    */
   hooks: {
     before: createAuthMiddleware(async ctx => {
-      if (ctx.path !== '/mcp/token') return;
+      if (ctx.path !== '/mcp/token') {
+        // Connecting apps: the consent page is always shown, and no app is
+        // connected while viewing as another user (./appConnectionGuard.ts).
+        // Every other path returns after string comparisons and one anchored
+        // cookie-header match, with no session lookup unless the request
+        // carries the saved-authorization cookie (oidc_login_prompt).
+        return applyAppConnectionRules(ctx, () => lookupSessionForHook(ctx));
+      }
 
       const authorization =
         ctx.request?.headers.get('authorization') ?? ctx.headers?.get('authorization') ?? null;
@@ -593,9 +602,40 @@ export const auth = betterAuth({
    * caller we have: apps/mcp/src/auth/resolveViewer.ts:42. Nothing in the OAuth
    * flow uses this endpoint; it exists for better-auth's own `withMcpAuth`
    * helper, which we do not use.
+   *
+   * `/list-sessions` is off too: no app lists a user's own sessions. So are
+   * `/get-access-token` and `/refresh-token`: no client calls them, and the
+   * GitHub token the server uses comes from getValidGitHubToken (the
+   * githubUserToken service), not from these endpoints. Like every entry
+   * here, they are off for HTTP only; in-process `auth.api.*` is unchanged.
    */
-  disabledPaths: ['/mcp/get-session'],
+  disabledPaths: ['/mcp/get-session', '/list-sessions', '/get-access-token', '/refresh-token'],
+  // Password guessing and code guessing are throttled harder than the default
+  // (better-auth enables its limiter in production only).
+  rateLimit: {
+    customRules: {
+      '/sign-in/email': { window: 60, max: 5 },
+      '/sign-up/email': { window: 60, max: 3 },
+      '/email-otp/send-verification-otp': { window: 60, max: 3 },
+      '/email-otp/verify-email': { window: 60, max: 5 },
+      '/email-otp/reset-password': { window: 60, max: 5 },
+      '/forget-password/email-otp': { window: 60, max: 3 },
+    },
+  },
   plugins: [
+    // 6-digit codes for verifying a password account's email and for
+    // resetting a password. Never a way to sign up or sign in on its own.
+    emailOTP({
+      otpLength: 6,
+      expiresIn: 10 * 60,
+      allowedAttempts: 5,
+      storeOTP: 'hashed',
+      overrideDefaultEmailVerification: true,
+      disableSignUp: true,
+      sendVerificationOTP: async ({ email, otp, type }) => {
+        await ClassmojiService.authEmail.sendAuthOtp(email, otp, type);
+      },
+    }),
     admin({
       impersonationSessionDuration: 60 * 60, // 1 hour
       // Allow users with 'admin' role to impersonate
@@ -664,6 +704,27 @@ export const auth = betterAuth({
  * @param {Request} request - The request object
  * @returns {Promise<{userId: string, token: string, userLogin: string} | null>}
  */
+/** The user's Github username (for logs and git-side callers), cached briefly. */
+async function githubUsernameFor(userId: string): Promise<string> {
+  const cacheKey = `username:${userId}`;
+  const cached = getCached<string>(cacheKey);
+  if (cached !== null && cached !== undefined) return cached;
+  let username = '';
+  try {
+    const account = await getPrisma().account.findFirst({
+      where: { user_id: userId, provider_id: 'github' },
+      select: { username: true },
+    });
+    username = account?.username ?? '';
+  } catch (error: unknown) {
+    // Only ever used for logs and display: never fail a request over it.
+    console.error('[auth] Github username lookup failed', error);
+    return '';
+  }
+  setCache(cacheKey, username);
+  return username;
+}
+
 export async function getAuthSession(request: Request): Promise<AuthSessionResult | null> {
   // Read by the CONFIGURED cookie name — see `sessionCookieRegexFor` in
   // ./secret.ts for why this must never be a hardcoded `classmoji.`.
@@ -682,7 +743,7 @@ export async function getAuthSession(request: Request): Promise<AuthSessionResul
       return {
         userId,
         token: cachedToken,
-        userLogin: session.user.name,
+        userLogin: await githubUsernameFor(userId),
         session,
       };
     }
@@ -694,7 +755,7 @@ export async function getAuthSession(request: Request): Promise<AuthSessionResul
       return {
         userId,
         token: tokenResult.token,
-        userLogin: session.user.name,
+        userLogin: await githubUsernameFor(userId),
         session,
       };
     }
@@ -704,7 +765,7 @@ export async function getAuthSession(request: Request): Promise<AuthSessionResul
     return {
       userId,
       token: null,
-      userLogin: session.user.name,
+      userLogin: await githubUsernameFor(userId),
       session,
     };
   }
@@ -744,7 +805,7 @@ export async function getAuthSession(request: Request): Promise<AuthSessionResul
       const result: AuthSessionResult = {
         userId,
         token: accessToken,
-        userLogin: directSession.user.login ?? '',
+        userLogin: (await githubUsernameFor(userId)) ?? '',
         session: { user: directSession.user, session: directSession },
       };
       setCache(sessionCacheKey, result, tokenResult?.expiresAt);
@@ -821,7 +882,12 @@ export async function requirePlatformAdmin(request: Request): Promise<PlatformAd
 
   const user = await getPrisma().user.findUnique({
     where: { id: authData.userId },
-    select: { id: true, login: true, email: true, name: true },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      accounts: { where: { provider_id: 'github' }, select: { username: true } },
+    },
   });
 
   if (!user) {
@@ -832,7 +898,8 @@ export async function requirePlatformAdmin(request: Request): Promise<PlatformAd
     });
   }
 
-  return { userId: user.id, user };
+  const { accounts, ...rest } = user;
+  return { userId: user.id, user: { ...rest, login: accounts[0]?.username ?? null } };
 }
 
 /**

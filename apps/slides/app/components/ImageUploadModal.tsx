@@ -1,9 +1,16 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { Modal, Slider, Button, message, Spin } from 'antd';
+import { Modal, Slider, Button, Spin } from 'antd';
+
+import { useToast } from '~/hooks';
 import { useDropzone } from 'react-dropzone';
 import ReactCrop, { type Crop } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
 import { useImageProcessor } from '~/hooks/useImageProcessor';
+import {
+  REPO_REST_MAX_BYTES,
+  REPO_REST_MAX_LABEL,
+  repoFileTooLargeMessage,
+} from '@classmoji/utils/repo-limits';
 
 /**
  * ImageUploadModal - Upload images with crop and resize options
@@ -31,6 +38,7 @@ interface ProcessedInfo {
 }
 
 export default function ImageUploadModal({ open, onClose, onUpload }: ImageUploadModalProps) {
+  const toast = useToast();
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [crop, setCrop] = useState<Crop | null>(null);
@@ -71,14 +79,15 @@ export default function ImageUploadModal({ open, onClose, onUpload }: ImageUploa
 
       // Validate file type
       if (!selectedFile.type.startsWith('image/')) {
-        message.error('Please select an image file');
+        toast.error('Please select an image file');
         return;
       }
 
-      // Check file size (max 100MB for Git Blobs API)
-      const MAX_SIZE = 100 * 1024 * 1024;
-      if (selectedFile.size > MAX_SIZE) {
-        message.error('File too large. Maximum size is 100MB');
+      // A GIF is uploaded as-is (resizing would lose its animation), so its
+      // size is final now. Every other format is checked after processing,
+      // which usually shrinks it — see handleUpload.
+      if (selectedFile.type === 'image/gif' && selectedFile.size > REPO_REST_MAX_BYTES) {
+        toast.error(repoFileTooLargeMessage());
         return;
       }
 
@@ -148,14 +157,23 @@ export default function ImageUploadModal({ open, onClose, onUpload }: ImageUploa
         { type: `image/${result.format}` }
       );
 
+      // The course repository's per-file ceiling applies to what is actually
+      // sent, so it is checked on the processed image.
+      if (processedFile.size > REPO_REST_MAX_BYTES) {
+        toast.error(
+          `${repoFileTooLargeMessage()} Lower the quality or the maximum width and try again.`
+        );
+        return;
+      }
+
       // Call parent upload handler
       await onUpload(processedFile);
-      message.success('Image uploaded successfully');
+      toast.success('Image uploaded successfully');
       onClose();
     } catch (err: unknown) {
       console.error('Upload failed:', err);
       const errorMessage = err instanceof Error ? err.message : String(err);
-      message.error(`Upload failed: ${errorMessage}`);
+      toast.error(`Upload failed: ${errorMessage}`);
     } finally {
       setProcessing(false);
     }
@@ -231,7 +249,7 @@ export default function ImageUploadModal({ open, onClose, onUpload }: ImageUploa
                   : 'Drag & drop an image, or click to select'}
               </p>
               <p className="text-sm text-gray-500 dark:text-gray-400">
-                PNG, JPG, GIF, WebP (max 100MB)
+                PNG, JPG, GIF, WebP (up to {REPO_REST_MAX_LABEL})
               </p>
             </div>
           </div>

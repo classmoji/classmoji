@@ -6,6 +6,7 @@ import dayjs from 'dayjs';
 
 import { ClassmojiService } from '@classmoji/services';
 import Tasks from '@classmoji/tasks';
+import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 
 type Classroom = NonNullable<Awaited<ReturnType<typeof ClassmojiService.classroom.findBySlug>>>;
 type Repository = NonNullable<Awaited<ReturnType<typeof ClassmojiService.repository.findById>>>;
@@ -39,6 +40,15 @@ export const publishAssignment = async (
       await ClassmojiService.repository.setPublished(repositoryId, true, classroomId);
       return { success: 'Repository re-published. Use Sync to update repositories.' };
     }
+
+    // Provisioning clones the template once per student in background runs the
+    // instructor never sees, so a missing or unreachable template is refused
+    // here, while the instructor is still looking.
+    const templateCheck = await ClassmojiService.repository.checkTemplate(
+      repository.template,
+      classroomId
+    );
+    if (!templateCheck.ok) return { error: templateCheck.error };
 
     let numReposToCreate = 0;
     let numIssuesToCreate = 0;
@@ -158,6 +168,119 @@ export const publishAssignment = async (
     console.error(error);
     throw error;
   }
+};
+
+/**
+ * Publish one assignment, and whatever it needs to be reachable.
+ *
+ * A REPO assignment is not open to students until its repositories exist, so
+ * an unpublished repository is published first (which provisions them). A
+ * repository that is already published is left alone: its repos are on GitHub
+ * and other assignments may be submitting through them, so re-publishing would
+ * be a no-op at best. Quiz and form assignments have nothing to provision.
+ *
+ * `release_at` still gates visibility independently, so publishing an
+ * assignment dated in the future marks it released without exposing it early.
+ */
+export const publishAssignmentAndRepository = async (
+  classroomSlug: string,
+  classroomId: string,
+  assignmentId: string,
+  userId: string | null = null
+) => {
+  const assignment = await ClassmojiService.assignment.findByIdInClassroom(
+    assignmentId,
+    classroomId
+  );
+  invariant(assignment != null, 'Assignment not found');
+  // A quiz's assignment is published only where the classroom shows quizzes
+  // (the quiz screens' own gate): elsewhere it is not there to publish, and a
+  // publish tells the class.
+  if (assignment.type === 'QUIZ' && !(await quizzesVisibleOrThrow(classroomId))) {
+    throw new Response('Not Found', { status: 404 });
+  }
+
+  let repoResult: Awaited<ReturnType<typeof publishAssignment>> | null = null;
+
+  if (assignment.type === 'REPO' && assignment.repository_id) {
+    const repository = await ClassmojiService.repository.findById(assignment.repository_id);
+    if (repository && !repository.is_published) {
+      repoResult = await publishAssignment(
+        classroomSlug,
+        classroomId,
+        assignment.repository_id,
+        userId
+      );
+    }
+  }
+
+  // The repository could not be published (its template is missing or
+  // unreachable): leave the assignment a draft too, since it would open to
+  // students with nothing to submit through.
+  if (repoResult && 'error' in repoResult) return repoResult;
+
+  // A quiz's assignment publishes through the one quiz publish function
+  // (assignment.publish routes it), which tells the class once.
+  await ClassmojiService.assignment.publish(assignmentId);
+
+  // The quiz screens' warning, on this publish path too: a quiz whose every
+  // linked source document is still a draft cannot be started yet.
+  if (
+    assignment.type === 'QUIZ' &&
+    assignment.quiz_id &&
+    (await ClassmojiService.quizAssignment.quizSourceMaterialAllDraft(assignment.quiz_id))
+  ) {
+    return {
+      info: `Quiz "${assignment.title}" published. All source material is still draft; students will not be able to start this quiz.`,
+    };
+  }
+
+  // Provisioning started: hand back the trigger session alone, exactly as the
+  // repository publish does. Adding a `success` here would pop a "published"
+  // toast (useNotifiedFetcher watches that key) while the repos are still being
+  // created, and the progress modal is the honest feedback for that.
+  if (repoResult && 'triggerSession' in repoResult) {
+    return repoResult;
+  }
+
+  // The repository was already published, so publishing this assignment cut no
+  // repos and nothing chained into opening its issues. Open them here: only
+  // the first assignment on a repository gets them for free, when its repos are
+  // created. Scoped to this assignment so its siblings are left alone.
+  if (assignment.type === 'REPO' && assignment.repository_id) {
+    const sessionId = nanoid();
+    const classroom = await ClassmojiService.classroom.findById(classroomId);
+    const repository = await ClassmojiService.repository.findById(assignment.repository_id);
+    const existingRepos = await ClassmojiService.gitRepo.findByRepository(
+      classroomSlug,
+      assignment.repository_id
+    );
+
+    if (repository && classroom) {
+      const missing = findMissingAssignments(repository as Repository, existingRepos as GitRepo[]);
+      const mine = missing[assignmentId] ? { [assignmentId]: missing[assignmentId] } : {};
+      const numMissing = Object.values(mine).reduce((n, a) => n + a.repos.length, 0);
+
+      if (numMissing > 0) {
+        await createMissingAssignments(classroom as Classroom, mine, sessionId);
+
+        const accessToken = await auth.createPublicToken({
+          scopes: { read: { tags: [`session_${sessionId}`] } },
+        });
+
+        return {
+          triggerSession: {
+            accessToken,
+            id: sessionId,
+            numReposToCreate: 0,
+            numIssuesToCreate: 2 * numMissing, // gh + cf per issue
+          },
+        };
+      }
+    }
+  }
+
+  return { success: `Assignment "${assignment.title}" published` };
 };
 
 /** `classroomId` scopes the body-supplied repository — see `publishAssignment`. */

@@ -49,7 +49,12 @@ vi.mock('~/services/aiAgentConnection.server', () => ({
 }));
 
 vi.mock('~/utils/agentStreamManager', () => ({ default: { publish: vi.fn() } }));
-vi.mock('@classmoji/utils', () => ({ getContentRepoName: () => 'content-x' }));
+// The real module, with only the repo-name helper stubbed: the route's session
+// time-zone resolution runs the real validator.
+vi.mock('@classmoji/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/utils')>()),
+  getContentRepoName: () => 'content-x',
+}));
 // Both are module-level imports of the route; the conversation lookup is
 // exercised properly in conversation-binding.test.ts, and the mint in
 // mcp-token.test.ts.
@@ -146,6 +151,8 @@ describe('syllabus bot Pro gating — action', () => {
     const res = (await post({ _action: 'initConversation' })) as Response;
 
     expect(res.status).toBe(403);
+    // A student on a widget left open can read this, so it names no plan.
+    expect(await res.json()).toEqual({ error: "Ask Moji isn't available in this class." });
     expect(sendRequestMock).not.toHaveBeenCalled();
   });
 
@@ -159,6 +166,7 @@ describe('syllabus bot Pro gating — action', () => {
     })) as Response;
 
     expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "Ask Moji isn't available in this class." });
     expect(sendRequestMock).not.toHaveBeenCalled();
   });
 

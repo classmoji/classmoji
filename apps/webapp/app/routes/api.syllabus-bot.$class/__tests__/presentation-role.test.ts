@@ -32,7 +32,10 @@ vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     entitlement: { canUseSyllabusBot: vi.fn(async () => ({ allowed: true })) },
     classroom: {
-      getClassroomSettingsForServer: vi.fn(async () => ({ syllabus_bot_enabled: true })),
+      getClassroomSettingsForServer: vi.fn(async () => ({
+        syllabus_bot_enabled: true,
+        timezone: classroomZone.value,
+      })),
     },
   },
 }));
@@ -40,7 +43,10 @@ vi.mock('~/services/aiAgentConnection.server', () => ({
   sendRequest: (...a: unknown[]) => sendRequestMock(...a),
 }));
 vi.mock('~/utils/agentStreamManager', () => ({ default: { registerSession: vi.fn() } }));
-vi.mock('@classmoji/utils', () => ({ getContentRepoName: () => '' }));
+vi.mock('@classmoji/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@classmoji/utils')>()),
+  getContentRepoName: () => '',
+}));
 vi.mock('@classmoji/auth/mcp-token', () => ({
   mintMcpAccessToken: vi.fn(async () => ({ accessToken: 'tok', expiresAt: new Date() })),
 }));
@@ -48,11 +54,15 @@ vi.mock('@classmoji/database', () => ({
   default: () => ({ aIConversation: { findFirst: vi.fn(async () => ({ id: 'conv-1' })) } }),
 }));
 
-const initWith = async (userRole?: string) => {
+// The classroom's stored zone, per test (null = the course has none).
+const classroomZone = vi.hoisted(() => ({ value: 'America/New_York' as string | null }));
+
+const initWith = async (userRole?: string, browserTimezone?: string) => {
   const { action } = await import('../route');
   const formData = new FormData();
   formData.append('_action', 'initConversation');
   if (userRole !== undefined) formData.append('userRole', userRole);
+  if (browserTimezone !== undefined) formData.append('browserTimezone', browserTimezone);
   await action({
     params: { class: 'some-class' },
     request: new Request('http://x/api/syllabus-bot/some-class', {
@@ -93,5 +103,51 @@ describe('syllabus bot presentation role', () => {
 
   it('refuses a lowercase near-miss, since the enum is the whole contract', async () => {
     expect(await initWith('student')).toBe('OWNER');
+  });
+});
+
+describe('syllabus bot session time zone — classroom, then browser, then UTC', () => {
+  const orgConfig = () =>
+    (
+      sendRequestMock.mock.calls.at(-1)?.[1] as {
+        orgConfig: {
+          timezone: string | null;
+          timezoneSource: string;
+          callerTimezone: string | null;
+        };
+      }
+    ).orgConfig;
+
+  beforeEach(() => {
+    classroomZone.value = 'America/New_York';
+  });
+
+  it("uses the classroom's zone, and still forwards the browser zone for MCP", async () => {
+    await initWith('STUDENT', 'Europe/Paris');
+    expect(orgConfig()).toMatchObject({
+      timezone: 'America/New_York',
+      timezoneSource: 'classroom',
+      callerTimezone: 'Europe/Paris',
+    });
+  });
+
+  it("falls back to the student's browser zone when the classroom has none", async () => {
+    classroomZone.value = null;
+    await initWith('STUDENT', 'America/Chicago');
+    expect(orgConfig()).toMatchObject({
+      timezone: 'America/Chicago',
+      timezoneSource: 'caller',
+      callerTimezone: 'America/Chicago',
+    });
+  });
+
+  it('ignores an invalid browser zone and lands on labelled UTC', async () => {
+    classroomZone.value = null;
+    await initWith('STUDENT', 'Mars/Olympus');
+    expect(orgConfig()).toMatchObject({
+      timezone: null,
+      timezoneSource: 'default',
+      callerTimezone: null,
+    });
   });
 });

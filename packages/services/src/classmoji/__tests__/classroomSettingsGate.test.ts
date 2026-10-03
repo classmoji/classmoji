@@ -14,13 +14,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const upsertMock = vi.fn();
 const canUseSyllabusBotMock = vi.fn();
+const canUseQuizzesMock = vi.fn();
+
+const findUniqueMock = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
-  default: () => ({ classroomSettings: { upsert: (...a: unknown[]) => upsertMock(...a) } }),
+  default: () => ({
+    classroomSettings: {
+      upsert: (...a: unknown[]) => upsertMock(...a),
+      findUnique: (...a: unknown[]) => findUniqueMock(...a),
+    },
+  }),
 }));
 
 vi.mock('../entitlement.service.ts', () => ({
   canUseSyllabusBot: (...a: unknown[]) => canUseSyllabusBotMock(...a),
+  canUseQuizzes: (...a: unknown[]) => canUseQuizzesMock(...a),
 }));
 
 vi.mock('../../git/index.ts', () => ({ GitHubProvider: class {} }));
@@ -38,9 +47,10 @@ describe('updateSettings — syllabus bot Pro gate', () => {
     const { updateSettings, ClassroomSettingsEntitlementError } =
       await import('../classroom.service.ts');
 
-    await expect(
-      updateSettings(CLASSROOM_ID, { syllabus_bot_enabled: true })
-    ).rejects.toBeInstanceOf(ClassroomSettingsEntitlementError);
+    const refusal = updateSettings(CLASSROOM_ID, { syllabus_bot_enabled: true });
+    await expect(refusal).rejects.toBeInstanceOf(ClassroomSettingsEntitlementError);
+    // The AI settings tab and the MCP tool show this message as is.
+    await expect(refusal).rejects.toThrow('Ask Moji requires a Pro subscription.');
     expect(upsertMock).not.toHaveBeenCalled();
   });
 
@@ -84,5 +94,133 @@ describe('updateSettings — syllabus bot Pro gate', () => {
       updateSettings(CLASSROOM_ID, { syllabus_bot_enabled: 'true' as unknown as boolean })
     ).rejects.toBeInstanceOf(ClassroomSettingsEntitlementError);
     expect(upsertMock).not.toHaveBeenCalled();
+  });
+});
+
+// Same gate for AI quizzes. quizzes_enabled defaults to true, so a Free
+// classroom holds `true` from creation; turning it OFF must stay possible.
+describe('updateSettings — quizzes Pro gate', () => {
+  it('refuses to enable them on a classroom without Pro, and writes nothing', async () => {
+    canUseQuizzesMock.mockResolvedValue({ allowed: false, reason: 'pro_required' });
+    const { updateSettings, ClassroomSettingsEntitlementError } =
+      await import('../classroom.service.ts');
+
+    const refusal = updateSettings(CLASSROOM_ID, { quizzes_enabled: true });
+    await expect(refusal).rejects.toBeInstanceOf(ClassroomSettingsEntitlementError);
+    // The AI settings tab and the MCP tool show this message as is.
+    await expect(refusal).rejects.toThrow('AI Quizzes requires a Pro subscription.');
+    expect(upsertMock).not.toHaveBeenCalled();
+  });
+
+  it('allows enabling them on a Pro classroom', async () => {
+    canUseQuizzesMock.mockResolvedValue({ allowed: true });
+    const { updateSettings } = await import('../classroom.service.ts');
+
+    await updateSettings(CLASSROOM_ID, { quizzes_enabled: true });
+
+    expect(canUseQuizzesMock).toHaveBeenCalledWith(CLASSROOM_ID);
+    expect(upsertMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('always allows turning them OFF, even with no entitlement', async () => {
+    canUseQuizzesMock.mockResolvedValue({ allowed: false, reason: 'pro_required' });
+    const { updateSettings } = await import('../classroom.service.ts');
+
+    await updateSettings(CLASSROOM_ID, { quizzes_enabled: false });
+
+    expect(upsertMock).toHaveBeenCalledTimes(1);
+    expect(canUseQuizzesMock).not.toHaveBeenCalled();
+  });
+
+  it('does not consult entitlement for unrelated settings writes', async () => {
+    const { updateSettings } = await import('../classroom.service.ts');
+
+    await updateSettings(CLASSROOM_ID, { theme: 'stone' });
+
+    expect(canUseQuizzesMock).not.toHaveBeenCalled();
+    expect(upsertMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a non-boolean truthy value rather than passing it through', async () => {
+    canUseQuizzesMock.mockResolvedValue({ allowed: false, reason: 'pro_required' });
+    const { updateSettings, ClassroomSettingsEntitlementError } =
+      await import('../classroom.service.ts');
+
+    await expect(
+      updateSettings(CLASSROOM_ID, { quizzes_enabled: 'true' as unknown as boolean })
+    ).rejects.toBeInstanceOf(ClassroomSettingsEntitlementError);
+    expect(upsertMock).not.toHaveBeenCalled();
+  });
+});
+
+// ── The course time zone ────────────────────────────────────────────────────
+//
+// classroom_settings.timezone is THE zone for every server-side date: the
+// public schedule, Ask Moji and the MCP `_local` fields. Validated here, in the
+// shared write path, against the runtime's own Intl data (not a list), and
+// stored in Intl's canonical spelling so the Settings select can show it.
+describe('updateSettings — time zone', () => {
+  const written = () => (upsertMock.mock.calls[0][0] as { update: Record<string, unknown> }).update;
+
+  it('stores a valid IANA zone', async () => {
+    const { updateSettings } = await import('../classroom.service.ts');
+    await updateSettings(CLASSROOM_ID, { timezone: 'America/New_York' });
+    expect(written()).toEqual({ timezone: 'America/New_York' });
+  });
+
+  it("stores the canonical spelling, not the caller's", async () => {
+    const { updateSettings } = await import('../classroom.service.ts');
+    await updateSettings(CLASSROOM_ID, { timezone: 'america/new_york' });
+    expect(written()).toEqual({ timezone: 'America/New_York' });
+  });
+
+  it('accepts UTC, which Intl.supportedValuesOf omits', async () => {
+    const { updateSettings } = await import('../classroom.service.ts');
+    await updateSettings(CLASSROOM_ID, { timezone: 'UTC' });
+    expect(written()).toEqual({ timezone: 'UTC' });
+  });
+
+  it.each([
+    ['a zone that does not exist', 'Not/AZone'],
+    ['a display name rather than a zone', 'Eastern Time'],
+    ['a near-miss the DB CHECK would also refuse', 'America/New York'],
+  ])('refuses %s before writing', async (_case, zone) => {
+    const { updateSettings, ClassroomSettingsValidationError } =
+      await import('../classroom.service.ts');
+    const error = await updateSettings(CLASSROOM_ID, { timezone: zone }).catch(e => e);
+    expect(error).toBeInstanceOf(ClassroomSettingsValidationError);
+    expect(error.code).toBe('TIMEZONE_INVALID');
+    expect(upsertMock).not.toHaveBeenCalled();
+  });
+
+  it('caps the rejected value it echoes back', async () => {
+    const { updateSettings } = await import('../classroom.service.ts');
+    const error = await updateSettings(CLASSROOM_ID, { timezone: 'x'.repeat(5000) }).catch(e => e);
+    expect(error.message.length).toBeLessThan(200);
+    expect(error.message).toContain('…');
+  });
+
+  it('clears the zone on null or a blank string', async () => {
+    const { updateSettings } = await import('../classroom.service.ts');
+    await updateSettings(CLASSROOM_ID, { timezone: null });
+    await updateSettings(CLASSROOM_ID, { timezone: '   ' });
+    expect((upsertMock.mock.calls[0][0] as { update: unknown }).update).toEqual({ timezone: null });
+    expect((upsertMock.mock.calls[1][0] as { update: unknown }).update).toEqual({ timezone: null });
+  });
+
+  it('leaves the zone alone when the patch omits it', async () => {
+    const { updateSettings } = await import('../classroom.service.ts');
+    await updateSettings(CLASSROOM_ID, { theme: 'stone' });
+    expect(written()).toEqual({ theme: 'stone' });
+  });
+});
+
+describe('getTimeZone', () => {
+  it("reads the classroom's own setting, and null when there is none", async () => {
+    const { getTimeZone } = await import('../classroom.service.ts');
+    findUniqueMock.mockResolvedValueOnce({ timezone: 'America/New_York' });
+    expect(await getTimeZone(CLASSROOM_ID)).toBe('America/New_York');
+    findUniqueMock.mockResolvedValueOnce(null);
+    expect(await getTimeZone(CLASSROOM_ID)).toBeNull();
   });
 });

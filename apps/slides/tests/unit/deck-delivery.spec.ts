@@ -20,6 +20,8 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { ClassmojiService } from '@classmoji/services';
+import { NO_MEDIA_URL, stripMediaRefs } from '../../app/utils/mediaRefs.ts';
 import {
   deckAccessFor,
   deckDeliveryContext,
@@ -28,8 +30,12 @@ import {
   isThumbnailRequest,
   isThemeRef,
   rebaseThemeRef,
+  isMediaRef,
   resolveDeckAssets,
+  resolveDeckAssetsPublic,
   resolveDeckDelivery,
+  resolveDeckMedia,
+  resolveUnservedMedia,
   sharedThemeName,
   type DeckDeliveryResolvers,
   type DeliveryContext,
@@ -578,5 +584,177 @@ test.describe('what a deck read asks for', () => {
       label: 'viewer',
       fallback: 'api-then-cdn',
     });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Media references — `media://{id}` in a video's src, its <source>, and a
+// slide's background video
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MEDIA_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+const MEDIA_REF = `media://${MEDIA_ID}`;
+const SIGNED_MEDIA = `${ORIGIN}/c/${CLASSROOM}/media/${MEDIA_ID}/orig.mp4?p=edit`;
+const PLACEHOLDER = `${ORIGIN}/c/${CLASSROOM}/missing/${encodeURIComponent(MEDIA_REF)}`;
+
+/** A deck carrying a media reference in each of the three places a video can. */
+const MEDIA_DECK = [
+  '<div class="slides">',
+  `<section data-background-video="${MEDIA_REF}"><p>bg</p></section>`,
+  `<section><video src="${MEDIA_REF}" controls></video></section>`,
+  `<section><video controls><source src="${MEDIA_REF}" type="video/mp4"></video></section>`,
+  `<section><img src="/content/${ORG}/${REPO}/slides/week-1/img/a.png"></section>`,
+  '</div>',
+].join('');
+
+/** The real resolver's contract for media: a media ref → its signed URL. */
+function mediaResolvers(seen: string[][] = []): DeckDeliveryResolvers {
+  return fakeResolvers({
+    async resolveDelivery(_ctx, refs) {
+      seen.push([...refs]);
+      const urls = new Map<string, string>();
+      for (const ref of refs) {
+        urls.set(ref, ref === MEDIA_REF ? SIGNED_MEDIA : `${ORIGIN}/signed-repo-url`);
+      }
+      return { urls, srcSets: new Map() };
+    },
+  });
+}
+
+test.describe('media references', () => {
+  test('recognises exactly the resolver’s media reference shape', () => {
+    expect(isMediaRef(MEDIA_REF)).toBe(true);
+    expect(isMediaRef('media://not-a-uuid')).toBe(false);
+    expect(isMediaRef(`/content/${ORG}/${REPO}/x.mp4`)).toBe(false);
+  });
+
+  test('every read surface signs them in a video src, a <source> and a background video', async () => {
+    const { html } = await resolveDeckDelivery(MEDIA_DECK, ctx(), {
+      themeName: null,
+      resolvers: mediaResolvers(),
+    });
+    expect(html).not.toContain('media://');
+    expect((html ?? '').split(SIGNED_MEDIA).length - 1).toBe(3);
+  });
+
+  test('the editor pass signs ONLY the media references', async () => {
+    const seen: string[][] = [];
+    const html = await resolveDeckMedia(MEDIA_DECK, ctx(), { resolvers: mediaResolvers(seen) });
+    expect(html).not.toContain('media://');
+    expect((html ?? '').split(SIGNED_MEDIA).length - 1).toBe(3);
+    // The repo image is left as stored — the editor loads it through the proxy,
+    // and it is never handed to the resolver.
+    expect(html).toContain(`/content/${ORG}/${REPO}/slides/week-1/img/a.png`);
+    expect(html).not.toContain('signed-repo-url');
+    expect(seen).toEqual([[MEDIA_REF]]);
+  });
+
+  test('the editor pass does no work on a deck with no media', async () => {
+    const seen: string[][] = [];
+    const deck = `<div class="slides"><section><img src="/content/${ORG}/${REPO}/a.png"></section></div>`;
+    expect(await resolveDeckMedia(deck, ctx(), { resolvers: mediaResolvers(seen) })).toBe(deck);
+    expect(seen).toEqual([]);
+  });
+
+  test('the editor keeps the stored reference when there is no context to sign with', async () => {
+    expect(await resolveDeckMedia(MEDIA_DECK, null)).toBe(MEDIA_DECK);
+  });
+
+  test('a read with no context turns every media reference into the placeholder', async () => {
+    const { html } = await resolveDeckDelivery(MEDIA_DECK, null, { classroomId: CLASSROOM });
+    expect(html).not.toContain('media://');
+    expect((html ?? '').split(PLACEHOLDER).length - 1).toBe(3);
+    // Everything else is left exactly as stored.
+    expect(html).toContain(`/content/${ORG}/${REPO}/slides/week-1/img/a.png`);
+    expect(await resolveDeckAssets(MEDIA_DECK, null, { classroomId: CLASSROOM })).toBe(html);
+  });
+
+  test('the placeholder pass skips a document with no media reference in it', async () => {
+    const deck = '<div class="slides"><section><p>hi</p></section></div>';
+    expect(await resolveUnservedMedia(deck, CLASSROOM)).toBe(deck);
+  });
+
+  test('with no delivery origin at all, a media reference is still never echoed', async () => {
+    delete process.env.CONTENT_DELIVERY_ORIGIN;
+    const html = await resolveUnservedMedia(
+      `<section><video src="${MEDIA_REF}"></video></section>`,
+      CLASSROOM
+    );
+    expect(html).not.toContain('media://');
+    expect(html).toContain('src="about:blank"');
+  });
+});
+
+/**
+ * A failed pass must still never hand a browser `media://`.
+ *
+ * Every catch in the module degrades to the stored document, which is right for
+ * a repo reference (it loads through the proxy) and wrong for a media one (it
+ * has no proxy and no scheme a browser loads). So each catch blanks them.
+ */
+test.describe('a failed read pass never leaks a media reference', () => {
+  const failing = () => {
+    throw new Error('resolver down');
+  };
+
+  /** Swap the service's resolver for one that throws, for one test. */
+  let original: typeof ClassmojiService.contentDelivery;
+  test.beforeEach(() => {
+    original = ClassmojiService.contentDelivery;
+  });
+  test.afterEach(() => {
+    (ClassmojiService as { contentDelivery: typeof original }).contentDelivery = original;
+  });
+  const breakResolver = () => {
+    (ClassmojiService as { contentDelivery: typeof original }).contentDelivery = {
+      ...original,
+      resolveDelivery: failing,
+    } as typeof original;
+  };
+
+  test('the pure pass blanks every reference and nothing else', () => {
+    const out = stripMediaRefs(MEDIA_DECK);
+    expect(out).not.toContain('media://');
+    expect(out.split(NO_MEDIA_URL).length - 1).toBe(3);
+    expect(out).toContain(`/content/${ORG}/${REPO}/slides/week-1/img/a.png`);
+    // An id in capitals is still one (a browser may hand one back that way).
+    expect(stripMediaRefs(`<video src="media://${MEDIA_ID.toUpperCase()}">`)).toBe(
+      '<video src="about:blank">'
+    );
+    expect(stripMediaRefs('<video src="media://not-a-uuid">')).toBe(
+      '<video src="media://not-a-uuid">'
+    );
+    expect(stripMediaRefs(null)).toBeNull();
+  });
+
+  test('resolveDeckDelivery: a resolver that throws', async () => {
+    const { html } = await resolveDeckDelivery(MEDIA_DECK, ctx(), {
+      themeName: null,
+      resolvers: fakeResolvers({ resolveDelivery: failing }),
+    });
+    expect(html).not.toContain('media://');
+    expect((html ?? '').split(NO_MEDIA_URL).length - 1).toBe(3);
+    // The repo reference is still the stored one — the proxy serves it.
+    expect(html).toContain(`/content/${ORG}/${REPO}/slides/week-1/img/a.png`);
+  });
+
+  test('resolveDeckDelivery: no context and no classroom to form a placeholder for', async () => {
+    const { html } = await resolveDeckDelivery(MEDIA_DECK, null);
+    expect(html).not.toContain('media://');
+    expect((html ?? '').split(NO_MEDIA_URL).length - 1).toBe(3);
+  });
+
+  test('resolveUnservedMedia: the placeholder lookup throws', async () => {
+    breakResolver();
+    const html = await resolveUnservedMedia(MEDIA_DECK, CLASSROOM);
+    expect(html).not.toContain('media://');
+    expect(html.split(NO_MEDIA_URL).length - 1).toBe(3);
+  });
+
+  test('resolveDeckAssetsPublic: the placeholder lookup throws', async () => {
+    breakResolver();
+    const html = await resolveDeckAssetsPublic(MEDIA_DECK, ORG, REPO, CLASSROOM);
+    expect(html).not.toContain('media://');
+    expect((html ?? '').split(NO_MEDIA_URL).length - 1).toBe(3);
   });
 });

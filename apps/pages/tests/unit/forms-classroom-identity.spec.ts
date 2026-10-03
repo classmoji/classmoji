@@ -1,10 +1,21 @@
 import { test, expect } from '@playwright/test';
-import type { FormField } from '@classmoji/services/form-contract';
+import { z } from 'zod';
+import {
+  buildResponseSchema,
+  parseAnswers,
+  parseFormDefinition,
+  type FormField,
+} from '@classmoji/services/form-contract';
 
 import {
   classroomIdentityPlan,
+  coerceAnswers,
   coerceValue,
   defaultValueFor,
+  exclusiveSelection,
+  extractIdentity,
+  friendlyErrorMap,
+  identityPlan,
   visibleClassroomFields,
 } from '../../app/components/forms/answerCoerce.ts';
 
@@ -23,6 +34,12 @@ import {
  * `coerceValue` for `roster_select` is here because the type has two answer
  * SHAPES behind one name, and getting the empty case wrong is invisible until
  * somebody submits a form having touched nothing.
+ *
+ * `identityPlan` and `classroomIdentityPlan` both skip identity questions
+ * (`identity_question: true`): an identity answer is never lifted into the
+ * response's name/email columns, and never answered from the account. The
+ * multiselect `exclusive` rule is here too, because the checkbox logic and the
+ * refusal message it mirrors are both pure.
  *
  * No browser, no dev stack — same runner arrangement as `forms-origin.spec.ts`.
  */
@@ -136,5 +153,126 @@ test.describe('roster_select has two answer shapes', () => {
     // A single value where a list is expected — what a form-encoded post gives
     // for a one-item multi-select.
     expect(coerceValue(many, 'user-1')).toEqual(['user-1']);
+  });
+});
+
+test.describe('identity questions are never the respondent’s identity', () => {
+  test('identityPlan skips a flagged name question', () => {
+    const chosen = field({ type: 'short_text', label: 'Chosen name', identity_question: true }, 1);
+    const plan = identityPlan([chosen]);
+    expect(plan.nameFieldId).toBeNull();
+  });
+
+  test('and picks the next unflagged one instead', () => {
+    const chosen = field({ type: 'short_text', label: 'Chosen name', identity_question: true }, 1);
+    const full = field({ type: 'short_text', label: 'Full name' }, 2);
+    const email = field({ type: 'email', label: 'School email' }, 3);
+
+    const plan = identityPlan([chosen, full, email]);
+    expect(plan.nameFieldId).toBe(full.id);
+    expect(plan.emailFieldId).toBe(email.id);
+  });
+
+  test('a flagged answer never becomes the name column', () => {
+    const chosen = field({ type: 'short_text', label: 'Chosen name', identity_question: true }, 1);
+    const identity = extractIdentity(
+      [chosen],
+      { [chosen.id]: 'Answer Staff Must Not See' },
+      { email: 'sam@example.edu', name: 'Sam Rivera' }
+    );
+    expect(identity).toEqual({ email: 'sam@example.edu', name: 'Sam Rivera' });
+
+    // With no fallback the column is empty, not the answer.
+    expect(extractIdentity([chosen], { [chosen.id]: 'Answer Staff Must Not See' }).name).toBeNull();
+  });
+
+  test('the flag survives the contract, so the stored definition is what is checked', () => {
+    const [chosen] = parseFormDefinition([
+      { type: 'short_text', label: 'Chosen name', identity_question: true },
+    ]).fields;
+    expect(identityPlan([chosen]).nameFieldId).toBeNull();
+  });
+
+  test('classroomIdentityPlan leaves a flagged name question for the member to answer', () => {
+    const preferred = field(
+      { type: 'short_text', label: 'Preferred name', identity_question: true },
+      1
+    );
+    const plan = classroomIdentityPlan([preferred], ME);
+
+    expect(plan.hiddenIds).toEqual([]);
+    expect(plan.injected[preferred.id]).toBeUndefined();
+    expect(visibleClassroomFields([preferred], plan)).toHaveLength(1);
+  });
+});
+
+test.describe('multiselect exclusive options', () => {
+  const definition = parseFormDefinition([
+    {
+      type: 'multiselect',
+      label: 'How do you describe your gender? (pick any that apply)',
+      identity_question: true,
+      options: [
+        { label: 'Woman' },
+        { label: 'Man' },
+        { label: 'Non-binary' },
+        { label: 'Prefer not to say', exclusive: true },
+      ],
+    },
+  ]);
+  const [question] = definition.fields;
+  const options = question.options as Array<{ id: string; label: string; exclusive?: true }>;
+  const [woman, man, nonBinary, preferNot] = options.map(option => option.id);
+
+  test('ticking the exclusive option leaves only it', () => {
+    expect(exclusiveSelection(options, [woman, nonBinary, preferNot], preferNot)).toEqual([
+      preferNot,
+    ]);
+  });
+
+  test('ticking any other option drops the exclusive one', () => {
+    expect(exclusiveSelection(options, [man, preferNot], man)).toEqual([man]);
+    expect(exclusiveSelection(options, [woman, nonBinary], nonBinary)).toEqual([woman, nonBinary]);
+  });
+
+  test('a field with no exclusive option is left alone', () => {
+    const plain = options.map(({ id, label }) => ({ id, label }));
+    expect(exclusiveSelection(plain, [woman, preferNot], preferNot)).toEqual([woman, preferNot]);
+  });
+
+  test('the renderer’s validation refuses a combination on the field, with the server’s message', () => {
+    const message = '"Prefer not to say" can\'t be combined with other choices';
+
+    // What the renderer's resolver runs: coerce, then the contract's schema
+    // under the friendly error map.
+    const client = z
+      .object({ answers: buildResponseSchema(definition.fields) })
+      .safeParse(
+        { answers: coerceAnswers(definition.fields, { [question.id]: [woman, preferNot] }) },
+        { errorMap: friendlyErrorMap }
+      );
+    expect(client.success).toBe(false);
+    expect(
+      client.error?.issues.map(issue => ({ path: issue.path, message: issue.message }))
+    ).toEqual([{ path: ['answers', question.id], message }]);
+
+    // What the server runs. Same field id, same words.
+    let issues: z.ZodIssue[] = [];
+    try {
+      parseAnswers(definition.fields, { [question.id]: [woman, preferNot] });
+    } catch (error) {
+      issues = (error as { issues?: z.ZodIssue[] }).issues ?? [];
+    }
+    expect(issues.map(issue => ({ path: issue.path, message: issue.message }))).toEqual([
+      { path: [question.id], message },
+    ]);
+
+    // The exclusive option alone, and the others together, are answers.
+    expect(parseAnswers(definition.fields, { [question.id]: [preferNot] })).toEqual({
+      [question.id]: [preferNot],
+    });
+    expect(parseAnswers(definition.fields, { [question.id]: [woman, man] })).toEqual({
+      [question.id]: [woman, man],
+    });
   });
 });

@@ -335,8 +335,10 @@ async function uploadAsset(
       }
       const form = new FormData();
       form.append('file', new File([buffer], name, { type }));
-      form.append('pageId', id);
-      const response = await fetch('/api/upload', { method: 'POST', body: form });
+      const response = await fetch(`/api/upload?pageId=${encodeURIComponent(id)}`, {
+        method: 'POST',
+        body: form,
+      });
       return { status: response.status, body: await response.text() };
     },
     { pageId, filename, base64: bytes.toString('base64'), mimeType }

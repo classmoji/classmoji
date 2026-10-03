@@ -13,11 +13,11 @@
  *      GitHub's contributor-stats endpoint returns 202 while warming its cache; we
  *      surface that as `pending: true` and still write the row but mark it `stale`
  *      so the Trigger.dev task retries.
- *   4. Resolve GitHub logins → classroom User ids via ClassroomMembership.user.login,
+ *   4. Resolve GitHub logins → classroom User ids via the members' git usernames,
  *      with `GitRepoContributorLink` rows taking precedence as manual overrides.
  *   5. Upsert the snapshot row (JSON columns + aggregate totals + stale/error flags).
  */
-import getPrisma from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import type { GitProvider } from '../git/GitProvider.ts';
 import { getGitProvider } from '../git/index.ts';
 import type {
@@ -32,6 +32,20 @@ import type {
 // within this window (past or future). Used by the cron to limit refresh scope.
 const ACTIVE_WINDOW_DAYS = 30;
 const MAX_ANALYTICS_COMMITS = 250;
+
+/**
+ * How long a snapshot counts as fresh enough that a push need not re-read the
+ * provider.
+ *
+ * Students push in bursts — 2.67 pushes per repo per day in production, far
+ * more on a deadline night — and every one of them re-read the same four GitHub
+ * endpoints to move a commit count by one. The number was never live anyway:
+ * GitHub's contributor-stats endpoint is its own cached aggregate (that is what
+ * the 202 is), so this adds a few minutes on top of a figure GitHub already
+ * recomputes on its own schedule. The on-demand refresh ignores it, so a TA who
+ * doubts a count is one click from a real fetch.
+ */
+const SNAPSHOT_TTL_MS = 5 * 60 * 1000;
 
 function pickLatestSnapshot<T, S extends { fetched_at: Date | string }>(
   items: T[],
@@ -186,7 +200,7 @@ export async function upsertSnapshot(
 
 /**
  * Build a `githubLogin → userId` map for a gitRepo. Starts with every
- * `ClassroomMembership.user.login` in the classroom, then overlays any
+ * member's git username in the classroom, then overlays any
  * `GitRepoContributorLink` rows for this repo (manual overrides win).
  */
 async function buildLoginToUserIdMap(
@@ -197,7 +211,7 @@ async function buildLoginToUserIdMap(
   const [memberships, links] = await Promise.all([
     prisma.classroomMembership.findMany({
       where: { classroom_id: classroomId },
-      include: { user: { select: { id: true, login: true } } },
+      include: { user: { select: { id: true, ...GIT_IDENTITY } } },
     }),
     prisma.gitRepoContributorLink.findMany({
       where: { git_repo_id: repositoryId, user_id: { not: null } },
@@ -206,9 +220,11 @@ async function buildLoginToUserIdMap(
 
   const map = new Map<string, string>();
   for (const m of memberships) {
-    const login = m.user?.login;
-    if (login && !map.has(login)) {
-      map.set(login, m.user.id);
+    for (const account of m.user?.accounts ?? []) {
+      const login = account.username;
+      if (login && !map.has(login)) {
+        map.set(login, m.user.id);
+      }
     }
   }
   // Overrides take precedence.
@@ -221,10 +237,43 @@ async function buildLoginToUserIdMap(
 // Orchestrator
 
 /**
- * End-to-end refresh for a single GitRepoAssignment. Intended to be called
- * by the Trigger.dev workflow (Task 7). Never throws — errors are persisted on
- * the snapshot row and returned via `{ stale: true, error }` so the task can
- * decide whether to retry.
+ * Read one git repo from the provider and attribute its authors to classroom
+ * users.
+ *
+ * Shared by `refreshOne` and `refreshRepo` so a repo costs exactly one set of
+ * provider calls per refresh, however many submission rows hang off it.
+ */
+async function fetchLinkedSnapshot(
+  gitOrg: Parameters<typeof getGitProvider>[0] & { login: string | null },
+  classroomId: string,
+  gitRepoId: string,
+  repoName: string
+): Promise<{ payload: SnapshotPayload; pending: boolean }> {
+  if (!gitOrg.login) throw new Error('GitOrganization.login is required');
+
+  const provider = getGitProvider(gitOrg);
+  const [{ payload, pending }, loginToUserId] = await Promise.all([
+    buildSnapshot(provider, gitOrg.login, repoName),
+    buildLoginToUserIdMap(classroomId, gitRepoId),
+  ]);
+
+  return {
+    payload: {
+      ...payload,
+      commits: linkAuthorsToUsers(payload.commits, loginToUserId),
+      contributors: linkContributorsToUsers(payload.contributors, loginToUserId),
+    },
+    pending,
+  };
+}
+
+/**
+ * End-to-end refresh for a single GitRepoAssignment. The on-demand path: the
+ * "refresh" button on a submission and the backfill script. A push refreshes
+ * the whole repo instead — see `refreshRepo`.
+ *
+ * Never throws — errors are persisted on the snapshot row and returned via
+ * `{ stale: true, error }` so the task can decide whether to retry.
  */
 export async function refreshOne(
   repositoryAssignmentId: string
@@ -251,21 +300,15 @@ export async function refreshOne(
     if (!classroom) throw new Error('Classroom not attached to GitRepo');
     const gitOrg = classroom.git_organization;
     if (!gitOrg) throw new Error('GitOrganization not attached to Classroom');
-    if (!gitOrg.login) throw new Error('GitOrganization.login is required');
 
-    const provider = getGitProvider(gitOrg);
+    const { payload, pending } = await fetchLinkedSnapshot(
+      gitOrg,
+      classroom.id,
+      repo.id,
+      repo.name
+    );
 
-    const { payload, pending } = await buildSnapshot(provider, gitOrg.login, repo.name);
-
-    const loginToUserId = await buildLoginToUserIdMap(classroom.id, repo.id);
-
-    const linkedPayload: SnapshotPayload = {
-      ...payload,
-      commits: linkAuthorsToUsers(payload.commits, loginToUserId),
-      contributors: linkContributorsToUsers(payload.contributors, loginToUserId),
-    };
-
-    await upsertSnapshot(repositoryAssignmentId, linkedPayload, { stale: pending });
+    await upsertSnapshot(repositoryAssignmentId, payload, { stale: pending });
 
     return { stale: pending };
   } catch (err) {
@@ -276,6 +319,89 @@ export async function refreshOne(
       console.error('[repoAnalytics] failed to persist error snapshot', upsertErr);
     }
     return { stale: true, error: message };
+  }
+}
+
+/**
+ * End-to-end refresh for EVERY submission row on one git repo, spending a
+ * single set of provider calls on all of them.
+ *
+ * A push is a fact about the repo, not about any one assignment: the commits,
+ * contributors, languages and PRs are identical for every row hanging off it.
+ * Refreshing per row re-read the same four endpoints once per row, so one push
+ * to a repo carrying N assignments cost N times the GitHub budget to write N
+ * identical snapshots.
+ *
+ * Rows whose assignment never submits by push are refreshed too, deliberately:
+ * a graded (frozen) row and an issue-mode row both still display the repo's
+ * commit count and should see the new commits.
+ *
+ * Never throws — a failure is persisted on every row, as the per-row refresh
+ * does, so a dead repo surfaces on each submission rather than silently.
+ */
+export async function refreshRepo(
+  gitRepoId: string
+): Promise<{ stale: boolean; error?: string; rows: number; skipped?: boolean }> {
+  const prisma = getPrisma();
+  let rowIds: string[] = [];
+
+  try {
+    const repo = await prisma.gitRepo.findUnique({
+      where: { id: gitRepoId },
+      include: {
+        classroom: { include: { git_organization: true } },
+        assignments: { select: { id: true } },
+      },
+    });
+
+    if (!repo) throw new Error(`GitRepo ${gitRepoId} not found`);
+    rowIds = repo.assignments.map(row => row.id);
+    // Nothing to write, so nothing worth spending provider calls on.
+    if (rowIds.length === 0) return { stale: false, rows: 0 };
+
+    // Every row already holds a good, recent snapshot, so this push has nothing
+    // to learn from the provider. `stale` and `error` rows deliberately fail
+    // this test: a row left warming by a 202 must keep retrying, and a dead repo
+    // must not be frozen behind the window.
+    const fresh = await prisma.gitRepoAnalyticsSnapshot.count({
+      where: {
+        git_repo_assignment_id: { in: rowIds },
+        stale: false,
+        error: null,
+        fetched_at: { gt: new Date(Date.now() - SNAPSHOT_TTL_MS) },
+      },
+    });
+    if (fresh === rowIds.length) {
+      return { stale: false, rows: rowIds.length, skipped: true };
+    }
+
+    const classroom = repo.classroom;
+    if (!classroom) throw new Error('Classroom not attached to GitRepo');
+    const gitOrg = classroom.git_organization;
+    if (!gitOrg) throw new Error('GitOrganization not attached to Classroom');
+
+    const { payload, pending } = await fetchLinkedSnapshot(
+      gitOrg,
+      classroom.id,
+      repo.id,
+      repo.name
+    );
+
+    for (const id of rowIds) {
+      await upsertSnapshot(id, payload, { stale: pending });
+    }
+
+    return { stale: pending, rows: rowIds.length };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    for (const id of rowIds) {
+      try {
+        await upsertSnapshot(id, null, { stale: true, error: message });
+      } catch (upsertErr) {
+        console.error('[repoAnalytics] failed to persist error snapshot', upsertErr);
+      }
+    }
+    return { stale: true, error: message, rows: rowIds.length };
   }
 }
 

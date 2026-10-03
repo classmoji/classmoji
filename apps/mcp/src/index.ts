@@ -15,6 +15,7 @@
  */
 
 import Fastify, { type FastifyError } from 'fastify';
+import { MCP_BODY_LIMIT_BYTES } from './bodyLimit.ts';
 import { MCP_PORT, MCP_PUBLIC_URL, WEBAPP_URL } from './config.ts';
 import { registerProcessSafetyNets } from './processSafety.ts';
 import devMintRoutes from './routes/devMint.ts';
@@ -28,23 +29,15 @@ registerAllTools();
 const fastify = Fastify({
   logger: true,
   /**
-   * Bigger than Fastify's 1 MiB default, because two tools accept payloads that
-   * dwarf it and enforce their own ceilings — with a reason the caller can act
-   * on. At the default the framework would refuse the request with a bare HTTP
-   * 413 before the MCP layer ever saw it, so the tool's own cap could never fire
-   * and the agent would get no usable error. The Streamable HTTP transport is
-   * handed the ALREADY-PARSED body (see routes/mcp.ts), so this limit is the
-   * only one on the path.
-   *
-   * 8 MiB rather than 4, because page_asset_upload carries file BYTES as
-   * base64, which inflates them by a third: the 5 MB image validateFile allows
-   * arrives as ~6.7 MB of JSON. (form_response_create's batch caps at 2 MB.)
+   * Bigger than Fastify's 1 MiB default so the tools that take large payloads
+   * can refuse them with their own, readable errors. See `bodyLimit.ts`, which
+   * page_asset_upload also derives its file cap from.
    */
-  bodyLimit: 8 * 1024 * 1024,
+  bodyLimit: MCP_BODY_LIMIT_BYTES,
 });
 
-// S5 process-level safety nets: a stray detached promise rejection (e.g. the
-// fire-and-forget token reversal on grade_remove) must not crash the server.
+// S5 process-level safety nets: a stray detached promise rejection (from any
+// code path that does not await its promise) must not crash the server.
 // unhandledRejection → log + keep serving; uncaughtException → log, best-effort
 // close, exit(1) (state may be corrupt; the process manager restarts clean).
 registerProcessSafetyNets(fastify.log, {

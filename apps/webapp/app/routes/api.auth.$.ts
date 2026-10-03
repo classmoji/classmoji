@@ -1,4 +1,5 @@
 import { auth } from '@classmoji/auth/server';
+import { withoutSessionTokens } from '@classmoji/auth/session-response';
 import { isHttpRedirectUri } from '~/utils/oauthRedirect';
 import type { LoaderFunctionArgs, ActionFunctionArgs } from 'react-router';
 
@@ -52,12 +53,14 @@ async function rejectUnsafeDynamicClientRegistration(
   );
 }
 
+// Session responses leave without their rows' `token` field; see
+// @classmoji/auth/session-response.
 export async function loader({ request }: LoaderFunctionArgs) {
-  return auth.handler(request);
+  return withoutSessionTokens(request, await auth.handler(request));
 }
 
 export async function action({ request }: ActionFunctionArgs) {
   const rejection = await rejectUnsafeDynamicClientRegistration(request);
   if (rejection) return rejection;
-  return auth.handler(request);
+  return withoutSessionTokens(request, await auth.handler(request));
 }

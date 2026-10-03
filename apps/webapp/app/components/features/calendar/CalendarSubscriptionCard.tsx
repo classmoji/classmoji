@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Button, Input, Modal, message } from 'antd';
+import { Button, Input, Modal } from 'antd';
+import { useCallout } from '@classmoji/ui-components';
 import { CopyOutlined, CheckOutlined, CalendarOutlined } from '@ant-design/icons';
 
 interface CalendarSubscriptionCardProps {
@@ -7,6 +8,7 @@ interface CalendarSubscriptionCardProps {
 }
 
 const CalendarSubscriptionCard = ({ subscriptionUrl }: CalendarSubscriptionCardProps) => {
+  const callout = useCallout();
   const [modalOpen, setModalOpen] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -19,10 +21,10 @@ const CalendarSubscriptionCard = ({ subscriptionUrl }: CalendarSubscriptionCardP
     try {
       await navigator.clipboard.writeText(subscriptionUrl);
       setCopied(true);
-      message.success('Calendar URL copied to clipboard');
+      callout.show({ variant: 'success', title: 'Calendar URL copied' });
       setTimeout(() => setCopied(false), 2000);
     } catch (_err: unknown) {
-      message.error('Failed to copy URL');
+      callout.show({ variant: 'error', title: 'Could not copy the URL' });
     }
   };
 

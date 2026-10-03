@@ -14,8 +14,10 @@ import StepBasicInfo from './StepBasicInfo';
 import StepImportModules from './StepImportModules';
 import StepReview from './StepReview';
 import { slugify, STEPS } from './utils';
+import { browserTimeZone } from '~/utils/browserTimeZone';
+import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import { SOURCE_ROLES } from './sourceAccess';
-import type { ImportSelections } from './types';
+import type { GitOrganizationOption, ImportSelections } from './types';
 import type { Route } from './+types/route';
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
@@ -26,7 +28,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   const octokit = GitHubProvider.getUserOctokit(authData.token);
 
   // Run the two independent GitHub reads in parallel:
-  //  - getAuthenticated: needed for the Classmoji user lookup + revoked-token handling
+  //  - getAuthenticated: revoked-token handling
   //  - syncUserInstallations: reads the user's app installations live from GitHub and
   //    upserts a GitOrganization row for each. This decouples the org dropdown from the
   //    async installation.created webhook, so a just-installed org shows up immediately.
@@ -52,15 +54,15 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       (error as { status?: number })?.status === 401 ||
       (error as { message?: string })?.message?.includes('Bad credentials')
     ) {
-      await clearRevokedToken(authData.userId);
+      // Only the token GitHub refused: a token refreshed meanwhile is kept.
+      await clearRevokedToken(authData.userId, authData.token);
       return redirect('/');
     }
     throw error;
   }
-  const authenticatedUser = authResult.data;
   let syncedInstallations = initialSync;
 
-  const user = await ClassmojiService.user.findByLogin(authenticatedUser.login);
+  const user = await ClassmojiService.user.findById(authData.userId);
 
   if (!user) {
     return redirect('/registration');
@@ -147,14 +149,19 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   // Fetch the displayable orgs and the classrooms this user may import FROM in
   // parallel. Import sources are OWNER *or* TEACHER — a teacher may copy a class
   // they teach, minus the API keys (see the strip in action.ts).
-  const [gitOrgs, importableClassrooms] = await Promise.all([
+  const [gitOrgs, importableClassrooms, subscription] = await Promise.all([
     getPrisma().gitOrganization.findMany({
       where: {
         provider: 'GITHUB',
         provider_id: { in: providerIds },
         ...(useInstalledFilter ? { github_installation_id: { not: null } } : {}),
       },
-      include: {
+      // What the org picker shows (id, login, its classrooms), plus the
+      // provider id the avatar is looked up by.
+      select: {
+        id: true,
+        login: true,
+        provider_id: true,
         classrooms: {
           select: {
             id: true,
@@ -221,12 +228,26 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       },
       orderBy: { created_at: 'desc' },
     }),
+    ClassmojiService.subscription.getCurrent(user.id),
   ]);
 
-  // Enrich gitOrgs with avatar URLs from GitHub
-  const gitOrgsWithAvatars = gitOrgs.map(org => ({
-    ...org,
+  // The new classroom is Pro exactly when its creator is (they are its only
+  // owner), so quiz import is offered to Pro creators alone, and only where the
+  // AI agent is configured (as `loadQuizzesVisible` requires). Same Pro test the
+  // classroom resolver applies to each owner's subscription; the action
+  // re-decides on the created classroom.
+  const quizzesVisible =
+    isAIAgentConfigured() &&
+    subscription.tier === 'PRO' &&
+    ClassmojiService.subscription.isSubscriptionActive(subscription);
+
+  // Enrich gitOrgs with avatar URLs from GitHub. Each org leaves as exactly
+  // what the picker reads (GitOrganizationOption).
+  const gitOrgsWithAvatars: GitOrganizationOption[] = gitOrgs.map(org => ({
+    id: org.id,
+    login: org.login,
     avatar_url: avatarByProviderId.get(org.provider_id) ?? null,
+    classrooms: org.classrooms,
   }));
 
   // Collapse the viewer's membership rows to a single flag and DROP the rows —
@@ -239,15 +260,15 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   }));
 
   return {
-    user,
     gitOrgs: gitOrgsWithAvatars,
     importableClassrooms: importSources,
     githubAppName: process.env.GITHUB_APP_NAME,
+    quizzesVisible,
   };
 };
 
 const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
-  const { gitOrgs, importableClassrooms, githubAppName } = loaderData;
+  const { gitOrgs, importableClassrooms, githubAppName, quizzesVisible } = loaderData;
   const navigate = useNavigate();
   const { fetcher, notify } = useGlobalFetcher();
   const { openInstallPopup, isRefreshing } = useGitHubAppInstallPopup(githubAppName);
@@ -433,7 +454,15 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
     notify(ActionTypes.CREATE_CLASSROOM, 'Creating classroom...');
 
     fetcher!.submit(
-      { ...values, slug: effectiveSlug, content_repo: effectiveContentRepo, importConfig },
+      {
+        ...values,
+        slug: effectiveSlug,
+        content_repo: effectiveContentRepo,
+        importConfig,
+        // The creator's browser zone seeds the course time zone (validated on
+        // the server; editable later in General settings).
+        timezone: browserTimeZone(),
+      },
       {
         method: 'post',
         action: '/create-classroom',
@@ -508,6 +537,7 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
                 setSelectedModules={setSelectedModules}
                 importSelections={importSelections}
                 setImportSelections={setImportSelections}
+                quizzesVisible={quizzesVisible}
               />
             )}
 
@@ -521,6 +551,7 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
                 sourceClassroom={sourceClassroom}
                 selectedModules={selectedModules}
                 importSelections={importSelections}
+                quizzesVisible={quizzesVisible}
               />
             )}
 

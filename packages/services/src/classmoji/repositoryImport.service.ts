@@ -1,8 +1,8 @@
 import getPrisma from '@classmoji/database';
-import { titleToIdentifier } from '@classmoji/utils';
+import { mirroredQuizStatus, mirroredQuizWeight, titleToIdentifier } from '@classmoji/utils';
 import type { Prisma } from '@prisma/client';
 
-type RepositoryImportClient = Prisma.TransactionClient | ReturnType<typeof getPrisma>;
+export type RepositoryImportClient = Prisma.TransactionClient | ReturnType<typeof getPrisma>;
 
 type SourceAssignmentWithLegacyFields = Prisma.AssignmentGetPayload<Record<string, never>> & {
   branch?: string | null;
@@ -104,7 +104,8 @@ export const cloneAssignment = async (
     is_extra_credit: sourceAssignment.is_extra_credit,
     is_published: false,
     description: sourceAssignment.description || '',
-    tokens_per_hour: sourceAssignment.tokens_per_hour || 0,
+    // Its own price, or empty to follow the target classroom's default.
+    tokens_per_hour: sourceAssignment.tokens_per_hour ?? null,
     branch: sourceAssignment.branch,
     workflow_file: sourceAssignment.workflow_file,
     // Conditionally strip deadlines
@@ -147,6 +148,8 @@ export const cloneQuiz = async (
     throw new Error(`Source quiz not found: ${sourceQuizId}`);
   }
 
+  // Source material links are not cloned: they name the source classroom's
+  // page and slide ids, which would have to be mapped to the target's copies.
   return tx.quiz.create({
     data: {
       classroom_id: targetClassroomId,
@@ -159,6 +162,8 @@ export const cloneQuiz = async (
       difficulty_level: sourceQuiz.difficulty_level,
       subject: sourceQuiz.subject,
       include_code_context: sourceQuiz.include_code_context,
+      course_search_enabled: sourceQuiz.course_search_enabled,
+      excluded_paths: sourceQuiz.excluded_paths ?? [],
       grading_strategy: sourceQuiz.grading_strategy,
       max_attempts: sourceQuiz.max_attempts,
       // Conditionally set status and deadline
@@ -166,6 +171,83 @@ export const cloneQuiz = async (
       due_date: stripDeadlines ? null : sourceQuiz.due_date,
     },
   });
+};
+
+/**
+ * What an import copies from a source quiz's assignment: its module (to find
+ * the target classroom's counterpart), its schedule and its weight.
+ */
+export const SOURCE_QUIZ_ASSIGNMENT_SELECT = {
+  weight: true,
+  is_extra_credit: true,
+  tokens_per_hour: true,
+  student_deadline: true,
+  release_at: true,
+  closes_at: true,
+  module: { select: { id: true, title: true, slug: true, description: true, position: true } },
+} satisfies Prisma.AssignmentSelect;
+
+export type SourceQuizAssignment = Prisma.AssignmentGetPayload<{
+  select: typeof SOURCE_QUIZ_ASSIGNMENT_SELECT;
+}>;
+
+/**
+ * Give an imported quiz its assignment in the target module: the source
+ * assignment's weight, extra credit and tokens per hour, its Opens, due and
+ * close dates unless stripped, appended to the module, and unpublished
+ * (importing never publishes anything). The title is the quiz's name. The
+ * quiz's own due date, weight and status are written to agree with it, as
+ * every quiz save does.
+ *
+ * A quiz has at most one assignment, so a target quiz that already has one
+ * (made by the other import path, or by an earlier try of this one) is left
+ * as it is: nothing is written and null is returned.
+ */
+export const cloneQuizAssignment = async (
+  source: SourceQuizAssignment,
+  target: { quizId: string; name: string },
+  targetModuleId: string,
+  options: { stripDeadlines?: boolean } = {},
+  tx: RepositoryImportClient = getPrisma()
+) => {
+  const { stripDeadlines = true } = options;
+  const existing = await tx.assignment.findUnique({
+    where: { quiz_id: target.quizId },
+    select: { id: true },
+  });
+  if (existing) return null;
+
+  const last = await tx.assignment.findFirst({
+    where: { module_id: targetModuleId },
+    orderBy: { position: 'desc' },
+    select: { position: true },
+  });
+  const assignment = await tx.assignment.create({
+    data: {
+      module_id: targetModuleId,
+      type: 'QUIZ',
+      quiz_id: target.quizId,
+      title: target.name,
+      slug: titleToIdentifier(target.name),
+      position: last ? last.position + 1 : 0,
+      weight: source.weight,
+      is_extra_credit: source.is_extra_credit,
+      tokens_per_hour: source.tokens_per_hour,
+      is_published: false,
+      student_deadline: stripDeadlines ? null : source.student_deadline,
+      release_at: stripDeadlines ? null : source.release_at,
+      closes_at: stripDeadlines ? null : source.closes_at,
+    },
+  });
+  await tx.quiz.update({
+    where: { id: target.quizId },
+    data: {
+      due_date: assignment.student_deadline,
+      weight: mirroredQuizWeight(assignment.weight),
+      status: mirroredQuizStatus(assignment, new Date()),
+    },
+  });
+  return assignment;
 };
 
 /**
@@ -228,7 +310,7 @@ export const cloneModule = async (
     where: { id: sourceRepositoryId },
     include: {
       assignments: { include: { module: true } },
-      quizzes: true,
+      quizzes: { include: { assignment: { select: SOURCE_QUIZ_ASSIGNMENT_SELECT } } },
       tag: true,
     },
   });
@@ -321,7 +403,10 @@ export const cloneModule = async (
     }
   }
 
-  // Clone quizzes
+  // Clone quizzes. A quiz placed in a module (it has an assignment) gets its
+  // assignment here, ONCE, in the target counterpart of its module; the
+  // modules phase of a classroom import skips a quiz that already has one. A
+  // source quiz in no module lands in no module.
   if (includeQuizzes && sourceModule.quizzes.length > 0) {
     for (const quiz of sourceModule.quizzes) {
       const clonedQuiz = await cloneQuiz(
@@ -333,6 +418,17 @@ export const cloneModule = async (
       );
       results.quizzes.push(clonedQuiz);
       results.idMaps.quizzes[quiz.id] = clonedQuiz.id;
+      if (quiz.assignment) {
+        const targetModuleId = await targetModuleFor(quiz.assignment.module);
+        if (options.targetModuleId) moduleIdMap[quiz.assignment.module.id] = options.targetModuleId;
+        await cloneQuizAssignment(
+          quiz.assignment,
+          { quizId: clonedQuiz.id, name: clonedQuiz.name },
+          targetModuleId,
+          { stripDeadlines },
+          tx
+        );
+      }
     }
   }
 

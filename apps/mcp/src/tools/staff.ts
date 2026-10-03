@@ -20,7 +20,15 @@
  * cross-classroom probe cannot enumerate foreign staff.
  */
 
-import { ClassmojiService, StaffServiceError, type StaffRole } from '@classmoji/services';
+import {
+  ClassmojiService,
+  HelperService,
+  StaffServiceError,
+  waitForRunOutcome,
+  type StaffRemovalStart,
+  type StaffRole,
+  type UngradedSlotsOutcome,
+} from '@classmoji/services';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
@@ -88,6 +96,19 @@ function mapStaffError(error: unknown): unknown {
         'invalid_params',
         'is_grader applies to ASSISTANT and TEACHER only — owners do not join the grading pool'
       );
+    case 'ungraded_choice_required': {
+      // Refused BEFORE anything is queued: the caller must decide.
+      const count = error.ungradedCount ?? 0;
+      return new ToolError(
+        'invalid_params',
+        `They are grader on ${count} ungraded submission${count === 1 ? '' : 's'} and will ` +
+          'no longer be an assistant or teacher here. Call again with ungraded_submissions: ' +
+          '"reassign" (spread across the other graders), "unassign" (remove them as grader) or ' +
+          '"keep" (leave them assigned). Graded submissions are never changed.',
+        'UNGRADED_CHOICE_REQUIRED',
+        { ungraded_count: count, options: ['reassign', 'unassign', 'keep'] }
+      );
+    }
     default:
       return error;
   }
@@ -317,11 +338,16 @@ export const staffUpdateTool: ToolDefinition<StaffUpdateArgs> = {
   },
 };
 
+/** What happens to a removed grader's ungraded submissions (HelperService.startStaffRemoval). */
+const UNGRADED_CHOICES = ['reassign', 'unassign', 'keep'] as const;
+type UngradedChoiceArg = (typeof UNGRADED_CHOICES)[number];
+
 interface StaffRemoveArgs {
   classroom: string;
   login: string;
   role: StaffRole;
   confirm: true;
+  ungraded_submissions?: UngradedChoiceArg;
 }
 
 /** One shape for both surfaces (the registry's raw shape and the guard below). */
@@ -332,32 +358,75 @@ const staffRemoveShape = {
   confirm: z
     .literal(true)
     .describe('Must be true — acknowledges this can remove the user from the GitHub org'),
+  ungraded_submissions: z
+    .enum(UNGRADED_CHOICES)
+    .optional()
+    .describe(
+      'Required when they grade ungraded submissions and keep no ASSISTANT/TEACHER role: ' +
+        'reassign, unassign or keep'
+    ),
 };
+
+/**
+ * staff_remove's whole budget, measured from handler entry (the same shape as
+ * form_teams_run in ./formTeams.ts): the connector's own timeout is ~60 s. The
+ * removal wait gets what is left minus SETTLE_RESERVE_MS, so the inline settle
+ * (at most UNGRADED_INLINE_LIMIT slots, four at a time) still fits. If, after
+ * the wait, less than MIN_SETTLE_MS remains, nothing is moved and the reply
+ * says to call again — the follow-up path finishes it.
+ */
+const HANDLER_BUDGET_MS = 45_000;
+const SETTLE_RESERVE_MS = 12_000;
+const MIN_SETTLE_MS = 8_000;
+
+/** The response and audit fields describing what became of the ungraded slots. */
+function describeUngraded(outcome: UngradedSlotsOutcome) {
+  return {
+    choice: outcome.choice,
+    total: outcome.total,
+    reassigned_to: Object.fromEntries(outcome.reassigned.map(r => [r.login, r.count])),
+    unassigned: outcome.unassigned + outcome.alreadyCovered,
+    // Of `unassigned`: the grader planned for them had left the grader pool.
+    ...(outcome.unassignedIneligible > 0
+      ? { unassigned_grader_ineligible: outcome.unassignedIneligible }
+      : {}),
+    kept: outcome.kept,
+    failed: outcome.failed,
+    // Above the inline limit the moves run in the background: the numbers
+    // are the plan those runs carry out.
+    queued: outcome.queued,
+    ...(outcome.fallback ? { fallback: outcome.fallback } : {}),
+  };
+}
 
 /** Exported so tests pin the confirm gate. */
 export const staffRemoveArgsSchema = z.object(staffRemoveShape);
 
-export const staffRemoveTool: ToolDefinition<StaffRemoveArgs> = {
+type StaffRemoveTool = ToolDefinition<StaffRemoveArgs>;
+
+export const staffRemoveTool: StaffRemoveTool = {
   name: 'staff_remove',
   // Can remove the user from the GitHub org entirely → destructive + openWorld.
   // Requires confirm:true (enforced by the schema).
   annotations: { destructive: true, openWorld: true },
   title: 'Remove a teaching-staff member from the classroom',
   description:
-    'Removes one role from a member of the classroom teaching team. Owner only, destructive, ' +
-    'requires confirm:true. Because roles are additive, this deletes ONLY the membership row at ' +
-    'the given role — someone who also holds another role here keeps it, and keeps the access ' +
-    'that role carries. Triggers the standard removal workflow, which is role-aware throughout: ' +
-    'it removes them from the classroom staff team on GitHub UNLESS they still hold another ' +
-    'staff role here (all staff roles share one team), and removes them from the GitHub ' +
-    'organization entirely — revoking their access — only IF they hold no other membership in ' +
-    'that organization (e.g. they also take a class in the same org). Removing the LAST ' +
-    'remaining owner is refused: add another owner first, though an owner MAY remove their own ' +
-    'owner role while another owner exists — and if that was their only role in the ' +
-    'organization, doing so ends their own GitHub access to it. Runs in the background. ' +
-    'Because the removal is processed ' +
-    'asynchronously it can still fail after this call reports success — check list_teaching_team ' +
-    'afterwards to confirm they are gone.',
+    'Removes one role from a teaching-team member. Owner only, destructive, requires ' +
+    'confirm:true. Roles are additive: only the membership at the given role is deleted; any ' +
+    'other role they hold here survives with its access. A background workflow removes them ' +
+    'from the classroom GitHub staff team unless another staff role keeps them on it, and from ' +
+    'the GitHub organization only if they hold no other membership there. The last owner cannot ' +
+    'be removed; an owner may remove their own owner role while another exists, which can end ' +
+    'their own GitHub access. UNGRADED SUBMISSIONS: if this leaves them with no grader-flagged ' +
+    'ASSISTANT or TEACHER role while they are grader on submissions with no grade yet, ' +
+    'ungraded_submissions is required and the refusal gives the count. reassign spreads them ' +
+    'over the other eligible graders, least-loaded per assignment (unassigns when there are ' +
+    'none); unassign removes them as grader; keep leaves them. Graded submissions never ' +
+    'change. Slots move only after the removal finishes, so this call waits for it. If it is ' +
+    'still running (removal_pending) or the slots newly need a decision (needs_decision), ' +
+    'nothing changes: call again with the same login, role and ungraded_submissions once ' +
+    'list_teaching_team no longer shows the role. The response reports ungraded_submissions: ' +
+    'reassigned_to (count per grader login), unassigned, kept, failed.',
   scope: 'write',
   roles: OWNER_ONLY,
   // Same tight bucket as staff_add: every call can revoke GitHub organization
@@ -365,6 +434,8 @@ export const staffRemoveTool: ToolDefinition<StaffRemoveArgs> = {
   rateLimit: { capacity: 5, refillPerSecond: 0.05 },
   inputSchema: staffRemoveShape,
   handler: async (args, ctx) => {
+    // The wait is budgeted from HERE: everything before it counts.
+    const entry = Date.now();
     const classroom = requireClassroomCtx(ctx);
 
     // confirm:true is in the schema the SDK validates, and re-parsed here so the
@@ -375,41 +446,227 @@ export const staffRemoveTool: ToolDefinition<StaffRemoveArgs> = {
       throw new ToolError('invalid_params', parsed.error.issues[0]?.message ?? 'Invalid arguments');
     }
 
-    let result;
+    const classroomId = classroom.classroomId;
+    const choiceArg = parsed.data.ungraded_submissions ?? null;
+
+    let started: StaffRemovalStart;
     try {
-      // The service resolves the target from the DB by (classroom, login, role)
-      // and builds the removal-task payload ENTIRELY server-side. It awaits the
-      // ENQUEUE only and hands back the run id; unlike the web route we do not
-      // waitForRunCompletion — the removal finishes in the background. The
-      // last-owner guard runs BEFORE the enqueue for exactly that reason.
-      result = await ClassmojiService.staff.removeStaff({
-        classroomId: classroom.classroomId,
+      // The shared entry point resolves the target from the DB by (classroom,
+      // login, role) and builds the removal-task payload ENTIRELY server-side.
+      // Its refusals (not found, last owner) run first, then the
+      // ungraded-submissions refusal (requireChoice): nothing is queued or
+      // moved until the caller has decided.
+      started = await HelperService.startStaffRemoval({
+        classroomId,
         login: parsed.data.login,
         role: parsed.data.role,
+        ungradedSubmissions: choiceArg,
+        requireChoice: true,
       });
     } catch (error) {
+      // The follow-up to a removal that could not finish settling: the role is
+      // already gone, and the caller is now giving the decision for the slots
+      // that were left. Only a real open removal qualifies
+      // (staff.previewLeftoverSlots); anything else stays the uniform not-found.
+      if (choiceArg && error instanceof StaffServiceError && error.code === 'staff_not_found') {
+        return settleLeftover(ctx, {
+          classroomId,
+          login: parsed.data.login,
+          role: parsed.data.role,
+          choice: choiceArg,
+        });
+      }
       throw mapStaffError(error);
     }
 
+    // Slots move only once the removal has SUCCEEDED. Wait (bounded) whenever
+    // they hold ungraded slots at all — not only when these are at stake — so
+    // a second call removing their other role sees this one finished.
+    let removal: 'queued' | 'completed' | 'failed' | 'pending' = 'queued';
+    let outcome: UngradedSlotsOutcome | null = null;
+    // Why a completed removal still leaves the slots open for a follow-up call.
+    let followup: 'needs_decision' | 'settle_deferred' | null = null;
+    let strandedCount = 0;
+    if (started.heldUngradedCount > 0) {
+      const timeoutMs = Math.max(0, entry + HANDLER_BUDGET_MS - SETTLE_RESERVE_MS - Date.now());
+      const waited = await waitForRunOutcome(started.runId, { timeoutMs });
+      removal =
+        waited.outcome === 'completed'
+          ? 'completed'
+          : waited.outcome === 'failed'
+            ? 'failed'
+            : 'pending';
+
+      if (removal === 'completed' && started.choice) {
+        if (entry + HANDLER_BUDGET_MS - Date.now() < MIN_SETTLE_MS) {
+          followup = 'settle_deferred';
+        } else {
+          outcome = await HelperService.settleUngradedSlots({
+            classroomId,
+            graderId: started.userId,
+            choice: started.choice,
+            departingName: started.name || started.login,
+            expectedCount: started.ungradedCount,
+          });
+        }
+      } else if (removal === 'completed') {
+        // Nothing was at stake when this call started, but a parallel removal
+        // of their other role may have finished too: ask again, now.
+        strandedCount = await ClassmojiService.staff.countStrandedSlots(
+          classroomId,
+          started.userId
+        );
+        if (strandedCount > 0) followup = 'needs_decision';
+      }
+    }
+
+    const ungraded = outcome
+      ? describeUngraded(outcome)
+      : followup === 'needs_decision'
+        ? { needs_decision: true, count: strandedCount }
+        : followup === 'settle_deferred' || (removal === 'pending' && started.choice)
+          ? { choice: started.choice, pending: true, count: started.ungradedCount }
+          : started.choice
+            ? // At stake, but the removal did not finish: nothing was moved.
+              { choice: started.choice, total: started.ungradedCount, moved: 0 }
+            : null;
+
     await writeAudit(ctx, {
       resource_type: 'STAFF',
-      resource_id: result.userId,
+      resource_id: started.userId,
       action: 'DELETE',
       data: {
         tool: 'staff_remove',
-        user_id: result.userId,
-        login: result.login,
-        role: result.role,
+        // `value` joins the audit service's 5s dedup key: removing two roles
+        // of the same person back to back must leave two rows.
+        value: `${started.role}:${started.choice ?? 'none'}`,
+        user_id: started.userId,
+        login: started.login,
+        role: started.role,
+        removal,
+        // The markers staff.previewLeftoverSlots accepts for a follow-up call.
+        ...(followup ? { [followup]: true } : {}),
+        ...(ungraded ? { ungraded_submissions: ungraded } : {}),
       },
     });
 
+    if (removal === 'failed') {
+      throw new ToolError(
+        'internal',
+        `The removal of the ${started.role} role failed in the background. Nothing was changed ` +
+          'on their ungraded submissions. Check list_teaching_team and try again.'
+      );
+    }
+
+    if (removal === 'pending') {
+      return ok({
+        success: true,
+        queued: true,
+        removal_pending: true,
+        login: started.login,
+        user_id: started.userId,
+        role: started.role,
+        ...(ungraded ? { ungraded_submissions: ungraded } : {}),
+        message: started.choice
+          ? `Removal of the ${started.role} role is still running, so their ${started.ungradedCount} ` +
+            'ungraded submissions were NOT changed. Once list_teaching_team no longer shows the ' +
+            'role, call staff_remove again with the same login, role and ungraded_submissions.'
+          : `Removal of the ${started.role} role is still running in the background.`,
+      });
+    }
+
+    const again =
+      'call staff_remove again with the same login and role and ungraded_submissions ' +
+      '(reassign, unassign or keep).';
     return ok({
       success: true,
-      queued: true,
-      login: result.login,
-      user_id: result.userId,
-      role: result.role,
-      message: `Removal of the ${result.role} role queued — removing the GitHub staff team membership (and org access if they hold no other role there) in the background.`,
+      queued: removal === 'queued',
+      ...(removal === 'completed' ? { removal_completed: true } : {}),
+      login: started.login,
+      user_id: started.userId,
+      role: started.role,
+      ...(ungraded ? { ungraded_submissions: ungraded } : {}),
+      message:
+        followup === 'needs_decision'
+          ? `Removed the ${started.role} role. Another removal finished at the same time, so they ` +
+            `are no longer a grader here and are assigned ${strandedCount} ungraded ` +
+            `submission${strandedCount === 1 ? '' : 's'}. Nothing was changed; ${again}`
+          : followup === 'settle_deferred'
+            ? `Removed the ${started.role} role, but there was no time left to move their ` +
+              `${started.ungradedCount} ungraded submissions; nothing was changed. To finish, ${again}`
+            : removal === 'completed'
+              ? `Removed the ${started.role} role.`
+              : `Removal of the ${started.role} role queued — removing the GitHub staff team membership (and org access if they hold no other role there) in the background.`,
     });
   },
 };
+
+/**
+ * The second half of a removal that could not finish settling (removal_pending,
+ * needs_decision or a deferred settle): the role is gone, a staff_remove audit
+ * row for this user and role marks the removal open (< 24h), the person keeps
+ * no grader-flagged ASSISTANT/TEACHER role here and still holds ungraded slots
+ * — so carry out the decision now. Anyone else is the same uniform not-found
+ * as any other miss. `keep` changes nothing and records nothing.
+ */
+async function settleLeftover(
+  ctx: Parameters<StaffRemoveTool['handler']>[1],
+  {
+    classroomId,
+    login,
+    role,
+    choice,
+  }: { classroomId: string; login: string; role: StaffRole; choice: UngradedChoiceArg }
+) {
+  let leftover;
+  try {
+    leftover = await ClassmojiService.staff.previewLeftoverSlots({ classroomId, login, role });
+  } catch (error) {
+    throw mapStaffError(error);
+  }
+
+  if (choice === 'keep') {
+    return ok({
+      success: true,
+      changed: false,
+      login: leftover.login,
+      user_id: leftover.userId,
+      role,
+      message: 'Nothing changed; their ungraded submissions stay assigned to them.',
+    });
+  }
+
+  const outcome = await HelperService.settleUngradedSlots({
+    classroomId,
+    graderId: leftover.userId,
+    choice,
+    departingName: leftover.name || leftover.login,
+    expectedCount: leftover.ungradedCount,
+  });
+  const ungraded = describeUngraded(outcome);
+
+  await writeAudit(ctx, {
+    resource_type: 'STAFF',
+    resource_id: leftover.userId,
+    action: 'UPDATE',
+    data: {
+      tool: 'staff_remove',
+      value: `leftover:${role}:${choice}`,
+      user_id: leftover.userId,
+      login: leftover.login,
+      role,
+      removal: 'already_done',
+      ungraded_submissions: ungraded,
+    },
+  });
+
+  return ok({
+    success: true,
+    removal_already_done: true,
+    login: leftover.login,
+    user_id: leftover.userId,
+    role,
+    ungraded_submissions: ungraded,
+    message: 'The role was already removed; their ungraded submissions have now been handled.',
+  });
+}

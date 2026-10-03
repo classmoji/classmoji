@@ -1,12 +1,15 @@
 import { Outlet, useNavigate, useLocation } from 'react-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Table, Badge, Typography, Button, Modal, Tag, Tooltip, Space, Select, Spin } from 'antd';
 import { CheckCircleOutlined, PlayCircleOutlined, TrophyOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import type { Route } from './+types/route';
 import { Countdown } from '~/components';
-import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
+import { assertClassroomAccess } from '~/utils/helpers';
+import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { formatDuration } from '~/utils/quizUtils';
+import { studentQuizAttemptView, studentQuizAttemptsSummaryView } from '~/utils/quizPayloads';
+import { useStartQuiz } from '~/components/features/quiz/useStartQuiz';
 
 const { Text } = Typography;
 
@@ -42,7 +45,8 @@ interface StudentQuiz {
   repository_id: string | null;
   include_code_context: boolean;
   dueDate: string | Date | null;
-  status: string;
+  /** Past its close date: no new attempt starts. */
+  closed: boolean;
   weight: number;
   questionCount: number;
   maxAttempts: number;
@@ -86,14 +90,12 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     attemptedAction: 'view_student_quizzes',
   });
 
-  await assertProTier(classSlug);
-
-  // Get classroom settings
-  const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
-
-  // Check if quizzes are enabled for this classroom
-  if (settings?.quizzes_enabled === false) {
-    throw new Response('Quizzes are currently disabled for this classroom', { status: 403 });
+  // A classroom without quizzes (not Pro, or switched off) has no quiz list:
+  // the URL answers like any other that names nothing, never with an upgrade
+  // or "disabled" message. A failed lookup throws to the error page rather
+  // than answering 404.
+  if (!(await quizzesVisibleOrThrow(classroom.id))) {
+    throw new Response('Not Found', { status: 404 });
   }
 
   // The service keeps its own role list, so it can disagree with the gate above
@@ -102,7 +104,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   let quizzes, user;
   try {
     [quizzes, user] = await Promise.all([
-      ClassmojiService.quiz.getQuizzesForStudent(classroom.id, userId, membership),
+      // CLOSED quizzes too: a student who finished one keeps seeing it, with
+      // its score, and one they never took reads as closed.
+      ClassmojiService.quiz.getQuizzesForStudent(classroom.id, userId, membership, {
+        includeClosed: true,
+      }),
       ClassmojiService.user.findById(userId),
     ]);
   } catch (error) {
@@ -120,22 +126,28 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       assignmentTitle: quiz.repository?.title || 'Unlinked',
       repository_id: quiz.repository_id,
       include_code_context: quiz.include_code_context,
-      dueDate: quiz.due_date,
-      status: quiz.status,
-      weight: quiz.weight,
+      // The quiz's assignment owns its due date, close date and weight where it
+      // has one, so this list shows what the Assignments page and the calendar
+      // show. A quiz in no module keeps its own (the service's `closed` reads
+      // the same way).
+      dueDate: quiz.assignment ? quiz.assignment.student_deadline : quiz.due_date,
+      closed: quiz.closed,
+      weight: quiz.assignment ? quiz.assignment.weight : quiz.weight,
       questionCount: quiz.question_count || 5,
       maxAttempts: quiz.max_attempts ?? 1,
       gradingStrategy: quiz.grading_strategy || 'HIGHEST',
 
-      // Attempt metadata from new service
+      // Attempt metadata from the service, narrowed to what this list reads —
+      // the service's attempt columns are wider (see ~/utils/quizPayloads).
       attemptCount: quiz.attemptCount || 0,
-      attempts: quiz.attempts || [],
-      attemptsSummary: quiz.attemptsSummary || {},
+      attempts: (quiz.attempts || []).map(studentQuizAttemptView),
+      attemptsSummary: studentQuizAttemptsSummaryView(quiz.attemptsSummary, quiz.max_attempts ?? 1),
 
       // Backward compatibility
       attemptStatus:
         quiz.attemptsSummary?.count > 0 ? quiz.attempts[0]?.status || 'in_progress' : null,
-      score: quiz.attemptsSummary?.currentScore || null,
+      // `??`, not `||`: a 0 is a score.
+      score: quiz.attemptsSummary?.currentScore ?? null,
     };
   });
 
@@ -149,12 +161,35 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   };
 }
 
+/**
+ * Which tab a quiz sits in. Done means a completed attempt, or a closed quiz
+ * with nothing left to resume — the same split the Assignments page makes, so
+ * a closed quiz never reads as still to do.
+ */
+const isDone = (quiz: StudentQuiz) =>
+  quiz.attempts.some(a => a.status === 'completed') ||
+  (quiz.closed && !quiz.attempts.some(a => a.status !== 'completed'));
+
 export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
   const { quizzes: rawQuizzes, org, userRole } = loaderData;
   const quizzes = rawQuizzes as unknown as StudentQuiz[];
-  const [activeTab, setActiveTab] = useState('current');
   const navigate = useNavigate();
   const location = useLocation();
+  const { startQuiz } = useStartQuiz(org ?? '');
+
+  // `?quiz=<id>` (from the Assignments page and Up next) opens the tab that
+  // holds that quiz, on the page that holds it, and highlights its row.
+  const focusQuizId = new URLSearchParams(location.search).get('quiz');
+  const focusQuiz = focusQuizId ? (quizzes.find(q => q.id === focusQuizId) ?? null) : null;
+  const [activeTab, setActiveTab] = useState(() =>
+    focusQuiz ? (isDone(focusQuiz) ? 'completed' : 'current') : 'current'
+  );
+  useEffect(() => {
+    if (!focusQuizId) return;
+    document
+      .querySelector<HTMLElement>(`[data-row-key="${CSS.escape(focusQuizId)}"]`)
+      ?.scrollIntoView({ block: 'center' });
+  }, [focusQuizId]);
 
   // Repo selection state for TAs/admins on code-aware quizzes
   const [repoModalVisible, setRepoModalVisible] = useState(false);
@@ -216,63 +251,8 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       return;
     }
 
-    // Create new attempt via API
-    try {
-      const response = await fetch('/api/quiz', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          _action: 'restartQuiz',
-          quizId: quiz!.id,
-          repoName, // Pass repo name for instructors
-        }),
-      });
-
-      const result = await response.json();
-
-      if (!result.success) {
-        // If there's an incomplete attempt, offer to resume it
-        if (result.reason === 'incomplete_attempt_exists' && result.existingAttemptId) {
-          Modal.confirm({
-            title: 'Resume or Start New?',
-            content: 'You have an in-progress attempt. Would you like to resume it?',
-            okText: 'Resume',
-            cancelText: 'Cancel',
-            onOk: () => {
-              navigate(
-                `/${rolePrefix}/${org}/quizzes/${quiz!.id}/attempt/${result.existingAttemptId}`
-              );
-            },
-          });
-          return;
-        }
-        Modal.error({
-          title: 'Cannot Start Quiz',
-          content: result.message,
-        });
-        return;
-      }
-
-      // Start the quiz
-      await fetch('/api/quiz', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          _action: 'startQuiz',
-          quizId: quiz!.id,
-          attemptId: result.attemptId,
-        }),
-      });
-
-      // Navigate to the new attempt
-      navigate(`/${rolePrefix}/${org}/quizzes/${quiz!.id}/attempt/${result.attemptId}`);
-    } catch (error: unknown) {
-      console.error('Error creating new attempt:', error);
-      Modal.error({
-        title: 'Error',
-        content: 'Failed to create new attempt. Please try again.',
-      });
-    }
+    // restartQuiz → startQuiz → open the attempt (shared with Up next).
+    await startQuiz(quiz!.id, repoName);
   };
 
   const handleRepoSelected = () => {
@@ -301,17 +281,18 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
 
   // Filter functions for different tabs
   const filterQuizzes = (quizzes: StudentQuiz[], tab: string) => {
-    const publishedQuizzes = quizzes.filter(q => q.status === 'PUBLISHED');
-
+    // The service lists what this viewer may see (open quizzes, and closed
+    // ones, which read as closed), so nothing is filtered here but the tab.
     switch (tab) {
       case 'current':
-        // Current = not yet completed (available, in-progress, or overdue)
-        return publishedQuizzes.filter(q => !q.attempts.some(a => a.status === 'completed'));
+        // Current = still to do (available, in progress, or overdue)
+        return quizzes.filter(q => !isDone(q));
       case 'completed':
-        return publishedQuizzes.filter(q => q.attempts.some(a => a.status === 'completed'));
+        // Completed, or closed with nothing left to resume
+        return quizzes.filter(isDone);
       case 'all':
       default:
-        return publishedQuizzes;
+        return quizzes;
     }
   };
 
@@ -372,6 +353,9 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
         key: 'timeSpent',
         width: 150,
         render: (_: unknown, record: QuizAttempt) => {
+          // An unfinished attempt has no settled duration or focus share yet;
+          // showing one reads as a finished attempt spent unfocused.
+          if (record.status !== 'completed') return <Text type="secondary">In progress</Text>;
           if (!record.focusMetrics) return <Text type="secondary">-</Text>;
 
           const { percentage, focusedMs, totalMs } = record.focusMetrics;
@@ -388,7 +372,6 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
               <Space size="small">
                 <Text type="secondary" style={{ fontSize: '12px' }}>
                   {timeStr}
-                  can{' '}
                 </Text>
                 <Tag color={color} style={{ fontSize: '11px', margin: 0 }}>
                   {clampedPercentage}%
@@ -457,6 +440,11 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       render: (name: string, record: StudentQuiz) => (
         <Space>
           <span className="font-medium text-ink-1">{name}</span>
+          {record.closed && (
+            <Tooltip title="This quiz takes no new attempts">
+              <Tag style={{ fontSize: '11px', margin: 0 }}>Closed</Tag>
+            </Tooltip>
+          )}
           {record.weight === 0 && (
             <Tooltip title="This quiz won't affect your grade">
               <Tag color="gold" style={{ fontSize: '11px', margin: 0 }}>
@@ -519,15 +507,17 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       key: 'actions',
       width: 200,
       render: (_: unknown, record: StudentQuiz) => {
-        const isPublished = record.status === 'PUBLISHED';
+        const isOpen = !record.closed;
         const { canCreateNew, count, maxAttempts } = record.attemptsSummary;
         const hasUnlimited = record.maxAttempts === 0;
 
-        const tooltipTitle = hasUnlimited
-          ? 'Start a new attempt (unlimited)'
-          : canCreateNew
-            ? `Start attempt ${count + 1} of ${maxAttempts}`
-            : `Maximum attempts reached (${maxAttempts})`;
+        const tooltipTitle = !isOpen
+          ? 'This quiz is closed'
+          : hasUnlimited
+            ? 'Start a new attempt (unlimited)'
+            : canCreateNew
+              ? `Start attempt ${count + 1} of ${maxAttempts}`
+              : `Maximum attempts reached (${maxAttempts})`;
 
         return (
           <Tooltip title={tooltipTitle}>
@@ -535,7 +525,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
               type="primary"
               size="small"
               icon={<PlayCircleOutlined />}
-              disabled={!isPublished || !canCreateNew}
+              disabled={!isOpen || !canCreateNew}
               onClick={() => handleNewAttempt(record)}
             >
               New Attempt
@@ -547,20 +537,23 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
   ];
 
   // Calculate counts for tabs
-  const publishedQuizzes = quizzes.filter(q => q.status === 'PUBLISHED');
+  const allQuizzes = filterQuizzes(quizzes, 'all');
   const currentCount = filterQuizzes(quizzes, 'current').length;
   const completedCount = filterQuizzes(quizzes, 'completed').length;
 
   const tabs = [
     { key: 'current', label: 'Current', count: currentCount },
     { key: 'completed', label: 'Completed', count: completedCount },
-    { key: 'all', label: 'All', count: publishedQuizzes.length },
+    { key: 'all', label: 'All', count: allQuizzes.length },
   ];
 
   const dataSource =
-    activeTab === 'all'
-      ? publishedQuizzes
-      : filterQuizzes(quizzes, activeTab as 'current' | 'completed');
+    activeTab === 'all' ? allQuizzes : filterQuizzes(quizzes, activeTab as 'current' | 'completed');
+
+  // Open on the page that holds the highlighted quiz.
+  const pageSize = activeTab === 'all' ? 50 : 25;
+  const focusIndex = focusQuizId ? dataSource.findIndex(q => q.id === focusQuizId) : -1;
+  const defaultPage = focusIndex >= 0 ? Math.floor(focusIndex / pageSize) + 1 : 1;
 
   const emptyText =
     activeTab === 'current' ? (
@@ -629,7 +622,8 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
           rowHoverable={false}
           size="small"
           scroll={{ x: 'max-content' }}
-          pagination={{ pageSize: activeTab === 'all' ? 50 : 25 }}
+          pagination={{ pageSize, defaultCurrent: defaultPage }}
+          rowClassName={record => (record.id === focusQuizId ? '[&>td]:bg-accent-soft!' : '')}
           expandable={{
             expandedRowRender: renderAttempts,
             rowExpandable: record => record.attemptCount > 0,

@@ -578,3 +578,57 @@ describe('saveDeckWithMerge — CAS retry', () => {
     expect(uploadBatchMock).not.toHaveBeenCalled();
   });
 });
+
+describe('saveDeckWithMerge — media references the editor holds signed', () => {
+  const CLASSROOM_ID = '11111111-2222-3333-4444-555555555555';
+  const MEDIA_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const ORIGIN = 'https://content.example.test';
+  const REF = `media://${MEDIA_ID}`;
+  const SIGNED = `${ORIGIN}/c/${CLASSROOM_ID}/media/${MEDIA_ID}/orig.mp4?e=1&k=0&t=edit&s=abc`;
+  const mediaSlide = {
+    ...slide,
+    classroom: {
+      ...slide.classroom,
+      id: CLASSROOM_ID,
+      content_key_version: 0,
+      content_delivery_enabled: true,
+    },
+  };
+
+  it('does not read a signed media URL as an edit to the slide it sits on', async () => {
+    const previousOrigin = process.env.CONTENT_DELIVERY_ORIGIN;
+    process.env.CONTENT_DELIVERY_ORIGIN = ORIGIN;
+    try {
+      const video = (src: string) => `<video src="${src}" controls></video>`;
+      primeSave({
+        base: deckWith([
+          { id: 'aaa', html: '<p>one</p>' },
+          { id: 'bbb', html: video(REF) },
+        ]),
+        // Somebody else edited the video slide meanwhile.
+        ours: deckWith([
+          { id: 'aaa', html: '<p>one</p>' },
+          { id: 'bbb', html: `<h2>Watch this</h2>${video(REF)}` },
+        ]),
+      });
+      // The editor edited aaa and never touched bbb — but holds its video signed.
+      const theirs = deckWith([
+        { id: 'aaa', html: '<h1>My edit</h1>' },
+        { id: 'bbb', html: video(SIGNED) },
+      ]);
+
+      const result = await saveDeckWithMerge({ slide: mediaSlide, theirs, baseSha: BASE_SHA });
+
+      expect(result).toMatchObject({ merged: true });
+      const { deck } = batchCall();
+      expect(deck?.slides.map(s => s.html)).toEqual([
+        '<h1>My edit</h1>',
+        `<h2>Watch this</h2>${video(REF)}`,
+      ]);
+      expect(JSON.stringify(deck)).not.toContain(SIGNED);
+    } finally {
+      if (previousOrigin === undefined) delete process.env.CONTENT_DELIVERY_ORIGIN;
+      else process.env.CONTENT_DELIVERY_ORIGIN = previousOrigin;
+    }
+  });
+});

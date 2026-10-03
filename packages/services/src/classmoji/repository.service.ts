@@ -1,6 +1,7 @@
 import getPrisma from '@classmoji/database';
-import { titleToIdentifier } from '@classmoji/utils';
+import { resolveTemplateRef, titleToIdentifier } from '@classmoji/utils';
 import type { RepositoryType, Prisma } from '@prisma/client';
+import { getGitProvider } from '../git/index.ts';
 import * as notificationService from './notification.service.ts';
 
 interface RepositoryQueryOptions {
@@ -31,6 +32,29 @@ export const findById = async (id: string) => {
     include: {
       assignments: true,
       classroom: true,
+      tag: true,
+    },
+  });
+};
+
+/**
+ * Find a Repository of one classroom by id.
+ *
+ * Returns null — without querying — when either id is not a non-empty string;
+ * see `assertScopedIds` below for why an unchecked value cannot stand in the
+ * `where`. Unlike `findById` it does not include the classroom row.
+ *
+ * @param {unknown} id - UUID of the Repository (may come from a request)
+ * @param {string} classroomId - UUID of the authorized Classroom
+ */
+export const findByIdInClassroom = async (id: unknown, classroomId: string) => {
+  if (typeof id !== 'string' || !id) return null;
+  if (typeof classroomId !== 'string' || !classroomId) return null;
+
+  return getPrisma().repository.findFirst({
+    where: { id, classroom_id: classroomId },
+    include: {
+      assignments: true,
       tag: true,
     },
   });
@@ -237,6 +261,9 @@ const assertScopedIds = (id: unknown, classroomId: unknown): void => {
   if (typeof classroomId !== 'string' || !classroomId) throw new Error('Invalid classroom id');
 };
 
+/** Columns `update` never writes, whatever the caller passes. */
+const IMMUTABLE_REPOSITORY_FIELDS = ['id', 'classroom_id', 'slug', 'title'] as const;
+
 /**
  * Update a Repository.
  *
@@ -249,14 +276,24 @@ const assertScopedIds = (id: unknown, classroomId: unknown): void => {
  */
 export const update = async (
   id: string,
-  updates: Prisma.RepositoryUpdateManyMutationInput,
+  // Unchecked so the tag_id FK scalar is writable.
+  updates: Omit<
+    Prisma.RepositoryUncheckedUpdateManyInput,
+    (typeof IMMUTABLE_REPOSITORY_FIELDS)[number]
+  >,
   classroomId: string
 ) => {
   assertScopedIds(id, classroomId);
 
+  // Stripped at RUNTIME as well as by the type: a JS caller or a cast would
+  // otherwise move the row to another classroom or rename it (the slug and the
+  // title are what provisioned git repo names derive from).
+  const data: Record<string, unknown> = { ...updates };
+  for (const field of IMMUTABLE_REPOSITORY_FIELDS) delete data[field];
+
   const { count } = await getPrisma().repository.updateMany({
     where: { id, classroom_id: classroomId },
-    data: updates,
+    data: data as Prisma.RepositoryUncheckedUpdateManyInput,
   });
   if (count !== 1) throw new Error('Repository not found in classroom');
 
@@ -270,27 +307,104 @@ export const update = async (
 };
 
 /**
+ * The Repository columns the repository form (admin.$class.repos_.form) edits,
+ * and so the only ones `createFromFormData` / `updateFromForm` will write. They
+ * are exactly the form schema's fields (schema.ts) minus the ones the route
+ * handles itself: `id` (the target), `tag` (becomes tag_id, checked against the
+ * classroom) and `organization` (display only). Anything else in a submitted
+ * body — classroom_id, slug, is_published, … — is ignored.
+ *
+ * `title` is editable in the form and stays editable; `slug` is set once on
+ * create and never follows it.
+ */
+export const REPOSITORY_FORM_FIELDS = [
+  'title',
+  'type',
+  'template',
+  'description',
+  'team_formation_mode',
+  'team_formation_deadline',
+  'max_team_size',
+  'project_template_id',
+  'project_template_title',
+] as const;
+
+/**
+ * The form-owned columns of a submitted form body, ready for Prisma: absent
+ * fields are left out, and the team formation deadline (sent as an ISO string)
+ * becomes a Date.
+ */
+export const pickRepositoryFormFields = (
+  values: Record<string, unknown>
+): Record<string, unknown> => {
+  const data: Record<string, unknown> = {};
+  for (const field of REPOSITORY_FORM_FIELDS) {
+    if (values[field] !== undefined) data[field] = values[field];
+  }
+  const deadline = data.team_formation_deadline;
+  if (deadline && !(deadline instanceof Date)) {
+    data.team_formation_deadline = new Date(deadline as string);
+  }
+  return data;
+};
+
+/**
+ * Create-data for a Repository from a repository-form body: the form-owned
+ * columns only, in the given classroom, with the given tag. The caller has
+ * already checked that the tag belongs to that classroom.
+ */
+export const createFromFormData = (
+  values: Record<string, unknown>,
+  classroomId: string,
+  tagId: string | null
+): RepositoryCreateInput =>
+  ({
+    ...pickRepositoryFormFields(values),
+    classroom_id: classroomId,
+    tag_id: tagId,
+  }) as RepositoryCreateInput;
+
+/**
  * Update a Repository from the repository form. Assignments are managed on
  * the module page, not here.
- * @param {Object} values - Update values
- * @returns {Promise<Object>}
+ *
+ * Scoped to `classroomId` like `update`: the write is an `updateMany` on
+ * (id, classroom_id), so a repository of another classroom is never touched —
+ * a count other than 1 throws 'Repository not found in classroom'. Only the
+ * form-owned columns (REPOSITORY_FORM_FIELDS) are written. As before, the tag
+ * is applied only to a GROUP repository, and only when one is given; it must
+ * be a tag of this classroom ('Tag not found in classroom' otherwise).
+ *
+ * @param {Object} values - The form body: id, the form fields, and tag
+ * @param {string} classroomId - UUID of the authorized Classroom
+ * @returns {Promise<Object>} The updated repository with assignments and tag
  */
-export const updateFromForm = async (values: RepositoryUpdateValues) => {
-  const { id, tag, ...updateData } = values;
+export const updateFromForm = async (values: RepositoryUpdateValues, classroomId: string) => {
+  const { id, tag } = values;
+  assertScopedIds(id, classroomId);
 
-  // Coerce repository-level dates
-  if (updateData.team_formation_deadline && !(updateData.team_formation_deadline instanceof Date)) {
-    updateData.team_formation_deadline = new Date(updateData.team_formation_deadline);
+  const applyTag = values.type === 'GROUP' && Boolean(tag);
+  if (applyTag) {
+    const owned = await getPrisma().tag.findFirst({
+      where: { id: String(tag), classroom_id: classroomId },
+      select: { id: true },
+    });
+    if (!owned) throw new Error('Tag not found in classroom');
   }
 
-  const repositoryUpdateData = {
-    ...(updateData as Prisma.RepositoryUncheckedUpdateInput),
-    ...(updateData.type === 'GROUP' && tag && { tag_id: tag }),
-  } satisfies Prisma.RepositoryUncheckedUpdateInput;
+  const data = {
+    ...pickRepositoryFormFields(values),
+    ...(applyTag ? { tag_id: String(tag) } : {}),
+  } as Prisma.RepositoryUncheckedUpdateManyInput;
 
-  return getPrisma().repository.update({
-    where: { id },
-    data: repositoryUpdateData,
+  const { count } = await getPrisma().repository.updateMany({
+    where: { id, classroom_id: classroomId },
+    data,
+  });
+  if (count !== 1) throw new Error('Repository not found in classroom');
+
+  return getPrisma().repository.findFirst({
+    where: { id, classroom_id: classroomId },
     include: { assignments: true, tag: true },
   });
 };
@@ -321,6 +435,41 @@ export const deleteById = async (id: string, classroomId: string) => {
   });
   if (count !== 1) throw new Error('Repository not found in classroom');
   return { id };
+};
+
+/**
+ * Delete a Repository ONLY if it is still unpublished and nothing has been
+ * provisioned from it — the conditions are part of the DELETE itself, so a
+ * publish or a provisioned GitRepo landing between a caller's checks and this
+ * write cannot slip through. Scoped exactly like `deleteById`.
+ *
+ * Never throws for a refused delete; it reports why, re-reading the row only
+ * when nothing was deleted:
+ *   - `deleted`     — the row is gone (and its cascade with it);
+ *   - `not_found`   — no such repository in this classroom (any more);
+ *   - `published`   — it is published;
+ *   - `provisioned` — student/team git repos exist (`gitRepos` of them).
+ */
+export const deleteIfUnprovisioned = async (
+  id: string,
+  classroomId: string
+): Promise<
+  { status: 'deleted' | 'not_found' | 'published' } | { status: 'provisioned'; gitRepos: number }
+> => {
+  assertScopedIds(id, classroomId);
+
+  const { count } = await getPrisma().repository.deleteMany({
+    where: { id, classroom_id: classroomId, is_published: false, git_repos: { none: {} } },
+  });
+  if (count === 1) return { status: 'deleted' };
+
+  const row = await getPrisma().repository.findFirst({
+    where: { id, classroom_id: classroomId },
+    select: { is_published: true, _count: { select: { git_repos: true } } },
+  });
+  if (!row) return { status: 'not_found' };
+  if (row.is_published) return { status: 'published' };
+  return { status: 'provisioned', gitRepos: row._count.git_repos };
 };
 
 /**
@@ -407,12 +556,130 @@ export const findWithStudentStatus = async (classroomId: string, studentId: stri
   });
 };
 
+/**
+ * What hangs off a repository, read inside the authorized classroom: its
+ * assignments (id + title) and counts of every dependent row. Returns null when
+ * the id is not a repository of `classroomId`.
+ *
+ * `git_repos` > 0 means student/team copies were provisioned from it, which is
+ * what freezes its structural fields and blocks a delete. The other counts are
+ * the blast radius of a delete: assignments, module items, page/slide links and
+ * autograding tests cascade with the repository; quizzes are unlinked (SET NULL).
+ * Each assignment carries its own link counts (page/slide links and calendar
+ * event links), which cascade with the assignment. A link row targets a
+ * repository OR an assignment, never both (resourceLink.service), so the
+ * repository-level and assignment-level counts do not overlap.
+ *
+ * `classroomId` is REQUIRED and part of the query — see `deleteById`.
+ */
+export const findDependents = async (id: string, classroomId: string) => {
+  assertScopedIds(id, classroomId);
+
+  return getPrisma().repository.findFirst({
+    where: { id, classroom_id: classroomId },
+    select: {
+      id: true,
+      assignments: {
+        select: {
+          id: true,
+          title: true,
+          _count: { select: { pages: true, slides: true, calendarEventLinks: true } },
+        },
+        orderBy: { title: 'asc' },
+      },
+      _count: {
+        select: {
+          git_repos: true,
+          module_items: true,
+          pages: true,
+          slides: true,
+          quizzes: true,
+          autograding_tests: true,
+        },
+      },
+    },
+  });
+};
+
 /** Prove a repository belongs to the classroom, or throw. */
 export const assertInClassroom = async (repositoryId: string, classroomId: string) => {
+  assertScopedIds(repositoryId, classroomId);
   const repository = await getPrisma().repository.findFirst({
     where: { id: repositoryId, classroom_id: classroomId },
     select: { id: true },
   });
   if (!repository) throw new Error('Repository not found in classroom');
   return repository;
+};
+
+export type TemplateCheck =
+  | { ok: true }
+  | { ok: false; reason: 'TEMPLATE_EMPTY' | 'TEMPLATE_UNREACHABLE'; error: string };
+
+/**
+ * Whether a repository's template can be used to provision student copies,
+ * checked when the instructor publishes (or picks a template) rather than once
+ * per student later, in background runs nobody watches.
+ *
+ * Refused: no template at all (provisioning cannot name a repository to clone),
+ * and, on Github, a template the classroom's app installation cannot see (404:
+ * deleted, renamed away, or private to an account the app cannot read). One
+ * `GET /repos` with the installation token, through `repositoryExists`.
+ *
+ * A template that exists but has no commits is fine: provisioning seeds it from
+ * the shared empty template. Gitlab has no repository read yet (and no template
+ * provisioning), so only the empty case is checked there. Any other failure
+ * (rate limit, outage, a missing installation) is logged and lets the publish
+ * through: this check catches a bad template, it does not make publishing
+ * depend on Github being up.
+ */
+export const checkTemplate = async (
+  template: string | null | undefined,
+  classroomId: string
+): Promise<TemplateCheck> => {
+  const classroom = await getPrisma().classroom.findUnique({
+    where: { id: classroomId },
+    select: {
+      git_organization: {
+        select: {
+          provider: true,
+          login: true,
+          github_installation_id: true,
+          access_token: true,
+          base_url: true,
+        },
+      },
+    },
+  });
+  const gitOrg = classroom?.git_organization ?? null;
+
+  // Same resolution provisioning uses: a bare name lives in the classroom org.
+  const ref = resolveTemplateRef(template, gitOrg?.login);
+  if (!ref) {
+    return {
+      ok: false,
+      reason: 'TEMPLATE_EMPTY',
+      error: 'This repository has no template repository. Choose one before publishing.',
+    };
+  }
+
+  if (!gitOrg || gitOrg.provider !== 'GITHUB') return { ok: true };
+
+  let exists: boolean;
+  try {
+    exists = await getGitProvider(gitOrg).repositoryExists(ref.owner, ref.repo);
+  } catch (error: unknown) {
+    console.warn(`[repository] could not check template ${ref.owner}/${ref.repo}:`, error);
+    return { ok: true };
+  }
+  if (exists) return { ok: true };
+
+  return {
+    ok: false,
+    reason: 'TEMPLATE_UNREACHABLE',
+    error:
+      `The template repository ${ref.owner}/${ref.repo} can't be found on Github. ` +
+      "It may have been deleted or renamed, or the Classmoji Github app can't access it. " +
+      'Choose another template repository.',
+  };
 };

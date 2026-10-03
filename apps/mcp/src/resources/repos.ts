@@ -8,7 +8,11 @@
  *
  * repos (any member — mirrors student.$class.repos allowedRoles):
  *   - Staff see every container + assignment incl. unpublished
- *     (repository.findByClassroomId, as the admin repos loader does).
+ *     (repository.findByClassroomId, as the admin repos loader does), with
+ *     every field repo_update edits (template, team settings, tag_id, project
+ *     template) — staff view only; the student view does not carry them. Each
+ *     assignment also names the module it belongs to (`module_id`, the value
+ *     assignment_update moves), staff view only for the same reason.
  *   - Students see only is_published containers with is_published assignments
  *     (repository.findPublished), further narrowed — as the student route
  *     does — to containers they own a GitRepo for, each assignment annotated
@@ -29,6 +33,7 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
+import { effectiveTokensPerHour } from '@classmoji/utils';
 import type { ResourceDefinition, ToolContext } from '../mcp/registry.ts';
 import {
   MEMBER,
@@ -44,6 +49,7 @@ import {
 
 interface AssignmentRow {
   id: string;
+  module_id?: string | null;
   title: string;
   slug?: string | null;
   weight: number;
@@ -52,7 +58,8 @@ interface AssignmentRow {
   description?: string;
   student_deadline?: Date | null;
   grader_deadline?: Date | null;
-  tokens_per_hour: number;
+  /** Empty = the classroom's default price. */
+  tokens_per_hour: number | null;
   release_at?: Date | null;
   grades_released: boolean;
 }
@@ -64,10 +71,15 @@ interface RepositoryRow {
   description?: string | null;
   is_published: boolean;
   type: string;
+  template?: string | null;
+  tag_id?: string | null;
   team_formation_mode?: string | null;
+  team_formation_deadline?: Date | null;
   max_team_size?: number | null;
+  project_template_id?: string | null;
+  project_template_title?: string | null;
   assignments: AssignmentRow[];
-  tag?: { name?: string | null } | null;
+  tag?: { id?: string; name?: string | null } | null;
 }
 
 /** The viewer's own GitRepoAssignments in this classroom (individual + team). */
@@ -92,13 +104,27 @@ export const reposResource: ResourceDefinition = {
   title: 'Assignment containers (repos)',
   description:
     'Assignment containers ("repos") with their due-dated assignments. Staff see all incl. ' +
-    'unpublished; students see published-only containers they have a git repo for, with their ' +
-    'own submission status per assignment (grades only after release).',
+    'unpublished, each assignment with the module_id it belongs to; students see published-only ' +
+    'containers they have a git repo for, with their own submission status per assignment ' +
+    '(grades only after release).',
   scope: 'read',
   roles: MEMBER,
   handler: async (_vars, ctx) => {
     const { classroomId, role, classroom } = classroomCtx(ctx);
     const staff = isStaff(role);
+    // An assignment without its own extension price pays the classroom's.
+    // tokens_per_hour stays the assignment's own value (null = follows the
+    // classroom), the same as every other tool reports and assignment_update
+    // writes, so reading it back and writing it never pins the classroom's
+    // price onto the assignment. effective_tokens_per_hour is what one hour
+    // actually costs.
+    const classroomTokensPerHour =
+      (classroom as unknown as { settings?: { default_tokens_per_hour?: number } | null }).settings
+        ?.default_tokens_per_hour ?? 0;
+    const price = (own: number | null) => ({
+      tokens_per_hour: own,
+      effective_tokens_per_hour: effectiveTokensPerHour(own, classroomTokensPerHour),
+    });
 
     if (!staff) {
       const settings = (classroom as unknown as { settings?: { show_repos?: boolean } | null })
@@ -121,13 +147,24 @@ export const reposResource: ResourceDefinition = {
           description: r.description ?? null,
           type: r.type,
           is_published: r.is_published,
+          // Everything repo_update edits, so an agent can read before it writes.
+          template: r.template ?? null,
           team_formation_mode: r.team_formation_mode ?? null,
+          team_formation_deadline: r.team_formation_deadline ?? null,
           max_team_size: r.max_team_size ?? null,
+          project_template_id: r.project_template_id ?? null,
+          project_template_title: r.project_template_title ?? null,
+          // `tag` stays the name (existing shape); `tag_id` is what the write
+          // tools take.
           tag: r.tag?.name ?? null,
+          tag_id: r.tag_id ?? null,
           assignments: r.assignments.map(a => ({
             id: a.id,
             title: a.title,
             slug: a.slug ?? null,
+            // The module the assignment lives in (see list_modules);
+            // assignment_update with module_id moves it.
+            module_id: a.module_id ?? null,
             weight: a.weight,
             is_extra_credit: a.is_extra_credit ?? false,
             is_published: a.is_published,
@@ -135,7 +172,7 @@ export const reposResource: ResourceDefinition = {
             grader_deadline: a.grader_deadline ?? null,
             release_at: a.release_at ?? null,
             grades_released: a.grades_released,
-            tokens_per_hour: a.tokens_per_hour,
+            ...price(a.tokens_per_hour),
           })),
         })),
       };
@@ -172,7 +209,7 @@ export const reposResource: ResourceDefinition = {
               is_extra_credit: a.is_extra_credit ?? false,
               student_deadline: a.student_deadline ?? null,
               grades_released: a.grades_released,
-              tokens_per_hour: a.tokens_per_hour,
+              ...price(a.tokens_per_hour),
               my_submission: mine
                 ? {
                     id: mine.id,

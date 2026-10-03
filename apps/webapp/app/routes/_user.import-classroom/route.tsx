@@ -11,6 +11,7 @@ import StepSelectClassrooms from './StepSelectClassrooms';
 import StepReview from './StepReview';
 import { parseExportBundle, slugify, type ParsedBundle } from './utils';
 import type { Route } from './+types/route';
+import { browserTimeZone } from '~/utils/browserTimeZone';
 
 const STEPS = [{ title: 'Upload' }, { title: 'Select' }, { title: 'Review' }];
 
@@ -74,9 +75,12 @@ const ImportClassroom = () => {
     notify(ActionTypes.IMPORT_CLASSROOM, 'Importing classrooms…');
     // Cast for the JSON submit: our deeply-nested typed payload isn't structurally
     // a React Router `JsonValue` (no index signature), but it serializes cleanly.
-    const submitTarget = { classrooms: payload } as unknown as Parameters<
-      NonNullable<typeof fetcher>['submit']
-    >[0];
+    // The importer's browser zone seeds each imported course's time zone
+    // (validated on the server; editable later in General settings).
+    const submitTarget = {
+      classrooms: payload,
+      timezone: browserTimeZone(),
+    } as unknown as Parameters<NonNullable<typeof fetcher>['submit']>[0];
     fetcher!.submit(submitTarget, {
       method: 'post',
       action: '/import-classroom',

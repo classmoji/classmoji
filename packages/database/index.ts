@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import dayjs, { type Dayjs } from 'dayjs';
 import { createOneShotShutdown } from '@classmoji/utils';
 
@@ -20,8 +20,61 @@ const calculateLateHours = (
 ): number => {
   let totalHoursLate = dayjs(closedAt || dayjs()).diff(studentDeadline, 'hours');
   totalHoursLate = Math.max(totalHoursLate, 0);
-  return totalHoursLate - calculateExtensionHours(tokenTransactions);
+  // Never negative: hours bought beyond the lateness (ahead of the deadline,
+  // say) are spare, not a credit.
+  return Math.max(totalHoursLate - calculateExtensionHours(tokenTransactions), 0);
 };
+
+/** The deadline pushed out by the extension hours bought with tokens. */
+const extendedDeadline = (
+  studentDeadline: Date | Dayjs | string | undefined,
+  tokenTransactions: TokenTransaction[] | undefined
+): Dayjs =>
+  dayjs(studentDeadline).add(Math.max(calculateExtensionHours(tokenTransactions ?? []), 0), 'hour');
+
+const DEFAULT_AVATAR_URL = 'https://cdn-icons-png.flaticon.com/512/25/25231.png';
+
+/**
+ * Loads a user's git identity (Github / GitLab username, id, avatar) from their
+ * Account rows. Include it wherever a user's git username is needed and read it
+ * with `gitUsername` / `withLogin` / `withLogins` from `@classmoji/utils`.
+ * Never selects tokens or password hashes, so results are safe to serialize.
+ */
+export const GIT_IDENTITY = {
+  accounts: {
+    where: { provider_id: { in: ['github', 'gitlab'] } },
+    select: {
+      provider_id: true,
+      account_id: true,
+      username: true,
+      image: true,
+      email: true,
+    },
+  },
+} satisfies Prisma.UserInclude;
+
+/** `where` filter: users whose `provider` username is `username` (case-insensitive). */
+export const whereGitUsername = (
+  username: string,
+  provider: string | null = 'GITHUB'
+): Prisma.UserWhereInput => ({
+  accounts: {
+    some: {
+      provider_id: (provider || 'GITHUB').toLowerCase(),
+      username: { equals: username, mode: 'insensitive' },
+    },
+  },
+});
+
+/** `where` filter: users whose `provider` username is any of `usernames` (exact). */
+export const whereGitUsernameIn = (
+  usernames: string[],
+  provider: string | null = 'GITHUB'
+): Prisma.UserWhereInput => ({
+  accounts: {
+    some: { provider_id: (provider || 'GITHUB').toLowerCase(), username: { in: usernames } },
+  },
+});
 
 function createPrismaClient() {
   const basePrisma = new PrismaClient();
@@ -33,12 +86,9 @@ function createPrismaClient() {
     result: {
       user: {
         avatar_url: {
-          needs: { provider_id: true },
-          compute(user: { provider_id: string | null }) {
-            if (!user.provider_id) {
-              return 'https://cdn-icons-png.flaticon.com/512/25/25231.png';
-            }
-            return `https://avatars.githubusercontent.com/u/${user.provider_id}?v=4`;
+          needs: { image: true },
+          compute(user: { image: string | null }) {
+            return user.image || DEFAULT_AVATAR_URL;
           },
         },
       },
@@ -114,7 +164,13 @@ function createPrismaClient() {
             const studentDeadline = dayjs(repoAssignment.assignment?.student_deadline);
 
             if (!studentDeadline.isValid()) return false;
-            if (!repoAssignment.closed_at) return dayjs().isAfter(studentDeadline);
+            // Not submitted yet: late once the deadline, plus any hours bought
+            // (they can be bought ahead of it), has passed.
+            if (!repoAssignment.closed_at) {
+              return dayjs().isAfter(
+                extendedDeadline(studentDeadline, repoAssignment.token_transactions)
+              );
+            }
 
             return (
               calculateLateHours(
@@ -139,10 +195,16 @@ function createPrismaClient() {
             grades: unknown[];
             status: string;
             is_late_override: boolean;
+            token_transactions?: TokenTransaction[];
           }) {
-            const hasDeadlinePassed = dayjs(repoAssignment.assignment?.student_deadline).isBefore(
-              dayjs()
-            );
+            // Hours bought with tokens push the deadline out, so missing work
+            // is not a zero inside that window. `token_transactions` is read
+            // when the query loaded it and is deliberately not in `needs`: a
+            // query without it still gets this field, on the plain deadline.
+            const hasDeadlinePassed = extendedDeadline(
+              repoAssignment.assignment?.student_deadline,
+              repoAssignment.token_transactions
+            ).isBefore(dayjs());
             const isOpen = repoAssignment.status === 'OPEN';
             return (
               hasDeadlinePassed &&

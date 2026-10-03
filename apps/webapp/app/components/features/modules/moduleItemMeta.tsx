@@ -10,13 +10,21 @@ import type { FormAccess, FormStatus, ModuleItemType } from '@prisma/client';
 import { formatCloseDate } from './ReadOnlyModulesTree';
 
 /**
- * The item types the "Add item" picker offers. Repositories are not module
- * members at all (a REPO assignment points at one); legacy REPOSITORY rows are
- * kept in the data but no longer rendered.
+ * The item types a module's content list may carry. Repositories are not
+ * module members at all (a REPO assignment points at one); legacy REPOSITORY
+ * rows are kept in the data but no longer rendered.
  */
 export type ContentItemType = Exclude<ModuleItemType, 'REPOSITORY'>;
 
-export const CONTENT_TYPES: ContentItemType[] = ['PAGE', 'SLIDE', 'QUIZ', 'FORM'];
+/**
+ * The types the "Add item" picker offers. Not QUIZ: a quiz is placed in a
+ * module by its assignment, from the quiz form (legacy QUIZ items are kept in
+ * the data but no longer written or rendered).
+ */
+export const CONTENT_TYPES: ContentItemType[] = ['PAGE', 'SLIDE', 'FORM'];
+
+/** The types a picker may offer, the same with or without quizzes. */
+export const contentTypesFor = (_quizzesVisible: boolean): ContentItemType[] => CONTENT_TYPES;
 
 /**
  * Compile-time exhaustiveness guard for the switches over ModuleItemType,

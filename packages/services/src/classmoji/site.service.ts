@@ -6,8 +6,10 @@ import {
   normalizeCustomDomain,
   isValidCustomDomain,
   isPlatformDomain,
+  openToStudents,
 } from '@classmoji/utils';
 import { isItemPublished, isItemPubliclyVisible } from './module.service.ts';
+import * as entitlementService from './entitlement.service.ts';
 import { getProStateForClassroomId } from './subscription.service.ts';
 import { removeCert, isFlyCertsConfigured } from '../fly/index.ts';
 import type { ModuleItemType, Prisma, Role } from '@prisma/client';
@@ -49,8 +51,6 @@ export const SITE_ERROR = {
   DOMAIN_TAKEN: 'DOMAIN_TAKEN',
   /** Custom domains are a PRO feature and this classroom is not on PRO. */
   PRO_REQUIRED: 'PRO_REQUIRED',
-  /** Not an IANA zone name this runtime's tz data knows. */
-  TIMEZONE_INVALID: 'TIMEZONE_INVALID',
 } as const;
 
 export type SiteErrorCode = (typeof SITE_ERROR)[keyof typeof SITE_ERROR];
@@ -275,41 +275,10 @@ export type SiteSettingsInput = {
   is_enabled?: boolean;
   home_page_id?: string | null;
   show_schedule?: boolean;
-  /** IANA zone name; `null` clears it back to the UTC fallback. */
-  timezone?: string | null;
+  // No `timezone` any more: the course zone is a classroom setting
+  // (classroom.updateSettings / getTimeZone), and classroom_sites.timezone is
+  // deprecated. The public schedule reads the classroom setting.
 };
-
-/**
- * The canonical form of an IANA zone name, or null if this runtime has never
- * heard of it.
- *
- * Asks Intl to BUILD a formatter rather than checking membership in
- * `Intl.supportedValuesOf('timeZone')`, and the difference matters. The
- * schedule renders through `dayjs.utc(...).tz(zone)`, which is Intl underneath,
- * so "Intl can format with this" is precisely the invariant that has to hold —
- * whereas the supported-values list omits aliases (`Etc/UTC`, `US/Eastern`) and
- * its exact contents move with the ICU build. Validating against the list would
- * refuse zones that would have rendered perfectly well.
- *
- * The RESOLVED name is what comes back, not the caller's spelling. Intl accepts
- * zone names case-insensitively, so `america/new_york` from a script or a future
- * API caller is stored as `America/New_York` — one spelling per zone in the
- * column, which is what keeps the settings <select> able to show the stored
- * value as its selected option.
- */
-function canonicalizeTimeZone(zone: string): string | null {
-  const trimmed = zone.trim();
-  if (!trimmed) return null;
-
-  try {
-    return new Intl.DateTimeFormat(undefined, { timeZone: trimmed }).resolvedOptions().timeZone;
-  } catch {
-    // RangeError is the documented rejection for an unknown zone. Caught
-    // broadly anyway: this runs on an admin write path, and no Intl failure is
-    // worth a 500 when the honest answer is "that is not a zone we can use".
-    return null;
-  }
-}
 
 /**
  * Update a site's settings, enforcing the invariant the schema cannot: an
@@ -328,13 +297,6 @@ function canonicalizeTimeZone(zone: string): string | null {
  * NULL, which leaves an enabled site with a null home page. That is deliberate:
  * losing a page must not delete the site row and release its subdomain. PR2's
  * serving code has to treat that shape as a repairable landing state.)
- *
- * `timezone` follows the same three-state convention as every other key here:
- * absent means "leave it alone", `null` (or a blank string, which is what an
- * emptied form control submits) CLEARS it back to the UTC fallback, and a
- * non-blank string is validated against the runtime's tz data and stored
- * canonicalized. A bad zone is refused rather than silently dropped — writing
- * it would produce a public schedule that formats in a zone nobody chose.
  */
 export async function upsertSiteSettings(classroomId: string, input: SiteSettingsInput) {
   const prisma = getPrisma();
@@ -398,31 +360,12 @@ export async function upsertSiteSettings(classroomId: string, input: SiteSetting
     );
   }
 
-  // Resolved before the write so a rejected zone costs nothing, and so the row
-  // stores Intl's canonical spelling rather than the caller's.
-  let nextTimezone: string | null | undefined;
-  if (input.timezone !== undefined) {
-    if (input.timezone === null || input.timezone.trim() === '') {
-      nextTimezone = null;
-    } else {
-      const canonical = canonicalizeTimeZone(input.timezone);
-      if (!canonical) {
-        throw new SiteError(
-          SITE_ERROR.TIMEZONE_INVALID,
-          `'${input.timezone}' is not a time zone we recognize. Pick one from the list, or clear it to use UTC.`
-        );
-      }
-      nextTimezone = canonical;
-    }
-  }
-
   return prisma.classroomSite.update({
     where: { classroom_id: classroomId },
     data: {
       ...(input.is_enabled === undefined ? {} : { is_enabled: input.is_enabled }),
       ...(input.home_page_id === undefined ? {} : { home_page_id: input.home_page_id }),
       ...(input.show_schedule === undefined ? {} : { show_schedule: input.show_schedule }),
-      ...(nextTimezone === undefined ? {} : { timezone: nextTimezone }),
     },
   });
 }
@@ -911,7 +854,8 @@ const SITE_ITEM_INCLUDE = {
       assignments: { where: { is_published: true }, select: { student_deadline: true } },
     },
   },
-  quiz: { select: { id: true, name: true, status: true, due_date: true } },
+  // No quiz: a QUIZ item is a legacy row that is never shown. A quiz is in a
+  // module through its assignment (SITE_QUIZ_ASSIGNMENT_SELECT below).
   // Narrow for the same reason as its siblings, but note what IS here: a form's
   // title and slug reach an anonymous request. That is not the leak the rest of
   // this include guards against — they are only ever RENDERED when
@@ -925,13 +869,55 @@ const SITE_ITEM_INCLUDE = {
   },
 } satisfies Prisma.ModuleItemInclude;
 
+/**
+ * A module's quizzes, as the schedule reads them: each QUIZ assignment's
+ * schedule columns and nothing it could print. The quiz's name is read for a
+ * member alone, in a query of its own (`quizNamesForMembers`), so an anonymous
+ * request never holds one.
+ */
+const SITE_QUIZ_ASSIGNMENT_SELECT = {
+  id: true,
+  type: true,
+  quiz_id: true,
+  is_published: true,
+  release_at: true,
+  student_deadline: true,
+} satisfies Prisma.AssignmentSelect;
+
+/** The order the Modules page lists a module's assignments in. */
+const SITE_ASSIGNMENT_ORDER = [
+  { position: 'asc' },
+  { student_deadline: { sort: 'asc', nulls: 'last' } },
+  { title: 'asc' },
+] satisfies Prisma.AssignmentOrderByWithRelationInput[];
+
+const SITE_MODULE_INCLUDE = {
+  items: { orderBy: { position: 'asc' }, include: SITE_ITEM_INCLUDE },
+  assignments: {
+    where: { type: 'QUIZ' },
+    orderBy: SITE_ASSIGNMENT_ORDER,
+    select: SITE_QUIZ_ASSIGNMENT_SELECT,
+  },
+} satisfies Prisma.ModuleInclude;
+
 type SiteModuleItem = Prisma.ModuleItemGetPayload<{ include: typeof SITE_ITEM_INCLUDE }>;
-type SiteModule = Prisma.ModuleGetPayload<{
-  include: { items: { include: typeof SITE_ITEM_INCLUDE } };
-}>;
+type SiteModule = Prisma.ModuleGetPayload<{ include: typeof SITE_MODULE_INCLUDE }>;
+type SiteQuizAssignment = SiteModule['assignments'][number];
 
 /** An item this viewer may open: carries its target, and renders as a link. */
 export type SiteScheduleVisibleItem = SiteModuleItem & { kind: 'visible' };
+
+/**
+ * A quiz a member may open: its assignment's id (a React key), the quiz's id
+ * and name, and its due date (the assignment's), as an anonymous visitor's
+ * placeholder carries it. Built only for a member.
+ */
+export type SiteScheduleQuizItem = {
+  kind: 'visible';
+  id: string;
+  item_type: 'QUIZ';
+  quiz: { id: string; name: string; due_at: Date | null };
+};
 
 /**
  * An item this viewer may NOT open, kept in place rather than deleted.
@@ -939,8 +925,9 @@ export type SiteScheduleVisibleItem = SiteModuleItem & { kind: 'visible' };
  * Deliberately not a narrowed `SiteModuleItem`: it is BUILT from three fields
  * rather than derived by omitting the rest, so the only way a title, slug,
  * template or link could reach an anonymous renderer is if someone added it to
- * this type on purpose. `id` is the ModuleItem's own uuid — a React key, not a
- * content identifier, and it resolves to nothing without a session.
+ * this type on purpose. `id` is the ModuleItem's own uuid (for a quiz, its
+ * assignment's) — a React key, not a content identifier, and it resolves to
+ * nothing without a session.
  */
 export type SiteSchedulePlaceholderItem = {
   kind: 'placeholder';
@@ -950,8 +937,13 @@ export type SiteSchedulePlaceholderItem = {
   due_at: Date | null;
 };
 
-export type SiteScheduleItem = SiteScheduleVisibleItem | SiteSchedulePlaceholderItem;
-export type SiteScheduleModule = Omit<SiteModule, 'items'> & { items: SiteScheduleItem[] };
+export type SiteScheduleItem =
+  | SiteScheduleVisibleItem
+  | SiteScheduleQuizItem
+  | SiteSchedulePlaceholderItem;
+export type SiteScheduleModule = Omit<SiteModule, 'items' | 'assignments'> & {
+  items: SiteScheduleItem[];
+};
 
 /**
  * The date a placeholder is allowed to show.
@@ -962,10 +954,12 @@ export type SiteScheduleModule = Omit<SiteModule, 'items'> & { items: SiteSchedu
  *
  * Repositories reduce to their EARLIEST published assignment deadline, the same
  * reduction the admin repo summary makes ("earliest assignment deadline =
- * repository due date"). Quizzes carry their own, and a FORM's `closes_at` is
- * its due date — which is how a members-only (CLASSROOM) form still tells the
- * public schedule "something is due Sep 12" without ever naming itself. Pages
- * and slides have no date at all, and get a bare placeholder.
+ * repository due date"). A FORM's `closes_at` is its due date — which is how a
+ * members-only (CLASSROOM) form still tells the public schedule "something is
+ * due Sep 12" without ever naming itself. Pages and slides have no date at all,
+ * and get a bare placeholder. A quiz's placeholder is built from its
+ * assignment, with the assignment's due date (`quizRows`); a legacy QUIZ item
+ * never gets this far.
  *
  * A switch rather than the if-chain this replaced: every type states its answer
  * out loud, and the `never` default means a sixth ModuleItemType cannot quietly
@@ -977,8 +971,9 @@ function placeholderDueAt(item: SiteModuleItem): Date | null {
     case 'PAGE':
     case 'SLIDE':
       return null;
+    // Legacy QUIZ items are dropped before any placeholder is made.
     case 'QUIZ':
-      return item.quiz?.due_date ?? null;
+      return null;
     case 'FORM':
       return item.form?.closes_at ?? null;
     case 'REPOSITORY': {
@@ -1022,45 +1017,108 @@ function placeholderDueAt(item: SiteModuleItem): Date | null {
  * useless to the audience a public site is for. Structure — how many units,
  * what kinds of work, when things are due — is exactly what a prospective
  * student should see; the titles are what they should not.
+ *
+ * Quizzes come from each module's QUIZ assignments (a quiz is in a module
+ * through its assignment; legacy QUIZ items are ignored), after the module's
+ * content items, in the order the Modules page lists assignments. A quiz is
+ * on the schedule exactly when students can see it — the one rule every
+ * student surface applies (`openToStudents`: published, past its Opens date)
+ * — as a link for a member and a placeholder carrying its due date for an
+ * anonymous visitor, who never gets its name. Quizzes appear only where
+ * quizzes do (`entitlement.quizzesVisible`). Otherwise they are dropped for
+ * every viewer, placeholder included, since a "Quiz" placeholder would still
+ * show the classroom has quizzes.
  */
 export async function listPublicModulesForViewer(
   classroomId: string,
   role: SiteViewerRole
 ): Promise<SiteScheduleModule[]> {
-  const modules = await getPrisma().module.findMany({
+  const listed = await getPrisma().module.findMany({
     where: { classroom_id: classroomId, is_published: true, is_public: true },
-    include: { items: { orderBy: { position: 'asc' }, include: SITE_ITEM_INCLUDE } },
+    include: SITE_MODULE_INCLUDE,
     // Same ordering the app uses for modules everywhere else.
     orderBy: [{ position: 'asc' }, { created_at: 'asc' }],
   });
+  const modules = listed.map(({ assignments, ...module }) => ({
+    ...module,
+    items: module.items.filter(item => item.item_type !== 'QUIZ'),
+    quizzes: assignments ?? [],
+  }));
+
+  // Asked once, and only when a quiz assignment is present, so a classroom
+  // without quizzes pays nothing for the lookup.
+  const now = new Date();
+  const showQuizzes =
+    modules.some(module => module.quizzes.length > 0) &&
+    (await entitlementService.quizzesVisible(classroomId));
+  const openQuizzes = (quizzes: SiteQuizAssignment[]) =>
+    showQuizzes ? quizzes.filter(a => openToStudents(a, now, { quizzesVisible: true })) : [];
 
   if (role !== null) {
+    const names = await quizNamesForMembers(modules.flatMap(module => openQuizzes(module.quizzes)));
     return modules
-      .map(module => ({
+      .map(({ quizzes, ...module }) => ({
         ...module,
-        items: module.items
-          .filter(isItemPublished)
-          .map((item): SiteScheduleItem => ({ ...item, kind: 'visible' })),
+        items: [
+          ...module.items
+            .filter(item => isItemPublished(item))
+            .map((item): SiteScheduleItem => ({ ...item, kind: 'visible' })),
+          ...openQuizzes(quizzes).flatMap((a): SiteScheduleItem[] => {
+            const name = a.quiz_id ? names.get(a.quiz_id) : undefined;
+            return a.quiz_id && name !== undefined
+              ? [
+                  {
+                    kind: 'visible',
+                    id: a.id,
+                    item_type: 'QUIZ',
+                    quiz: { id: a.quiz_id, name, due_at: a.student_deadline },
+                  },
+                ]
+              : [];
+          }),
+        ],
       }))
       .filter(module => module.items.length > 0);
   }
 
-  return modules.map(module => ({
+  return modules.map(({ quizzes, ...module }) => ({
     ...module,
     // flatMap, not filter+map: the empty array is how "not published, so not
     // even a placeholder" is expressed, and item ORDER is preserved throughout
     // so placeholders sit at the positions the instructor put them.
-    items: module.items.flatMap((item): SiteScheduleItem[] => {
-      if (isItemPubliclyVisible(item)) return [{ ...item, kind: 'visible' }];
-      if (!isItemPublished(item)) return [];
-      return [
-        {
+    items: [
+      ...module.items.flatMap((item): SiteScheduleItem[] => {
+        if (isItemPubliclyVisible(item)) return [{ ...item, kind: 'visible' }];
+        if (!isItemPublished(item)) return [];
+        return [
+          {
+            kind: 'placeholder',
+            id: item.id,
+            item_type: item.item_type,
+            due_at: placeholderDueAt(item),
+          },
+        ];
+      }),
+      // A quiz is never public: its name alone says what the work is.
+      ...openQuizzes(quizzes).map(
+        (a): SiteScheduleItem => ({
           kind: 'placeholder',
-          id: item.id,
-          item_type: item.item_type,
-          due_at: placeholderDueAt(item),
-        },
-      ];
-    }),
+          id: a.id,
+          item_type: 'QUIZ',
+          due_at: a.student_deadline,
+        })
+      ),
+    ],
   }));
+}
+
+/** The quizzes' names, by quiz id: read for a member's schedule only. */
+async function quizNamesForMembers(quizzes: SiteQuizAssignment[]): Promise<Map<string, string>> {
+  const ids = quizzes.flatMap(a => (a.quiz_id ? [a.quiz_id] : []));
+  if (ids.length === 0) return new Map();
+  const rows = await getPrisma().quiz.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, name: true },
+  });
+  return new Map(rows.map(row => [row.id, row.name]));
 }

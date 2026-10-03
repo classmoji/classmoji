@@ -60,6 +60,15 @@ interface CommonLayoutProps {
    * two seconds.
    */
   importBanner?: ImportProgressBannerProps | null;
+  /**
+   * Whether the classroom is on Pro, from the layout loader — the /teacher and
+   * /assistant layouts pass it. When given it decides the Pro-only nav entries
+   * outright; the store's subscription is only the fallback for layouts that
+   * pass nothing (the admin layout, whose owner can read the subscription).
+   * The store is not usable for the others: its fetch is OWNER-only, so for a
+   * teacher or assistant it holds no tier.
+   */
+  isPro?: boolean;
 }
 
 const CommonLayout = ({
@@ -69,6 +78,7 @@ const CommonLayout = ({
   pagesUrl: _pagesUrl = 'http://localhost:7100',
   navVisibility,
   importBanner = null,
+  isPro,
 }: CommonLayoutProps) => {
   const [collapsed, setCollapsed] = useLocalStorageState('classmoji-collapsed', {
     defaultValue: false,
@@ -101,7 +111,8 @@ const CommonLayout = ({
       }
     | undefined;
   const { user, memberships = [], aiAgentAvailable = false } = rootData ?? {};
-  const { isProTier } = useSubscription();
+  const { isProTier: storeIsProTier } = useSubscription();
+  const isProTier = isPro ?? storeIsProTier;
   const { tokenBalance } = useStore();
   const askMojiEnabled = useStore(s => s.askMojiEnabled);
   const isAskMojiOpen = useStore(s => s.isAskMojiOpen);
@@ -183,7 +194,7 @@ const CommonLayout = ({
             onClick={() => setSupportOpen(true)}
             className={`group flex items-center gap-2.5 rounded-md transition-colors duration-150 w-[calc(100%-12px)] ${
               collapsed ? 'justify-center p-2 mx-1.5' : 'px-2 py-1.5 mx-1.5 text-left'
-            } hover:bg-nav-hover`}
+            } hover:bg-sidebar-hover`}
             style={{ color: 'var(--ink-1)' }}
           >
             {collapsed ? (
@@ -230,7 +241,7 @@ const CommonLayout = ({
           className={`
             group flex items-center gap-2.5 rounded-md transition-colors duration-150
             ${collapsed ? 'justify-center p-2 mx-1.5' : 'px-2 py-1.5 mx-1.5'}
-            ${active ? '' : 'hover:bg-nav-hover'}
+            ${active ? '' : 'hover:bg-sidebar-hover'}
           `}
           style={{
             color: active ? 'var(--ink-0)' : 'var(--ink-1)',
@@ -290,7 +301,7 @@ const CommonLayout = ({
       collapsed
         ? 'justify-center p-2 mx-1.5 w-[calc(100%-12px)]'
         : 'px-2 py-1.5 mx-1.5 w-[calc(100%-12px)] text-left'
-    } ${isAskMojiOpen ? '' : 'hover:bg-nav-hover'}`;
+    } ${isAskMojiOpen ? '' : 'hover:bg-sidebar-hover'}`;
 
     return (
       <button
@@ -430,7 +441,7 @@ const CommonLayout = ({
               type="button"
               onClick={() => setCollapsed(!collapsed)}
               aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              className="hidden lg:inline-flex p-1.5 rounded-md text-ink-3 hover:text-ink-0 hover:bg-nav-hover transition-colors"
+              className="hidden lg:inline-flex p-1.5 rounded-md text-ink-3 hover:text-ink-0 hover:bg-sidebar-hover transition-colors"
             >
               <svg
                 width="18"
@@ -482,7 +493,7 @@ const CommonLayout = ({
           <ProfileDropdown placement="topLeft">
             <button
               type="button"
-              className={`flex items-center gap-2.5 p-1.5 rounded-lg hover:bg-nav-hover transition-colors text-left min-w-0 ${collapsed ? 'justify-center' : 'flex-1'}`}
+              className={`flex items-center gap-2.5 p-1.5 rounded-lg hover:bg-sidebar-hover transition-colors text-left min-w-0 ${collapsed ? 'justify-center' : 'flex-1'}`}
             >
               <Avatar
                 src={user?.avatar_url}
@@ -507,7 +518,7 @@ const CommonLayout = ({
             <Tooltip title="View on GitHub">
               <button
                 type="button"
-                className="p-1.5 rounded-lg hover:bg-nav-hover transition-colors shrink-0"
+                className="p-1.5 rounded-lg hover:bg-sidebar-hover transition-colors shrink-0"
                 onClick={() =>
                   window.open(
                     `https://github.com/orgs/${classroom.git_organization?.login}/repositories`,

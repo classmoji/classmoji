@@ -14,6 +14,7 @@ const classroomSiteDelete = vi.fn();
 const classroomFindUnique = vi.fn();
 const pageFindFirst = vi.fn();
 const moduleFindMany = vi.fn();
+const quizFindMany = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
@@ -28,6 +29,7 @@ vi.mock('@classmoji/database', () => ({
     classroom: { findUnique: classroomFindUnique },
     page: { findFirst: pageFindFirst },
     module: { findMany: moduleFindMany },
+    quiz: { findMany: quizFindMany },
   }),
 }));
 
@@ -37,6 +39,14 @@ vi.mock('@classmoji/database', () => ({
 const getProStateForClassroomId = vi.fn();
 vi.mock('../subscription.service.ts', () => ({
   getProStateForClassroomId: (...a: unknown[]) => getProStateForClassroomId(...a),
+}));
+
+// Whether quizzes may appear is entitlement's decision
+// (entitlement.service.test.ts). Stubbed so the schedule tests pin what the
+// site does with the answer; true unless a test says otherwise.
+const quizzesVisible = vi.fn();
+vi.mock('../entitlement.service.ts', () => ({
+  quizzesVisible: (...a: unknown[]) => quizzesVisible(...a),
 }));
 
 // Certificate teardown is best-effort by design; these tests pin WHEN it is
@@ -97,6 +107,7 @@ beforeEach(() => {
   });
   isFlyCertsConfigured.mockReturnValue(true);
   removeCert.mockResolvedValue(true);
+  quizzesVisible.mockResolvedValue(true);
 });
 
 describe('site.checkSubdomainAvailability', () => {
@@ -397,85 +408,22 @@ describe('site.upsertSiteSettings', () => {
     });
   });
 
-  // ── The public schedule's time zone ───────────────────────────────────────
-  //
-  // The column exists because /schedule formats deadlines on the SERVER and
-  // ships no JavaScript, so a wrong zone is a wrong calendar day on a public
-  // page. Validated against the runtime's own tz data rather than a list: Intl
-  // is what `dayjs.tz` uses downstream, so this checks the thing that actually
-  // has to work rather than a copy of it.
-  describe('timezone', () => {
-    // A settled, DISABLED site with a stored home page, so these exercise the
-    // zone rule alone instead of tripping the home-page invariants.
-    const settled = () => {
-      classroomSiteFindUnique.mockResolvedValue({
-        classroom_id: 'class-1',
-        is_enabled: false,
-        home_page_id: 'page-1',
-      });
-      classroomSiteUpdate.mockResolvedValue({});
-    };
-
-    const written = () => (classroomSiteUpdate.mock.calls[0][0] as { data: unknown }).data;
-
-    it('stores a valid IANA zone', async () => {
-      settled();
-      await upsertSiteSettings('class-1', { timezone: 'America/New_York' });
-      expect(written()).toEqual({ timezone: 'America/New_York' });
+  // The public schedule's time zone is no longer a SITE setting: it moved to
+  // classroom_settings.timezone (one control for the whole classroom), and its
+  // validation tests moved with it to classroomSettingsGate.test.ts.
+  it('no longer writes the deprecated site timezone column', async () => {
+    classroomSiteFindUnique.mockResolvedValue({
+      classroom_id: 'class-1',
+      is_enabled: false,
+      home_page_id: 'page-1',
     });
-
-    it("stores the canonical spelling, not the caller's", async () => {
-      // Intl matches zone names case-insensitively and resolves aliases. One
-      // spelling per zone in the column is what keeps the settings <select>
-      // able to render the stored value as a selected option.
-      settled();
-      await upsertSiteSettings('class-1', { timezone: 'america/new_york' });
-      expect(written()).toEqual({ timezone: 'America/New_York' });
-    });
-
-    it('accepts zones Intl.supportedValuesOf omits', async () => {
-      // Why this validates by BUILDING a formatter rather than by list
-      // membership: `UTC` is not in supportedValuesOf on this runtime, and
-      // refusing it would be absurd — it is the schedule's own fallback.
-      settled();
-      await upsertSiteSettings('class-1', { timezone: 'UTC' });
-      expect(written()).toEqual({ timezone: 'UTC' });
-    });
-
-    it.each([
-      ['a zone that does not exist', 'Not/AZone'],
-      ['a display name rather than a zone', 'Eastern Time'],
-      ['a bare offset', 'GMT+5'],
-      ['a near-miss the DB CHECK would also refuse', 'America/New York'],
-    ])('refuses %s', async (_case, zone) => {
-      settled();
-      await expect(upsertSiteSettings('class-1', { timezone: zone })).rejects.toMatchObject({
-        code: SITE_ERROR.TIMEZONE_INVALID,
-      });
-      // Refused BEFORE the write. A zone that reaches the column renders a
-      // public page in a zone nobody chose.
-      expect(classroomSiteUpdate).not.toHaveBeenCalled();
-    });
-
-    it('clears the zone on null, back to the UTC fallback', async () => {
-      settled();
-      await upsertSiteSettings('class-1', { timezone: null });
-      expect(written()).toEqual({ timezone: null });
-    });
-
-    it('treats a blank string as a clear, not as an invalid zone', async () => {
-      // What an emptied form control submits. Rejecting it would put an error
-      // on a row the admin had just reset.
-      settled();
-      await upsertSiteSettings('class-1', { timezone: '   ' });
-      expect(written()).toEqual({ timezone: null });
-    });
-
-    it('leaves the stored zone alone when the patch omits it', async () => {
-      // The three-state convention every key here follows: absent ≠ null.
-      settled();
-      await upsertSiteSettings('class-1', { show_schedule: true });
-      expect(written()).toEqual({ show_schedule: true });
+    classroomSiteUpdate.mockResolvedValue({});
+    await upsertSiteSettings('class-1', {
+      show_schedule: true,
+      timezone: 'America/New_York',
+    } as Parameters<typeof upsertSiteSettings>[1]);
+    expect((classroomSiteUpdate.mock.calls[0][0] as { data: unknown }).data).toEqual({
+      show_schedule: true,
     });
   });
 
@@ -643,6 +591,23 @@ describe('site.getPageBySlugForSite', () => {
 });
 
 describe('site.listPublicModulesForViewer', () => {
+  /** A QUIZ assignment as the schedule selects it: schedule columns only. */
+  const quizAssignment = (id: string, quizId: string, over: Record<string, unknown> = {}) => ({
+    id,
+    type: 'QUIZ',
+    quiz_id: quizId,
+    is_published: true,
+    release_at: null,
+    student_deadline: null,
+    ...over,
+  });
+
+  beforeEach(() => {
+    quizFindMany.mockImplementation(({ where }: { where: { id: { in: string[] } } }) =>
+      Promise.resolve(where.id.in.map(id => ({ id, name: `Quiz ${id}` })))
+    );
+  });
+
   const modules = [
     {
       id: 'mod-1',
@@ -658,8 +623,9 @@ describe('site.listPublicModulesForViewer', () => {
           item_type: 'REPOSITORY',
           repository: { id: 'r1', is_published: true, assignments: [] },
         },
-        { id: 'i7', item_type: 'QUIZ', quiz: { id: 'q1', status: 'PUBLISHED', due_date: null } },
       ],
+      // A quiz is in a module through its QUIZ assignment.
+      assignments: [quizAssignment('a7', 'q1')],
     },
     {
       id: 'mod-2',
@@ -699,6 +665,31 @@ describe('site.listPublicModulesForViewer', () => {
     });
   });
 
+  it("loads a quiz assignment's schedule columns and nothing it could print", async () => {
+    moduleFindMany.mockResolvedValue([]);
+    await listPublicModulesForViewer('class-1', null);
+
+    const { assignments } = moduleFindMany.mock.calls[0][0].include;
+    expect(assignments.where).toEqual({ type: 'QUIZ' });
+    expect(assignments.select).toEqual({
+      id: true,
+      type: true,
+      quiz_id: true,
+      is_published: true,
+      release_at: true,
+      student_deadline: true,
+    });
+    // Legacy QUIZ items are not even joined to their quiz.
+    expect(moduleFindMany.mock.calls[0][0].include.items.include.quiz).toBeUndefined();
+  });
+
+  it("never reads a quiz's name for an anonymous visitor", async () => {
+    moduleFindMany.mockResolvedValue(modules);
+    await listPublicModulesForViewer('class-1', null);
+
+    expect(quizFindMany).not.toHaveBeenCalled();
+  });
+
   it('gives an anonymous visitor public pages and slides as real items', async () => {
     moduleFindMany.mockResolvedValue(modules);
     const result = await listPublicModulesForViewer('class-1', null);
@@ -713,13 +704,14 @@ describe('site.listPublicModulesForViewer', () => {
 
     // i3 is a DRAFT page: invisible to enrolled students too, so it gets no
     // placeholder either — a public site must not advertise unreleased work.
+    // The quiz (its assignment, a7) follows the content items.
     expect(result[0].items.map(item => [item.id, item.kind])).toEqual([
       ['i1', 'visible'],
       ['i2', 'placeholder'],
       ['i4', 'visible'],
       ['i5', 'placeholder'],
       ['i6', 'placeholder'],
-      ['i7', 'placeholder'],
+      ['a7', 'placeholder'],
     ]);
     expect(result[0].items.map(item => item.kind === 'placeholder' && item.item_type)).toEqual([
       false,
@@ -803,25 +795,86 @@ describe('site.listPublicModulesForViewer', () => {
     ]);
   });
 
-  it("carries a quiz's own due date onto its placeholder", async () => {
+  it("carries the quiz assignment's due date onto its placeholder", async () => {
     const due = new Date('2026-10-01T16:00:00Z');
     moduleFindMany.mockResolvedValue([
       {
         id: 'mod-quiz',
         title: 'Quizzes',
-        items: [
-          { id: 'i-q', item_type: 'QUIZ', quiz: { id: 'q9', status: 'PUBLISHED', due_date: due } },
-        ],
+        items: [],
+        assignments: [quizAssignment('a-q', 'q9', { student_deadline: due })],
       },
     ]);
 
     const result = await listPublicModulesForViewer('class-1', null);
     expect(result[0].items[0]).toEqual({
       kind: 'placeholder',
-      id: 'i-q',
+      id: 'a-q',
       item_type: 'QUIZ',
       due_at: due,
     });
+  });
+
+  it('ignores legacy QUIZ items for every viewer: a quiz is listed by its assignment', async () => {
+    moduleFindMany.mockResolvedValue([
+      {
+        id: 'mod-quiz',
+        title: 'Quizzes',
+        items: [{ id: 'i-q', item_type: 'QUIZ', quiz: null }],
+        assignments: [quizAssignment('a-q', 'q9')],
+      },
+    ]);
+    const anonymous = await listPublicModulesForViewer('class-1', null);
+    expect(anonymous[0].items.map(item => item.id)).toEqual(['a-q']);
+
+    moduleFindMany.mockResolvedValue([
+      {
+        id: 'mod-quiz',
+        title: 'Quizzes',
+        items: [{ id: 'i-q', item_type: 'QUIZ', quiz: null }],
+        assignments: [],
+      },
+    ]);
+    await expect(listPublicModulesForViewer('class-1', 'STUDENT')).resolves.toEqual([]);
+  });
+
+  it('links a member to each quiz students can see, by name, and to no other', async () => {
+    moduleFindMany.mockResolvedValue([
+      {
+        id: 'mod-quiz',
+        title: 'Quizzes',
+        items: [],
+        assignments: [
+          quizAssignment('a-open', 'q-open', {
+            student_deadline: new Date('2026-09-12T23:59:00Z'),
+          }),
+          quizAssignment('a-draft', 'q-draft', { is_published: false }),
+          quizAssignment('a-later', 'q-later', { release_at: new Date(Date.now() + 86_400_000) }),
+          // Past its close date: still visible, it only takes no new attempt.
+          quizAssignment('a-closed', 'q-closed', { closes_at: new Date(Date.now() - 1000) }),
+        ],
+      },
+    ]);
+
+    const result = await listPublicModulesForViewer('class-1', 'STUDENT');
+
+    expect(result[0].items).toEqual([
+      {
+        kind: 'visible',
+        id: 'a-open',
+        item_type: 'QUIZ',
+        // With its due date, as an anonymous visitor's placeholder has it.
+        quiz: { id: 'q-open', name: 'Quiz q-open', due_at: new Date('2026-09-12T23:59:00Z') },
+      },
+      {
+        kind: 'visible',
+        id: 'a-closed',
+        item_type: 'QUIZ',
+        quiz: { id: 'q-closed', name: 'Quiz q-closed', due_at: null },
+      },
+    ]);
+    // Only the names of the quizzes listed are read.
+    expect(quizFindMany.mock.calls[0][0].where).toEqual({ id: { in: ['q-open', 'q-closed'] } });
   });
 
   it('gives an anonymous visitor NO row at all for an unpublished item', async () => {
@@ -837,7 +890,11 @@ describe('site.listPublicModulesForViewer', () => {
             item_type: 'REPOSITORY',
             repository: { id: 'r3', is_published: false, assignments: [] },
           },
-          { id: 'i10', item_type: 'QUIZ', quiz: { id: 'q2', status: 'DRAFT', due_date: null } },
+        ],
+        assignments: [
+          quizAssignment('a10', 'q2', { is_published: false }),
+          // Published, but not open yet: students cannot see it either.
+          quizAssignment('a11', 'q3', { release_at: new Date(Date.now() + 86_400_000) }),
         ],
       },
     ]);
@@ -855,7 +912,7 @@ describe('site.listPublicModulesForViewer', () => {
     // but the draft page (i3) is still hidden. No placeholder ever reaches a
     // member — everything they may see, they see in full.
     expect(result.map(m => m.id)).toEqual(['mod-1', 'mod-2']);
-    expect(result[0].items.map(i => i.id)).toEqual(['i1', 'i2', 'i4', 'i5', 'i6', 'i7']);
+    expect(result[0].items.map(i => i.id)).toEqual(['i1', 'i2', 'i4', 'i5', 'i6', 'a7']);
     expect(result.every(m => m.items.every(i => i.kind === 'visible'))).toBe(true);
   });
 
@@ -869,8 +926,8 @@ describe('site.listPublicModulesForViewer', () => {
             item_type: 'REPOSITORY',
             repository: { id: 'r3', is_published: false, assignments: [] },
           },
-          { id: 'i10', item_type: 'QUIZ', quiz: { id: 'q2', status: 'DRAFT', due_date: null } },
         ],
+        assignments: [quizAssignment('a10', 'q2', { is_published: false })],
       },
     ]);
     // Members keep the old rule: a module left with nothing is dropped, so a
@@ -1033,6 +1090,63 @@ describe('site.listPublicModulesForViewer', () => {
     await expect(listPublicModulesForViewer('class-1', null)).resolves.toEqual([
       { id: 'mod-4', title: 'Week 3', items: [] },
     ]);
+  });
+
+  // ── quizzes ──────────────────────────────────────────────────────────────
+  //
+  // A quiz appears only where quizzes are visible. Otherwise it is gone for
+  // every viewer — not even a placeholder, which would still say "Quiz".
+
+  it('drops quizzes for a member when quizzes are not visible', async () => {
+    quizzesVisible.mockResolvedValue(false);
+    moduleFindMany.mockResolvedValue(modules);
+
+    const result = await listPublicModulesForViewer('class-1', 'STUDENT');
+
+    expect(quizzesVisible).toHaveBeenCalledWith('class-1');
+    expect(result[0].items.map(i => i.id)).toEqual(['i1', 'i2', 'i4', 'i5', 'i6']);
+    expect(quizFindMany).not.toHaveBeenCalled();
+  });
+
+  it('gives an anonymous visitor no quiz placeholder when quizzes are not visible', async () => {
+    quizzesVisible.mockResolvedValue(false);
+    moduleFindMany.mockResolvedValue(modules);
+
+    const result = await listPublicModulesForViewer('class-1', null);
+
+    expect(result[0].items.map(item => item.id)).not.toContain('a7');
+    expect(result.flatMap(m => m.items).some(item => item.item_type === 'QUIZ')).toBe(false);
+  });
+
+  it('applies the usual empty-module rules to a module that held only a quiz', async () => {
+    quizzesVisible.mockResolvedValue(false);
+    const quizOnly = [
+      {
+        id: 'mod-quiz',
+        title: 'Quizzes',
+        items: [],
+        assignments: [quizAssignment('a-q', 'q9')],
+      },
+    ];
+
+    // Members: a module left with nothing is dropped. Anonymous: a bare title.
+    moduleFindMany.mockResolvedValue(quizOnly);
+    await expect(listPublicModulesForViewer('class-1', 'STUDENT')).resolves.toEqual([]);
+    moduleFindMany.mockResolvedValue(quizOnly);
+    await expect(listPublicModulesForViewer('class-1', null)).resolves.toEqual([
+      expect.objectContaining({ id: 'mod-quiz', title: 'Quizzes', items: [] }),
+    ]);
+  });
+
+  it('asks once per call, and not at all when no module holds a quiz', async () => {
+    moduleFindMany.mockResolvedValue(modules);
+    await listPublicModulesForViewer('class-1', null);
+    expect(quizzesVisible).toHaveBeenCalledTimes(1);
+
+    quizzesVisible.mockClear();
+    moduleFindMany.mockResolvedValue([modules[1]]);
+    await listPublicModulesForViewer('class-1', null);
+    expect(quizzesVisible).not.toHaveBeenCalled();
   });
 });
 

@@ -31,7 +31,6 @@
     "@tabler/icons-react": "^3.35.0",
     "@tailwindcss/typography": "^0.5.19",
     "cheerio": "^1.1.2",
-    "cloudinary": "^2.8.0",
     "compression": "^1.8.1",
     "dayjs": "^1.11.13",
     "express": "^5.2.1",

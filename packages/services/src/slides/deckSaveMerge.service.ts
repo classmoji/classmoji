@@ -47,6 +47,7 @@ import { applyDeckOps, DeckOpError, type DeckOp } from './deckOps.ts';
 import { assertDeckSlide } from './slideSource.ts';
 import {
   DeckConflictError,
+  canonicalizeDeckForSave,
   resolveSlideRepoContext,
   saveDeck,
   type SlideContentTarget,
@@ -252,6 +253,12 @@ async function runDeckMergeSave({
   firstOurs,
   forceAdoption,
 }: RunDeckMergeSaveArgs): Promise<SaveDeckMergeResult> {
+  // The editor's document in its STORED form before anything is compared with
+  // it. saveDeck canonicalizes on the way to the commit anyway; this is for the
+  // merge, which would otherwise read the editor's signed `media://` URLs as an
+  // edit to every slide carrying one — and turn a concurrent change to any of
+  // those slides into a conflict nobody made.
+  theirs = await canonicalizeDeckForSave(slide, theirs);
   for (let attempt = 0; attempt < 2; attempt++) {
     // Ours = fresh main (attempt 0 uses the prefetched parallel read).
     const ours = attempt === 0 ? firstOurs : await readOursDeckFile(ctx, deckPath);

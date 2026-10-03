@@ -3,13 +3,14 @@
  *
  * Every resource returns a COMPACT, allow-listed payload — never a raw
  * service/Prisma row. The webapp's loaders frequently over-fetch (full User
- * rows with provider_email / stripe ids / ban fields riding along and the UI
+ * rows with account identities / stripe ids / ban fields riding along and the UI
  * simply not rendering them); an MCP resource is a data API, so the allowlist
  * lives here, server-side. When adding fields, allow-list explicitly — never
  * spread a service row into a payload.
  */
 
 import type { Role } from '@prisma/client';
+import { gitUsername, mirroredQuizStatus, type WithGitAccounts } from '@classmoji/utils';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext } from '../mcp/registry.ts';
 
@@ -33,6 +34,14 @@ export function orgLogin(ctx: ToolContext): string | null {
   return classroom.git_organization?.login ?? null;
 }
 
+/** The classroom's git provider ('GITHUB' | 'GITLAB'); picks which username a user is known by. */
+export function orgProvider(ctx: ToolContext): string {
+  const classroom = classroomCtx(ctx).classroom as unknown as {
+    git_organization?: { provider?: string | null } | null;
+  };
+  return classroom.git_organization?.provider ?? 'GITHUB';
+}
+
 /** Sanitized (SAFE_SETTINGS_FIELDS) settings from the resolved classroom. */
 export function sanitizedSettings(ctx: ToolContext): Record<string, unknown> {
   const classroom = classroomCtx(ctx).classroom as unknown as {
@@ -49,6 +58,55 @@ export const MEMBER: readonly Role[] = ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDEN
 export const STUDENT_ONLY: readonly Role[] = ['STUDENT'];
 /** Quiz routes allow the whole teaching team plus STUDENT. */
 export const QUIZ_ROLES: readonly Role[] = ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'];
+
+// ─── A quiz's place in the course ────────────────────────────────────────────
+
+/** A quiz row as the quiz services return it, with its assignment when it has one. */
+export interface QuizPlacementSource {
+  status: string;
+  due_date?: Date | string | null;
+  weight?: number | null;
+  assignment?: {
+    is_published: boolean;
+    release_at?: Date | string | null;
+    student_deadline?: Date | string | null;
+    closes_at?: Date | string | null;
+    weight: number;
+    module?: { id: string; title: string } | null;
+  } | null;
+}
+
+/**
+ * Where a quiz sits and when, read from its QUIZ assignment, which owns them:
+ * the module, Opens (`release_at`), due and close dates, weight and publish
+ * state. `status` is DRAFT / PUBLISHED / CLOSED as of `now` (CLOSED once the
+ * close date has passed), not the quiz's own column, which is written only
+ * when the quiz is saved. A quiz in no module has no assignment and keeps its
+ * own due date, weight and status.
+ */
+export function quizPlacement(quiz: QuizPlacementSource, now: Date = new Date()) {
+  const a = quiz.assignment;
+  if (!a) {
+    return {
+      status: quiz.status,
+      published: quiz.status !== 'DRAFT',
+      module: null,
+      release_at: null,
+      due_date: quiz.due_date ?? null,
+      closes_at: null,
+      weight: quiz.weight ?? 0,
+    };
+  }
+  return {
+    status: mirroredQuizStatus(a, now),
+    published: a.is_published,
+    module: a.module ? { id: a.module.id, title: a.module.title } : null,
+    release_at: a.release_at ?? null,
+    due_date: a.student_deadline ?? null,
+    closes_at: a.closes_at ?? null,
+    weight: a.weight,
+  };
+}
 
 /**
  * "Staff" = the classroom's teaching team, exactly OWNER/TEACHER/ASSISTANT
@@ -74,7 +132,7 @@ export const isStaff = (role: Role): boolean => STAFF_ROLES.has(role);
 
 // ─── User narrowing ──────────────────────────────────────────────────────────
 
-interface UserLike {
+interface UserLike extends WithGitAccounts {
   id: string;
   name?: string | null;
   login?: string | null;
@@ -87,7 +145,7 @@ export function publicUser(user: UserLike | null | undefined) {
   return {
     id: user.id,
     name: user.name ?? null,
-    login: user.login ?? null,
+    login: gitUsername(user),
     avatar: user.image ?? null,
   };
 }
@@ -124,7 +182,7 @@ export interface SubmissionLike {
     student_deadline?: Date | string | null;
     grades_released?: boolean;
     is_published?: boolean;
-    tokens_per_hour?: number;
+    tokens_per_hour?: number | null;
     weight?: number;
   } | null;
   git_repo?: {

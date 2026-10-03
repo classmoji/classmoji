@@ -18,6 +18,8 @@ interface QuestionData {
   code_snippet?: string;
   code_language?: string;
   context?: string;
+  /** Set when the server quoted the code from the student's file (chat quizzes). */
+  source?: { path: string; lines: string; changed: boolean };
 }
 
 interface QuestionCardProps {
@@ -29,9 +31,60 @@ type MarkdownCodeProps = React.ComponentProps<'code'> & {
   inline?: boolean;
 };
 
+/** "5-10" → "lines 5–10", "7" → "line 7", "1-2, 11-15" → "lines 1–2, 11–15". */
+const formatQuotedLines = (lines: string): string => {
+  const shown = lines.replace(/-/g, '–');
+  return /^\d+$/.test(lines.trim()) ? `line ${shown}` : `lines ${shown}`;
+};
+
+/** The file and lines a quoted card's code comes from. */
+const CodeSource = ({
+  source,
+  isDarkMode,
+}: {
+  source: NonNullable<QuestionData['source']>;
+  isDarkMode: boolean;
+}) => (
+  <div
+    data-testid="quiz-code-source"
+    style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: '6px',
+      minWidth: 0,
+      marginBottom: '4px',
+      fontSize: '12px',
+      lineHeight: '18px',
+      color: isDarkMode ? '#9ca3af' : '#4b5563',
+    }}
+  >
+    <span
+      title={source.path}
+      style={{
+        fontFamily: 'monospace',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        minWidth: 0,
+      }}
+    >
+      {source.path}
+    </span>
+    <span aria-hidden="true">·</span>
+    <span style={{ whiteSpace: 'nowrap' }}>{formatQuotedLines(source.lines)}</span>
+  </div>
+);
+
 const QuestionCard = ({ questionData, isDarkMode = false }: QuestionCardProps) => {
-  const { question_number, total_questions, question_text, code_snippet, code_language, context } =
-    questionData;
+  const {
+    question_number,
+    total_questions,
+    question_text,
+    code_snippet,
+    code_language,
+    context,
+    source,
+  } = questionData;
 
   return (
     <Card
@@ -94,6 +147,7 @@ const QuestionCard = ({ questionData, isDarkMode = false }: QuestionCardProps) =
       {/* Code Snippet (optional) - rendered via ReactMarkdown for syntax highlighting */}
       {code_snippet && (
         <div style={{ marginBottom: '12px' }}>
+          {source ? <CodeSource source={source} isDarkMode={isDarkMode} /> : null}
           <ReactMarkdown
             rehypePlugins={[rehypeHighlight]}
             components={{

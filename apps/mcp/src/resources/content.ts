@@ -11,7 +11,22 @@
  *   modules         — any member (mirrors student.$class.modules, which the
  *                     assistant route re-exports): show_modules=false →
  *                     {enabled:false}; staff see unpublished, students see
- *                     published modules with published items only.
+ *                     published modules with published items and published
+ *                     assignments only (a REPO assignment only once its
+ *                     repository is published too — module.listForClassroom
+ *                     decides both). Each module carries its content `items`
+ *                     AND its `assignments`, the placement the Modules page
+ *                     shows. Staff get each assignment's target and grading
+ *                     fields; a student gets only what their module row
+ *                     renders (title, type, due date) — never the quiz or
+ *                     form behind it, which may still be a draft. Quiz
+ *                     assignments are dropped for every role unless
+ *                     entitlement.quizzesVisible (Pro, quizzes on); legacy
+ *                     QUIZ items are listed for nobody (a quiz is in a
+ *                     module through its assignment). Legacy
+ *                     REPOSITORY item rows are passed through unchanged: the
+ *                     member screens no longer draw them, but the public
+ *                     course site still does.
  *   quizzes         — roles OWNER/TEACHER/ASSISTANT/STUDENT, matching the quiz
  *                     routes. Gate order mirrors the routes: role check →
  *                     Pro-tier → quizzes_enabled. NOTE:
@@ -19,19 +34,42 @@
  *                     gate, but neither quiz LIST loader checks it (it only
  *                     gates the attempt/action flow + nav) — route wins, so
  *                     the list resource does not check it. Students get the
+ *                     published quizzes, closed ones included (as the web
+ *                     list), with the
  *                     student route's field allowlist (no
  *                     system_prompt/rubric_prompt); staff get the admin one.
+ *                     `source_material` (the linked pages and decks, in
+ *                     order) is drafts-included for staff and published-only
+ *                     for students — the service decides that per list.
  *   calendar        — any member; calendar.getClassroomCalendar already
  *                     expands recurrence and merges assignment deadlines. The
- *                     parameterless URI covers the current UTC month (web
- *                     default); …/calendar/{start}/{end} takes ISO dates.
+ *                     parameterless URI covers the current month in the
+ *                     classroom's zone (web default shape);
+ *                     …/calendar/{start}/{end} takes ISO dates, read as whole
+ *                     days in that zone.
  */
 
 import { ClassmojiService } from '@classmoji/services';
+import {
+  gitUsername,
+  isRealCalendarDate,
+  localDayRange,
+  localMonthGridRange,
+  type WithGitAccounts,
+} from '@classmoji/utils';
 import { ToolError } from '../mcp/errors.ts';
+import { renderZone } from '../mcp/localTimes.ts';
 import type { ResourceDefinition, ToolContext } from '../mcp/registry.ts';
 import { assertProTier } from '../authz/proTier.ts';
-import { MEMBER, QUIZ_ROLES, classroomCtx, isStaff, sanitizedSettings } from './shape.ts';
+import {
+  MEMBER,
+  QUIZ_ROLES,
+  classroomCtx,
+  isStaff,
+  quizPlacement,
+  sanitizedSettings,
+  type QuizPlacementSource,
+} from './shape.ts';
 
 // ─── pages ───────────────────────────────────────────────────────────────────
 
@@ -103,6 +141,21 @@ interface ModuleItemRow {
   form?: { id: string; title?: string | null; status?: string; access?: string } | null;
 }
 
+/** An assignment as `module.listForClassroom` loads it, with its target resolved. */
+interface ModuleAssignmentRow {
+  id: string;
+  title: string;
+  type: string;
+  submission_mode?: string;
+  weight: number;
+  is_extra_credit?: boolean;
+  is_published: boolean;
+  student_deadline?: Date | null;
+  repository?: { id: string; title?: string | null } | null;
+  quiz?: { id: string; name?: string | null } | null;
+  form?: { id: string; title?: string | null } | null;
+}
+
 interface ModuleRow {
   id: string;
   classroom_id: string;
@@ -112,6 +165,7 @@ interface ModuleRow {
   position: number;
   is_published: boolean;
   items: ModuleItemRow[];
+  assignments?: ModuleAssignmentRow[];
 }
 
 /**
@@ -123,8 +177,13 @@ interface ModuleRow {
  * `isItemPublished` already hides a DRAFT form from students the same way it
  * hides a draft page — so nothing here has to re-decide visibility. A Form's
  * label lives in `title` (a Quiz is the odd one out with `name`).
+ *
+ * `position` is the item's place in the list as this caller sees it, not the
+ * stored column. The stored numbers run over every row of the module, so where
+ * quiz items are hidden a gap would say one sits there (exactly so after a
+ * reorder, which renumbers 0..n-1 over the full list).
  */
-function moduleItemSummary(item: ModuleItemRow) {
+function moduleItemSummary(item: ModuleItemRow, position: number) {
   const target = item.page ?? item.slide ?? item.quiz ?? item.repository ?? item.form ?? null;
   const title =
     item.page?.title ??
@@ -136,9 +195,51 @@ function moduleItemSummary(item: ModuleItemRow) {
   return {
     id: item.id,
     type: item.item_type,
-    position: item.position,
+    position,
     target_id: target?.id ?? null,
     title,
+  };
+}
+
+/**
+ * One assignment of a module.
+ *
+ * A STUDENT gets what their module row renders and nothing else: the
+ * assignment's own id and title, its type and its due date. Not the target: the
+ * service's student filter (`openToStudents`) already leaves out an assignment
+ * whose quiz or form is a draft, but the target's own name is still not what a
+ * student's module row shows. Not weight, extra credit or submission mode
+ * either: list_repos gives a student those for the repositories they hold a
+ * git repo in.
+ *
+ * Staff get the placement in full: the target the type points at, as one
+ * generic pair rather than three nullable id columns (a classroom without
+ * quizzes must not carry a key that names one), the grading fields and the
+ * publish flag.
+ *
+ * The array order IS the display order (the service sorts by the hand-arranged
+ * position, then deadline, then title), so no position is emitted: a stored
+ * position is only meaningful through that tie-break.
+ */
+function moduleAssignmentSummary(assignment: ModuleAssignmentRow, staff: boolean) {
+  const base = {
+    id: assignment.id,
+    title: assignment.title,
+    type: assignment.type,
+    student_deadline: assignment.student_deadline ?? null,
+  };
+  if (!staff) return base;
+
+  const target = assignment.repository ?? assignment.quiz ?? assignment.form ?? null;
+  return {
+    ...base,
+    target_id: target?.id ?? null,
+    target_title:
+      assignment.repository?.title ?? assignment.quiz?.name ?? assignment.form?.title ?? null,
+    ...(assignment.type === 'REPO' ? { submission_mode: assignment.submission_mode ?? null } : {}),
+    weight: assignment.weight,
+    is_extra_credit: assignment.is_extra_credit ?? false,
+    is_published: assignment.is_published,
   };
 }
 
@@ -147,9 +248,11 @@ export const modulesResource: ResourceDefinition = {
   uriTemplate: 'classmoji://{org}/{slug}/modules',
   title: 'Modules (curriculum lists)',
   description:
-    'Ordered curriculum modules with their content items (pages, repos, quizzes, slides, forms). ' +
-    'Students see published modules/items only; staff also see unpublished. Returns ' +
-    '{enabled:false} when the classroom hides modules (show_modules).',
+    'Ordered curriculum modules, each with its content items (pages, slides, forms) and ' +
+    'the assignments that belong to it (REPO, QUIZ or FORM, in display order). Students see ' +
+    'published modules, items and assignments only, each assignment by title, type and due ' +
+    'date; staff also see unpublished, with each assignment’s target and grading fields. ' +
+    'Returns {enabled:false} when the classroom hides modules (show_modules).',
   scope: 'read',
   roles: MEMBER,
   handler: async (vars, ctx) => {
@@ -159,8 +262,16 @@ export const modulesResource: ResourceDefinition = {
       return { enabled: false, modules: [] };
     }
 
+    // Quizzes appear only where quizzes do — the predicate the web app's module
+    // screens filter on too. The answer goes to listForClassroom, which applies
+    // the student-visibility rule to a student's assignments with it
+    // (published, past Opens, quizzes shown); staff, who see unpublished rows
+    // too, have quiz assignments dropped below where quizzes are hidden.
+    const staff = isStaff(role);
+    const quizzesVisible = await ClassmojiService.entitlement.quizzesVisible(classroomId);
     const modules = (await ClassmojiService.module.listForClassroom(vars.slug, {
-      includeUnpublished: isStaff(role),
+      includeUnpublished: staff,
+      quizzesVisible,
     })) as ModuleRow[];
 
     // listForClassroom resolves by BARE slug. The slug is globally unique
@@ -183,8 +294,15 @@ export const modulesResource: ResourceDefinition = {
         slug: m.slug ?? null,
         description: m.description ?? null,
         position: m.position,
-        ...(isStaff(role) ? { is_published: m.is_published } : {}),
-        items: m.items.map(moduleItemSummary),
+        ...(staff ? { is_published: m.is_published } : {}),
+        // A quiz is in a module through its assignment: legacy QUIZ items are
+        // listed for nobody (listForClassroom leaves them out too).
+        items: m.items
+          .filter(item => item.item_type !== 'QUIZ')
+          .map((item, index) => moduleItemSummary(item, index)),
+        assignments: (m.assignments ?? [])
+          .filter(a => quizzesVisible || a.type !== 'QUIZ')
+          .map(a => moduleAssignmentSummary(a, staff)),
       })),
     };
   },
@@ -192,17 +310,30 @@ export const modulesResource: ResourceDefinition = {
 
 // ─── quizzes ─────────────────────────────────────────────────────────────────
 
-interface QuizRow {
+interface QuizRow extends QuizPlacementSource {
   id: string;
   name: string;
   status: string;
   due_date?: Date | null;
+  /** The quiz's assignment: it owns the module, dates, weight and publish state. */
+  assignment?:
+    | (NonNullable<QuizPlacementSource['assignment']> & { tokens_per_hour?: number | null })
+    | null;
   weight: number;
   question_count: number;
   max_attempts: number;
   grading_strategy: string;
   include_code_context: boolean;
+  course_search_enabled?: boolean;
+  excluded_paths?: string[];
   repository_id?: string | null;
+  source_material?: Array<{
+    kind: string;
+    id: string;
+    title: string;
+    is_draft: boolean;
+    order: number;
+  }>;
   system_prompt?: string | null;
   rubric_prompt?: string;
   subject?: string | null;
@@ -238,9 +369,10 @@ export const quizzesResource: ResourceDefinition = {
   uriTemplate: 'classmoji://{org}/{slug}/quizzes',
   title: 'Quizzes',
   description:
-    'AI-graded quizzes. Staff (OWNER/TEACHER/ASSISTANT) see all quizzes incl. drafts and ' +
-    'prompts; students see published quizzes with their own attempt summary. Requires a Pro ' +
-    'subscription and quizzes_enabled.',
+    'AI-graded quizzes with their source material (linked pages and decks, in order). Staff ' +
+    '(OWNER/TEACHER/ASSISTANT) see all quizzes incl. drafts and prompts; students see ' +
+    'published quizzes (closed ones too, as CLOSED), published material and their own attempt ' +
+    'summary. Requires a Pro subscription and quizzes_enabled.',
   scope: 'read',
   roles: QUIZ_ROLES,
   handler: async (vars, ctx) => {
@@ -252,24 +384,38 @@ export const quizzesResource: ResourceDefinition = {
       throw new ToolError('forbidden', 'Quizzes are currently disabled for this classroom');
     }
 
+    // Where a quiz sits and when (module, status, published, Opens, due and
+    // close dates, weight) is read from its assignment, as of now; a quiz in
+    // no module keeps its own (as on the web).
+    const now = new Date();
     const base = (q: QuizRow) => ({
       id: q.id,
       name: q.name,
-      status: q.status,
-      due_date: q.due_date ?? null,
-      weight: q.weight,
+      ...quizPlacement(q, now),
       question_count: q.question_count,
       max_attempts: q.max_attempts,
       grading_strategy: q.grading_strategy,
       include_code_context: q.include_code_context,
+      course_search_enabled: q.course_search_enabled ?? false,
       repository_id: q.repository_id ?? null,
+      // Field by field. The service already dropped drafts for the student list.
+      source_material: (q.source_material ?? []).map(doc => ({
+        kind: doc.kind,
+        id: doc.id,
+        title: doc.title,
+        is_draft: doc.is_draft,
+        order: doc.order,
+      })),
     });
 
     if (role === 'STUDENT') {
+      // Closed quizzes too, as the web list shows them: a student keeps the
+      // quiz they finished and its score, and a closed one reads as CLOSED.
       const quizzes = (await ClassmojiService.quiz.getQuizzesForStudent(
         classroomId,
         ctx.viewer.userId,
-        membership as never
+        membership as never,
+        { includeClosed: true }
       )) as QuizRow[];
       // Student allowlist (mirrors the student route's .map): NO system_prompt,
       // rubric_prompt, subject, difficulty_level, or class-wide stats.
@@ -292,6 +438,10 @@ export const quizzesResource: ResourceDefinition = {
         difficulty_level: q.difficulty_level ?? null,
         system_prompt: q.system_prompt ?? null,
         rubric_prompt: q.rubric_prompt ?? null,
+        // Staff only, like the prompts: quiz configuration.
+        excluded_paths: q.excluded_paths ?? [],
+        // Null = the classroom's default_tokens_per_hour.
+        tokens_per_hour: q.assignment?.tokens_per_hour ?? null,
         attempts_count: q.attemptsCount ?? 0,
         avg_score: q.avgScore ?? null,
       })),
@@ -350,7 +500,7 @@ interface CalendarRow {
   is_recurring?: boolean;
   recurrence_rule?: unknown;
   occurrence_date?: Date | string;
-  creator?: { id: string; name?: string | null; login?: string | null } | null;
+  creator?: (WithGitAccounts & { id: string; name?: string | null; login?: string | null }) | null;
   is_deadline?: boolean;
   is_unpublished?: boolean;
   assignment_id?: string;
@@ -456,7 +606,7 @@ function shapeCalendarRow(row: CalendarRow, staff: boolean) {
     recurrence_rule: row.recurrence_rule ?? null,
     occurrence_date: row.occurrence_date ?? null,
     creator: row.creator
-      ? { id: row.creator.id, name: row.creator.name ?? null, login: row.creator.login ?? null }
+      ? { id: row.creator.id, name: row.creator.name ?? null, login: gitUsername(row.creator) }
       : null,
     ...(row.is_deadline
       ? {
@@ -474,17 +624,15 @@ function shapeCalendarRow(row: CalendarRow, staff: boolean) {
   };
 }
 
-/** Current UTC month expanded to grid-week boundaries ±1 day (web default). */
-function defaultCalendarRange(): { start: Date; end: Date } {
-  const now = new Date();
-  const firstOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-  const lastOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0));
-  const start = new Date(firstOfMonth);
-  start.setUTCDate(start.getUTCDate() - firstOfMonth.getUTCDay() - 1);
-  const end = new Date(lastOfMonth);
-  end.setUTCDate(end.getUTCDate() + (6 - lastOfMonth.getUTCDay()) + 1);
-  end.setUTCHours(23, 59, 59, 999);
-  return { start, end };
+/**
+ * The zone this request renders in (classroom setting, else the caller's hint,
+ * else UTC — see ClassroomContext.effectiveTimezone). Calendar windows are
+ * whole days in it: a Sun 11:59 PM EDT deadline is Mon 03:59Z, and a window of
+ * UTC days ending on that Sunday would silently drop it.
+ */
+function classroomZone(ctx: ToolContext): string | null {
+  const effective = classroomCtx(ctx).effectiveTimezone;
+  return effective ? renderZone(effective) : null;
 }
 
 async function loadCalendar(ctx: ToolContext, start: Date, end: Date) {
@@ -520,10 +668,30 @@ export const calendarResource: ResourceDefinition = {
   scope: 'read',
   roles: MEMBER,
   handler: async (_vars, ctx) => {
-    const { start, end } = defaultCalendarRange();
+    // The current month in the CLASS zone, widened to grid weeks ±1 day (web
+    // default shape), so the last evening of a month is still that month.
+    const { start, end } = localMonthGridRange(new Date(), classroomZone(ctx));
     return loadCalendar(ctx, start, end);
   },
 };
+
+/**
+ * The pre-zone reading, kept for a caller that passes full ISO date-times rather
+ * than the documented bare dates: exact instants, end widened to the end of its
+ * UTC day as before. Null when either is unparseable or start is not before end.
+ */
+function exactRange(startRaw: string, endRaw: string): { start: Date; end: Date } | null {
+  // Full date-times only, on real calendar dates: Date silently rolls a bare or
+  // impossible date (`2026-02-30`) into the next month, which must be refused.
+  const realDateTime = (raw: string) =>
+    /^\d{4}-\d{2}-\d{2}T/.test(raw) && isRealCalendarDate(raw.slice(0, 10));
+  if (!realDateTime(startRaw) || !realDateTime(endRaw)) return null;
+  const start = new Date(startRaw);
+  const end = new Date(endRaw);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start >= end) return null;
+  end.setUTCHours(23, 59, 59, 999);
+  return { start, end };
+}
 
 export const calendarRangeResource: ResourceDefinition = {
   name: 'calendar-range',
@@ -535,15 +703,16 @@ export const calendarRangeResource: ResourceDefinition = {
   scope: 'read',
   roles: MEMBER,
   handler: async (vars, ctx) => {
-    const start = new Date(vars.start);
-    const end = new Date(vars.end);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start >= end) {
+    // Whole days in the class zone: local 00:00 on `start` to local
+    // 23:59:59.999 on `end`. A bare date means a day on the course's calendar.
+    const range =
+      localDayRange(vars.start, vars.end, classroomZone(ctx)) ?? exactRange(vars.start, vars.end);
+    if (!range) {
       throw new ToolError(
         'invalid_params',
         'start/end must be ISO dates (YYYY-MM-DD) with start before end'
       );
     }
-    end.setUTCHours(23, 59, 59, 999);
-    return loadCalendar(ctx, start, end);
+    return loadCalendar(ctx, range.start, range.end);
   },
 };

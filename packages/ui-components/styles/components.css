@@ -290,3 +290,202 @@ html[data-theme='dark'] .bar .fill.done {
   display: inline-block;
   flex-shrink: 0;
 }
+
+/* ============================================================================
+   Callout — the app's one transient notification surface.
+
+   Written as real CSS rather than Tailwind utilities on purpose: no app puts
+   this package's `src/**` in its Tailwind scan path, so a utility that no app
+   file happens to use is never emitted. Every value the design specifies
+   (11px gap, 13.5px title, 5px bar) is exactly that kind of value.
+   ========================================================================== */
+
+.cm-callout {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: var(--shadow-float);
+  color: var(--ink-1);
+}
+
+/* The icon slot carries the variant's colour; everything inside inherits it. */
+.cm-callout-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+.cm-callout-tone-accent {
+  color: var(--accent);
+}
+/* The accent is a brand colour chosen for light grounds and is not redefined
+   in dark mode (a classroom can set its own). Lift it rather than swapping it,
+   so a small glyph stays legible on a dark panel and still reads as the
+   classroom's colour. */
+html.dark .cm-callout-tone-accent,
+html[data-theme='dark'] .cm-callout-tone-accent {
+  color: color-mix(in srgb, var(--accent) 70%, white);
+}
+.cm-callout-tone-rose {
+  color: var(--rose-ink);
+}
+.cm-callout-tone-sky {
+  color: var(--sky-ink);
+}
+
+.cm-callout-body {
+  flex: 1;
+  min-width: 0;
+}
+.cm-callout-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--ink-1);
+}
+.cm-callout-meta {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+/* Single-line variants read as one sentence: title, then the rest beside it. */
+.cm-callout-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+.cm-callout-line .cm-callout-meta {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.cm-callout-track {
+  width: 100%;
+  height: 5px;
+  margin-top: 7px;
+  border-radius: 999px;
+  background: var(--bar-track);
+  overflow: hidden;
+}
+.cm-callout-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 180ms linear;
+}
+html.dark .cm-callout-fill,
+html[data-theme='dark'] .cm-callout-fill {
+  background: color-mix(in srgb, var(--accent) 70%, white);
+}
+.cm-callout-fill.is-error {
+  background: var(--rose-ink);
+}
+
+/* Work in flight. A ring rather than an icon, so it reads as indefinite. */
+.cm-callout-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid color-mix(in srgb, currentColor 28%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: cm-callout-spin 0.8s linear infinite;
+}
+@keyframes cm-callout-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Something failed: a badge, not a full-height accent bar. */
+.cm-callout-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--rose-bg);
+  color: var(--rose-ink);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+/* Always a way out, kept quiet enough to stay out of the way. */
+.cm-callout-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  align-self: flex-start;
+  margin-top: 1px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition:
+    background 100ms,
+    color 100ms;
+}
+.cm-callout-close:hover {
+  background: var(--nav-hover);
+  color: var(--ink-1);
+}
+
+/* The action sits beside the text, never under it. */
+.cm-callout .btn {
+  flex: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cm-callout-fill {
+    transition: none;
+  }
+  .cm-callout-spinner {
+    animation: none;
+  }
+}
+
+/* Banner — a callout that belongs to the page rather than floating over it.
+   Same spacing, type and radius as `.cm-callout`, so the two read as one
+   family; the tone says which kind of standing condition it reports. */
+.cm-banner {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 13px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+.cm-banner-amber {
+  background: var(--amber-bg);
+  border-color: var(--amber-bord);
+  color: var(--amber-ink);
+}
+.cm-banner-accent {
+  background: var(--accent-soft);
+  border-color: var(--accent-soft-2);
+  color: var(--accent-ink);
+}
+.cm-banner-rose {
+  background: var(--rose-bg);
+  border-color: var(--rose-bord);
+  color: var(--rose-ink);
+}

@@ -1,10 +1,14 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useLoaderData, useFetcher, data, redirect } from 'react-router';
-import { message, Tooltip, Popconfirm } from 'antd';
+import { Tooltip, Popconfirm } from 'antd';
 import getPrisma from '@classmoji/database';
 import { ContentService } from '@classmoji/content';
 import { assertSlideAccess } from '@classmoji/auth/server';
-import { ClassmojiService } from '@classmoji/services';
+import {
+  ClassmojiService,
+  isCommitTooLargeRefusal,
+  uploadRefusalStatus,
+} from '@classmoji/services';
 import {
   DeckConflictError,
   DeckOpsBaseMismatchError,
@@ -30,15 +34,38 @@ import {
   type DeckThemeUrls,
   type MergeResolution,
 } from '@classmoji/services/slides';
+import {
+  REPO_REST_MAX_BYTES,
+  REPO_REST_MAX_LABEL,
+  repoFileTooLargeMessage,
+} from '@classmoji/utils/repo-limits';
+import {
+  UploadTooLargeError,
+  readLimitedFormData,
+  uploadBodyLimit,
+} from '@classmoji/utils/upload-limit';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
-import { useUser } from '~/hooks';
+import { uploadMultipart } from '@classmoji/ui-components/upload';
+import {
+  UploadReroute,
+  afterMediaFailure,
+  deckUploadErrorMessage,
+  editorMediaOptions,
+  placeDeckAsset,
+  type UploadFailure,
+} from '~/utils/mediaUpload';
+import { playableMediaUrl } from '~/utils/mediaClient';
+import { canonicalMediaUrls, deliveryHostOf } from '~/utils/mediaRefs';
+import { useToast, useUser } from '~/hooks';
 import { diffDeckSnapshots, extractDeckSnapshot, type DeckSnapshot } from '~/utils/deckOpsDiff';
 import { getThemeUrls } from '~/utils/themeService.server';
+import { loadUploadCapability } from '~/utils/uploadCapability.server';
 import {
   deckAccessFor,
   deckDeliveryContext,
   readDeckText,
   resolveDeckAssets,
+  resolveDeckMedia,
   resolveDeliveryThemeUrls,
   resolveReadThemeUrls,
   gitBlobSha,
@@ -160,7 +187,9 @@ export const loader = async ({
         headers: nonDeckHeaders({ Location: signed.url }),
       });
     }
-    if (signed.reason === 'delivery_off') {
+    // The GitHub stream behind `/download` exists only for a document that is
+    // IN GitHub; a media-backed one has nothing there to stream.
+    if (signed.reason === 'delivery_off' && !slide.media_id) {
       return new Response(null, {
         status: 302,
         headers: nonDeckHeaders({ Location: `/${encodeURIComponent(slideId)}/download` }),
@@ -434,11 +463,19 @@ export const loader = async ({
 
     // Sign the deck's image references — but never for the document the editor
     // is about to load. Entering edit mode always re-reads through
-    // `fetch-latest` (which does no image pass), so restricting this to
-    // non-edit reads is what guarantees a signed URL can never be posted back
-    // and committed into deck.json.
+    // `fetch-latest` (which signs nothing but `media://` references), so
+    // restricting this to non-edit reads keeps repo references unsigned in the
+    // editor. A media reference is the one exception, because it has no proxy
+    // to load through; `saveDeck` turns a signed media URL back into the
+    // reference on the way to the commit.
     if (mode !== 'edit') {
-      slideContent = await resolveDeckAssets(slideContent, deliveryCtx);
+      slideContent = await resolveDeckAssets(slideContent, deliveryCtx, {
+        classroomId: slide.classroom_id,
+      });
+    } else {
+      // The editor's one exception: `media://` references are signed, because
+      // they have no proxy to load through. See `resolveDeckMedia`.
+      slideContent = await resolveDeckMedia(slideContent, deliveryCtx);
     }
 
     // Strip speaker notes from content if user doesn't have permission to view them
@@ -495,18 +532,23 @@ export const loader = async ({
     }
   }
 
-  // Cloudinary video hosting is Pro-only, and the properties panel offers an
-  // "Upload to Cloudinary" button. Resolved ONLY for editors: viewers never see
-  // that button, and this loader is on the hot path for every student opening
-  // every slide, so a tier query for them would be pure cost. The real gate is
-  // in api.video.upload-cloudinary, which re-decides per request.
-  const isPro = canEdit
-    ? (await ClassmojiService.subscription.getProStateForClassroomId(slide.classroom_id)).isPro
-    : false;
+  // What this classroom's uploads can do — where the editor sends a video or a
+  // file too large for the repository (`storageTargetFor`). Resolved ONLY for
+  // editors: nobody else uploads, and this loader is on the hot path for every
+  // student opening every slide, so the Pro and usage reads would be pure cost
+  // for them. Every upload route re-derives it from the file it receives.
+  const uploadCapability = canEdit
+    ? await loadUploadCapability(slide.classroom, 'deck editor')
+    : null;
 
   return {
-    slide,
-    isPro,
+    // What the viewer reads of the slide. The classroom's organization is
+    // `gitOrgLogin` below; the present route carries what presenting needs.
+    slide: { id: slide.id, title: slide.title, classroom_id: slide.classroom_id },
+    uploadCapability,
+    // The host signed media URLs are minted on, for the editor's diff (see
+    // `canonicalMediaUrls`). Editors only, like the capability above.
+    mediaDeliveryHost: canEdit ? deliveryHostOf(process.env.CONTENT_DELIVERY_ORIGIN) : null,
     contentUrl,
     slideContent,
     contentError,
@@ -626,6 +668,31 @@ async function forgetThemeFiles(
   await ClassmojiService.contentAssets.removeContentAssets(slide.classroom_id, paths);
 }
 
+/**
+ * What an author reads when a deck save is too large — the deck's sentence, not
+ * the file one, because the author is saving a deck and has picked no file. No
+ * full stop: the save-failure toast puts one after it.
+ */
+const DECK_TOO_LARGE_MESSAGE = `This deck is larger than the ${REPO_REST_MAX_LABEL} your course repository accepts`;
+
+/**
+ * The most the deck editor's action reads of a request body.
+ *
+ * Two shapes arrive here. The image upload is multipart and carries one file,
+ * so its cap is the repository's per-file ceiling plus the multipart envelope.
+ * Every other intent — the deck save above all — is a url-encoded form whose
+ * largest field is the deck's HTML, and percent-encoding can inflate markup up
+ * to about three times (every `<`, `>`, `"` and space), so that shape gets
+ * three times the same ceiling: room for any deck the repository could store,
+ * and still a bound.
+ */
+function deckActionBodyLimit(request: Request): number {
+  const contentType = request.headers.get('content-type') ?? '';
+  return contentType.includes('multipart/form-data')
+    ? uploadBodyLimit(REPO_REST_MAX_BYTES)
+    : 3 * REPO_REST_MAX_BYTES;
+}
+
 export const action = async ({
   request,
   params,
@@ -635,8 +702,6 @@ export const action = async ({
 }) => {
   const { slideId } = params;
   if (!slideId) return { error: 'Missing slideId' };
-  const formData = await request.formData();
-  const intent = formData.get('intent');
 
   // Fetch slide to get classroom/git org info
   const slide = await getPrisma().slide.findUnique({
@@ -661,6 +726,35 @@ export const action = async ({
     slide,
     accessType: 'edit',
   });
+
+  // The body is read only now, after the gate above, and through a byte-counting
+  // reader: a caller who may not edit this deck never gets to make the process
+  // hold a byte of what they sent. See `deckActionBodyLimit` for the cap.
+  let formData: FormData;
+  try {
+    formData = await readLimitedFormData(request, deckActionBodyLimit(request));
+  } catch (error: unknown) {
+    if (error instanceof UploadTooLargeError) {
+      // The image upload is the only multipart intent, and its client settles
+      // its pending promise on `intent: 'upload-image'` — which the unread body
+      // can no longer tell us, so it is named here.
+      const multipart = (request.headers.get('content-type') ?? '').includes('multipart/form-data');
+      if (multipart) {
+        return data(
+          { intent: 'upload-image' as const, error: repoFileTooLargeMessage() },
+          { status: 413 }
+        );
+      }
+      // Everything else here is a deck save. `tooLarge` — deliberately NOT
+      // `code`, which the client answers with a whole-deck re-submit every time
+      // — lets a changes-only save fall back to ONE whole-deck save (its ops can
+      // outweigh the document they describe); a whole-deck save that is still
+      // too large shows the sentence.
+      return data({ error: DECK_TOO_LARGE_MESSAGE, tooLarge: true }, { status: 413 });
+    }
+    throw error;
+  }
+  const intent = formData.get('intent');
 
   // This action is the DECK EDITOR's action, whole and entire: themes,
   // snippets, deck images, the deck read, the preview branch — and the
@@ -876,6 +970,14 @@ export const action = async ({
   // `/content/...` ones — a signed URL that round-tripped through the editor
   // would be committed into deck.json.
   if (intent === 'fetch-latest') {
+    // The edit tier, as the editor's own loader read uses: only an editor
+    // reaches this action.
+    const editorDeliveryCtx = deckDeliveryContext(
+      slide,
+      gitOrgLogin,
+      repo,
+      deckAccessFor('viewer', { canEdit: true }, slide)
+    );
     try {
       // Phase 4c: deck.json-first, mirroring the edit-mode loader. skipCache:
       // this read refreshes the editor's conflict token — it must not serve
@@ -893,20 +995,20 @@ export const action = async ({
             loaded.deck,
             gitOrgLogin,
             repo,
-            deckDeliveryContext(
-              slide,
-              gitOrgLogin,
-              repo,
-              deckAccessFor('viewer', { canEdit: true }, slide)
-            )
+            editorDeliveryCtx
           );
           return {
             intent: 'fetch-latest',
-            content: generateDeckHtml(loaded.deck, {
-              title: slide.title,
-              themeUrls,
-              includeNotes: true,
-            }),
+            // Media references are the exception: signed, because they have no
+            // proxy to load through. See `resolveDeckMedia`.
+            content: await resolveDeckMedia(
+              generateDeckHtml(loaded.deck, {
+                title: slide.title,
+                themeUrls,
+                includeNotes: true,
+              }),
+              editorDeliveryCtx
+            ),
             content_sha: loaded.sha,
             sha_source: 'deck' as const,
           };
@@ -966,7 +1068,7 @@ export const action = async ({
 
       return {
         intent: 'fetch-latest',
-        content: result.content,
+        content: await resolveDeckMedia(result.content, editorDeliveryCtx),
         content_sha: contentSha,
         sha_source: shaSource,
       };
@@ -982,18 +1084,32 @@ export const action = async ({
   }
 
   // Upload an image to the slide's images folder
+  //
+  // EVERY answer from this intent carries `intent: 'upload-image'`, failures
+  // included: the image dialog's pending promise settles only on a response
+  // tagged with it, so an untagged error leaves the dialog spinning forever.
   if (intent === 'upload-image') {
     try {
       const file = formData.get('file');
       if (!file || !(file instanceof File)) {
-        return { error: 'No file provided' };
+        return { intent: 'upload-image' as const, error: 'No file provided' };
       }
+
+      // The storage router first: a file it sends to media (a Pro video, or one
+      // over the repository's cap on a classroom with media) is refused with
+      // `USE_MEDIA` before anything is committed.
+      await ClassmojiService.media.assertRepoTarget(slide.classroom, {
+        name: file.name,
+        size: file.size,
+      });
 
       // Convert File to Buffer for ContentService
       const arrayBuffer = await file.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
 
-      // Upload to images folder alongside the slide content
+      // Upload to images folder alongside the slide content. Same type policy
+      // as a page asset: any file where the delivery layer serves the
+      // classroom, images and PDFs elsewhere.
       const result = await ContentService.upload({
         orgLogin: gitOrgLogin,
         repo,
@@ -1001,6 +1117,7 @@ export const action = async ({
         filename: file.name,
         folder: `${slide.content_path}/images`,
         message: `Upload image for slides: ${slide.title}`,
+        fileTypes: ClassmojiService.contentDelivery.uploadFileTypes(slide.classroom),
       });
 
       // Record the row now rather than waiting for the push webhook: a deck
@@ -1023,8 +1140,29 @@ export const action = async ({
         path: result.path,
       };
     } catch (error: unknown) {
-      console.error('Failed to upload image:', error);
-      return { error: error instanceof Error ? error.message : String(error) };
+      // 409 `USE_MEDIA`: the file belongs in media (the editor's capability was
+      // stale). The editor sends it there once, to media's multipart upload,
+      // and places it by reference. Tagged like every other answer from this
+      // intent.
+      if (ClassmojiService.media.isMediaRoutingError(error)) {
+        return data(
+          { intent: 'upload-image' as const, error: error.code, message: error.message },
+          { status: 409 }
+        );
+      }
+      // A refusal keeps the service's sentence and its own status: 413 for a
+      // file over the repository's cap (ours, or GitHub's), 415 for a type or
+      // extension this classroom does not take, 400 for a bad name. Only a
+      // real failure is logged and answers 500.
+      const refused = uploadRefusalStatus(error) ?? (isCommitTooLargeRefusal(error) ? 413 : null);
+      if (!refused) console.error('Failed to upload image:', error);
+      return data(
+        {
+          intent: 'upload-image' as const,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        { status: refused ?? 500 }
+      );
     }
   }
 
@@ -1528,6 +1666,18 @@ export const action = async ({
   const saveOursSha =
     typeof rawSaveOursSha === 'string' && rawSaveOursSha ? rawSaveOursSha : undefined;
 
+  // The save response's document goes straight back into the editor (a merge
+  // remounts it, view mode shows it until the loader catches up), so its
+  // `media://` references are signed exactly as the editor's own read signs
+  // them — they have no proxy to load through. The edit tier: only an editor
+  // reaches this action. `html_sha` is always the raw document's identity.
+  const saveDeliveryCtx = deckDeliveryContext(
+    slide,
+    gitOrgLogin,
+    repo,
+    deckAccessFor('viewer', { canEdit: true }, slide)
+  );
+
   // Conflict report → 409 the chooser renders (the client re-submits the
   // same payload + resolutions + the report's ours_sha). Shared by both save
   // shapes.
@@ -1612,7 +1762,7 @@ export const action = async ({
         success: true,
         sha: result.sha,
         sha_source: 'deck' as const,
-        savedContent: result.html,
+        savedContent: await resolveDeckMedia(result.html, saveDeliveryCtx),
         // The committed index.html's IDENTITY. `sha` above is deck.json's, and
         // the viewer's read is of index.html — comparing those two would never
         // match. Hashed from the bytes just committed, which is the same object
@@ -1644,6 +1794,11 @@ export const action = async ({
           },
           { status: 409 }
         );
+      }
+      // GitHub refused the commit as too large. No `tooLarge` flag: a
+      // whole-deck retry would carry the same deck and be refused again.
+      if (isCommitTooLargeRefusal(error)) {
+        return data({ error: DECK_TOO_LARGE_MESSAGE }, { status: 413 });
       }
       console.error('Failed to save slide (ops):', error);
       return { error: error instanceof Error ? error.message : String(error) };
@@ -1802,9 +1957,12 @@ export const action = async ({
     }
 
     // Return the full HTML: it is the editor's next-session document and the
-    // baseline the next save diffs against, and it stays UNSIGNED for that.
-    // View mode no longer renders it once the loader's revalidation lands —
-    // that read is by sha through the Worker, so it is not behind this one.
+    // baseline the next save diffs against. Its repo references stay unsigned
+    // (the editor loads them through the proxy); its `media://` references are
+    // signed, as the editor's own read signs them, and the client compares
+    // media by reference (`canonicalMediaUrls`), so a fresh signature is not an
+    // edit. View mode no longer renders it once the loader's revalidation lands
+    // — that read is by sha through the Worker, so it is not behind this one.
     // sha is the DECK sha (+ sha_source 'deck') — deck.json now exists, so the
     // client's conflict token must point at it for the next save.
     // merged_with_concurrent (present iff the merge path committed) → the
@@ -1814,7 +1972,7 @@ export const action = async ({
       success: true,
       sha: saved.sha,
       sha_source: 'deck' as const,
-      savedContent: saved.html,
+      savedContent: await resolveDeckMedia(saved.html, saveDeliveryCtx),
       // index.html's identity — see the ops path above for why it is not `sha`.
       html_sha: gitBlobSha(saved.html),
       orphanedImages,
@@ -1847,15 +2005,20 @@ export const action = async ({
         { status: 409 }
       );
     }
+    if (isCommitTooLargeRefusal(error)) {
+      return data({ error: DECK_TOO_LARGE_MESSAGE }, { status: 413 });
+    }
     console.error('Failed to save slide:', error);
     return { error: error instanceof Error ? error.message : String(error) };
   }
 };
 
 export default function SlideViewer() {
+  const toast = useToast();
   const {
     slide,
-    isPro,
+    uploadCapability,
+    mediaDeliveryHost,
     contentUrl,
     slideContent,
     deckSha,
@@ -1940,24 +2103,38 @@ export default function SlideViewer() {
   // re-submit must carry the SAME ops so the server re-derives the SAME
   // conflict report the choices answer.
   const lastPostedOpsRef = useRef<{ ops: string; baseSha: string } | null>(null);
+  /**
+   * The document as the diff compares it: media by REFERENCE. Both sides of
+   * every diff pass through this — the baseline (a server read, signed at read
+   * time) and the DOM (signed whenever it was loaded) — so a media URL minted
+   * at a different moment is not an edit, and an edited slide's ops carry the
+   * `media://` reference rather than an expiring signature.
+   */
+  const mediaScope = useMemo(
+    () => ({ host: mediaDeliveryHost, classroomId: slide.classroom_id }),
+    [mediaDeliveryHost, slide.classroom_id]
+  );
   /** Capture/refresh the diff baseline from a server-rendered document. */
-  const captureBaseline = useCallback((content: unknown, sha: unknown, source: unknown): void => {
-    if (
-      typeof content === 'string' &&
-      content &&
-      typeof sha === 'string' &&
-      sha &&
-      source === 'deck' &&
-      typeof DOMParser !== 'undefined'
-    ) {
-      const snapshot = extractDeckSnapshot(content, html =>
-        new DOMParser().parseFromString(html, 'text/html')
-      );
-      baselineRef.current = snapshot ? { snapshot, baseSha: sha } : null;
-    } else {
-      baselineRef.current = null;
-    }
-  }, []);
+  const captureBaseline = useCallback(
+    (content: unknown, sha: unknown, source: unknown): void => {
+      if (
+        typeof content === 'string' &&
+        content &&
+        typeof sha === 'string' &&
+        sha &&
+        source === 'deck' &&
+        typeof DOMParser !== 'undefined'
+      ) {
+        const snapshot = extractDeckSnapshot(canonicalMediaUrls(content, mediaScope), html =>
+          new DOMParser().parseFromString(html, 'text/html')
+        );
+        baselineRef.current = snapshot ? { snapshot, baseSha: sha } : null;
+      } else {
+        baselineRef.current = null;
+      }
+    },
+    [mediaScope]
+  );
   // Bumped when a merged save lands while editing: the committed document is
   // the MERGE (not what the DOM holds), so a live editor must remount from
   // the merged savedContent — otherwise the next save, carrying the fresh
@@ -2065,24 +2242,22 @@ export default function SlideViewer() {
     }
   }, [returnUrl]);
 
-  // Update revealInstance when RevealSlides mounts/updates
-  // Needed for both edit mode (notes editing) and view mode (notes preview)
-  useEffect(() => {
-    if (revealRef.current) {
-      // Small delay to ensure Reveal.js has initialized
-      const timer = setTimeout(() => {
-        setRevealInstance(revealRef.current?.getRevealInstance?.() ?? null);
-        // Update current theme for Sandpack auto-theme detection
-        const themes = revealRef.current?.getThemes?.();
-        if (themes?.theme) {
-          setCurrentSlideTheme(themes.theme);
-        }
-      }, 100);
-      return () => clearTimeout(timer);
-    } else {
-      setRevealInstance(null);
-    }
-  }, [isEditing, editableContent, slideContent]); // Re-run when editing state or content changes
+  // RevealSlides reports its Reveal.js instance once initialize() resolves (and
+  // null when it is torn down). The notes panel, toolbar and overview all
+  // subscribe to this instance, in both edit and view mode.
+  //
+  // This used to read the instance off the ref 100ms after each render. On a
+  // large deck in view mode Reveal is not ready by then, the read came back
+  // null, and nothing ever read again — so the notes panel never saw a slide
+  // and showed "No speaker notes" on every one.
+  const handleRevealReady = useCallback((deck: RevealApi | null) => {
+    setRevealInstance(deck);
+  }, []);
+  // Sandpack auto-theme follows the theme RevealSlides extracts on each content
+  // parse — including a theme-only change that does not rebuild Reveal.
+  const handleThemeChange = useCallback(({ theme }: { theme: string; codeTheme: string }) => {
+    setCurrentSlideTheme(theme);
+  }, []);
 
   // Trigger Reveal.js layout recalculation when entering edit mode
   // This fixes centering issues caused by CSS changes (like min-height on columns)
@@ -2124,13 +2299,13 @@ export default function SlideViewer() {
   useEffect(() => {
     if (!notice) return;
     if (notice === 'preview-accepted') {
-      message.success(
+      toast.success(
         noticeAutoMerged
           ? `Preview merged —${noticeAutoMerged} change${noticeAutoMerged === 1 ? '' : 's'} merged automatically; changes are now live.`
           : 'Preview merged —changes are now live.'
       );
     } else if (notice === 'preview-discarded') {
-      message.success('Preview discarded.');
+      toast.success('Preview discarded.');
     }
     // Strip the params so a refresh doesn't re-toast
     const url = new URL(window.location.href);
@@ -2190,86 +2365,86 @@ export default function SlideViewer() {
       // message, and KEEP any open chooser / conflict banner (they hold the
       // only recovery path — do not strand the user, S8).
       setIsLoadingLatest(false);
-      message.error(`Couldn't load the latest version: ${fetcher.data.error}. Please try again.`);
+      toast.error(`Couldn't load the latest version: ${fetcher.data.error}. Please try again.`);
     } else if (fetcher.data?.intent === 'delete-images') {
       // Images were deleted
       setIsDeletingImages(false);
       if (fetcher.data.success) {
-        message.success(
+        toast.success(
           `Deleted ${fetcher.data.deleted} unused image${fetcher.data.deleted !== 1 ? 's' : ''}`
         );
         setShowOrphanedModal(false);
         setOrphanedImages([]);
       } else if (fetcher.data.error) {
-        message.error(`Failed to delete images: ${fetcher.data.error}`);
+        toast.error(`Failed to delete images: ${fetcher.data.error}`);
       }
     } else if (fetcher.data?.intent === 'save-snippet') {
       // Snippet was saved
       if (fetcher.data.success && fetcher.data.snippet) {
-        message.success(`Snippet "${fetcher.data.snippet.name}" saved!`);
+        toast.success(`Snippet "${fetcher.data.snippet.name}" saved!`);
         // Add the new snippet to the list
         setSnippets((prev: Array<{ id: string; name: string; content: string }>) => [
           ...prev,
           fetcher.data.snippet,
         ]);
       } else if (fetcher.data.error) {
-        message.error(`Failed to save snippet: ${fetcher.data.error}`);
+        toast.error(`Failed to save snippet: ${fetcher.data.error}`);
       }
     } else if (fetcher.data?.intent === 'update-snippet') {
       // Snippet was updated
       if (fetcher.data.success && fetcher.data.snippet) {
-        message.success(`Snippet "${fetcher.data.snippet.name}" updated!`);
+        toast.success(`Snippet "${fetcher.data.snippet.name}" updated!`);
         // Replace the old snippet with the updated one
         setSnippets((prev: Array<{ id: string; name: string; content: string }>) =>
           prev.map(s => (s.id === fetcher.data.oldId ? fetcher.data.snippet : s))
         );
       } else if (fetcher.data.error) {
-        message.error(`Failed to update snippet: ${fetcher.data.error}`);
+        toast.error(`Failed to update snippet: ${fetcher.data.error}`);
       }
     } else if (fetcher.data?.intent === 'delete-snippet') {
       // Snippet was deleted
       if (fetcher.data.success) {
-        message.success('Snippet deleted');
+        toast.success('Snippet deleted');
         // Remove the snippet from the list
         setSnippets((prev: Array<{ id: string; name: string; content: string }>) =>
           prev.filter(s => s.id !== fetcher.data.deletedId)
         );
       } else if (fetcher.data.error) {
-        message.error(`Failed to delete snippet: ${fetcher.data.error}`);
+        toast.error(`Failed to delete snippet: ${fetcher.data.error}`);
       }
     } else if (fetcher.data?.intent === 'save-theme') {
       // CSS theme was saved
       if (fetcher.data.success && fetcher.data.theme) {
-        message.success(`CSS theme "${fetcher.data.theme.name}" saved!`);
+        toast.success(`CSS theme "${fetcher.data.theme.name}" saved!`);
         // Add the new theme to the list
         setCssThemes((prev: Array<{ id: string; name: string; type: string; content: string }>) => [
           ...prev,
           fetcher.data.theme,
         ]);
       } else if (fetcher.data.error) {
-        message.error(`Failed to save theme: ${fetcher.data.error}`);
+        toast.error(`Failed to save theme: ${fetcher.data.error}`);
       }
     } else if (fetcher.data?.intent === 'update-theme') {
       // CSS theme was updated
       if (fetcher.data.success && fetcher.data.theme) {
-        message.success(`CSS theme "${fetcher.data.theme.name}" updated!`);
+        toast.success(`CSS theme "${fetcher.data.theme.name}" updated!`);
         // Replace the old theme with the updated one
         setCssThemes((prev: Array<{ id: string; name: string; type: string; content: string }>) =>
           prev.map(t => (t.id === fetcher.data.oldId ? fetcher.data.theme : t))
         );
       } else if (fetcher.data.error) {
-        message.error(`Failed to update theme: ${fetcher.data.error}`);
+        toast.error(`Failed to update theme: ${fetcher.data.error}`);
       }
     } else if (fetcher.data?.intent === 'delete-theme') {
       // CSS theme was deleted
       if (fetcher.data.success) {
-        message.success('CSS theme deleted');
+        toast.success('CSS theme deleted');
         // Remove the theme from the list
         setCssThemes((prev: Array<{ id: string; name: string; type: string; content: string }>) =>
           prev.filter(t => t.id !== fetcher.data.deletedId)
         );
       } else if (fetcher.data.error) {
-        message.error(`Failed to delete theme: ${fetcher.data.error}`);
+        toast.error(`Failed to delete theme: ${fetcher.data.error}`);
       }
     } else if (fetcher.data?.conflict && fetcher.data?.units) {
       // Save-merge collision report (Phase 7.5): true same-unit conflicts the
@@ -2302,6 +2477,21 @@ export default function SlideViewer() {
       saveInFlightRef.current = false;
       exitAfterSaveRef.current = false;
       setSavingInFlight(false);
+    } else if (fetcher.data?.tooLarge && lastPostedOpsRef.current && lastPostedContentRef.current) {
+      // A changes-only save was over the body cap — its ops can outweigh the
+      // document they describe. Re-run it ONCE as a whole-deck save: clearing
+      // the posted ops is what bounds this, since a whole-deck save that is
+      // still too large arrives here with no ops posted and falls through to
+      // the error toast below.
+      lastPostedOpsRef.current = null;
+      saveInFlightRef.current = true;
+      setSavingInFlight(true);
+      const payload: Record<string, string> = { content: lastPostedContentRef.current };
+      if (contentToken.content_sha) {
+        payload.content_sha = contentToken.content_sha;
+        payload.sha_source = contentToken.sha_source;
+      }
+      fetcher.submit(payload, { method: 'post' });
     } else if (fetcher.data?.code && lastPostedContentRef.current) {
       // A chooser re-submit was refused (stale ours_sha pin, conflict set
       // changed) OR an ops save answered OPS_BASE_MISMATCH. Re-run the plain
@@ -2325,7 +2515,10 @@ export default function SlideViewer() {
     } else if (fetcher.data?.savedContent) {
       // After save, update our local content to match what was saved. This is
       // the EDITOR's copy: it seeds the next edit session and is what the next
-      // save diffs against, and it must stay unsigned for that round trip.
+      // save diffs against. Its repo references are unsigned; its media ones
+      // are signed like the editor's own read, so a remount (or view mode,
+      // until the loader lands) plays them — and the diff compares media by
+      // reference (`mediaScope`), so the fresh signature is not an edit.
       setEditableContent(fetcher.data.savedContent);
       // View mode wants the loader's signed copy instead — but not yet. The
       // action has only just returned; the loader revalidation React Router
@@ -2366,7 +2559,7 @@ export default function SlideViewer() {
       if (typeof fetcher.data.merged_with_concurrent === 'number') {
         const n = fetcher.data.merged_with_concurrent;
         if (n > 0) {
-          message.success(`Saved — merged with ${n} concurrent change${n === 1 ? '' : 's'}`);
+          toast.success(`Saved — merged with ${n} concurrent change${n === 1 ? '' : 's'}`);
         }
       }
       // Check if there are orphaned images to clean up
@@ -2397,7 +2590,7 @@ export default function SlideViewer() {
       saveInFlightRef.current = false;
       exitAfterSaveRef.current = false;
       setSavingInFlight(false);
-      message.error(
+      toast.error(
         `Couldn't save: ${fetcher.data.error}. Your changes are still here — please try again.`
       );
     }
@@ -2443,26 +2636,62 @@ export default function SlideViewer() {
     if (outcome.viewFromLoader) setViewFromLoader(true);
   }, [fetcher.state, deckSha]);
 
-  // Handle image upload - returns a promise that resolves with the image URL
+  // Handle image upload - returns a promise that resolves with the image URL.
+  //
+  // Routed first: a file the storage router sends to media (a Pro video, or
+  // anything over the repository's cap on a classroom with media) goes straight
+  // there from the browser and is placed by its playable URL; a refusal is the
+  // router's own sentence. Everything else takes the deck's repository upload.
+  // The capability can be stale, so the server's answer wins, ONCE
+  // (`placeDeckAsset`): the repository answering `USE_MEDIA` sends the file to
+  // media, and media turning away a file the repository can take (not Pro any
+  // more, media unavailable, `USE_REPO`) sends it to the repository. A full
+  // media quota is refused with the server's sentence and never falls back.
+  // `first` lets a caller that already knows skip the router.
   const handleImageUpload = useCallback(
-    async (file: File): Promise<string> => {
-      return new Promise<string>((resolve, reject) => {
-        const formData = new FormData();
-        formData.append('intent', 'upload-image');
-        formData.append('file', file);
+    async (file: File, first?: 'repo' | 'media'): Promise<string> =>
+      placeDeckAsset(
+        file,
+        uploadCapability,
+        {
+          toMedia: async mediaFile => {
+            try {
+              const { ref } = await uploadMultipart({
+                file: mediaFile,
+                classroomId: slide.classroom_id,
+                options: editorMediaOptions(mediaFile),
+                endpoints: { base: '/api/media' },
+              });
+              return await playableMediaUrl(slide.id, ref);
+            } catch (error: unknown) {
+              const outcome = afterMediaFailure(
+                error as UploadFailure,
+                mediaFile,
+                uploadCapability
+              );
+              if (outcome.kind === 'repo') throw new UploadReroute('repo');
+              throw new Error(outcome.message ?? 'Upload cancelled.');
+            }
+          },
+          toRepo: repoFile =>
+            new Promise<string>((resolve, reject) => {
+              const formData = new FormData();
+              formData.append('intent', 'upload-image');
+              formData.append('file', repoFile);
 
-        fetcher.submit(formData, {
-          method: 'post',
-          encType: 'multipart/form-data',
-        });
+              fetcher.submit(formData, {
+                method: 'post',
+                encType: 'multipart/form-data',
+              });
 
-        // We'll resolve this in the useEffect when we get the response
-        // Store the resolve/reject for later
-        window.__imageUploadResolve = resolve;
-        window.__imageUploadReject = reject;
-      });
-    },
-    [fetcher]
+              // Settled by the effect below when the response arrives.
+              window.__imageUploadResolve = resolve;
+              window.__imageUploadReject = reject;
+            }),
+        },
+        first
+      ),
+    [fetcher, uploadCapability, slide.classroom_id, slide.id]
   );
 
   // Handle image upload response
@@ -2470,8 +2699,12 @@ export default function SlideViewer() {
     if (fetcher.data?.intent === 'upload-image') {
       if (fetcher.data.success && fetcher.data.url) {
         window.__imageUploadResolve?.(fetcher.data.url);
+      } else if (fetcher.data.error === 'USE_MEDIA') {
+        // The file belongs in media: `placeDeckAsset` sends it there, once.
+        window.__imageUploadReject?.(new UploadReroute('media'));
       } else if (fetcher.data.error) {
-        window.__imageUploadReject?.(new Error(fetcher.data.error));
+        // The server's sentence, never its code.
+        window.__imageUploadReject?.(new Error(deckUploadErrorMessage(fetcher.data)));
       }
       // Clean up
       delete window.__imageUploadResolve;
@@ -2521,7 +2754,7 @@ export default function SlideViewer() {
         contentToken.content_sha === baseline.baseSha &&
         typeof DOMParser !== 'undefined'
       ) {
-        const currSnapshot = extractDeckSnapshot(content, html =>
+        const currSnapshot = extractDeckSnapshot(canonicalMediaUrls(content, mediaScope), html =>
           new DOMParser().parseFromString(html, 'text/html')
         );
         const ops = currSnapshot ? diffDeckSnapshots(baseline.snapshot, currSnapshot) : null;
@@ -2545,7 +2778,7 @@ export default function SlideViewer() {
       }
       return payload;
     },
-    [contentToken]
+    [contentToken, mediaScope]
   );
 
   // Save the current slide content and, once the committed content is ready,
@@ -2758,7 +2991,10 @@ export default function SlideViewer() {
       onDeleteTheme={handleDeleteTheme}
       customThemes={customThemes}
       sharedThemes={sharedThemes}
-      isPro={isPro}
+      uploadCapability={uploadCapability}
+      classroomId={slide.classroom_id}
+      slideId={slide.id}
+      onUploadAsset={handleImageUpload}
     >
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
         {/* Navbar - uses grid layout to center toolbar when editing */}
@@ -3039,6 +3275,8 @@ export default function SlideViewer() {
                 canEdit={effectiveCanEdit}
                 isEditing={isEditing}
                 onContentChange={handleContentChange}
+                onRevealReady={handleRevealReady}
+                onThemeChange={handleThemeChange}
                 customThemes={customThemes}
                 sharedThemes={sharedThemes}
               />

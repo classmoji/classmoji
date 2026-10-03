@@ -102,7 +102,9 @@ const ImpersonationBanner = ({
     <>
       {/* Spacer to push content below the fixed banner */}
       <div className="h-10" />
-      <div className="fixed top-0 left-0 right-0 z-50 bg-amber-500 text-amber-950 py-2 px-4 flex items-center justify-center gap-4 shadow-md">
+      {/* System-level, so it spans the viewport rather than floating, but it
+          takes the same tone and spacing as every other standing notice. */}
+      <div className="cm-banner cm-banner-amber fixed top-0 left-0 right-0 z-50 justify-center rounded-none border-x-0 border-t-0">
         <IconUserOff size={18} />
         <span className="font-medium">
           You are viewing as: <strong>{session?.user?.name || session?.user?.email}</strong>

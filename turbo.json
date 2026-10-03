@@ -115,6 +115,13 @@
       // tested nothing. Declared on the task rather than in globalEnv because
       // these steer tests only — they are not part of any build's identity.
       "env": [
+        // The two opt-ins the DB-backed services suites read. Neither was named
+        // here, so `CONTENT_INDEX_INTEGRATION=1 npm run test` reached turbo and
+        // stopped: the suite saw an unset variable and skipped itself, reporting
+        // green for tests that never ran. Same class of quiet failure as the
+        // E2E_* names below.
+        "CONTENT_INDEX_INTEGRATION",
+        "DOCS_INDEX_INTEGRATION",
         "E2E_TARGET",
         "E2E_PAGES_URL",
         "E2E_SLIDES_URL",
@@ -187,6 +194,7 @@
     "TRIGGER_API_URL",
     "TRIGGER_PUBLIC_API_URL",
     "TRIGGER_PROJECT_ID",
+    "TRIGGER_DEV_BRANCH",
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "EXPLORATION_MODE",
@@ -195,7 +203,14 @@
     "LLM_TEMPERATURE",
     "LLM_MAX_TOKENS",
     "EXPLORATION_MODEL",
+    "QUIZ_QUESTION_EFFORT",
+    "QUIZ_GRADING_EFFORT",
+    "EXPLORATION_EFFORT",
+    "SYLLABUS_BOT_EFFORT",
+    "AI_MAX_BUDGET_USD",
     "SYLLABUS_BOT_MODEL",
+    "QUIZ_TRIGGER_RUNTIME",
+    "TRIGGER_AI_SDK_OTEL_AUTOREGISTER",
     "STRIPE_SECRET_KEY",
     "STRIPE_WEBHOOK_SECRET",
     "STRIPE_PRO_PRICE_ID",
@@ -233,6 +248,10 @@
     "CONTENT_SIGNING_SECRET_PREVIOUS",
     "CONTENT_WORKER_SHARED_SECRET",
     "CONTENT_DELIVERY_ORIGIN",
+    "MEDIA_R2_ACCOUNT_ID",
+    "MEDIA_R2_ACCESS_KEY_ID",
+    "MEDIA_R2_SECRET_ACCESS_KEY",
+    "MEDIA_R2_BUCKET",
     "CLOUDFLARE_ACCOUNT_ID",
     "CLOUDFLARE_BROWSER_RENDERING_TOKEN",
     "CLOUDFLARE_WORKERS_AI_TOKEN",

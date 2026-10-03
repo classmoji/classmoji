@@ -1,5 +1,6 @@
 import { assertClassroomMutationAllowed, type ClassroomStatusInput } from '@classmoji/auth/server';
-import { prisma, getAuthSession } from '~/utils/db.server.ts';
+import { getAuthSession } from '~/utils/db.server.ts';
+import { findClassroomRole } from '~/utils/classroomRole.server.ts';
 import type { PageForContent } from '~/types/pages.ts';
 
 /**
@@ -33,6 +34,13 @@ interface AssertPageAccessOptions {
   request: Request;
   page: PageForContent;
   accessType?: 'view' | 'edit';
+  /**
+   * Count only a membership whose invite was accepted, as the class site does
+   * (`resolveViewer`): an invited-but-never-joined user is not a member there,
+   * and must not be one here either. Off by default for the callers that
+   * predate it.
+   */
+  acceptedOnly?: boolean;
 }
 
 interface PageAccessResult {
@@ -54,6 +62,7 @@ export async function assertPageAccess({
   request,
   page,
   accessType = 'view',
+  acceptedOnly = false,
 }: AssertPageAccessOptions): Promise<PageAccessResult> {
   const result: PageAccessResult = {
     canView: false,
@@ -73,19 +82,16 @@ export async function assertPageAccess({
   if (authData) {
     result.userId = authData.userId;
 
-    // Get membership in this classroom
-    const membership = await prisma.classroomMembership.findFirst({
-      where: {
-        user_id: authData.userId,
-        classroom_id: page.classroom_id,
-      },
-      include: { classroom: true },
+    // Their role in this classroom: the highest of the rows they hold there.
+    const role = await findClassroomRole({
+      userId: authData.userId,
+      classroomId: page.classroom_id,
+      acceptedOnly,
     });
 
-    result.membership = membership;
+    result.membership = role ? { role } : null;
 
-    if (membership) {
-      const role = membership.role;
+    if (role) {
       const isStaff = role === 'OWNER' || role === 'TEACHER';
       const isTeachingTeam = isStaff || role === 'ASSISTANT';
 

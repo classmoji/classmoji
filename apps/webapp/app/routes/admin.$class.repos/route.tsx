@@ -3,10 +3,10 @@ import { useState } from 'react';
 import { IconFolder, IconFileText } from '@tabler/icons-react';
 
 import RepositoriesTable from '~/components/features/repositories/RepositoriesTable';
-import { SearchInput, ButtonNew, RequireRole, TriggerProgress } from '~/components';
-import { useGlobalFetcher } from '~/hooks';
+import { SearchInput, ButtonNew, RequireRole } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -21,19 +21,22 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   // the same context the Assignments page gives it: every assignment (the full
   // row to edit, and which quizzes/forms are already bound), the modules it
   // may belong to, and the content it may link.
-  const [repositories, assignments, modules, candidates] = await Promise.all([
+  const [repositories, assignments, modules, candidates, quizzesVisible] = await Promise.all([
     ClassmojiService.repository.findByClassroomSlug(classSlug!),
     ClassmojiService.assignment.listForClassroom(classroom.id),
     ClassmojiService.module.findByClassroomSlug(classSlug!),
     ClassmojiService.module.getCandidateContent(classroom.id),
+    loadQuizzesVisible(classroom.id),
   ]);
 
+  // Where the classroom's quizzes are hidden, its quiz assignments and the
+  // quizzes the editor could bind never leave the loader.
   return {
     repositories,
     editor: {
-      assignments,
+      assignments: quizzesVisible ? assignments : assignments.filter(a => a.type !== 'QUIZ'),
       modules: modules.map(m => ({ id: m.id, title: m.title })),
-      quizzes: candidates.quizzes,
+      quizzes: quizzesVisible ? candidates.quizzes : [],
       forms: candidates.forms,
       pages: candidates.pages,
       slides: candidates.slides,
@@ -44,16 +47,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
   const { pathname } = useLocation();
   const { repositories, editor } = loaderData;
-  const { fetcher } = useGlobalFetcher();
   const [query, setQuery] = useState('');
-  const fetcherData = fetcher!.data as
-    | {
-        triggerSession?: {
-          numReposToCreate?: number;
-          numIssuesToCreate?: number;
-        };
-      }
-    | undefined;
+  // The assistant section renders this same page read-only. The URL is the
+  // authority: /admin is OWNER-gated in the loader, so being here is the
+  // permission.
+  const canEdit = pathname.split('/')[1] === 'admin';
 
   return (
     <div className="min-h-full relative">
@@ -75,54 +73,31 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
           </div>
         </div>
 
-        <RequireRole roles={['OWNER']}>
-          <div className="flex items-center gap-3">
-            <SearchInput
-              query={query}
-              setQuery={setQuery}
-              placeholder="Search by title"
-              className="flex-1 min-w-0 sm:grow-0 sm:basis-56"
-            />
+        <div className="flex items-center gap-3">
+          {/* Search is reading, not writing: an assistant scanning a long list
+              needs it as much as the owner does. */}
+          <SearchInput
+            query={query}
+            setQuery={setQuery}
+            placeholder="Search by title"
+            className="flex-1 min-w-0 sm:grow-0 sm:basis-56"
+          />
 
+          <RequireRole roles={['OWNER']}>
             <NavLink to={`${pathname}/form`} data-tour="repos-new">
               <ButtonNew>New repository</ButtonNew>
             </NavLink>
-          </div>
-        </RequireRole>
+          </RequireRole>
+        </div>
       </div>
 
-      <>
-        {(fetcherData?.triggerSession?.numReposToCreate ||
-          fetcherData?.triggerSession?.numIssuesToCreate) && (
-          <TriggerProgress
-            operation="PUBLISH_OR_SYNC_ASSIGNMENT"
-            validIdentifiers={[
-              'gh-create_git_repo',
-              'cf-create_git_repo',
-              'gh-create_git_repo_assignment',
-              'cf-create_git_repo_assignment',
-              'gh-add_collaborator_to_repo',
-            ]}
-          />
+      <RepositoriesTable
+        repositories={repositories.filter((repository: { title: string }) =>
+          repository.title.toLowerCase().includes(query.toLowerCase())
         )}
-
-        <TriggerProgress
-          operation="AUTOGRADE"
-          validIdentifiers={['dispatch_autograde_workflow', 'gh-commit_autograde_workflow']}
-        />
-        <TriggerProgress operation="UPDATE_REPOS" validIdentifiers={['update_git_repo']} />
-        <TriggerProgress
-          operation="CALCULATE_REPO_CONTRIBUTIONS"
-          validIdentifiers={['calculate_repo_contributions']}
-        />
-
-        <RepositoriesTable
-          repositories={repositories.filter((repository: { title: string }) =>
-            repository.title.toLowerCase().includes(query.toLowerCase())
-          )}
-          editor={editor}
-        />
-      </>
+        editor={editor}
+        canEdit={canEdit}
+      />
     </div>
   );
 };

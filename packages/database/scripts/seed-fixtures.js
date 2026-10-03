@@ -14,6 +14,66 @@
  */
 
 /**
+ * Idempotently create or refresh a user with a Github account. Git identity
+ * lives on the Account, so the upsert is keyed on the account: by Github id,
+ * else by username (a placeholder row for a user known only by login).
+ *
+ * Returns the user row plus `login` (the Github username), the shape callers
+ * read. A seeded user with an email is marked verified: the app sends
+ * unverified users to registration.
+ *
+ * @param {import('@prisma/client').PrismaClient} prisma
+ * @param {{ login: string, githubId: string, name?: string, email?: string,
+ *   image?: string, school_id?: string, accessToken?: string,
+ *   keepImage?: boolean }} identity `keepImage` leaves an existing user's avatar alone.
+ */
+export async function upsertGithubUser(
+  prisma,
+  { login, githubId, name, email, image, school_id = 'dev', accessToken, keepImage = false }
+) {
+  const verified = email ? { emailVerified: true } : {};
+  const tokenData = accessToken ? { access_token: accessToken } : {};
+  const imageUpdate = keepImage ? {} : { image };
+  const account =
+    (await prisma.account.findUnique({
+      where: { provider_id_account_id: { provider_id: 'github', account_id: githubId } },
+    })) ?? (await prisma.account.findFirst({ where: { provider_id: 'github', username: login } }));
+
+  let user;
+  if (account) {
+    await prisma.account.update({
+      where: { id: account.id },
+      data: { account_id: githubId, username: login, ...imageUpdate, ...tokenData },
+    });
+    user = await prisma.user.update({
+      where: { id: account.user_id },
+      data: { ...imageUpdate, ...verified },
+    });
+  } else {
+    user = await prisma.user.create({
+      data: {
+        name,
+        email,
+        image,
+        school_id,
+        ...verified,
+        accounts: {
+          create: {
+            provider_id: 'github',
+            account_id: githubId,
+            username: login,
+            email,
+            image,
+            ...tokenData,
+          },
+        },
+      },
+    });
+  }
+  return { ...user, login };
+}
+
+/**
  * Team + GROUP-repository fixture for group-grading and team-scoped tests.
  *
  * Creates (all in the given classroom):
@@ -166,14 +226,14 @@ export async function seedForeignClassroom(prisma, { org }) {
       login: 'fake-other-owner',
       name: 'Other Owner',
       email: 'other-owner@dev.local',
-      provider_id: '10000006',
+      githubId: '10000006',
       role: 'OWNER',
     },
     {
       login: 'fake-other-student',
       name: 'Other Student',
       email: 'other-student@dev.local',
-      provider_id: '10000007',
+      githubId: '10000007',
       role: 'STUDENT',
     },
   ].map(u => ({ ...u, image: `https://github.com/identicons/${u.login}.png` }));
@@ -182,19 +242,7 @@ export async function seedForeignClassroom(prisma, { org }) {
   let studentUser = null;
 
   for (const u of foreignUsers) {
-    const user = await prisma.user.upsert({
-      where: { login: u.login },
-      update: { image: u.image },
-      create: {
-        provider: 'GITHUB',
-        provider_id: u.provider_id,
-        login: u.login,
-        name: u.name,
-        email: u.email,
-        image: u.image,
-        school_id: 'dev',
-      },
-    });
+    const user = await upsertGithubUser(prisma, u);
 
     await prisma.classroomMembership.upsert({
       where: {

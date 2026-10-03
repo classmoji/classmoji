@@ -119,6 +119,68 @@ interface AgentResponse {
   payload: Record<string, unknown>;
 }
 
+/**
+ * The ai-agent codes whose `error` text is fixed copy written for the person
+ * using the feature (see apps/ai-agent src/websocket/handlers.js). Every other
+ * code carries text that is not: API_ERROR's lines describe the upstream
+ * failure ("temporarily busy", "a configuration issue"), and the rest carry
+ * whatever the ai-agent caught, which is text for an operator.
+ */
+const USER_FACING_ERROR_CODES = new Set([
+  'BUDGET_EXCEEDED',
+  'SESSION_NOT_FOUND',
+  // A quiz message sent while the attempt's previous turn is still running:
+  // "Your last message is still being answered."
+  'turn_in_progress',
+]);
+
+/** The message an ERROR reply gets when its own text is not user-facing copy. */
+export const AI_AGENT_GENERIC_ERROR = 'Something went wrong. Please try again.';
+
+/**
+ * The code a request is rejected with when its connection to the ai-agent
+ * drops before the reply: the ai-agent exited (a deploy), crashed or was
+ * killed. Nothing can answer it on that connection any more, so it fails at
+ * once instead of at its timeout (up to 300 s). Retryable: the next request
+ * opens a new connection.
+ */
+export const AGENT_DISCONNECTED = 'AGENT_DISCONNECTED';
+
+/**
+ * An ERROR reply from the ai-agent. `code` and `retryable` come over from its
+ * payload, so a caller can tell one failure from another (a BUDGET_EXCEEDED
+ * stop from an API_ERROR, say) without matching on the message text.
+ *
+ * `message` is the ai-agent's text only for the codes in
+ * USER_FACING_ERROR_CODES; anything else gets AI_AGENT_GENERIC_ERROR, and the
+ * ai-agent's own text moves to `detail`, which callers log and never return.
+ * A failure of the connection itself (not configured, connect or request
+ * timeout) rejects with a plain Error written for the log, so callers answer
+ * anything without an allow-listed `code` with their own fixed copy.
+ */
+export class AIAgentRequestError extends Error {
+  code?: string;
+  retryable?: boolean;
+  detail?: string;
+
+  constructor(message: string, code?: string, retryable?: boolean, detail?: string) {
+    super(message);
+    this.name = 'AIAgentRequestError';
+    this.code = code;
+    this.retryable = retryable;
+    this.detail = detail;
+  }
+}
+
+/** Build the rejection for an ai-agent ERROR payload (see AIAgentRequestError). */
+const agentRequestError = (payload?: { error?: string; code?: string; retryable?: boolean }) => {
+  const { error, code, retryable } = payload ?? {};
+  if (error && code && USER_FACING_ERROR_CODES.has(code)) {
+    return new AIAgentRequestError(error, code, retryable);
+  }
+  return new AIAgentRequestError(AI_AGENT_GENERIC_ERROR, code, retryable, error);
+};
+
 export async function sendRequest(
   type: string,
   payload: Record<string, unknown>,
@@ -149,6 +211,22 @@ export async function sendRequest(
       settled = true;
       clearTimeout(timeoutHandle);
       socket.off('message', messageHandler);
+      socket.off('disconnect', disconnectHandler);
+    };
+
+    // The connection this request went out on dropped: its reply can never
+    // arrive. Only requests sent on THIS socket are listening here.
+    const disconnectHandler = (reason?: string) => {
+      if (settled) return;
+      cleanup();
+      reject(
+        new AIAgentRequestError(
+          AI_AGENT_GENERIC_ERROR,
+          AGENT_DISCONNECTED,
+          true,
+          `ai-agent connection closed before the reply (${reason ?? 'unknown reason'})`
+        )
+      );
     };
 
     // Create a unique handler for this request
@@ -161,6 +239,8 @@ export async function sendRequest(
         conversationId?: string;
         step?: Record<string, unknown>;
         error?: string;
+        code?: string;
+        retryable?: boolean;
       };
     }) => {
       // SECURITY: Filter by requestId (primary) or sessionId (fallback for legacy)
@@ -217,13 +297,19 @@ export async function sendRequest(
       // Handle errors - must match our request
       if (msg.type === 'ERROR' && (matchesRequest || matchesSession)) {
         cleanup();
-        reject(new Error(msg.payload?.error || 'Request failed'));
+        reject(agentRequestError(msg.payload));
         return;
       }
     };
 
+    // Fire-and-forget messages (session ends) wait for nothing, so a dropped
+    // connection is not a failure for them: they resolve as they always have.
+    const fireAndForgetTypes = ['QUIZ_END', 'SYLLABUS_BOT_END', 'PROMPT_ASSISTANT_END'];
+    const fireAndForget = fireAndForgetTypes.includes(type) && responseTypes.length === 0;
+
     // Register message handler
     socket.on('message', messageHandler);
+    if (!fireAndForget) socket.on('disconnect', disconnectHandler);
 
     // Set timeout
     timeoutHandle = setTimeout(() => {
@@ -240,8 +326,7 @@ export async function sendRequest(
     });
 
     // Special handling for fire-and-forget messages (no response expected)
-    const fireAndForgetTypes = ['QUIZ_END', 'SYLLABUS_BOT_END', 'PROMPT_ASSISTANT_END'];
-    if (fireAndForgetTypes.includes(type) && responseTypes.length === 0) {
+    if (fireAndForget) {
       // Give it a moment to send, then resolve
       setTimeout(() => {
         cleanup();

@@ -21,6 +21,7 @@ import {
   answerableFields,
   coerceAnswers,
   defaultAnswers,
+  exclusiveSelection,
   friendlyErrorMap,
   identityPlan,
   type IdentityPlan,
@@ -739,13 +740,14 @@ const ROSTER_VISIBLE_MATCHES = 40;
  * multi, a bare id for single — which is what `coerceValue` and the contract's
  * answer schema both expect.
  *
- * The list is INLINE rather than a popover. A popover needs focus-loss
- * handling, an escape key, and a decision about what a click outside means; a
- * bordered box with a scroll needs none of that, works identically on a phone,
- * and cannot end up in the state where the options are open over the submit
- * button. `useState` lives here (a module-scope component) and not in the
- * renderer — see the note above `FormBody` for why that placement is
- * load-bearing.
+ * The list is INLINE rather than a popover — it pushes the page down instead
+ * of floating over it, so it can never cover the submit button, and it works
+ * the same on a phone. But it only shows while the person is searching:
+ * focusing or typing in the box opens it, and Escape, a click outside the
+ * control, or tabbing out of it closes it. An always-open list read as a
+ * dropdown that would not close. `useState` lives here (a module-scope
+ * component) and not in the renderer — see the note above `FormBody` for why
+ * that placement is load-bearing.
  */
 // `register` is in the props (it is the shared ControlProps shape) and
 // deliberately unused: this field is not a DOM input, so there is nothing to
@@ -756,6 +758,26 @@ function RosterSelect({ field, name, watch, setValue, invalid }: ControlProps) {
   const options = optionsOf(field);
   const label = String(field.label ?? 'people');
   const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const container = useRef<HTMLDivElement>(null);
+  const search = useRef<HTMLInputElement>(null);
+
+  // A click anywhere outside the control closes the list. This is a document
+  // listener rather than the input's blur because Safari does not focus a
+  // button on click, so a blur's relatedTarget cannot tell "clicked an option"
+  // from "clicked the page". `click`, not `pointerdown`: on a phone a swipe to
+  // scroll starts with a pointerdown, and must not close the list.
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (event: MouseEvent) => {
+      if (!container.current?.contains(event.target as Node)) setOpen(false);
+    };
+    // Capture phase: it runs before React's handler, which removes a picked
+    // option from the list — by the bubble phase that button is detached and
+    // `contains` would call a pick an outside click.
+    document.addEventListener('click', onClick, true);
+    return () => document.removeEventListener('click', onClick, true);
+  }, [open]);
 
   const raw = watch(name) as unknown;
   const selectedIds: string[] = multiple
@@ -776,6 +798,9 @@ function RosterSelect({ field, name, watch, setValue, invalid }: ControlProps) {
   const choose = (optionId: string) => {
     setValue(name, multiple ? [...selectedIds, optionId] : optionId, { shouldDirty: true });
     setQuery('');
+    // Multi-pick keeps the list open for the next name; single-pick is done.
+    if (multiple) search.current?.focus();
+    else setOpen(false);
   };
 
   const drop = (optionId: string) => {
@@ -798,6 +823,24 @@ function RosterSelect({ field, name, watch, setValue, invalid }: ControlProps) {
       // Two roster fields on one form offer the SAME people. Without a handle
       // per field, "click Jordan Okafor" is ambiguous on the page and in a test.
       data-testid={`roster-${field.id}`}
+      ref={container}
+      onKeyDown={event => {
+        if (event.key === 'Escape' && open) {
+          event.preventDefault();
+          // Focus first: focusing the search opens the list (onFocus), so the
+          // close has to be the later of the two batched updates.
+          search.current?.focus();
+          setOpen(false);
+        }
+      }}
+      // Tabbing out of the control closes the list. Focus moving to one of its
+      // own options or chips (relatedTarget inside) keeps it open, and a null
+      // relatedTarget (a click that focused nothing) is left to the pointer
+      // listener above.
+      onBlur={event => {
+        const next = event.relatedTarget as Node | null;
+        if (next && !event.currentTarget.contains(next)) setOpen(false);
+      }}
       className={`rounded-md border bg-white dark:bg-gray-900 ${
         invalid ? 'border-red-400' : 'border-gray-300 dark:border-gray-600'
       }`}
@@ -830,15 +873,22 @@ function RosterSelect({ field, name, watch, setValue, invalid }: ControlProps) {
           <input
             type="text"
             role="combobox"
-            // The list is always rendered below the box (no popover), so it is
-            // permanently "expanded" — and it is the element this control owns.
-            aria-expanded="true"
+            ref={search}
+            aria-expanded={open}
             aria-controls={`roster-${field.id}-list`}
             aria-autocomplete="list"
             aria-label={`Search ${label}`}
             autoComplete="off"
             value={query}
-            onChange={event => setQuery(event.target.value)}
+            onChange={event => {
+              setQuery(event.target.value);
+              setOpen(true);
+            }}
+            onFocus={() => setOpen(true)}
+            onClick={() => setOpen(true)}
+            onKeyDown={event => {
+              if (event.key === 'ArrowDown') setOpen(true);
+            }}
             placeholder={
               field.optionSource === 'teaching_team'
                 ? 'Search the teaching team…'
@@ -849,6 +899,7 @@ function RosterSelect({ field, name, watch, setValue, invalid }: ControlProps) {
           />
           <ul
             id={`roster-${field.id}-list`}
+            hidden={!open}
             className="max-h-48 overflow-y-auto border-t border-gray-200 py-1 dark:border-gray-700"
           >
             {matches.slice(0, ROSTER_VISIBLE_MATCHES).map(option => (
@@ -983,10 +1034,43 @@ function Control({ field, name, register, watch, setValue, invalid }: ControlPro
           </div>
         );
 
-      case 'multiselect':
+      case 'multiselect': {
+        const options = optionsOf(field);
+        const registration = register(name);
+        /**
+         * `exclusive` options ("Prefer not to say") can't be combined with any
+         * other choice; the contract refuses the combination and the server
+         * re-checks it. Ticking one unticks the rest, and ticking anything else
+         * unticks it.
+         *
+         * The sibling boxes are updated in the DOM BEFORE react-hook-form's own
+         * handler runs, because that handler reads the group's value from its
+         * registered checkboxes. Doing it this way round means the value RHF
+         * stores, and the re-validation it runs after a failed submit, both see
+         * the final selection rather than the combination for one tick.
+         */
+        const onChange: typeof registration.onChange = event => {
+          const box = event.target as HTMLInputElement;
+          if (box.checked && options.some(option => option.exclusive)) {
+            const boxes = Array.from(
+              box
+                .closest('fieldset')
+                ?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]') ?? []
+            );
+            const keep = new Set(
+              exclusiveSelection(
+                options,
+                boxes.filter(other => other.checked).map(other => other.value),
+                box.value
+              )
+            );
+            for (const other of boxes) other.checked = keep.has(other.value);
+          }
+          return registration.onChange(event);
+        };
         return (
           <fieldset {...labelled} aria-describedby={described} className="flex flex-col gap-2">
-            {optionsOf(field).map(option => (
+            {options.map(option => (
               <label
                 key={option.id}
                 className="flex items-start gap-2 text-sm text-gray-800 dark:text-gray-100"
@@ -994,7 +1078,8 @@ function Control({ field, name, register, watch, setValue, invalid }: ControlPro
                 <input
                   type="checkbox"
                   value={option.id}
-                  {...register(name)}
+                  {...registration}
+                  onChange={onChange}
                   className="mt-1 h-4 w-4 shrink-0"
                 />
                 <span>
@@ -1005,6 +1090,7 @@ function Control({ field, name, register, watch, setValue, invalid }: ControlPro
             ))}
           </fieldset>
         );
+      }
 
       case 'switch':
         return (

@@ -1,32 +1,103 @@
+import { useEffect } from 'react';
 import { useFetcher, useLocation, useNavigate, useParams, Outlet } from 'react-router';
+import { useCallout } from '@classmoji/ui-components';
 import { Table, Button, Typography, Tag, Space, Tooltip, Popconfirm } from 'antd';
 import { IconSend, IconBook, IconCalendar, IconTrash } from '@tabler/icons-react';
 import { TableActionButtons, EditableCell, ButtonNew } from '~/components';
 import { ClassmojiService, QuizAccessError } from '@classmoji/services';
+import { canAuthorQuiz, quizAssignmentKeysIn, quizAuthorSettingKeysIn } from '@classmoji/utils';
+import {
+  QUIZ_AUTHOR_ONLY,
+  deleteQuizCopy,
+  publishQuizCopy,
+  quizListStatus,
+  scheduledLabel,
+  type QuizListStatus,
+} from './quizList';
 import { namedAction } from 'remix-utils/named-action';
 import {
   addClassroomAuditLog,
   assertClassroomAccess,
   assertClassroomMutationAllowed,
-  assertProTier,
 } from '~/utils/helpers';
+import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import type { Route } from './+types/route';
 import type React from 'react';
 import type { TablerIconsProps } from '@tabler/icons-react';
 
 const { Text } = Typography;
 
+/**
+ * Said alongside a successful save that leaves a quiz published while every
+ * document linked as its source material is still a draft: students cannot
+ * start it until one is published. Saving is still allowed.
+ */
+const SOURCE_MATERIAL_DRAFT_WARNING =
+  'All source material is still draft; students will not be able to start this quiz.';
+
+/** At least one linked document, and every one of them a draft. */
+const allSourceMaterialDraft = (
+  quiz: { source_material?: ReadonlyArray<{ is_draft: boolean }> } | null | undefined
+) => Boolean(quiz?.source_material?.length) && quiz!.source_material!.every(doc => doc.is_draft);
+
+/**
+ * quiz.create/update refuse source material that is malformed or not in this
+ * classroom with a ResourceLinkServiceError, and roll the quiz write back.
+ * Matched by name so the check does not depend on which copy of the class the
+ * error came from.
+ */
+const isSourceMaterialRefusal = (error: unknown) =>
+  (error as { name?: unknown } | null)?.name === 'ResourceLinkServiceError';
+
+/**
+ * The refusal's `conflict` code: another save of the same quiz's material
+ * committed first, and this one was rolled back whole. Saving again is the fix.
+ */
+const isSourceMaterialConflict = (error: unknown) =>
+  (error as { code?: unknown } | null)?.code === 'conflict';
+
+const SOURCE_MATERIAL_CONFLICT =
+  "Someone else saved this quiz's source material at the same time. Reload and save again.";
+
+/**
+ * quiz.create/update refuse "Paths to exclude" they cannot save (empty,
+ * absolute, "..", too many) with a QuizExcludedPathsError before writing
+ * anything; its message names the pattern and is shown as is. Matched by name,
+ * as above.
+ */
+const isExcludedPathsRefusal = (error: unknown): error is Error =>
+  (error as { name?: unknown } | null)?.name === 'QuizExcludedPathsError';
+
+/**
+ * quiz.update refuses to close a quiz that is still a draft with a
+ * QuizStatusChangeError ("Publish the quiz before closing it"), shown as is.
+ * Matched by name, as above.
+ */
+const isStatusChangeRefusal = (error: unknown): error is Error =>
+  (error as { name?: unknown } | null)?.name === 'QuizStatusChangeError';
+
+/**
+ * quiz.create/update/publish refuse an assignment write they cannot make (no
+ * module, a module outside this class, a value out of range) with a
+ * QuizAssignmentError carrying the HTTP status; its message is shown as is.
+ * Matched by name, as above.
+ */
+const isAssignmentRefusal = (error: unknown): error is Error & { status?: number } =>
+  (error as { name?: unknown } | null)?.name === 'QuizAssignmentError';
+
 interface AdminQuiz {
   id: string;
   name: string;
   moduleId: string | null;
-  moduleTitle: string;
+  moduleTitle: string | null;
   systemPrompt: string | null;
   rubricPrompt: string | null;
   subject: string;
   difficultyLevel: string;
   dueDate: string | Date | null;
-  status: string;
+  /** Opens: students see the quiz from then on (null = when published). */
+  releaseAt: string | Date | null;
+  status: QuizListStatus;
   weight: number;
   questionCount: number;
   maxAttempts: number;
@@ -59,14 +130,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     attemptedAction: 'view_admin_quizzes',
   });
 
-  await assertProTier(classSlug);
-
-  // Get classroom settings
-  const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
-
-  // Check if quizzes are enabled for this classroom
-  if (settings?.quizzes_enabled === false) {
-    throw new Response('Quizzes are currently disabled for this classroom', { status: 403 });
+  // A classroom without quizzes (not Pro, switched off, or no AI agent) has no
+  // quiz screens: the URL answers like any other that names nothing.
+  if (!(await quizzesVisibleOrThrow(classroom.id))) {
+    throw new Response('Not Found', { status: 404 });
   }
 
   const user = await ClassmojiService.user.findById(userId);
@@ -88,7 +155,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     throw error;
   }
 
-  // Transform quizzes for frontend compatibility
+  // Transform quizzes for frontend compatibility. Module, due date, weight and
+  // status are the quiz's assignment's; a quiz with none is in no module.
+  const now = new Date();
   const transformedQuizzes = quizzesWithAttempts.map(quiz => {
     // Find admin's attempt for preview functionality
     const adminAttempt = quiz.attempts?.find(a => String(a.user_id) === String(userId));
@@ -107,28 +176,34 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       }
     }
 
+    const assignment = quiz.assignment;
     return {
       id: quiz.id, // Already a string UUID
       name: quiz.name,
-      moduleId: quiz.repository_id?.toString() || null,
-      moduleTitle: quiz.repository?.title || 'Unlinked',
+      moduleId: assignment?.module?.id ?? null,
+      moduleTitle: assignment?.module?.title ?? null,
       systemPrompt: quiz.system_prompt,
       rubricPrompt: quiz.rubric_prompt,
       subject: quiz.subject || '',
       difficultyLevel: quiz.difficulty_level || 'Beginner',
-      dueDate: quiz.due_date,
-      status: quiz.status,
-      weight: quiz.weight,
+      dueDate: assignment ? assignment.student_deadline : quiz.due_date,
+      releaseAt: assignment?.release_at ?? null,
+      status: quizListStatus(assignment, now),
+      weight: assignment ? assignment.weight : quiz.weight,
       questionCount: quiz.question_count || 5,
       maxAttempts: quiz.max_attempts ?? 1,
       gradingStrategy: quiz.grading_strategy || 'HIGHEST',
       includeCodeContext: quiz.include_code_context || false,
       attemptsCount: quiz.attemptsCount,
       avgScore: quiz.avgScore,
-      // Include admin's attempt data for preview
+      // Include admin's attempt data for preview. Only the fields a preview
+      // needs: the attempt row is joined to its user, whose row carries far
+      // more than this list uses.
       attemptStatus,
       score,
-      userAttempt: adminAttempt || null,
+      userAttempt: adminAttempt
+        ? { id: adminAttempt.id, completed_at: adminAttempt.completed_at }
+        : null,
     };
   });
 
@@ -137,6 +212,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     classroomId: classroom.id,
     quizzes: transformedQuizzes,
     userLogin: user?.login || null,
+    // Owner and teacher create, publish, weight and delete quizzes; a
+    // teaching assistant edits their content (Decision 4(b)). The action
+    // enforces it; this only shapes the screen.
+    canAuthor: canAuthorQuiz(membership?.role),
   };
 }
 
@@ -156,7 +235,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
-  await assertProTier(classSlug);
+  // Checked here as well as in the loader: a tab opened before quizzes were
+  // hidden can still post, and a publish emails the class.
+  if (!(await quizzesVisibleOrThrow(classroom.id))) {
+    throw new Response('Not Found', { status: 404 });
+  }
 
   // Create FormData with the action from the JSON
   const formData = new FormData();
@@ -185,6 +268,59 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       status: 404,
       headers: { 'Content-Type': 'application/json' },
     });
+
+  const sourceMaterialNotFound = () =>
+    new Response(JSON.stringify({ error: 'Some of the source material is not in this class' }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+  const sourceMaterialConflict = () =>
+    new Response(JSON.stringify({ error: SOURCE_MATERIAL_CONFLICT }), {
+      status: 409,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+  const excludedPathsRefused = (error: Error) =>
+    new Response(JSON.stringify({ error: error.message }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+  /** A QuizStatusChangeError from quiz.update: its message, as the form shows it. */
+  const statusChangeRefused = (error: Error) =>
+    new Response(JSON.stringify({ error: error.message }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+  /** A ResourceLinkServiceError from quiz.create/update, as the form shows it. */
+  const sourceMaterialRefused = (error: unknown) =>
+    isSourceMaterialConflict(error) ? sourceMaterialConflict() : sourceMaterialNotFound();
+
+  /** A QuizAssignmentError: its message, at its status. */
+  const assignmentRefused = (error: Error & { status?: number }) =>
+    new Response(JSON.stringify({ error: error.message }), {
+      status: error.status ?? 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+  // Decision 4(b): the owner and teachers author quizzes (create, publish,
+  // weight, schedule, delete); a teaching assistant edits a quiz's content and
+  // name. Enforced here, per intent, because /teacher and /assistant re-export
+  // this action and the gate above admits the whole teaching team.
+  const canAuthor = canAuthorQuiz(membership!.role);
+  const authorOnly = () =>
+    new Response(JSON.stringify({ error: QUIZ_AUTHOR_ONLY }), {
+      status: 403,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+  /** The draft warning for a quiz that is now published, read after the write. */
+  const publishedDraftWarning = async (quizId: string) =>
+    allSourceMaterialDraft(await ClassmojiService.quiz.findById(quizId))
+      ? { warning: SOURCE_MATERIAL_DRAFT_WARNING }
+      : {};
 
   /**
    * Resolve a quiz THAT BELONGS TO THE CLASSROOM THIS REQUEST WAS AUTHORIZED
@@ -228,20 +364,35 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
   return namedAction(formData, {
     async createQuiz() {
+      if (!canAuthor) return authorOnly();
       const { ...quizData } = data;
       const repository = await resolveRepositoryId(quizData.repositoryId);
       if (!repository.ok) return notFound();
-      const newQuiz = await ClassmojiService.quiz.create({
-        ...quizData,
-        classroomId: classroom.id,
-      });
+      let newQuiz;
+      try {
+        // The quiz, its assignment (module checked against this classroom)
+        // and its source material are written in one transaction.
+        newQuiz = await ClassmojiService.quiz.create({
+          ...quizData,
+          classroomId: classroom.id,
+        });
+      } catch (error) {
+        if (isSourceMaterialRefusal(error)) return sourceMaterialRefused(error);
+        if (isExcludedPathsRefusal(error)) return excludedPathsRefused(error);
+        if (isAssignmentRefusal(error)) return assignmentRefused(error);
+        throw error;
+      }
       await audit('CREATE', newQuiz.id, {
         tool: 'web:quizzes.create',
         name: newQuiz.name,
         repository_id: newQuiz.repository_id ?? null,
+        module_id: newQuiz.assignment?.module_id ?? null,
       });
+      const warning = newQuiz.assignment?.is_published
+        ? await publishedDraftWarning(newQuiz.id)
+        : {};
       return new Response(
-        JSON.stringify({ success: 'Quiz created successfully', quizId: newQuiz.id }),
+        JSON.stringify({ success: 'Quiz created successfully', quizId: newQuiz.id, ...warning }),
         {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -250,23 +401,45 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async updateQuiz() {
+      // A teaching assistant saves content and the name; any assignment field
+      // in the body (module, opens, due, closes, weight, tokens, published, or
+      // the old flat due date, weight and status), or the number of
+      // questions, max attempts or grading strategy, refuses the whole save.
+      if (
+        !canAuthor &&
+        (quizAssignmentKeysIn(data).length > 0 || quizAuthorSettingKeysIn(data).length > 0)
+      ) {
+        return authorOnly();
+      }
       if (!(await loadQuizInClassroom(data.id))) return notFound();
       const repository = await resolveRepositoryId(data.repositoryId);
       if (!repository.ok) return notFound();
-      await ClassmojiService.quiz.update(data.id, data);
+      try {
+        await ClassmojiService.quiz.update(data.id, data);
+      } catch (error) {
+        if (isSourceMaterialRefusal(error)) return sourceMaterialRefused(error);
+        if (isExcludedPathsRefusal(error)) return excludedPathsRefused(error);
+        if (isStatusChangeRefusal(error)) return statusChangeRefused(error);
+        if (isAssignmentRefusal(error)) return assignmentRefused(error);
+        throw error;
+      }
       await audit('UPDATE', data.id, {
         tool: 'web:quizzes.update',
         // Field NAMES only. The body carries system and rubric prompts, which
         // are long free text and do not belong in an audit payload.
         fields: Object.keys(data).filter(key => key !== '_action' && key !== 'id'),
       });
-      return new Response(JSON.stringify({ success: 'Quiz updated successfully' }), {
+      const warning =
+        data.assignment?.isPublished === true ? await publishedDraftWarning(data.id) : {};
+      return new Response(JSON.stringify({ success: 'Quiz updated successfully', ...warning }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
     },
 
     async deleteQuiz() {
+      // Deleting takes the quiz's assignment and every attempt with it (D-C).
+      if (!canAuthor) return authorOnly();
       const quiz = await loadQuizInClassroom(data.id);
       if (!quiz) return notFound();
       await ClassmojiService.quiz.delete(data.id);
@@ -278,20 +451,38 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async publishQuiz() {
-      if (!(await loadQuizInClassroom(data.id))) return notFound();
-      await ClassmojiService.quiz.publish(data.id);
+      if (!canAuthor) return authorOnly();
+      const quiz = await loadQuizInClassroom(data.id);
+      if (!quiz) return notFound();
+      // Publishes the quiz's assignment: the one publish function, which
+      // tells the class once (where quizzes show, and once the quiz is open).
+      try {
+        await ClassmojiService.quiz.publish(data.id);
+      } catch (error) {
+        if (isAssignmentRefusal(error)) return assignmentRefused(error);
+        throw error;
+      }
       await audit('UPDATE', data.id, { tool: 'web:quizzes.publish', published: true });
-      return new Response(JSON.stringify({ success: 'Quiz published successfully' }), {
+      // Publishing does not change the material, so the row read above says.
+      const warning = allSourceMaterialDraft(quiz)
+        ? { warning: SOURCE_MATERIAL_DRAFT_WARNING }
+        : {};
+      return new Response(JSON.stringify({ success: 'Quiz published successfully', ...warning }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
     },
 
     async updateWeight() {
+      if (!canAuthor) return authorOnly();
       if (!(await loadQuizInClassroom(data.id))) return notFound();
-      await ClassmojiService.quiz.update(data.id, {
-        weight: data.weight,
-      });
+      // The weight is the quiz's assignment's.
+      try {
+        await ClassmojiService.quiz.update(data.id, { assignment: { weight: data.weight } });
+      } catch (error) {
+        if (isAssignmentRefusal(error)) return assignmentRefused(error);
+        throw error;
+      }
       await audit('UPDATE', data.id, {
         tool: 'web:quizzes.update_weight',
         fields: ['weight'],
@@ -329,13 +520,38 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   });
 };
 
+const STATUS_TAGS: Record<QuizListStatus, { color: string; text: string }> = {
+  PUBLISHED: { color: 'green', text: 'Published' },
+  SCHEDULED: { color: 'blue', text: 'Scheduled' },
+  DRAFT: { color: 'orange', text: 'Draft' },
+  CLOSED: { color: 'default', text: 'Closed' },
+  NO_MODULE: { color: 'red', text: 'No module' },
+};
+
 export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
-  const { quizzes } = loaderData;
+  const { quizzes, canAuthor } = loaderData;
   const fetcher = useFetcher();
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
-  // Served under every prefix this route's gate allows (/admin and /teacher),
-  // so links stay on the prefix the user arrived on.
+  const callout = useCallout();
+
+  // A publish whose source material is all still draft succeeds with a
+  // warning; a refused action (publish, weight, delete) says why.
+  useEffect(() => {
+    if (fetcher.state !== 'idle') return;
+    if (typeof fetcher.data?.error === 'string') {
+      callout.show({ variant: 'error', title: fetcher.data.error });
+    } else if (fetcher.data?.warning) {
+      callout.show({ variant: 'info', title: fetcher.data.warning });
+    }
+    // `callout` is stable per CalloutProvider.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetcher.state, fetcher.data]);
+  // Served under every prefix this route's gate allows (/admin, /teacher and
+  // /assistant), so links stay on the prefix the user arrived on. What the
+  // screen offers follows the viewer's role, not the prefix: the owner and
+  // teachers get create, weight, publish and delete; everyone gets view and
+  // edit (an assistant's edit saves content only).
   const rolePrefix = useLocation().pathname.split('/')[1];
 
   const handleEditQuiz = (quiz: AdminQuiz) => {
@@ -378,10 +594,6 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
     navigate(`/${rolePrefix}/${classSlug}/quizzes/${quiz.id}`);
   };
 
-  const totalWeight = quizzes
-    .filter(q => (q.status as string) !== 'ARCHIVED')
-    .reduce((acc: number, q) => acc + q.weight, 0);
-
   const ActionButton = ({
     icon: Icon,
     tooltip,
@@ -421,31 +633,41 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       render: (name: string) => <span className="font-medium text-ink-1">{name}</span>,
     },
     {
-      title: 'Repository',
+      title: 'Module',
       dataIndex: 'moduleTitle',
-      key: 'repository',
+      key: 'module',
       width: 240,
-      sorter: (a: AdminQuiz, b: AdminQuiz) => a.moduleTitle.localeCompare(b.moduleTitle),
-      render: (title: string) => (
-        <Space>
-          <IconBook size={16} className="text-gray-400" />
-          <Text type="secondary">{title}</Text>
-        </Space>
-      ),
+      sorter: (a: AdminQuiz, b: AdminQuiz) =>
+        (a.moduleTitle ?? '').localeCompare(b.moduleTitle ?? ''),
+      render: (title: string | null) =>
+        title ? (
+          <Space>
+            <IconBook size={16} className="text-gray-400" />
+            <Text type="secondary">{title}</Text>
+          </Space>
+        ) : (
+          <Text type="secondary">—</Text>
+        ),
     },
     {
-      title: 'Weight (%)',
+      title: 'Weight',
       key: 'weight',
       width: 110,
       sorter: (a: AdminQuiz, b: AdminQuiz) => a.weight - b.weight,
-      render: (quiz: AdminQuiz) => (
-        <EditableCell
-          record={quiz}
-          dataIndex="weight"
-          onUpdate={handleUpdateWeight}
-          format="number"
-        />
-      ),
+      // The weight is the assignment's: editable once the quiz is in a module,
+      // by the owner or a teacher.
+      render: (quiz: AdminQuiz) =>
+        canAuthor && quiz.moduleId ? (
+          <EditableCell
+            record={quiz}
+            dataIndex="weight"
+            onUpdate={handleUpdateWeight}
+            format="number"
+            min={0}
+          />
+        ) : (
+          <Text>{`${quiz.weight}%`}</Text>
+        ),
     },
     {
       title: 'Due Date',
@@ -471,18 +693,14 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
-      width: 110,
+      // Wide enough for "Scheduled" with its date.
+      width: 200,
       sorter: (a: AdminQuiz, b: AdminQuiz) => a.status.localeCompare(b.status),
-      render: (status: string) => {
-        const statusConfig: Record<string, { color: string; text: string }> = {
-          PUBLISHED: { color: 'green', text: 'Published' },
-          DRAFT: { color: 'orange', text: 'Draft' },
-          ARCHIVED: { color: 'default', text: 'Archived' },
-        };
-        const config = statusConfig[status] || statusConfig.DRAFT;
+      render: (status: QuizListStatus, record: AdminQuiz) => {
+        const config = STATUS_TAGS[status] ?? STATUS_TAGS.DRAFT;
         return (
           <Tag color={config.color} className="font-semibold">
-            {config.text}
+            {status === 'SCHEDULED' ? scheduledLabel(record.releaseAt) : config.text}
           </Tag>
         );
       },
@@ -491,8 +709,10 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       title: 'Attempts',
       key: 'attempts',
       width: 110,
+      // Shown wherever there are attempts: a quiz unpublished or taken out
+      // of its module keeps the attempts already made.
       render: (_: unknown, record: AdminQuiz) =>
-        record.status === 'PUBLISHED' ? (
+        record.attemptsCount > 0 ? (
           <Space direction="vertical" size={0}>
             <Text>{record.attemptsCount} attempts</Text>
             {record.avgScore !== null && (
@@ -512,16 +732,18 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
         <TableActionButtons
           onView={() => handleViewQuiz(record)}
           onEdit={() => handleEditQuiz(record)}
-          onDelete={() => handleDeleteQuiz(record.id)}
+          onDelete={canAuthor ? () => handleDeleteQuiz(record.id) : undefined}
+          deleteConfirmTitle="Delete quiz"
+          deleteConfirmDescription={deleteQuizCopy(record.moduleTitle)}
         >
-          {record.status === 'DRAFT' && (
+          {canAuthor && record.status === 'DRAFT' && (
             <ActionButton
               icon={IconSend}
               tooltip="Publish Quiz"
               color="green"
               popconfirmProps={{
                 title: 'Publish Quiz',
-                description: 'This will make the quiz available to all students.',
+                description: publishQuizCopy(record.releaseAt),
                 onConfirm: (e?: React.MouseEvent) => {
                   e?.stopPropagation();
                   handlePublishQuiz(record.id);
@@ -555,9 +777,11 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
             <Button icon={<IconTrash size={16} />}>Clear My Attempts</Button>
           </Popconfirm>
 
-          <ButtonNew action={() => navigate(`/${rolePrefix}/${classSlug}/quizzes/form`)}>
-            New quiz
-          </ButtonNew>
+          {canAuthor && (
+            <ButtonNew action={() => navigate(`/${rolePrefix}/${classSlug}/quizzes/form`)}>
+              New quiz
+            </ButtonNew>
+          )}
         </Space>
       </div>
 
@@ -574,36 +798,12 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
             showSizeChanger: true,
             showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} quizzes`,
           }}
-          summary={() => (
-            <Table.Summary.Row>
-              <Table.Summary.Cell index={0} className="font-semibold">
-                Total
-              </Table.Summary.Cell>
-              <Table.Summary.Cell index={1}></Table.Summary.Cell>
-              <Table.Summary.Cell index={2} className="font-bold">
-                <span
-                  className={
-                    totalWeight === 100
-                      ? 'text-green-600'
-                      : totalWeight > 100
-                        ? 'text-red-600'
-                        : 'text-orange-600'
-                  }
-                >
-                  {totalWeight}%
-                </span>
-              </Table.Summary.Cell>
-              <Table.Summary.Cell index={3}></Table.Summary.Cell>
-              <Table.Summary.Cell index={4}></Table.Summary.Cell>
-              <Table.Summary.Cell index={5}></Table.Summary.Cell>
-              <Table.Summary.Cell index={6}></Table.Summary.Cell>
-            </Table.Summary.Row>
-          )}
           locale={{
             emptyText: (
               <div className="text-center py-12 text-gray-500">
                 <div className="font-medium">No quizzes created yet</div>
-                <div className="text-sm">Create your first quiz to get started!</div>
+                {/* Only the owner and teachers create quizzes. */}
+                {canAuthor && <div className="text-sm">Create your first quiz to get started!</div>}
               </div>
             ),
           }}

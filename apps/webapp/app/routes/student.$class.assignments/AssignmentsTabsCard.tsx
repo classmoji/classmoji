@@ -1,40 +1,36 @@
 import { useState } from 'react';
-import { Link, useParams } from 'react-router';
 import dayjs from 'dayjs';
+import { Link, useParams } from 'react-router';
 import { motion, useReducedMotion } from 'framer-motion';
-import { IconCheck, IconExternalLink } from '@tabler/icons-react';
+import { IconExternalLink } from '@tabler/icons-react';
+import type { StudentCourseworkRow } from '@classmoji/services';
 import Emoji from '~/components/ui/display/Emoji';
 import TokenExtensionPopover from '~/components/features/TokenExtensionPopover';
 import { CommitCount } from '~/components/features/analytics';
+import {
+  CourseworkStatusPill,
+  CourseworkTypeTag,
+} from '~/components/features/assignments/CourseworkTags';
 import { POP_SPRING } from '~/utils/motion';
+import { formatDeadline } from './formatDeadline';
+import { extensionNote } from './extensionNote';
 
+const NOTE_TONE = {
+  info: 'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300',
+  good: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
+} as const;
+
+/** The Current / Completed split: a done row is submitted, completed or closed. */
 export type AssignmentStatus = 'current' | 'completed';
 
-export interface AssignmentRow {
-  id: string;
-  assignmentTitle: string;
-  repositoryTitle: string;
-  moduleType: string | null;
-  status: AssignmentStatus;
-  gradesReleased: boolean;
-  studentDeadline: string | null;
-  repoUrl: string | null;
-  /** Commits in the student's repo, from the last analytics refresh. */
-  commitCount: number | null;
-  issueUrl: string | null;
-  grades: { id: string; emoji: string }[];
-  gradersSummary: string;
-  numLateHours: number;
-  isLateOverride: boolean;
-  tokensPerHour: number;
-}
+type TabKey = 'current' | 'completed' | 'all';
 
 interface AssignmentsTabsCardProps {
-  rows: AssignmentRow[];
+  rows: StudentCourseworkRow[];
   balance: number;
+  /** The tab shown first; Current unless said otherwise. */
+  initialTab?: TabKey;
 }
-
-type TabKey = 'current' | 'completed' | 'all';
 
 const TAB_ORDER: { key: TabKey; label: string }[] = [
   { key: 'current', label: 'Current' },
@@ -47,44 +43,68 @@ const moduleTypeLabel: Record<string, string> = {
   GROUP: 'Group',
 };
 
-const statusPillStyle: Record<AssignmentStatus, string> = {
-  current: 'bg-[#D4A289]/15 text-[#8a5b3a] dark:bg-[#D4A289]/20 dark:text-[#E8C4AC]',
-  completed: 'bg-[#619462]/15 text-[#3f6a40] dark:bg-[#619462]/20 dark:text-[#9BC39C]',
-};
-
-const statusPillLabel: Record<AssignmentStatus, string> = {
-  current: 'Not submitted',
-  completed: 'Submitted',
-};
-
 const emptyCopy: Record<TabKey, string> = {
   current: 'No current assignments. You’re all caught up.',
-  completed: 'Nothing submitted yet.',
+  completed: 'Nothing completed yet.',
   all: 'No assignments yet.',
 };
 
-const formatDeadline = (deadline: string) => {
-  const target = dayjs(deadline);
-  const today = dayjs().startOf('day');
-  const days = target.startOf('day').diff(today, 'day');
-  if (days < 0) return `overdue · ${target.format('MMM D')}`;
-  if (days === 0) return 'due today';
-  if (days === 1) return 'due tomorrow';
-  return target.format('MMM D');
+const Dash = () => <span className="text-gray-400 dark:text-gray-600">—</span>;
+
+const attemptsLine = (row: StudentCourseworkRow) => {
+  if (row.attemptsUsed === null) return null;
+  const used = row.attemptsUsed;
+  if (!row.maxAttempts) return `${used} ${used === 1 ? 'attempt' : 'attempts'} used`;
+  return `${used} of ${row.maxAttempts} ${row.maxAttempts === 1 ? 'attempt' : 'attempts'} used`;
 };
 
-const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
-  const [active, setActive] = useState<TabKey>('current');
+/** The row's title, linked to where the student does the work. */
+const TitleLink = ({ row }: { row: StudentCourseworkRow }) => {
+  const className =
+    'inline-flex items-center gap-1.5 font-medium text-ink-0! hover:underline underline-offset-2';
+  if (!row.href) return <span className="font-medium text-ink-0">{row.title}</span>;
+  if (!row.external) {
+    return (
+      <Link to={row.href} className={className}>
+        {row.title}
+      </Link>
+    );
+  }
+  const title =
+    row.type === 'FORM'
+      ? 'Open the form'
+      : row.repo?.issueUrl
+        ? 'Open the GitHub issue for this assignment'
+        : 'Open the repository you submit this in';
+  return (
+    <a href={row.href} target="_blank" rel="noreferrer" title={title} className={className}>
+      <span>{row.title}</span>
+      <IconExternalLink size={13} className="shrink-0 text-gray-400 dark:text-gray-500" />
+    </a>
+  );
+};
+
+const AssignmentsTabsCard = ({
+  rows,
+  balance,
+  initialTab = 'current',
+}: AssignmentsTabsCardProps) => {
+  const [active, setActive] = useState<TabKey>(initialTab);
   const reducedMotion = useReducedMotion();
   const { class: classSlug } = useParams();
 
+  // An untracked row (a PUBLIC form, open or closed) is neither still to do
+  // nor done for this student: it is listed under All only.
+  const tabOf = (row: StudentCourseworkRow): AssignmentStatus | null =>
+    !row.tracked ? null : row.done ? 'completed' : 'current';
+
   const counts: Record<TabKey, number> = {
-    current: rows.filter(r => r.status === 'current').length,
-    completed: rows.filter(r => r.status === 'completed').length,
+    current: rows.filter(r => tabOf(r) === 'current').length,
+    completed: rows.filter(r => tabOf(r) === 'completed').length,
     all: rows.length,
   };
 
-  const filtered = active === 'all' ? rows : rows.filter(r => r.status === active);
+  const filtered = active === 'all' ? rows : rows.filter(r => tabOf(r) === active);
 
   return (
     <div className="h-full flex flex-col">
@@ -113,9 +133,7 @@ const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
             >
               {label}
               <span
-                className={`ml-2 text-xs tabular-nums ${
-                  isActive ? 'text-ink-3' : 'text-ink-4'
-                }`}
+                className={`ml-2 text-xs tabular-nums ${isActive ? 'text-ink-3' : 'text-ink-4'}`}
               >
                 {counts[key]}
               </span>
@@ -134,13 +152,10 @@ const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
             <table className="w-full text-sm">
               <thead className="text-xs font-semibold tracking-[0.08em] uppercase text-ink-3">
                 <tr className="border-b border-line">
-                  <th className="text-left px-4 py-3 font-semibold">Repository</th>
-                  <th className="text-left px-4 py-3 font-semibold">Issue</th>
-                  <th className="text-left px-4 py-3 font-semibold hidden md:table-cell">Type</th>
+                  <th className="text-left px-4 py-3 font-semibold w-[1%]">Type</th>
+                  <th className="text-left px-4 py-3 font-semibold">Assignment</th>
                   <th className="text-left px-4 py-3 font-semibold">Status</th>
-                  <th className="text-left px-4 py-3 font-semibold hidden lg:table-cell">
-                    Grading
-                  </th>
+                  <th className="text-left px-4 py-3 font-semibold hidden lg:table-cell">Grade</th>
                   <th className="text-left px-4 py-3 font-semibold hidden lg:table-cell">
                     Graders
                   </th>
@@ -152,153 +167,208 @@ const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
               </thead>
               <tbody>
                 {filtered.map(row => {
+                  // Only a row still to do counts down to (or past) its date.
+                  const tab = tabOf(row) ?? 'completed';
+                  const repo = row.repo;
                   const canRequestRegrade =
-                    row.status === 'completed' && row.gradesReleased && !!classSlug;
-                  const isLate =
-                    row.status === 'current' && row.numLateHours > 0 && !row.isLateOverride;
+                    !!repo && row.done && repo.gradesReleased && !!classSlug;
+                  // Late by the hours left after any the student bought: still
+                  // counting on an open row, fixed at the submission's time on
+                  // a submitted one.
+                  const isLate = !!repo && repo.numLateHours > 0 && !repo.isLateOverride;
+                  // Extension hours can be bought at any time, before the
+                  // deadline or after it, submitted or not. The rows with
+                  // nothing to buy have no deadline, or were submitted on time
+                  // and cannot change any more: graded, or submitted by
+                  // closing the issue. (A push-mode row submitted on time can
+                  // still take a later push inside the hours bought.)
+                  const submittedOnTimeAndSettled =
+                    !!repo &&
+                    row.done &&
+                    repo.numLateHours === 0 &&
+                    (canRequestRegrade || repo.submissionMode !== 'REPO');
+                  const canExtend =
+                    !!repo &&
+                    !!row.deadline &&
+                    repo.tokensPerHour > 0 &&
+                    !repo.isLateOverride &&
+                    !submittedOnTimeAndSettled;
+                  // The date stays the assignment's own; a note under it says
+                  // what the hours bought did.
+                  const note = repo
+                    ? extensionNote({
+                        deadline: row.deadline,
+                        done: row.done,
+                        extensionHours: repo.extensionHours,
+                        numLateHours: repo.numLateHours,
+                        isLateOverride: repo.isLateOverride,
+                        closedAt: repo.closedAt,
+                      })
+                    : null;
+                  const meta = [
+                    row.module.title,
+                    row.isExtraCredit ? 'Extra credit' : null,
+                    attemptsLine(row),
+                  ].filter(Boolean);
+
                   return (
                     <tr
-                      key={row.id}
+                      key={row.assignmentId}
                       className="border-b last:border-b-0 border-stone-100 dark:border-neutral-800/70 hover:bg-stone-50/70 dark:hover:bg-neutral-800/40 transition-colors align-top"
                     >
-                      <td className="px-4 py-3 text-gray-600 dark:text-gray-300">
-                        {row.repoUrl ? (
-                          <span className="inline-flex items-center gap-2 min-w-0">
-                            <a
-                              href={row.repoUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              title="Open your repository on GitHub"
-                              className="inline-flex items-center gap-1.5 max-w-[12rem] rounded-md text-gray-700 dark:text-gray-200 hover:text-ink-0 hover:underline underline-offset-2 transition-colors"
-                            >
-                              <span className="truncate">
-                                {row.repositoryTitle || 'Repository'}
-                              </span>
-                              <IconExternalLink
-                                size={13}
-                                className="shrink-0 text-gray-400 dark:text-gray-500"
-                              />
-                            </a>
-                            {row.commitCount !== null && (
-                              <CommitCount snapshot={{ total_commits: row.commitCount }} />
-                            )}
-                          </span>
-                        ) : (
-                          <span className="block truncate max-w-[12rem]">
-                            {row.repositoryTitle || '—'}
-                          </span>
-                        )}
+                      <td className="px-4 py-3">
+                        <CourseworkTypeTag type={row.type} />
                       </td>
                       <td className="px-4 py-3">
-                        {row.moduleType === 'INDIVIDUAL' && row.issueUrl ? (
-                          <a
-                            href={row.issueUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            title="Open the GitHub issue for this assignment"
-                            className="inline-flex items-center gap-1.5 font-medium text-ink-0 hover:underline underline-offset-2"
-                          >
-                            <span>{row.assignmentTitle}</span>
-                            <IconExternalLink
-                              size={13}
-                              className="shrink-0 text-gray-400 dark:text-gray-500"
-                            />
-                          </a>
-                        ) : (
-                          <span className="font-medium text-ink-0">{row.assignmentTitle}</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 hidden md:table-cell text-gray-600 dark:text-gray-300">
-                        {row.moduleType ? (
-                          (moduleTypeLabel[row.moduleType] ??
-                          row.moduleType.charAt(0) + row.moduleType.slice(1).toLowerCase())
-                        ) : (
-                          <span className="text-gray-400 dark:text-gray-600">—</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        {row.status === 'completed' ? (
-                          <motion.span
-                            initial={reducedMotion ? false : { scale: 0.6, opacity: 0 }}
-                            animate={{ scale: 1, opacity: 1 }}
-                            transition={POP_SPRING}
-                            className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${statusPillStyle[row.status]}`}
-                          >
-                            <IconCheck size={12} stroke={3} />
-                            {statusPillLabel[row.status]}
-                          </motion.span>
-                        ) : (
-                          <div className="flex items-center gap-1.5">
-                            <span
-                              className={`inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full ${statusPillStyle[row.status]}`}
-                            >
-                              {statusPillLabel[row.status]}
+                        <div className="flex flex-col gap-0.5 min-w-0">
+                          <TitleLink row={row} />
+                          <span className="text-xs text-ink-3">{meta.join(' · ')}</span>
+                          {repo && (
+                            // The student's own repository: the only place they
+                            // reach it, with its commits and the kind of repo.
+                            <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-gray-600 dark:text-gray-300">
+                              {repo.repoUrl ? (
+                                <a
+                                  href={repo.repoUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  title="Open your repository on GitHub"
+                                  className="inline-flex items-center gap-1 max-w-[14rem] text-gray-700! dark:text-gray-200! hover:text-ink-0! hover:underline underline-offset-2 transition-colors"
+                                >
+                                  <span className="truncate">
+                                    {repo.repositoryTitle || 'Repository'}
+                                  </span>
+                                  <IconExternalLink
+                                    size={12}
+                                    className="shrink-0 text-gray-400 dark:text-gray-500"
+                                  />
+                                </a>
+                              ) : (
+                                <span className="truncate max-w-[14rem]">
+                                  {repo.repositoryTitle || '—'}
+                                </span>
+                              )}
+                              {repo.commitCount !== null && (
+                                <CommitCount snapshot={{ total_commits: repo.commitCount }} />
+                              )}
+                              {repo.moduleType && (
+                                <span className="text-ink-3">
+                                  {moduleTypeLabel[repo.moduleType] ??
+                                    repo.moduleType.charAt(0) +
+                                      repo.moduleType.slice(1).toLowerCase()}
+                                </span>
+                              )}
                             </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        {row.status === null ? (
+                          <Dash />
+                        ) : (
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {row.status === 'SUBMITTED' || row.status === 'COMPLETED' ? (
+                              <motion.span
+                                initial={reducedMotion ? false : { scale: 0.6, opacity: 0 }}
+                                animate={{ scale: 1, opacity: 1 }}
+                                transition={POP_SPRING}
+                                className="inline-flex"
+                              >
+                                <CourseworkStatusPill status={row.status} />
+                              </motion.span>
+                            ) : (
+                              <CourseworkStatusPill status={row.status} />
+                            )}
                             {isLate && (
                               <span className="inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-700 dark:text-orange-300">
-                                {row.numLateHours}h late
+                                {repo!.numLateHours}h late
                               </span>
                             )}
                           </div>
                         )}
                       </td>
                       <td className="px-4 py-3 hidden lg:table-cell">
-                        {/* A released grade shows whether or not the student has
-                            submitted: staff can grade an open assignment (a zero,
-                            an extension), and hiding it read as "no grade". */}
-                        {row.gradesReleased && row.grades.length > 0 ? (
-                          <div className="flex items-center gap-1">
-                            {row.grades.slice(0, 4).map((g, idx) => (
-                              <Emoji key={g.id ?? idx} emoji={g.emoji} fontSize={18} />
-                            ))}
-                          </div>
-                        ) : row.status === 'completed' ? (
-                          <span className="text-xs text-ink-3">Pending</span>
+                        {repo ? (
+                          // A released grade shows whether or not the student
+                          // has submitted: staff can grade an open assignment
+                          // (a zero, an extension), and hiding it read as "no
+                          // grade".
+                          repo.gradesReleased && repo.grades.length > 0 ? (
+                            <div className="flex items-center gap-1">
+                              {repo.grades.slice(0, 4).map((g, idx) => (
+                                <Emoji key={g.id ?? idx} emoji={g.emoji} fontSize={18} />
+                              ))}
+                            </div>
+                          ) : row.done ? (
+                            <span className="text-xs text-ink-3">Pending</span>
+                          ) : (
+                            <Dash />
+                          )
+                        ) : row.score !== null ? (
+                          <span className="font-semibold tabular-nums text-ink-1">
+                            {Math.round(row.score * 10) / 10}%
+                          </span>
                         ) : (
-                          <span className="text-gray-400 dark:text-gray-600">—</span>
+                          <Dash />
                         )}
                       </td>
                       <td className="px-4 py-3 hidden lg:table-cell text-gray-600 dark:text-gray-300">
-                        {row.gradersSummary ? (
-                          <span className="block truncate max-w-[10rem]">{row.gradersSummary}</span>
+                        {repo?.gradersSummary ? (
+                          <span className="block truncate max-w-[10rem]">
+                            {repo.gradersSummary}
+                          </span>
                         ) : (
-                          <span className="text-gray-400 dark:text-gray-600">—</span>
+                          <Dash />
                         )}
                       </td>
                       <td className="px-4 py-3 hidden sm:table-cell whitespace-nowrap text-gray-600 dark:text-gray-300">
-                        {row.studentDeadline ? (
-                          formatDeadline(row.studentDeadline)
+                        {row.deadline ? (
+                          <div className="flex flex-col items-start gap-1">
+                            <span>
+                              {note?.inWindow
+                                ? dayjs(row.deadline).format('MMM D')
+                                : formatDeadline(row.deadline, tab)}
+                            </span>
+                            {note && (
+                              <span
+                                className={`text-xs font-medium px-2 py-0.5 rounded-md ${NOTE_TONE[note.tone]}`}
+                              >
+                                {note.text}
+                              </span>
+                            )}
+                          </div>
                         ) : (
-                          <span className="text-gray-400 dark:text-gray-600">—</span>
+                          <Dash />
                         )}
                       </td>
                       <td className="px-4 py-3 text-right whitespace-nowrap">
-                        {canRequestRegrade ? (
-                          <Link
-                            to={`/student/${classSlug}/regrade-requests/new`}
-                            state={{ assignment: { id: row.id, title: row.assignmentTitle } }}
-                            className="inline-flex items-center text-xs font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-line bg-panel hover:bg-nav-hover transition-colors"
-                          >
-                            Request regrade
-                          </Link>
-                        ) : isLate ? (
-                          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-700 dark:text-gray-200">
-                            Extend
-                            <TokenExtensionPopover
-                              repositoryAssignment={{
-                                id: row.id,
-                                num_late_hours: row.numLateHours,
-                                is_late_override: row.isLateOverride,
-                                assignment: {
-                                  student_deadline: row.studentDeadline ?? '',
-                                  tokens_per_hour: row.tokensPerHour,
-                                },
-                              }}
-                              balance={balance}
-                            />
+                        {canExtend || canRequestRegrade ? (
+                          <span className="inline-flex items-center justify-end gap-3">
+                            {canExtend && (
+                              <TokenExtensionPopover
+                                repositoryAssignment={{
+                                  id: repo!.gitRepoAssignmentId,
+                                  num_late_hours: repo!.numLateHours,
+                                  is_late_override: repo!.isLateOverride,
+                                  assignment: { tokens_per_hour: repo!.tokensPerHour },
+                                }}
+                                balance={balance}
+                              />
+                            )}
+                            {canRequestRegrade && (
+                              <Link
+                                to={`/student/${classSlug}/regrade-requests/new`}
+                                state={{
+                                  assignment: { id: repo!.gitRepoAssignmentId, title: row.title },
+                                }}
+                                className="inline-flex items-center text-xs font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-line bg-panel hover:bg-nav-hover transition-colors"
+                              >
+                                Request regrade
+                              </Link>
+                            )}
                           </span>
                         ) : (
-                          <span className="text-gray-400 dark:text-gray-600">—</span>
+                          <Dash />
                         )}
                       </td>
                     </tr>

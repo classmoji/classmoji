@@ -58,6 +58,9 @@ jobs:
               - 'packages/database/**'
               - 'packages/services/**'
               - 'packages/utils/**'
+              # The worker bundles services, which signs media and content
+              # URLs with this package.
+              - 'packages/content-signing/**'
 
   deploy-webapp:
     needs: changes
@@ -251,7 +254,7 @@ jobs:
 
       - name: Deploy to Trigger.dev
         working-directory: packages/tasks
-        run: npx trigger.dev@4.6.3 deploy --push
+        run: npx trigger.dev@4.6.4 deploy --push
         env:
           TRIGGER_ACCESS_TOKEN: ${{ secrets.TRIGGER_ACCESS_TOKEN }}
           INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}

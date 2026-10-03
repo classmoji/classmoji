@@ -2,8 +2,57 @@ import { defineConfig } from '@trigger.dev/sdk';
 // eslint-disable-next-line import/no-unresolved
 import { prismaExtension } from '@trigger.dev/build/extensions/prisma';
 // eslint-disable-next-line import/no-unresolved
-import { aptGet, syncEnvVars } from '@trigger.dev/build/extensions/core';
+import { aptGet, ffmpeg, syncEnvVars } from '@trigger.dev/build/extensions/core';
+// eslint-disable-next-line import/no-unresolved
+import { pythonExtension } from '@trigger.dev/python/extension';
 import { InfisicalSDK } from '@infisical/sdk';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/**
+ * Options for the Python build extension that carries the team-set solver
+ * (python/team_set_solver.py, OR-Tools CP-SAT).
+ *
+ * A FUNCTION, called only inside `build.extensions`, never at module top level:
+ * the CLI's config-strip plugin replaces `build` with `{}` when it bundles this
+ * file into the worker, but top-level statements survive — and a top-level file
+ * read of a path resolved from this file's location would run inside the
+ * deployed container, where that path does not exist.
+ *
+ * `requirements`, NOT `requirementsFile`. In @trigger.dev/python 4.6.4 the
+ * requirementsFile branch emits `COPY ./python/requirements.txt .` followed by
+ * `pip install -r ./python/requirements.txt`; the COPY lands the file at
+ * `./requirements.txt`, so a nested requirements file cannot be opened and the
+ * image build fails (triggerdotdev/trigger.dev#1843). The `requirements` branch
+ * writes the list to a file and installs it in one working directory. The file
+ * stays the single source of truth — it is also what the local venv installs.
+ *
+ * `scripts` is resolved relative to this directory and copied to the same
+ * relative path in the build output (`/app/python/…` when deployed). The glob
+ * does not descend into dot-directories, so the local `.venv` is not copied.
+ *
+ * `devPythonBinaryPath` points `trigger dev` at the local venv (see
+ * python/README.md) and is set only when that interpreter exists, so a checkout
+ * without the venv still loads this config; the solve task then fails its runs
+ * with `engine_error` rather than the whole dev worker refusing to start.
+ * Deployed images ignore it and use the extension's /opt/venv. (The 4.6.4 CLI
+ * snapshots dev run environments before the extension sets it, so the solve
+ * task also falls back to the venv itself — `useLocalVenvIfUnset`.)
+ */
+function teamSetSolverPythonOptions() {
+  const pythonDir = join(dirname(fileURLToPath(import.meta.url)), 'python');
+  const requirements = readFileSync(join(pythonDir, 'requirements.txt'), 'utf8')
+    .split('\n')
+    .map(line => line.replace(/\s+#.*$/, '').trim())
+    .filter(line => line && !line.startsWith('#'));
+  const venvPython = join(pythonDir, '.venv', 'bin', 'python');
+  return {
+    requirements,
+    scripts: ['./python/**/*.py'],
+    ...(existsSync(venvPython) ? { devPythonBinaryPath: venvPython } : {}),
+  };
+}
 
 export default defineConfig({
   project: process.env.TRIGGER_PROJECT_ID || 'proj_ijxcrutouxchmrbjmkkk',
@@ -21,15 +70,21 @@ export default defineConfig({
   // a non-local database. Deployed (STAGING/PRODUCTION) runs are unaffected.
   init: async ({ ctx }) => {
     if (ctx?.environment?.type !== 'DEVELOPMENT') return;
-    const url = process.env.DATABASE_URL || '';
-    const isLocal = /@(localhost|127\.0\.0\.1|0\.0\.0\.0|host\.docker\.internal)[:/]/.test(url);
-    if (!isLocal) {
-      const masked = url.replace(/\/\/[^@]*@/, '//***@');
-      throw new Error(
-        `[db-safety] Local Trigger.dev (DEVELOPMENT) worker is pointed at a NON-LOCAL database: ${masked}. ` +
-          `Refusing to run so local task runs cannot write to production. ` +
-          `Fix DATABASE_URL in packages/tasks/.env to point at localhost.`
-      );
+    const isLocal = url =>
+      /@(localhost|127\.0\.0\.1|0\.0\.0\.0|host\.docker\.internal)[:/]/.test(url);
+    // DATABASE_URL_UNPOOLED, when set, is used by the few places that need a
+    // direct connection, so it must be local too.
+    for (const name of ['DATABASE_URL', 'DATABASE_URL_UNPOOLED']) {
+      const url = process.env[name] || '';
+      if (name !== 'DATABASE_URL' && !url) continue;
+      if (!isLocal(url)) {
+        const masked = url.replace(/\/\/[^@]*@/, '//***@');
+        throw new Error(
+          `[db-safety] Local Trigger.dev (DEVELOPMENT) worker is pointed at a NON-LOCAL database: ${masked}. ` +
+            `Refusing to run so local task runs cannot write to production. ` +
+            `Fix ${name} in packages/tasks/.env to point at localhost.`
+        );
+      }
     }
   },
   retries: {
@@ -42,7 +97,26 @@ export default defineConfig({
       randomize: true,
     },
   },
-  dirs: ['./src/workflows'],
+  dirs: ['./src/workflows', './src/agents'],
+  // The CLI's default ignore list (test and spec files) plus test fixtures:
+  // every other file under `dirs` is imported to discover tasks, and a fixture
+  // repository's browser script must never be. Setting this replaces the
+  // defaults, so they are repeated here.
+  ignorePatterns: [
+    '**/*.test.ts',
+    '**/*.test.mts',
+    '**/*.test.cts',
+    '**/*.test.js',
+    '**/*.test.mjs',
+    '**/*.test.cjs',
+    '**/*.spec.ts',
+    '**/*.spec.mts',
+    '**/*.spec.cts',
+    '**/*.spec.js',
+    '**/*.spec.mjs',
+    '**/*.spec.cjs',
+    '**/__fixtures__/**',
+  ],
   build: {
     extensions: [
       prismaExtension({
@@ -50,8 +124,18 @@ export default defineConfig({
         mode: 'legacy',
       }),
       aptGet({
-        packages: ['bash', 'git'],
+        // git-lfs: `gh-create_git_repo` copies templates that keep their
+        // files in Git LFS (see helpers/templatePush.ts).
+        packages: ['bash', 'git', 'git-lfs'],
       }),
+      // For `media-video-process`. No version: the extension installs Debian's
+      // `ffmpeg` package — on the node-22 image (bookworm) that is 5.1.x, a
+      // fixed release with libx264 and the native aac/mjpeg encoders. (Version
+      // '7' would pull johnvansickle's static `ffmpeg-git`, i.e. whatever git
+      // master is on build day.) Sets FFMPEG_PATH / FFPROBE_PATH in deployed
+      // images; it does nothing for `trigger dev`, which uses ffmpeg on PATH.
+      ffmpeg(),
+      pythonExtension(teamSetSolverPythonOptions()),
       syncEnvVars(async ctx => {
         // Skip sync if credentials not available (allows local dev without Infisical)
         if (!process.env.INFISICAL_CLIENT_ID || !process.env.INFISICAL_CLIENT_SECRET) {
@@ -105,14 +189,10 @@ export default defineConfig({
             value: secret.secretValue,
           }));
 
-          // Trigger.dev workers need a direct (unpooled) connection
-          const unpooledUrl = mapped.find(s => s.name === 'DATABASE_URL_UNPOOLED')?.value;
-          if (unpooledUrl) {
-            const entry = mapped.find(s => s.name === 'DATABASE_URL');
-            if (entry) entry.value = unpooledUrl;
-            else mapped.push({ name: 'DATABASE_URL', value: unpooledUrl });
-          }
-
+          // Tasks use the pooled DATABASE_URL, the same one the web apps use.
+          // The direct endpoint is synced as DATABASE_URL_UNPOOLED like any other
+          // secret, for the few places that need session state (a session-level
+          // advisory lock, a session setting).
           return mapped;
         } catch (error) {
           console.error('[Infisical] Failed to sync secrets:', error.message);

@@ -53,6 +53,28 @@ export default [
   // The teaching team's gallery queue: where assistants approve.
   route(':classroomSlug/forms/:formSlug/gallery', 'forms/admin/galleryQueue.tsx'),
 
+  // Team sets built from a CLASSROOM form's responses. The set is a layout
+  // (id 'team-set'): its loader carries the header every set page shows, and
+  // its action is the ONE target of every set mutation (see useSetFetcher for
+  // the `?index` trap that makes the target explicit). Static `teams` is a 4th
+  // segment no other forms route uses, so it cannot shadow a form's pages.
+  route(':classroomSlug/forms/:formSlug/teams', 'forms/admin/teams/list.tsx'),
+  route(
+    ':classroomSlug/forms/:formSlug/teams/:setSlug',
+    'forms/admin/teams/set.tsx',
+    { id: 'team-set' },
+    [
+      index('forms/admin/teams/setup.tsx'),
+      route('runs/:runNumber', 'forms/admin/teams/run.tsx'),
+      route('runs/:runNumber/compare/:otherNumber', 'forms/admin/teams/compare.tsx'),
+    ]
+  ),
+  // A resource route (no component) the set pages poll while a run or a
+  // create moves. A sibling of the layout, not a child, so a poll never runs
+  // the layout's loader; `status` is a 6th segment, so a set NAMED "status"
+  // still reaches its own Setup.
+  route(':classroomSlug/forms/:formSlug/teams/:setSlug/status', 'forms/admin/teams/status.ts'),
+
   // The public fill surfaces, exempted from the root login redirect (see
   // app/utils/formsPaths.ts). Placeholders until the renderer lands; they are
   // declared NOW so the routing skeleton and the gate are settled together

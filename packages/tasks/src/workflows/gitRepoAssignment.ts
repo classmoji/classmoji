@@ -1,7 +1,10 @@
 import { task, tasks, schedules, logger } from '@trigger.dev/sdk';
 import { ClassmojiService, HelperService, getGitProvider } from '@classmoji/services';
+import type { MoveGraderSlotPayload } from '@classmoji/services';
 import { titleToIdentifier } from '@classmoji/utils';
 import { createRepositoriesTask } from './gitRepo.ts';
+import { ensureGitInstallation, GitAppNotInstalledError } from '../helpers/gitInstallation.ts';
+import { retryOnDatabaseBlip } from '../helpers/databaseRetry.ts';
 import { nanoid } from 'nanoid';
 import dayjs from 'dayjs';
 
@@ -249,11 +252,14 @@ export const createGithubRepositoryAssignmentTask = task({
         });
         if (row) await ClassmojiService.gitRepoAssignment.recordExistingPush(row.id);
       } catch (error) {
-        logger.warn('Could not read the repo history for an existing push; the next push will count', {
-          repoName,
-          assignmentId: assignment.id,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        logger.warn(
+          'Could not read the repo history for an existing push; the next push will count',
+          {
+            repoName,
+            assignmentId: assignment.id,
+            error: error instanceof Error ? error.message : String(error),
+          }
+        );
       }
       return;
     }
@@ -269,7 +275,41 @@ export const createGithubRepositoryAssignmentTask = task({
         assignment.title
       );
 
-      if (existingIssue) {
+      // An issue with this title may already be another submission row's: two
+      // assignments with the same title submitting through one repository, or
+      // a stale duplicate repo row. Adopting it would hand this row an issue id
+      // (its primary key) another row holds, so open a fresh issue instead.
+      const claimedBy = existingIssue
+        ? await ClassmojiService.gitRepoAssignment.findFirst({
+            provider: 'GITHUB',
+            provider_id: String(existingIssue.id),
+          })
+        : null;
+      if (
+        claimedBy &&
+        claimedBy.git_repo_id === studentRepo.id &&
+        claimedBy.assignment_id === assignment.id
+      ) {
+        // A concurrent run for this same pair got there first.
+        logger.info('Assignment issue was recorded by a concurrent run — skipping', {
+          repoName,
+          assignmentId: assignment.id,
+          gitRepoId: studentRepo.id,
+        });
+        return;
+      }
+      if (existingIssue && claimedBy) {
+        logger.warn('Existing issue with this title belongs to another submission row', {
+          repoName,
+          assignmentId: assignment.id,
+          studentRepoId: studentRepo.id,
+          issueNumber: existingIssue.number,
+          claimedByRowId: claimedBy.id,
+          claimedByAssignmentId: claimedBy.assignment_id,
+        });
+      }
+
+      if (existingIssue && !claimedBy) {
         logger.info('Found existing GitHub assignment issue; adopting it', {
           organization: organization.login,
           repoName,
@@ -348,6 +388,7 @@ export const createGithubRepositoryAssignmentTask = task({
 
 export const createDatabaseRepositoryAssignmentTask = task({
   id: 'cf-create_git_repo_assignment',
+  ...retryOnDatabaseBlip,
   run: async (payload: CreateDatabaseRepositoryAssignmentTaskPayload) => {
     const { assignment, studentRepo, issueNumber, id } = payload;
 
@@ -379,8 +420,40 @@ export const removeGraderFromRepositoryAssignmentTask = task({
   },
 });
 
+/**
+ * Move one ungraded slot off a departing grader (staff removal with more slots
+ * than UNGRADED_INLINE_LIMIT in packages/services/src/helper). Ids only: the classroom's git
+ * organization, the repo, the issue and both logins are read from stored rows
+ * by the classroom-scoped helpers, and the new grader is re-checked against the
+ * pool when the run executes. Add-then-remove inside one run. The project
+ * default is a single attempt, so this task sets its own retry: a provider
+ * error throws and the run is retried up to MOVE_GRADER_SLOT_RETRY.maxAttempts
+ * times with exponential backoff — safe because a repeated add reports
+ * already_assigned and a repeated removal reports already_removed.
+ */
+const MOVE_GRADER_SLOT_RETRY = {
+  maxAttempts: 3,
+  factor: 2,
+  minTimeoutInMs: 2_000,
+  maxTimeoutInMs: 30_000,
+  randomize: true,
+};
+
+export const moveGraderSlotTask = task({
+  id: 'move_grader_slot',
+  retry: MOVE_GRADER_SLOT_RETRY,
+  run: async (payload: MoveGraderSlotPayload) => {
+    const result = await HelperService.moveGraderSlot(payload);
+    if (result.status !== 'moved' && result.status !== 'unassigned') {
+      logger.info('move_grader_slot finished without a move', { ...payload, ...result });
+    }
+    return result;
+  },
+});
+
 export const updateRepositoryAssignmentTask = task({
   id: 'update_git_repo_assignment',
+  ...retryOnDatabaseBlip,
   run: async ({ payload }: UpdateRepositoryAssignmentTaskPayload) => {
     const { gitRepoAssignmentId, ...updates } = payload;
     return ClassmojiService.gitRepoAssignment.update(gitRepoAssignmentId, updates);
@@ -389,6 +462,7 @@ export const updateRepositoryAssignmentTask = task({
 
 export const repositoryAssignmentClosedHandlerTask = task({
   id: 'webhook-git_repo_assignment_closed_handler',
+  ...retryOnDatabaseBlip,
   run: async (payload: GitRepoAssignmentWebhookTaskPayload) => {
     const { issue } = payload;
     const repoAssignment = await ClassmojiService.gitRepoAssignment.findByProviderId(
@@ -413,6 +487,7 @@ export const repositoryAssignmentClosedHandlerTask = task({
 
 export const repositoryAssignmentReopenedHandlerTask = task({
   id: 'webhook-git_repo_assignment_reopened_handler',
+  ...retryOnDatabaseBlip,
   run: async (payload: GitRepoAssignmentWebhookTaskPayload) => {
     const { issue } = payload;
     // Resolves through the issue id, so a REPO-mode row (no issue) can never
@@ -439,9 +514,14 @@ export const repositoryAssignmentReopenedHandlerTask = task({
  * Classroom, the last push before the deadline (plus bought extension hours)
  * is the submission; later pushes do not count, graded rows are frozen, and a
  * late-delivered older webhook never moves the time backwards.
+ *
+ * Retried on a database blip (a lost push is a lost submission). Safe to
+ * repeat: both writes only move times forward, so a second run with the same
+ * `pushedAt` changes nothing, and an extra analytics refresh is harmless.
  */
 export const repositoryPushHandlerTask = task({
   id: 'webhook-git_repo_push_handler',
+  ...retryOnDatabaseBlip,
   run: async (payload: RepositoryPushTaskPayload) => {
     const pushedAt = new Date(payload.pushedAt);
     // The repo's own "last push", whatever it does to submissions below.
@@ -460,20 +540,23 @@ export const repositoryPushHandlerTask = task({
     // ones the push counted as a submission: a graded row is frozen above,
     // and an issue-mode row never submits by push, but both still show the
     // repo's commit count and should see the new commits.
-    const rows = await ClassmojiService.gitRepoAssignment.findIdsByGitRepoId(payload.gitRepoId);
-    for (const id of rows) {
-      await tasks.trigger(
-        'refresh-repo-analytics',
-        { repositoryAssignmentId: id },
-        { concurrencyKey: payload.gitRepoId }
-      );
-    }
-    return { touched: touched.length, refreshed: rows.length };
+    //
+    // One run for the whole repo, not one per row. The commits, contributors,
+    // languages and PRs a snapshot holds are facts about the repo and identical
+    // across its rows, so fanning out per row re-read the same four GitHub
+    // endpoints once per row to write N identical snapshots.
+    await tasks.trigger(
+      'refresh-repo-analytics-repo',
+      { gitRepoId: payload.gitRepoId },
+      { concurrencyKey: payload.gitRepoId }
+    );
+    return { touched: touched.length };
   },
 });
 
 export const repositoryAssignmentDeletedHandlerTask = task({
   id: 'webhook-git_repo_assignment_deleted_handler',
+  ...retryOnDatabaseBlip,
   run: async (payload: GitRepoAssignmentWebhookTaskPayload) => {
     const { issue } = payload;
     const repoAssignment = await ClassmojiService.gitRepoAssignment.findByProviderId(
@@ -505,6 +588,40 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
 
       logger.info('Found assignments to release', { count: assignmentsToRelease.length });
 
+      // One installation check per Github org per run. Without it an org whose
+      // app was uninstalled spawned one failing create_git_repos run per
+      // unreleased repository, every night, all with the same error.
+      const installationChecks = new Map<string, Promise<GitOrganizationLike | null>>();
+      const checkInstallation = (
+        classroom: ClassroomRecord
+      ): Promise<GitOrganizationLike | null> => {
+        const gitOrg = classroom.git_organization;
+        const key = (gitOrg as { id?: string }).id ?? gitOrg.login ?? classroom.id;
+        let check = installationChecks.get(key);
+        if (!check) {
+          check = ensureGitInstallation(gitOrg).catch((error: unknown) => {
+            const message = getErrorMessage(error);
+            if (error instanceof GitAppNotInstalledError) {
+              logger.error('Skipping assignment release: Github App not installed', {
+                org: gitOrg.login,
+                classroomSlug: classroom.slug,
+                status: error.status,
+                message,
+              });
+            } else {
+              logger.warn('Skipping assignment release: installation check failed', {
+                org: gitOrg.login,
+                classroomSlug: classroom.slug,
+                message,
+              });
+            }
+            return null;
+          });
+          installationChecks.set(key, check);
+        }
+        return check;
+      };
+
       const moduleGroups: Record<string, ReleaseAssignmentRecord[]> = {};
       for (const assignment of assignmentsToRelease) {
         if (!moduleGroups[assignment.repository_id]) {
@@ -517,7 +634,8 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
         const moduleAssignments = moduleGroups[repositoryId];
         const repository = moduleAssignments[0].repository;
         const classroom = repository.classroom;
-        const gitOrg = classroom.git_organization;
+        const gitOrg = await checkInstallation(classroom);
+        if (!gitOrg) continue;
 
         let logins: string[] = [];
 

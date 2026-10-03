@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRevalidator } from 'react-router';
 
+import { isRetryableDeliveryUrl } from '~/utils/mediaRefs.ts';
+
 /**
  * The client half of render-time URL resolution.
  *
@@ -109,14 +111,21 @@ export function useAssetMap(
 }
 
 /**
- * A signed delivery URL, by shape — no need to ship the origin to the client.
+ * The element whose failed load is worth a retry, and the URL it failed on.
  *
- * `blob` and `theme` only. A `/missing/` URL is the deterministic 404 the
- * resolver mints for a reference the asset map has never heard of: it will 404
- * again after any number of revalidations, so retrying one is guaranteed waste.
+ * Images AND media elements: a media video's signature expires on the same
+ * clock as an image's, and a `<video>` that 403s reports it through the same
+ * non-bubbling `error` event. Null for anything else (a `<source>`, a script).
  */
-const DELIVERY_URL =
-  /\/c\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/(?:blob|theme)\//;
+export function failedAssetUrl(target: EventTarget | null): string | null {
+  if (typeof HTMLImageElement !== 'undefined' && target instanceof HTMLImageElement) {
+    return target.currentSrc || target.src;
+  }
+  if (typeof HTMLMediaElement !== 'undefined' && target instanceof HTMLMediaElement) {
+    return target.currentSrc || target.src;
+  }
+  return null;
+}
 
 /**
  * Re-resolve once when a signed URL comes back 403.
@@ -143,9 +152,11 @@ export function useAssetRetry(): number {
   useEffect(() => {
     const onError = (event: Event) => {
       if (retried.current) return;
-      const target = event.target;
-      if (!(target instanceof HTMLImageElement)) return;
-      if (!DELIVERY_URL.test(target.currentSrc || target.src)) return;
+      // A signed `blob`, `theme` or `media` URL, by shape — no need to ship the
+      // origin to the client. A `/missing/` placeholder is the deterministic
+      // 404 the resolver mints for a reference it cannot sign: it 404s again
+      // after any number of revalidations, so retrying one is guaranteed waste.
+      if (!isRetryableDeliveryUrl(failedAssetUrl(event.target))) return;
 
       retried.current = true;
       setEpoch(value => value + 1);

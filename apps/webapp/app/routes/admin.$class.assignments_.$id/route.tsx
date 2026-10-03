@@ -2,20 +2,12 @@ import { Button, Dropdown, Switch, Tag, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
 import dayjs from 'dayjs';
 import { IconChevronLeft, IconDotsVertical, IconRobot } from '@tabler/icons-react';
-import {
-  Link,
-  Outlet,
-  redirect,
-  useLocation,
-  useNavigate,
-  useRevalidator,
-  useSearchParams,
-} from 'react-router';
+import { Link, Outlet, redirect, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { useMemo, useState } from 'react';
 import { namedAction } from 'remix-utils/named-action';
 
 import { ClassmojiService, HelperService } from '@classmoji/services';
-import { SearchInput, TriggerProgress } from '~/components';
+import { SearchInput } from '~/components';
 import AssignmentFormModal from '~/components/features/assignments/AssignmentFormModal';
 import type { AssignmentRowData } from '~/components/features/assignments/AssignmentsTable';
 import { useGlobalFetcher } from '~/hooks';
@@ -24,12 +16,14 @@ import {
   requireClassroomTeachingTeam,
   assertClassroomMutationAllowed,
 } from '~/utils/routeAuth.server';
+import { loadQuizzesVisible, quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import SubmissionsTable, {
   type SubmissionFilter,
   type SubmissionsRepo,
   matchesFilter,
 } from './SubmissionsTable';
 import type { Route } from './+types/route';
+import { classroomForClient } from '~/utils/classroomForClient';
 
 /**
  * The assignment page: one REPO assignment, every student (or team) copy of
@@ -38,7 +32,9 @@ import type { Route } from './+types/route';
  * list and the gradebook. Served under /admin, /teacher and /assistant.
  *
  * Quiz and form assignments keep their own screens (attempts, responses); a
- * request for one of those redirects there.
+ * request for one of those redirects there, or 404s for a quiz in a classroom
+ * whose quizzes are hidden, and for a form under /assistant, which has no
+ * forms screen.
  */
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug, id } = params;
@@ -52,10 +48,19 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   if (!assignment) throw new Response('Assignment not found', { status: 404 });
 
   const rolePrefix = new URL(request.url).pathname.split('/')[1] || 'admin';
-  if (assignment.type === 'QUIZ' && assignment.quiz) {
-    throw redirect(`/${rolePrefix}/${classSlug}/quizzes/${assignment.quiz.id}`);
+  if (assignment.type === 'QUIZ') {
+    // Where quizzes are hidden, a quiz assignment answers as a missing one does.
+    if (!(await quizzesVisibleOrThrow(classroom.id))) {
+      throw new Response('Assignment not found', { status: 404 });
+    }
+    if (assignment.quiz) {
+      throw redirect(`/${rolePrefix}/${classSlug}/quizzes/${assignment.quiz.id}`);
+    }
   }
   if (assignment.type === 'FORM') {
+    // Forms are managed under /admin and /teacher only (OWNER | TEACHER); there
+    // is no /assistant forms route to send an assistant on to.
+    if (rolePrefix === 'assistant') throw new Response('Assignment not found', { status: 404 });
     const slug = assignment.form?.slug ? `/${encodeURIComponent(assignment.form.slug)}` : '';
     throw redirect(`/${rolePrefix}/${classSlug}/forms${slug}`);
   }
@@ -85,20 +90,25 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   }));
 
   // What the assignment modal needs to edit this assignment.
-  const [allAssignments, modules, repositories, candidates, students] = await Promise.all([
-    ClassmojiService.assignment.listForClassroom(classroom.id),
-    ClassmojiService.module.findByClassroomSlug(classSlug!),
-    ClassmojiService.repository.findByClassroomId(classroom.id),
-    ClassmojiService.module.getCandidateContent(classroom.id),
-    ClassmojiService.classroomMembership.findUsersByRoles(classroom.id, ['STUDENT']),
-  ]);
+  const [allAssignments, modules, repositories, candidates, students, quizzesVisible] =
+    await Promise.all([
+      ClassmojiService.assignment.listForClassroom(classroom.id),
+      ClassmojiService.module.findByClassroomSlug(classSlug!),
+      ClassmojiService.repository.findByClassroomId(classroom.id),
+      ClassmojiService.module.getCandidateContent(classroom.id),
+      ClassmojiService.classroomMembership.findUsersByRoles(classroom.id, ['STUDENT']),
+      loadQuizzesVisible(classroom.id),
+    ]);
 
   return {
     assignment,
     repos,
-    assistants: graderPool.filter(({ is_grader }) => is_grader),
+    // What the grader picker reads of each grader: id, login and name.
+    assistants: graderPool
+      .filter(({ is_grader }) => is_grader)
+      .map(({ id, login, name }) => ({ id, login, name })),
     emojiMappings,
-    classroom,
+    classroom: classroomForClient(classroom),
     rolePrefix,
     autogradingTestCount: autogradingTests.length,
     studentCount: students.length,
@@ -106,10 +116,13 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     repositories: repositories.map(r => ({
       id: r.id,
       title: r.title,
+      slug: r.slug,
+      type: r.type,
       is_published: r.is_published,
     })),
-    candidates,
-    boundQuizIds: allAssignments.map(a => a.quiz_id).filter(Boolean) as string[],
+    // Where the classroom's quizzes are hidden no quiz leaves the loader. (The
+    // modal binds no quiz: a quiz's assignment is made in the quiz form.)
+    candidates: quizzesVisible ? candidates : { ...candidates, quizzes: [] },
     boundFormIds: allAssignments.map(a => a.form_id).filter(Boolean) as string[],
   };
 };
@@ -132,28 +145,47 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   const data = await request.json();
 
+  // Only the ids in the body are used: the submission is loaded from this
+  // classroom and this page's assignment, and the repo name, issue number and
+  // grader login that reach GitHub are the stored ones.
+  const scope = {
+    classroomId: classroom.id,
+    gitOrganization: classroom.git_organization,
+    gitRepoAssignmentId: data?.repoAssignmentId,
+    graderId: data?.graderId,
+    assignmentId: params.id!,
+  };
+  const SUBMISSION_NOT_FOUND = 'Submission not found.';
+
   return namedAction(request, {
     async addGrader() {
-      await HelperService.addGraderToGitRepoAssignment({
-        repoName: data.repoName,
-        gitOrganization: classroom.git_organization,
-        githubIssueNumber: data.githubIssueNumber,
-        graderLogin: data.graderLogin,
-        graderId: data.graderId,
-        gitRepoAssignmentId: data.repoAssignmentId,
-      });
-      return { action: ActionTypes.ADD_GRADER, success: 'Grader added' };
+      const result = await HelperService.addGraderInClassroom(scope);
+      if (result.status === 'submission_not_found') {
+        return { action: ActionTypes.ADD_GRADER, error: SUBMISSION_NOT_FOUND };
+      }
+      if (result.status === 'grader_not_eligible') {
+        return {
+          action: ActionTypes.ADD_GRADER,
+          error: 'That person is not a grader in this classroom.',
+        };
+      }
+      return {
+        action: ActionTypes.ADD_GRADER,
+        success: result.status === 'already_assigned' ? 'Already assigned' : 'Grader added',
+      };
     },
 
     async removeGrader() {
-      await HelperService.removeGraderFromGitRepoAssignment({
-        repoName: data.repoName,
-        gitOrganization: classroom.git_organization,
-        githubIssueNumber: data.githubIssueNumber,
-        graderLogin: data.graderLogin,
-        graderId: data.graderId,
-        gitRepoAssignmentId: data.repoAssignmentId,
-      });
+      const result = await HelperService.removeGraderInClassroom(scope);
+      if (result.status === 'submission_not_found') {
+        return { action: ActionTypes.REMOVE_GRADER, error: SUBMISSION_NOT_FOUND };
+      }
+      if (result.status === 'grader_not_assigned') {
+        return {
+          action: ActionTypes.REMOVE_GRADER,
+          error: 'That grader is not assigned to this submission.',
+        };
+      }
       return { action: ActionTypes.REMOVE_GRADER, success: 'Grader removed' };
     },
   });
@@ -186,14 +218,12 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
     modules,
     repositories,
     candidates,
-    boundQuizIds,
     boundFormIds,
   } = loaderData;
   const classSlug = classroom.slug;
   const { fetcher, notify } = useGlobalFetcher();
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const { revalidate } = useRevalidator();
   // The gradebook links here with ?q=<login> to land on one student's row.
   const [searchParams] = useSearchParams();
   const [query, setQuery] = useState(searchParams.get('q') ?? '');
@@ -459,6 +489,7 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
           emojiMappings={emojiMappings as Record<string, unknown>}
           org={gitOrgLogin ?? ''}
           canManageGraders={canManage}
+          canDeleteSubmissions={canManage}
           total={rows.length}
         />
       </div>
@@ -469,24 +500,11 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
         classSlug={classSlug}
         modules={modules}
         repositories={repositories}
-        quizzes={candidates.quizzes}
         forms={candidates.forms}
         pages={candidates.pages}
         slides={candidates.slides}
-        boundQuizIds={new Set(boundQuizIds)}
         boundFormIds={new Set(boundFormIds)}
         assignment={assignment as unknown as AssignmentRowData}
-      />
-
-      <TriggerProgress
-        operation="AUTOGRADE"
-        validIdentifiers={['dispatch_autograde_workflow', 'gh-commit_autograde_workflow']}
-        callback={() => setTimeout(() => revalidate(), 100)}
-      />
-      <TriggerProgress
-        operation="ASSIGN_GRADERS_TO_ASSIGNMENTS"
-        validIdentifiers={['add_grader_to_git_repo_assignment']}
-        callback={() => setTimeout(() => revalidate(), 100)}
       />
 
       <Outlet />
