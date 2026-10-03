@@ -207,9 +207,13 @@ export async function pollGitlabPushes(): Promise<{
   return result;
 }
 
-/** Every 15 minutes: the fallback for GitLabs whose webhooks can't reach us. */
+/**
+ * Hourly: the fallback for GitLabs whose webhooks can't reach us. A push is
+ * recorded at Gitlab's own push time, so the interval only delays when it
+ * shows up, never whether it was on time.
+ */
 export const pollGitlabPushesTask = schedules.task({
   id: 'gitlab-poll-pushes',
-  cron: '*/15 * * * *',
+  cron: '0 * * * *',
   run: async () => pollGitlabPushes(),
 });
