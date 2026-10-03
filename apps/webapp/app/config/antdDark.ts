@@ -50,6 +50,12 @@ const darkTheme = {
       defaultColor: '#e5e5e5',
       defaultHoverBg: '#404040',
       defaultHoverBorderColor: '#525252',
+      // `type="text"` buttons take their colour from colorText, which is
+      // BRAND_TEXT (black, for text on the green fill) above. Without these
+      // they render black on the dark surface.
+      textTextColor: '#e5e5e5',
+      textTextHoverColor: '#f5f5f5',
+      textTextActiveColor: '#f5f5f5',
       // Remove box shadow
       primaryShadow: 'none',
       defaultShadow: 'none',
