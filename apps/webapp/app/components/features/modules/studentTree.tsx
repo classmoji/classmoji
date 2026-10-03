@@ -1,4 +1,4 @@
-import { Button, Tag } from 'antd';
+import { Tag } from 'antd';
 import { Link } from 'react-router';
 import Emoji from '~/components/ui/display/Emoji';
 import {
@@ -156,8 +156,8 @@ export const buildAssignmentLeaf = (
     : null;
   const teamAction =
     selfFormed && teamHref && !(selfFormed.deadlinePassed && !selfFormed.hasTeam) ? (
-      <Link to={teamHref}>
-        <Button size="small">{selfFormed.hasTeam ? 'View team' : 'Form a team'}</Button>
+      <Link to={teamHref} className="btn btn-sm text-ink-0! hover:text-ink-0!">
+        {selfFormed.hasTeam ? 'View team' : 'Form a team'}
       </Link>
     ) : null;
   const teamStatus =
