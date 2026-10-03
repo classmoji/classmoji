@@ -62,13 +62,9 @@ export interface CreateRepositoryPayload {
   organizationGithubPlan: string;
 }
 
-/** Whether the repository's .gitignore rules exclude `file`. */
-const isIgnored = async (repoGit: SimpleGit, file: string): Promise<boolean> =>
-  (await repoGit.checkIgnore([file])).length > 0;
-
 /**
  * A repository a previous run left between pushing `feedback` and pushing
- * `updates`: exactly `main` and `feedback`. It lacks the welcome commit, the
+ * `updates`: exactly `main` and `feedback`. It lacks the feedback commit, the
  * Feedback pull request and `updates`, and is finished rather than skipped.
  */
 export const isHalfInitialised = (heads: Map<string, string>): boolean =>
@@ -87,23 +83,12 @@ interface SetupTarget {
 
 /**
  * The commit that puts `main` one ahead of `feedback`, so the Feedback pull
- * request has something to show. It adds the welcome file, unless the
- * repository's .gitignore excludes it: the instructor's choice stands, and an
- * empty commit opens the pull request instead.
+ * request has something to open on. It is empty: the student's repository
+ * holds exactly what the instructor's template does, and nothing a template's
+ * .gitignore could refuse.
  */
-const commitWelcome = async (
-  repoGit: SimpleGit,
-  localPath: string,
-  terms: GitTerms
-): Promise<void> => {
-  if (await isIgnored(repoGit, 'CLASSMOJI.md')) {
-    await repoGit.commit('Start your feedback space', undefined, { '--allow-empty': null });
-  } else {
-    const classmojiPath = path.join(localPath, 'CLASSMOJI.md');
-    fs.writeFileSync(classmojiPath, `Hello! This is your ${terms.repo} for the assignment. 📝\n`);
-    await repoGit.add('CLASSMOJI.md');
-    await repoGit.commit('Add Classmoji welcome message');
-  }
+const commitFeedbackStart = async (repoGit: SimpleGit): Promise<void> => {
+  await repoGit.commit('Start your feedback space', undefined, { '--allow-empty': null });
 };
 
 /**
@@ -183,12 +168,12 @@ const pushUpdatesBranch = async (
  * Its `main` may hold student work by now, so the student repository itself
  * is cloned (not the template), and `main` is only ever added to with a plain
  * push, never rewritten: a student push landing meanwhile makes that push
- * fail, and the retry then finds `main` ahead. The welcome commit goes on only
+ * fail, and the retry then finds `main` ahead. The feedback commit goes on only
  * while `main` is still where `feedback` is; once the student has committed,
  * `main` is already ahead and the pull request has something to show.
  *
- * At most one commit goes on top, so the clone is the tip alone, with file
- * contents only for the top-level files the welcome commit reads (.gitignore).
+ * At most one (empty) commit goes on top, so the clone is the tip alone, with
+ * file contents only for the top-level files.
  */
 const finishHalfInitialisedRepo = async (
   target: SetupTarget,
@@ -221,7 +206,7 @@ const finishHalfInitialisedRepo = async (
   await repoGit.addConfig('user.email', CLASSMOJI_BOT_EMAIL);
 
   if (needsWelcomeCommit) {
-    await commitWelcome(repoGit, localPath, target.terms);
+    await commitFeedbackStart(repoGit);
     await repoGit.push('origin', 'main', target.setupPush);
   }
 
@@ -331,9 +316,9 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
     }
 
     // Only the template's default branch is pushed, so only it is fetched.
-    // `--sparse` checks out the top-level files alone: the working tree is
-    // needed just for the root .gitignore and CLASSMOJI.md, and a full
-    // checkout of a game project doubles the disk it takes. Every commit
+    // `--sparse` checks out the top-level files alone: nothing here edits the
+    // working tree, and a full checkout of a game project doubles the disk it
+    // takes. Every commit
     // still carries the whole tree, so what is pushed is unchanged.
     await git.clone(templateRepoUrl, localPath, ['--single-branch', '--no-tags', '--sparse']);
     const repoGit = simpleGit({ baseDir: localPath, config: LOW_MEMORY_GIT_CONFIG });
@@ -370,8 +355,7 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
       // Empty template (no commits — e.g. a freshly created "BlankProject"). Seed
       // from Classmoji's shared, public empty-template repo (which ships a README)
       // so the student/team repo gets a real `main` with content instead of an
-      // empty-tree commit. The CLASSMOJI.md commit further down still adds the
-      // welcome file on top.
+      // empty-tree commit. The feedback commit further down still goes on top.
       logger.warn(
         `Template ${templateOwner}/${templateRepo} has no commits; seeding from ${FALLBACK_TEMPLATE_REPO}`
       );
@@ -409,7 +393,7 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
     await repoGit.push('origin', 'feedback', ['--set-upstream', ...setupPush]);
     await repoGit.checkout('main');
 
-    await commitWelcome(repoGit, localPath, terms);
+    await commitFeedbackStart(repoGit);
     await repoGit.push('origin', 'main', setupPush);
 
     await openFeedbackPullRequest(setupTarget);
