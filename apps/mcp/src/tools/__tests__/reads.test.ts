@@ -249,6 +249,20 @@ describe('get_leaderboard', () => {
     expect(parse(toolResult).count).toBe(1);
   });
 
+  it('hands the service the bare slug only: quiz visibility and quiz grades are resolved inside it', async () => {
+    // The service resolves the classroom's quiz visibility and loads its quiz
+    // grade items itself, so both MCP surfaces and the owner dashboard count
+    // quizzes identically without passing anything extra.
+    await leaderboardResource.handler(
+      { org: 'test-org', slug: 'winter-2025' },
+      staffCtx('OWNER'),
+      new URL('classmoji://x')
+    );
+    await getLeaderboardTool.handler({ classroom: CLASSROOM }, staffCtx('OWNER'));
+
+    expect(mocks.calculateClassLeaderboard.mock.calls).toEqual([['winter-2025'], ['winter-2025']]);
+  });
+
   it('preserves the twin-classroom guard (bare slug resolves elsewhere → refuse)', async () => {
     mocks.findBySlug.mockResolvedValue({ id: 'a-different-classroom' });
     // The handler throws; the registry (not the handler) maps it to isError, so

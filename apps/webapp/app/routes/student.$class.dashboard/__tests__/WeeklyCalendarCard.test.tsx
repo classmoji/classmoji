@@ -23,7 +23,7 @@ const events: WeekEvent[] = [
 const render = (weekStart: string) =>
   renderToStaticMarkup(
     <MemoryRouter>
-      <WeeklyCalendarCard events={events} weekStart={weekStart} classSlug="cs52" />
+      <WeeklyCalendarCard events={events} weekStart={weekStart} classSlug="intro-101" />
     </MemoryRouter>
   );
 

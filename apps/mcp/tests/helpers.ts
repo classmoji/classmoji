@@ -461,6 +461,7 @@ export const MCP_TOOL_NAMES = new Set([
   'page_update',
   'page_delete',
   'token_grant',
+  'extension_purchase',
 ]);
 
 export interface AuditExpectation {

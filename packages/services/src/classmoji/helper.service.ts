@@ -6,6 +6,8 @@ import * as classroomService from './classroom.service.ts';
 import * as assignmentService from './assignment.service.ts';
 import * as gitRepoAssignmentService from './gitRepoAssignment.service.ts';
 import * as gitRepoAssignmentGraderService from './gitRepoAssignmentGrader.service.ts';
+import { quizzesVisibleOrThrow } from './entitlement.service.ts';
+import { loadQuizGradeItems } from './quizGradeItems.service.ts';
 
 import getPrisma from '@classmoji/database';
 import { calculateStudentFinalGrade } from '@classmoji/utils';
@@ -148,6 +150,13 @@ export const findClassroomGradingProgressPerAssignment = async (classroomId: str
   return progress;
 };
 
+/**
+ * Every student's course grade, lowest first. Quiz assignments count through
+ * their grade items, under the same quiz visibility the classroom's pages use
+ * (`quizzesVisibleOrThrow`), resolved here so every caller (owner dashboard,
+ * MCP leaderboard resource and tool) agrees with the gradebook. A failed
+ * visibility lookup throws rather than dropping quizzes from the totals.
+ */
 export const calculateClassLeaderboard = async (classroomSlug: string) => {
   const classroom = await classroomService.findBySlug(classroomSlug);
 
@@ -159,6 +168,10 @@ export const calculateClassLeaderboard = async (classroomSlug: string) => {
   const students = await findRepositoriesPerStudent(classroom);
 
   const settings = await classroomService.getClassroomSettingsForServer(classroom.id);
+
+  // One batched read for the whole roster.
+  const quizzesVisible = await quizzesVisibleOrThrow(classroom.id);
+  const quizItems = await loadQuizGradeItems({ classroomId: classroom.id, quizzesVisible });
 
   const grades: Array<{
     id: string;
@@ -172,7 +185,10 @@ export const calculateClassLeaderboard = async (classroomSlug: string) => {
     const grade = calculateStudentFinalGrade(
       student.git_repos as GitRepo[],
       emojiMappings as Record<string, number>,
-      settings as OrganizationSettings
+      settings as OrganizationSettings,
+      true,
+      true,
+      quizItems.get(student.id) ?? []
     );
 
     grades.push({

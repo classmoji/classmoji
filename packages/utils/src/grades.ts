@@ -40,6 +40,46 @@ export interface OrganizationSettings {
   late_penalty_points_per_hour: number;
 }
 
+/**
+ * One graded assignment that is not a repo submission (a quiz today), fed to
+ * the engine beside the repo walk. Built by `quizGradeItem`.
+ *
+ *   - `grade` is the late-penalised value and `raw_grade` the unpenalised
+ *     one, each 0-100 and each picked by the quiz's grading strategy over its
+ *     own per-attempt values. The engine reads `grade` with the late penalty
+ *     on and `raw_grade` with it off.
+ *   - `counts_as_zero`: no completed attempt and the deadline (plus the hours
+ *     bought) has passed. A real 0 in both modes.
+ *   - A null value with `counts_as_zero` false is left out, like an ungraded
+ *     repo submission.
+ *   - `late_hours`: whole hours late of the attempt that counts for `grade`.
+ *   - `counting_raw_percentage`: that same attempt's own unpenalised score, so
+ *     `counting_raw_percentage − grade` is the points the penalty took. It can
+ *     differ from `raw_grade`, which the strategy may pick from another
+ *     attempt. Null for a counted zero.
+ */
+export interface GradedItem {
+  assignment_id: string;
+  module_id: string;
+  weight: number;
+  is_extra_credit: boolean;
+  grade: number | null;
+  raw_grade: number | null;
+  counts_as_zero: boolean;
+  late_hours: number;
+  counting_raw_percentage: number | null;
+}
+
+/**
+ * The value an item contributes: `grade` with the late penalty, `raw_grade`
+ * without; 0 when it counts as zero; null when it has no value yet.
+ */
+export const gradedItemValue = (item: GradedItem, includeLatePenalty = true): number | null => {
+  if (item.counts_as_zero) return 0;
+  const value = includeLatePenalty ? item.grade : item.raw_grade;
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+};
+
 export interface GradeResult {
   finalNumericGrade: number;
   finalLetterGrade: string;
@@ -60,7 +100,10 @@ export const calculateLetterGrade = (
   return 'F';
 };
 
-/** Quiz and form assignments produce no grade yet; only REPO submissions count. */
+/**
+ * The repo walk grades REPO submissions only. Quiz grades reach the engine as
+ * `items` (`GradedItem`), never through a GitRepoAssignment.
+ */
 const isGradable = (repoAssignment: GitRepoAssignment): boolean =>
   !repoAssignment.assignment.type || repoAssignment.assignment.type === 'REPO';
 
@@ -90,13 +133,18 @@ export const calculateAssignmentGrade = (
  * (rounded to 0.1), plus Σ g·w/100 over graded extra-credit submissions.
  * Ungraded submissions are left out of the denominator entirely.
  * -1 when nothing is gradable.
+ *
+ * `items` (quiz assignments, see `GradedItem`) join the same weighted mean and
+ * extra-credit sums. They are always individual, so `includeGroupAssignment`
+ * does not drop them.
  */
 export const calculateStudentFinalGrade = (
   gitRepos: GitRepo[],
   emojiToNumberMap: Record<string, number>,
   settings: OrganizationSettings,
   includeLatePenalty = true,
-  includeGroupAssignment = true
+  includeGroupAssignment = true,
+  items: readonly GradedItem[] = []
 ): number => {
   let weighted = 0;
   let totalWeight = 0;
@@ -123,6 +171,19 @@ export const calculateStudentFinalGrade = (
         weighted += grade * weight;
         totalWeight += weight;
       }
+    }
+  }
+
+  for (const item of items) {
+    const grade = gradedItemValue(item, includeLatePenalty);
+    if (grade === null) continue;
+
+    const weight = item.weight ?? 0;
+    if (item.is_extra_credit) {
+      extraCredit += (grade * weight) / 100;
+    } else {
+      weighted += grade * weight;
+      totalWeight += weight;
     }
   }
 
@@ -233,11 +294,26 @@ export const calculateGrades = (
   gitRepos: GitRepo[],
   emojiMappings: Record<string, number>,
   settings: OrganizationSettings,
-  letterGradeMappings: LetterGradeMappingEntry[]
+  letterGradeMappings: LetterGradeMappingEntry[],
+  items: readonly GradedItem[] = []
 ): GradeResult => {
-  const finalNumericGrade = calculateStudentFinalGrade(gitRepos, emojiMappings, settings, true);
+  const finalNumericGrade = calculateStudentFinalGrade(
+    gitRepos,
+    emojiMappings,
+    settings,
+    true,
+    true,
+    items
+  );
   const finalLetterGrade = calculateLetterGrade(finalNumericGrade, letterGradeMappings);
-  const rawNumericGrade = calculateStudentFinalGrade(gitRepos, emojiMappings, settings, false);
+  const rawNumericGrade = calculateStudentFinalGrade(
+    gitRepos,
+    emojiMappings,
+    settings,
+    false,
+    true,
+    items
+  );
   const rawLetterGrade = calculateLetterGrade(rawNumericGrade, letterGradeMappings);
 
   return {
