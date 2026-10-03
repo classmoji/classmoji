@@ -317,7 +317,7 @@ interface QuizRow extends QuizPlacementSource {
   due_date?: Date | null;
   /** The quiz's assignment: it owns the module, dates, weight and publish state. */
   assignment?:
-    | (NonNullable<QuizPlacementSource['assignment']> & { tokens_per_hour?: number })
+    | (NonNullable<QuizPlacementSource['assignment']> & { tokens_per_hour?: number | null })
     | null;
   weight: number;
   question_count: number;
@@ -440,7 +440,8 @@ export const quizzesResource: ResourceDefinition = {
         rubric_prompt: q.rubric_prompt ?? null,
         // Staff only, like the prompts: quiz configuration.
         excluded_paths: q.excluded_paths ?? [],
-        tokens_per_hour: q.assignment?.tokens_per_hour ?? 0,
+        // Null = the classroom's default_tokens_per_hour.
+        tokens_per_hour: q.assignment?.tokens_per_hour ?? null,
         attempts_count: q.attemptsCount ?? 0,
         avg_score: q.avgScore ?? null,
       })),

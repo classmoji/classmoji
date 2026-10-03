@@ -1,5 +1,5 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { withLogins } from '@classmoji/utils';
+import { effectiveTokensPerHour, withLogins } from '@classmoji/utils';
 import type { Prisma, TokenTransactionType } from '@prisma/client';
 
 interface UpdateExtensionInput {
@@ -79,7 +79,8 @@ export const updateExtension = async (data: UpdateExtensionInput) => {
  *
  * Price and eligibility are recomputed HERE from the DB — callers must never
  * trust a client-supplied price (S9). Re-enforces the popover's gates: no late
- * override, tokens_per_hour configured and a deadline to extend. The balance
+ * override, a price per hour (the assignment's own tokens_per_hour, else the
+ * classroom's default_tokens_per_hour) and a deadline to extend. The balance
  * check runs inside updateExtension's transaction.
  *
  * Hours can be bought at any time: before the deadline (they push the
@@ -133,7 +134,15 @@ export const purchaseExtensionHours = async ({
     throw new Error('Extensions are unavailable: this assignment has no deadline.');
   }
 
-  const tokensPerHour = repoAssignment.assignment?.tokens_per_hour ?? 0;
+  // The assignment's own price, else the classroom's default.
+  const settings = await getPrisma().classroomSettings.findUnique({
+    where: { classroom_id: classroomId },
+    select: { default_tokens_per_hour: true },
+  });
+  const tokensPerHour = effectiveTokensPerHour(
+    repoAssignment.assignment?.tokens_per_hour,
+    settings?.default_tokens_per_hour
+  );
   if (tokensPerHour <= 0) {
     throw new Error('Token cost not configured for this assignment.');
   }

@@ -306,7 +306,7 @@ export const findForReleaseByRepository = async (
  * @param {string} [data.description] - Description
  * @param {Date} [data.student_deadline] - Student deadline
  * @param {Date} [data.grader_deadline] - Grader deadline
- * @param {number} [data.tokens_per_hour] - Tokens per hour for extensions
+ * @param {number|null} [data.tokens_per_hour] - Tokens per extension hour; null = the classroom default
  * @param {string} [data.branch] - Branch name
  * @param {string} [data.workflow_file] - GitHub Actions workflow file
  * @param {Date} [data.release_at] - Auto-release date
@@ -496,7 +496,7 @@ export const notifyAfterUpdate = async (
     closes_at: Date | null;
     student_deadline: Date | null;
     weight: number;
-    tokens_per_hour: number;
+    tokens_per_hour: number | null;
     module: { classroom_id: string };
   }
 ) => {
@@ -584,7 +584,8 @@ export interface AssignmentWriteInput {
   release_at?: Date | string | null;
   /** QUIZ only: from then on no new attempt starts. Null = never closes. */
   closes_at?: Date | string | null;
-  tokens_per_hour?: number;
+  /** Tokens per extension hour. Null = the classroom's default; 0 = no extensions. */
+  tokens_per_hour?: number | null;
   grades_released?: boolean;
   /** Pages / slide decks attached to the assignment; replaces the current set when given. */
   page_ids?: string[];
@@ -709,7 +710,7 @@ export const createInClassroom = async (classroomId: string, input: AssignmentWr
     student_deadline: toDate(input.student_deadline) ?? null,
     grader_deadline: toDate(input.grader_deadline) ?? null,
     release_at: toDate(input.release_at) ?? null,
-    tokens_per_hour: input.tokens_per_hour ?? 0,
+    tokens_per_hour: input.tokens_per_hour ?? null,
     grades_released: input.grades_released ?? false,
   });
   await syncContentLinks(created.id, input.page_ids, input.slide_ids);
@@ -854,7 +855,12 @@ export const reorderInModuleTx = async (
     where: { module_id: moduleId },
     select: { id: true },
   });
-  if (!sameIdSet(existing.map(a => a.id), orderedAssignmentIds)) {
+  if (
+    !sameIdSet(
+      existing.map(a => a.id),
+      orderedAssignmentIds
+    )
+  ) {
     throw new Error('Ordered assignment ids must match the module assignments');
   }
 

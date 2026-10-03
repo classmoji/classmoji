@@ -16,6 +16,7 @@ import { IconArrowRight } from '@tabler/icons-react';
 import dayjs, { type Dayjs } from 'dayjs';
 import { useDebounce } from '@uidotdev/usehooks';
 import { titleToIdentifier } from '@classmoji/utils';
+import useStore from '~/store';
 
 import { type AssignmentRowData } from './AssignmentsTable';
 
@@ -169,7 +170,8 @@ interface FormValues {
   release_at: Dayjs | null;
   student_deadline: Dayjs | null;
   grader_deadline: Dayjs | null;
-  tokens_per_hour: number;
+  /** Empty = the classroom's default price. */
+  tokens_per_hour: number | null;
   description: string;
   page_ids: string[];
   slide_ids: string[];
@@ -207,6 +209,10 @@ const AssignmentFormModal = ({
   const [createdTags, setCreatedTags] = useState<{ id: string; name: string }[]>([]);
   const creatingTag = tagFetcher.state !== 'idle';
   const [form] = Form.useForm<FormValues>();
+  // The price an assignment without its own pays: Settings > Extension.
+  const classroomTokensPerHour = useStore(
+    state => state.classroom?.settings?.default_tokens_per_hour ?? 0
+  );
   const [kind, setKind] = useState<AssignmentKind>('REPO');
   const [mode, setMode] = useState<SubmissionMode>('REPO');
   const isEdit = !!assignment;
@@ -311,7 +317,7 @@ const AssignmentFormModal = ({
       release_at: assignment?.release_at ? dayjs(assignment.release_at) : null,
       student_deadline: assignment?.student_deadline ? dayjs(assignment.student_deadline) : null,
       grader_deadline: assignment?.grader_deadline ? dayjs(assignment.grader_deadline) : null,
-      tokens_per_hour: assignment?.tokens_per_hour ?? 0,
+      tokens_per_hour: assignment?.tokens_per_hour ?? null,
       description: assignment?.description ?? '',
       page_ids: assignment?.pages?.map(l => l.page.id) ?? [],
       slide_ids: assignment?.slides?.map(l => l.slide.id) ?? [],
@@ -395,7 +401,8 @@ const AssignmentFormModal = ({
       release_at: toIso(values.release_at),
       student_deadline: toIso(values.student_deadline),
       grader_deadline: toIso(values.grader_deadline),
-      tokens_per_hour: values.tokens_per_hour ?? 0,
+      // Empty follows the classroom's price; a number (0 = none) is this one's own.
+      tokens_per_hour: values.tokens_per_hour ?? null,
       description: values.description ?? '',
       page_ids: values.page_ids ?? [],
       slide_ids: values.slide_ids ?? [],
@@ -754,8 +761,17 @@ const AssignmentFormModal = ({
           >
             <InputNumber addonAfter="%" min={0} className="w-full" />
           </Form.Item>
-          <Form.Item name="tokens_per_hour" label="Tokens per extension hour">
-            <InputNumber min={0} style={{ width: '100%' }} />
+          <Form.Item
+            name="tokens_per_hour"
+            label="Tokens per extension hour"
+            extra="Leave empty to use the classroom's price. 0 turns extensions off for this assignment."
+          >
+            <InputNumber
+              min={0}
+              precision={0}
+              placeholder={`Classroom default (${classroomTokensPerHour})`}
+              style={{ width: '100%' }}
+            />
           </Form.Item>
         </div>
 

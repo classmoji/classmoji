@@ -24,7 +24,13 @@
  */
 
 import getPrisma from '@classmoji/database';
-import { isClosed, openToStudents, quizStanding, titleToIdentifier } from '@classmoji/utils';
+import {
+  effectiveTokensPerHour,
+  isClosed,
+  openToStudents,
+  quizStanding,
+  titleToIdentifier,
+} from '@classmoji/utils';
 import { pagesUrl } from '../emails/escape.ts';
 import * as formResponseService from './formResponse.service.ts';
 import * as helperService from './helper.service.ts';
@@ -147,7 +153,12 @@ export type RepoSubmission = Awaited<
 const iso = (value: Date | string | null | undefined) =>
   value ? new Date(value).toISOString() : null;
 
-const repoFields = (ra: RepoSubmission, gitOrgLogin: string | null, now: Date): RepoRowFields => {
+const repoFields = (
+  ra: RepoSubmission,
+  gitOrgLogin: string | null,
+  now: Date,
+  classroomTokensPerHour: number
+): RepoRowFields => {
   const login = gitOrgLogin ?? ra.git_repo?.classroom?.git_organization?.login ?? null;
   // The student's own copy of the repository: with the student Repositories
   // screen gone, this row is where they reach it.
@@ -212,7 +223,8 @@ const repoFields = (ra: RepoSubmission, gitOrgLogin: string | null, now: Date): 
       .join(', '),
     numLateHours,
     isLateOverride: Boolean(ra.is_late_override),
-    tokensPerHour: ra.assignment?.tokens_per_hour ?? 0,
+    // The assignment's own price, else the classroom's default.
+    tokensPerHour: effectiveTokensPerHour(ra.assignment?.tokens_per_hour, classroomTokensPerHour),
     extensionHours,
     submissionMode: ra.assignment?.submission_mode ?? null,
     closedAt: iso(ra.closed_at),
@@ -291,7 +303,7 @@ export const listForStudent = async ({
 
   // One read per type for this student. A type whose read fails shows no rows
   // (its statuses would be guesses); the other types still show.
-  const [repoSubmissions, quizJoin, formJoin] = await Promise.all([
+  const [repoSubmissions, quizJoin, formJoin, classroomTokensPerHour] = await Promise.all([
     givenSubmissions ??
       (hasRepos
         ? helperService
@@ -323,6 +335,18 @@ export const listForStudent = async ({
           formResponseService.findSubmittedForUserByFormIds(userId, formIds),
         ]).catch(degraded('form', context, null))
       : null,
+    // The classroom's extension price, for repo rows whose assignment sets
+    // none. A failed read prices them at 0 (no Extend) rather than hiding the
+    // rows.
+    hasRepos
+      ? (async () =>
+          (
+            await getPrisma().classroomSettings.findUnique({
+              where: { classroom_id: classroomId },
+              select: { default_tokens_per_hour: true },
+            })
+          )?.default_tokens_per_hour ?? 0)().catch(degraded('extension price', context, 0))
+      : 0,
   ]);
   const [quizzes, attempts] = quizJoin ?? [[], []];
   const [forms, submittedResponses] = formJoin ?? [[], []];
@@ -357,7 +381,7 @@ export const listForStudent = async ({
       const ra = submissionByAssignment.get(a.id);
       // No submission row yet: no student repo to open, so no row (as before).
       if (!ra) continue;
-      const repo = repoFields(ra, gitOrgLogin, now);
+      const repo = repoFields(ra, gitOrgLogin, now, classroomTokensPerHour);
       const href = repo.issueUrl ?? repo.repoUrl;
       const submitted = ra.status === 'CLOSED';
       rows.push({

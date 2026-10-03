@@ -63,8 +63,9 @@ export const extensionPurchaseTool: ToolDefinition<ExtensionPurchaseArgs> = {
   description:
     'Spends YOUR tokens to buy extension hours on one of YOUR OWN assignments (students ' +
     'only). Works at any time: before the deadline the hours push your deadline out, after ' +
-    'it they reduce how late the submission counts. The price per hour comes from the ' +
-    'assignment (tokens_per_hour) and nothing but your balance limits how many you buy, so ' +
+    'it they reduce how late the submission counts. The price per hour is the assignment’s ' +
+    'tokens_per_hour, or the classroom’s default when that is null; nothing but your balance ' +
+    'limits how many you buy, so ' +
     'buy no more hours than you need. An assignment with no deadline has nothing to extend. Check your balance and assignment cost first via the assignments/tokens ' +
     'resources.',
   scope: 'write',

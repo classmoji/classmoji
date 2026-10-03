@@ -13,6 +13,7 @@ const txCreateMock = vi.fn();
 const txUpdateManyMock = vi.fn();
 const txFindUniqueOrThrowMock = vi.fn();
 const teamMembershipFindFirstMock = vi.fn();
+const settingsFindUniqueMock = vi.fn();
 
 vi.mock('@classmoji/database', () => {
   const tokenTransaction = {
@@ -27,6 +28,9 @@ vi.mock('@classmoji/database', () => {
       gitRepoAssignment: { findUnique: (...args: unknown[]) => graFindUniqueMock(...args) },
       teamMembership: {
         findFirst: (...args: unknown[]) => teamMembershipFindFirstMock(...args),
+      },
+      classroomSettings: {
+        findUnique: (...args: unknown[]) => settingsFindUniqueMock(...args),
       },
       tokenTransaction,
       $transaction: (fn: (tx: { tokenTransaction: typeof tokenTransaction }) => unknown) =>
@@ -61,6 +65,7 @@ describe('token.purchaseExtensionHours', () => {
     graFindUniqueMock.mockResolvedValue(baseRepoAssignment());
     txFindManyMock.mockResolvedValue([]);
     txFindFirstMock.mockResolvedValue({ balance_after: 100 });
+    settingsFindUniqueMock.mockResolvedValue({ default_tokens_per_hour: 0 });
     txCreateMock.mockImplementation((args: { data: Record<string, unknown> }) => ({
       id: 'tx-1',
       ...args.data,
@@ -134,6 +139,40 @@ describe('token.purchaseExtensionHours', () => {
     await expect(purchase()).rejects.toThrow('a late override is in effect');
   });
 
+  it("charges the classroom's price when the assignment sets none", async () => {
+    const gra = baseRepoAssignment();
+    (gra.assignment as { tokens_per_hour: number | null }).tokens_per_hour = null;
+    graFindUniqueMock.mockResolvedValue(gra);
+    settingsFindUniqueMock.mockResolvedValue({ default_tokens_per_hour: 2 });
+
+    await purchase(3);
+    const created = txCreateMock.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(created.data.amount).toBe(-6); // 2 tokens/hour from the classroom * 3 hours
+    expect(settingsFindUniqueMock).toHaveBeenCalledWith({
+      where: { classroom_id: 'class-1' },
+      select: { default_tokens_per_hour: true },
+    });
+  });
+
+  it("keeps an assignment's own price over the classroom's, and its 0 means no extensions", async () => {
+    settingsFindUniqueMock.mockResolvedValue({ default_tokens_per_hour: 5 });
+    await purchase(2);
+    const created = txCreateMock.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(created.data.amount).toBe(-6); // the assignment's 3, not the classroom's 5
+
+    const off = baseRepoAssignment();
+    off.assignment.tokens_per_hour = 0;
+    graFindUniqueMock.mockResolvedValue(off);
+    await expect(purchase()).rejects.toThrow('Token cost not configured');
+  });
+
+  it('rejects when neither the assignment nor the classroom sets a price', async () => {
+    const gra = baseRepoAssignment();
+    (gra.assignment as { tokens_per_hour: number | null }).tokens_per_hour = null;
+    graFindUniqueMock.mockResolvedValue(gra);
+    await expect(purchase()).rejects.toThrow('Token cost not configured');
+  });
+
   it('rejects when tokens_per_hour is not configured', async () => {
     const gra = baseRepoAssignment();
     gra.assignment.tokens_per_hour = 0;
@@ -188,6 +227,7 @@ describe('token.purchaseExtensionHours in REPO mode (a push is the submission)',
     vi.clearAllMocks();
     txFindManyMock.mockResolvedValue([]);
     txFindFirstMock.mockResolvedValue({ balance_after: 100 });
+    settingsFindUniqueMock.mockResolvedValue({ default_tokens_per_hour: 0 });
     txCreateMock.mockImplementation((args: { data: Record<string, unknown> }) => ({
       id: 'tx-1',
       ...args.data,

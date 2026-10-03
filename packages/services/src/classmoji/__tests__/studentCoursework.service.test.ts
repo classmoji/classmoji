@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   findSubmittedForUserByFormIds: vi.fn(),
   quizFindMany: vi.fn(),
   formFindMany: vi.fn(),
+  settingsFindUnique: vi.fn(),
 }));
 
 vi.mock('@classmoji/database', () => ({
@@ -23,6 +24,7 @@ vi.mock('@classmoji/database', () => ({
     assignment: { findMany: (...a: unknown[]) => mocks.listForClassroom(...a) },
     quiz: { findMany: (...a: unknown[]) => mocks.quizFindMany(...a) },
     form: { findMany: (...a: unknown[]) => mocks.formFindMany(...a) },
+    classroomSettings: { findUnique: (...a: unknown[]) => mocks.settingsFindUnique(...a) },
   }),
 }));
 vi.mock('../helper.service.ts', () => ({
@@ -449,6 +451,39 @@ describe('listForStudent — REPO rows keep every field the page showed', () => 
 
     expect(row).toMatchObject({ status: 'SUBMITTED', done: true });
     expect(row.repo).toMatchObject({ numLateHours: 2, extensionHours: 2 });
+  });
+
+  it("prices a repo row at the classroom's default when its assignment sets none", async () => {
+    mocks.settingsFindUnique.mockResolvedValue({ default_tokens_per_hour: 2 });
+    mocks.listForClassroom.mockResolvedValue([
+      assignment('r-1', 'REPO'),
+      assignment('r-2', 'REPO'),
+    ]);
+    mocks.findAllAssignmentsForStudent.mockResolvedValue([
+      submission('ra-1', 'r-1', {
+        assignment: {
+          student_deadline: at(24),
+          grades_released: false,
+          submission_mode: 'REPO',
+          tokens_per_hour: null,
+        },
+      }),
+      // Its own 0 stays 0: extensions are off for this one.
+      submission('ra-2', 'r-2', {
+        assignment: {
+          student_deadline: at(24),
+          grades_released: false,
+          submission_mode: 'REPO',
+          tokens_per_hour: 0,
+        },
+      }),
+    ]);
+
+    const rows = await list();
+    const price = (id: string) => rows.find(r => r.assignmentId === id)?.repo?.tokensPerHour;
+
+    expect(price('r-1')).toBe(2);
+    expect(price('r-2')).toBe(0);
   });
 
   it("keeps the student's own submission over their team's", async () => {
