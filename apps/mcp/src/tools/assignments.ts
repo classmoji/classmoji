@@ -110,7 +110,7 @@ interface AssignmentUpdateArgs {
   grader_deadline?: string | null;
   release_at?: string | null;
   closes_at?: string | null;
-  tokens_per_hour?: number;
+  tokens_per_hour?: number | null;
   module_id?: string;
 }
 
@@ -198,8 +198,11 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       .number()
       .int()
       .min(0)
+      .nullable()
       .optional()
-      .describe('Extension tokens per extension hour (0 = no extensions)'),
+      .describe(
+        "Extension tokens per extension hour; null = the classroom's default_tokens_per_hour, 0 = no extensions"
+      ),
     module_id: z
       .string()
       .uuid()
@@ -400,7 +403,7 @@ interface AssignmentCreateArgs {
   description?: string;
   student_deadline?: string;
   grader_deadline?: string;
-  tokens_per_hour?: number;
+  tokens_per_hour?: number | null;
   release_at?: string;
   is_published?: boolean;
 }
@@ -451,8 +454,11 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
       .number()
       .int()
       .min(0)
+      .nullable()
       .optional()
-      .describe('Extension token cost per extension hour (default 0)'),
+      .describe(
+        "Extension token cost per extension hour; omit or null to use the classroom's default_tokens_per_hour, 0 = no extensions"
+      ),
     release_at: z
       .string()
       .datetime({ offset: true })

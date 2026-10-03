@@ -104,7 +104,8 @@ export const cloneAssignment = async (
     is_extra_credit: sourceAssignment.is_extra_credit,
     is_published: false,
     description: sourceAssignment.description || '',
-    tokens_per_hour: sourceAssignment.tokens_per_hour || 0,
+    // Its own price, or empty to follow the target classroom's default.
+    tokens_per_hour: sourceAssignment.tokens_per_hour ?? null,
     branch: sourceAssignment.branch,
     workflow_file: sourceAssignment.workflow_file,
     // Conditionally strip deadlines

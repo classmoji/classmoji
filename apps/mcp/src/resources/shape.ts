@@ -182,7 +182,7 @@ export interface SubmissionLike {
     student_deadline?: Date | string | null;
     grades_released?: boolean;
     is_published?: boolean;
-    tokens_per_hour?: number;
+    tokens_per_hour?: number | null;
     weight?: number;
   } | null;
   git_repo?: {

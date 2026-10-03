@@ -39,7 +39,8 @@ const SettingsExtensions = ({ loaderData }: Route.ComponentProps) => {
   const saveExtensionSettings = () => {
     fetcher!.submit(
       {
-        default_tokens_per_hour: parseInt(tokensPerHour),
+        // An empty field is 0 (no extensions), never a malformed number.
+        default_tokens_per_hour: Number.parseInt(tokensPerHour, 10) || 0,
       },
       {
         action: '?/saveExtensionSettings',
@@ -53,7 +54,7 @@ const SettingsExtensions = ({ loaderData }: Route.ComponentProps) => {
     <div className="w-2/3">
       <SettingSection
         title="Tokens per hour"
-        description="Configure the default number of tokens per hour for deadline extensions"
+        description="What one extension hour costs a student, on every assignment that doesn't set its own price. Changing it reprices those assignments right away. 0 turns extensions off for them."
       >
         <Form layout="vertical">
           <Form.Item label="Tokens per hour">

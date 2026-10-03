@@ -32,7 +32,8 @@ export { QuizAssignmentError } from './quizAssignment.service.ts';
  * A quiz's place in the course, as the quiz form's Assignment panel writes
  * it. Each field is optional on an update (absent = unchanged); `moduleId` is
  * required to create a quiz. Dates take an ISO string, a Date, or null to
- * clear; `weight` and `tokensPerHour` are numbers of 0 or more.
+ * clear; `weight` and `tokensPerHour` are numbers of 0 or more. An empty
+ * `tokensPerHour` (null or '') means the classroom's default price.
  */
 export interface QuizAssignmentInput {
   moduleId?: string | null;
@@ -247,7 +248,7 @@ interface AssignmentChanges {
   student_deadline?: Date | null;
   closes_at?: Date | null;
   weight?: number;
-  tokens_per_hour?: number;
+  tokens_per_hour?: number | null;
   is_published?: boolean;
 }
 
@@ -274,7 +275,11 @@ const assignmentChangesOf = (
     integer: false,
   });
   if (weight !== undefined) changes.weight = weight;
-  const tokensPerHour = countInput('Tokens per hour', input.tokensPerHour, { integer: true });
+  // Empty = the classroom's default price; a number is this quiz's own.
+  const tokensPerHour =
+    input.tokensPerHour === null || input.tokensPerHour === ''
+      ? null
+      : countInput('Tokens per hour', input.tokensPerHour, { integer: true });
   if (tokensPerHour !== undefined) changes.tokens_per_hour = tokensPerHour;
   if (input.isPublished !== undefined) changes.is_published = input.isPublished === true;
   else if (data.status !== undefined) changes.is_published = data.status !== 'DRAFT';
@@ -340,7 +345,7 @@ export const create = async (data: QuizCreateInput) => {
       student_deadline: schedule.student_deadline,
       release_at: changes.release_at ?? null,
       closes_at: schedule.closes_at,
-      tokens_per_hour: changes.tokens_per_hour ?? 0,
+      tokens_per_hour: changes.tokens_per_hour ?? null,
     });
     if (data.sourceMaterial !== undefined) {
       await setQuizSourceMaterial(tx, {
@@ -618,7 +623,7 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
             : current.status === 'CLOSED'
               ? current.updated_at
               : null,
-        tokens_per_hour: changes.tokens_per_hour ?? 0,
+        tokens_per_hour: changes.tokens_per_hour ?? null,
       });
       assignment = await tx.assignment.findUniqueOrThrow({
         where: { id: created.id },

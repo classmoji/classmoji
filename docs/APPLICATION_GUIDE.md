@@ -196,7 +196,7 @@ Repositories, quizzes and forms are the storage; assignments are what gets relea
 - **Weight** (`weight`): the only grading weight. Course grade = weighted mean of graded, non-extra-credit assignments, plus extra credit ([packages/utils/src/grades.ts](packages/utils/src/grades.ts)). Drop-lowest was removed.
 - **Extra Credit** (`is_extra_credit`): bonus that does not enter the denominator
 - **Deadlines**: `release_at` (when students see it), `student_deadline` (when work is due), `grader_deadline` (when grading should be done)
-- **Tokens per hour** (`tokens_per_hour`): reward for early submission (Pro tier)
+- **Tokens per hour** (`tokens_per_hour`): what one extension hour costs a student. Null = the classroom's `ClassroomSettings.default_tokens_per_hour` (resolved by `effectiveTokensPerHour` in `packages/utils`); 0 = no extensions on this assignment
 - **Submission mode** (`submission_mode`, `REPO` assignments only): `REPO` (push) or `ISSUE`. The database column defaults to `ISSUE`; the web UI and the MCP `assignment_create` tool default new assignments to `REPO`.
 
 #### Submission Modes
