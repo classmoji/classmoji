@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { GITLAB_ANTD_BUTTON } from '~/components/ui/gitlabButton';
 import { useSearchParams } from 'react-router';
 import { Alert, Button, Input } from 'antd';
 import { GithubOutlined } from '@ant-design/icons';
@@ -241,7 +242,7 @@ const SettingsConnections = ({ loaderData }: Route.ComponentProps) => {
           <ConnectionRow icon={<GitlabLogo size={18} />} name="Gitlab" status={gitlabStatus}>
             {!gitlab && gitlabAvailable && (
               <Button
-                type="primary"
+                className={GITLAB_ANTD_BUTTON}
                 onClick={() => setChoosingGitLab(true)}
                 disabled={choosingGitLab}
               >

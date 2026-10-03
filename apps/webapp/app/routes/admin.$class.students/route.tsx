@@ -142,6 +142,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
 const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
   const { students, classroom, invitations, isOwner, canManage } = loaderData;
+  const isGitLab = classroom.git_organization?.provider === 'GITLAB';
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
@@ -157,11 +158,13 @@ const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
       school_id: null,
       login: 'pending-invite',
       has_accepted_invite: false,
-      avatar_url: 'https://github.com/github.png?size=460',
+      // No account yet. Github classes show Github's mark; a Gitlab class
+      // shows the person's initial instead (see UserThumbnailView).
+      avatar_url: isGitLab ? null : 'https://github.com/github.png?size=460',
       _isInvite: true,
     }));
     return [...students, ...inviteList];
-  }, [students, invitations]);
+  }, [students, invitations, isGitLab]);
 
   // Search over the fields the row actually carries. Name and login are always
   // present; the contact fields exist only in an OWNER's payload, so they widen
