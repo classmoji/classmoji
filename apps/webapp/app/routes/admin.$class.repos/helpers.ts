@@ -6,6 +6,7 @@ import dayjs from 'dayjs';
 
 import { ClassmojiService } from '@classmoji/services';
 import Tasks from '@classmoji/tasks';
+import { gitTerms } from '~/utils/gitWeb';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 
 type Classroom = NonNullable<Awaited<ReturnType<typeof ClassmojiService.classroom.findBySlug>>>;
@@ -17,6 +18,27 @@ type GitRepo = Awaited<ReturnType<typeof ClassmojiService.gitRepo.findByReposito
  * resolved from it rather than from the slug, and the repository — addressed by
  * a body-supplied id — is checked against it before anything is published.
  */
+const skippedNote = (count: number) =>
+  `${count} student${count === 1 ? '' : 's'} skipped: no Gitlab account connected yet. ` +
+  'Their repositories are created when they connect Gitlab and open Classmoji.';
+
+/**
+ * A repository published without an assignment reaches students only through
+ * their Repositories page, so the publish says so and points at the fix.
+ */
+const unassignedNote = (repos: string) =>
+  `No assignment uses this yet, so students only see it under ${repos}. ` +
+  'Add it to an assignment in a module to give it a deadline and a grade.';
+
+/** Join a publish's notes into the one `info` line the callout shows. */
+const withNotes = <T extends object>(
+  result: T,
+  ...notes: (string | null)[]
+): T & { info?: string } => {
+  const info = [(result as { info?: string }).info, ...notes].filter(Boolean).join(' ');
+  return info ? { ...result, info } : result;
+};
+
 export const publishAssignment = async (
   classroomSlug: string,
   classroomId: string,
@@ -27,9 +49,11 @@ export const publishAssignment = async (
     const sessionId = nanoid();
     const classroom = await ClassmojiService.classroom.findById(classroomId);
     const repository = await ClassmojiService.repository.findById(repositoryId);
+    const terms = gitTerms(classroom?.git_organization?.provider === 'GITLAB');
 
     invariant(repository != null, 'Repository not found');
     invariant(repository.classroom_id === classroomId, 'Repository not found in classroom');
+    const unassigned = repository.assignments.length === 0 ? unassignedNote(terms.Repos) : null;
 
     // If repos already exist (re-publish after unpublish), just flip the flag
     const existingRepos = await ClassmojiService.gitRepo.findByRepository(
@@ -38,7 +62,10 @@ export const publishAssignment = async (
     );
     if (existingRepos.length > 0) {
       await ClassmojiService.repository.setPublished(repositoryId, true, classroomId);
-      return { success: 'Repository re-published. Use Sync to update repositories.' };
+      return withNotes(
+        { success: `${terms.Repo} re-published. Use Sync to update ${terms.repos}.` },
+        unassigned
+      );
     }
 
     // Provisioning clones the template once per student in background runs the
@@ -50,6 +77,7 @@ export const publishAssignment = async (
     );
     if (!templateCheck.ok) return { error: templateCheck.error };
 
+    let skippedNoGitLab = 0;
     let numReposToCreate = 0;
     let numIssuesToCreate = 0;
     let _numStudents = 0;
@@ -60,7 +88,22 @@ export const publishAssignment = async (
         'STUDENT'
       );
 
-      const studentList = students.map(user => user.login || '').filter(login => login !== '');
+      let studentList = students.map(user => user.login || '').filter(login => login !== '');
+
+      // GitLab: a project is named after, and shared with, the student's GitLab
+      // username, so students without GitLab connected can't get one yet. Say
+      // so instead of letting the task skip them silently.
+      if (classroom?.git_organization?.provider === 'GITLAB') {
+        const gitlabUsernames = await ClassmojiService.user.findProviderUsernames(
+          students.map(user => user.id),
+          'GITLAB'
+        );
+        const withGitLab = new Set(
+          students.filter(user => gitlabUsernames.has(user.id)).map(user => user.login)
+        );
+        skippedNoGitLab = studentList.filter(login => !withGitLab.has(login)).length;
+        studentList = studentList.filter(login => withGitLab.has(login));
+      }
 
       // Nobody to provision for yet — an empty roster (pre-term staging) or a
       // roster whose invites are all still pending, so no GitHub login to create
@@ -71,15 +114,20 @@ export const publishAssignment = async (
       if (studentList.length === 0) {
         await ClassmojiService.repository.setPublished(repositoryId, true, classroomId);
 
-        return {
-          success: 'Repository published! Student repositories are created as students join.',
-        };
+        return withNotes(
+          {
+            success: `${terms.Repo} published! Student ${terms.repos} are created as students join.`,
+          },
+          skippedNoGitLab > 0 ? skippedNote(skippedNoGitLab) : null,
+          unassigned
+        );
       }
 
       numReposToCreate = studentList.length;
       numIssuesToCreate =
-        repository.assignments.filter(assignment => dayjs(assignment.release_at).isBefore(dayjs()))
-          .length * studentList.length;
+        repository.assignments.filter(
+          assignment => dayjs(assignment.release_at).isBefore(dayjs())
+        ).length * studentList.length;
       _numStudents = studentList.length;
 
       Tasks.createRepositoriesTask.trigger(
@@ -108,9 +156,10 @@ export const publishAssignment = async (
       // drafts. Publish them now; each team's rows are created as it forms.
       await ClassmojiService.assignment.publishReleased(repositoryId);
 
-      return {
-        success: 'Repository published! Students can now form teams.',
-      };
+      return withNotes(
+        { success: `${terms.Repo} published! Students can now form teams.` },
+        unassigned
+      );
     } else {
       // Instructor-assigned teams
       const teams = await ClassmojiService.organizationTag.findTeamsByTag(repository.tag_id!);
@@ -121,15 +170,17 @@ export const publishAssignment = async (
       if (teams.length === 0) {
         await ClassmojiService.repository.setPublished(repositoryId, true, classroomId);
 
-        return {
-          success: 'Repository published! Team repositories are created once teams exist.',
-        };
+        return withNotes(
+          { success: `${terms.Repo} published! Team ${terms.repos} are created once teams exist.` },
+          unassigned
+        );
       }
 
       numReposToCreate = teams.length;
       numIssuesToCreate =
-        repository.assignments.filter(assignment => dayjs(assignment.release_at).isBefore(dayjs()))
-          .length * teams.length;
+        repository.assignments.filter(
+          assignment => dayjs(assignment.release_at).isBefore(dayjs())
+        ).length * teams.length;
       _numStudents = teams.length;
 
       Tasks.createRepositoriesTask.trigger(
@@ -156,14 +207,18 @@ export const publishAssignment = async (
       },
     });
 
-    return {
-      triggerSession: {
-        accessToken,
-        id: sessionId,
-        numReposToCreate: numReposToCreate * 2, // multiply by 2 to handle gh and cf creation
-        numIssuesToCreate: numIssuesToCreate, // publish does not create issues
+    return withNotes(
+      {
+        triggerSession: {
+          accessToken,
+          id: sessionId,
+          numReposToCreate: numReposToCreate * 2, // multiply by 2 to handle gh and cf creation
+          numIssuesToCreate: numIssuesToCreate, // publish does not create issues
+        },
       },
-    };
+      skippedNoGitLab > 0 ? skippedNote(skippedNoGitLab) : null,
+      unassigned
+    );
   } catch (error: unknown) {
     console.error(error);
     throw error;
@@ -564,7 +619,9 @@ const createMissingAssignments = async (
       };
       assignmentsData.push({
         payload,
-        options: { tags: [`session_${sessionId}`] },
+        // `standalone`: this run is one repo's whole job here, not a step of a
+        // repo being created, so the progress callout counts it as a unit.
+        options: { tags: [`session_${sessionId}`, 'standalone'] },
       });
     });
   });

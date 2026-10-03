@@ -26,6 +26,8 @@ export const ROOT_GIT_ORGANIZATION_SELECT = {
   provider: true,
   provider_id: true,
   login: true,
+  // A self-managed Gitlab's host: without it every link falls back to gitlab.com.
+  base_url: true,
 } as const satisfies Prisma.GitOrganizationSelect;
 
 // Membership projection for the root loader: what the client reads of a
@@ -101,8 +103,17 @@ export type AppSubscription =
 // Root loader mutates user to add .subscription and .memberships
 // User.image (Prisma) is used as avatar_url in the UI
 export interface AppUser extends UserWithMemberships {
-  /** A Github account is connected (required before joining a classroom). */
+  /** A Github account is connected. */
   has_github: boolean;
+  /** A Gitlab account is connected. One of the two is required before joining a classroom. */
+  has_gitlab: boolean;
+  /** The person's username on each provider (null where not connected). */
+  logins: { GITHUB: string | null; GITLAB: string | null };
+  /**
+   * The provider in effect (the current classroom's, else `fallbackMode`); set
+   * by the root loader, which also points `login` at that provider's username.
+   */
+  provider?: 'GITHUB' | 'GITLAB';
   /** Has an email+password sign-in. */
   has_password: boolean;
   subscription?: AppSubscription | null;

@@ -28,9 +28,11 @@ const calendarEventFindMany = vi.fn();
 const formFindMany = vi.fn();
 const quizzesVisible = vi.fn();
 
-vi.mock('@classmoji/database', () => ({
-  // calendar.service reads it for its includes; its shape does not matter here.
-  GIT_IDENTITY: {},
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
   default: () => ({
     assignment: { findMany: assignmentFindMany },
     calendarEvent: { findMany: calendarEventFindMany },

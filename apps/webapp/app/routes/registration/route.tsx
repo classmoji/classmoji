@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 import { Button, Form, Input, Spin, Card, Alert, Space } from 'antd';
 import { redirect, useFetcher, useNavigate } from 'react-router';
 import { UserOutlined, MailOutlined, GithubOutlined, CheckCircleFilled } from '@ant-design/icons';
@@ -194,6 +195,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
   return {
     githubLogin,
+    gitlabLogin: gitUsername(user, 'GITLAB'),
     name: user.name,
     // A Github sign-up arrives with its Github email; it still needs a code.
     suggestedEmail: invite?.email ?? user.email ?? null,
@@ -204,7 +206,11 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 };
 
 const Registration = ({ loaderData }: Route.ComponentProps) => {
-  const { githubLogin, name, suggestedEmail, invitedEmail, inviteToken, next } = loaderData;
+  const { githubLogin, gitlabLogin, name, suggestedEmail, invitedEmail, inviteToken, next } =
+    loaderData;
+  // The provider username shown (display only; the server never reads it back).
+  const gitLogin = githubLogin ?? gitlabLogin;
+  const isGitLab = !githubLogin && Boolean(gitlabLogin);
   const fetcher = useFetcher();
   const codeFetcher = useFetcher();
   const verifyFetcher = useFetcher();
@@ -282,11 +288,16 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
             <Logo size={48} />
           </div>
           <h1 className="text-xl font-semibold mb-2 dark:text-gray-100">Create Your Account</h1>
-          <p className="text-gray-600 dark:text-gray-400 text-sm">Complete your profile to get started</p>
+          <p className="text-gray-600 dark:text-gray-400 text-sm">
+            Complete your profile to get started
+          </p>
         </div>
 
         {/* Main Form Card */}
-        <Card className="shadow-xs border border-gray-200 dark:border-neutral-800" styles={{ body: { padding: '24px' } }}>
+        <Card
+          className="shadow-xs border border-gray-200 dark:border-neutral-800"
+          styles={{ body: { padding: '24px' } }}
+        >
           <Spin spinning={isSubmitting} tip="Setting up your account..." fullscreen />
 
           {actionError && (
@@ -299,7 +310,7 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
             onFinish={onFinish}
             size="middle"
             initialValues={{
-              login: githubLogin ?? undefined,
+              login: gitLogin ?? undefined,
               email: suggestedEmail ?? undefined,
               name: name ?? undefined,
             }}
@@ -392,13 +403,17 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
                   <Input />
                 </Form.Item>
 
-                {/* GitHub Username */}
-                {githubLogin && (
+                {/* Github or Gitlab username */}
+                {gitLogin && (
                   <Form.Item
                     label={
                       <span className="flex items-center gap-2 font-medium text-gray-700 text-sm">
-                        <GithubOutlined />
-                        GitHub Username
+                        {isGitLab ? (
+                          <GitlabLogo size={14} />
+                        ) : (
+                          <GithubOutlined className="text-gray-900 dark:text-gray-100" />
+                        )}
+                        {isGitLab ? 'Gitlab Username' : 'Github Username'}
                       </span>
                     }
                     name="login"

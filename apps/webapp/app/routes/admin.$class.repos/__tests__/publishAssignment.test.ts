@@ -147,9 +147,26 @@ describe('publishAssignment — empty roster (pre-term staging)', () => {
     expect(result.success).toBeDefined();
   });
 
-  it('publishes an instructor-assigned GROUP repo with no teams yet', async () => {
+  it('says students only find a repository no assignment uses under Repositories', async () => {
     mocks.repositoryFindById.mockResolvedValue(
       repositoryRow({ type: 'GROUP', team_formation_mode: 'INSTRUCTOR', tag_id: 'tag-1' })
+    );
+
+    const result = await publish();
+
+    expect(result.success).toBeDefined();
+    expect(result.info).toMatch(/only see it under Repositories/);
+  });
+
+  it('publishes an instructor-assigned GROUP repo with no teams yet', async () => {
+    mocks.repositoryFindById.mockResolvedValue(
+      repositoryRow({
+        type: 'GROUP',
+        team_formation_mode: 'INSTRUCTOR',
+        tag_id: 'tag-1',
+        // An assignment uses it, so the publish has no note to add.
+        assignments: [{ id: 'a-1', release_at: null }],
+      })
     );
 
     const result = await publish();

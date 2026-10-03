@@ -9,6 +9,7 @@ import { getContentRepoName } from '@classmoji/utils';
 import { SettingSection } from '~/components';
 import { ActionTypes } from '~/constants';
 import { useGlobalFetcher } from '~/hooks';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import type { Route } from './+types/route';
 
@@ -35,12 +36,13 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
   const { class: classSlug } = useParams();
 
   const { fetcher } = useGlobalFetcher();
+  const web = useGitWeb();
 
   // content_repo is the stored, user-editable repo name; the org-level helper is
   // only a fallback for legacy classrooms that predate it.
   const gitOrgLogin = organization.git_organization?.login || classSlug || '';
   const repoName = organization.content_repo || getContentRepoName({ login: gitOrgLogin });
-  const repoUrl = `https://github.com/${gitOrgLogin}/${repoName}`;
+  const repoUrl = web.contentRepo(repoName);
 
   // Handler for customizable repo name (currently disabled in UI)
   const _handleContentRepoChange = (
@@ -137,7 +139,11 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
       {/* Content Repository Link */}
       <SettingSection
         title="Content Repository"
-        description="Your course content (slides, pages, syllabus) is stored in a GitHub repository."
+        description={
+          web.isGitLab
+            ? 'Your course content (slides, pages, syllabus) is stored in a Gitlab repository.'
+            : 'Your course content (slides, pages, syllabus) is stored in a Github repository.'
+        }
       >
         <a
           href={repoUrl}

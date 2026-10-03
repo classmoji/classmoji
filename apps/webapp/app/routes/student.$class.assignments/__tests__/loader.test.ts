@@ -93,6 +93,7 @@ describe('student assignments loader', () => {
       userId: 'student-1',
       quizzesVisible: false,
       gitOrgLogin: 'test-org',
+      git: expect.objectContaining({ login: 'test-org' }),
       assignments: [{ id: 'listed' }],
     });
   });

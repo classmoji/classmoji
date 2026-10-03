@@ -42,7 +42,7 @@ export async function loginAs(page: Page, role: TestRole, redirectTo: string = '
  * privileged than the route already is, and it lives here (not in a spec)
  * because it is the only correct way to write a multi-student test.
  *
- * @param login  the user's `login` column — `fake-student-2`, and so on.
+ * @param login  the user's Github username — `fake-student-2`, and so on.
  */
 export async function loginAsLogin(page: Page, login: string): Promise<void> {
   const prisma = await getTestPrisma();

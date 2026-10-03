@@ -210,13 +210,22 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
   let setId: string;
   let setName: string;
 
+  /** The unique key of a Github account by username. */
+  const githubUsername = (username: string) => ({
+    provider_id_gitlab_instance_id_username: {
+      provider_id: 'github',
+      gitlab_instance_id: '',
+      username,
+    },
+  });
+
   const makeUser = async (label: string) => {
     const login = `tstest-${suite}-${label}`;
     const user = await prisma.user.create({
       data: {
-        accounts: { create: { provider_id: 'github', account_id: login, username: login } },
         email: `${login}@example.test`,
         name: `Team Test ${label}`,
+        accounts: { create: { provider_id: 'github', account_id: login, username: login } },
       },
     });
     logins.set(user.id, login);
@@ -1365,8 +1374,8 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
       })
     );
     addTeamMembersMock.mockImplementation(async ({ logins: requested }: { logins: string[] }) => {
-      await prisma.account.updateMany({
-        where: { provider_id: 'github', username: requested[1]! },
+      await prisma.account.update({
+        where: githubUsername(requested[1]!),
         data: { username: `${requested[1]}-renamed` },
       });
       return {
@@ -1402,8 +1411,8 @@ describe.skipIf(!RUN)('teamSet.service (integration)', () => {
       teams_failed: 0,
       members_failed: 3,
     });
-    await prisma.account.updateMany({
-      where: { provider_id: 'github', username: `${team2[1]}-renamed` },
+    await prisma.account.update({
+      where: githubUsername(`${team2[1]}-renamed`),
       data: { username: team2[1]! },
     });
 

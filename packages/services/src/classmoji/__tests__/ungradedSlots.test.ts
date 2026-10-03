@@ -39,16 +39,24 @@ const membershipCount = ({ where }: { where: Record<string, unknown> }) =>
     }).length
   );
 
-vi.mock('@classmoji/database', async importOriginal => ({
-  ...(await importOriginal<typeof import('@classmoji/database')>()),
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
   default: () => ({
-    classroom: { findUnique: vi.fn(async () => ({ git_organization: { provider: 'GITHUB' } })) },
     gitRepoAssignmentGrader: {
       findMany: (...a: unknown[]) => graderFindMany(...a),
       count: (...a: unknown[]) => graderCount(...a),
       groupBy: (...a: unknown[]) => graderGroupBy(...a),
     },
     user: { findFirst: (...a: unknown[]) => userFindFirst(...a) },
+    // Staff logins are looked up on the classroom organization's provider.
+    classroom: {
+      findUnique: async () => ({
+        git_organization: { provider: 'GITHUB', gitlab_instance_id: null },
+      }),
+    },
     classroomMembership: {
       count: (args: { where: Record<string, unknown> }) => membershipCount(args),
     },

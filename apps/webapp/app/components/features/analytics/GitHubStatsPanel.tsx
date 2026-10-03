@@ -7,6 +7,7 @@ import Anomalies from './Anomalies';
 import ContributorBreakdown, { type EligibleStudent } from './ContributorBreakdown';
 import HeuristicsChips from './HeuristicsChips';
 import PullRequestPills from './PullRequestPills';
+import { useGitWeb } from '~/hooks/useGitWeb';
 
 export type ContributorRecord = {
   login: string;
@@ -79,9 +80,7 @@ function LanguageBar({ languages }: { languages: Record<string, number> }) {
 
   return (
     <div className="space-y-2" data-testid="language-breakdown">
-      <div className="text-xs uppercase tracking-wide text-ink-3 font-semibold">
-        Languages
-      </div>
+      <div className="text-xs uppercase tracking-wide text-ink-3 font-semibold">Languages</div>
       <div className="flex h-2 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800">
         {withPct.map(l => (
           <div
@@ -116,6 +115,7 @@ const GitHubStatsPanel = ({
   students,
   focusPct,
 }: GitHubStatsPanelProps) => {
+  const web = useGitWeb();
   if (!snapshot) {
     return (
       <Card
@@ -124,12 +124,8 @@ const GitHubStatsPanel = ({
       >
         <div className="flex items-center justify-between gap-4">
           <div>
-            <div className="text-lg font-semibold text-ink-0">
-              GitHub Activity
-            </div>
-            <div className="text-sm text-ink-3">
-              No snapshot yet for this submission.
-            </div>
+            <div className="text-lg font-semibold text-ink-0">{web.label} Activity</div>
+            <div className="text-sm text-ink-3">No snapshot yet for this submission.</div>
           </div>
           <Button
             type="primary"
@@ -163,9 +159,7 @@ const GitHubStatsPanel = ({
       {/* Header */}
       <div className="flex items-center justify-between gap-4 mb-4">
         <div>
-          <div className="text-lg font-semibold text-ink-0">
-            GitHub Activity
-          </div>
+          <div className="text-lg font-semibold text-ink-0">{web.label} Activity</div>
           <div className="mt-1 flex items-center gap-2 text-xs text-ink-3">
             <span data-testid="fetched-at">Updated {dayjs(fetched_at).fromNow()}</span>
             {stale && (

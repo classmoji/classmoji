@@ -13,6 +13,8 @@ interface TokenPayload {
   repo?: string;
   token?: string;
   expiresAt?: string;
+  provider?: string;
+  apiBase?: string;
 }
 
 interface CacheEntry {
@@ -108,7 +110,14 @@ async function mintOriginRef(env: Env, classroomId: string, now: number): Promis
     throw new OriginError(502, 'token endpoint returned an incomplete payload');
   }
 
-  const ref: OriginRef = { org: payload.org, repo: payload.repo, token: payload.token };
+  const ref: OriginRef = {
+    org: payload.org,
+    repo: payload.repo,
+    token: payload.token,
+    ...(payload.provider === 'GITLAB'
+      ? { provider: 'GITLAB' as const, apiBase: payload.apiBase }
+      : {}),
+  };
   const expiresAtMs = payload.expiresAt ? Date.parse(payload.expiresAt) : Number.NaN;
   // Only cache a token we know the lifetime of; an unparseable expiry means
   // we re-mint next request rather than serve with a token that may be dead.

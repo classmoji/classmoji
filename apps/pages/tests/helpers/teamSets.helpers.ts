@@ -416,9 +416,9 @@ export async function createTeamsFixture({
     const login = loginOf(key, person);
     const user = await prisma.user.create({
       data: {
-        accounts: { create: { provider_id: 'github', account_id: login, username: login } },
         name,
         email: `${login}@example.test`,
+        accounts: { create: { provider_id: 'github', account_id: login, username: login } },
       },
     });
     return { key: person, id: user.id, name, login };

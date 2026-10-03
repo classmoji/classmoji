@@ -6,6 +6,7 @@ import { redirect, useParams } from 'react-router';
 import type { ShouldRevalidateFunctionArgs } from 'react-router';
 
 import { useGlobalFetcher, useDisclosure } from '~/hooks';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import { ClassmojiService } from '@classmoji/services';
 import { getAuthSession } from '@classmoji/auth/server';
 import { ActionTypes } from '~/constants';
@@ -44,12 +45,16 @@ export const shouldRevalidate = ({ actionResult }: ShouldRevalidateFunctionArgs)
 
 const DangerZone = ({ loaderData }: Route.ComponentProps) => {
   const { artifacts, withheld, impersonating } = loaderData;
+  const { isGitLab } = useGitWeb();
   const repos = artifacts.filter(a => a.kind === 'repo');
   const teams = artifacts.filter(a => a.kind === 'team');
   // Content repo first, then assignment repos, then the template duplicates this
   // classroom's own import created, then every team.
   const artifactGroups = [
-    { heading: 'Content repository', items: artifacts.filter(a => a.label === 'content repo') },
+    {
+      heading: 'Content repository',
+      items: artifacts.filter(a => a.label === 'content repo'),
+    },
     {
       heading: 'Assignment repositories',
       items: artifacts.filter(a => a.label === 'assignment repo'),
@@ -58,7 +63,7 @@ const DangerZone = ({ loaderData }: Route.ComponentProps) => {
       heading: 'Imported template repositories',
       items: artifacts.filter(a => a.label === 'template repo'),
     },
-    { heading: 'Teams', items: teams },
+    { heading: isGitLab ? 'Subgroups' : 'Teams', items: teams },
   ].filter(group => group.items.length > 0);
   const { fetcher, notify } = useGlobalFetcher();
   const { show, close, visible } = useDisclosure();
@@ -77,7 +82,9 @@ const DangerZone = ({ loaderData }: Route.ComponentProps) => {
     setRemoving(true);
     notify(
       ActionTypes.REMOVE_CLASSROOM,
-      deleteGitHub ? 'Removing classroom and GitHub artifacts...' : 'Removing classroom...'
+      deleteGitHub
+        ? `Removing classroom and ${isGitLab ? 'Gitlab' : 'Github'} artifacts...`
+        : 'Removing classroom...'
     );
     fetcher!.submit(
       { delete_github: deleteGitHub ? 'true' : 'false' },
@@ -138,9 +145,9 @@ const DangerZone = ({ loaderData }: Route.ComponentProps) => {
         cancelButtonProps={{ disabled: removing }}
       >
         <p>
-          Everything stored in Classmoji for this classroom will be permanently removed:
-          repositories, assignments, quizzes, pages, slide decks, modules, student enrollments,
-          grades, and settings. There is no undo.
+          Everything stored in Classmoji for this classroom will be permanently removed:{' '}
+          {isGitLab ? 'projects' : 'repositories'}, assignments, quizzes, pages, slide decks,
+          modules, student enrollments, grades, and settings. There is no undo.
         </p>
         <div className="pt-3">
           <Checkbox
@@ -148,24 +155,43 @@ const DangerZone = ({ loaderData }: Route.ComponentProps) => {
             disabled={removing}
             onChange={e => setDeleteGitHub(e.target.checked)}
           >
-            Also delete this classroom&rsquo;s GitHub artifacts
+            Also delete this classroom&rsquo;s {isGitLab ? 'Gitlab' : 'Github'} artifacts
             <div className="text-xs text-gray-500 dark:text-gray-400">
-              The content repository, the classroom teams, all student assignment repositories, and
-              any template repositories this classroom&rsquo;s import created. Leave unchecked to
-              keep everything on GitHub.
+              {isGitLab ? (
+                <>
+                  The class subgroup and everything in it (the content project, all student and team
+                  projects, and the team subgroups), plus any template projects this
+                  classroom&rsquo;s import created. Leave unchecked to keep everything on Gitlab.
+                </>
+              ) : (
+                <>
+                  The content repository, the classroom teams, all student assignment repositories,
+                  and any template repositories this classroom&rsquo;s import created. Leave
+                  unchecked to keep everything on Github.
+                </>
+              )}
             </div>
           </Checkbox>
           {deleteGitHub && (
             <div className="mt-2 rounded-md border border-gray-200 bg-gray-50 p-3 text-xs dark:border-neutral-700 dark:bg-neutral-800">
               {artifacts.length === 0 ? (
                 <p className="text-gray-600 dark:text-gray-300">
-                  Nothing to delete on GitHub for this classroom.
+                  Nothing to delete on {isGitLab ? 'Gitlab' : 'Github'} for this classroom.
                 </p>
               ) : (
                 <>
                   <p className="font-medium text-gray-700 dark:text-gray-200">
-                    Will delete {repos.length} repositor{repos.length === 1 ? 'y' : 'ies'} and{' '}
-                    {teams.length} team{teams.length === 1 ? '' : 's'}:
+                    {isGitLab ? (
+                      <>
+                        Will delete {repos.length} repositor{repos.length === 1 ? 'y' : 'ies'} and{' '}
+                        {teams.length} subgroup{teams.length === 1 ? '' : 's'}:
+                      </>
+                    ) : (
+                      <>
+                        Will delete {repos.length} repositor{repos.length === 1 ? 'y' : 'ies'} and{' '}
+                        {teams.length} team{teams.length === 1 ? '' : 's'}:
+                      </>
+                    )}
                   </p>
                   {/* Student assignment repos can run to hundreds — keep the list scrollable. */}
                   <div className="mt-2 max-h-40 overflow-y-auto pr-1">
@@ -189,8 +215,9 @@ const DangerZone = ({ loaderData }: Route.ComponentProps) => {
               {withheld && (
                 <p className="mt-2 text-amber-600 dark:text-amber-400">
                   Content repo <span className="font-mono">{withheld.name}</span> is shared with
-                  classroom <span className="font-mono">{withheld.sharedWithSlug}</span>, so GitHub
-                  cleanup is blocked — uncheck this option to remove the classroom only.
+                  classroom <span className="font-mono">{withheld.sharedWithSlug}</span>, so{' '}
+                  {isGitLab ? 'Gitlab' : 'Github'} cleanup is blocked — uncheck this option to
+                  remove the classroom only.
                 </p>
               )}
             </div>
@@ -223,7 +250,7 @@ const DangerZone = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom, membership } = await requireClassroomAdmin(request, classSlug, {
+  const { classroom, membership, userId } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'SETTINGS',
     action: 'delete_classroom',
   });
@@ -256,7 +283,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         classroom,
         classSlug,
         deleteGitHub,
-        deleteGitHub ? (authData?.token ?? null) : null
+        deleteGitHub ? (authData?.token ?? null) : null,
+        classroom.git_organization?.provider === 'GITLAB',
+        userId
       );
     },
   });
@@ -266,8 +295,11 @@ const removeClassroomHandler = async (
   classroom: { id: string },
   classSlug: string,
   deleteGitHub: boolean,
-  userToken: string | null
+  userToken: string | null,
+  isGitLab: boolean,
+  requesterUserId: string
 ) => {
+  const platform = isGitLab ? 'Gitlab' : 'Github';
   // GitHub cleanup MUST precede the DB delete: the cascade destroys the rows
   // that name the artifacts (content repo, team slugs, git repo names).
   // A FAILED cleanup therefore ABORTS the delete — deleting anyway would strand
@@ -276,38 +308,41 @@ const removeClassroomHandler = async (
   // and retry, or opt out of the GitHub cleanup entirely.
   let cleanupNote = '';
   if (deleteGitHub) {
-    const retryHint =
-      'Fix the GitHub permissions and try again, or uncheck the GitHub option to remove the classroom only.';
+    const retryHint = `Fix the ${platform} permissions and try again, or uncheck the ${platform} option to remove the classroom only.`;
     let summary;
     try {
+      // Gitlab: the requester's own Gitlab connection, likewise.
       summary = await ClassmojiService.classroom.deleteGitHubArtifacts(
         classroom.id,
-        userToken ?? ''
+        userToken ?? '',
+        { requesterUserId }
       );
     } catch (error: unknown) {
       console.error('GitHub cleanup failed on classroom delete:', error);
       return {
         action: ActionTypes.REMOVE_CLASSROOM,
-        error: `Classroom NOT deleted: GitHub cleanup failed (see server logs). ${retryHint}`,
+        error: `Classroom NOT deleted: ${platform} cleanup failed (see server logs). ${retryHint}`,
       };
     }
 
     const bits: string[] = [];
+    const repoWord = 'repo';
+    const teamWord = isGitLab ? 'subgroup' : 'team';
     if (summary.deleted_repos > 0)
-      bits.push(`${summary.deleted_repos} repo${summary.deleted_repos === 1 ? '' : 's'}`);
+      bits.push(`${summary.deleted_repos} ${repoWord}${summary.deleted_repos === 1 ? '' : 's'}`);
     if (summary.deleted_teams > 0)
-      bits.push(`${summary.deleted_teams} team${summary.deleted_teams === 1 ? '' : 's'}`);
-    const deletedNote = bits.length > 0 ? ` GitHub: deleted ${bits.join(', ')}.` : '';
+      bits.push(`${summary.deleted_teams} ${teamWord}${summary.deleted_teams === 1 ? '' : 's'}`);
+    const deletedNote = bits.length > 0 ? ` ${platform}: deleted ${bits.join(', ')}.` : '';
 
     if (summary.failures.length > 0) {
       console.error('GitHub cleanup failures on classroom delete:', summary.failures);
-      const failedNote = `${summary.failures.length} GitHub item${
+      const failedNote = `${summary.failures.length} ${platform} item${
         summary.failures.length === 1 ? '' : 's'
       } could not be deleted (see server logs).`;
       const progressNote =
         bits.length > 0
           ? ` Deleted before the failure: ${bits.join(', ')}.`
-          : ' Nothing was deleted on GitHub.';
+          : ` Nothing was deleted on ${platform}.`;
       return {
         action: ActionTypes.REMOVE_CLASSROOM,
         error: `Classroom NOT deleted: ${failedNote}${progressNote} ${retryHint}`,
@@ -319,7 +354,7 @@ const removeClassroomHandler = async (
     if (summary.skipped > 0) {
       cleanupNote += ` ${summary.skipped} item${
         summary.skipped === 1 ? ' was' : 's were'
-      } already gone or not visible to your GitHub account.`;
+      } already gone or not visible to your ${platform} account.`;
     }
   }
 

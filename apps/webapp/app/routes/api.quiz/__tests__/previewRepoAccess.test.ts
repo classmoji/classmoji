@@ -54,6 +54,7 @@ vi.mock('~/utils/aiFeatures.server', () => ({ isAIAgentConfigured: () => true })
 vi.mock('~/utils/backgroundTask.server', () => ({ runBackgroundTask: vi.fn() }));
 vi.mock('../../student.$class.quizzes/helpers.server', () => ({
   getInstallationToken: vi.fn(async () => 'install-token'),
+  gitlabProjectAccess: vi.fn(async () => null),
 }));
 vi.mock('../../student.$class.quizzes/aiAgent.server', () => ({
   initializeQuizViaAgent: vi.fn(),

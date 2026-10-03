@@ -66,8 +66,9 @@ describe('settings.general action: change email', () => {
     mocks.userFindFirst.mockResolvedValue({ id: 'someone-else' });
     const result = await post({ intent: 'send-code', email: 'Taken@School.edu' });
     expect(result.error).toMatch(/already in use/);
+    // The address is normalized to lower case before it is looked up or stored.
     expect(mocks.userFindFirst.mock.calls[0][0].where).toEqual({
-      email: { equals: 'Taken@School.edu', mode: 'insensitive' },
+      email: { equals: 'taken@school.edu', mode: 'insensitive' },
       NOT: { id: 'me' },
     });
     expect(mocks.sendCode).not.toHaveBeenCalled();

@@ -138,11 +138,16 @@ export const action = async ({ request }: Route.ActionArgs) => {
     return json({ error: 'not found' }, 404);
   }
 
-  const org = classroom.git_organization.login;
+  // Where the content repo lives: the org on Github, the classroom's own
+  // subgroup on GitLab (the Worker calls `${org}/${repo}` either way).
+  const org =
+    classroom.git_organization.provider === 'GITLAB' && classroom.git_namespace
+      ? classroom.git_namespace
+      : classroom.git_organization.login;
   const repo = classroom.content_repo;
 
   try {
-    const provider = getGitProvider(classroom.git_organization);
+    const provider = getGitProvider({ ...classroom.git_organization, login: org });
 
     // NARROWED AT THE SOURCE. The Worker needs to read one repo; an unscoped
     // installation token would carry every permission the app holds on every
@@ -167,7 +172,26 @@ export const action = async ({ request }: Route.ActionArgs) => {
     // per-mint line would be pure volume — and the one thing worth never
     // writing down is in scope right here. Refusals and failures log; the happy
     // path does not.
-    return json({ org, repo, token, expiresAt }, 200);
+    // The Worker picks its origin from `provider`; a Gitlab origin also needs
+    // the instance to call, which may be self-hosted.
+    const isGitLab = classroom.git_organization.provider === 'GITLAB';
+    return json(
+      {
+        org,
+        repo,
+        token,
+        expiresAt,
+        provider: isGitLab ? 'GITLAB' : 'GITHUB',
+        ...(isGitLab
+          ? {
+              apiBase: (
+                classroom.git_organization.base_url || ClassmojiService.gitlabInstance.defaultHost()
+              ).replace(/\/+$/, ''),
+            }
+          : {}),
+      },
+      200
+    );
   } catch (error: unknown) {
     // Laundered before it is logged: raw mint failures echo credentials back.
     console.error(

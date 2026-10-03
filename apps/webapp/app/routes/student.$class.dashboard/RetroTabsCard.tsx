@@ -4,6 +4,8 @@ import { Avatar, Tooltip } from 'antd';
 import dayjs from 'dayjs';
 import { IconArrowRight, IconBrandGithub } from '@tabler/icons-react';
 import Emoji from '~/components/ui/display/Emoji';
+import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
+import { useGitWeb } from '~/hooks/useGitWeb';
 
 /**
  * A recent grade: a repo assignment's released emoji grades (as on the
@@ -201,6 +203,7 @@ const TeamPanel = ({
   needsTeam: SelfFormedNeedsTeam | null;
   classSlug: string;
 }) => {
+  const web = useGitWeb();
   if (team) {
     const footer = (
       <>
@@ -221,7 +224,13 @@ const TeamPanel = ({
             rel="noreferrer"
             className="inline-flex items-center gap-1.5 text-xs font-medium text-white px-3 py-1.5 rounded-full bg-gray-900 dark:bg-gray-100 dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors"
           >
-            <IconBrandGithub size={14} />
+            {web.isGitLab ? (
+              <GitlabLogo size={14} />
+            ) : (
+              // Takes the button's text colour: on this dark button a
+              // near-black logo would vanish.
+              <IconBrandGithub size={14} />
+            )}
             Go to repo
             <IconArrowRight size={12} />
           </a>
@@ -274,7 +283,7 @@ const TeamPanel = ({
     );
   }
   return (
-    <PanelShell title="Team" subtitle="No group repositories in this class">
+    <PanelShell title="Team" subtitle={`No group ${web.terms.repos} in this class`}>
       <div className="h-full flex flex-col items-center justify-center text-center">
         <p className="text-sm text-ink-3">Nothing to show here yet.</p>
       </div>

@@ -35,7 +35,7 @@ vi.mock('@classmoji/services', async () => {
     await import('../../../../../../packages/services/src/classmoji/subscription.service.ts');
   return {
     ClassmojiService: {
-      user: { findByLogin: vi.fn().mockResolvedValue({ id: 'user-1', login: 'instructor' }) },
+      user: { findById: vi.fn().mockResolvedValue({ id: 'user-1', login: 'instructor' }) },
       gitOrganization: { syncUserInstallations: vi.fn().mockResolvedValue([]) },
       subscription: {
         getCurrent: (...a: unknown[]) => mocks.getCurrent(...a),
@@ -54,8 +54,21 @@ vi.mock('@classmoji/services', async () => {
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
+    // A Github-connected creator: the Github side of the form.
+    account: { findMany: vi.fn().mockResolvedValue([{ provider_id: 'github' }]) },
     gitOrganization: { findMany: vi.fn().mockResolvedValue([]) },
     classroom: { findMany: vi.fn().mockResolvedValue([]) },
+  }),
+}));
+
+// The Gitlab side of the form is not under test: Gitlab is not configured.
+vi.mock('../gitlabOptions.server', () => ({
+  loadGitLabOptions: async () => ({
+    enabled: false,
+    connection: null,
+    host: null,
+    groups: [],
+    error: null,
   }),
 }));
 
@@ -66,6 +79,16 @@ vi.mock('~/hooks', () => ({
   useGitHubAppInstallPopup: () => ({}),
 }));
 vi.mock('~/constants', () => ({ ActionTypes: {} }));
+// Not under test here: a deployment with no Gitlab configured.
+vi.mock('../gitlabOptions.server', () => ({
+  loadGitLabOptions: vi.fn().mockResolvedValue({
+    enabled: false,
+    connection: null,
+    host: null,
+    groups: [],
+    error: null,
+  }),
+}));
 vi.mock('../StepBasicInfo', () => ({ default: () => null }));
 vi.mock('../action', () => ({ action: vi.fn() }));
 

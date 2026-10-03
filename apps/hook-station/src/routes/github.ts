@@ -169,8 +169,23 @@ interface PushEventPayload {
     name?: string;
     default_branch?: string;
     owner?: { login?: string; name?: string };
+    /** When GitHub's servers received the push (epoch seconds). Server-set. */
+    pushed_at?: number | string;
   };
   sender?: { login?: string; type?: string };
+}
+
+/**
+ * When the push reached GitHub: the payload's server-set `pushed_at`, which
+ * holds even for a delayed or redelivered webhook. Never the commit date (the
+ * author's clock). Falls back to now when absent or implausible.
+ */
+function serverPushTime(pushedAt: number | string | undefined): string {
+  const now = Date.now();
+  const ms = typeof pushedAt === 'number' ? pushedAt * 1000 : pushedAt ? Date.parse(pushedAt) : NaN;
+  return Number.isFinite(ms) && ms <= now + 60_000
+    ? new Date(ms).toISOString()
+    : new Date(now).toISOString();
 }
 
 type PathStatus = 'added' | 'modified' | 'removed';
@@ -211,7 +226,9 @@ function aggregateChanges(commits: PushCommit[]): {
  *
  * To a STUDENT repo (the overwhelming majority of pushes the App sees) it is
  * the submission for every published REPO-mode assignment that submits
- * through that repo. The time recorded is the delivery time, never the
+ * through that repo. The time recorded is when GitHub received the push
+ * (`repository.pushed_at`, server-set, so a late redelivery still records the
+ * real time), never the
  * commit's own timestamp, which is the author's clock and trivially
  * back-dated. Branch deletions and pushes by bots are ignored: Classmoji's
  * own autograde workflow commits to every student repo whenever tests change,
@@ -241,7 +258,7 @@ async function handlePush(data: PushEventPayload): Promise<void> {
     });
     if (gitRepo) {
       await Tasks.repositoryPushHandlerTask.trigger(
-        { gitRepoId: gitRepo.id, pushedAt: new Date().toISOString() },
+        { gitRepoId: gitRepo.id, pushedAt: serverPushTime(data.repository?.pushed_at) },
         // One submission update per student repo at a time, in delivery order.
         { concurrencyKey: gitRepo.id }
       );

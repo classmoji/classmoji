@@ -1,4 +1,4 @@
-import { Button, Tag } from 'antd';
+import { Tag } from 'antd';
 import { Link } from 'react-router';
 import Emoji from '~/components/ui/display/Emoji';
 import {
@@ -6,8 +6,19 @@ import {
   type QuizLeafInput,
   buildResourceLeaves,
   prettyType,
-  repoGithubUrl,
 } from '~/components/features/modules/ReadOnlyModulesTree';
+import { gitContextFor, gitWeb, type ClassroomLike, type GitWebContext } from '~/utils/gitWeb';
+
+/**
+ * Links for a repo row: the repo's own classroom when the row carries it (so a
+ * Gitlab project resolves under its class subgroup), else the tree's context.
+ */
+const webFor = (classroom: ClassroomLike | null | undefined, ctx: StudentTreeCtx) =>
+  gitWeb(
+    classroom?.git_organization
+      ? gitContextFor(classroom)
+      : (ctx.git ?? { provider: 'GITHUB', login: ctx.gitOrgLogin })
+  );
 
 // These trees are assembled from loosely-typed Prisma includes that differ
 // slightly per route; the node builder only touches a well-known subset.
@@ -33,6 +44,8 @@ export interface StudentTreeCtx {
   rolePrefix?: string;
   /** Org login, used to build the repository "View" fallback to the source repo. */
   gitOrgLogin?: string | null;
+  /** The classroom's git context (Github org or GitLab class subgroup). */
+  git?: GitWebContext;
   /**
    * The viewer's own git repo per repository unit, keyed by repository id.
    * Lets the "View" link reach the student's repo even when no GitHub issue
@@ -123,14 +136,15 @@ export const buildAssignmentLeaf = (
 ): ModuleTreeNode => {
   const showGrades = a.grades_released && (ra?.grades?.length ?? 0) > 0;
   const login = ra?.git_repo?.classroom?.git_organization?.login ?? ctx.gitOrgLogin;
+  const rowWeb = webFor(ra?.git_repo?.classroom, ctx);
   const issueUrl =
     login && ra?.provider_issue_number
-      ? `https://github.com/${login}/${ra.git_repo.name}/issues/${ra.provider_issue_number}`
+      ? rowWeb.issue(ra.git_repo.name, ra.provider_issue_number)
       : null;
   const ownRepo =
     ra?.git_repo ??
     (a.repository_id ? ctx.studentRepoByRepositoryId?.[String(a.repository_id)] : undefined);
-  const ownRepoUrl = ownRepo ? repoGithubUrl(ownRepo.name, login) : null;
+  const ownRepoUrl = ownRepo && login ? rowWeb.repo(ownRepo.name) : null;
 
   // A self-formed group assignment: until the viewer is on a team there is no
   // repo to open, so the row sends them to the team page instead of GitHub.
@@ -142,8 +156,8 @@ export const buildAssignmentLeaf = (
     : null;
   const teamAction =
     selfFormed && teamHref && !(selfFormed.deadlinePassed && !selfFormed.hasTeam) ? (
-      <Link to={teamHref}>
-        <Button size="small">{selfFormed.hasTeam ? 'View team' : 'Form a team'}</Button>
+      <Link to={teamHref} className="btn btn-sm text-ink-0! hover:text-ink-0!">
+        {selfFormed.hasTeam ? 'View team' : 'Form a team'}
       </Link>
     ) : null;
   const teamStatus =
@@ -202,7 +216,7 @@ export const buildAssignmentLeaf = (
           rel="noreferrer"
           className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
         >
-          Open issue
+          Open {rowWeb.terms.issue}
         </a>
       ) : null),
     children: resourceLeaves({ pages: a.pages, slides: a.slides }, level + 1, `a-${a.id}`, ctx),

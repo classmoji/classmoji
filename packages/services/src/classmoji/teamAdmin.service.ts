@@ -26,13 +26,20 @@
  */
 import { queue } from 'async';
 
-import getPrisma, { GIT_IDENTITY, whereGitUsername } from '@classmoji/database';
+import getPrisma, {
+  GIT_IDENTITY,
+  gitScopeProvider,
+  whereGitUsername,
+  type GitUsernameScope,
+} from '@classmoji/database';
 import { withLogin } from '@classmoji/utils';
 import type { GitProvider as GitProviderEnum } from '@prisma/client';
 
 import { getGitProvider } from '../git/index.ts';
 import { sleep } from './sleep.ts';
+import { repoNamespace, scopeGitlabId, teamsNamespace } from '@classmoji/utils';
 import * as classroomService from './classroom.service.ts';
+import * as userService from './user.service.ts';
 import * as teamService from './team.service.ts';
 import * as teamMembershipService from './teamMembership.service.ts';
 import * as teamTagService from './teamTag.service.ts';
@@ -259,8 +266,54 @@ const loadClassroomOrg = async (classroomId: string) => {
       `[team] classroom ${classroomId} has no git organization`
     );
   }
-  return { classroom, gitOrganization, orgLogin: gitOrganization.login };
+  // Teams live at the org on Github, under `<class subgroup>/teams` on
+  // GitLab; team repos sit where every student repo does.
+  const teamsParent = teamsNamespace(classroom);
+  const reposParent = repoNamespace(classroom);
+  if (!teamsParent || !reposParent) {
+    throw new TeamServiceError(
+      'no_org_configured',
+      `[team] classroom ${classroomId} has no Gitlab class subgroup`
+    );
+  }
+  return {
+    classroom,
+    gitOrganization,
+    orgLogin: teamsParent,
+    reposParent,
+  };
 };
+
+/**
+ * The provider-side username to add to a team: the GitLab username on a GitLab
+ * classroom (a user's Classmoji login may differ from it, e.g. "alice-2"),
+ * the Github login otherwise.
+ */
+const providerUsername = async (
+  gitOrganization: { provider: string },
+  user: { id: string; login: string | null },
+  fallback: string
+): Promise<string> => {
+  if (gitOrganization.provider !== 'GITLAB') return user.login ?? fallback;
+  const usernames = await userService.findProviderUsernames([user.id], 'GITLAB');
+  const username = usernames.get(user.id);
+  if (!username) {
+    throw new TeamServiceError(
+      'user_not_found',
+      `[team] ${user.login ?? fallback} has no Gitlab account connected`
+    );
+  }
+  return username;
+};
+
+/** The stored provider id of a team: instance-scoped on a self-managed GitLab. */
+const storedTeamId = (
+  gitOrganization: { provider: string; gitlab_instance_id?: string | null },
+  id: number | string
+): string =>
+  gitOrganization.provider === 'GITLAB'
+    ? scopeGitlabId(gitOrganization.gitlab_instance_id ?? null, id)
+    : String(id);
 
 /**
  * Resolve a team by slug OR id, ALWAYS scoped to the classroom. Every mutation
@@ -451,7 +504,7 @@ export const createTeam = async ({
   let team;
   try {
     team = await teamService.create({
-      providerId: providerTeam.id,
+      providerId: storedTeamId(gitOrganization, providerTeam.id),
       provider: gitOrganization.provider as GitProviderEnum,
       name: providerTeam.name,
       slug: providerTeam.slug,
@@ -508,7 +561,7 @@ export const deleteTeam = async ({
    */
   deleteOnProvider?: boolean;
 }): Promise<DeleteTeamResult> => {
-  const { gitOrganization, orgLogin } = await loadClassroomOrg(classroomId);
+  const { gitOrganization, orgLogin, reposParent } = await loadClassroomOrg(classroomId);
   const team = await resolveTeam(classroomId, slugOrId);
   const gitProvider = getGitProvider(gitOrganization);
 
@@ -529,7 +582,7 @@ export const deleteTeam = async ({
     }
     for (const repo of repositories as Array<{ name: string }>) {
       try {
-        await gitProvider.deleteRepository(orgLogin, repo.name);
+        await gitProvider.deleteRepository(reposParent, repo.name);
       } catch (error: unknown) {
         if (!isProviderNotFound(error)) throw error;
       }
@@ -575,12 +628,12 @@ export const renameTeam = async ({
   newName: string;
 }): Promise<RenameTeamResult> => {
   const trimmedName = requireName(newName);
-  const { gitOrganization, orgLogin } = await loadClassroomOrg(classroomId);
+  const { gitOrganization, orgLogin, reposParent } = await loadClassroomOrg(classroomId);
 
-  if (gitOrganization.provider !== 'GITHUB') {
+  if (gitOrganization.provider !== 'GITHUB' && gitOrganization.provider !== 'GITLAB') {
     throw new TeamServiceError(
       'provider_unsupported',
-      '[team] renaming a team is only supported for GitHub organizations'
+      '[team] renaming a team is only supported for Github and Gitlab'
     );
   }
 
@@ -639,12 +692,12 @@ export const renameTeam = async ({
     }
     const newRepoName = repo.name.split(oldSuffix).join(`-${newSlug}`);
     try {
-      await gitProvider.updateRepo(orgLogin, repo.name, { name: newRepoName });
+      await gitProvider.updateRepo(reposParent, repo.name, { name: newRepoName });
       succeeded.push({ id: repo.id, name: newRepoName });
     } catch (error: unknown) {
       failed.push({
         name: repo.name,
-        error: failureReason(`rename repo ${orgLogin}/${repo.name}`, error, 'provider_error'),
+        error: failureReason(`rename repo ${reposParent}/${repo.name}`, error, 'provider_error'),
       });
     }
     await sleep(PROVIDER_THROTTLE_MS);
@@ -662,6 +715,17 @@ export const renameTeam = async ({
     repoRenames: succeeded,
   });
 
+  // A repo's autograding token is signed over its full path, and the paths
+  // just changed: re-provision the workflows of every repository these repos
+  // belong to (bot commits, never submissions), or their CI reports would be
+  // refused as someone else's.
+  await reprovisionAutograding(
+    classroomId,
+    repositories
+      .filter(repo => succeeded.some(s => s.id === repo.id))
+      .map(repo => (repo as { repository_id?: string | null }).repository_id)
+  );
+
   return {
     teamId: team.id,
     newName: updated.name,
@@ -670,6 +734,34 @@ export const renameTeam = async ({
     failed,
   };
 };
+
+/** Re-run autograde provisioning for these repositories (those with tests). Best-effort. */
+async function reprovisionAutograding(
+  classroomId: string,
+  repositoryIds: Array<string | null | undefined>
+): Promise<void> {
+  const ids = [...new Set(repositoryIds.filter((id): id is string => Boolean(id)))];
+  if (ids.length === 0) return;
+  try {
+    const [classroom, withTests] = await Promise.all([
+      getPrisma().classroom.findUnique({ where: { id: classroomId }, select: { slug: true } }),
+      getPrisma().repository.findMany({
+        where: { id: { in: ids }, autograding_tests: { some: {} } },
+        select: { id: true },
+      }),
+    ]);
+    if (!classroom) return;
+    const { tasks } = await import('@trigger.dev/sdk');
+    for (const repository of withTests) {
+      await tasks.trigger('dispatch_autograde_workflow', {
+        repositoryId: repository.id,
+        classroomSlug: classroom.slug,
+      });
+    }
+  } catch (error: unknown) {
+    console.error('[team] could not re-provision autograding after a rename', error);
+  }
+}
 
 const assertSlugFree = async ({
   classroomId,
@@ -719,12 +811,12 @@ export const addTeamMembers = async ({
 
   const membersQueue = queue<string>(async login => {
     try {
-      const user = await findUserByLogin(login, gitOrganization.provider);
+      const user = await findUserByLogin(login, gitOrganization);
       if (!user) {
         failed.push({ login, error: 'not_found' });
         return;
       }
-      const canonicalLogin = user.login ?? login;
+      const canonicalLogin = await providerUsername(gitOrganization, user, login);
       await gitProvider.addTeamMember(orgLogin, team.slug, canonicalLogin);
       await teamMembershipService.addMemberToTeam(team.id, user.id);
       succeeded.push({ login: canonicalLogin });
@@ -765,11 +857,11 @@ export const removeTeamMember = async ({
   const { gitOrganization, orgLogin } = await loadClassroomOrg(classroomId);
   const team = await resolveTeam(classroomId, slugOrId);
 
-  const user = await findUserByLogin(login, gitOrganization.provider);
+  const user = await findUserByLogin(login, gitOrganization);
   if (!user) {
     throw new TeamServiceError('user_not_found', `[team] no user with login ${login}`);
   }
-  const canonicalLogin = user.login ?? login;
+  const canonicalLogin = await providerUsername(gitOrganization, user, login);
 
   const gitProvider = getGitProvider(gitOrganization);
   await gitProvider.removeTeamMember(orgLogin, team.slug, canonicalLogin);
@@ -853,10 +945,10 @@ export const removeTeamTag = async ({
  * username insensitively — 'Ada' and 'ada' are the same person. Only id/login
  * are needed here, unlike user.service.findByGitUsername which pulls the whole graph.
  */
-const findUserByLogin = async (login: string, provider: string) => {
+const findUserByLogin = async (login: string, scope: GitUsernameScope) => {
   const user = await getPrisma().user.findFirst({
-    where: whereGitUsername(login.replace('@', '').trim(), provider),
+    where: whereGitUsername(login.replace('@', '').trim(), scope),
     select: { id: true, ...GIT_IDENTITY },
   });
-  return user ? withLogin(user, provider) : null;
+  return user ? withLogin(user, gitScopeProvider(scope)) : null;
 };

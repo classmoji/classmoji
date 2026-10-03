@@ -8,6 +8,7 @@ import { Countdown } from '~/components';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { formatDuration } from '~/utils/quizUtils';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import { studentQuizAttemptView, studentQuizAttemptsSummaryView } from '~/utils/quizPayloads';
 import { useStartQuiz } from '~/components/features/quiz/useStartQuiz';
 
@@ -171,6 +172,7 @@ const isDone = (quiz: StudentQuiz) =>
   (quiz.closed && !quiz.attempts.some(a => a.status !== 'completed'));
 
 export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
+  const { terms } = useGitWeb();
   const { quizzes: rawQuizzes, org, userRole } = loaderData;
   const quizzes = rawQuizzes as unknown as StudentQuiz[];
   const navigate = useNavigate();
@@ -215,7 +217,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       console.error('[Quiz] Error fetching repos:', error);
       Modal.error({
         title: 'Error',
-        content: 'Failed to fetch repositories. Please try again.',
+        content: `Failed to fetch ${terms.repos}. Please try again.`,
       });
     } finally {
       setLoadingRepos(false);
@@ -258,8 +260,8 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
   const handleRepoSelected = () => {
     if (!selectedRepo) {
       Modal.warning({
-        title: 'No Repository Selected',
-        content: 'Please select a repository to continue.',
+        title: `No ${terms.Repo} Selected`,
+        content: `Please select a ${terms.repo} to continue.`,
       });
       return;
     }
@@ -459,7 +461,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       ),
     },
     {
-      title: 'Repository',
+      title: terms.Repo,
       dataIndex: 'assignmentTitle',
       key: 'repository',
       render: (title: string) => <Text type="secondary">{title}</Text>,
@@ -634,7 +636,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
 
       {/* Repository selection modal for TAs/admins on code-aware quizzes */}
       <Modal
-        title="Select Test Repository"
+        title={`Select Test ${terms.Repo}`}
         open={repoModalVisible}
         onOk={handleRepoSelected}
         onCancel={() => {
@@ -646,7 +648,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
         okButtonProps={{ disabled: !selectedRepo }}
       >
         <p className="mb-4 text-gray-600">
-          Select a repository to use for testing this code-aware quiz:
+          Select a {terms.repo} to use for testing this code-aware quiz:
         </p>
         {loadingRepos ? (
           <div className="flex justify-center py-4">
@@ -655,7 +657,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
         ) : (
           <Select
             style={{ width: '100%' }}
-            placeholder="Select a repository"
+            placeholder={`Select a ${terms.repo}`}
             value={selectedRepo}
             onChange={setSelectedRepo}
             showSearch

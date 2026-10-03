@@ -14,6 +14,8 @@
  */
 import { Octokit } from '@octokit/rest';
 import getPrisma from '@classmoji/database';
+import { GitLabProvider, getGitProvider } from '@classmoji/services';
+import { repoNamespace } from '@classmoji/utils';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { getInstallationToken } from '~/routes/student.$class.quizzes/helpers.server';
 import type { Route } from './+types/route';
@@ -22,6 +24,7 @@ const SEARCH_LIMIT = 50;
 
 interface RepoSearchItem {
   name: string;
+  ref?: string;
   full_name: string;
   description: string | null;
   updated_at: string | null | undefined;
@@ -55,7 +58,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   // Check if classroom has a git organization configured
   if (!classroom.git_organization) {
     return new Response(
-      JSON.stringify({ error: 'No GitHub organization configured for this classroom' }),
+      JSON.stringify({ error: 'No git organization configured for this classroom' }),
       {
         status: 400,
         headers: { 'Content-Type': 'application/json' },
@@ -65,6 +68,14 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   try {
     const gitOrg = classroom.git_organization;
+
+    if (gitOrg.provider === 'GITLAB') {
+      const repoList = await listGitLabTemplates(gitOrg, query);
+      return new Response(JSON.stringify(repoList), {
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+      });
+    }
+
     const token = await getInstallationToken(gitOrg);
     const octokit = new Octokit({ auth: token });
 
@@ -107,11 +118,60 @@ export async function loader({ request }: Route.LoaderArgs) {
     });
   } catch (error: unknown) {
     console.error('[api.github-repos] Error fetching repos:', error);
-    return new Response(JSON.stringify({ error: 'Failed to fetch repositories' }), {
+    const reposWord =
+      classroom.git_organization.provider === 'GITLAB' ? 'projects' : 'repositories';
+    return new Response(JSON.stringify({ error: `Failed to fetch ${reposWord}` }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });
   }
+}
+
+/**
+ * GitLab: projects anywhere in the classroom's group (subgroups included),
+ * with the `templates` subgroup first and the student projects Classmoji
+ * created (in any classroom of this group) left out. GitLab has no "template"
+ * flag on the free plan, so the dedicated subgroup stands in for it.
+ */
+async function listGitLabTemplates(
+  gitOrg: Parameters<typeof getGitProvider>[0] & { id: string; login: string },
+  query: string
+): Promise<RepoSearchItem[]> {
+  const provider = getGitProvider(gitOrg) as GitLabProvider;
+  const [projects, generated] = await Promise.all([
+    provider.listGroupProjects(gitOrg.login, query.length >= 2 ? query : ''),
+    getPrisma().gitRepo.findMany({
+      where: { classroom: { git_org_id: gitOrg.id } },
+      select: { name: true, classroom: { select: { git_namespace: true } } },
+    }),
+  ]);
+  const excluded = new Set(
+    generated.map(r =>
+      `${repoNamespace({ ...r.classroom, git_organization: gitOrg })}/${r.name}`.toLowerCase()
+    )
+  );
+  const templatesPrefix = `${gitOrg.login}/templates/`.toLowerCase();
+
+  return projects
+    .filter(p => !excluded.has(p.path_with_namespace.toLowerCase()))
+    .sort(
+      (a, b) =>
+        Number(b.path_with_namespace.toLowerCase().startsWith(templatesPrefix)) -
+        Number(a.path_with_namespace.toLowerCase().startsWith(templatesPrefix))
+    )
+    .slice(0, SEARCH_LIMIT)
+    .map(p => ({
+      name: p.name,
+      full_name: p.path_with_namespace,
+      // What the quiz preview sends back: a project's display name is not
+      // its path, and it may live anywhere in the group.
+      ref: p.path_with_namespace,
+      description: p.description,
+      updated_at: p.last_activity_at,
+      private: p.visibility !== 'public',
+      language: null,
+      stargazers_count: p.star_count ?? 0,
+    }));
 }
 
 /**

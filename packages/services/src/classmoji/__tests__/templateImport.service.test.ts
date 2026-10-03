@@ -60,8 +60,14 @@ describe('parseTemplateRef', () => {
     expect(parseTemplateRef('lab1', '')).toBeNull();
   });
 
-  it('returns null for refs carrying more path segments than a repo ref can hold', () => {
-    expect(parseTemplateRef('org/a/b', 'x')).toBeNull();
+  it('reads a nested Gitlab group path as the owner (split on the last slash)', () => {
+    expect(parseTemplateRef('cs/templates/lab1', 'x')).toEqual({
+      owner: 'cs/templates',
+      name: 'lab1',
+    });
+  });
+
+  it('returns null for a URL, which is not a ref', () => {
     expect(parseTemplateRef('https://github.com/org/lab1', 'x')).toBeNull();
   });
 });

@@ -1,4 +1,3 @@
-import { GIT_IDENTITY } from '@classmoji/database';
 /**
  * The classroom-scoped lookups and delete behind the repository page's actions:
  *   - gitRepo.findByIdInClassroom / deleteInClassroom
@@ -20,10 +19,12 @@ const db = vi.hoisted(() => ({
   membershipFindFirst: vi.fn(),
 }));
 
-vi.mock('@classmoji/database', async importOriginal => ({
-  ...(await importOriginal<typeof import('@classmoji/database')>()),
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
   default: () => ({
-    classroom: { findUnique: vi.fn(async () => ({ git_organization: { provider: 'GITHUB' } })) },
     gitRepo: {
       findFirst: (...a: unknown[]) => db.gitRepoFindFirst(...a),
       deleteMany: (...a: unknown[]) => db.gitRepoDeleteMany(...a),
@@ -31,6 +32,12 @@ vi.mock('@classmoji/database', async importOriginal => ({
     gitRepoAssignment: { findFirst: (...a: unknown[]) => db.gitRepoAssignmentFindFirst(...a) },
     repository: { findFirst: (...a: unknown[]) => db.repositoryFindFirst(...a) },
     classroomMembership: { findFirst: (...a: unknown[]) => db.membershipFindFirst(...a) },
+    // Logins are read on the classroom organization's provider.
+    classroom: {
+      findUnique: async () => ({
+        git_organization: { provider: 'GITHUB', gitlab_instance_id: null },
+      }),
+    },
   }),
 }));
 
@@ -47,6 +54,8 @@ const gitRepo = await import('../gitRepo.service.ts');
 const gitRepoAssignment = await import('../gitRepoAssignment.service.ts');
 const repository = await import('../repository.service.ts');
 const graders = await import('../gitRepoAssignmentGrader.service.ts');
+
+const { GIT_IDENTITY } = await import('@classmoji/database/gitIdentity');
 
 const UNUSABLE_IDS: unknown[] = [undefined, null, '', 42, { not: '' }, ['id-1']];
 

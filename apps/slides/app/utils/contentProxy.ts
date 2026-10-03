@@ -63,12 +63,15 @@ export async function fetchContent({
   path,
   binary = false,
   preferCdn = false,
+  cdn = true,
 }: {
   org: string;
   repo: string;
   path: string;
   binary?: boolean;
   preferCdn?: boolean;
+  /** False for a content repo with no Pages site at all (every Gitlab project). */
+  cdn?: boolean;
 }): Promise<{ content: string | Buffer; source: 'cdn' | 'api' | 'blob' } | null> {
   /**
    * The Pages CDN leg. Bounded: this runs on a render path, and an unreachable
@@ -91,9 +94,9 @@ export async function fetchContent({
     return null;
   };
 
-  if (preferCdn) {
-    const cdn = await readCdn();
-    if (cdn) return cdn;
+  if (preferCdn && cdn) {
+    const fromCdn = await readCdn();
+    if (fromCdn) return fromCdn;
   }
 
   // The authenticated read: it always sees the current commit.
@@ -140,7 +143,7 @@ export async function fetchContent({
   // DEPRECATED — Phase 4 removes this tier along with GitHub Pages itself. When
   // `preferCdn` is set it already ran above; here it is the last resort after
   // the authenticated reads could not answer.
-  return preferCdn ? null : await readCdn();
+  return preferCdn || !cdn ? null : await readCdn();
 }
 
 /**

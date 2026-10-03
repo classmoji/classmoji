@@ -73,7 +73,8 @@ export const graderAssignTool: ToolDefinition<GraderArgs> = {
   annotations: { destructive: false, openWorld: true },
   title: 'Assign a grader',
   description:
-    'Assigns a grader to one submission and mirrors them onto the GitHub issue assignees, like ' +
+    'Assigns a grader to one submission and mirrors them onto the Github issue assignees ' +
+    '(Gitlab issues are left unassigned: one assignee per issue on its free plan), like ' +
     'the web assignment page. Owner or teacher. The grader must be an ASSISTANT or ' +
     'TEACHER of this classroom marked as a grader (is_grader) — an owner, or staff without ' +
     'is_grader, is refused; staff_update sets is_grader. git_repo_assignment_id is the `id` from ' +
@@ -143,7 +144,7 @@ export const graderUnassignTool: ToolDefinition<GraderArgs> = {
   annotations: { destructive: true, openWorld: true },
   title: 'Unassign a grader',
   description:
-    'Removes a grader from one submission and from the GitHub issue assignees, like the web ' +
+    'Removes a grader from one submission and from the Github issue assignees, like the web ' +
     'assignment page. Owner or teacher. The grader must currently be assigned to the ' +
     'submission; anyone assigned can be removed, even if they are no longer marked as a grader. ' +
     'git_repo_assignment_id is the `id` from list_submissions.',
@@ -213,7 +214,7 @@ export const graderAssignBulkTool: ToolDefinition<GraderAssignBulkArgs> = {
     'grader. ' +
     'method=EXISTING copies the per-student/per-team grader mapping from template_assignment_id ' +
     '(required for EXISTING, and it must be an assignment in this classroom) — submissions with ' +
-    'no match in the template are skipped. Graders are mirrored onto the GitHub issue assignees. ' +
+    'no match in the template are skipped. Graders are mirrored onto the Github issue assignees (not on Gitlab). ' +
     'Runs in the background; `submissions_assigned` is the number of grader-assignment tasks ' +
     'queued, so with a multi-grader template it can exceed the submission count. Assignment ids ' +
     'come from list_repos. For one-off changes use grader_assign / grader_unassign instead.',

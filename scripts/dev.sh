@@ -31,6 +31,27 @@ export DATABASE_URL WEBAPP_URL QUIZ_AGENT_URL AI_AGENT_URL SLIDES_URL PAGES_URL 
 export WEBAPP_PORT HOOK_PORT QUIZ_AGENT_PORT SLIDES_PORT PAGES_PORT MCP_PORT ADMIN_PORT
 export DEVPORT_ID DEVPORT_NAME
 
+# Trigger.dev dev branch (opt-in): set TRIGGER_DEV_MACHINE in .env (e.g.
+# "pape-macbook") when you run `trigger dev` on more than one computer with
+# the same Trigger login. Those sessions share the `default` branch otherwise,
+# and since CLI 4.6 a session that dequeues a run for a build it doesn't have
+# FAILS it (COULD_NOT_FIND_EXECUTOR) instead of leaving it for the right one.
+# With it set, this checkout runs on its own branch (plus the devport name in a
+# devport). The CLI reads TRIGGER_DEV_BRANCH; the SDK in the apps reads
+# TRIGGER_PREVIEW_BRANCH (sent as `x-trigger-branch`), and child runs stay on
+# their parent's branch. Unset: everything stays on `default`.
+if [ -z "$TRIGGER_DEV_BRANCH" ] && [ -n "$TRIGGER_DEV_MACHINE" ]; then
+  if [ -n "$DEVPORT_NAME" ] && [ "$DEVPORT_NAME" != "main" ]; then
+    TRIGGER_DEV_BRANCH="$TRIGGER_DEV_MACHINE-$DEVPORT_NAME"
+  else
+    TRIGGER_DEV_BRANCH="$TRIGGER_DEV_MACHINE"
+  fi
+fi
+if [ -n "$TRIGGER_DEV_BRANCH" ]; then
+  TRIGGER_PREVIEW_BRANCH="${TRIGGER_PREVIEW_BRANCH:-$TRIGGER_DEV_BRANCH}"
+  export TRIGGER_DEV_BRANCH TRIGGER_PREVIEW_BRANCH
+fi
+
 # Step 4: Clean up orphaned processes from previous sessions of THIS devport only
 # Only kills ports assigned to current DEVPORT_ID, not other devports or main
 cleanup_ports() {
@@ -55,11 +76,11 @@ cleanup_ports
 # Set log file name and prefixes based on devport
 if [ -n "$DEVPORT_NAME" ]; then
   LOG_FILE="/tmp/classmoji-dev-${DEVPORT_NAME}.log"
-  PREFIX_BASE="web:$DEVPORT_NAME,slides:$DEVPORT_NAME,pages:$DEVPORT_NAME,admin:$DEVPORT_NAME,hook:$DEVPORT_NAME,mcp:$DEVPORT_NAME,trigger:$DEVPORT_NAME,smee-gh,smee-stripe,quiz:$DEVPORT_NAME"
+  PREFIX_BASE="web:$DEVPORT_NAME,slides:$DEVPORT_NAME,pages:$DEVPORT_NAME,admin:$DEVPORT_NAME,hook:$DEVPORT_NAME,mcp:$DEVPORT_NAME,trigger:$DEVPORT_NAME,smee-gh,smee-stripe,smee-gitlab,quiz:$DEVPORT_NAME"
   DB_NAME="classmoji_${DEVPORT_NAME//-/_}"
 else
   LOG_FILE="/tmp/classmoji-dev.log"
-  PREFIX_BASE="web,slides,pages,admin,hook,mcp,trigger,smee-gh,smee-stripe,quiz"
+  PREFIX_BASE="web,slides,pages,admin,hook,mcp,trigger,smee-gh,smee-stripe,smee-gitlab,quiz"
   DB_NAME="classmoji"
 fi
 
@@ -91,6 +112,7 @@ DEVPORT_ID=${DEVPORT_ID:-0}
 - Hook:       http://localhost:$HOOK_PORT
 - MCP:        http://localhost:$MCP_PORT
 - Quiz Agent: http://localhost:$QUIZ_AGENT_PORT
+- Trigger.dev dev branch: ${TRIGGER_DEV_BRANCH:-default}
 
 ## Database:
 - Name: $DB_NAME
@@ -128,6 +150,7 @@ if [ "$RUN_FANOUT" = true ]; then
       "turbo run trigger:dev --log-prefix=none" \
       "turbo run hook:github --log-prefix=none" \
       "turbo run hook:stripe --log-prefix=none" \
+      "turbo run hook:gitlab --log-prefix=none" \
       "$AI_AGENT_CMD" \
       "node $SCRIPT_DIR/webhook-fanout.js" \
       2>&1 | tee "$LOG_FILE"
@@ -144,6 +167,7 @@ if [ "$RUN_FANOUT" = true ]; then
       "turbo run trigger:dev --log-prefix=none" \
       "turbo run hook:github --log-prefix=none" \
       "turbo run hook:stripe --log-prefix=none" \
+      "turbo run hook:gitlab --log-prefix=none" \
       "node $SCRIPT_DIR/webhook-fanout.js" \
       2>&1 | tee "$LOG_FILE"
   fi
@@ -162,6 +186,7 @@ else
       "turbo run trigger:dev --log-prefix=none" \
       "turbo run hook:github --log-prefix=none" \
       "turbo run hook:stripe --log-prefix=none" \
+      "turbo run hook:gitlab --log-prefix=none" \
       "$AI_AGENT_CMD" \
       2>&1 | tee "$LOG_FILE"
   else
@@ -177,6 +202,7 @@ else
       "turbo run trigger:dev --log-prefix=none" \
       "turbo run hook:github --log-prefix=none" \
       "turbo run hook:stripe --log-prefix=none" \
+      "turbo run hook:gitlab --log-prefix=none" \
       2>&1 | tee "$LOG_FILE"
   fi
 fi

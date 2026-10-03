@@ -131,7 +131,9 @@ describe('classroom removal as yourself', () => {
   it('runs the GitHub cleanup with your token, then removes the classroom', async () => {
     const result = (await remove(true)) as Response;
 
-    expect(mocks.deleteGitHubArtifacts).toHaveBeenCalledWith('class-1', USER_TOKEN);
+    expect(mocks.deleteGitHubArtifacts).toHaveBeenCalledWith('class-1', USER_TOKEN, {
+      requesterUserId: 'owner-1',
+    });
     expect(mocks.deleteById).toHaveBeenCalledWith('class-1');
     expect(result.status).toBe(302);
   });

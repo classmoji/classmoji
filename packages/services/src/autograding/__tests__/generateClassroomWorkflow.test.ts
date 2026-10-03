@@ -36,3 +36,20 @@ describe('generateClassroomWorkflow report step', () => {
     expect(yaml).not.toContain('Report results to Classmoji');
   });
 });
+
+describe('generateClassroomWorkflow without a Trigger token', () => {
+  it('reports to the given URL with no Authorization header', () => {
+    const yaml = generateClassroomWorkflow(
+      [{ name: 'passes', method: 'COMMAND', run_command: 'true' }],
+      {
+        triggerUrl: 'https://hooks.example.test/webhooks/callback/autograde',
+        triggerToken: null,
+        classroomSlug: 'c1',
+        hmacToken: 'abc',
+      }
+    );
+    expect(yaml).toContain('Report results to Classmoji');
+    expect(yaml).toContain('https://hooks.example.test/webhooks/callback/autograde');
+    expect(yaml).not.toContain('Authorization');
+  });
+});

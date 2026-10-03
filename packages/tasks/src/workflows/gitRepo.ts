@@ -8,13 +8,23 @@ import {
   HelperService,
   getGitProvider,
   ensureClassroomTeam,
+  type GitLabProvider,
 } from '@classmoji/services';
-import { titleToIdentifier, resolveTemplateRef } from '@classmoji/utils';
-import { createGithubRepositoryAssignmentTask } from './gitRepoAssignment.ts';
+import {
+  gitTerms,
+  titleToIdentifier,
+  resolveTemplateRef,
+  repoNamespace,
+  scopeGitlabId,
+  teamsNamespace,
+} from '@classmoji/utils';
+import { addAssignmentToRepo } from './gitRepoAssignment.ts';
 import { updateRepository, type UpdateRepositoryPayload } from '../helpers/updateRepository.ts';
 import { createRepository, type CreateRepositoryPayload } from '../helpers/createRepository.ts';
 import { provisionAutogradeWorkflowForRepo } from './autograde.ts';
+import { reportStatus } from '../helpers/progress.ts';
 import { ensureGitInstallation, GitAppNotInstalledError } from '../helpers/gitInstallation.ts';
+import { withDatabaseRetry } from '../helpers/databaseRetry.ts';
 
 type GitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string | null };
 type StrictGitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string };
@@ -43,6 +53,12 @@ interface RepositoryRecord {
 interface StudentRecord {
   id: string;
   login: string | null;
+  /**
+   * The student's username on the classroom's git provider, when it differs
+   * from `login`: on GitLab, their GitLab username (`login` holds the Github
+   * one whenever Github is connected). Repo names and repo access use this.
+   */
+  git_login?: string;
 }
 
 interface TeamRecord {
@@ -53,6 +69,8 @@ interface TeamRecord {
 interface ClassroomRecord {
   id: string;
   slug: string;
+  /** GitLab: the class subgroup. Null on Github. */
+  git_namespace?: string | null;
   git_organization: GitOrganizationLike;
 }
 
@@ -200,10 +218,11 @@ export const createRepositoriesTask = task({
     // half undefined and fail once per student on a URL that named no field.
     const templateRef = resolveTemplateRef(repository.template, classroom.git_organization.login);
     if (!templateRef) {
+      const templateTerms = gitTerms(classroom.git_organization.provider === 'GITLAB');
       throw new Error(
-        `Assignment "${repository.title}" has no usable template repository ` +
-          `(template is "${repository.template ?? ''}"). Set it to owner/repo, ` +
-          `or to a repository in ${classroom.git_organization.login}.`
+        `Assignment "${repository.title}" has no usable template ${templateTerms.repo} ` +
+          `(template is "${repository.template ?? ''}"). Set it to owner/name, ` +
+          `or to a ${templateTerms.repo} in ${classroom.git_organization.login}.`
       );
     }
     const { owner: templateOwner, repo: templateRepo } = templateRef;
@@ -212,6 +231,17 @@ export const createRepositoriesTask = task({
       'STUDENT'
     );
     const teams: TeamRecord[] = await ClassmojiService.team.findByClassroomId(classroom.id);
+
+    // GitLab: projects are named after, and shared with, each student's GitLab
+    // username. Callers still identify students by `login`.
+    const isGitLab = classroom.git_organization.provider === 'GITLAB';
+    const gitlabUsernames =
+      isGitLab && repository.type === 'INDIVIDUAL'
+        ? await ClassmojiService.user.findProviderUsernames(
+            students.map(student => student.id),
+            'GITLAB'
+          )
+        : null;
 
     // No installation token in the payloads: each run mints its own. One
     // minted here expired an hour later however long the runs queued, and sat
@@ -224,7 +254,27 @@ export const createRepositoriesTask = task({
     const repositorySlug = repository.slug || titleToIdentifier(repository.title);
 
     const reposData = uniqueLogins.flatMap(login => {
-      const repoName = `${repositorySlug}-${login}`;
+      // GitLab lowercases project paths; keep the stored name identical. (A
+      // team's slug is already a lowercase GitLab path.)
+      let repoName = isGitLab
+        ? `${repositorySlug}-${login}`.toLowerCase()
+        : `${repositorySlug}-${login}`;
+      let gitlabStudent: StudentRecord | undefined;
+      if (gitlabUsernames) {
+        const student = students.find(s => s.login === login);
+        const gitLogin = student ? gitlabUsernames.get(student.id) : undefined;
+        if (!student || !gitLogin) {
+          logger.warn('Skipping repo creation: student has no Gitlab account connected', {
+            classroomSlug: org,
+            repositoryId: repository.id,
+            login,
+          });
+          return [];
+        }
+        // GitLab lowercases project paths; keep the stored name identical.
+        repoName = `${repositorySlug}-${gitLogin}`.toLowerCase();
+        gitlabStudent = { ...student, git_login: gitLogin };
+      }
       const data: StandardCreateRepositoryTaskPayload = {
         repoName,
         classroom,
@@ -236,7 +286,7 @@ export const createRepositoriesTask = task({
       };
 
       if (repository.type === 'INDIVIDUAL') {
-        data.student = students.find(student => student.login === login);
+        data.student = gitlabStudent ?? students.find(student => student.login === login);
         if (!data.student) {
           logger.warn('Skipping repo creation for unknown student login', {
             classroomSlug: org,
@@ -333,7 +383,51 @@ export const createRepositoryTask = task({
           })()
         : withoutQueuedToken(payload);
       const { classroom } = normalizedPayload;
-      const repoId = await createRepository(normalizedPayload);
+      // Who the repo is for, in the status line the instructor sees.
+      const who =
+        normalizedPayload.student?.git_login ||
+        normalizedPayload.student?.login ||
+        normalizedPayload.team?.slug ||
+        normalizedPayload.repoName;
+
+      await reportStatus(`Creating ${normalizedPayload.repoName}`);
+
+      // A self-managed GitLab's project ids are stored instance-scoped.
+      const createdRepoId = await createRepository(normalizedPayload);
+      const repoId =
+        classroom.git_organization.provider === 'GITLAB'
+          ? scopeGitlabId(classroom.git_organization.gitlab_instance_id, createdRepoId)
+          : createdRepoId;
+
+      // GitLab: pushes reach Classmoji through a project hook (Github's come
+      // through the App). Added after the template setup pushes above, so
+      // those never count as a submission. Best-effort: a missing hook only
+      // means pushes aren't tracked, which recordExistingPush later backfills.
+      if (classroom.git_organization.provider === 'GITLAB') {
+        const url = ClassmojiService.gitlabInstance.webhookUrl(
+          classroom.git_organization.gitlab_instance_id
+        );
+        const secret = ClassmojiService.gitlabInstance.webhookSecret(
+          classroom.git_organization.gitlab_instance_id
+        );
+        const namespace = repoNamespace(classroom);
+        if (url && secret && namespace) {
+          try {
+            await (
+              getGitProvider(classroom.git_organization) as GitLabProvider
+            ).ensureProjectPushHook(namespace, normalizedPayload.repoName, url, secret);
+          } catch (error: unknown) {
+            logger.warn('Could not add the Gitlab push webhook', {
+              repoName: normalizedPayload.repoName,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        } else {
+          logger.warn('GITLAB_WEBHOOK_URL/SECRET not set: pushes to this project are not tracked', {
+            repoName: normalizedPayload.repoName,
+          });
+        }
+      }
 
       // Provision the autograding workflow for this fresh repo (best-effort,
       // never throws). Done here rather than via the template repo so repo
@@ -343,44 +437,39 @@ export const createRepositoryTask = task({
         repoName: normalizedPayload.repoName,
         classroomSlug: classroom.slug,
         gitOrganization: classroom.git_organization,
+        repoOwner: repoNamespace(classroom),
       });
 
-      await addCollaboratorsToRepoTask.triggerAndWait(
-        {
-          ...normalizedPayload,
-        },
-        { tags: ctx.run.tags, concurrencyKey: classroom.slug }
+      // The steps below run here rather than as waited-on child runs. Each wait
+      // hands this run's slot to the next queued repo, so every repo stalled at
+      // every step and they all finished together at the end; done inline, a
+      // repo is finished a few seconds after it starts.
+
+      await reportStatus(`Giving ${who} access`);
+      // Without this the student has a repo they can't open; fail the run.
+      await addCollaboratorsToRepo(normalizedPayload);
+
+      await reportStatus(`Saving ${normalizedPayload.repoName}`);
+      // Retried on a database blip, as its own task (cf-create_git_repo) was.
+      const studentRepo = await withDatabaseRetry(() =>
+        createRepoInDatabase({ ...normalizedPayload, repoId })
       );
-
-      const triggerResult = await createRepoInDatabaseTask.triggerAndWait(
-        {
-          ...normalizedPayload,
-          repoId,
-        },
-        { tags: ctx.run.tags, concurrencyKey: classroom.slug }
-      );
-
-      if (!triggerResult.ok) {
-        throw triggerResult.error;
-      }
-
-      const studentRepo = triggerResult.output;
 
       if (
         normalizedPayload.repository.type === 'GROUP' &&
+        // Github Projects boards have no GitLab counterpart.
+        classroom.git_organization.provider === 'GITHUB' &&
         normalizedPayload.repository.project_template_id &&
         !studentRepo.project_id
       ) {
-        await createProjectForRepoTask.triggerAndWait(
-          {
-            classroom,
-            repository: normalizedPayload.repository,
-            repoName: normalizedPayload.repoName,
-            repoId: studentRepo.id,
-            team: normalizedPayload.team,
-          },
-          { tags: ctx.run.tags, concurrencyKey: classroom.slug }
-        );
+        await reportStatus(`Setting up the project board for ${who}`);
+        await createProjectForRepo({
+          classroom,
+          repository: normalizedPayload.repository,
+          repoName: normalizedPayload.repoName,
+          repoId: studentRepo.id,
+          team: normalizedPayload.team,
+        });
       }
 
       // A joining student gets issues for assignments that are ALREADY
@@ -394,24 +483,29 @@ export const createRepositoryTask = task({
           (!normalizedPayload.provisionOnly || assignment.is_published === true)
       );
 
-      const assignmentPayloads = filteredAssignments.map(assignment => ({
-        payload: {
-          assignment,
-          studentRepo,
-          repoName: normalizedPayload.repoName,
-          organization: normalizedPayload.classroom.git_organization,
-        },
-        options: { tags: ctx.run.tags, concurrencyKey: classroom.slug },
-      }));
-
-      if (assignmentPayloads.length) {
-        await createGithubRepositoryAssignmentTask.batchTriggerAndWait(assignmentPayloads);
+      if (filteredAssignments.length) {
+        await reportStatus(`Adding assignments for ${who}`);
+        // Every assignment is attempted; then a missing row fails the run, since
+        // it reads "not released" for this student (a re-run skips rows that
+        // already exist).
+        const failures: unknown[] = [];
+        for (const assignment of filteredAssignments) {
+          try {
+            await addAssignmentToRepo({
+              assignment,
+              studentRepo,
+              repoName: normalizedPayload.repoName,
+              organization: normalizedPayload.classroom.git_organization,
+            });
+          } catch (error: unknown) {
+            failures.push(error);
+          }
+        }
+        if (failures.length) throw failures[0];
 
         if (!normalizedPayload.provisionOnly) {
-          for (const assignmentPayload of assignmentPayloads) {
-            await ClassmojiService.assignment.update(assignmentPayload.payload.assignment.id, {
-              is_published: true,
-            });
+          for (const assignment of filteredAssignments) {
+            await ClassmojiService.assignment.update(assignment.id, { is_published: true });
           }
         }
       }
@@ -422,65 +516,99 @@ export const createRepositoryTask = task({
   },
 });
 
+/** Gives the student (or team) and the assistants access to the repo. */
+export const addCollaboratorsToRepo = async (payload: AddCollaboratorsToRepoTaskPayload) => {
+  try {
+    const { repository, classroom, repoName } = payload;
+    const gitOrgLogin = classroom.git_organization.login;
+
+    if (!gitOrgLogin) {
+      throw new Error('Missing Git organization login');
+    }
+
+    const gitProvider = getGitProvider(classroom.git_organization);
+
+    // GitLab: the student joins their own project as Developer; a team
+    // project is shared with the team's subgroup, so its members (and later
+    // member changes) get Developer access. Staff are members of the class
+    // subgroup and inherit every project in it, so there is no assistants
+    // team to add.
+    if (classroom.git_organization.provider === 'GITLAB') {
+      const namespace = repoNamespace(classroom);
+      if (repository.type !== 'INDIVIDUAL') {
+        const teamsParent = teamsNamespace(classroom);
+        if (!namespace || !teamsParent || !payload.team?.slug) {
+          throw new Error(`Missing class subgroup or team for repo ${repoName}`);
+        }
+        await gitProvider.addTeamToRepo(
+          namespace,
+          repoName,
+          `${teamsParent}/${payload.team.slug}`,
+          'push'
+        );
+        return;
+      }
+      const gitLogin = payload.student?.git_login;
+      if (!namespace || !gitLogin) {
+        throw new Error(`Missing class subgroup or Gitlab username for repo ${repoName}`);
+      }
+      await gitProvider.addCollaborator(namespace, repoName, gitLogin, 'push');
+      return;
+    }
+
+    if (repository.type === 'INDIVIDUAL') {
+      if (!payload.student?.login) {
+        throw new Error(`Missing student login for repo ${repoName}`);
+      }
+
+      await gitProvider.addCollaborator(gitOrgLogin, repoName, payload.student.login, 'maintain');
+    } else {
+      if (!payload.team?.slug) {
+        throw new Error(`Missing team slug for repo ${repoName}`);
+      }
+
+      await gitProvider.addTeamToRepo(gitOrgLogin, repoName, payload.team.slug, 'maintain');
+    }
+
+    const team = await ensureClassroomTeam(gitProvider, gitOrgLogin, classroom, 'ASSISTANT');
+    await gitProvider.addTeamToRepo(gitOrgLogin, repoName, team.slug, 'maintain');
+  } catch (error: unknown) {
+    console.error('Error adding collaborator to repo', error);
+    throw error;
+  }
+};
+
 export const addCollaboratorsToRepoTask = task({
   id: 'gh-add_collaborator_to_repo',
   queue: {
     concurrencyLimit: 6,
   },
-  run: async (payload: AddCollaboratorsToRepoTaskPayload) => {
-    try {
-      const { repository, classroom, repoName } = payload;
-      const gitOrgLogin = classroom.git_organization.login;
-
-      if (!gitOrgLogin) {
-        throw new Error('Missing Git organization login');
-      }
-
-      const gitProvider = getGitProvider(classroom.git_organization);
-
-      if (repository.type === 'INDIVIDUAL') {
-        if (!payload.student?.login) {
-          throw new Error(`Missing student login for repo ${repoName}`);
-        }
-
-        await gitProvider.addCollaborator(gitOrgLogin, repoName, payload.student.login, 'maintain');
-      } else {
-        if (!payload.team?.slug) {
-          throw new Error(`Missing team slug for repo ${repoName}`);
-        }
-
-        await gitProvider.addTeamToRepo(gitOrgLogin, repoName, payload.team.slug, 'maintain');
-      }
-
-      const team = await ensureClassroomTeam(gitProvider, gitOrgLogin, classroom, 'ASSISTANT');
-      await gitProvider.addTeamToRepo(gitOrgLogin, repoName, team.slug, 'maintain');
-    } catch (error: unknown) {
-      console.error('Error adding collaborator to repo', error);
-      throw error;
-    }
-  },
+  run: addCollaboratorsToRepo,
 });
+
+/** The Classmoji row for a repo that now exists on the git provider. */
+export const createRepoInDatabase = async (payload: CreateRepoInDatabaseTaskPayload) => {
+  try {
+    const { repository, classroom, repoName } = payload;
+    const isIndividualModule = repository.type === 'INDIVIDUAL';
+
+    return ClassmojiService.gitRepo.create({
+      repositoryId: repository.id,
+      classroom,
+      repoName,
+      student: isIndividualModule ? payload.student : null,
+      team: isIndividualModule ? null : payload.team,
+      providerId: payload.repoId,
+    });
+  } catch (error: unknown) {
+    console.error('Error creating gitRepo in database', error);
+    throw error;
+  }
+};
 
 export const createRepoInDatabaseTask = task({
   id: 'cf-create_git_repo',
-  run: async (payload: CreateRepoInDatabaseTaskPayload) => {
-    try {
-      const { repository, classroom, repoName } = payload;
-      const isIndividualModule = repository.type === 'INDIVIDUAL';
-
-      return ClassmojiService.gitRepo.create({
-        repositoryId: repository.id,
-        classroom,
-        repoName,
-        student: isIndividualModule ? payload.student : null,
-        team: isIndividualModule ? null : payload.team,
-        providerId: payload.repoId,
-      });
-    } catch (error: unknown) {
-      console.error('Error creating gitRepo in database', error);
-      throw error;
-    }
-  },
+  run: createRepoInDatabase,
 });
 
 export const deleteRepoTask = task({
@@ -499,6 +627,8 @@ export const updateRepositoryTask = task({
     concurrencyLimit: 6,
   },
   run: async (payload: UpdateRepositoryPayload) => {
+    // It can take a while; the callout says which repo it's on.
+    await reportStatus(`Updating ${payload.repoName}`);
     return updateRepository(payload);
   },
 });
@@ -506,76 +636,78 @@ export const updateRepositoryTask = task({
 /**
  * Create a GitHub Project for a gitRepo by copying from a template
  */
+export const createProjectForRepo = async (payload: CreateProjectForRepoTaskPayload) => {
+  const { classroom, repository, repoName, repoId, team } = payload;
+
+  try {
+    // Idempotency guard: copyProjectFromTemplate is not idempotent — a re-run would create
+    // a second GitHub Project and overwrite the first id below, orphaning it. Skip if this
+    // repo already has a project.
+    const existingRepo = await ClassmojiService.gitRepo.find({ id: repoId });
+    if (existingRepo?.project_id) {
+      logger.info(`Repo ${repoName} already has a project; skipping project copy`, {
+        projectId: existingRepo.project_id,
+        projectNumber: existingRepo.project_number ?? null,
+      });
+      return {
+        id: existingRepo.project_id,
+        number: existingRepo.project_number ?? 0,
+        url: '',
+      };
+    }
+
+    const gitProvider = getGitProvider(classroom.git_organization);
+    const org = classroom.git_organization.login;
+
+    if (!org || !repository.project_template_id) {
+      throw new Error(`Missing project configuration for ${repoName}`);
+    }
+
+    const orgNodeId = await gitProvider.getOrganizationNodeId(org);
+    const projectTitle = repoName;
+    const project = await gitProvider.copyProjectFromTemplate(
+      repository.project_template_id,
+      orgNodeId,
+      projectTitle
+    );
+
+    logger.info(`Created project "${projectTitle}" for repo ${repoName}`, {
+      projectNumber: project.number,
+      projectUrl: project.url,
+    });
+
+    await ClassmojiService.gitRepo.update(repoId, {
+      project_id: project.id,
+      project_number: project.number,
+    });
+
+    const repo = await gitProvider.getRepository(org, repoName);
+    if (!repo.node_id) {
+      throw new Error(`GitRepo ${repoName} is missing a node_id`);
+    }
+
+    await gitProvider.linkRepoToProject(project.id, repo.node_id);
+
+    if (team?.slug) {
+      await gitProvider.addTeamToProject(project.id, org, team.slug, 'WRITER');
+    }
+
+    const assistantsTeam = await ensureClassroomTeam(gitProvider, org, classroom, 'ASSISTANT');
+    await gitProvider.addTeamToProject(project.id, org, assistantsTeam.slug, 'WRITER');
+
+    return project;
+  } catch (error: unknown) {
+    logger.error(`Error creating project for repo ${repoName}:`, { error });
+    return null;
+  }
+};
+
 export const createProjectForRepoTask = task({
   id: 'gh-create_project_for_repo',
   queue: {
     concurrencyLimit: 4,
   },
-  run: async (payload: CreateProjectForRepoTaskPayload) => {
-    const { classroom, repository, repoName, repoId, team } = payload;
-
-    try {
-      // Idempotency guard: copyProjectFromTemplate is not idempotent — a re-run would create
-      // a second GitHub Project and overwrite the first id below, orphaning it. Skip if this
-      // repo already has a project.
-      const existingRepo = await ClassmojiService.gitRepo.find({ id: repoId });
-      if (existingRepo?.project_id) {
-        logger.info(`Repo ${repoName} already has a project; skipping project copy`, {
-          projectId: existingRepo.project_id,
-          projectNumber: existingRepo.project_number ?? null,
-        });
-        return {
-          id: existingRepo.project_id,
-          number: existingRepo.project_number ?? 0,
-          url: '',
-        };
-      }
-
-      const gitProvider = getGitProvider(classroom.git_organization);
-      const org = classroom.git_organization.login;
-
-      if (!org || !repository.project_template_id) {
-        throw new Error(`Missing project configuration for ${repoName}`);
-      }
-
-      const orgNodeId = await gitProvider.getOrganizationNodeId(org);
-      const projectTitle = repoName;
-      const project = await gitProvider.copyProjectFromTemplate(
-        repository.project_template_id,
-        orgNodeId,
-        projectTitle
-      );
-
-      logger.info(`Created project "${projectTitle}" for repo ${repoName}`, {
-        projectNumber: project.number,
-        projectUrl: project.url,
-      });
-
-      await ClassmojiService.gitRepo.update(repoId, {
-        project_id: project.id,
-        project_number: project.number,
-      });
-
-      const repo = await gitProvider.getRepository(org, repoName);
-      if (!repo.node_id) {
-        throw new Error(`GitRepo ${repoName} is missing a node_id`);
-      }
-
-      await gitProvider.linkRepoToProject(project.id, repo.node_id);
-
-      if (team?.slug) {
-        await gitProvider.addTeamToProject(project.id, org, team.slug, 'WRITER');
-      }
-
-      const assistantsTeam = await ensureClassroomTeam(gitProvider, org, classroom, 'ASSISTANT');
-      await gitProvider.addTeamToProject(project.id, org, assistantsTeam.slug, 'WRITER');
-
-      return project;
-    } catch (error: unknown) {
-      logger.error(`Error creating project for repo ${repoName}:`, { error });
-      return null;
-    }
-  },
+  run: createProjectForRepo,
 });
 
 /**

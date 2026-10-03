@@ -43,6 +43,10 @@
       "persistent": true,
       "cache": false
     },
+    "hook:gitlab": {
+      "persistent": true,
+      "cache": false
+    },
     "hook:dev": {
       "persistent": true,
       "cache": false
@@ -169,6 +173,8 @@
     "GITHUB_PRIVATE_KEY",
     "GITHUB_WEBHOOK_SECRET",
     "AUTOGRADE_CALLBACK_SECRET",
+    "AUTOGRADE_CALLBACK_URL",
+    "AUTOGRADE_LEGACY_TOKENS_UNTIL",
     "GITHUB_TOKEN",
     "GITHUB_PROF_TOKEN",
     "GITHUB_INSTRUCTOR_TOKEN",
@@ -176,9 +182,15 @@
     "GITHUB_STUDENT_TOKEN",
     "SETUP_GITHUB_APP",
     "GITLAB_URL",
+    "CLASSMOJI_EGRESS_IPS",
     "GITLAB_ISSUER",
     "GITLAB_CLIENT_ID",
     "GITLAB_CLIENT_SECRET",
+    "GITLAB_WEBHOOK_URL",
+    "GITLAB_WEBHOOK_SECRET",
+    "GITLAB_ALLOW_PRIVATE_HOSTS",
+    "GITLAB_LEGACY_WEBHOOK_SECRET_UNTIL",
+    "GITLAB_SMEE_URL",
     "DATABASE_URL",
     "REDIS_URL",
     "RESEND_API_KEY",
@@ -191,6 +203,8 @@
     "FORMS_PUBLIC_ADDRESS_LIMIT",
     "FORMS_PUBLIC_ADDRESS_WINDOW_MS",
     "TRIGGER_SECRET_KEY",
+    "TRIGGER_DEV_BRANCH",
+    "TRIGGER_PREVIEW_BRANCH",
     "TRIGGER_API_URL",
     "TRIGGER_PUBLIC_API_URL",
     "TRIGGER_PROJECT_ID",

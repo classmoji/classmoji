@@ -52,10 +52,17 @@ const MANIFEST_PATH = path.join('.classmoji', 'manifest.json');
 const MAX_REWRITE_BYTES = 5 * 1024 * 1024;
 
 export interface ContentRepoCoordinates {
+  /** The org login: what content URLs name, and what rewrites match on. */
   orgLogin: string;
   repo: string;
   /** Installation access token for that org (gitProvider.getAccessToken()). */
   token: string;
+  /**
+   * GitLab only: the instance host (`https://gitlab.school.edu`) and the
+   * project's namespace (the class subgroup), which is where git reaches it.
+   * Absent for Github.
+   */
+  gitlab?: { host: string; namespace: string };
 }
 
 export interface CloneContentRepoPayload {
@@ -148,8 +155,13 @@ export type CloneContentRepoResult =
       skipped: CloneSkipReason;
     };
 
-const cloneUrl = ({ orgLogin, repo, token }: ContentRepoCoordinates): string =>
-  `https://x-access-token:${token}@github.com/${orgLogin}/${repo}.git`;
+const cloneUrl = ({ orgLogin, repo, token, gitlab }: ContentRepoCoordinates): string => {
+  if (gitlab) {
+    const host = new URL(gitlab.host);
+    return `${host.protocol}//oauth2:${token}@${host.host}/${gitlab.namespace}/${repo}.git`;
+  }
+  return `https://x-access-token:${token}@github.com/${orgLogin}/${repo}.git`;
+};
 
 /**
  * Rethrow a git failure with the repo named and the installation token stripped.
@@ -480,14 +492,26 @@ export const cloneContentRepo = async (
     // guaranteed to be `main` — every consumer (Pages, the content readers)
     // assumes `main`, so name it explicitly.
     await freshGit.checkoutLocalBranch('main');
-    await freshGit.add('.');
-    await freshGit.commit(commitMessage);
-    // Only these two carry the credentialed remote URL — the local operations
-    // above cannot leak a token, so they are left to throw as they are.
+    // Only the remote operations carry the credentialed URL — the local
+    // operations cannot leak a token, so they are left to throw as they are.
     try {
       await freshGit.addRemote('origin', cloneUrl(target));
+      if (target.gitlab) {
+        // GitLab protects `main` against force-pushes. Commit on top of the
+        // scaffold instead: the commit's tree is exactly this working tree
+        // (the index starts empty), so the scaffold's files are replaced all
+        // the same, and a plain push is enough.
+        await freshGit.fetch('origin', 'main', ['--depth', '1']);
+        await freshGit.raw(['reset', '--soft', 'FETCH_HEAD']);
+      }
+    } catch (error: unknown) {
+      throw gitFailure('reading', target, error);
+    }
+    await freshGit.add('.');
+    await freshGit.commit(commitMessage);
+    try {
       // Overwrites ONLY the auto-init scaffold ensureContentRepo just created.
-      await freshGit.push('origin', 'main', ['--force']);
+      await freshGit.push('origin', 'main', target.gitlab ? [] : ['--force']);
       pushed = true;
     } catch (error: unknown) {
       throw gitFailure('pushing to', target, error);

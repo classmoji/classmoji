@@ -55,6 +55,7 @@ import {
 import {
   cloneContentRepo,
   type CloneSkipReason,
+  type ContentRepoCoordinates,
   type RolloverMediaCopy,
 } from '../helpers/cloneContentRepo.ts';
 
@@ -276,7 +277,7 @@ export async function assertSourceAccess(
 async function contentRepoCoordinates(
   prisma: PrismaClient,
   classroomId: string
-): Promise<{ orgLogin: string; repo: string; token: string } | null> {
+): Promise<ContentRepoCoordinates | null> {
   const classroom = await prisma.classroom.findUnique({
     where: { id: classroomId },
     include: { git_organization: true },
@@ -293,7 +294,19 @@ async function contentRepoCoordinates(
   // throws synchronously when the row has no installation id.
   try {
     const token = await getGitProvider(org).getAccessToken();
-    return { orgLogin: org.login, repo: classroom.content_repo, token };
+    // GitLab: the content project lives in the class subgroup, on the org's
+    // own instance.
+    const gitlab =
+      org.provider === 'GITLAB' && classroom.git_namespace
+        ? {
+            host:
+              org.base_url ||
+              (await ClassmojiService.gitlabInstance.hostFor(org.gitlab_instance_id)),
+            namespace: classroom.git_namespace,
+          }
+        : undefined;
+    if (gitlab) await ClassmojiService.gitlabInstance.assertPublicGitlabHost(gitlab.host);
+    return { orgLogin: org.login, repo: classroom.content_repo, token, gitlab };
   } catch (error: unknown) {
     throw new Error(describeTokenMintError(org.login, error));
   }

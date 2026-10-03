@@ -1,4 +1,5 @@
 import { Form, Input, Button, Space, Typography, Radio, Popconfirm } from 'antd';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import { useState } from 'react';
 
 import { IconMail, IconUser, IconBrandGithubCopilot } from '@tabler/icons-react';
@@ -6,6 +7,7 @@ import { IconMail, IconUser, IconBrandGithubCopilot } from '@tabler/icons-react'
 import { useGlobalFetcher } from '~/hooks';
 import { useCallout } from '@classmoji/ui-components';
 import { ActionTypes } from '~/constants';
+import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 
 const { Text } = Typography;
 
@@ -60,6 +62,9 @@ interface FormStaffProps {
  * owner can grant one.
  */
 const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
+  // Github org or GitLab group: the username is on the classroom's provider.
+  const web = useGitWeb();
+  const platform = web.label;
   const { fetcher, notify } = useGlobalFetcher();
   const [form] = Form.useForm();
   const [role, setRole] = useState<StaffRole>(initialRole);
@@ -95,7 +100,10 @@ const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
   };
 
   const onFinishFailed = () => {
-    callout.show({ variant: 'error', title: 'Enter the GitHub username of the person to add' });
+    callout.show({
+      variant: 'error',
+      title: `Enter the ${platform} username of the person to add`,
+    });
   };
 
   const submitButton = (
@@ -153,10 +161,9 @@ const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
             the classroom and everything in it.
           </p>
           <p className="mt-1">
-            Co-owner is a Classmoji role, not a GitHub organization admin. Anything that runs with
-            the requester&rsquo;s own GitHub credentials — such as the GitHub cleanup offered when a
-            classroom is deleted — will fail for a co-owner who is not an admin of the GitHub
-            organization.
+            {web.isGitLab
+              ? 'Co-owner is a Classmoji role, not a Gitlab group owner. Anything that runs with the requester’s own Gitlab credentials, such as the Gitlab cleanup offered when a classroom is deleted, will fail for a co-owner who is not an owner of the Gitlab group.'
+              : 'Co-owner is a Classmoji role, not a GitHub organization admin. Anything that runs with the requester’s own GitHub credentials — such as the GitHub cleanup offered when a classroom is deleted — will fail for a co-owner who is not an admin of the GitHub organization.'}
           </p>
         </div>
       )}
@@ -165,22 +172,34 @@ const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
           resolved from their git profile, so the other two fields stay empty
           unless the instructor wants to override what GitHub says. */}
       <Form.Item
-        label="GitHub Username"
+        label={`${platform} Username`}
         name="login"
         rules={[
-          { required: true, message: 'Please enter GitHub username' },
+          { required: true, message: `Please enter ${platform} username` },
           {
-            pattern: /^[a-zA-Z0-9]([a-zA-Z0-9]|-)*[a-zA-Z0-9]$/,
-            message: 'Invalid GitHub username format',
+            // GitLab usernames also allow `.` and `_`.
+            pattern: web.isGitLab
+              ? /^[a-zA-Z0-9_]([a-zA-Z0-9_.-])*$/
+              : /^[a-zA-Z0-9]([a-zA-Z0-9]|-)*[a-zA-Z0-9]$/,
+            message: `Invalid ${platform} username format`,
           },
         ]}
         extra={
           <Text type="secondary" className="text-xs">
-            Enter the GitHub username (without @)
+            Enter the {platform} username (without @)
           </Text>
         }
       >
-        <Input placeholder="github-username" prefix={<IconBrandGithubCopilot size={16} />} />
+        <Input
+          placeholder={web.isGitLab ? 'gitlab-username' : 'github-username'}
+          prefix={
+            web.isGitLab ? (
+              <GitlabLogo size={16} />
+            ) : (
+              <IconBrandGithubCopilot size={16} className="text-gray-900 dark:text-gray-100" />
+            )
+          }
+        />
       </Form.Item>
 
       {/* OPTIONAL OVERRIDES. These were required back when the form filled them
@@ -190,7 +209,10 @@ const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
           instructor inviting someone whose real name they did not have to
           hand. */}
       <Form.Item label="Name (optional)" name="name">
-        <Input placeholder="Defaults to their GitHub name" prefix={<IconUser size={16} />} />
+        <Input
+          placeholder={`Defaults to their ${web.isGitLab ? 'Gitlab' : 'GitHub'} name`}
+          prefix={<IconUser size={16} />}
+        />
       </Form.Item>
 
       <Form.Item
@@ -198,7 +220,10 @@ const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
         name="email"
         rules={[{ type: 'email', message: 'Please enter a valid email address' }]}
       >
-        <Input placeholder="Defaults to their GitHub email" prefix={<IconMail size={16} />} />
+        <Input
+          placeholder={`Defaults to their ${web.isGitLab ? 'Gitlab' : 'GitHub'} email`}
+          prefix={<IconMail size={16} />}
+        />
       </Form.Item>
 
       <Form.Item className="mb-0 mt-6">
@@ -215,10 +240,9 @@ const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
                     what they delete.
                   </p>
                   <p className="mt-2">
-                    Co-owner is a Classmoji role, not a GitHub organization admin. Operations that
-                    use the requester&rsquo;s own GitHub credentials — such as the GitHub cleanup
-                    offered when a classroom is deleted — will fail for a co-owner who is not an
-                    admin of the GitHub organization.
+                    {web.isGitLab
+                      ? 'Co-owner is a Classmoji role, not a Gitlab group owner. Operations that use the requester’s own Gitlab credentials, such as the Gitlab cleanup offered when a classroom is deleted, will fail for a co-owner who is not an owner of the Gitlab group.'
+                      : 'Co-owner is a Classmoji role, not a GitHub organization admin. Operations that use the requester’s own GitHub credentials — such as the GitHub cleanup offered when a classroom is deleted — will fail for a co-owner who is not an admin of the GitHub organization.'}
                   </p>
                 </div>
               }

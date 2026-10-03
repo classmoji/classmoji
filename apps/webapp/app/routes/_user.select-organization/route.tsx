@@ -1,7 +1,9 @@
 import { redirect, useNavigate, useSearchParams } from 'react-router';
+import { fallbackMode } from '~/utils/sessionMode.server';
 import { useEffect, useMemo, useState } from 'react';
 import { Modal, Button as AntdButton } from 'antd';
-import { useCallout } from '@classmoji/ui-components';
+import { Button, IconGithub, useCallout } from '@classmoji/ui-components';
+import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 
 import { useUser, useDisclosure, useGlobalFetcher } from '~/hooks';
 import { getAuthSession } from '@classmoji/auth/server';
@@ -10,6 +12,7 @@ import { authClient } from '@classmoji/auth/client';
 import GitHubIcon from '../_index/github.svg';
 import { checkAuth } from '~/utils/helpers';
 import { hashHue } from '~/utils/hue';
+import { connectGithub, connectGitlabAt } from '~/utils/connectGitAccount';
 
 import {
   ClassmojiService,
@@ -59,7 +62,10 @@ const toLandingMembership = (m: SelectOrganizationMembership): LandingMembership
     ...classroom
   } = m.organization as SelectOrganizationMembership['organization'] & {
     memberships?: unknown;
-    git_organization: MembershipOrganization['git_organization'] & { avatar_url?: string | null };
+    git_organization: MembershipOrganization['git_organization'] & {
+      avatar_url?: string | null;
+      base_url?: string | null;
+    };
   };
   return {
     id: m.id,
@@ -74,6 +80,8 @@ const toLandingMembership = (m: SelectOrganizationMembership): LandingMembership
         provider_id: gitOrganization.provider_id,
         login: gitOrganization.login,
         avatar_url: gitOrganization.avatar_url ?? null,
+        // Which Gitlab a student connects to join: empty means gitlab.com.
+        base_url: (gitOrganization as { base_url?: string | null }).base_url ?? null,
       },
     } as SelectOrganizationMembership['organization'],
   };
@@ -97,9 +105,9 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   let user = await ClassmojiService.user.findById(authData.userId, { includeMemberships: true });
   if (!user) return redirect('/');
 
-  // The root loader runs these same checks, but in parallel with this one, so
-  // they are repeated here: nothing below (the invite claim especially) may
-  // run for an account that has not confirmed an email and connected Github.
+  // The root loader runs this check too, but in parallel with this one, so it
+  // is repeated here: nothing below (the invite claim especially) may run for
+  // an account that has not confirmed an email.
   if (!user.email || !user.emailVerified) {
     // Hand the token to registration: it prefills the address and stands in
     // for the verification code.
@@ -109,20 +117,18 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         : '/registration'
     );
   }
-  const githubAccount = await getPrisma().account.findFirst({
-    where: { user_id: user.id, provider_id: 'github', username: { not: null } },
-    select: { email: true },
+  const gitAccounts = await getPrisma().account.findMany({
+    where: { user_id: user.id, provider_id: { in: ['github', 'gitlab'] }, username: { not: null } },
+    select: { provider_id: true, email: true },
   });
-  if (!githubAccount) {
-    // The page asks them to connect instead of listing classrooms.
-    const linkError = new URL(request.url).searchParams.get('error');
-    return {
-      needsGithub: true as const,
-      linkError: linkError
-        ? (LINK_ERRORS[linkError] ?? 'Connecting Github failed. Please try again.')
-        : null,
-    };
-  }
+  // No Github or Gitlab connected yet: the classrooms they were invited to are
+  // still listed (joining one asks for the account it needs); with none, the
+  // page only asks them to connect.
+  const needsGitAccount = gitAccounts.length === 0;
+  const linkErrorCode = new URL(request.url).searchParams.get('error');
+  const linkError = linkErrorCode
+    ? (LINK_ERRORS[linkErrorCode] ?? 'Connecting your account failed. Please try again.')
+    : null;
 
   if (user) {
     let typedUser = user as AppUser;
@@ -149,6 +155,54 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       }
     } catch (error) {
       console.error('Failed to claim pending classroom invites:', error);
+    }
+
+    // GitLab courses have no second invite to accept (on Github, "pending"
+    // means the Github org invite is still open), so a pending GitLab-course
+    // membership becomes active as soon as the student has GitLab connected.
+    // Flipped here first so a reload never re-triggers; the task then creates
+    // their projects. Runs after the invite claim so a just-claimed invite
+    // counts. Not during impersonation: an admin must not enroll on the user's
+    // behalf.
+    try {
+      const impersonatingNow = !!(
+        authData.session as { session?: { impersonatedBy?: string | null } } | undefined
+      )?.session?.impersonatedBy;
+      const pendingGitLab = impersonatingNow
+        ? []
+        : await getPrisma().classroomMembership.findMany({
+            where: {
+              user_id: typedUser.id,
+              has_accepted_invite: false,
+              classroom: { git_organization: { provider: 'GITLAB' } },
+            },
+            select: { id: true, classroom: { select: { git_org_id: true } } },
+          });
+      const gitlabUsername =
+        pendingGitLab.length > 0
+          ? (await ClassmojiService.user.findProviderUsernames([typedUser.id], 'GITLAB')).get(
+              typedUser.id
+            )
+          : undefined;
+      if (gitlabUsername) {
+        await getPrisma().classroomMembership.updateMany({
+          where: { id: { in: pendingGitLab.map(m => m.id) } },
+          data: { has_accepted_invite: true },
+        });
+        for (const gitOrganizationId of new Set(pendingGitLab.map(m => m.classroom.git_org_id))) {
+          await tasks.trigger('activate_membership', { login: gitlabUsername, gitOrganizationId });
+        }
+        const refreshedUser = await ClassmojiService.user.findById(typedUser.id, {
+          includeMemberships: true,
+        });
+        if (refreshedUser) {
+          user = refreshedUser;
+          typedUser = user as AppUser;
+          typedUser.memberships = (typedUser.memberships ?? []) as SelectOrganizationMembership[];
+        }
+      }
+    } catch (error) {
+      console.error('Failed to activate Gitlab course memberships:', error);
     }
 
     // Runs after the invite claim above so a freshly-claimed student membership
@@ -178,6 +232,14 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       metadata: (n.metadata ?? null) as Record<string, unknown> | null,
     }));
 
+    // Every classroom is listed, Github and Gitlab alike, whichever way the
+    // person signed in. Outside a classroom, Github's words apply when they
+    // have it connected (e.g. Github Classroom import), else Gitlab's.
+    const gitMode = fallbackMode({
+      has_github: gitAccounts.some(a => a.provider_id === 'github'),
+      has_gitlab: gitAccounts.some(a => a.provider_id === 'gitlab'),
+    });
+
     const membershipRoles: Record<string, NotificationRole[]> = {};
     for (const m of typedUser.memberships ?? []) {
       const orgId = (m as SelectOrganizationMembership).organization?.id;
@@ -192,11 +254,20 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     const sameAddress = (a: string | null | undefined) =>
       !!a && !!inviteEmail && a.toLowerCase() === inviteEmail.toLowerCase();
     const inviteEmailMismatch =
-      inviteEmail && !sameAddress(typedUser.email) && !sameAddress(githubAccount.email)
+      inviteEmail &&
+      !sameAddress(typedUser.email) &&
+      !gitAccounts.some(account => sameAddress(account.email))
         ? inviteEmail
         : null;
 
+    if (needsGitAccount && (typedUser.memberships ?? []).length === 0) {
+      return { needsGithub: true as const, linkError };
+    }
+
     return {
+      // The signed-in user comes from the root loader (useUser), not from here:
+      // the service user carries whole membership and organization rows.
+      gitMode,
       memberships: (typedUser.memberships as SelectOrganizationMembership[]).map(
         toLandingMembership
       ),
@@ -206,6 +277,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       membershipRoles,
       surveyQuestions,
       inviteEmailMismatch,
+      linkError,
     };
   } else {
     return redirect('/registration');
@@ -269,6 +341,7 @@ function buildLandingClasses(memberships: LandingMembership[]): LandingClass[] {
         subtitle: '',
         slug: `@${gitLogin}/${orgLogin}`,
         githubOrg: gitLogin,
+        provider: org.git_organization?.provider === 'GITLAB' ? 'GITLAB' : 'GITHUB',
         role: deriveRole(m.role, m.has_accepted_invite),
         hue: hashHue(org.id),
         avatar:
@@ -302,7 +375,7 @@ function buildLandingClasses(memberships: LandingMembership[]): LandingClass[] {
 
 // ───────── component ─────────
 
-/** Shown instead of the classrooms until the account has a Github account connected. */
+/** Shown instead of the classrooms until the account has a Github or Gitlab account connected. */
 const ConnectGithubPrompt = ({ error }: { error: string | null }) => {
   const [busy, setBusy] = useState(false);
 
@@ -322,8 +395,8 @@ const ConnectGithubPrompt = ({ error }: { error: string | null }) => {
           Connect your Github account
         </h1>
         <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
-          Classmoji classrooms run on Github, where course repositories and assignments live.
-          Connect your account to create or join a classroom.
+          Classmoji classrooms run on Github or Gitlab, where course repositories and assignments
+          live. Connect your account to create or join a classroom.
         </p>
         {error && (
           <div className="w-full mb-4 rounded-lg bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 text-sm px-3 py-2">
@@ -338,6 +411,12 @@ const ConnectGithubPrompt = ({ error }: { error: string | null }) => {
           <img src={GitHubIcon} alt="" className="w-5 h-5 dark:invert" />
           {busy ? 'Redirecting to Github…' : 'Connect Github'}
         </button>
+        <a
+          href="/settings/connections"
+          className="mt-3 text-sm text-gray-600 dark:text-gray-400 hover:underline"
+        >
+          Use Gitlab instead
+        </a>
       </div>
     </div>
   );
@@ -362,6 +441,7 @@ const SelectOrganization = ({
     membershipRoles,
     surveyQuestions,
     inviteEmailMismatch,
+    linkError,
   } = loaderData;
   const { user } = useUser();
   const { classroom, setClassroom, startFullTour } = useStore();
@@ -371,6 +451,8 @@ const SelectOrganization = ({
   const [searchParams, setSearchParams] = useSearchParams();
   const callout = useCallout();
   const [pendingClassroom, setPendingClassroom] = useState<MembershipOrganization | null>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
 
   useEffect(() => {
     setClassroom(null);
@@ -398,6 +480,17 @@ const SelectOrganization = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, setSearchParams]);
 
+  // Connecting a git account came back with an error (?error=…).
+  useEffect(() => {
+    if (!linkError) return;
+    callout.show({ variant: 'error', title: linkError, autoDismissMs: 8000 });
+    const next = new URLSearchParams(searchParams);
+    next.delete('error');
+    setSearchParams(next, { replace: true });
+    // `callout` is stable per CalloutProvider; see the removed-toast effect above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkError]);
+
   // Invite link for an address this account does not have (#343). Shown once,
   // then the param is dropped so a refresh does not repeat it.
   useEffect(() => {
@@ -420,11 +513,86 @@ const SelectOrganization = ({
   const memberList = memberships as LandingMembership[];
   const classes = useMemo(() => buildLandingClasses(memberList), [memberList]);
 
+  const providerOf = (organization: MembershipOrganization | null | undefined) =>
+    organization?.git_organization?.provider === 'GITLAB' ? 'GITLAB' : 'GITHUB';
+  // The username a class needs is the one on its own provider: a Github-only
+  // account invited to a Gitlab class still has to connect Gitlab to join.
+  const hasLoginFor = (organization: MembershipOrganization | null | undefined) =>
+    !!user?.logins?.[providerOf(organization)];
+
+  const connectFor = async (organization: MembershipOrganization | null | undefined) => {
+    setConnecting(true);
+    setConnectError(null);
+    const error =
+      providerOf(organization) === 'GITLAB'
+        ? await connectGitlabAt(
+            (organization?.git_organization as { base_url?: string | null } | undefined)?.base_url,
+            '/select-organization'
+          )
+        : await connectGithub('/select-organization');
+    if (error) {
+      setConnectError(error);
+      setConnecting(false);
+      // Outside the join dialog (the notice and Gitlab cards connect straight away).
+      if (!visible) callout.show({ variant: 'error', title: error, autoDismissMs: 8000 });
+    }
+  };
+
+  // Classes waiting on an account this person has not connected yet: one
+  // notice says which, with the way to connect it.
+  const waitingOn = memberList.filter(
+    m => !m.has_accepted_invite && m.role !== 'OWNER' && !hasLoginFor(m.organization)
+  );
+
   if (!user) return null;
+
+  // One banner per provider still to connect, naming the classes it unlocks.
+  const connectNotice =
+    waitingOn.length > 0 ? (
+      <div className="flex flex-col gap-2">
+        {(['GITHUB', 'GITLAB'] as const).map(provider => {
+          const classesHere = waitingOn.filter(m => providerOf(m.organization) === provider);
+          if (classesHere.length === 0) return null;
+          const platform = provider === 'GITLAB' ? 'Gitlab' : 'Github';
+          const verb = provider === 'GITLAB' ? 'open' : 'join';
+          const target =
+            classesHere.length === 1
+              ? classesHere[0].organization.name || classesHere[0].organization.login
+              : `${classesHere.length} classes`;
+          return (
+            <div
+              key={provider}
+              className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-panel ring-1 ring-line px-4 py-2.5"
+            >
+              <span className="inline-flex text-gray-900 dark:text-gray-100">
+                {provider === 'GITLAB' ? <GitlabLogo size={18} /> : <IconGithub size={18} />}
+              </span>
+              <div className="flex-1 min-w-[12rem]">
+                <div className="text-sm font-medium text-ink-0">
+                  Connect your {platform} account to {verb} {target}
+                </div>
+              </div>
+              <Button
+                className="btn-sm"
+                disabled={connecting}
+                onClick={() => void connectFor(classesHere[0].organization)}
+              >
+                Connect {platform}
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+    ) : null;
 
   const acceptInvite = (organization: MembershipOrganization | null) => {
     if (!organization || !user.login) return;
-    notify(ActionTypes.SEND_INVITATION, 'Sending you Github invite...');
+    notify(
+      ActionTypes.SEND_INVITATION,
+      organization.git_organization?.provider === 'GITLAB'
+        ? 'Joining the class...'
+        : 'Sending you Github invite...'
+    );
     fetcher?.submit(
       { classroom_id: organization.id },
       {
@@ -437,6 +605,15 @@ const SelectOrganization = ({
   };
 
   const onOpenClass = (c: LandingClass) => {
+    // A Gitlab class waiting on Gitlab: connect, and the page lets them in on
+    // the way back.
+    if (c.needsConnect && c.provider === 'GITLAB') {
+      const membership = memberList.find(
+        m => m.organization.id === c.organization.id && !m.has_accepted_invite
+      );
+      void connectFor(membership?.organization);
+      return;
+    }
     // Use the card's own role — looking up membership by org id is ambiguous
     // when a user has multiple memberships for the same classroom (e.g. OWNER
     // + STUDENT in a dev sandbox), and would always pick the first match.
@@ -461,6 +638,10 @@ const SelectOrganization = ({
   // tours, then returns here.
   const onTakeTour = () => startFullTour();
 
+  const modalClassroom = pendingClassroom ?? classroom;
+  const modalNeedsConnect = !hasLoginFor(modalClassroom);
+  const modalPlatform = providerOf(modalClassroom) === 'GITLAB' ? 'Gitlab' : 'Github';
+
   return (
     <>
       {/* Asked once per user, before the first-sign-in tour (which waits on it). */}
@@ -477,13 +658,20 @@ const SelectOrganization = ({
           <AntdButton key="cancel" onClick={close}>
             Cancel
           </AntdButton>,
-          <AntdButton
-            key="ok"
-            type="primary"
-            onClick={() => acceptInvite(pendingClassroom ?? classroom)}
-          >
-            Accept
-          </AntdButton>,
+          modalNeedsConnect ? (
+            <AntdButton
+              key="connect"
+              type="primary"
+              loading={connecting}
+              onClick={() => connectFor(modalClassroom)}
+            >
+              Connect {modalPlatform}
+            </AntdButton>
+          ) : (
+            <AntdButton key="ok" type="primary" onClick={() => acceptInvite(modalClassroom)}>
+              Accept
+            </AntdButton>
+          ),
         ]}
       >
         <p>
@@ -491,11 +679,23 @@ const SelectOrganization = ({
           <span className="underline">
             {(pendingClassroom ?? classroom)?.name || (pendingClassroom ?? classroom)?.login}
           </span>
-          . Once you accept, you will be sent a Github invitation to join the organization.
+          .{' '}
+          {modalNeedsConnect
+            ? `This class runs on ${modalPlatform}. Connect your ${modalPlatform} account first, then come back here to accept.`
+            : modalPlatform === 'Gitlab'
+              ? 'Once you accept, you will get your Gitlab repositories right away.'
+              : 'Once you accept, you will be sent a Github invitation to join the organization.'}
         </p>
+        {connectError && (
+          <p className="mt-3 rounded-lg bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 text-sm px-3 py-2">
+            {connectError}
+          </p>
+        )}
       </Modal>
 
       <ClassroomsLandingScreen
+        gitMode={loaderData.gitMode}
+        notice={connectNotice}
         user={
           user
             ? {
@@ -505,7 +705,16 @@ const SelectOrganization = ({
               }
             : null
         }
-        classes={classes.filter(c => !c.is_example)}
+        classes={classes
+          .filter(c => !c.is_example)
+          .map(c => {
+            if (c.role !== 'PENDING INVITE' || user.logins?.[c.provider]) return c;
+            // Gitlab has no invite to accept: connecting Gitlab is what lets
+            // them in, so the card shows their real role, not "Pending invite".
+            return c.provider === 'GITLAB'
+              ? { ...c, role: deriveRole(c.membershipRole, true), needsConnect: true }
+              : { ...c, needsConnect: true };
+          })}
         onOpenClass={onOpenClass}
         onTakeTour={onTakeTour}
         notifications={notifications}
@@ -537,7 +746,32 @@ export const action = checkAuth(
     }
 
     const classroom = membership.classroom;
-    const student_login = gitUsername(membership.user, classroom.git_organization.provider);
+    const courseProvider = classroom.git_organization.provider;
+    // The student's username on the course's own provider. A Github username is
+    // never sent to a Gitlab group or the other way round: it would name a
+    // stranger who holds that username there.
+    const student_login = gitUsername(membership.user, courseProvider);
+
+    // GitLab course: the student needs GitLab connected (their project is
+    // named after, and shared with, their GitLab username). They never join
+    // the GitLab group: group members inherit every project in it, which would
+    // expose classmates' repos. Activation creates their projects straight
+    // away, since GitLab has no invite to accept and no webhook to wait for.
+    if (courseProvider === 'GITLAB') {
+      if (!student_login) {
+        return {
+          error: 'This course uses Gitlab. Connect your Gitlab account in Settings to join it.',
+        };
+      }
+      await tasks.trigger('activate_membership', {
+        login: student_login,
+        gitOrganizationId: classroom.git_organization.id,
+      });
+      return {
+        success: "You're in. Your Gitlab repositories are being created.",
+        action: ActionTypes.SEND_INVITATION,
+      };
+    }
 
     if (!student_login) {
       return { error: 'Connect your Github account before joining this classroom.' };

@@ -5,6 +5,9 @@ import { ClassMark } from './ClassMark';
 import { RoleChip } from './RoleChip';
 import type { LandingClass } from './types';
 import { useClassroomStatusModals } from '~/utils/classroomStatusModals';
+import { IconGithub } from '@classmoji/ui-components';
+import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
+import { IconLock } from '@tabler/icons-react';
 
 interface ClassroomCardProps {
   c: LandingClass;
@@ -163,6 +166,15 @@ export function ClassroomCard({
         {/* Bottom row: role + status chips */}
         <div className="mt-auto pt-4 flex items-center gap-2">
           <RoleChip role={c.role} />
+          {c.needsConnect && (
+            <span
+              className="inline-flex items-center gap-1 rounded-md bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300 ring-1 ring-gray-200 dark:ring-gray-700 px-2 py-0.5 text-xs font-medium"
+              title={`Connect your ${c.provider === 'GITLAB' ? 'Gitlab' : 'Github'} account to open this class`}
+            >
+              <IconLock size={12} stroke={2} />
+              No access yet
+            </span>
+          )}
           {c.status === 'LOCKED' && (
             <span className="inline-flex items-center rounded-md bg-amber-50 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200 ring-1 ring-amber-200 dark:ring-amber-800/50 px-2 py-0.5 text-xs font-medium">
               Read-only
@@ -173,6 +185,14 @@ export function ClassroomCard({
               Unpublished
             </span>
           )}
+          {/* Where the class lives. */}
+          <span
+            className="ml-auto inline-flex text-gray-900 dark:text-gray-100"
+            title={c.provider === 'GITLAB' ? 'Gitlab classroom' : 'Github classroom'}
+            aria-label={c.provider === 'GITLAB' ? 'Gitlab classroom' : 'Github classroom'}
+          >
+            {c.provider === 'GITLAB' ? <GitlabLogo size={18} /> : <IconGithub size={18} />}
+          </span>
         </div>
       </div>
     </div>

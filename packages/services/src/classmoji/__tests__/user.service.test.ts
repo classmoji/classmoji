@@ -8,8 +8,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // prisma and assert the where clause the query is built with.
 const findManyMock = vi.fn();
 
-vi.mock('@classmoji/database', async importOriginal => ({
-  ...(await importOriginal<typeof import('@classmoji/database')>()),
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
   default: () => ({ user: { findMany: (...args: unknown[]) => findManyMock(...args) } }),
 }));
 

@@ -23,7 +23,14 @@ vi.mock('@classmoji/services', () => ({
   getGitProvider: vi.fn(),
 }));
 
-vi.mock('@classmoji/utils', () => ({ titleToIdentifier: (t: string) => t }));
+vi.mock('@classmoji/utils', () => ({
+  titleToIdentifier: (t: string) => t,
+  gitTerms: () => ({}),
+  repoNamespace: () => null,
+  scopeGitlabId: (_i: unknown, id: unknown) => String(id),
+  GITLAB_PROJECTS_SUBGROUP: 'projects',
+}));
+vi.mock('@classmoji/database', () => ({ default: () => ({}) }));
 vi.mock('../gitRepo.ts', () => ({ createRepositoriesTask: { triggerAndWait: vi.fn() } }));
 
 const { moveGraderSlotTask } = (await import('../gitRepoAssignment.ts')) as unknown as {

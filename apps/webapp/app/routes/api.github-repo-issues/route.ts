@@ -36,12 +36,23 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   if (!classroom.git_organization) {
     return new Response(
-      JSON.stringify({ error: 'No GitHub organization configured for this classroom' }),
+      JSON.stringify({
+        error: 'No Github organization or Gitlab group configured for this classroom',
+      }),
       {
         status: 400,
         headers: { 'Content-Type': 'application/json' },
       }
     );
+  }
+
+  // Github only: this reads issues through the Github App. Nothing calls it
+  // for a Gitlab classroom; refuse rather than send a Gitlab token to Github.
+  if (classroom.git_organization.provider !== 'GITHUB') {
+    return new Response(JSON.stringify({ error: 'Only available for Github classrooms' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 
   try {

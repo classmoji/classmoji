@@ -36,13 +36,27 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const tags = await ClassmojiService.organizationTag.findByClassroomId(classroom.id);
   const teamWithRepos = await ClassmojiService.team.findByIdWithRepositories(team.id);
   const repositoryCount = teamWithRepos?.git_repos.length ?? 0;
-  const canRenameTeam = classroom.git_organization?.provider === 'GITHUB';
+  // Github teams and Gitlab team subgroups can both be renamed (teamAdmin.renameTeam).
+  const provider = classroom.git_organization?.provider;
+  const canRenameTeam = provider === 'GITHUB' || provider === 'GITLAB';
+  const isGitLab = provider === 'GITLAB';
 
-  return { team, students: studentsObjects, teamMembers, tags, repositoryCount, canRenameTeam };
+  return {
+    team,
+    students: studentsObjects,
+    teamMembers,
+    tags,
+    repositoryCount,
+    canRenameTeam,
+    isGitLab,
+  };
 };
 
 const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
-  const { students, teamMembers, tags, team, repositoryCount, canRenameTeam } = loaderData;
+  const { students, teamMembers, tags, team, repositoryCount, canRenameTeam, isGitLab } =
+    loaderData;
+  const host = isGitLab ? 'Gitlab' : 'Github';
+  const repoWord = (n: number) => `repositor${n === 1 ? 'y' : 'ies'}`;
   const [membersToAdd, setMembersToAdd] = useState<string[]>([]);
   const [tagsToAdd, setTagsToAdd] = useState<string[]>([]);
   const [renameValue, setRenameValue] = useState(team.name);
@@ -202,8 +216,8 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
               </Button>
             </div>
             <p className="mt-2 text-xs text-ink-3">
-              Renames the team on GitHub and every linked repository ({repositoryCount} repo
-              {repositoryCount === 1 ? '' : 's'}). Local clones need to update their git remote.
+              Renames the team on {host} and every linked repository ({repositoryCount}{' '}
+              {repoWord(repositoryCount)}). Local clones need to update their git remote.
             </p>
           </Card>
         </>
@@ -214,7 +228,8 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
           className="mb-8 border-red-300 dark:border-red-700"
           title={
             <span className="text-red-700 dark:text-red-400">
-              {renameFailures.length} repo{renameFailures.length === 1 ? '' : 's'} failed to rename
+              {renameFailures.length} repo
+              {renameFailures.length === 1 ? '' : 's'} failed to rename
             </span>
           }
           extra={
@@ -224,8 +239,8 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
           }
         >
           <p className="mb-2 text-xs text-ink-3">
-            The team was renamed but these repositories still have the old suffix on GitHub. Rename
-            them manually or retry by renaming the team again.
+            The team was renamed but these {isGitLab ? 'projects' : 'repositories'} still have the
+            old suffix on {host}. Rename them manually or retry by renaming the team again.
           </p>
           <ul className="text-sm">
             {renameFailures.map(f => (
@@ -246,9 +261,9 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
         onCancel={() => setRenameConfirmOpen(false)}
       >
         <p>
-          This will rename the team on GitHub and update{' '}
+          This will rename the team on {host} and update{' '}
           <strong>
-            {repositoryCount} repositor{repositoryCount === 1 ? 'y' : 'ies'}
+            {repositoryCount} {repoWord(repositoryCount)}
           </strong>
           . Team members and anyone with local clones will need to update their git remote URLs.
         </p>

@@ -15,6 +15,8 @@ export interface LandingClass {
   slug: string;
   /** GitHub organization login (shown under the class name). */
   githubOrg: string;
+  /** Where the class lives; its logo sits in the card's bottom-right corner. */
+  provider: 'GITHUB' | 'GITLAB';
   role: LandingRole;
   hue: number;
   /** Organization avatar URL (GitHub org image); falls back to the ClassMark when absent. */
@@ -34,4 +36,6 @@ export interface LandingClass {
     name?: string | null;
   };
   hasAcceptedInvite: boolean;
+  /** A pending invite to a class on a provider this person has not connected. */
+  needsConnect?: boolean;
 }

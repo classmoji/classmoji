@@ -19,7 +19,7 @@
  * GitHub rate limits: many students starting at once share one installation's
  * limits. A tree or file read that GitHub answers with a rate limit is tried
  * up to twice more, after a jittered pause (`RATE_LIMIT_BACKOFF_MS`), and the
- * pauses stop on the turn's signal.
+ * pauses stop on the turn's signal. A Gitlab read (`gitHost`) answered with a 429 is retried the same way.
  *
  * The steps themselves are `workflows/exploreRepo.ts`, reused as is, so the
  * legacy task and the in-process path read, pick and excerpt the same way.
@@ -70,9 +70,12 @@ export const RATE_LIMIT_BACKOFF_MS: ReadonlyArray<readonly [number, number]> = [
 ];
 
 export type ExploreRepositoryInput = {
+  /** The org on Github; the project's namespace on Gitlab. */
   owner: string;
   repo: string;
   token: string;
+  /** A Gitlab instance origin to read from instead of Github; absent on Github. */
+  gitHost?: string | null;
   model: string;
   /** Effort for the excerpt call; unknown values send none. */
   effort: string | null;
@@ -223,11 +226,14 @@ async function fetchTreeWithRetry(
   owner: string,
   repo: string,
   token: string,
-  r: RetryContext
+  r: RetryContext,
+  gitHost?: string | null
 ): Promise<RepoTree> {
+  const fetchTree = () =>
+    gitHost ? fetchRepoTree(owner, repo, token, gitHost) : fetchRepoTree(owner, repo, token);
   for (let retry = 0; ; retry++) {
     try {
-      return await untilAborted(fetchRepoTree(owner, repo, token), r.signal);
+      return await untilAborted(fetchTree(), r.signal);
     } catch (error) {
       if (error instanceof ExplorationStoppedError) throw error;
       if (retry >= r.backoff.length || !isGithubRateLimited(error)) throw error;
@@ -338,7 +344,7 @@ export async function exploreRepository(i: ExploreRepositoryInput): Promise<Expl
   const isExcluded = pathExclusion(i.excludedPaths);
 
   throwIfStopped(signal);
-  const tree = (await fetchTreeWithRetry(owner, repo, token, retry)).filter(
+  const tree = (await fetchTreeWithRetry(owner, repo, token, retry, i.gitHost)).filter(
     entry => isExplorableEntry(entry) && !isExcluded(entry.path)
   );
   const treeListing = formatTreeForLLM(tree);
@@ -364,7 +370,10 @@ export async function exploreRepository(i: ExploreRepositoryInput): Promise<Expl
 
   throwIfStopped(signal);
   // The answer's own path is checked against the excluded paths too.
-  const files = await fetchFilesWithRetry(owner, repo, filePaths, token, retry, { isExcluded });
+  const files = await fetchFilesWithRetry(owner, repo, filePaths, token, retry, {
+    isExcluded,
+    ...(i.gitHost ? { gitHost: i.gitHost } : {}),
+  });
   throwIfStopped(signal);
   for (const file of files) {
     if (file.error) i.onFileRead(file.path, { error: true });

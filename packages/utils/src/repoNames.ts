@@ -121,9 +121,91 @@ export function resolveTemplateRef(
   const trimmed = (template ?? '').trim().replace(/^\/+|\/+$/g, '');
   if (!trimmed) return null;
 
-  const [first, second] = trimmed.split('/');
-  if (second) return { owner: first!, repo: second };
+  // Split on the LAST slash: a GitLab template can sit in a nested group
+  // (`dept/cs10/starter` → owner `dept/cs10`). Github owners never contain one.
+  const slash = trimmed.lastIndexOf('/');
+  if (slash !== -1) {
+    return { owner: trimmed.slice(0, slash), repo: trimmed.slice(slash + 1) };
+  }
 
   const owner = (orgLogin ?? '').trim();
-  return owner ? { owner, repo: first! } : null;
+  return owner ? { owner, repo: trimmed } : null;
+}
+
+/**
+ * A GitLab class subgroup's layout: the content project at its root, student
+ * and team projects in `projects/`, team subgroups in `teams/`.
+ */
+export const GITLAB_PROJECTS_SUBGROUP = 'projects';
+export const GITLAB_TEAMS_SUBGROUP = 'teams';
+
+/**
+ * Where a classroom's student and team repos live: the class subgroup's
+ * `projects` subgroup on GitLab, the org itself on Github (no namespace).
+ */
+export function repoNamespace(classroom: {
+  git_namespace?: string | null;
+  git_organization: { login: string | null };
+}): string | null {
+  return classroom.git_namespace
+    ? `${classroom.git_namespace}/${GITLAB_PROJECTS_SUBGROUP}`
+    : classroom.git_organization.login;
+}
+
+/**
+ * The Gitlab project a code-aware quiz explores, as namespace and project
+ * name. A student's project is in the classroom's `projects` subgroup
+ * (`repoNamespace`). A staff preview (`fullPath`) may name a project by its
+ * full path instead (any project in the class's Gitlab group, e.g. a solution
+ * under templates/); that path must stay inside the group. Null when it does
+ * not, or when the classroom has no namespace to read from.
+ */
+export function gitlabQuizProject(
+  classroom: {
+    git_namespace?: string | null;
+    git_organization: { login: string | null };
+  },
+  repoName: string,
+  { fullPath = false }: { fullPath?: boolean } = {}
+): { namespace: string; repo: string } | null {
+  const slash = repoName.lastIndexOf('/');
+  if (fullPath && slash > 0) {
+    const namespace = repoName.slice(0, slash);
+    const group = (classroom.git_organization.login ?? '').toLowerCase();
+    const ns = namespace.toLowerCase();
+    // Each segment a real name: `cs/../other` must not pass for inside `cs`.
+    if (ns.split('/').some(segment => segment === '' || segment === '.' || segment === '..')) {
+      return null;
+    }
+    if (!group || (ns !== group && !ns.startsWith(`${group}/`))) return null;
+    return { namespace, repo: repoName.slice(slash + 1) };
+  }
+  const namespace = repoNamespace(classroom);
+  return namespace ? { namespace, repo: repoName } : null;
+}
+
+/**
+ * Where a classroom's own content repo lives: the class subgroup on GitLab,
+ * the org on Github.
+ */
+export function classNamespace(classroom: {
+  git_namespace?: string | null;
+  git_organization: { login: string | null };
+}): string | null {
+  return classroom.git_namespace || classroom.git_organization.login;
+}
+
+/**
+ * Where a classroom's teams live on its provider: the org itself on Github
+ * (teams are org-level), `<class subgroup>/teams` on GitLab (each team a
+ * subgroup there, its projects shared with it).
+ */
+export function teamsNamespace(classroom: {
+  git_namespace?: string | null;
+  git_organization: { login: string | null; provider?: string | null };
+}): string | null {
+  if (classroom.git_organization.provider === 'GITLAB') {
+    return classroom.git_namespace ? `${classroom.git_namespace}/${GITLAB_TEAMS_SUBGROUP}` : null;
+  }
+  return classroom.git_organization.login;
 }

@@ -1,4 +1,6 @@
 import { App, Button, Checkbox, Dropdown, Popover, Table, Tooltip } from 'antd';
+import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
+import { gitContextFor, gitWeb, type ClassroomLike } from '~/utils/gitWeb';
 import type { MenuProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
@@ -90,7 +92,7 @@ export interface SubmissionsRepo {
     slug?: string | null;
     [key: string]: unknown;
   } | null;
-  team?: { avatar_url: string; name: string; slug: string; [key: string]: unknown } | null;
+  team?: { avatar_url?: string | null; name: string; slug: string; [key: string]: unknown } | null;
   submission: SubmissionRow | null;
   project_number?: number | null;
   metadata?: unknown;
@@ -162,6 +164,10 @@ const SubmissionsTable = ({
   const { modal } = App.useApp();
   const { classroom } = useStore();
   const callout = useCallout();
+  // Github org or GitLab class subgroup, whichever this classroom is on.
+  const gitCtx = gitContextFor(classroom as ClassroomLike | null);
+  const web = gitWeb(gitCtx);
+  const terms = web.terms;
 
   const isIndividual = repositoryType === 'INDIVIDUAL';
   const isPushMode = assignment.submission_mode === 'REPO';
@@ -254,22 +260,24 @@ const SubmissionsTable = ({
         ),
     },
     {
-      title: 'Repository',
+      title: terms.Repo,
       key: 'repo',
       width: 240,
       render: (_: unknown, repo) => {
-        const projectUrl = repo.project_number
-          ? `https://github.com/orgs/${org}/projects/${repo.project_number}`
-          : null;
+        const projectUrl = repo.project_number ? web.project(repo.project_number) : null;
         return (
           <div className="flex items-center gap-1 min-w-0">
             <a
-              href={`https://github.com/${org}/${repo.name}`}
+              href={web.repo(repo.name)}
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center gap-1.5 min-w-0 text-ink-1 hover:underline underline-offset-2"
             >
-              <IconBrandGithub size={14} className="shrink-0 text-gray-400" />
+              {web.isGitLab ? (
+                <GitlabLogo size={14} />
+              ) : (
+                <IconBrandGithub size={14} className="shrink-0 text-gray-900 dark:text-gray-100" />
+              )}
               <span className="truncate">{repo.name}</span>
             </a>
             {projectUrl && (
@@ -297,9 +305,7 @@ const SubmissionsTable = ({
         const n = snapshot?.total_commits;
         if (n === null || n === undefined) return <span className="text-ink-3">—</span>;
         const sha = latestCommitSha(snapshot?.commits);
-        const href = sha
-          ? `https://github.com/${org}/${repo.name}/commit/${sha}`
-          : `https://github.com/${org}/${repo.name}/commits`;
+        const href = sha ? web.commit(repo.name, sha) : web.commits(repo.name);
         return <CommitCount snapshot={snapshot} href={href} size="lg" className="text-sm!" />;
       },
     },
@@ -353,7 +359,9 @@ const SubmissionsTable = ({
         repo.submission ? (
           <RepositoryAssignmentStatus repositoryAssignment={repo.submission} />
         ) : (
-          <Tooltip title="Sync the repository from the Repositories page to create this student's submission row">
+          <Tooltip
+            title={`Sync the ${terms.repo} from the ${terms.Repos} page to create this student's submission row`}
+          >
             <span className="text-sm text-ink-3">Not released</span>
           </Tooltip>
         ),
@@ -480,7 +488,7 @@ const SubmissionsTable = ({
               className={link}
               onClick={() =>
                 // The row IS the git repo; hand the helper its name explicitly.
-                openRepositoryAssignmentInGithub(org, {
+                openRepositoryAssignmentInGithub(gitCtx, {
                   git_repo: { name: repo.name },
                   provider_issue_number: s.provider_issue_number,
                 })
@@ -510,10 +518,12 @@ const SubmissionsTable = ({
                               alsoRepo.current = e.target.checked;
                             }}
                           >
-                            Also delete the GitHub repository
+                            {web.isGitLab
+                              ? 'Also delete the Gitlab repository'
+                              : 'Also delete the Github repository'}
                             <span className="block text-xs text-ink-3">
                               Permanent, and removes every other assignment&rsquo;s submission on
-                              this repository.
+                              this {terms.repo}.
                             </span>
                           </Checkbox>
                         </div>
@@ -577,11 +587,11 @@ const SubmissionsTable = ({
         emptyText: (
           <div className="text-center py-12 text-gray-500">
             <div className="font-medium">
-              {total === 0 ? 'No student repositories yet' : 'Nothing matches this filter'}
+              {total === 0 ? `No student ${terms.repos} yet` : 'Nothing matches this filter'}
             </div>
             <div className="text-sm">
               {total === 0
-                ? 'Publish the repository to create one per student.'
+                ? `Publish the ${terms.repo} to create one per student.`
                 : 'Pick another filter or clear the search.'}
             </div>
           </div>

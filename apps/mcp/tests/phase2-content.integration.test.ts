@@ -349,7 +349,13 @@ beforeAll(async () => {
 
   const users = await Promise.all(
     Object.values(LOGINS).map(login =>
-      prisma.user.create({ data: { login, email: `${login}@example.test`, name: login } })
+      prisma.user.create({
+        data: {
+          email: `${login}@example.test`,
+          name: login,
+          accounts: { create: { provider_id: 'github', account_id: login, username: login } },
+        },
+      })
     )
   );
   const [teacherUser, assistantUser, studentUser, outsiderUser] = users;
@@ -455,7 +461,11 @@ afterAll(async () => {
   const prisma = getPrisma();
   await deleteMintedTokens();
   if (ids.org) await prisma.gitOrganization.delete({ where: { id: ids.org } });
-  await prisma.user.deleteMany({ where: { login: { in: Object.values(LOGINS) } } });
+  await prisma.user.deleteMany({
+    where: {
+      accounts: { some: { provider_id: 'github', username: { in: Object.values(LOGINS) } } },
+    },
+  });
   // `docs_index` is global and cascades from nothing, so it is deleted by this
   // run's own slug prefix. A bare `DELETE FROM docs_index` would take a
   // developer's real 25 documentation rows with it.

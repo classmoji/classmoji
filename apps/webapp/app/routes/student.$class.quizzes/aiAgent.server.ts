@@ -16,6 +16,8 @@ interface CodeAwareOptions {
   orgLogin: string;
   repoName: string;
   accessToken: string;
+  /** Gitlab instance origin; absent on Github. `orgLogin` is then the project namespace. */
+  gitHost?: string | null;
 }
 
 /**
@@ -61,6 +63,7 @@ export async function initializeQuizViaAgent(
       payload.orgLogin = codeAwareOptions.orgLogin;
       payload.repoName = codeAwareOptions.repoName;
       payload.accessToken = codeAwareOptions.accessToken;
+      if (codeAwareOptions.gitHost) payload.gitHost = codeAwareOptions.gitHost;
     }
 
     if (mcpToken) payload.mcpToken = mcpToken;

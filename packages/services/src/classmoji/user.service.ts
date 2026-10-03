@@ -1,5 +1,10 @@
 import _ from 'lodash';
-import getPrisma, { GIT_IDENTITY, whereGitUsername } from '@classmoji/database';
+import getPrisma, {
+  GIT_IDENTITY,
+  gitScopeProvider,
+  whereGitUsername,
+  type GitUsernameScope,
+} from '@classmoji/database';
 import { claimPendingInvites } from './classroomInvite.service.ts';
 import type { GitProvider, Prisma, GitRepo } from '@prisma/client';
 import {
@@ -335,6 +340,28 @@ export const findById = async (id: string, options: { includeMemberships?: boole
   return user;
 };
 
+/**
+ * Each user's username on a git provider, read from their connected account
+ * (`Account.username`), keyed by user id. For batch work on a classroom's
+ * provider (project names, project membership). Users without that provider
+ * connected are absent.
+ */
+export const findProviderUsernames = async (
+  userIds: string[],
+  provider: GitProvider
+): Promise<Map<string, string>> => {
+  if (userIds.length === 0) return new Map();
+  const accounts = await getPrisma().account.findMany({
+    where: {
+      user_id: { in: userIds },
+      provider_id: accountProviderId(provider),
+      username: { not: null },
+    },
+    select: { user_id: true, username: true },
+  });
+  return new Map(accounts.map(a => [a.user_id, a.username as string]));
+};
+
 const findByGitIdentity = async (where: Prisma.UserWhereInput, provider: GitProvider) => {
   const found = await getPrisma().user.findFirst({
     where,
@@ -379,8 +406,12 @@ const findByGitIdentity = async (where: Prisma.UserWhereInput, provider: GitProv
   };
 };
 
-export const findByGitUsername = async (username: string, provider: GitProvider = 'GITHUB') =>
-  findByGitIdentity(whereGitUsername(username, provider), provider);
+/**
+ * By git username. Pass the classroom's git organization as `scope` when there
+ * is one: a GitLab username is only unique on its own server.
+ */
+export const findByGitUsername = async (username: string, scope: GitUsernameScope = 'GITHUB') =>
+  findByGitIdentity(whereGitUsername(username, scope), gitScopeProvider(scope) as GitProvider);
 
 /** Same shape as `findByGitUsername`, keyed on the provider's user id (`Account.account_id`). */
 export const findByGitAccountId = async (accountId: string, provider: GitProvider = 'GITHUB') =>

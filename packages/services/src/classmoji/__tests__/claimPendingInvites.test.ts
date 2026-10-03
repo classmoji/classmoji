@@ -14,8 +14,11 @@ const membershipCreateMany = vi.fn();
 const inviteDeleteMany = vi.fn();
 const transaction = vi.fn();
 
-vi.mock('@classmoji/database', async importOriginal => ({
-  ...(await importOriginal<typeof import('@classmoji/database')>()),
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
   default: () => ({
     user: { findUnique: (...a: unknown[]) => userFindUnique(...a) },
     classroomInvite: {
@@ -41,7 +44,7 @@ beforeEach(() => {
 });
 
 describe('claimPendingInvites', () => {
-  it('matches against both the app email and the provider email', async () => {
+  it('matches against both the verified app email and the Github account email', async () => {
     userFindUnique.mockResolvedValue({
       email: 'a@school.edu',
       emailVerified: true,
@@ -59,11 +62,7 @@ describe('claimPendingInvites', () => {
   });
 
   it('writes the membership and deletes the invite in one transaction', async () => {
-    userFindUnique.mockResolvedValue({
-      email: 'a@school.edu',
-      emailVerified: true,
-      accounts: [{ email: null }],
-    });
+    userFindUnique.mockResolvedValue({ email: 'a@school.edu', emailVerified: true, accounts: [] });
     inviteFindMany.mockResolvedValue([
       { id: 'invite-1', classroom_id: 'class-1' },
       { id: 'invite-2', classroom_id: 'class-2' },
@@ -98,11 +97,7 @@ describe('claimPendingInvites', () => {
   it('relies on skipDuplicates so a repeated claim cannot throw P2002', async () => {
     // Both callers run repeatedly by construction: every login, every email
     // write. A plain `create` threw on the second run — that was the old bug.
-    userFindUnique.mockResolvedValue({
-      email: 'a@school.edu',
-      emailVerified: true,
-      accounts: [{ email: null }],
-    });
+    userFindUnique.mockResolvedValue({ email: 'a@school.edu', emailVerified: true, accounts: [] });
     inviteFindMany.mockResolvedValue([{ id: 'invite-1', classroom_id: 'class-1' }]);
 
     await invites.claimPendingInvites('user-1');
@@ -133,11 +128,7 @@ describe('claimPendingInvites', () => {
   });
 
   it('writes nothing when there are no pending invites', async () => {
-    userFindUnique.mockResolvedValue({
-      email: 'a@school.edu',
-      emailVerified: true,
-      accounts: [{ email: null }],
-    });
+    userFindUnique.mockResolvedValue({ email: 'a@school.edu', emailVerified: true, accounts: [] });
     inviteFindMany.mockResolvedValue([]);
 
     const result = await invites.claimPendingInvites('user-1');

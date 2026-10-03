@@ -1,6 +1,6 @@
-import getPrisma, { GIT_IDENTITY, whereGitUsername } from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY, gitScopeProvider, whereGitUsername } from '@classmoji/database';
 import { withLogin, withLogins } from '@classmoji/utils';
-import { findClassroomGitProvider } from './classroomGitProvider.ts';
+import { findClassroomGitProvider, findClassroomGitScope } from './classroomGitProvider.ts';
 import type { Prisma, Role } from '@prisma/client';
 
 interface ClassroomMembershipUpsertData {
@@ -103,12 +103,13 @@ export const findByClassroomAndUser = async (
  * @returns {Promise<Object|null>}
  */
 export const findStudentByLoginInClassroom = async (classroomId: string, login: string) => {
-  const provider = await findClassroomGitProvider(classroomId);
+  const scope = await findClassroomGitScope(classroomId);
+  const provider = gitScopeProvider(scope);
   const membership = await getPrisma().classroomMembership.findFirst({
     where: {
       classroom_id: classroomId,
       role: 'STUDENT',
-      user: whereGitUsername(login, provider),
+      user: whereGitUsername(login, scope),
     },
     select: {
       id: true,

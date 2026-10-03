@@ -26,8 +26,11 @@ const pageFindMany = vi.fn();
 const pageCreate = vi.fn();
 const classroomFindUnique = vi.fn();
 
-vi.mock('@classmoji/database', async importOriginal => ({
-  ...(await importOriginal<typeof import('@classmoji/database')>()),
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
   default: () => ({
     classroom: { findUnique: (...args: unknown[]) => classroomFindUnique(...args) },
     page: {

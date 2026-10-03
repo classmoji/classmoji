@@ -11,6 +11,10 @@ export interface OriginRef {
   org: string;
   repo: string;
   token: string;
+  /** Which origin serves this classroom. Absent means Github (older token payloads). */
+  provider?: 'GITHUB' | 'GITLAB';
+  /** The Gitlab instance's base URL, for a Gitlab origin. */
+  apiBase?: string;
 }
 
 export interface BlobRef extends OriginRef {
@@ -19,6 +23,11 @@ export interface BlobRef extends OriginRef {
 
 export interface TreeRef extends OriginRef {
   treeSha: string;
+  /**
+   * The folder the tree sha was signed for. Github lists a tree by its sha
+   * alone; Gitlab can only list by path, and checks the sha against it.
+   */
+  path?: string;
 }
 
 export interface TreeEntry {

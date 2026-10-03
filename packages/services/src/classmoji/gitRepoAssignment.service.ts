@@ -5,7 +5,7 @@
  * It tracks their progress, grades, and submission status.
  */
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { withLogins } from '@classmoji/utils';
+import { repoNamespace, withLogins } from '@classmoji/utils';
 import { findClassroomGitProvider } from './classroomGitProvider.ts';
 import type { GitProvider, IssueStatus, Prisma } from '@prisma/client';
 import { getGitProvider } from '../git/index.ts';
@@ -483,16 +483,18 @@ export const recordExistingPush = async (gitRepoAssignmentId: string) => {
         select: {
           name: true,
           created_at: true,
-          classroom: { select: { git_organization: true } },
+          classroom: { select: { git_namespace: true, git_organization: true } },
         },
       },
     },
   });
   if (!row || row.closed_at || row.assignment.submission_mode !== 'REPO') return null;
   const gitOrg = row.git_repo.classroom.git_organization;
-  if (!gitOrg?.login) return null;
+  // The org on Github; the class subgroup on GitLab.
+  const owner = repoNamespace(row.git_repo.classroom);
+  if (!gitOrg?.login || !owner) return null;
 
-  const commits = await getGitProvider(gitOrg).listCommits(gitOrg.login, row.git_repo.name, {
+  const commits = await getGitProvider(gitOrg).listCommits(owner, row.git_repo.name, {
     maxCommits: 10,
   });
   const createdAt = new Date(row.git_repo.created_at).getTime();

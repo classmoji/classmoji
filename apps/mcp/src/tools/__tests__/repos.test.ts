@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   findTeamsByTag: vi.fn(),
   findGitReposByRepository: vi.fn(),
   moduleFindById: vi.fn(),
+  classroomFindById: vi.fn(),
   repositoryUpdate: vi.fn(),
   findDependents: vi.fn(),
   deleteIfUnprovisioned: vi.fn(),
@@ -46,6 +47,7 @@ vi.mock('@classmoji/services', () => ({
     classroomMembership: { findUsersByRole: (...a: unknown[]) => mocks.findUsersByRole(...a) },
     gitRepo: { findByRepository: (...a: unknown[]) => mocks.findGitReposByRepository(...a) },
     module: { findById: (...a: unknown[]) => mocks.moduleFindById(...a) },
+    classroom: { findById: (...a: unknown[]) => mocks.classroomFindById(...a) },
     contentManifest: { saveManifest: (...a: unknown[]) => mocks.saveManifest(...a) },
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
   },
@@ -120,6 +122,20 @@ describe('repo_create', () => {
     // The key isolation guarantee: creating a container must NOT provision repos.
     expect(mocks.createRepositoriesTrigger).not.toHaveBeenCalled();
     expect((mocks.auditCreate.mock.calls[0][0] as { action: string }).action).toBe('CREATE');
+  });
+
+  it('refuses a Github Project template on a Gitlab classroom', async () => {
+    mocks.classroomFindById.mockResolvedValue({ git_organization: { provider: 'GITLAB' } });
+    await expect(
+      repoCreateTool.handler({ ...BASE, project_template_id: 'PVT_x' }, CTX)
+    ).rejects.toMatchObject({ kind: 'invalid_params' });
+    expect(mocks.repositoryCreate).not.toHaveBeenCalled();
+  });
+
+  it('keeps a Github Project template on a Github classroom', async () => {
+    mocks.classroomFindById.mockResolvedValue({ git_organization: { provider: 'GITHUB' } });
+    await repoCreateTool.handler({ ...BASE, project_template_id: 'PVT_x' }, CTX);
+    expect(mocks.repositoryCreate.mock.calls[0][0]).toMatchObject({ project_template_id: 'PVT_x' });
   });
 
   it('rejects a GROUP + instructor-assigned container with no tag_id', async () => {

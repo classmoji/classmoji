@@ -3,7 +3,7 @@ import { Tag } from 'antd';
 import { IconChevronDown, IconChevronRight, type Icon } from '@tabler/icons-react';
 
 import { usePagePeek } from '~/components/features/pages';
-import { TYPE_META } from './moduleItemMeta';
+import { TYPE_META, typeLabel } from './moduleItemMeta';
 import type { ModuleTreeNode } from './ReadOnlyModulesTree';
 
 export interface StudentModuleCardData {
@@ -28,7 +28,7 @@ interface StudentModuleCardProps {
 const kindOf = (node: ModuleTreeNode): { label: string; icon: Icon } => {
   if (node.kind === 'assignment') return { label: 'Assignment', icon: TYPE_META.REPOSITORY.icon };
   if (node.kind === 'repository' || node.kind === 'repo')
-    return { label: 'Repository', icon: TYPE_META.REPOSITORY.icon };
+    return { label: typeLabel('REPOSITORY'), icon: TYPE_META.REPOSITORY.icon };
   switch (node.resourceIcon) {
     case 'slide':
       return { label: 'Slides', icon: TYPE_META.SLIDE.icon };

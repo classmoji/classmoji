@@ -18,7 +18,7 @@ vi.mock('@classmoji/auth/server', () => ({
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
-    user: { findByLogin: vi.fn().mockResolvedValue({ id: 'user-1', login: 'instructor' }) },
+    user: { findById: vi.fn().mockResolvedValue({ id: 'user-1', login: 'instructor' }) },
     gitOrganization: {
       syncUserInstallations: vi.fn().mockResolvedValue([
         {
@@ -44,8 +44,21 @@ vi.mock('@classmoji/services', () => ({
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
+    // A Github-connected creator: the Github side of the form.
+    account: { findMany: vi.fn().mockResolvedValue([{ provider_id: 'github' }]) },
     gitOrganization: { findMany: (...a: unknown[]) => mocks.findMany(...a) },
     classroom: { findMany: vi.fn().mockResolvedValue([]) },
+  }),
+}));
+
+// The Gitlab side of the form is not under test: Gitlab is not configured.
+vi.mock('../gitlabOptions.server', () => ({
+  loadGitLabOptions: async () => ({
+    enabled: false,
+    connection: null,
+    host: null,
+    groups: [],
+    error: null,
   }),
 }));
 

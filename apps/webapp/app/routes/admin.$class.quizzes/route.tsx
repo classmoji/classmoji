@@ -22,6 +22,7 @@ import {
 } from '~/utils/helpers';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import type { Route } from './+types/route';
+import { useGitWeb } from '~/hooks/useGitWeb';
 import type React from 'react';
 import type { TablerIconsProps } from '@tabler/icons-react';
 
@@ -531,6 +532,7 @@ const STATUS_TAGS: Record<QuizListStatus, { color: string; text: string }> = {
 export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
   const { quizzes, canAuthor } = loaderData;
   const fetcher = useFetcher();
+  const { terms } = useGitWeb();
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
   const callout = useCallout();

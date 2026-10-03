@@ -25,11 +25,14 @@
 
 import getPrisma from '@classmoji/database';
 import {
+  gitContextFor,
+  gitWeb,
   effectiveTokensPerHour,
   isClosed,
   openToStudents,
   quizStanding,
   titleToIdentifier,
+  type GitWebContext,
 } from '@classmoji/utils';
 import { pagesUrl } from '../emails/escape.ts';
 import * as formResponseService from './formResponse.service.ts';
@@ -132,6 +135,11 @@ export interface ListForStudentInput {
   /** The classroom's git organization, for repo links. */
   gitOrgLogin?: string | null;
   /**
+   * The classroom's full git context (provider, Gitlab subgroup and host), so
+   * repo and issue links resolve on Gitlab too. Github links when absent.
+   */
+  git?: GitWebContext | null;
+  /**
    * The student's submission rows, for a caller that has already read them
    * with `helper.findAllAssignmentsForStudent` (the dashboard does, for its
    * team card), so they are not read twice. Read here when absent.
@@ -156,16 +164,24 @@ const iso = (value: Date | string | null | undefined) =>
 const repoFields = (
   ra: RepoSubmission,
   gitOrgLogin: string | null,
+  git: GitWebContext | null,
   now: Date,
   classroomTokensPerHour: number
 ): RepoRowFields => {
   const login = gitOrgLogin ?? ra.git_repo?.classroom?.git_organization?.login ?? null;
+  const web = gitWeb(
+    git ??
+      (!gitOrgLogin && ra.git_repo?.classroom?.git_organization
+        ? gitContextFor(ra.git_repo.classroom)
+        : { provider: 'GITHUB', login })
+  );
   // The student's own copy of the repository: with the student Repositories
   // screen gone, this row is where they reach it.
-  const repoUrl =
-    login && ra.git_repo?.name ? `https://github.com/${login}/${ra.git_repo.name}` : null;
+  const repoUrl = login && ra.git_repo?.name ? web.repo(ra.git_repo.name) : null;
   const issueUrl =
-    repoUrl && ra.provider_issue_number ? `${repoUrl}/issues/${ra.provider_issue_number}` : null;
+    repoUrl && ra.provider_issue_number
+      ? web.issue(ra.git_repo!.name, ra.provider_issue_number)
+      : null;
   const graders = (ra.graders ?? []).map(g => ({ id: g.grader.id, name: g.grader.name ?? null }));
 
   // Late hours: how many hours past the deadline the student still is, after
@@ -288,6 +304,7 @@ export const listForStudent = async ({
   userId,
   quizzesVisible,
   gitOrgLogin = null,
+  git = null,
   repoSubmissions: givenSubmissions,
   assignments: givenAssignments,
   now = new Date(),
@@ -381,7 +398,7 @@ export const listForStudent = async ({
       const ra = submissionByAssignment.get(a.id);
       // No submission row yet: no student repo to open, so no row (as before).
       if (!ra) continue;
-      const repo = repoFields(ra, gitOrgLogin, now, classroomTokensPerHour);
+      const repo = repoFields(ra, gitOrgLogin, git, now, classroomTokensPerHour);
       const href = repo.issueUrl ?? repo.repoUrl;
       const submitted = ra.status === 'CLOSED';
       rows.push({

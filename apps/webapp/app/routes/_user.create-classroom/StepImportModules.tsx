@@ -23,6 +23,8 @@ interface StepImportModulesProps {
   setSelectedModules: (repositories: Map<string, ModuleConfig>) => void;
   importSelections: ImportSelections;
   setImportSelections: (selections: ImportSelections) => void;
+  /** Gitlab wording (projects, the group's templates subgroup). */
+  isGitLab?: boolean;
   /** Quiz import is offered to Pro creators only; otherwise quizzes go unmentioned. */
   quizzesVisible: boolean;
 }
@@ -46,6 +48,7 @@ const StepImportModules = ({
   setSelectedModules,
   importSelections,
   setImportSelections,
+  isGitLab = false,
   quizzesVisible,
 }: StepImportModulesProps) => {
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -312,7 +315,9 @@ const StepImportModules = ({
                           key: 'duplicateTemplates',
                           label: 'Duplicate template repos',
                           count: distinctTemplates,
-                          sublabel: 'private copies in this org — keeps terms independent',
+                          sublabel: isGitLab
+                            ? "private copies in the group's templates subgroup, so terms stay independent"
+                            : 'private copies in this org — keeps terms independent',
                         },
                         {
                           key: 'calendar',

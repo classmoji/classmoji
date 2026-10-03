@@ -36,7 +36,11 @@ vi.mock('../../../../../packages/services/src/git/index.ts', () => ({
 }));
 
 // Factory-default DB mock (packages/services' one idiom, plan §8.1).
-vi.mock('@classmoji/database', () => ({
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+
   default: () => ({
     gitRepoAssignmentGrader: { create: mocks.graderCreate, delete: mocks.graderDelete },
     // notifyGraderAssigned's lookup — return null so the (runSafely-wrapped)

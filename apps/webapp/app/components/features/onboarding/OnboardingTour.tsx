@@ -20,13 +20,12 @@
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { useFetcher, useLocation, useNavigate } from 'react-router';
+import { useFetcher, useLocation, useNavigate, useRouteLoaderData } from 'react-router';
 import { Tour, Button } from 'antd';
 import type { TourProps } from 'antd';
 import { useUser } from '~/hooks';
 import useStore from '~/store';
 import { useSurveyPending } from '~/components/features/survey';
-import type { TourPhase } from '~/types';
 import { browserTimeZone } from '~/utils/browserTimeZone';
 
 /** Target a landing `data-onboarding` element; null -> antd renders centered. */
@@ -48,6 +47,16 @@ interface LandingStep {
 }
 
 const SELECT_ORG = '/select-organization';
+
+/** Gitlab wording for the steps whose copy names Github things, keyed by `onboarding`. */
+const GITLAB_DESCRIPTIONS: Record<string, string> = {
+  'new-class':
+    'A classroom is backed by a Gitlab group, and you can run several classrooms (for example, different semesters of the same course) under one group. To create one you pick a group you own on your connected Gitlab account, then name the class; the URL slug is generated from the name and cannot be changed later.',
+  import:
+    'Already taught a course in Classmoji? Start a new classroom from a previous one and bring its repositories along. Imported content arrives with deadlines stripped and repositories unpublished, so you can reuse coursework without exposing anything to students until you are ready.',
+  'settings-general':
+    'Your profile basics, name, email, and Gitlab username, live on the General tab. They are synced from Gitlab and shown read-only here.',
+};
 
 const LANDING_STEPS: LandingStep[] = [
   {
@@ -128,6 +137,8 @@ const LANDING_STEPS: LandingStep[] = [
 export function OnboardingTour() {
   const { user } = useUser();
   const location = useLocation();
+  const gitMode = (useRouteLoaderData('root') as { gitMode?: string } | undefined)?.gitMode;
+  const isGitLab = gitMode === 'GITLAB';
   const navigate = useNavigate();
   const fetcher = useFetcher();
   const sandboxFetcher = useFetcher<{ slug?: string; error?: string }>();
@@ -166,19 +177,13 @@ export function OnboardingTour() {
     if (surveyPending) return;
     initRef.current = true;
 
-    let saved: { phase?: TourPhase; step?: number } | null = null;
+    // The tour is switched off: it neither starts on first sign-in nor resumes
+    // a half-finished run from an earlier session, whose saved step is dropped.
     try {
-      saved = JSON.parse(sessionStorage.getItem('cm-tour') || 'null');
+      sessionStorage.removeItem('cm-tour');
     } catch {
-      saved = null;
+      // Storage unavailable; nothing to drop.
     }
-    if (saved?.phase === 'landing') {
-      setTourPhase('landing');
-      setTourStep(typeof saved.step === 'number' ? saved.step : 0);
-      return;
-    }
-
-    // The first-sign-in auto-start is switched off for now.
   }, [
     user,
     onLanding,
@@ -297,20 +302,24 @@ export function OnboardingTour() {
       onChange={setTourStep}
       onClose={endTour}
       onFinish={finishLanding}
-      steps={LANDING_STEPS.map(s => ({
-        title: s.title,
-        description: s.tip ? (
-          <>
-            <p style={{ margin: 0 }}>{s.description}</p>
-            <div className="cm-tour-tip">{s.tip}</div>
-          </>
-        ) : (
-          s.description
-        ),
-        target: s.onboarding ? target(s.onboarding) : undefined,
-        placement: s.placement,
-        mask: s.onboarding ? undefined : { color: 'rgba(0, 0, 0, 0.8)' },
-      }))}
+      steps={LANDING_STEPS.map(s => {
+        const description =
+          (isGitLab && s.onboarding && GITLAB_DESCRIPTIONS[s.onboarding]) || s.description;
+        return {
+          title: s.title,
+          description: s.tip ? (
+            <>
+              <p style={{ margin: 0 }}>{description}</p>
+              <div className="cm-tour-tip">{s.tip}</div>
+            </>
+          ) : (
+            description
+          ),
+          target: s.onboarding ? target(s.onboarding) : undefined,
+          placement: s.placement,
+          mask: s.onboarding ? undefined : { color: 'rgba(0, 0, 0, 0.8)' },
+        };
+      })}
       indicatorsRender={(current, total) => (
         <div
           style={{

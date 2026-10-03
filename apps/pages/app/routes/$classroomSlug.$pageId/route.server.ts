@@ -1,4 +1,5 @@
 import { redirect } from 'react-router';
+import { gitWeb } from '@classmoji/utils';
 import {
   REPO_REST_MAX_BYTES,
   REPO_REST_MAX_LABEL,
@@ -316,16 +317,23 @@ export const loader = async ({
   const gitOrg = (page.classroom as Record<string, unknown>).git_organization as {
     login?: string;
     avatar_url?: string;
+    provider?: string;
+    base_url?: string | null;
   } | null;
   // Content repo is STORED and user-editable — never re-derived from the namespace.
   const contentRepo = page.classroom.content_repo;
   const repoName = contentRepo && gitOrg?.login ? contentRepo : null;
 
-  // GitHub's free diff UI for the pending preview (branch segment URL-encoded —
-  // preview branch names contain slashes).
+  // The provider's own diff UI for the pending preview (branch segment
+  // URL-encoded — preview branch names contain slashes).
   const diffUrl =
     gitOrg?.login && repoName
-      ? `https://github.com/${gitOrg.login}/${repoName}/compare/main...${encodeURIComponent(previewBranch)}`
+      ? gitWeb({
+          provider: gitOrg.provider,
+          login: gitOrg.login,
+          base_url: gitOrg.base_url,
+          git_namespace: (page.classroom as { git_namespace?: string | null }).git_namespace,
+        }).contentCompare(repoName, 'main', previewBranch)
       : null;
 
   return {
@@ -348,6 +356,16 @@ export const loader = async ({
             login: gitOrg.login,
             repo: repoName,
             avatar_url: gitOrg.avatar_url,
+            provider: gitOrg.provider ?? 'GITHUB',
+            source_url: repoName
+              ? gitWeb({
+                  provider: gitOrg.provider,
+                  login: gitOrg.login,
+                  base_url: gitOrg.base_url,
+                  git_namespace: (page.classroom as { git_namespace?: string | null })
+                    .git_namespace,
+                }).contentFile(repoName, 'main', `${page.content_path}/content.json`)
+              : null,
           }
         : null,
     },

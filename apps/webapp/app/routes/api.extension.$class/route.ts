@@ -9,6 +9,7 @@ import {
   waitForRunCompletion,
   assertClassroomMutationAllowed,
 } from '~/utils/helpers';
+import { gitTerms } from '~/utils/gitWeb';
 import type { Route } from './+types/route';
 
 // TokenTransaction has no `status` column; this endpoint's status is only used
@@ -38,6 +39,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         metadata: { repository_assignment_id: repositoryAssignmentId, hours: data.hours },
       });
       assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+      const terms = gitTerms(classroom.git_organization?.provider === 'GITLAB');
 
       // Treat the request body as ids only. Price, target student, and classroom
       // are all re-derived from the DB so a crafted body cannot mint tokens,
@@ -45,7 +47,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       if (typeof repositoryAssignmentId !== 'string' || !repositoryAssignmentId) {
         return {
           action: ActionTypes.REQUEST_EXTENSION,
-          error: 'Missing repository assignment ID.',
+          error: `Missing ${terms.repo} assignment ID.`,
         };
       }
 
@@ -62,7 +64,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       if (!repoAssignment || repoAssignment.git_repo?.classroom_id !== classroom.id) {
         return {
           action: ActionTypes.REQUEST_EXTENSION,
-          error: 'Repository assignment not found.',
+          error: `${terms.Repo} assignment not found.`,
         };
       }
 
@@ -72,7 +74,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       if (!studentId) {
         return {
           action: ActionTypes.REQUEST_EXTENSION,
-          error: 'Extensions can only be granted on individual student repositories.',
+          error: `Extensions can only be granted on individual student ${terms.repos}.`,
         };
       }
 

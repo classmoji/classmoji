@@ -72,6 +72,7 @@ vi.mock('~/utils/backgroundTask.server', () => ({
 
 vi.mock('../../student.$class.quizzes/helpers.server', () => ({
   getInstallationToken: vi.fn(async () => 'install-token'),
+  gitlabProjectAccess: vi.fn(),
 }));
 
 vi.mock('../../student.$class.quizzes/aiAgent.server', () => ({
