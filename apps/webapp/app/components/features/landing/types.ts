@@ -36,4 +36,6 @@ export interface LandingClass {
     name?: string | null;
   };
   hasAcceptedInvite: boolean;
+  /** A pending invite to a class on a provider this person has not connected. */
+  needsConnect?: boolean;
 }

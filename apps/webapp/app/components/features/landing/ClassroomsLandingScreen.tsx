@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect, useRef, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
 import { Button, IconGithub, IconPlus } from '@classmoji/ui-components';
@@ -20,6 +20,8 @@ interface Props {
   membershipRoles?: Record<string, NotificationRole[]>;
   /** The session's mode: a GitLab session gets no Github-only actions. */
   gitMode?: 'GITHUB' | 'GITLAB';
+  /** Shown under the header, above the classes (e.g. an account to connect). */
+  notice?: ReactNode;
 }
 
 export function ClassroomsLandingScreen({
@@ -32,6 +34,7 @@ export function ClassroomsLandingScreen({
   notifications,
   unreadCount,
   membershipRoles,
+  notice,
 }: Props) {
   const [tourSpin, setTourSpin] = useState(false);
 
@@ -265,6 +268,8 @@ export function ClassroomsLandingScreen({
           </Link>
         </div>
       </div>
+
+      {notice && <div className="-mt-2 mb-6">{notice}</div>}
 
       {pinned.length === 0 && active.length === 0 && archived.length === 0 ? (
         <div className="rounded-2xl border-2 border-dashed border-line p-10 text-center text-ink-4">

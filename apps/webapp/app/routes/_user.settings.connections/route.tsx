@@ -9,6 +9,7 @@ import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
 import { parseGitlabId } from '@classmoji/utils';
 import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
+import { connectDefaultGitlab, connectGitlabInstance } from '~/utils/connectGitAccount';
 import type { Route } from './+types/route';
 
 const CALLBACK_URL = '/settings/connections';
@@ -100,35 +101,16 @@ const GitLabConnectChooser = ({
   const [unknownHost, setUnknownHost] = useState<string | null>(null);
 
   const linkInstance = async (instanceId: string) => {
-    const response = await fetch('/api/auth/gitlab-instance/link', {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        instanceId,
-        callbackURL: CALLBACK_URL,
-        errorCallbackURL: CALLBACK_URL,
-      }),
-    });
-    const body = (await response.json().catch(() => null)) as {
-      url?: string;
-      message?: string;
-    } | null;
-    if (response.ok && body?.url) {
-      window.location.href = body.url;
-      return;
+    const error = await connectGitlabInstance(instanceId, CALLBACK_URL);
+    if (error) {
+      setMessage(error);
+      setBusy(false);
     }
-    setMessage(body?.message ?? 'Could not start connecting Gitlab.');
-    setBusy(false);
   };
 
   const connectDefault = async () => {
     setBusy(true);
-    await authClient.linkSocial({
-      provider: 'gitlab',
-      callbackURL: CALLBACK_URL,
-      errorCallbackURL: CALLBACK_URL,
-    });
+    await connectDefaultGitlab(CALLBACK_URL);
   };
 
   const connectHost = async () => {
