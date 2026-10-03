@@ -8,6 +8,8 @@ import {
   calculateRepositoryGrade,
   calculateStudentFinalGrade,
   calculateGrades,
+  gradedItemValue,
+  type GradedItem,
   type GitRepoAssignment,
   type GitRepo,
   type OrganizationSettings,
@@ -51,6 +53,19 @@ const graded = (emoji: string, extra: Parameters<typeof ra>[0] = {}) =>
 const repo = (assignments: GitRepoAssignment[], type = 'INDIVIDUAL'): GitRepo => ({
   repository: { type },
   assignments,
+});
+
+/** One quiz item. */
+const item = (over: Partial<GradedItem> = {}): GradedItem => ({
+  assignment_id: 'quiz-asg',
+  module_id: 'mod',
+  weight: 10,
+  is_extra_credit: false,
+  grade: null,
+  raw_grade: null,
+  counts_as_zero: false,
+  late_hours: 0,
+  ...over,
 });
 
 describe('calculateLetterGrade', () => {
@@ -169,9 +184,9 @@ describe('calculateRepositoryGrade', () => {
   });
 
   it('returns -1 when the graded weights sum to zero', () => {
-    expect(
-      calculateRepositoryGrade([graded('heart', { weight: 0 })], EMOJI_MAP, NO_PENALTY)
-    ).toBe(-1);
+    expect(calculateRepositoryGrade([graded('heart', { weight: 0 })], EMOJI_MAP, NO_PENALTY)).toBe(
+      -1
+    );
   });
 
   it('ignores the extra-credit flag for the display grade', () => {
@@ -230,7 +245,7 @@ describe('calculateStudentFinalGrade', () => {
     expect(calculateStudentFinalGrade(repos, EMOJI_MAP, NO_PENALTY, true, true)).toBe(50);
   });
 
-  it('skips quiz and form assignments (structural only)', () => {
+  it('skips quiz and form assignments in the repo walk: quizzes count only via items', () => {
     const repos = [
       repo([
         graded('heart', { weight: 50, type: 'REPO' }),
@@ -239,6 +254,11 @@ describe('calculateStudentFinalGrade', () => {
       ]),
     ];
     expect(calculateStudentFinalGrade(repos, EMOJI_MAP, NO_PENALTY)).toBe(100);
+    expect(
+      calculateStudentFinalGrade(repos, EMOJI_MAP, NO_PENALTY, true, true, [
+        item({ weight: 50, grade: 0, raw_grade: 0 }),
+      ])
+    ).toBe(50);
   });
 
   it('returns -1 when every graded weight is zero', () => {
@@ -266,7 +286,90 @@ describe('calculateStudentFinalGrade', () => {
   });
 });
 
+describe('calculateStudentFinalGrade with items', () => {
+  const repos = () => [repo([graded('eyes', { weight: 30 })])]; // 80
+
+  it('joins items to the same weighted mean', () => {
+    // (80*30 + 90*10) / 40
+    expect(
+      calculateStudentFinalGrade(repos(), EMOJI_MAP, NO_PENALTY, true, true, [
+        item({ weight: 10, grade: 90, raw_grade: 90 }),
+      ])
+    ).toBe(82.5);
+  });
+
+  it('reads grade with the penalty and raw_grade without it', () => {
+    const items = [item({ weight: 10, grade: 70, raw_grade: 90 })];
+    expect(calculateStudentFinalGrade(repos(), EMOJI_MAP, NO_PENALTY, true, true, items)).toBe(
+      77.5
+    );
+    expect(calculateStudentFinalGrade(repos(), EMOJI_MAP, NO_PENALTY, false, true, items)).toBe(
+      82.5
+    );
+  });
+
+  it('counts_as_zero is a 0 in both modes', () => {
+    const items = [item({ weight: 10, grade: null, raw_grade: null, counts_as_zero: true })];
+    expect(calculateStudentFinalGrade(repos(), EMOJI_MAP, NO_PENALTY, true, true, items)).toBe(60);
+    expect(calculateStudentFinalGrade(repos(), EMOJI_MAP, NO_PENALTY, false, true, items)).toBe(60);
+  });
+
+  it('leaves an item with no value out of the denominator', () => {
+    const items = [item({ weight: 10, grade: null, raw_grade: null })];
+    expect(calculateStudentFinalGrade(repos(), EMOJI_MAP, NO_PENALTY, true, true, items)).toBe(80);
+  });
+
+  it('adds extra-credit items on top, and drops them from the raw grade', () => {
+    const items = [item({ weight: 5, grade: 100, raw_grade: 100, is_extra_credit: true })];
+    expect(calculateStudentFinalGrade(repos(), EMOJI_MAP, NO_PENALTY, true, true, items)).toBe(85);
+    expect(calculateStudentFinalGrade(repos(), EMOJI_MAP, NO_PENALTY, false, true, items)).toBe(80);
+  });
+
+  it('keeps items when GROUP repositories are skipped', () => {
+    const withGroup = [...repos(), repo([graded('sob', { weight: 30 })], 'GROUP')];
+    const items = [item({ weight: 30, grade: 100, raw_grade: 100 })];
+    expect(calculateStudentFinalGrade(withGroup, EMOJI_MAP, NO_PENALTY, true, false, items)).toBe(
+      90
+    );
+  });
+
+  it('items alone make a grade; no items and no repos is -1', () => {
+    expect(
+      calculateStudentFinalGrade([], EMOJI_MAP, NO_PENALTY, true, true, [
+        item({ weight: 2, grade: 64, raw_grade: 64 }),
+      ])
+    ).toBe(64);
+    expect(calculateStudentFinalGrade([], EMOJI_MAP, NO_PENALTY, true, true, [])).toBe(-1);
+  });
+
+  it('an empty items list changes nothing', () => {
+    const r = [repo([graded('heart', { weight: 18 }), graded('eyes', { weight: 42 })])];
+    expect(calculateStudentFinalGrade(r, EMOJI_MAP, PENALTY_5, true, true, [])).toBe(
+      calculateStudentFinalGrade(r, EMOJI_MAP, PENALTY_5)
+    );
+  });
+});
+
+describe('gradedItemValue', () => {
+  it('picks grade or raw_grade, 0 for counts_as_zero, null when empty', () => {
+    expect(gradedItemValue(item({ grade: 70, raw_grade: 90 }))).toBe(70);
+    expect(gradedItemValue(item({ grade: 70, raw_grade: 90 }), false)).toBe(90);
+    expect(gradedItemValue(item({ grade: null, raw_grade: null, counts_as_zero: true }))).toBe(0);
+    expect(gradedItemValue(item({ grade: null, raw_grade: null }))).toBeNull();
+  });
+});
+
 describe('calculateGrades', () => {
+  it('passes items to both the final and the raw grade', () => {
+    const repos = [repo([graded('eyes', { weight: 50 })])];
+    const items = [item({ weight: 50, grade: 60, raw_grade: 100 })];
+    const result = calculateGrades(repos, EMOJI_MAP, NO_PENALTY, LETTER_GRADES, items);
+    expect(result.finalNumericGrade).toBe(70);
+    expect(result.finalLetterGrade).toBe('C');
+    expect(result.rawNumericGrade).toBe(90);
+    expect(result.rawLetterGrade).toBe('A');
+  });
+
   it('returns numeric and letter grades for raw and final', () => {
     const repos = [
       repo([graded('heart', { weight: 50, num_late_hours: 4, is_late_override: false })]),
@@ -436,9 +539,7 @@ describe('golden: flattened weights reproduce the legacy two-level grade', () =>
   it('pins the concrete values', () => {
     const legacy = fixture();
     // repos: 93, 90, 80 (late) -> 55.8 + 22.5 + 12 = 90.3; EC: (100+90)*5/100 = 9.5
-    expect(calculateStudentFinalGrade(legacy.map(flattenWeights), EMOJI_MAP, PENALTY_5)).toBe(
-      99.8
-    );
+    expect(calculateStudentFinalGrade(legacy.map(flattenWeights), EMOJI_MAP, PENALTY_5)).toBe(99.8);
     // raw: late penalty off and extra credit excluded -> 55.8 + 22.5 + 13.5
     expect(
       calculateStudentFinalGrade(legacy.map(flattenWeights), EMOJI_MAP, PENALTY_5, false)
@@ -461,9 +562,7 @@ describe('golden: flattened weights reproduce the legacy two-level grade', () =>
       legacyRepo(50, [graded('heart', { weight: 100 })]),
     ];
     expect(legacyStudentFinalGrade(legacy, EMOJI_MAP, NO_PENALTY)).toBe(100);
-    expect(calculateStudentFinalGrade(legacy.map(flattenWeights), EMOJI_MAP, NO_PENALTY)).toBe(
-      100
-    );
+    expect(calculateStudentFinalGrade(legacy.map(flattenWeights), EMOJI_MAP, NO_PENALTY)).toBe(100);
   });
 
   it('documents the accepted divergence for a partially graded repository', () => {
