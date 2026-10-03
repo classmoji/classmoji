@@ -209,7 +209,13 @@ function buildExampleSandbox(args: {
       let taUser: { id: string } | null = null;
       const studentUsers: { id: string; login: string }[] = [];
       for (const p of DEMO_PEOPLE) {
-        const image = `https://github.com/identicons/${p.login}.png`;
+        // `p.login` is a fake GitHub login that was never registered, so
+        // GitHub's real identicon endpoint (github.com/identicons/<login>.png)
+        // 404s for every demo persona — it only serves logins that actually
+        // exist. GitHub's email-keyed avatar proxy generates a deterministic
+        // identicon for any email (it's what backs commit author avatars for
+        // unregistered emails), so it works for personas with no real account.
+        const image = `https://avatars.githubusercontent.com/u/e?email=${encodeURIComponent(p.email)}`;
         const account = await tx.account.findUnique({
           where: { provider_id_account_id: { provider_id: 'github', account_id: p.provider_id } },
           select: { user_id: true },

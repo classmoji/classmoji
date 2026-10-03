@@ -1,3 +1,5 @@
+import UserAvatar from '~/components/shared/UserAvatar';
+
 interface UserThumbnailViewProps {
   user?: {
     avatar_url?: string | null;
@@ -11,13 +13,12 @@ interface UserThumbnailViewProps {
 const UserThumbnailView = ({ user, truncate = false }: UserThumbnailViewProps) => {
   return (
     <div className={`flex gap-3 ${truncate ? 'min-w-0 flex-1' : 'w-full'}`}>
-      {user?.avatar_url && (
-        <img
-          className="w-[40px] h-[40px] rounded-full flex-shrink-0"
-          src={user.avatar_url ?? undefined}
-          alt={user.name ?? user.login ?? 'User avatar'}
-        />
-      )}
+      <UserAvatar
+        image={user?.avatar_url}
+        name={user?.name}
+        login={user?.login || user?.slug}
+        size={40}
+      />
 
       <div className={`flex flex-col gap-[2px] ${truncate ? 'min-w-0 flex-1' : ''}`}>
         <div
