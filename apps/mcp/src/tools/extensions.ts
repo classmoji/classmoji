@@ -2,11 +2,8 @@
  * extension_purchase — a student spends tokens to buy extension hours on their
  * own repository submission or on a quiz assignment they take.
  *
- * Mirrors apps/webapp/app/routes/student.$class.assignments
- * purchaseExtensionHours: assertClassroomAccess allows OWNER/TEACHER plus
- * STUDENT self-access (resourceOwnerId = the paying student). MCP exposes the
- * live student path only — STUDENT tier, always self: the paying student is
- * ALWAYS the caller.
+ * Mirrors the student Assignments page's purchase action, student path only:
+ * STUDENT tier, always self — the paying student is ALWAYS the caller.
  *
  * Exactly one target, checked in the handler (the input is a flat shape, so
  * the schema cannot say "one of"):

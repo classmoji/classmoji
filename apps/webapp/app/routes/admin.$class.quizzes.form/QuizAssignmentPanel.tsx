@@ -377,7 +377,7 @@ export const EditableAssignmentPanel = ({
         <InputNumber
           min={0}
           precision={0}
-          className="w-full"
+          style={{ width: '100%' }}
           placeholder={tokensPerHourLabel(null, classroomTokensPerHour)}
           data-testid="quiz-tokens-per-hour"
         />
