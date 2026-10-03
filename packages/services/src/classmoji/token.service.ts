@@ -1,6 +1,7 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { effectiveTokensPerHour, withLogins } from '@classmoji/utils';
-import type { Prisma, TokenTransactionType } from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import type { TokenTransactionType } from '@prisma/client';
 
 interface UpdateExtensionInput {
   classroom_id: string;
@@ -19,15 +20,64 @@ interface AssignToStudentInput {
   [key: string]: unknown;
 }
 
+/**
+ * A student's ledger is ordered by created_at, newest first. The id breaks a
+ * tie between rows stored at the same millisecond, so every reader and writer
+ * agrees on which row is the latest.
+ */
+const LATEST_FIRST: Prisma.TokenTransactionOrderByWithRelationInput[] = [
+  { created_at: 'desc' },
+  { id: 'desc' },
+];
+
+type LedgerTx = Prisma.TransactionClient;
+
+const LEDGER_TX = { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted };
+
+/**
+ * Serialize writes to one student's ledger in one classroom, so each new row
+ * is computed from the true latest balance. Every ledger writer calls this
+ * inside its transaction before it reads the latest row; the lock is released
+ * when the transaction commits or rolls back. Two pairs that hash to the same
+ * key only wait on each other, which is harmless.
+ *
+ * The lock relies on read-committed statement-level snapshots: the read that
+ * follows it sees every row committed by the writer that held the lock before.
+ * Callers therefore pin `LEDGER_TX` (read committed) explicitly rather than
+ * depend on the database default.
+ *
+ * `$executeRaw` because pg_advisory_xact_lock returns void, which `$queryRaw`
+ * cannot deserialize. The values are bound as parameters.
+ */
+const lockLedger = async (tx: LedgerTx, classroomId: string, studentId: string) => {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${classroomId}::text || ':' || ${studentId}::text, 0))`;
+};
+
+/** The latest row of a student's ledger. Call only after `lockLedger`. */
+const findLatest = (tx: LedgerTx, classroomId: string, studentId: string) =>
+  tx.tokenTransaction.findFirst({
+    where: { classroom_id: classroomId, student_id: studentId },
+    orderBy: LATEST_FIRST,
+  });
+
+/**
+ * created_at for a new ledger row: now, but always strictly after the latest
+ * row it was computed from, so the ledger's order is the order rows were
+ * written in. A default timestamp comes from whichever clock fills it (the
+ * writing process, or the database at transaction start), and two rows can
+ * land in the same millisecond; either could sort a new row at or before the
+ * one it was computed from. The column keeps milliseconds, hence +1 ms.
+ */
+const nextCreatedAt = (latest: { created_at: Date } | null) =>
+  new Date(Math.max(Date.now(), latest ? latest.created_at.getTime() + 1 : 0));
+
 export const getBalance = async (classroomId: string, studentId: string) => {
   const transaction = await getPrisma().tokenTransaction.findFirst({
     where: {
       classroom_id: classroomId,
       student_id: studentId,
     },
-    orderBy: {
-      created_at: 'desc',
-    },
+    orderBy: LATEST_FIRST,
   });
 
   if (!transaction) {
@@ -39,15 +89,8 @@ export const getBalance = async (classroomId: string, studentId: string) => {
 
 export const updateExtension = async (data: UpdateExtensionInput) => {
   return getPrisma().$transaction(async tx => {
-    const transaction = await tx.tokenTransaction.findFirst({
-      where: {
-        classroom_id: data.classroom_id,
-        student_id: data.student_id,
-      },
-      orderBy: {
-        created_at: 'desc',
-      },
-    });
+    await lockLedger(tx, data.classroom_id, data.student_id);
+    const transaction = await findLatest(tx, data.classroom_id, data.student_id);
 
     // Handle case where student has no previous transactions
     const studentBalance = transaction?.balance_after || 0;
@@ -68,9 +111,10 @@ export const updateExtension = async (data: UpdateExtensionInput) => {
         // the spread so it can't trigger Prisma's misleading "Argument `classroom` is
         // missing" error (same guard as assignToStudent).
         description: (data.description as string | null | undefined) ?? '',
+        created_at: nextCreatedAt(transaction),
       },
     });
-  });
+  }, LEDGER_TX);
 };
 
 /**
@@ -169,6 +213,17 @@ export const purchaseExtensionHours = async ({
  */
 export const cancelPurchase = async (transactionId: string) => {
   return getPrisma().$transaction(async tx => {
+    // The ledger to lock is the purchase's; a row's classroom and student
+    // never change, so they can be read before the lock.
+    const owner = await tx.tokenTransaction.findUnique({
+      where: { id: transactionId },
+      select: { classroom_id: true, student_id: true },
+    });
+    if (!owner) {
+      throw new Error('Only a purchase that is not already cancelled can be cancelled.');
+    }
+    await lockLedger(tx, owner.classroom_id, owner.student_id);
+
     const flipped = await tx.tokenTransaction.updateMany({
       where: { id: transactionId, type: 'PURCHASE', is_cancelled: false },
       data: { is_cancelled: true },
@@ -178,10 +233,7 @@ export const cancelPurchase = async (transactionId: string) => {
     }
 
     const purchase = await tx.tokenTransaction.findUniqueOrThrow({ where: { id: transactionId } });
-    const latest = await tx.tokenTransaction.findFirst({
-      where: { classroom_id: purchase.classroom_id, student_id: purchase.student_id },
-      orderBy: { created_at: 'desc' },
-    });
+    const latest = await findLatest(tx, purchase.classroom_id, purchase.student_id);
     const refund = Math.abs(purchase.amount);
     const hours = purchase.hours_purchased ?? 0;
 
@@ -195,9 +247,10 @@ export const cancelPurchase = async (transactionId: string) => {
         type: 'REFUND',
         balance_after: (latest?.balance_after ?? 0) + refund,
         description: `Refund of ${hours} hours.`,
+        created_at: nextCreatedAt(latest),
       },
     });
-  });
+  }, LEDGER_TX);
 };
 
 export const findTransactions = async (query: Prisma.TokenTransactionWhereInput) => {
@@ -213,24 +266,15 @@ export const findTransactions = async (query: Prisma.TokenTransactionWhereInput)
         },
         assignment_grade: true,
       },
-      orderBy: {
-        created_at: 'desc',
-      },
+      orderBy: LATEST_FIRST,
     })
   );
 };
 
 export const assignToStudent = async (data: AssignToStudentInput) => {
   return getPrisma().$transaction(async tx => {
-    const transaction = await tx.tokenTransaction.findFirst({
-      where: {
-        classroom_id: data.classroomId,
-        student_id: data.studentId,
-      },
-      orderBy: {
-        created_at: 'desc',
-      },
-    });
+    await lockLedger(tx, data.classroomId, data.studentId);
+    const transaction = await findLatest(tx, data.classroomId, data.studentId);
 
     const studentBalance = transaction?.balance_after || 0;
     const newBalance = studentBalance + data.amount;
@@ -247,9 +291,10 @@ export const assignToStudent = async (data: AssignToStudentInput) => {
         // is missing", so coalesce null/undefined to an empty string.
         description: data.description ?? '',
         git_repo_assignment_id: data.repositoryAssignmentId,
+        created_at: nextCreatedAt(transaction),
       },
     });
-  });
+  }, LEDGER_TX);
 };
 
 export const updateTransaction = async (id: string, data: Record<string, unknown>) => {
