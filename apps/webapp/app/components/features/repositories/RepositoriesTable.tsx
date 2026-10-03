@@ -1,5 +1,5 @@
 import { forwardRef, useMemo, useState } from 'react';
-import { Dropdown, Table, Tag } from 'antd';
+import { Dropdown, Table, Tag, Tooltip } from 'antd';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { titleToIdentifier } from '@classmoji/utils';
 import type { MenuProps } from 'antd';
@@ -302,6 +302,17 @@ const RepositoriesTable = ({
               <Tag color="purple" className="m-0 shrink-0 font-medium">
                 issue
               </Tag>
+            )}
+            {/* Handed out on its own, it reaches students only through their
+                Repositories page: no module, deadline or grade. */}
+            {(r.assignments ?? []).length === 0 && (
+              <Tooltip
+                title={`Students only find this under ${terms.Repos}. Add it to an assignment in a module to give it a deadline, a grade and a place in their modules.`}
+              >
+                <Tag className="m-0 shrink-0 font-medium text-gray-600! dark:text-gray-300!">
+                  No assignment
+                </Tag>
+              </Tooltip>
             )}
           </span>
         );

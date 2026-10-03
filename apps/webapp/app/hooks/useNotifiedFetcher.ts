@@ -61,6 +61,11 @@ export const useNotifiedFetcher = () => {
         title: fetcher.data.success,
         autoDismissMs: 2000,
       });
+      // A success can carry a note worth reading after it (e.g. a repository
+      // published with no assignment using it).
+      if (typeof fetcher.data.info === 'string') {
+        callout.show({ variant: 'info', title: fetcher.data.info });
+      }
     } else if (fetcher.data?.error) {
       finalize(fetcher.data.action, {
         variant: 'error',

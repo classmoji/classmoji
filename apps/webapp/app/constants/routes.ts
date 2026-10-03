@@ -31,7 +31,7 @@ export const routeCategories = {
     label: 'Content',
     // Pages is LAST on purpose: it is the class's reading surface (its front
     // page, docked), not a task list, so it sits after the coursework entries.
-    items: ['modules', 'repositories', 'assignments', 'slides', 'quizzes', 'forms', 'pages'],
+    items: ['modules', 'assignments', 'repositories', 'slides', 'quizzes', 'forms', 'pages'],
   },
   assessment: {
     label: 'Assessment',
@@ -76,19 +76,20 @@ export const routes = {
     roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
     category: 'content',
   },
-  repositories: {
-    link: '/repos',
-    label: 'Repositories',
-    icon: IconFileText,
-    // Students have no repositories screen; their coursework lives in Modules.
-    roles: ['OWNER', 'TEACHER', 'ASSISTANT'],
-    category: 'content',
-  },
   assignments: {
     link: '/assignments',
     label: 'Assignments',
     icon: IconClipboardList,
     roles: ['STUDENT'],
+    category: 'content',
+  },
+  repositories: {
+    link: '/repos',
+    label: 'Repositories',
+    icon: IconFileText,
+    // Students see their own (and their teams') repositories here, including
+    // ones handed out without an assignment.
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
     category: 'content',
   },
   slides: {

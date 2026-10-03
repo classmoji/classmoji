@@ -22,6 +22,23 @@ const skippedNote = (count: number) =>
   `${count} student${count === 1 ? '' : 's'} skipped: no Gitlab account connected yet. ` +
   'Their repositories are created when they connect Gitlab and open Classmoji.';
 
+/**
+ * A repository published without an assignment reaches students only through
+ * their Repositories page, so the publish says so and points at the fix.
+ */
+const unassignedNote = (repos: string) =>
+  `No assignment uses this yet, so students only see it under ${repos}. ` +
+  'Add it to an assignment in a module to give it a deadline and a grade.';
+
+/** Join a publish's notes into the one `info` line the callout shows. */
+const withNotes = <T extends object>(
+  result: T,
+  ...notes: (string | null)[]
+): T & { info?: string } => {
+  const info = [(result as { info?: string }).info, ...notes].filter(Boolean).join(' ');
+  return info ? { ...result, info } : result;
+};
+
 export const publishAssignment = async (
   classroomSlug: string,
   classroomId: string,
@@ -36,6 +53,7 @@ export const publishAssignment = async (
 
     invariant(repository != null, 'Repository not found');
     invariant(repository.classroom_id === classroomId, 'Repository not found in classroom');
+    const unassigned = repository.assignments.length === 0 ? unassignedNote(terms.Repos) : null;
 
     // If repos already exist (re-publish after unpublish), just flip the flag
     const existingRepos = await ClassmojiService.gitRepo.findByRepository(
@@ -44,7 +62,10 @@ export const publishAssignment = async (
     );
     if (existingRepos.length > 0) {
       await ClassmojiService.repository.setPublished(repositoryId, true, classroomId);
-      return { success: `${terms.Repo} re-published. Use Sync to update ${terms.repos}.` };
+      return withNotes(
+        { success: `${terms.Repo} re-published. Use Sync to update ${terms.repos}.` },
+        unassigned
+      );
     }
 
     // Provisioning clones the template once per student in background runs the
@@ -93,10 +114,13 @@ export const publishAssignment = async (
       if (studentList.length === 0) {
         await ClassmojiService.repository.setPublished(repositoryId, true, classroomId);
 
-        return {
-          success: `${terms.Repo} published! Student ${terms.repos} are created as students join.`,
-          ...(skippedNoGitLab > 0 ? { info: skippedNote(skippedNoGitLab) } : {}),
-        };
+        return withNotes(
+          {
+            success: `${terms.Repo} published! Student ${terms.repos} are created as students join.`,
+          },
+          skippedNoGitLab > 0 ? skippedNote(skippedNoGitLab) : null,
+          unassigned
+        );
       }
 
       numReposToCreate = studentList.length;
@@ -132,9 +156,10 @@ export const publishAssignment = async (
       // drafts. Publish them now; each team's rows are created as it forms.
       await ClassmojiService.assignment.publishReleased(repositoryId);
 
-      return {
-        success: `${terms.Repo} published! Students can now form teams.`,
-      };
+      return withNotes(
+        { success: `${terms.Repo} published! Students can now form teams.` },
+        unassigned
+      );
     } else {
       // Instructor-assigned teams
       const teams = await ClassmojiService.organizationTag.findTeamsByTag(repository.tag_id!);
@@ -145,9 +170,10 @@ export const publishAssignment = async (
       if (teams.length === 0) {
         await ClassmojiService.repository.setPublished(repositoryId, true, classroomId);
 
-        return {
-          success: `${terms.Repo} published! Team ${terms.repos} are created once teams exist.`,
-        };
+        return withNotes(
+          { success: `${terms.Repo} published! Team ${terms.repos} are created once teams exist.` },
+          unassigned
+        );
       }
 
       numReposToCreate = teams.length;
@@ -181,15 +207,18 @@ export const publishAssignment = async (
       },
     });
 
-    return {
-      triggerSession: {
-        accessToken,
-        id: sessionId,
-        numReposToCreate: numReposToCreate * 2, // multiply by 2 to handle gh and cf creation
-        numIssuesToCreate: numIssuesToCreate, // publish does not create issues
+    return withNotes(
+      {
+        triggerSession: {
+          accessToken,
+          id: sessionId,
+          numReposToCreate: numReposToCreate * 2, // multiply by 2 to handle gh and cf creation
+          numIssuesToCreate: numIssuesToCreate, // publish does not create issues
+        },
       },
-      ...(skippedNoGitLab > 0 ? { info: skippedNote(skippedNoGitLab) } : {}),
-    };
+      skippedNoGitLab > 0 ? skippedNote(skippedNoGitLab) : null,
+      unassigned
+    );
   } catch (error: unknown) {
     console.error(error);
     throw error;
