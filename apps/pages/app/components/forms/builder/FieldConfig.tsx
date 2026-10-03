@@ -937,7 +937,7 @@ export default function FieldConfig(props: FieldConfigProps) {
 
       <TypeSpecific {...props} />
 
-      {props.scopes.gallery && !props.nested ? (
+      {props.scopes.gallery && !props.nested && !isIdentityQuestion(field) ? (
         <GalleryRoleSelect field={field} onChange={onChange} />
       ) : null}
 
@@ -969,7 +969,12 @@ export default function FieldConfig(props: FieldConfigProps) {
               type="checkbox"
               checked={isIdentityQuestion(field)}
               aria-describedby={`identity-hint-${field.id}`}
-              onChange={event => onChange({ identity_question: event.target.checked || undefined })}
+              onChange={event =>
+                onChange({
+                  identity_question: event.target.checked || undefined,
+                  ...(event.target.checked ? { gallery_role: undefined } : {}),
+                })
+              }
             />
             Identity question
           </label>

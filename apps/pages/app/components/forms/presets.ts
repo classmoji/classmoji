@@ -187,8 +187,8 @@ const PROJECT_SHOWCASE: FormPreset = {
     field('short_text', { label: 'Tagline', help: 'One sentence.', gallery_role: 'tagline' }),
     field('long_text', { label: 'Summary', required: true, gallery_role: 'summary' }),
     field('short_text', {
-      label: 'Cover image URL',
-      help: 'An https:// link to an image.',
+      label: 'Cover image',
+      help: 'Upload an image or paste an https:// image URL.',
       gallery_role: 'cover',
     }),
     field('roster_select', {
@@ -199,7 +199,11 @@ const PROJECT_SHOWCASE: FormPreset = {
     }),
     field('short_text', { label: 'Tags', help: 'Comma separated.', gallery_role: 'tags' }),
     field('short_text', { label: 'Deployed URL', gallery_role: 'link' }),
-    field('short_text', { label: 'Demo video', gallery_role: 'link' }),
+    field('short_text', {
+      label: 'Demo video',
+      gallery_role: 'video',
+      help: 'Upload a video or paste a demo link.',
+    }),
     field('short_text', { label: 'GitHub frontend', gallery_role: 'link' }),
     field('short_text', { label: 'GitHub backend', gallery_role: 'link' }),
     field('short_text', { label: 'Figma', gallery_role: 'link' }),

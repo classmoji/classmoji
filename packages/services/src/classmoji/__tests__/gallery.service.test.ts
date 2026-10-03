@@ -118,4 +118,39 @@ describe('projectFromResponse', () => {
     expect(project.links).toEqual([]);
     expect(project.extras).toEqual([]);
   });
+
+  it('never publishes identity questions, including legacy fields with gallery roles', () => {
+    const fields = [
+      f('private', 'long_text', 'Accommodation', { identity_question: true }),
+      f('secretTitle', 'short_text', 'Student ID', {
+        identity_question: true,
+        gallery_role: 'title',
+      }),
+    ];
+    const project = projectFromResponse(
+      { ...RESPONSE, answers: { private: 'Private', secretTitle: '1234' } },
+      fields,
+      CLASSROOM
+    );
+    expect(project.title).toBe('Untitled project');
+    expect(project.extras).toEqual([]);
+  });
+
+  it('preserves stable hosted media references and refuses executable video URLs', () => {
+    const ref = 'media://11111111-2222-4333-8444-555555555555';
+    const fields = [
+      f('cover', 'short_text', 'Cover', { gallery_role: 'cover' }),
+      f('video', 'short_text', 'Video', { gallery_role: 'video' }),
+    ];
+    expect(
+      projectFromResponse({ ...RESPONSE, answers: { cover: ref, video: ref } }, fields, CLASSROOM)
+    ).toMatchObject({ coverUrl: ref, videoUrl: ref, links: [] });
+    expect(
+      projectFromResponse(
+        { ...RESPONSE, answers: { video: 'javascript:alert(1)' } },
+        fields,
+        CLASSROOM
+      ).links
+    ).toEqual([]);
+  });
 });

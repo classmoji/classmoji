@@ -62,7 +62,7 @@ export const headers = ({ loaderHeaders }: { loaderHeaders: Headers }) => loader
 
 export default function GalleryQueue() {
   const { classroomSlug, formSlug, formTitle, items } = useLoaderData<typeof loader>();
-  const fetcher = useFetcher();
+  const fetcher = useFetcher<{ error?: string }>();
   const setGallery = (id: string, status: 'APPROVED' | 'HIDDEN') =>
     fetcher.submit({ responseIds: [id], status } as never, {
       method: 'post',
@@ -77,6 +77,11 @@ export default function GalleryQueue() {
         <span className="mx-1.5 text-gray-300 dark:text-gray-600">/</span>
         Gallery
       </h1>
+      {fetcher.data?.error ? (
+        <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">
+          {fetcher.data.error}
+        </p>
+      ) : null}
       <div className="rounded-2xl bg-white p-5 ring-1 ring-stone-200 sm:p-6 dark:bg-neutral-900 dark:ring-neutral-800">
         {items.length === 0 ? (
           <div className="py-12 text-center text-gray-500 dark:text-gray-400">
@@ -90,6 +95,7 @@ export default function GalleryQueue() {
                 <span className="text-sm text-gray-900 dark:text-gray-100">{item.title}</span>
                 <GalleryCell
                   status={item.galleryStatus}
+                  disabled={fetcher.state !== 'idle'}
                   onChange={status => setGallery(item.id, status)}
                 />
               </li>

@@ -1,3 +1,4 @@
+import GalleryMediaUpload, { type GalleryUploadContext } from './GalleryMediaUpload.tsx';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   useForm,
@@ -99,6 +100,7 @@ export interface ReviewTarget extends ResolvedTargetRef {
 }
 
 export interface FormRendererProps {
+  galleryUpload?: GalleryUploadContext | null;
   fields: FormField[];
   /**
    * Per `repeat_group` field id, the teammates THIS person reviews — resolved
@@ -304,7 +306,10 @@ export default function FormRenderer({
   onSubmit,
   onIdentityEmail,
   footnote,
+  galleryUpload,
 }: FormRendererProps) {
+  const [uploads, setUploads] = useState(0);
+  const onUploadBusy = (busy: boolean) => setUploads(n => Math.max(0, n + (busy ? 1 : -1)));
   const plan: IdentityPlan = useMemo(() => identityPlan(fields), [fields]);
   // A locked identity answers the question the identity inputs exist to ask.
   const needsIdentityInputs = plan.emailFieldId === null && !lockedIdentity;
@@ -546,6 +551,7 @@ export default function FormRenderer({
   };
 
   const submit = handleSubmit(data => {
+    if (busy || uploads > 0) return;
     const answers = data.answers as Record<string, unknown>;
 
     // A locked identity is the session's, and the server re-derives it from the
@@ -662,6 +668,8 @@ export default function FormRenderer({
   return (
     <FormBody
       fields={fields}
+      galleryUpload={galleryUpload}
+      onUploadBusy={onUploadBusy}
       reviewTargets={reviewTargets}
       onBlur={onIdentityEmail ? handleBlur : undefined}
       register={register}
@@ -675,7 +683,7 @@ export default function FormRenderer({
       didRestore={didRestore}
       submit={submit}
       submitLabel={submitLabel}
-      busy={busy}
+      busy={busy || uploads > 0}
       error={error}
       footnote={footnote}
     />
@@ -1483,13 +1491,26 @@ function RepeatGroup({ field, targets, register, watch, setValue, errorFor }: Re
 }
 
 interface FieldProps extends Omit<ControlProps, 'invalid'> {
+  galleryUpload?: GalleryUploadContext | null;
+  onUploadBusy?: (busy: boolean) => void;
   message?: string;
   /** Only a repeat_group needs these, and only at the top level. */
   targets?: ReviewTarget[];
   errorFor?: (...path: string[]) => string | undefined;
 }
 
-function Field({ field, name, register, watch, setValue, message, targets, errorFor }: FieldProps) {
+function Field({
+  field,
+  name,
+  register,
+  watch,
+  setValue,
+  message,
+  targets,
+  errorFor,
+  galleryUpload,
+  onUploadBusy,
+}: FieldProps) {
   if (isDisplayField(field.type)) return <DisplayBlock field={field} />;
 
   const description = field.description as string | undefined;
@@ -1501,7 +1522,20 @@ function Field({ field, name, register, watch, setValue, message, targets, error
       {description && field.type !== 'switch' ? (
         <p className="mb-2 text-sm text-gray-500 dark:text-gray-400">{description}</p>
       ) : null}
-      {field.type === 'repeat_group' ? (
+      {galleryUpload &&
+      onUploadBusy &&
+      field.type === 'short_text' &&
+      (field.gallery_role === 'cover' || field.gallery_role === 'video') ? (
+        <GalleryMediaUpload
+          name={name}
+          label={String(field.label ?? 'Media')}
+          role={field.gallery_role}
+          value={String(watch(name) ?? '')}
+          context={galleryUpload}
+          onBusy={onUploadBusy}
+          onChange={ref => setValue(name, ref, { shouldDirty: true, shouldValidate: true })}
+        />
+      ) : field.type === 'repeat_group' ? (
         <RepeatGroup
           field={field}
           targets={targets ?? []}
@@ -1534,6 +1568,8 @@ function Field({ field, name, register, watch, setValue, message, targets, error
 }
 
 interface FormBodyProps {
+  galleryUpload?: GalleryUploadContext | null;
+  onUploadBusy: (busy: boolean) => void;
   fields: FormField[];
   reviewTargets?: Record<string, ReviewTarget[]>;
   /** Delegated `focusout`, for the early email send. See `FormRenderer`. */
@@ -1556,6 +1592,8 @@ interface FormBodyProps {
 
 function FormBody({
   fields,
+  galleryUpload,
+  onUploadBusy,
   reviewTargets,
   onBlur,
   register,
@@ -1601,6 +1639,8 @@ function FormBody({
 
       {fields.map(field => (
         <Field
+          galleryUpload={galleryUpload}
+          onUploadBusy={onUploadBusy}
           key={field.id}
           field={field}
           name={`answers.${field.id}` as AnswerPath}

@@ -132,12 +132,16 @@ export function formContractError(
 // the revision like any other def key, so a response renders against the roles
 // it was filled under. Non-gallery forms carry and ignore them.
 
+export const GALLERY_IMAGE_MAX_BYTES = 20_000_000;
+export const GALLERY_VIDEO_MAX_BYTES = 250_000_000;
+
 export const GALLERY_ROLES = [
   'title',
   'tagline',
   'summary',
   'icon',
   'cover',
+  'video',
   'team',
   'tags',
   'link',
@@ -871,6 +875,7 @@ export const GALLERY_ROLE_TYPES: Record<GalleryRole, readonly FormFieldType[]> =
   tagline: ['short_text'],
   icon: ['short_text'],
   cover: ['short_text'],
+  video: ['short_text'],
   link: ['short_text'],
   summary: ['long_text'],
   detail: ['long_text'],
@@ -1171,6 +1176,12 @@ export function parseFormDefinition(input: unknown): FormDefinition {
   for (const field of flattenFields(definition.fields)) {
     const role = galleryRoleOf(field);
     if (!role) continue;
+    if (isIdentityQuestion(field)) {
+      throw formContractError(
+        FORM_DEFINITION_INVALID,
+        'An identity question cannot have a gallery role.'
+      );
+    }
     const nested = !definition.fields.includes(field);
     const wrongType = !GALLERY_ROLE_TYPES[role].includes(field.type);
     const singleTeam = role === 'team' && field.multiple !== true;
@@ -1271,7 +1282,15 @@ export function galleryRoleOf(field: FormField): GalleryRole | undefined {
 }
 
 /** Roles a gallery card has room for exactly once. `link` and `detail` repeat. */
-const SINGLE_GALLERY_ROLES: GalleryRole[] = ['tagline', 'summary', 'icon', 'cover', 'team', 'tags'];
+const SINGLE_GALLERY_ROLES: GalleryRole[] = [
+  'tagline',
+  'summary',
+  'icon',
+  'cover',
+  'video',
+  'team',
+  'tags',
+];
 
 /**
  * Publish-time rule for a form that feeds the gallery (form.gallery_org_id set):

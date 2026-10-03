@@ -1935,6 +1935,7 @@ model Form {
   module_items ModuleItem[]
   assignment   Assignment?
   gallery_org  GitOrganization? @relation(fields: [gallery_org_id], references: [id], onDelete: SetNull)
+  gallery_media MediaObject[]
   team_sets    TeamSet[]
 
   @@unique([classroom_id, slug])
@@ -2480,6 +2481,10 @@ model MediaObject {
   /// the upload aborted.
   upload_id           String?
   uploaded_by         String
+  /// Form-scoped student uploads. Null for ordinary classroom media.
+  gallery_form_id     String?
+  gallery_field_id    String?
+  gallery_form        Form? @relation(fields: [gallery_form_id], references: [id], onDelete: SetNull)
   /// The three upload-dialog options. Video only — for every other kind they
   /// are stored at fixed values: no optimise, keep the original, and
   /// allow_download TRUE (a PDF or a zip is the file itself; the setting is

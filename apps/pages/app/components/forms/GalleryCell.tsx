@@ -13,8 +13,10 @@ const GALLERY_CHIP: Record<string, string> = {
 export default function GalleryCell({
   status,
   onChange,
+  disabled = false,
 }: {
   status: string;
+  disabled?: boolean;
   onChange: (next: 'APPROVED' | 'HIDDEN') => void;
 }) {
   return (
@@ -29,6 +31,7 @@ export default function GalleryCell({
       {status !== 'APPROVED' ? (
         <button
           type="button"
+          disabled={disabled}
           onClick={() => onChange('APPROVED')}
           className="text-xs font-medium text-emerald-700 hover:underline dark:text-emerald-400"
         >
@@ -38,6 +41,7 @@ export default function GalleryCell({
       {status !== 'HIDDEN' ? (
         <button
           type="button"
+          disabled={disabled}
           onClick={() => onChange('HIDDEN')}
           className="text-xs font-medium text-gray-500 hover:underline dark:text-gray-400"
         >

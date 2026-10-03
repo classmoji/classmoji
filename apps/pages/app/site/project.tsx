@@ -121,6 +121,16 @@ const SiteProject = () => {
           </div>
         ) : null}
 
+        {project.videoUrl ? (
+          <video
+            src={project.videoUrl}
+            controls
+            preload="metadata"
+            aria-label="Project demo video"
+            className="mt-8 w-full rounded-xl"
+          />
+        ) : null}
+
         {project.summary ? <p className={`mt-8 text-lg ${PROSE}`}>{project.summary}</p> : null}
 
         {project.details.map(detail => (

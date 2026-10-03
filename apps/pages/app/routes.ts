@@ -52,6 +52,14 @@ export default [
   route(':classroomSlug/forms/:formSlug/responses/gallery', 'forms/admin/responsesGallery.ts'),
   // The teaching team's gallery queue: where assistants approve.
   route(':classroomSlug/forms/:formSlug/gallery', 'forms/admin/galleryQueue.tsx'),
+  route(
+    ':classroomSlug/forms/:formSlug/media/:fieldId/uploads',
+    'forms/fill/galleryMediaUpload.ts'
+  ),
+  route(
+    ':classroomSlug/forms/:formSlug/media/:fieldId/uploads/:mediaId/:operation',
+    'forms/fill/galleryMedia.ts'
+  ),
 
   // Team sets built from a CLASSROOM form's responses. The set is a layout
   // (id 'team-set'): its loader carries the header every set page shows, and

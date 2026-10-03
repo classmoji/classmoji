@@ -4,6 +4,7 @@ import { GIT_IDENTITY } from '@classmoji/database';
 import { displayUsername, gitAccount } from '@classmoji/utils';
 import { ClassmojiService, getAuthSession, prisma } from '~/utils/db.server.ts';
 import { findClassroomRole } from '~/utils/classroomRole.server.ts';
+import type { GalleryUploadContext } from '~/components/forms/GalleryMediaUpload.tsx';
 import type { ReviewTarget } from '~/components/forms/FormRenderer.tsx';
 import {
   classroomIdentityPlan,
@@ -86,6 +87,7 @@ export type ClassroomFormLoad =
   | { view: 'closed'; theme: CanvasTheme; classroomName: string; form: PublicFormSummary }
   | {
       view: 'classroom-fill';
+      galleryUpload: GalleryUploadContext | null;
       theme: CanvasTheme;
       classroomName: string;
       form: PublicFormSummary;
@@ -202,7 +204,7 @@ export async function resolveClassroomForm({
   request,
   loginUrl,
 }: {
-  classroom: { id: string };
+  classroom: { id: string; slug: string };
   form: ClassroomFormRow;
   theme: CanvasTheme;
   classroomName: string;
@@ -213,6 +215,7 @@ export async function resolveClassroomForm({
     id: form.id,
     title: form.title,
     description: form.description,
+    gallery: Boolean(form.gallery_org_id),
   };
 
   const account = await sessionAccount(request);
@@ -408,6 +411,12 @@ export async function resolveClassroomForm({
 
   return {
     view: 'classroom-fill',
+    galleryUpload:
+      form.gallery_org_id &&
+      mode !== 'recorded' &&
+      (await ClassmojiService.media.uploadCapabilityFor({ id: classroom.id })).media
+        ? { classroomId: classroom.id, basePath: `/${classroom.slug}/forms/${form.slug}/media` }
+        : null,
     theme,
     classroomName,
     form: summary,

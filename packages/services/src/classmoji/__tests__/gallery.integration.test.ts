@@ -49,7 +49,13 @@ describe.skipIf(!RUN)('project gallery (integration)', () => {
   const makeUser = async (label: string) => {
     const user = await prisma.user.create({
       data: {
-        login: `gallerytest-${suite}-${label}`,
+        accounts: {
+          create: {
+            provider_id: 'github',
+            account_id: `gallerytest-${suite}-${label}`,
+            username: `gallerytest-${suite}-${label}`,
+          },
+        },
         email: `gallerytest-${suite}-${label}@example.test`,
         name: `Gallery Test ${label}`,
       },
@@ -132,7 +138,13 @@ describe.skipIf(!RUN)('project gallery (integration)', () => {
       if (id) await prisma.gitOrganization.delete({ where: { id } }).catch(() => {});
     }
     await prisma.user
-      .deleteMany({ where: { login: { startsWith: `gallerytest-${suite}-` } } })
+      .deleteMany({
+        where: {
+          accounts: {
+            some: { provider_id: 'github', username: { startsWith: `gallerytest-${suite}-` } },
+          },
+        },
+      })
       .catch(() => {});
   });
 
@@ -234,18 +246,18 @@ describe.skipIf(!RUN)('project gallery (integration)', () => {
     expect(await galleryService.getForOrg(orgA, randomUUID())).toBeNull();
   });
 
-  // The spec's Auth decision: a student edit after approval keeps APPROVED
-  // (staff can hide). It holds only because submitClassroom's update never
-  // writes gallery_status; this pins it.
-  it('a student edit after approval keeps APPROVED and shows the new answers', async () => {
+  // Changed answers need another staff review before publication.
+  it('a student edit after approval returns to PENDING until reviewed', async () => {
     const form = await makeShowcase(newerClassroom);
     await formService.update(form.formId, { allow_multiple: true });
     const id = await approve(form, students[2], 'First title');
 
     expect(await submitProject(form, students[2], 'Second title')).toBe(id);
     expect((await prisma.formResponse.findUniqueOrThrow({ where: { id } })).gallery_status).toBe(
-      'APPROVED'
+      'PENDING'
     );
+    expect(await galleryService.getForOrg(orgA, id)).toBeNull();
+    await responseService.setGalleryStatus(id, 'APPROVED');
     expect((await galleryService.getForOrg(orgA, id))?.title).toBe('Second title');
   });
 });

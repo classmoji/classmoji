@@ -2,8 +2,15 @@ import getPrisma from '@classmoji/database';
 import type { Prisma } from '@prisma/client';
 import { fieldsOf } from './form.service.ts';
 import {
+  canonicalizeMany,
+  parseMediaRef,
+  resolveDelivery,
+  type ResolveContext,
+} from './contentDelivery.service.ts';
+import {
   FIELD_TYPE_REGISTRY,
   galleryRoleOf,
+  isIdentityQuestion,
   type FormField,
   type FormOption,
 } from './formContract.ts';
@@ -13,7 +20,7 @@ import {
  *
  * A project IS a form response: APPROVED + SUBMITTED, on a form whose
  * gallery_org_id names the org. PUBLIC read path (the anonymous class-site
- * routes call it), so the select below never reads email, user_id, staff
+ * routes call it), so the select below never reads email or staff
  * columns or resolved_context, and values leave only through a gallery role or
  * the extras list. Carries no authorization, like every service here.
  */
@@ -34,6 +41,7 @@ export interface GalleryCard {
 }
 
 export interface GalleryProject extends GalleryCard {
+  videoUrl: string | null;
   team: string[];
   tags: string[];
   links: Array<{ label: string; url: string }>;
@@ -106,6 +114,7 @@ export function projectFromResponse(
     summary: '',
     icon: '',
     coverUrl: null,
+    videoUrl: null,
     term: classroom.name,
     classroomSlug: classroom.slug,
     submittedAt: response.submitted_at.toISOString(),
@@ -117,6 +126,7 @@ export function projectFromResponse(
   };
 
   for (const field of fields) {
+    if (isIdentityQuestion(field)) continue;
     const value = answers[field.id];
     const role = galleryRoleOf(field);
     switch (role) {
@@ -127,7 +137,14 @@ export function projectFromResponse(
         project[role] = text(value);
         break;
       case 'cover':
-        project.coverUrl = webUrl(text(value), true);
+        project.coverUrl = parseMediaRef(text(value)) ? text(value) : webUrl(text(value), true);
+        break;
+      case 'video':
+        if (parseMediaRef(text(value))) project.videoUrl = text(value);
+        else {
+          const url = webUrl(text(value));
+          if (url) project.links.push({ label: String(field.label ?? 'Demo video'), url });
+        }
         break;
       case 'team':
         // Roster labels are "Name (login)"; the public page shows names.
@@ -162,10 +179,27 @@ export function projectFromResponse(
 
 const PUBLIC_SELECT = {
   id: true,
+  form_id: true,
+  user_id: true, // Internal ownership check only; never returned to the public caller.
   answers: true,
   submitted_at: true,
   revision: { select: { fields: true } },
-  form: { select: { classroom: { select: { name: true, slug: true, created_at: true } } } },
+  form: {
+    select: {
+      classroom: {
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          created_at: true,
+          content_repo: true,
+          content_key_version: true,
+          content_delivery_enabled: true,
+          git_organization: { select: { login: true } },
+        },
+      },
+    },
+  },
 } satisfies Prisma.FormResponseSelect;
 
 type PublicRow = Prisma.FormResponseGetPayload<{ select: typeof PUBLIC_SELECT }>;
@@ -176,8 +210,99 @@ const approvedIn = (orgId: string): Prisma.FormResponseWhereInput => ({
   form: { gallery_org_id: orgId },
 });
 
-const toProject = (row: PublicRow): GalleryProject =>
-  projectFromResponse(row, fieldsOf(row.revision.fields), row.form.classroom);
+async function publicProjects(rows: PublicRow[]): Promise<GalleryProject[]> {
+  const projects = rows.map(row =>
+    projectFromResponse(row, fieldsOf(row.revision.fields), row.form.classroom)
+  );
+  // Each term owns its media: sign against the source classroom, never the site hosting the gallery.
+  const classrooms = new Map(rows.map(row => [row.form.classroom.id, row.form.classroom]));
+  await Promise.all(
+    [...classrooms].map(async ([id, classroom]) => {
+      const entries = projects.filter((_, i) => rows[i].form.classroom.id === id);
+      const refs = entries.flatMap(project =>
+        [project.coverUrl, project.videoUrl].filter((ref): ref is string => Boolean(ref))
+      );
+      const ctx: ResolveContext | null =
+        classroom.content_repo && classroom.git_organization
+          ? {
+              classroom: {
+                ...classroom,
+                content_repo: classroom.content_repo,
+                git_organization: classroom.git_organization,
+              },
+              tier: 'month',
+            }
+          : null;
+      let urls = new Map<string, string>();
+      if (ctx && refs.length) {
+        try {
+          const canonical = await canonicalizeMany(ctx, refs);
+          const mediaIds = [...canonical.values()].flatMap(ref => parseMediaRef(ref) ?? []);
+          const media = mediaIds.length
+            ? await getPrisma().mediaObject.findMany({
+                where: { id: { in: mediaIds }, classroom_id: id, status: 'READY' },
+                select: {
+                  id: true,
+                  uploaded_by: true,
+                  gallery_form_id: true,
+                  gallery_field_id: true,
+                  kind: true,
+                },
+              })
+            : [];
+          for (let i = 0; i < projects.length; i++) {
+            if (rows[i].form.classroom.id !== id) continue;
+            for (const [property, role, kind] of [
+              ['coverUrl', 'cover', 'IMAGE'],
+              ['videoUrl', 'video', 'VIDEO'],
+            ] as const) {
+              const ref = projects[i][property];
+              const mediaId = ref && parseMediaRef(canonical.get(ref) ?? ref);
+              if (!mediaId) continue;
+              const field = fieldsOf(rows[i].revision.fields).find(
+                field => galleryRoleOf(field) === role
+              );
+              if (
+                !media.some(
+                  file =>
+                    file.id === mediaId &&
+                    file.uploaded_by === rows[i].user_id &&
+                    file.gallery_form_id === rows[i].form_id &&
+                    file.gallery_field_id === field?.id &&
+                    file.kind === kind
+                )
+              ) {
+                projects[i][property] = null;
+              }
+            }
+          }
+          const allowed = entries.flatMap(project =>
+            [project.coverUrl, project.videoUrl].filter((ref): ref is string => Boolean(ref))
+          );
+          const resolved = await resolveDelivery(
+            ctx,
+            allowed.map(ref => canonical.get(ref) ?? ref)
+          );
+          urls = new Map(
+            refs.map(ref => [ref, resolved.urls.get(canonical.get(ref) ?? ref) ?? ref])
+          );
+        } catch (error) {
+          console.warn('[gallery] Media resolution failed:', error);
+        }
+      }
+      const displayUrl = (ref: string | null) => {
+        if (!ref) return null;
+        const url = urls.get(ref) ?? ref;
+        return webUrl(url, true);
+      };
+      for (const project of entries) {
+        project.coverUrl = displayUrl(project.coverUrl);
+        project.videoUrl = displayUrl(project.videoUrl);
+      }
+    })
+  );
+  return projects;
+}
 
 const cardOf = (project: GalleryProject): GalleryCard => ({
   id: project.id,
@@ -199,8 +324,9 @@ export async function listForOrg(orgId: string): Promise<GalleryCard[]> {
     where: approvedIn(orgId),
     select: PUBLIC_SELECT,
   });
+  const projects = await publicProjects(rows);
   return rows
-    .map(row => ({ termAt: row.form.classroom.created_at.getTime(), project: toProject(row) }))
+    .map((row, i) => ({ termAt: row.form.classroom.created_at.getTime(), project: projects[i] }))
     .sort((a, b) => b.termAt - a.termAt || a.project.title.localeCompare(b.project.title))
     .map(entry => cardOf(entry.project));
 }
@@ -211,5 +337,5 @@ export async function getForOrg(orgId: string, responseId: string): Promise<Gall
     where: { id: responseId, ...approvedIn(orgId) },
     select: PUBLIC_SELECT,
   });
-  return row ? toProject(row) : null;
+  return row ? (await publicProjects([row]))[0] : null;
 }

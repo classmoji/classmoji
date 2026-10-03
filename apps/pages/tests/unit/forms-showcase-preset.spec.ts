@@ -32,7 +32,8 @@ test.describe('Project Showcase preset', () => {
     const count = (role: string) => fields.filter(field => galleryRoleOf(field) === role).length;
     expect(count('title')).toBe(1);
     expect(count('team')).toBe(1);
-    expect(count('link')).toBe(5);
+    expect(count('link')).toBe(4);
+    expect(count('video')).toBe(1);
     expect(count('detail')).toBe(2);
     expect(fields.some(field => field.label === 'Demo credentials' && !galleryRoleOf(field))).toBe(
       true

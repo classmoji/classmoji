@@ -22,6 +22,7 @@ import {
 } from './formTeamResolver.ts';
 import { escapeVars, pagesUrl } from '../emails/escape.ts';
 import { fieldsOf } from './form.service.ts';
+import { assertGalleryMediaAnswers } from './galleryMedia.ts';
 import { Prisma } from '@prisma/client';
 import type { GalleryStatus, Role, SubmissionState } from '@prisma/client';
 
@@ -201,6 +202,7 @@ interface LockedFormRow {
   response_cap: number | null;
   allow_multiple: boolean;
   current_revision_id: string | null;
+  gallery_org_id: string | null;
 }
 
 /**
@@ -217,7 +219,7 @@ interface LockedFormRow {
  */
 async function lockForm(tx: Prisma.TransactionClient, formId: string): Promise<LockedFormRow> {
   const rows = await tx.$queryRaw<LockedFormRow[]>`
-    SELECT id, status, closes_at, response_cap, allow_multiple, current_revision_id
+    SELECT id, status, closes_at, response_cap, allow_multiple, current_revision_id, gallery_org_id
     FROM forms
     WHERE id = ${formId}
     FOR UPDATE
@@ -1564,7 +1566,16 @@ export async function submitClassroom({
       }) as unknown as Prisma.InputJsonValue;
     }
 
-    const validated = parseAnswers(fields, answers, { resolved });
+    let validated = parseAnswers(fields, answers, { resolved });
+    if (form.gallery_org_id) {
+      validated = await assertGalleryMediaAnswers(tx, {
+        classroomId: preflight.classroom_id,
+        formId,
+        userId,
+        fields,
+        answers: validated,
+      });
+    }
 
     if (existing && existing.submission_state === 'SUBMITTED' && !form.allow_multiple) {
       throw serviceError(FORM_ALREADY_SUBMITTED, 'You have already responded to this form.');
@@ -1584,6 +1595,7 @@ export async function submitClassroom({
       name: name ?? null,
       answers: validated as unknown as Prisma.InputJsonValue,
       submission_state: 'SUBMITTED' as SubmissionState,
+      ...(form.gallery_org_id ? { gallery_status: 'PENDING' as GalleryStatus } : {}),
       verified_at: existing?.verified_at ?? now,
       ...(snapshot ? { resolved_context: snapshot } : {}),
     };
