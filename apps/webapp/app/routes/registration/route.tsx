@@ -22,6 +22,8 @@ import { verifyInviteToken, inviteTokenMatchesEmail } from '@classmoji/auth/invi
 const safeNext = (value: string | null | undefined): string =>
   value && value.startsWith('/') && !value.startsWith('//') ? value : '/select-organization';
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const authData = await getAuthSession(request);
   if (!authData?.userId) return redirect('/');
@@ -226,6 +228,7 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
   const codeSent = codeFetcher.data?.codeSent === true;
   const emailVerified = verifyFetcher.data?.verified === true || verifiedEmail !== null;
   const verifyError = verifyFetcher.data?.verifyError;
+  const codeError = codeFetcher.data?.error;
 
   const useDifferentEmail = () => {
     setUseInvite(false);
@@ -354,6 +357,11 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
                   </Button>
                 )}
               </Space.Compact>
+              {codeError && (
+                <div className="text-red-500 text-xs mt-1" role="alert">
+                  {codeError}
+                </div>
+              )}
             </Form.Item>
 
             {useInvite && emailVerified && (
@@ -518,6 +526,10 @@ export const action = async ({ request }: Route.ActionArgs) => {
 
   // ── Send verification code ──────────────────────────────────────────────
   if (intent === 'send-code') {
+    const rawEmail = typeof formData.email === 'string' ? formData.email : '';
+    if (!EMAIL_RE.test(rawEmail.trim())) {
+      return { error: 'Please enter a valid email address.' };
+    }
     await sendEmailVerificationCode(formData.email);
     return { codeSent: true };
   }
