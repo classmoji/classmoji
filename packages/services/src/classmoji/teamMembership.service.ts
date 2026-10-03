@@ -37,3 +37,12 @@ export const findTeamsByUserId = async (userId: string) => {
     },
   });
 };
+
+/** Whether the user is a member of the team. */
+export const isTeamMember = async (teamId: string, userId: string) => {
+  const membership = await getPrisma().teamMembership.findFirst({
+    where: { team_id: teamId, user_id: userId },
+    select: { id: true },
+  });
+  return membership !== null;
+};

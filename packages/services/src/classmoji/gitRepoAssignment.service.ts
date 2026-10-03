@@ -5,7 +5,12 @@
  * It tracks their progress, grades, and submission status.
  */
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { repoNamespace, withLogins } from '@classmoji/utils';
+import {
+  extendedDeadlineMs,
+  isPastDeadlineIgnoringOverride,
+  repoNamespace,
+  withLogins,
+} from '@classmoji/utils';
 import { findClassroomGitProvider } from './classroomGitProvider.ts';
 import type { GitProvider, IssueStatus, Prisma } from '@prisma/client';
 import { getGitProvider } from '../git/index.ts';
@@ -170,6 +175,8 @@ export const findByClassroomId = async (classroomId: string) => {
         analytics_snapshot: {
           select: { total_commits: true, last_commit_at: true, fetched_at: true },
         },
+        // Purchased extension hours, for lateness (is_late, num_late_hours).
+        token_transactions: { select: { hours_purchased: true } },
         grades: {
           include: {
             token_transaction: true,
@@ -433,13 +440,8 @@ export const recordPush = async (gitRepoId: string, pushedAt: Date) => {
     },
   });
   const open = candidates.filter(c => {
-    const deadline = c.assignment.student_deadline;
-    if (!deadline) return true;
-    const extensionHours = Math.max(
-      0,
-      c.token_transactions.reduce((sum, t) => sum + (t.hours_purchased ?? 0), 0)
-    );
-    const cutoff = new Date(deadline).getTime() + extensionHours * 3_600_000;
+    const cutoff = extendedDeadlineMs(c.assignment.student_deadline, c.token_transactions);
+    if (cutoff === null) return true;
     if (pushedAt.getTime() <= cutoff) return true;
     // Past the cutoff: a first push is a late submission; an existing one stays.
     return c.closed_at === null;
@@ -514,6 +516,66 @@ export const recordExistingPush = async (gitRepoAssignmentId: string) => {
 };
 
 /**
+ * Re-read a push-mode submission after the student bought extension hours.
+ * A push that came after the old cutoff was ignored by `recordPush` when an
+ * on-time submission existed; if the repo's latest push now falls within the
+ * deadline plus the purchased hours, it becomes the submission, so the
+ * student does not have to push again. Same rules as `recordPush`: only a
+ * published REPO-mode row, never a graded one, never a push past the new
+ * cutoff, and never a time earlier than the current submission (the write
+ * re-checks the last two, so a concurrent push or grade wins).
+ *
+ * Reads the push time recorded from the provider's push events
+ * (`GitRepo.last_push_at`, server time, as `recordPush` receives it), so it
+ * makes no network call. Only the latest push is known: when the student
+ * pushed again after the new cutoff, nothing changes. Returns the time
+ * recorded, or null.
+ */
+export const recordPushAfterExtension = async (gitRepoAssignmentId: string) => {
+  const prisma = getPrisma();
+  const row = await prisma.gitRepoAssignment.findUnique({
+    where: { id: gitRepoAssignmentId },
+    select: {
+      id: true,
+      closed_at: true,
+      assignment: {
+        select: { type: true, submission_mode: true, is_published: true, student_deadline: true },
+      },
+      // Every row, refunds included: a REFUND carries negative hours.
+      token_transactions: { select: { hours_purchased: true } },
+      git_repo: { select: { last_push_at: true } },
+      _count: { select: { grades: true } },
+    },
+  });
+  if (!row) return null;
+  const { assignment } = row;
+  if (
+    assignment.type !== 'REPO' ||
+    assignment.submission_mode !== 'REPO' ||
+    !assignment.is_published ||
+    row._count.grades > 0
+  ) {
+    return null;
+  }
+  const pushedAt = row.git_repo.last_push_at;
+  if (!pushedAt) return null;
+  // No deadline: every push already counts, nothing to re-read.
+  const cutoff = extendedDeadlineMs(assignment.student_deadline, row.token_transactions);
+  if (cutoff === null || pushedAt.getTime() > cutoff) return null;
+  if (row.closed_at && row.closed_at.getTime() >= pushedAt.getTime()) return null;
+
+  const result = await prisma.gitRepoAssignment.updateMany({
+    where: {
+      id: row.id,
+      grades: { none: {} },
+      OR: [{ closed_at: null }, { closed_at: { lt: pushedAt } }],
+    },
+    data: { status: 'CLOSED', closed_at: pushedAt },
+  });
+  return result.count > 0 ? pushedAt : null;
+};
+
+/**
  * Update a GitRepoAssignment
  * @param {string} id - UUID of the GitRepoAssignment
  * @param {Object} updates - Fields to update
@@ -535,46 +597,8 @@ export const update = async (id: string, updates: GitRepoAssignmentUpdateData) =
   });
 };
 
-interface LateOverrideRow {
-  closed_at: Date | null;
-  assignment: { student_deadline: Date | null } | null;
-  token_transactions: { hours_purchased: number | null }[];
-}
-
-const MS_PER_HOUR = 60 * 60 * 1000;
-
-/**
- * Whether a submission is past its deadline IGNORING `is_late_override`.
- *
- * Mirrors the `is_late` computed field in packages/database/index.ts minus its
- * first line (`if (is_late_override) return false`): that field reads false
- * for every exempted row, so it cannot say whether an exempted — or
- * about-to-be-cleared — submission was actually late. Same rules otherwise:
- * no valid deadline → not late; not yet closed → late once the deadline plus
- * the purchased extension hours has passed (they can be bought ahead of the
- * deadline), as in `is_late`; closed → whole hours late (dayjs
- * `diff(..., 'hours')` truncation, floored at zero) minus purchased extension
- * hours, late when positive.
- */
-export function isPastDeadlineIgnoringOverride(row: LateOverrideRow, now: Date = new Date()) {
-  const deadline = row.assignment?.student_deadline;
-  if (!deadline) return false;
-  const deadlineMs = new Date(deadline).getTime();
-  if (Number.isNaN(deadlineMs)) return false;
-  const extensionHours = (row.token_transactions ?? []).reduce(
-    (acc, t) => acc + (t.hours_purchased || 0),
-    0
-  );
-  if (!row.closed_at) {
-    return now.getTime() > deadlineMs + Math.max(extensionHours, 0) * MS_PER_HOUR;
-  }
-
-  const hoursLate = Math.max(
-    Math.trunc((new Date(row.closed_at).getTime() - deadlineMs) / MS_PER_HOUR),
-    0
-  );
-  return hoursLate - extensionHours > 0;
-}
+// Shared with the MCP read surfaces, which shape rows outside this service.
+export { isPastDeadlineIgnoringOverride };
 
 export type LateOverrideSelector = { ids: string[] } | { assignmentId: string };
 
@@ -787,18 +811,29 @@ export const getCompletionProgress = async (classroomSlug: string) => {
   return parseFloat(((numCompleted / totalNum) * 100).toFixed(1));
 };
 
-/**
- * Get late submission percentage for a classroom
- * @param {string} classroomSlug - Classroom slug
- * @returns {Promise<number>} - Percentage late
- */
-export const getLatePercentage = async (classroomSlug: string) => {
-  const totalNum = await getPrisma().gitRepoAssignment.count({
-    where: {
-      git_repo: { classroom: { slug: classroomSlug } },
-    },
-  });
+interface CountedLateRow {
+  closed_at: Date | null;
+  is_late_override: boolean;
+  assignment: { student_deadline: Date | null } | null;
+  token_transactions: { hours_purchased: number | null }[];
+}
 
+/**
+ * Whether the staff dashboards count a submission as late: turned in after
+ * the deadline plus the extension hours the student bought (the rule of the
+ * `is_late` computed field), or carrying a late exemption, since an exempted
+ * submission was still late. A row with nothing turned in is missing, not late.
+ */
+export const isCountedLate = (row: CountedLateRow) =>
+  row.is_late_override || (row.closed_at !== null && isPastDeadlineIgnoringOverride(row));
+
+/**
+ * Count a classroom's submissions and the late ones among them (see
+ * `isCountedLate`).
+ * @param {string} classroomSlug - Classroom slug
+ * @returns {Promise<{ total: number, late: number }>}
+ */
+export const getLateCount = async (classroomSlug: string) => {
   const repoAssignments = await getPrisma().gitRepoAssignment.findMany({
     where: {
       git_repo: { classroom: { slug: classroomSlug } },
@@ -807,22 +842,25 @@ export const getLatePercentage = async (classroomSlug: string) => {
       closed_at: true,
       is_late_override: true,
       assignment: { select: { student_deadline: true } },
+      // Every row, refunds included: a REFUND carries negative hours.
+      token_transactions: { select: { hours_purchased: true } },
     },
   });
+  return {
+    total: repoAssignments.length,
+    late: repoAssignments.filter(isCountedLate).length,
+  };
+};
 
-  const numLate = repoAssignments.filter(
-    ra =>
-      ra.is_late_override ||
-      Boolean(
-        ra.closed_at &&
-        ra.assignment.student_deadline &&
-        ra.closed_at > ra.assignment.student_deadline
-      )
-  ).length;
-
-  if (totalNum === 0) return 0;
-
-  return parseFloat(((numLate / totalNum) * 100).toFixed(0));
+/**
+ * Get late submission percentage for a classroom
+ * @param {string} classroomSlug - Classroom slug
+ * @returns {Promise<number>} - Percentage late
+ */
+export const getLatePercentage = async (classroomSlug: string) => {
+  const { total, late } = await getLateCount(classroomSlug);
+  if (total === 0) return 0;
+  return parseFloat(((late / total) * 100).toFixed(0));
 };
 
 /**

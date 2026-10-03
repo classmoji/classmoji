@@ -49,27 +49,10 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       status: 'CLOSED',
     },
   });
-  const lateRepoAssignmentsPromise = prisma.gitRepoAssignment
-    .findMany({
-      where: { git_repo: { classroom: { slug: classSlug! } } },
-      select: {
-        closed_at: true,
-        is_late_override: true,
-        assignment: { select: { student_deadline: true } },
-      },
-    })
-    .then(
-      list =>
-        list.filter(
-          r =>
-            r.is_late_override ||
-            Boolean(
-              r.closed_at &&
-              r.assignment.student_deadline &&
-              r.closed_at > r.assignment.student_deadline
-            )
-        ).length
-    );
+  // Late after the deadline plus any extension hours the student bought.
+  const lateRepoAssignmentsPromise = ClassmojiService.gitRepoAssignment
+    .getLateCount(classSlug!)
+    .then(({ late }) => late);
 
   const dataPromise = Promise.all([
     ClassmojiService.classroomMembership.findUsersByRole(classroom.id, 'STUDENT'),
@@ -321,10 +304,7 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
 
             return (
               <>
-                <div
-                  data-tour="dashboard-stats"
-                  className="grid grid-cols-2 lg:grid-cols-4 gap-4"
-                >
+                <div data-tour="dashboard-stats" className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                   <StatItem
                     statKey="students"
                     label="Students"

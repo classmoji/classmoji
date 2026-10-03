@@ -198,8 +198,9 @@ export const getSubmissionTool = mirrorResourceTool({
   name: 'get_submission',
   title: 'Get submission detail',
   description:
-    'One submission (a GitRepoAssignment) with its grades, graders, and analytics snapshot if ' +
-    'present. Teaching team only. `submission_id` comes from list_submissions; it is also the ' +
+    'One submission (a GitRepoAssignment) with its grades, graders, extension_hours, is_late ' +
+    '(past student_deadline plus extension_hours) and analytics snapshot if present. Teaching ' +
+    'team only. `submission_id` comes from list_submissions; it is also the ' +
     'id that grade_add, grade_remove, grader_assign, and submission_late_override consume.',
   extraInput: {
     submission_id: submissionIdSchema().describe('Submission (GitRepoAssignment) id'),
@@ -331,7 +332,9 @@ export const listSubmissionsTool: ToolDefinition<ListSubmissionsArgs> = {
   description:
     'All submissions (GitRepoAssignments) in the classroom with grade emojis, grader assignments, ' +
     'student/team, and the classroom emoji scale — the same per-submission shape as the ' +
-    'grading-queue. Optional filters: repository_id, assignment_id, grader_id, status (OPEN|CLOSED). ' +
+    'grading-queue. Each row has extension_hours (hours the student bought with tokens) and ' +
+    'is_late (past student_deadline plus extension_hours; false when is_late_override). ' +
+    'Optional filters: repository_id, assignment_id, grader_id, status (OPEN|CLOSED). ' +
     'The returned `id` is the submission id that grade_add, grade_remove, grader_assign, and ' +
     'submission_late_override consume. Teaching team only.',
   scope: 'read',

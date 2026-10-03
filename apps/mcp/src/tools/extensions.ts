@@ -6,8 +6,9 @@
  * purchaseExtensionHours: assertClassroomAccess allows OWNER/TEACHER plus
  * STUDENT self-access (resourceOwnerId = the paying student). MCP exposes the
  * live student path only — STUDENT tier, always self: the paying student is
- * ALWAYS the caller, and the submission must be the caller's own individual
- * repo (derived from the DB, never the request).
+ * ALWAYS the caller, and the submission must be the caller's own repo or a
+ * repo of a team they are on (derived from the DB, never the request), as the
+ * web lets any team member buy hours for their team from their own balance.
  *
  * All pricing and gating lives in packages/services
  * token.purchaseExtensionHours (S9 — price derives from
@@ -61,8 +62,8 @@ export const extensionPurchaseTool: ToolDefinition<ExtensionPurchaseArgs> = {
   annotations: { destructive: false },
   title: 'Purchase extension hours',
   description:
-    'Spends YOUR tokens to buy extension hours on one of YOUR OWN assignments (students ' +
-    'only). Works at any time: before the deadline the hours push your deadline out, after ' +
+    'Spends YOUR tokens to buy extension hours on one of YOUR OWN assignments, or your ' +
+    'team’s (students only). Works at any time: before the deadline the hours push your deadline out, after ' +
     'it they reduce how late the submission counts. The price per hour is the assignment’s ' +
     'tokens_per_hour, or the classroom’s default when that is null; nothing but your balance ' +
     'limits how many you buy, so ' +
@@ -77,10 +78,18 @@ export const extensionPurchaseTool: ToolDefinition<ExtensionPurchaseArgs> = {
   },
   handler: async (args, ctx) => {
     // S1 + self-scoping: the submission must exist in the authorized classroom
-    // AND belong to the calling student's own individual repo (team repos have
-    // no single owner to charge). Same non-leaking error either way.
+    // AND be the calling student's own repo or their team's (the caller pays
+    // from their own balance). Same non-leaking error either way.
     const gra = await loadGitRepoAssignmentInClassroom(args.git_repo_assignment_id, ctx);
-    if (gra.git_repo.student_id !== ctx.viewer.userId) {
+    const ownRepo = gra.git_repo.student_id === ctx.viewer.userId;
+    const teamRepo =
+      !ownRepo && gra.git_repo.team_id
+        ? await ClassmojiService.teamMembership.isTeamMember(
+            gra.git_repo.team_id,
+            ctx.viewer.userId
+          )
+        : false;
+    if (!ownRepo && !teamRepo) {
       throw scopedNotFound('Submission');
     }
 
