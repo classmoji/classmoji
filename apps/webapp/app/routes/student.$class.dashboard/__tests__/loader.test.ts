@@ -74,6 +74,7 @@ const courseworkRow = (over: Record<string, unknown>) => ({
   score: null,
   scoredAt: null,
   href: null,
+  extensionHours: 0,
   ...over,
 });
 
@@ -191,8 +192,7 @@ describe('student dashboard loader — Up next', () => {
     const data = await (await loader(loaderArgs())).data;
 
     expect(upNextMock).toHaveBeenCalledWith([open, done]);
-    // A row without repo details carries no bought hours.
-    expect(data.upNext).toEqual([{ ...open, extensionHours: 0 }]);
+    expect(data.upNext).toEqual([open]);
     expect(data.viewerIsStudent).toBe(true);
   });
 
@@ -209,6 +209,15 @@ describe('student dashboard loader — Up next', () => {
     expect('repo' in data.upNext[0]).toBe(false);
     expect(data.upNext[0].extensionHours).toBe(0);
     expect(JSON.stringify(data.upNext)).not.toContain('Grace');
+  });
+
+  it('keeps the hours bought on a quiz row, so the card reads it inside its window', async () => {
+    const quiz = courseworkRow({ assignmentId: 'q', type: 'QUIZ', extensionHours: 3 });
+    listForStudentMock.mockResolvedValue([quiz]);
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.upNext[0].extensionHours).toBe(3);
   });
 
   it('tells the card when the viewer is staff', async () => {

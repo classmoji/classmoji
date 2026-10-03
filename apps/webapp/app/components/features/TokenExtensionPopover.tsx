@@ -5,35 +5,43 @@ import { useRevalidator } from 'react-router';
 import useSound from 'use-sound';
 
 import { useCallout } from '@classmoji/ui-components';
+import type { StudentCourseworkRow } from '@classmoji/services';
 import { useNotifiedFetcher, useUser } from '~/hooks';
 import useStore from '~/store';
 import tokenImage from '~/assets/images/token.png';
 import coinsSound from '~/assets/sounds/coins.mp3';
 
-interface TokenPopupRepositoryAssignment {
-  id: string;
-  /** Hours still late after what was already bought; only presets the field. */
-  num_late_hours: number;
-  is_late_override: boolean;
-  assignment: {
-    tokens_per_hour?: number | null;
-  };
-}
+/** What the hours are bought on: a repo submission, or a quiz assignment. */
+export type ExtensionTarget = NonNullable<StudentCourseworkRow['extend']>;
 
-interface TokenPopupFormProps {
-  weight?: number;
-  repositoryAssignment: TokenPopupRepositoryAssignment;
+interface TokenExtensionPopoverProps {
+  target: ExtensionTarget;
+  /** Hours still late after what was already bought; only presets the field. */
+  numLateHours: number;
+  /** The price of one hour; the server prices the purchase again itself. */
+  tokensPerHour: number;
   balance: number | null | undefined;
 }
 
+/** The purchase body's target field: the submission or the quiz assignment. */
+export const extensionTargetBody = (target: ExtensionTarget): Record<string, string> =>
+  target.kind === 'QUIZ'
+    ? { assignment_id: target.assignmentId }
+    : { git_repo_assignment_id: target.gitRepoAssignmentId };
+
 /**
  * Hours can be bought at any time: ahead of the deadline, while the work is
- * late, or after it is submitted. The only limits are the ones the server
- * enforces too (token.purchaseExtensionHours): a price per hour is set, no late
- * override is in effect, and the balance covers the cost.
+ * late, or after it is submitted. The row decides whether Extend is offered;
+ * the server re-checks every rule and the price (token.purchaseExtensionHours
+ * for a repo, token.purchaseQuizExtensionHours for a quiz), and the balance
+ * covers the cost.
  */
-const TokenExtensionPopover = ({ repositoryAssignment, balance }: TokenPopupFormProps) => {
-  const tokensPerHour = repositoryAssignment.assignment.tokens_per_hour ?? 0;
+const TokenExtensionPopover = ({
+  target,
+  numLateHours,
+  tokensPerHour,
+  balance,
+}: TokenExtensionPopoverProps) => {
   // The most hours the balance pays for; unknown balance leaves the field open
   // and the purchase handler reports it.
   const maxHours =
@@ -42,7 +50,7 @@ const TokenExtensionPopover = ({ repositoryAssignment, balance }: TokenPopupForm
       : Math.floor(balance / tokensPerHour);
   // Start at what clears the lateness, when the student is late and can pay.
   const [hours, setHours] = useState(() =>
-    Math.max(1, Math.min(repositoryAssignment.num_late_hours, maxHours ?? Infinity))
+    Math.max(1, Math.min(numLateHours, maxHours ?? Infinity))
   );
   const { fetcher, notify } = useNotifiedFetcher();
   const [open, setOpen] = useState(false);
@@ -76,10 +84,7 @@ const TokenExtensionPopover = ({ repositoryAssignment, balance }: TokenPopupForm
     setHours(time);
   };
 
-  const onPurchaseExtensionHours = (
-    purchaseHours: number,
-    repoAssignment: TokenPopupRepositoryAssignment
-  ) => {
+  const onPurchaseExtensionHours = (purchaseHours: number) => {
     // Validate all required values exist
     if (balance === null || balance === undefined) {
       callout.show({
@@ -90,7 +95,7 @@ const TokenExtensionPopover = ({ repositoryAssignment, balance }: TokenPopupForm
       return;
     }
 
-    if (!repoAssignment?.assignment?.tokens_per_hour) {
+    if (tokensPerHour <= 0) {
       callout.show({ variant: 'error', title: 'Token cost not configured for this assignment.' });
       hide();
       return;
@@ -102,7 +107,7 @@ const TokenExtensionPopover = ({ repositoryAssignment, balance }: TokenPopupForm
       return;
     }
 
-    const tokenCost = repoAssignment.assignment.tokens_per_hour * purchaseHours;
+    const tokenCost = tokensPerHour * purchaseHours;
     if (balance < tokenCost) {
       callout.show({
         variant: 'error',
@@ -117,11 +122,8 @@ const TokenExtensionPopover = ({ repositoryAssignment, balance }: TokenPopupForm
       {
         student_id: user!.id,
         classroom_id: classroom!.id,
-        amount: repoAssignment.assignment.tokens_per_hour * purchaseHours * -1,
         hours_purchased: purchaseHours,
-        type: 'PURCHASE',
-        description: `Purchase of ${purchaseHours} hour(s).`,
-        git_repo_assignment_id: repoAssignment.id,
+        ...extensionTargetBody(target),
       },
       {
         method: 'post',
@@ -139,9 +141,7 @@ const TokenExtensionPopover = ({ repositoryAssignment, balance }: TokenPopupForm
   // new type on every render, which remounts the field and drops its focus
   // each time a digit is typed.
   const renderForm = () => {
-    const tokenCost = repositoryAssignment?.assignment?.tokens_per_hour
-      ? repositoryAssignment.assignment.tokens_per_hour * hours
-      : 0;
+    const tokenCost = tokensPerHour > 0 ? tokensPerHour * hours : 0;
     const hasInsufficientBalance = balance !== null && balance !== undefined && balance < tokenCost;
 
     return (
@@ -173,8 +173,8 @@ const TokenExtensionPopover = ({ repositoryAssignment, balance }: TokenPopupForm
           />
           <Button
             className="w-full mt-4"
-            onClick={() => onPurchaseExtensionHours(hours, repositoryAssignment)}
-            disabled={hasInsufficientBalance || !repositoryAssignment?.assignment?.tokens_per_hour}
+            onClick={() => onPurchaseExtensionHours(hours)}
+            disabled={hasInsufficientBalance || tokensPerHour <= 0}
           >
             Purchase
           </Button>
@@ -183,7 +183,7 @@ const TokenExtensionPopover = ({ repositoryAssignment, balance }: TokenPopupForm
     );
   };
 
-  if (tokensPerHour <= 0 || repositoryAssignment.is_late_override) return null;
+  if (tokensPerHour <= 0) return null;
 
   return (
     <Popover

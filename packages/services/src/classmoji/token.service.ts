@@ -1,13 +1,28 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { effectiveTokensPerHour, withLogins } from '@classmoji/utils';
+import { effectiveTokensPerHour, openToStudents, withLogins } from '@classmoji/utils';
 import { Prisma } from '@prisma/client';
 import type { TokenTransactionType } from '@prisma/client';
+import { quizzesVisibleOrThrow } from './entitlement.service.ts';
 
+/**
+ * One extension row. A row names at most one thing it was bought for: a
+ * repository submission (`git_repo_assignment_id`) or a quiz assignment
+ * (`assignment_id`); the database refuses both at once.
+ */
 interface UpdateExtensionInput {
   classroom_id: string;
   student_id: string;
   amount: number;
-  [key: string]: unknown;
+  /**
+   * A TokenTransactionType. Typed wider only because the legacy
+   * `request_extension` task (packages/tasks workflows/extension.ts) still
+   * passes 'EXTENSION', which the column does not accept.
+   */
+  type: TokenTransactionType | (string & {});
+  hours_purchased?: number | null;
+  description?: string | null;
+  git_repo_assignment_id?: string | null;
+  assignment_id?: string | null;
 }
 
 interface AssignToStudentInput {
@@ -130,12 +145,18 @@ export const updateExtension = async (data: UpdateExtensionInput) => {
 
     return tx.tokenTransaction.create({
       data: {
-        ...(data as Prisma.TokenTransactionUncheckedCreateInput),
+        classroom_id: data.classroom_id,
+        student_id: data.student_id,
+        amount: data.amount,
+        type: data.type as TokenTransactionType,
+        hours_purchased: data.hours_purchased ?? null,
+        git_repo_assignment_id: data.git_repo_assignment_id ?? null,
+        assignment_id: data.assignment_id ?? null,
         balance_after: newBalance,
-        // `description` is non-nullable (@default('')); coalesce a possibly-null value from
-        // the spread so it can't trigger Prisma's misleading "Argument `classroom` is
-        // missing" error (same guard as assignToStudent).
-        description: (data.description as string | null | undefined) ?? '',
+        // `description` is non-nullable (@default('')); coalesce a null so it
+        // can't trigger Prisma's misleading "Argument `classroom` is missing"
+        // error (same guard as assignToStudent).
+        description: data.description ?? '',
         created_at: nextCreatedAt(transaction),
       },
     });
@@ -228,6 +249,138 @@ export const purchaseExtensionHours = async ({
   });
 };
 
+/** The ledger description of a quiz extension row: the title, then the hours. */
+export const quizExtensionDescription = (title: string, hours: number) =>
+  hours < 0 ? `${title} · \u2212${Math.abs(hours)} h` : `${title} · +${hours} h`;
+
+/**
+ * The title a quiz extension row was written with, read back from its
+ * description ("<title> · +N h" / "<title> · −N h"), or null when the
+ * description is not one. The tokens log falls back to it once the
+ * assignment is gone (the link is set null, the row stays).
+ */
+export const titleFromQuizExtensionDescription = (description: string | null | undefined) => {
+  const match = /^(.+) · [+\u2212]\d+ h$/u.exec(description ?? '');
+  return match ? match[1] : null;
+};
+
+/**
+ * Student purchase of extension hours on a QUIZ assignment. The hours move
+ * that student's due date on the quiz: every attempt's lateness, and whether
+ * a missing attempt counts 0, is measured from `student_deadline` plus the
+ * net hours bought (`effectiveDeadline` in @classmoji/utils).
+ *
+ * Eligibility and price are decided here from the database, never by the
+ * caller:
+ *   - the assignment is a QUIZ in a module of `classroomId`, and students can
+ *     see it (published, opened, quizzes shown in the classroom). Anything
+ *     else reads as not found;
+ *   - the payer is a STUDENT of the classroom;
+ *   - it has a due date;
+ *   - the price per hour (the assignment's own, else the classroom's
+ *     default) is above 0.
+ * Hours can be bought at any time, before the due date or after a late
+ * completion; the close date plays no part. There is no cap but the
+ * balance, which `updateExtension` checks under the student's ledger lock.
+ *
+ * NOTE: callers are responsible for authorizing `studentId` (self-access or
+ * teaching-team).
+ */
+export const purchaseQuizExtensionHours = async ({
+  classroomId,
+  studentId,
+  assignmentId,
+  hours,
+  now = new Date(),
+}: {
+  classroomId: string;
+  studentId: string;
+  assignmentId: string;
+  hours: number;
+  now?: Date;
+}) => {
+  if (!Number.isInteger(hours) || hours <= 0) {
+    throw new Error('Invalid hours: Must be a positive whole number.');
+  }
+
+  const prisma = getPrisma();
+  const assignment = await prisma.assignment.findUnique({
+    where: { id: assignmentId },
+    select: {
+      id: true,
+      type: true,
+      title: true,
+      is_published: true,
+      release_at: true,
+      student_deadline: true,
+      tokens_per_hour: true,
+      module: { select: { classroom_id: true } },
+    },
+  });
+  if (!assignment || assignment.module.classroom_id !== classroomId || assignment.type !== 'QUIZ') {
+    throw new Error('Quiz assignment not found.');
+  }
+  const quizzesVisible = await quizzesVisibleOrThrow(classroomId);
+  if (!openToStudents(assignment, now, { quizzesVisible })) {
+    throw new Error('Quiz assignment not found.');
+  }
+
+  const [membership, settings] = await Promise.all([
+    prisma.classroomMembership.findFirst({
+      where: { classroom_id: classroomId, user_id: studentId, role: 'STUDENT' },
+      select: { id: true },
+    }),
+    prisma.classroomSettings.findUnique({
+      where: { classroom_id: classroomId },
+      select: { default_tokens_per_hour: true },
+    }),
+  ]);
+  if (!membership) {
+    throw new Error('Extensions are unavailable: only students buy extension hours.');
+  }
+  if (!assignment.student_deadline) {
+    throw new Error('Extensions are unavailable: this assignment has no deadline.');
+  }
+
+  const tokensPerHour = effectiveTokensPerHour(
+    assignment.tokens_per_hour,
+    settings?.default_tokens_per_hour
+  );
+  if (tokensPerHour <= 0) {
+    throw new Error('Token cost not configured for this assignment.');
+  }
+
+  return updateExtension({
+    classroom_id: classroomId,
+    student_id: studentId,
+    assignment_id: assignment.id,
+    amount: -(tokensPerHour * hours),
+    hours_purchased: hours,
+    type: 'PURCHASE',
+    description: quizExtensionDescription(assignment.title, hours),
+  });
+};
+
+/**
+ * student id → the net extension hours each student has bought on one quiz
+ * assignment (purchases minus refunds; read through `effectiveDeadline` /
+ * `lateHours`, which floor it at 0). A student with no purchase has no key.
+ */
+export const netQuizExtensionHoursByStudent = async ({
+  classroomId,
+  assignmentId,
+}: {
+  classroomId: string;
+  assignmentId: string;
+}): Promise<Map<string, number>> => {
+  const rows = await getPrisma().tokenTransaction.groupBy({
+    by: ['student_id'],
+    where: { classroom_id: classroomId, assignment_id: assignmentId },
+    _sum: { hours_purchased: true },
+  });
+  return new Map(rows.map(row => [row.student_id, row._sum.hours_purchased ?? 0]));
+};
+
 /**
  * Cancel a purchase of extension hours and refund it, exactly once. Only a
  * PURCHASE that is not yet cancelled qualifies; the flip to `is_cancelled` is
@@ -257,21 +410,37 @@ export const cancelPurchase = async (transactionId: string) => {
       throw new Error('Only a purchase that is not already cancelled can be cancelled.');
     }
 
-    const purchase = await tx.tokenTransaction.findUniqueOrThrow({ where: { id: transactionId } });
+    const purchase = await tx.tokenTransaction.findUniqueOrThrow({
+      where: { id: transactionId },
+      include: { assignment: { select: { title: true } } },
+    });
     const latest = await findLatest(tx, purchase.classroom_id, purchase.student_id);
     const refund = Math.abs(purchase.amount);
     const hours = purchase.hours_purchased ?? 0;
+
+    // A quiz refund keeps a readable title like its purchase: the live title
+    // while the assignment exists, else the one the purchase was written with.
+    const quizTitle =
+      purchase.assignment?.title ??
+      (purchase.git_repo_assignment_id
+        ? null
+        : titleFromQuizExtensionDescription(purchase.description));
+    const description =
+      quizTitle !== null
+        ? quizExtensionDescription(quizTitle, -hours)
+        : `Refund of ${hours} hours.`;
 
     return tx.tokenTransaction.create({
       data: {
         classroom_id: purchase.classroom_id,
         student_id: purchase.student_id,
         git_repo_assignment_id: purchase.git_repo_assignment_id,
+        assignment_id: purchase.assignment_id,
         amount: refund,
         hours_purchased: 0 - hours,
         type: 'REFUND',
         balance_after: (latest?.balance_after ?? 0) + refund,
-        description: `Refund of ${hours} hours.`,
+        description,
         created_at: nextCreatedAt(latest),
       },
     });
@@ -289,6 +458,8 @@ export const findTransactions = async (query: Prisma.TokenTransactionWhereInput)
             assignment: true,
           },
         },
+        // A quiz extension's assignment: the tokens log names it.
+        assignment: { select: { id: true, title: true, type: true } },
         assignment_grade: true,
       },
       orderBy: LATEST_FIRST,

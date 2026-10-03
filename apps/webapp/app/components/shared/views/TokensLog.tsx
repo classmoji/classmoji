@@ -20,8 +20,33 @@ interface TokenTransaction {
   student: Record<string, unknown>;
   created_at: string | Date;
   amount: number;
+  description?: string | null;
+  assignment_id?: string | null;
+  git_repo_assignment_id?: string | null;
+  assignment?: { title?: string | null } | null;
+  git_repo_assignment?: { assignment?: { title?: string | null } | null } | null;
   [key: string]: unknown;
 }
+
+/**
+ * The assignment a ledger row names: a quiz extension's assignment, else the
+ * repo submission's assignment. Once a quiz assignment is deleted its rows
+ * keep no link, and the title is read back from the row's description, which
+ * a quiz extension writes as "<title> · +N h" or "<title> · −N h"
+ * (token.service `quizExtensionDescription`). Null when the row names none.
+ */
+export const transactionAssignmentTitle = (record: {
+  assignment_id?: string | null;
+  git_repo_assignment_id?: string | null;
+  assignment?: { title?: string | null } | null;
+  git_repo_assignment?: { assignment?: { title?: string | null } | null } | null;
+  description?: string | null;
+}): string | null => {
+  const linked = record.assignment?.title ?? record.git_repo_assignment?.assignment?.title;
+  if (linked) return linked;
+  if (record.assignment_id || record.git_repo_assignment_id) return null;
+  return /^(.+) · [+\u2212]\d+ h$/u.exec(record.description ?? '')?.[1] ?? null;
+};
 
 interface TokensLogProps {
   transactions: TokenTransaction[];
@@ -137,9 +162,12 @@ const TokensLog = ({ transactions, students }: TokensLogProps) => {
     },
     {
       title: 'Assignment',
-      dataIndex: ['repository_issue', 'assignment', 'title'],
       key: 'assignment',
       width: 300,
+      render: (_: unknown, record: TokenTransaction) =>
+        transactionAssignmentTitle(record) ?? (
+          <span className="text-gray-400 dark:text-gray-500">—</span>
+        ),
     },
     {
       title: 'Description',

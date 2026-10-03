@@ -115,6 +115,15 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   return namedAction(request, {
     async purchaseExtensionHours() {
+      // What the hours are bought on: a repo submission or a quiz assignment,
+      // exactly one of the two.
+      const gitRepoAssignmentId =
+        typeof data.git_repo_assignment_id === 'string' && data.git_repo_assignment_id
+          ? data.git_repo_assignment_id
+          : null;
+      const assignmentId =
+        typeof data.assignment_id === 'string' && data.assignment_id ? data.assignment_id : null;
+
       const { classroom, membership } = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
@@ -123,7 +132,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         attemptedAction: 'purchase_extension_hours',
         metadata: {
           hours_requested: data.hours_purchased,
-          repository_issue_id: data.repository_issue_id,
+          ...(gitRepoAssignmentId ? { git_repo_assignment_id: gitRepoAssignmentId } : {}),
+          ...(assignmentId ? { assignment_id: assignmentId } : {}),
         },
         resourceOwnerId: data.student_id,
         selfAccessRoles: ['STUDENT'],
@@ -134,25 +144,33 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       if (!Number.isInteger(hoursPurchased) || hoursPurchased <= 0) {
         throw new Error('Invalid hours: Must be a positive whole number.');
       }
-      if (!data.git_repo_assignment_id) {
-        throw new Error('Missing repository assignment ID.');
+      if (Boolean(gitRepoAssignmentId) === Boolean(assignmentId)) {
+        throw new Error('Name one repository assignment or one quiz assignment.');
       }
       if (String(data.classroom_id) !== String(classroom.id)) {
         throw new Error('Invalid classroom ID.');
       }
 
-      // Price and eligibility are recomputed server-side in the service — the
-      // client-supplied `amount` is never trusted, and the popover's gates
-      // (a price is set, no late override) are re-enforced there so they
-      // cannot be bypassed by posting a crafted request body. It also checks
-      // the submission is the paying student's own, or their team's
-      // (packages/services token.purchaseExtensionHours, plan §5.2 gap 6).
-      await ClassmojiService.token.purchaseExtensionHours({
-        classroomId: classroom.id,
-        studentId: data.student_id,
-        gitRepoAssignmentId: data.git_repo_assignment_id,
-        hours: hoursPurchased,
-      });
+      // Price and eligibility are recomputed server-side in the service: the
+      // client never sends a price, and every gate (a price is set, a
+      // deadline, no late override on a repo, the submission or quiz is the
+      // student's to extend) is re-enforced there so it cannot be bypassed by
+      // posting a crafted request body.
+      if (assignmentId) {
+        await ClassmojiService.token.purchaseQuizExtensionHours({
+          classroomId: classroom.id,
+          studentId: data.student_id,
+          assignmentId,
+          hours: hoursPurchased,
+        });
+      } else {
+        await ClassmojiService.token.purchaseExtensionHours({
+          classroomId: classroom.id,
+          studentId: data.student_id,
+          gitRepoAssignmentId: gitRepoAssignmentId!,
+          hours: hoursPurchased,
+        });
+      }
       return {
         action: 'PURCHASE_EXTENSION_HOURS',
         success: 'Successfully purchased hour(s).',

@@ -34,6 +34,13 @@ const row = (over: Partial<StudentCourseworkRow>): StudentCourseworkRow => ({
   href: '/student/cs52/quizzes?quiz=q1',
   external: false,
   action: { kind: 'START_QUIZ', quizId: 'q1' },
+  numLateHours: 0,
+  isLateOverride: false,
+  tokensPerHour: 0,
+  extensionHours: 0,
+  submittedAt: null,
+  missing: false,
+  extend: null,
   ...over,
 });
 

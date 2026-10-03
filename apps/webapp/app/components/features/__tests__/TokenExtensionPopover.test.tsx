@@ -1,9 +1,10 @@
 /**
- * When the Extend popover offers itself and what it starts at. Hours sell at
- * any time, so neither the deadline nor how late the work is decides whether
- * it shows: only a price per hour and the absence of a late override do. The
- * hours field starts at the late hours and never offers more than the balance
- * pays for. Rendered on the server with the popover's content inline.
+ * When the Extend popover offers itself, what it starts at, and what it posts.
+ * The row decides whether Extend is offered at all; the popover needs a price
+ * per hour. The hours field starts at the late hours and never offers more
+ * than the balance pays for. A purchase names its target: the repo submission
+ * or the quiz assignment. Rendered on the server with the popover's content
+ * inline.
  */
 import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -24,6 +25,8 @@ vi.mock('antd', () => ({
   ),
 }));
 vi.mock('react-router', () => ({ useRevalidator: () => ({ revalidate: vi.fn() }) }));
+// Only the type is imported; keep the services package out of this render.
+vi.mock('@classmoji/services', () => ({}));
 vi.mock('use-sound', () => ({ default: () => [vi.fn()] }));
 vi.mock('@classmoji/ui-components', () => ({ useCallout: () => ({ show: vi.fn() }) }));
 vi.mock('~/hooks', () => ({
@@ -34,20 +37,18 @@ vi.mock('~/store', () => ({ default: () => ({ classroom: { id: 'class-1' } }) })
 vi.mock('~/assets/images/token.png', () => ({ default: 'token.png' }));
 vi.mock('~/assets/sounds/coins.mp3', () => ({ default: 'coins.mp3' }));
 
-const { default: TokenExtensionPopover } = await import('../TokenExtensionPopover');
+const { default: TokenExtensionPopover, extensionTargetBody } =
+  await import('../TokenExtensionPopover');
 
 const render = (
-  over: { num_late_hours?: number; is_late_override?: boolean; tokens_per_hour?: number | null },
+  over: { num_late_hours?: number; tokens_per_hour?: number },
   balance: number | null = 10
 ) =>
   renderToStaticMarkup(
     <TokenExtensionPopover
-      repositoryAssignment={{
-        id: 'gra-1',
-        num_late_hours: over.num_late_hours ?? 0,
-        is_late_override: over.is_late_override ?? false,
-        assignment: { tokens_per_hour: 'tokens_per_hour' in over ? over.tokens_per_hour : 2 },
-      }}
+      target={{ kind: 'REPO', gitRepoAssignmentId: 'gra-1' }}
+      numLateHours={over.num_late_hours ?? 0}
+      tokensPerHour={over.tokens_per_hour ?? 2}
       balance={balance}
     />
   );
@@ -77,9 +78,28 @@ describe('TokenExtensionPopover', () => {
     expect(html).toContain('<button disabled="">Purchase</button>');
   });
 
-  it('is absent without a price per hour, or with a late override', () => {
+  it('is absent without a price per hour', () => {
     expect(render({ tokens_per_hour: 0 })).toBe('');
-    expect(render({ tokens_per_hour: null })).toBe('');
-    expect(render({ num_late_hours: 4, is_late_override: true })).toBe('');
+  });
+
+  it('works the same on a quiz assignment', () => {
+    const html = renderToStaticMarkup(
+      <TokenExtensionPopover
+        target={{ kind: 'QUIZ', assignmentId: 'asg-q' }}
+        numLateHours={3}
+        tokensPerHour={1}
+        balance={10}
+      />
+    );
+    expect(html).toContain('3 hour(s) = 3 tokens');
+  });
+
+  it('posts the submission id for a repo and the assignment id for a quiz', () => {
+    expect(extensionTargetBody({ kind: 'REPO', gitRepoAssignmentId: 'gra-1' })).toEqual({
+      git_repo_assignment_id: 'gra-1',
+    });
+    expect(extensionTargetBody({ kind: 'QUIZ', assignmentId: 'asg-q' })).toEqual({
+      assignment_id: 'asg-q',
+    });
   });
 });

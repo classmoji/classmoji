@@ -175,39 +175,28 @@ const AssignmentsTabsCard = ({
                   const repo = row.repo;
                   const canRequestRegrade =
                     !!repo && row.done && repo.gradesReleased && !!classSlug;
-                  // Late by the hours left after any the student bought: still
-                  // counting on an open row, fixed at the submission's time on
-                  // a submitted one.
-                  const isLate = !!repo && repo.numLateHours > 0 && !repo.isLateOverride;
-                  // Extension hours can be bought at any time, before the
-                  // deadline or after it, submitted or not. The rows with
-                  // nothing to buy have no deadline, or were submitted on time
-                  // and cannot change any more: graded, or submitted by
-                  // closing the issue. (A push-mode row submitted on time can
-                  // still take a later push inside the hours bought.)
-                  const submittedOnTimeAndSettled =
-                    !!repo &&
-                    row.done &&
-                    repo.numLateHours === 0 &&
-                    (canRequestRegrade || repo.submissionMode !== 'REPO');
-                  const canExtend =
-                    !!repo &&
-                    !!row.deadline &&
-                    repo.tokensPerHour > 0 &&
-                    !repo.isLateOverride &&
-                    !submittedOnTimeAndSettled;
+                  // Late by the hours left after any the student bought: a
+                  // repo still open counts up to now, a submitted one is fixed
+                  // at its submission's time, a quiz is late by the attempt
+                  // that counts. A quiz with no completed attempt past its
+                  // (extended) due date is missing instead.
+                  const isLate = row.numLateHours > 0 && !row.isLateOverride;
+                  // Where Extend is offered, and what it buys hours on, is the
+                  // row's (studentCoursework): a repo submission or a quiz.
+                  const extendTarget = row.extend;
                   // The date stays the assignment's own; a note under it says
                   // what the hours bought did.
-                  const note = repo
-                    ? extensionNote({
-                        deadline: row.deadline,
-                        done: row.done,
-                        extensionHours: repo.extensionHours,
-                        numLateHours: repo.numLateHours,
-                        isLateOverride: repo.isLateOverride,
-                        closedAt: repo.closedAt,
-                      })
-                    : null;
+                  const note =
+                    row.type === 'FORM'
+                      ? null
+                      : extensionNote({
+                          deadline: row.deadline,
+                          done: row.done,
+                          extensionHours: row.extensionHours,
+                          numLateHours: row.numLateHours,
+                          isLateOverride: row.isLateOverride,
+                          closedAt: row.submittedAt,
+                        });
                   const meta = [
                     row.module.title,
                     row.isExtraCredit ? 'Extra credit' : null,
@@ -284,7 +273,12 @@ const AssignmentsTabsCard = ({
                             )}
                             {isLate && (
                               <span className="inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-700 dark:text-orange-300">
-                                {repo!.numLateHours}h late
+                                {row.numLateHours}h late
+                              </span>
+                            )}
+                            {row.missing && (
+                              <span className="inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full bg-red-500/15 text-red-700 dark:text-red-300">
+                                Missing
                               </span>
                             )}
                           </div>
@@ -345,16 +339,13 @@ const AssignmentsTabsCard = ({
                         )}
                       </td>
                       <td className="px-4 py-3 text-right whitespace-nowrap">
-                        {canExtend || canRequestRegrade ? (
+                        {extendTarget || canRequestRegrade ? (
                           <span className="inline-flex items-center justify-end gap-3">
-                            {canExtend && (
+                            {extendTarget && (
                               <TokenExtensionPopover
-                                repositoryAssignment={{
-                                  id: repo!.gitRepoAssignmentId,
-                                  num_late_hours: repo!.numLateHours,
-                                  is_late_override: repo!.isLateOverride,
-                                  assignment: { tokens_per_hour: repo!.tokensPerHour },
-                                }}
+                                target={extendTarget}
+                                numLateHours={row.numLateHours}
+                                tokensPerHour={row.tokensPerHour}
                                 balance={balance}
                               />
                             )}

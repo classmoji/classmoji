@@ -25,6 +25,8 @@ export interface AssignmentPanelData {
   dueDate: string | null;
   closesAt: string | null;
   weight: number;
+  /** The quiz's own price per extension hour; null = the classroom's rate, 0 = no extensions. */
+  tokensPerHour: number | null;
   isPublished: boolean;
 }
 
@@ -35,6 +37,7 @@ export interface AssignmentPanelValues {
   dueDate?: Dayjs | null;
   closesAt?: Dayjs | null;
   weight?: number | null;
+  tokensPerHour?: number | null;
   isPublished?: boolean;
 }
 
@@ -51,6 +54,7 @@ export const panelFormValues = (data: AssignmentPanelData): AssignmentPanelValue
   dueDate: toDayjs(data.dueDate),
   closesAt: toDayjs(data.closesAt),
   weight: data.weight,
+  tokensPerHour: data.tokensPerHour,
   isPublished: data.isPublished,
 });
 
@@ -60,8 +64,14 @@ export type AssignmentPanelPayload = {
   dueDate: string | null;
   closesAt: string | null;
   weight: number;
+  /** Null = the classroom's rate. */
+  tokensPerHour: number | null;
   isPublished: boolean;
 };
+
+/** An emptied price field is the classroom's rate (null); a number is the quiz's own. */
+const priceOf = (value: number | string | null | undefined) =>
+  value === null || value === undefined || value === '' ? null : Number(value);
 
 /** The form's values, as the quiz action takes them. */
 export const panelPayload = (
@@ -72,6 +82,7 @@ export const panelPayload = (
   dueDate: values?.dueDate ? values.dueDate.toISOString() : null,
   closesAt: values?.closesAt ? values.closesAt.toISOString() : null,
   weight: Number(values?.weight ?? 0),
+  tokensPerHour: priceOf(values?.tokensPerHour),
   isPublished: values?.isPublished === true,
 });
 
@@ -95,6 +106,8 @@ export const changedPanelPayload = (
   if (!sameInstant(now.dueDate, initial.dueDate)) changed.dueDate = now.dueDate;
   if (!sameInstant(now.closesAt, initial.closesAt)) changed.closesAt = now.closesAt;
   if (now.weight !== initial.weight) changed.weight = now.weight;
+  // Empty (the classroom's rate) and 0 (no extensions) differ.
+  if (now.tokensPerHour !== initial.tokensPerHour) changed.tokensPerHour = now.tokensPerHour;
   if (now.isPublished !== initial.isPublished) changed.isPublished = now.isPublished;
   return changed;
 };
@@ -222,6 +235,14 @@ const Chips = ({ places }: { places: string[] }) =>
     </div>
   );
 
+/** How the price reads: the quiz's own, none, or the classroom's rate (with its value). */
+export const tokensPerHourLabel = (tokensPerHour: number | null, classroomTokensPerHour: number) =>
+  tokensPerHour === null
+    ? `Classroom rate (${classroomTokensPerHour})`
+    : tokensPerHour === 0
+      ? 'No extensions'
+      : String(tokensPerHour);
+
 const PANEL_CLASS =
   'rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-5 flex flex-col gap-3';
 
@@ -230,11 +251,14 @@ export const EditableAssignmentPanel = ({
   modules,
   isOwner,
   classSlug,
+  classroomTokensPerHour,
   closesError = null,
 }: {
   modules: ModuleOption[];
   isOwner: boolean;
   classSlug: string;
+  /** The classroom's price per extension hour, which an empty field means. */
+  classroomTokensPerHour: number;
   /** What is wrong with Closes (closesDateError), shown under the field. */
   closesError?: string | null;
 }) => {
@@ -245,6 +269,9 @@ export const EditableAssignmentPanel = ({
   const dueDate = Form.useWatch(['assignment', 'dueDate'], form) as Dayjs | null | undefined;
   const closesAt = Form.useWatch(['assignment', 'closesAt'], form) as Dayjs | null | undefined;
   const weight = Number(Form.useWatch(['assignment', 'weight'], form) ?? 0);
+  const tokensPerHour = priceOf(
+    Form.useWatch(['assignment', 'tokensPerHour'], form) as number | null | undefined
+  );
   const moduleTitle = modules.find(m => m.id === moduleId)?.title ?? null;
 
   return (
@@ -336,6 +363,21 @@ export const EditableAssignmentPanel = ({
         <InputNumber min={0} className="w-full" />
       </Form.Item>
 
+      <Form.Item
+        name={['assignment', 'tokensPerHour']}
+        label="Tokens per hour"
+        className="mb-0"
+        help={tokensPerHour === 0 ? 'No extensions' : undefined}
+      >
+        <InputNumber
+          min={0}
+          precision={0}
+          className="w-full"
+          placeholder={tokensPerHourLabel(null, classroomTokensPerHour)}
+          data-testid="quiz-tokens-per-hour"
+        />
+      </Form.Item>
+
       <div className="flex items-center justify-between border-t border-stone-200 pt-3 dark:border-neutral-800">
         <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">Published</span>
         <Form.Item name={['assignment', 'isPublished']} valuePropName="checked" noStyle>
@@ -360,13 +402,20 @@ const formatDate = (iso: string | null, empty: string) =>
   iso ? dayjs(iso).format(DATE_FORMAT) : empty;
 
 /** The panel for a teaching assistant: what is set, nothing editable. */
-export const ReadOnlyAssignmentPanel = ({ data }: { data: AssignmentPanelData }) => {
+export const ReadOnlyAssignmentPanel = ({
+  data,
+  classroomTokensPerHour,
+}: {
+  data: AssignmentPanelData;
+  classroomTokensPerHour: number;
+}) => {
   const rows: Array<[string, string]> = [
     ['Module', data.moduleTitle ?? 'None'],
     ['Opens', formatDate(data.releaseAt, 'When published')],
     ['Due', formatDate(data.dueDate, 'No due date')],
     ['Closes', formatDate(data.closesAt, 'Never')],
     ['Weight', `${data.weight}%`],
+    ['Tokens per hour', tokensPerHourLabel(data.tokensPerHour, classroomTokensPerHour)],
     ['Published', data.isPublished ? 'Yes' : 'No'],
   ];
   return (

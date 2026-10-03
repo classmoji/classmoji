@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   quizFindMany: vi.fn(),
   formFindMany: vi.fn(),
   settingsFindUnique: vi.fn(),
+  netQuizExtensionHours: vi.fn(),
 }));
 
 vi.mock('@classmoji/database', () => ({
@@ -32,6 +33,9 @@ vi.mock('../helper.service.ts', () => ({
 }));
 vi.mock('../quizAttempt.service.ts', () => ({
   findForUserByQuizIds: (...a: unknown[]) => mocks.findForUserByQuizIds(...a),
+}));
+vi.mock('../quizGradeItems.service.ts', () => ({
+  netQuizExtensionHours: (...a: unknown[]) => mocks.netQuizExtensionHours(...a),
 }));
 vi.mock('../formResponse.service.ts', () => ({
   findSubmittedForUserByFormIds: (...a: unknown[]) => mocks.findSubmittedForUserByFormIds(...a),
@@ -146,6 +150,7 @@ beforeEach(() => {
   mocks.findSubmittedForUserByFormIds.mockResolvedValue([]);
   mocks.quizFindMany.mockResolvedValue([]);
   mocks.formFindMany.mockResolvedValue([]);
+  mocks.netQuizExtensionHours.mockResolvedValue(new Map());
 });
 
 describe('listForStudent — which assignments appear', () => {
@@ -164,6 +169,7 @@ describe('listForStudent — which assignments appear', () => {
         'release_at',
         'student_deadline',
         'closes_at',
+        'tokens_per_hour',
         'quiz_id',
         'form_id',
         'module',
@@ -345,12 +351,18 @@ describe('listForStudent — REPO rows keep every field the page showed', () => 
       grades: [],
       graders: [{ id: 'g-1', name: 'Grace' }],
       gradersSummary: 'Grace',
+      submissionMode: 'ISSUE',
+      closedAt: null,
+    });
+    // Late and extension fields sit on the row, as on a quiz row.
+    expect(row).toMatchObject({
       numLateHours: 4,
       isLateOverride: false,
       tokensPerHour: 3,
       extensionHours: 2,
-      submissionMode: 'ISSUE',
-      closedAt: null,
+      submittedAt: null,
+      missing: false,
+      extend: { kind: 'REPO', gitRepoAssignmentId: 'ra-1' },
     });
   });
 
@@ -372,11 +384,15 @@ describe('listForStudent — REPO rows keep every field the page showed', () => 
 
     const [row] = await list();
 
-    expect(row).toMatchObject({ status: 'SUBMITTED', done: true });
+    expect(row).toMatchObject({
+      status: 'SUBMITTED',
+      done: true,
+      numLateHours: 0,
+      submittedAt: at(-2).toISOString(),
+    });
     expect(row.repo).toMatchObject({
       gradesReleased: true,
       grades: [{ id: 'gr-1', emoji: 'heart' }],
-      numLateHours: 0,
       closedAt: at(-2).toISOString(),
     });
   });
@@ -421,7 +437,8 @@ describe('listForStudent — REPO rows keep every field the page showed', () => 
 
     const [row] = await list();
 
-    expect(row.repo).toMatchObject({ issueUrl: null, numLateHours: 2 });
+    expect(row.repo).toMatchObject({ issueUrl: null });
+    expect(row.numLateHours).toBe(2);
     expect(row.href).toBe('https://github.com/cs52-org/lab-ra-1-ada');
   });
 
@@ -449,8 +466,12 @@ describe('listForStudent — REPO rows keep every field the page showed', () => 
 
     const [row] = await list();
 
-    expect(row).toMatchObject({ status: 'SUBMITTED', done: true });
-    expect(row.repo).toMatchObject({ numLateHours: 2, extensionHours: 2 });
+    expect(row).toMatchObject({
+      status: 'SUBMITTED',
+      done: true,
+      numLateHours: 2,
+      extensionHours: 2,
+    });
   });
 
   it("prices a repo row at the classroom's default when its assignment sets none", async () => {
@@ -480,7 +501,7 @@ describe('listForStudent — REPO rows keep every field the page showed', () => 
     ]);
 
     const rows = await list();
-    const price = (id: string) => rows.find(r => r.assignmentId === id)?.repo?.tokensPerHour;
+    const price = (id: string) => rows.find(r => r.assignmentId === id)?.tokensPerHour;
 
     expect(price('r-1')).toBe(2);
     expect(price('r-2')).toBe(0);
@@ -497,6 +518,66 @@ describe('listForStudent — REPO rows keep every field the page showed', () => 
 
     expect(rows).toHaveLength(1);
     expect(rows[0].repo!.gitRepoAssignmentId).toBe('ra-own');
+  });
+});
+
+describe('listForStudent — REPO Extend: hours sell at any time, where they buy something', () => {
+  const repoRow = async (
+    over: Record<string, unknown> = {},
+    assignmentOver: Record<string, unknown> = {},
+    deadline: Date | null = at(-6)
+  ) => {
+    mocks.listForClassroom.mockResolvedValue([
+      assignment('r-1', 'REPO', { student_deadline: deadline }),
+    ]);
+    mocks.findAllAssignmentsForStudent.mockResolvedValue([
+      submission('ra-1', 'r-1', {
+        ...over,
+        assignment: {
+          student_deadline: deadline,
+          grades_released: false,
+          submission_mode: 'ISSUE',
+          tokens_per_hour: 2,
+          ...assignmentOver,
+        },
+      }),
+    ]);
+    return (await list())[0];
+  };
+  const OFFERED = { kind: 'REPO', gitRepoAssignmentId: 'ra-1' };
+
+  it('offers it before the deadline, and on open work that is late', async () => {
+    expect((await repoRow({}, {}, at(24))).extend).toEqual(OFFERED);
+    expect(await repoRow()).toMatchObject({ numLateHours: 6, extend: OFFERED });
+  });
+
+  it('offers it on submitted work that was late, graded or not', async () => {
+    const lateClose = { status: 'CLOSED', closed_at: at(-3) };
+    expect((await repoRow(lateClose)).extend).toEqual(OFFERED);
+    const graded = await repoRow(
+      { ...lateClose, grades: [{ id: 'gr', emoji: 'heart' }] },
+      { grades_released: true }
+    );
+    expect(graded.extend).toEqual(OFFERED);
+  });
+
+  it('offers it on push-mode work submitted on time, before grading', async () => {
+    const row = await repoRow({ status: 'CLOSED', closed_at: at(-7) }, { submission_mode: 'REPO' });
+    expect(row).toMatchObject({ numLateHours: 0, extend: OFFERED });
+  });
+
+  it('does not offer it where hours buy nothing', async () => {
+    // Issue-mode work submitted on time, or graded work submitted on time.
+    expect((await repoRow({ status: 'CLOSED', closed_at: at(-7) })).extend).toBeNull();
+    const graded = await repoRow(
+      { status: 'CLOSED', closed_at: at(-7), grades: [{ id: 'gr', emoji: 'heart' }] },
+      { grades_released: true, submission_mode: 'REPO' }
+    );
+    expect(graded.extend).toBeNull();
+    // No price, a late override, no deadline.
+    expect((await repoRow({}, { tokens_per_hour: 0 })).extend).toBeNull();
+    expect((await repoRow({ is_late_override: true })).extend).toBeNull();
+    expect((await repoRow({}, {}, null)).extend).toBeNull();
   });
 });
 
@@ -615,6 +696,165 @@ describe('listForStudent — QUIZ rows', () => {
     expect((await quizRow([], { due_date: at(72) }, { student_deadline: null })).deadline).toBe(
       null
     );
+  });
+});
+
+describe('listForStudent — QUIZ late hours and extensions', () => {
+  const quizRow = async ({
+    attempts = [] as ReturnType<typeof attempt>[],
+    quizOver = {} as Record<string, unknown>,
+    assignmentOver = {} as Record<string, unknown>,
+    hours = 0,
+    settings = { default_tokens_per_hour: 2, late_penalty_points_per_hour: 0 } as Record<
+      string,
+      number
+    > | null,
+  } = {}) => {
+    mocks.listForClassroom.mockResolvedValue([assignment('a-q', 'QUIZ', assignmentOver)]);
+    mocks.quizFindMany.mockResolvedValue([quiz('quiz-a-q', quizOver)]);
+    mocks.findForUserByQuizIds.mockResolvedValue(attempts);
+    mocks.netQuizExtensionHours.mockResolvedValue(new Map(hours ? [['a-q', hours]] : []));
+    mocks.settingsFindUnique.mockResolvedValue(settings);
+    return (await list())[0];
+  };
+  const OFFERED = { kind: 'QUIZ', assignmentId: 'a-q' };
+  /** A completed attempt `lateBy` hours (and 10 minutes) after a deadline 20 h ago. */
+  const finished = (id: string, lateBy: number, pct: number | null) => ({
+    id,
+    quiz_id: 'quiz-a-q',
+    started_at: new Date(at(-20).getTime() + lateBy * HOUR - HOUR),
+    completed_at: new Date(at(-20).getTime() + lateBy * HOUR + 10 * 60_000),
+    partial_credit_percentage: pct,
+  });
+  const DUE_20H_AGO = { student_deadline: at(-20) };
+
+  it("reads this student's hours bought on the classroom's quizzes", async () => {
+    await quizRow();
+    expect(mocks.netQuizExtensionHours).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      studentId: 'stu-1',
+      assignmentIds: ['a-q'],
+    });
+  });
+
+  it('shows the raw score of the attempt that counts after the late penalty, with its late hours', async () => {
+    const attempts = [finished('on-time', -2, 70), finished('late', 5, 90)];
+
+    // 2 points an hour: the late 90 counts 80, over the on-time 70.
+    const mild = await quizRow({
+      attempts,
+      assignmentOver: DUE_20H_AGO,
+      settings: { default_tokens_per_hour: 2, late_penalty_points_per_hour: 2 },
+    });
+    expect(mild).toMatchObject({ score: 90, numLateHours: 5, submittedAt: expect.any(String) });
+
+    // 5 points an hour: the late 90 counts 65, so the on-time 70 counts.
+    const harsh = await quizRow({
+      attempts,
+      assignmentOver: DUE_20H_AGO,
+      settings: { default_tokens_per_hour: 2, late_penalty_points_per_hour: 5 },
+    });
+    expect(harsh).toMatchObject({ score: 70, numLateHours: 0 });
+  });
+
+  it('measures lateness from the due date plus the hours bought', async () => {
+    const row = await quizRow({
+      attempts: [finished('late', 5, 90)],
+      assignmentOver: DUE_20H_AGO,
+      hours: 3,
+    });
+    expect(row).toMatchObject({ numLateHours: 2, extensionHours: 3 });
+
+    // A net negative (more refunded than bought) never pulls the deadline in.
+    const refunded = await quizRow({
+      attempts: [finished('late', 5, 90)],
+      assignmentOver: DUE_20H_AGO,
+      hours: -2,
+    });
+    expect(refunded).toMatchObject({ numLateHours: 5, extensionHours: 0 });
+  });
+
+  it('is missing, not hours late, past the due date (plus hours bought) with no completed attempt', async () => {
+    const missing = await quizRow({ assignmentOver: DUE_20H_AGO });
+    expect(missing).toMatchObject({ missing: true, numLateHours: 0, done: false });
+
+    const running = await quizRow({
+      attempts: [attempt('run', 'quiz-a-q', 1, false, null)],
+      assignmentOver: DUE_20H_AGO,
+    });
+    expect(running.missing).toBe(true);
+
+    // Inside the hours bought: not missing yet.
+    const bought = await quizRow({ assignmentOver: DUE_20H_AGO, hours: 24 });
+    expect(bought).toMatchObject({ missing: false, extensionHours: 24 });
+
+    // Before the due date, or with none: never missing.
+    expect((await quizRow()).missing).toBe(false);
+    expect((await quizRow({ assignmentOver: { student_deadline: null } })).missing).toBe(false);
+  });
+
+  it('a completed attempt is never missing, even an unscored one', async () => {
+    const row = await quizRow({
+      attempts: [finished('pending', 3, null)],
+      assignmentOver: DUE_20H_AGO,
+    });
+    expect(row).toMatchObject({ status: 'COMPLETED', missing: false, score: null });
+  });
+
+  it("offers Extend before the due date and after, at the quiz's price or the classroom's", async () => {
+    expect(await quizRow()).toMatchObject({ tokensPerHour: 2, extend: OFFERED });
+    expect(
+      await quizRow({ attempts: [finished('late', 5, 90)], assignmentOver: DUE_20H_AGO })
+    ).toMatchObject({ extend: OFFERED });
+    expect(await quizRow({ assignmentOver: { tokens_per_hour: 4 } })).toMatchObject({
+      tokensPerHour: 4,
+      extend: OFFERED,
+    });
+  });
+
+  it('does not offer Extend at a price of 0 or with no due date', async () => {
+    expect(await quizRow({ assignmentOver: { tokens_per_hour: 0 } })).toMatchObject({
+      tokensPerHour: 0,
+      extend: null,
+    });
+    expect((await quizRow({ settings: null })).extend).toBeNull();
+    expect((await quizRow({ assignmentOver: { student_deadline: null } })).extend).toBeNull();
+  });
+
+  it('hides Extend on a closed quiz the student never completed, not on one they did', async () => {
+    const closedUntaken = await quizRow({
+      assignmentOver: { student_deadline: at(-20), closes_at: at(-1) },
+    });
+    expect(closedUntaken).toMatchObject({ status: 'CLOSED', extend: null });
+
+    const closedRunning = await quizRow({
+      attempts: [attempt('run', 'quiz-a-q', 2, false, null)],
+      assignmentOver: { student_deadline: at(-20), closes_at: at(-1) },
+    });
+    expect(closedRunning.extend).toBeNull();
+
+    const closedFinished = await quizRow({
+      attempts: [finished('late', 5, 90)],
+      assignmentOver: { student_deadline: at(-20), closes_at: at(-1) },
+    });
+    expect(closedFinished.extend).toEqual(OFFERED);
+  });
+
+  it('keeps the quiz rows when the price and penalty read fails, with no Extend', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.listForClassroom.mockResolvedValue([assignment('a-q', 'QUIZ')]);
+    mocks.quizFindMany.mockResolvedValue([quiz('quiz-a-q')]);
+    mocks.settingsFindUnique.mockRejectedValue(new Error('timeout'));
+
+    const [row] = await list();
+    expect(row).toMatchObject({ type: 'QUIZ', tokensPerHour: 0, extend: null });
+  });
+
+  it('gives a form row no late or extension fields', async () => {
+    mocks.listForClassroom.mockResolvedValue([assignment('a-f', 'FORM')]);
+    mocks.formFindMany.mockResolvedValue([form('form-a-f')]);
+    const [row] = await list();
+    expect(row).toMatchObject({ numLateHours: 0, extensionHours: 0, missing: false, extend: null });
   });
 });
 

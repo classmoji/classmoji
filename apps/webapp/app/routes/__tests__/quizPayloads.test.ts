@@ -27,6 +27,8 @@ const mocks = vi.hoisted(() => ({
   findWithMessages: vi.fn(),
   getMessages: vi.fn(),
   userFindById: vi.fn(),
+  findUsersByRole: vi.fn(),
+  netQuizExtensionHoursByStudent: vi.fn(),
 }));
 
 vi.mock('~/utils/helpers', () => ({
@@ -53,6 +55,11 @@ vi.mock('@classmoji/services', () => ({
       clearForUserAndQuiz: vi.fn(),
     },
     user: { findById: (...a: unknown[]) => mocks.userFindById(...a) },
+    classroomMembership: { findUsersByRole: (...a: unknown[]) => mocks.findUsersByRole(...a) },
+    token: {
+      netQuizExtensionHoursByStudent: (...a: unknown[]) =>
+        mocks.netQuizExtensionHoursByStudent(...a),
+    },
   },
   QuizAttemptNotFoundError: class QuizAttemptNotFoundError extends Error {},
 }));
@@ -348,6 +355,7 @@ describe('quiz results page payload', () => {
           'focusMetrics',
           'id',
           'isCounting',
+          'lateHours',
           'partialCreditScore',
           'started_at',
         ].sort()
@@ -558,6 +566,66 @@ describe('student attempt drawer payload', () => {
   });
 });
 
+describe('quiz results page: lateness', () => {
+  const DUE = new Date('2026-03-01T09:00:00Z');
+
+  beforeEach(() => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: TA.id,
+      classroom: CLASSROOM,
+      membership: { role: 'ASSISTANT' },
+    });
+    mocks.findUsersByRole.mockResolvedValue([{ id: ADA.id }, { id: BABBAGE.id }]);
+    mocks.netQuizExtensionHoursByStudent.mockResolvedValue(new Map());
+  });
+
+  it("measures students' attempts against the due date and the hours they bought, never staff previews", async () => {
+    mocks.quizFindById.mockResolvedValue({
+      ...QUIZ_ROW,
+      assignment: { id: 'asg-1', student_deadline: DUE },
+    });
+    // Ada's first attempt completed 1h20m after the due date; she bought 1 h.
+    mocks.netQuizExtensionHoursByStudent.mockResolvedValue(new Map([[ADA.id, 1]]));
+    const taDone = attemptRow('a-ta-done', TA, {
+      completed_at: new Date('2026-03-02T12:00:00Z'),
+      partial_credit_percentage: 50,
+    });
+    mocks.findByQuiz.mockResolvedValue([...ATTEMPTS, taDone]);
+
+    const payload = await detailRoute.loader(detailArgs());
+
+    expect(mocks.netQuizExtensionHoursByStudent).toHaveBeenCalledWith({
+      classroomId: CLASSROOM.id,
+      assignmentId: 'asg-1',
+    });
+    expect(mocks.findUsersByRole).toHaveBeenCalledWith(CLASSROOM.id, 'STUDENT');
+    const ada = payload.students.find(s => s.userId === ADA.id)!;
+    expect(ada.attempts.map(a => [a.id, a.lateHours])).toEqual([
+      ['a-ada-2', 48],
+      ['a-ada-1', 0],
+    ]);
+    expect(ada.lateHours).toBe(0);
+    // An open attempt has no lateness yet; a staff preview never has any.
+    const babbage = payload.students.find(s => s.userId === BABBAGE.id)!;
+    expect(babbage.attempts[0].lateHours).toBeNull();
+    const ta = payload.students.find(s => s.userId === TA.id)!;
+    expect(ta.attempts.every(a => a.lateHours === null)).toBe(true);
+    expect(ta.lateHours).toBeNull();
+  });
+
+  it('reads nothing more for a quiz with no due date, and marks nothing late', async () => {
+    mocks.quizFindById.mockResolvedValue({
+      ...QUIZ_ROW,
+      assignment: { id: 'asg-1', student_deadline: null },
+    });
+
+    const payload = await detailRoute.loader(detailArgs());
+
+    expect(mocks.findUsersByRole).not.toHaveBeenCalled();
+    expect(payload.students.every(s => s.lateHours === null)).toBe(true);
+  });
+});
+
 // ─── The grading-strategy rules, directly ───────────────────────────────────
 
 describe('buildQuizResultRows', () => {
@@ -615,5 +683,36 @@ describe('buildQuizResultRows', () => {
 
     expect(students[0].countingAttemptId).toBe(zero.id);
     expect(students[0].currentScore).toBe(0);
+  });
+
+  it('counts the attempt that scores best after the late penalty, and shows its raw score', () => {
+    const late = {
+      studentDeadline: new Date('2026-03-01T00:00:00Z'),
+      latePenaltyPerHour: 1,
+      extensionHours: new Map<string, number>(),
+      studentIds: new Set([ADA.id]),
+    };
+    // Ada's 80 completed 10 h late counts 70; her 60, 58 h late, counts 2.
+    const { students } = buildQuizResultRows({
+      attempts: [ADA_SECOND, ADA_FIRST],
+      gradingStrategy: 'HIGHEST',
+      viewerId: 'nobody',
+      late,
+    });
+    expect(students[0]).toMatchObject({
+      countingAttemptId: ADA_FIRST.id,
+      currentScore: 80,
+      countedScore: 70,
+      lateHours: 10,
+    });
+
+    // At 10 points an hour both floor at 0; the tie goes to the one completed first.
+    const harsh = buildQuizResultRows({
+      attempts: [ADA_SECOND, ADA_FIRST],
+      gradingStrategy: 'HIGHEST',
+      viewerId: 'nobody',
+      late: { ...late, latePenaltyPerHour: 10 },
+    });
+    expect(harsh.students[0]).toMatchObject({ countedScore: 0, lateHours: 10 });
   });
 });
