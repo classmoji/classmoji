@@ -229,7 +229,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       // The card shows no repo details, so none are sent.
       upNext: ClassmojiService.studentCoursework
         .upNext(coursework)
-        .map(({ repo: _repo, ...row }) => row),
+        .map(({ repo, ...row }) => ({ ...row, extensionHours: repo?.extensionHours ?? 0 })),
       viewerIsStudent: membership?.role === 'STUDENT',
       feedback,
       team,

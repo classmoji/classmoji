@@ -346,6 +346,8 @@ describe('listForStudent — REPO rows keep every field the page showed', () => 
       numLateHours: 4,
       isLateOverride: false,
       tokensPerHour: 3,
+      extensionHours: 2,
+      submissionMode: 'ISSUE',
       closedAt: null,
     });
   });
@@ -404,7 +406,7 @@ describe('listForStudent — REPO rows keep every field the page showed', () => 
       submission('ra-1', 'r-1', {
         status: 'CLOSED',
         provider_issue_number: null,
-        // Pushed 2h1m after the deadline: 3 late hours (rounded up).
+        // Pushed 2h1m after the deadline: 2 whole late hours, as the penalty counts.
         closed_at: new Date(at(-6).getTime() + 2 * HOUR + 60_000),
         assignment: {
           student_deadline: at(-6),
@@ -417,8 +419,36 @@ describe('listForStudent — REPO rows keep every field the page showed', () => 
 
     const [row] = await list();
 
-    expect(row.repo).toMatchObject({ issueUrl: null, numLateHours: 3 });
+    expect(row.repo).toMatchObject({ issueUrl: null, numLateHours: 2 });
     expect(row.href).toBe('https://github.com/cs52-org/lab-ra-1-ada');
+  });
+
+  it('counts a submitted issue-mode row late by its close time, less the hours bought', async () => {
+    mocks.listForClassroom.mockResolvedValue([assignment('r-1', 'REPO')]);
+    mocks.findAllAssignmentsForStudent.mockResolvedValue([
+      submission('ra-1', 'r-1', {
+        status: 'CLOSED',
+        // Closed 4h1m after the deadline: 4 whole late hours. Three were
+        // bought and one of those purchases cancelled, so two still stand.
+        closed_at: new Date(at(-10).getTime() + 4 * HOUR + 60_000),
+        token_transactions: [
+          { type: 'PURCHASE', hours_purchased: 2 },
+          { type: 'PURCHASE', hours_purchased: 1 },
+          { type: 'REFUND', hours_purchased: -1 },
+        ],
+        assignment: {
+          student_deadline: at(-10),
+          grades_released: false,
+          submission_mode: 'ISSUE',
+          tokens_per_hour: 2,
+        },
+      }),
+    ]);
+
+    const [row] = await list();
+
+    expect(row).toMatchObject({ status: 'SUBMITTED', done: true });
+    expect(row.repo).toMatchObject({ numLateHours: 2, extensionHours: 2 });
   });
 
   it("keeps the student's own submission over their team's", async () => {

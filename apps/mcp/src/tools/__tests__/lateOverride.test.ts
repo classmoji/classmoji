@@ -892,9 +892,11 @@ describe('isPastDeadlineIgnoringOverride (parity with the is_late computed field
     expect(late(new Date('2026-09-30T00:00:00Z'), [], null)).toBe(false);
   });
 
-  it('open submission → late once the deadline has passed, extensions ignored', () => {
+  it('open submission → late once the deadline plus the hours bought has passed', () => {
     expect(late(null)).toBe(true);
-    expect(late(null, [500])).toBe(true);
+    // Still inside the bought window: not late yet.
+    expect(late(null, [500])).toBe(false);
+    expect(late(null, [1])).toBe(true);
     expect(
       realService.isPastDeadlineIgnoringOverride(
         { closed_at: null, assignment: { student_deadline: DEADLINE }, token_transactions: [] },

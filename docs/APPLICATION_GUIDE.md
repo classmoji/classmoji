@@ -332,6 +332,7 @@ A classroom grades on one of two scales. Either way every grade is stored as a n
 **Spending Tokens**
 - **Deadline Extensions**: Students spend tokens to extend deadlines
 - Configurable exchange rate (e.g., 10 tokens = 1 hour extension)
+- Hours can be bought at any time (`ClassmojiService.token.purchaseExtensionHours`): before the deadline, while the work is late, or after it is submitted or graded. They move the student's own deadline (`recordPush` reads deadline + purchased hours as the cutoff) and are subtracted from `num_late_hours`, so the late penalty shrinks. The only cap is the balance; a submission with a late override takes no purchases.
 
 #### Transaction Types
 

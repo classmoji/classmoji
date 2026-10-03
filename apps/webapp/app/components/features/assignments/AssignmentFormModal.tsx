@@ -754,7 +754,7 @@ const AssignmentFormModal = ({
           >
             <InputNumber addonAfter="%" min={0} className="w-full" />
           </Form.Item>
-          <Form.Item name="tokens_per_hour" label="Tokens per late hour">
+          <Form.Item name="tokens_per_hour" label="Tokens per extension hour">
             <InputNumber min={0} style={{ width: '100%' }} />
           </Form.Item>
         </div>
