@@ -1356,6 +1356,7 @@ model TokenTransaction {
 
   @@index([classroom_id])
   @@index([student_id])
+  @@index([git_repo_assignment_id])
   @@map("token_transactions")
 }
 

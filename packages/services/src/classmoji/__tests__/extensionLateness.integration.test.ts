@@ -79,7 +79,12 @@ describe.skipIf(!RUN)('extension hours and lateness (integration)', () => {
     return user.id;
   };
 
-  const makeAssignment = (moduleId: string, repositoryId: string, deadline: Date) =>
+  const makeAssignment = (
+    moduleId: string,
+    repositoryId: string,
+    deadline: Date,
+    submissionMode: 'REPO' | 'ISSUE' = 'REPO'
+  ) =>
     prisma.assignment.create({
       data: {
         module_id: moduleId,
@@ -87,7 +92,7 @@ describe.skipIf(!RUN)('extension hours and lateness (integration)', () => {
         repository_id: repositoryId,
         title: `Lab ${randomUUID().slice(0, 6)}`,
         is_published: true,
-        submission_mode: 'REPO',
+        submission_mode: submissionMode,
         student_deadline: deadline,
         tokens_per_hour: 1,
       },
@@ -230,5 +235,65 @@ describe.skipIf(!RUN)('extension hours and lateness (integration)', () => {
     row = await prisma.gitRepoAssignment.findUniqueOrThrow({ where: { id: sub.id } });
     expect(row.closed_at).toEqual(latePush);
     expect(row.status).toBe('CLOSED');
+  });
+
+  it('leaves a graded submission alone when bought hours would cover a later push', async () => {
+    const { classroom, moduleId, repositoryId } = await makeClassroom();
+    const deadline = new Date(Date.now() - 24 * HOUR);
+    const assignment = await makeAssignment(moduleId, repositoryId, deadline);
+    const alice = await makeStudent(classroom.id);
+    const onTime = new Date(deadline.getTime() - HOUR);
+    const latePush = new Date(deadline.getTime() + 2 * HOUR);
+    const repo = await makeRepo(classroom.id, repositoryId, alice, latePush);
+    const sub = await makeSubmission(repo.id, assignment.id, onTime);
+    await prisma.assignmentGrade.create({
+      data: { git_repo_assignment_id: sub.id, emoji: 'score-90' },
+    });
+
+    await buy(classroom.id, alice, sub.id, 3);
+
+    const row = await prisma.gitRepoAssignment.findUniqueOrThrow({ where: { id: sub.id } });
+    expect(row.closed_at).toEqual(onTime);
+  });
+
+  it('never stamps an issue-mode submission from a push after a purchase', async () => {
+    const { classroom, moduleId, repositoryId } = await makeClassroom();
+    const deadline = new Date(Date.now() - 24 * HOUR);
+    const assignment = await makeAssignment(moduleId, repositoryId, deadline, 'ISSUE');
+    const alice = await makeStudent(classroom.id);
+    const latePush = new Date(deadline.getTime() + 2 * HOUR);
+    const repo = await makeRepo(classroom.id, repositoryId, alice, latePush);
+    const sub = await makeSubmission(repo.id, assignment.id, null);
+
+    await buy(classroom.id, alice, sub.id, 3);
+
+    const row = await prisma.gitRepoAssignment.findUniqueOrThrow({ where: { id: sub.id } });
+    expect(row.closed_at).toBeNull();
+    expect(row.status).toBe('OPEN');
+  });
+
+  it('recordPush writes only forward in time and never past a grade', async () => {
+    const { classroom, moduleId, repositoryId } = await makeClassroom();
+    const deadline = new Date(Date.now() + 24 * HOUR);
+    const assignment = await makeAssignment(moduleId, repositoryId, deadline);
+    const alice = await makeStudent(classroom.id);
+    const repo = await makeRepo(classroom.id, repositoryId, alice);
+    const sub = await makeSubmission(repo.id, assignment.id, null);
+    const earlier = new Date(Date.now() - 2 * HOUR);
+    const later = new Date(Date.now() - HOUR);
+
+    expect(await gitRepoAssignmentService.recordPush(repo.id, later)).toEqual([{ id: sub.id }]);
+    // An older push delivered afterwards changes nothing.
+    expect(await gitRepoAssignmentService.recordPush(repo.id, earlier)).toEqual([]);
+    let row = await prisma.gitRepoAssignment.findUniqueOrThrow({ where: { id: sub.id } });
+    expect(row.closed_at).toEqual(later);
+
+    // Once graded, a newer push changes nothing either.
+    await prisma.assignmentGrade.create({
+      data: { git_repo_assignment_id: sub.id, emoji: 'score-80' },
+    });
+    expect(await gitRepoAssignmentService.recordPush(repo.id, new Date())).toEqual([]);
+    row = await prisma.gitRepoAssignment.findUniqueOrThrow({ where: { id: sub.id } });
+    expect(row.closed_at).toEqual(later);
   });
 });

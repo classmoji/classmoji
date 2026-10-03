@@ -107,6 +107,22 @@ describe('extension_purchase', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
+  it("refuses a member of another team, asking about the repo's own team", async () => {
+    // The caller is on team-2; the submission belongs to team-1.
+    mocks.isTeamMember.mockImplementation(
+      async (teamId: string, userId: string) => teamId === 'team-2' && userId === 'student-1'
+    );
+    mocks.findById.mockResolvedValue(submission({ student_id: null, team_id: 'team-1' }));
+
+    const err = await buy().catch(e => e);
+
+    expect(mocks.isTeamMember).toHaveBeenCalledWith('team-1', 'student-1');
+    expect((err as ToolError).kind).toBe('not_found');
+    expect((err as ToolError).message).toBe('Submission not found in this classroom');
+    expect(mocks.purchaseExtensionHours).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
   it("refuses a classmate's individual repo the same way", async () => {
     mocks.findById.mockResolvedValue(submission({ student_id: 'student-2', team_id: null }));
 

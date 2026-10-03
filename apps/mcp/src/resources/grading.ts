@@ -46,7 +46,9 @@ import {
  * `extension_hours` is the net hours the student bought (never below 0), and
  * `is_late` follows the web's `is_late`: submitted after the deadline plus
  * those hours, or not submitted with that time passed; false under
- * `is_late_override`. Every source must load `token_transactions`.
+ * `is_late_override`. Unlike the dashboard late count (`isCountedLate`),
+ * which counts submitted work only, an unsubmitted row can be late here.
+ * Every source must load `token_transactions`, refunds included.
  */
 export function queueRow(s: SubmissionLike, git: GitWebContext | null) {
   const lateness = {
@@ -154,8 +156,10 @@ export const gradingQueueResource: ResourceDefinition = {
   description:
     'All submissions (GitRepoAssignments) in the classroom plus the subset assigned to you as ' +
     'grader, with grade emojis, grader assignments, and the classroom emoji scale. Each row ' +
-    'has extension_hours (hours bought with tokens) and is_late (past student_deadline plus ' +
-    'extension_hours; false when is_late_override). Teaching team only.',
+    'has extension_hours (hours bought with tokens, net of refunds) and is_late (past ' +
+    'student_deadline plus extension_hours; false when is_late_override). is_late includes ' +
+    'unsubmitted rows past that time, unlike the dashboard late count, which counts submitted ' +
+    'work only. Teaching team only.',
   scope: 'read',
   roles: TEACHING_TEAM,
   handler: async (_vars, ctx) => {
@@ -188,9 +192,10 @@ export const submissionResource: ResourceDefinition = {
   uriTemplate: 'classmoji://{org}/{slug}/submissions/{submissionId}',
   title: 'Submission detail',
   description:
-    'One submission (GitRepoAssignment) with its grades, graders, extension_hours, is_late ' +
-    '(past student_deadline plus extension_hours) and analytics snapshot if present. Teaching ' +
-    'team only. submissionId comes from the grading-queue resource.',
+    'One submission (GitRepoAssignment) with its grades, graders, extension_hours (net of ' +
+    'refunds), is_late (past student_deadline plus extension_hours, submitted or not, unlike ' +
+    'the dashboard late count, which counts submitted work only) and analytics snapshot if ' +
+    'present. Teaching team only. submissionId comes from the grading-queue resource.',
   scope: 'read',
   roles: TEACHING_TEAM,
   handler: async (vars, ctx) => {

@@ -67,8 +67,9 @@ export const extensionPurchaseTool: ToolDefinition<ExtensionPurchaseArgs> = {
     'it they reduce how late the submission counts. The price per hour is the assignment’s ' +
     'tokens_per_hour, or the classroom’s default when that is null; nothing but your balance ' +
     'limits how many you buy, so ' +
-    'buy no more hours than you need. An assignment with no deadline has nothing to extend. Check your balance and assignment cost first via the assignments/tokens ' +
-    'resources.',
+    'buy no more hours than you need. An assignment with no deadline has nothing to extend. ' +
+    'Your extension counts net of refunds: a cancelled purchase takes its hours back. Check ' +
+    'your balance and assignment cost first via the assignments/tokens resources.',
   scope: 'write',
   roles: ['STUDENT'],
   inputSchema: {

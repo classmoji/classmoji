@@ -38,8 +38,16 @@ export const findTeamsByUserId = async (userId: string) => {
   });
 };
 
-/** Whether the user is a member of the team. */
-export const isTeamMember = async (teamId: string, userId: string) => {
+/**
+ * Whether the user is a member of the team. A missing id is never a member:
+ * Prisma drops an `undefined` filter, so without this guard a missing team id
+ * would match the user's membership in any team.
+ */
+export const isTeamMember = async (
+  teamId: string | null | undefined,
+  userId: string | null | undefined
+) => {
+  if (!teamId || !userId) return false;
   const membership = await getPrisma().teamMembership.findFirst({
     where: { team_id: teamId, user_id: userId },
     select: { id: true },

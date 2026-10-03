@@ -439,19 +439,36 @@ export const recordPush = async (gitRepoId: string, pushedAt: Date) => {
       token_transactions: { select: { hours_purchased: true } },
     },
   });
-  const open = candidates.filter(c => {
+  const inTime: string[] = [];
+  const lateFirst: string[] = [];
+  for (const c of candidates) {
     const cutoff = extendedDeadlineMs(c.assignment.student_deadline, c.token_transactions);
-    if (cutoff === null) return true;
-    if (pushedAt.getTime() <= cutoff) return true;
+    if (cutoff === null || pushedAt.getTime() <= cutoff) inTime.push(c.id);
     // Past the cutoff: a first push is a late submission; an existing one stays.
-    return c.closed_at === null;
-  });
-  if (open.length === 0) return [];
-  await prisma.gitRepoAssignment.updateMany({
-    where: { id: { in: open.map(c => c.id) } },
+    else if (c.closed_at === null) lateFirst.push(c.id);
+  }
+  if (inTime.length === 0 && lateFirst.length === 0) return [];
+  // The write repeats the read's conditions, so a newer push or a grade that
+  // lands between the two wins: this push never moves a submission back in
+  // time, never unfreezes a graded row, and a late push never replaces a
+  // submission that appeared meanwhile.
+  return prisma.gitRepoAssignment.updateManyAndReturn({
+    where: {
+      OR: [
+        ...(inTime.length
+          ? [
+              {
+                id: { in: inTime },
+                OR: [{ closed_at: null }, { closed_at: { lt: pushedAt }, grades: { none: {} } }],
+              },
+            ]
+          : []),
+        ...(lateFirst.length ? [{ id: { in: lateFirst }, closed_at: null }] : []),
+      ],
+    },
     data: { status: 'CLOSED', closed_at: pushedAt },
+    select: { id: true },
   });
-  return open.map(c => ({ id: c.id }));
 };
 
 /**
@@ -825,7 +842,7 @@ interface CountedLateRow {
  * submission was still late. A row with nothing turned in is missing, not late.
  */
 export const isCountedLate = (row: CountedLateRow) =>
-  row.is_late_override || (row.closed_at !== null && isPastDeadlineIgnoringOverride(row));
+  row.closed_at !== null && (row.is_late_override || isPastDeadlineIgnoringOverride(row));
 
 /**
  * Count a classroom's submissions and the late ones among them (see
@@ -857,8 +874,14 @@ export const getLateCount = async (classroomSlug: string) => {
  * @param {string} classroomSlug - Classroom slug
  * @returns {Promise<number>} - Percentage late
  */
-export const getLatePercentage = async (classroomSlug: string) => {
-  const { total, late } = await getLateCount(classroomSlug);
+export const getLatePercentage = async (classroomSlug: string) =>
+  latePercentage(await getLateCount(classroomSlug));
+
+/**
+ * The late share of a `getLateCount` result as a whole percentage, for a
+ * caller that already holds the counts and should not read them again.
+ */
+export const latePercentage = ({ total, late }: { total: number; late: number }) => {
   if (total === 0) return 0;
   return parseFloat(((late / total) * 100).toFixed(0));
 };
