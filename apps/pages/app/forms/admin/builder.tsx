@@ -777,6 +777,11 @@ export default function FormBuilder() {
               />
               Feed the org project gallery
             </label>
+          ) : !data.form.gallery && fields.some(field => field.gallery_role) ? (
+            <p className="mt-1 max-w-xs text-xs text-gray-500 dark:text-gray-400">
+              Ask the classroom owner to enable the org project gallery before projects can appear
+              publicly.
+            </p>
           ) : null}
           <span className="mt-1 block h-4" />
         </div>

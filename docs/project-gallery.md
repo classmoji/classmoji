@@ -8,6 +8,14 @@ class site's `/projects` and `/projects/:responseId` pages. The gallery spans
 terms belonging to the same git organization. Editing a submitted project
 returns it to PENDING until staff approve it again.
 
+In an existing Pro classroom, owners and teachers start from **Forms → New
+Form → Project Showcase**, then publish the form. Only the classroom owner can
+enable **Feed the org project gallery**; a teacher-created showcase starts
+with the gallery off and explains this requirement. Once enabled, teachers can
+approve or hide projects in **Responses** or the gallery queue. **View gallery**
+on the responses page opens the classroom's public site's `/projects` page.
+The classroom needs an enabled course site for that link to appear.
+
 Identity questions, account email, and staff response metadata never appear in
 the public projection. Other answered input fields may appear as project
 details, so the fill page explicitly discloses publication. Mark private
@@ -84,3 +92,18 @@ post-deployment smoke check. The shared media service's mocked R2 tests verify
 multipart completion, size checks, quota locking, and processing behavior.
 
 Light and dark upload screenshots are in `docs/screenshots/`.
+
+The existing-instructor browser flow starts in the webapp's Forms list and
+tests creation, publishing, owner enablement, student submission, moderation,
+edits, closing/reopening, and publishing a new version:
+
+```sh
+npx playwright test -c apps/pages/playwright.config.ts \
+  apps/pages/tests/e2e/forms-gallery-instructor.spec.ts
+```
+
+Set `GALLERY_SITE_URL` to the local course site's `/projects` URL to also test
+public list/detail visibility and privacy. Set `GALLERY_STAFF_BASE_URL` to a
+local Pages dev server with `SITE_BASE_DOMAIN` enabled to test **View gallery**.
+Both servers must use the devport database. Raw dev test sessions are deliberately
+refused by production servers; use a dev server for authenticated staff checks.

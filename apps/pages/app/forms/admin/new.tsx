@@ -42,6 +42,7 @@ export const loader = async ({
     action: 'new_form',
   });
   return {
+    isOwner: membership.role === 'OWNER',
     // Where backing out goes. This drawer's dominant entry point is the
     // webapp's New Form button, so Cancel and Escape have to return THERE —
     // dismissing to the pages list underneath would strand someone who came
@@ -149,7 +150,7 @@ export const action = async ({
 };
 
 export default function NewFormDrawer() {
-  const { formsList } = useLoaderData<typeof loader>();
+  const { formsList, isOwner } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ error?: string }>();
 
   const [presetKey, setPresetKey] = useState('blank');
@@ -319,7 +320,9 @@ export default function NewFormDrawer() {
                     {option.label}
                   </span>
                   <span className="col-start-2 text-xs text-gray-500 dark:text-gray-400">
-                    {option.blurb}
+                    {option.key === 'showcase' && !isOwner
+                      ? 'Title, summary, team and links. The classroom owner must enable the org gallery before approved entries appear publicly.'
+                      : option.blurb}
                   </span>
                 </label>
               ))}
