@@ -65,6 +65,19 @@ export const lockLedgers = async (tx: LedgerTx, classroomId: string, studentIds:
   }
 };
 
+/**
+ * Serialize grade changes on one submission (GitRepoAssignment). Grade
+ * transactions take this first, before any ledger lock, so two grade changes
+ * on the same submission run one after the other even when it pays nobody (a
+ * repo with no owner, or a team with no members) and so takes no ledger lock.
+ * Purchases and cancels take only ledger locks, so the order of locks stays
+ * the same everywhere. An advisory lock, not a row lock on the submission:
+ * ledger inserts already take key-share locks on that row.
+ */
+export const lockSubmission = async (tx: LedgerTx, gitRepoAssignmentId: string) => {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended('gra:' || ${gitRepoAssignmentId}::text, 0))`;
+};
+
 /** The latest row of a student's ledger. Call only after `lockLedger`. */
 const findLatest = (tx: LedgerTx, classroomId: string, studentId: string) =>
   tx.tokenTransaction.findFirst({

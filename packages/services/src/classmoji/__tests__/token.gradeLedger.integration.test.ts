@@ -32,10 +32,13 @@ import getPrisma from '@classmoji/database';
 
 // A switch to make chosen ledger writes fail, so a test can stop a grade
 // operation part-way through. Everything else goes to the real service.
+// Every attempted ledger write is recorded, in order, before the switch is
+// checked.
 const ledgerHook = vi.hoisted(() => ({
   failWhen: null as
     | null
     | ((data: { studentId: string; type?: unknown; amount: number }) => boolean),
+  calls: [] as Array<{ studentId: string; type?: unknown; amount: number }>,
 }));
 
 vi.mock('../token.service.ts', async importOriginal => {
@@ -43,6 +46,8 @@ vi.mock('../token.service.ts', async importOriginal => {
   return {
     ...actual,
     assignToStudent: async (...args: Parameters<typeof actual.assignToStudent>) => {
+      const { studentId, type, amount } = args[0];
+      ledgerHook.calls.push({ studentId, type, amount });
       if (ledgerHook.failWhen?.(args[0])) throw new Error('ledger write failed (test)');
       return actual.assignToStudent(...args);
     },
@@ -240,6 +245,7 @@ describe.skipIf(!RUN)('grade changes and the token ledger (integration)', () => 
 
   afterEach(() => {
     ledgerHook.failWhen = null;
+    ledgerHook.calls = [];
   });
 
   afterAll(async () => {
@@ -258,10 +264,17 @@ describe.skipIf(!RUN)('grade changes and the token ledger (integration)', () => 
 
     // The second member's reversal fails, after the first one was written.
     const sorted = [...members].sort();
+    ledgerHook.calls = [];
     ledgerHook.failWhen = data => data.type === 'REMOVAL' && data.studentId === sorted[1];
     await expect(remove(submission, grade.id, { teamId })).rejects.toThrow(
       'ledger write failed (test)'
     );
+    // The first member's REMOVAL row was written before the second one
+    // failed, so the checks below show a written row rolled back.
+    expect(ledgerHook.calls.map(c => [c.type, c.studentId, c.amount])).toEqual([
+      ['REMOVAL', sorted[0], -5],
+      ['REMOVAL', sorted[1], -5],
+    ]);
 
     const after = await grades(submission);
     expect(after.map(g => [g.id, g.token_transaction_id])).toEqual([
@@ -398,6 +411,86 @@ describe.skipIf(!RUN)('grade changes and the token ledger (integration)', () => 
     ]);
     expect(rows.filter(r => r.type === 'GAIN')).toHaveLength(2);
     expect(await expectChained(studentId)).toBe(START + 5);
+  });
+
+  it('replaces a score cleared for an open regrade request when the grader gives the same score', async () => {
+    const studentId = await makeStudent();
+    const submission = await makeSubmission({ studentId });
+    await add(submission, 'score-80', { studentId });
+    const [old] = await grades(submission);
+    expect(await expectChained(studentId)).toBe(START + 2);
+
+    const now = Date.now();
+    await prisma.assignmentGrade.update({
+      where: { id: old.id },
+      data: { created_at: new Date(now - 60_000) },
+    });
+    await prisma.regradeRequest.create({
+      data: {
+        git_repo_assignment_id: submission,
+        classroom_id: classroomId,
+        student_id: studentId,
+        previous_grade: ['score-80'],
+        created_at: new Date(now - 30_000),
+      },
+    });
+
+    // The same score again: the stale grade is cleared inside the transaction,
+    // so the grader's earlier score is no longer there and a new grade is
+    // written.
+    await add(submission, 'score-80', { studentId });
+
+    const after = await grades(submission);
+    expect(after.map(g => g.emoji)).toEqual(['score-80']);
+    expect(after[0].id).not.toBe(old.id);
+    expect(after[0].token_transaction_id).not.toBeNull();
+    const rows = await rowsOf(studentId, submission);
+    expect(rows.filter(r => r.type === 'REMOVAL').map(r => r.amount)).toEqual([-2]);
+    expect(rows.filter(r => r.type === 'GAIN')).toHaveLength(2);
+    expect(await expectChained(studentId)).toBe(START + 2);
+  });
+
+  it('adds and removes a paying grade on submissions that pay nobody', async () => {
+    const { teamId: emptyTeam } = await makeTeam(0);
+    const teamSubmission = await makeSubmission({ teamId: emptyTeam });
+    const ownerless = await makeSubmission({});
+
+    for (const submission of [teamSubmission, ownerless]) {
+      await add(submission, '⭐');
+      const [grade] = await grades(submission);
+      expect(grade.emoji).toBe('⭐');
+      expect(grade.token_transaction_id).toBeNull();
+
+      expect(await remove(submission, grade.id)).toBe(true);
+      expect(await grades(submission)).toHaveLength(0);
+      expect(
+        await prisma.tokenTransaction.count({ where: { git_repo_assignment_id: submission } })
+      ).toBe(0);
+    }
+  });
+
+  it('writes one grade when the same score is given twice at once on a submission that pays nobody', async () => {
+    for (let round = 0; round < 5; round++) {
+      const submission = await makeSubmission({});
+
+      await Promise.all([add(submission, 'score-90'), add(submission, 'score-90')]);
+
+      expect((await grades(submission)).map(g => g.emoji)).toEqual(['score-90']);
+    }
+  });
+
+  it('writes one grade and one reward per member when the same emoji is given twice at once', async () => {
+    const { teamId, members } = await makeTeam(2);
+    const submission = await makeSubmission({ teamId });
+
+    await Promise.all([add(submission, '⭐'), add(submission, '⭐')]);
+
+    expect((await grades(submission)).map(g => g.emoji)).toEqual(['⭐']);
+    for (const member of members) {
+      const rows = await rowsOf(member, submission);
+      expect(rows.filter(r => r.type === 'GAIN')).toHaveLength(1);
+      expect(await expectChained(member)).toBe(START + 5);
+    }
   });
 
   it('leaves no unreversed reward when a removal races the add', async () => {

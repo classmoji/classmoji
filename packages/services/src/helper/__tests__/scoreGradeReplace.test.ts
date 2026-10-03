@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   assignToStudent: vi.fn(),
   lockLedgers: vi.fn(),
+  lockSubmission: vi.fn(),
   // The grade transaction's client: who the submission pays, the grade being
   // replaced, and its conditional delete.
   tx: {
@@ -47,6 +48,7 @@ vi.mock('../../classmoji/index.ts', () => ({
     token: {
       assignToStudent: (...a: unknown[]) => mocks.assignToStudent(...a),
       lockLedgers: (...a: unknown[]) => mocks.lockLedgers(...a),
+      lockSubmission: (...a: unknown[]) => mocks.lockSubmission(...a),
     },
   },
 }));

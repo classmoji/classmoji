@@ -223,10 +223,14 @@ interface RemoveGradePayload {
 /**
  * Options for a grade transaction. Read committed, which the ledger locks rely
  * on (see lockLedger in token.service), and a longer timeout than Prisma's 5 s
- * default, since a team grade writes one ledger row per member.
+ * default, since a team grade writes one ledger row per member. `maxWait` is
+ * how long to wait for a pooled connection (Prisma's default is 2 s), so a
+ * burst of grade changes queued on the same locks does not fail other requests
+ * waiting for a connection.
  */
 const GRADE_TX = {
   isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+  maxWait: 5_000,
   timeout: 15_000,
 };
 
@@ -239,18 +243,23 @@ interface GradeScope {
 }
 
 /**
- * Start a grade transaction on a submission: read from the database who its
- * token rewards go to (the student who owns the repo, or every current member
- * of the team that owns it), then lock those ledgers for the rest of the
- * transaction. Grades, their token rows and the link between them then commit
- * together, and no other grade change or ledger write on these students
- * interleaves. `lockLedgers` takes the locks in sorted order.
+ * Start a grade transaction on a submission: lock the submission, read from
+ * the database who its token rewards go to (the student who owns the repo, or
+ * every current member of the team that owns it), then lock those ledgers for
+ * the rest of the transaction. Grades, their token rows and the link between
+ * them then commit together, and no other grade change on this submission or
+ * ledger write on these students interleaves. The submission lock comes
+ * first, then `lockLedgers` in sorted order, so the lock order is the same in
+ * every transaction.
  */
 async function openGradeScope(
   tx: Prisma.TransactionClient,
   classroomId: string,
   gitRepoAssignmentId: string
 ): Promise<GradeScope> {
+  // Taken even when the submission pays nobody (no ledger locks follow), so
+  // two identical grade changes on it never run side by side.
+  await ClassmojiService.token.lockSubmission(tx, gitRepoAssignmentId);
   const submission = await tx.gitRepoAssignment.findUnique({
     where: { id: gitRepoAssignmentId },
     select: { git_repo: { select: { student_id: true, team_id: true } } },

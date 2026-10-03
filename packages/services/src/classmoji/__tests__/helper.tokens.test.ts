@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const updateGradeMock = vi.fn();
 const assignToStudentMock = vi.fn();
 const lockLedgersMock = vi.fn();
+const lockSubmissionMock = vi.fn();
 const findEmojiMappingsMock = vi.fn();
 const findOpenRegradeMock = vi.fn();
 const findByAssignmentIdMock = vi.fn();
@@ -30,6 +31,7 @@ vi.mock('../index.ts', () => ({
     token: {
       assignToStudent: (...args: unknown[]) => assignToStudentMock(...args),
       lockLedgers: (...args: unknown[]) => lockLedgersMock(...args),
+      lockSubmission: (...args: unknown[]) => lockSubmissionMock(...args),
     },
     emojiMapping: {
       findByClassroomId: (...args: unknown[]) => findEmojiMappingsMock(...args),
@@ -79,6 +81,7 @@ beforeEach(() => {
     updateGradeMock,
     assignToStudentMock,
     lockLedgersMock,
+    lockSubmissionMock,
     findEmojiMappingsMock,
     findOpenRegradeMock,
     findByAssignmentIdMock,
@@ -162,6 +165,7 @@ describe('addGradeToGitRepoAssignment token reward', () => {
     expect(transactionMock).toHaveBeenCalledTimes(1);
     expect(transactionMock).toHaveBeenCalledWith({
       isolationLevel: 'ReadCommitted',
+      maxWait: 5000,
       timeout: 15000,
     });
     expect(doesGradeExistMock).toHaveBeenCalledWith('gra-1', '✅', tx);
@@ -225,6 +229,41 @@ describe('addGradeToGitRepoAssignment token reward', () => {
     expect(lockLedgersMock.mock.invocationCallOrder[0]).toBeLessThan(
       addGradeMock.mock.invocationCallOrder[0]
     );
+  });
+
+  it('locks the submission before reading its recipients and before any ledger lock', async () => {
+    ownedByTeam(['student-b', 'student-a']);
+
+    await HelperService.addGradeToGitRepoAssignment({
+      classroom,
+      gitRepoAssignment,
+      graderId: 'grader-1',
+      grade: '✅',
+    });
+
+    expect(lockSubmissionMock).toHaveBeenCalledTimes(1);
+    expect(lockSubmissionMock).toHaveBeenCalledWith(tx, 'gra-1');
+    const submissionLock = lockSubmissionMock.mock.invocationCallOrder[0];
+    expect(submissionLock).toBeLessThan(
+      tx.gitRepoAssignment.findUnique.mock.invocationCallOrder[0]
+    );
+    expect(submissionLock).toBeLessThan(lockLedgersMock.mock.invocationCallOrder[0]);
+  });
+
+  it('locks the submission even when it pays nobody', async () => {
+    ownedByTeam([]);
+
+    await HelperService.addGradeToGitRepoAssignment({
+      classroom,
+      gitRepoAssignment,
+      graderId: 'grader-1',
+      grade: '✅',
+    });
+
+    expect(lockSubmissionMock).toHaveBeenCalledWith(tx, 'gra-1');
+    expect(addGradeMock).toHaveBeenCalledWith('gra-1', 'grader-1', '✅', tx);
+    expect(assignToStudentMock).not.toHaveBeenCalled();
+    expect(updateGradeMock).not.toHaveBeenCalled();
   });
 
   it("surfaces a failed reward write on an individual student's grade", async () => {
@@ -300,6 +339,9 @@ describe('addGradeToGitRepoAssignment numeric score replace', () => {
       [undefined, 3],
     ]);
     expect(assignToStudentMock.mock.calls.every(call => call[1] === tx)).toBe(true);
+    // The grader's previous scores are read inside the same transaction.
+    expect(findByAssignmentIdMock).toHaveBeenCalledTimes(1);
+    expect(findByAssignmentIdMock).toHaveBeenCalledWith('gra-1', tx);
   });
 
   it('writes no reversal when the old score was already removed', async () => {
@@ -352,9 +394,14 @@ describe('removeGradeFromGitRepoAssignment token reversal', () => {
     });
 
     expect(removed).toBe(true);
+    expect(lockSubmissionMock).toHaveBeenCalledWith(tx, 'gra-1');
+    expect(lockSubmissionMock.mock.invocationCallOrder[0]).toBeLessThan(
+      lockLedgersMock.mock.invocationCallOrder[0]
+    );
     expect(transactionMock).toHaveBeenCalledTimes(1);
     expect(transactionMock).toHaveBeenCalledWith({
       isolationLevel: 'ReadCommitted',
+      maxWait: 5000,
       timeout: 15000,
     });
     expect(tx.assignmentGrade.deleteMany).toHaveBeenCalledWith({

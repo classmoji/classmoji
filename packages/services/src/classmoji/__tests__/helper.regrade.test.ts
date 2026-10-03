@@ -11,6 +11,7 @@ const doesGradeExistMock = vi.fn();
 const addGradeMock = vi.fn();
 const assignToStudentMock = vi.fn();
 const lockLedgersMock = vi.fn();
+const lockSubmissionMock = vi.fn();
 const findEmojiMappingsMock = vi.fn();
 const transactionMock = vi.fn();
 
@@ -28,6 +29,7 @@ vi.mock('../index.ts', () => ({
     token: {
       assignToStudent: (...args: unknown[]) => assignToStudentMock(...args),
       lockLedgers: (...args: unknown[]) => lockLedgersMock(...args),
+      lockSubmission: (...args: unknown[]) => lockSubmissionMock(...args),
     },
     emojiMapping: {
       findByClassroomId: (...args: unknown[]) => findEmojiMappingsMock(...args),
@@ -67,6 +69,7 @@ beforeEach(() => {
     addGradeMock,
     assignToStudentMock,
     lockLedgersMock,
+    lockSubmissionMock,
     findEmojiMappingsMock,
     transactionMock,
     tx.gitRepoAssignment.findUnique,

@@ -31,7 +31,7 @@ vi.mock('@classmoji/database', () => {
 
 const LONG_AGO = new Date('2026-01-01T00:00:00Z');
 
-const { assignToStudent, lockLedgers } = await import('../token.service.ts');
+const { assignToStudent, lockLedgers, lockSubmission } = await import('../token.service.ts');
 
 describe('token.assignToStudent', () => {
   beforeEach(() => {
@@ -166,5 +166,19 @@ describe('token.lockLedgers', () => {
     await lockLedgers({ $executeRaw: callerExecuteRaw } as never, 'class-1', []);
 
     expect(callerExecuteRaw).not.toHaveBeenCalled();
+  });
+});
+
+describe('token.lockSubmission', () => {
+  it('takes one advisory lock keyed by the submission id, bound as a parameter', async () => {
+    const callerExecuteRaw = vi.fn();
+
+    await lockSubmission({ $executeRaw: callerExecuteRaw } as never, 'gra-1');
+
+    expect(callerExecuteRaw).toHaveBeenCalledTimes(1);
+    const [strings, ...values] = callerExecuteRaw.mock.calls[0] as [string[], ...unknown[]];
+    expect(strings.join('?')).toContain('pg_advisory_xact_lock');
+    expect(strings.join('?')).toContain("'gra:'");
+    expect(values).toEqual(['gra-1']);
   });
 });
