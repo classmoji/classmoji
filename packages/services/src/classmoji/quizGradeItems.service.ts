@@ -31,6 +31,40 @@ export interface LoadQuizGradeItemsInput {
 }
 
 /**
+ * assignment id → the net extension hours one student has bought on QUIZ
+ * assignments in a classroom (purchases minus refunds; may be negative, so
+ * read it through `effectiveDeadline` / `lateHours`, which floor it at 0).
+ * An assignment with no purchase has no key: read `get(id) ?? 0`.
+ */
+export const netQuizExtensionHours = async ({
+  classroomId,
+  studentId,
+  assignmentIds,
+}: {
+  classroomId: string;
+  studentId: string;
+  assignmentIds?: readonly string[];
+}): Promise<Map<string, number>> => {
+  const byAssignment = new Map<string, number>();
+  if (assignmentIds && assignmentIds.length === 0) return byAssignment;
+
+  const rows = await getPrisma().tokenTransaction.groupBy({
+    by: ['assignment_id'],
+    where: {
+      classroom_id: classroomId,
+      student_id: studentId,
+      assignment_id: assignmentIds ? { in: [...assignmentIds] } : { not: null },
+    },
+    _sum: { hours_purchased: true },
+  });
+
+  for (const row of rows) {
+    if (row.assignment_id) byAssignment.set(row.assignment_id, row._sum.hours_purchased ?? 0);
+  }
+  return byAssignment;
+};
+
+/**
  * user id → that student's quiz items. A student with no item (nothing open,
  * nothing scored and nothing overdue) has no key: read `get(id) ?? []`.
  */
