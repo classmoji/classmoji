@@ -150,7 +150,9 @@ export const gradeRemoveTool: ToolDefinition<GradeRemoveArgs> = {
       throw scopedNotFound('Grade');
     }
 
-    await HelperService.removeGradeFromGitRepoAssignment({
+    // False when the grade was already gone (a concurrent removal got there
+    // first): nothing changed, so nothing is audited.
+    const removed = await HelperService.removeGradeFromGitRepoAssignment({
       classroom: { id: classroom.classroomId },
       gitRepoAssignment: {
         id: gra.id,
@@ -160,14 +162,20 @@ export const gradeRemoveTool: ToolDefinition<GradeRemoveArgs> = {
       grade,
     });
 
-    await writeAudit(ctx, {
-      resource_type: 'GIT_REPO_ASSIGNMENT',
-      resource_id: gra.id,
-      action: 'DELETE',
-      data: { tool: 'grade_remove', emoji: grade.emoji, grade_id: grade.id },
-    });
+    if (removed) {
+      await writeAudit(ctx, {
+        resource_type: 'GIT_REPO_ASSIGNMENT',
+        resource_id: gra.id,
+        action: 'DELETE',
+        data: { tool: 'grade_remove', emoji: grade.emoji, grade_id: grade.id },
+      });
+    }
 
-    return ok({ success: true, removed: { id: grade.id, emoji: grade.emoji } });
+    return ok({
+      success: true,
+      removed: { id: grade.id, emoji: grade.emoji },
+      already_removed: !removed,
+    });
   },
 };
 
@@ -198,7 +206,7 @@ export const gradeRemoveAllTool: ToolDefinition<GradeRemoveAllArgs> = {
     const grades = await ClassmojiService.assignmentGrade.findByAssignmentId(gra.id);
     let removedCount = 0;
     for (const grade of grades) {
-      await HelperService.removeGradeFromGitRepoAssignment({
+      const removed = await HelperService.removeGradeFromGitRepoAssignment({
         classroom: { id: classroom.classroomId },
         gitRepoAssignment: {
           id: gra.id,
@@ -207,9 +215,12 @@ export const gradeRemoveAllTool: ToolDefinition<GradeRemoveAllArgs> = {
         },
         grade,
       });
-      // U9: audit each removal as it lands, not once at the end — a mid-loop
-      // failure must still leave every completed removal audited. Per-grade
-      // rows match grade_remove's audit shape (emoji + grade_id).
+      // A grade a concurrent request already removed changed nothing here:
+      // not counted, not audited.
+      if (!removed) continue;
+      // U9: audit each real removal as it lands, not once at the end — a
+      // mid-loop failure must still leave every completed removal audited.
+      // Per-grade rows match grade_remove's audit shape (emoji + grade_id).
       await writeAudit(ctx, {
         resource_type: 'GIT_REPO_ASSIGNMENT',
         resource_id: gra.id,
