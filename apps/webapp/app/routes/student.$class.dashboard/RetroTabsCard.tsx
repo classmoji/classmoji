@@ -227,7 +227,9 @@ const TeamPanel = ({
             {web.isGitLab ? (
               <GitlabLogo size={14} />
             ) : (
-              <IconBrandGithub size={14} className="text-gray-900 dark:text-gray-100" />
+              // Takes the button's text colour: on this dark button a
+              // near-black logo would vanish.
+              <IconBrandGithub size={14} />
             )}
             Go to repo
             <IconArrowRight size={12} />

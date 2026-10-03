@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { isTransientDatabaseError, retryOnDatabaseBlip } from '../databaseRetry.ts';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  isTransientDatabaseError,
+  retryOnDatabaseBlip,
+  withDatabaseRetry,
+} from '../databaseRetry.ts';
 
 // Shaped like Prisma's own errors without importing the client.
 const initError = (message: string) =>
@@ -50,5 +54,31 @@ describe('retryOnDatabaseBlip', () => {
     await expect(
       retryOnDatabaseBlip.catchError({ error: new Error('assignment not found') })
     ).resolves.toEqual({ skipRetrying: true });
+  });
+});
+
+describe('withDatabaseRetry', () => {
+  const quick = { maxAttempts: 4, factor: 2, minTimeoutInMs: 1, maxTimeoutInMs: 2 };
+  const blip = Object.assign(new Error("Can't reach database server"), { code: 'P1001' });
+
+  it('retries a write through a database blip', async () => {
+    const write = vi.fn().mockRejectedValueOnce(blip).mockResolvedValue('row');
+
+    await expect(withDatabaseRetry(write, quick)).resolves.toBe('row');
+    expect(write).toHaveBeenCalledTimes(2);
+  });
+
+  it('throws any other error at once', async () => {
+    const write = vi.fn().mockRejectedValue(new Error('Unique constraint failed'));
+
+    await expect(withDatabaseRetry(write, quick)).rejects.toThrow('Unique constraint failed');
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives up after the last attempt', async () => {
+    const write = vi.fn().mockRejectedValue(blip);
+
+    await expect(withDatabaseRetry(write, quick)).rejects.toBe(blip);
+    expect(write).toHaveBeenCalledTimes(4);
   });
 });

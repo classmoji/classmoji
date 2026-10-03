@@ -16,7 +16,7 @@ import {
 } from '@classmoji/utils';
 import { createRepositoriesTask } from './gitRepo.ts';
 import { ensureGitInstallation, GitAppNotInstalledError } from '../helpers/gitInstallation.ts';
-import { retryOnDatabaseBlip } from '../helpers/databaseRetry.ts';
+import { retryOnDatabaseBlip, withDatabaseRetry } from '../helpers/databaseRetry.ts';
 import { nanoid } from 'nanoid';
 import dayjs from 'dayjs';
 
@@ -494,8 +494,11 @@ export const addAssignmentToRepo = async (payload: CreateGithubRepositoryAssignm
   }
 
   // Without the row the issue exists but Classmoji never sees it submitted,
-  // so a failed write fails this run rather than passing.
-  await createDatabaseRepositoryAssignment({ ...payload, id, issueNumber, provider });
+  // so a failed write fails this run rather than passing. A database blip is
+  // retried here, as the row's own task (cf-create_git_repo_assignment) did.
+  await withDatabaseRetry(() =>
+    createDatabaseRepositoryAssignment({ ...payload, id, issueNumber, provider })
+  );
 };
 
 export const createGithubRepositoryAssignmentTask = task({

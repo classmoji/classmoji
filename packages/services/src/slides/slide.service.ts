@@ -539,7 +539,7 @@ export async function countSlidesUsingTheme(
       classrooms: { some: { content_repo: contentRepo } },
     },
   });
-  if (!isConnectedGitOrg(gitOrg)) {
+  if (!gitOrg || !isConnectedGitOrg(gitOrg)) {
     return { count: 0, slides: [] };
   }
 
@@ -547,7 +547,9 @@ export async function countSlidesUsingTheme(
     where: {
       classroom: {
         content_repo: contentRepo,
-        git_organization: { login: gitOrgLogin },
+        // Scoped to the org found above: a Github org and a Gitlab group can
+        // share a login, and their slides must not be counted together.
+        git_organization: { id: gitOrg.id },
       },
     },
     include: {

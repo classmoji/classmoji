@@ -139,13 +139,13 @@ const staffErrorMessage = (error: unknown, fallback: string, isGitLab = false): 
     case 'git_user_not_found':
       return isGitLab
         ? 'No user with that username on Gitlab. Check the spelling and try again.'
-        : 'No user with that username on the classroom’s Github/Gitlab. Check the spelling and try again.';
+        : 'No Github user with that username. Check the spelling and try again.';
     case 'staff_not_found':
       return 'That person no longer holds that role in this class — reload the page.';
     case 'no_org_configured':
       return isGitLab
         ? 'This classroom has no linked Gitlab group, so staff cannot be managed yet.'
-        : 'This classroom has no linked Github organization or Gitlab group, so staff cannot be managed yet.';
+        : 'This classroom has no linked Github organization, so staff cannot be managed yet.';
     case 'login_conflict':
       return 'That username belongs to a different account than the one already on file for it — contact support.';
     case 'last_owner':
@@ -214,7 +214,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       if (!login) {
         return {
           action: ActionTypes.SAVE_USER,
-          error: 'Enter the username of the person to add.',
+          error: `Enter the ${isGitLab ? 'Gitlab' : 'Github'} username of the person to add.`,
         };
       }
 
