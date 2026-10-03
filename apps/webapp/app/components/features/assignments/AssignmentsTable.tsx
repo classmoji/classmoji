@@ -23,7 +23,8 @@ export interface AssignmentRowData {
   release_at: string | Date | null;
   student_deadline: string | Date | null;
   grader_deadline: string | Date | null;
-  tokens_per_hour: number;
+  /** Empty = the classroom's default price. */
+  tokens_per_hour: number | null;
   description?: string;
   module: { id: string; title: string; slug: string | null; position?: number };
   repository?: { id: string; title: string } | null;

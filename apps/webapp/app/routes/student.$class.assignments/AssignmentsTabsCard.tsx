@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import dayjs from 'dayjs';
 import { Link, useParams } from 'react-router';
 import { motion, useReducedMotion } from 'framer-motion';
 import { IconExternalLink } from '@tabler/icons-react';
@@ -12,6 +13,12 @@ import {
 } from '~/components/features/assignments/CourseworkTags';
 import { POP_SPRING } from '~/utils/motion';
 import { formatDeadline } from './formatDeadline';
+import { extensionNote } from './extensionNote';
+
+const NOTE_TONE = {
+  info: 'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300',
+  good: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
+} as const;
 
 /** The Current / Completed split: a done row is submitted, completed or closed. */
 export type AssignmentStatus = 'current' | 'completed';
@@ -165,8 +172,39 @@ const AssignmentsTabsCard = ({
                   const repo = row.repo;
                   const canRequestRegrade =
                     !!repo && row.done && repo.gradesReleased && !!classSlug;
-                  const isLate =
-                    !!repo && !row.done && repo.numLateHours > 0 && !repo.isLateOverride;
+                  // Late by the hours left after any the student bought: still
+                  // counting on an open row, fixed at the submission's time on
+                  // a submitted one.
+                  const isLate = !!repo && repo.numLateHours > 0 && !repo.isLateOverride;
+                  // Extension hours can be bought at any time, before the
+                  // deadline or after it, submitted or not. The rows with
+                  // nothing to buy have no deadline, or were submitted on time
+                  // and cannot change any more: graded, or submitted by
+                  // closing the issue. (A push-mode row submitted on time can
+                  // still take a later push inside the hours bought.)
+                  const submittedOnTimeAndSettled =
+                    !!repo &&
+                    row.done &&
+                    repo.numLateHours === 0 &&
+                    (canRequestRegrade || repo.submissionMode !== 'REPO');
+                  const canExtend =
+                    !!repo &&
+                    !!row.deadline &&
+                    repo.tokensPerHour > 0 &&
+                    !repo.isLateOverride &&
+                    !submittedOnTimeAndSettled;
+                  // The date stays the assignment's own; a note under it says
+                  // what the hours bought did.
+                  const note = repo
+                    ? extensionNote({
+                        deadline: row.deadline,
+                        done: row.done,
+                        extensionHours: repo.extensionHours,
+                        numLateHours: repo.numLateHours,
+                        isLateOverride: repo.isLateOverride,
+                        closedAt: repo.closedAt,
+                      })
+                    : null;
                   const meta = [
                     row.module.title,
                     row.isExtraCredit ? 'Extra credit' : null,
@@ -284,34 +322,50 @@ const AssignmentsTabsCard = ({
                         )}
                       </td>
                       <td className="px-4 py-3 hidden sm:table-cell whitespace-nowrap text-gray-600 dark:text-gray-300">
-                        {row.deadline ? formatDeadline(row.deadline, tab) : <Dash />}
+                        {row.deadline ? (
+                          <div className="flex flex-col items-start gap-1">
+                            <span>
+                              {note?.inWindow
+                                ? dayjs(row.deadline).format('MMM D')
+                                : formatDeadline(row.deadline, tab)}
+                            </span>
+                            {note && (
+                              <span
+                                className={`text-xs font-medium px-2 py-0.5 rounded-md ${NOTE_TONE[note.tone]}`}
+                              >
+                                {note.text}
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <Dash />
+                        )}
                       </td>
                       <td className="px-4 py-3 text-right whitespace-nowrap">
-                        {canRequestRegrade ? (
-                          <Link
-                            to={`/student/${classSlug}/regrade-requests/new`}
-                            state={{
-                              assignment: { id: repo!.gitRepoAssignmentId, title: row.title },
-                            }}
-                            className="inline-flex items-center text-xs font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-line bg-panel hover:bg-nav-hover transition-colors"
-                          >
-                            Request regrade
-                          </Link>
-                        ) : isLate ? (
-                          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-700 dark:text-gray-200">
-                            Extend
-                            <TokenExtensionPopover
-                              repositoryAssignment={{
-                                id: repo!.gitRepoAssignmentId,
-                                num_late_hours: repo!.numLateHours,
-                                is_late_override: repo!.isLateOverride,
-                                assignment: {
-                                  student_deadline: row.deadline ?? '',
-                                  tokens_per_hour: repo!.tokensPerHour,
-                                },
-                              }}
-                              balance={balance}
-                            />
+                        {canExtend || canRequestRegrade ? (
+                          <span className="inline-flex items-center justify-end gap-3">
+                            {canExtend && (
+                              <TokenExtensionPopover
+                                repositoryAssignment={{
+                                  id: repo!.gitRepoAssignmentId,
+                                  num_late_hours: repo!.numLateHours,
+                                  is_late_override: repo!.isLateOverride,
+                                  assignment: { tokens_per_hour: repo!.tokensPerHour },
+                                }}
+                                balance={balance}
+                              />
+                            )}
+                            {canRequestRegrade && (
+                              <Link
+                                to={`/student/${classSlug}/regrade-requests/new`}
+                                state={{
+                                  assignment: { id: repo!.gitRepoAssignmentId, title: row.title },
+                                }}
+                                className="inline-flex items-center text-xs font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-line bg-panel hover:bg-nav-hover transition-colors"
+                              >
+                                Request regrade
+                              </Link>
+                            )}
                           </span>
                         ) : (
                           <Dash />

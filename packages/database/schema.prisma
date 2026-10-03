@@ -880,7 +880,9 @@ model Assignment {
   description      String         @default("")
   student_deadline DateTime?
   grader_deadline  DateTime?
-  tokens_per_hour  Int            @default(0)
+  // The price of one extension hour on this assignment. Empty = the
+  // classroom's ClassroomSettings.default_tokens_per_hour; 0 = no extensions.
+  tokens_per_hour  Int?
   release_at       DateTime?
   // QUIZ only for now: from this moment no new attempt can start (an attempt
   // already under way may finish). Empty = never closes. REPO ignores it.

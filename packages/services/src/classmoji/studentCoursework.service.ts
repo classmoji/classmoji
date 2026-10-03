@@ -24,7 +24,13 @@
  */
 
 import getPrisma from '@classmoji/database';
-import { isClosed, openToStudents, quizStanding, titleToIdentifier } from '@classmoji/utils';
+import {
+  effectiveTokensPerHour,
+  isClosed,
+  openToStudents,
+  quizStanding,
+  titleToIdentifier,
+} from '@classmoji/utils';
 import { pagesUrl } from '../emails/escape.ts';
 import * as formResponseService from './formResponse.service.ts';
 import * as helperService from './helper.service.ts';
@@ -71,6 +77,14 @@ export interface RepoRowFields {
   numLateHours: number;
   isLateOverride: boolean;
   tokensPerHour: number;
+  /**
+   * Extension hours the student has bought with tokens and not cancelled.
+   * The deadline shown stays the assignment's own; these hours say how far
+   * past it the student is still on time.
+   */
+  extensionHours: number;
+  /** How the work is submitted: a push (REPO) or closing the issue (ISSUE). */
+  submissionMode: 'REPO' | 'ISSUE' | null;
   /** When it was submitted (the issue closed, or the counted push). */
   closedAt: string | null;
 }
@@ -139,7 +153,12 @@ export type RepoSubmission = Awaited<
 const iso = (value: Date | string | null | undefined) =>
   value ? new Date(value).toISOString() : null;
 
-const repoFields = (ra: RepoSubmission, gitOrgLogin: string | null, now: Date): RepoRowFields => {
+const repoFields = (
+  ra: RepoSubmission,
+  gitOrgLogin: string | null,
+  now: Date,
+  classroomTokensPerHour: number
+): RepoRowFields => {
   const login = gitOrgLogin ?? ra.git_repo?.classroom?.git_organization?.login ?? null;
   // The student's own copy of the repository: with the student Repositories
   // screen gone, this row is where they reach it.
@@ -150,23 +169,35 @@ const repoFields = (ra: RepoSubmission, gitOrgLogin: string | null, now: Date): 
   const graders = (ra.graders ?? []).map(g => ({ id: g.grader.id, name: g.grader.name ?? null }));
 
   // Late hours: how many hours past the deadline the student still is, after
-  // the extension hours they bought with tokens. In ISSUE mode only an open
-  // (not yet submitted) assignment accrues late hours; in REPO mode the latest
-  // push is the submission, so a late push is late by that push's time.
-  const extensionHours = (ra.token_transactions ?? [])
-    .filter(t => t.type === 'PURCHASE')
-    .reduce((sum, t) => sum + (t.hours_purchased ?? 0), 0);
+  // the extension hours they bought with tokens. Work not yet submitted is late
+  // up to now, rounded up: that many hours bring the deadline past this
+  // moment. Submitted work is late by its submission's time (the push in REPO
+  // mode, the issue's close in ISSUE mode) in whole hours, which is what the
+  // late penalty counts (`num_late_hours`) and what hours bought afterwards
+  // pay down. Every row's hours are summed, as that field does: a cancelled
+  // purchase leaves a REFUND with negative hours.
+  const extensionHours = Math.max(
+    0,
+    (ra.token_transactions ?? []).reduce((sum, t) => sum + (t.hours_purchased ?? 0), 0)
+  );
   const deadlineMs = ra.assignment?.student_deadline
     ? new Date(ra.assignment.student_deadline).getTime()
     : null;
   const isRepoMode = ra.assignment?.submission_mode === 'REPO';
-  const submittedAtMs = isRepoMode && ra.closed_at ? new Date(ra.closed_at).getTime() : null;
+  const closedAtMs = ra.closed_at ? new Date(ra.closed_at).getTime() : null;
+  // A push is the submission in REPO mode; in ISSUE mode an open issue is not
+  // submitted, whatever an earlier close left behind.
+  const submittedAtMs = isRepoMode || ra.status !== 'OPEN' ? closedAtMs : null;
+  const stillOpen = isRepoMode ? closedAtMs === null : ra.status === 'OPEN';
   const hoursPastDeadline =
-    deadlineMs !== null
-      ? Math.max(0, Math.ceil(((submittedAtMs ?? now.getTime()) - deadlineMs) / 3_600_000))
-      : 0;
-  const numLateHours =
-    isRepoMode || ra.status === 'OPEN' ? Math.max(0, hoursPastDeadline - extensionHours) : 0;
+    deadlineMs === null
+      ? 0
+      : submittedAtMs !== null
+        ? Math.max(0, Math.floor((submittedAtMs - deadlineMs) / 3_600_000))
+        : stillOpen
+          ? Math.max(0, Math.ceil((now.getTime() - deadlineMs) / 3_600_000))
+          : 0;
+  const numLateHours = Math.max(0, hoursPastDeadline - extensionHours);
 
   return {
     gitRepoAssignmentId: ra.id,
@@ -192,7 +223,10 @@ const repoFields = (ra: RepoSubmission, gitOrgLogin: string | null, now: Date): 
       .join(', '),
     numLateHours,
     isLateOverride: Boolean(ra.is_late_override),
-    tokensPerHour: ra.assignment?.tokens_per_hour ?? 0,
+    // The assignment's own price, else the classroom's default.
+    tokensPerHour: effectiveTokensPerHour(ra.assignment?.tokens_per_hour, classroomTokensPerHour),
+    extensionHours,
+    submissionMode: ra.assignment?.submission_mode ?? null,
     closedAt: iso(ra.closed_at),
   };
 };
@@ -269,7 +303,7 @@ export const listForStudent = async ({
 
   // One read per type for this student. A type whose read fails shows no rows
   // (its statuses would be guesses); the other types still show.
-  const [repoSubmissions, quizJoin, formJoin] = await Promise.all([
+  const [repoSubmissions, quizJoin, formJoin, classroomTokensPerHour] = await Promise.all([
     givenSubmissions ??
       (hasRepos
         ? helperService
@@ -301,6 +335,18 @@ export const listForStudent = async ({
           formResponseService.findSubmittedForUserByFormIds(userId, formIds),
         ]).catch(degraded('form', context, null))
       : null,
+    // The classroom's extension price, for repo rows whose assignment sets
+    // none. A failed read prices them at 0 (no Extend) rather than hiding the
+    // rows.
+    hasRepos
+      ? (async () =>
+          (
+            await getPrisma().classroomSettings.findUnique({
+              where: { classroom_id: classroomId },
+              select: { default_tokens_per_hour: true },
+            })
+          )?.default_tokens_per_hour ?? 0)().catch(degraded('extension price', context, 0))
+      : 0,
   ]);
   const [quizzes, attempts] = quizJoin ?? [[], []];
   const [forms, submittedResponses] = formJoin ?? [[], []];
@@ -335,7 +381,7 @@ export const listForStudent = async ({
       const ra = submissionByAssignment.get(a.id);
       // No submission row yet: no student repo to open, so no row (as before).
       if (!ra) continue;
-      const repo = repoFields(ra, gitOrgLogin, now);
+      const repo = repoFields(ra, gitOrgLogin, now, classroomTokensPerHour);
       const href = repo.issueUrl ?? repo.repoUrl;
       const submitted = ra.status === 'CLOSED';
       rows.push({

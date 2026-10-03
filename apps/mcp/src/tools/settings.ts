@@ -116,7 +116,11 @@ export const classroomSettingsUpdateTool: ToolDefinition<ClassroomSettingsUpdate
       .int()
       .min(0)
       .optional()
-      .describe('Default extension-token cost per late hour for new assignments'),
+      .describe(
+        'Extension-token cost per extension hour on every assignment without its own ' +
+          'tokens_per_hour. Changing it reprices those assignments immediately, including ' +
+          'past ones; 0 turns extensions off for them'
+      ),
     late_penalty_points_per_hour: z
       .number()
       .min(0)

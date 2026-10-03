@@ -593,5 +593,26 @@ export function databaseModuleMock() {
   return {
     default: () => validatingPrisma,
     getPrisma: () => validatingPrisma,
+    // The module's plain named exports, copied: services read them at import
+    // time, and the real module cannot be loaded here (it starts a client).
+    GIT_IDENTITY: {
+      accounts: {
+        where: { provider_id: { in: ['github', 'gitlab'] } },
+        select: { provider_id: true, account_id: true, username: true, image: true, email: true },
+      },
+    },
+    whereGitUsername: (username: string, provider: string | null = 'GITHUB') => ({
+      accounts: {
+        some: {
+          provider_id: (provider || 'GITHUB').toLowerCase(),
+          username: { equals: username, mode: 'insensitive' },
+        },
+      },
+    }),
+    whereGitUsernameIn: (usernames: string[], provider: string | null = 'GITHUB') => ({
+      accounts: {
+        some: { provider_id: (provider || 'GITHUB').toLowerCase(), username: { in: usernames } },
+      },
+    }),
   };
 }
