@@ -367,7 +367,12 @@ async function reserveUpload({
       content_delivery_enabled: true,
       content_repo: true,
       git_organization: {
-        select: { login: true, provider: true, github_installation_id: true },
+        select: {
+          login: true,
+          provider: true,
+          github_installation_id: true,
+          gitlab_connection_id: true,
+        },
       },
     },
   });

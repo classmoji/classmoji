@@ -38,6 +38,7 @@ export interface CapabilityClassroom {
     login?: string | null;
     provider?: string | null;
     github_installation_id?: string | null;
+    gitlab_connection_id?: string | null;
   } | null;
 }
 
@@ -55,7 +56,12 @@ async function withDeliveryFields(classroom: CapabilityClassroom): Promise<Capab
       content_delivery_enabled: true,
       content_repo: true,
       git_organization: {
-        select: { login: true, provider: true, github_installation_id: true },
+        select: {
+          login: true,
+          provider: true,
+          github_installation_id: true,
+          gitlab_connection_id: true,
+        },
       },
     },
   });

@@ -382,6 +382,23 @@ describe('createUpload', () => {
     });
   });
 
+  it('allows media uploads for a connected GitLab classroom', async () => {
+    prisma.classroom.findUnique.mockImplementation(async ({ select }) => ({
+      content_delivery_enabled: true,
+      content_repo: 'content-repo',
+      git_organization: {
+        login: 'org',
+        provider: 'GITLAB',
+        ...(select.git_organization.select.gitlab_connection_id
+          ? { gitlab_connection_id: 'connection' }
+          : {}),
+      },
+    }));
+    await expect(
+      createUpload({ classroom, userId: 'u', filename: 'a.mp4', sizeBytes: 10 })
+    ).resolves.toMatchObject({ uploadId: 'upload-1' });
+  });
+
   it('refuses a classroom whose content cannot be delivered', async () => {
     // Uploading into a classroom the Worker cannot sign for would store bytes
     // that render as a /missing/ placeholder and nothing else.
