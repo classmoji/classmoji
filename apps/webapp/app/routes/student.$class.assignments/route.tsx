@@ -109,50 +109,111 @@ const StudentAssignments = ({ loaderData }: Route.ComponentProps) => {
   );
 };
 
+/** The most hours one purchase buys; the same cap the MCP extension_purchase tool has. */
+export const MAX_EXTENSION_HOURS = 1000;
+
+/** A non-empty string id from the body, or null. */
+const idFrom = (value: unknown): string | null =>
+  typeof value === 'string' && value ? value : null;
+
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const data = await request.json();
   const classSlug = params.class!;
 
   return namedAction(request, {
     async purchaseExtensionHours() {
-      const { classroom, membership } = await assertClassroomAccess({
-        request,
-        classroomSlug: classSlug,
-        allowedRoles: ['OWNER', 'TEACHER'],
-        resourceType: 'TOKEN_PURCHASE',
-        attemptedAction: 'purchase_extension_hours',
-        metadata: {
-          hours_requested: data.hours_purchased,
-          repository_issue_id: data.repository_issue_id,
-        },
-        resourceOwnerId: data.student_id,
-        selfAccessRoles: ['STUDENT'],
-      });
-      assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+      // What the hours are bought on: a repo submission or a quiz assignment,
+      // exactly one of the two.
+      const gitRepoAssignmentId = idFrom(data.git_repo_assignment_id);
+      const assignmentId = idFrom(data.assignment_id);
+      const metadata = {
+        hours_requested: data.hours_purchased,
+        ...(gitRepoAssignmentId ? { git_repo_assignment_id: gitRepoAssignmentId } : {}),
+        ...(assignmentId ? { assignment_id: assignmentId } : {}),
+      };
 
-      const hoursPurchased = Number(data.hours_purchased);
-      if (!Number.isInteger(hoursPurchased) || hoursPurchased <= 0) {
-        throw new Error('Invalid hours: Must be a positive whole number.');
-      }
-      if (!data.git_repo_assignment_id) {
-        throw new Error('Missing repository assignment ID.');
-      }
-      if (String(data.classroom_id) !== String(classroom.id)) {
-        throw new Error('Invalid classroom ID.');
-      }
+      const checkBody = (classroomId: string) => {
+        const hours = data.hours_purchased;
+        if (
+          typeof hours !== 'number' ||
+          !Number.isInteger(hours) ||
+          hours <= 0 ||
+          hours > MAX_EXTENSION_HOURS
+        ) {
+          throw new Error(
+            `Invalid hours: Must be a positive whole number, at most ${MAX_EXTENSION_HOURS}.`
+          );
+        }
+        if (Boolean(gitRepoAssignmentId) === Boolean(assignmentId)) {
+          throw new Error('Name one repository assignment or one quiz assignment.');
+        }
+        if (idFrom(data.classroom_id) !== classroomId) {
+          throw new Error('Invalid classroom ID.');
+        }
+        return hours;
+      };
 
-      // Price and eligibility are recomputed server-side in the service — the
-      // client-supplied `amount` is never trusted, and the popover's gates
-      // (a price is set, no late override) are re-enforced there so they
-      // cannot be bypassed by posting a crafted request body. It also checks
-      // the submission is the paying student's own, or their team's
-      // (packages/services token.purchaseExtensionHours, plan §5.2 gap 6).
-      await ClassmojiService.token.purchaseExtensionHours({
-        classroomId: classroom.id,
-        studentId: data.student_id,
-        gitRepoAssignmentId: data.git_repo_assignment_id,
-        hours: hoursPurchased,
-      });
+      // Price and eligibility are recomputed server-side in the service: the
+      // client never sends a price, and every gate (a price is set, a
+      // deadline, no late override on a repo, the submission or quiz is the
+      // student's to extend) is re-enforced there so it cannot be bypassed by
+      // posting a crafted request body.
+
+      if (assignmentId && !gitRepoAssignmentId) {
+        // A quiz: students buy hours for themselves only. The payer is the
+        // signed-in student (their STUDENT membership); a body naming anyone
+        // else is refused by the gate (and audited) and again below.
+        const claimed = data.student_id;
+        if (claimed !== undefined && claimed !== null && !idFrom(claimed)) {
+          throw new Error('Invalid student ID.');
+        }
+        const { userId, classroom, membership } = await assertClassroomAccess({
+          request,
+          classroomSlug: classSlug,
+          allowedRoles: ['STUDENT'],
+          resourceType: 'TOKEN_PURCHASE',
+          attemptedAction: 'purchase_extension_hours',
+          metadata,
+          ...(idFrom(claimed) ? { resourceOwnerId: claimed, requireOwnership: true } : {}),
+        });
+        if (idFrom(claimed) && claimed !== userId) {
+          throw new Response('Forbidden', { status: 403 });
+        }
+        assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+        const hours = checkBody(classroom.id);
+
+        await ClassmojiService.token.purchaseQuizExtensionHours({
+          classroomId: classroom.id,
+          studentId: userId,
+          assignmentId,
+          hours,
+        });
+      } else {
+        // A repo submission: the student themselves, or staff on their behalf.
+        const studentId = idFrom(data.student_id);
+        if (!studentId) {
+          throw new Error('Invalid student ID.');
+        }
+        const { classroom, membership } = await assertClassroomAccess({
+          request,
+          classroomSlug: classSlug,
+          allowedRoles: ['OWNER', 'TEACHER'],
+          resourceType: 'TOKEN_PURCHASE',
+          attemptedAction: 'purchase_extension_hours',
+          metadata,
+          resourceOwnerId: studentId,
+          selfAccessRoles: ['STUDENT'],
+        });
+        assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+        const hours = checkBody(classroom.id);
+
+        await ClassmojiService.token.purchaseExtensionHours({
+          classroomId: classroom.id,
+          studentId,
+          gitRepoAssignmentId: gitRepoAssignmentId!,
+          hours,
+        });
+      }
       return {
         action: 'PURCHASE_EXTENSION_HOURS',
         success: 'Successfully purchased hour(s).',

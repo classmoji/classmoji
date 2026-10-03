@@ -997,6 +997,8 @@ model Assignment {
   pages                PageLink[]
   slides               SlideLink[]
   calendarEventLinks   CalendarEventAssignmentLink[]
+  // Quiz extension hours bought on this assignment (QUIZ only).
+  token_transactions   TokenTransaction[]
 
   @@unique([repository_id, title])
   @@index([repository_id])
@@ -1340,6 +1342,12 @@ model TokenTransaction {
   classroom_id           String
   student_id             String
   git_repo_assignment_id String?
+  // A quiz extension: the QUIZ assignment the hours were bought on. At most
+  // one of git_repo_assignment_id / assignment_id is set (CHECK
+  // token_transactions_one_target in the migration). SetNull keeps the row,
+  // and so the balance chain, when the assignment is deleted; the row's
+  // description keeps a readable snapshot of the title.
+  assignment_id          String?
   amount                 Int
   type                   TokenTransactionType
   hours_purchased        Int?
@@ -1352,10 +1360,12 @@ model TokenTransaction {
   classroom           Classroom          @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   student             User               @relation(fields: [student_id], references: [id], onDelete: Cascade)
   git_repo_assignment GitRepoAssignment? @relation(fields: [git_repo_assignment_id], references: [id], onDelete: Cascade)
+  assignment          Assignment?        @relation(fields: [assignment_id], references: [id], onDelete: SetNull)
   assignment_grade    AssignmentGrade?
 
   @@index([classroom_id])
   @@index([student_id])
+  @@index([assignment_id, student_id])
   @@map("token_transactions")
 }
 

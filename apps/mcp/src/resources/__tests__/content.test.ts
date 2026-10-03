@@ -44,6 +44,7 @@ const assertProTier = vi.fn();
 const findByClassroom = vi.fn();
 const getQuizzesForStudent = vi.fn();
 const getClassroomCalendar = vi.fn();
+const quizzesVisibleOrThrow = vi.fn();
 
 /** The lifted platform gate the wrapper delegates to (see the module note). */
 vi.mock('@classmoji/auth/server', () => ({
@@ -58,6 +59,7 @@ vi.mock('@classmoji/services', () => ({
       getQuizzesForStudent: (...a: unknown[]) => getQuizzesForStudent(...a),
     },
     calendar: { getClassroomCalendar: (...a: unknown[]) => getClassroomCalendar(...a) },
+    entitlement: { quizzesVisibleOrThrow: (...a: unknown[]) => quizzesVisibleOrThrow(...a) },
   },
 }));
 
@@ -104,6 +106,8 @@ beforeEach(() => {
   findByClassroom.mockReset();
   getQuizzesForStudent.mockReset();
   getClassroomCalendar.mockReset();
+  quizzesVisibleOrThrow.mockReset();
+  quizzesVisibleOrThrow.mockResolvedValue(true);
 });
 
 describe('quizzes resource Pro gate (A3)', () => {
