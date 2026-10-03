@@ -35,7 +35,8 @@ const mocks = vi.hoisted(() => ({
   findRepositoriesPerStudent: vi.fn(),
   getClassroomSettingsForServer: vi.fn(),
   findLetterGradeMappings: vi.fn(),
-  loadQuizzesVisible: vi.fn(),
+  quizzesVisibleOrThrow: vi.fn(),
+  loadQuizGradeItems: vi.fn(),
   findAttemptsByQuiz: vi.fn(),
   findGradingStrategies: vi.fn(),
   listResponsesByFormId: vi.fn(),
@@ -60,10 +61,6 @@ vi.mock(
   async () => await import('../../../utils/studentFields.server.ts')
 );
 
-vi.mock('~/utils/classroomProFlag.server', () => ({
-  loadQuizzesVisible: (...a: unknown[]) => mocks.loadQuizzesVisible(...a),
-}));
-
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     classroomMembership: {
@@ -85,6 +82,12 @@ vi.mock('@classmoji/services', () => ({
     quizAttempt: { findByQuiz: (...a: unknown[]) => mocks.findAttemptsByQuiz(...a) },
     quiz: { findGradingStrategies: (...a: unknown[]) => mocks.findGradingStrategies(...a) },
     formResponse: { listByFormId: (...a: unknown[]) => mocks.listResponsesByFormId(...a) },
+    entitlement: {
+      quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a),
+    },
+    quizGradeItems: {
+      loadQuizGradeItems: (...a: unknown[]) => mocks.loadQuizGradeItems(...a),
+    },
   },
 }));
 
@@ -190,7 +193,8 @@ beforeEach(() => {
     quizzes_enabled: true,
   });
   mocks.findLetterGradeMappings.mockResolvedValue([]);
-  mocks.loadQuizzesVisible.mockResolvedValue(true);
+  mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
+  mocks.loadQuizGradeItems.mockResolvedValue(new Map());
   mocks.findAttemptsByQuiz.mockResolvedValue([]);
   mocks.findGradingStrategies.mockResolvedValue({});
   mocks.listResponsesByFormId.mockResolvedValue([]);
@@ -205,7 +209,7 @@ describe('grades loader — the payload carries only what the table renders', ()
     const { students } = await resolveLoader();
     const student = (students as Record<string, unknown>[])[0];
 
-    const expected = ['id', 'name', 'login', 'avatar_url', 'git_repos'];
+    const expected = ['id', 'name', 'login', 'avatar_url', 'git_repos', 'quiz_items'];
     if (role === 'OWNER') expected.push(...CONTACT_FIELDS);
 
     expect(Object.keys(student).sort()).toEqual(expected.sort());
@@ -360,7 +364,7 @@ describe('grades loader — quiz columns appear only where quizzes are visible',
     expect(mocks.findAttemptsByQuiz).toHaveBeenCalledWith('quiz-1');
     expect(mocks.findGradingStrategies).toHaveBeenCalledWith(['quiz-1']);
     expect(activity.quiz['a-quiz']).toEqual({ 'student-1': { completed: true, score: 90 } });
-    expect(mocks.loadQuizzesVisible).toHaveBeenCalledWith('class-1');
+    expect(mocks.quizzesVisibleOrThrow).toHaveBeenCalledWith('class-1');
   });
 
   it('scores from partial_credit_percentage under the quiz grading strategy', async () => {
@@ -397,7 +401,7 @@ describe('grades loader — quiz columns appear only where quizzes are visible',
   });
 
   it('drops the quiz column and never reads its attempts when quizzes are hidden', async () => {
-    mocks.loadQuizzesVisible.mockResolvedValue(false);
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(false);
 
     const { assignments, activity } = await resolveColumns();
 
@@ -407,6 +411,95 @@ describe('grades loader — quiz columns appear only where quizzes are visible',
     expect(mocks.findGradingStrategies).not.toHaveBeenCalled();
     // Form activity is unaffected.
     expect(mocks.listResponsesByFormId).toHaveBeenCalledWith('form-1');
+  });
+});
+
+// ─── Loader: quiz grade items for the totals ─────────────────────────────────
+
+describe('grades loader — quiz grade items join the totals', () => {
+  const ITEM = {
+    assignment_id: 'a-quiz',
+    module_id: 'mod-1',
+    weight: 10,
+    is_extra_credit: false,
+    grade: 72,
+    raw_grade: 80,
+    counts_as_zero: false,
+    late_hours: 4,
+  };
+
+  const resolveAll = async () => {
+    const { allData } = await route.loader(loaderArgs());
+    const resolved = (await allData) as unknown[];
+    return {
+      students: resolved[2] as Array<Record<string, unknown> & { quiz_items: unknown[] }>,
+      assignments: resolved[6] as Array<{ id: string; type: string }>,
+    };
+  };
+
+  beforeEach(() => {
+    mocks.listForClassroom.mockResolvedValue([
+      {
+        id: 'a-quiz',
+        title: 'Recursion',
+        type: 'QUIZ',
+        quiz_id: 'quiz-1',
+        module: { title: 'W1' },
+      },
+    ]);
+  });
+
+  it('loads the items once for the whole roster with the same visibility as the columns', async () => {
+    await resolveAll();
+
+    expect(mocks.quizzesVisibleOrThrow).toHaveBeenCalledExactlyOnceWith('class-1');
+    expect(mocks.loadQuizGradeItems).toHaveBeenCalledExactlyOnceWith({
+      classroomId: 'class-1',
+      quizzesVisible: true,
+    });
+  });
+
+  it("puts each student's items on their row, projected to the item fields", async () => {
+    mocks.loadQuizGradeItems.mockResolvedValue(
+      new Map([['student-1', [{ ...ITEM, attempt_id: 'at-1', user_id: 'student-1' }]]])
+    );
+
+    const { students } = await resolveAll();
+
+    expect(students[0].quiz_items).toEqual([ITEM]);
+    expect(Object.keys(students[0].quiz_items[0] as object).sort()).toEqual(
+      Object.keys(ITEM).sort()
+    );
+  });
+
+  it('gives a student with no item an empty list', async () => {
+    mocks.loadQuizGradeItems.mockResolvedValue(new Map([['someone-else', [ITEM]]]));
+
+    const { students } = await resolveAll();
+
+    expect(students[0].quiz_items).toEqual([]);
+  });
+
+  it('asks for no items and shows no quiz column when quizzes are hidden', async () => {
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(false);
+
+    const { students, assignments } = await resolveAll();
+
+    expect(assignments).toEqual([]);
+    expect(mocks.loadQuizGradeItems).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      quizzesVisible: false,
+    });
+    expect(students[0].quiz_items).toEqual([]);
+  });
+
+  it('errors instead of dropping quizzes when the visibility lookup fails', async () => {
+    mocks.quizzesVisibleOrThrow.mockRejectedValue(new Error('lookup failed'));
+
+    const { allData } = await route.loader(loaderArgs());
+
+    await expect(allData).rejects.toThrow('lookup failed');
+    expect(mocks.loadQuizGradeItems).not.toHaveBeenCalled();
   });
 });
 

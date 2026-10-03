@@ -4,12 +4,23 @@ import { Skeleton } from 'antd';
 
 import GradesTable from './GradesTable';
 import { ClassmojiService } from '@classmoji/services';
-import { quizStanding } from '@classmoji/utils';
+import { quizStanding, type GradedItem } from '@classmoji/utils';
 import { addAuditLog, addClassroomAuditLog } from '~/utils/helpers';
 import { pickOwnerOnlyContactFields } from '~/utils/studentFields.server';
 import { requireClassroomStaff, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
-import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import type { Route } from './+types/route';
+
+/** A grade item as the table reads it, and nothing more. */
+const projectGradedItem = (item: GradedItem): GradedItem => ({
+  assignment_id: item.assignment_id,
+  module_id: item.module_id,
+  weight: item.weight,
+  is_extra_credit: item.is_extra_credit,
+  grade: item.grade,
+  raw_grade: item.raw_grade,
+  counts_as_zero: item.counts_as_zero,
+  late_hours: item.late_hours,
+});
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
@@ -28,8 +39,20 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   // trio is shared with it so the two cannot drift.
   const isRealOwner = membership?.role === 'OWNER';
 
-  // Never rejects: a failed lookup answers false.
-  const quizzesVisible = loadQuizzesVisible(classroom.id);
+  // One answer for the quiz columns AND the quiz grade items in the totals, the
+  // same predicate the student report and the leaderboard use. A failed lookup
+  // rejects (the page errors) rather than silently dropping quizzes out of
+  // every total.
+  const quizzesVisible = ClassmojiService.entitlement.quizzesVisibleOrThrow(classroom.id);
+
+  // Each student's quiz grade items (user id → items), one batched read for the
+  // roster. Projected to the item fields so nothing else reaches the page.
+  const quizItems = quizzesVisible.then(visible =>
+    ClassmojiService.quizGradeItems.loadQuizGradeItems({
+      classroomId: classroom.id,
+      quizzesVisible: visible,
+    })
+  );
 
   const promises = {
     emojiMappings: ClassmojiService.emojiMapping.findByClassroomId(classroom.id),
@@ -42,7 +65,10 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     // `User` and `ClassroomMembership` rows — which carry contact details, the
     // global better-auth role, ban state and the Stripe customer id — and none
     // of that belongs in a page.
-    students: ClassmojiService.user.findRepositoriesPerStudent(classroom).then(students =>
+    students: Promise.all([
+      ClassmojiService.user.findRepositoriesPerStudent(classroom),
+      quizItems,
+    ]).then(([students, itemsByUser]) =>
       students.map(student => ({
         id: student.id,
         name: student.name,
@@ -53,6 +79,9 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
         // Passed through whole and untouched: calculateStudentFinalGrade
         // walks the nested assignments, grades and token transactions.
         git_repos: student.git_repos,
+        // Quiz assignments in the totals: the same items the leaderboard and
+        // the student report count.
+        quiz_items: (itemsByUser.get(student.id) ?? []).map(projectGradedItem),
         ...pickOwnerOnlyContactFields(student, isRealOwner),
       }))
     ),
@@ -131,7 +160,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
           // Each student's counting attempt under the quiz's grading strategy
           // (the shared selector): completed attempts only, scored by
           // partial_credit_percentage, so a running retake never hides a
-          // finished attempt. Display only; totals do not read it.
+          // finished attempt. Cell states only (in progress, unscored); the
+          // totals, sorter and column mean read the grade items.
           quiz[a.id] = {};
           for (const [userId, own] of byUser) {
             const standing = quizStanding(own, strategies?.[a.quiz_id]);

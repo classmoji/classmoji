@@ -45,15 +45,19 @@ Grades are hidden from students by default. Each assignment page has a **Grades 
 
 ### Late penalties
 
-Set **Late penalty points per hour** in **Settings > Grades**. A submission that lands after the deadline (plus any extension the student bought with tokens) is docked that many points per late hour. To forgive a specific submission, open the **⋮** on its row and choose **Waive late penalty**; **Restore late penalty** undoes it.
+Set **Late penalty points per hour** in **Settings > Grades**. A submission that lands after the deadline (plus any extension the student bought with tokens) is docked that many points per whole late hour. To forgive a specific submission, open the **⋮** on its row and choose **Waive late penalty**; **Restore late penalty** undoes it.
+
+Quizzes follow the same rule: an attempt finished after the due date (plus the hours the student bought) loses that many points per whole late hour, and the quiz's grading strategy (highest, most recent, or first attempt) picks among the penalised scores. There is no waive for quizzes; a student can buy the late hours out with tokens.
 
 ### Grade calculations
 
 <GradeCalculationDiagram />
 
-**Submission grade**: the mean of the grades given to that submission (emoji values or scores, across graders), minus any late penalty.
+**Repository assignment grade**: the mean of the grades given to the submission (emoji values or scores, across graders), minus any late penalty. A submission still missing after the deadline (plus bought hours) counts as 0.
 
-**Course grade**: the weighted mean of every graded, non-extra-credit assignment, using each assignment's weight, plus any extra-credit assignments on top. Repositories carry no weight, and there is no drop-lowest.
+**Quiz assignment grade**: the score of the attempt picked by the quiz's grading strategy, minus any late penalty. It counts as soon as the attempt is scored. A student with no finished attempt once the due date (plus the hours they bought) has passed gets a 0; a quiz with no due date never counts as 0. Students see their own score before the penalty, with the late hours beside it; staff totals use the penalised score.
+
+**Course grade**: Σ(grade × weight) / Σ weight over every graded, non-extra-credit assignment, then each graded extra-credit assignment adds grade × weight / 100. Weights are relative, so they don't need to add up to 100. Repositories carry no weight, forms carry no grade, and there is no drop-lowest. Quizzes count only where quizzes are turned on for the classroom.
 
 ### Letter grades
 
@@ -66,8 +70,9 @@ Map score ranges to letters in **Settings > Grades** (for example, 90–100 = A,
 <Screenshot src={gradesImg} alt="The gradebook showing students with letter grades, raw grades, and final grade columns" frame url="app.classmoji.io/admin/cs-101/grades" size="lg" />
 
 - Search students, and use **Show** to filter: **Everyone**, **Has something to grade**, **Has a missing submission**, **Late somewhere**.
-- Columns are grouped by type, **Repositories**, **Quizzes**, **Forms**, in deadline order. Each header shows the title (linked to the assignment page), its module, weight, due date, and how many are left to grade.
-- Cells show the score, or **To grade** (blue), **Late** (amber), **Missing** (red), or **Not submitted**. Quiz cells show the score, **In progress**, or **Not attempted**; form cells **Responded** or **No response**.
+- Columns are grouped by module, in course order, each module ending with its **Module total** (collapse a module to show only its total). Each header shows the title (linked to the assignment page), weight, due date, and how many are left to grade.
+- Cells show the score, or **To grade** (blue), **Late** (amber), **Missing** (red), or **Not submitted**. Quiz cells show the score the total counts (after any late penalty, amber with the late hours when late), **0 (not attempted)** (red) once the due date has passed with no finished attempt, or else **In progress** or **Not attempted**; form cells **Responded** or **No response**.
+- **Has a missing submission** and **Late somewhere** include quizzes.
 - Grade from the cell: hover **Grade** to open the picker (emoji, or score badges on a numeric scale). Clicking an existing score jumps to that student's row on the assignment page.
 - **Total** (the weighted score; hover for the before-late-penalty and individual-only figures) and **Letter** (from the breakpoints, amber when overridden) stay pinned on the right. A class row at the bottom shows the mean and median.
 
@@ -75,4 +80,4 @@ Map score ranges to letters in **Settings > Grades** (for example, 90–100 = A,
 
 Click the eye icon on a gradebook row (or **View** on the Students list) to open a student's report at `/admin/:class/students/:login` (also under `/teacher`).
 
-It shows the student's name, login, school ID (owner-editable), and tokens; tiles for **Total** with letter, **Graded so far**, **Late** (hours and penalty), and **Final letter override**; then their assignments grouped into **Repositories**, **Quizzes**, and **Forms**, each with its module, status, grade, **View** (Github), **Waive late**, and **Grade now**. A **Private note** at the bottom is visible to staff only.
+It shows the student's name, login, school ID (owner-editable), and tokens; tiles for **Total** with letter, **Graded so far**, **Late** (hours and penalty), and **Final letter override**, each counting repository and quiz assignments; then their assignments grouped by module, each with its status, grade, **View** (Github), **Waive late**, and **Grade now**. A quiz row shows the score the total counts, its late hours, or **Not attempted** with a 0 once the due date has passed. A **Private note** at the bottom is visible to staff only.

@@ -14,15 +14,13 @@ const mocks = vi.hoisted(() => ({
   findForUserByQuizIds: vi.fn(),
   findGradingStrategies: vi.fn(),
   findOwnResponse: vi.fn(),
-  loadQuizzesVisible: vi.fn(),
+  quizzesVisibleOrThrow: vi.fn(),
+  loadQuizGradeItems: vi.fn(),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
   requireClassroomStaff: (...a: unknown[]) => mocks.requireClassroomStaff(...a),
   assertClassroomMutationAllowed: vi.fn(),
-}));
-vi.mock('~/utils/classroomProFlag.server', () => ({
-  loadQuizzesVisible: (...a: unknown[]) => mocks.loadQuizzesVisible(...a),
 }));
 vi.mock('~/utils/helpers', () => ({ addAuditLog: vi.fn(), addClassroomAuditLog: vi.fn() }));
 vi.mock('~/components', () => ({ LateOverrideButton: () => null }));
@@ -50,6 +48,12 @@ vi.mock('@classmoji/services', () => ({
       findGradingStrategies: (...a: unknown[]) => mocks.findGradingStrategies(...a),
     },
     formResponse: { findOwnResponse: (...a: unknown[]) => mocks.findOwnResponse(...a) },
+    entitlement: {
+      quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a),
+    },
+    quizGradeItems: {
+      loadQuizGradeItems: (...a: unknown[]) => mocks.loadQuizGradeItems(...a),
+    },
   },
 }));
 
@@ -103,7 +107,8 @@ describe('student report loader — quiz visibility', () => {
       },
     ]);
     mocks.findOwnResponse.mockResolvedValue(null);
-    mocks.loadQuizzesVisible.mockResolvedValue(true);
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
+    mocks.loadQuizGradeItems.mockResolvedValue(new Map());
   });
 
   it('lists the quiz assignment with its attempt when quizzes are visible', async () => {
@@ -117,7 +122,7 @@ describe('student report loader — quiz visibility', () => {
     });
     expect(mocks.findForUserByQuizIds).toHaveBeenCalledWith('u-1', ['quiz-1']);
     expect(mocks.findGradingStrategies).toHaveBeenCalledWith(['quiz-1']);
-    expect(mocks.loadQuizzesVisible).toHaveBeenCalledWith('c-1');
+    expect(mocks.quizzesVisibleOrThrow).toHaveBeenCalledWith('c-1');
   });
 
   it('reports an attempted quiz with no completed attempt as not completed', async () => {
@@ -139,7 +144,7 @@ describe('student report loader — quiz visibility', () => {
   });
 
   it('leaves the quiz assignment out and never reads the attempt when quizzes are hidden', async () => {
-    mocks.loadQuizzesVisible.mockResolvedValue(false);
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(false);
 
     const data = await load();
 
@@ -147,7 +152,81 @@ describe('student report loader — quiz visibility', () => {
     expect(data.quizStatus).toEqual({});
     expect(mocks.findForUserByQuizIds).not.toHaveBeenCalled();
     expect(mocks.findGradingStrategies).not.toHaveBeenCalled();
+    expect(mocks.loadQuizGradeItems).not.toHaveBeenCalled();
+    expect(data.quizItems).toEqual([]);
     // Form state is unaffected.
     expect(mocks.findOwnResponse).toHaveBeenCalledWith('form-1', 'u-1');
+  });
+});
+
+describe('student report loader — quiz grade items', () => {
+  const ITEM = {
+    assignment_id: 'a-quiz',
+    module_id: 'mod-1',
+    weight: 10,
+    is_extra_credit: false,
+    grade: 0,
+    raw_grade: 0,
+    counts_as_zero: true,
+    late_hours: 0,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.requireClassroomStaff.mockResolvedValue({
+      userId: 'staff-1',
+      classroom: { id: 'c-1', slug: 'cs101', status: 'ACTIVE', git_organization: null },
+      membership: { role: 'TEACHER' },
+    });
+    mocks.findStudentByLoginInClassroom.mockResolvedValue({
+      id: 'm-1',
+      comment: null,
+      letter_grade: null,
+      user: { id: 'u-1', name: 'Alice', login: 'alice', school_id: null, image: null },
+    });
+    mocks.listForClassroom.mockResolvedValue(ASSIGNMENTS);
+    mocks.findAllAssignmentsForStudent.mockResolvedValue([]);
+    mocks.findGradingStrategies.mockResolvedValue({ 'quiz-1': 'HIGHEST' });
+    mocks.findForUserByQuizIds.mockResolvedValue([]);
+    mocks.findOwnResponse.mockResolvedValue(null);
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
+    mocks.loadQuizGradeItems.mockResolvedValue(new Map());
+  });
+
+  it("loads this student's items only, with the classroom's quiz visibility", async () => {
+    mocks.loadQuizGradeItems.mockResolvedValue(new Map([['u-1', [ITEM]]]));
+
+    const data = await load();
+
+    expect(mocks.loadQuizGradeItems).toHaveBeenCalledExactlyOnceWith({
+      classroomId: 'c-1',
+      quizzesVisible: true,
+      userIds: ['u-1'],
+    });
+    // A counted zero reaches the page as an item, so the total and the row show it.
+    expect(data.quizItems).toEqual([ITEM]);
+  });
+
+  it('projects each item to the item fields', async () => {
+    mocks.loadQuizGradeItems.mockResolvedValue(
+      new Map([['u-1', [{ ...ITEM, attempt_id: 'x', user_id: 'u-1' }]]])
+    );
+
+    const data = await load();
+
+    expect(Object.keys(data.quizItems[0]).sort()).toEqual(Object.keys(ITEM).sort());
+  });
+
+  it('has no items when the student has none yet', async () => {
+    const data = await load();
+
+    expect(data.quizItems).toEqual([]);
+  });
+
+  it('errors instead of dropping quizzes when the visibility lookup fails', async () => {
+    mocks.quizzesVisibleOrThrow.mockRejectedValue(new Error('lookup failed'));
+
+    await expect(load()).rejects.toThrow('lookup failed');
+    expect(mocks.loadQuizGradeItems).not.toHaveBeenCalled();
   });
 });
