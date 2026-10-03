@@ -7,6 +7,13 @@
  * keyed to the viewer's own user id, never a request-supplied one.
  * Compact rows: the web loader embeds the full student User row and raw
  * relations; here the ledger keeps scalar fields + assignment context only.
+ *
+ * Each row names the assignment it is about: a quiz extension through its own
+ * `assignment` link, a repository extension or grade token through its
+ * submission's assignment. `assignment_id` is that assignment's id (the one
+ * extension_purchase takes for a quiz). A quiz extension whose assignment was
+ * deleted keeps no link, so its title is read back from the row's
+ * description, the "<title> · +N h" snapshot written with it.
  */
 
 import { ClassmojiService } from '@classmoji/services';
@@ -22,11 +29,27 @@ interface TransactionRow {
   description: string;
   is_cancelled: boolean;
   created_at: Date;
+  /** A quiz extension's assignment (set null if the assignment is deleted). */
+  assignment_id?: string | null;
+  assignment?: { id: string; title?: string | null } | null;
   git_repo_assignment?: {
     id: string;
     assignment?: { id: string; title?: string | null } | null;
   } | null;
   assignment_grade?: { id: string; emoji?: string } | null;
+}
+
+/**
+ * The live title of the assignment a row is about; for a quiz extension whose
+ * assignment is gone (the link is set null, the row stays), the title its
+ * description was written with; otherwise null. Grants and removals that name
+ * no assignment stay null: their description is free text.
+ */
+function assignmentTitle(t: TransactionRow): string | null {
+  const live = t.assignment?.title ?? t.git_repo_assignment?.assignment?.title;
+  if (live) return live;
+  if (t.hours_purchased == null || t.git_repo_assignment) return null;
+  return ClassmojiService.token.titleFromQuizExtensionDescription(t.description);
 }
 
 export const tokensResource: ResourceDefinition = {
@@ -35,7 +58,8 @@ export const tokensResource: ResourceDefinition = {
   title: 'My token ledger',
   description:
     'Your token balance and transaction history in this classroom (grants, purchases, refunds, ' +
-    'removals). Students only.',
+    'removals). Each row names the assignment it is about (assignment_id, assignment_title), ' +
+    'quiz extensions included. Students only.',
   scope: 'read',
   roles: STUDENT_ONLY,
   handler: async (_vars, ctx) => {
@@ -59,7 +83,8 @@ export const tokensResource: ResourceDefinition = {
         description: t.description,
         is_cancelled: t.is_cancelled,
         created_at: t.created_at,
-        assignment_title: t.git_repo_assignment?.assignment?.title ?? null,
+        assignment_id: t.assignment_id ?? t.git_repo_assignment?.assignment?.id ?? null,
+        assignment_title: assignmentTitle(t),
         grade_emoji: t.assignment_grade?.emoji ?? null,
       })),
     };

@@ -24,16 +24,28 @@
  *     students (nav parity; staff unaffected).
  *
  * grades-mine (STUDENT self):
- *   Mirrors the student dashboard's feedback list: filter =
- *   assignment.grades_released && grades.length > 0 — grades_released is the
- *   SOLE visibility gate. Same DTO fields (grader identity narrowed to
- *   id+name). Queries are classroom_id-scoped (not slug-scoped like
- *   helper.findAllAssignmentsForStudent) because slugs are only unique per
- *   git org.
+ *   Repository submissions mirror the student dashboard's feedback list:
+ *   filter = assignment.grades_released && grades.length > 0 —
+ *   grades_released is the SOLE visibility gate for them. Same DTO fields
+ *   (grader identity narrowed to id+name). Queries are classroom_id-scoped
+ *   (not slug-scoped like helper.findAllAssignmentsForStudent) because slugs
+ *   are only unique per git org.
+ *
+ *   Quiz scores (`quiz_grades`) show as soon as an attempt is scored, as on the
+ *   web: one row per quiz item the grade engine counts for this student
+ *   (quizGradeItems.loadQuizGradeItems, the loader every total uses), with the
+ *   RAW percentage of the attempt that counts and that attempt's late hours —
+ *   students see the raw score and the lateness, never the penalised value,
+ *   as for repositories. A quiz whose deadline (plus the hours bought on it)
+ *   passed with no attempt is a counted 0 (`counts_as_zero`). Gated on
+ *   entitlement.quizzesVisibleOrThrow, the predicate the totals use: where
+ *   quizzes are hidden the key is absent, and a failed lookup fails the read
+ *   rather than dropping the quizzes.
  */
 
+import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
-import { effectiveTokensPerHour } from '@classmoji/utils';
+import { countingQuizScore, effectiveDeadline, effectiveTokensPerHour } from '@classmoji/utils';
 import type { ResourceDefinition, ToolContext } from '../mcp/registry.ts';
 import {
   MEMBER,
@@ -44,6 +56,7 @@ import {
   isStaff,
   issueUrl,
   orgGit,
+  sanitizedSettings,
   type SubmissionLike,
 } from './shape.ts';
 
@@ -81,6 +94,14 @@ interface RepositoryRow {
   assignments: AssignmentRow[];
   tag?: { id?: string; name?: string | null } | null;
 }
+
+/** grades-mine's description; my_grades (tools/reads.ts) carries the same text. */
+export const GRADES_MINE_DESCRIPTION =
+  'Your own grades in this classroom. Repository submissions appear only once their grades ' +
+  'are released (Assignment.grades_released). Quiz scores (quiz_grades) appear as soon as an ' +
+  'attempt is scored: the raw percentage of the attempt that counts, with how many hours late ' +
+  'it was (after any hours you bought), or 0 with counts_as_zero when the deadline passed ' +
+  'with no attempt. Students only.';
 
 /** The viewer's own GitRepoAssignments in this classroom (individual + team). */
 async function findMySubmissions(ctx: ToolContext): Promise<SubmissionLike[]> {
@@ -229,17 +250,103 @@ export const reposResource: ResourceDefinition = {
   },
 };
 
+/**
+ * The caller's quiz rows for grades-mine, or null where quizzes are hidden.
+ * Which quizzes have a row, and which are a counted 0, comes from the grade
+ * loader; the counting attempt is re-derived from the same inputs with the
+ * same rule (`countingQuizScore`: the strategy picks among late-penalised
+ * scores), so the row names the attempt the total counts.
+ */
+async function myQuizGrades(ctx: ToolContext) {
+  const { classroomId } = classroomCtx(ctx);
+  const quizzesVisible = await ClassmojiService.entitlement.quizzesVisibleOrThrow(classroomId);
+  if (!quizzesVisible) return null;
+
+  const studentId = ctx.viewer.userId;
+  const now = new Date();
+  const items =
+    (
+      await ClassmojiService.quizGradeItems.loadQuizGradeItems({
+        classroomId,
+        quizzesVisible,
+        userIds: [studentId],
+        now,
+      })
+    ).get(studentId) ?? [];
+  if (items.length === 0) return [];
+
+  const itemByAssignment = new Map(items.map(item => [item.assignment_id, item]));
+  const assignmentIds = [...itemByAssignment.keys()];
+  const assignments = await getPrisma().assignment.findMany({
+    where: { id: { in: assignmentIds }, type: 'QUIZ', module: { classroom_id: classroomId } },
+    select: {
+      id: true,
+      title: true,
+      quiz_id: true,
+      student_deadline: true,
+      module: { select: { id: true, title: true } },
+      quiz: { select: { grading_strategy: true } },
+    },
+    orderBy: [{ student_deadline: 'asc' }, { title: 'asc' }],
+  });
+  const quizIds = assignments.flatMap(a => (a.quiz_id ? [a.quiz_id] : []));
+  const [attempts, hours] = await Promise.all([
+    ClassmojiService.quizAttempt.findForUserByQuizIds(studentId, quizIds),
+    ClassmojiService.quizGradeItems.netQuizExtensionHours({
+      classroomId,
+      studentId,
+      assignmentIds,
+    }),
+  ]);
+  const penalty = Number(sanitizedSettings(ctx).late_penalty_points_per_hour ?? 0) || 0;
+
+  return assignments.flatMap(a => {
+    const item = itemByAssignment.get(a.id);
+    if (!item) return [];
+    const extensionHours = hours.get(a.id) ?? 0;
+    const score = item.counts_as_zero
+      ? null
+      : countingQuizScore(
+          attempts.filter(t => t.quiz_id === a.quiz_id),
+          a.quiz?.grading_strategy,
+          {
+            studentDeadline: a.student_deadline,
+            extensionHours,
+            latePenaltyPerHour: penalty,
+          }
+        );
+    return [
+      {
+        assignment_id: a.id,
+        quiz_id: a.quiz_id,
+        title: a.title,
+        module: a.module ? { id: a.module.id, title: a.module.title } : null,
+        student_deadline: a.student_deadline ?? null,
+        // The due date with the hours this student bought on it.
+        effective_deadline: effectiveDeadline(a.student_deadline, extensionHours),
+        // The raw score of the attempt that counts; 0 for a counted zero.
+        percentage: item.counts_as_zero ? 0 : (score?.raw_percentage ?? null),
+        late_hours: score?.late_hours ?? 0,
+        counts_as_zero: item.counts_as_zero,
+        counting_attempt_id: score?.counting_attempt_id ?? null,
+        completed_at: score?.counting?.completed_at ?? null,
+      },
+    ];
+  });
+}
+
 export const gradesMineResource: ResourceDefinition = {
   name: 'grades-mine',
   uriTemplate: 'classmoji://{org}/{slug}/grades-mine',
-  title: 'My released grades',
-  description:
-    'Your own graded submissions in this classroom — only assignments whose grades have been ' +
-    'released (Assignment.grades_released). Students only.',
+  title: 'My grades',
+  description: GRADES_MINE_DESCRIPTION,
   scope: 'read',
   roles: STUDENT_ONLY,
   handler: async (_vars, ctx) => {
-    const submissions = await findMySubmissions(ctx);
+    const [submissions, quizGrades] = await Promise.all([
+      findMySubmissions(ctx),
+      myQuizGrades(ctx),
+    ]);
     const git = orgGit(ctx);
 
     // The student dashboard's exact feedback filter: released AND has grades.
@@ -260,6 +367,8 @@ export const gradesMineResource: ResourceDefinition = {
         graders: graderRefs(s.graders),
         issue_url: issueUrl(git, s),
       })),
+      // Absent where the classroom hides quizzes: no trace of them.
+      ...(quizGrades ? { quiz_grades: quizGrades } : {}),
     };
   },
 };
