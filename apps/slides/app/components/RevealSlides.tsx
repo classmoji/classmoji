@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { handleCodeBlockTab, handleCodeBlockEnter } from './properties/utils/codeBlockUtils';
 import { stripMediaRefs } from '~/utils/mediaRefs';
+import { cleanSandpackBlocks } from '~/utils/sandpackBlocks';
 
 // Built-in Reveal.js themes (exported for use in SlideToolbar)
 export const BUILTIN_THEMES = [
@@ -561,54 +562,10 @@ const RevealSlides = forwardRef(function RevealSlides(
       codeEl.classList.remove('hljs');
     });
 
-    // Clean up Sandpack sl-blocks - the entire sl-block-content needs to be rebuilt
-    // When Sandpack renders, it can create text nodes and other content throughout the block
-    // We rebuild the entire structure to ensure only clean HTML is saved
-    slidesClone
-      .querySelectorAll('.sl-block[data-block-type="sandpack"]')
-      .forEach((block: Element) => {
-        const embed = block.querySelector('.sandpack-embed') as HTMLElement | null;
-        const scriptTag = embed?.querySelector('script[data-sandpack-files]');
-
-        // Remove invalid blocks (no sandpack-embed or no script tag)
-        // These can be created by corrupted save/load cycles
-        if (!embed || !scriptTag) {
-          block.remove();
-          return;
-        }
-
-        // Extract the JSON content and all data attributes
-        const filesJson = scriptTag.textContent;
-        const template = embed.dataset.template || 'vanilla';
-        const theme = embed.dataset.theme || 'auto';
-        const layout = embed.dataset.layout || 'preview-right';
-        const showTabs = embed.dataset.showTabs;
-        const showLineNumbers = embed.dataset.showLineNumbers;
-        const showConsole = embed.dataset.showConsole;
-        const readOnly = embed.dataset.readOnly;
-        const editorWidth = embed.dataset.editorWidth;
-
-        // Rebuild sl-block-content with clean sandpack-embed
-        const contentDiv = block.querySelector('.sl-block-content');
-        if (contentDiv) {
-          // Build data attributes string
-          let dataAttrs = `data-template="${template}" data-theme="${theme}" data-layout="${layout}"`;
-          if (showTabs === 'false') dataAttrs += ' data-show-tabs="false"';
-          if (showLineNumbers === 'false') dataAttrs += ' data-show-line-numbers="false"';
-          if (showConsole === 'true') dataAttrs += ' data-show-console="true"';
-          if (readOnly === 'true') dataAttrs += ' data-read-only="true"';
-          if (editorWidth && editorWidth !== '50')
-            dataAttrs += ` data-editor-width="${editorWidth}"`;
-
-          // Escape </script> in JSON to prevent innerHTML parsing issues
-          // The JSON may contain </script> tags (e.g., in HTML file content)
-          // which would prematurely close our script tag when parsed
-          const safeJson = filesJson.replace(/<\/script>/gi, '<\\/script>');
-
-          // Replace entire content with clean HTML
-          contentDiv.innerHTML = `<div class="sandpack-embed" ${dataAttrs}><script type="application/json" data-sandpack-files>${safeJson}</script></div>`;
-        }
-      });
+    // Sandpack sl-blocks: strip the live React mount and stray typed text,
+    // keep the embed, its attributes and its files payload exactly as stored.
+    // Same cleanup the diff-at-save snapshot runs (deckOpsDiff).
+    cleanSandpackBlocks(slidesClone);
 
     // Remove any Reveal.js runtime classes/attributes that shouldn't be saved
     slidesClone.querySelectorAll('.present, .past, .future').forEach((el: Element) => {

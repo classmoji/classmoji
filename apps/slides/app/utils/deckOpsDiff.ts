@@ -31,6 +31,7 @@
  */
 
 import { stripRuntimeSectionAttrs } from '@classmoji/services/slides/runtime-attrs';
+import { cleanSandpackBlocks } from './sandpackBlocks.ts';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -109,34 +110,10 @@ function cleanupContainer(container: Element): void {
     if ((codeEl.getAttribute('class') ?? '') === '') codeEl.removeAttribute('class');
   });
 
-  // Sandpack blocks: rebuild sl-block-content to the canonical embed shape
-  // (same rebuild getCurrentContent performs — running it on the baseline too
+  // Sandpack blocks: strip the live editor's additions, keep everything stored
+  // (same cleanup getCurrentContent performs — running it on the baseline too
   // keeps the two sides byte-comparable).
-  container.querySelectorAll('.sl-block[data-block-type="sandpack"]').forEach(block => {
-    const embed = block.querySelector('.sandpack-embed') as HTMLElement | null;
-    const scriptTag = embed?.querySelector('script[data-sandpack-files]');
-    if (!embed || !scriptTag) {
-      block.remove();
-      return;
-    }
-    const filesJson = scriptTag.textContent ?? '';
-    const template = embed.dataset.template || 'vanilla';
-    const theme = embed.dataset.theme || 'auto';
-    const layout = embed.dataset.layout || 'preview-right';
-    const { showTabs, showLineNumbers, showConsole, readOnly, editorWidth } = embed.dataset;
-
-    const contentDiv = block.querySelector('.sl-block-content');
-    if (contentDiv) {
-      let dataAttrs = `data-template="${template}" data-theme="${theme}" data-layout="${layout}"`;
-      if (showTabs === 'false') dataAttrs += ' data-show-tabs="false"';
-      if (showLineNumbers === 'false') dataAttrs += ' data-show-line-numbers="false"';
-      if (showConsole === 'true') dataAttrs += ' data-show-console="true"';
-      if (readOnly === 'true') dataAttrs += ' data-read-only="true"';
-      if (editorWidth && editorWidth !== '50') dataAttrs += ` data-editor-width="${editorWidth}"`;
-      const safeJson = filesJson.replace(/<\/script>/gi, '<\\/script>');
-      contentDiv.innerHTML = `<div class="sandpack-embed" ${dataAttrs}><script type="application/json" data-sandpack-files>${safeJson}</script></div>`;
-    }
-  });
+  cleanSandpackBlocks(container);
 
   // Reveal runtime position classes.
   container.querySelectorAll('.present, .past, .future').forEach(el => {

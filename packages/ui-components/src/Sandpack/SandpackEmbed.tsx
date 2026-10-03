@@ -154,7 +154,8 @@ export default function SandpackEmbed({
     // Convert string values to Sandpack file format
     const formatted: Record<string, { code: string }> = {};
     for (const [path, content] of Object.entries(sourceFiles)) {
-      formatted[path] = typeof content === 'string' ? { code: content } : { code: content };
+      // Object-form entries ({ code, hidden, active, … }) go to Sandpack as-is.
+      formatted[path] = typeof content === 'string' ? { code: content } : content;
     }
     return formatted;
   }, [files, template]);
