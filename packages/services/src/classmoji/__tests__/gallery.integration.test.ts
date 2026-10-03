@@ -281,6 +281,7 @@ describe.skipIf(!RUN)('project gallery (integration)', () => {
     const token = submission.rawToken!;
     const { response } = await responseService.confirmSubmission(token);
     await responseService.setGalleryStatus(response.id, 'APPROVED');
+    await formService.setGalleryOrg(form.id, false);
     const answers = { [titleId]: 'Changed' };
     if (mode === 'confirm') await responseService.confirmSubmission(token, { answers });
     else
@@ -291,9 +292,22 @@ describe.skipIf(!RUN)('project gallery (integration)', () => {
         revisionId: revision.id,
         answers,
       });
+    await formService.setGalleryOrg(form.id, true);
     expect(
       (await prisma.formResponse.findUniqueOrThrow({ where: { id: response.id } })).gallery_status
     ).toBe('PENDING');
     expect(await galleryService.getForOrg(orgA, response.id)).toBeNull();
+  });
+  it('editing while the gallery is disabled cannot reuse an earlier approval', async () => {
+    const form = await makeShowcase(newerClassroom);
+    await formService.update(form.formId, { allow_multiple: true });
+    const id = await approve(form, students[2], 'Approved before disabling');
+    await formService.setGalleryOrg(form.formId, false);
+    await submitProject(form, students[2], 'Unreviewed replacement');
+    await formService.setGalleryOrg(form.formId, true);
+    expect((await prisma.formResponse.findUniqueOrThrow({ where: { id } })).gallery_status).toBe(
+      'PENDING'
+    );
+    expect(await galleryService.getForOrg(orgA, id)).toBeNull();
   });
 });
