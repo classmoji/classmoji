@@ -7,7 +7,10 @@ import { CourseworkTypeTag } from '~/components/features/assignments/CourseworkT
 import { useStartQuiz } from '~/components/features/quiz/useStartQuiz';
 
 /** An Up next row: a coursework row without the repo details the card never shows. */
-export type UpNextRow = Omit<StudentCourseworkRow, 'repo'>;
+export type UpNextRow = Omit<StudentCourseworkRow, 'repo'> & {
+  /** Extension hours the student bought on a repo row; 0 otherwise. */
+  extensionHours?: number;
+};
 
 interface UpNextCardProps {
   /** What the student still owes, soonest due first (studentCoursework.upNext). */
@@ -24,9 +27,14 @@ interface UpNextCardProps {
  * The due date as the student reads it, in their own time zone. Overdue and
  * due-within-a-day dates are the ones to notice.
  */
-export const formatDue = (deadline: string, now = dayjs()) => {
+export const formatDue = (deadline: string, now = dayjs(), extensionHours = 0) => {
   const due = dayjs(deadline);
   const days = due.startOf('day').diff(now.startOf('day'), 'day');
+  // Past the deadline but inside the hours the student bought: not overdue.
+  // The date stays the assignment's own; the hours applied are said with it.
+  if (due.isBefore(now) && extensionHours > 0 && !due.add(extensionHours, 'hour').isBefore(now)) {
+    return { text: `${due.format('MMM D')} · +${extensionHours}h applied`, urgent: true };
+  }
   if (due.isBefore(now)) return { text: `Overdue · ${due.format('MMM D')}`, urgent: true };
   if (days === 0) return { text: `Today, ${due.format('h:mm A')}`, urgent: true };
   if (days === 1) return { text: `Tomorrow, ${due.format('h:mm A')}`, urgent: true };
@@ -106,7 +114,10 @@ const UpNextCard = ({ rows, classSlug, viewerIsStudent }: UpNextCardProps) => {
       ) : (
         <ul className="mt-3 flex-1 flex flex-col">
           {rows.map(row => {
-            const due = row.deadline && hydrated ? formatDue(row.deadline) : null;
+            const due =
+              row.deadline && hydrated
+                ? formatDue(row.deadline, undefined, row.extensionHours)
+                : null;
             return (
               <li
                 key={row.assignmentId}

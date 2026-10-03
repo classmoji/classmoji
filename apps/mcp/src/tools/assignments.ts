@@ -199,7 +199,7 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       .int()
       .min(0)
       .optional()
-      .describe('Extension tokens per late hour (0 = no extensions)'),
+      .describe('Extension tokens per extension hour (0 = no extensions)'),
     module_id: z
       .string()
       .uuid()
@@ -452,7 +452,7 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
       .int()
       .min(0)
       .optional()
-      .describe('Extension token cost per late hour (default 0)'),
+      .describe('Extension token cost per extension hour (default 0)'),
     release_at: z
       .string()
       .datetime({ offset: true })

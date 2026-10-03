@@ -71,6 +71,14 @@ export interface RepoRowFields {
   numLateHours: number;
   isLateOverride: boolean;
   tokensPerHour: number;
+  /**
+   * Extension hours the student has bought with tokens and not cancelled.
+   * The deadline shown stays the assignment's own; these hours say how far
+   * past it the student is still on time.
+   */
+  extensionHours: number;
+  /** How the work is submitted: a push (REPO) or closing the issue (ISSUE). */
+  submissionMode: 'REPO' | 'ISSUE' | null;
   /** When it was submitted (the issue closed, or the counted push). */
   closedAt: string | null;
 }
@@ -205,6 +213,8 @@ const repoFields = (ra: RepoSubmission, gitOrgLogin: string | null, now: Date): 
     numLateHours,
     isLateOverride: Boolean(ra.is_late_override),
     tokensPerHour: ra.assignment?.tokens_per_hour ?? 0,
+    extensionHours,
+    submissionMode: ra.assignment?.submission_mode ?? null,
     closedAt: iso(ra.closed_at),
   };
 };

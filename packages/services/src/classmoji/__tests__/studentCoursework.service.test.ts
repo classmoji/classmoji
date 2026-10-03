@@ -346,6 +346,8 @@ describe('listForStudent — REPO rows keep every field the page showed', () => 
       numLateHours: 4,
       isLateOverride: false,
       tokensPerHour: 3,
+      extensionHours: 2,
+      submissionMode: 'ISSUE',
       closedAt: null,
     });
   });
@@ -446,7 +448,7 @@ describe('listForStudent — REPO rows keep every field the page showed', () => 
     const [row] = await list();
 
     expect(row).toMatchObject({ status: 'SUBMITTED', done: true });
-    expect(row.repo).toMatchObject({ numLateHours: 2 });
+    expect(row.repo).toMatchObject({ numLateHours: 2, extensionHours: 2 });
   });
 
   it("keeps the student's own submission over their team's", async () => {

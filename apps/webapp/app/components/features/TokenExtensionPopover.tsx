@@ -135,7 +135,10 @@ const TokenExtensionPopover = ({ repositoryAssignment, balance }: TokenPopupForm
     play();
   };
 
-  const Form = () => {
+  // Called, not rendered as <Form />: a component defined inside this one is a
+  // new type on every render, which remounts the field and drops its focus
+  // each time a digit is typed.
+  const renderForm = () => {
     const tokenCost = repositoryAssignment?.assignment?.tokens_per_hour
       ? repositoryAssignment.assignment.tokens_per_hour * hours
       : 0;
@@ -151,7 +154,11 @@ const TokenExtensionPopover = ({ repositoryAssignment, balance }: TokenPopupForm
         </div>
         {balance !== null && balance !== undefined && (
           <p
-            className={`text-sm mt-1 ${hasInsufficientBalance ? 'text-red-500' : 'text-gray-500'}`}
+            className={`text-sm mt-1 ${
+              hasInsufficientBalance
+                ? 'text-red-500 dark:text-red-400'
+                : 'text-gray-500 dark:text-gray-400'
+            }`}
           >
             Balance: {balance} tokens
           </p>
@@ -183,10 +190,19 @@ const TokenExtensionPopover = ({ repositoryAssignment, balance }: TokenPopupForm
       title="Purchase extension hours"
       open={open}
       onOpenChange={handleOpenChange}
-      content={<Form />}
+      content={renderForm()}
       placement="left"
+      trigger="click"
     >
-      <IconCalendarPlus className="cursor-pointer" size={15.5} />
+      {/* A real button: it opens on click or tap, and from the keyboard. */}
+      <button
+        type="button"
+        aria-label="Buy extension hours"
+        className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-700 dark:text-gray-200 rounded-md hover:text-ink-0 dark:hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+      >
+        Extend
+        <IconCalendarPlus size={15.5} aria-hidden="true" />
+      </button>
     </Popover>
   );
 };

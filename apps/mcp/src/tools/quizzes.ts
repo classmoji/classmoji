@@ -238,7 +238,7 @@ const tokensPerHourSchema = z
   .number()
   .int()
   .min(0)
-  .describe('Extension tokens per late hour (default 0 = no extensions)');
+  .describe('Extension tokens per extension hour (default 0 = no extensions)');
 
 const moduleIdSchema = z.string().uuid().describe('Module the quiz sits in (see list_modules)');
 

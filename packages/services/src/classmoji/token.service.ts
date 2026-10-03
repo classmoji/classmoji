@@ -74,7 +74,7 @@ export const updateExtension = async (data: UpdateExtensionInput) => {
 };
 
 /**
- * Student purchase of late-hour extensions (plan §5.2 gap 6, extract-first —
+ * Student purchase of extension hours (plan §5.2 gap 6, extract-first —
  * moved from the student.$class.assignments purchaseExtensionHours action).
  *
  * Price and eligibility are recomputed HERE from the DB — callers must never
