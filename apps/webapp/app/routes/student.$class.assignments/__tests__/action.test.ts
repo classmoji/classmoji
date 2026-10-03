@@ -3,7 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // The student Assignments action: buying extension hours on a repo submission
 // or on a quiz assignment. The body names exactly one target; the matching
 // service prices and checks the purchase; the audit metadata names the target
-// that was sent.
+// that was sent. A quiz is bought by the signed-in student for themselves
+// only; a repo by the student or by staff on their behalf.
 const purchaseRepoMock = vi.fn();
 const purchaseQuizMock = vi.fn();
 const assertAccessMock = vi.fn();
@@ -25,13 +26,13 @@ vi.mock('~/utils/classroomProFlag.server', () => ({ loadQuizzesVisible: vi.fn() 
 vi.mock('../ProgressSummaryCard', () => ({ default: () => null }));
 vi.mock('../AssignmentsTabsCard', () => ({ default: () => null }));
 
-const { action } = await import('../route.tsx');
+const { action, MAX_EXTENSION_HOURS } = await import('../route.tsx');
 
 const post = (body: Record<string, unknown>) =>
   action({
-    params: { class: 'cs52' },
+    params: { class: 'intro-101' },
     request: new Request(
-      'http://localhost/student/cs52/assignments?action=purchaseExtensionHours',
+      'http://localhost/student/intro-101/assignments?action=purchaseExtensionHours',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -46,6 +47,7 @@ describe('purchaseExtensionHours action', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     assertAccessMock.mockResolvedValue({
+      userId: 'stu-1',
       classroom: { id: 'class-1', status: 'ACTIVE' },
       membership: { role: 'STUDENT' },
     });
@@ -95,16 +97,112 @@ describe('purchaseExtensionHours action', () => {
     expect(purchaseQuizMock).not.toHaveBeenCalled();
   });
 
-  it('checks access (self or staff) and the classroom status before buying', async () => {
-    await post({ ...BASE, assignment_id: 'asg-q' });
+  it('checks access (self or staff) on a repo, and the classroom status before buying', async () => {
+    await post({ ...BASE, git_repo_assignment_id: 'gra-1' });
 
     expect(assertAccessMock.mock.calls[0][0]).toMatchObject({
-      classroomSlug: 'cs52',
+      classroomSlug: 'intro-101',
       allowedRoles: ['OWNER', 'TEACHER'],
       resourceOwnerId: 'stu-1',
       selfAccessRoles: ['STUDENT'],
     });
     expect(mutationAllowedMock).toHaveBeenCalledWith({ status: 'ACTIVE', role: 'STUDENT' });
+  });
+
+  it("still lets staff buy repo hours on a student's behalf", async () => {
+    assertAccessMock.mockResolvedValue({
+      userId: 'owner-1',
+      classroom: { id: 'class-1', status: 'ACTIVE' },
+      membership: { role: 'OWNER' },
+    });
+
+    await post({ ...BASE, git_repo_assignment_id: 'gra-1' });
+
+    expect(purchaseRepoMock).toHaveBeenCalledWith(expect.objectContaining({ studentId: 'stu-1' }));
+  });
+
+  describe('a quiz: the signed-in student buys for themselves only', () => {
+    it("checks the caller's STUDENT membership, owning the id the body names", async () => {
+      await post({ ...BASE, assignment_id: 'asg-q' });
+
+      const gate = assertAccessMock.mock.calls[0][0];
+      expect(gate).toMatchObject({
+        classroomSlug: 'intro-101',
+        allowedRoles: ['STUDENT'],
+        resourceOwnerId: 'stu-1',
+        requireOwnership: true,
+      });
+      expect(gate.selfAccessRoles).toBeUndefined();
+      expect(mutationAllowedMock).toHaveBeenCalledWith({ status: 'ACTIVE', role: 'STUDENT' });
+    });
+
+    it('pays from the signed-in student when the body names no one', async () => {
+      const { student_id: _omitted, ...body } = BASE;
+      await post({ ...body, assignment_id: 'asg-q' });
+
+      expect(assertAccessMock.mock.calls[0][0].resourceOwnerId).toBeUndefined();
+      expect(purchaseQuizMock).toHaveBeenCalledWith(
+        expect.objectContaining({ studentId: 'stu-1' })
+      );
+    });
+
+    it("refuses an owner posting another student's id", async () => {
+      // The gate denies it (requireOwnership); refused here too should it not.
+      assertAccessMock.mockResolvedValue({
+        userId: 'owner-1',
+        classroom: { id: 'class-1', status: 'ACTIVE' },
+        membership: { role: 'STUDENT' },
+      });
+
+      const thrown = await post({ ...BASE, assignment_id: 'asg-q' }).catch(e => e);
+
+      expect(thrown).toBeInstanceOf(Response);
+      expect((thrown as Response).status).toBe(403);
+      expect(assertAccessMock.mock.calls[0][0]).toMatchObject({
+        resourceOwnerId: 'stu-1',
+        requireOwnership: true,
+      });
+      expect(purchaseQuizMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses a student id that is not a string', async () => {
+      await expect(post({ ...BASE, student_id: 42, assignment_id: 'asg-q' })).rejects.toThrow(
+        'Invalid student ID.'
+      );
+      expect(assertAccessMock).not.toHaveBeenCalled();
+      expect(purchaseQuizMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it('takes whole hours from 1 to the MCP cap, as a number', async () => {
+    expect(MAX_EXTENSION_HOURS).toBe(1000);
+    for (const hours_purchased of [0, -1, 1.5, MAX_EXTENSION_HOURS + 1, '2', null]) {
+      for (const target of [{ assignment_id: 'asg-q' }, { git_repo_assignment_id: 'gra-1' }]) {
+        await expect(post({ ...BASE, hours_purchased, ...target })).rejects.toThrow(
+          'Invalid hours'
+        );
+      }
+    }
+    expect(purchaseQuizMock).not.toHaveBeenCalled();
+    expect(purchaseRepoMock).not.toHaveBeenCalled();
+
+    await post({ ...BASE, hours_purchased: MAX_EXTENSION_HOURS, assignment_id: 'asg-q' });
+    expect(purchaseQuizMock).toHaveBeenCalledWith(
+      expect.objectContaining({ hours: MAX_EXTENSION_HOURS })
+    );
+  });
+
+  it('requires string ids', async () => {
+    await expect(
+      post({ ...BASE, student_id: undefined, git_repo_assignment_id: 'gra-1' })
+    ).rejects.toThrow('Invalid student ID.');
+    await expect(
+      post({ ...BASE, classroom_id: 1, git_repo_assignment_id: 'gra-1' })
+    ).rejects.toThrow('Invalid classroom ID.');
+    // A non-string target is no target.
+    await expect(post({ ...BASE, assignment_id: 7 })).rejects.toThrow('Name one');
+    expect(purchaseRepoMock).not.toHaveBeenCalled();
+    expect(purchaseQuizMock).not.toHaveBeenCalled();
   });
 
   it('refuses a body for another classroom', async () => {

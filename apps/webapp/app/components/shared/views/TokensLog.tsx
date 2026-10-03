@@ -1,6 +1,7 @@
 import { Table, Tag, Avatar, Button } from 'antd';
 import dayjs from 'dayjs';
 import { IconCoin } from '@tabler/icons-react';
+import { transactionAssignmentTitle } from '@classmoji/utils';
 
 import { useRole, useGlobalFetcher } from '~/hooks';
 
@@ -21,32 +22,13 @@ interface TokenTransaction {
   created_at: string | Date;
   amount: number;
   description?: string | null;
+  hours_purchased?: number | null;
   assignment_id?: string | null;
   git_repo_assignment_id?: string | null;
   assignment?: { title?: string | null } | null;
   git_repo_assignment?: { assignment?: { title?: string | null } | null } | null;
   [key: string]: unknown;
 }
-
-/**
- * The assignment a ledger row names: a quiz extension's assignment, else the
- * repo submission's assignment. Once a quiz assignment is deleted its rows
- * keep no link, and the title is read back from the row's description, which
- * a quiz extension writes as "<title> · +N h" or "<title> · −N h"
- * (token.service `quizExtensionDescription`). Null when the row names none.
- */
-export const transactionAssignmentTitle = (record: {
-  assignment_id?: string | null;
-  git_repo_assignment_id?: string | null;
-  assignment?: { title?: string | null } | null;
-  git_repo_assignment?: { assignment?: { title?: string | null } | null } | null;
-  description?: string | null;
-}): string | null => {
-  const linked = record.assignment?.title ?? record.git_repo_assignment?.assignment?.title;
-  if (linked) return linked;
-  if (record.assignment_id || record.git_repo_assignment_id) return null;
-  return /^(.+) · [+\u2212]\d+ h$/u.exec(record.description ?? '')?.[1] ?? null;
-};
 
 interface TokensLogProps {
   transactions: TokenTransaction[];
@@ -161,6 +143,9 @@ const TokensLog = ({ transactions, students }: TokensLogProps) => {
       key: 'balance_after',
     },
     {
+      // The quiz assignment a row names, else its repo submission's; a quiz
+      // extension whose assignment was deleted by the title it was bought
+      // under. A grant or removal names none, whatever its text says.
       title: 'Assignment',
       key: 'assignment',
       width: 300,

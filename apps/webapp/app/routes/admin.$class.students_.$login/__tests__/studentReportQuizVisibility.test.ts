@@ -169,6 +169,7 @@ describe('student report loader — quiz grade items', () => {
     raw_grade: 0,
     counts_as_zero: true,
     late_hours: 0,
+    counting_raw_percentage: null,
   };
 
   beforeEach(() => {
@@ -215,6 +216,30 @@ describe('student report loader — quiz grade items', () => {
     const data = await load();
 
     expect(Object.keys(data.quizItems[0]).sort()).toEqual(Object.keys(ITEM).sort());
+  });
+
+  it('names the quizzes that have not opened yet, so they are not counted as gradable', async () => {
+    mocks.listForClassroom.mockResolvedValue([
+      ...ASSIGNMENTS,
+      {
+        id: 'a-later',
+        title: 'Later',
+        type: 'QUIZ',
+        quiz: { id: 'quiz-2' },
+        release_at: new Date('2099-01-01T00:00:00Z'),
+      },
+      {
+        id: 'a-opened',
+        title: 'Opened',
+        type: 'QUIZ',
+        quiz: { id: 'quiz-3' },
+        release_at: new Date('2020-01-01T00:00:00Z'),
+      },
+    ]);
+
+    const data = await load();
+
+    expect(data.unopenedQuizIds).toEqual(['a-later']);
   });
 
   it('has no items when the student has none yet', async () => {

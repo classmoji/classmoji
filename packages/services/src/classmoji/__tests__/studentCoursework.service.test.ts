@@ -135,10 +135,10 @@ const submission = (id: string, assignmentId: string, over: Record<string, unkno
 const list = (quizzesVisible = true) =>
   listForStudent({
     classroomId: 'class-1',
-    classroomSlug: 'cs52',
+    classroomSlug: 'intro-101',
     userId: 'stu-1',
     quizzesVisible,
-    gitOrgLogin: 'cs52-org',
+    gitOrgLogin: 'intro-101-org',
     now: NOW,
   });
 
@@ -182,7 +182,7 @@ describe('listForStudent — which assignments appear', () => {
   it('uses the listing a caller already read', async () => {
     const rows = await listForStudent({
       classroomId: 'class-1',
-      classroomSlug: 'cs52',
+      classroomSlug: 'intro-101',
       userId: 'stu-1',
       quizzesVisible: true,
       assignments: [assignment('f-1', 'FORM')] as never,
@@ -242,10 +242,10 @@ describe('listForStudent — which assignments appear', () => {
 
     const rows = await listForStudent({
       classroomId: 'class-1',
-      classroomSlug: 'cs52',
+      classroomSlug: 'intro-101',
       userId: 'stu-1',
       quizzesVisible: true,
-      gitOrgLogin: 'cs52-org',
+      gitOrgLogin: 'intro-101-org',
       repoSubmissions: [submission('ra-given', 'r-1')] as never,
       now: NOW,
     });
@@ -336,16 +336,16 @@ describe('listForStudent — REPO rows keep every field the page showed', () => 
       isExtraCredit: true,
       status: 'NOT_SUBMITTED',
       done: false,
-      href: 'https://github.com/cs52-org/lab-ra-1-ada/issues/7',
+      href: 'https://github.com/intro-101-org/lab-ra-1-ada/issues/7',
       external: true,
-      action: { kind: 'OPEN', href: 'https://github.com/cs52-org/lab-ra-1-ada/issues/7' },
+      action: { kind: 'OPEN', href: 'https://github.com/intro-101-org/lab-ra-1-ada/issues/7' },
     });
     expect(row.repo).toEqual({
       gitRepoAssignmentId: 'ra-1',
       repositoryTitle: 'lab-ra-1-ada',
-      repoUrl: 'https://github.com/cs52-org/lab-ra-1-ada',
+      repoUrl: 'https://github.com/intro-101-org/lab-ra-1-ada',
       commitCount: 12,
-      issueUrl: 'https://github.com/cs52-org/lab-ra-1-ada/issues/7',
+      issueUrl: 'https://github.com/intro-101-org/lab-ra-1-ada/issues/7',
       moduleType: 'INDIVIDUAL',
       gradesReleased: false,
       grades: [],
@@ -439,7 +439,7 @@ describe('listForStudent — REPO rows keep every field the page showed', () => 
 
     expect(row.repo).toMatchObject({ issueUrl: null });
     expect(row.numLateHours).toBe(2);
-    expect(row.href).toBe('https://github.com/cs52-org/lab-ra-1-ada');
+    expect(row.href).toBe('https://github.com/intro-101-org/lab-ra-1-ada');
   });
 
   it('counts a submitted issue-mode row late by its close time, less the hours bought', async () => {
@@ -548,7 +548,12 @@ describe('listForStudent — REPO Extend: hours sell at any time, where they buy
 
   it('offers it before the deadline, and on open work that is late', async () => {
     expect((await repoRow({}, {}, at(24))).extend).toEqual(OFFERED);
-    expect(await repoRow()).toMatchObject({ numLateHours: 6, extend: OFFERED });
+    // Extend starts at the hours that clear the lateness.
+    expect(await repoRow()).toMatchObject({
+      numLateHours: 6,
+      suggestedExtensionHours: 6,
+      extend: OFFERED,
+    });
   });
 
   it('offers it on submitted work that was late, graded or not', async () => {
@@ -599,7 +604,7 @@ describe('listForStudent — QUIZ rows', () => {
     expect(row).toMatchObject({
       type: 'QUIZ',
       title: 'Quiz name quiz-a-q',
-      href: '/student/cs52/quizzes?quiz=quiz-a-q',
+      href: '/student/intro-101/quizzes?quiz=quiz-a-q',
       external: false,
     });
   });
@@ -774,15 +779,16 @@ describe('listForStudent — QUIZ late hours and extensions', () => {
     expect(refunded).toMatchObject({ numLateHours: 5, extensionHours: 0 });
   });
 
-  it('is missing, not hours late, past the due date (plus hours bought) with no completed attempt', async () => {
+  it('is missing, not hours late, past the due date (plus hours bought) with no attempt', async () => {
     const missing = await quizRow({ assignmentOver: DUE_20H_AGO });
     expect(missing).toMatchObject({ missing: true, numLateHours: 0, done: false });
 
+    // An attempt still running past the due date reads only In progress.
     const running = await quizRow({
       attempts: [attempt('run', 'quiz-a-q', 1, false, null)],
       assignmentOver: DUE_20H_AGO,
     });
-    expect(running.missing).toBe(true);
+    expect(running).toMatchObject({ status: 'IN_PROGRESS', missing: false });
 
     // Inside the hours bought: not missing yet.
     const bought = await quizRow({ assignmentOver: DUE_20H_AGO, hours: 24 });
@@ -821,23 +827,101 @@ describe('listForStudent — QUIZ late hours and extensions', () => {
     expect((await quizRow({ assignmentOver: { student_deadline: null } })).extend).toBeNull();
   });
 
-  it('hides Extend on a closed quiz the student never completed, not on one they did', async () => {
+  it('hides Extend on a closed quiz the student never took, not on one finished or still running', async () => {
     const closedUntaken = await quizRow({
       assignmentOver: { student_deadline: at(-20), closes_at: at(-1) },
     });
     expect(closedUntaken).toMatchObject({ status: 'CLOSED', extend: null });
 
+    // An attempt still running past the close date can still finish inside
+    // the hours bought.
     const closedRunning = await quizRow({
       attempts: [attempt('run', 'quiz-a-q', 2, false, null)],
       assignmentOver: { student_deadline: at(-20), closes_at: at(-1) },
     });
-    expect(closedRunning.extend).toBeNull();
+    expect(closedRunning.extend).toEqual(OFFERED);
 
     const closedFinished = await quizRow({
       attempts: [finished('late', 5, 90)],
       assignmentOver: { student_deadline: at(-20), closes_at: at(-1) },
     });
     expect(closedFinished.extend).toEqual(OFFERED);
+  });
+
+  it('offers Extend only where the hours still change something', async () => {
+    // Completed on time, attempts left: a retake can still use the hours.
+    expect(
+      (await quizRow({ attempts: [finished('ok', -2, 80)], assignmentOver: DUE_20H_AGO })).extend
+    ).toEqual(OFFERED);
+
+    // Completed on time with every attempt used: nothing left to buy for.
+    const exhausted = await quizRow({
+      attempts: [finished('ok', -2, 80)],
+      quizOver: { max_attempts: 1 },
+      assignmentOver: DUE_20H_AGO,
+    });
+    expect(exhausted).toMatchObject({ status: 'COMPLETED', extend: null });
+
+    // Completed on time and closed: no attempt can start.
+    expect(
+      (
+        await quizRow({
+          attempts: [finished('ok', -2, 80)],
+          assignmentOver: { student_deadline: at(-20), closes_at: at(-1) },
+        })
+      ).extend
+    ).toBeNull();
+
+    // A late completed attempt, even one that does not count, can be bought back.
+    const lateRetake = await quizRow({
+      attempts: [finished('ok', -2, 80), finished('late', 3, 60)],
+      quizOver: { max_attempts: 2 },
+      assignmentOver: DUE_20H_AGO,
+    });
+    expect(lateRetake).toMatchObject({ numLateHours: 0, extend: OFFERED });
+
+    // A running attempt with no attempt left to start.
+    const running = await quizRow({
+      attempts: [attempt('run', 'quiz-a-q', 1, false, null)],
+      quizOver: { max_attempts: 1 },
+      assignmentOver: DUE_20H_AGO,
+    });
+    expect(running.extend).toEqual(OFFERED);
+
+    // Not started, before or after the due date: a first attempt can start.
+    expect((await quizRow()).extend).toEqual(OFFERED);
+    expect((await quizRow({ assignmentOver: DUE_20H_AGO })).extend).toEqual(OFFERED);
+  });
+
+  it('suggests the hours that clear the lateness', async () => {
+    // Missing 20 h past the due date (plus 3 bought): 17 h to now.
+    expect((await quizRow({ assignmentOver: DUE_20H_AGO, hours: 3 })).suggestedExtensionHours).toBe(
+      17
+    );
+    // Partial hours round up, as on an open repo row.
+    expect(
+      (
+        await quizRow({
+          assignmentOver: { student_deadline: new Date(NOW.getTime() - 90 * 60_000) },
+        })
+      ).suggestedExtensionHours
+    ).toBe(2);
+    // An attempt still running past the due date: the same.
+    expect(
+      (
+        await quizRow({
+          attempts: [attempt('run', 'quiz-a-q', 1, false, null)],
+          assignmentOver: DUE_20H_AGO,
+        })
+      ).suggestedExtensionHours
+    ).toBe(20);
+    // Completed late: the counting attempt's late hours.
+    expect(
+      (await quizRow({ attempts: [finished('late', 5, 90)], assignmentOver: DUE_20H_AGO }))
+        .suggestedExtensionHours
+    ).toBe(5);
+    // Before the due date: nothing to clear.
+    expect((await quizRow()).suggestedExtensionHours).toBe(0);
   });
 
   it('keeps the quiz rows when the price and penalty read fails, with no Extend', async () => {
@@ -854,7 +938,13 @@ describe('listForStudent — QUIZ late hours and extensions', () => {
     mocks.listForClassroom.mockResolvedValue([assignment('a-f', 'FORM')]);
     mocks.formFindMany.mockResolvedValue([form('form-a-f')]);
     const [row] = await list();
-    expect(row).toMatchObject({ numLateHours: 0, extensionHours: 0, missing: false, extend: null });
+    expect(row).toMatchObject({
+      numLateHours: 0,
+      extensionHours: 0,
+      missing: false,
+      suggestedExtensionHours: 0,
+      extend: null,
+    });
   });
 });
 
@@ -879,9 +969,9 @@ describe('listForStudent — FORM rows', () => {
       type: 'FORM',
       status: 'NOT_SUBMITTED',
       done: false,
-      href: 'https://pages.test/cs52/forms/slug-form-a-f',
+      href: 'https://pages.test/intro-101/forms/slug-form-a-f',
       external: true,
-      action: { kind: 'FILL_OUT', href: 'https://pages.test/cs52/forms/slug-form-a-f' },
+      action: { kind: 'FILL_OUT', href: 'https://pages.test/intro-101/forms/slug-form-a-f' },
     });
   });
 

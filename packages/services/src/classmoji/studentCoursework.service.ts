@@ -37,6 +37,7 @@ import {
   gitWeb,
   effectiveTokensPerHour,
   isClosed,
+  lateHours,
   openToStudents,
   quizStanding,
   titleToIdentifier,
@@ -142,10 +143,19 @@ export interface StudentCourseworkRow {
   /** When the work was submitted: the repo's submission, the quiz's counting attempt. */
   submittedAt: string | null;
   /**
-   * QUIZ: past the due date plus the hours bought with no completed attempt,
-   * so it counts 0 until one completes. Shown as missing, not as hours late.
+   * QUIZ: past the due date plus the hours bought with no completed attempt
+   * and none in progress. Shown as missing, not as hours late. A running
+   * attempt shows only In progress (the grade still counts 0 until an
+   * attempt completes).
    */
   missing: boolean;
+  /**
+   * The hours Extend starts at: what clears the lateness. REPO: its late
+   * hours. QUIZ past the due date plus the hours bought with no completed
+   * attempt (missing, or an attempt still running): the hours from there to
+   * now, rounded up; otherwise the late hours of the attempt that counts.
+   */
+  suggestedExtensionHours: number;
   /** Where Extend buys hours, or null where it is not offered. */
   extend: ExtensionTarget | null;
   /** QUIZ: attempts used, and the cap (0 = unlimited). */
@@ -200,15 +210,19 @@ type LateFields = Pick<
   'numLateHours' | 'isLateOverride' | 'tokensPerHour' | 'extensionHours' | 'submittedAt'
 >;
 
-const NO_LATE_FIELDS: LateFields & Pick<StudentCourseworkRow, 'missing' | 'extend'> = {
+const NO_LATE_FIELDS: LateFields &
+  Pick<StudentCourseworkRow, 'missing' | 'extend' | 'suggestedExtensionHours'> = {
   numLateHours: 0,
   isLateOverride: false,
   tokensPerHour: 0,
   extensionHours: 0,
   submittedAt: null,
   missing: false,
+  suggestedExtensionHours: 0,
   extend: null,
 };
+
+const HOUR_MS = 3_600_000;
 
 const repoFields = (
   ra: RepoSubmission,
@@ -480,6 +494,7 @@ export const listForStudent = async ({
         ...base,
         ...late,
         missing: false,
+        suggestedExtensionHours: late.numLateHours,
         extend: extendable ? { kind: 'REPO', gitRepoAssignmentId: ra.id } : null,
         type: 'REPO',
         title: a.title,
@@ -504,7 +519,10 @@ export const listForStudent = async ({
         latePenaltyPerHour,
       });
       const due = effectiveDeadline(a.student_deadline, extensionHours);
-      const missing = !standing.completed && due !== null && now.getTime() > due.getTime();
+      // Past the (extended) due date with no completed attempt. Missing only
+      // when none is running either: a running attempt reads In progress.
+      const overdue = !standing.completed && due !== null && now.getTime() > due.getTime();
+      const missing = overdue && !standing.inProgress;
       const tokensPerHour = effectiveTokensPerHour(a.tokens_per_hour, classroomTokensPerHour);
       // The row is open to this student (published, past Opens), so what is
       // left to ask is whether the close date has passed: from then on no new
@@ -519,11 +537,20 @@ export const listForStudent = async ({
             : 'NOT_STARTED';
       const canStart =
         !closed && (quiz.max_attempts === 0 || standing.attemptsUsed < quiz.max_attempts);
-      // Offered whenever there is a due date and a price, before Due too;
-      // not on a closed quiz the student never completed (no attempt can
-      // start, so the hours would buy nothing).
+      const someAttemptLate = own.some(
+        attempt =>
+          attempt.completed_at != null &&
+          lateHours(attempt.completed_at, a.student_deadline, extensionHours) > 0
+      );
+      // Offered where there is a due date and a price, and the hours can
+      // still change something: a new attempt can start, one is running, or
+      // a completed attempt is late. Not on a closed quiz the student never
+      // took, nor on one completed on time with no attempt left to start.
       const extendable =
-        a.student_deadline !== null && tokensPerHour > 0 && !(closed && !standing.completed);
+        a.student_deadline !== null &&
+        tokensPerHour > 0 &&
+        !(closed && !standing.completed && !standing.inProgress) &&
+        (canStart || standing.inProgress !== null || someAttemptLate);
       rows.push({
         ...base,
         numLateHours: counting.late_hours,
@@ -532,6 +559,10 @@ export const listForStudent = async ({
         extensionHours,
         submittedAt: iso(counting.counting?.completed_at),
         missing,
+        suggestedExtensionHours:
+          overdue && due !== null
+            ? Math.ceil((now.getTime() - due.getTime()) / HOUR_MS)
+            : counting.late_hours,
         extend: extendable ? { kind: 'QUIZ', assignmentId: a.id } : null,
         type: 'QUIZ',
         title: quiz.name,

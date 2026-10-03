@@ -34,12 +34,13 @@ import {
   panelPayload,
   panelStatus,
   studentsSeeItIn,
+  tokensPerHourLabel,
   type AssignmentPanelData,
 } from '../QuizAssignmentPanel';
 
 const mocks = vi.hoisted(() => ({
   submit: vi.fn(),
-  pathname: '/admin/cs52-26f/quizzes/form',
+  pathname: '/admin/intro-101/quizzes/form',
   assertClassroomAccess: vi.fn(),
   quizzesVisibleOrThrow: vi.fn(),
   quizFindById: vi.fn(),
@@ -71,7 +72,7 @@ vi.mock('react-router', () => ({
   useFetcher: () => ({ state: 'idle', data: undefined, submit: mocks.submit }),
   useLocation: () => ({ pathname: mocks.pathname }),
   useNavigate: () => vi.fn(),
-  useParams: () => ({ class: 'cs52-26f' }),
+  useParams: () => ({ class: 'intro-101' }),
   Link: ({ to, children, ...rest }: { to: string; children: ReactNode }) => (
     <a href={to} {...rest}>
       {children}
@@ -124,7 +125,7 @@ window.getComputedStyle = ((element: Element, pseudo?: string | null) => {
 
 const { default: QuizFormDrawer, loader } = await import('../route');
 
-const CLASS_SLUG = 'cs52-26f';
+const CLASS_SLUG = 'intro-101';
 const MODULES = [
   { id: 'mod-1', title: 'Week 1' },
   { id: 'mod-2', title: 'Week 2' },
@@ -244,7 +245,7 @@ const fillRequired = async () => {
 
 beforeEach(() => {
   mocks.submit.mockReset();
-  mocks.pathname = '/admin/cs52-26f/quizzes/form';
+  mocks.pathname = '/admin/intro-101/quizzes/form';
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -515,7 +516,7 @@ describe('a class with no modules', () => {
   });
 
   it('tells a teacher the class owner has to add one, with no link, and Save stays disabled', async () => {
-    mocks.pathname = '/teacher/cs52-26f/quizzes/form';
+    mocks.pathname = '/teacher/intro-101/quizzes/form';
     await render({ viewer: TEACHER, modules: [] });
 
     const note = byTestId('quiz-no-modules-note')!;
@@ -537,7 +538,7 @@ describe('a teaching assistant', () => {
   });
 
   beforeEach(() => {
-    mocks.pathname = '/assistant/cs52-26f/quizzes/form';
+    mocks.pathname = '/assistant/intro-101/quizzes/form';
   });
 
   it('sees the panel read-only, with no Delete', async () => {
@@ -936,5 +937,18 @@ describe('panelStatus', () => {
     );
     expect(panelStatus(true, null, '2026-10-01T13:00:00Z', now)).toBe('Published');
     expect(panelStatus(true, '2026-10-02T11:00:00Z', null, now)).toBe('Closed');
+  });
+});
+
+describe('tokensPerHourLabel', () => {
+  it("reads empty as the classroom's rate, and 0 as no extensions", () => {
+    expect(tokensPerHourLabel(null, 3)).toBe('Classroom rate (3)');
+    expect(tokensPerHourLabel(0, 3)).toBe('No extensions');
+    expect(tokensPerHourLabel(5, 3)).toBe('5');
+  });
+
+  it('reads empty as no extensions where the classroom rate is 0', () => {
+    expect(tokensPerHourLabel(null, 0)).toBe('No extensions');
+    expect(tokensPerHourLabel(4, 0)).toBe('4');
   });
 });

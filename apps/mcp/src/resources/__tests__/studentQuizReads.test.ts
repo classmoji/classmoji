@@ -12,7 +12,8 @@
  *     (assignment deleted) by the title its description was written with.
  *   - list_quizzes gives a student the assignment id, the price of an hour,
  *     the hours bought and the due date they give, and the counting attempt's
- *     late hours, with two reads for the whole list.
+ *     late hours, with two reads for the whole list; it answers a student only
+ *     where quizzes are visible (`entitlement.quizzesVisibleOrThrow`).
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -28,7 +29,6 @@ const mocks = vi.hoisted(() => ({
   findForUser: vi.fn(),
   getBalance: vi.fn(),
   findTransactions: vi.fn(),
-  titleParser: (_d: string): string | null => null,
 }));
 
 vi.mock('@classmoji/database', async () =>
@@ -54,8 +54,6 @@ vi.mock('@classmoji/services', () => ({
     token: {
       getBalance: (...a: unknown[]) => mocks.getBalance(...a),
       findTransactions: (...a: unknown[]) => mocks.findTransactions(...a),
-      // The real parser (bound below), so the test reads what the service writes.
-      titleFromQuizExtensionDescription: (d: string) => mocks.titleParser(d),
     },
   },
 }));
@@ -66,9 +64,8 @@ const { quizzesResource, QUIZZES_DESCRIPTION } = await import('../content.ts');
 const { myGradesTool, myTokensTool, listQuizzesTool } = await import('../../tools/reads.ts');
 const { prismaCallsFor, resetPrismaStub, setPrismaRows } =
   await import('../../__tests__/prismaSchemaStub.ts');
-const realTokenService =
-  await import('../../../../../packages/services/src/classmoji/token.service.ts');
-mocks.titleParser = realTokenService.titleFromQuizExtensionDescription;
+// The description the service writes, so the test reads back what it writes.
+const { quizExtensionDescription } = await import('@classmoji/utils');
 
 const VARS = { org: 'test-org', slug: 'winter-2025' };
 const URI = new URL('classmoji://test-org/winter-2025/x');
@@ -329,7 +326,7 @@ describe('my_tokens assignment naming', () => {
         amount: 4,
         hours_purchased: -2,
         balance_after: 11,
-        description: realTokenService.quizExtensionDescription('Deleted quiz', -2),
+        description: quizExtensionDescription('Deleted quiz', -2),
         is_cancelled: false,
         created_at: at(1),
         assignment_id: null,
@@ -537,6 +534,28 @@ describe('list_quizzes for a student: extension fields', () => {
       countingAttemptId: 'late-90',
       lateHours: 2,
     });
+  });
+
+  it('gates the list on the predicate the totals use', async () => {
+    arrangeList();
+
+    await quizzesResource.handler(VARS, studentCtx(settings), URI);
+    expect(mocks.quizzesVisibleOrThrow).toHaveBeenCalledWith('class-1');
+
+    // Hidden (e.g. no AI agent configured): refused before anything is read.
+    mocks.getQuizzesForStudent.mockClear();
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(false);
+    await expect(quizzesResource.handler(VARS, studentCtx(settings), URI)).rejects.toMatchObject({
+      kind: 'forbidden',
+    });
+    expect(mocks.getQuizzesForStudent).not.toHaveBeenCalled();
+
+    // A failed lookup fails the read rather than answering an empty list.
+    mocks.quizzesVisibleOrThrow.mockRejectedValue(new Error('db down'));
+    await expect(quizzesResource.handler(VARS, studentCtx(settings), URI)).rejects.toThrow(
+      'db down'
+    );
+    expect(mocks.getQuizzesForStudent).not.toHaveBeenCalled();
   });
 
   it('makes no extension reads when no quiz has an assignment', async () => {

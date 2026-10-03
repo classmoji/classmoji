@@ -11,6 +11,7 @@ import {
   calculateGrades,
   calculateLetterGrade,
   gradedItemValue,
+  isReleased,
   quizStanding,
   type GradedItem,
   type LetterGradeMappingEntry,
@@ -23,6 +24,7 @@ import { addAuditLog, addClassroomAuditLog } from '~/utils/helpers';
 import { requireClassroomStaff, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { normalizeSchoolId } from '~/utils/schoolId';
 import { useGitWeb } from '~/hooks/useGitWeb';
+import { latePillText, quizPointsLost, quizScoreNote, repoPointsLost } from './reportLateness';
 import type { Route } from './+types/route';
 
 /**
@@ -77,6 +79,12 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const assignments = quizzesVisible
     ? publishedAssignments
     : publishedAssignments.filter(a => a.type !== 'QUIZ');
+  // Quizzes whose release date is still ahead: listed with when they open,
+  // and not yet counted among the assignments to grade.
+  const now = new Date();
+  const unopenedQuizIds = assignments
+    .filter(a => a.type === 'QUIZ' && !isReleased(a.release_at, now))
+    .map(a => a.id);
 
   // Quiz attempts for this student in one lookup, scored by each quiz's
   // grading strategy through the shared selector (the gradebook's rule), and
@@ -107,6 +115,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     raw_grade: item.raw_grade,
     counts_as_zero: item.counts_as_zero,
     late_hours: item.late_hours,
+    counting_raw_percentage: item.counting_raw_percentage,
   }));
   const quizStatus: Record<
     string,
@@ -168,6 +177,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     repoAssignments,
     quizStatus,
     quizItems,
+    unopenedQuizIds,
     formStatus,
     emojiMappings,
     settings: { late_penalty_points_per_hour: settingsRow?.late_penalty_points_per_hour ?? 0 },
@@ -382,6 +392,7 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
     repoAssignments: repoAssignmentRows,
     quizStatus,
     quizItems,
+    unopenedQuizIds,
     formStatus,
     emojiMappings,
     settings,
@@ -439,14 +450,24 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
       .reduce((sum, item) => sum + item.weight, 0);
   const gradedCount =
     repoAssignments.filter(ra => (ra.grades?.length ?? 0) > 0).length + gradedQuizItems.length;
-  const gradableCount = assignments.filter(a => a.type === 'REPO' || a.type === 'QUIZ').length;
+  // A quiz that has not opened yet is nothing to grade so far.
+  const unopened = new Set(unopenedQuizIds);
+  const gradableCount = assignments.filter(
+    a => a.type === 'REPO' || (a.type === 'QUIZ' && !unopened.has(a.id))
+  ).length;
   const lateRows = repoAssignments.filter(ra => ra.is_late && !ra.is_late_override);
   const lateQuizItems = quizItems.filter(item => item.late_hours > 0);
   const lateCount = lateRows.length + lateQuizItems.length;
   const lateHours =
     lateRows.reduce((sum, ra) => sum + (ra.num_late_hours ?? 0), 0) +
     lateQuizItems.reduce((sum, item) => sum + item.late_hours, 0);
-  const latePenalty = lateHours * orgSettings.late_penalty_points_per_hour;
+  // The points the penalty actually took, as the rows show them.
+  const latePointsLost =
+    Math.round(
+      (lateRows.reduce((sum, ra) => sum + repoPointsLost(ra, mappings, orgSettings), 0) +
+        lateQuizItems.reduce((sum, item) => sum + quizPointsLost(item), 0)) *
+        10
+    ) / 10;
 
   const computedLetter =
     totals.finalNumericGrade >= 0 ? calculateLetterGrade(totals.finalNumericGrade, letters) : null;
@@ -522,8 +543,7 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
         else if (late)
           status = (
             <Pill tone="amber">
-              Late {ra.num_late_hours}h · −
-              {(ra.num_late_hours ?? 0) * orgSettings.late_penalty_points_per_hour} pts
+              {latePillText(ra.num_late_hours ?? 0, repoPointsLost(ra, mappings, orgSettings))}
             </Pill>
           );
         else if (ra.is_late_override) status = <Pill tone="grey">Late waived</Pill>;
@@ -599,14 +619,12 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
       const value = item ? gradedItemValue(item) : null;
       href = a.quiz ? `${base}/quizzes/${a.quiz.id}` : href;
       if (item?.counts_as_zero) {
-        status = <Pill tone="red">Not attempted</Pill>;
+        // Counts 0, whether or not an attempt is still running.
+        status = <Pill tone="red">Missing</Pill>;
       } else if (item && item.late_hours > 0) {
-        status = (
-          <Pill tone="amber">
-            Late {item.late_hours}h · −{item.late_hours * orgSettings.late_penalty_points_per_hour}{' '}
-            pts
-          </Pill>
-        );
+        status = <Pill tone="amber">{latePillText(item.late_hours, quizPointsLost(item))}</Pill>;
+      } else if (!item && unopened.has(a.id)) {
+        status = <Pill tone="grey">Opens {fmt(a.release_at) ?? ''}</Pill>;
       } else {
         status = !q?.attempted ? (
           <Pill tone="grey">Not attempted</Pill>
@@ -618,11 +636,9 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
       }
       if (item && value !== null) {
         // What the total counts: the late-penalised score, or the counted 0.
-        const raw = item.counts_as_zero ? null : item.raw_grade;
+        // The note quotes the counting attempt's own score before the penalty.
         grade = (
-          <Tooltip
-            title={raw !== null && raw !== value ? `${raw} before the late penalty` : undefined}
-          >
+          <Tooltip title={quizScoreNote(item, value)}>
             <span className="inline-flex items-center justify-center min-w-9 h-8 px-2 rounded-lg bg-[#6c8fae] text-white text-sm font-bold tabular-nums">
               {Math.round(value * 10) / 10}
             </span>
@@ -746,7 +762,7 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
           </span>{' '}
           {lateCount > 0 && (
             <span className="text-sm font-medium text-ink-3">
-              · {lateHours}h, −{latePenalty} pts
+              · {lateHours}h{latePointsLost > 0 ? `, −${latePointsLost} pts` : ''}
             </span>
           )}
         </Tile>

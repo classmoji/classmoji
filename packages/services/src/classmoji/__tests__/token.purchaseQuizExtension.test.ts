@@ -47,12 +47,7 @@ vi.mock('../entitlement.service.ts', () => ({
   quizzesVisibleOrThrow: (...args: unknown[]) => quizzesVisibleMock(...args),
 }));
 
-const {
-  purchaseQuizExtensionHours,
-  cancelPurchase,
-  quizExtensionDescription,
-  titleFromQuizExtensionDescription,
-} = await import('../token.service.ts');
+const { purchaseQuizExtensionHours, cancelPurchase } = await import('../token.service.ts');
 
 const NOW = new Date('2026-10-03T12:00:00Z');
 const HOUR_MS = 3_600_000;
@@ -198,6 +193,21 @@ describe('token.purchaseQuizExtensionHours', () => {
     await expect(purchase(1.5)).rejects.toThrow('Invalid hours');
   });
 
+  it('refuses an empty or non-string student id before any read', async () => {
+    await expect(purchase(2, { studentId: '' })).rejects.toThrow('Invalid student ID.');
+    await expect(
+      purchaseQuizExtensionHours({
+        classroomId: 'class-1',
+        studentId: undefined as unknown as string,
+        assignmentId: 'asg-quiz',
+        hours: 2,
+        now: NOW,
+      })
+    ).rejects.toThrow('Invalid student ID.');
+    expect(assignmentFindUniqueMock).not.toHaveBeenCalled();
+    expect(txCreateMock).not.toHaveBeenCalled();
+  });
+
   it("checks the balance under the student's ledger lock", async () => {
     txFindFirstMock.mockResolvedValue({ balance_after: 3, created_at: LONG_AGO });
     await expect(purchase(2)).rejects.toThrow('Insufficient token balance');
@@ -205,17 +215,6 @@ describe('token.purchaseQuizExtensionHours', () => {
     expect(executeRawMock.mock.invocationCallOrder[0]).toBeLessThan(
       txFindFirstMock.mock.invocationCallOrder[0]
     );
-  });
-});
-
-describe('quiz extension descriptions', () => {
-  it('writes the title and the hours, and reads the title back', () => {
-    expect(quizExtensionDescription('Quiz · part 2', 3)).toBe('Quiz · part 2 · +3 h');
-    expect(quizExtensionDescription('Quiz', -3)).toBe('Quiz · −3 h');
-    expect(titleFromQuizExtensionDescription('Quiz · part 2 · +3 h')).toBe('Quiz · part 2');
-    expect(titleFromQuizExtensionDescription('Quiz · −3 h')).toBe('Quiz');
-    expect(titleFromQuizExtensionDescription('Purchase of 3 hour(s).')).toBeNull();
-    expect(titleFromQuizExtensionDescription(null)).toBeNull();
   });
 });
 

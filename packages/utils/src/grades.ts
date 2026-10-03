@@ -53,6 +53,10 @@ export interface OrganizationSettings {
  *   - A null value with `counts_as_zero` false is left out, like an ungraded
  *     repo submission.
  *   - `late_hours`: whole hours late of the attempt that counts for `grade`.
+ *   - `counting_raw_percentage`: that same attempt's own unpenalised score, so
+ *     `counting_raw_percentage − grade` is the points the penalty took. It can
+ *     differ from `raw_grade`, which the strategy may pick from another
+ *     attempt. Null for a counted zero.
  */
 export interface GradedItem {
   assignment_id: string;
@@ -63,6 +67,7 @@ export interface GradedItem {
   raw_grade: number | null;
   counts_as_zero: boolean;
   late_hours: number;
+  counting_raw_percentage: number | null;
 }
 
 /**

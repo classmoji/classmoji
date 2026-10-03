@@ -16,8 +16,11 @@ export type ExtensionTarget = NonNullable<StudentCourseworkRow['extend']>;
 
 interface TokenExtensionPopoverProps {
   target: ExtensionTarget;
-  /** Hours still late after what was already bought; only presets the field. */
-  numLateHours: number;
+  /**
+   * The hours that clear the lateness (the row's `suggestedExtensionHours`);
+   * only presets the field.
+   */
+  suggestedHours: number;
   /** The price of one hour; the server prices the purchase again itself. */
   tokensPerHour: number;
   balance: number | null | undefined;
@@ -38,7 +41,7 @@ export const extensionTargetBody = (target: ExtensionTarget): Record<string, str
  */
 const TokenExtensionPopover = ({
   target,
-  numLateHours,
+  suggestedHours,
   tokensPerHour,
   balance,
 }: TokenExtensionPopoverProps) => {
@@ -50,7 +53,7 @@ const TokenExtensionPopover = ({
       : Math.floor(balance / tokensPerHour);
   // Start at what clears the lateness, when the student is late and can pay.
   const [hours, setHours] = useState(() =>
-    Math.max(1, Math.min(numLateHours, maxHours ?? Infinity))
+    Math.max(1, Math.min(suggestedHours, maxHours ?? Infinity))
   );
   const { fetcher, notify } = useNotifiedFetcher();
   const [open, setOpen] = useState(false);

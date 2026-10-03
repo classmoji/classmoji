@@ -2,11 +2,13 @@
  * What the gradebook renders for quiz assignments once quiz grade items join
  * the totals. Rendered on the server.
  *
- *   - A counted zero reads "0 (not attempted)" with the missing tint.
+ *   - A counted zero reads "Missing" with the missing tint (a running attempt
+ *     past the deadline is one too).
  *   - A late item shows the late-penalised value the totals count, the late
  *     hours, and the late tint (with its dark variant).
- *   - A quiz with a column but no item (not open yet, before the deadline)
- *     keeps its attempt-state render, never "0 (not attempted)".
+ *   - A quiz with a column but no item keeps its attempt-state render (before
+ *     the deadline), or reads "Opens <date>" while it has not opened yet.
+ *   - "Has something to grade" matches a quiz whose score is still to come.
  *   - Total, module total and the column mean read the item value, so the
  *     header row and the cells agree.
  */
@@ -22,13 +24,13 @@ vi.mock('~/components', () => ({
 vi.mock('~/hooks', () => ({ useDarkMode: () => ({ isDarkMode: false }) }));
 vi.mock('../GradeSettings', () => ({ default: () => null }));
 
-const { default: GradesTable } = await import('../GradesTable');
+const { default: GradesTable, matchesRowFilter } = await import('../GradesTable');
 
 type Props = Parameters<typeof GradesTable>[0];
 
 const MODULE = { id: 'mod-1', title: 'Week 1', position: 0 };
 
-const quizColumn = (id: string, title: string) => ({
+const quizColumn = (id: string, title: string, extra: Record<string, unknown> = {}) => ({
   id,
   title,
   weight: 10,
@@ -38,6 +40,7 @@ const quizColumn = (id: string, title: string) => ({
   module_title: MODULE.title,
   quiz_id: `quiz-${id}`,
   created_at: '2026-09-01T00:00:00Z',
+  ...extra,
 });
 
 const item = (assignmentId: string, extra: Partial<GradedItem> = {}): GradedItem => ({
@@ -49,6 +52,7 @@ const item = (assignmentId: string, extra: Partial<GradedItem> = {}): GradedItem
   raw_grade: 80,
   counts_as_zero: false,
   late_hours: 4,
+  counting_raw_percentage: 80,
   ...extra,
 });
 
@@ -63,7 +67,7 @@ const student = (id: string, name: string, quizItems: GradedItem[]) => ({
 
 const render = (props: Partial<Props>) =>
   renderToStaticMarkup(
-    <MemoryRouter initialEntries={['/admin/cs52/grades']}>
+    <MemoryRouter initialEntries={['/admin/intro-101/grades']}>
       <Routes>
         <Route
           path="/admin/:class/grades"
@@ -92,19 +96,59 @@ const text = (html: string) =>
     .replace(/\s+/g, ' ')
     .trim();
 
+/** The red Missing chip of a cell (the legend under the table says "Missing" too). */
+const MISSING_CHIP = 'text-red-700 dark:text-red-300">Missing<';
+
 describe('gradebook quiz cells', () => {
-  it('renders a counted zero as "0 (not attempted)" with the missing tint', () => {
-    const html = render({
-      assignments: [quizColumn('a-quiz', 'Recursion')],
-      students: [
-        student('s-1', 'Ada', [
-          item('a-quiz', { grade: 0, raw_grade: 0, counts_as_zero: true, late_hours: 0 }),
-        ]),
-      ],
+  const zero = (assignmentId: string) =>
+    item(assignmentId, {
+      grade: 0,
+      raw_grade: 0,
+      counts_as_zero: true,
+      late_hours: 0,
+      counting_raw_percentage: null,
     });
 
-    expect(text(html)).toContain('0 (not attempted)');
+  it('renders a counted zero as "Missing" with the missing tint', () => {
+    const html = render({
+      assignments: [quizColumn('a-quiz', 'Recursion')],
+      students: [student('s-1', 'Ada', [zero('a-quiz')])],
+    });
+
+    expect(html).toContain(MISSING_CHIP);
+    expect(text(html)).not.toContain('not attempted');
     expect(html).toContain('bg-red-50 dark:bg-red-950/30');
+  });
+
+  it('reads "Missing", not "In progress", for a counted zero with a running attempt', () => {
+    const html = render({
+      assignments: [quizColumn('a-quiz', 'Recursion')],
+      students: [student('s-1', 'Ada', [zero('a-quiz')])],
+      activity: { quiz: { 'a-quiz': { 's-1': { completed: false, score: null } } }, form: {} },
+    });
+
+    expect(html).toContain(MISSING_CHIP);
+    expect(text(html)).not.toContain('In progress');
+  });
+
+  it('reads "Opens <date>" for a quiz that has not opened yet', () => {
+    const html = render({
+      assignments: [quizColumn('a-quiz', 'Later', { release_at: '2099-05-04T12:00:00Z' })],
+      students: [student('s-1', 'Ada', [])],
+    });
+
+    expect(text(html)).toContain('Opens May 4');
+    expect(text(html)).not.toContain('Not attempted');
+  });
+
+  it('a past release date is no "Opens" cell', () => {
+    const html = render({
+      assignments: [quizColumn('a-quiz', 'Open', { release_at: '2020-01-01T00:00:00Z' })],
+      students: [student('s-1', 'Ada', [])],
+    });
+
+    expect(text(html)).not.toContain('Opens');
+    expect(text(html)).toContain('Not attempted');
   });
 
   it('renders a late item with the penalised value, its late hours and the late tint', () => {
@@ -126,7 +170,59 @@ describe('gradebook quiz cells', () => {
     });
 
     expect(text(html)).toContain('Not attempted');
-    expect(text(html)).not.toContain('0 (not attempted)');
+    expect(html).not.toContain(MISSING_CHIP);
+  });
+});
+
+describe('gradebook row filters', () => {
+  const columns = [quizColumn('a-quiz', 'Recursion')] as Parameters<typeof matchesRowFilter>[2];
+  const ada = student('s-1', 'Ada', []);
+  const activityWith = (state: { completed: boolean; score: number | null }) => ({
+    quiz: { 'a-quiz': { 's-1': state } },
+    form: {},
+  });
+
+  it('"Has something to grade" matches a quiz with only unscored completed attempts', () => {
+    expect(
+      matchesRowFilter(ada, 'ungraded', columns, activityWith({ completed: true, score: null }))
+    ).toBe(true);
+  });
+
+  it('but not a running attempt, a scored one, or a counted zero', () => {
+    expect(
+      matchesRowFilter(ada, 'ungraded', columns, activityWith({ completed: false, score: null }))
+    ).toBe(false);
+    expect(
+      matchesRowFilter(
+        student('s-1', 'Ada', [item('a-quiz')]),
+        'ungraded',
+        columns,
+        activityWith({ completed: true, score: 80 })
+      )
+    ).toBe(false);
+    expect(
+      matchesRowFilter(
+        student('s-1', 'Ada', [
+          item('a-quiz', { grade: 0, raw_grade: 0, counts_as_zero: true, late_hours: 0 }),
+        ]),
+        'ungraded',
+        columns,
+        { quiz: {}, form: {} }
+      )
+    ).toBe(false);
+  });
+
+  it('"missing" and "late" read the quiz items', () => {
+    const zeroed = student('s-1', 'Ada', [
+      item('a-quiz', { grade: 0, raw_grade: 0, counts_as_zero: true, late_hours: 0 }),
+    ]);
+    expect(matchesRowFilter(zeroed, 'missing', columns, { quiz: {}, form: {} })).toBe(true);
+    expect(
+      matchesRowFilter(student('s-1', 'Ada', [item('a-quiz')]), 'late', columns, {
+        quiz: {},
+        form: {},
+      })
+    ).toBe(true);
   });
 });
 

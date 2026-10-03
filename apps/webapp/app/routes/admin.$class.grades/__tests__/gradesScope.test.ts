@@ -99,7 +99,7 @@ vi.mock('react-router', () => ({ Await: () => null, Outlet: () => null }));
 
 const route = await import('../route.tsx');
 
-const CLASS_SLUG = 'cs52-26f';
+const CLASS_SLUG = 'intro-101';
 const CLASSROOM = { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE' };
 const OWN_MEMBERSHIP = 'membership-in-this-classroom';
 const FOREIGN_MEMBERSHIP = 'membership-in-another-classroom';
@@ -426,6 +426,7 @@ describe('grades loader — quiz grade items join the totals', () => {
     raw_grade: 80,
     counts_as_zero: false,
     late_hours: 4,
+    counting_raw_percentage: 80,
   };
 
   const resolveAll = async () => {
@@ -470,6 +471,24 @@ describe('grades loader — quiz grade items join the totals', () => {
     expect(Object.keys(students[0].quiz_items[0] as object).sort()).toEqual(
       Object.keys(ITEM).sort()
     );
+  });
+
+  it('sends each quiz column\'s release date, for its "Opens" cells', async () => {
+    const opens = new Date('2099-05-04T12:00:00Z');
+    mocks.listForClassroom.mockResolvedValue([
+      {
+        id: 'a-quiz',
+        title: 'Recursion',
+        type: 'QUIZ',
+        quiz_id: 'quiz-1',
+        release_at: opens,
+        module: { title: 'W1' },
+      },
+    ]);
+
+    const { assignments } = await resolveAll();
+
+    expect(assignments[0]).toMatchObject({ id: 'a-quiz', release_at: opens });
   });
 
   it('gives a student with no item an empty list', async () => {

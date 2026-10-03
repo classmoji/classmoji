@@ -1,5 +1,11 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { effectiveTokensPerHour, openToStudents, withLogins } from '@classmoji/utils';
+import {
+  effectiveTokensPerHour,
+  openToStudents,
+  quizExtensionDescription,
+  titleFromQuizExtensionDescription,
+  withLogins,
+} from '@classmoji/utils';
 import { Prisma } from '@prisma/client';
 import type { TokenTransactionType } from '@prisma/client';
 import { quizzesVisibleOrThrow } from './entitlement.service.ts';
@@ -164,11 +170,12 @@ export const updateExtension = async (data: UpdateExtensionInput) => {
 };
 
 /**
- * Student purchase of extension hours (plan §5.2 gap 6, extract-first —
- * moved from the student.$class.assignments purchaseExtensionHours action).
+ * Student purchase of extension hours on a repository submission (the
+ * student.$class.assignments purchaseExtensionHours action and MCP
+ * extension_purchase call it).
  *
  * Price and eligibility are recomputed HERE from the DB — callers must never
- * trust a client-supplied price (S9). Re-enforces the popover's gates: no late
+ * trust a client-supplied price. Re-enforces the popover's gates: no late
  * override, a price per hour (the assignment's own tokens_per_hour, else the
  * classroom's default_tokens_per_hour) and a deadline to extend. The balance
  * check runs inside updateExtension's transaction.
@@ -249,21 +256,6 @@ export const purchaseExtensionHours = async ({
   });
 };
 
-/** The ledger description of a quiz extension row: the title, then the hours. */
-export const quizExtensionDescription = (title: string, hours: number) =>
-  hours < 0 ? `${title} · \u2212${Math.abs(hours)} h` : `${title} · +${hours} h`;
-
-/**
- * The title a quiz extension row was written with, read back from its
- * description ("<title> · +N h" / "<title> · −N h"), or null when the
- * description is not one. The tokens log falls back to it once the
- * assignment is gone (the link is set null, the row stays).
- */
-export const titleFromQuizExtensionDescription = (description: string | null | undefined) => {
-  const match = /^(.+) · [+\u2212]\d+ h$/u.exec(description ?? '');
-  return match ? match[1] : null;
-};
-
 /**
  * Student purchase of extension hours on a QUIZ assignment. The hours move
  * that student's due date on the quiz: every attempt's lateness, and whether
@@ -283,8 +275,8 @@ export const titleFromQuizExtensionDescription = (description: string | null | u
  * completion; the close date plays no part. There is no cap but the
  * balance, which `updateExtension` checks under the student's ledger lock.
  *
- * NOTE: callers are responsible for authorizing `studentId` (self-access or
- * teaching-team).
+ * NOTE: callers authorize `studentId`. Quiz hours are bought by the student
+ * for themselves: the web action and MCP pass the signed-in student's id.
  */
 export const purchaseQuizExtensionHours = async ({
   classroomId,
@@ -301,6 +293,9 @@ export const purchaseQuizExtensionHours = async ({
 }) => {
   if (!Number.isInteger(hours) || hours <= 0) {
     throw new Error('Invalid hours: Must be a positive whole number.');
+  }
+  if (typeof studentId !== 'string' || !studentId) {
+    throw new Error('Invalid student ID.');
   }
 
   const prisma = getPrisma();

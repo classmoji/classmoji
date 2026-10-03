@@ -34,7 +34,7 @@ import EmojiGrader from '~/components/features/grading/EmojiGrader';
  * loader projects the User row down to this, and the contact fields are
  * present for an OWNER only.
  */
-interface Student {
+export interface Student {
   id: string;
   name: string | null;
   login: string | null;
@@ -69,6 +69,8 @@ export interface GradebookAssignment {
   created_at?: string | Date;
   repository_id?: string | null;
   student_deadline?: string | Date | null;
+  /** When a QUIZ or FORM opens to students; null = when published. */
+  release_at?: string | Date | null;
   submission_mode?: string;
   grades_released?: boolean;
   quiz_id?: string | null;
@@ -99,7 +101,7 @@ type Submission = GitRepoAssignment & {
 };
 
 type EmojiMappings = Record<string, number>;
-type RowFilter = 'all' | 'ungraded' | 'missing' | 'late';
+export type RowFilter = 'all' | 'ungraded' | 'missing' | 'late';
 
 interface GradesTableProps {
   emojiMappings: EmojiMappings;
@@ -148,6 +150,44 @@ const quizItemOf = (student: Student, assignmentId: string): GradedItem | undefi
 const quizValueOf = (student: Student, assignmentId: string): number | null => {
   const item = quizItemOf(student, assignmentId);
   return item ? gradedItemValue(item) : null;
+};
+/** Whether a quiz has not opened to students yet (`release_at` still ahead). */
+const opensLater = (assignment: GradebookAssignment, now = Date.now()) =>
+  assignment.release_at != null && new Date(assignment.release_at).getTime() > now;
+/**
+ * Completed attempts with no score yet and nothing counted: the score is
+ * still to come. Never a counted zero (that has an item).
+ */
+const quizPending = (activity: GradebookActivity, student: Student, assignmentId: string) => {
+  if (quizItemOf(student, assignmentId)) return false;
+  const q = activity.quiz[assignmentId]?.[student.id];
+  return Boolean(q?.completed && q.score === null);
+};
+/**
+ * Whether a student's row passes the gradebook filter, over the visible
+ * columns. "Has something to grade" includes a quiz whose score is still to
+ * come; missing and late include quiz items.
+ */
+export const matchesRowFilter = (
+  student: Student,
+  rowFilter: RowFilter,
+  columnsSpec: readonly GradebookAssignment[],
+  activity: GradebookActivity
+): boolean => {
+  if (rowFilter === 'all') return true;
+  const subs = columnsSpec.filter(a => a.type === 'REPO').map(a => findSubmission(student, a.id));
+  const quizColumns = columnsSpec.filter(a => a.type === 'QUIZ');
+  const quizItems = quizColumns.flatMap(a => quizItemOf(student, a.id) ?? []);
+  if (rowFilter === 'ungraded')
+    return (
+      subs.some(s => isSubmitted(s) && !isGraded(s)) ||
+      quizColumns.some(a => quizPending(activity, student, a.id))
+    );
+  if (rowFilter === 'missing')
+    return subs.some(s => s?.should_be_zero) || quizItems.some(i => i.counts_as_zero);
+  if (rowFilter === 'late')
+    return subs.some(s => isLate(s)) || quizItems.some(i => i.late_hours > 0);
+  return true;
 };
 const LATE_TINT = 'bg-amber-50 dark:bg-amber-950/30';
 const MISSING_TINT = 'bg-red-50 dark:bg-red-950/30';
@@ -268,21 +308,9 @@ const GradesTable = (props: GradesTableProps) => {
           .join(' ');
         if (!hay.includes(q)) return false;
       }
-      if (rowFilter === 'all') return true;
-      const subs = columnsSpec
-        .filter(a => a.type === 'REPO')
-        .map(a => findSubmission(student, a.id));
-      const quizItems = columnsSpec
-        .filter(a => a.type === 'QUIZ')
-        .flatMap(a => quizItemOf(student, a.id) ?? []);
-      if (rowFilter === 'ungraded') return subs.some(s => isSubmitted(s) && !isGraded(s));
-      if (rowFilter === 'missing')
-        return subs.some(s => s?.should_be_zero) || quizItems.some(i => i.counts_as_zero);
-      if (rowFilter === 'late')
-        return subs.some(s => isLate(s)) || quizItems.some(i => i.late_hours > 0);
-      return true;
+      return matchesRowFilter(student, rowFilter, columnsSpec, activity);
     });
-  }, [students, searchQuery, rowFilter, columnsSpec]);
+  }, [students, searchQuery, rowFilter, columnsSpec, activity]);
 
   const toGradeCount = (assignmentId: string) =>
     students.reduce((n, s) => {
@@ -299,9 +327,9 @@ const GradesTable = (props: GradesTableProps) => {
 
   /**
    * A quiz cell. With a grade item it shows what the totals count: the
-   * late-penalised score (amber when late), or a counted zero. Without one
-   * (not open yet, before the deadline, running or unscored) it shows the
-   * attempt state.
+   * late-penalised score (amber when late), or Missing (a counted 0). Without
+   * one it shows when the quiz opens, or the attempt state (before the
+   * deadline, running or unscored).
    */
   const renderQuizCell = (
     student: Student,
@@ -309,14 +337,8 @@ const GradesTable = (props: GradesTableProps) => {
   ): { body: React.ReactNode; tint: string } => {
     const item = quizItemOf(student, assignment.id);
     if (item?.counts_as_zero) {
-      return {
-        body: (
-          <span className="font-semibold tabular-nums text-red-700 dark:text-red-300">
-            0 (not attempted)
-          </span>
-        ),
-        tint: MISSING_TINT,
-      };
+      // Counts 0 in the totals; a running attempt past the deadline is one too.
+      return { body: <Chip tone="red">Missing</Chip>, tint: MISSING_TINT };
     }
     const value = item ? gradedItemValue(item) : null;
     if (item && value !== null) {
@@ -329,6 +351,12 @@ const GradesTable = (props: GradesTableProps) => {
           </>
         ),
         tint: late ? LATE_TINT : '',
+      };
+    }
+    if (!item && opensLater(assignment)) {
+      return {
+        body: <Chip tone="grey">Opens {dayjs(assignment.release_at).format('MMM D')}</Chip>,
+        tint: '',
       };
     }
     const q = activity.quiz[assignment.id]?.[student.id];

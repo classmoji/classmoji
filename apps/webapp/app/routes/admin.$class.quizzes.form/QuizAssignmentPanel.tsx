@@ -235,10 +235,15 @@ const Chips = ({ places }: { places: string[] }) =>
     </div>
   );
 
-/** How the price reads: the quiz's own, none, or the classroom's rate (with its value). */
+/**
+ * How the price reads: the quiz's own, none, or the classroom's rate (with its
+ * value). Empty at a classroom rate of 0 sells no hours either.
+ */
 export const tokensPerHourLabel = (tokensPerHour: number | null, classroomTokensPerHour: number) =>
   tokensPerHour === null
-    ? `Classroom rate (${classroomTokensPerHour})`
+    ? classroomTokensPerHour > 0
+      ? `Classroom rate (${classroomTokensPerHour})`
+      : 'No extensions'
     : tokensPerHour === 0
       ? 'No extensions'
       : String(tokensPerHour);

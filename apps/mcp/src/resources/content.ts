@@ -501,6 +501,12 @@ export const quizzesResource: ResourceDefinition = {
     });
 
     if (role === 'STUDENT') {
+      // A student sees quizzes where the classroom's pages show them: the same
+      // predicate extension_purchase and my_grades use (Pro, switched on, and
+      // the AI agent configured). A failed lookup fails the read.
+      if (!(await ClassmojiService.entitlement.quizzesVisibleOrThrow(classroomId))) {
+        throw new ToolError('forbidden', 'Quizzes are not available in this classroom');
+      }
       // Closed quizzes too, as the web list shows them: a student keeps the
       // quiz they finished and its score, and a closed one reads as CLOSED.
       const quizzes = (await ClassmojiService.quiz.getQuizzesForStudent(

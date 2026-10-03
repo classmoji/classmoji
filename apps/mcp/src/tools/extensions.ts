@@ -1,7 +1,6 @@
 /**
- * extension_purchase — a student spends tokens to buy late hours on their own
- * submission (plan §5.2 gap 6, extract-first — Phase 3) or on a quiz they take
- * (quizzes as assignments, Phase 3).
+ * extension_purchase — a student spends tokens to buy extension hours on their
+ * own repository submission or on a quiz assignment they take.
  *
  * Mirrors apps/webapp/app/routes/student.$class.assignments
  * purchaseExtensionHours: assertClassroomAccess allows OWNER/TEACHER plus
@@ -21,7 +20,7 @@
  *     does not exist. A REPO assignment id is refused with a pointer to
  *     git_repo_assignment_id (the hours belong to a submission there).
  *
- * All pricing and gating lives in packages/services (S9 — price derives from
+ * All pricing and gating lives in packages/services (the price derives from
  * Assignment.tokens_per_hour, else the classroom's default; the late-override
  * refusal, deadline and price checks are re-enforced server-side; balance
  * check inside the DB transaction). Hours can be bought at any time, before

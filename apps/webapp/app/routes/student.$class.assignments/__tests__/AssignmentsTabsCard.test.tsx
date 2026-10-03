@@ -49,6 +49,7 @@ const base = {
   extensionHours: 0,
   submittedAt: null,
   missing: false,
+  suggestedExtensionHours: 0,
   extend: null,
 } as const;
 
@@ -64,6 +65,7 @@ const REPO_LATE: StudentCourseworkRow = {
   action: { kind: 'OPEN', href: 'https://github.com/org/lab-ada/issues/3' },
   deadline: '2020-01-01T12:00:00.000Z',
   numLateHours: 5,
+  suggestedExtensionHours: 5,
   tokensPerHour: 2,
   extend: { kind: 'REPO', gitRepoAssignmentId: 'gra-1' },
   repo: {
@@ -91,7 +93,7 @@ const QUIZ_OPEN: StudentCourseworkRow = {
   done: false,
   attemptsUsed: 0,
   maxAttempts: 2,
-  href: '/student/cs52/quizzes?quiz=q1',
+  href: '/student/intro-101/quizzes?quiz=q1',
   external: false,
   action: { kind: 'START_QUIZ', quizId: 'q1' },
 };
@@ -105,14 +107,14 @@ const FORM_PUBLIC: StudentCourseworkRow = {
   tracked: false,
   done: false,
   isExtraCredit: true,
-  href: 'https://pages.test/cs52/forms/signup',
+  href: 'https://pages.test/intro-101/forms/signup',
   external: true,
   action: null,
 };
 
 const render = (rows: StudentCourseworkRow[], initialTab?: 'current' | 'completed' | 'all') =>
   renderToStaticMarkup(
-    <MemoryRouter initialEntries={['/student/cs52/assignments']}>
+    <MemoryRouter initialEntries={['/student/intro-101/assignments']}>
       <Routes>
         <Route
           path="/student/:class/assignments"
@@ -145,7 +147,7 @@ describe('AssignmentsTabsCard', () => {
       const html = render([REPO_LATE]);
       expect(html).toContain('data-extend-for="gra-1"');
       expect(popover).toHaveBeenCalledWith(
-        expect.objectContaining({ numLateHours: 5, tokensPerHour: 2, balance: 10 })
+        expect.objectContaining({ suggestedHours: 5, tokensPerHour: 2, balance: 10 })
       );
     });
 
@@ -154,6 +156,22 @@ describe('AssignmentsTabsCard', () => {
         { ...QUIZ_OPEN, tokensPerHour: 1, extend: { kind: 'QUIZ', assignmentId: 'a-quiz' } },
       ]);
       expect(html).toContain('data-extend-for="a-quiz"');
+    });
+
+    it('starts a missing quiz at the hours since its due date, not its late hours', () => {
+      popover.mockClear();
+      render([
+        {
+          ...QUIZ_OPEN,
+          deadline: '2020-01-01T12:00:00.000Z',
+          missing: true,
+          numLateHours: 0,
+          suggestedExtensionHours: 7,
+          tokensPerHour: 1,
+          extend: { kind: 'QUIZ', assignmentId: 'a-quiz' },
+        },
+      ]);
+      expect(popover).toHaveBeenCalledWith(expect.objectContaining({ suggestedHours: 7 }));
     });
 
     it('does not offer it where the row names no target', () => {
@@ -236,7 +254,7 @@ describe('AssignmentsTabsCard', () => {
     const html = render([QUIZ_OPEN]);
 
     expect(html).toContain('>QUIZ<');
-    expect(html).toContain('href="/student/cs52/quizzes?quiz=q1"');
+    expect(html).toContain('href="/student/intro-101/quizzes?quiz=q1"');
     expect(html).toContain('Week 1 · 0 of 2 attempts used');
     expect(html).toContain('Not started');
   });
@@ -246,7 +264,7 @@ describe('AssignmentsTabsCard', () => {
     const html = render([FORM_PUBLIC], 'all');
 
     expect(html).toContain('>FORM<');
-    expect(html).toContain('href="https://pages.test/cs52/forms/signup"');
+    expect(html).toContain('href="https://pages.test/intro-101/forms/signup"');
     expect(html).toContain('Week 1 · Extra credit');
     expect(html).not.toContain('Not submitted');
   });

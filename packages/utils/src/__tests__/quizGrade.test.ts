@@ -195,6 +195,7 @@ describe('quizGradeItem', () => {
       raw_grade: 82,
       counts_as_zero: false,
       late_hours: 5,
+      counting_raw_percentage: 82,
     });
   });
 
@@ -209,7 +210,13 @@ describe('quizGradeItem', () => {
 
   it('counts 0 once the deadline has passed with no completed attempt', () => {
     const item = quizGradeItem({ ...base, attempts: [attempt('run', at(1), null, null)] });
-    expect(item).toMatchObject({ counts_as_zero: true, grade: 0, raw_grade: 0, late_hours: 0 });
+    expect(item).toMatchObject({
+      counts_as_zero: true,
+      grade: 0,
+      raw_grade: 0,
+      late_hours: 0,
+      counting_raw_percentage: null,
+    });
   });
 
   it('no item before the deadline with no attempt', () => {
@@ -258,6 +265,22 @@ describe('quizGradeItem', () => {
     });
     // late: 10 h × 2 = 75 < 80.
     expect(item).toMatchObject({ grade: 80, raw_grade: 95, late_hours: 0 });
+    // The on-time 80 counts: its own raw score, not the raw pick (95).
+    expect(item?.counting_raw_percentage).toBe(80);
+  });
+
+  it('counting_raw_percentage is the counting attempt before its penalty', () => {
+    // 90 completed 6 h late at 2 points an hour counts 78.
+    const item = quizGradeItem({ ...base, attempts: [attempt('a', at(-1), at(6, 20), 90)] });
+    expect(item).toMatchObject({ grade: 78, counting_raw_percentage: 90, late_hours: 6 });
+    expect(item!.counting_raw_percentage! - item!.grade!).toBe(12);
+    // At 20 points an hour the penalty floors at 0: 90 points lost, not 120.
+    const floored = quizGradeItem({
+      ...base,
+      latePenaltyPerHour: 20,
+      attempts: [attempt('a', at(-1), at(6, 20), 90)],
+    });
+    expect(floored).toMatchObject({ grade: 0, counting_raw_percentage: 90 });
   });
 
   it('no item when the assignment is not open to students', () => {

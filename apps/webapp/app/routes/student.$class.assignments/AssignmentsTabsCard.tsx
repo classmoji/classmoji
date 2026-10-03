@@ -344,7 +344,7 @@ const AssignmentsTabsCard = ({
                             {extendTarget && (
                               <TokenExtensionPopover
                                 target={extendTarget}
-                                numLateHours={row.numLateHours}
+                                suggestedHours={row.suggestedExtensionHours}
                                 tokensPerHour={row.tokensPerHour}
                                 balance={balance}
                               />

@@ -139,9 +139,15 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   // Lateness is a student's: their due date moves by the hours they bought,
   // their attempts are late past it, and the attempt that counts is picked
-  // after the classroom's late penalty, as in their grade. A staff preview
-  // and a quiz in no module are never late.
-  const isStudent = membership?.role === 'STUDENT';
+  // after the classroom's late penalty, as in their grade. Whoever is on the
+  // STUDENT roster is graded as a student (the grade loader reads that
+  // roster), a teaching assistant who is also a student included; the access
+  // gate hands back the highest role, so a staff role is checked for a
+  // STUDENT membership too. A staff-only preview and a quiz in no module are
+  // never late.
+  const isStudent =
+    membership?.role === 'STUDENT' ||
+    (await ClassmojiService.classroomMembership.hasRole(classroom.id, userId, 'STUDENT'));
   const assignmentIds = quizzes.flatMap(quiz => (quiz.assignment ? [quiz.assignment.id] : []));
   const boughtHours =
     isStudent && assignmentIds.length > 0

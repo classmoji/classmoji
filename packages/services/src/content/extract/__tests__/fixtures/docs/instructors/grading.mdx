@@ -57,6 +57,8 @@ Quizzes follow the same rule: an attempt finished after the due date (plus the h
 
 **Quiz assignment grade**: the score of the attempt picked by the quiz's grading strategy, minus any late penalty. It counts as soon as the attempt is scored. A student with no finished attempt once the due date (plus the hours they bought) has passed gets a 0; a quiz with no due date never counts as 0. Students see their own score before the penalty, with the late hours beside it; staff totals use the penalised score.
 
+Quiz scores run 0–100, while a repository grade is on your emoji scale. If your top emoji is worth less (or more) than 100, a quiz weighs differently from a repository assignment of the same weight.
+
 **Course grade**: Σ(grade × weight) / Σ weight over every graded, non-extra-credit assignment, then each graded extra-credit assignment adds grade × weight / 100. Weights are relative, so they don't need to add up to 100. Repositories carry no weight, forms carry no grade, and there is no drop-lowest. Quizzes count only where quizzes are turned on for the classroom.
 
 ### Letter grades
@@ -71,8 +73,8 @@ Map score ranges to letters in **Settings > Grades** (for example, 90–100 = A,
 
 - Search students, and use **Show** to filter: **Everyone**, **Has something to grade**, **Has a missing submission**, **Late somewhere**.
 - Columns are grouped by module, in course order, each module ending with its **Module total** (collapse a module to show only its total). Each header shows the title (linked to the assignment page), weight, due date, and how many are left to grade.
-- Cells show the score, or **To grade** (blue), **Late** (amber), **Missing** (red), or **Not submitted**. Quiz cells show the score the total counts (after any late penalty, amber with the late hours when late), **0 (not attempted)** (red) once the due date has passed with no finished attempt, or else **In progress** or **Not attempted**; form cells **Responded** or **No response**.
-- **Has a missing submission** and **Late somewhere** include quizzes.
+- Cells show the score, or **To grade** (blue), **Late** (amber), **Missing** (red), or **Not submitted**. Quiz cells show the score the total counts (after any late penalty, amber with the late hours when late), **Missing** (red, counts as 0) once the due date has passed with no finished attempt, **Opens** with the date for a quiz that has not opened yet, or else **In progress** or **Not attempted**; form cells **Responded** or **No response**.
+- **Has a missing submission** and **Late somewhere** include quizzes; **Has something to grade** includes a finished quiz attempt still waiting for its score.
 - Grade from the cell: hover **Grade** to open the picker (emoji, or score badges on a numeric scale). Clicking an existing score jumps to that student's row on the assignment page.
 - **Total** (the weighted score; hover for the before-late-penalty and individual-only figures) and **Letter** (from the breakpoints, amber when overridden) stay pinned on the right. A class row at the bottom shows the mean and median.
 
@@ -80,4 +82,4 @@ Map score ranges to letters in **Settings > Grades** (for example, 90–100 = A,
 
 Click the eye icon on a gradebook row (or **View** on the Students list) to open a student's report at `/admin/:class/students/:login` (also under `/teacher`).
 
-It shows the student's name, login, school ID (owner-editable), and tokens; tiles for **Total** with letter, **Graded so far**, **Late** (hours and penalty), and **Final letter override**, each counting repository and quiz assignments; then their assignments grouped by module, each with its status, grade, **View** (Github), **Waive late**, and **Grade now**. A quiz row shows the score the total counts, its late hours, or **Not attempted** with a 0 once the due date has passed. A **Private note** at the bottom is visible to staff only.
+It shows the student's name, login, school ID (owner-editable), and tokens; tiles for **Total** with letter, **Graded so far** (quizzes that have not opened yet are not counted), **Late** (hours, and the points the penalty took), and **Final letter override**, each counting repository and quiz assignments; then their assignments grouped by module, each with its status, grade, **View** (Github), **Waive late**, and **Grade now**. A quiz row shows the score the total counts (hover it for the score before the late penalty), its late hours, **Missing** with a 0 once the due date has passed with no finished attempt, or **Opens** with the date before it opens. A **Private note** at the bottom is visible to staff only.

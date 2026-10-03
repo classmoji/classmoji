@@ -51,6 +51,41 @@ const LateCell = ({ hours, counted = null }: { hours: number | null; counted?: n
   );
 };
 
+const round = (value: number) => Math.round(value * 10) / 10;
+
+/**
+ * A student's current score: the raw score of the attempt that counts, with
+ * what it counts for after the late penalty when that differs ("90 → 60",
+ * the gradebook's value). "Missing" for a counted 0, "Not started" for a
+ * rostered student with no attempt.
+ */
+const CurrentScoreCell = ({ student }: { student: QuizStudent }) => {
+  if (student.countsAsZero) {
+    return (
+      <span className="inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full bg-red-500/15 text-red-700 dark:text-red-300 whitespace-nowrap">
+        Missing
+      </span>
+    );
+  }
+  if (student.attemptCount === 0) {
+    return <span className="text-gray-400 dark:text-gray-500 italic">Not started</span>;
+  }
+  if (student.currentScore === null) {
+    return <span className="text-gray-400 dark:text-gray-500 italic">No score</span>;
+  }
+  const counted = student.countedScore;
+  return (
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+      <GradeBadge grade={student.currentScore} />
+      {counted !== null && counted !== student.currentScore && (
+        <span className="text-xs font-semibold tabular-nums text-orange-700 dark:text-orange-300">
+          → {round(counted)}
+        </span>
+      )}
+    </span>
+  );
+};
+
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { ClassmojiService } = await import('@classmoji/services');
   const { addAuditLog, assertClassroomAccess } = await import('~/utils/helpers');
@@ -80,27 +115,31 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   // Lateness is measured from the quiz's due date plus the hours each student
   // bought, for students on the roster only: anyone else's attempts are
-  // previews and are never late. A quiz with no due date is never late.
+  // previews and are never late. A quiz with no due date is never late. Every
+  // rostered student has a row, so staff see who has not started and who
+  // counts 0.
   const assignment = quiz.assignment;
   const penalty: unknown = classroom.settings?.late_penalty_points_per_hour;
   const latePenaltyPerHour = typeof penalty === 'number' ? penalty : 0;
-  const [attempts, late] = await Promise.all([
+  const [attempts, roster, extensionHours] = await Promise.all([
     ClassmojiService.quizAttempt.findByQuiz(quiz.id),
+    ClassmojiService.classroomMembership.findUsersByRole(classroom.id, 'STUDENT'),
     assignment?.student_deadline
-      ? Promise.all([
-          ClassmojiService.classroomMembership.findUsersByRole(classroom.id, 'STUDENT'),
-          ClassmojiService.token.netQuizExtensionHoursByStudent({
-            classroomId: classroom.id,
-            assignmentId: assignment.id,
-          }),
-        ]).then(([roster, extensionHours]) => ({
+      ? ClassmojiService.token.netQuizExtensionHoursByStudent({
+          classroomId: classroom.id,
+          assignmentId: assignment.id,
+        })
+      : null,
+  ]);
+  const late =
+    assignment?.student_deadline && extensionHours
+      ? {
           studentDeadline: assignment.student_deadline,
           latePenaltyPerHour,
           extensionHours,
           studentIds: new Set(roster.map(student => student.id)),
-        }))
-      : null,
-  ]);
+        }
+      : null;
 
   addAuditLog({
     request,
@@ -118,6 +157,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     gradingStrategy: quiz.grading_strategy,
     viewerId: userId,
     late,
+    roster: { students: roster, assignment: assignment ?? null, now: new Date() },
   });
 
   return {
@@ -612,7 +652,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
     {
       title: () => (
         <Tooltip
-          title={`Formative score (with partial credit) of the attempt that counts - ${getStrategyLabel()} strategy, after the late penalty`}
+          title={`Formative score (with partial credit) of the attempt that counts - ${getStrategyLabel()} strategy. When late, the arrow shows what it counts for after the late penalty.`}
         >
           <Space>
             Current Score
@@ -620,15 +660,11 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
           </Space>
         </Tooltip>
       ),
-      width: 150,
+      width: 170,
       dataIndex: 'currentScore',
-      render: (score: number | null) => {
-        if (score === null) {
-          return <span className="text-gray-400 dark:text-gray-500 italic">No score</span>;
-        }
-        return <GradeBadge grade={score} />;
-      },
-      sorter: (a: QuizStudent, b: QuizStudent) => (a.currentScore || 0) - (b.currentScore || 0),
+      render: (_: number | null, record: QuizStudent) => <CurrentScoreCell student={record} />,
+      // By what counts, as the gradebook does: a counted 0 is 0, no score last.
+      sorter: (a: QuizStudent, b: QuizStudent) => (a.countedScore ?? -1) - (b.countedScore ?? -1),
     },
     {
       title: () => (
@@ -685,13 +721,19 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       title: 'Latest Attempt',
       width: 180,
       dataIndex: 'latestAttempt',
-      render: (latestAttempt: string) => (
-        <Tooltip title={dayjs(latestAttempt).format('MMM D, YYYY h:mm A')}>
-          <span className="text-gray-600 dark:text-gray-300">{dayjs(latestAttempt).fromNow()}</span>
-        </Tooltip>
-      ),
+      render: (latestAttempt: string | null) =>
+        latestAttempt ? (
+          <Tooltip title={dayjs(latestAttempt).format('MMM D, YYYY h:mm A')}>
+            <span className="text-gray-600 dark:text-gray-300">
+              {dayjs(latestAttempt).fromNow()}
+            </span>
+          </Tooltip>
+        ) : (
+          <span className="text-gray-400 dark:text-gray-500">—</span>
+        ),
       sorter: (a: QuizStudent, b: QuizStudent) =>
-        new Date(b.latestAttempt).getTime() - new Date(a.latestAttempt).getTime(),
+        (b.latestAttempt ? new Date(b.latestAttempt).getTime() : 0) -
+        (a.latestAttempt ? new Date(a.latestAttempt).getTime() : 0),
     },
   ];
 

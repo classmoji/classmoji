@@ -20,6 +20,7 @@ const projectGradedItem = (item: GradedItem): GradedItem => ({
   raw_grade: item.raw_grade,
   counts_as_zero: item.counts_as_zero,
   late_hours: item.late_hours,
+  counting_raw_percentage: item.counting_raw_percentage,
 });
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
@@ -130,6 +131,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
           quiz_id: a.quiz_id,
           form_id: a.form_id,
           student_deadline: a.student_deadline,
+          // A quiz column reads "Opens <date>" until it opens.
+          release_at: a.release_at,
           created_at: a.created_at,
           submission_mode: a.submission_mode,
           grades_released: a.grades_released,

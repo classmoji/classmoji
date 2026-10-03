@@ -65,6 +65,7 @@ const item = (over: Partial<GradedItem> = {}): GradedItem => ({
   raw_grade: null,
   counts_as_zero: false,
   late_hours: 0,
+  counting_raw_percentage: null,
   ...over,
 });
 

@@ -104,9 +104,9 @@ vi.mock('@tabler/icons-react', () => ({
   IconChartBar: () => null,
 }));
 vi.mock('react-router', () => ({
-  useLocation: () => ({ pathname: '/assistant/cs52-26f/quizzes/quiz-1' }),
+  useLocation: () => ({ pathname: '/assistant/intro-101/quizzes/quiz-1' }),
   useNavigate: () => vi.fn(),
-  useParams: () => ({ class: 'cs52-26f', quizId: 'quiz-1' }),
+  useParams: () => ({ class: 'intro-101', quizId: 'quiz-1' }),
   useFetcher: () => ({ submit: vi.fn() }),
   Outlet: () => null,
 }));
@@ -120,7 +120,7 @@ const { buildQuizResultRows } = await import('~/utils/quizPayloads');
 
 // ─── Fixtures shaped like the real joins ────────────────────────────────────
 
-const CLASS_SLUG = 'cs52-26f';
+const CLASS_SLUG = 'intro-101';
 const CLASSROOM = { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE' };
 const QUIZ_ID = 'quiz-1';
 
@@ -319,6 +319,8 @@ beforeEach(() => {
     [ADA, BABBAGE, TA].find(u => u.id === id)
   );
   mocks.getMessages.mockResolvedValue([{ role: 'ASSISTANT', content: SENTINEL.feedback }]);
+  // The results page always reads the STUDENT roster; empty unless a test says.
+  mocks.findUsersByRole.mockResolvedValue([]);
 });
 
 // ─── The results page ───────────────────────────────────────────────────────
@@ -568,6 +570,19 @@ describe('student attempt drawer payload', () => {
 
 describe('quiz results page: lateness', () => {
   const DUE = new Date('2026-03-01T09:00:00Z');
+  /** The quiz's assignment as `quiz.findById` joins it: what the zero rule reads. */
+  const assignmentRow = (over: Record<string, unknown> = {}) => ({
+    id: 'asg-1',
+    module_id: 'mod-1',
+    type: 'QUIZ',
+    is_published: true,
+    release_at: null,
+    weight: 10,
+    is_extra_credit: false,
+    student_deadline: DUE,
+    ...over,
+  });
+  const LOVELACE = userRow('stu-lovelace', 'lovelace', 'Augusta King');
 
   beforeEach(() => {
     mocks.assertClassroomAccess.mockResolvedValue({
@@ -580,10 +595,7 @@ describe('quiz results page: lateness', () => {
   });
 
   it("measures students' attempts against the due date and the hours they bought, never staff previews", async () => {
-    mocks.quizFindById.mockResolvedValue({
-      ...QUIZ_ROW,
-      assignment: { id: 'asg-1', student_deadline: DUE },
-    });
+    mocks.quizFindById.mockResolvedValue({ ...QUIZ_ROW, assignment: assignmentRow() });
     // Ada's first attempt completed 1h20m after the due date; she bought 1 h.
     mocks.netQuizExtensionHoursByStudent.mockResolvedValue(new Map([[ADA.id, 1]]));
     const taDone = attemptRow('a-ta-done', TA, {
@@ -613,16 +625,104 @@ describe('quiz results page: lateness', () => {
     expect(ta.lateHours).toBeNull();
   });
 
-  it('reads nothing more for a quiz with no due date, and marks nothing late', async () => {
+  it('reads no hours bought for a quiz with no due date, and marks nothing late or missing', async () => {
     mocks.quizFindById.mockResolvedValue({
       ...QUIZ_ROW,
-      assignment: { id: 'asg-1', student_deadline: null },
+      assignment: assignmentRow({ student_deadline: null }),
     });
+    mocks.findUsersByRole.mockResolvedValue([ADA, BABBAGE, LOVELACE]);
 
     const payload = await detailRoute.loader(detailArgs());
 
-    expect(mocks.findUsersByRole).not.toHaveBeenCalled();
+    expect(mocks.netQuizExtensionHoursByStudent).not.toHaveBeenCalled();
     expect(payload.students.every(s => s.lateHours === null)).toBe(true);
+    expect(payload.students.every(s => !s.countsAsZero)).toBe(true);
+    // No due date: a student with no attempt has not started, never Missing.
+    expect(payload.students.find(s => s.userId === LOVELACE.id)).toMatchObject({
+      attemptCount: 0,
+      countsAsZero: false,
+    });
+  });
+
+  it('lists every rostered student, and counts 0 for those past the due date with nothing completed', async () => {
+    mocks.quizFindById.mockResolvedValue({ ...QUIZ_ROW, assignment: assignmentRow() });
+    mocks.findUsersByRole.mockResolvedValue([ADA, BABBAGE, LOVELACE]);
+
+    const payload = await detailRoute.loader(detailArgs());
+
+    // Students with attempts first, in arrival order; then the rest of the roster.
+    expect(payload.students.map(s => s.userId)).toEqual([ADA.id, TA.id, BABBAGE.id, LOVELACE.id]);
+    const lovelace = payload.students.find(s => s.userId === LOVELACE.id)!;
+    expect(lovelace).toEqual({
+      userId: LOVELACE.id,
+      user: {
+        id: LOVELACE.id,
+        name: 'Augusta King',
+        login: 'lovelace',
+        avatar_url: LOVELACE.image,
+      },
+      attempts: [],
+      attemptCount: 0,
+      currentScore: null,
+      countedScore: 0,
+      lateHours: null,
+      countsAsZero: true,
+      bestScore: null,
+      firstAttemptScore: null,
+      countingAttemptId: null,
+      latestAttempt: null,
+    });
+    // A running attempt past the due date is still a counted 0.
+    const babbage = payload.students.find(s => s.userId === BABBAGE.id)!;
+    expect(babbage).toMatchObject({ countsAsZero: true, attemptCount: 1, currentScore: null });
+    // A scored attempt counts; a staff preview never counts 0.
+    expect(payload.students.find(s => s.userId === ADA.id)!.countsAsZero).toBe(false);
+    expect(payload.students.find(s => s.userId === TA.id)!.countsAsZero).toBe(false);
+    // The roster's user rows are as wide as any other: nothing extra leaves.
+    expectNoSentinels(payload);
+  });
+
+  it('shows a rostered student with no attempt as not started before the due date', async () => {
+    mocks.quizFindById.mockResolvedValue({
+      ...QUIZ_ROW,
+      assignment: assignmentRow({ student_deadline: new Date('2099-01-01T00:00:00Z') }),
+    });
+    mocks.findUsersByRole.mockResolvedValue([LOVELACE]);
+
+    const payload = await detailRoute.loader(detailArgs());
+
+    expect(payload.students.find(s => s.userId === LOVELACE.id)).toMatchObject({
+      attemptCount: 0,
+      countsAsZero: false,
+      countedScore: null,
+    });
+  });
+
+  it('the zero waits for the hours a student bought', async () => {
+    // Due 2 h ago; Lovelace bought 5 h.
+    const due = new Date(Date.now() - 2 * 3_600_000);
+    mocks.quizFindById.mockResolvedValue({
+      ...QUIZ_ROW,
+      assignment: assignmentRow({ student_deadline: due }),
+    });
+    mocks.findUsersByRole.mockResolvedValue([LOVELACE]);
+    mocks.netQuizExtensionHoursByStudent.mockResolvedValue(new Map([[LOVELACE.id, 5]]));
+
+    const payload = await detailRoute.loader(detailArgs());
+
+    expect(payload.students.find(s => s.userId === LOVELACE.id)!.countsAsZero).toBe(false);
+  });
+
+  it('nobody counts 0 while the quiz is not open to students', async () => {
+    mocks.quizFindById.mockResolvedValue({
+      ...QUIZ_ROW,
+      assignment: assignmentRow({ is_published: false }),
+    });
+    mocks.findUsersByRole.mockResolvedValue([LOVELACE]);
+
+    const payload = await detailRoute.loader(detailArgs());
+
+    expect(payload.students.find(s => s.userId === LOVELACE.id)!.countsAsZero).toBe(false);
   });
 });
 

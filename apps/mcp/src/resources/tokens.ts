@@ -17,6 +17,7 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
+import { transactionAssignmentTitle } from '@classmoji/utils';
 import type { ResourceDefinition } from '../mcp/registry.ts';
 import { STUDENT_ONLY, classroomCtx } from './shape.ts';
 
@@ -31,25 +32,13 @@ interface TransactionRow {
   created_at: Date;
   /** A quiz extension's assignment (set null if the assignment is deleted). */
   assignment_id?: string | null;
+  git_repo_assignment_id?: string | null;
   assignment?: { id: string; title?: string | null } | null;
   git_repo_assignment?: {
     id: string;
     assignment?: { id: string; title?: string | null } | null;
   } | null;
   assignment_grade?: { id: string; emoji?: string } | null;
-}
-
-/**
- * The live title of the assignment a row is about; for a quiz extension whose
- * assignment is gone (the link is set null, the row stays), the title its
- * description was written with; otherwise null. Grants and removals that name
- * no assignment stay null: their description is free text.
- */
-function assignmentTitle(t: TransactionRow): string | null {
-  const live = t.assignment?.title ?? t.git_repo_assignment?.assignment?.title;
-  if (live) return live;
-  if (t.hours_purchased == null || t.git_repo_assignment) return null;
-  return ClassmojiService.token.titleFromQuizExtensionDescription(t.description);
 }
 
 export const tokensResource: ResourceDefinition = {
@@ -84,7 +73,10 @@ export const tokensResource: ResourceDefinition = {
         is_cancelled: t.is_cancelled,
         created_at: t.created_at,
         assignment_id: t.assignment_id ?? t.git_repo_assignment?.assignment?.id ?? null,
-        assignment_title: assignmentTitle(t),
+        // The live title; for a quiz extension whose assignment is gone, the
+        // title its description was written with. Grants and removals name
+        // none: their description is free text.
+        assignment_title: transactionAssignmentTitle(t),
         grade_emoji: t.assignment_grade?.emoji ?? null,
       })),
     };

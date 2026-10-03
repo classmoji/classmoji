@@ -185,6 +185,7 @@ export const quizGradeItem = <T extends ScorableQuizAttempt>({
       raw_grade: score.raw_grade,
       counts_as_zero: false,
       late_hours: score.late_hours,
+      counting_raw_percentage: score.raw_percentage,
     };
   }
 
@@ -194,5 +195,12 @@ export const quizGradeItem = <T extends ScorableQuizAttempt>({
   const deadline = effectiveDeadline(assignment.student_deadline, extensionHours);
   if (!deadline || toTime(now) <= deadline.getTime()) return null;
 
-  return { ...base, grade: 0, raw_grade: 0, counts_as_zero: true, late_hours: 0 };
+  return {
+    ...base,
+    grade: 0,
+    raw_grade: 0,
+    counts_as_zero: true,
+    late_hours: 0,
+    counting_raw_percentage: null,
+  };
 };
