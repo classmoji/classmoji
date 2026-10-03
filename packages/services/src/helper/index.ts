@@ -843,7 +843,7 @@ class HelperService {
     );
 
     if (studentId) {
-      this.assignTokensToStudent(
+      await this.assignTokensToStudent(
         {
           organization: classroom,
           gitRepoAssignment,
@@ -853,7 +853,7 @@ class HelperService {
         assignmentGrade
       );
     } else if (teamId) {
-      this.assignTokensToTeam(
+      await this.assignTokensToTeam(
         {
           organization: classroom,
           gitRepoAssignment,

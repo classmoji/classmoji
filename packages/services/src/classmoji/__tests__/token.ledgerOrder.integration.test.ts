@@ -113,7 +113,7 @@ describe.skipIf(!RUN)('token ledger under concurrent writers (integration)', () 
     }
   });
 
-  it('charges concurrent purchases one after another, never past the balance', async () => {
+  it('applies concurrent purchases in order against the latest balance', async () => {
     const studentId = await makeStudent();
     await grant(studentId, 100);
 
@@ -168,7 +168,7 @@ describe.skipIf(!RUN)('token ledger under concurrent writers (integration)', () 
     expect(rows.filter(r => r.type === 'REFUND')).toHaveLength(2);
   });
 
-  it('refunds one purchase exactly once when cancels race each other', async () => {
+  it('records one refund when the same purchase is cancelled concurrently', async () => {
     const studentId = await makeStudent();
     await grant(studentId, 60);
     const bought = await purchase(studentId, 40);
@@ -188,7 +188,7 @@ describe.skipIf(!RUN)('token ledger under concurrent writers (integration)', () 
     expect(rows.filter(r => r.type === 'REFUND')).toHaveLength(1);
   });
 
-  it("does not hold up another student's ledger", async () => {
+  it("keeps two students' ledgers separate under concurrent writes", async () => {
     const a = await makeStudent();
     const b = await makeStudent();
     await Promise.all([grant(a, 10), grant(b, 20)]);

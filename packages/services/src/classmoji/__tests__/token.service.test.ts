@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const createMock = vi.fn();
 const findFirstMock = vi.fn();
 const executeRawMock = vi.fn();
+const transactionOptionsMock = vi.fn();
 
 vi.mock('@classmoji/database', () => {
   const tokenTransaction = {
@@ -18,8 +19,12 @@ vi.mock('@classmoji/database', () => {
     default: () => ({
       tokenTransaction,
       $transaction: (
-        fn: (tx: { tokenTransaction: typeof tokenTransaction; $executeRaw: unknown }) => unknown
-      ) => fn({ tokenTransaction, $executeRaw }),
+        fn: (tx: { tokenTransaction: typeof tokenTransaction; $executeRaw: unknown }) => unknown,
+        options?: unknown
+      ) => {
+        transactionOptionsMock(options);
+        return fn({ tokenTransaction, $executeRaw });
+      },
     }),
   };
 });
@@ -33,6 +38,7 @@ describe('token.assignToStudent', () => {
     createMock.mockReset();
     findFirstMock.mockReset();
     executeRawMock.mockReset();
+    transactionOptionsMock.mockReset();
     findFirstMock.mockResolvedValue({ balance_after: 10, created_at: LONG_AGO });
     createMock.mockImplementation((args: { data: Record<string, unknown> }) => ({
       id: 'tx-1',
@@ -64,6 +70,12 @@ describe('token.assignToStudent', () => {
 
     const createArg = createMock.mock.calls[0][0] as { data: Record<string, unknown> };
     expect(createArg.data.git_repo_assignment_id).toBeUndefined();
+  });
+
+  it('runs its transaction at read committed', async () => {
+    await assignToStudent({ classroomId: 'class-1', studentId: 'student-1', amount: 5 });
+
+    expect(transactionOptionsMock).toHaveBeenCalledWith({ isolationLevel: 'ReadCommitted' });
   });
 
   it("locks the student's ledger before it reads the latest row", async () => {

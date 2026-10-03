@@ -1,6 +1,7 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { effectiveTokensPerHour, withLogins } from '@classmoji/utils';
-import type { Prisma, TokenTransactionType } from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import type { TokenTransactionType } from '@prisma/client';
 
 interface UpdateExtensionInput {
   classroom_id: string;
@@ -31,12 +32,19 @@ const LATEST_FIRST: Prisma.TokenTransactionOrderByWithRelationInput[] = [
 
 type LedgerTx = Prisma.TransactionClient;
 
+const LEDGER_TX = { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted };
+
 /**
  * Serialize writes to one student's ledger in one classroom, so each new row
  * is computed from the true latest balance. Every ledger writer calls this
  * inside its transaction before it reads the latest row; the lock is released
  * when the transaction commits or rolls back. Two pairs that hash to the same
  * key only wait on each other, which is harmless.
+ *
+ * The lock relies on read-committed statement-level snapshots: the read that
+ * follows it sees every row committed by the writer that held the lock before.
+ * Callers therefore pin `LEDGER_TX` (read committed) explicitly rather than
+ * depend on the database default.
  *
  * `$executeRaw` because pg_advisory_xact_lock returns void, which `$queryRaw`
  * cannot deserialize. The values are bound as parameters.
@@ -106,7 +114,7 @@ export const updateExtension = async (data: UpdateExtensionInput) => {
         created_at: nextCreatedAt(transaction),
       },
     });
-  });
+  }, LEDGER_TX);
 };
 
 /**
@@ -242,7 +250,7 @@ export const cancelPurchase = async (transactionId: string) => {
         created_at: nextCreatedAt(latest),
       },
     });
-  });
+  }, LEDGER_TX);
 };
 
 export const findTransactions = async (query: Prisma.TokenTransactionWhereInput) => {
@@ -258,9 +266,7 @@ export const findTransactions = async (query: Prisma.TokenTransactionWhereInput)
         },
         assignment_grade: true,
       },
-      orderBy: {
-        created_at: 'desc',
-      },
+      orderBy: LATEST_FIRST,
     })
   );
 };
@@ -288,7 +294,7 @@ export const assignToStudent = async (data: AssignToStudentInput) => {
         created_at: nextCreatedAt(transaction),
       },
     });
-  });
+  }, LEDGER_TX);
 };
 
 export const updateTransaction = async (id: string, data: Record<string, unknown>) => {

@@ -10,12 +10,20 @@ const assignToStudentMock = vi.fn();
 const findEmojiMappingsMock = vi.fn();
 const removeGradeMock = vi.fn();
 const findTeamMock = vi.fn();
+const findOpenRegradeMock = vi.fn();
+const doesGradeExistMock = vi.fn();
+const addGradeMock = vi.fn();
 
 vi.mock('../index.ts', () => ({
   default: {
     assignmentGrade: {
       update: (...args: unknown[]) => updateGradeMock(...args),
       removeGrade: (...args: unknown[]) => removeGradeMock(...args),
+      doesGradeExist: (...args: unknown[]) => doesGradeExistMock(...args),
+      addGrade: (...args: unknown[]) => addGradeMock(...args),
+    },
+    regradeRequest: {
+      findOpenByAssignmentId: (...args: unknown[]) => findOpenRegradeMock(...args),
     },
     team: {
       findById: (...args: unknown[]) => findTeamMock(...args),
@@ -133,5 +141,64 @@ describe('removeGradeFromGitRepoAssignment token reversal', () => {
       'start student-2',
       'end student-2',
     ]);
+  });
+});
+
+describe('addGradeToGitRepoAssignment token reward', () => {
+  beforeEach(() => {
+    assignToStudentMock.mockReset();
+    findEmojiMappingsMock.mockReset();
+    findTeamMock.mockReset();
+    updateGradeMock.mockReset();
+    findOpenRegradeMock.mockResolvedValue(null);
+    doesGradeExistMock.mockResolvedValue(false);
+    addGradeMock.mockResolvedValue({ id: 'grade-1' });
+    findEmojiMappingsMock.mockResolvedValue([{ emoji: '✅', extra_tokens: 5 }]);
+  });
+
+  it("surfaces a failed reward write on an individual student's grade", async () => {
+    assignToStudentMock.mockRejectedValue(new Error('ledger write failed'));
+
+    await expect(
+      HelperService.addGradeToGitRepoAssignment({
+        classroom: { id: 'class-1' },
+        gitRepoAssignment,
+        graderId: 'grader-1',
+        grade: '✅',
+        studentId: 'student-1',
+      } as never)
+    ).rejects.toThrow('ledger write failed');
+  });
+
+  it("surfaces a failed reward write on a team member's grade", async () => {
+    findTeamMock.mockResolvedValue({ memberships: [{ user_id: 'student-1' }] });
+    assignToStudentMock.mockRejectedValue(new Error('ledger write failed'));
+
+    await expect(
+      HelperService.addGradeToGitRepoAssignment({
+        classroom: { id: 'class-1' },
+        gitRepoAssignment: { id: 'gra-1', teamId: 'team-1' },
+        graderId: 'grader-1',
+        grade: '✅',
+        teamId: 'team-1',
+      } as never)
+    ).rejects.toThrow('ledger write failed');
+  });
+
+  it('has written the reward row by the time the grade call returns', async () => {
+    assignToStudentMock.mockImplementation(async () => {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      return { id: 'tx-1' };
+    });
+
+    await HelperService.addGradeToGitRepoAssignment({
+      classroom: { id: 'class-1' },
+      gitRepoAssignment,
+      graderId: 'grader-1',
+      grade: '✅',
+      studentId: 'student-1',
+    } as never);
+
+    expect(updateGradeMock).toHaveBeenCalledWith('grade-1', { token_transaction_id: 'tx-1' });
   });
 });
