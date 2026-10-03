@@ -24,7 +24,7 @@
  */
 
 import getPrisma from '@classmoji/database';
-import { openToStudents, quizStanding, titleToIdentifier } from '@classmoji/utils';
+import { isClosed, openToStudents, quizStanding, titleToIdentifier } from '@classmoji/utils';
 import { pagesUrl } from '../emails/escape.ts';
 import * as formResponseService from './formResponse.service.ts';
 import * as helperService from './helper.service.ts';
@@ -225,11 +225,12 @@ export const listPublishedAssignments = (classroomId: string) =>
       is_extra_credit: true,
       release_at: true,
       student_deadline: true,
+      // A quiz takes no new attempt from its close date on.
+      closes_at: true,
       quiz_id: true,
       form_id: true,
       module: { select: { id: true, title: true } },
       repository: { select: { is_published: true } },
-      quiz: { select: { status: true } },
       form: { select: { status: true } },
     },
   });
@@ -279,11 +280,11 @@ export const listForStudent = async ({
       ? Promise.all([
           getPrisma().quiz.findMany({
             where: { id: { in: quizIds } },
+            // The quiz's own content only: its due date, publish state and
+            // close date are its assignment's.
             select: {
               id: true,
               name: true,
-              status: true,
-              due_date: true,
               max_attempts: true,
               grading_strategy: true,
             },
@@ -356,21 +357,24 @@ export const listForStudent = async ({
         attempts.filter(attempt => attempt.quiz_id === quiz.id),
         quiz.grading_strategy
       );
+      // The row is open to this student (published, past Opens), so what is
+      // left to ask is whether the close date has passed: from then on no new
+      // attempt starts.
+      const closed = isClosed(a.closes_at, now);
       const status: CourseworkStatus = standing.completed
         ? 'COMPLETED'
         : standing.inProgress
           ? 'IN_PROGRESS'
-          : quiz.status === 'CLOSED'
+          : closed
             ? 'CLOSED'
             : 'NOT_STARTED';
       const canStart =
-        quiz.status === 'PUBLISHED' &&
-        (quiz.max_attempts === 0 || standing.attemptsUsed < quiz.max_attempts);
+        !closed && (quiz.max_attempts === 0 || standing.attemptsUsed < quiz.max_attempts);
       rows.push({
         ...base,
         type: 'QUIZ',
         title: quiz.name,
-        deadline: iso(a.student_deadline ?? quiz.due_date),
+        deadline: iso(a.student_deadline),
         status,
         done: status === 'COMPLETED' || status === 'CLOSED',
         score: standing.score,

@@ -192,22 +192,21 @@ describe('assignment page — a REPO assignment’s modal context', () => {
     ]);
   });
 
-  it('offers no quiz and names none as bound where quizzes are hidden', async () => {
+  it('offers no quiz and names none where quizzes are hidden', async () => {
     mocks.loadQuizzesVisible.mockResolvedValue(false);
 
     const payload = await route.loader(loaderArgs());
 
     expect(payload.candidates.quizzes).toEqual([]);
     expect(payload.candidates.forms).toEqual(CANDIDATES.forms);
-    expect(payload.boundQuizIds).toEqual([]);
     expect(payload.boundFormIds).toEqual(['form-9']);
     expect(JSON.stringify(payload)).not.toContain('quiz-9');
   });
 
-  it('carries the quizzes where they show', async () => {
+  it('carries the quizzes where they show, and no quiz bindings (the modal binds no quiz)', async () => {
     const payload = await route.loader(loaderArgs());
 
     expect(payload.candidates.quizzes).toEqual(CANDIDATES.quizzes);
-    expect(payload.boundQuizIds).toEqual(['quiz-9']);
+    expect(payload).not.toHaveProperty('boundQuizIds');
   });
 });

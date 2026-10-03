@@ -45,7 +45,8 @@ interface StudentQuiz {
   repository_id: string | null;
   include_code_context: boolean;
   dueDate: string | Date | null;
-  status: string;
+  /** Past its close date: no new attempt starts. */
+  closed: boolean;
   weight: number;
   questionCount: number;
   maxAttempts: number;
@@ -125,11 +126,13 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       assignmentTitle: quiz.repository?.title || 'Unlinked',
       repository_id: quiz.repository_id,
       include_code_context: quiz.include_code_context,
-      // The quiz's assignment owns the due date where it has one, so this list
-      // shows the date the Assignments page and the calendar show.
-      dueDate: quiz.assignment?.student_deadline ?? quiz.due_date,
-      status: quiz.status,
-      weight: quiz.weight,
+      // The quiz's assignment owns its due date, close date and weight where it
+      // has one, so this list shows what the Assignments page and the calendar
+      // show. A quiz in no module keeps its own (the service's `closed` reads
+      // the same way).
+      dueDate: quiz.assignment ? quiz.assignment.student_deadline : quiz.due_date,
+      closed: quiz.closed,
+      weight: quiz.assignment ? quiz.assignment.weight : quiz.weight,
       questionCount: quiz.question_count || 5,
       maxAttempts: quiz.max_attempts ?? 1,
       gradingStrategy: quiz.grading_strategy || 'HIGHEST',
@@ -165,7 +168,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
  */
 const isDone = (quiz: StudentQuiz) =>
   quiz.attempts.some(a => a.status === 'completed') ||
-  (quiz.status === 'CLOSED' && !quiz.attempts.some(a => a.status !== 'completed'));
+  (quiz.closed && !quiz.attempts.some(a => a.status !== 'completed'));
 
 export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
   const { quizzes: rawQuizzes, org, userRole } = loaderData;
@@ -278,19 +281,18 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
 
   // Filter functions for different tabs
   const filterQuizzes = (quizzes: StudentQuiz[], tab: string) => {
-    // Published and closed quizzes; a closed one is shown as closed.
-    const listedQuizzes = quizzes.filter(q => q.status === 'PUBLISHED' || q.status === 'CLOSED');
-
+    // The service lists what this viewer may see (open quizzes, and closed
+    // ones, which read as closed), so nothing is filtered here but the tab.
     switch (tab) {
       case 'current':
         // Current = still to do (available, in progress, or overdue)
-        return listedQuizzes.filter(q => !isDone(q));
+        return quizzes.filter(q => !isDone(q));
       case 'completed':
         // Completed, or closed with nothing left to resume
-        return listedQuizzes.filter(isDone);
+        return quizzes.filter(isDone);
       case 'all':
       default:
-        return listedQuizzes;
+        return quizzes;
     }
   };
 
@@ -438,7 +440,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       render: (name: string, record: StudentQuiz) => (
         <Space>
           <span className="font-medium text-ink-1">{name}</span>
-          {record.status === 'CLOSED' && (
+          {record.closed && (
             <Tooltip title="This quiz takes no new attempts">
               <Tag style={{ fontSize: '11px', margin: 0 }}>Closed</Tag>
             </Tooltip>
@@ -505,11 +507,11 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       key: 'actions',
       width: 200,
       render: (_: unknown, record: StudentQuiz) => {
-        const isPublished = record.status === 'PUBLISHED';
+        const isOpen = !record.closed;
         const { canCreateNew, count, maxAttempts } = record.attemptsSummary;
         const hasUnlimited = record.maxAttempts === 0;
 
-        const tooltipTitle = !isPublished
+        const tooltipTitle = !isOpen
           ? 'This quiz is closed'
           : hasUnlimited
             ? 'Start a new attempt (unlimited)'
@@ -523,7 +525,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
               type="primary"
               size="small"
               icon={<PlayCircleOutlined />}
-              disabled={!isPublished || !canCreateNew}
+              disabled={!isOpen || !canCreateNew}
               onClick={() => handleNewAttempt(record)}
             >
               New Attempt

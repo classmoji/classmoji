@@ -13,12 +13,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const tx = {
+  // The row locks update takes first: the assignment's, and with none, the
+  // quiz's.
+  $queryRaw: vi.fn(async (..._args: unknown[]): Promise<unknown[]> => []),
   quiz: {
     create: vi.fn(),
     update: vi.fn(),
     findUnique: vi.fn(),
     findUniqueOrThrow: vi.fn(),
   },
+  module: { findFirst: vi.fn() },
+  // findUnique: whether an assignment appeared while update waited for the
+  // quiz row's lock (none here).
+  assignment: { create: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(async () => null) },
   page: { findMany: vi.fn() },
   slide: { findMany: vi.fn() },
   pageLink: { deleteMany: vi.fn(), createMany: vi.fn() },
@@ -36,6 +43,8 @@ vi.mock('@classmoji/database', () => ({
     quiz: {
       findUnique: (...a: unknown[]) => quizFindUnique(...a),
       findMany: (...a: unknown[]) => quizFindMany(...a),
+      // The row create hands back, read once the transaction has committed.
+      findUniqueOrThrow: (...a: unknown[]) => tx.quiz.findUniqueOrThrow(...a),
     },
   }),
 }));
@@ -47,6 +56,7 @@ vi.mock('../contentManifest.service.ts', () => ({
 }));
 
 vi.mock('../notification.service.ts', () => ({}));
+vi.mock('../entitlement.service.ts', () => ({}));
 
 const quizService = await import('../quiz.service.ts');
 const { QuizExcludedPathsError, QuizStatusChangeError } = quizService;
@@ -54,12 +64,30 @@ const { ResourceLinkServiceError } = await import('../resourceLink.service.ts');
 
 const CLASSROOM = 'classroom-1';
 const T0 = new Date('2026-09-01T00:00:00Z');
+/** Every quiz is created in a module (its assignment's). */
+const IN_MODULE = { assignment: { moduleId: 'mod-1' } };
 
 beforeEach(() => {
   vi.clearAllMocks();
   tx.quiz.create.mockResolvedValue({ id: 'quiz-1' });
   tx.quiz.update.mockResolvedValue({ id: 'quiz-1', classroom_id: CLASSROOM });
   tx.quiz.findUniqueOrThrow.mockResolvedValue({ id: 'quiz-1', name: 'Q' });
+  // The quiz as update reads it first: in no module unless a test says so.
+  tx.quiz.findUnique.mockResolvedValue({
+    classroom_id: CLASSROOM,
+    status: 'PUBLISHED',
+    weight: 0,
+    due_date: null,
+    updated_at: T0,
+    assignment: null,
+  });
+  tx.module.findFirst.mockResolvedValue({ id: 'mod-1' });
+  tx.assignment.findFirst.mockResolvedValue(null);
+  tx.assignment.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
+    id: 'asg-1',
+    ...data,
+    module: { classroom_id: CLASSROOM },
+  }));
   tx.page.findMany.mockImplementation(async ({ where }: { where: { id: { in: string[] } } }) =>
     where.id.in.map(id => ({ id }))
   );
@@ -74,6 +102,7 @@ describe('quiz.create', () => {
       name: 'Q',
       classroomId: CLASSROOM,
       rubricPrompt: 'r',
+      ...IN_MODULE,
       courseSearchEnabled: true,
       sourceMaterial: [
         { kind: 'slide', id: 's1' },
@@ -97,7 +126,7 @@ describe('quiz.create', () => {
   });
 
   it('defaults course search off and leaves material alone when none is given', async () => {
-    await quizService.create({ name: 'Q', classroomId: CLASSROOM, rubricPrompt: 'r' });
+    await quizService.create({ name: 'Q', classroomId: CLASSROOM, rubricPrompt: 'r', ...IN_MODULE });
 
     expect(tx.quiz.create.mock.calls[0][0].data.course_search_enabled).toBe(false);
     expect(tx.pageLink.deleteMany).not.toHaveBeenCalled();
@@ -112,6 +141,7 @@ describe('quiz.create', () => {
         name: 'Q',
         classroomId: CLASSROOM,
         rubricPrompt: 'r',
+        ...IN_MODULE,
         sourceMaterial: [{ kind: 'page', id: 'foreign' }],
       })
       .catch(e => e);
@@ -190,9 +220,9 @@ describe('quiz.update', () => {
     expect(tx.quiz.update.mock.calls[1][0].data).toEqual({ name: 'N' });
   });
 
-  it('returns the updated row without loading attempts inside the transaction', async () => {
-    const row = { id: 'quiz-1', classroom_id: CLASSROOM, name: 'N', weight: 10 };
-    tx.quiz.update.mockResolvedValue(row);
+  it('returns the saved row and its assignment without loading attempts inside the transaction', async () => {
+    const row = { id: 'quiz-1', classroom_id: CLASSROOM, name: 'N', weight: 10, assignment: null };
+    tx.quiz.findUniqueOrThrow.mockResolvedValue(row);
 
     await expect(
       quizService.update('quiz-1', { name: 'N', sourceMaterial: [{ kind: 'page', id: 'p1' }] })
@@ -203,7 +233,11 @@ describe('quiz.update', () => {
       where: { id: 'quiz-1' },
       data: { name: 'N' },
     });
-    expect(tx.quiz.findUniqueOrThrow).not.toHaveBeenCalled();
+    // Read back with its assignment only.
+    expect(tx.quiz.findUniqueOrThrow).toHaveBeenCalledWith({
+      where: { id: 'quiz-1' },
+      include: { assignment: { include: { module: { select: { id: true, title: true } } } } },
+    });
   });
 
   it('rolls back on a foreign document: the error escapes the transaction', async () => {
@@ -223,6 +257,7 @@ describe('quiz excluded paths', () => {
       name: 'Q',
       classroomId: CLASSROOM,
       rubricPrompt: 'r',
+      ...IN_MODULE,
       includeCodeContext: true,
       excludedPaths: [' tests/** ', '**/*.spec.js', 'tests/**'],
     });
@@ -233,7 +268,7 @@ describe('quiz excluded paths', () => {
   });
 
   it('create leaves them to the column default when none are given', async () => {
-    await quizService.create({ name: 'Q', classroomId: CLASSROOM, rubricPrompt: 'r' });
+    await quizService.create({ name: 'Q', classroomId: CLASSROOM, rubricPrompt: 'r', ...IN_MODULE });
     expect(tx.quiz.create.mock.calls[0][0].data).not.toHaveProperty('excluded_paths');
   });
 
@@ -432,7 +467,7 @@ describe('quiz.getQuizzesForStudent — closed quizzes and the counting score', 
     ...over,
   });
 
-  it('lists published quizzes only, unless closed ones are asked for', async () => {
+  it('lists a quiz by its assignment (published, opened), or by its own status when it has none', async () => {
     quizFindMany.mockResolvedValue([]);
 
     await quizService.getQuizzesForStudent(CLASSROOM, 'student-1', STUDENT);
@@ -440,12 +475,45 @@ describe('quiz.getQuizzesForStudent — closed quizzes and the counting score', 
       includeClosed: true,
     });
 
-    expect(quizFindMany.mock.calls[0][0].where.status).toBe('PUBLISHED');
-    expect(quizFindMany.mock.calls[1][0].where.status).toEqual({ in: ['PUBLISHED', 'CLOSED'] });
-    // The assignment's due date travels with each quiz.
-    expect(quizFindMany.mock.calls[1][0].include.assignment).toEqual({
-      select: { student_deadline: true },
+    const [assigned, legacy] = quizFindMany.mock.calls[0][0].where.OR;
+    expect(assigned.assignment.is_published).toBe(true);
+    expect(assigned.assignment.OR[0]).toEqual({ release_at: null });
+    expect(legacy).toEqual({ assignment: { is: null }, status: 'PUBLISHED' });
+    expect(quizFindMany.mock.calls[1][0].where.OR[1].status).toEqual({
+      in: ['PUBLISHED', 'CLOSED'],
     });
+    // The assignment's schedule travels with each quiz.
+    expect(quizFindMany.mock.calls[1][0].include.assignment.select).toMatchObject({
+      student_deadline: true,
+      closes_at: true,
+      release_at: true,
+      is_published: true,
+    });
+  });
+
+  it('keeps a quiz past its close date visible but not startable for a student', async () => {
+    const closedAssignment = {
+      is_published: true,
+      release_at: null,
+      closes_at: new Date(Date.now() - 60_000),
+      student_deadline: null,
+      weight: 5,
+    };
+    quizFindMany.mockResolvedValue([
+      quizRow({ id: 'quiz-closed', assignment: closedAssignment }),
+      quizRow({ id: 'quiz-open', assignment: { ...closedAssignment, closes_at: null } }),
+    ]);
+
+    const withClosed = await quizService.getQuizzesForStudent(CLASSROOM, 'student-1', STUDENT, {
+      includeClosed: true,
+    });
+    const withoutClosed = await quizService.getQuizzesForStudent(CLASSROOM, 'student-1', STUDENT);
+
+    expect(withClosed.map(q => [q.id, q.closed, q.attemptsSummary.canCreateNew])).toEqual([
+      ['quiz-closed', true, false],
+      ['quiz-open', false, true],
+    ]);
+    expect(withoutClosed.map(q => q.id)).toEqual(['quiz-open']);
   });
 
   it('offers a student no new attempt on a closed quiz; staff may still preview it', async () => {
@@ -492,8 +560,17 @@ describe('quiz.getQuizzesForStudent — closed quizzes and the counting score', 
 });
 
 describe('quiz.update — closing a quiz', () => {
+  const unassigned = (status: string) => ({
+    classroom_id: CLASSROOM,
+    status,
+    weight: 0,
+    due_date: null,
+    updated_at: T0,
+    assignment: null,
+  });
+
   it('refuses to close a quiz that is still a draft, writing nothing', async () => {
-    tx.quiz.findUnique.mockResolvedValue({ status: 'DRAFT' });
+    tx.quiz.findUnique.mockResolvedValue(unassigned('DRAFT'));
 
     const refusal = await quizService.update('quiz-1', { status: 'CLOSED' }).catch(e => e);
 
@@ -503,8 +580,8 @@ describe('quiz.update — closing a quiz', () => {
     expect(tx.quiz.update).not.toHaveBeenCalled();
   });
 
-  it('closes a published quiz', async () => {
-    tx.quiz.findUnique.mockResolvedValue({ status: 'PUBLISHED' });
+  it('closes a published quiz in no module through its own status, as before', async () => {
+    tx.quiz.findUnique.mockResolvedValue(unassigned('PUBLISHED'));
 
     await quizService.update('quiz-1', { status: 'CLOSED' });
 
@@ -513,11 +590,13 @@ describe('quiz.update — closing a quiz', () => {
     );
   });
 
-  it('does not look the status up for any other change', async () => {
-    await quizService.update('quiz-1', { status: 'DRAFT', name: 'Renamed' });
+  it('refuses new-shape assignment fields on a quiz in no module, writing nothing', async () => {
+    const refusal = await quizService
+      .update('quiz-1', { assignment: { weight: 5 } })
+      .catch(e => e);
 
-    expect(tx.quiz.findUnique).not.toHaveBeenCalled();
-    expect(tx.quiz.update).toHaveBeenCalled();
+    expect(refusal).toMatchObject({ name: 'QuizAssignmentError', code: 'module_required' });
+    expect(tx.quiz.update).not.toHaveBeenCalled();
   });
 });
 
@@ -527,8 +606,74 @@ describe('quiz.findByClassroom — due date source', () => {
 
     await quizService.findByClassroom(CLASSROOM, { role: 'OWNER', classroom_id: CLASSROOM });
 
-    expect(quizFindMany.mock.calls[0][0].include.assignment).toEqual({
-      select: { student_deadline: true },
+    expect(quizFindMany.mock.calls[0][0].include.assignment.select).toMatchObject({
+      module: { select: { id: true, title: true } },
+      student_deadline: true,
+      closes_at: true,
+      weight: true,
+      is_published: true,
     });
+  });
+});
+
+describe('quiz.create — the module', () => {
+  it('refuses a quiz with no module before anything is written', async () => {
+    const refusal = await quizService
+      .create({ name: 'Q', classroomId: CLASSROOM, rubricPrompt: 'r' })
+      .catch(e => e);
+
+    expect(refusal).toMatchObject({ name: 'QuizAssignmentError', code: 'module_required' });
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it('refuses a module outside the quiz’s classroom, inside the transaction', async () => {
+    tx.module.findFirst.mockResolvedValue(null);
+
+    const refusal = await quizService
+      .create({ name: 'Q', classroomId: CLASSROOM, rubricPrompt: 'r', ...IN_MODULE })
+      .catch(e => e);
+
+    expect(tx.module.findFirst).toHaveBeenCalledWith({
+      where: { id: 'mod-1', classroom_id: CLASSROOM },
+      select: { id: true },
+    });
+    expect(refusal).toMatchObject({ code: 'module_not_found', status: 404 });
+    expect(tx.quiz.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('quiz.update — a move that races another', () => {
+  const assigned = (moduleId: string) => ({
+    classroom_id: CLASSROOM,
+    status: 'PUBLISHED',
+    weight: 0,
+    due_date: null,
+    updated_at: T0,
+    assignment: { id: 'asg-1', module_id: moduleId, is_published: true, closes_at: null },
+  });
+
+  it('runs again when the quiz moved between its first read and its locks', async () => {
+    // Every lock finds its row.
+    tx.$queryRaw.mockImplementation(async () => [{ id: 'row' }]);
+    tx.quiz.findUnique
+      // First run: read in Week A, locked; then found already moved to Week B.
+      .mockResolvedValueOnce({ classroom_id: CLASSROOM, assignment: { module_id: 'mod-a' } })
+      .mockResolvedValueOnce(assigned('mod-b'))
+      // Second run: read in Week B; then the quiz is gone (stops the save here).
+      .mockResolvedValueOnce({ classroom_id: CLASSROOM, assignment: { module_id: 'mod-b' } })
+      .mockResolvedValueOnce(null);
+
+    const error = await quizService
+      .update('quiz-1', { assignment: { moduleId: 'mod-c' } })
+      .catch((e: unknown) => e);
+
+    expect(transaction).toHaveBeenCalledTimes(2);
+    // The second run locked the module the quiz was really in.
+    const lockedModules = tx.$queryRaw.mock.calls
+      .filter(([sql]) => (sql as TemplateStringsArray).join('?').includes('FROM modules'))
+      .map(([, id]) => id);
+    expect(lockedModules).toEqual(['mod-a', 'mod-c', 'mod-b', 'mod-c']);
+    expect(error).toMatchObject({ name: 'QuizAssignmentError', code: 'not_found' });
+    expect(tx.quiz.update).not.toHaveBeenCalled();
   });
 });

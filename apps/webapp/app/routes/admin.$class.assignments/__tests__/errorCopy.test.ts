@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   requireClassroomAdmin: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
   loadQuizzesVisible: vi.fn(),
+  quizzesVisibleOrThrow: vi.fn(),
+  findByIdInClassroom: vi.fn(),
   createInClassroom: vi.fn(),
   updateInClassroom: vi.fn(),
   deleteInClassroom: vi.fn(),
@@ -22,11 +24,13 @@ vi.mock('~/utils/routeAuth.server', () => ({
 
 vi.mock('~/utils/classroomProFlag.server', () => ({
   loadQuizzesVisible: (...a: unknown[]) => mocks.loadQuizzesVisible(...a),
+  quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a),
 }));
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     assignment: {
+      findByIdInClassroom: (...a: unknown[]) => mocks.findByIdInClassroom(...a),
       createInClassroom: (...a: unknown[]) => mocks.createInClassroom(...a),
       updateInClassroom: (...a: unknown[]) => mocks.updateInClassroom(...a),
       deleteInClassroom: (...a: unknown[]) => mocks.deleteInClassroom(...a),

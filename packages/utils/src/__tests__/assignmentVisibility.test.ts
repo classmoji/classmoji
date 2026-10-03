@@ -1,20 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { openToStudents, type AssignmentVisibilityInput } from '../assignmentVisibility.ts';
+import {
+  isClosed,
+  openToStudents,
+  type AssignmentVisibilityInput,
+} from '../assignmentVisibility.ts';
 
 const NOW = new Date('2026-10-01T12:00:00Z');
 const PAST = new Date('2026-09-30T12:00:00Z');
 const FUTURE = new Date('2026-10-08T12:00:00Z');
 
-const quiz = (
-  isPublished: boolean,
-  status: string,
-  releaseAt: Date | null
-): AssignmentVisibilityInput => ({
+const quiz = (isPublished: boolean, releaseAt: Date | null): AssignmentVisibilityInput => ({
   type: 'QUIZ',
   is_published: isPublished,
   release_at: releaseAt,
   repository: null,
-  quiz: { status },
   form: null,
 });
 
@@ -24,50 +23,49 @@ describe('openToStudents — QUIZ', () => {
     ['a release date in the past', PAST, true],
     ['a release date in the future', FUTURE, false],
   ];
-  const statuses: Array<[string, boolean]> = [
-    ['DRAFT', false],
-    ['PUBLISHED', true],
-    // Visible, so a student who finished it still sees it with its score.
-    ['CLOSED', true],
-  ];
 
+  // The assignment owns the quiz's publish state: nothing on the quiz row is
+  // read, so a quiz past its close date stays visible (with its scores).
   for (const assignmentPublished of [true, false]) {
-    for (const [status, statusOpen] of statuses) {
-      for (const [label, releaseAt, released] of releases) {
-        for (const quizzesVisible of [true, false]) {
-          const expected = assignmentPublished && statusOpen && released && quizzesVisible;
-          it(`${expected ? 'shows' : 'hides'} a ${status} quiz, assignment ${
-            assignmentPublished ? 'published' : 'unpublished'
-          }, ${label}, quizzes ${quizzesVisible ? 'on' : 'off'}`, () => {
-            expect(
-              openToStudents(quiz(assignmentPublished, status, releaseAt), NOW, { quizzesVisible })
-            ).toBe(expected);
-          });
-        }
+    for (const [label, releaseAt, released] of releases) {
+      for (const quizzesVisible of [true, false]) {
+        const expected = assignmentPublished && released && quizzesVisible;
+        it(`${expected ? 'shows' : 'hides'} a quiz, assignment ${
+          assignmentPublished ? 'published' : 'unpublished'
+        }, ${label}, quizzes ${quizzesVisible ? 'on' : 'off'}`, () => {
+          expect(openToStudents(quiz(assignmentPublished, releaseAt), NOW, { quizzesVisible })).toBe(
+            expected
+          );
+        });
       }
     }
   }
 
-  it('hides a quiz assignment whose quiz did not load', () => {
-    expect(
-      openToStudents({ type: 'QUIZ', is_published: true, quiz: null }, NOW, {
-        quizzesVisible: true,
-      })
-    ).toBe(false);
-  });
-
   it('opens exactly at the release time', () => {
-    expect(openToStudents(quiz(true, 'PUBLISHED', NOW), NOW, { quizzesVisible: true })).toBe(true);
+    expect(openToStudents(quiz(true, NOW), NOW, { quizzesVisible: true })).toBe(true);
   });
 
   it('accepts dates as ISO strings', () => {
     expect(
       openToStudents(
-        { ...quiz(true, 'PUBLISHED', null), release_at: FUTURE.toISOString() },
+        { ...quiz(true, null), release_at: FUTURE.toISOString() },
         NOW.toISOString() as unknown as Date,
         { quizzesVisible: true }
       )
     ).toBe(false);
+  });
+});
+
+describe('isClosed', () => {
+  it('never closes without a date', () => {
+    expect(isClosed(null, NOW)).toBe(false);
+    expect(isClosed(undefined, NOW)).toBe(false);
+  });
+
+  it('is closed from the close time on, not before', () => {
+    expect(isClosed(FUTURE, NOW)).toBe(false);
+    expect(isClosed(NOW, NOW)).toBe(true);
+    expect(isClosed(PAST.toISOString(), NOW)).toBe(true);
   });
 });
 

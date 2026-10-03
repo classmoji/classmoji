@@ -83,7 +83,8 @@ export type ScheduleItem =
       page?: { id: string; title: string; slug: string | null } | null;
       slide?: { id: string; title: string } | null;
       repository?: { id: string; title: string } | null;
-      quiz?: { id: string; name: string } | null;
+      /** A quiz's due date is its assignment's; null when it has none. */
+      quiz?: { id: string; name: string; due_at?: Date | string | null } | null;
       /**
        * Only ever populated for a form the service already ruled publicly
        * visible (OPEN/CLOSED **and** `access: PUBLIC`) or for a member. A
@@ -112,13 +113,13 @@ export type ScheduleLinkRow = {
   /**
    * Preformatted deadline, or null when the row has none to show.
    *
-   * Only FORM fills this in today, and the asymmetry is deliberate rather than
-   * an omission. A row that is a LINK has already been judged openable by this
-   * viewer, and for a form that means `access: PUBLIC` — the close date is on
-   * the far end of the link anyway, and "RSVP by Sep 12" is the whole reason a
-   * prospective student would follow it. A repo or a quiz link is only ever
-   * shown to a MEMBER, who reads its real deadline in the app; printing a
-   * second copy here would be a second place for it to go stale.
+   * FORM and QUIZ fill this in. A row that is a LINK has already been judged
+   * openable by this viewer, and for a form that means `access: PUBLIC` — the
+   * close date is on the far end of the link anyway, and "RSVP by Sep 12" is
+   * the whole reason a prospective student would follow it. A quiz row shows
+   * its due date as its placeholder does for an anonymous visitor, so a member
+   * does not see less than the public does. A repo link is only ever shown to
+   * a MEMBER, who reads its real deadline in the app.
    *
    * Declared on the type rather than left optional so it is one shape in the
    * component and one assertion in a spec — a key that is sometimes absent is a
@@ -259,15 +260,18 @@ function toLinkRow(
         external: true,
         due: null,
       };
+    // A quiz reaches the schedule from its assignment (the service builds the
+    // item); the link opens that quiz on the member's quiz list. Its due date
+    // shows as on an anonymous visitor's placeholder for it.
     case 'QUIZ':
       if (!item.quiz) return null;
       return {
         kind: 'link',
         label: label(item.quiz.name),
-        href: `${targets.appBase}/quizzes`,
+        href: `${targets.appBase}/quizzes?quiz=${encodeURIComponent(item.quiz.id)}`,
         typeLabel: ITEM_TYPE_LABEL.QUIZ,
         external: true,
-        due: null,
+        due: formatDue(item.quiz.due_at ?? null, targets.timezone),
       };
     case 'FORM':
       if (!item.form) return null;

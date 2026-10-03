@@ -11,6 +11,7 @@ import {
   IconPresentation,
   IconRobot,
 } from '@tabler/icons-react';
+import { isClosed } from '@classmoji/utils';
 import { PageLink } from '~/components/features/pages';
 
 /**
@@ -85,13 +86,26 @@ export const isFormClosed = (form: { status: string; closes_at: Date | string | 
   form.status === 'CLOSED' ||
   (!!form.closes_at && new Date(form.closes_at).getTime() <= Date.now());
 
+/**
+ * A quiz as a module leaf, from the quiz's assignment: its name, whether it
+ * is published, its close date and its due date. Nothing on the quiz row
+ * itself decides any of them.
+ */
+export interface QuizLeafInput {
+  id: string;
+  name: string;
+  published?: boolean;
+  closesAt?: Date | string | null;
+  due?: Date | string | null;
+}
+
 // Turn a module's / assignment's linked pages, slides, quizzes and forms into
 // read-only resource leaf nodes (each opens the relevant app in a new tab).
 export const buildResourceLeaves = (
   input: {
     pages?: Array<{ page: { id: string; title: string; is_draft?: boolean } }>;
     slides?: Array<{ slide: { id: string; title: string; is_draft?: boolean } }>;
-    quizzes?: Array<{ id: string; name: string; status?: string }>;
+    quizzes?: QuizLeafInput[];
     forms?: Array<{
       id: string;
       title: string;
@@ -139,9 +153,11 @@ export const buildResourceLeaves = (
       href: `${ctx.slidesUrl}/${slide.id}`,
     })
   );
-  // A quiz reaches here unpublished only in the staff preview. DRAFT is content
-  // students have never seen; CLOSED is content they can no longer attempt —
-  // both read wrong sitting unlabelled next to the live ones.
+  // A quiz leaf is read off the quiz's assignment: published, close date and
+  // due date. An unpublished one reaches here only in the staff preview, and
+  // says so; a closed one (past its close date) takes no new attempt, and says
+  // so to everyone, as a closed form does. The leaf opens the quiz on the quiz
+  // list.
   (input.quizzes ?? []).forEach(q =>
     out.push({
       key: `${keyPrefix}-quiz-${q.id}`,
@@ -150,12 +166,13 @@ export const buildResourceLeaves = (
       resourceIcon: 'quiz',
       name: q.name,
       statusNode:
-        isStaff && q.status === 'DRAFT' ? (
+        isStaff && q.published === false ? (
           <Tag color="orange">Draft</Tag>
-        ) : isStaff && q.status === 'CLOSED' ? (
+        ) : isClosed(q.closesAt, Date.now()) ? (
           <Tag>Closed</Tag>
         ) : null,
-      href: ctx.quizzesHref,
+      dueText: q.due ? new Date(q.due).toLocaleDateString() : undefined,
+      href: `${ctx.quizzesHref}?quiz=${encodeURIComponent(q.id)}`,
     })
   );
   // Forms live in the pages app: /{class}/forms/{slug}. The close time is this

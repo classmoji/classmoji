@@ -2,11 +2,14 @@
  * The due-date-changed notification (bell row, and the email it sends) on a
  * quiz assignment follows the classroom's quiz visibility
  * (`entitlement.quizzesVisible`): where quizzes are hidden, moving a quiz's
- * deadline notifies nobody. Every writer goes through `update` or
+ * deadline notifies nobody. Nor does it while the quiz is not open to
+ * students (unpublished, or before its Opens date): the notice names the quiz
+ * to the whole class. Every writer goes through `update` or
  * `updateInClassroom` — the calendar's deadline drag, the assignments page and
  * the MCP assignment tools — so the check lives in their shared notifier.
  *
- * Asked for QUIZ rows only, and only when the deadline actually moved.
+ * Asked for QUIZ rows only, and only when the deadline actually moved. A QUIZ
+ * row is also mirrored onto its quiz in the same transaction.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -14,22 +17,27 @@ const mocks = vi.hoisted(() => ({
   assignmentFindUnique: vi.fn(),
   assignmentFindFirst: vi.fn(),
   assignmentUpdate: vi.fn(),
+  quizUpdate: vi.fn(),
   quizzesVisible: vi.fn(),
   getStudentsForAssignment: vi.fn(),
   createNotifications: vi.fn(),
 }));
 
-vi.mock('@classmoji/database', () => ({
-  default: () => ({
+vi.mock('@classmoji/database', () => {
+  const client = {
     assignment: {
       findUnique: (...a: unknown[]) => mocks.assignmentFindUnique(...a),
       findFirst: (...a: unknown[]) => mocks.assignmentFindFirst(...a),
       update: (...a: unknown[]) => mocks.assignmentUpdate(...a),
     },
-  }),
-}));
-
-vi.mock('@classmoji/utils', () => ({ titleToIdentifier: (t: string) => t }));
+    quiz: { update: (...a: unknown[]) => mocks.quizUpdate(...a) },
+    // An interactive transaction runs its callback against the same client.
+    $transaction: (fn: (tx: unknown) => unknown) => fn(client),
+    // The row lock taken before the previous values are read.
+    $queryRaw: async () => [],
+  };
+  return { default: () => client };
+});
 
 vi.mock('../entitlement.service.ts', () => ({
   quizzesVisible: (...a: unknown[]) => mocks.quizzesVisible(...a),
@@ -53,26 +61,45 @@ const { update, updateInClassroom } = await import('../assignment.service.ts');
 const OLD = new Date('2026-10-01T23:59:00.000Z');
 const NEW = new Date('2026-10-08T23:59:00.000Z');
 
+const FUTURE = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
 /** The updated row as Prisma hands it back: scalars, `type` included. */
-const updatedRow = (type: 'REPO' | 'QUIZ') => ({
+const updatedRow = (
+  type: 'REPO' | 'QUIZ',
+  over: Partial<{ is_published: boolean; release_at: Date | null }> = {}
+) => ({
   id: 'asg-1',
   type,
+  quiz_id: type === 'QUIZ' ? 'quiz-1' : null,
+  module_id: 'mod-1',
   title: 'Week 3',
   student_deadline: NEW,
+  release_at: null,
+  closes_at: null,
+  weight: 2.4,
+  tokens_per_hour: 0,
+  is_published: true,
   grades_released: false,
   module: { classroom_id: 'class-1' },
   repository: null,
+  ...over,
 });
 
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
-  mocks.assignmentFindUnique.mockResolvedValue({ student_deadline: OLD, grades_released: false });
+  mocks.assignmentFindUnique.mockResolvedValue({
+    student_deadline: OLD,
+    grades_released: false,
+    is_published: true,
+  });
+  mocks.quizUpdate.mockResolvedValue({});
   mocks.assignmentFindFirst.mockResolvedValue({
     id: 'asg-1',
     type: 'QUIZ',
     submission_mode: 'ISSUE',
     student_deadline: OLD,
     grades_released: false,
+    is_published: true,
     _count: { git_repo_assignments: 0 },
   });
   mocks.quizzesVisible.mockResolvedValue(true);
@@ -119,8 +146,75 @@ describe('update — a quiz assignment’s deadline', () => {
     expect(mocks.createNotifications).not.toHaveBeenCalled();
   });
 
+  it('notifies nobody while the quiz is unpublished', async () => {
+    mocks.assignmentFindUnique.mockResolvedValue({
+      student_deadline: OLD,
+      grades_released: false,
+      is_published: false,
+    });
+    mocks.assignmentUpdate.mockResolvedValue(updatedRow('QUIZ', { is_published: false }));
+
+    await update('asg-1', { student_deadline: NEW });
+
+    expect(mocks.createNotifications).not.toHaveBeenCalled();
+  });
+
+  it('notifies nobody before the quiz opens', async () => {
+    mocks.assignmentUpdate.mockResolvedValue(updatedRow('QUIZ', { release_at: FUTURE }));
+
+    await update('asg-1', { student_deadline: NEW });
+
+    expect(mocks.createNotifications).not.toHaveBeenCalled();
+  });
+
+  it('sends no due-date notice for a draft published in the same write with a new Due', async () => {
+    // Students never saw the old date: the publish notice alone announces it.
+    mocks.assignmentFindUnique.mockResolvedValue({
+      student_deadline: OLD,
+      grades_released: false,
+      is_published: false,
+      release_at: null,
+    });
+    mocks.assignmentUpdate.mockResolvedValue(updatedRow('QUIZ'));
+
+    await update('asg-1', { student_deadline: NEW, is_published: true });
+
+    expect(mocks.createNotifications).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'ASSIGNMENT_DUE_DATE_CHANGED' })
+    );
+  });
+
+  it('sends no due-date notice for a quiz that opens with this write', async () => {
+    mocks.assignmentFindUnique.mockResolvedValue({
+      student_deadline: OLD,
+      grades_released: false,
+      is_published: true,
+      release_at: FUTURE,
+    });
+    mocks.assignmentUpdate.mockResolvedValue(updatedRow('QUIZ', { release_at: null }));
+
+    await update('asg-1', { student_deadline: NEW, release_at: null });
+
+    expect(mocks.createNotifications).not.toHaveBeenCalled();
+  });
+
+  it('mirrors the row onto its quiz: name, due date, rounded weight, status', async () => {
+    mocks.assignmentUpdate.mockResolvedValue(updatedRow('QUIZ'));
+
+    await update('asg-1', { student_deadline: NEW });
+
+    expect(mocks.quizUpdate).toHaveBeenCalledExactlyOnceWith({
+      where: { id: 'quiz-1' },
+      data: { name: 'Week 3', due_date: NEW, weight: 2, status: 'PUBLISHED' },
+    });
+  });
+
   it('does not ask when the deadline did not move', async () => {
-    mocks.assignmentFindUnique.mockResolvedValue({ student_deadline: NEW, grades_released: false });
+    mocks.assignmentFindUnique.mockResolvedValue({
+      student_deadline: NEW,
+      grades_released: false,
+      is_published: true,
+    });
     mocks.assignmentUpdate.mockResolvedValue(updatedRow('QUIZ'));
 
     await update('asg-1', { student_deadline: NEW });
@@ -139,6 +233,7 @@ describe('update — any other kind of assignment', () => {
 
     expect(mocks.quizzesVisible).not.toHaveBeenCalled();
     expect(mocks.createNotifications).toHaveBeenCalledOnce();
+    expect(mocks.quizUpdate).not.toHaveBeenCalled();
   });
 });
 
@@ -159,5 +254,35 @@ describe('updateInClassroom — a quiz assignment’s deadline', () => {
     await updateInClassroom('asg-1', 'class-1', { student_deadline: NEW });
 
     expect(mocks.createNotifications).toHaveBeenCalledOnce();
+  });
+});
+
+describe('updateInClassroom — fields that do not apply to the row', () => {
+  it('refuses grades_released on a quiz assignment and writes nothing', async () => {
+    await expect(updateInClassroom('asg-1', 'class-1', { grades_released: true })).rejects.toThrow(
+      'A quiz shows its score as soon as an attempt completes'
+    );
+    expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a close date on a form or repository assignment and writes nothing', async () => {
+    for (const [type, message] of [
+      ['FORM', 'A form assignment closes with its form'],
+      ['REPO', 'Repository assignments have no close date'],
+    ] as const) {
+      mocks.assignmentFindFirst.mockResolvedValue({
+        id: 'asg-1',
+        type,
+        submission_mode: 'ISSUE',
+        student_deadline: OLD,
+        grades_released: false,
+        is_published: true,
+        _count: { git_repo_assignments: 0 },
+      });
+      await expect(updateInClassroom('asg-1', 'class-1', { closes_at: NEW })).rejects.toThrow(
+        message
+      );
+    }
+    expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
   });
 });

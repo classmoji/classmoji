@@ -2,11 +2,12 @@
  * Pins the quiz filter on the modules read (the `modules` resource and its
  * `list_modules` mirror, which share one handler).
  *
- * Quiz items appear only where `entitlement.quizzesVisible` holds (Pro, and
- * quizzes switched on) — the predicate the web app's module screens filter on,
- * so an agent and a browser see the same curriculum. When it does not hold,
- * quiz items are dropped for every role and every other item is untouched. The
- * lookup is asked once, and only when a quiz item is present.
+ * A quiz is in a module through its QUIZ assignment, so legacy QUIZ items are
+ * listed for nobody, whether or not the classroom shows quizzes, and every
+ * other item is untouched. The listed items are numbered 0..n-1, so a dropped
+ * QUIZ item leaves no gap. `entitlement.quizzesVisible` is asked once per
+ * read and handed to the service, which applies the student-visibility rule
+ * with it.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -82,11 +83,13 @@ beforeEach(() => {
 });
 
 describe('modules read — quiz items', () => {
-  it('lists quiz items where quizzes are visible', async () => {
-    expect(itemIds(await read('STUDENT'))).toEqual([['i-page', 'i-quiz', 'i-slide'], ['i-quiz-2']]);
+  it('lists no legacy QUIZ item where quizzes are visible, for staff and students alike', async () => {
+    for (const role of ['OWNER', 'STUDENT'] as const) {
+      expect(itemIds(await read(role)), role).toEqual([['i-page', 'i-slide'], []]);
+    }
   });
 
-  it('drops quiz items, and only those, for staff and students alike when not visible', async () => {
+  it('lists no legacy QUIZ item where quizzes are hidden either, and leaves the rest', async () => {
     mocks.quizzesVisible.mockResolvedValue(false);
 
     for (const role of ['OWNER', 'STUDENT'] as const) {
@@ -99,8 +102,6 @@ describe('modules read — quiz items', () => {
   it('numbers the items it lists 0..n-1, so a dropped quiz item leaves no gap', async () => {
     // Stored positions run over every row of the module. Shown as stored, the
     // slide at 2 with nothing at 1 would say a row sits between them.
-    mocks.quizzesVisible.mockResolvedValue(false);
-
     const payload = (await read('OWNER')) as unknown as {
       modules: Array<{ items: Array<{ id: string; position: number }> }>;
     };
@@ -111,17 +112,15 @@ describe('modules read — quiz items', () => {
     ]);
   });
 
-  it('asks about the authorized classroom once per read', async () => {
-    await read('OWNER');
+  it('asks about the authorized classroom once per read and hands the answer on', async () => {
+    mocks.quizzesVisible.mockResolvedValue(false);
+    await read('STUDENT');
 
     expect(mocks.quizzesVisible).toHaveBeenCalledTimes(1);
     expect(mocks.quizzesVisible).toHaveBeenCalledWith('class-1');
-  });
-
-  it('does not ask when no module holds a quiz', async () => {
-    mocks.listForClassroom.mockResolvedValue([{ ...MODULES[0], items: [MODULES[0].items[0]] }]);
-
-    expect(itemIds(await read('OWNER'))).toEqual([['i-page']]);
-    expect(mocks.quizzesVisible).not.toHaveBeenCalled();
+    expect(mocks.listForClassroom).toHaveBeenCalledWith('w26', {
+      includeUnpublished: false,
+      quizzesVisible: false,
+    });
   });
 });

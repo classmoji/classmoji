@@ -1,6 +1,6 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import type { MessageRole, Prisma } from '@prisma/client';
-import { DEFAULT_EMOJI_GRADE_MAPPINGS, withLogins } from '@classmoji/utils';
+import { DEFAULT_EMOJI_GRADE_MAPPINGS, isClosed, isReleased, withLogins } from '@classmoji/utils';
 import { CONTRACT_VERSION } from '@classmoji/utils/quiz-agent';
 
 /**
@@ -1122,6 +1122,9 @@ export const createNew = async (
       max_attempts: true,
       name: true,
       status: true,
+      // The assignment owns when a student may start: published, opened,
+      // not yet closed. A quiz with none keeps the old status rule.
+      assignment: { select: { is_published: true, release_at: true, closes_at: true } },
     },
   });
 
@@ -1201,12 +1204,31 @@ export const createNew = async (
       };
     }
 
-    // Students can only take published quizzes
-    if (quiz.status !== 'PUBLISHED') {
+    // Students start only a quiz that is open to them now. With an
+    // assignment: published, past its Opens date, and not closed (a quiz past
+    // its close date stays visible but takes no new attempt; an attempt
+    // already under way may finish). With none: the quiz's own PUBLISHED.
+    const now = new Date();
+    const assignment = quiz.assignment;
+    if (assignment ? !assignment.is_published : quiz.status !== 'PUBLISHED') {
       return {
         success: false,
         message: 'Quiz is not published',
         reason: 'quiz_not_published',
+      };
+    }
+    if (assignment && !isReleased(assignment.release_at, now)) {
+      return {
+        success: false,
+        message: 'Quiz is not open yet',
+        reason: 'quiz_not_open',
+      };
+    }
+    if (assignment && isClosed(assignment.closes_at, now)) {
+      return {
+        success: false,
+        message: 'Quiz is closed',
+        reason: 'quiz_closed',
       };
     }
   }

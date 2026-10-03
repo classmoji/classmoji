@@ -38,12 +38,19 @@ export const OWNER_TEACHER = ['OWNER', 'TEACHER'] as const;
 /** requireClassroomAdmin routes (modules, tokens, settings, grader assignment). */
 export const OWNER_ONLY = ['OWNER'] as const;
 /**
- * Quiz admin surface (admin.$class.quizzes loader + action, and the assistant
- * and teacher routes that re-export it): allowedRoles
- * ['OWNER','TEACHER','ASSISTANT']. Mirrors QUIZ_ROLES in resources/shape.ts
- * minus STUDENT, which has no write surface.
+ * Quiz editors: the whole teaching team, the tier of quiz_update. Mirrors
+ * QUIZ_ROLES in resources/shape.ts minus STUDENT, which has no write surface,
+ * and QUIZ_EDITOR_ROLES in @classmoji/utils (quizAssignment.ts). An ASSISTANT
+ * edits a quiz's content and name only; quiz_update refuses the assignment
+ * fields to anyone who is not also a quiz author.
  */
 export const QUIZ_STAFF = ['OWNER', 'TEACHER', 'ASSISTANT'] as const;
+/**
+ * Quiz authors: create, publish and delete a quiz, and change its assignment
+ * (due date, weight, status). Same set as QUIZ_AUTHOR_ROLES in
+ * @classmoji/utils (quizAssignment.ts); the quiz tool tests hold the two equal.
+ */
+export const QUIZ_AUTHORS = OWNER_TEACHER;
 /**
  * Forms surface: apps/pages' `assertFormAdmin`
  * (apps/pages/app/utils/formAuth.server.ts) composes `requireClassroomStaff`,

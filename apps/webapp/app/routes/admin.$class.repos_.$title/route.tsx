@@ -28,7 +28,6 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
     modules,
     repositories,
     candidates,
-    boundQuizIds,
     boundFormIds,
   } = loaderData;
   const { fetcher, notify } = useGlobalFetcher();
@@ -196,11 +195,9 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
         classSlug={classSlug!}
         modules={modules}
         repositories={repositories}
-        quizzes={candidates.quizzes}
         forms={candidates.forms}
         pages={candidates.pages}
         slides={candidates.slides}
-        boundQuizIds={new Set(boundQuizIds)}
         boundFormIds={new Set(boundFormIds)}
         assignment={editing}
       />
