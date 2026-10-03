@@ -24,6 +24,7 @@ import {
   monokaiPro,
 } from '@codesandbox/sandpack-themes';
 import { DEFAULT_FILES } from './constants.ts';
+import { SandpackEditTracker } from './utils.ts';
 import CollapsibleConsole from './CollapsibleConsole.tsx';
 
 /**
@@ -43,20 +44,28 @@ const THEME_MAP: Record<string, SandpackThemeProp> = {
 };
 
 interface FileSyncListenerProps {
-  onFilesChange: (files: Record<string, string>) => void;
+  onFilesChange: (files: Record<string, string>, baseline: Record<string, string>) => void;
+  /** The files handed to SandpackProvider (identity changes when Sandpack resets to them). */
+  sourceFiles: Record<string, unknown>;
 }
 
 /**
- * Internal component that syncs file changes back to the callback
+ * Internal component that syncs file edits back to the callback
  *
  * Note: Sandpack's listen() is for bundler messages (compile status, errors),
  * NOT for file content changes. File edits are managed in React state, so we
  * watch sandpack.files directly which triggers re-renders on change.
+ *
+ * The map Sandpack reports on mount (or after resetting to new files) is not
+ * an edit: it becomes the baseline and is never reported. Later maps are
+ * reported with that baseline, so the write-back can tell a user's edit from
+ * a template default (see SandpackEditTracker / syncEditedFiles).
  */
-function FileSyncListener({ onFilesChange }: FileSyncListenerProps) {
+function FileSyncListener({ onFilesChange, sourceFiles }: FileSyncListenerProps) {
   const { sandpack } = useSandpack();
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastFilesRef = useRef<string | null>(null);
+  const trackerRef = useRef<SandpackEditTracker | null>(null);
 
   useEffect(() => {
     if (!onFilesChange) return;
@@ -67,24 +76,41 @@ function FileSyncListener({ onFilesChange }: FileSyncListenerProps) {
     for (const [path, file] of Object.entries(sandpack.files)) {
       currentFiles[path] = file.code;
     }
+    const currentJson = JSON.stringify(currentFiles);
+
+    trackerRef.current ??= new SandpackEditTracker();
+    const baseline = trackerRef.current.observe(sourceFiles, currentFiles);
+    if (!baseline) {
+      // Mount/reset report (or a stale one): never written back. A pending
+      // edit from before the reset belongs to files Sandpack no longer shows.
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+      lastFilesRef.current = currentJson;
+      return;
+    }
 
     // Compare with last known state to avoid unnecessary syncs
-    const currentJson = JSON.stringify(currentFiles);
     if (lastFilesRef.current === currentJson) {
       return; // No change
     }
     lastFilesRef.current = currentJson;
 
-    // Debounce the sync
+    // Debounce the sync. The timer is not cleared when this effect merely
+    // re-runs (other Sandpack state changes) — that would drop the edit.
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => {
-      onFilesChange(currentFiles);
+      timeoutRef.current = null;
+      onFilesChange(currentFiles, baseline);
     }, 300);
+  }, [sandpack, sandpack?.files, onFilesChange, sourceFiles]);
 
-    return () => {
+  // Unmount: drop a pending sync.
+  useEffect(
+    () => () => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    };
-  }, [sandpack, sandpack?.files, onFilesChange]);
+    },
+    []
+  );
 
   return null;
 }
@@ -103,7 +129,7 @@ interface SandpackEmbedProps {
   layout?: string;
   files?: Record<string, string>;
   options?: SandpackEmbedOptions;
-  onFilesChange?: (files: Record<string, string>) => void;
+  onFilesChange?: (files: Record<string, string>, baseline: Record<string, string>) => void;
   slideTheme?: string;
   className?: string;
   editorWidthPercentage?: number;
@@ -214,7 +240,9 @@ export default function SandpackEmbed({
           )}
         </SandpackLayout>
         {showConsole && <CollapsibleConsole maxHeight={150} />}
-        {onFilesChange && <FileSyncListener onFilesChange={onFilesChange} />}
+        {onFilesChange && (
+          <FileSyncListener onFilesChange={onFilesChange} sourceFiles={sandpackFiles} />
+        )}
       </SandpackProvider>
     </div>
   );

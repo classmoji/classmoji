@@ -31,7 +31,7 @@
  */
 
 import { stripRuntimeSectionAttrs } from '@classmoji/services/slides/runtime-attrs';
-import { cleanSandpackBlocks } from './sandpackBlocks.ts';
+import { cleanupEditorContainer } from './editorCleanup.ts';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -91,43 +91,6 @@ const MAX_INSERT_GROUP = 20;
 const MAX_OPS = 400;
 
 // ─── Extraction (DOM layer) ──────────────────────────────────────────────────
-
-/** Mirror of getCurrentContent's cleanup, applied to BOTH diff sides. */
-function cleanupContainer(container: Element): void {
-  // Runtime contenteditable never persists.
-  container.querySelectorAll('[contenteditable]').forEach(el => {
-    el.removeAttribute('contenteditable');
-  });
-
-  // Code blocks: flatten to escaped plain text, drop hljs (idempotent — the
-  // same normalization the editor applies on load and save, and the server
-  // applies in normalizeSlideHtml).
-  container.querySelectorAll('pre code').forEach(codeEl => {
-    const plainText = codeEl.textContent || '';
-    const escaped = plainText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    codeEl.innerHTML = escaped;
-    codeEl.classList.remove('hljs');
-    if ((codeEl.getAttribute('class') ?? '') === '') codeEl.removeAttribute('class');
-  });
-
-  // Sandpack blocks: strip the live editor's additions, keep everything stored
-  // (same cleanup getCurrentContent performs — running it on the baseline too
-  // keeps the two sides byte-comparable).
-  cleanSandpackBlocks(container);
-
-  // Reveal runtime position classes.
-  container.querySelectorAll('.present, .past, .future').forEach(el => {
-    el.classList.remove('present', 'past', 'future');
-    if ((el.getAttribute('class') ?? '') === '') el.removeAttribute('class');
-  });
-
-  // Reveal fragment runtime paint (`visible` / `current-fragment`) is added as
-  // the presenter steps through fragments — never authored, must never persist,
-  // or a merely-VIEWED slide reads as edited. `fragment` itself stays.
-  container.querySelectorAll('.fragment').forEach(el => {
-    el.classList.remove('visible', 'current-fragment');
-  });
-}
 
 /**
  * Cleaned attribute record for a section — mirrors the server parser's
@@ -210,7 +173,7 @@ export function extractDeckSnapshot(
     container.getAttribute('data-code-theme') ??
     'github';
 
-  cleanupContainer(container);
+  cleanupEditorContainer(container);
 
   const rootSections = Array.from(container.querySelectorAll('section')).filter(
     section => !section.parentElement?.closest('section')

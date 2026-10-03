@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { handleCodeBlockTab, handleCodeBlockEnter } from './properties/utils/codeBlockUtils';
 import { stripMediaRefs } from '~/utils/mediaRefs';
-import { cleanSandpackBlocks } from '~/utils/sandpackBlocks';
+import { cleanupEditorContainer } from '~/utils/editorCleanup';
 
 // Built-in Reveal.js themes (exported for use in SlideToolbar)
 export const BUILTIN_THEMES = [
@@ -545,38 +545,10 @@ const RevealSlides = forwardRef(function RevealSlides(
     // Clone the slides to clean up without affecting the live DOM
     const slidesClone = slidesDiv.cloneNode(true) as HTMLElement;
 
-    // Remove contenteditable attributes added during editing
-    // These shouldn't be persisted to the saved HTML
-    slidesClone.querySelectorAll('[contenteditable]').forEach((el: Element) => {
-      el.removeAttribute('contenteditable');
-    });
-
-    // Strip highlight.js spans from code blocks - save plain text only
-    // This ensures clean HTML that can be re-highlighted on view
-    slidesClone.querySelectorAll('pre code').forEach((codeEl: Element) => {
-      const plainText = codeEl.textContent || '';
-      // Escape HTML to preserve code content correctly
-      // (textContent returns decoded chars like <, setting innerHTML would interpret them)
-      const escaped = plainText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      codeEl.innerHTML = escaped;
-      codeEl.classList.remove('hljs');
-    });
-
-    // Sandpack sl-blocks: strip the live React mount and stray typed text,
-    // keep the embed, its attributes and its files payload exactly as stored.
-    // Same cleanup the diff-at-save snapshot runs (deckOpsDiff).
-    cleanSandpackBlocks(slidesClone);
-
-    // Remove any Reveal.js runtime classes/attributes that shouldn't be saved
-    slidesClone.querySelectorAll('.present, .past, .future').forEach((el: Element) => {
-      el.classList.remove('present', 'past', 'future');
-    });
-
-    // Reveal paints `visible` / `current-fragment` on fragments as the presenter
-    // steps through them — runtime paint that must never persist (keep `fragment`).
-    slidesClone.querySelectorAll('.fragment').forEach((el: Element) => {
-      el.classList.remove('visible', 'current-fragment');
-    });
+    // Strip editor/runtime additions (contenteditable, hljs spans, the live
+    // Sandpack mounts, Reveal paint). The same cleanup the diff-at-save
+    // snapshot runs on both sides (deckOpsDiff), so the two always agree.
+    cleanupEditorContainer(slidesClone);
 
     // Build data attributes for theme settings (single theme)
     const revealDiv = deckRef.current;

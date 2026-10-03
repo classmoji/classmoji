@@ -48,8 +48,8 @@ export default function SandpackRenderer({
   const filesChangeHandler = useCallback(
     (embedEl: HTMLElement) =>
       isEditing
-        ? (files: Record<string, string>) => {
-            if (syncEditedFiles(embedEl, files)) onContentChange?.();
+        ? (files: Record<string, string>, baseline: Record<string, string>) => {
+            if (syncEditedFiles(embedEl, files, baseline)) onContentChange?.();
           }
         : undefined,
     [isEditing, onContentChange]

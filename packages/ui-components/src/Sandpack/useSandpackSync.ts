@@ -18,16 +18,16 @@ import { syncEditedFiles } from './utils.ts';
 export default function useSandpackSync(
   element: HTMLElement | null,
   onContentChange?: () => void
-): (files: Record<string, string>) => void {
+): (files: Record<string, string>, baseline?: Record<string, string>) => void {
   const elementRef = useRef(element);
   elementRef.current = element;
 
   const syncFiles = useCallback(
-    (files: Record<string, string>) => {
+    (files: Record<string, string>, baseline?: Record<string, string>) => {
       const el = elementRef.current;
       if (!el) return;
 
-      if (syncEditedFiles(el, files)) onContentChange?.();
+      if (syncEditedFiles(el, files, baseline)) onContentChange?.();
     },
     [onContentChange]
   );

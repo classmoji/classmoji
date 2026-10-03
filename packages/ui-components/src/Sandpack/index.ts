@@ -18,6 +18,7 @@ export {
   updateFilesInElement,
   mergeEditedFiles,
   syncEditedFiles,
+  SandpackEditTracker,
   createSandpackElement,
 } from './utils.ts';
 export {
