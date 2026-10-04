@@ -62,7 +62,8 @@ import { MCP_BODY_LIMIT_BYTES } from '../bodyLimit.ts';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
-import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
+import type { ToolContext, ToolDefinition, ToolResult } from '../mcp/registry.ts';
+import { renderAfterPageApply } from './pageRender.ts';
 import {
   loadPageWithRepoInClassroom,
   mapSemanticMergeError,
@@ -251,7 +252,7 @@ function previewPayload(status: {
  * preview branch to exist; reads then target it (API-path only — the CDN and
  * students always see main).
  */
-async function resolveReadRef(
+export async function resolveReadRef(
   page: PageWithRepoRecord,
   at: 'main' | 'preview'
 ): Promise<string | undefined> {
@@ -284,7 +285,7 @@ const LIVE_FALLBACK_NOTE =
  * the service is down (said in the result), none for a page the live service
  * cannot hold (legacy HTML, no content file) — git then answers as today.
  */
-async function readLivePage(
+export async function readLivePage(
   env: CollabEnv | null,
   page: PageWithRepoRecord,
   viewer: string
@@ -596,6 +597,7 @@ interface PageContentApplyArgs {
   ops: PageContentOp[];
   commit?: 'preview' | 'direct';
   mode?: 'live' | 'preview';
+  render?: boolean;
 }
 
 /** Compact per-op summary for the result payload and the audit row. */
@@ -858,7 +860,8 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
     'returns), then page_preview_accept. Default: ' +
     'live for drafts, preview for published pages. Use preview for big edits: many blocks, ' +
     'restructuring, rewrites. When a preview already exists, preview applies STACK onto it ' +
-    "and expected_sha must come from a read at: 'preview' (main's sha will conflict).",
+    "and expected_sha must come from a read at: 'preview' (main's sha will conflict). " +
+    'render: true also returns images of the page around the changed blocks (see page_render).',
   scope: 'write',
   roles: OWNER_TEACHER,
   inputSchema: {
@@ -892,214 +895,220 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
         "Older name for mode: 'preview', or 'direct' (= live). " +
           'Default: preview for published pages, direct for drafts'
       ),
+    render: z
+      .boolean()
+      .optional()
+      .describe('Also return images of the page around the changed blocks (default false)'),
   },
   handler: async (args, ctx) => {
-    const page = await loadPageWithRepoInClassroom(args.page_id, ctx);
-
-    // Live editing: 'live' goes into the live document through the collab
-    // server; git main is only its checkpoint and is never written here.
-    const liveState = liveStateFor(page.classroom);
-    const commit =
-      args.mode !== undefined ? (args.mode === 'live' ? 'direct' : 'preview') : args.commit;
-
-    // §3b default routing: published pages preview, drafts direct.
-    const committedTo: 'main' | 'preview' =
-      (commit ?? (page.is_draft === false ? 'preview' : 'direct')) === 'preview'
-        ? 'preview'
-        : 'main';
-
-    if (liveState && committedTo === 'main') {
-      return applyLive(requireLiveEnv(liveState), page, args, ctx);
-    }
-    if (!args.expected_sha) {
-      throw new ToolError(
-        'invalid_params',
-        'expected_sha is required — pass the sha from page_content_get or page_content_outline'
-      );
-    }
-    // A live read's version stands in for main's sha when a NEW preview is
-    // cut from main: the agent read the live page, which has no git sha.
-    const liveRead = liveState !== null && parseLiveVersion(args.expected_sha) !== null;
-
-    // Stacking: when a preview already exists and we're committing to it,
-    // load FROM it so this apply builds on the pending changes.
-    let loadRef: string | undefined;
-    if (committedTo === 'preview') {
-      const status = await ClassmojiService.pageContent.getPreviewStatus(page);
-      if (status.exists) {
-        loadRef = ClassmojiService.pageContent.previewBranchName(page.content_path);
-      }
-    }
-
-    const content = await ClassmojiService.pageContent.loadPageContent(page, {
-      skipCache: true,
-      ...(loadRef ? { ref: loadRef } : {}),
-    });
-
-    // Legacy HTML (or missing) content: granular ops are meaningless — only a
-    // fresh replace_all is allowed (it writes a brand-new content.json).
-    // "Missing" is strictly a 404 on both files: an unreadable read rejects out
-    // of loadPageContent, so the sha-less create below is reachable only for a
-    // page that really has no content file, never for one we could not read.
-    if (content.format !== 'json' && args.ops.some(op => op.op !== 'replace_all')) {
-      throw new ToolError('invalid_params', LEGACY_GUIDANCE);
-    }
-
-    // Which ref the sha was compared against — names the right re-read in
-    // CONTENT_CONFLICT messages (stacking reads target the preview branch).
-    const conflictAt: 'main' | 'preview' = loadRef ? 'preview' : 'main';
-
-    // Stacking onto a preview needs the preview's own sha, never a live one.
-    if (liveRead && loadRef) throw contentConflict('preview');
-    const expectedSha = liveRead ? content.sha : args.expected_sha;
-
-    // Optimistic lock (tool-level, works for BOTH sha sources): the sha the
-    // caller read must still be the sha of the file we loaded.
-    if (content.sha !== null && content.sha !== expectedSha) {
-      throw contentConflict(conflictAt);
-    }
-
-    const priorBlocks =
-      content.format === 'json'
-        ? (ClassmojiService.pageContent.ensureBlockIds(
-            content.blocks as BlockNode[]
-          ) as BlockNode[])
-        : [];
-    const priorCount = countBlocks(priorBlocks);
-
-    // Client-supplied ids that collide with existing ids (or each other) are
-    // re-minted deterministically inside applyBlockOps — collected here so the
-    // result/audit report the re-mints.
-    const idRemints: Array<{ op_index: number; from: string; to: string }> = [];
-
-    // Ops that would leave the document unopenable (a columnList dropped below
-    // two columns, a stray block parked directly in one, a whole row inserted
-    // inside a column) are repaired rather
-    // than committed as-is. Reported back because the repair changes the
-    // layout the caller asked for: silently unwrapping a row would leave an
-    // agent believing its delete did exactly what it said.
-    const structureRepairs: Array<{ kind: string; id?: string }> = [];
-
-    let newBlocks: unknown[];
-    try {
-      newBlocks = ClassmojiService.pageContent.applyBlockOps(
-        priorBlocks,
-        args.ops as Parameters<typeof ClassmojiService.pageContent.applyBlockOps>[1],
-        {
-          onIdRemint: remint => idRemints.push(remint),
-          onStructureRepair: repair => structureRepairs.push(repair),
-        }
-      );
-    } catch (error) {
-      if (error instanceof Error && error.name === 'BlockOpError') {
-        throw new ToolError(
-          'invalid_params',
-          liveRead && (error as { code?: string }).code === 'UNKNOWN_BLOCK_ID'
-            ? `${error.message}. A preview starts from the last saved version, which may not ` +
-                "have blocks added in the last minute yet — retry shortly or use mode: 'live'."
-            : error.message
-        );
-      }
-      throw error;
-    }
-
-    // Client-supplied blocks (insert/replace_all payloads) may lack ids —
-    // fill them deterministically so this apply PERSISTS stable ids.
-    newBlocks = ClassmojiService.pageContent.ensureBlockIds(newBlocks as BlockNode[]);
-
-    let createdPreviewBranch = false;
-    if (committedTo === 'preview') {
-      // Create the branch from main's current HEAD when absent (no-op when
-      // stacking on an existing preview).
-      const ensured = await ClassmojiService.pageContent.ensurePreviewBranch(page);
-      createdPreviewBranch = ensured.created;
-    }
-
-    // On a create (no content file yet), there is no sha to lock on — passing
-    // one would 409 every first write (put treats expectedSha + missing file
-    // as deleted-since-read). GitHub's sha-less create still rejects an
-    // existence race with a 422, mapped to CONTENT_CONFLICT below.
-    const isCreate = content.sha === null;
-
-    let saved: { sha: string; commit: string };
-    try {
-      saved = await ClassmojiService.pageContent.savePageContent(page, newBlocks, {
-        // Also enforced GitHub-side at write time: catches a racing writer
-        // between our read and this commit (and a content.json materialized
-        // out-of-band under a legacy page).
-        ...(isCreate ? {} : { expectedSha: expectedSha ?? args.expected_sha }),
-        ...(committedTo === 'preview'
-          ? { branch: ClassmojiService.pageContent.previewBranchName(page.content_path) }
-          : {}),
-        message: `page_content_apply: ${page.title}`,
-      });
-    } catch (error) {
-      const status = (error as { status?: number }).status;
-      // 409 = optimistic-lock loss; 422 on a create = a concurrent creator won
-      // the sha-less create race — both mean "re-read for a fresh sha".
-      if (status === 409 || (isCreate && status === 422)) {
-        // The branch was created by THIS apply and the save failed — delete
-        // the fresh (empty) branch so it doesn't strand the page in preview
-        // mode with no pending edits. Best-effort.
-        if (createdPreviewBranch) {
-          try {
-            await ClassmojiService.pageContent.discardPreview(page);
-          } catch (cleanupError: unknown) {
-            console.warn(
-              '[page_content_apply] Failed to clean up the freshly created preview branch:',
-              cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
-            );
-          }
-        }
-        throw contentConflict(conflictAt);
-      }
-      throw error;
-    }
-
-    const applied = summarizeOps(args.ops);
-    for (const remint of idRemints) {
-      const entry = applied[remint.op_index];
-      if (entry) {
-        const reminted =
-          (entry.reminted_ids as Array<{ from: string; to: string }> | undefined) ?? [];
-        reminted.push({ from: remint.from, to: remint.to });
-        entry.reminted_ids = reminted;
-      }
-    }
-    const hasDestructiveOps = args.ops.some(op => op.op === 'replace_all' || op.op === 'delete');
-
-    await writeAudit(ctx, {
-      resource_type: 'PAGES',
-      resource_id: page.id,
-      action: 'UPDATE',
-      data: {
-        tool: 'page_content_apply',
-        ops: applied,
-        expected_sha: args.expected_sha,
-        new_sha: saved.sha,
-        commit_sha: saved.commit,
-        committed_to: committedTo,
-        ...(hasDestructiveOps ? { prior_block_count: priorCount } : {}),
-        ...(structureRepairs.length > 0 ? { structure_repairs: structureRepairs } : {}),
-      } as Prisma.InputJsonValue,
-    });
-
-    // Open live editors refresh their pending-preview banner.
-    if (committedTo === 'preview') await notifyPreviewChanged(page.classroom, 'page', page.id);
-    const previewUrl = committedTo === 'preview' ? pagePreviewUrl(page) : null;
-    return ok({
-      success: true,
-      new_sha: saved.sha,
-      block_count: countBlocks(newBlocks as BlockNode[]),
-      committed_to: committedTo,
-      ...(previewUrl ? { preview_url: previewUrl } : {}),
-      applied,
-      ...(structureRepairs.length > 0
-        ? { structure_repairs: structureRepairs, note: STRUCTURE_REPAIR_NOTE }
-        : {}),
-    });
+    const result = await applyPageEdits(args, ctx);
+    return args.render ? renderAfterPageApply(result, args.page_id, ctx) : result;
   },
 };
+
+/** page_content_apply itself; `render: true` is layered on by the handler above. */
+async function applyPageEdits(args: PageContentApplyArgs, ctx: ToolContext): Promise<ToolResult> {
+  const page = await loadPageWithRepoInClassroom(args.page_id, ctx);
+
+  // Live editing: 'live' goes into the live document through the collab
+  // server; git main is only its checkpoint and is never written here.
+  const liveState = liveStateFor(page.classroom);
+  const commit =
+    args.mode !== undefined ? (args.mode === 'live' ? 'direct' : 'preview') : args.commit;
+
+  // §3b default routing: published pages preview, drafts direct.
+  const committedTo: 'main' | 'preview' =
+    (commit ?? (page.is_draft === false ? 'preview' : 'direct')) === 'preview' ? 'preview' : 'main';
+
+  if (liveState && committedTo === 'main') {
+    return applyLive(requireLiveEnv(liveState), page, args, ctx);
+  }
+  if (!args.expected_sha) {
+    throw new ToolError(
+      'invalid_params',
+      'expected_sha is required — pass the sha from page_content_get or page_content_outline'
+    );
+  }
+  // A live read's version stands in for main's sha when a NEW preview is
+  // cut from main: the agent read the live page, which has no git sha.
+  const liveRead = liveState !== null && parseLiveVersion(args.expected_sha) !== null;
+
+  // Stacking: when a preview already exists and we're committing to it,
+  // load FROM it so this apply builds on the pending changes.
+  let loadRef: string | undefined;
+  if (committedTo === 'preview') {
+    const status = await ClassmojiService.pageContent.getPreviewStatus(page);
+    if (status.exists) {
+      loadRef = ClassmojiService.pageContent.previewBranchName(page.content_path);
+    }
+  }
+
+  const content = await ClassmojiService.pageContent.loadPageContent(page, {
+    skipCache: true,
+    ...(loadRef ? { ref: loadRef } : {}),
+  });
+
+  // Legacy HTML (or missing) content: granular ops are meaningless — only a
+  // fresh replace_all is allowed (it writes a brand-new content.json).
+  // "Missing" is strictly a 404 on both files: an unreadable read rejects out
+  // of loadPageContent, so the sha-less create below is reachable only for a
+  // page that really has no content file, never for one we could not read.
+  if (content.format !== 'json' && args.ops.some(op => op.op !== 'replace_all')) {
+    throw new ToolError('invalid_params', LEGACY_GUIDANCE);
+  }
+
+  // Which ref the sha was compared against — names the right re-read in
+  // CONTENT_CONFLICT messages (stacking reads target the preview branch).
+  const conflictAt: 'main' | 'preview' = loadRef ? 'preview' : 'main';
+
+  // Stacking onto a preview needs the preview's own sha, never a live one.
+  if (liveRead && loadRef) throw contentConflict('preview');
+  const expectedSha = liveRead ? content.sha : args.expected_sha;
+
+  // Optimistic lock (tool-level, works for BOTH sha sources): the sha the
+  // caller read must still be the sha of the file we loaded.
+  if (content.sha !== null && content.sha !== expectedSha) {
+    throw contentConflict(conflictAt);
+  }
+
+  const priorBlocks =
+    content.format === 'json'
+      ? (ClassmojiService.pageContent.ensureBlockIds(content.blocks as BlockNode[]) as BlockNode[])
+      : [];
+  const priorCount = countBlocks(priorBlocks);
+
+  // Client-supplied ids that collide with existing ids (or each other) are
+  // re-minted deterministically inside applyBlockOps — collected here so the
+  // result/audit report the re-mints.
+  const idRemints: Array<{ op_index: number; from: string; to: string }> = [];
+
+  // Ops that would leave the document unopenable (a columnList dropped below
+  // two columns, a stray block parked directly in one, a whole row inserted
+  // inside a column) are repaired rather
+  // than committed as-is. Reported back because the repair changes the
+  // layout the caller asked for: silently unwrapping a row would leave an
+  // agent believing its delete did exactly what it said.
+  const structureRepairs: Array<{ kind: string; id?: string }> = [];
+
+  let newBlocks: unknown[];
+  try {
+    newBlocks = ClassmojiService.pageContent.applyBlockOps(
+      priorBlocks,
+      args.ops as Parameters<typeof ClassmojiService.pageContent.applyBlockOps>[1],
+      {
+        onIdRemint: remint => idRemints.push(remint),
+        onStructureRepair: repair => structureRepairs.push(repair),
+      }
+    );
+  } catch (error) {
+    if (error instanceof Error && error.name === 'BlockOpError') {
+      throw new ToolError(
+        'invalid_params',
+        liveRead && (error as { code?: string }).code === 'UNKNOWN_BLOCK_ID'
+          ? `${error.message}. A preview starts from the last saved version, which may not ` +
+              "have blocks added in the last minute yet — retry shortly or use mode: 'live'."
+          : error.message
+      );
+    }
+    throw error;
+  }
+
+  // Client-supplied blocks (insert/replace_all payloads) may lack ids —
+  // fill them deterministically so this apply PERSISTS stable ids.
+  newBlocks = ClassmojiService.pageContent.ensureBlockIds(newBlocks as BlockNode[]);
+
+  let createdPreviewBranch = false;
+  if (committedTo === 'preview') {
+    // Create the branch from main's current HEAD when absent (no-op when
+    // stacking on an existing preview).
+    const ensured = await ClassmojiService.pageContent.ensurePreviewBranch(page);
+    createdPreviewBranch = ensured.created;
+  }
+
+  // On a create (no content file yet), there is no sha to lock on — passing
+  // one would 409 every first write (put treats expectedSha + missing file
+  // as deleted-since-read). GitHub's sha-less create still rejects an
+  // existence race with a 422, mapped to CONTENT_CONFLICT below.
+  const isCreate = content.sha === null;
+
+  let saved: { sha: string; commit: string };
+  try {
+    saved = await ClassmojiService.pageContent.savePageContent(page, newBlocks, {
+      // Also enforced GitHub-side at write time: catches a racing writer
+      // between our read and this commit (and a content.json materialized
+      // out-of-band under a legacy page).
+      ...(isCreate ? {} : { expectedSha: expectedSha ?? args.expected_sha }),
+      ...(committedTo === 'preview'
+        ? { branch: ClassmojiService.pageContent.previewBranchName(page.content_path) }
+        : {}),
+      message: `page_content_apply: ${page.title}`,
+    });
+  } catch (error) {
+    const status = (error as { status?: number }).status;
+    // 409 = optimistic-lock loss; 422 on a create = a concurrent creator won
+    // the sha-less create race — both mean "re-read for a fresh sha".
+    if (status === 409 || (isCreate && status === 422)) {
+      // The branch was created by THIS apply and the save failed — delete
+      // the fresh (empty) branch so it doesn't strand the page in preview
+      // mode with no pending edits. Best-effort.
+      if (createdPreviewBranch) {
+        try {
+          await ClassmojiService.pageContent.discardPreview(page);
+        } catch (cleanupError: unknown) {
+          console.warn(
+            '[page_content_apply] Failed to clean up the freshly created preview branch:',
+            cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+          );
+        }
+      }
+      throw contentConflict(conflictAt);
+    }
+    throw error;
+  }
+
+  const applied = summarizeOps(args.ops);
+  for (const remint of idRemints) {
+    const entry = applied[remint.op_index];
+    if (entry) {
+      const reminted =
+        (entry.reminted_ids as Array<{ from: string; to: string }> | undefined) ?? [];
+      reminted.push({ from: remint.from, to: remint.to });
+      entry.reminted_ids = reminted;
+    }
+  }
+  const hasDestructiveOps = args.ops.some(op => op.op === 'replace_all' || op.op === 'delete');
+
+  await writeAudit(ctx, {
+    resource_type: 'PAGES',
+    resource_id: page.id,
+    action: 'UPDATE',
+    data: {
+      tool: 'page_content_apply',
+      ops: applied,
+      expected_sha: args.expected_sha,
+      new_sha: saved.sha,
+      commit_sha: saved.commit,
+      committed_to: committedTo,
+      ...(hasDestructiveOps ? { prior_block_count: priorCount } : {}),
+      ...(structureRepairs.length > 0 ? { structure_repairs: structureRepairs } : {}),
+    } as Prisma.InputJsonValue,
+  });
+
+  // Open live editors refresh their pending-preview banner.
+  if (committedTo === 'preview') await notifyPreviewChanged(page.classroom, 'page', page.id);
+  const previewUrl = committedTo === 'preview' ? pagePreviewUrl(page) : null;
+  return ok({
+    success: true,
+    new_sha: saved.sha,
+    block_count: countBlocks(newBlocks as BlockNode[]),
+    committed_to: committedTo,
+    ...(previewUrl ? { preview_url: previewUrl } : {}),
+    applied,
+    ...(structureRepairs.length > 0
+      ? { structure_repairs: structureRepairs, note: STRUCTURE_REPAIR_NOTE }
+      : {}),
+  });
+}
 
 // ─── page_preview_accept ─────────────────────────────────────────────────────
 

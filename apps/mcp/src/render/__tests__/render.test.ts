@@ -13,6 +13,14 @@ import { deckIdSet, deckSlideOrder, overflowReport } from '../deckAgent.ts';
 import { sheetHtml } from '../deckRender.ts';
 import { changedSlideIds, deckRenderTool } from '../../tools/render.ts';
 import { deckApplyTool } from '../../tools/deck.ts';
+import { pageContentApplyTool } from '../../tools/pageContent.ts';
+import {
+  blockIdSet,
+  changedBlockIds,
+  chooseChunks,
+  chunksOf,
+  pageRenderTool,
+} from '../../tools/pageRender.ts';
 
 const deck = {
   version: 1,
@@ -203,6 +211,54 @@ describe('contact sheet markup', () => {
 
 describe('tool descriptions stay under 1,500 bytes', () => {
   it.each([deckRenderTool, deckApplyTool])('$name', tool => {
+    expect(new TextEncoder().encode(tool.description).length).toBeLessThan(1500);
+  });
+});
+
+describe('page render helpers', () => {
+  it('maps a block box to the chunks it spans', () => {
+    expect(chunksOf({ top: 0, bottom: 100 }, 1200)).toEqual([1]);
+    expect(chunksOf({ top: 1150, bottom: 1300 }, 1200)).toEqual([1, 2]);
+    expect(chunksOf({ top: 2400, bottom: 2401 }, 1200)).toEqual([3]);
+  });
+
+  it('chooses chunks from a start, or the ones holding the blocks, capped', () => {
+    const layout = {
+      height: 5000,
+      chunks: 5,
+      blocks: [
+        { id: 'x', top: 3700, bottom: 3800 },
+        { id: 'y', top: 100, bottom: 200 },
+      ],
+    };
+    expect(chooseChunks(layout, { max: 3, byBlocks: false })).toEqual([1, 2, 3]);
+    expect(chooseChunks(layout, { start: 4, max: 3, byBlocks: true })).toEqual([4, 5]);
+    expect(chooseChunks(layout, { max: 3, byBlocks: true })).toEqual([1, 4]);
+    expect(chooseChunks(layout, { max: 1, byBlocks: true })).toEqual([1]);
+  });
+
+  it('collects changed block ids from an apply result', () => {
+    expect(
+      changedBlockIds({
+        applied: [
+          { op: 'update', id: 'a' },
+          { op: 'delete', id: 'gone' },
+          { op: 'insert', count: 2, ids: ['n1', 'n2'] },
+          { op: 'move', id: 'a' },
+          { op: 'insert', count: 1, reminted_ids: [{ from: 'dup', to: 'fresh' }] },
+        ],
+        inserted_ids: [['late']],
+      })
+    ).toEqual(['a', 'n1', 'n2', 'fresh', 'late']);
+  });
+
+  it('finds every block id in a nested tree', () => {
+    expect([
+      ...blockIdSet([{ id: 'a', children: [{ id: 'b', children: [{ id: 'c' }] }] }, { id: 'd' }]),
+    ]).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it.each([pageRenderTool, pageContentApplyTool])('$name description < 1,500 bytes', tool => {
     expect(new TextEncoder().encode(tool.description).length).toBeLessThan(1500);
   });
 });
