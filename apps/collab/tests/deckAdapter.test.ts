@@ -265,6 +265,32 @@ describe('applyOps', () => {
     expect(deck.slides[3].children?.map(c => c.id)).toEqual(['aaaa0005', 'aaaa0004']);
   });
 
+  it('an attrs update merges into the live slide: a null removes a key, the rest stay', () => {
+    const adapter = createDeckAdapter(makeDeps());
+    const withAttrs = structuredClone(DECK);
+    withAttrs.slides[0].attrs = { spellcheck: 'false', 'data-background-color': '#fff' };
+    const document = liveDoc(withAttrs);
+
+    adapter.applyOps(
+      context(document),
+      adapter.parseOps([
+        { op: 'update', id: 'aaaa0001', attrs: { 'data-transition': 'fade', spellcheck: null } },
+      ])
+    );
+    expect(yDocToDeck(document).slides[0].attrs).toEqual({
+      'data-background-color': '#fff',
+      'data-transition': 'fade',
+    });
+
+    adapter.applyOps(
+      context(document),
+      adapter.parseOps([
+        { op: 'update', id: 'aaaa0001', attrs: { 'data-transition': 'zoom' }, replace_attrs: true },
+      ])
+    );
+    expect(yDocToDeck(document).slides[0].attrs).toEqual({ 'data-transition': 'zoom' });
+  });
+
   it('409 slide-locked on an update or delete of a slide a person holds', () => {
     const adapter = createDeckAdapter(makeDeps());
     const document = liveDoc(DECK, [42]);

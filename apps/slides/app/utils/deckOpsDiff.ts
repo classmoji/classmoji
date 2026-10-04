@@ -74,8 +74,13 @@ export type DeckDiffOp =
       /** Empty string removes the notes (server contract). */
       notes?: string;
       hidden?: boolean;
-      /** null clears all extra attributes. */
-      attrs?: Record<string, string> | null;
+      /**
+       * Merged into the slide's attrs (a null value removes that key) unless
+       * replace_attrs; null clears them all.
+       */
+      attrs?: Record<string, string | null> | null;
+      /** The editor sends the section's whole record: always a replacement. */
+      replace_attrs?: boolean;
     }
   | { op: 'insert'; slides: NewSlideSpec[]; position: DeckDiffPosition }
   | { op: 'move'; id: string; position: DeckDiffPosition }
@@ -298,6 +303,20 @@ function simInsertAt(root: SimNode[], nodes: SimNode[], position: DeckDiffPositi
   }
 }
 
+/** The engine's attrs rule (deckOps nextSlideAttrs), minus the runtime strip. */
+function simAttrs(
+  current: Record<string, string>,
+  op: { attrs?: Record<string, string | null> | null; replace_attrs?: boolean }
+): Record<string, string> {
+  if (!op.attrs) return {};
+  const next: Record<string, string> = op.replace_attrs ? {} : { ...current };
+  for (const [name, value] of Object.entries(op.attrs)) {
+    if (value === null) delete next[name];
+    else next[name] = value;
+  }
+  return next;
+}
+
 /** Apply one op to the sim tree; throws DiffBail on anything the engine would refuse. */
 function simApply(root: SimNode[], op: DeckDiffOp): void {
   switch (op.op) {
@@ -310,7 +329,7 @@ function simApply(root: SimNode[], op: DeckDiffOp): void {
       }
       if (op.notes !== undefined) found.node.notes = op.notes === '' ? null : op.notes;
       if (op.hidden !== undefined) found.node.hidden = op.hidden;
-      if (op.attrs !== undefined) found.node.attrs = { ...(op.attrs ?? {}) };
+      if (op.attrs !== undefined) found.node.attrs = simAttrs(found.node.attrs, op);
       break;
     }
     case 'insert':
@@ -393,7 +412,14 @@ function planUpdate(base: DiffSection, curr: DiffSection): DeckDiffOp | null {
     changed = true;
   }
   if (!eqRecord(base.attrs, curr.attrs)) {
-    op.attrs = Object.keys(curr.attrs).length > 0 ? { ...curr.attrs } : null;
+    // The section's whole record, as a replacement: the engine merges attrs
+    // by default, which would keep a key the person removed.
+    if (Object.keys(curr.attrs).length > 0) {
+      op.attrs = { ...curr.attrs };
+      op.replace_attrs = true;
+    } else {
+      op.attrs = null;
+    }
     changed = true;
   }
   return changed ? op : null;

@@ -390,6 +390,35 @@ describe('per-slide staleness check', () => {
     expect(posted()).toHaveLength(0);
   });
 
+  it("an attrs merge is refused when the slide's attrs changed since the read", async () => {
+    serve(4, DECK());
+    await read();
+    serve(9, {
+      ...DECK(),
+      slides: [
+        DECK().slides[0],
+        { ...DECK().slides[1], attrs: { 'data-background-color': '#f00' } },
+      ],
+    });
+    await expect(
+      apply([{ op: 'update', id: 'bbb', attrs: { 'data-transition': 'fade' } }])
+    ).rejects.toMatchObject({ code: 'BLOCK_CHANGED', data: { changed_ids: ['bbb'] } });
+    expect(posted()).toHaveLength(0);
+  });
+
+  it('an attrs merge goes to the live deck as sent, guarded by the slide as read', async () => {
+    serve(4, DECK());
+    await read();
+    const op = { op: 'update', id: 'bbb', attrs: { 'data-transition': 'fade', spellcheck: null } };
+    expect(parse(await apply([op]))).toMatchObject({ success: true, committed_to: 'live' });
+    // The collab server applies the merge against the live slide inside its
+    // transaction, after checking it still hashes to what the agent read.
+    expect(posted()[0]?.body).toMatchObject({
+      ops: [op],
+      expect: { bbb: itemHash(DECK().slides[1]) },
+    });
+  });
+
   it('a reorder is refused when the slide order changed since the read', async () => {
     serve(4, DECK());
     await read();

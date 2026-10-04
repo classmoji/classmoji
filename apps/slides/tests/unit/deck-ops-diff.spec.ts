@@ -14,6 +14,7 @@
 
 import { test, expect } from '@playwright/test';
 import { stripRuntimeSectionAttrs } from '@classmoji/services/slides/runtime-attrs';
+import { applyDeckOps, type DeckOp } from '@classmoji/services/slides';
 import {
   cleanSectionAttrs,
   diffDeckSnapshots,
@@ -35,7 +36,11 @@ function s(id: string | null, html: string, extra: Partial<DiffSection> = {}): D
 }
 
 /** Stack container shorthand. */
-function stack(id: string | null, children: DiffSection[], extra: Partial<DiffSection> = {}): DiffSection {
+function stack(
+  id: string | null,
+  children: DiffSection[],
+  extra: Partial<DiffSection> = {}
+): DiffSection {
   return {
     id,
     html: null,
@@ -51,7 +56,8 @@ function snap(sections: DiffSection[], theme = 'white', codeTheme = 'github'): D
   return { theme, codeTheme, sections };
 }
 
-const base3 = () => snap([s('aaa', '<p>one</p>'), s('bbb', '<p>two</p>'), s('ccc', '<p>three</p>')]);
+const base3 = () =>
+  snap([s('aaa', '<p>one</p>'), s('bbb', '<p>two</p>'), s('ccc', '<p>three</p>')]);
 
 test.describe('no-op and updates', () => {
   test('identical snapshots → empty op list (caller falls back to whole-doc no-op semantics)', () => {
@@ -87,8 +93,38 @@ test.describe('no-op and updates', () => {
     ]);
     expect(diffDeckSnapshots(base, curr)).toEqual([
       { op: 'update', id: 'aaa', hidden: true, attrs: null },
-      { op: 'update', id: 'bbb', attrs: { class: 'fancy' } },
+      { op: 'update', id: 'bbb', attrs: { class: 'fancy' }, replace_attrs: true },
     ]);
+  });
+
+  test('a removed attribute travels as a whole-record replacement (the engine merges otherwise)', () => {
+    const base = snap([
+      s('aaa', '<p>x</p>', {
+        attrs: { 'data-background-color': '#fff', 'data-transition': 'fade' },
+      }),
+    ]);
+    const curr = snap([s('aaa', '<p>x</p>', { attrs: { 'data-transition': 'fade' } })]);
+    const ops = diffDeckSnapshots(base, curr);
+    expect(ops).toEqual([
+      { op: 'update', id: 'aaa', attrs: { 'data-transition': 'fade' }, replace_attrs: true },
+    ]);
+    // And the server engine lands exactly that record.
+    const { deck } = applyDeckOps(
+      {
+        version: 1,
+        theme: 'white',
+        codeTheme: 'github',
+        slides: [
+          {
+            id: 'aaa',
+            html: '<p>x</p>',
+            attrs: { 'data-background-color': '#fff', 'data-transition': 'fade' },
+          },
+        ],
+      },
+      ops as DeckOp[]
+    );
+    expect(deck.slides[0].attrs).toEqual({ 'data-transition': 'fade' });
   });
 
   test('untouched slides are never transmitted', () => {
@@ -174,7 +210,10 @@ test.describe('deletes, reorder, moves', () => {
   });
 
   test('deleted stack (children gone with it) → one container delete', () => {
-    const base = snap([s('aaa', '<p>x</p>'), stack('st', [s('c1', '<p>c1</p>'), s('c2', '<p>c2</p>')])]);
+    const base = snap([
+      s('aaa', '<p>x</p>'),
+      stack('st', [s('c1', '<p>c1</p>'), s('c2', '<p>c2</p>')]),
+    ]);
     const curr = snap([s('aaa', '<p>x</p>')]);
     expect(diffDeckSnapshots(base, curr)).toEqual([{ op: 'delete', id: 'st' }]);
   });
@@ -216,7 +255,10 @@ test.describe('deletes, reorder, moves', () => {
   });
 
   test('child escapes its stack to the top level → move op', () => {
-    const base = snap([s('aaa', '<p>x</p>'), stack('st', [s('c1', '<p>c1</p>'), s('c2', '<p>c2</p>')])]);
+    const base = snap([
+      s('aaa', '<p>x</p>'),
+      stack('st', [s('c1', '<p>c1</p>'), s('c2', '<p>c2</p>')]),
+    ]);
     const curr = snap([
       s('aaa', '<p>x</p>'),
       stack('st', [s('c2', '<p>c2</p>')]),
@@ -228,16 +270,30 @@ test.describe('deletes, reorder, moves', () => {
   });
 
   test('top-level slide joins a stack (after an existing child) → move op', () => {
-    const base = snap([s('aaa', '<p>x</p>'), stack('st', [s('c1', '<p>c1</p>')]), s('bbb', '<p>y</p>')]);
-    const curr = snap([s('aaa', '<p>x</p>'), stack('st', [s('c1', '<p>c1</p>'), s('bbb', '<p>y</p>')])]);
+    const base = snap([
+      s('aaa', '<p>x</p>'),
+      stack('st', [s('c1', '<p>c1</p>')]),
+      s('bbb', '<p>y</p>'),
+    ]);
+    const curr = snap([
+      s('aaa', '<p>x</p>'),
+      stack('st', [s('c1', '<p>c1</p>'), s('bbb', '<p>y</p>')]),
+    ]);
     expect(diffDeckSnapshots(base, curr)).toEqual([
       { op: 'move', id: 'bbb', position: { after: 'c1' } },
     ]);
   });
 
   test('move to the FRONT of a stack from outside → null (no expressible anchor)', () => {
-    const base = snap([s('aaa', '<p>x</p>'), stack('st', [s('c1', '<p>c1</p>')]), s('bbb', '<p>y</p>')]);
-    const curr = snap([s('aaa', '<p>x</p>'), stack('st', [s('bbb', '<p>y</p>'), s('c1', '<p>c1</p>')])]);
+    const base = snap([
+      s('aaa', '<p>x</p>'),
+      stack('st', [s('c1', '<p>c1</p>')]),
+      s('bbb', '<p>y</p>'),
+    ]);
+    const curr = snap([
+      s('aaa', '<p>x</p>'),
+      stack('st', [s('bbb', '<p>y</p>'), s('c1', '<p>c1</p>')]),
+    ]);
     expect(diffDeckSnapshots(base, curr)).toBeNull();
   });
 });
@@ -272,7 +328,10 @@ test.describe('anomalies → null (whole-doc fallback)', () => {
   });
 
   test('NEW stack wrapping EXISTING slides (overview grouping) is inexpressible', () => {
-    const curr = snap([stack(null, [s('aaa', '<p>one</p>'), s('bbb', '<p>two</p>')]), s('ccc', '<p>three</p>')]);
+    const curr = snap([
+      stack(null, [s('aaa', '<p>one</p>'), s('bbb', '<p>two</p>')]),
+      s('ccc', '<p>three</p>'),
+    ]);
     expect(diffDeckSnapshots(base3(), curr)).toBeNull();
   });
 

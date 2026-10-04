@@ -32,6 +32,16 @@ export { SlideHtmlError } from './deckHtml.ts';
 
 const attrsSchema = z.record(z.string());
 
+/**
+ * What an agent writing slide html needs to know beyond plain HTML: the
+ * editor's draggable blocks, and vector art inside them.
+ */
+const SLIDE_HTML_DESCRIPTION =
+  'Slide HTML (no <section>). Draggable blocks: <div class="sl-block" data-block-type="text" ' +
+  'style="left:Xpx;top:Ypx;width:Wpx"><div class="sl-block-content">…</div></div> on the ' +
+  "deck's logical canvas. Inline <svg> works in slide html and inside a text block; for an " +
+  'image block use <img src="data:image/svg+xml,…"> with the SVG percent-encoded';
+
 const positionSchema = z.union([
   z.object({ after: z.string().min(1) }).strict(),
   z.object({ at: z.enum(['start', 'end']) }).strict(),
@@ -48,7 +58,7 @@ const newChildSlideSchema = z
 
 const newSlideSchema = z
   .object({
-    html: z.string().max(200_000).optional(),
+    html: z.string().max(200_000).optional().describe(SLIDE_HTML_DESCRIPTION),
     notes: z.string().max(50_000).optional(),
     hidden: z.boolean().optional(),
     attrs: attrsSchema.optional(),
@@ -73,7 +83,7 @@ export const deckOpSchema = z.discriminatedUnion('op', [
   z.object({
     op: z.literal('update'),
     id: z.string().min(1),
-    html: z.string().max(200_000).optional(),
+    html: z.string().max(200_000).optional().describe(SLIDE_HTML_DESCRIPTION),
     notes: z
       .string()
       .max(50_000)
@@ -81,10 +91,18 @@ export const deckOpSchema = z.discriminatedUnion('op', [
       .optional()
       .describe('Speaker notes HTML; null or empty string removes the notes'),
     hidden: z.boolean().optional(),
-    attrs: attrsSchema
+    attrs: z
+      .record(z.string().nullable())
       .nullable()
       .optional()
-      .describe('Full replacement attrs record (null or {} clears all extra attributes)'),
+      .describe(
+        "Section attributes, MERGED into the slide's: keys you send are set, a key set to null " +
+          'is removed, keys you omit are kept. attrs: null clears them all'
+      ),
+    replace_attrs: z
+      .boolean()
+      .optional()
+      .describe('true = attrs replaces the whole record instead of merging'),
   }),
   z.object({
     op: z.literal('insert'),
@@ -211,6 +229,33 @@ function assertValidTheme(theme: string): void {
   );
 }
 
+/**
+ * An update op's attrs against the slide's current ones. By default a MERGE:
+ * keys sent are set, a null value removes its key, keys not sent are kept —
+ * so a pass that sets one attribute never drops the rest. `replace` (or
+ * `attrs: null`, which clears everything) takes the record as the whole set.
+ * Reveal's runtime paint never persists, even when an agent hands back
+ * verbatim what deck_get returned (issue #361).
+ */
+function nextSlideAttrs(
+  current: Record<string, string> | undefined,
+  incoming: Record<string, string | null> | null,
+  replace: boolean
+): Record<string, string> {
+  if (incoming === null) return {};
+  const set: Record<string, string> = {};
+  const removed: string[] = [];
+  for (const [name, value] of Object.entries(incoming)) {
+    if (value === null) removed.push(name);
+    else set[name] = value;
+  }
+  const cleaned = stripRuntimeSectionAttrs(set);
+  if (replace) return cleaned;
+  const next: Record<string, string> = { ...(current ?? {}) };
+  for (const name of removed) delete next[name];
+  return Object.assign(next, cleaned);
+}
+
 // ─── applyDeckOps ────────────────────────────────────────────────────────────
 
 export interface ApplyDeckOpsOptions {
@@ -274,10 +319,11 @@ export function applyDeckOps(
           if (op.hidden) target.slide.hidden = true;
           else delete target.slide.hidden;
         }
+        if (op.replace_attrs && op.attrs === undefined) {
+          throw new DeckOpError(`update op for '${op.id}' sets replace_attrs without attrs`);
+        }
         if (op.attrs !== undefined) {
-          // Reveal's runtime paint never persists, even when an agent hands
-          // back verbatim what deck_get returned (issue #361).
-          const attrs = op.attrs == null ? {} : stripRuntimeSectionAttrs(op.attrs);
+          const attrs = nextSlideAttrs(target.slide.attrs, op.attrs, op.replace_attrs === true);
           if (Object.keys(attrs).length === 0) {
             delete target.slide.attrs;
           } else {
