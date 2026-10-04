@@ -57,7 +57,7 @@
     "test:ui": "dotenv -e .env -- ./scripts/devport.sh run turbo run web:test:ui",
     "web:test": "dotenv -e .env -- ./scripts/devport.sh run turbo run web:test --filter=@classmoji/web",
     "web:test:ui": "dotenv -e .env -- ./scripts/devport.sh run turbo run web:test:ui --filter=@classmoji/web",
-    "site:dev": "cd apps/site && npm run dev",
+    "site:dev": "dotenv -e .env -- npm --prefix apps/site run dev",
     "fly:site": "fly deploy --config apps/site/fly.toml --dockerfile apps/site/Dockerfile",
     "fly:webapp": "fly deploy --config apps/webapp/fly.toml --dockerfile apps/webapp/Dockerfile --no-cache",
     "fly:slides": "fly deploy --config apps/slides/fly.toml --dockerfile apps/slides/Dockerfile --no-cache",

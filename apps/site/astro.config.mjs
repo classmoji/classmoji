@@ -2,12 +2,21 @@ import { defineConfig } from 'astro/config';
 import { fileURLToPath } from 'url';
 import tailwindcss from '@tailwindcss/vite';
 import mdx from '@astrojs/mdx';
+import node from '@astrojs/node';
 import react from '@astrojs/react';
 import starlight from '@astrojs/starlight';
 import starlightThemeBlack from 'starlight-theme-black';
 
 // https://astro.build/config
 export default defineConfig({
+  // Pages stay pre-built and static; only routes that opt out of prerendering
+  // (the contact form's /api/contact) run on the Node server.
+  adapter: node({ mode: 'standalone' }),
+  // Astro's origin check would compare the visitor's https origin with the
+  // http address the server sees behind Fly's proxy and refuse every post. The
+  // only on-demand route is the contact form, which writes to our own inbox and
+  // has its own honeypot and rate limit, so there is nothing for it to guard.
+  security: { checkOrigin: false },
   integrations: [
     starlight({
       title: '🍎 classmoji',
