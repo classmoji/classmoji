@@ -30,14 +30,19 @@ import {
   SlideHtmlError,
   applyDeckOps,
   deckOpsPayloadSchema,
+  indexResolutions,
   isDeckSlide,
+  PreviewResolutionError,
   loadDeck,
   merge3Units,
   parseDeckHtml,
   slideService,
   type DeckJson,
+  type DeckMergeConflict,
   type DeckOp,
+  type DeckSlide,
   type MergeChoice,
+  type MergeResolution,
 } from '@classmoji/services/slides';
 import {
   DECK_SCHEMA_VERSION,
@@ -185,6 +190,20 @@ function parseDeckText(text: string | null): DeckJson | null {
   } catch {
     return null;
   }
+}
+
+function flattenSlides(deck: DeckJson): Map<string, DeckSlide> {
+  const out = new Map<string, DeckSlide>();
+  for (const slide of deck.slides) {
+    out.set(slide.id, slide);
+    for (const child of slide.children ?? []) out.set(child.id, child);
+  }
+  return out;
+}
+
+/** What a lock protects: the slide's html (moves and attributes are free). */
+function contentKey(slide: DeckSlide): string {
+  return JSON.stringify(slide.html ?? null);
 }
 
 function asHttpError(err: unknown): never {
@@ -354,6 +373,61 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
       syncDeckIntoYDoc(doc, merged);
     });
     return { sourceSha: theirsLoaded.sha, conflicts };
+  }
+
+  /**
+   * `POST /internal/deck/:id/merge-preview`: 3-way merge INSIDE the live
+   * transaction — base = where the preview branched, ours = the live deck,
+   * theirs = the preview — so nothing typed between a read and the write is
+   * lost. Conflicts left after `resolutions` (the chooser's `{id, choose}`
+   * list) are returned and nothing is applied; otherwise the merged deck is
+   * written id-aware. A slide whose content the merge would change while a
+   * person holds it is refused with 409 slide-locked, like an op.
+   */
+  mergePreview(
+    ctx: LiveEditContext,
+    {
+      base,
+      theirs,
+      resolutions,
+    }: { base: DeckJson; theirs: DeckJson; resolutions?: MergeResolution[] | null }
+  ): { conflicts: DeckMergeConflict[] } {
+    this.attach(ctx.document);
+    let chosen: Record<string, MergeChoice> = {};
+    if (resolutions && resolutions.length > 0) {
+      try {
+        chosen = indexResolutions(resolutions);
+      } catch (err) {
+        if (err instanceof PreviewResolutionError) {
+          throw new CollabHttpError(400, { error: 'invalid-resolutions', message: err.message });
+        }
+        throw err;
+      }
+    }
+    let conflicts: DeckMergeConflict[] = [];
+    ctx.transact(doc => {
+      const ours = yDocToDeck(doc);
+      const merge = merge3Units(base, ours, theirs, { resolutions: chosen });
+      if (merge.conflicts.length > 0) {
+        conflicts = merge.conflicts;
+        return;
+      }
+      const locks = this.liveLocks(doc);
+      if (locks.size > 0) {
+        const before = flattenSlides(ours);
+        const after = flattenSlides(merge.merged);
+        for (const [slideId, holder] of locks) {
+          const prev = before.get(slideId);
+          if (!prev) continue;
+          const next = after.get(slideId);
+          if (!next || contentKey(prev) !== contentKey(next)) {
+            throw new CollabHttpError(409, { error: 'slide-locked', slideId, holder });
+          }
+        }
+      }
+      syncDeckIntoYDoc(doc, merge.merged);
+    });
+    return { conflicts };
   }
 
   /**

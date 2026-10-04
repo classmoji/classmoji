@@ -371,3 +371,54 @@ describe('lock bookkeeping', () => {
     document.destroy();
   });
 });
+
+describe('mergePreview', () => {
+  const preview = (): DeckJson => ({
+    ...DECK,
+    slides: [
+      { id: 'aaaa0001', html: '<h1>Preview one</h1>' },
+      { id: 'pppp0001', html: '<p>added by the preview</p>' },
+      ...DECK.slides.slice(1),
+    ],
+  });
+
+  it('merges the preview into the live deck, keeping live edits elsewhere', () => {
+    const adapter = createDeckAdapter(makeDeps());
+    const document = liveDoc();
+    (deckSlides(document).get('aaaa0002') as Y.Map<unknown>).set('html', '<h2>live</h2>');
+    const result = adapter.mergePreview(context(document), { base: DECK, theirs: preview() });
+    expect(result.conflicts).toEqual([]);
+    const deck = yDocToDeck(document);
+    expect(deck.slides.map(s => s.id)).toEqual(['aaaa0001', 'pppp0001', 'aaaa0002', 'aaaa0003']);
+    expect(deck.slides[0].html).toBe('<h1>Preview one</h1>');
+    expect(deck.slides[2].html).toBe('<h2>live</h2>');
+  });
+
+  it('conflicts apply nothing; resolutions settle them', () => {
+    const adapter = createDeckAdapter(makeDeps());
+    const document = liveDoc();
+    (deckSlides(document).get('aaaa0001') as Y.Map<unknown>).set('html', '<h1>live one</h1>');
+    const first = adapter.mergePreview(context(document), { base: DECK, theirs: preview() });
+    expect(first.conflicts.map(c => c.id)).toEqual(['aaaa0001']);
+    expect(yDocToDeck(document).slides.map(s => s.id)).not.toContain('pppp0001');
+
+    const second = adapter.mergePreview(context(document), {
+      base: DECK,
+      theirs: preview(),
+      resolutions: [{ id: 'aaaa0001', choose: 'theirs' }],
+    });
+    expect(second.conflicts).toEqual([]);
+    expect(yDocToDeck(document).slides[0].html).toBe('<h1>Preview one</h1>');
+  });
+
+  it('409 slide-locked when the merge would change a slide a person holds', () => {
+    const adapter = createDeckAdapter(makeDeps());
+    const document = liveDoc(DECK, [9]);
+    acquireLock(document, 'aaaa0001', holder(9), { now: 1_000_000 });
+    adapter.attach(document);
+    expect(() =>
+      adapter.mergePreview(context(document), { base: DECK, theirs: preview() })
+    ).toThrow(expect.objectContaining({ status: 409 }));
+    expect(yDocToDeck(document).slides[0].html).toBe('<h1>One</h1>');
+  });
+});
