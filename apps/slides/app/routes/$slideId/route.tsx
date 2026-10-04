@@ -3565,7 +3565,9 @@ export default function SlideViewer() {
           />
         )}
         {preview?.missing && <NoPreviewNotice />}
-        {preview && !preview.active && preview.exists && !isEditing && (
+        {/* Live decks keep it in edit mode too: an agent's pending preview is
+            news while you edit, not only when you stop. */}
+        {preview && !preview.active && preview.exists && (!isEditing || collabMode) && (
           <PendingPreviewBanner preview={preview} />
         )}
 
