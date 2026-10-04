@@ -105,6 +105,9 @@ jobs:
               # The worker bundles services, which signs media and content
               # URLs with this package.
               - 'packages/content-signing/**'
+              # content-checkpoint renders live docs with these.
+              - 'packages/collab/**'
+              - 'packages/page-schema/**'
 
   # Build images before the migration barrier; only rollouts wait for webapp.
   # At most six monorepo builds: admin takes ai-agent's slot when it finishes.

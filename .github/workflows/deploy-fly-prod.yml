@@ -61,6 +61,9 @@ jobs:
               # The worker bundles services, which signs media and content
               # URLs with this package.
               - 'packages/content-signing/**'
+              # content-checkpoint renders live docs with these.
+              - 'packages/collab/**'
+              - 'packages/page-schema/**'
 
   deploy-webapp:
     needs: changes
