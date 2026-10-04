@@ -29,6 +29,7 @@ import {
   isConfirmedFor,
   moveSlide,
   setDeckThemes,
+  syncDeckIntoYDoc,
   yDocToDeck,
 } from '@classmoji/collab';
 import type { DeckJson } from '@classmoji/services/slides';
@@ -121,9 +122,9 @@ const MEDIA_URL =
 let fakeNow: number | null = null;
 const clock = () => fakeNow ?? Date.now();
 
-function setup() {
+function setup(deck: DeckJson = DECK) {
   fakeNow = null;
-  const remote = deckToYDoc(DECK);
+  const remote = deckToYDoc(deck);
   installLockArbiter(remote);
   const session = new FakeSession();
   session.server = remote;
@@ -813,6 +814,118 @@ test.describe('live deck bridge', () => {
     expect(t.section('aaaa0003').innerHTML).toBe('<h2>remote</h2>');
     t.bridge.destroy();
   });
+
+  test('editing state the browser puts on a section (spellcheck) is never written', async () => {
+    const t = setup();
+    const el = t.section('aaaa0003');
+    el.setAttribute('spellcheck', 'false');
+    el.querySelector('h2')!.textContent = 'Three, typed';
+    t.bridge.flushLocal();
+    t.session.ack();
+    t.bridge.flushLocal();
+    t.session.ack();
+    expect(t.remoteHtml('aaaa0003')).toBe('<h2>Three, typed</h2>');
+    expect(yDocToDeck(t.remote).slides[2].attrs).toEqual({ 'data-background-color': '#fff' });
+    t.bridge.destroy();
+  });
+
+  // The 2026-10-04 incident on the plain collab deck: slide 2555ece5 vanished
+  // in a store from the one human tab while two agents inserted, deleted and
+  // updated slides. Replayed op for op (as the server writes agent ops:
+  // applyDeckOps → syncDeckIntoYDoc), an idle or typing editor writes no
+  // structure of its own: a structural delete only ever comes from the person.
+  for (const scenario of ['typing on another slide', 'looking at the slide'] as const) {
+    test(`agents' inserts, deletes and updates never make the editor delete a slide (${scenario})`, async () => {
+      const ids = [
+        '2b2add7c',
+        '2921d2c5',
+        '78e11bed',
+        'c415e56f',
+        'af2a451d',
+        '2555ece5',
+        'b04b1299',
+        'f4bbbc3c',
+        'e7331c5a',
+        '45cb7a2c',
+        '16ccc7f4',
+        'c014a8ee',
+        '0015d90e',
+        'b3eafff0',
+        '54da53d2',
+        'a390c720',
+        '64fc1606',
+        '0c2289ad',
+        '12b99831',
+        '2d28a89a',
+        '74d0b20a',
+        'ee2b1736',
+        '3c0e8e5b',
+        'bed22546',
+        'ebcc610a',
+        'a44ec2f3',
+        '474dc51f',
+        '4a7fc6b7',
+        'fbfa5627',
+        '1d19f9cb',
+        '7b9f7ae7',
+        '8014c590',
+        '2096c193',
+        'ab542072',
+      ];
+      const slide = (id: string, html = `<h2>${id}</h2>`) => ({ id, html });
+      const deckOf = (list: Array<{ id: string; html: string }>): DeckJson => ({
+        version: 1,
+        theme: 'white',
+        codeTheme: 'github',
+        slides: list,
+      });
+      let live = ids.map(id => slide(id));
+      const t = setup(deckOf(live));
+      const mine = scenario === 'typing on another slide' ? '8014c590' : '2555ece5';
+      t.setCurrent(mine);
+      const el = t.section(mine);
+      if (scenario === 'typing on another slide') {
+        el.setAttribute('tabindex', '-1');
+        el.focus();
+        const text = el.querySelector('h2')?.firstChild as Text;
+        window.getSelection()?.setBaseAndExtent(text, 2, text, 2);
+      }
+      const agent = async (next: typeof live) => {
+        live = next;
+        syncDeckIntoYDoc(t.remote, deckOf(live));
+        await tick();
+        if (scenario === 'typing on another slide') {
+          el.querySelector('h2')!.textContent += 'x';
+          await tick();
+          t.bridge.flushLocal();
+        }
+        t.session.ack();
+        t.session.ack();
+        await tick();
+        expect(yDocToDeck(t.remote).slides.map(s => s.id)).toEqual(live.map(s => s.id));
+        expect(t.order()).toEqual(live.map(s => s.id));
+      };
+      const at = (id: string) => live.findIndex(s => s.id === id);
+      // v352: teacher 2 appends four.
+      await agent([
+        ...live,
+        ...['56773f87', '7f9c1c42', '494b6d04', 'cdb985de'].map(id => slide(id)),
+      ]);
+      // v353: teacher 1 inserts two after the second slide.
+      await agent([...live.slice(0, 2), slide('8a17fa27'), slide('fa1aeeb3'), ...live.slice(2)]);
+      // v354: teacher 1 deletes one of them.
+      await agent(live.filter(s => s.id !== 'fa1aeeb3'));
+      // v355: teacher 1 appends one; v356: teacher 2 rewrites three.
+      await agent([...live, slide('d3a047fa')]);
+      await agent(
+        live.map(s =>
+          ['56773f87', '7f9c1c42', '494b6d04'].includes(s.id) ? slide(s.id, '<h2>new</h2>') : s
+        )
+      );
+      expect(at('2555ece5')).toBeGreaterThan(-1);
+      t.bridge.destroy();
+    });
+  }
 
   test('Done: flushes and releases the lock', () => {
     const t = setup();

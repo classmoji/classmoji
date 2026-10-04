@@ -73,6 +73,16 @@ describe('stripRuntimeSectionAttrs', () => {
     expect(stripRuntimeSectionAttrs(attrs)).toEqual({});
   });
 
+  it('drops the editing state a section picks up while someone edits it', () => {
+    expect(
+      stripRuntimeSectionAttrs({
+        spellcheck: 'false',
+        contenteditable: 'true',
+        'data-transition': 'slide',
+      })
+    ).toEqual({ 'data-transition': 'slide' });
+  });
+
   it('keeps the author-set neighbours of those attributes', () => {
     expect(
       stripRuntimeSectionAttrs({

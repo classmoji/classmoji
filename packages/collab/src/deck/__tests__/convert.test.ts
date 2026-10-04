@@ -263,4 +263,27 @@ describe('editor block state never reaches the deck', () => {
       '<div class="sl-block"><p>x</p></div>'
     );
   });
+
+  it('yDocToDeck leaves editing attributes stored on a section out (spellcheck, contenteditable)', () => {
+    const deck: DeckJson = {
+      version: 1,
+      theme: 'white',
+      codeTheme: 'github',
+      slides: [
+        {
+          id: 'a',
+          html: '<h2>x</h2>',
+          attrs: {
+            spellcheck: 'false',
+            'data-background-color': '#f6f5fb',
+            contenteditable: 'true',
+          },
+        },
+        { id: 'b', html: '<h2>y</h2>', attrs: { spellcheck: 'false' } },
+      ],
+    };
+    const out = yDocToDeck(deckToYDoc(deck));
+    expect(out.slides[0].attrs).toEqual({ 'data-background-color': '#f6f5fb' });
+    expect(out.slides[1].attrs).toBeUndefined();
+  });
 });

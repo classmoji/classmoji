@@ -12,6 +12,7 @@
  */
 import * as Y from 'yjs';
 import type { DeckJson, DeckSlide } from '@classmoji/services/slides';
+import { stripRuntimeSectionAttrs } from '@classmoji/services/slides/runtime-attrs';
 
 import { compareKeys, keysBetween } from '../fractionalIndex.ts';
 import {
@@ -184,7 +185,8 @@ function slideToJson(entry: DeckSlideEntry, kids: DeckSlideEntry[] | undefined):
   const notes = readSlideNotes(map);
   if (notes !== undefined) values.notes = notes;
   if (map.get(F.hidden) === true) values.hidden = true;
-  const attrs = readSlideAttrs(map);
+  // Runtime / editing paint that reached a slide (spellcheck, …) is never content.
+  const attrs = stripRuntimeSectionAttrs(readSlideAttrs(map));
   if (Object.keys(attrs).length > 0) values.attrs = attrs;
 
   const keys = orderedKeys(
