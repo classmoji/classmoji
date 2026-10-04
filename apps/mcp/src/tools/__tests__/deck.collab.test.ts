@@ -219,7 +219,7 @@ describe('live reads', () => {
       await deckOutlineTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID }, CTX)
     );
     expect(outline).toMatchObject({
-      sha: 'live:4',
+      sha: 'live:1.4',
       sha_source: 'live',
       version: 4,
       slide_count: 2,
@@ -229,7 +229,7 @@ describe('live reads', () => {
     const got = parse(
       await deckGetTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID, slide_ids: ['bbb'] }, CTX)
     );
-    expect(got).toMatchObject({ sha: 'live:4', slides: [{ id: 'bbb' }] });
+    expect(got).toMatchObject({ sha: 'live:1.4', slides: [{ id: 'bbb' }] });
     expect(mocks.loadDeck).not.toHaveBeenCalled();
   });
 
@@ -247,7 +247,7 @@ describe('live apply', () => {
         {
           classroom: 'org/x',
           slide_id: SLIDE_ID,
-          expected_sha: 'live:4',
+          expected_sha: 'live:1.4',
           sha_source: 'live',
           ops: [UPDATE_OP],
         },
@@ -256,7 +256,7 @@ describe('live apply', () => {
     );
     expect(result).toMatchObject({
       success: true,
-      new_sha: 'live:5',
+      new_sha: 'live:1.5',
       sha_source: 'live',
       committed_to: 'live',
     });
@@ -273,7 +273,7 @@ describe('live apply', () => {
         {
           classroom: 'org/x',
           slide_id: SLIDE_ID,
-          expected_sha: 'live:4',
+          expected_sha: 'live:1.4',
           ops: [{ op: 'insert', slides: [{ html: '<p>New</p>' }], position: { at: 'end' } }],
         },
         CTX
@@ -287,7 +287,7 @@ describe('live apply', () => {
     route('GET', 'snapshot', snapshotResponder(9));
     await expect(
       deckApplyTool.handler(
-        { classroom: 'org/x', slide_id: SLIDE_ID, expected_sha: 'live:4', ops: [UPDATE_OP] },
+        { classroom: 'org/x', slide_id: SLIDE_ID, expected_sha: 'live:1.4', ops: [UPDATE_OP] },
         CTX
       )
     ).rejects.toMatchObject({ code: 'CONTENT_CONFLICT' });
@@ -312,7 +312,7 @@ describe('live apply', () => {
     }));
     const error = await deckApplyTool
       .handler(
-        { classroom: 'org/x', slide_id: SLIDE_ID, expected_sha: 'live:4', ops: [UPDATE_OP] },
+        { classroom: 'org/x', slide_id: SLIDE_ID, expected_sha: 'live:1.4', ops: [UPDATE_OP] },
         CTX
       )
       .catch((e: unknown) => e);
@@ -333,7 +333,7 @@ describe('live apply', () => {
         {
           classroom: 'org/x',
           slide_id: SLIDE_ID,
-          expected_sha: 'live:4',
+          expected_sha: 'live:1.4',
           sha_source: 'live',
           ops: [UPDATE_OP],
         },
@@ -357,7 +357,7 @@ describe('per-slide staleness check', () => {
       body: { epoch: 1, version, live: true, content: deck },
     }));
   const read = () => deckOutlineTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID }, CTX);
-  const apply = (ops: unknown[], expected_sha = 'live:4') =>
+  const apply = (ops: unknown[], expected_sha = 'live:1.4') =>
     deckApplyTool.handler(
       { classroom: 'org/x', slide_id: SLIDE_ID, expected_sha, ops: ops as never },
       CTX
@@ -394,6 +394,48 @@ describe('per-slide staleness check', () => {
     });
   });
 
+  it('a pure insert may omit expected_sha; an update may not', async () => {
+    const insert = { op: 'insert', slides: [{ html: '<p>New</p>' }], position: { at: 'end' } };
+    const ok1 = parse(
+      await deckApplyTool.handler(
+        { classroom: 'org/x', slide_id: SLIDE_ID, ops: [insert] as never },
+        CTX
+      )
+    );
+    expect(ok1.committed_to).toBe('live');
+    await expect(
+      deckApplyTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID, ops: [UPDATE_OP] }, CTX)
+    ).rejects.toMatchObject({ code: 'EXPECTED_SHA_REQUIRED' });
+  });
+
+  it('after an insert the dry-run view is not cached: a follow-up gets the strict check', async () => {
+    serve(4, DECK());
+    await read();
+    const insert = { op: 'insert', slides: [{ html: '<p>New</p>' }], position: { at: 'end' } };
+    const first = parse(await apply([insert]));
+    expect(first.new_sha).toBe('live:1.5');
+    serve(7, DECK());
+    await expect(apply([UPDATE_OP], 'live:1.5')).rejects.toMatchObject({
+      code: 'CONTENT_CONFLICT',
+    });
+  });
+
+  it('without an insert the agent view is cached for the follow-up', async () => {
+    serve(4, DECK());
+    await read();
+    const first = parse(await apply([UPDATE_OP]));
+    expect(first.new_sha).toBe('live:1.5');
+    serve(7, {
+      ...DECK(),
+      slides: [
+        { id: 'aaa', html: '<h1>Hi all</h1>' },
+        { id: 'bbb', html: UPDATE_OP.html },
+      ],
+    });
+    const second = parse(await apply([{ ...UPDATE_OP, html: '<p>Again</p>' }], 'live:1.5'));
+    expect(second.success).toBe(true);
+  });
+
   it('falls back to the strict check on a cache miss', async () => {
     serve(9, DECK());
     await expect(apply([UPDATE_OP])).rejects.toMatchObject({ code: 'CONTENT_CONFLICT' });
@@ -423,7 +465,7 @@ describe('live preview accept', () => {
     const result = parse(
       await deckPreviewAcceptTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID }, CTX)
     );
-    expect(result).toMatchObject({ merged: true, committed_to: 'live', new_sha: 'live:6' });
+    expect(result).toMatchObject({ merged: true, committed_to: 'live', version: 6 });
     expect(calls.find(call => call.method === 'POST')).toMatchObject({
       path: `/internal/deck/${SLIDE_ID}/merge-preview`,
       body: {
@@ -434,6 +476,18 @@ describe('live preview accept', () => {
     });
     expect(mocks.discardDeckPreview).toHaveBeenCalledTimes(1);
     expect(mocks.acceptDeckPreview).not.toHaveBeenCalled();
+  });
+
+  it('keeps the preview when it gained commits during the accept', async () => {
+    route('POST', 'merge-preview', () => ({ status: 200, body: { applied: true, version: 6 } }));
+    mocks.compareBranches
+      .mockResolvedValueOnce({ merge_base_sha: 'base-commit', head_sha: 'head-1', ahead_by: 1 })
+      .mockResolvedValueOnce({ merge_base_sha: 'base-commit', head_sha: 'head-2', ahead_by: 2 });
+    const result = parse(
+      await deckPreviewAcceptTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID }, CTX)
+    );
+    expect(result).toMatchObject({ merged: true, preview_kept: true });
+    expect(mocks.discardDeckPreview).not.toHaveBeenCalled();
   });
 
   it('a conflict returns units + order_conflict and keeps the preview', async () => {

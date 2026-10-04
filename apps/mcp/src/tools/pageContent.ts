@@ -33,7 +33,8 @@ import {
   CollabRequestError,
   actorFor,
   fetchSnapshot,
-  liveEnvFor,
+  liveStateFor,
+  requireLiveEnv,
   liveSha,
   liveWriteError,
   parseLiveVersion,
@@ -42,7 +43,8 @@ import {
   postOps,
   type CollabEnv,
 } from '../collab/client.ts';
-import { assertLiveVersionArg, checkLiveVersion, rememberSnapshot } from '../collab/liveCheck.ts';
+import { assertLivePin, checkLivePin, rememberSnapshot } from '../collab/liveCheck.ts';
+import { normalizePageBlocks } from '../collab/pageSchema.ts';
 import {
   REPO_REST_MAX_BYTES,
   formatMegabytes,
@@ -259,6 +261,10 @@ async function resolveReadRef(
 
 // ─── Live editing (classrooms with collab_enabled) ───────────────────────────
 
+const LIVE_UNCONFIGURED_NOTE =
+  'The live editing service is not configured here, so this is the last saved version from ' +
+  "git — it may be behind the live page. Live edits are refused; mode: 'preview' still works.";
+
 /** Said whenever a read falls back to git because the live service is down. */
 const LIVE_FALLBACK_NOTE =
   'The live editing service did not answer, so this is the last saved version from git — it ' +
@@ -271,12 +277,13 @@ const LIVE_FALLBACK_NOTE =
  * cannot hold (legacy HTML, no content file) — git then answers as today.
  */
 async function readLivePage(
-  env: CollabEnv,
+  env: CollabEnv | null,
   page: PageWithRepoRecord
 ): Promise<{ snapshot: SnapshotResponse<'page'> } | { fallbackNote: string | null }> {
+  if (!env) return { fallbackNote: LIVE_UNCONFIGURED_NOTE };
   try {
     const snapshot = await fetchSnapshot(env, 'page', page.id);
-    rememberSnapshot('page', page.id, snapshot.version, snapshot.content);
+    rememberSnapshot('page', page.id, snapshot.epoch, snapshot.version, snapshot.content);
     return { snapshot };
   } catch (error) {
     if (error instanceof CollabRequestError) {
@@ -297,9 +304,10 @@ async function readLivePage(
 /** The fields every live read reports about the version it read. */
 function liveVersionFields(snapshot: SnapshotResponse<'page'>) {
   return {
-    sha: liveSha(snapshot.version),
+    sha: liveSha(snapshot.epoch, snapshot.version),
     sha_source: 'live',
     version: snapshot.version,
+    epoch: snapshot.epoch,
     live: { open_now: snapshot.live },
   };
 }
@@ -321,7 +329,7 @@ export const pageContentOutlineTool: ToolDefinition<PageContentOutlineArgs> = {
     'cover image and pending-preview status. Start here, then fetch only the blocks you need with ' +
     'page_content_get (block_ids) and edit them with page_content_apply — never round-trip ' +
     "whole documents. Pass at: 'preview' to outline the pending preview instead of main. In a " +
-    "classroom with live editing, main is the live page and sha is its version ('live:N').",
+    "classroom with live editing, main is the live page and sha is its version ('live:E.V').",
   scope: 'read',
   roles: OWNER_TEACHER,
   inputSchema: {
@@ -349,10 +357,10 @@ export const pageContentOutlineTool: ToolDefinition<PageContentOutlineArgs> = {
         : undefined;
 
     // Live editing: 'main' is the live page, read from the collab server.
-    const env = liveEnvFor(page.classroom);
+    const liveState = liveStateFor(page.classroom);
     let fallback: Record<string, unknown> = {};
-    if (env && at === 'main') {
-      const live = await readLivePage(env, page);
+    if (liveState && at === 'main') {
+      const live = await readLivePage(liveState.env, page);
       if ('snapshot' in live) {
         const outline = flattenOutline(live.snapshot.content.blocks as BlockNode[]);
         const cover = live.snapshot.content.coverImage;
@@ -434,7 +442,7 @@ export const pageContentGetTool: ToolDefinition<PageContentGetArgs> = {
     '(from page_content_outline) to fetch only specific blocks — preferred on large pages. ' +
     'Omitting block_ids returns the whole document. The returned sha is the expected_sha for ' +
     "a subsequent page_content_apply. Pass at: 'preview' to read the pending preview branch. " +
-    "In a classroom with live editing, main is the live page and sha is its version ('live:N').",
+    "In a classroom with live editing, main is the live page and sha is its version ('live:E.V').",
   scope: 'read',
   roles: OWNER_TEACHER,
   inputSchema: {
@@ -458,10 +466,10 @@ export const pageContentGetTool: ToolDefinition<PageContentGetArgs> = {
     const ref = await resolveReadRef(page, args.at ?? 'main');
 
     // Live editing: 'main' is the live page, read from the collab server.
-    const env = liveEnvFor(page.classroom);
+    const liveState = liveStateFor(page.classroom);
     let fallback: Record<string, unknown> = {};
-    if (env && !ref) {
-      const live = await readLivePage(env, page);
+    if (liveState && !ref) {
+      const live = await readLivePage(liveState.env, page);
       if ('snapshot' in live) {
         return ok(
           selectBlocks(
@@ -593,6 +601,55 @@ const STRUCTURE_REPAIR_NOTE =
   'column cannot contain another columnList — a nested one is lifted out to sit ' +
   'after the row). Re-read the outline to see the resulting structure.';
 
+/** Every block in the tree carries a string id. */
+function allIdsPresent(blocks: unknown): boolean {
+  if (!Array.isArray(blocks)) return true;
+  return blocks.every(
+    block =>
+      !!block &&
+      typeof block === 'object' &&
+      typeof (block as BlockNode).id === 'string' &&
+      allIdsPresent((block as BlockNode).children)
+  );
+}
+
+/**
+ * Cache the agent's view of the version its apply produced — the snapshot it
+ * READ plus its own ops, normalized through the page schema — so a follow-up
+ * apply pinned to `new_sha` is checked per block, and an edit a person made
+ * after the agent's read is still caught. Skipped (the follow-up then gets
+ * the strict check) when there is no read snapshot, or when ids would be
+ * minted: those depend on positions in the live document, not in the view.
+ */
+async function rememberAgentView(
+  pageId: string,
+  epoch: number,
+  version: number,
+  agentView: unknown,
+  ops: PageContentOp[]
+): Promise<void> {
+  if (!agentView) return;
+  const view = agentView as { blocks: unknown[]; coverImage: unknown };
+  let reminted = false;
+  let next: unknown[];
+  try {
+    next = ClassmojiService.pageContent.applyBlockOps(
+      view.blocks as BlockNode[],
+      ops as Parameters<typeof ClassmojiService.pageContent.applyBlockOps>[1],
+      { onIdRemint: () => (reminted = true) }
+    );
+  } catch {
+    return;
+  }
+  if (reminted || !allIdsPresent(next)) return;
+  const normalized = await normalizePageBlocks(next);
+  if (!normalized) return;
+  rememberSnapshot('page', pageId, epoch, version, {
+    blocks: normalized,
+    coverImage: view.coverImage,
+  });
+}
+
 /**
  * page_content_apply in live mode: the ops go into the live document through
  * the collab server, as the caller (peers see them as `<name> (agent)`).
@@ -606,15 +663,15 @@ async function applyLive(
   args: PageContentApplyArgs,
   ctx: ToolContext
 ) {
-  assertLiveVersionArg('page', args.expected_sha);
+  assertLivePin('page', args.expected_sha, args.ops);
   let snapshot: SnapshotResponse<'page'>;
   try {
     snapshot = await fetchSnapshot(env, 'page', page.id);
   } catch (error) {
     throw liveWriteError(error, 'page');
   }
-  // Per-block staleness: only what the ops touch must be as the agent read it.
-  checkLiveVersion('page', page.id, args.expected_sha, snapshot, args.ops);
+  // Only what the ops depend on must still be as the agent read it.
+  const { agentView } = checkLivePin('page', page.id, args.expected_sha, snapshot, args.ops);
 
   const priorBlocks = snapshot.content.blocks as BlockNode[];
   const idRemints: Array<{ op_index: number; from: string; to: string }> = [];
@@ -644,12 +701,7 @@ async function applyLive(
     throw liveWriteError(error, 'page');
   }
   const after = ClassmojiService.pageContent.ensureBlockIds(newBlocks) as BlockNode[];
-  // The agent's view of the new version: what it read plus its own ops, so a
-  // follow-up apply against `new_sha` is checked per block like any other.
-  rememberSnapshot('page', page.id, version, {
-    blocks: after,
-    coverImage: snapshot.content.coverImage,
-  });
+  await rememberAgentView(page.id, snapshot.epoch, version, agentView, args.ops);
 
   const applied = summarizeOps(args.ops);
   for (const remint of idRemints) {
@@ -671,7 +723,7 @@ async function applyLive(
       tool: 'page_content_apply',
       ops: applied,
       ...(args.expected_sha ? { expected_sha: args.expected_sha } : {}),
-      new_sha: liveSha(version),
+      new_sha: liveSha(snapshot.epoch, version),
       committed_to: 'live',
       ...(hasDestructiveOps ? { prior_block_count: countBlocks(priorBlocks) } : {}),
       ...(structureRepairs.length > 0 ? { structure_repairs: structureRepairs } : {}),
@@ -680,7 +732,7 @@ async function applyLive(
 
   return ok({
     success: true,
-    new_sha: liveSha(version),
+    new_sha: liveSha(snapshot.epoch, version),
     version,
     block_count: countBlocks(after),
     committed_to: 'live',
@@ -699,8 +751,8 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
     'Applies granular block operations (update / insert / move / delete / replace_all) to a ' +
     "page's BlockNote content. Pass expected_sha from page_content_get or " +
     'page_content_outline; a CONTENT_CONFLICT error means the content changed — re-read for a ' +
-    "fresh sha. In live mode it is the version ('live:N'): optional, but passing it refuses " +
-    '(BLOCK_CHANGED) an edit to blocks someone changed since your read. ' +
+    "fresh sha. In live mode it is the version ('live:E.V'), required except for pure inserts; ops on " +
+    'blocks someone changed since your read are refused (BLOCK_CHANGED). ' +
     "mode: 'live' edits the page itself (with live editing on, people in the editor " +
     "see it at once); mode: 'preview' stages the edits — students never see them — for review " +
     'as a rendered page with the changed blocks highlighted, then page_preview_accept. Default: ' +
@@ -718,8 +770,8 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
       .optional()
       .describe(
         'Content sha from the last page_content_get/outline read (optimistic lock). Required ' +
-          "except in live mode, where it is the version ('live:N') and protects edits people " +
-          'made since your read to the blocks your ops touch'
+          "except for pure inserts in live mode, where it is the version ('live:E.V') and " +
+          'protects edits people made since your read to the blocks your ops touch'
       ),
     ops: z
       .array(opSchema)
@@ -746,7 +798,7 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
 
     // Live editing: 'live' goes into the live document through the collab
     // server; git main is only its checkpoint and is never written here.
-    const env = liveEnvFor(page.classroom);
+    const liveState = liveStateFor(page.classroom);
     const commit =
       args.mode !== undefined ? (args.mode === 'live' ? 'direct' : 'preview') : args.commit;
 
@@ -756,7 +808,9 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
         ? 'preview'
         : 'main';
 
-    if (env && committedTo === 'main') return applyLive(env, page, args, ctx);
+    if (liveState && committedTo === 'main') {
+      return applyLive(requireLiveEnv(liveState), page, args, ctx);
+    }
     if (!args.expected_sha) {
       throw new ToolError(
         'invalid_params',
@@ -765,7 +819,7 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
     }
     // A live read's version stands in for main's sha when a NEW preview is
     // cut from main: the agent read the live page, which has no git sha.
-    const liveRead = env !== null && parseLiveVersion(args.expected_sha) !== null;
+    const liveRead = liveState !== null && parseLiveVersion(args.expected_sha) !== null;
 
     // Stacking: when a preview already exists and we're committing to it,
     // load FROM it so this apply builds on the pending changes.
@@ -1065,9 +1119,23 @@ async function acceptPreviewLive(
     });
   }
 
+  // Delete the branch only if it is still exactly what was merged: a commit
+  // that landed on it during the accept would otherwise be lost unseen.
   let previewKept: string | null = null;
   try {
-    await pageContent.discardPreview(page);
+    const nowAt = await ContentService.compareBranches({
+      gitOrganization: page.classroom.git_organization as never,
+      repo: page.classroom.content_repo,
+      base: 'main',
+      head: branch,
+    });
+    if (nowAt && nowAt.head_sha !== comparison.head_sha) {
+      previewKept =
+        'The preview is merged into the live page, but new edits landed on it during the ' +
+        'accept, so it was kept with them — review it and accept again, or discard it.';
+    } else if (nowAt) {
+      await pageContent.discardPreview(page);
+    }
   } catch (error) {
     console.warn('[page_preview_accept] Merged live but could not delete the preview:', error);
     previewKept =
@@ -1084,7 +1152,7 @@ async function acceptPreviewLive(
       outcome: 'merged',
       committed_to: 'live',
       semantic: true,
-      new_sha: liveSha(outcome.version),
+      new_version: outcome.version,
       ...(args.resolutions?.length
         ? { resolutions: args.resolutions.map(({ id, choose }) => ({ id, choose })) }
         : {}),
@@ -1095,7 +1163,6 @@ async function acceptPreviewLive(
     success: true,
     merged: true,
     committed_to: 'live',
-    new_sha: liveSha(outcome.version),
     version: outcome.version,
     ...(args.resolutions?.length ? { resolved: args.resolutions } : {}),
     ...(previewKept ? { preview_kept: true, message: previewKept } : {}),
@@ -1173,8 +1240,8 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewAcceptArgs> = {
     }
 
     // Live editing: the preview merges into the live document, not main.
-    const env = liveEnvFor(page.classroom);
-    if (env) return acceptPreviewLive(env, page, args, ctx);
+    const liveState = liveStateFor(page.classroom);
+    if (liveState) return acceptPreviewLive(requireLiveEnv(liveState), page, args, ctx);
 
     // ── Resolutions path: apply chooser decisions to the conflicted merge ──
     if (args.resolutions?.length) {
@@ -1651,7 +1718,7 @@ async function setCoverLive(
       tool: 'page_cover_set',
       ...(nextCover ? { url: nextCover.url, position: nextCover.position } : { removed: true }),
       ...(current ? { prior_url: current.url, prior_position: current.position } : {}),
-      new_sha: liveSha(version),
+      new_sha: liveSha(snapshot.epoch, version),
       committed_to: 'live',
     } as Prisma.InputJsonValue,
   });
@@ -1661,7 +1728,7 @@ async function setCoverLive(
   return ok({
     success: true,
     cover_image: await coverPayload(page, nextCover),
-    new_sha: liveSha(version),
+    new_sha: liveSha(snapshot.epoch, version),
     version,
   });
 }
@@ -1733,8 +1800,8 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
 
     // Live editing: the cover lives in the live document's meta, written
     // through the collab server; git is never touched here.
-    const env = liveEnvFor(page.classroom);
-    if (env) return setCoverLive(env, page, args, ctx);
+    const liveState = liveStateFor(page.classroom);
+    if (liveState) return setCoverLive(requireLiveEnv(liveState), page, args, ctx);
 
     const content = await ClassmojiService.pageContent.loadPageContent(page, { skipCache: true });
 

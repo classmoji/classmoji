@@ -4,12 +4,11 @@
  * write the LIVE document through the collab server's internal HTTP API
  * (`${COLLAB_URL}/internal`, header `x-collab-secret`) instead of git main —
  * main is only the last checkpoint there. Unflagged classrooms never reach
- * this module: `liveEnvFor` checks the flag before anything else.
+ * this module: `liveStateFor` checks the flag before anything else.
  *
- * Versions: a live document has no blob sha. Reads report its
- * `collab_docs.version` as `live:<n>` in the `sha` field (the same marker the
- * pages app uses for a live merge's `ours_sha`), and writes take it back as
- * `expected_sha`.
+ * Versions: a live document has no blob sha. Reads report its epoch and
+ * `collab_docs.version` as `live:<epoch>.<version>` in the `sha` field, and
+ * writes take it back as `expected_sha` (see liveCheck.ts for the check).
  */
 
 import {
@@ -41,67 +40,115 @@ export function classroomCollabEnabled(classroom: unknown): boolean {
 let warnedMissingEnv = false;
 
 /**
- * The collab env when this classroom edits live, else null. The flag is read
- * FIRST: an unflagged classroom never resolves the env, so it never talks to
- * the collab server. Without the collab env (production with COLLAB_URL or
- * COLLAB_INTERNAL_SECRET unset) live editing is off everywhere — the pages
- * and slides apps fall back to their git editors the same way — so the tools
- * keep today's git paths, with one error in the log.
+ * Whether this classroom edits live, and how to reach the collab server:
+ * `null` = not a live classroom (the flag is read FIRST, so an unflagged
+ * classroom never resolves the env and never talks to collab); `{ env }` =
+ * live, where `env` is null when the collab env is not configured (production
+ * with COLLAB_URL or COLLAB_INTERNAL_SECRET unset). Then reads fall back to
+ * git, labelled, and writes are refused (LIVE_UNAVAILABLE) — git main is only
+ * the live document's checkpoint, so writing it would be lost or fought over.
  */
-export function liveEnvFor(classroom: unknown): CollabEnv | null {
+export function liveStateFor(classroom: unknown): { env: CollabEnv | null } | null {
   if (!classroomCollabEnabled(classroom)) return null;
   const env = resolveCollabEnv();
   if (!env && !warnedMissingEnv) {
     warnedMissingEnv = true;
-    console.error('[mcp] Live editing is off: COLLAB_URL and COLLAB_INTERNAL_SECRET must be set.');
+    console.error(
+      '[mcp] Live editing is on for a classroom but COLLAB_URL / COLLAB_INTERNAL_SECRET are unset.'
+    );
   }
-  return env;
+  return { env };
+}
+
+/** The collab env for a live WRITE, or LIVE_UNAVAILABLE when unconfigured. */
+export function requireLiveEnv(state: { env: CollabEnv | null }): CollabEnv {
+  if (state.env) return state.env;
+  throw new ToolError(
+    'internal',
+    'This classroom edits content live, but the live editing service is not configured here, ' +
+      "so nothing was changed. mode: 'preview' still works.",
+    'LIVE_UNAVAILABLE'
+  );
 }
 
 // ─── Versions ────────────────────────────────────────────────────────────────
 
 const LIVE_PREFIX = 'live:';
 
-/** The `sha` a read reports for a live document. */
-export function liveSha(version: number): string {
-  return `${LIVE_PREFIX}${version}`;
+/**
+ * The `sha` a read reports for a live document: `live:<epoch>.<version>`.
+ * The epoch changes when the document is reseeded from git, so a version
+ * from before a reseed never matches one after it.
+ */
+export function liveSha(epoch: number, version: number): string {
+  return `${LIVE_PREFIX}${epoch}.${version}`;
 }
 
-/** `live:12` or `12` → 12; anything else (a git sha) → null. */
-export function parseLiveVersion(value: string | undefined | null): number | null {
+export interface LivePin {
+  /** null for the older version-only form (`live:12`, `12`). */
+  epoch: number | null;
+  version: number;
+}
+
+/** `live:3.12` → {3, 12}; `live:12` or `12` → {null, 12}; a git sha → null. */
+export function parseLiveVersion(value: string | undefined | null): LivePin | null {
   if (!value) return null;
   const raw = value.startsWith(LIVE_PREFIX) ? value.slice(LIVE_PREFIX.length) : value;
-  if (!/^\d{1,15}$/.test(raw)) return null;
-  return Number(raw);
+  const both = /^(\d{1,15})\.(\d{1,15})$/.exec(raw);
+  if (both) return { epoch: Number(both[1]), version: Number(both[2]) };
+  if (/^\d{1,15}$/.test(raw)) return { epoch: null, version: Number(raw) };
+  return null;
 }
 
 // ─── Version errors ───
 
-/** CONTENT_CONFLICT for a live apply whose version is stale or missing. */
+const readTool = (kind: 'page' | 'deck') =>
+  kind === 'page' ? 'page_content_get/outline' : 'deck_get/deck_outline';
+
+/** CONTENT_CONFLICT for a live apply whose pin is stale. */
 export function liveVersionConflict(
   expected: string,
-  current: number,
+  current: { epoch: number; version: number },
   kind: 'page' | 'deck'
 ): ToolError {
-  const read = kind === 'page' ? 'page_content_get/outline' : 'deck_get/deck_outline';
   return new ToolError(
     'invalid_params',
     `The live ${kind} changed since you read it (you read '${expected}', it is now ` +
-      `'${liveSha(current)}') — someone may be editing it right now. Re-read with ${read} and ` +
-      "retry; for a larger edit use mode: 'preview'.",
+      `'${liveSha(current.epoch, current.version)}') — someone may be editing it right now. ` +
+      `Re-read with ${readTool(kind)} and retry; for a larger edit use mode: 'preview'.`,
+    'CONTENT_CONFLICT'
+  );
+}
+
+/** CONTENT_CONFLICT for a pin from before the document was reloaded from git. */
+export function liveEpochConflict(kind: 'page' | 'deck'): ToolError {
+  return new ToolError(
+    'invalid_params',
+    `The ${kind} was reloaded from git since you read it, so that version no longer applies — ` +
+      `re-read with ${readTool(kind)} and retry.`,
     'CONTENT_CONFLICT'
   );
 }
 
 /** expected_sha that is not a live version, in live mode. */
 export function notALiveVersion(kind: 'page' | 'deck'): ToolError {
-  const read =
-    kind === 'page' ? 'page_content_get or page_content_outline' : 'deck_get or deck_outline';
   return new ToolError(
     'invalid_params',
     `This ${kind} is edited live: expected_sha must be the live version a read returned ` +
-      `(like 'live:12'), not a git sha — call ${read} for it.`,
+      `(like 'live:1.12'), not a git sha — call ${readTool(kind)} for it.`,
     'CONTENT_CONFLICT'
+  );
+}
+
+/** Live ops that change or remove existing content, sent without a pin. */
+export function pinRequired(kind: 'page' | 'deck'): ToolError {
+  const what = kind === 'page' ? 'blocks' : 'slides';
+  return new ToolError(
+    'invalid_params',
+    `In live mode expected_sha is required for ops that change, move or remove existing ${what} ` +
+      `(only pure inserts may omit it) — pass the version from ${readTool(kind)}, so edits ` +
+      'people made since your read are not overwritten.',
+    'EXPECTED_SHA_REQUIRED'
   );
 }
 
@@ -272,6 +319,16 @@ export async function postMergePreview(
   }
 }
 
+/** `POST /internal/:kind/:id/close`: checkpoint now, then close every connection. */
+export function postClose(
+  env: CollabEnv,
+  kind: CollabKind,
+  id: string,
+  reason: string
+): Promise<{ closed: number }> {
+  return collabRequest<{ closed: number }>(env, 'POST', docPath(kind, id, 'close'), { reason });
+}
+
 // ─── Actor ───────────────────────────────────────────────────────────────────
 
 /**
@@ -319,18 +376,22 @@ export function liveWriteError(
   if (error.status === 409 && error.code === 'slide-locked') {
     return slideLockedError(error.body);
   }
-  if (error.status === 422 && error.code === 'legacy-html') {
+  if (
+    error.code === 'legacy-html' ||
+    error.code === 'unparseable-deck' ||
+    error.code === 'content-missing'
+  ) {
+    const why =
+      error.code === 'content-missing'
+        ? `This ${what} has no content file yet`
+        : error.code === 'legacy-html'
+          ? 'This page still stores legacy HTML'
+          : "This deck's HTML cannot be parsed into a structured deck";
     return new ToolError(
       'invalid_params',
-      'This page still stores legacy HTML, so it cannot be edited live. Open it once in the web ' +
-        'editor to migrate it to BlockNote.'
-    );
-  }
-  if (error.status === 422 && error.code === 'unparseable-deck') {
-    return new ToolError(
-      'invalid_params',
-      "This deck's HTML could not be parsed into a structured deck. Open it once in the web " +
-        'slides editor and save to migrate it.'
+      `${why}, so it cannot be edited live and nothing was changed. Use mode: 'preview' ` +
+        '(for a page, a replace_all op writes fresh content), or open it once in the web editor.',
+      'LIVE_UNSUPPORTED'
     );
   }
   if (error.status === 400 || error.status === 422) {

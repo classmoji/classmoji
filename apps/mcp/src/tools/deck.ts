@@ -74,7 +74,8 @@ import {
   CollabRequestError,
   actorFor,
   fetchSnapshot,
-  liveEnvFor,
+  liveStateFor,
+  requireLiveEnv,
   liveSha,
   liveWriteError,
   parseLiveVersion,
@@ -82,7 +83,7 @@ import {
   postOps,
   type CollabEnv,
 } from '../collab/client.ts';
-import { assertLiveVersionArg, checkLiveVersion, rememberSnapshot } from '../collab/liveCheck.ts';
+import { assertLivePin, checkLivePin, rememberSnapshot } from '../collab/liveCheck.ts';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import {
@@ -204,6 +205,10 @@ function previewReadRef(
 
 // ─── Live editing (classrooms with collab_enabled) ───────────────────────────
 
+const LIVE_UNCONFIGURED_NOTE =
+  'The live editing service is not configured here, so this is the last saved version from ' +
+  "git — it may be behind the live deck. Live edits are refused; mode: 'preview' still works.";
+
 const LIVE_FALLBACK_NOTE =
   'The live editing service did not answer, so this is the last saved version from git — it ' +
   "may be behind the live deck. Live edits fail until the service is back; mode: 'preview' " +
@@ -215,12 +220,13 @@ const LIVE_FALLBACK_NOTE =
  * cannot hold (unparseable HTML, no content yet) — git then answers as today.
  */
 async function readLiveDeck(
-  env: CollabEnv,
+  env: CollabEnv | null,
   slide: SlideWithRepoRecord
 ): Promise<{ snapshot: SnapshotResponse<'deck'> } | { fallbackNote: string | null }> {
+  if (!env) return { fallbackNote: LIVE_UNCONFIGURED_NOTE };
   try {
     const snapshot = await fetchSnapshot(env, 'deck', slide.id);
-    rememberSnapshot('deck', slide.id, snapshot.version, snapshot.content);
+    rememberSnapshot('deck', slide.id, snapshot.epoch, snapshot.version, snapshot.content);
     return { snapshot };
   } catch (error) {
     if (error instanceof CollabRequestError) {
@@ -244,9 +250,10 @@ function liveDeckHead(slide: SlideWithRepoRecord, snapshot: SnapshotResponse<'de
   return {
     slide_id: slide.id,
     format: 'deck',
-    sha: liveSha(snapshot.version),
+    sha: liveSha(snapshot.epoch, snapshot.version),
     sha_source: 'live',
     version: snapshot.version,
+    epoch: snapshot.epoch,
     live: { open_now: snapshot.live },
     at: 'main',
     theme: deck.theme,
@@ -336,7 +343,7 @@ export const deckOutlineTool: ToolDefinition<DeckOutlineArgs> = {
     'content sha + sha_source, and pending-preview status. Start here, then fetch only the ' +
     'slides you need with deck_get (slide_ids) and edit them with deck_apply — never ' +
     "round-trip whole decks. Pass at: 'preview' to outline the pending preview instead of main. " +
-    "In a classroom with live editing, main is the live deck and sha is its version ('live:N').",
+    "In a classroom with live editing, main is the live deck and sha is its version ('live:E.V').",
   scope: 'read',
   roles: TEACHING_TEAM,
   inputSchema: {
@@ -356,10 +363,10 @@ export const deckOutlineTool: ToolDefinition<DeckOutlineArgs> = {
     const ref = previewReadRef(slide, args.at ?? 'main', status);
 
     // Live editing: 'main' is the live deck, read from the collab server.
-    const env = liveEnvFor(slide.classroom);
+    const liveState = liveStateFor(slide.classroom);
     let fallback: Record<string, unknown> = {};
-    if (env && !ref) {
-      const live = await readLiveDeck(env, slide);
+    if (liveState && !ref) {
+      const live = await readLiveDeck(liveState.env, slide);
       if ('snapshot' in live) {
         const { slide_id, ...head } = liveDeckHead(slide, live.snapshot);
         return ok({
@@ -428,7 +435,7 @@ export const deckGetTool: ToolDefinition<DeckGetArgs> = {
     'large decks. Omitting slide_ids returns the whole deck incl. config and custom CSS. The ' +
     'returned sha + sha_source are the expected_sha/sha_source for a subsequent deck_apply. ' +
     "Pass at: 'preview' to read the pending preview branch. In a classroom with live editing, " +
-    "main is the live deck and sha is its version ('live:N', sha_source 'live').",
+    "main is the live deck and sha is its version ('live:E.V', sha_source 'live').",
   scope: 'read',
   roles: TEACHING_TEAM,
   inputSchema: {
@@ -454,10 +461,10 @@ export const deckGetTool: ToolDefinition<DeckGetArgs> = {
     const ref = previewReadRef(slide, args.at ?? 'main', status);
 
     // Live editing: 'main' is the live deck, read from the collab server.
-    const env = liveEnvFor(slide.classroom);
+    const liveState = liveStateFor(slide.classroom);
     let fallback: Record<string, unknown> = {};
-    if (env && !ref) {
-      const live = await readLiveDeck(env, slide);
+    if (liveState && !ref) {
+      const live = await readLiveDeck(liveState.env, slide);
       if ('snapshot' in live) {
         return ok(
           selectSlides(liveDeckHead(slide, live.snapshot), live.snapshot.content, args.slide_ids)
@@ -549,15 +556,15 @@ async function applyDeckLive(
   args: DeckApplyArgs,
   ctx: ToolContext
 ) {
-  assertLiveVersionArg('deck', args.expected_sha);
+  assertLivePin('deck', args.expected_sha, args.ops);
   let snapshot: SnapshotResponse<'deck'>;
   try {
     snapshot = await fetchSnapshot(env, 'deck', slide.id);
   } catch (error) {
     throw liveWriteError(error, 'deck');
   }
-  // Per-slide staleness: only what the ops touch must be as the agent read it.
-  checkLiveVersion('deck', slide.id, args.expected_sha, snapshot, args.ops);
+  // Only what the ops depend on must still be as the agent read it.
+  const { agentView } = checkLivePin('deck', slide.id, args.expected_sha, snapshot, args.ops);
 
   let newDeck: DeckJson;
   let applied: Array<Record<string, unknown>>;
@@ -587,9 +594,21 @@ async function applyDeckLive(
   } catch (error) {
     throw liveWriteError(error, 'deck');
   }
-  // The agent's view of the new version: what it read plus its own ops, so a
-  // follow-up apply against `new_sha` is checked per slide like any other.
-  rememberSnapshot('deck', slide.id, version, newDeck);
+  // Cache the agent's view of the new version — the snapshot it READ plus its
+  // own ops — so a follow-up pinned to `new_sha` is checked per slide and a
+  // person's edit since the read is still caught. Not after an insert: the
+  // live deck minted different ids than this dry run (the follow-up then gets
+  // the strict check; re-reading caches the real ids).
+  if (agentView && !hasInsert) {
+    try {
+      const view = applyDeckOps(agentView as DeckJson, args.ops, {
+        starterCustomCss: slideService.STARTER_CUSTOM_CSS,
+      }).deck;
+      rememberSnapshot('deck', slide.id, snapshot.epoch, version, view);
+    } catch {
+      // The ops do not replay on the read snapshot: nothing to cache.
+    }
+  }
 
   const hasDestructiveOps = args.ops.some(op => op.op === 'delete');
   await writeAudit(ctx, {
@@ -600,7 +619,7 @@ async function applyDeckLive(
       tool: 'deck_apply',
       ops: applied,
       ...(args.expected_sha ? { expected_sha: args.expected_sha } : {}),
-      new_sha: liveSha(version),
+      new_sha: liveSha(snapshot.epoch, version),
       committed_to: 'live',
       ...(hasDestructiveOps ? { prior_slide_count: countSlides(snapshot.content.slides) } : {}),
     } as Prisma.InputJsonValue,
@@ -608,7 +627,7 @@ async function applyDeckLive(
 
   return ok({
     success: true,
-    new_sha: liveSha(version),
+    new_sha: liveSha(snapshot.epoch, version),
     sha_source: 'live',
     version,
     committed_to: 'live',
@@ -628,8 +647,8 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
     'Applies granular slide operations (update / insert / move / delete / reorder / set_theme) ' +
     'to a deck. Pass expected_sha (+ sha_source) from deck_get or ' +
     'deck_outline; a CONTENT_CONFLICT error means the deck changed — re-read for a fresh sha. ' +
-    "In live mode it is the version ('live:N'): optional, but passing it refuses " +
-    '(BLOCK_CHANGED) an edit to slides someone changed since your read. ' +
+    "In live mode it is the version ('live:E.V'), required except for pure inserts; ops on " +
+    'slides someone changed since your read are refused (BLOCK_CHANGED). ' +
     "mode: 'live' edits the deck itself (with live editing on, people in the editor see it at " +
     "once, and a slide someone is editing refuses the call); mode: 'preview' stages the edits " +
     "— students never see them — for review as rendered slides at the deck's ?preview=1 URL " +
@@ -652,8 +671,8 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
       .optional()
       .describe(
         'Content sha from the last deck_get/deck_outline read (optimistic lock). Required ' +
-          "except in live mode, where it is the version ('live:N') and protects edits people " +
-          'made since your read to the slides your ops touch'
+          "except for pure inserts in live mode, where it is the version ('live:E.V') and " +
+          'protects edits people made since your read to the slides your ops touch'
       ),
     sha_source: z
       .enum(['deck', 'legacy_html', 'live'])
@@ -685,7 +704,7 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
 
     // Live editing: 'live' goes into the live deck through the collab server;
     // git main is only its checkpoint and is never written here.
-    const env = liveEnvFor(slide.classroom);
+    const liveState = liveStateFor(slide.classroom);
     const commit =
       args.mode !== undefined ? (args.mode === 'live' ? 'direct' : 'preview') : args.commit;
 
@@ -695,7 +714,9 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
         ? 'preview'
         : 'main';
 
-    if (env && committedTo === 'main') return applyDeckLive(env, slide, args, ctx);
+    if (liveState && committedTo === 'main') {
+      return applyDeckLive(requireLiveEnv(liveState), slide, args, ctx);
+    }
     if (!args.expected_sha) {
       throw new ToolError(
         'invalid_params',
@@ -705,7 +726,8 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
     // A live read's version stands in for main's sha when a NEW preview is
     // cut from main: the agent read the live deck, which has no git sha.
     const liveRead =
-      env !== null && (args.sha_source === 'live' || parseLiveVersion(args.expected_sha) !== null);
+      liveState !== null &&
+      (args.sha_source === 'live' || parseLiveVersion(args.expected_sha) !== null);
     const shaSource = (args.sha_source ?? 'deck') as DeckShaSource;
 
     // Stacking: when a preview already exists and we're committing to it,
@@ -961,9 +983,23 @@ async function acceptDeckPreviewLive(
     });
   }
 
+  // Delete the branch only if it is still exactly what was merged: a commit
+  // that landed on it during the accept would otherwise be lost unseen.
   let previewKept: string | null = null;
   try {
-    await discardDeckPreview(slide);
+    const nowAt = await ContentService.compareBranches({
+      gitOrganization: slide.classroom.git_organization as never,
+      repo: slide.classroom.content_repo ?? '',
+      base: 'main',
+      head: branch,
+    });
+    if (nowAt && nowAt.head_sha !== comparison.head_sha) {
+      previewKept =
+        'The preview is merged into the live deck, but new edits landed on it during the ' +
+        'accept, so it was kept with them — review it and accept again, or discard it.';
+    } else if (nowAt) {
+      await discardDeckPreview(slide);
+    }
   } catch (error) {
     console.warn('[deck_preview_accept] Merged live but could not delete the preview:', error);
     previewKept =
@@ -980,7 +1016,7 @@ async function acceptDeckPreviewLive(
       outcome: 'merged',
       committed_to: 'live',
       semantic: true,
-      new_sha: liveSha(outcome.version),
+      new_version: outcome.version,
       ...(args.resolutions?.length
         ? { resolutions: args.resolutions.map(({ id, choose }) => ({ id, choose })) }
         : {}),
@@ -991,7 +1027,6 @@ async function acceptDeckPreviewLive(
     success: true,
     merged: true,
     committed_to: 'live',
-    new_sha: liveSha(outcome.version),
     version: outcome.version,
     ...(args.resolutions?.length ? { resolved: args.resolutions } : {}),
     ...(previewKept ? { preview_kept: true, message: previewKept } : {}),
@@ -1072,8 +1107,8 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewAcceptArgs> = {
     }
 
     // Live editing: the preview merges into the live deck, not main.
-    const env = liveEnvFor(slide.classroom);
-    if (env) return acceptDeckPreviewLive(env, slide, args, ctx);
+    const liveState = liveStateFor(slide.classroom);
+    if (liveState) return acceptDeckPreviewLive(requireLiveEnv(liveState), slide, args, ctx);
 
     // ── Resolutions path: apply chooser decisions to the conflicted merge ──
     if (args.resolutions?.length) {
