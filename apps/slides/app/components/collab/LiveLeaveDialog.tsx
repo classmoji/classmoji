@@ -23,6 +23,38 @@ export default function LiveLeaveDialog({
     return () => previous?.focus?.();
   }, []);
 
+  const stayCb = useRef(onStay);
+  stayCb.current = onStay;
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        stayCb.current();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>('button:not([disabled])') ?? []
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const inside = dialogRef.current?.contains(document.activeElement);
+      if (event.shiftKey && (document.activeElement === first || !inside)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !inside)) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  return () => previous?.focus?.();
+  }, []);
+
   const onKeyDown = (event: React.KeyboardEvent) => {
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -56,7 +88,6 @@ export default function LiveLeaveDialog({
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={bodyId}
-        onKeyDown={onKeyDown}
         className="w-[calc(100%-2rem)] max-w-sm rounded-xl bg-white p-5 shadow-xl ring-1 ring-gray-200 dark:bg-gray-800 dark:ring-gray-700"
       >
         <h2 id={titleId} className="font-semibold text-gray-900 dark:text-gray-100">
