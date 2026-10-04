@@ -45,12 +45,13 @@ const UserHeader = () => {
           </Link>
 
           <div className="flex items-center gap-1.5">
+            {/* Hidden until the feedback board launches.
             <Link
               to="/feedback"
               className="hidden sm:inline-flex h-9 items-center rounded-lg px-2.5 text-sm font-medium text-ink-2 no-underline hover:bg-nav-hover hover:text-ink-0 transition-colors"
             >
               Feedback
-            </Link>
+            </Link> */}
             <button
               type="button"
               title="Help & docs"

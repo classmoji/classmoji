@@ -21,7 +21,7 @@ export function StatusLabel({
   return (
     <span
       className={`inline-flex items-center gap-1.5 font-semibold ${STATUS_META[status].ink} ${
-        size === 'md' ? 'text-base' : 'text-xs'
+        size === 'md' ? 'text-sm' : 'text-[12px]'
       }`}
     >
       <Icon className={size === 'md' ? 'h-[18px] w-[18px]' : 'h-3.5 w-3.5'} aria-hidden />

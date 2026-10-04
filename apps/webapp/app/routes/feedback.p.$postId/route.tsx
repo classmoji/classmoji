@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, data, useLoaderData, useNavigate } from 'react-router';
+import { useCallback, useMemo, useState } from 'react';
+import { Link, data, useLoaderData } from 'react-router';
 import {
   BellIcon,
   BellOffIcon,
+  ChevronDownIcon,
   ChevronLeftIcon,
   LinkIcon,
   MessageSquareIcon,
@@ -48,11 +49,10 @@ export const meta = ({ data: loaderData }: Route.MetaArgs) => [
 type CommentSort = 'top' | 'new';
 
 const actionClass =
-  'inline-flex cursor-pointer items-center gap-2.5 rounded-md py-1.5 text-sm text-ink-2 transition-colors duration-150 hover:text-ink-0';
+  'inline-flex cursor-pointer items-center gap-2.5 rounded-md py-1.5 text-[13px] text-ink-2 transition-colors duration-150 hover:text-ink-0';
 
 export default function FeedbackPostPage() {
   const { post, viewerId, isAdmin, signedIn } = useLoaderData<typeof loader>();
-  const navigate = useNavigate();
   const [sort, setSort] = useState<CommentSort>('top');
   const [copied, setCopied] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -71,17 +71,8 @@ export default function FeedbackPostPage() {
     follow.fetcher.formData?.get('intent') === 'follow' ? !post.viewerFollows : post.viewerFollows;
   const status = useFeedbackAction(signedIn);
   const remove = useFeedbackAction(signedIn);
+  // Deleting redirects to the board from the action itself.
   const canDelete = isAdmin || post.viewerIsAuthor;
-
-  useEffect(() => {
-    if (
-      remove.fetcher.state === 'idle' &&
-      remove.fetcher.data &&
-      'deleted' in remove.fetcher.data
-    ) {
-      navigate('/feedback');
-    }
-  }, [remove.fetcher.state, remove.fetcher.data, navigate]);
 
   const comments = useMemo(
     () =>
@@ -115,12 +106,12 @@ export default function FeedbackPostPage() {
       <article className="min-w-0">
         <Link
           to="/feedback"
-          className="-ml-1 inline-flex items-center gap-1 rounded-md px-1 text-sm font-medium text-ink-3! no-underline transition-colors duration-150 hover:text-ink-0!"
+          className="-ml-1 inline-flex items-center gap-1 rounded-md px-1 text-[13px] font-medium text-ink-3! no-underline transition-colors duration-150 hover:text-ink-0!"
         >
           <ChevronLeftIcon className="h-4 w-4" aria-hidden />
           Back to feedback
         </Link>
-        <h1 className="mt-4 text-balance text-3xl font-bold leading-tight tracking-tight text-ink-0">
+        <h1 className="mt-4 text-balance text-2xl font-bold leading-tight tracking-tight text-ink-0">
           {post.title}
         </h1>
         <div className="mt-4 flex flex-col gap-3">
@@ -128,13 +119,13 @@ export default function FeedbackPostPage() {
             post.body.split(/\n{2,}/).map((para, i) => (
               <p
                 key={i}
-                className="whitespace-pre-line break-words text-base leading-relaxed text-ink-1"
+                className="whitespace-pre-line break-words text-sm leading-relaxed text-ink-1"
               >
                 <LinkedText text={para} />
               </p>
             ))
           ) : (
-            <p className="text-sm text-ink-4">No details were added.</p>
+            <p className="text-[13px] text-ink-4">No details were added.</p>
           )}
         </div>
 
@@ -142,7 +133,7 @@ export default function FeedbackPostPage() {
           {shownStatus && STATUS_ORDER.includes(shownStatus as (typeof STATUS_ORDER)[number]) && (
             <StatusLabel status={shownStatus as (typeof STATUS_ORDER)[number]} />
           )}
-          <span className="inline-flex items-center gap-1.5 text-sm text-ink-3">
+          <span className="inline-flex items-center gap-1.5 text-[13px] text-ink-3">
             <MessageSquareIcon className="h-4 w-4" aria-hidden />
             {post.comment_count} {post.comment_count === 1 ? 'comment' : 'comments'}
           </span>
@@ -157,7 +148,7 @@ export default function FeedbackPostPage() {
 
         <section aria-labelledby="comments-heading" className="mt-10">
           <div className="flex items-center justify-between">
-            <h2 id="comments-heading" className="text-base font-semibold text-ink-0">
+            <h2 id="comments-heading" className="text-sm font-semibold text-ink-0">
               Comments <span className="font-normal text-ink-4">{post.comment_count}</span>
             </h2>
             {post.comments.length > 1 && (
@@ -165,7 +156,7 @@ export default function FeedbackPostPage() {
                 value={sort}
                 onChange={e => setSort(e.target.value as CommentSort)}
                 aria-label="Sort comments"
-                className="h-8 rounded-md border border-line-2 bg-panel px-2 text-xs text-ink-1 focus:border-accent focus:outline-none"
+                className="h-8 rounded-md border border-line-2 bg-panel px-2 text-[12px] text-ink-1 focus:border-accent focus:outline-none"
               >
                 <option value="top">Top</option>
                 <option value="new">Newest</option>
@@ -186,7 +177,7 @@ export default function FeedbackPostPage() {
               ))}
             </ul>
           ) : (
-            <p className="mt-4 text-sm text-ink-3">
+            <p className="mt-4 text-[13px] text-ink-3">
               No comments yet. Share how this would help your class.
             </p>
           )}
@@ -198,7 +189,7 @@ export default function FeedbackPostPage() {
           type="button"
           onClick={() => follow.submit({ intent: 'follow', postId: post.id })}
           aria-pressed={following}
-          className={`inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg text-sm font-semibold transition-colors duration-150 ${
+          className={`inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg text-[13px] font-semibold transition-colors duration-150 ${
             following
               ? 'border border-line-2 bg-panel text-ink-0 hover:border-line-strong'
               : 'bg-accent text-white hover:bg-accent-hover'
@@ -212,7 +203,7 @@ export default function FeedbackPostPage() {
           {following ? 'Unfollow' : 'Follow this post'}
         </button>
 
-        <dl className="rounded-xl bg-panel p-4 text-sm ring-1 ring-stone-200 dark:ring-neutral-800">
+        <dl className="rounded-xl bg-panel p-4 text-[13px] ring-1 ring-stone-200 dark:ring-neutral-800">
           {[
             ['Board', `${CATEGORY_EMOJI[post.category]} ${CATEGORY_LABELS[post.category]}`],
             ['Created by', authorName(post.author, post.is_anonymous)],
@@ -237,21 +228,35 @@ export default function FeedbackPostPage() {
             <dt className="text-ink-3">Status</dt>
             <dd>
               {isAdmin ? (
-                <select
-                  aria-label="Status"
-                  value={shownStatus ?? ''}
-                  onChange={e =>
-                    status.submit({ intent: 'set-status', postId: post.id, status: e.target.value })
-                  }
-                  className="h-8 rounded-md border border-line-2 bg-panel px-2 text-xs font-medium text-ink-1 focus:border-accent focus:outline-none"
-                >
-                  <option value="">Not on roadmap</option>
-                  {STATUS_ORDER.map(s => (
-                    <option key={s} value={s}>
-                      {STATUS_META[s].label}
-                    </option>
-                  ))}
-                </select>
+                <div className="relative">
+                  <select
+                    aria-label="Status"
+                    value={shownStatus ?? ''}
+                    onChange={e =>
+                      status.submit({
+                        intent: 'set-status',
+                        postId: post.id,
+                        status: e.target.value,
+                      })
+                    }
+                    className={`h-[32px] cursor-pointer appearance-none rounded-lg border border-line-2 bg-panel pl-3 pr-8 text-[13px] font-medium transition-colors duration-150 hover:border-line-strong focus:border-accent focus:outline-none ${
+                      shownStatus && shownStatus in STATUS_META
+                        ? STATUS_META[shownStatus as keyof typeof STATUS_META].ink
+                        : 'text-ink-3'
+                    }`}
+                  >
+                    <option value="">Not on roadmap</option>
+                    {STATUS_ORDER.map(s => (
+                      <option key={s} value={s}>
+                        {STATUS_META[s].label}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDownIcon
+                    className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-3"
+                    aria-hidden
+                  />
+                </div>
               ) : post.status ? (
                 <StatusLabel status={post.status} />
               ) : (
@@ -262,7 +267,7 @@ export default function FeedbackPostPage() {
         </dl>
 
         <div>
-          <h2 className="text-sm font-semibold text-ink-2">Actions</h2>
+          <h2 className="text-[13px] font-semibold text-ink-2">Actions</h2>
           <div className="mt-2 flex flex-col items-start">
             <button
               type="button"

@@ -1,411 +1,487 @@
 import React from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
-import { CheckIcon, ChevronDownIcon, ChevronRightIcon, CircleDashedIcon, RocketIcon, SendHorizontalIcon, SquareTerminalIcon, XIcon } from 'lucide-react';
+import { Alert, Avatar, Button, Card, ConfigProvider, Progress, Select } from 'antd';
+import {
+  CheckCircleOutlined,
+  CloseOutlined,
+  CodeOutlined,
+  FileTextOutlined,
+  QuestionCircleOutlined,
+  RocketOutlined,
+  SendOutlined,
+  TrophyOutlined,
+} from '@ant-design/icons';
 import { demoUsers } from '../../data/appNav';
 import { useDemoTimeline } from '../../hooks/useDemoTimeline';
 import type { DemoBase, Step } from '../../types/demo';
-import { chip, ui } from '../../utils/classes';
-import { EASE_OUT, clickAnd, moveTo, offset, typeSteps } from '../../utils/timeline';
+import { clickAnd, moveTo, typeSteps } from '../../utils/timeline';
+import { AppAntd } from '../demo-kit/AppAntd';
 import { AppShell } from '../demo-kit/AppShell';
-import { Avatar } from '../demo-kit/Avatar';
 import { DemoFrame } from '../demo-kit/DemoFrame';
+
+/*
+ * A copy of the webapp's code review quiz, as a student takes it:
+ * - the attempt drawer (routes/student.$class.quizzes.$quizId.attempt.$attemptId):
+ *   90% wide, 🧑‍💻 and the quiz name in its header;
+ * - the chat (components/features/quiz/QuizChat.tsx): 📝 assistant bubbles,
+ *   the files read under "Code Analysis (N steps)" (StepList), each question in
+ *   a QuestionCard quoting the student's own code with its path and lines, the
+ *   feedback with Try Again / Next → (NextStepButtons), a "completed question
+ *   N" row between questions (ProgressDivider), the results at the end
+ *   (QuizResults);
+ * - the composer (routes/student.$class.quizzes/ChatEditor.tsx).
+ * No score is shown until the end. Code review reads the student's repository
+ * only when the instructor turns it on for the quiz.
+ */
+
+type Phase =
+  | 'start'
+  | 'welcome'
+  | 'reading1'
+  | 'q1'
+  | 'a1'
+  | 'feedback1'
+  | 'next1'
+  | 'q2'
+  | 'a2'
+  | 'feedback2'
+  | 'done';
+
 type State = DemoBase & {
-  aiTyping: boolean;
-  welcome: boolean;
-  analysis1: boolean;
-  open1: boolean;
-  lines1: number[];
-  q1: boolean;
-  a1: string;
-  analysis2: boolean;
-  open2: boolean;
-  q2: boolean;
-  a2: string;
-  evaluated: boolean;
-  meter: number;
+  phase: Phase;
+  /** Files listed so far in the open step list. */
+  files: number;
   draft: string;
+  thinking: string | null;
 };
-const WELCOME = "Welcome to your code review quiz on HW3: Hash Maps! I'll look at your repository first, then ask you 2 questions about your implementation.";
-const Q1 = 'Why did you use a hash map in solve()?';
-const A1 = 'Lookups are O(1) on average, so checking whether the complement is already in seen keeps solve() linear instead of quadratic.';
-const Q2 = 'Nice. What happens if two keys hash to the same bucket?';
+
+const ORDER: Phase[] = [
+  'start',
+  'welcome',
+  'reading1',
+  'q1',
+  'a1',
+  'feedback1',
+  'next1',
+  'q2',
+  'a2',
+  'feedback2',
+  'done',
+];
+const reached = (s: State, phase: Phase) => ORDER.indexOf(s.phase) >= ORDER.indexOf(phase);
+
+const QUIZ = 'HW3: Hash Maps';
+const WELCOME = `Welcome to your code review quiz on ${QUIZ}! I'll look at your repository first, then ask you 2 questions about your implementation.`;
+const FILES = ['README.md', 'solve.py', 'tests/test_solve.py'];
+const Q1 =
+  'Why does solve() store each number in seen before moving on, and what does that buy you?';
+const A1 =
+  'So the next numbers can find their complement in O(1). It keeps solve() linear instead of checking every pair.';
+const FEEDBACK1 =
+  "Exactly. Each lookup in seen is O(1) on average, so one pass is enough. That's the whole point of the hash map here.";
+const Q2 = 'What happens in seen if two different numbers hash to the same bucket?';
 const A2 = 'Python handles that for me. I think the old value just gets replaced?';
-const CODE = ['def solve(nums, target):', '    seen = {}', '    for i, n in enumerate(nums):', '        need = target - n', '        if need in seen:', '            return [seen[need], i]', '        seen[n] = i', '    return []'];
-const TOKEN = /(\b(?:def|for|in|if|return)\b|\benumerate\b|\bsolve\b)/g;
+const FEEDBACK2 =
+  'Not quite. A collision does not replace anything: Python probes for another slot, and both keys stay in the dict. Only an equal key overwrites a value.';
+
+const CODE1 = {
+  path: 'solve.py',
+  lines: '3–6',
+  code: [
+    'for i, n in enumerate(nums):',
+    '    need = target - n',
+    '    if need in seen:',
+    '        return [seen[need], i]',
+  ],
+};
+const CODE2 = { path: 'solve.py', lines: '7', code: ['    seen[n] = i'] };
+
 const initial: State = {
   cursor: null,
   click: 0,
-  aiTyping: false,
-  welcome: false,
-  analysis1: false,
-  open1: false,
-  lines1: [],
-  q1: false,
-  a1: '',
-  analysis2: false,
-  open2: false,
-  q2: false,
-  a2: '',
-  evaluated: false,
-  meter: 0,
-  draft: ''
+  phase: 'start',
+  files: 0,
+  draft: '',
+  thinking: 'Thinking...',
 };
-const sendAnswer1 = (s: State): State => ({
-  ...s,
-  a1: s.draft.trim() || A1,
-  draft: '',
-  open1: false,
-  meter: 58
-});
-const sendAnswer2 = (s: State): State => ({
-  ...s,
-  a2: s.draft.trim() || A2,
-  draft: '',
-  open2: false,
-  meter: 72
-});
 
-/** After the first answer is sent (shared by autoplay and the real Send button). */
-const afterAnswer1: Step<State>[] = [{
-  at: 0,
-  action: sendAnswer1
-}, {
-  at: 300,
-  action: s => ({
-    ...s,
-    aiTyping: true
-  })
-}, {
-  at: 700,
-  action: s => ({
-    ...s,
-    analysis2: true,
-    open2: true
-  })
-}, {
-  at: 1100,
-  action: s => ({
-    ...s,
-    aiTyping: false,
-    q2: true
-  })
-}];
-const afterAnswer2: Step<State>[] = [{
-  at: 0,
-  action: sendAnswer2
-}, {
-  at: 300,
-  action: s => ({
-    ...s,
-    aiTyping: true
-  })
-}, {
-  at: 900,
-  action: s => ({
-    ...s,
-    aiTyping: false,
-    evaluated: true,
-    meter: 80
-  })
-}];
-const SEND1_AT = 5000;
-const SEND2_AT = 8700;
-const steps: Step<State>[] = [{
-  at: 0,
-  action: s => ({
-    ...s,
-    aiTyping: true
-  })
-}, {
-  at: 400,
-  action: s => ({
-    ...s,
-    aiTyping: false,
-    welcome: true
-  })
-}, {
-  at: 800,
-  action: s => ({
-    ...s,
-    analysis1: true,
-    open1: true
-  })
-}, {
-  at: 1100,
-  action: s => ({
-    ...s,
-    lines1: [2],
-    meter: 12
-  })
-}, {
-  at: 1400,
-  action: s => ({
-    ...s,
-    lines1: [2, 7],
-    meter: 24
-  })
-}, {
-  at: 1900,
-  action: s => ({
-    ...s,
-    q1: true
-  })
-}, {
-  at: 2200,
-  action: moveTo<State>('composer')
-}, {
-  at: 2600,
-  action: clickAnd<State>()
-}, ...typeSteps<State>(2700, A1, 85, (s, t) => ({
-  ...s,
-  draft: t
-}), 'word'), {
-  at: 3600,
-  action: s => ({
-    ...s,
-    meter: 40
-  })
-}, {
-  at: 4600,
-  action: moveTo<State>('send')
-}, {
-  at: SEND1_AT,
-  action: clickAnd<State>()
-}, ...offset(afterAnswer1, SEND1_AT), {
-  at: 6300,
-  action: moveTo<State>('composer')
-}, {
-  at: 6700,
-  action: clickAnd<State>()
-}, ...typeSteps<State>(6800, A2, 100, (s, t) => ({
-  ...s,
-  draft: t
-}), 'word'), {
-  at: 8300,
-  action: moveTo<State>('send')
-}, {
-  at: SEND2_AT,
-  action: clickAnd<State>()
-}, ...offset(afterAnswer2, SEND2_AT), {
-  at: 10100,
-  action: moveTo<State>('eval')
-}];
-const enter = {
-  initial: {
-    opacity: 0,
-    y: 6
-  },
-  animate: {
-    opacity: 1,
-    y: 0
-  },
-  transition: {
-    duration: 0.22,
-    ease: EASE_OUT
-  }
-};
-const aiBox = `rounded-lg border bg-panel px-4 py-3 dark:bg-panel-dark ${ui.divider}`;
-export function QuizDemo() {
-  const demo = useDemoTimeline({
-    initial,
-    steps,
-    duration: 11000
-  });
-  const {
-    state: s,
-    act,
-    sequence
-  } = demo;
-  const awaitingA1 = s.q1 && !s.a1;
-  const awaitingA2 = s.q2 && !s.a2;
-  const canSend = (awaitingA1 || awaitingA2) && s.draft.trim().length > 0;
-  const send = () => {
-    if (!canSend) return;
-    sequence(awaitingA1 ? afterAnswer1 : afterAnswer2);
-  };
-  const renderCode = (from: number, to: number, highlight: number[]) => <div className="mt-2 overflow-hidden rounded-md border border-line bg-panel py-1.5 font-mono text-[11px] leading-[20px] dark:border-line-dark dark:bg-panel-dark">
-      {CODE.slice(from - 1, to).map((line, i) => {
-      const n = from + i;
-      const on = highlight.includes(n);
-      return <div key={n} className={`flex whitespace-pre border-l-2 pr-2 transition-colors duration-200 ${on ? `border-accent ${ui.selected}` : 'border-transparent'}`}>
-            <span className={`w-8 shrink-0 select-none pr-3 text-right ${ui.ink4}`}>{n}</span>
-            <span className={ui.ink0}>
-              {line.split(TOKEN).map((part, pi) => {
-            if (/^(def|for|in|if|return)$/.test(part)) return <span key={pi} className="text-[#cf222e] dark:text-[#ff7b72]">
-                      {part}
-                    </span>;
-            if (/^(enumerate|solve)$/.test(part)) return <span key={pi} className="text-[#8250df] dark:text-[#d2a8ff]">
-                      {part}
-                    </span>;
-            return <span key={pi}>{part}</span>;
-          })}
-            </span>
-          </div>;
-    })}
-    </div>;
-  const renderAnalysis = (open: boolean, toggle: () => void, label: string, from: number, to: number, highlight: number[]) => <motion.div {...enter} className="rounded-lg border border-line bg-app dark:border-line-dark dark:bg-app-dark">
-      <button type="button" onClick={toggle} aria-expanded={open} className={`flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] ${ui.ink3} ${ui.focus}`}>
-        {open ? <ChevronDownIcon className="h-3.5 w-3.5" aria-hidden /> : <ChevronRightIcon className="h-3.5 w-3.5" aria-hidden />}
-        <RocketIcon className="h-3 w-3 text-question dark:text-question-dark" aria-hidden />
-        {label}
-        {open && highlight.length > 0 && <span className={`ml-auto text-[11px] ${ui.ink4}`}>
-            solve.py · L{[...highlight].sort((a, b) => a - b).join(', L')}
-          </span>}
-      </button>
-      <AnimatePresence initial={false}>
-        {open && <motion.div initial={{
-        height: 0,
-        opacity: 0
-      }} animate={{
-        height: 'auto',
-        opacity: 1
-      }} exit={{
-        height: 0,
-        opacity: 0
-      }} transition={{
-        duration: 0.24,
-        ease: EASE_OUT
-      }} className="overflow-hidden">
-            <div className="px-3 pb-3">{renderCode(from, to, highlight)}</div>
-          </motion.div>}
-      </AnimatePresence>
-    </motion.div>;
-  const aiAvatar = <span aria-hidden className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-quiz-soft text-[13px] ring-1 ring-quiz-ring dark:bg-[#33290f] dark:ring-[#5a4718]">
-      📝
-    </span>;
-  const renderQuestion = (index: number, text: string) => <motion.div {...enter} className="flex items-start gap-2.5">
-      {aiAvatar}
-      <div className={`max-w-[470px] flex-1 ${aiBox}`}>
-        <div className="rounded-md border border-line px-3.5 py-2.5 dark:border-line-dark">
-          <p className="flex items-center gap-1.5 border-b border-question-line pb-2 text-[13px] font-semibold text-question dark:border-question-line-dark dark:text-question-dark">
-            <span className="h-3.5 w-3.5" aria-hidden />
-            Question {index} of 2
-          </p>
-          <p className={`pt-2 text-[12.5px] leading-[1.5] ${ui.ink0}`}>{text}</p>
+const to =
+  (phase: Phase, extra: Partial<State> = {}) =>
+  (s: State): State => ({ ...s, phase, ...extra });
+
+const steps: Step<State>[] = [
+  { at: 700, action: to('welcome', { thinking: null }) },
+  { at: 1000, action: to('reading1', { thinking: 'Exploring code...', files: 1 }) },
+  { at: 1300, action: s => ({ ...s, files: 2 }) },
+  { at: 1600, action: s => ({ ...s, files: 3 }) },
+  { at: 2100, action: to('q1', { thinking: null }) },
+  { at: 2500, action: moveTo<State>('composer') },
+  ...typeSteps<State>(3000, A1, 90, (s, draft) => ({ ...s, draft }), 'word'),
+  { at: 4800, action: moveTo<State>('send') },
+  { at: 5300, action: clickAnd<State>(to('a1', { draft: '', thinking: 'Thinking...' })) },
+  { at: 6100, action: to('feedback1', { thinking: null }) },
+  { at: 6600, action: moveTo<State>('next') },
+  { at: 7200, action: clickAnd<State>(to('next1', { thinking: 'Exploring code...' })) },
+  { at: 8100, action: to('q2', { thinking: null }) },
+  { at: 8400, action: moveTo<State>('composer') },
+  ...typeSteps<State>(8800, A2, 90, (s, draft) => ({ ...s, draft }), 'word'),
+  { at: 10200, action: moveTo<State>('send') },
+  { at: 10700, action: clickAnd<State>(to('a2', { draft: '', thinking: 'Thinking...' })) },
+  { at: 11500, action: to('feedback2', { thinking: null }) },
+  { at: 12000, action: moveTo<State>('next') },
+  { at: 12600, action: clickAnd<State>(s => ({ ...s, thinking: 'Thinking...' })) },
+  { at: 13400, action: to('done', { thinking: null }) },
+  { at: 13600, action: moveTo<State>(null) },
+];
+
+/** The app's antd theme at the demo's scale. */
+function Compact({ children }: { children: React.ReactNode }) {
+  return (
+    <AppAntd>
+      <ConfigProvider theme={{ token: { fontSize: 12, controlHeight: 28 } }}>
+        {children}
+      </ConfigProvider>
+    </AppAntd>
+  );
+}
+
+const PY = /(\b(?:for|in|if|return)\b|\benumerate\b|\d+)/g;
+
+/** Github-light colors, as the card's highlight.js theme draws Python. */
+function Code({ lines }: { lines: string[] }) {
+  return (
+    <pre className="m-0 overflow-hidden rounded-md border border-[#d0d7de] bg-[#f6f8fa] p-2.5 font-mono text-[11px] leading-[1.5] text-[#1f2328]">
+      {lines.map((line, i) => (
+        <div key={i}>
+          {line.split(PY).map((part, j) =>
+            /^(for|in|if|return)$/.test(part) ? (
+              <span key={j} className="text-[#cf222e]">
+                {part}
+              </span>
+            ) : part === 'enumerate' ? (
+              <span key={j} className="text-[#0550ae]">
+                {part}
+              </span>
+            ) : (
+              <React.Fragment key={j}>{part}</React.Fragment>
+            )
+          )}
+          {line === '' ? ' ' : null}
+        </div>
+      ))}
+    </pre>
+  );
+}
+
+const AssistantAvatar = () => (
+  <Avatar
+    size={28}
+    style={{ backgroundColor: '#fffdf5', fontSize: 16, border: '1px solid #ffd66b', flexShrink: 0 }}
+  >
+    📝
+  </Avatar>
+);
+
+function AssistantBubble({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex items-start gap-2">
+      <AssistantAvatar />
+      <div className="max-w-[70%] break-words rounded-lg border border-[#d9d9d9] bg-white px-3 py-2 text-[12px] leading-[1.5] text-gray-900">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function UserBubble({ text }: { text: string }) {
+  return (
+    <div className="flex items-start justify-end gap-2">
+      <div className="max-w-[70%] break-words rounded-lg bg-[#f0f2f5] px-3 py-2 text-[12px] leading-[1.5] text-gray-900">
+        {text}
+      </div>
+      <Avatar size={28} style={{ backgroundColor: '#52c41a', flexShrink: 0 }}>
+        B
+      </Avatar>
+    </div>
+  );
+}
+
+/** StepList: "Code Analysis (N steps)", the files read, open only while reading. */
+function Steps({ files, open }: { files: number; open: boolean }) {
+  return (
+    <div className="w-[70%] overflow-hidden rounded-lg border border-[#d9d9d9] bg-[#fafafa] text-[11.5px]">
+      <div className="flex items-center gap-1.5 px-3 py-1.5 text-gray-500">
+        <span className={`text-[9px] transition-transform ${open ? 'rotate-90' : ''}`}>▶</span>
+        <RocketOutlined style={{ color: '#3b82f6' }} />
+        Code Analysis ({files} {files === 1 ? 'step' : 'steps'})
+      </div>
+      {open && (
+        <ul className="m-0 list-none border-t border-[#d9d9d9] bg-white px-3 py-1.5">
+          {FILES.slice(0, files).map(f => (
+            <li
+              key={f}
+              className="flex items-center gap-2 py-0.5 font-mono text-[11px] text-gray-500"
+            >
+              <FileTextOutlined style={{ color: '#10b981' }} />
+              {f}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** QuestionCard: the student's own code, its path and lines, then the question. */
+function Question({ n, code, text }: { n: number; code: typeof CODE1; text: string }) {
+  return (
+    <div className="flex items-start gap-2">
+      <AssistantAvatar />
+      <div className="max-w-[70%] rounded-lg border border-[#d9d9d9] bg-white p-2">
+        <div className="rounded-lg border border-[#91caff] bg-[#e6f4ff] px-3 py-2.5">
+          <div className="mb-2 flex items-center gap-1.5 border-b border-[#91caff] pb-1.5">
+            <QuestionCircleOutlined style={{ fontSize: 15, color: '#1890ff' }} />
+            <span className="text-[12.5px] font-semibold text-[#0958d9]">Question {n} of 2</span>
+          </div>
+          <div className="mb-1 flex items-center gap-1.5 text-[11px] text-[#4b5563]">
+            <span className="font-mono">{code.path}</span>
+            <span aria-hidden>·</span>
+            <span>{code.lines.includes('–') ? `lines ${code.lines}` : `line ${code.lines}`}</span>
+          </div>
+          <Code lines={code.code} />
+          <p className="mb-0 mt-2 text-[12.5px] leading-[1.5] text-[#1f2937]">{text}</p>
         </div>
       </div>
-    </motion.div>;
-  const renderAnswer = (text: string) => <motion.div {...enter} className="flex items-start justify-end gap-2.5">
-      <p className={`max-w-[400px] rounded-lg border bg-panel-hover px-3.5 py-2.5 text-[12.5px] leading-[1.5] dark:bg-panel-hover-dark ${ui.divider} ${ui.ink0}`}>
-        {text}
-      </p>
-      <Avatar initials="BK" size="sm" />
-    </motion.div>;
-  return <DemoFrame controller={demo} address="classmoji.app/cs52-26f/quizzes/hw3" label="Demo: a code review quiz analyzes Bob's solve() function, highlights the lines it is asking about, takes his typed answers, and rates his understanding at 80%." rest={{
-    x: 0.6,
-    y: 0.5
-  }}>
+    </div>
+  );
+}
+
+/** offer_next_step: the feedback, the lead-in, then Try Again / Next →. */
+function Feedback({ text, active }: { text: string; active: boolean }) {
+  return (
+    <AssistantBubble>
+      <p className="m-0">{text}</p>
+      <p className="mb-0 mt-2">Ready for the next question?</p>
+      <div className="mt-2 flex gap-2">
+        <Button size="small" disabled={!active}>
+          Try Again
+        </Button>
+        <span data-cursor={active ? 'next' : undefined}>
+          <Button type="primary" size="small" disabled={!active}>
+            Next →
+          </Button>
+        </span>
+      </div>
+    </AssistantBubble>
+  );
+}
+
+/** ProgressDivider, in its own row with its own avatar. */
+function Completed({ n, emoji, text }: { n: number; emoji: string; text: string }) {
+  return (
+    <div className="flex items-start gap-2">
+      <AssistantAvatar />
+      <div className="rounded-lg border border-[#d9d9d9] bg-white px-3 py-2 text-[12px] leading-[1.5]">
+        <div className="text-[#374151]">
+          completed question {n}: <span className="text-[14px]">{emoji}</span>
+        </div>
+        <div className="text-[#666]">{text}</div>
+      </div>
+    </div>
+  );
+}
+
+/** QuizResults, from its top: the alert, the evaluation card, the score ring. */
+function Results() {
+  return (
+    <div className="flex flex-col gap-2.5">
+      <Alert
+        message="Quiz Complete!"
+        description="Your responses have been evaluated. Here are your results:"
+        type="success"
+        showIcon
+      />
+      <Card
+        size="small"
+        title={
+          <span className="flex items-center gap-2">
+            <TrophyOutlined style={{ fontSize: 18, color: '#52c41a' }} />
+            Quiz Evaluation: GOOD
+          </span>
+        }
+      >
+        <div className="flex items-center gap-5">
+          <Progress
+            type="circle"
+            size={84}
+            percent={75}
+            strokeColor="#1890ff"
+            format={p => (
+              <div>
+                <div className="text-[18px] font-bold text-gray-900">{p}%</div>
+                <div className="text-[11px] text-gray-500">Score</div>
+              </div>
+            )}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="text-[12.5px] font-semibold text-gray-900">Summary</div>
+            <p className="m-0 text-[12px] text-gray-700">
+              Strong on why the hash map makes solve() linear. Collisions need another look.
+            </p>
+            <div className="mt-2 text-[12.5px] font-semibold text-gray-900">
+              <CheckCircleOutlined style={{ color: '#52c41a', marginRight: 6 }} />
+              Strengths
+            </div>
+            <p className="m-0 text-[12px] text-gray-700">Explains average O(1) lookups clearly.</p>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+export function QuizDemo() {
+  const demo = useDemoTimeline({ initial, steps, duration: 15600 });
+  const { state: s } = demo;
+  const awaiting = s.phase === 'q1' || s.phase === 'q2';
+
+  return (
+    <DemoFrame
+      controller={demo}
+      address="app.classmoji.io/student/cs52-26f/quizzes"
+      label="Demo: a student takes a code review quiz. The tutor reads his repository, asks two questions about his own solve() code, gives feedback after each answer, and ends with a 75% score."
+      rest={{ x: 0.6, y: 0.5 }}
+    >
       <div className="relative h-full overflow-hidden">
         <AppShell active="quizzes" role="student" user={demoUsers.student} title="Quizzes">
-          <div className={`h-full ${ui.card}`} />
+          <div className="h-full rounded-2xl bg-panel ring-1 ring-line" />
         </AppShell>
-        <div className="absolute inset-0 bg-black/40" aria-hidden />
+        <div className="absolute inset-0 bg-black/45" aria-hidden />
 
-        <section aria-label="Code review quiz" className={`absolute inset-y-0 right-0 flex w-[624px] flex-col bg-panel shadow-float dark:bg-panel-dark ${ui.ink0}`}>
-          <header className={`flex h-11 shrink-0 items-center gap-2.5 border-b bg-app px-4 dark:bg-app-dark ${ui.divider}`}>
-            <XIcon className={`h-4 w-4 ${ui.ink3}`} aria-hidden />
-            <span aria-hidden className="text-[14px]">
-              🧑‍💻
-            </span>
-            <h4 className="text-[14px] font-semibold">HW3: Hash Maps</h4>
-            <span className={`text-[12px] font-medium ${ui.ink3}`}>(Code review)</span>
-            <div className="ml-auto flex items-center gap-2">
-              <span className={`text-[11px] ${ui.ink3}`}>Understanding</span>
-              <div className="h-1.5 w-20 overflow-hidden rounded-full bg-bar dark:bg-bar-dark" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={s.meter} aria-label="Understanding">
-                <motion.div className="h-full rounded-full bg-accent" initial={false} animate={{
-                width: `${s.meter}%`
-              }} transition={{
-                duration: 0.3,
-                ease: EASE_OUT
-              }} />
-              </div>
-              <span className="w-8 text-right text-[11.5px] font-semibold tabular-nums">{s.meter}%</span>
-            </div>
-          </header>
+        <Compact>
+          <section
+            aria-label="Code review quiz"
+            className="absolute inset-y-0 right-0 flex w-[90%] flex-col bg-white shadow-[-6px_0_16px_0_rgba(0,0,0,0.08),-3px_0_6px_-4px_rgba(0,0,0,0.12),-9px_0_28px_8px_rgba(0,0,0,0.05)]"
+          >
+            <header className="flex h-11 shrink-0 items-center gap-3 border-b border-[#f0f0f0] bg-[#f9f9f9] px-4">
+              <CloseOutlined style={{ fontSize: 13, color: 'rgba(0,0,0,0.45)' }} />
+              <span className="text-[14px] font-semibold text-[rgba(0,0,0,0.88)]">
+                <span className="mr-1.5 text-[16px]">🧑‍💻</span>
+                {QUIZ}
+              </span>
+            </header>
 
-          <div className="flex min-h-0 flex-1 flex-col justify-end gap-3 overflow-hidden px-5 py-4">
-            {s.welcome && <motion.div {...enter} className="flex items-start gap-2.5">
-                {aiAvatar}
-                <p className={`max-w-[470px] text-[12.5px] leading-[1.5] ${aiBox}`}>{WELCOME}</p>
-              </motion.div>}
-            {s.analysis1 && renderAnalysis(s.open1, () => act(st => ({
-            ...st,
-            open1: !st.open1
-          })), 'Code Analysis (4 steps)', 1, 8, s.lines1)}
-            {s.q1 && renderQuestion(1, Q1)}
-            {s.a1 && renderAnswer(s.a1)}
-            {s.analysis2 && renderAnalysis(s.open2, () => act(st => ({
-            ...st,
-            open2: !st.open2
-          })), 'Code Analysis (2 steps)', 4, 7, [5, 6])}
-            {s.q2 && renderQuestion(2, Q2)}
-            {s.a2 && renderAnswer(s.a2)}
-            {s.aiTyping && <div className="flex items-start gap-2.5" aria-label="Moji is thinking">
-                {aiAvatar}
-                <div className={`flex items-center gap-1 ${aiBox}`}>
-                  {[0, 1, 2].map(d => <span key={d} className="demo-typing-dot h-1.5 w-1.5 rounded-full bg-ink-4 dark:bg-inkd-4" style={{
-                animationDelay: `${d * 160}ms`
-              }} />)}
-                </div>
-              </div>}
-            {s.evaluated && <motion.div {...enter} className="flex items-start gap-2.5">
-                {aiAvatar}
-                <div data-cursor="eval" className={`max-w-[470px] flex-1 ${aiBox}`}>
-                  <div className="rounded-md border border-mint-line bg-mint-bg px-3.5 py-2.5 dark:border-mint-line-dark dark:bg-mint-bg-dark">
-                    <div className="flex items-center justify-between">
-                      <p className="text-[13px] font-semibold">Quiz complete</p>
-                      <p className="text-[13px] font-bold tabular-nums text-mint-ink dark:text-mint-ink-dark">80%</p>
+            <div className="flex min-h-0 flex-1 flex-col px-5 pb-4 pt-3">
+              <div className="flex min-h-0 flex-1 flex-col justify-end gap-3 overflow-hidden">
+                {reached(s, 'welcome') && <AssistantBubble>{WELCOME}</AssistantBubble>}
+                {reached(s, 'reading1') && (
+                  <div className="pl-9">
+                    <Steps files={s.files} open={s.phase === 'reading1'} />
+                  </div>
+                )}
+                {reached(s, 'q1') && <Question n={1} code={CODE1} text={Q1} />}
+                {reached(s, 'a1') && <UserBubble text={A1} />}
+                {reached(s, 'feedback1') && (
+                  <Feedback text={FEEDBACK1} active={s.phase === 'feedback1'} />
+                )}
+                {reached(s, 'next1') && <UserBubble text="next" />}
+                {reached(s, 'q2') && (
+                  <>
+                    <Completed n={1} emoji="🚀" text="Clear grasp of why the lookup is O(1)." />
+                    <div className="pl-9">
+                      <Steps files={1} open={false} />
                     </div>
-                    <p className={`mt-1 text-[12.5px] ${ui.ink1}`}>
-                      Strong grasp of time complexity. Missed the collision case.
-                    </p>
-                    <div className="mt-2 flex gap-1.5">
-                      <span className={chip('mint')}>
-                        <CheckIcon className="h-2.5 w-2.5" strokeWidth={3} aria-hidden />
-                        Big-O
+                    <Question n={2} code={CODE2} text={Q2} />
+                  </>
+                )}
+                {reached(s, 'a2') && <UserBubble text={A2} />}
+                {reached(s, 'feedback2') && (
+                  <Feedback text={FEEDBACK2} active={s.phase === 'feedback2'} />
+                )}
+                {reached(s, 'done') && (
+                  <>
+                    <UserBubble text="next" />
+                    <Completed n={2} emoji="🤔" text="Collisions are resolved, not overwritten." />
+                    <Results />
+                  </>
+                )}
+                {s.thinking && (
+                  <div className="flex items-start gap-2">
+                    <AssistantAvatar />
+                    <div className="flex items-center gap-2 rounded-lg border border-[#d9d9d9] bg-white px-3 py-2">
+                      <span className="flex gap-1">
+                        {[0, 1, 2].map(d => (
+                          <span
+                            key={d}
+                            className="demo-typing-dot h-1.5 w-1.5 rounded-full bg-[#10b981]"
+                            style={{ animationDelay: `${d * 160}ms` }}
+                          />
+                        ))}
                       </span>
-                      <span className={chip('amber')}>
-                        <CircleDashedIcon className="h-2.5 w-2.5" strokeWidth={2.5} aria-hidden />
-                        Collisions
-                      </span>
+                      <span className="text-[12px] text-[rgba(0,0,0,0.45)]">{s.thinking}</span>
                     </div>
                   </div>
-                </div>
-              </motion.div>}
-          </div>
-
-          <div className="shrink-0 px-4 pb-4">
-            <div className={`overflow-hidden rounded-lg border ${ui.divider}`}>
-              <div className={`flex items-center gap-2 border-b bg-app px-2.5 py-1.5 dark:bg-app-dark ${ui.divider}`}>
-                <span className="inline-flex h-[26px] items-center gap-6 rounded-[7px] border border-line-2 bg-panel px-2 text-[12px] dark:border-line-2-dark dark:bg-panel-dark">
-                  Python
-                  <ChevronDownIcon className={`h-3 w-3 ${ui.ink3}`} aria-hidden />
-                </span>
-                <span className="inline-flex h-[26px] items-center gap-1.5 rounded-[7px] bg-quiz px-2.5 text-[12px] font-medium text-ink-0">
-                  <SquareTerminalIcon className="h-3.5 w-3.5" aria-hidden />
-                  Insert Code
-                </span>
-                <span className={`ml-auto text-[11px] ${ui.ink3}`}>Click Send to submit your message</span>
+                )}
               </div>
-              <label htmlFor="quiz-answer" className="sr-only">
-                Your answer
-              </label>
-              <textarea id="quiz-answer" data-cursor="composer" rows={2} value={s.draft} onChange={e => {
-              const value = e.target.value;
-              act(st => ({
-                ...st,
-                draft: value
-              }));
-            }} placeholder={awaitingA1 || awaitingA2 ? 'Type your answer' : ''} className={`block w-full resize-none bg-panel px-3 py-2.5 text-[12.5px] leading-[1.5] placeholder:text-ink-4 focus:outline-none dark:bg-panel-dark dark:placeholder:text-inkd-4 ${ui.ink0}`} />
-              <div className={`flex justify-end border-t px-2.5 py-2 ${ui.divider}`}>
-                <button type="button" data-cursor="send" onClick={send} disabled={!canSend} className={`inline-flex h-8 items-center gap-1.5 rounded-md bg-quiz px-3.5 text-[13px] font-medium text-ink-0 transition-colors duration-150 hover:bg-quiz-hover disabled:cursor-default disabled:opacity-60 disabled:hover:bg-quiz ${ui.focus}`}>
-                  <SendHorizontalIcon className="h-3.5 w-3.5" aria-hidden />
-                  Send
-                </button>
+
+              <div className="mt-3 shrink-0 border-t border-[#f0f0f0] pt-3">
+                <div
+                  className={`overflow-hidden rounded-lg border border-[#e5e7eb] ${s.phase === 'done' ? 'opacity-50' : ''}`}
+                >
+                  <div className="flex items-center gap-2 border-b border-[#e5e7eb] bg-gray-50 px-2 py-1">
+                    <Select
+                      size="small"
+                      value="javascript"
+                      style={{ width: 110 }}
+                      open={false}
+                      options={[{ value: 'javascript', label: 'JavaScript' }]}
+                    />
+                    <Button
+                      size="small"
+                      icon={<CodeOutlined />}
+                      style={{ backgroundColor: '#fadb14', borderColor: '#fadb14', color: '#000' }}
+                    >
+                      Insert Code
+                    </Button>
+                    <span className="ml-auto text-[11px] text-gray-500">
+                      Click Send to submit your message
+                    </span>
+                  </div>
+                  <div
+                    data-cursor="composer"
+                    className="min-h-[38px] px-3 py-2 text-[12px] leading-[1.5]"
+                  >
+                    {s.draft ? (
+                      <span className="text-gray-900">{s.draft}</span>
+                    ) : (
+                      <span className="text-gray-400">
+                        {s.phase === 'done'
+                          ? 'Quiz completed!'
+                          : 'Type your response... (use Code button to add code snippets)'}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex justify-end border-t border-[#e5e7eb] px-2 py-1">
+                    <span data-cursor="send">
+                      <Button
+                        size="small"
+                        icon={<SendOutlined />}
+                        disabled={!(awaiting && s.draft)}
+                        style={
+                          awaiting && s.draft
+                            ? { backgroundColor: '#fadb14', borderColor: '#fadb14', color: '#000' }
+                            : undefined
+                        }
+                      >
+                        Send
+                      </Button>
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-        </section>
+          </section>
+        </Compact>
       </div>
-    </DemoFrame>;
+    </DemoFrame>
+  );
 }

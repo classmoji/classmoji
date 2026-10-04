@@ -50,7 +50,7 @@ export const CATEGORY_EMOJI: Record<FeedbackCategory, string> = {
 };
 
 export const CATEGORY_LABELS: Record<FeedbackCategory, string> = {
-  FEATURE: 'Feature request',
+  FEATURE: 'Feature Request',
   BUG: 'Bug',
   INTEGRATION: 'Integration',
 };

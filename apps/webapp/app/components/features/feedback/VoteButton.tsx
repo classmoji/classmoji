@@ -22,7 +22,7 @@ export function VoteButton({
       aria-pressed={voted}
       aria-label={`${voted ? 'Remove upvote' : 'Upvote'} (${count} ${count === 1 ? 'vote' : 'votes'})`}
       className={`inline-flex shrink-0 cursor-pointer items-center justify-center gap-1 rounded-lg border font-semibold tabular-nums transition-[color,background-color,border-color,transform] duration-150 ease-out active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-        size === 'md' ? 'h-9 min-w-[64px] px-2.5 text-sm' : 'h-7 min-w-[48px] px-2 text-xs'
+        size === 'md' ? 'h-9 min-w-[64px] px-2.5 text-[13px]' : 'h-7 min-w-[48px] px-2 text-[12px]'
       } ${
         voted
           ? 'border-mint-bord bg-mint-bg text-mint-ink'

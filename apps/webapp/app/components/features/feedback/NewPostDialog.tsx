@@ -53,7 +53,8 @@ export function NewPostDialog({ open, onClose }: { open: boolean; onClose: () =>
     const label = body.slice(start, end) || 'link text';
     const snippet = `[${label}](https://)`;
     setBody(body.slice(0, start) + snippet + body.slice(end));
-    requestAnimationFrame(() => {
+    // After React writes the new value, so the selection lands on it.
+    window.setTimeout(() => {
       el?.focus();
       el?.setSelectionRange(start + 1, start + 1 + label.length);
     });
@@ -106,7 +107,7 @@ export function NewPostDialog({ open, onClose }: { open: boolean; onClose: () =>
           >
             <form onSubmit={onSubmit} noValidate className="px-7 pb-6 pt-6">
               <div className="flex items-start justify-between gap-4">
-                <span className="inline-flex items-center gap-2 rounded-full border border-line bg-stone-50 px-3.5 py-1.5 text-sm font-medium text-ink-1 dark:bg-neutral-800/60">
+                <span className="inline-flex items-center gap-2 rounded-full border border-line bg-stone-50 px-3.5 py-1.5 text-[13px] font-medium text-ink-1 dark:bg-neutral-800/60">
                   <span aria-hidden>💡</span>
                   Feature Request
                 </span>
@@ -135,7 +136,7 @@ export function NewPostDialog({ open, onClose }: { open: boolean; onClose: () =>
                 }}
                 placeholder="Title of your request"
                 aria-describedby={error ? 'post-error' : undefined}
-                className={`mt-6 w-full ${bare} text-3xl font-bold tracking-tight text-ink-0 placeholder:text-ink-4`}
+                className={`mt-6 w-full ${bare} text-2xl font-bold tracking-tight text-ink-0 placeholder:text-ink-4`}
               />
               <textarea
                 id="post-body"
@@ -150,7 +151,7 @@ export function NewPostDialog({ open, onClose }: { open: boolean; onClose: () =>
                 }}
                 required
                 placeholder="Describe your request..."
-                className={`mt-4 min-h-[340px] w-full resize-y ${bare} text-base leading-relaxed text-ink-1 placeholder:text-ink-4`}
+                className={`mt-4 min-h-[340px] w-full resize-y ${bare} text-sm leading-relaxed text-ink-1 placeholder:text-ink-4`}
               />
 
               <div className="mt-2 flex items-center gap-3 border-t border-line pt-3">
@@ -163,17 +164,17 @@ export function NewPostDialog({ open, onClose }: { open: boolean; onClose: () =>
                 >
                   <LinkIcon className="h-4 w-4" aria-hidden />
                 </button>
-                <span className="text-xs text-ink-4">Links you paste become clickable.</span>
+                <span className="text-[12px] text-ink-4">Links you paste become clickable.</span>
               </div>
 
               {error && (
-                <p id="post-error" role="alert" className="mt-2 text-sm text-rose-ink">
+                <p id="post-error" role="alert" className="mt-2 text-[13px] text-rose-ink">
                   {error}
                 </p>
               )}
 
               <div className="mt-6 flex flex-wrap items-center justify-between gap-4">
-                <div className="flex flex-col gap-2 text-sm text-ink-3">
+                <div className="flex flex-col gap-2 text-[13px] text-ink-3">
                   <span className="inline-flex items-center gap-2">
                     <GlobeIcon className="h-4 w-4" aria-hidden />
                     {anonymous
@@ -193,7 +194,7 @@ export function NewPostDialog({ open, onClose }: { open: boolean; onClose: () =>
                 <button
                   type="submit"
                   disabled={pending}
-                  className="h-10 cursor-pointer rounded-full bg-accent px-6 text-sm font-semibold text-white transition-colors duration-150 hover:bg-accent-hover disabled:opacity-70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
+                  className="h-10 cursor-pointer rounded-full bg-accent px-6 text-[13px] font-semibold text-white transition-colors duration-150 hover:bg-accent-hover disabled:opacity-70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
                 >
                   {pending ? 'Posting…' : 'Create a new post'}
                 </button>

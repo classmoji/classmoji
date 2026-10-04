@@ -57,7 +57,7 @@ export function CommentComposer({
     return (
       <Link
         to={signInHref(`${location.pathname}${location.search}`)}
-        className="block rounded-xl border border-dashed border-line-2 px-4 py-4 text-sm text-ink-3! no-underline transition-colors duration-150 hover:border-line-strong hover:text-ink-0!"
+        className="block rounded-xl border border-dashed border-line-2 px-4 py-4 text-[13px] text-ink-3! no-underline transition-colors duration-150 hover:border-line-strong hover:text-ink-0!"
       >
         <span className="font-medium text-accent">Sign in</span> to join the conversation.
       </Link>
@@ -79,14 +79,14 @@ export function CommentComposer({
           onChange={e => setBody(e.target.value)}
           onKeyDown={onKeyDown}
           placeholder={placeholder}
-          className="block w-full resize-none appearance-none border-0! bg-transparent px-4 pt-3 text-sm text-ink-0 shadow-none! outline-none! ring-0! placeholder:text-ink-4 focus:border-0! focus:shadow-none! focus:outline-none! focus:ring-0!"
+          className="block w-full resize-none appearance-none border-0! bg-transparent px-4 pt-3 text-[13px] text-ink-0 shadow-none! outline-none! ring-0! placeholder:text-ink-4 focus:border-0! focus:shadow-none! focus:outline-none! focus:ring-0!"
         />
         <div className="flex items-center justify-end gap-2 px-3 pb-3">
           {onCancel && (
             <button
               type="button"
               onClick={onCancel}
-              className="h-8 cursor-pointer rounded-md px-3 text-xs font-medium text-ink-3 transition-colors duration-150 hover:text-ink-0"
+              className="h-8 cursor-pointer rounded-md px-3 text-[12px] font-medium text-ink-3 transition-colors duration-150 hover:text-ink-0"
             >
               Cancel
             </button>
@@ -101,7 +101,9 @@ export function CommentComposer({
           </button>
         </div>
       </form>
-      {fetcher.data?.error && <p className="mt-1.5 text-xs text-rose-ink">{fetcher.data.error}</p>}
+      {fetcher.data?.error && (
+        <p className="mt-1.5 text-[12px] text-rose-ink">{fetcher.data.error}</p>
+      )}
     </div>
   );
 }

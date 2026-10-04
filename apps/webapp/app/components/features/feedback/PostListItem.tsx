@@ -18,14 +18,14 @@ export function PostListItem({ post, signedIn }: { post: FeedbackPostSummary; si
   );
 
   return (
-    <article className="group relative flex gap-6 px-6 py-5 transition-colors duration-150 hover:bg-panel-hover">
+    <article className="group relative flex gap-8 px-8 py-5 transition-colors duration-150 hover:bg-panel-hover">
       <div className="min-w-0 flex-1">
         {post.status && (
           <div className="mb-1.5">
             <StatusLabel status={post.status} />
           </div>
         )}
-        <h3 className="text-[1.0625rem] font-semibold leading-snug text-ink-0">
+        <h3 className="text-[15px] font-semibold leading-snug text-ink-0">
           <Link
             to={`/feedback/p/${post.id}`}
             className="rounded-sm text-ink-0! no-underline after:absolute after:inset-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
@@ -34,11 +34,11 @@ export function PostListItem({ post, signedIn }: { post: FeedbackPostSummary; si
           </Link>
         </h3>
         {post.body && (
-          <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-ink-2">
+          <p className="mt-1.5 line-clamp-2 text-[13px] leading-relaxed text-ink-2">
             {plainText(post.body)}
           </p>
         )}
-        <div className="mt-3 flex items-center gap-2 text-xs">
+        <div className="mt-3 flex items-center gap-2 text-[12px]">
           <FeedbackAvatar
             name={authorName(post.author, post.is_anonymous)}
             anonymous={post.is_anonymous}

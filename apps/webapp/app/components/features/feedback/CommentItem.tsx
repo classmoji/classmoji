@@ -44,11 +44,11 @@ export function CommentItem({
     <li>
       <div className="flex items-center gap-2.5">
         <FeedbackAvatar name={name} image={comment.author?.image} size={isReply ? 24 : 32} />
-        <span className="text-sm font-semibold text-ink-0">{name}</span>
-        <span className="text-xs text-ink-4">{formatDate(comment.created_at)}</span>
+        <span className="text-[13px] font-semibold text-ink-0">{name}</span>
+        <span className="text-[12px] text-ink-4">{formatDate(comment.created_at)}</span>
       </div>
       <div className={isReply ? 'pl-[34px]' : 'pl-[42px]'}>
-        <p className="mt-1.5 whitespace-pre-line break-words text-sm leading-relaxed text-ink-1">
+        <p className="mt-1.5 whitespace-pre-line break-words text-[13px] leading-relaxed text-ink-1">
           <LinkedText text={comment.body} />
         </p>
         <div className="mt-2 flex items-center justify-between">
@@ -58,7 +58,7 @@ export function CommentItem({
                 type="button"
                 onClick={() => setReplying(v => !v)}
                 aria-expanded={replying}
-                className="cursor-pointer rounded-md text-xs font-medium text-ink-3 transition-colors duration-150 hover:text-ink-0"
+                className="cursor-pointer rounded-md text-[12px] font-medium text-ink-3 transition-colors duration-150 hover:text-ink-0"
               >
                 Reply
               </button>
@@ -71,7 +71,7 @@ export function CommentItem({
                     remove.submit({ intent: 'delete-comment', commentId: comment.id });
                   }
                 }}
-                className="inline-flex cursor-pointer items-center gap-1 rounded-md text-xs font-medium text-ink-4 transition-colors duration-150 hover:text-rose-ink"
+                className="inline-flex cursor-pointer items-center gap-1 rounded-md text-[12px] font-medium text-ink-4 transition-colors duration-150 hover:text-rose-ink"
               >
                 <Trash2Icon className="h-3.5 w-3.5" aria-hidden />
                 Delete

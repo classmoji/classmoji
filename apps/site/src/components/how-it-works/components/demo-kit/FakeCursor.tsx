@@ -4,7 +4,7 @@ import { motion } from 'framer-motion';
 import { EASE_OUT, STAGE } from '../../utils/timeline';
 
 type FakeCursorProps = {
-  innerRef: RefObject<HTMLDivElement>;
+  innerRef: RefObject<HTMLDivElement | null>;
   scale: number;
   target: string | null;
   click: number;
@@ -29,7 +29,7 @@ export function FakeCursor({ innerRef, scale, target, click, rest, stateKey }: F
       x = (r.left - ir.left + r.width / 2) / scale;
       y = (r.top - ir.top + r.height / 2) / scale;
     }
-    setPos((p) => (Math.abs(p.x - x) < 0.5 && Math.abs(p.y - y) < 0.5 ? p : { x, y }));
+    setPos(p => (Math.abs(p.x - x) < 0.5 && Math.abs(p.y - y) < 0.5 ? p : { x, y }));
   }, [innerRef, target, stateKey, scale, rest.x, rest.y]);
 
   return (

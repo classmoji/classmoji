@@ -8,6 +8,7 @@
  * else may delete only their own.
  */
 
+import { redirect } from 'react-router';
 import { PLATFORM_ADMIN_USER_IDS, requireAuth } from '@classmoji/auth/server';
 import {
   ClassmojiService,
@@ -87,7 +88,8 @@ export const action = async ({ request }: Route.ActionArgs) => {
           return new Response('Forbidden', { status: 403 });
         }
         await feedback.deletePost(postId);
-        return { ok: true, deleted: true };
+        // Back to the board: staying would reload a post that no longer exists.
+        return redirect('/feedback');
       }
       case 'delete-comment': {
         const commentId = field('commentId');

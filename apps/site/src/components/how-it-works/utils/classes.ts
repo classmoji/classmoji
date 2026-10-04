@@ -8,7 +8,8 @@ export const ui = {
   app: 'bg-app dark:bg-app-dark',
   card: 'rounded-2xl bg-panel shadow-card ring-1 ring-edge dark:bg-panel-dark dark:ring-edge-dark',
   cardMd: 'rounded-lg bg-panel shadow-card ring-1 ring-edge dark:bg-panel-dark dark:ring-edge-dark',
-  floating: 'rounded-lg bg-panel shadow-float ring-1 ring-edge dark:bg-panel-dark dark:ring-line-2-dark',
+  floating:
+    'rounded-lg bg-panel shadow-float ring-1 ring-edge dark:bg-panel-dark dark:ring-line-2-dark',
   ink0: 'text-ink-0 dark:text-inkd-0',
   ink1: 'text-ink-1 dark:text-inkd-1',
   ink2: 'text-ink-2 dark:text-inkd-2',
@@ -40,7 +41,8 @@ const BTN_VARIANT: Record<ButtonVariant, string> = {
     'border-line-2 bg-panel text-ink-0 hover:border-line-strong disabled:text-ink-3 disabled:hover:border-line-2 dark:border-line-2-dark dark:bg-panel-dark dark:text-inkd-0 dark:hover:border-line-strong-dark dark:disabled:text-inkd-3 dark:disabled:hover:border-line-2-dark',
   primary:
     'border-accent bg-accent text-white hover:border-accent-hover hover:bg-accent-hover disabled:opacity-50 disabled:hover:border-accent disabled:hover:bg-accent',
-  ghost: 'border-transparent bg-transparent text-ink-1 hover:bg-navhover dark:text-inkd-1 dark:hover:bg-navhover-dark',
+  ghost:
+    'border-transparent bg-transparent text-ink-1 hover:bg-navhover dark:text-inkd-1 dark:hover:bg-navhover-dark',
 };
 
 export function button(variant: ButtonVariant = 'default', size: ButtonSize = 'md'): string {
@@ -49,12 +51,16 @@ export function button(variant: ButtonVariant = 'default', size: ButtonSize = 'm
 
 const CHIP_TONES: Record<ChipTone, string> = {
   mint: 'border-mint-line bg-mint-bg text-mint-ink dark:border-mint-line-dark dark:bg-mint-bg-dark dark:text-mint-ink-dark',
-  peach: 'border-peach-line bg-peach-bg text-peach-ink dark:border-peach-line-dark dark:bg-peach-bg-dark dark:text-peach-ink-dark',
+  peach:
+    'border-peach-line bg-peach-bg text-peach-ink dark:border-peach-line-dark dark:bg-peach-bg-dark dark:text-peach-ink-dark',
   sky: 'border-sky-line bg-sky-bg text-sky-ink dark:border-sky-line-dark dark:bg-sky-bg-dark dark:text-sky-ink-dark',
-  lilac: 'border-lilac-line bg-lilac-bg text-lilac-ink dark:border-lilac-line-dark dark:bg-lilac-bg-dark dark:text-lilac-ink-dark',
-  amber: 'border-amber-line bg-amber-bg text-amber-ink dark:border-amber-line-dark dark:bg-amber-bg-dark dark:text-amber-ink-dark',
+  lilac:
+    'border-lilac-line bg-lilac-bg text-lilac-ink dark:border-lilac-line-dark dark:bg-lilac-bg-dark dark:text-lilac-ink-dark',
+  amber:
+    'border-amber-line bg-amber-bg text-amber-ink dark:border-amber-line-dark dark:bg-amber-bg-dark dark:text-amber-ink-dark',
   rose: 'border-rose-line bg-rose-bg text-rose-ink dark:border-rose-line-dark dark:bg-rose-bg-dark dark:text-rose-ink-dark',
-  neutral: 'border-edge bg-stone-100 text-ink-2 dark:border-line-2-dark dark:bg-panel-hover-dark dark:text-inkd-2',
+  neutral:
+    'border-edge bg-stone-100 text-ink-2 dark:border-line-2-dark dark:bg-panel-hover-dark dark:text-inkd-2',
 };
 
 export function chip(tone: ChipTone, caps = false): string {

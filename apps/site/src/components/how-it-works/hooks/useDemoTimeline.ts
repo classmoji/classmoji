@@ -18,7 +18,7 @@ type Options<S> = {
 export type DemoController<S> = {
   state: S;
   mode: DemoMode;
-  containerRef: RefObject<HTMLElement>;
+  containerRef: RefObject<HTMLElement | null>;
   /** apply an update immediately */
   act: (fn: (s: S) => S) => void;
   /** schedule a mini-timeline from now */
@@ -35,7 +35,7 @@ export function useDemoTimeline<S extends DemoBase>({
   const sorted = useMemo(() => [...steps].sort((a, b) => a.at - b.at), [steps]);
   const finalState = useMemo<S>(
     () => ({ ...sorted.reduce((s, st) => st.action(s), initial), cursor: null }),
-    [sorted, initial],
+    [sorted, initial]
   );
 
   const [state, setState] = useState<S>(initial);
@@ -47,7 +47,7 @@ export function useDemoTimeline<S extends DemoBase>({
   const timers = useRef<number[]>([]);
 
   const clearTimers = () => {
-    timers.current.forEach((t) => window.clearTimeout(t));
+    timers.current.forEach(t => window.clearTimeout(t));
     timers.current = [];
   };
 
@@ -87,7 +87,7 @@ export function useDemoTimeline<S extends DemoBase>({
           due.push(sorted[index.current]);
           index.current += 1;
         }
-        if (due.length) setState((s) => due.reduce((acc, st) => st.action(acc), s));
+        if (due.length) setState(s => due.reduce((acc, st) => st.action(acc), s));
       }
       raf = requestAnimationFrame(tick);
     };
@@ -98,7 +98,7 @@ export function useDemoTimeline<S extends DemoBase>({
   const act = useCallback((fn: (s: S) => S) => setState(fn), []);
 
   const sequence = useCallback((seq: Step<S>[]) => {
-    seq.forEach((st) => {
+    seq.forEach(st => {
       timers.current.push(window.setTimeout(() => setState(st.action), st.at));
     });
   }, []);
