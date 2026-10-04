@@ -717,6 +717,8 @@ async function applyDeckLive(
       ops: applied,
       ...(args.expected_sha ? { expected_sha: args.expected_sha } : {}),
       new_sha: liveSha(epoch, version),
+      // Distinct per write: two applies inside the audit's 5 s window both stay.
+      value: liveSha(epoch, version),
       committed_to: 'live',
       ...(hasDestructiveOps ? { prior_slide_count: countSlides(snapshot.content.slides) } : {}),
     } as Prisma.InputJsonValue,
@@ -980,6 +982,8 @@ async function applyDeckEdits(args: DeckApplyArgs, ctx: ToolContext): Promise<To
       ops: applied,
       expected_sha: args.expected_sha,
       new_sha: saved.sha,
+      // Distinct per write: two applies inside the audit's 5 s window both stay.
+      value: saved.sha,
       commit_sha: saved.commit,
       committed_to: committedTo,
       ...(hasDestructiveOps ? { prior_slide_count: priorSlideCount } : {}),

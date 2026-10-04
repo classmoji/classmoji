@@ -1,6 +1,7 @@
 /**
- * Audit rows for live editing: COLLAB_JOIN / COLLAB_LEAVE per socket, and
- * ACCESS_DENIED for a refused join by a member of the doc's classroom. A
+ * Audit rows for live editing: COLLAB_JOIN / COLLAB_LEAVE per socket,
+ * UPDATE for a person's structural edit of a deck (slides inserted, deleted,
+ * moved), and ACCESS_DENIED for a refused join by a member of the doc's classroom. A
  * refused NON-member cannot be recorded (the audit row needs a classroom
  * role) — a known limitation of the audit schema.
  *
@@ -10,7 +11,7 @@ export interface AuditEntry {
   userId: string;
   classroomId: string;
   role: string;
-  action: 'COLLAB_JOIN' | 'COLLAB_LEAVE' | 'ACCESS_DENIED';
+  action: 'COLLAB_JOIN' | 'COLLAB_LEAVE' | 'ACCESS_DENIED' | 'UPDATE';
   resourceType: string;
   resourceId: string;
   data?: Record<string, unknown>;

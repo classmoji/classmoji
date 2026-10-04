@@ -62,6 +62,7 @@ import type { CheckpointTrigger } from './checkpoint.ts';
 import type { CollabConfig } from './config.ts';
 import { handleRequest } from './http.ts';
 import { recordAudit, type AuditSink } from './audit.ts';
+import { summarizeStructure, watchDeckStructure, type StructuralOp } from './structureAudit.ts';
 import { currentEpoch, isReseedMarker, type CollabDocStore } from './store/types.ts';
 
 export { DEFAULT_COLLAB_PORT };
@@ -142,6 +143,8 @@ interface LoadedDoc {
   deleted?: boolean;
   /** The last transaction touched only ephemeral roots (deck locks). */
   lastTxEphemeral: boolean;
+  /** Slides the last transaction inserted, deleted or moved (decks). */
+  lastTxStructure?: StructuralOp[];
   /**
    * Who edited since the last store; merged into collab_docs.editors by the
    * next store (persisted, so co-author trailers survive a restart).
@@ -421,6 +424,15 @@ export class CollabRuntime {
       });
     }
 
+    if (doc.room.kind === 'deck') {
+      // Read by onChange for the same transaction, like lastTxEphemeral.
+      const structure = watchDeckStructure(document);
+      document.on('afterTransaction', (tr: Y.Transaction) => {
+        const entry = this.loaded.get(payload.documentName);
+        if (entry) entry.lastTxStructure = structure.opsOf(tr);
+      });
+    }
+
     adapter?.attach?.(document);
   }
 
@@ -437,6 +449,32 @@ export class CollabRuntime {
       | undefined;
     if (!context?.userId || context.repair || context.external) return;
     doc.pendingEditors.set(context.userId, context.name ?? 'Someone');
+    // A person's structural edit (agents' ops are audited by the MCP tool).
+    const structure = doc.lastTxStructure;
+    if (structure?.length && !context.agent) this.auditStructure(doc, context, structure);
+  }
+
+  /**
+   * One audit row per structural transaction from an editor: UPDATE on the
+   * deck like deck_apply's, with the same `{ op, id }` entries, so "who
+   * deleted slide X" is one query over people and agents. `value` keeps two
+   * different edits in the dedup window apart.
+   */
+  private auditStructure(
+    doc: LoadedDoc,
+    context: Partial<CollabConnectionContext>,
+    ops: StructuralOp[]
+  ): void {
+    if (!context.userId || !context.role) return;
+    recordAudit(this.deps.audit, {
+      userId: context.userId,
+      classroomId: doc.classroomId,
+      role: context.role,
+      action: 'UPDATE',
+      resourceType: 'SLIDES',
+      resourceId: doc.room.id,
+      data: { tool: 'live_editor', ops, value: summarizeStructure(ops) },
+    });
   }
 
   /** A socket's join/leave in the audit log (direct connections carry no role). */
