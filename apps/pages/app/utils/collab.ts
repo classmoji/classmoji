@@ -318,7 +318,8 @@ export interface LiveCheckpoint {
 /** Stateless messages the collab server broadcasts to a page's room. */
 export type LiveStatelessMessage =
   | ({ type: 'checkpoint' } & LiveCheckpoint)
-  | { type: 'page-meta'; title?: string; width?: number };
+  | { type: 'page-meta'; title?: string; width?: number }
+  | { type: 'preview-changed' };
 
 /** A stateless payload as one of ours, or null for anything else. */
 export function parseStatelessMessage(payload: unknown): LiveStatelessMessage | null {
@@ -341,6 +342,7 @@ export function parseStatelessMessage(payload: unknown): LiveStatelessMessage | 
       ...(typeof message.error === 'string' && message.error ? { error: message.error } : {}),
     };
   }
+  if (message.type === 'preview-changed') return { type: 'preview-changed' };
   if (message.type === 'page-meta') {
     const title = typeof message.title === 'string' ? message.title : undefined;
     const width =
@@ -450,9 +452,3 @@ export function offerCopyUnsaved({
 }): boolean {
   return refused && hasSynced && localUnsynced;
 }
-
-/**
- * How often an open live page asks the loader again for what lives outside
- * the document (a pending preview, the classroom's state). Also on focus.
- */
-export const LIVE_REFRESH_MS = 90_000;

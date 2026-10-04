@@ -86,6 +86,8 @@ export interface CollabSessionState {
   lastCheckpoint: (LiveCheckpoint & { seq: number }) | null;
   /** Title/width changed outside the document, numbered as it arrives. */
   pageMeta: { title?: string; width?: number; seq: number } | null;
+  /** Numbered each time the page's pending preview was created, changed or removed. */
+  previewChangedSeq: number;
 }
 
 export const INITIAL_SESSION_STATE: CollabSessionState = {
@@ -99,6 +101,7 @@ export const INITIAL_SESSION_STATE: CollabSessionState = {
   openedAt: 0,
   lastCheckpoint: null,
   pageMeta: null,
+  previewChangedSeq: 0,
 };
 
 const asStatus = (value: unknown): ProviderStatus =>
@@ -231,6 +234,8 @@ export class CollabSession {
     if (message.type === 'checkpoint') {
       const { type: _type, ...checkpoint } = message;
       this.update({ lastCheckpoint: { ...checkpoint, seq: this.seq } });
+    } else if (message.type === 'preview-changed') {
+      this.update({ previewChangedSeq: this.seq });
     } else {
       const { type: _type, ...meta } = message;
       this.update({ pageMeta: { ...meta, seq: this.seq } });

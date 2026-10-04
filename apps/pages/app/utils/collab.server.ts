@@ -176,6 +176,24 @@ export async function notifyPageMeta(
   }
 }
 
+/**
+ * Tell the room the page's pending preview changed (created, accepted,
+ * discarded), so every open editor shows the current one. Best effort.
+ */
+export async function notifyPreviewChanged(env: CollabEnv, pageId: string): Promise<void> {
+  try {
+    await collabInternalRequest<unknown>(
+      env,
+      'POST',
+      pageInternalPath(pageId, 'preview-changed'),
+      {},
+      { timeoutMs: 3000 }
+    );
+  } catch (error) {
+    console.warn('[pages] Could not tell the live room the preview changed:', error);
+  }
+}
+
 /** "Save version": ask for a checkpoint now. */
 export function requestCheckpoint(env: CollabEnv, pageId: string, actor: CollabActor) {
   const body: CheckpointRequest = { actor };

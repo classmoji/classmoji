@@ -34,7 +34,6 @@ import {
   LiveRejectedBanner,
 } from '~/components/editor/collab/LiveNotices.tsx';
 import {
-  LIVE_REFRESH_MS,
   SAVE_VERSION_WAIT_MS,
   offerCopyUnsaved,
   applyPageMeta,
@@ -745,25 +744,29 @@ const PageRoute = () => {
   }, [liveRefused, collab]);
 
   // A live page never reloads on its own, so news the loader carries — above
-  // all a preview an agent just left — is fetched again while the tab is in
-  // view: every LIVE_REFRESH_MS, and whenever it comes back into view.
+  // all a preview an agent just left or someone accepted — is fetched again
+  // when the room says the preview changed, and (as a fallback for a message
+  // missed while away) whenever the tab comes back into view.
   const liveRevalidator = useRevalidator();
   const liveRevalidatorRef = useRef(liveRevalidator);
   liveRevalidatorRef.current = liveRevalidator;
+  const refreshLoader = useCallback(() => {
+    const revalidator = liveRevalidatorRef.current;
+    if (revalidator.state !== 'idle') return;
+    void revalidator.revalidate();
+  }, []);
   useEffect(() => {
     if (!liveMode) return;
-    const refresh = () => {
-      const revalidator = liveRevalidatorRef.current;
-      if (document.visibilityState !== 'visible' || revalidator.state !== 'idle') return;
-      void revalidator.revalidate();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refreshLoader();
     };
-    const timer = window.setInterval(refresh, LIVE_REFRESH_MS);
-    document.addEventListener('visibilitychange', refresh);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener('visibilitychange', refresh);
-    };
-  }, [liveMode]);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [liveMode, refreshLoader]);
+  const previewChangedSeq = liveState.previewChangedSeq;
+  useEffect(() => {
+    if (liveMode && previewChangedSeq > 0) refreshLoader();
+  }, [liveMode, previewChangedSeq, refreshLoader]);
 
   // Edits the server never acknowledged are lost on reload; before that, the
   // person can take them along as text.

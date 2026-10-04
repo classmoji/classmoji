@@ -49,6 +49,7 @@ import {
   liveEditingBlockedFor,
   liveEditingEnv,
   notifyPageMeta,
+  notifyPreviewChanged,
   readEditorName,
   requestCheckpoint,
 } from '~/utils/collab.server.ts';
@@ -680,6 +681,8 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
         resolutions,
       });
       if (result.merged) {
+        // Every other open editor drops its "pending preview" banner.
+        await notifyPreviewChanged(liveEnv, pageId);
         const keptParam = result.previewKept ? '&preview_kept=1' : '';
         return redirect(`/${page.classroom.slug}/${pageId}?notice=preview-accepted${keptParam}`);
       }
@@ -1067,6 +1070,7 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
   if (intent === 'preview-discard') {
     try {
       await ClassmojiService.pageContent.discardPreview(actionPage);
+      if (liveEnv) await notifyPreviewChanged(liveEnv, pageId);
       return redirect(`/${page.classroom.slug}/${pageId}?notice=preview-discarded`);
     } catch (error: unknown) {
       console.error('Failed to discard preview:', error);

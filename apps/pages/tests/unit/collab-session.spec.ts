@@ -181,6 +181,12 @@ test.describe('CollabSession', () => {
       payload: JSON.stringify({ type: 'checkpoint', at: '2026-10-03T12:01:00Z', error: 'x' }),
     });
     expect(session.getState().lastCheckpoint!.seq).toBeGreaterThan(first!.seq);
+    expect(session.getState().previewChangedSeq).toBe(0);
+    provider.args.onStateless({ payload: JSON.stringify({ type: 'preview-changed' }) });
+    const changed = session.getState().previewChangedSeq;
+    expect(changed).toBeGreaterThan(0);
+    provider.args.onStateless({ payload: JSON.stringify({ type: 'preview-changed' }) });
+    expect(session.getState().previewChangedSeq).toBeGreaterThan(changed);
     provider.args.onStateless({ payload: 'garbage' });
     expect(session.getState().lastCheckpoint).toMatchObject({ error: 'x' });
     session.destroy();

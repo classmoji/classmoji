@@ -495,6 +495,9 @@ test.describe('messages from the room', () => {
       title: 'Week 2',
       width: 3,
     });
+    expect(parseStatelessMessage('{"type":"preview-changed"}')).toEqual({
+      type: 'preview-changed',
+    });
     expect(parseStatelessMessage('{"type":"checkpoint"}')).toBeNull();
     expect(parseStatelessMessage('{"type":"page-meta"}')).toBeNull();
     expect(parseStatelessMessage('{"type":"deck-meta","title":"x"}')).toBeNull();
@@ -585,4 +588,10 @@ test.describe('live editing on but unreachable', () => {
     expect(liveIntentRefusal('update-title', false, true)).toBeNull();
     expect(liveIntentRefusal('save', false, false)).toBeNull();
   });
+});
+
+test('the live route refreshes on preview-changed and on returning to view, never on a timer', () => {
+  expect(ROUTE).toContain('if (liveMode && previewChangedSeq > 0) refreshLoader();');
+  expect(ROUTE).toContain("document.addEventListener('visibilitychange', onVisible);");
+  expect(ROUTE).not.toMatch(/setInterval\(refresh/);
 });
