@@ -666,7 +666,18 @@ export async function recordPageFile(
   page: PageWithContentRepo,
   path: string,
   sha: string,
-  content?: string
+  content?: string,
+  {
+    awaitTail = false,
+  }: {
+    /**
+     * Wait for the warm and the index before returning (still never throws).
+     * For callers whose process may stop the moment they return — a Trigger.dev
+     * run — where a fire-and-forget tail would simply be dropped. Saves from a
+     * request keep the default and return as soon as the row is written.
+     */
+    awaitTail?: boolean;
+  } = {}
 ): Promise<void> {
   const classroomId = (page.classroom as { id?: unknown }).id;
   if (typeof classroomId !== 'string') return;
@@ -684,8 +695,9 @@ export async function recordPageFile(
   // the row are done, and a cache fill that is still running (or has already
   // failed) changes nothing about whether the save succeeded. AFTER the row is
   // written, because the warm reads the sha back out of the map.
+  const tail: Promise<unknown>[] = [];
   const ctx = pageWarmContext(page);
-  if (ctx) void warmContentText(ctx, [path]);
+  if (ctx) tail.push(warmContentText(ctx, [path]));
 
   // And feed the search index off the same tail, from the bytes this save
   // already has in hand.
@@ -704,14 +716,19 @@ export async function recordPageFile(
   // them and indexes from the merged file itself.
   const pageId = (page as { id?: unknown }).id;
   if (content !== undefined && typeof pageId === 'string') {
-    void indexOneFile({
-      classroomId,
-      path,
-      sha,
-      body: content,
-      docHint: { kind: 'page', id: pageId, title: page.title },
-    });
+    tail.push(
+      indexOneFile({
+        classroomId,
+        path,
+        sha,
+        body: content,
+        docHint: { kind: 'page', id: pageId, title: page.title },
+      })
+    );
   }
+
+  const settled = Promise.allSettled(tail);
+  if (awaitTail) await settled;
 }
 
 /**

@@ -608,9 +608,10 @@ export async function saveDeck({
 export async function recordDeckCommit(
   slide: SlideContentTarget,
   committed: Array<{ path: string; sha: string }>,
-  written: Array<{ path: string; content: string }>
+  written: Array<{ path: string; content: string }>,
+  options: RecordTailOptions = {}
 ): Promise<void> {
-  await recordDeckFiles(slide, committed, written);
+  await recordDeckFiles(slide, committed, written, options);
 
   if (slide.id) {
     await getPrisma().slide.update({
@@ -634,10 +635,20 @@ export async function recordDeckCommit(
  * size column is written by tree syncs that measured it, and an invented value
  * would overwrite a measured one.
  */
+interface RecordTailOptions {
+  /**
+   * Wait for the warm, thumbnail enqueue and index before returning (still
+   * never throws). For callers whose process may stop the moment they return
+   * — a Trigger.dev run — where a fire-and-forget tail would be dropped.
+   */
+  awaitTail?: boolean;
+}
+
 async function recordDeckFiles(
   slide: SlideContentTarget,
   committed: Array<{ path: string; sha: string }>,
-  written: Array<{ path: string; content: string }>
+  written: Array<{ path: string; content: string }>,
+  { awaitTail = false }: RecordTailOptions = {}
 ): Promise<void> {
   const classroomId = slide.classroom?.id;
   if (!classroomId) return;
@@ -657,11 +668,14 @@ async function recordDeckFiles(
   // origin pull. Not awaited — the save is finished, and a cache fill is not
   // allowed to hold it open or to fail it. AFTER the rows above, because the
   // warm looks each sha up in the map.
+  const tail: Promise<unknown>[] = [];
   const ctx = deckWarmContext(slide);
   if (ctx)
-    void warmContentText(
-      ctx,
-      committed.map(file => file.path)
+    tail.push(
+      warmContentText(
+        ctx,
+        committed.map(file => file.path)
+      )
     );
 
   // And ask for a fresh picture of slide one. Same contract as the warm above,
@@ -678,7 +692,7 @@ async function recordDeckFiles(
   // Only main-branch writes reach here — `saveDeck` skips `recordDeckFiles`
   // entirely for a preview branch — so no screenshot is ever taken of content
   // nobody has published.
-  void enqueueDeckThumbnail(slide.id, classroomId);
+  tail.push(enqueueDeckThumbnail(slide.id, classroomId));
 
   // And feed the search index, from the artifact this commit just wrote.
   //
@@ -694,12 +708,17 @@ async function recordDeckFiles(
   const htmlSha = committed.find(file => file.path === htmlPath)?.sha;
   const htmlBody = written.find(file => file.path === htmlPath)?.content;
   if (slide.id && htmlSha && htmlBody !== undefined) {
-    void indexOneFile({
-      classroomId,
-      path: htmlPath,
-      sha: htmlSha,
-      body: htmlBody,
-      docHint: { kind: 'slide', id: slide.id, title: slide.title },
-    });
+    tail.push(
+      indexOneFile({
+        classroomId,
+        path: htmlPath,
+        sha: htmlSha,
+        body: htmlBody,
+        docHint: { kind: 'slide', id: slide.id, title: slide.title },
+      })
+    );
   }
+
+  const settled = Promise.allSettled(tail);
+  if (awaitTail) await settled;
 }
