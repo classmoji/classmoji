@@ -20,6 +20,7 @@ import {
   BlockColorsItem,
 } from '@blocknote/react';
 import { BlockNoteView } from '@blocknote/mantine';
+import { syntaxHighlighter } from '@blocknote/code-block';
 import { filterSuggestionItems } from '@blocknote/core/extensions';
 import { en as defaultLocale } from '@blocknote/core/locales';
 import {
@@ -294,6 +295,10 @@ const PageEditor = forwardRef(function PageEditor(
     ...(resolveFileUrl ? { resolveFileUrl } : {}),
     dropCursor: multiColumnDropCursor,
     dictionary: { ...defaultLocale, multi_column: multiColumnLocales.en },
+    // Shiki highlighting for code blocks (github-light/github-dark). Up to
+    // BlockNote 0.46 it came with the code block's options; 0.55 makes it an
+    // editor extension.
+    extensions: [syntaxHighlighter],
   };
 
   // Create the BlockNote editor with multi-column drop cursor + dictionary.

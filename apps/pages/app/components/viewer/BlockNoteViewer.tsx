@@ -1,5 +1,6 @@
 import { useCreateBlockNote } from '@blocknote/react';
 import { BlockNoteView } from '@blocknote/mantine';
+import { syntaxHighlighter } from '@blocknote/code-block';
 import { MantineProvider } from '@mantine/core';
 import { normalizeCodeBlockContent } from '@classmoji/page-schema';
 import { useState, useEffect, useMemo } from 'react';
@@ -75,6 +76,8 @@ const BlockNoteViewer = ({
   const editor = useCreateBlockNote({
     schema: viewerSchema,
     initialContent: initialContent as never,
+    // Shiki highlighting for code blocks, as in the editor.
+    extensions: [syntaxHighlighter],
     ...(resolveFileUrl ? { resolveFileUrl } : {}),
   });
 
