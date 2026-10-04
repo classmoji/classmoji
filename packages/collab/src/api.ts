@@ -10,6 +10,12 @@ import type { CollabKind } from './rooms.ts';
 // ─── Internal HTTP API (`${COLLAB_URL}/internal`, header x-collab-secret) ───
 
 export const COLLAB_SECRET_HEADER = 'x-collab-secret';
+
+/**
+ * The `x-collab-secret` every side uses when COLLAB_INTERNAL_SECRET is unset
+ * and NODE_ENV !== 'production' (production refuses to start without one).
+ */
+export const DEV_COLLAB_INTERNAL_SECRET = 'classmoji-collab-dev-secret';
 export const COLLAB_INTERNAL_PREFIX = '/internal';
 
 /** Who is making a server-side edit; shown in awareness as `<name> (agent)`. */

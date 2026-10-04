@@ -11,8 +11,10 @@
  * | COLLAB_CHECKPOINT_MAX_DELAY  | 30s                         | 4m           |
  */
 
+import { DEV_COLLAB_INTERNAL_SECRET } from '@classmoji/collab';
+
 /** Used for `x-collab-secret` when NODE_ENV !== 'production' and none is set. */
-export const DEV_INTERNAL_SECRET = 'classmoji-collab-dev-secret';
+export const DEV_INTERNAL_SECRET = DEV_COLLAB_INTERNAL_SECRET;
 
 export interface CollabConfig {
   production: boolean;

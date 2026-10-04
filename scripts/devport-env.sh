@@ -31,6 +31,8 @@ if [ -f ".devport" ]; then
   export PAGES_URL="http://localhost:$PAGES_PORT"
   export ADMIN_URL="http://localhost:$ADMIN_PORT"
   export MCP_PUBLIC_URL="http://localhost:$MCP_PORT"
+  export COLLAB_URL="http://localhost:$COLLAB_PORT"
+  export COLLAB_WS_URL="ws://localhost:$COLLAB_PORT"
 
   # Override DATABASE_URL with feature-specific DB
   DB_NAME="classmoji_${DEVPORT_NAME//-/_}"
@@ -38,7 +40,7 @@ if [ -f ".devport" ]; then
 
   echo "🔌 Devport $DEVPORT_ID ($DEVPORT_NAME) active"
   echo "   Webapp: $WEBAPP_PORT | Hook: $HOOK_PORT"
-  echo "   Quiz: $QUIZ_AGENT_PORT | Slides: $SLIDES_PORT | Pages: $PAGES_PORT | MCP: $MCP_PORT | Admin: $ADMIN_PORT | DB: $DB_NAME"
+  echo "   Quiz: $QUIZ_AGENT_PORT | Slides: $SLIDES_PORT | Pages: $PAGES_PORT | MCP: $MCP_PORT | Collab: $COLLAB_PORT | Admin: $ADMIN_PORT | DB: $DB_NAME"
 else
   # Default ports for main repo (ID=0)
   export WEBAPP_PORT=3000
@@ -58,4 +60,6 @@ else
   export PAGES_URL="http://localhost:7100"
   export ADMIN_URL="http://localhost:7500"
   export MCP_PUBLIC_URL="http://localhost:8100"
+  export COLLAB_URL="http://localhost:7700"
+  export COLLAB_WS_URL="ws://localhost:7700"
 fi
