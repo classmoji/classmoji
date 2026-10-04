@@ -3,7 +3,10 @@ import * as Y from 'yjs';
 
 import { cloneYDoc, deckLocks, deckToYDoc } from '../convert.ts';
 import {
+  LOCK_DISCONNECT_GRACE_MS,
   LOCK_TAKEOVER_IDLE_MS,
+  markDisconnected,
+  markReconnected,
   LockActivity,
   acquireLock,
   expireLocks,
@@ -63,11 +66,20 @@ describe('acquire / refresh / release', () => {
     expect(took).toMatchObject({ ok: true, tookOver: true });
   });
 
-  it('holder gone from awareness → stale', () => {
+  it('a disconnected holder keeps the slide for the grace period', () => {
     const a = peer(10);
     acquireLock(a, 's1', holder(a, 'A'), { now: 0 });
-    expect(lockState(getLock(a, 's1'), 99, { now: 1, connected: new Set([99]) })).toBe('stale');
-    expect(lockState(getLock(a, 's1'), 99, { now: 1, connected: new Set([10, 99]) })).toBe('held');
+    // Not marked yet (the server marks it): still held.
+    expect(lockState(getLock(a, 's1'), 99, { now: 1, connected: new Set([99]) })).toBe('held');
+    markDisconnected(a, [10], 1_000);
+    expect(lockState(getLock(a, 's1'), 99, { now: 2_000, idleMs: 1_000 })).toBe('held');
+    expect(lockState(getLock(a, 's1'), 99, { now: 40_000, idleMs: LOCK_DISCONNECT_GRACE_MS })).toBe(
+      'stale'
+    );
+    // Back within the grace: the mark goes, the lock (and its stamp) stay.
+    markReconnected(a, [10]);
+    expect(getLock(a, 's1')).not.toHaveProperty('disconnectedAt');
+    expect(lockState(getLock(a, 's1'), 99, { now: 40_000, idleMs: 0 })).toBe('held');
   });
 
   it('touch keeps `since`, only the holder can touch or release', () => {
@@ -100,6 +112,21 @@ describe('server cleanup', () => {
     expect(expireLocks(doc, { now, activity, maxIdleMs: 120_000 })).toEqual([]);
     now = 130_000;
     expect(expireLocks(doc, { now, activity, maxIdleMs: 120_000 })).toEqual(['s1']);
+    activity.destroy();
+  });
+
+  it('a gone holder is marked first, released after the grace', () => {
+    let now = 0;
+    const doc = peer(1);
+    const activity = new LockActivity(doc, () => now);
+    acquireLock(doc, 's1', { ...holder(doc, 'A'), clientId: 10 }, { now: 0 });
+    const connected = new Set<number>([1]);
+    expect(expireLocks(doc, { now, activity, connected })).toEqual([]);
+    expect(getLock(doc, 's1')).toHaveProperty('disconnectedAt', 0);
+    now = LOCK_DISCONNECT_GRACE_MS - 1;
+    expect(expireLocks(doc, { now, activity, connected })).toEqual([]);
+    now = LOCK_DISCONNECT_GRACE_MS;
+    expect(expireLocks(doc, { now, activity, connected })).toEqual(['s1']);
     activity.destroy();
   });
 });

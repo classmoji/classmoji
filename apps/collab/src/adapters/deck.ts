@@ -53,8 +53,11 @@ import {
   deckToYDoc,
   expireLocks,
   installLockArbiter,
+  installLockGuard,
+  LOCK_DISCONNECT_GRACE_MS,
+  markDisconnected,
+  markReconnected,
   lockState,
-  releaseLocksOf,
   syncDeckIntoYDoc,
   yDocToDeck,
   type DeckSnapshotContent,
@@ -145,6 +148,28 @@ export function canEditDeck(
 /** Store-skipping origin for the server's own lock bookkeeping. */
 export const LOCK_ORIGIN = { source: 'local', skipStoreHooks: true, context: { locks: true } };
 
+/** Origin of the guard's corrections of edits to held slides (stored like any edit). */
+export const GUARD_ORIGIN = { source: 'local', context: { lockGuard: true } };
+
+/**
+ * The Yjs clientIDs behind a transaction from a browser connection (its
+ * awareness clients and whoever inserted structs), or null for the server's
+ * own writes (agents, merges, locks), which are checked where they are made.
+ */
+export function writersOf(document: Y.Doc, tr: Y.Transaction): Set<number> | null {
+  const origin = tr.origin as { source?: string; connection?: unknown } | null;
+  if (!origin || origin.source !== 'connection') return null;
+  const out = new Set<number>();
+  const clients = (
+    document as Y.Doc & { getClients?: (connection: unknown) => Set<number> }
+  ).getClients?.(origin.connection);
+  for (const id of clients ?? []) out.add(id);
+  for (const [client, clock] of tr.afterState) {
+    if (clock > (tr.beforeState.get(client) ?? 0)) out.add(client);
+  }
+  return out;
+}
+
 /** How often the server sweeps a live deck's locks. */
 export const LOCK_SWEEP_MS = 15_000;
 
@@ -152,8 +177,8 @@ export const LOCK_SWEEP_MS = 15_000;
 type WithAwareness = Y.Doc & {
   awareness?: {
     getStates(): Map<number, unknown>;
-    on(event: 'update', cb: (change: { removed: number[] }) => void): void;
-    off(event: 'update', cb: (change: { removed: number[] }) => void): void;
+    on(event: 'update', cb: (change: { added?: number[]; removed: number[] }) => void): void;
+    off(event: 'update', cb: (change: { added?: number[]; removed: number[] }) => void): void;
   };
 };
 
@@ -506,10 +531,32 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
     const activity = new LockActivity(document, this.deps.now);
     this.attached.set(document, { activity });
     const uninstall = installLockArbiter(document, LOCK_ORIGIN);
+    // Peers that skip the client checks: an edit to a slide someone else holds
+    // is undone here, in the same tick.
+    const uninstallGuard = installLockGuard(document, {
+      origin: GUARD_ORIGIN,
+      writersOf: tr => writersOf(document, tr),
+      onRevert: (ids, writers) =>
+        console.warn(
+          `[collab] undid a change to held slide(s) ${ids.join(', ')} by client(s) ${[...writers].join(', ')}`
+        ),
+    });
 
     const awareness = (document as WithAwareness).awareness;
-    const onAwareness = ({ removed }: { removed: number[] }) => {
-      if (removed.length > 0) releaseLocksOf(document, removed, LOCK_ORIGIN);
+    const graceTimers = new Set<ReturnType<typeof setTimeout>>();
+    const onAwareness = ({ added, removed }: { added?: number[]; removed: number[] }) => {
+      // Back within the grace: the lock is theirs again.
+      if (added && added.length > 0) markReconnected(document, added, LOCK_ORIGIN);
+      if (removed.length > 0) {
+        // Gone: keep their slide for the grace period, then sweep it.
+        markDisconnected(document, removed, this.deps.now(), LOCK_ORIGIN);
+        const timer = setTimeout(() => {
+          graceTimers.delete(timer);
+          sweep();
+        }, LOCK_DISCONNECT_GRACE_MS + 250);
+        (timer as { unref?: () => void }).unref?.();
+        graceTimers.add(timer);
+      }
     };
     awareness?.on('update', onAwareness);
 
@@ -530,7 +577,9 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
 
     document.once('destroy', () => {
       clearInterval(timer);
+      for (const grace of graceTimers) clearTimeout(grace);
       uninstall();
+      uninstallGuard();
       awareness?.off('update', onAwareness);
       activity.destroy();
       this.attached.delete(document);

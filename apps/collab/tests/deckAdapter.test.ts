@@ -22,6 +22,7 @@ import { CollabHttpError, type LiveEditContext } from '../src/adapters/types.ts'
 import {
   LOCK_ORIGIN,
   canEditDeck,
+  writersOf,
   createDeckAdapter,
   type DeckAdapterDeps,
   type DeckRecord,
@@ -94,18 +95,22 @@ function liveDoc(deck: DeckJson = DECK, connected: number[] = []) {
 
 class FakeAwareness {
   private states: Map<number, unknown>;
-  private listeners = new Set<(change: { removed: number[] }) => void>();
+  private listeners = new Set<(change: { added?: number[]; removed: number[] }) => void>();
   constructor(connected: number[]) {
     this.states = new Map(connected.map(id => [id, { user: { id: `u${id}` } }]));
   }
   getStates() {
     return this.states;
   }
-  on(_event: 'update', cb: (change: { removed: number[] }) => void) {
+  on(_event: 'update', cb: (change: { added?: number[]; removed: number[] }) => void) {
     this.listeners.add(cb);
   }
-  off(_event: 'update', cb: (change: { removed: number[] }) => void) {
+  off(_event: 'update', cb: (change: { added?: number[]; removed: number[] }) => void) {
     this.listeners.delete(cb);
+  }
+  reconnect(clientId: number) {
+    this.states.set(clientId, { user: { id: `u${clientId}` } });
+    for (const cb of this.listeners) cb({ added: [clientId], removed: [] });
   }
   disconnect(clientId: number) {
     this.states.delete(clientId);
@@ -341,18 +346,25 @@ describe('mergeExternal', () => {
 });
 
 describe('lock bookkeeping', () => {
-  it('releases a disconnected client’s locks, store hooks skipped', () => {
-    const adapter = createDeckAdapter(makeDeps());
+  it('a disconnected holder keeps the slide for the grace period, store hooks skipped', () => {
+    const deps = makeDeps();
+    const adapter = createDeckAdapter(deps);
     const document = liveDoc(DECK, [5, 6]);
-    acquireLock(document, 'aaaa0001', holder(5), { now: 1_000_000 });
-    acquireLock(document, 'aaaa0002', holder(6), { now: 1_000_000 });
+    acquireLock(document, 'aaaa0001', holder(5), { now: deps.now() });
+    acquireLock(document, 'aaaa0002', holder(6), { now: deps.now() });
     adapter.attach(document);
     const origins: unknown[] = [];
     document.on('afterTransaction', tr => origins.push(tr.origin));
     document.awareness.disconnect(5);
-    expect(getLock(document, 'aaaa0001')).toBeNull();
-    expect(getLock(document, 'aaaa0002')?.clientId).toBe(6);
+    expect(getLock(document, 'aaaa0001')).toMatchObject({
+      clientId: 5,
+      disconnectedAt: deps.now(),
+    });
     expect(origins).toEqual([LOCK_ORIGIN]);
+    // Back within the grace: theirs again, unmarked.
+    document.awareness.reconnect(5);
+    expect(getLock(document, 'aaaa0001')).not.toHaveProperty('disconnectedAt');
+    expect(getLock(document, 'aaaa0002')?.clientId).toBe(6);
     document.destroy();
   });
 
@@ -362,8 +374,8 @@ describe('lock bookkeeping', () => {
     const document = liveDoc(DECK, [6]);
     acquireLock(document, 'aaaa0001', holder(5), { now: 0 }); // 5 is not connected
     acquireLock(document, 'aaaa0002', holder(6), { now: deps.now() });
-    adapter.attach(document); // sweeps once on attach
-    expect(getLock(document, 'aaaa0001')).toBeNull();
+    adapter.attach(document); // sweeps once on attach: 5's lock starts its grace
+    expect(getLock(document, 'aaaa0001')).toHaveProperty('disconnectedAt');
     expect(getLock(document, 'aaaa0002')).not.toBeNull();
     deps.tick(LOCK_EXPIRE_IDLE_MS + 1);
     adapter.repair(document); // idempotent attach, no sweep
@@ -487,5 +499,24 @@ describe('mergeExternal: bases, no-ops, held slides', () => {
   it('currentSourceSha is the deck file’s blob sha', async () => {
     const adapter = createDeckAdapter(makeDeps());
     expect(await adapter.currentSourceSha(SLIDE.id)).toBe('main-sha');
+  });
+});
+
+describe('writersOf', () => {
+  it("a connection's awareness clients and the inserting clients; null for server writes", () => {
+    const document = deckToYDoc(DECK) as Y.Doc & { getClients?: (c: unknown) => Set<number> };
+    const connection = {};
+    document.getClients = c => (c === connection ? new Set([77]) : new Set());
+    let seen: Set<number> | null | undefined;
+    document.on('afterTransaction', tr => {
+      seen = writersOf(document, tr);
+    });
+    const peer = cloneYDoc(document);
+    peer.clientID = 88;
+    (deckSlides(peer).get('aaaa0001') as Y.Map<unknown>).set('html', 'x');
+    Y.applyUpdate(document, Y.encodeStateAsUpdate(peer), { source: 'connection', connection });
+    expect([...(seen ?? [])].sort()).toEqual([77, 88]);
+    document.transact(() => deckSlides(document).delete('aaaa0002'), { source: 'local' });
+    expect(seen).toBeNull();
   });
 });

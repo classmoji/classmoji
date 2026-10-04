@@ -1158,7 +1158,8 @@ export class DeckBridge {
     if (!held || held.slideId !== slideId) return;
     const now = this.clock();
     held.lastEditAt = now;
-    if (heartbeatDue(held.lastBeatAt, now)) {
+    // No heartbeats while offline: the server's grace mark must not be raced.
+    if (this.session.ready && heartbeatDue(held.lastBeatAt, now)) {
       held.lastBeatAt = now;
       touchLock(this.doc, slideId, this.doc.clientID, now, BRIDGE_ORIGIN);
     }
