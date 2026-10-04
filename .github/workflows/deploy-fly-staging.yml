@@ -18,6 +18,7 @@ jobs:
       webapp: ${{ steps.filter.outputs.webapp == 'true' || github.event_name == 'workflow_dispatch' }}
       ai-agent: ${{ steps.filter.outputs.ai-agent == 'true' || github.event_name == 'workflow_dispatch' }}
       hook-station: ${{ steps.filter.outputs.hook-station == 'true' || github.event_name == 'workflow_dispatch' }}
+      collab: ${{ steps.filter.outputs.collab == 'true' || github.event_name == 'workflow_dispatch' }}
       mcp: ${{ steps.filter.outputs.mcp == 'true' || github.event_name == 'workflow_dispatch' }}
       site: ${{ steps.filter.outputs.site == 'true' || github.event_name == 'workflow_dispatch' }}
       slides: ${{ steps.filter.outputs.slides == 'true' || github.event_name == 'workflow_dispatch' }}
@@ -58,6 +59,15 @@ jobs:
               - '.github/workflows/deploy-fly-staging.yml'
               - '.github/workflows/build-fly-staging.yml'
               - 'apps/hook-station/**'
+              - 'packages/**'
+            collab:
+              - 'package.json'
+              - 'package-lock.json'
+              - '.npmrc'
+              - '.dockerignore'
+              - '.github/workflows/deploy-fly-staging.yml'
+              - '.github/workflows/build-fly-staging.yml'
+              - 'apps/collab/**'
               - 'packages/**'
             mcp:
               - 'package.json'
@@ -110,7 +120,8 @@ jobs:
               - 'packages/page-schema/**'
 
   # Build images before the migration barrier; only rollouts wait for webapp.
-  # At most six monorepo builds: admin takes ai-agent's slot when it finishes.
+  # At most six monorepo builds: admin takes ai-agent's slot when it finishes,
+  # collab takes hook-station's.
   build-webapp:
     needs: changes
     if: needs.changes.outputs.webapp == 'true'
@@ -137,6 +148,16 @@ jobs:
     uses: ./.github/workflows/build-fly-staging.yml
     with:
       service: hook-station
+    secrets:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+
+  build-collab:
+    needs: [changes, build-hook-station]
+    if: always() && !cancelled() && needs.changes.outputs.collab == 'true'
+    uses: ./.github/workflows/build-fly-staging.yml
+    with:
+      service: collab
     secrets:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
@@ -239,6 +260,28 @@ jobs:
           flyctl deploy --config apps/hook-station/fly.toml --image "$IMAGE" --app classmoji-hook-station-staging
         env:
           IMAGE: ${{ needs.build-hook-station.outputs.image }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  deploy-collab:
+    needs: [changes, deploy-webapp, build-collab]
+    if: always() && !cancelled() && needs.build-collab.result == 'success' && needs.build-collab.outputs.image != '' && (needs.deploy-webapp.result == 'success' || (needs.changes.outputs.webapp != 'true' && needs.deploy-webapp.result == 'skipped'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy collab
+        run: |
+          # Like hook-station, collab must NOT scale to zero: open rooms and
+          # their unsaved edits live in the one machine's memory. Deploy the
+          # production config as-is (auto_stop off, exactly one machine).
+          if flyctl status --app classmoji-collab-staging >/dev/null 2>&1; then
+            flyctl deploy --config apps/collab/fly.toml --image "$IMAGE" --app classmoji-collab-staging
+          else
+            echo "::notice::Skipping collab deploy because Fly app classmoji-collab-staging is not provisioned."
+          fi
+        env:
+          IMAGE: ${{ needs.build-collab.outputs.image }}
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
   deploy-mcp:
