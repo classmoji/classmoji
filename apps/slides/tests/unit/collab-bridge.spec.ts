@@ -24,6 +24,7 @@ import {
   recordSlideConflict,
   LOCK_DISCONNECT_GRACE_MS,
   markDisconnected,
+  markReconnected,
   installLockArbiter,
   isConfirmedFor,
   moveSlide,
@@ -612,6 +613,26 @@ test.describe('live deck bridge', () => {
     t.session.ack();
     expect(readSlideConflicts(t.remote).has('aaaa0002')).toBe(false);
     expect(t.states.at(-1)?.conflicts).toEqual({});
+    t.bridge.destroy();
+  });
+
+  test('offline, back within the grace with the lock still ours → the offline edit is written', () => {
+    const t = setup();
+    t.section('aaaa0002').innerHTML = '<h2>one</h2>';
+    t.bridge.flushLocal();
+    t.session.ack();
+    t.session.ack();
+    t.session.setReady(false);
+    // The server marks the lock while we are away (grace).
+    markDisconnected(t.remote, [t.session.doc.clientID], Date.now());
+    t.section('aaaa0002').innerHTML = '<h2>written offline</h2>';
+    t.bridge.flushLocal();
+    expect(t.session.pending).toBe(0);
+    // Back: the server unmarks; the lock (and its stamp) are still ours.
+    markReconnected(t.remote, [t.session.doc.clientID]);
+    t.session.setReady(true);
+    t.session.ack();
+    expect(t.remoteHtml('aaaa0002')).toBe('<h2>written offline</h2>');
     t.bridge.destroy();
   });
 
