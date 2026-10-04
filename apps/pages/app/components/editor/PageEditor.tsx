@@ -32,6 +32,7 @@ import { withCollaboration } from '@blocknote/core/yjs';
 import type * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 import { FRAGMENT } from '@classmoji/page-schema/constants';
+import { normalizeCodeBlockContent } from '@classmoji/page-schema';
 import type { CollabUser } from '@classmoji/collab';
 import { kindOfFilename, type UploadCapability } from '@classmoji/services/media/router';
 
@@ -275,9 +276,11 @@ const PageEditor = forwardRef(function PageEditor(
     },
     [pageId, onAssetUploaded, classroomId]
   );
+  // Code blocks as plain text: BlockNote 0.55 will not load a stored link
+  // inside one (see normalizeCodeBlockContent).
   const typedInitialContent =
     Array.isArray(initialContent) && initialContent.length > 0
-      ? (initialContent as PageBlockInsertions)
+      ? (normalizeCodeBlockContent(initialContent) as PageBlockInsertions)
       : undefined;
 
   // The options both modes share.

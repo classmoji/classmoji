@@ -1,3 +1,5 @@
+import { normalizeCodeBlockContent } from './codeContent.ts';
+
 /**
  * The `content.json` wrapper, serialized exactly as `savePageContent`
  * (packages/services/src/classmoji/pageContent.service.ts) writes it:
@@ -23,14 +25,16 @@ export function serializePageContent(content: PageContent): string {
 
 /**
  * Parse a stored `content.json`: the `{ blocks, coverImage? }` wrapper, or the
- * older bare block array (read the same way `loadPageContent` does).
+ * older bare block array (read the same way `loadPageContent` does). Code
+ * blocks come back as plain text (`normalizeCodeBlockContent`), the only form
+ * BlockNote 0.55 loads.
  */
 export function parsePageContent(text: string): PageContent {
   const parsed = JSON.parse(text) as unknown;
-  if (Array.isArray(parsed)) return { blocks: parsed, coverImage: null };
+  if (Array.isArray(parsed)) return { blocks: normalizeCodeBlockContent(parsed), coverImage: null };
   if (parsed && typeof parsed === 'object' && Array.isArray((parsed as PageContent).blocks)) {
     const { blocks, coverImage } = parsed as PageContent;
-    return { blocks, coverImage: coverImage || null };
+    return { blocks: normalizeCodeBlockContent(blocks), coverImage: coverImage || null };
   }
   throw new Error('content.json is neither a block array nor a { blocks } wrapper');
 }

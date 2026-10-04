@@ -34,6 +34,7 @@ export {
   createPageSchema,
   type PageSchema,
 } from './schema.ts';
+export { normalizeCodeBlockContent } from './codeContent.ts';
 export {
   serializePageContent,
   parsePageContent,

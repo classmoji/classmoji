@@ -1,6 +1,7 @@
 import { ServerBlockNoteEditor } from '@blocknote/server-util';
 import * as Y from 'yjs';
 
+import { normalizeCodeBlockContent } from './codeContent.ts';
 import { COVER_IMAGE_KEY, FRAGMENT, META_MAP } from './constants.ts';
 import type { PageContent, PageCoverImage } from './content.ts';
 import { createPageSchema } from './schema.ts';
@@ -40,13 +41,15 @@ export function cloneDoc(doc: Y.Doc): Y.Doc {
 
 /**
  * Blocks -> a new Y.Doc with the blocks in FRAGMENT. For SEEDING only (a new
- * document); never use it to rewrite a live document.
+ * document); never use it to rewrite a live document. Code blocks are seeded
+ * as plain text (`normalizeCodeBlockContent`): BlockNote 0.55 refuses a link
+ * inside one.
  */
 export function blocksToYDoc(
   blocks: unknown[],
   editor: PageServerEditor = getServerEditor()
 ): Y.Doc {
-  return editor.blocksToYDoc(blocks as never, FRAGMENT);
+  return editor.blocksToYDoc(normalizeCodeBlockContent(blocks) as never, FRAGMENT);
 }
 
 /**

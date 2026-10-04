@@ -14,8 +14,14 @@ import { BlockNoteEditor, createCodeBlockSpec, BlockNoteSchema } from '@blocknot
 import { codeBlockOptions } from '@blocknote/code-block';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { normalizeCodeBlockContent } from '../codeContent.ts';
 import { codeBlockDisplayLanguage, createPageSchema } from '../schema.ts';
-import { CODE_LANGUAGES as LANGUAGES, codeBlocks } from './fixtures/codeBlockLanguages.ts';
+import {
+  CODE_LANGUAGES as LANGUAGES,
+  RICH_CODE_TEXT,
+  codeBlocks,
+  richCodeBlocks,
+} from './fixtures/codeBlockLanguages.ts';
 
 let editor: BlockNoteEditor<any, any, any> | undefined;
 afterEach(() => {
@@ -109,5 +115,30 @@ describe('the page code block in the editor', () => {
     const block = e.document[0];
     expect(block.type).toBe('codeBlock');
     expect((block.props as { language: string }).language).toBe('shellscript');
+  });
+});
+
+describe('code blocks saved with links or styles (inline content, up to 0.46)', () => {
+  it('BlockNote 0.55 refuses them as stored (why they are normalized on load)', () => {
+    let error: unknown;
+    try {
+      mountEditor(createPageSchema(), richCodeBlocks());
+    } catch (err) {
+      error = err;
+    }
+    // BlockNote wraps it: "Error creating document from blocks passed as
+    // `initialContent`", caused by ProseMirror's content check.
+    expect(String((error as Error)?.cause ?? error)).toMatch(/Invalid content for node codeBlock/);
+  });
+
+  it('load in the editor once normalized, as plain text', () => {
+    const { editor: e, root } = mountEditor(
+      createPageSchema(),
+      normalizeCodeBlockContent(richCodeBlocks())
+    );
+    for (const [id, text] of Object.entries(RICH_CODE_TEXT)) {
+      expect(e.getBlock(id)?.content, id).toEqual([{ type: 'text', text, styles: {} }]);
+    }
+    expect(root.querySelectorAll('[data-content-type="codeBlock"] a')).toHaveLength(0);
   });
 });

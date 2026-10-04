@@ -1,6 +1,7 @@
 import { useCreateBlockNote } from '@blocknote/react';
 import { BlockNoteView } from '@blocknote/mantine';
 import { MantineProvider } from '@mantine/core';
+import { normalizeCodeBlockContent } from '@classmoji/page-schema';
 import { useState, useEffect, useMemo } from 'react';
 import type { PageBlockInsertions } from '~/components/editor/blocks/index.tsx';
 import { viewerSchema } from './viewerBlocks.tsx';
@@ -63,7 +64,7 @@ const BlockNoteViewer = ({
   const [isMounted, setIsMounted] = useState(false);
   const initialContent =
     Array.isArray(content) && content.length > 0
-      ? (content as PageBlockInsertions)
+      ? (normalizeCodeBlockContent(content) as PageBlockInsertions)
       : ([{ type: 'paragraph', content: [] }] as PageBlockInsertions);
 
   const downloads = useMemo(
