@@ -5,6 +5,7 @@ import { cloneYDoc, deckLocks, deckToYDoc } from '../convert.ts';
 import {
   LOCK_DISCONNECT_GRACE_MS,
   LOCK_TAKEOVER_IDLE_MS,
+  expireGoneLocks,
   markDisconnected,
   markReconnected,
   LockActivity,
@@ -69,8 +70,14 @@ describe('acquire / refresh / release', () => {
   it('a disconnected holder keeps the slide for the grace period', () => {
     const a = peer(10);
     acquireLock(a, 's1', holder(a, 'A'), { now: 0 });
-    // Not marked yet (the server marks it): still held.
-    expect(lockState(getLock(a, 's1'), 99, { now: 1, connected: new Set([99]) })).toBe('held');
+    // Gone, not marked yet: held for a moment (the server's mark follows)…
+    expect(lockState(getLock(a, 's1'), 99, { now: 1, connected: new Set([99]), idleMs: 0 })).toBe(
+      'held'
+    );
+    // …a lock nobody marked (left in a stored state) is free to take over.
+    expect(
+      lockState(getLock(a, 's1'), 99, { now: 1, connected: new Set([99]), idleMs: 5_000 })
+    ).toBe('stale');
     markDisconnected(a, [10], 1_000);
     expect(lockState(getLock(a, 's1'), 99, { now: 2_000, idleMs: 1_000 })).toBe('held');
     expect(lockState(getLock(a, 's1'), 99, { now: 40_000, idleMs: LOCK_DISCONNECT_GRACE_MS })).toBe(
@@ -128,6 +135,22 @@ describe('server cleanup', () => {
     now = LOCK_DISCONNECT_GRACE_MS;
     expect(expireLocks(doc, { now, activity, connected })).toEqual(['s1']);
     activity.destroy();
+  });
+});
+
+describe('expireGoneLocks (server, on load and before agent ops)', () => {
+  it('judges by stored times, not by when the doc was loaded', () => {
+    const doc = peer(1);
+    acquireLock(doc, 'old', { ...holder(doc, 'Gone'), clientId: 10 }, { now: 0 });
+    acquireLock(doc, 'recent', { ...holder(doc, 'Blip'), clientId: 11 }, { now: 0 });
+    markDisconnected(doc, [11], 90_000);
+    acquireLock(doc, 'here', { ...holder(doc, 'Here'), clientId: 12 }, { now: 0 });
+    const result = expireGoneLocks(doc, { now: 100_000, connected: new Set([12]) });
+    expect(result.expired).toEqual(['old']);
+    // Blip dropped 10 s ago: 20 s of grace left.
+    expect(result.nextInMs).toBe(20_000);
+    expect(getLock(doc, 'recent')).not.toBeNull();
+    expect(getLock(doc, 'here')).not.toBeNull();
   });
 });
 

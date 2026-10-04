@@ -3,7 +3,7 @@
  * rule + classroom lock + flag), seeding, ops (applied id-aware; 409 on a slide
  * a person holds), external merges, and the server's lock bookkeeping.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import type { Role } from '@prisma/client';
 import {
@@ -13,6 +13,7 @@ import {
   deckSlides,
   deckToYDoc,
   getLock,
+  markDisconnected,
   readSlideConflicts,
   roomName,
   yDocToDeck,
@@ -384,18 +385,51 @@ describe('lock bookkeeping', () => {
     document.destroy();
   });
 
-  it('clears stored locks of clients long gone, and idle locks', () => {
+  it('on load, a lock whose holder left long ago is cleared at once (stored times)', () => {
     const deps = makeDeps();
     const adapter = createDeckAdapter(deps);
     const document = liveDoc(DECK, [6]);
-    acquireLock(document, 'aaaa0001', holder(5), { now: 0 }); // 5 is not connected
+    acquireLock(document, 'aaaa0001', holder(5), { now: 0 }); // 5 left ages ago
     acquireLock(document, 'aaaa0002', holder(6), { now: deps.now() });
-    adapter.attach(document); // sweeps once on attach: 5's lock starts its grace
-    expect(getLock(document, 'aaaa0001')).toHaveProperty('disconnectedAt');
+    adapter.attach(document);
+    expect(getLock(document, 'aaaa0001')).toBeNull();
     expect(getLock(document, 'aaaa0002')).not.toBeNull();
-    deps.tick(LOCK_EXPIRE_IDLE_MS + 1);
-    adapter.repair(document); // idempotent attach, no sweep
-    expect(getLock(document, 'aaaa0002')).not.toBeNull();
+    document.destroy();
+  });
+
+  it('on load, a holder gone within the grace keeps it until the grace (not a fresh one) ends', () => {
+    vi.useFakeTimers();
+    try {
+      const deps = makeDeps();
+      const adapter = createDeckAdapter(deps);
+      const document = liveDoc(DECK, []);
+      acquireLock(document, 'aaaa0001', holder(5), { now: deps.now() });
+      markDisconnected(document, [5], deps.now() - 20_000); // dropped 20 s ago
+      adapter.attach(document);
+      expect(getLock(document, 'aaaa0001')).not.toBeNull();
+      deps.tick(10_300);
+      vi.advanceTimersByTime(10_300);
+      expect(getLock(document, 'aaaa0001')).toBeNull();
+      document.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('agent ops treat a gone holder past the grace as free, and clear the lock', () => {
+    const deps = makeDeps();
+    const adapter = createDeckAdapter(deps);
+    const document = liveDoc(DECK, [6]);
+    adapter.attach(document);
+    // Holder 5 joined after load and left; its lock was marked 31 s ago.
+    acquireLock(document, 'aaaa0001', holder(5), { now: deps.now() });
+    markDisconnected(document, [5], deps.now() - 31_000);
+    adapter.applyOps(
+      context(document),
+      adapter.parseOps([{ op: 'update', id: 'aaaa0001', html: 'x' }])
+    );
+    expect(yDocToDeck(document).slides[0].html).toBe('x');
+    expect(getLock(document, 'aaaa0001')).toBeNull();
     document.destroy();
   });
 });

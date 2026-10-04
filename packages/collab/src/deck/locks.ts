@@ -35,6 +35,8 @@ export const LOCK_TAKEOVER_IDLE_MS = 60_000;
 export const LOCK_EXPIRE_IDLE_MS = 120_000;
 /** A disconnected holder keeps the slide this long (a reload, a network blip). */
 export const LOCK_DISCONNECT_GRACE_MS = 30_000;
+/** How long a gone holder's unmarked lock waits for the server's mark. */
+export const LOCK_GONE_SETTLE_MS = 3_000;
 
 export type LockHolder = Pick<SlideLock, 'userId' | 'name' | 'color' | 'clientId'>;
 
@@ -107,6 +109,19 @@ export function lockState(lock: SlideLock | null, clientId: number, ctx: LockCon
   // A holder who dropped keeps the slide through the grace period (the
   // server marks the lock; the mark is the entry's last change).
   const disconnectedAt = (lock as StampedLock).disconnectedAt;
+  // Gone without a mark (a lock left in a stored state by a session long
+  // over): nothing to wait for. Only when the caller's view of who is
+  // connected is settled (`connected` given).
+  // A few seconds' settle first: the server's mark for a holder who JUST
+  // dropped arrives right after their presence goes.
+  if (
+    typeof disconnectedAt !== 'number' &&
+    ctx.connected &&
+    !ctx.connected.has(lock.clientId) &&
+    (ctx.idleMs ?? Infinity) >= LOCK_GONE_SETTLE_MS
+  ) {
+    return 'stale';
+  }
   if (typeof disconnectedAt === 'number') {
     const since = ctx.idleMs ?? Math.max(0, ctx.now - disconnectedAt);
     if (since >= LOCK_DISCONNECT_GRACE_MS) return 'stale';
@@ -227,6 +242,37 @@ export function markReconnected(
     }, origin);
   }
   return cleared.map(([slideId]) => slideId);
+}
+
+/**
+ * Server: drop locks whose holder is not connected and has been gone longer
+ * than the grace period, judged by the STORED times (the server's
+ * `disconnectedAt` mark, else the holder's `lastActive`) — never by when this
+ * process loaded the doc, so a lock left in a stored state does not get a
+ * fresh grace period on every visit. Returns what it dropped and, for gone
+ * holders still within their grace, how long until the first of them ends.
+ */
+export function expireGoneLocks(
+  doc: Y.Doc,
+  ctx: { now: number; connected: ReadonlySet<number>; graceMs?: number },
+  origin: unknown = null
+): { expired: string[]; nextInMs: number | null } {
+  const grace = ctx.graceMs ?? LOCK_DISCONNECT_GRACE_MS;
+  const expired: string[] = [];
+  let nextInMs: number | null = null;
+  for (const [slideId, lock] of allLocks(doc)) {
+    if (ctx.connected.has(lock.clientId)) continue;
+    const since = (lock as StampedLock).disconnectedAt ?? lock.lastActive;
+    const left = since + grace - ctx.now;
+    if (left <= 0) expired.push(slideId);
+    else nextInMs = nextInMs === null ? left : Math.min(nextInMs, left);
+  }
+  if (expired.length > 0) {
+    doc.transact(() => {
+      for (const slideId of expired) deckLocks(doc).delete(slideId);
+    }, origin);
+  }
+  return { expired, nextInMs };
 }
 
 /** Server: drop every lock held by these Yjs clients (they disconnected). */

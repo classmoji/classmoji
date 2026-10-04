@@ -54,6 +54,7 @@ import {
   expireLocks,
   installLockArbiter,
   installLockGuard,
+  expireGoneLocks,
   mergeSlideFields,
   recordSlideConflict,
   LOCK_DISCONNECT_GRACE_MS,
@@ -386,14 +387,24 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
     const now = this.deps.now();
     const out = new Map<string, SlideLock>();
     for (const [slideId, lock] of allLocks(doc)) {
+      // A gone holder is judged by the stored times (when they dropped), an
+      // active one by what this process has seen of them.
+      const gone = connected ? !connected.has(lock.clientId) : false;
       const state = lockState(lock, -1, {
         now,
         connected,
-        idleMs: activity?.idleMs(slideId, now),
+        idleMs: gone ? undefined : activity?.idleMs(slideId, now),
       });
       if (state === 'held') out.set(slideId, lock);
     }
     return out;
+  }
+
+  /** Drop locks whose holder left more than the grace period ago (stored times). */
+  clearGoneLocks(document: Y.Doc): { expired: string[]; nextInMs: number | null } {
+    const connected = connectedClients(document);
+    if (!connected) return { expired: [], nextInMs: null };
+    return expireGoneLocks(document, { now: this.deps.now(), connected }, LOCK_ORIGIN);
   }
 
   /**
@@ -412,6 +423,7 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
 
   applyOps(ctx: LiveEditContext, ops: DeckOp[]): ApplyOpsResult {
     this.attach(ctx.document);
+    this.clearGoneLocks(ctx.document);
     const result: ApplyOpsResult = {};
     ctx.transact(doc => {
       const current = yDocToDeck(doc);
@@ -651,7 +663,7 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
         markDisconnected(document, removed, this.deps.now(), LOCK_ORIGIN);
         const timer = setTimeout(() => {
           graceTimers.delete(timer);
-          sweep();
+          clearGone();
         }, LOCK_DISCONNECT_GRACE_MS + 250);
         (timer as { unref?: () => void }).unref?.();
         graceTimers.add(timer);
@@ -659,23 +671,35 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
     };
     awareness?.on('update', onAwareness);
 
-    const sweep = () =>
+    // Gone holders by their stored times (a lock left by a session that ended
+    // while the doc was unloaded gets no fresh grace period); when one is
+    // still within its grace, look again when it ends.
+    let goneTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearGone = () => {
+      const { nextInMs } = this.clearGoneLocks(document);
+      if (goneTimer) clearTimeout(goneTimer);
+      goneTimer = null;
+      if (nextInMs !== null) {
+        goneTimer = setTimeout(clearGone, nextInMs + 250);
+        (goneTimer as { unref?: () => void }).unref?.();
+      }
+    };
+    const sweep = () => {
+      clearGone();
+      // Idle holders (a frozen tab still connected).
       expireLocks(
         document,
-        {
-          now: this.deps.now(),
-          activity,
-          maxIdleMs: LOCK_EXPIRE_IDLE_MS,
-          connected: connectedClients(document),
-        },
+        { now: this.deps.now(), activity, maxIdleMs: LOCK_EXPIRE_IDLE_MS },
         LOCK_ORIGIN
       );
+    };
     sweep();
     const timer = setInterval(sweep, LOCK_SWEEP_MS);
     (timer as { unref?: () => void }).unref?.();
 
     document.once('destroy', () => {
       clearInterval(timer);
+      if (goneTimer) clearTimeout(goneTimer);
       for (const grace of graceTimers) clearTimeout(grace);
       uninstall();
       uninstallGuard();
