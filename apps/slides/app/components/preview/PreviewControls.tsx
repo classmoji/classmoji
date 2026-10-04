@@ -748,7 +748,12 @@ export const PendingPreviewBanner = ({ preview }: { preview: PreviewInfo }) => {
 
   return (
     <>
-      <div data-testid="pending-preview-banner" className="fixed top-14 left-0 right-0 z-40">
+      <div
+        data-testid="pending-preview-banner"
+        className="fixed left-0 right-0 z-40"
+        // Under the navbar's measured height (3.5rem unless live editing measured it).
+        style={{ top: 'var(--slides-nav-h, 3.5rem)' }}
+      >
         <div className="border-b border-amber-200 dark:border-amber-800/70 bg-amber-50/90 dark:bg-amber-950/80 backdrop-blur px-4 sm:px-6 lg:px-8 py-1.5">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-amber-900 dark:text-amber-100">
             <span className="inline-flex items-center gap-1.5">

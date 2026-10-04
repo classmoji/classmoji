@@ -3336,6 +3336,38 @@ export default function SlideViewer() {
   );
   const syncStatus = deriveSyncStatus(collabState);
 
+  // Live editing: the navbar carries more (presence, status, Save version)
+  // and its toolbar can wrap, so measure it — and the pending-preview banner
+  // pinned under it in edit mode — and let the slide area, the properties
+  // panel and the banner sit below the real heights instead of a fixed 56 px.
+  const pendingBannerShown = Boolean(
+    collabMode && isEditing && preview && !preview.active && preview.exists
+  );
+  useEffect(() => {
+    if (!collabMode || typeof ResizeObserver === 'undefined') return;
+    const rootStyle = document.documentElement.style;
+    const nav = document.querySelector('.slides-navbar');
+    const banner = pendingBannerShown
+      ? document.querySelector('[data-testid="pending-preview-banner"]')
+      : null;
+    const measure = () => {
+      if (nav) rootStyle.setProperty('--slides-nav-h', `${nav.getBoundingClientRect().height}px`);
+      rootStyle.setProperty(
+        '--slides-banner-h',
+        banner ? `${banner.getBoundingClientRect().height}px` : '0px'
+      );
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    if (nav) observer.observe(nav);
+    if (banner) observer.observe(banner);
+    return () => {
+      observer.disconnect();
+      rootStyle.removeProperty('--slides-nav-h');
+      rootStyle.removeProperty('--slides-banner-h');
+    };
+  }, [collabMode, pendingBannerShown]);
+
   // A live preview: outline the slides the pending preview changes.
   useEffect(() => {
     if (!revealInstance || !preview?.active || !previewChangedIds?.length) return;

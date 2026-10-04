@@ -62,7 +62,10 @@
 
 /* Reveal container - positioned below navbar */
 .reveal-container {
-  @apply fixed inset-0 pt-14;
+  @apply fixed inset-0;
+  /* The navbar's real height (live editing measures it: its toolbar can wrap)
+     plus a banner pinned under it, if any; 3.5rem / 0 otherwise. */
+  padding-top: calc(var(--slides-nav-h, 3.5rem) + var(--slides-banner-h, 0px));
   /* Let Reveal.js theme set the background via .reveal-viewport */
 }
 
@@ -124,7 +127,8 @@
 
 /* Properties sidebar layout */
 .properties-sidebar {
-  @apply fixed top-14 right-0 bottom-0 z-40;
+  @apply fixed right-0 bottom-0 z-40;
+  top: calc(var(--slides-nav-h, 3.5rem) + var(--slides-banner-h, 0px));
   @apply w-64;
 }
 
