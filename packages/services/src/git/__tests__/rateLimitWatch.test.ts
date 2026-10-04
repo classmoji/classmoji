@@ -101,6 +101,8 @@ describe('watchRateLimits on a real Octokit', () => {
         owner: 'o',
         repo: 'r',
         path: 'p',
+        message: 'm',
+        content: 'Yw==',
       })
     ).rejects.toMatchObject({ status: 403 });
     await expect(octokit.request('GET /rate_limit')).rejects.toMatchObject({ status: 403 });
