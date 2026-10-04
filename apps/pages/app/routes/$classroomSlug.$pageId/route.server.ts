@@ -258,7 +258,9 @@ export const loader = async ({
   const readContent = async () => {
     if (collab && liveEnv) {
       try {
-        const snapshot = await fetchLiveSnapshot(liveEnv, page.id);
+        // Short: a collab server that does not answer must not hold up the
+        // page; git's copy is good enough for resolving assets.
+        const snapshot = await fetchLiveSnapshot(liveEnv, page.id, { timeoutMs: 3000 });
         return {
           format: 'json' as const,
           content: Array.isArray(snapshot.content?.blocks) ? snapshot.content.blocks : [],

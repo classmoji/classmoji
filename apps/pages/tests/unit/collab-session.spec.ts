@@ -98,6 +98,18 @@ test.describe('CollabSession', () => {
     expect(provider.destroyCalls).toBe(1);
   });
 
+  test('a 4403 close (the periodic re-check) is a refusal; other closes are not', () => {
+    const { session, provider } = open();
+    provider.args.onClose({ event: { code: 1006 } });
+    expect(session.getState().rejected).toBeNull();
+    expect(provider.destroyCalls).toBe(0);
+
+    provider.args.onClose({ event: { code: 4403 } });
+    expect(session.getState().rejected).toBe('forbidden');
+    expect(provider.destroyCalls).toBe(1);
+    session.destroy();
+  });
+
   test('an unknown reason is read as forbidden', () => {
     const { session, provider } = open();
     provider.args.onAuthenticationFailed({ reason: 'permission-denied' });

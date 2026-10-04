@@ -29,13 +29,20 @@ import {
   type MergeFn,
 } from '~/utils/collabAccept.ts';
 
-/** Blocks as the page schema stores them (defaults filled in); raw on failure. */
+/**
+ * Blocks as the page schema stores them (defaults filled in); raw on failure.
+ *
+ * Ids first, the way the collab server seeds a document: the schema mints a
+ * RANDOM id for an id-less block, which could then never line up with the
+ * same block in the live document (seeded with the derived id).
+ */
 export function normalizePageBlocks(blocks: unknown[]): unknown[] {
+  const withIds = ClassmojiService.pageContent.ensureBlockIds(blocks);
   try {
-    return yDocToBlocks(blocksToYDoc(blocks));
+    return yDocToBlocks(blocksToYDoc(withIds));
   } catch (error) {
     console.warn('[pages] Could not normalize blocks through the page schema:', error);
-    return blocks;
+    return withIds;
   }
 }
 

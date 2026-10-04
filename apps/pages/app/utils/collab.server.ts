@@ -87,11 +87,17 @@ export async function collabEditorData({
 // ─── Internal API calls ──────────────────────────────────────────────────────
 
 /** The live document (read from a clone on the server): blocks + cover. */
-export function fetchLiveSnapshot(env: CollabEnv, pageId: string) {
+export function fetchLiveSnapshot(
+  env: CollabEnv,
+  pageId: string,
+  options: { timeoutMs?: number } = {}
+) {
   return collabInternalRequest<SnapshotResponse<'page'>>(
     env,
     'GET',
-    pageInternalPath(pageId, 'snapshot')
+    pageInternalPath(pageId, 'snapshot'),
+    undefined,
+    options
   );
 }
 

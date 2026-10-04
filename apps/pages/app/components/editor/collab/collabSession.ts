@@ -18,7 +18,12 @@
 
 import * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
-import type { CollabLoaderData, CollabRejectReason, CollabTokenPayload } from '@classmoji/collab';
+import {
+  COLLAB_FORBIDDEN_CLOSE_CODE,
+  type CollabLoaderData,
+  type CollabRejectReason,
+  type CollabTokenPayload,
+} from '@classmoji/collab';
 
 import {
   normalizeRejectReason,
@@ -38,6 +43,8 @@ export interface CollabProviderCallbacks {
   onStatus(data: { status: ProviderStatus | string }): void;
   onUnsyncedChanges(data: { number: number }): void;
   onAuthenticationFailed(data: { reason: string }): void;
+  /** The socket closed; `event.code` 4403 is the server's periodic re-check refusing. */
+  onClose(data: { event: { code?: number } | null | undefined }): void;
 }
 
 export interface CollabProviderArgs extends CollabProviderCallbacks {
@@ -101,6 +108,13 @@ export class CollabSession {
       onStatus: ({ status }) => this.update({ status: asStatus(status) }),
       onUnsyncedChanges: ({ number }) => this.update({ unsyncedChanges: number }),
       onAuthenticationFailed: ({ reason }) => this.reject(reason),
+      // The server re-checks access every minute and closes the socket with
+      // 4403 when it fails. That is a close, not an auth message: without
+      // this the provider would just reconnect while the editor stayed
+      // editable over a document that may never sync again.
+      onClose: ({ event }) => {
+        if (event?.code === COLLAB_FORBIDDEN_CLOSE_CODE) this.reject('forbidden');
+      },
     });
 
     this.onAwarenessChange = () => this.refreshPeers();
