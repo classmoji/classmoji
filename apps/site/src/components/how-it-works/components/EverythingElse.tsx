@@ -2,7 +2,7 @@ import React from 'react';
 import type { LucideIcon } from 'lucide-react';
 import {
   CoinsIcon,
-  DownloadIcon,
+  FileTextIcon,
   FlaskConicalIcon,
   GlobeIcon,
   LayersIcon,
@@ -22,15 +22,15 @@ const ITEMS: Item[] = [
     href: '/docs/instructors/modules',
   },
   {
-    icon: PresentationIcon,
-    title: 'Pages and slides',
-    description: 'Write course pages and present slides without leaving your class.',
+    icon: FileTextIcon,
+    title: 'Pages',
+    description: 'Write syllabi, guides, and notes as course pages your students read in the class.',
     href: '/docs/instructors/pages',
   },
   {
     icon: FlaskConicalIcon,
     title: 'Autograding',
-    description: 'Run your tests on Github Actions and see results on each submission.',
+    description: 'Run your tests on Github Actions or Gitlab CI and see results on each submission.',
     href: '/docs/instructors/autograding',
   },
   {
@@ -57,10 +57,9 @@ const ITEMS: Item[] = [
     description: 'Surveys, sign-ups, and team peer review, with responses exported to CSV.',
   },
   {
-    icon: DownloadIcon,
-    title: 'Import from Github Classroom',
-    description: 'Bring an existing course over live. No ZIP upload.',
-    href: '/docs/instructors/import-github-classroom',
+    icon: PresentationIcon,
+    title: 'Slides',
+    description: 'Build decks in the browser and present them, with speaker notes and students following along live.',
   },
 ];
 
