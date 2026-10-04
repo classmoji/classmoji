@@ -11,19 +11,16 @@
 import getPrisma from '@classmoji/database';
 import { ContentService } from '@classmoji/content';
 import {
-  applyDeckOps,
   discardDeckPreview,
-  merge3Units,
   parseDeckHtml,
   previewBranchName,
   resolveSlideRepoContext,
-  slideService,
   type DeckJson,
+  type DeckMergeConflict,
   type DeckOp,
-  type MergeChoice,
+  type MergeResolution,
 } from '@classmoji/services/slides';
 import {
-  deckOpsBetween,
   type CheckpointRequest,
   type CollabActor,
   type CollabLoaderData,
@@ -162,76 +159,72 @@ async function readPreviewDecks(slide: SlideTarget) {
 }
 
 export type LiveAcceptResult =
-  | { ok: true; applied: number; conflicts: number }
+  | { ok: true }
+  | { ok: false; conflicts: DeckMergeConflict[] }
   | { ok: false; status: number; error: string };
 
 /**
- * Accept a deck preview into the LIVE deck: 3-way merge (base = where the
- * preview branched, ours = the live deck, theirs = the preview; a slide both
- * sides changed takes the preview — that is what the reviewer accepted), then
- * the difference applied as id-aware ops through the collab server, so people
- * editing other slides keep their work. The branch is deleted once applied.
+ * Accept a deck preview into the LIVE deck. The collab server runs the 3-way
+ * merge inside the live transaction (base = where the preview branched,
+ * ours = the live deck, theirs = the preview), so people editing other slides
+ * keep their work. Conflicts come back unapplied for the chooser; the chooser
+ * re-submits with `resolutions`. The branch is deleted only once applied.
  */
 export async function acceptDeckPreviewLive({
   env,
   slide,
   actor,
+  resolutions,
 }: {
   env: CollabEnv;
   slide: SlideTarget;
   actor: CollabActor;
+  resolutions?: MergeResolution[] | null;
 }): Promise<LiveAcceptResult> {
   const { theirs, base } = await readPreviewDecks(slide);
   if (!theirs) return { ok: false, status: 404, error: 'No pending preview to accept' };
-
-  const live = await fetchLiveDeck(env, slide.id);
-  const ours = live.content;
-  const first = merge3Units(base ?? ours, ours, theirs);
-  let merged = first.merged;
-  if (first.conflicts.length > 0) {
-    const resolutions: Record<string, MergeChoice> = {};
-    for (const conflict of first.conflicts) resolutions[conflict.id] = 'theirs';
-    merged = merge3Units(base ?? ours, ours, theirs, { resolutions }).merged;
-  }
-
-  const ops = deckOpsBetween(ours, merged, {
-    verify: (deck, plan) =>
-      applyDeckOps(deck, plan, { starterCustomCss: slideService.STARTER_CUSTOM_CSS }).deck,
-  });
-  if (!ops) {
+  if (!base) {
     return {
       ok: false,
-      status: 422,
-      error:
-        "This preview can't be merged into the live deck. Discard it and ask for the change again.",
+      status: 409,
+      error: "This preview can't be merged. Discard it and ask for the change again.",
     };
   }
 
-  if (ops.length > 0) {
-    try {
-      await applyLiveDeckOps(env, slide.id, ops, actor);
-    } catch (error) {
-      if (error instanceof CollabRequestError && error.status === 409) {
-        const body = error.body as Partial<SlideLockedError> | null;
-        const who = body?.holder?.name ?? 'Someone';
+  try {
+    await collabInternalRequest<{ applied: boolean; version: number }>(
+      env,
+      'POST',
+      deckInternalPath(slide.id, 'merge-preview'),
+      { base, theirs, ...(resolutions?.length ? { resolutions } : {}), actor },
+      { timeoutMs: 20_000 }
+    );
+  } catch (error) {
+    if (error instanceof CollabRequestError && error.status === 409) {
+      const body = error.body as {
+        error?: string;
+        conflicts?: DeckMergeConflict[];
+        holder?: SlideLockedError['holder'];
+      } | null;
+      if (body?.error === 'conflicts' && Array.isArray(body.conflicts)) {
+        return { ok: false, conflicts: body.conflicts };
+      }
+      if (body?.error === 'slide-locked') {
+        const who = body.holder?.name ?? 'Someone';
         return {
           ok: false,
           status: 409,
-          error: `${who} is editing a slide this preview changes. Accept it once they are done.`,
+          error: `${who} is editing a slide this preview changes. Merge it once they are done.`,
         };
       }
-      if (error instanceof CollabRequestError && error.status === 422) {
-        return {
-          ok: false,
-          status: 409,
-          error: 'The deck changed while accepting. Try again.',
-        };
-      }
-      throw error;
     }
+    if (error instanceof CollabRequestError && error.status === 400) {
+      return { ok: false, status: 400, error: 'Those choices no longer match. Merge again.' };
+    }
+    throw error;
   }
   await discardDeckPreview(slide as never);
-  return { ok: true, applied: ops.length, conflicts: first.conflicts.length };
+  return { ok: true };
 }
 
 /**

@@ -26,6 +26,7 @@ import {
   previewBranchName,
   resolveDeckPreviewConflicts,
   saveDeck,
+  splitDeckConflicts,
   saveDeckFromOps,
   saveDeckWithMerge,
   slideFileService,
@@ -1610,12 +1611,39 @@ export const action = async ({
   // deletes the branch without touching main.
 
   if (intent === 'preview-accept' && liveEnv) {
-    // Live deck: merge the preview into the live document through collab
-    // (people editing other slides keep their work), then drop the branch.
+    // Live deck: the collab server merges the preview into the live document
+    // (people editing other slides keep their work); the branch goes after.
+    let liveResolutions: MergeResolution[] | null = null;
+    const rawLiveResolutions = formData.get('resolutions');
+    if (typeof rawLiveResolutions === 'string' && rawLiveResolutions) {
+      try {
+        const parsed = JSON.parse(rawLiveResolutions);
+        if (!Array.isArray(parsed) || parsed.length === 0) throw new Error('empty');
+        liveResolutions = parsed;
+      } catch {
+        return data(
+          { error: 'Malformed resolutions payload — expected [{id, choose}]' },
+          { status: 400 }
+        );
+      }
+    }
     try {
       const status = await getDeckPreviewStatus(slide);
       if (!status.exists) return { error: 'No pending preview to accept' };
-      const result = await acceptDeckPreviewLive({ env: liveEnv, slide, actor: await liveActor() });
+      const result = await acceptDeckPreviewLive({
+        env: liveEnv,
+        slide,
+        actor: await liveActor(),
+        resolutions: liveResolutions,
+      });
+      if (!result.ok && 'conflicts' in result) {
+        // The existing chooser renders these and re-submits with resolutions.
+        const { units, orderConflict } = splitDeckConflicts(result.conflicts);
+        return data(
+          { conflict: true, units, orderConflict, unitPreviews: null, autoMerged: 0 },
+          { status: 409 }
+        );
+      }
       if (!result.ok) return data({ error: result.error }, { status: result.status });
       return redirect(`/${slideId}?notice=preview-accepted`);
     } catch (error: unknown) {
