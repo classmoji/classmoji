@@ -113,6 +113,44 @@ const label = 'text-[0.875rem] font-medium text-ink-1';
 
   const SENT = "Thanks, your message is on its way. We'll reply to the email you gave us.";
 
+  /** A short burst of 🍎 and ✨ from the button: the thank-you for writing in. */
+  const celebrate = (from: HTMLElement) => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const box = from.getBoundingClientRect();
+    const originX = box.left + box.width / 2;
+    const originY = box.top + box.height / 2;
+    for (let i = 0; i < 22; i++) {
+      const piece = document.createElement('span');
+      piece.textContent = i % 3 === 0 ? '✨' : '🍎';
+      piece.setAttribute('aria-hidden', 'true');
+      Object.assign(piece.style, {
+        position: 'fixed',
+        left: `${originX}px`,
+        top: `${originY}px`,
+        fontSize: `${14 + Math.random() * 12}px`,
+        pointerEvents: 'none',
+        zIndex: '60',
+      });
+      document.body.appendChild(piece);
+      // Up and outward, then falling back down as it fades.
+      const angle = -Math.PI / 2 + (Math.random() - 0.5) * Math.PI * 1.1;
+      const distance = 90 + Math.random() * 130;
+      const dx = Math.cos(angle) * distance;
+      const dy = Math.sin(angle) * distance;
+      const spin = (Math.random() - 0.5) * 540;
+      piece
+        .animate(
+          [
+            { transform: 'translate(-50%, -50%) scale(0.6)', opacity: 1 },
+            { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px)) rotate(${spin / 2}deg) scale(1)`, opacity: 1, offset: 0.55 },
+            { transform: `translate(calc(-50% + ${dx * 1.15}px), calc(-50% + ${dy + 120}px)) rotate(${spin}deg) scale(0.9)`, opacity: 0 },
+          ],
+          { duration: 900 + Math.random() * 400, easing: 'cubic-bezier(0.2, 0.7, 0.3, 1)' }
+        )
+        .finished.finally(() => piece.remove());
+    }
+  };
+
   // Without JavaScript the form posts and the server redirects back here.
   const params = new URLSearchParams(window.location.search);
   if (params.has('sent')) show(true, SENT);
@@ -132,6 +170,7 @@ const label = 'text-[0.875rem] font-medium text-ink-1';
       const body = (await response.json().catch(() => null)) as { ok: boolean; error?: string } | null;
       if (body?.ok) {
         show(true, SENT);
+        celebrate(button);
         form.reset();
       } else {
         show(false, body?.error ?? 'Could not send your message. Try again.');

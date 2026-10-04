@@ -4,7 +4,7 @@ import { useReducedMotion } from 'framer-motion';
 import type { DemoBase, DemoMode, Step } from '../types/demo';
 
 /** A slightly slower pace gives each cursor action and UI response time to register. */
-const PLAYBACK_RATE = 0.85;
+const PLAYBACK_RATE = 0.7;
 
 type Options<S> = {
   initial: S;
