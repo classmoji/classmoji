@@ -74,11 +74,17 @@ export interface CollabDocStore {
     classroomId: string;
     schemaVersion: number;
     state: Uint8Array;
-    /** Editors since the previous store, merged into `editors` (by userId). */
+    /**
+     * Editors since the previous store, merged into `editors` (by userId),
+     * each stamped in storage with the version this store writes.
+     */
     editors?: CollabActor[];
   }): Promise<StoredVersion | null>;
 
-  /** Merge editors into an existing row's `editors` (by userId; latest name wins). */
+  /**
+   * Merge editors into an existing row's `editors` (by userId; latest name
+   * wins), stamped with the row's current version.
+   */
   addEditors(kind: CollabKind, docId: string, editors: CollabActor[]): Promise<void>;
 
   /**

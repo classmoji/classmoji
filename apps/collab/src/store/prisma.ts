@@ -24,15 +24,32 @@ export function actorsOf(value: unknown): CollabActor[] {
 }
 
 /**
- * SQL merging the JSONB actor list `$param` into "editors": one entry per
- * userId, the newest name wins, first-seen order kept.
+ * SQL for the JSONB actor list `$param`, each entry stamped with
+ * `"version": <versionSql>` — the row version the edit is stored in. The
+ * checkpoint worker trims an editor only when the version it pushed covers
+ * that stamp, so someone who edits again while a push is in flight keeps
+ * their entry (and their co-author trailer on the next commit). Non-object
+ * entries are dropped.
  */
-function mergeEditorsSql(param: string): string {
+function stampEditorsSql(param: string, versionSql: string): string {
+  return `(
+    SELECT coalesce(jsonb_agg(a.x || jsonb_build_object('version', ${versionSql}) ORDER BY a.ord), '[]'::jsonb)
+    FROM jsonb_array_elements(${param}::jsonb) WITH ORDINALITY AS a(x, ord)
+    WHERE jsonb_typeof(a.x) = 'object'
+  )`;
+}
+
+/**
+ * SQL merging the JSONB actor list `newSql` into "editors": one entry per
+ * userId, the newest entry wins (its name and its version stamp), first-seen
+ * order kept.
+ */
+function mergeEditorsSql(newSql: string): string {
   return `(
     SELECT coalesce(jsonb_agg(m.x ORDER BY m.first_ord), '[]'::jsonb) FROM (
       SELECT DISTINCT ON (t.x->>'userId') t.x,
         min(t.ord) OVER (PARTITION BY t.x->>'userId') AS first_ord
-      FROM jsonb_array_elements(coalesce("collab_docs"."editors", '[]'::jsonb) || ${param}::jsonb)
+      FROM jsonb_array_elements(coalesce("collab_docs"."editors", '[]'::jsonb) || ${newSql})
         WITH ORDINALITY AS t(x, ord)
       ORDER BY t.x->>'userId', t.ord DESC
     ) m
@@ -123,11 +140,12 @@ export class PrismaCollabDocStore implements CollabDocStore {
       `INSERT INTO "collab_docs"
          ("kind", "doc_id", "classroom_id", "epoch", "state", "schema_version",
           "version", "dirty_since", "updated_at", "editors")
-       VALUES ($1, $2, $3, $4, $5, $6, 1, ${NOW_UTC}, ${NOW_UTC}, $7::jsonb)
+       VALUES ($1, $2, $3, $4, $5, $6, 1, ${NOW_UTC}, ${NOW_UTC}, ${stampEditorsSql('$7', '1')})
        ON CONFLICT ("kind", "doc_id") DO UPDATE SET
          "state" = EXCLUDED."state",
          "schema_version" = EXCLUDED."schema_version",
-         "editors" = ${mergeEditorsSql('$7')},
+         -- SET sees the row before this update: version + 1 is the new version.
+         "editors" = ${mergeEditorsSql(stampEditorsSql('$7', '"collab_docs"."version" + 1'))},
          "version" = "collab_docs"."version" + 1,
          "dirty_since" = coalesce("collab_docs"."dirty_since", EXCLUDED."dirty_since"),
          "updated_at" = EXCLUDED."updated_at"
@@ -147,7 +165,8 @@ export class PrismaCollabDocStore implements CollabDocStore {
   async addEditors(kind: CollabKind, docId: string, editors: CollabActor[]): Promise<void> {
     if (editors.length === 0) return;
     await getPrisma().$executeRawUnsafe(
-      `UPDATE "collab_docs" SET "editors" = ${mergeEditorsSql('$3')}
+      // No new state: the entry is stamped with the row's current version.
+      `UPDATE "collab_docs" SET "editors" = ${mergeEditorsSql(stampEditorsSql('$3', '"collab_docs"."version"'))}
        WHERE "kind" = $1 AND "doc_id" = $2`,
       kind,
       docId,

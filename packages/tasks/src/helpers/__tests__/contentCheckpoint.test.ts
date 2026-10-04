@@ -207,14 +207,25 @@ function makePrisma(rows: Row[]) {
         .sort((a, b) => (a.kind + a.doc_id).localeCompare(b.kind + b.doc_id))
         .map(meta)
     ),
-    // Only the editors trim runs through $executeRaw: interpret it.
+    // Only the editors trim runs through $executeRaw: interpret it (credited
+    // AND stamped at or below the pushed version; no stamp counts as 0).
     $executeRaw: vi.fn(async (sql: TemplateStringsArray, ...values: unknown[]) => {
       if (!sql.join('?').includes('editors')) throw new Error('unexpected $executeRaw');
-      const [userIds, kind, docId, epoch] = values as [string[], string, string, number];
+      const [userIds, pushedVersion, kind, docId, epoch] = values as [
+        string[],
+        number,
+        string,
+        string,
+        number,
+      ];
       const r = rows.find(x => x.kind === kind && x.doc_id === docId && x.epoch === epoch);
       if (!r || !Array.isArray(r.editors)) return 0;
-      const left = (r.editors as Array<{ userId: string }>).filter(
-        e => !userIds.includes(e.userId)
+      const left = (r.editors as Array<{ userId: string; version?: unknown }>).filter(
+        e =>
+          !(
+            userIds.includes(e.userId) &&
+            (typeof e.version === 'number' ? e.version : 0) <= pushedVersion
+          )
       );
       r.editors = left.length ? left : null;
       return 1;
@@ -1060,5 +1071,71 @@ describe('runContentCheckpoint bookkeeping round 2', () => {
     });
     await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
     expect(prisma.rows[0].editors).toEqual([{ userId: 'u-bob', name: 'Bob' }]);
+  });
+
+  it('keeps a credited editor who edited again while the push was in flight', async () => {
+    // Ada's v1 edit is in the snapshot; she types again before the trim, and
+    // that store re-stamps her entry at v2. The v1 push must not drop her, or
+    // the commit that carries v2 loses her Co-authored-by.
+    const prisma = makePrisma([
+      row('page', 'page-a', blocksToYDoc([para('a1', 'a')]), 1, {
+        editors: [{ userId: 'u-ada', name: 'Ada', version: 1 }],
+      }),
+    ]);
+    const { deps } = makeDeps(prisma, {
+      commitFiles: async input => {
+        const result = await commitFilesToRemote({ ...input, tmpRoot: root });
+        prisma.rows[0].editors = [{ userId: 'u-ada', name: 'Ada', version: 2 }];
+        prisma.rows[0].version = 2;
+        return result;
+      },
+    });
+    await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
+    const body = sh(['--git-dir', remote, 'log', '-1', '--format=%B', 'main']);
+    expect(body).toContain('Co-authored-by: Ada <101+ada@users.noreply.github.com>');
+    expect(prisma.rows[0]).toMatchObject({ pushed_version: 1, version: 2 });
+    expect(prisma.rows[0].editors).toEqual([{ userId: 'u-ada', name: 'Ada', version: 2 }]);
+  });
+
+  it('trims only editors whose latest edit the pushed version covers', async () => {
+    const prisma = makePrisma([
+      row('page', 'page-a', blocksToYDoc([para('a1', 'a')]), 3, {
+        editors: [
+          { userId: 'u-ada', name: 'Ada', version: 3 },
+          // Stamped before entries carried a version: covered, as before.
+          { userId: 'u-old', name: 'Old' },
+          // Stored after the snapshot: not credited here, not trimmed.
+          { userId: 'u-bob', name: 'Bob', version: 4 },
+        ],
+      }),
+    ]);
+    const { deps } = makeDeps(prisma, {
+      commitFiles: async input => {
+        const result = await commitFilesToRemote({ ...input, tmpRoot: root });
+        // Bob's store landed between the snapshot and the trim.
+        prisma.rows[0].version = 4;
+        return result;
+      },
+    });
+    // The snapshot the run reads (v3) predates Bob's store.
+    prisma.$queryRaw.mockImplementationOnce(async () => [
+      {
+        kind: 'page',
+        doc_id: 'page-a',
+        epoch: 1,
+        version: 3,
+        pushed_version: 0,
+        schema_version: prisma.rows[0].schema_version,
+        source_sha: prisma.rows[0].source_sha,
+        pushed_commit: null,
+        editors: [
+          { userId: 'u-ada', name: 'Ada', version: 3 },
+          { userId: 'u-old', name: 'Old' },
+        ],
+      },
+    ]);
+    await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
+    expect(prisma.rows[0].pushed_version).toBe(3);
+    expect(prisma.rows[0].editors).toEqual([{ userId: 'u-bob', name: 'Bob', version: 4 }]);
   });
 });

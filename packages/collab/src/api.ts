@@ -307,14 +307,15 @@ export type CheckpointReason = 'store' | 'save-version' | 'last-leave' | 'flag-o
 
 /**
  * Who edited one doc since its last push, for the commit's `Co-authored-by:`
- * trailers. Kept IN MEMORY by the collab server (from each change's
- * connection context, agents included under the user they act for) and sent
- * with every trigger — the trailing debounce runs with the last payload, so
- * each payload carries every doc of the classroom with unpushed editors. An
- * editor is dropped once a push covers the version their edit was stored in.
- * A collab restart forgets them: the next commit then has no co-author
- * trailers for edits made before the restart (the content itself is safe in
- * collab_docs).
+ * trailers. Collected by the collab server from each change's connection
+ * context (agents included under the user they act for), persisted with each
+ * store in `collab_docs.editors` (every entry stamped with the version its
+ * edit was stored in), and sent with every trigger — the trailing debounce
+ * runs with the last payload, so each payload carries every doc of the
+ * classroom with unpushed editors. The worker reads the row's list first;
+ * this payload is the fallback. An editor is dropped once a push covers the
+ * version of their latest edit, so an edit stored while a push is in flight
+ * is credited on the next commit.
  */
 export interface CheckpointDocEditors {
   kind: CollabKind;

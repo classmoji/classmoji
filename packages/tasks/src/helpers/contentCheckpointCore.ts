@@ -993,10 +993,11 @@ async function checkpointDocs(
       });
     }
 
-    // Editors credited in this commit leave the row's list; anyone the store
-    // hook added meanwhile stays. (Someone credited here who also typed after
-    // the snapshot loses the trailer on the next commit — a missed credit,
-    // never a wrong one.)
+    // Editors credited in this commit leave the row's list, but only if the
+    // pushed version covers their latest edit (each entry carries the version
+    // it was stored in). Anyone the store hook added meanwhile — or anyone
+    // credited here who typed again after the snapshot, whose entry the store
+    // re-stamped — stays, and is credited on the next commit.
     const credited = [
       ...new Set(
         (coAuthorsByDoc.get(key) ?? [])
@@ -1006,7 +1007,7 @@ async function checkpointDocs(
     ];
     if (credited.length && result.pushed) {
       try {
-        await trimEditors(prisma, c.row, credited);
+        await trimEditors(prisma, c.row, credited, c.row.version);
       } catch (error) {
         log.warn('content-checkpoint: could not trim editors', {
           classroomId,
@@ -1061,13 +1062,32 @@ async function checkpointDocs(
   return report;
 }
 
-/** Remove `userIds` from the row's `editors` list (null when it empties). */
-async function trimEditors(prisma: CheckpointPrisma, row: CheckpointRow, userIds: string[]) {
+/**
+ * Remove `userIds` from the row's `editors` list where the entry's `version`
+ * (the row version of that editor's latest stored edit) is at most
+ * `pushedVersion`; null when the list empties. An entry with no numeric
+ * version (written before entries were stamped) counts as 0, i.e. covered.
+ *
+ * One UPDATE, so it is atomic against a concurrent store: the row lock
+ * serializes the two, and under READ COMMITTED a trim that waited on the
+ * lock re-evaluates its SET against the committed row — a store that landed
+ * first has re-stamped its editors past `pushedVersion`, so they stay.
+ */
+async function trimEditors(
+  prisma: CheckpointPrisma,
+  row: CheckpointRow,
+  userIds: string[],
+  pushedVersion: number
+) {
   await prisma.$executeRaw`
     UPDATE collab_docs SET editors = (
-      SELECT CASE WHEN count(*) = 0 THEN NULL ELSE jsonb_agg(e) END
-      FROM jsonb_array_elements(editors) AS e
-      WHERE NOT ((e ->> 'userId') = ANY(${userIds}::text[]))
+      SELECT CASE WHEN count(*) = 0 THEN NULL ELSE jsonb_agg(t.e ORDER BY t.ord) END
+      FROM jsonb_array_elements(editors) WITH ORDINALITY AS t(e, ord)
+      WHERE NOT (
+        (t.e ->> 'userId') = ANY(${userIds}::text[])
+        AND CASE WHEN jsonb_typeof(t.e -> 'version') = 'number'
+              THEN (t.e ->> 'version')::numeric ELSE 0 END <= ${pushedVersion}
+      )
     )
     WHERE kind = ${row.kind} AND doc_id = ${row.doc_id} AND epoch = ${row.epoch}
       AND jsonb_typeof(editors) = 'array'`;
