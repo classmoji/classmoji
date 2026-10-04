@@ -15,6 +15,7 @@
     "format:check": "prettier --check \"**/*.{js,jsx,ts,tsx,json,md}\""
   },
   "dependencies": {
+    "@classmoji/collab": "*",
     "@classmoji/database": "*",
     "@classmoji/services": "*",
     "@classmoji/tasks": "*",

@@ -1,0 +1,31 @@
+{
+  "name": "@classmoji/collab-server",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "collab:dev": "node --watch --experimental-strip-types src/index.ts",
+    "collab:start": "node --experimental-strip-types src/index.ts",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"**/*.{js,jsx,ts,tsx,json,md}\"",
+    "format:check": "prettier --check \"**/*.{js,jsx,ts,tsx,json,md}\""
+  },
+  "dependencies": {
+    "@classmoji/auth": "*",
+    "@classmoji/collab": "*",
+    "@classmoji/database": "*",
+    "@classmoji/page-schema": "*",
+    "@classmoji/services": "*",
+    "@classmoji/utils": "*",
+    "@hocuspocus/extension-database": "^4.7.0",
+    "@hocuspocus/server": "^4.7.0",
+    "y-prosemirror": "^1.3.7",
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.33"
+  },
+  "devDependencies": {
+    "@hocuspocus/provider": "^4.7.0",
+    "vitest": "^4.1.5"
+  }
+}
