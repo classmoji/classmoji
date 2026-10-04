@@ -275,8 +275,11 @@ jobs:
           # Like hook-station, collab must NOT scale to zero: open rooms and
           # their unsaved edits live in the one machine's memory. Deploy the
           # production config as-is (auto_stop off, exactly one machine).
+          # `flyctl status` succeeds for an app that exists with zero machines,
+          # so the first deploy after provisioning runs and creates the
+          # machine; --ha=false makes that one machine, not Fly's default two.
           if flyctl status --app classmoji-collab-staging >/dev/null 2>&1; then
-            flyctl deploy --config apps/collab/fly.toml --image "$IMAGE" --app classmoji-collab-staging
+            flyctl deploy --config apps/collab/fly.toml --image "$IMAGE" --app classmoji-collab-staging --ha=false
           else
             echo "::notice::Skipping collab deploy because Fly app classmoji-collab-staging is not provisioned."
           fi

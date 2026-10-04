@@ -148,8 +148,10 @@ jobs:
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy collab
         run: |
+          # Single instance (apps/collab/fly.toml): --ha=false makes the first
+          # deploy of a machine-less app create one machine, not two.
           if flyctl status --app classmoji-collab >/dev/null 2>&1; then
-            flyctl deploy --config apps/collab/fly.toml --dockerfile apps/collab/Dockerfile --remote-only
+            flyctl deploy --config apps/collab/fly.toml --dockerfile apps/collab/Dockerfile --remote-only --ha=false
           else
             echo "::notice::Skipping collab deploy because Fly app classmoji-collab is not provisioned."
           fi

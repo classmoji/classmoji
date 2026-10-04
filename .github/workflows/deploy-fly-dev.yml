@@ -156,9 +156,10 @@ jobs:
         run: |
           # No scale-to-zero wrapper (unlike the other dev apps): open rooms
           # and their unsaved edits live in the one machine's memory, same as
-          # staging and production.
+          # staging and production. --ha=false: the first deploy of a
+          # machine-less app creates one machine, not two.
           if flyctl status --app classmoji-collab-dev >/dev/null 2>&1; then
-            flyctl deploy --config apps/collab/fly.toml --dockerfile apps/collab/Dockerfile --remote-only --app classmoji-collab-dev
+            flyctl deploy --config apps/collab/fly.toml --dockerfile apps/collab/Dockerfile --remote-only --app classmoji-collab-dev --ha=false
           else
             echo "::notice::Skipping collab deploy because Fly app classmoji-collab-dev is not provisioned."
           fi
