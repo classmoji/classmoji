@@ -601,6 +601,22 @@ const STRUCTURE_REPAIR_NOTE =
   'column cannot contain another columnList — a nested one is lifted out to sit ' +
   'after the row). Re-read the outline to see the resulting structure.';
 
+/**
+ * Where staff review a page's preview: the pages app renders the preview
+ * branch at `?preview=1` (changed blocks highlighted). PAGES_URL is read at
+ * call time; outside production it defaults to the local pages app. Null when
+ * it cannot be built (production without PAGES_URL, a classroom without a
+ * slug), and the result then simply has no link.
+ */
+function pagePreviewUrl(page: PageWithRepoRecord): string | null {
+  const base =
+    process.env.PAGES_URL?.trim() ||
+    (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:7100');
+  const slug = (page.classroom as { slug?: unknown }).slug;
+  if (!base || typeof slug !== 'string' || !slug) return null;
+  return `${base.replace(/\/+$/, '')}/${encodeURIComponent(slug)}/${encodeURIComponent(page.id)}?preview=1`;
+}
+
 /** Every block in the tree carries a string id. */
 function allIdsPresent(blocks: unknown): boolean {
   if (!Array.isArray(blocks)) return true;
@@ -755,7 +771,8 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
     'blocks someone changed since your read are refused (BLOCK_CHANGED). ' +
     "mode: 'live' edits the page itself (with live editing on, people in the editor " +
     "see it at once); mode: 'preview' stages the edits — students never see them — for review " +
-    'as a rendered page with the changed blocks highlighted, then page_preview_accept. Default: ' +
+    'as a rendered page with the changed blocks highlighted (the preview_url the result ' +
+    'returns), then page_preview_accept. Default: ' +
     'live for drafts, preview for published pages. Use preview for big edits: many blocks, ' +
     'restructuring, rewrites. When a preview already exists, preview applies STACK onto it ' +
     "and expected_sha must come from a read at: 'preview' (main's sha will conflict).",
@@ -984,11 +1001,13 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
       } as Prisma.InputJsonValue,
     });
 
+    const previewUrl = committedTo === 'preview' ? pagePreviewUrl(page) : null;
     return ok({
       success: true,
       new_sha: saved.sha,
       block_count: countBlocks(newBlocks as BlockNode[]),
       committed_to: committedTo,
+      ...(previewUrl ? { preview_url: previewUrl } : {}),
       applied,
       ...(structureRepairs.length > 0
         ? { structure_repairs: structureRepairs, note: STRUCTURE_REPAIR_NOTE }

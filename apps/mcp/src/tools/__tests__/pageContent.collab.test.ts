@@ -126,6 +126,7 @@ const PREVIEW_BRANCH = 'preview/pages/syllabus';
 
 const CLASSROOM = {
   id: 'class-1',
+  slug: 'cs101',
   content_repo: 'content-test-org-cs101',
   git_organization: { provider: 'GITHUB', login: 'test-org' },
 };
@@ -236,6 +237,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 const UPDATE_OP = {
@@ -690,6 +692,7 @@ describe('live write refusals', () => {
 
 describe('preview mode with live editing', () => {
   it('a published page defaults to preview, cut from main, taking the live version', async () => {
+    vi.stubEnv('PAGES_URL', 'https://pages.example.test/');
     mocks.pageFindById.mockResolvedValue(LIVE_PAGE);
     const result = parse(
       await pageContentApplyTool.handler(
@@ -698,6 +701,7 @@ describe('preview mode with live editing', () => {
       )
     );
     expect(result.committed_to).toBe('preview');
+    expect(result.preview_url).toBe(`https://pages.example.test/cs101/${PAGE_ID}?preview=1`);
     expect(mocks.ensurePreviewBranch).toHaveBeenCalledTimes(1);
     // The CAS is on the sha actually loaded from main.
     expect(mocks.savePageContent.mock.calls[0][2]).toMatchObject({
