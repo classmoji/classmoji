@@ -93,6 +93,8 @@ import { useDeckCollab } from '~/components/collab/useDeckCollab';
 import CollabHeaderControls from '~/components/collab/CollabHeaderControls';
 import SlideCollabOverlay from '~/components/collab/SlideCollabOverlay';
 import { CollabRejectedBanner } from '~/components/collab/CollabNotices';
+import LiveLeaveDialog from '~/components/collab/LiveLeaveDialog';
+import LockDescriptions from '~/components/collab/LockDescriptions';
 import {
   claimStaleReload,
   deriveSyncStatus,
@@ -3549,37 +3551,10 @@ export default function SlideViewer() {
 
         {/* Live editing: in-app navigation while edits are still syncing */}
         {liveBlocker.state === 'blocked' && (
-          <div
-            className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/30 dark:bg-black/50"
-            role="dialog"
-            aria-modal="true"
-            data-testid="live-leave-dialog"
-          >
-            <div className="w-[calc(100%-2rem)] max-w-sm rounded-xl bg-white p-5 shadow-xl ring-1 ring-gray-200 dark:bg-gray-800 dark:ring-gray-700">
-              <div className="font-semibold text-gray-900 dark:text-gray-100">
-                Your latest changes haven&rsquo;t synced yet
-              </div>
-              <div className="mt-1 text-sm text-gray-600 dark:text-gray-300">
-                If you leave now, they may be lost.
-              </div>
-              <div className="mt-4 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => liveBlocker.reset?.()}
-                  className="px-3 py-1.5 text-sm rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
-                >
-                  Stay
-                </button>
-                <button
-                  type="button"
-                  onClick={() => liveBlocker.proceed?.()}
-                  className="px-3 py-1.5 text-sm font-medium rounded-md bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400"
-                >
-                  Leave anyway
-                </button>
-              </div>
-            </div>
-          </div>
+          <LiveLeaveDialog
+            onStay={() => liveBlocker.reset?.()}
+            onLeave={() => liveBlocker.proceed?.()}
+          />
         )}
 
         {/* Preview-branch chrome (staff only — `preview` is null otherwise) */}
@@ -3722,6 +3697,8 @@ export default function SlideViewer() {
                 customThemes={customThemes}
                 sharedThemes={sharedThemes}
               />
+              {/* Live editing: what screen readers hear for read-only slides */}
+              {collabMode && isEditing && <LockDescriptions locks={bridgeState.locks} />}
               {/* Live editing: lock badge and who else is on this slide */}
               {collabMode && isEditing && (
                 <SlideCollabOverlay

@@ -1169,3 +1169,12 @@
   outline: 3px solid rgba(245, 158, 11, 0.9);
   outline-offset: 6px;
 }
+.dark .reveal.editing-mode .slides section.cm-locked {
+  outline-color: rgba(251, 191, 36, 0.8);
+}
+.dark .reveal.editing-mode .slides section.cm-held {
+  outline-color: rgba(96, 165, 250, 0.5);
+}
+.dark .reveal .slides section.cm-preview-changed {
+  outline-color: rgba(251, 191, 36, 0.95);
+}

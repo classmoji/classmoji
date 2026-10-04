@@ -31,6 +31,8 @@ export default function SlideCollabOverlay({
         <div
           className="pointer-events-auto flex items-center gap-2 rounded-full bg-white/95 py-1 pl-1 pr-3 text-sm shadow-md ring-1 ring-amber-300 dark:bg-gray-800/95 dark:ring-amber-600"
           data-testid="slide-lock-badge"
+          role="status"
+          aria-live="polite"
           data-holder={other.holder.name}
         >
           <PeerAvatar peer={other.holder} size="sm" />
@@ -53,7 +55,12 @@ export default function SlideCollabOverlay({
         </div>
       )}
       {peersHere.length > 0 && (
-        <div className="flex -space-x-1" data-testid="slide-peers">
+        <div
+          className="flex -space-x-1"
+          data-testid="slide-peers"
+          role="group"
+          aria-label={`Also on this slide: ${peersHere.map(p => p.name).join(', ')}`}
+        >
           {peersHere.map(peer => (
             <PeerAvatar key={peer.key} peer={peer} size="sm" />
           ))}

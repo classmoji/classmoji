@@ -320,6 +320,8 @@ test.describe('live deck bridge', () => {
     await tick();
     expect(t.section('aaaa0003').getAttribute('contenteditable')).toBe('false');
     expect(t.section('aaaa0003').classList.contains('cm-locked')).toBe(true);
+    expect(t.section('aaaa0003').getAttribute('aria-readonly')).toBe('true');
+    expect(t.section('aaaa0003').getAttribute('aria-describedby')).toBe('cm-lock-desc-aaaa0003');
     // What RevealSlides asks at init, so the slide is never editable for a frame.
     expect(t.bridge.isEditableSection(t.section('aaaa0003'))).toBe(false);
     expect(t.bridge.isEditableSection(t.section('aaaa0002'))).toBe(true);

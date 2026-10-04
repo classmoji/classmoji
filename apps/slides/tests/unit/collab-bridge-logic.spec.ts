@@ -122,7 +122,7 @@ test.describe('scanDeckDom', () => {
 test.describe('serializeSection', () => {
   test('cleans editor/runtime additions; notes and child sections excluded', () => {
     const doc = dom(`<div class="slides"><section data-cm-id="s1" contenteditable="true"
-      class="intro present editing-mode cm-held cm-locked" style="top: 12px; color: red; display: block"
+      class="intro present editing-mode cm-held cm-locked" aria-readonly="true" aria-describedby="cm-lock-desc-s1" style="top: 12px; color: red; display: block"
       data-background-color="#000" data-hidden="true" aria-hidden="true" data-index-h="0">
       <h2 class="fragment visible current-fragment">Hi</h2>
       <pre><code class="hljs language-js"><span class="hljs-keyword">const</span> a = 1 &lt; 2;</code></pre>

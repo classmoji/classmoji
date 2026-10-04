@@ -26,6 +26,8 @@ function CollabBadge({ badge }: { badge: SlideCollabBadge }) {
         <span
           className="flex items-center gap-1 rounded-full bg-white/95 py-0.5 pl-0.5 pr-1.5 text-[10px] font-semibold text-amber-900 ring-1 ring-amber-300 dark:bg-gray-800/95 dark:text-amber-100 dark:ring-amber-600"
           title={`${badge.lock.name} is editing`}
+          role="img"
+          aria-label={`${badge.lock.name} is editing`}
           data-testid="overview-lock-badge"
         >
           <span
@@ -41,6 +43,8 @@ function CollabBadge({ badge }: { badge: SlideCollabBadge }) {
         <span
           key={peer.key}
           title={peer.agent ? `${peer.name} (agent)` : peer.name}
+          role="img"
+          aria-label={peer.agent ? `${peer.name} (agent)` : peer.name}
           className={`inline-flex h-4 w-4 items-center justify-center rounded-full text-[8px] font-semibold text-white ring-1 ${
             peer.agent ? 'ring-violet-500' : 'ring-white dark:ring-gray-800'
           }`}
@@ -266,7 +270,8 @@ function DraggableSlide({
         slide={slide}
         isDragging={isDragging}
         isInStack={isInStack}
-        canDelete={canDelete}
+        // A slide someone else is editing can't be deleted from here.
+        canDelete={canDelete && !(badge?.lock && !badge.lock.mine)}
         onClick={() => onSlideClick(slide.id, stackIndex, slideIndex)}
         onDelete={() => onDeleteSlide(slide.id)}
       />

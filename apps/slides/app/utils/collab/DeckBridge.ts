@@ -1142,6 +1142,13 @@ export class DeckBridge {
         }
         section.classList.toggle('cm-locked', other);
         section.classList.toggle('cm-held', mine);
+        if (other) {
+          section.setAttribute('aria-readonly', 'true');
+          section.setAttribute('aria-describedby', `cm-lock-desc-${id}`);
+        } else if (section.hasAttribute('aria-readonly')) {
+          section.removeAttribute('aria-readonly');
+          section.removeAttribute('aria-describedby');
+        }
       }
     });
   }

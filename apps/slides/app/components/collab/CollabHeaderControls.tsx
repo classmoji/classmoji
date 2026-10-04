@@ -33,6 +33,7 @@ export function PeerAvatar({
   const label = peerLabel({ name: peer.name, agent: peer.agent ?? false, self: peer.self });
   return (
     <span
+      role="img"
       title={label}
       aria-label={label}
       className={`relative inline-flex items-center justify-center rounded-full font-semibold text-white ring-2 ring-white dark:ring-gray-900 ${

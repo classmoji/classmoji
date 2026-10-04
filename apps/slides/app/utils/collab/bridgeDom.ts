@@ -123,6 +123,11 @@ export function serializeSection(el: HTMLElement): SerializedSection {
   const asideNotes = asides.length > 0 ? asides.map(a => a.innerHTML).join('\n') : null;
   for (const aside of asides) aside.remove();
 
+  // Lock chrome (read-only marking for assistive tech) is never content.
+  if (clone.classList.contains('cm-locked')) {
+    clone.removeAttribute('aria-readonly');
+    clone.removeAttribute('aria-describedby');
+  }
   for (const cls of COLLAB_SECTION_CLASSES) clone.classList.remove(cls);
   if ((clone.getAttribute('class') ?? '') === '') clone.removeAttribute('class');
 
@@ -147,7 +152,14 @@ export function applySectionAttrs(
   attrs: Readonly<Record<string, string>>,
   hidden: boolean
 ): void {
-  const keepAlways = new Set(['data-cm-id', 'contenteditable', 'data-hidden']);
+  const keepAlways = new Set([
+    'data-cm-id',
+    'contenteditable',
+    'data-hidden',
+    // lock chrome, managed by the bridge
+    'aria-readonly',
+    'aria-describedby',
+  ]);
   for (const attr of Array.from(el.attributes)) {
     const name = attr.name.toLowerCase();
     if (keepAlways.has(name) || RUNTIME_SECTION_ATTRS.has(name)) continue;
