@@ -35,15 +35,14 @@ import {
   fetchSnapshot,
   liveEnvFor,
   liveSha,
-  liveVersionConflict,
   liveWriteError,
-  notALiveVersion,
   parseLiveVersion,
   postCover,
   postMergePreview,
   postOps,
   type CollabEnv,
 } from '../collab/client.ts';
+import { assertLiveVersionArg, checkLiveVersion, rememberSnapshot } from '../collab/liveCheck.ts';
 import {
   REPO_REST_MAX_BYTES,
   formatMegabytes,
@@ -276,7 +275,9 @@ async function readLivePage(
   page: PageWithRepoRecord
 ): Promise<{ snapshot: SnapshotResponse<'page'> } | { fallbackNote: string | null }> {
   try {
-    return { snapshot: await fetchSnapshot(env, 'page', page.id) };
+    const snapshot = await fetchSnapshot(env, 'page', page.id);
+    rememberSnapshot('page', page.id, snapshot.version, snapshot.content);
+    return { snapshot };
   } catch (error) {
     if (error instanceof CollabRequestError) {
       if (error.unavailable) {
@@ -565,7 +566,7 @@ type PageContentOp = z.infer<typeof opSchema>;
 interface PageContentApplyArgs {
   classroom: string;
   page_id: string;
-  expected_sha: string;
+  expected_sha?: string;
   ops: PageContentOp[];
   commit?: 'preview' | 'direct';
   mode?: 'live' | 'preview';
@@ -605,18 +606,15 @@ async function applyLive(
   args: PageContentApplyArgs,
   ctx: ToolContext
 ) {
-  const expected = parseLiveVersion(args.expected_sha);
-  if (expected === null) throw notALiveVersion('page');
-
+  assertLiveVersionArg('page', args.expected_sha);
   let snapshot: SnapshotResponse<'page'>;
   try {
     snapshot = await fetchSnapshot(env, 'page', page.id);
   } catch (error) {
     throw liveWriteError(error, 'page');
   }
-  if (snapshot.version !== expected) {
-    throw liveVersionConflict(args.expected_sha, snapshot.version, 'page');
-  }
+  // Per-block staleness: only what the ops touch must be as the agent read it.
+  checkLiveVersion('page', page.id, args.expected_sha, snapshot, args.ops);
 
   const priorBlocks = snapshot.content.blocks as BlockNode[];
   const idRemints: Array<{ op_index: number; from: string; to: string }> = [];
@@ -645,6 +643,13 @@ async function applyLive(
   } catch (error) {
     throw liveWriteError(error, 'page');
   }
+  const after = ClassmojiService.pageContent.ensureBlockIds(newBlocks) as BlockNode[];
+  // The agent's view of the new version: what it read plus its own ops, so a
+  // follow-up apply against `new_sha` is checked per block like any other.
+  rememberSnapshot('page', page.id, version, {
+    blocks: after,
+    coverImage: snapshot.content.coverImage,
+  });
 
   const applied = summarizeOps(args.ops);
   for (const remint of idRemints) {
@@ -665,7 +670,7 @@ async function applyLive(
     data: {
       tool: 'page_content_apply',
       ops: applied,
-      expected_sha: args.expected_sha,
+      ...(args.expected_sha ? { expected_sha: args.expected_sha } : {}),
       new_sha: liveSha(version),
       committed_to: 'live',
       ...(hasDestructiveOps ? { prior_block_count: countBlocks(priorBlocks) } : {}),
@@ -677,7 +682,7 @@ async function applyLive(
     success: true,
     new_sha: liveSha(version),
     version,
-    block_count: countBlocks(ClassmojiService.pageContent.ensureBlockIds(newBlocks) as BlockNode[]),
+    block_count: countBlocks(after),
     committed_to: 'live',
     applied,
     ...(structureRepairs.length > 0
@@ -692,9 +697,11 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
   title: 'Apply page content edits',
   description:
     'Applies granular block operations (update / insert / move / delete / replace_all) to a ' +
-    "page's BlockNote content. Requires expected_sha from page_content_get or " +
+    "page's BlockNote content. Pass expected_sha from page_content_get or " +
     'page_content_outline; a CONTENT_CONFLICT error means the content changed — re-read for a ' +
-    "fresh sha. mode: 'live' edits the page itself (with live editing on, people in the editor " +
+    "fresh sha. In live mode it is the version ('live:N'): optional, but passing it refuses " +
+    '(BLOCK_CHANGED) an edit to blocks someone changed since your read. ' +
+    "mode: 'live' edits the page itself (with live editing on, people in the editor " +
     "see it at once); mode: 'preview' stages the edits — students never see them — for review " +
     'as a rendered page with the changed blocks highlighted, then page_preview_accept. Default: ' +
     'live for drafts, preview for published pages. Use preview for big edits: many blocks, ' +
@@ -708,7 +715,12 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
     expected_sha: z
       .string()
       .min(1)
-      .describe('Content sha from the last page_content_get/outline read (optimistic lock)'),
+      .optional()
+      .describe(
+        'Content sha from the last page_content_get/outline read (optimistic lock). Required ' +
+          "except in live mode, where it is the version ('live:N') and protects edits people " +
+          'made since your read to the blocks your ops touch'
+      ),
     ops: z
       .array(opSchema)
       .min(1)
@@ -745,6 +757,12 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
         : 'main';
 
     if (env && committedTo === 'main') return applyLive(env, page, args, ctx);
+    if (!args.expected_sha) {
+      throw new ToolError(
+        'invalid_params',
+        'expected_sha is required — pass the sha from page_content_get or page_content_outline'
+      );
+    }
     // A live read's version stands in for main's sha when a NEW preview is
     // cut from main: the agent read the live page, which has no git sha.
     const liveRead = env !== null && parseLiveVersion(args.expected_sha) !== null;
@@ -1133,7 +1151,9 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewAcceptArgs> = {
       .describe(
         "Pass the ours_sha from the conflict report your resolutions answer. If main's " +
           'content changed since that report, the accept fails with CONTENT_CONFLICT instead ' +
-          'of applying reviewed choices to unseen content. Only meaningful with resolutions.'
+          'of applying reviewed choices to unseen content. Only meaningful with resolutions. ' +
+          "With live editing on it is not checked (the report says 'live'): the live page " +
+          'is re-merged atomically when the accept runs.'
       ),
     expected_theirs_sha: z
       .string()

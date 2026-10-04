@@ -80,6 +80,8 @@ vi.mock('@classmoji/services', async () => {
   };
 });
 
+const { clearSnapshotCache } = await import('../../collab/liveCheck.ts');
+
 const {
   pageContentOutlineTool,
   pageContentGetTool,
@@ -186,6 +188,7 @@ beforeEach(() => {
   mocks.collabEnvMissing.value = false;
   calls = [];
   routes = {};
+  clearSnapshotCache();
   fakeFetch.mockClear();
   vi.stubGlobal('fetch', fakeFetch);
   mocks.pageFindById.mockResolvedValue(LIVE_DRAFT);
@@ -476,6 +479,110 @@ describe('live apply', () => {
         CTX
       )
     ).rejects.toMatchObject({ code: 'LIVE_UNAVAILABLE' });
+    expect(mocks.savePageContent).not.toHaveBeenCalled();
+  });
+});
+
+describe('per-block staleness check', () => {
+  /** The live page at `version` with `blocks`. */
+  const serve = (version: number, blocks: unknown[]) =>
+    route('GET', 'snapshot', () => ({
+      status: 200,
+      body: { epoch: 1, version, live: true, content: { blocks, coverImage: null } },
+    }));
+  const readOutline = () =>
+    pageContentOutlineTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX);
+  const apply = (ops: unknown[], expected_sha?: string) =>
+    pageContentApplyTool.handler(
+      {
+        classroom: 'org/x',
+        page_id: PAGE_ID,
+        ...(expected_sha ? { expected_sha } : {}),
+        ops: ops as never,
+      },
+      CTX
+    );
+  const posted = () => calls.filter(call => call.method === 'POST');
+
+  it('applies when the targeted block is unchanged though others were edited since', async () => {
+    serve(7, LIVE_BLOCKS());
+    await readOutline();
+    const typed = LIVE_BLOCKS();
+    typed[0].content = [{ type: 'text', text: 'Week 1 (someone is typing here)' }];
+    // Defaults filled in by the live document are not a change.
+    serve(15, [typed[0], { ...LIVE_BLOCKS()[1], props: { textAlignment: 'left' } }]);
+    const result = parse(await apply([UPDATE_OP], 'live:7'));
+    expect(result).toMatchObject({ success: true, committed_to: 'live' });
+    expect(posted()).toHaveLength(1);
+  });
+
+  it('refuses with BLOCK_CHANGED, naming the block, when the target was edited', async () => {
+    serve(7, LIVE_BLOCKS());
+    await readOutline();
+    const edited = LIVE_BLOCKS();
+    edited[1].content = [{ type: 'text', text: 'Read chapter 1 and 2' }];
+    serve(15, edited);
+    const error = await apply([UPDATE_OP], 'live:7').catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: 'BLOCK_CHANGED', data: { changed_ids: ['p1'] } });
+    expect((error as Error).message).toMatch(/'p1'.*Re-read.*mode: 'preview'/);
+    expect(posted()).toHaveLength(0);
+  });
+
+  it('refuses an insert whose anchor was deleted since the read', async () => {
+    serve(7, LIVE_BLOCKS());
+    await readOutline();
+    serve(15, [LIVE_BLOCKS()[0]]);
+    const insert = {
+      op: 'insert',
+      blocks: [{ type: 'paragraph', content: [] }],
+      position: { after: 'p1' },
+    };
+    await expect(apply([insert], 'live:7')).rejects.toMatchObject({ code: 'BLOCK_CHANGED' });
+    expect(posted()).toHaveLength(0);
+  });
+
+  it('falls back to the strict check for a version it never served (cache miss)', async () => {
+    serve(15, LIVE_BLOCKS());
+    await expect(apply([UPDATE_OP], 'live:7')).rejects.toMatchObject({
+      code: 'CONTENT_CONFLICT',
+    });
+    expect(posted()).toHaveLength(0);
+  });
+
+  it('replace_all always needs the current version', async () => {
+    serve(7, LIVE_BLOCKS());
+    await readOutline();
+    serve(8, LIVE_BLOCKS());
+    await expect(
+      apply([{ op: 'replace_all', blocks: LIVE_BLOCKS() }], 'live:7')
+    ).rejects.toMatchObject({ code: 'CONTENT_CONFLICT' });
+  });
+
+  it('a follow-up apply against the returned new_sha is checked per block', async () => {
+    serve(7, LIVE_BLOCKS());
+    await readOutline();
+    const first = parse(await apply([UPDATE_OP], 'live:7'));
+    expect(first.new_sha).toBe('live:8');
+    // Someone typed in the heading after the agent's edit landed.
+    const typed = LIVE_BLOCKS();
+    typed[0].content = [{ type: 'text', text: 'Week one' }];
+    serve(12, [typed[0], { ...UPDATE_OP.block, id: 'p1', props: { textColor: 'default' } }]);
+    const second = parse(
+      await apply([{ ...UPDATE_OP, block: { type: 'paragraph', content: [] } }], 'live:8')
+    );
+    expect(second.success).toBe(true);
+  });
+
+  it('applies without expected_sha (no pin)', async () => {
+    serve(15, LIVE_BLOCKS());
+    const result = parse(await apply([UPDATE_OP]));
+    expect(result.committed_to).toBe('live');
+    expect(posted()).toHaveLength(1);
+  });
+
+  it('still requires expected_sha outside live mode', async () => {
+    mocks.pageFindById.mockResolvedValue(PLAIN_DRAFT);
+    await expect(apply([UPDATE_OP])).rejects.toMatchObject({ kind: 'invalid_params' });
     expect(mocks.savePageContent).not.toHaveBeenCalled();
   });
 });

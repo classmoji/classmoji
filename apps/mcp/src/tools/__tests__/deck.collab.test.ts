@@ -70,6 +70,8 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
+const { clearSnapshotCache } = await import('../../collab/liveCheck.ts');
+
 const {
   deckOutlineTool,
   deckGetTool,
@@ -169,6 +171,7 @@ beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   calls = [];
   routes = {};
+  clearSnapshotCache();
   fakeFetch.mockClear();
   vi.stubGlobal('fetch', fakeFetch);
   mocks.slideFindById.mockResolvedValue(LIVE_DRAFT);
@@ -344,6 +347,57 @@ describe('live apply', () => {
       branch: PREVIEW_BRANCH,
     });
     expect(calls.some(call => call.method === 'POST')).toBe(false);
+  });
+});
+
+describe('per-slide staleness check', () => {
+  const serve = (version: number, deck: DeckJson) =>
+    route('GET', 'snapshot', () => ({
+      status: 200,
+      body: { epoch: 1, version, live: true, content: deck },
+    }));
+  const read = () => deckOutlineTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID }, CTX);
+  const apply = (ops: unknown[], expected_sha = 'live:4') =>
+    deckApplyTool.handler(
+      { classroom: 'org/x', slide_id: SLIDE_ID, expected_sha, ops: ops as never },
+      CTX
+    );
+  const posted = () => calls.filter(call => call.method === 'POST');
+
+  it('applies when the targeted slide is unchanged though another slide was edited', async () => {
+    serve(4, DECK());
+    await read();
+    serve(9, { ...DECK(), slides: [{ id: 'aaa', html: '<h1>Hi all</h1>' }, DECK().slides[1]] });
+    const result = parse(await apply([UPDATE_OP]));
+    expect(result).toMatchObject({ success: true, committed_to: 'live' });
+    expect(posted()).toHaveLength(1);
+  });
+
+  it('refuses with BLOCK_CHANGED when the targeted slide was edited', async () => {
+    serve(4, DECK());
+    await read();
+    serve(9, { ...DECK(), slides: [DECK().slides[0], { id: 'bbb', html: '<p>Edited</p>' }] });
+    await expect(apply([UPDATE_OP])).rejects.toMatchObject({
+      code: 'BLOCK_CHANGED',
+      data: { changed_ids: ['bbb'] },
+    });
+    expect(posted()).toHaveLength(0);
+  });
+
+  it('a reorder is refused when the slide order changed since the read', async () => {
+    serve(4, DECK());
+    await read();
+    serve(9, { ...DECK(), slides: [DECK().slides[1], DECK().slides[0]] });
+    await expect(apply([{ op: 'reorder', order: ['bbb', 'aaa'] }])).rejects.toMatchObject({
+      code: 'BLOCK_CHANGED',
+      data: { changed_ids: ['__order__'] },
+    });
+  });
+
+  it('falls back to the strict check on a cache miss', async () => {
+    serve(9, DECK());
+    await expect(apply([UPDATE_OP])).rejects.toMatchObject({ code: 'CONTENT_CONFLICT' });
+    expect(posted()).toHaveLength(0);
   });
 });
 

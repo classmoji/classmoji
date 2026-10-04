@@ -76,14 +76,13 @@ import {
   fetchSnapshot,
   liveEnvFor,
   liveSha,
-  liveVersionConflict,
   liveWriteError,
-  notALiveVersion,
   parseLiveVersion,
   postMergePreview,
   postOps,
   type CollabEnv,
 } from '../collab/client.ts';
+import { assertLiveVersionArg, checkLiveVersion, rememberSnapshot } from '../collab/liveCheck.ts';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import {
@@ -220,7 +219,9 @@ async function readLiveDeck(
   slide: SlideWithRepoRecord
 ): Promise<{ snapshot: SnapshotResponse<'deck'> } | { fallbackNote: string | null }> {
   try {
-    return { snapshot: await fetchSnapshot(env, 'deck', slide.id) };
+    const snapshot = await fetchSnapshot(env, 'deck', slide.id);
+    rememberSnapshot('deck', slide.id, snapshot.version, snapshot.content);
+    return { snapshot };
   } catch (error) {
     if (error instanceof CollabRequestError) {
       if (error.unavailable) {
@@ -528,7 +529,7 @@ function selectSlides(
 interface DeckApplyArgs {
   classroom: string;
   slide_id: string;
-  expected_sha: string;
+  expected_sha?: string;
   sha_source?: DeckShaSource | 'live';
   ops: DeckOp[];
   commit?: 'preview' | 'direct';
@@ -548,18 +549,15 @@ async function applyDeckLive(
   args: DeckApplyArgs,
   ctx: ToolContext
 ) {
-  const expected = parseLiveVersion(args.expected_sha);
-  if (expected === null) throw notALiveVersion('deck');
-
+  assertLiveVersionArg('deck', args.expected_sha);
   let snapshot: SnapshotResponse<'deck'>;
   try {
     snapshot = await fetchSnapshot(env, 'deck', slide.id);
   } catch (error) {
     throw liveWriteError(error, 'deck');
   }
-  if (snapshot.version !== expected) {
-    throw liveVersionConflict(args.expected_sha, snapshot.version, 'deck');
-  }
+  // Per-slide staleness: only what the ops touch must be as the agent read it.
+  checkLiveVersion('deck', slide.id, args.expected_sha, snapshot, args.ops);
 
   let newDeck: DeckJson;
   let applied: Array<Record<string, unknown>>;
@@ -589,6 +587,9 @@ async function applyDeckLive(
   } catch (error) {
     throw liveWriteError(error, 'deck');
   }
+  // The agent's view of the new version: what it read plus its own ops, so a
+  // follow-up apply against `new_sha` is checked per slide like any other.
+  rememberSnapshot('deck', slide.id, version, newDeck);
 
   const hasDestructiveOps = args.ops.some(op => op.op === 'delete');
   await writeAudit(ctx, {
@@ -598,7 +599,7 @@ async function applyDeckLive(
     data: {
       tool: 'deck_apply',
       ops: applied,
-      expected_sha: args.expected_sha,
+      ...(args.expected_sha ? { expected_sha: args.expected_sha } : {}),
       new_sha: liveSha(version),
       committed_to: 'live',
       ...(hasDestructiveOps ? { prior_slide_count: countSlides(snapshot.content.slides) } : {}),
@@ -625,8 +626,10 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
   title: 'Apply deck edits',
   description:
     'Applies granular slide operations (update / insert / move / delete / reorder / set_theme) ' +
-    'to a deck. Requires expected_sha (+ sha_source) from deck_get or ' +
+    'to a deck. Pass expected_sha (+ sha_source) from deck_get or ' +
     'deck_outline; a CONTENT_CONFLICT error means the deck changed — re-read for a fresh sha. ' +
+    "In live mode it is the version ('live:N'): optional, but passing it refuses " +
+    '(BLOCK_CHANGED) an edit to slides someone changed since your read. ' +
     "mode: 'live' edits the deck itself (with live editing on, people in the editor see it at " +
     "once, and a slide someone is editing refuses the call); mode: 'preview' stages the edits " +
     "— students never see them — for review as rendered slides at the deck's ?preview=1 URL " +
@@ -646,7 +649,12 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
     expected_sha: z
       .string()
       .min(1)
-      .describe('Content sha from the last deck_get/deck_outline read (optimistic lock)'),
+      .optional()
+      .describe(
+        'Content sha from the last deck_get/deck_outline read (optimistic lock). Required ' +
+          "except in live mode, where it is the version ('live:N') and protects edits people " +
+          'made since your read to the slides your ops touch'
+      ),
     sha_source: z
       .enum(['deck', 'legacy_html', 'live'])
       .optional()
@@ -688,6 +696,12 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
         : 'main';
 
     if (env && committedTo === 'main') return applyDeckLive(env, slide, args, ctx);
+    if (!args.expected_sha) {
+      throw new ToolError(
+        'invalid_params',
+        'expected_sha is required — pass the sha from deck_get or deck_outline'
+      );
+    }
     // A live read's version stands in for main's sha when a NEW preview is
     // cut from main: the agent read the live deck, which has no git sha.
     const liveRead =
@@ -1035,7 +1049,9 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewAcceptArgs> = {
       .describe(
         "Pass the ours_sha from the conflict report your resolutions answer. If main's deck " +
           'changed since that report, the accept fails with CONTENT_CONFLICT instead of ' +
-          'applying reviewed choices to unseen content. Only meaningful with resolutions.'
+          'applying reviewed choices to unseen content. Only meaningful with resolutions. ' +
+          "With live editing on it is not checked (the report says 'live'): the live deck " +
+          'is re-merged atomically when the accept runs.'
       ),
     expected_theirs_sha: z
       .string()
