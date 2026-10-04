@@ -1,7 +1,8 @@
 /**
  * Agent pointers in live editing: page_cursor_set puts the agent's caret (or a
  * selection) in a page people have open; deck_cursor_set shows which slide it
- * is on. Neither changes content — they move the agent's presence (collab
+ * is on and where its pointer arrow sits on it. Neither changes content —
+ * they move the agent's presence (collab
  * `POST /internal/:kind/:id/cursor`), so they need no version pin and write no
  * audit row. Gated exactly like the apply tools they accompany: the same
  * roles, the same record loaders, the deck's assistant sub-gate, and a write
@@ -9,7 +10,7 @@
  */
 
 import { z } from 'zod';
-import type { CursorRequest } from '@classmoji/collab';
+import { DECK_SLIDE_SIZE, type CursorRequest } from '@classmoji/collab';
 import {
   CollabRequestError,
   actorFor,
@@ -127,6 +128,8 @@ interface DeckCursorSetArgs {
   classroom: string;
   slide_id: string;
   slide: string;
+  x?: number;
+  y?: number;
 }
 
 export const deckCursorSetTool: ToolDefinition<DeckCursorSetArgs> = {
@@ -135,16 +138,31 @@ export const deckCursorSetTool: ToolDefinition<DeckCursorSetArgs> = {
   title: 'Point at a slide in a live deck',
   description:
     'Shows people editing a deck live which slide you are looking at or about to change: your ' +
-    'avatar sits on that slide, in the editor and the slide overview, under your name and in ' +
-    'your colour, until about a minute after your last edit or move. Changes no content. Only ' +
-    'for classrooms with live editing. slide is the id deck_outline lists. A deck_apply in ' +
-    "mode: 'live' already points at the slides it changes.",
+    'avatar sits on that slide, in the editor and the slide overview, and a pointer arrow sits ' +
+    'on the slide itself, under your name and in your colour, until about a minute after your ' +
+    'last edit or move. Changes no content. Only for classrooms with live editing. slide is ' +
+    'the id deck_outline lists. x and y place the arrow in slide coordinates: x 0 (left edge) ' +
+    `to ${DECK_SLIDE_SIZE.width} (right), y 0 (top) to ${DECK_SLIDE_SIZE.height} (bottom); ` +
+    "a coordinate left out is the slide's centre. Calling again moves the arrow. " +
+    "A deck_apply in mode: 'live' already points at the slides it changes.",
   scope: 'write',
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     slide_id: z.string().uuid().describe('Slide deck id'),
     slide: z.string().min(1).max(200).describe('Id of the slide to point at (from deck_outline)'),
+    x: z
+      .number()
+      .min(0)
+      .max(DECK_SLIDE_SIZE.width)
+      .optional()
+      .describe(`Arrow position across the slide, 0 (left) to ${DECK_SLIDE_SIZE.width} (right)`),
+    y: z
+      .number()
+      .min(0)
+      .max(DECK_SLIDE_SIZE.height)
+      .optional()
+      .describe(`Arrow position down the slide, 0 (top) to ${DECK_SLIDE_SIZE.height} (bottom)`),
   },
   handler: async (args, ctx) => {
     const deck = await loadSlideInClassroom(args.slide_id, ctx);
@@ -157,6 +175,8 @@ export const deckCursorSetTool: ToolDefinition<DeckCursorSetArgs> = {
       ({ shown } = await postCursor(env, 'deck', deck.id, {
         actor: await actorFor(ctx),
         slide: args.slide,
+        ...(args.x !== undefined ? { x: args.x } : {}),
+        ...(args.y !== undefined ? { y: args.y } : {}),
       }));
     } catch (error) {
       throw cursorError(error, 'deck', args.slide);

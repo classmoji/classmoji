@@ -6,6 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import type { ToolContext } from '../../mcp/registry.ts';
 
 const mocks = vi.hoisted(() => ({
@@ -196,6 +197,34 @@ describe('deck_cursor_set', () => {
         },
       },
     ]);
+  });
+
+  it('places the pointer arrow at x, y when given (only what was given is sent)', async () => {
+    await deckCursorSetTool.handler(
+      { classroom: 'org/x', slide_id: DECK_ID, slide: 'aaa', x: 120, y: 340.5 },
+      ctx()
+    );
+    await deckCursorSetTool.handler(
+      { classroom: 'org/x', slide_id: DECK_ID, slide: 'aaa', y: 0 },
+      ctx()
+    );
+    expect(calls.map(call => call.body)).toEqual([
+      expect.objectContaining({ slide: 'aaa', x: 120, y: 340.5 }),
+      expect.not.objectContaining({ x: expect.anything() }),
+    ]);
+    expect(calls[1].body.y).toBe(0);
+  });
+
+  it('documents and enforces the slide coordinate range', () => {
+    const schema = z.object(deckCursorSetTool.inputSchema);
+    const base = { classroom: 'org/x', slide_id: DECK_ID, slide: 'aaa' };
+    expect(schema.safeParse({ ...base, x: 0, y: 0 }).success).toBe(true);
+    expect(schema.safeParse({ ...base, x: 960, y: 700 }).success).toBe(true);
+    expect(schema.safeParse({ ...base, x: 961 }).success).toBe(false);
+    expect(schema.safeParse({ ...base, y: 701 }).success).toBe(false);
+    expect(schema.safeParse({ ...base, x: -1 }).success).toBe(false);
+    expect(deckCursorSetTool.description).toContain('x 0 (left edge) to 960 (right)');
+    expect(deckCursorSetTool.description).toContain('y 0 (top) to 700 (bottom)');
   });
 
   it('an assistant may only point in decks they may edit', async () => {
