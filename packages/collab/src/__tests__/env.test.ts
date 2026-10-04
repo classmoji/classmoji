@@ -8,13 +8,33 @@ import {
 } from '../env.ts';
 
 describe('resolveCollabInternalSecret', () => {
-  it('uses the env value, else the dev secret outside production', () => {
+  it('uses the env value', () => {
     expect(resolveCollabInternalSecret({ COLLAB_INTERNAL_SECRET: ' s3 ' })).toBe('s3');
-    expect(resolveCollabInternalSecret({})).toBe(DEV_COLLAB_INTERNAL_SECRET);
+    expect(
+      resolveCollabInternalSecret({ NODE_ENV: 'production', COLLAB_INTERNAL_SECRET: 'real' })
+    ).toBe('real');
+  });
+
+  it('falls back to the dev secret only in development and test', () => {
     expect(resolveCollabInternalSecret({ NODE_ENV: 'development' })).toBe(
       DEV_COLLAB_INTERNAL_SECRET
     );
+    expect(resolveCollabInternalSecret({ NODE_ENV: 'test' })).toBe(DEV_COLLAB_INTERNAL_SECRET);
+    expect(resolveCollabInternalSecret({})).toBeNull();
+    expect(resolveCollabInternalSecret({ NODE_ENV: 'staging' })).toBeNull();
     expect(resolveCollabInternalSecret({ NODE_ENV: 'production' })).toBeNull();
+  });
+
+  it('refuses the dev value and an empty value in production', () => {
+    expect(
+      resolveCollabInternalSecret({
+        NODE_ENV: 'production',
+        COLLAB_INTERNAL_SECRET: DEV_COLLAB_INTERNAL_SECRET,
+      })
+    ).toBeNull();
+    expect(
+      resolveCollabInternalSecret({ NODE_ENV: 'production', COLLAB_INTERNAL_SECRET: '  ' })
+    ).toBeNull();
   });
 });
 

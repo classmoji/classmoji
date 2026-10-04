@@ -33,6 +33,8 @@ if [ -f ".devport" ]; then
   export MCP_PUBLIC_URL="http://localhost:$MCP_PORT"
   export COLLAB_URL="http://localhost:$COLLAB_PORT"
   export COLLAB_WS_URL="ws://localhost:$COLLAB_PORT"
+  # Dev-only shared secret for collab's internal API (see @classmoji/collab/env).
+  export COLLAB_INTERNAL_SECRET="${COLLAB_INTERNAL_SECRET:-classmoji-collab-dev-secret}"
 
   # Override DATABASE_URL with feature-specific DB
   DB_NAME="classmoji_${DEVPORT_NAME//-/_}"
@@ -62,4 +64,5 @@ else
   export MCP_PUBLIC_URL="http://localhost:8100"
   export COLLAB_URL="http://localhost:7700"
   export COLLAB_WS_URL="ws://localhost:7700"
+  export COLLAB_INTERNAL_SECRET="${COLLAB_INTERNAL_SECRET:-classmoji-collab-dev-secret}"
 fi

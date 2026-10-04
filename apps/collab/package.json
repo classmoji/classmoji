@@ -5,7 +5,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "collab:dev": "NODE_ENV=${NODE_ENV:-development} node --watch --experimental-strip-types src/index.ts",
-    "collab:start": "node --experimental-strip-types src/index.ts",
+    "collab:start": "NODE_ENV=production node --experimental-strip-types src/index.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"**/*.{js,jsx,ts,tsx,json,md}\"",

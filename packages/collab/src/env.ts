@@ -10,11 +10,11 @@
  *  - `COLLAB_INTERNAL_SECRET` the `x-collab-secret` value
  *  - `COLLAB_PORT`            devport's port, used only for dev fallbacks
  *
- * Outside production (NODE_ENV !== 'production') every value falls back to
- * the local collab server on COLLAB_PORT (7700 + devport id × 10) and the
- * shared dev secret. In production a missing value resolves to null: callers
- * turn live editing off (and the collab server refuses to start without a
- * secret).
+ * Outside production (NODE_ENV !== 'production') the URLs fall back to the
+ * local collab server on COLLAB_PORT (7700 + devport id × 10); the secret
+ * falls back to the shared dev secret only in development/test. A missing
+ * value resolves to null: callers turn live editing off, and the collab
+ * server refuses to start without a secret.
  */
 
 type Env = Record<string, string | undefined>;
@@ -39,11 +39,20 @@ export interface CollabEnv extends CollabUrls {
 const isProduction = (env: Env) => env.NODE_ENV === 'production';
 const trimSlash = (url: string) => url.trim().replace(/\/+$/, '');
 
-/** COLLAB_INTERNAL_SECRET, else the dev secret outside production, else null. */
+/**
+ * The internal secret:
+ * - COLLAB_INTERNAL_SECRET when set — except the dev value in production;
+ * - else the dev secret, but only when NODE_ENV is 'development' or 'test'
+ *   (devport-env.sh also exports it for dev processes that run without
+ *   NODE_ENV);
+ * - else null (callers refuse to talk to collab / collab refuses to start).
+ */
 export function resolveCollabInternalSecret(env: Env = process.env): string | null {
   const secret = env.COLLAB_INTERNAL_SECRET?.trim();
-  if (secret) return secret;
-  return isProduction(env) ? null : DEV_COLLAB_INTERNAL_SECRET;
+  if (secret) return isProduction(env) && secret === DEV_COLLAB_INTERNAL_SECRET ? null : secret;
+  return env.NODE_ENV === 'development' || env.NODE_ENV === 'test'
+    ? DEV_COLLAB_INTERNAL_SECRET
+    : null;
 }
 
 /**

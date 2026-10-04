@@ -15,6 +15,12 @@ if [ -f "$PROJECT_DIR/.env" ]; then
   echo "📄 Loading environment from .env..."
   set -a  # Auto-export all variables
   source "$PROJECT_DIR/.env"
+  # Optional dev-only overlay of local overrides kept OUTSIDE the repo (e.g. a
+  # Trigger.dev dev key, TRIGGER_DEV_MACHINE), so values .env leaves empty
+  # don't wipe what you need. Point CLASSMOJI_ENV_OVERLAY at the file.
+  if [ -n "$CLASSMOJI_ENV_OVERLAY" ] && [ -f "$CLASSMOJI_ENV_OVERLAY" ]; then
+    source "$CLASSMOJI_ENV_OVERLAY"
+  fi
   set +a
 else
   echo "⚠️  No .env file found! Copy .env.example to .env first."
@@ -28,7 +34,7 @@ source "$SCRIPT_DIR/devport-env.sh"
 
 # Step 3: Export all devport vars so they're available to subprocesses
 export DATABASE_URL WEBAPP_URL QUIZ_AGENT_URL AI_AGENT_URL SLIDES_URL PAGES_URL MCP_PUBLIC_URL ADMIN_URL SITE_BASE_DOMAIN
-export COLLAB_URL COLLAB_WS_URL
+export COLLAB_URL COLLAB_WS_URL COLLAB_INTERNAL_SECRET
 export WEBAPP_PORT HOOK_PORT QUIZ_AGENT_PORT SLIDES_PORT PAGES_PORT MCP_PORT ADMIN_PORT COLLAB_PORT
 export DEVPORT_ID DEVPORT_NAME
 
@@ -59,8 +65,10 @@ cleanup_ports() {
   local ports="$WEBAPP_PORT $HOOK_PORT $QUIZ_AGENT_PORT $SLIDES_PORT $PAGES_PORT $MCP_PORT $ADMIN_PORT $COLLAB_PORT"
   local killed=false
   for port in $ports; do
-    if lsof -ti:$port >/dev/null 2>&1; then
-      lsof -ti:$port | xargs kill -9 2>/dev/null && killed=true
+    # Listeners only: a client connected to the port (a browser, another
+    # devport's proxy) must not be killed with it.
+    if lsof -ti tcp:$port -sTCP:LISTEN >/dev/null 2>&1; then
+      lsof -ti tcp:$port -sTCP:LISTEN | xargs kill -9 2>/dev/null && killed=true
     fi
   done
   if [ "$killed" = true ]; then
