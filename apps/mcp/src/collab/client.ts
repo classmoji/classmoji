@@ -43,24 +43,17 @@ let warnedMissingEnv = false;
 /**
  * The collab env when this classroom edits live, else null. The flag is read
  * FIRST: an unflagged classroom never resolves the env, so it never talks to
- * the collab server. A flagged classroom in an environment without the
- * collab env (production with COLLAB_URL unset) is refused rather than
- * written to git main behind the live document's back.
+ * the collab server. Without the collab env (production with COLLAB_URL or
+ * COLLAB_INTERNAL_SECRET unset) live editing is off everywhere — the pages
+ * and slides apps fall back to their git editors the same way — so the tools
+ * keep today's git paths, with one error in the log.
  */
 export function liveEnvFor(classroom: unknown): CollabEnv | null {
   if (!classroomCollabEnabled(classroom)) return null;
   const env = resolveCollabEnv();
-  if (!env) {
-    if (!warnedMissingEnv) {
-      warnedMissingEnv = true;
-      console.error(
-        '[mcp] Live editing is on for a classroom but COLLAB_URL / COLLAB_INTERNAL_SECRET are unset.'
-      );
-    }
-    throw new ToolError(
-      'internal',
-      'This classroom edits content live, but the live editing service is not configured here'
-    );
+  if (!env && !warnedMissingEnv) {
+    warnedMissingEnv = true;
+    console.error('[mcp] Live editing is off: COLLAB_URL and COLLAB_INTERNAL_SECRET must be set.');
   }
   return env;
 }

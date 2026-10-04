@@ -27,7 +27,20 @@ const mocks = vi.hoisted(() => ({
   compareBranches: vi.fn(),
   userFindById: vi.fn(),
   auditCreate: vi.fn(),
+  collabEnvMissing: { value: false },
 }));
+
+// The real env resolution (vitest is not production, so it yields the dev
+// fallback), switchable to "not configured" for one test.
+vi.mock('@classmoji/collab/env', async () => {
+  const actual =
+    await vi.importActual<typeof import('@classmoji/collab/env')>('@classmoji/collab/env');
+  return {
+    ...actual,
+    resolveCollabEnv: (...a: Parameters<typeof actual.resolveCollabEnv>) =>
+      mocks.collabEnvMissing.value ? null : actual.resolveCollabEnv(...a),
+  };
+});
 
 vi.mock('../../../../../packages/services/src/content/ContentService.ts', () => ({
   ContentService: {},
@@ -169,7 +182,8 @@ function parse(result: { content: Array<{ text: string }> }) {
 }
 
 beforeEach(() => {
-  for (const m of Object.values(mocks)) m.mockReset();
+  for (const m of Object.values(mocks)) if (typeof m === 'function') m.mockReset();
+  mocks.collabEnvMissing.value = false;
   calls = [];
   routes = {};
   fakeFetch.mockClear();
@@ -278,6 +292,26 @@ describe('unflagged classroom', () => {
     );
     expect(preview.committed_to).toBe('preview');
     expect(fakeFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('flagged classroom without the collab env', () => {
+  it('keeps the git paths, like the web apps, and never calls fetch', async () => {
+    mocks.collabEnvMissing.value = true;
+    const silence = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const outline = parse(
+      await pageContentOutlineTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+    );
+    expect(outline.sha).toBe('git-sha-1');
+    const applied = parse(
+      await pageContentApplyTool.handler(
+        { classroom: 'org/x', page_id: PAGE_ID, expected_sha: 'git-sha-1', ops: [UPDATE_OP] },
+        CTX
+      )
+    );
+    expect(applied.committed_to).toBe('main');
+    expect(fakeFetch).not.toHaveBeenCalled();
+    silence.mockRestore();
   });
 });
 
