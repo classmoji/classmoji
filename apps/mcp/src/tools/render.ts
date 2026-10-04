@@ -171,6 +171,10 @@ export function changedSlideIds(applied: unknown): string[] {
   if (!Array.isArray(applied)) return out;
   for (const entry of applied as Array<Record<string, unknown>>) {
     if (entry.op === 'update' || entry.op === 'move') add(entry.id);
+    // Block ops report the slide holding the block.
+    if (entry.op === 'block_add' || entry.op === 'block_update' || entry.op === 'block_delete') {
+      add(entry.slide);
+    }
     if (entry.op === 'insert') {
       for (const id of Array.isArray(entry.ids) ? entry.ids : []) {
         const kids = (entry.children as Record<string, unknown[]> | undefined)?.[id as string];

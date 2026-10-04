@@ -12,7 +12,8 @@
  * view an apply left, so re-reading clears a refusal that view caused; one
  * agent's view never stands in for another's read),
  * and an apply compares ONLY what its ops depend on — the blocks/slides they
- * update, delete or move, that their position anchors still exist, the slide
+ * update, delete or move (a deck block op: the slide holding the block), that
+ * their position anchors still exist, the slide
  * order for a reorder, the theme for set_theme, the whole document for
  * replace_all — between that snapshot and the document now, whether or not
  * the versions differ. Untouched → the ops apply (the collab server applies
@@ -151,7 +152,16 @@ function findBlock(blocks: unknown, id: string): PageBlock | null {
   return null;
 }
 
-type AnyOp = { op: string; id?: string; position?: { after: string } | { at: string } };
+type AnyOp = {
+  op: string;
+  id?: string;
+  /** Deck block ops: the slide holding the block. */
+  slide?: string;
+  position?: { after: string } | { at: string };
+};
+
+/** Deck block ops edit one slide's html, so they target that slide like an update. */
+const BLOCK_OPS = new Set(['block_add', 'block_update', 'block_delete']);
 
 /** Ops that change or remove existing content: these need a pin. */
 export function needsPin(ops: AnyOp[]): boolean {
@@ -181,6 +191,7 @@ function collectTargets(ops: AnyOp[]): Targets {
     if ((op.op === 'update' || op.op === 'delete' || op.op === 'move') && op.id) {
       targets.content.add(op.id);
     }
+    if (BLOCK_OPS.has(op.op) && op.slide) targets.content.add(op.slide);
     if ((op.op === 'insert' || op.op === 'move') && op.position && 'after' in op.position) {
       targets.anchors.add(op.position.after);
     }

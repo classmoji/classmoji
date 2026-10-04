@@ -91,6 +91,16 @@ describe('changedSlideIds', () => {
     ).toEqual(['a', 'c', 'n1', 'k1', 'k2']);
     expect(changedSlideIds(undefined)).toEqual([]);
   });
+
+  it('block ops report the slide holding the block', () => {
+    expect(
+      changedSlideIds([
+        { op: 'block_add', slide: 's1', block_id: 'b1', type: 'html' },
+        { op: 'block_update', slide: 's2', block_id: 'b2' },
+        { op: 'block_delete', slide: 's1', block_id: 'b1' },
+      ])
+    ).toEqual(['s1', 's2']);
+  });
 });
 
 describe('LruCache', () => {

@@ -321,6 +321,43 @@ describe('applyOps', () => {
     expect(attempt([{ op: 'move', id: 'aaaa0004', position: { at: 'end' } }])).toBeNull();
   });
 
+  it('409 slide-locked on a block op on a held slide, exactly like an update', () => {
+    const adapter = createDeckAdapter(makeDeps());
+    const document = liveDoc(DECK, [42]);
+    acquireLock(document, 'aaaa0004', holder(42), { now: 1_000_000 });
+    adapter.attach(document);
+    const box = { left: 0, top: 0, width: 100, height: 100 };
+    const attempt = (ops: unknown[]) => {
+      try {
+        return adapter.applyOps(context(document), adapter.parseOps(ops));
+      } catch (err) {
+        return err;
+      }
+    };
+    for (const op of [
+      { op: 'block_add', slide: 'aaaa0004', type: 'html', box, source: '<p>x</p>' },
+      { op: 'block_update', slide: 'aaaa0004', block_id: 'b1', box: { top: 5 } },
+      { op: 'block_delete', slide: 'aaaa0004', block_id: 'b1' },
+    ]) {
+      expect(attempt([op])).toMatchObject({
+        status: 409,
+        body: { error: 'slide-locked', slideId: 'aaaa0004', holder: { clientId: 42 } },
+      });
+    }
+    expect(yDocToDeck(document).slides[2].children?.[0].html).toBe('<p>child</p>');
+
+    // Another slide takes the block; the outcome names that slide.
+    const result = attempt([
+      { op: 'block_add', slide: 'aaaa0001', type: 'html', box, source: '<p>x</p>', block_id: 'b1' },
+    ]);
+    expect(result).toEqual({ touchedId: 'aaaa0001', touchedIds: ['aaaa0001'] });
+    expect(yDocToDeck(document).slides[0].html).toContain('data-cm-block-id="b1"');
+    // An unknown block is the 422 every impossible op is.
+    expect(attempt([{ op: 'block_delete', slide: 'aaaa0001', block_id: 'nope' }])).toMatchObject({
+      status: 422,
+    });
+  });
+
   it('a stale or disconnected holder does not block', () => {
     const deps = makeDeps();
     const adapter = createDeckAdapter(deps);

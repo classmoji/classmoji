@@ -72,6 +72,7 @@ vi.mock('@classmoji/services', () => ({
 }));
 
 const { clearSnapshotCache } = await import('../../collab/liveCheck.ts');
+const { applyDeckOps } = await import('@classmoji/services/slides/ops');
 
 const {
   deckOutlineTool,
@@ -708,5 +709,223 @@ describe('tool descriptions', () => {
     }
     expect(deckApplyTool.description).toMatch(/mode: 'live'/);
     expect(deckApplyTool.description).toMatch(/big edits/);
+  });
+});
+
+// ─── svg / html / iframe blocks ─────────────────────────────────────────────
+
+describe('block ops', () => {
+  const BOX = { left: 10, top: 20, width: 400, height: 300 };
+  const SOURCE =
+    '<!doctype html><canvas id="c"></canvas><script>let s = "a < b && \'c\'";</script>';
+  const serve = (version: number, deck: DeckJson) =>
+    route('GET', 'snapshot', () => ({
+      status: 200,
+      body: { epoch: 1, version, live: true, content: deck },
+    }));
+  const read = () => deckOutlineTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID }, CTX);
+  const apply = (ops: unknown[], expected_sha = 'live:1.4') =>
+    deckApplyTool.handler(
+      { classroom: 'org/x', slide_id: SLIDE_ID, expected_sha, ops: ops as never },
+      CTX
+    );
+  const posts = () => calls.filter(call => call.method === 'POST');
+
+  /** DECK() with the html block applied (what the live deck holds after the add). */
+  function deckWithBlock(): DeckJson {
+    return applyDeckOps(DECK(), [
+      { op: 'block_add', slide: 'bbb', type: 'html', box: BOX, source: SOURCE, block_id: 'b1' },
+    ]).deck;
+  }
+
+  it('live block_add: the block id is fixed before the ops travel, and reported', async () => {
+    serve(4, DECK());
+    await read();
+    const result = parse(
+      await apply([{ op: 'block_add', slide: 'bbb', type: 'html', box: BOX, source: SOURCE }])
+    );
+    const sent = posts()[0]?.body?.ops as Array<Record<string, unknown>>;
+    expect(sent[0].block_id).toMatch(/^[0-9a-f]{8}$/);
+    expect(result.applied).toEqual([
+      { op: 'block_add', slide: 'bbb', block_id: sent[0].block_id, type: 'html' },
+    ]);
+    // Guarded like an update of the slide holding the block.
+    expect(posts()[0]?.body?.expect).toEqual({ bbb: itemHash(DECK().slides[1]) });
+    const audit = mocks.auditCreate.mock.calls.at(-1)?.[0];
+    expect(JSON.stringify(audit)).toContain(String(sent[0].block_id));
+  });
+
+  it('a block op on a slide edited since the read is BLOCK_CHANGED; elsewhere is fine', async () => {
+    serve(4, DECK());
+    await read();
+    serve(9, { ...DECK(), slides: [{ id: 'aaa', html: '<h1>Edited</h1>' }, DECK().slides[1]] });
+    expect(
+      parse(
+        await apply([{ op: 'block_add', slide: 'bbb', type: 'svg', box: BOX, source: '<svg/>' }])
+      ).success
+    ).toBe(true);
+
+    clearSnapshotCache();
+    serve(4, DECK());
+    await read();
+    serve(9, { ...DECK(), slides: [DECK().slides[0], { id: 'bbb', html: '<p>Edited</p>' }] });
+    await expect(
+      apply([{ op: 'block_delete', slide: 'bbb', block_id: 'b1' }])
+    ).rejects.toMatchObject({ code: 'BLOCK_CHANGED', data: { changed_ids: ['bbb'] } });
+  });
+
+  it('block ops need a pin, like updates', async () => {
+    await expect(
+      deckApplyTool.handler(
+        {
+          classroom: 'org/x',
+          slide_id: SLIDE_ID,
+          ops: [{ op: 'block_delete', slide: 'bbb', block_id: 'b1' }] as never,
+        },
+        CTX
+      )
+    ).rejects.toMatchObject({ kind: 'invalid_params' });
+  });
+
+  it('an iframe src (an upload ref or a deck path) is resolved to its /content URL before it travels', async () => {
+    serve(4, DECK());
+    await read();
+    await apply([
+      {
+        op: 'block_add',
+        slide: 'bbb',
+        type: 'iframe',
+        box: BOX,
+        src: 'slides/intro-week/games/minions/index.html',
+      },
+    ]);
+    const sent = posts()[0]?.body?.ops as Array<Record<string, unknown>>;
+    expect(sent[0].src).toBe(
+      '/content/test-org/content-test-org-cs101/slides/intro-week/games/minions/index.html'
+    );
+  });
+
+  it('refuses a bad src or unknown block plainly and sends nothing', async () => {
+    serve(4, DECK());
+    await read();
+    await expect(
+      apply([
+        { op: 'block_add', slide: 'bbb', type: 'iframe', box: BOX, src: 'javascript:alert(1)' },
+      ])
+    ).rejects.toMatchObject({ kind: 'invalid_params', message: expect.stringMatching(/https/) });
+    await expect(
+      apply([{ op: 'block_update', slide: 'bbb', block_id: 'zz', box: { top: 1 } }])
+    ).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: expect.stringMatching(/No block 'zz'/),
+    });
+    expect(posts()).toHaveLength(0);
+  });
+
+  it('outline lists blocks (id, type, box); get returns the source decoded', async () => {
+    serve(4, deckWithBlock());
+    const outline = parse(await read());
+    expect(outline.slides[0]).not.toHaveProperty('blocks');
+    expect(outline.slides[1].blocks).toEqual([{ id: 'b1', type: 'html', box: BOX }]);
+
+    const got = parse(
+      await deckGetTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID, slide_ids: ['bbb'] }, CTX)
+    );
+    expect(got.slides[0].blocks).toEqual([{ id: 'b1', type: 'html', box: BOX, source: SOURCE }]);
+    const whole = parse(await deckGetTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID }, CTX));
+    expect(whole.slides[1].blocks[0].source).toBe(SOURCE);
+  });
+
+  it('the decoded blocks never leak into the remembered read (a pinned apply still passes)', async () => {
+    serve(4, deckWithBlock());
+    await deckGetTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID }, CTX);
+    const result = parse(
+      await apply([{ op: 'block_update', slide: 'bbb', block_id: 'b1', box: { left: 0 } }])
+    );
+    expect(result.success).toBe(true);
+    expect(result.applied).toEqual([{ op: 'block_update', slide: 'bbb', block_id: 'b1' }]);
+  });
+
+  it('git mode: the saved deck holds the block, src resolved', async () => {
+    mocks.slideFindById.mockResolvedValue(PLAIN_DRAFT);
+    const result = parse(
+      await deckApplyTool.handler(
+        {
+          classroom: 'org/x',
+          slide_id: SLIDE_ID,
+          expected_sha: 'git-sha-1',
+          ops: [
+            { op: 'block_add', slide: 'aaa', type: 'iframe', box: BOX, src: 'games/x/index.html' },
+          ] as never,
+        },
+        CTX
+      )
+    );
+    expect(result.applied[0]).toMatchObject({ op: 'block_add', slide: 'aaa', type: 'iframe' });
+    const saved = mocks.saveDeck.mock.calls[0][0].deck as DeckJson;
+    expect(saved.slides[0].html).toContain(
+      'data-src="/content/test-org/content-test-org-cs101/slides/intro-week/games/x/index.html"'
+    );
+    expect(fakeFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('the block guide reaches tools/list', () => {
+  it('deck_apply carries it in the op fields; file_upload_start in one line; all under budget', async () => {
+    const { buildMcpServer, registerToolDefinition } = await import('../../mcp/registry.ts');
+    const { fileUploadStartTool, fileImportUrlTool } = await import('../media.ts');
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    for (const tool of [
+      deckApplyTool,
+      deckOutlineTool,
+      deckGetTool,
+      fileUploadStartTool,
+      fileImportUrlTool,
+    ]) {
+      try {
+        registerToolDefinition(tool as never);
+      } catch {
+        // already registered by an earlier run in this worker
+      }
+    }
+    const server = buildMcpServer({
+      userId: 'teacher-1',
+      clientId: 'c',
+      scopes: new Set(['read', 'write']),
+    } as never);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'blocks-test', version: '0.0.0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const tools = (await client.listTools()).tools;
+    const byName = new Map(tools.map(tool => [tool.name, tool]));
+    const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
+
+    const apply = byName.get('deck_apply');
+    const schema = JSON.stringify(apply?.inputSchema);
+    for (const phrase of [
+      'block_add',
+      'one-file mini-game',
+      'slide html ≤200 KB',
+      'in-memory localStorage',
+      'restarts when someone edits the slide',
+      'multi-file games',
+      'not live-editable',
+      'static vector art',
+      'scripts stripped',
+    ]) {
+      expect(schema, phrase).toContain(phrase);
+    }
+    expect(new TextEncoder().encode(apply?.description ?? '').length).toBeLessThan(1500);
+    // The whole deck_apply entry stays well inside what clients load.
+    expect(bytes(apply)).toBeLessThan(16_000);
+
+    const upload = byName.get('file_upload_start');
+    expect(upload?.description).toMatch(/multi-file game.*folder.*block_add type iframe/s);
+    expect(upload?.description).toMatch(/html block/);
+    expect(new TextEncoder().encode(upload?.description ?? '').length).toBeLessThan(1500);
+    expect(JSON.stringify(upload?.inputSchema)).toContain('"folder"');
+    expect(JSON.stringify(byName.get('file_import_url')?.inputSchema)).toContain('"folder"');
+    expect(JSON.stringify(byName.get('deck_outline')?.description)).toMatch(/blocks/);
   });
 });

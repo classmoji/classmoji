@@ -64,7 +64,10 @@ import {
   applyDeckOps,
   deckOpSchema,
   findSlide,
+  prepareDeckOps,
+  readSlideBlocks,
   type DeckOp,
+  type SlideBlockInfo,
 } from '@classmoji/services/slides/ops';
 import type { SnapshotResponse } from '@classmoji/collab';
 import { ContentService } from '@classmoji/services';
@@ -307,6 +310,36 @@ function slideTextPreview(html: string | undefined): string {
   return text.length > 80 ? `${text.slice(0, 79)}…` : text;
 }
 
+// ─── Blocks ──────────────────────────────────────────────────────────────────
+
+/** Block types the block ops build and agents edit by id. */
+const AGENT_BLOCK_TYPES = new Set(['html', 'svg', 'iframe']);
+
+/**
+ * A slide's blocks as agents see them: html, svg and iframe blocks, and any
+ * block with an id. `content` adds each one's decoded source / svg / src.
+ */
+function agentBlocks(html: string | undefined, content: boolean): SlideBlockInfo[] {
+  if (!html || !html.includes('sl-block')) return [];
+  return readSlideBlocks(html, { content }).filter(
+    block => block.id !== null || AGENT_BLOCK_TYPES.has(block.type)
+  );
+}
+
+/**
+ * deck_get's copy of a slide: `blocks` (decoded) on any slide that has some.
+ * A NEW object — the slide may be a cached live snapshot, which must stay as
+ * the read returned it.
+ */
+function slideWithBlocks(slide: DeckSlide): DeckSlide & { blocks?: SlideBlockInfo[] } {
+  const blocks = agentBlocks(slide.html, true);
+  return {
+    ...slide,
+    ...(slide.children ? { children: slide.children.map(slideWithBlocks) } : {}),
+    ...(blocks.length > 0 ? { blocks } : {}),
+  };
+}
+
 interface DeckOutlineEntry {
   id: string;
   /** Dotted position, '4' or '4.2' (vertical-stack children). */
@@ -314,16 +347,20 @@ interface DeckOutlineEntry {
   preview: string;
   hidden: boolean;
   has_notes: boolean;
+  /** html / svg / iframe blocks (and any block with an id): id, type, box. */
+  blocks?: SlideBlockInfo[];
   children?: DeckOutlineEntry[];
 }
 
 function outlineEntry(slide: DeckSlide, index: string): DeckOutlineEntry {
+  const blocks = agentBlocks(slide.html, false);
   const entry: DeckOutlineEntry = {
     id: slide.id,
     index,
     preview: slideTextPreview(slide.html),
     hidden: slide.hidden === true,
     has_notes: slide.notes != null && slide.notes !== '',
+    ...(blocks.length > 0 ? { blocks } : {}),
   };
   if (slide.children && slide.children.length > 0) {
     entry.children = slide.children.map((child, j) => outlineEntry(child, `${index}.${j + 1}`));
@@ -358,7 +395,8 @@ export const deckOutlineTool: ToolDefinition<DeckOutlineArgs> = {
   title: 'Outline a slide deck',
   description:
     "Returns a compact outline of a deck's slides: one entry per slide (id, index like '4' or " +
-    "'4.2' for vertical stacks, ≤80-char text preview, hidden, has_notes) plus theme info, the " +
+    "'4.2' for vertical stacks, ≤80-char text preview, hidden, has_notes, blocks: id/type/box of " +
+    'html, svg and iframe blocks) plus theme info, the ' +
     'content sha + sha_source, and pending-preview status. Start here, then fetch only the ' +
     'slides you need with deck_get (slide_ids) and edit them with deck_apply — never ' +
     "round-trip whole decks. Pass at: 'preview' to outline the pending preview instead of main. " +
@@ -454,7 +492,8 @@ export const deckGetTool: ToolDefinition<DeckGetArgs> = {
     'large decks. Omitting slide_ids returns the whole deck incl. config and custom CSS. The ' +
     'returned sha + sha_source are the expected_sha/sha_source for a subsequent deck_apply. ' +
     "Pass at: 'preview' to read the pending preview branch. In a classroom with live editing, " +
-    "main is the live deck and sha is its version ('live:E.V', sha_source 'live').",
+    "main is the live deck and sha is its version ('live:E.V', sha_source 'live'). A slide's " +
+    'blocks list its html/svg/iframe blocks with source, svg or src decoded.',
   scope: 'read',
   roles: TEACHING_TEAM,
   inputSchema: {
@@ -540,13 +579,13 @@ function selectSlides(
       }
       selected.push(found.slide);
     }
-    return { ...head, slides: selected };
+    return { ...head, slides: selected.map(slideWithBlocks) };
   }
   return {
     ...head,
     ...(deck.config ? { config: deck.config } : {}),
     ...(deck.customCss != null ? { custom_css: deck.customCss } : {}),
-    slides: deck.slides,
+    slides: deck.slides.map(slideWithBlocks),
   };
 }
 
@@ -800,7 +839,10 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
       .array(deckOpSchema)
       .min(1)
       .max(25)
-      .describe('Slide operations, applied sequentially (later ops see earlier effects)'),
+      .describe(
+        'Slide operations, applied sequentially (later ops see earlier effects). ' +
+          'block_add / block_update / block_delete edit one html, svg or iframe block of a slide'
+      ),
     mode: z
       .enum(['live', 'preview'])
       .optional()
@@ -827,9 +869,22 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
 };
 
 /** deck_apply itself; `render: true` is layered on by the handler above. */
-async function applyDeckEdits(args: DeckApplyArgs, ctx: ToolContext): Promise<ToolResult> {
-  const slide = await loadSlideInClassroom(args.slide_id, ctx);
+async function applyDeckEdits(rawArgs: DeckApplyArgs, ctx: ToolContext): Promise<ToolResult> {
+  const slide = await loadSlideInClassroom(rawArgs.slide_id, ctx);
   await assertSlideEditable(slide, ctx);
+
+  // Block ops leave here ready to apply anywhere: a new block's id is fixed
+  // now (the dry run, the live server and the replay must name the same
+  // block), and iframe srcs are resolved against the deck folder.
+  const org = slide.classroom.git_organization?.login;
+  const repo = slide.classroom.content_repo;
+  const args: DeckApplyArgs = {
+    ...rawArgs,
+    ops: prepareDeckOps(
+      rawArgs.ops,
+      org && repo ? { org, repo, contentPath: slide.content_path } : null
+    ),
+  };
 
   // Live editing: 'live' goes into the live deck through the collab server;
   // git main is only its checkpoint and is never written here.

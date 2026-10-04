@@ -195,11 +195,17 @@ function connectedClients(doc: Y.Doc): Set<number> | undefined {
   return awareness ? new Set(awareness.getStates().keys()) : undefined;
 }
 
-/** Ids an op writes content of (a delete of a stack takes its children). */
+/**
+ * Ids an op writes content of (a delete of a stack takes its children; a block
+ * op writes the html of the slide holding the block, exactly like an update).
+ */
 function touchedSlideIds(deck: DeckJson, ops: DeckOp[]): string[] {
   const out = new Set<string>();
   for (const op of ops) {
     if (op.op === 'update') out.add(op.id);
+    if (op.op === 'block_add' || op.op === 'block_update' || op.op === 'block_delete') {
+      out.add(op.slide);
+    }
     if (op.op === 'delete') {
       out.add(op.id);
       const slide = deck.slides.find(s => s.id === op.id);
@@ -314,6 +320,10 @@ export function opsOutcome(applied: Array<Record<string, unknown>>): ApplyOpsRes
     } else if (typeof entry.id === 'string') {
       touch(entry.id);
       touchedId = entry.id;
+    } else if (typeof entry.slide === 'string') {
+      // A block op: the slide holding the block.
+      touch(entry.slide);
+      touchedId = entry.slide;
     }
   }
   const touchedIds = touched.slice(-AGENT_TOUCHED_MAX);
