@@ -8,8 +8,9 @@
  * `${COLLAB_URL}/internal/:kind/:id/external { sha, before }`; collab reads the
  * file at `sha` and 3-way merges it into the live doc (or reseeds an idle one).
  *
- * Retries: network errors, 5xx, 409 (busy; not `content-missing`) and 429
- * retry with exponential backoff; any other 4xx is final (bad id, legacy page, wrong secret — another
+ * Retries: network errors, 5xx, 409 (busy; not `content-missing` or
+ * `no-merge-base`) and 429 retry with exponential backoff; any other 4xx is
+ * final (bad id, legacy page, wrong secret — another
  * attempt gets the same answer). The queue runs one notification per
  * classroom at a time (hook-station passes `concurrencyKey: classroomId`), so
  * a classroom's pushes reach collab in delivery order.
@@ -40,15 +41,26 @@ export interface CollabExternalResult {
 }
 
 /**
- * Whether another attempt can change the answer: network-level 5xx, 429, and
- * 409 (busy) — except a 409 `content-missing`, which says the file is not in
- * the repo at that commit and stays that way.
+ * 409 answers that stay the same on every attempt:
+ *  - `content-missing`: the file is not in the repo at that commit;
+ *  - `no-merge-base`: collab can't find the content the live doc descends
+ *    from, so it kept the live doc and did NOT merge the outside edit. Needs a
+ *    person (alerted below), not another attempt.
+ */
+export const FINAL_CONFLICTS = new Set(['content-missing', 'no-merge-base']);
+
+/** The `error` code of a collab error body, if any. */
+function errorCode(body: unknown): string | undefined {
+  const error = (body as { error?: unknown } | null)?.error;
+  return typeof error === 'string' ? error : undefined;
+}
+
+/**
+ * Whether another attempt can change the answer: 5xx, 429, and 409 (busy) —
+ * except the 409s in FINAL_CONFLICTS.
  */
 export function isRetryableStatus(status: number, body?: unknown): boolean {
-  if (status === 409) {
-    const error = (body as { error?: unknown } | null)?.error;
-    return error !== 'content-missing';
-  }
+  if (status === 409) return !FINAL_CONFLICTS.has(errorCode(body) ?? '');
   return status >= 500 || status === 429;
 }
 
@@ -56,7 +68,9 @@ export function isRetryableStatus(status: number, body?: unknown): boolean {
 export class CollabExternalRefused extends Error {
   constructor(
     message: string,
-    readonly status: number
+    readonly status: number,
+    /** Collab's `error` code, when it sent one. */
+    readonly code?: string
   ) {
     super(message);
     this.name = 'CollabExternalRefused';
@@ -94,7 +108,7 @@ export async function postCollabExternal(
 
   const message = `collab ${kind}/${docId} @ ${sha}: HTTP ${response.status} ${JSON.stringify(body)}`;
   if (isRetryableStatus(response.status, body)) throw new Error(message);
-  throw new CollabExternalRefused(message, response.status);
+  throw new CollabExternalRefused(message, response.status, errorCode(body));
 }
 
 export const collabExternal = task({
@@ -114,7 +128,15 @@ export const collabExternal = task({
       return result.body;
     } catch (err) {
       if (err instanceof CollabExternalRefused) {
-        logger.error('collab external refused', { ...payload, error: err.message });
+        // Error level with the doc ids: an outside edit that did not reach the
+        // live doc is an alert. For `no-merge-base` collab kept the live doc
+        // and records the conflict on it; this run just stops.
+        logger.error(
+          err.code === 'no-merge-base'
+            ? 'collab external: outside edit NOT merged (no merge base)'
+            : 'collab external refused',
+          { ...payload, status: err.status, code: err.code, error: err.message }
+        );
         throw new AbortTaskRunError(err.message);
       }
       throw err;

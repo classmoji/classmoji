@@ -67,7 +67,16 @@ describe('postCollabExternal', () => {
     ).rejects.toBeInstanceOf(CollabExternalRefused);
   });
 
-  it('a 409 content-missing is final', async () => {
+  it.each(['content-missing', 'no-merge-base'])('a 409 %s is final', async code => {
+    const err = await postCollabExternal(payload, {
+      fetch: respond(409, { error: code }),
+      env,
+    }).catch(e => e);
+    expect(err).toBeInstanceOf(CollabExternalRefused);
+    expect(err).toMatchObject({ status: 409, code });
+  });
+
+  it('a 409 content-missing is final (slide-locked is not)', async () => {
     await expect(
       postCollabExternal(payload, { fetch: respond(409, { error: 'content-missing' }), env })
     ).rejects.toBeInstanceOf(CollabExternalRefused);
@@ -101,6 +110,31 @@ describe('the task', () => {
     expect(COLLAB_EXTERNAL_TASK).toBe('collab-external');
     expect(definition.queue).toEqual({ name: 'collab-external', concurrencyLimit: 1 });
     expect(definition.retry.maxAttempts).toBeGreaterThan(1);
+  });
+
+  it('a 409 no-merge-base aborts (no retries) and logs an error with the doc ids', async () => {
+    const { logger } = await import('@trigger.dev/sdk');
+    vi.mocked(logger.error).mockClear();
+    vi.stubEnv('COLLAB_URL', 'http://collab.test');
+    vi.stubEnv('COLLAB_INTERNAL_SECRET', 's3');
+    try {
+      vi.stubGlobal('fetch', respond(409, { error: 'no-merge-base' }));
+      await expect(definition.run(payload)).rejects.toMatchObject({ name: 'AbortTaskRunError' });
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('no merge base'),
+        expect.objectContaining({
+          classroomId: 'c1',
+          kind: 'page',
+          docId: 'page-1',
+          sha: payload.sha,
+          status: 409,
+          code: 'no-merge-base',
+        })
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+    }
   });
 
   it('turns a final answer into AbortTaskRunError and lets a retryable one throw', async () => {
