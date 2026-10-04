@@ -892,7 +892,6 @@ describe('runContentCheckpoint bookkeeping round 2', () => {
       source_sha: 'f'.repeat(40),
       dirty_since: new Date(),
     });
-    prisma.rows[0].source_sha = prisma.rows[0].source_sha; // stale on purpose
     const { deps: deps2, notifyOutsideEdit } = makeDeps(prisma);
     const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r2' }, deps2);
     expect(notifyOutsideEdit).not.toHaveBeenCalled();
