@@ -43,6 +43,7 @@ interface AgentState {
   slide?: string;
   touched?: { ids: string[]; seq: number };
   cursor?: { anchor: unknown; head: unknown };
+  pointer?: { slide: string; x: number; y: number };
 }
 
 /** The agent entries a client sees, by clientID. */
@@ -431,5 +432,49 @@ describe('decks', () => {
     expect(missing).toEqual({ status: 404, body: { error: 'not-found', what: 'slide' } });
     const bad = await internal(server, 'POST', '/deck/deck-1/cursor', { actor: ada });
     expect(bad.status).toBe(400);
+  });
+
+  it("puts the agent's pointer arrow where it points, else the slide's centre", async () => {
+    await start({ deck: stubDeck() });
+    const room = roomName('deck', 'deck-1', 1);
+    const client = connect(server, room, { schemaVersion: 1 });
+    clients.push(client);
+    await client.synced;
+    const pointer = () => agentList(client)[0]?.pointer;
+
+    // An op: the arrow goes to the centre of the slide it changed.
+    await internal(server, 'POST', '/deck/deck-1/ops', { actor: ada, ops: [{ op: 'x' }] });
+    await waitFor(() => pointer()?.slide === 's2', 3000, 'arrow on the changed slide');
+    expect(pointer()).toEqual({ slide: 's2', x: 480, y: 350 });
+
+    // /cursor with a spot (clamped onto the slide).
+    let res = await internal(server, 'POST', '/deck/deck-1/cursor', {
+      actor: ada,
+      slide: 's2',
+      x: 120.5,
+      y: 9000,
+    });
+    expect(res).toEqual({ status: 200, body: { shown: true } });
+    await waitFor(() => pointer()?.x === 120.5, 3000, 'arrow at the spot');
+    expect(pointer()).toEqual({ slide: 's2', x: 120.5, y: 700 });
+
+    // Another op on the same slide leaves it where it pointed.
+    await internal(server, 'POST', '/deck/deck-1/ops', { actor: ada, ops: [{ op: 'x' }] });
+    await waitFor(() => agentList(client)[0]?.touched?.seq === 2, 3000, 'second batch');
+    expect(pointer()).toEqual({ slide: 's2', x: 120.5, y: 700 });
+
+    // /cursor without a spot: the centre of that slide.
+    res = await internal(server, 'POST', '/deck/deck-1/cursor', { actor: ada, slide: 's1' });
+    expect(res.status).toBe(200);
+    await waitFor(() => pointer()?.slide === 's1', 3000, 'arrow on s1');
+    expect(pointer()).toEqual({ slide: 's1', x: 480, y: 350 });
+
+    for (const body of [
+      { actor: ada, slide: 's1', x: 'a' },
+      { actor: ada, slide: 's1', y: '5' },
+      { actor: ada, slide: 's1', x: true },
+    ]) {
+      expect((await internal(server, 'POST', '/deck/deck-1/cursor', body)).status).toBe(400);
+    }
   });
 });

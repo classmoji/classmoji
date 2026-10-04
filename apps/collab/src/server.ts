@@ -24,7 +24,9 @@ import {
   COLLAB_CLOSE_RELOAD,
   agentColor,
   agentDisplayName,
+  agentRestPoint,
   normalizeAgentSession,
+  normalizeSlidePointer,
   parseRoom,
   roomName,
   userColor,
@@ -38,6 +40,7 @@ import {
   type CollabStatelessMessage,
   type CursorRequest,
   type CursorResponse,
+  type SlidePointer,
 } from '@classmoji/collab';
 import { DEFAULT_COLLAB_PORT } from '@classmoji/collab/env';
 
@@ -171,6 +174,8 @@ interface AgentPresence {
   seq: number;
   /** Pages: its caret. */
   cursor: AgentCursor | null;
+  /** Decks: its pointer arrow on a slide. */
+  pointer: SlidePointer | null;
   expireTimer: NodeJS.Timeout | null;
   touchTimer: NodeJS.Timeout | null;
   /** Sent to the document at least once under the current clientID. */
@@ -749,6 +754,7 @@ export class CollabRuntime {
         touched: null,
         seq: 0,
         cursor: null,
+        pointer: null,
         expireTimer: null,
         touchTimer: null,
         published: false,
@@ -780,6 +786,11 @@ export class CollabRuntime {
     if (typeof outcome.touchedId === 'string') {
       presence.focus =
         kind === 'deck' ? { slide: outcome.touchedId } : { blockId: outcome.touchedId };
+      // Decks: its arrow moves to the slide it changed (where it already
+      // pointed on that slide, else the centre).
+      if (kind === 'deck' && presence.pointer?.slide !== outcome.touchedId) {
+        presence.pointer = { slide: outcome.touchedId, ...agentRestPoint() };
+      }
     }
     const ids = Array.isArray(outcome.touchedIds)
       ? outcome.touchedIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
@@ -812,7 +823,8 @@ export class CollabRuntime {
 
   /**
    * `POST /internal/:kind/:id/cursor`: move an agent's caret (page) or point
-   * it at a slide (deck) without changing content. Nobody has the doc open →
+   * it at a slide (deck; its arrow at `x`,`y`, else the slide's centre)
+   * without changing content. Nobody has the doc open →
    * `{ shown: false }`; an unknown block or slide → 404.
    */
   async agentCursor(
@@ -844,6 +856,12 @@ export class CollabRuntime {
       }
       const presence = this.agentPresence(document, request.actor);
       presence.focus = { slide };
+      const rest = agentRestPoint();
+      presence.pointer = normalizeSlidePointer({
+        slide,
+        x: request.x ?? rest.x,
+        y: request.y ?? rest.y,
+      }) ?? { slide, ...rest };
       this.publishAgent(presence);
     }
     return { shown: true };
@@ -902,6 +920,7 @@ export class CollabRuntime {
       ...presence.focus,
       ...(presence.touched ? { touched: presence.touched } : {}),
       ...(presence.cursor ? { cursor: presence.cursor } : {}),
+      ...(presence.pointer ? { pointer: presence.pointer } : {}),
     });
     applyAwarenessUpdate(
       document.awareness,

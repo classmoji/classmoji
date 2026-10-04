@@ -7,12 +7,14 @@
  *   { user: { name: '<name> (agent)' | '<name> (agent 2)', color, agent: true },
  *     blockId? | slide?,          what it last touched (page block / deck slide)
  *     touched?: { ids, seq },     what its last op batch inserted or changed
- *     cursor?: { anchor, head } } pages: its caret, as y-prosemirror reads it
+ *     cursor?: { anchor, head },  pages: its caret, as y-prosemirror reads it
+ *     pointer?: { slide, x, y } } decks: its pointer arrow (see pointer.ts)
  *
  * Pure: no DOM, no Yjs. The server, both editors and MCP import it.
  */
 
 import { USER_COLORS, colorHash } from './color.ts';
+import type { SlidePointer } from './pointer.ts';
 
 /** At most this many ids in one batch's `touched` list (the last ones win). */
 export const AGENT_TOUCHED_MAX = 40;
@@ -42,6 +44,7 @@ export interface AgentAwarenessState {
   slide?: string;
   touched?: AgentTouched;
   cursor?: AgentCursor | null;
+  pointer?: SlidePointer;
 }
 
 // ─── Session ids ─────────────────────────────────────────────────────────────

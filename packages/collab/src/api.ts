@@ -89,14 +89,18 @@ export interface PageCursorPoint {
 /**
  * `POST /internal/:kind/:id/cursor` — place an agent's presence without
  * changing content. Page: `page` (a caret, or a selection to `selectTo`);
- * deck: `slide` (the slide id it points at). `{ shown: false }` when nobody
- * has the doc open (there is no one to show it to); 404 `not-found` for an
- * unknown block or slide.
+ * deck: `slide` (the slide id it points at), and optionally where on it its
+ * pointer arrow sits — `x`, `y` in slide coordinates (DECK_SLIDE_SIZE,
+ * clamped; the centre when absent). `{ shown: false }` when nobody has the
+ * doc open (there is no one to show it to); 404 `not-found` for an unknown
+ * block or slide.
  */
 export interface CursorRequest {
   actor: CollabActor;
   page?: PageCursorPoint & { selectTo?: Partial<PageCursorPoint> };
   slide?: string;
+  x?: number;
+  y?: number;
 }
 
 export interface CursorResponse {

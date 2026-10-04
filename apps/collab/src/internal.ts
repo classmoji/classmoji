@@ -13,7 +13,7 @@
  *   POST /internal/:kind/:id/checkpoint     { message?, actor } → { version }
  *   POST /internal/:kind/:id/close          { reason } → { closed }   (sockets: 4409 reload)
  *   POST /internal/:kind/:id/preview-changed {} → { broadcast }  (stateless { type: 'preview-changed' })
- *   POST /internal/:kind/:id/cursor         { actor, page? | slide? } → { shown }  (agent caret; no edit)
+ *   POST /internal/:kind/:id/cursor         { actor, page? | slide, x?, y? } → { shown }  (agent caret/arrow; no edit)
  *   POST /internal/classroom/:id/flag       { enabled } → { closed, reseeded }
  *
  * /external: `sha` is the COMMIT the outside push landed as (theirs is read
@@ -126,7 +126,7 @@ function invalidCursor(): CollabHttpError {
   return new CollabHttpError(400, {
     error: 'invalid-cursor',
     message:
-      'page { blockId, offset? | at?, selectTo? { blockId?, offset? | at? } } or slide (an id) is required',
+      'page { blockId, offset? | at?, selectTo? { blockId?, offset? | at? } } or slide (an id) with optional x, y (numbers) is required',
   });
 }
 
@@ -137,7 +137,20 @@ function requireCursor(kind: CollabKind, body: Record<string, unknown>): CursorR
     if (typeof body.slide !== 'string' || !body.slide || body.slide.length > MAX_ID_LENGTH) {
       throw invalidCursor();
     }
-    return { actor, slide: body.slide };
+    // Slide coordinates; the server clamps them onto the slide.
+    const coord = (value: unknown): number | undefined => {
+      if (value === undefined || value === null) return undefined;
+      if (typeof value !== 'number' || !Number.isFinite(value)) throw invalidCursor();
+      return value;
+    };
+    const x = coord(body.x);
+    const y = coord(body.y);
+    return {
+      actor,
+      slide: body.slide,
+      ...(x !== undefined ? { x } : {}),
+      ...(y !== undefined ? { y } : {}),
+    };
   }
   if (!body.page || typeof body.page !== 'object') throw invalidCursor();
   const page = body.page as Record<string, unknown>;
