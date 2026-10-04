@@ -159,7 +159,10 @@
 /* Slide Overview Thumbnails */
 .reveal-thumbnail {
   /* Inherit basic Reveal.js typography */
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
   color: #222;
   background: white;
   height: 100%;
@@ -179,9 +182,15 @@
   line-height: 1.2;
 }
 
-.reveal-thumbnail h1 { font-size: 2em; }
-.reveal-thumbnail h2 { font-size: 1.5em; }
-.reveal-thumbnail h3 { font-size: 1.25em; }
+.reveal-thumbnail h1 {
+  font-size: 2em;
+}
+.reveal-thumbnail h2 {
+  font-size: 1.5em;
+}
+.reveal-thumbnail h3 {
+  font-size: 1.25em;
+}
 
 .reveal-thumbnail p {
   margin: 0.5em 0;
@@ -302,7 +311,9 @@
   border: 2px dashed color-mix(in srgb, var(--r-main-color, #666) 30%, transparent);
   border-radius: 8px;
   padding: 1em;
-  transition: border-color 0.2s, background-color 0.2s;
+  transition:
+    border-color 0.2s,
+    background-color 0.2s;
   /* Content starts at top of column */
   display: flex;
   flex-direction: column;
@@ -336,7 +347,9 @@
 }
 
 /* Active column label is more visible */
-.reveal section[contenteditable='true'][class*='slide-layout-'] > div[data-column-active='true']::before {
+.reveal
+  section[contenteditable='true'][class*='slide-layout-']
+  > div[data-column-active='true']::before {
   color: rgba(59, 130, 246, 0.8);
 }
 
@@ -402,7 +415,9 @@
 
 /* Transition for smooth handle interactions */
 .image-resize-handle {
-  transition: transform 0.1s ease, background-color 0.1s ease;
+  transition:
+    transform 0.1s ease,
+    background-color 0.1s ease;
 }
 
 /* During resize, disable pointer events on the image to prevent selection issues */
@@ -435,7 +450,15 @@
 .reveal section[contenteditable='true'] .iframe-wrapper {
   position: relative;
   min-height: 200px;
-  background: linear-gradient(135deg, #f5f5f5 25%, #e8e8e8 25%, #e8e8e8 50%, #f5f5f5 50%, #f5f5f5 75%, #e8e8e8 75%);
+  background: linear-gradient(
+    135deg,
+    #f5f5f5 25%,
+    #e8e8e8 25%,
+    #e8e8e8 50%,
+    #f5f5f5 50%,
+    #f5f5f5 75%,
+    #e8e8e8 75%
+  );
   background-size: 20px 20px;
   border: 2px dashed rgba(100, 100, 100, 0.4);
   border-radius: 8px;
@@ -447,7 +470,15 @@
 /* Dark mode iframe wrapper */
 @media (prefers-color-scheme: dark) {
   .reveal section[contenteditable='true'] .iframe-wrapper {
-    background: linear-gradient(135deg, #2a2a2a 25%, #333 25%, #333 50%, #2a2a2a 50%, #2a2a2a 75%, #333 75%);
+    background: linear-gradient(
+      135deg,
+      #2a2a2a 25%,
+      #333 25%,
+      #333 50%,
+      #2a2a2a 50%,
+      #2a2a2a 75%,
+      #333 75%
+    );
     background-size: 20px 20px;
     border-color: rgba(150, 150, 150, 0.4);
   }
@@ -455,7 +486,15 @@
 
 /* Class-based dark mode */
 .dark .reveal section[contenteditable='true'] .iframe-wrapper {
-  background: linear-gradient(135deg, #2a2a2a 25%, #333 25%, #333 50%, #2a2a2a 50%, #2a2a2a 75%, #333 75%);
+  background: linear-gradient(
+    135deg,
+    #2a2a2a 25%,
+    #333 25%,
+    #333 50%,
+    #2a2a2a 50%,
+    #2a2a2a 75%,
+    #333 75%
+  );
   background-size: 20px 20px;
   border-color: rgba(150, 150, 150, 0.4);
 }
@@ -549,7 +588,7 @@
    to implement crop/pan. Without this override, Tailwind's preflight rule
    (max-width: 100%) constrains images to container size, breaking the
    crop positioning and making images invisible when offset. */
-.reveal .sl-block[data-block-type="image"] .sl-block-content img {
+.reveal .sl-block[data-block-type='image'] .sl-block-content img {
   max-width: none;
 }
 
@@ -587,12 +626,12 @@
 }
 
 /* Iframe blocks in edit mode - disable pointer events so clicks select the block */
-.reveal.editing-mode .sl-block[data-block-type="iframe"] iframe {
+.reveal.editing-mode .sl-block[data-block-type='iframe'] iframe {
   pointer-events: none;
 }
 
 /* When the iframe block is in editing mode (double-clicked), re-enable pointer events */
-.reveal.editing-mode .sl-block[data-block-type="iframe"].editing iframe {
+.reveal.editing-mode .sl-block[data-block-type='iframe'].editing iframe {
   pointer-events: auto;
 }
 
@@ -618,9 +657,11 @@
   height: 10px;
   background-color: #ffffff;
   border: 2px solid #3b82f6;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
   pointer-events: auto;
-  transition: transform 0.1s ease, background-color 0.1s ease;
+  transition:
+    transform 0.1s ease,
+    background-color 0.1s ease;
 }
 
 .block-resize-handle:hover {
@@ -647,7 +688,7 @@
   bottom: -24px;
   left: 50%;
   transform: translateX(-50%);
-  background-color: rgba(0,0,0,0.75);
+  background-color: rgba(0, 0, 0, 0.75);
   color: white;
   padding: 2px 8px;
   border-radius: 4px;
@@ -664,7 +705,7 @@
   top: -24px;
   left: 50%;
   transform: translateX(-50%);
-  background-color: rgba(0,0,0,0.75);
+  background-color: rgba(0, 0, 0, 0.75);
   color: white;
   padding: 2px 8px;
   border-radius: 4px;
@@ -690,7 +731,7 @@
   white-space: nowrap;
   pointer-events: none;
   animation: fadeIn 0.15s ease;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
 /* Green border when in code editing mode */
@@ -710,8 +751,11 @@
 /* Uses --r-main-color from Reveal.js theme to automatically contrast with any background */
 
 .reveal.editing-mode .slides {
-  background-image:
-    radial-gradient(circle, color-mix(in srgb, var(--r-main-color, #222) 35%, transparent) 1px, transparent 1px);
+  background-image: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--r-main-color, #222) 35%, transparent) 1px,
+    transparent 1px
+  );
   background-size: 40px 40px;
   background-position: 0 0;
 }
@@ -1047,62 +1091,81 @@
 }
 
 /* Solarized Light - cream/beige background */
-.reveal .sl-block-content[data-highlight-theme="solarized-light"] pre,
-.reveal .sl-block-content[data-highlight-theme="solarized-light"] code:not(.hljs) {
+.reveal .sl-block-content[data-highlight-theme='solarized-light'] pre,
+.reveal .sl-block-content[data-highlight-theme='solarized-light'] code:not(.hljs) {
   background-color: #fdf6e3;
 }
 
 /* GitHub - light background */
-.reveal .sl-block-content[data-highlight-theme="github"] pre,
-.reveal .sl-block-content[data-highlight-theme="github"] code:not(.hljs) {
+.reveal .sl-block-content[data-highlight-theme='github'] pre,
+.reveal .sl-block-content[data-highlight-theme='github'] code:not(.hljs) {
   background-color: #f8f8f8;
 }
 
 /* Monokai - dark background */
-.reveal .sl-block-content[data-highlight-theme="monokai"] pre,
-.reveal .sl-block-content[data-highlight-theme="monokai"] code:not(.hljs) {
+.reveal .sl-block-content[data-highlight-theme='monokai'] pre,
+.reveal .sl-block-content[data-highlight-theme='monokai'] code:not(.hljs) {
   background-color: #272822;
   color: #f8f8f2;
 }
 
 /* Atom One Dark */
-.reveal .sl-block-content[data-highlight-theme="atom-one-dark"] pre,
-.reveal .sl-block-content[data-highlight-theme="atom-one-dark"] code:not(.hljs) {
+.reveal .sl-block-content[data-highlight-theme='atom-one-dark'] pre,
+.reveal .sl-block-content[data-highlight-theme='atom-one-dark'] code:not(.hljs) {
   background-color: #282c34;
   color: #abb2bf;
 }
 
 /* Atom One Light */
-.reveal .sl-block-content[data-highlight-theme="atom-one-light"] pre,
-.reveal .sl-block-content[data-highlight-theme="atom-one-light"] code:not(.hljs) {
+.reveal .sl-block-content[data-highlight-theme='atom-one-light'] pre,
+.reveal .sl-block-content[data-highlight-theme='atom-one-light'] code:not(.hljs) {
   background-color: #fafafa;
   color: #383a42;
 }
 
 /* Dracula */
-.reveal .sl-block-content[data-highlight-theme="dracula"] pre,
-.reveal .sl-block-content[data-highlight-theme="dracula"] code:not(.hljs) {
+.reveal .sl-block-content[data-highlight-theme='dracula'] pre,
+.reveal .sl-block-content[data-highlight-theme='dracula'] code:not(.hljs) {
   background-color: #282a36;
   color: #f8f8f2;
 }
 
 /* VS / Visual Studio */
-.reveal .sl-block-content[data-highlight-theme="vs"] pre,
-.reveal .sl-block-content[data-highlight-theme="vs"] code:not(.hljs) {
+.reveal .sl-block-content[data-highlight-theme='vs'] pre,
+.reveal .sl-block-content[data-highlight-theme='vs'] code:not(.hljs) {
   background-color: #ffffff;
   color: #000000;
 }
 
 /* VS Code Dark+ */
-.reveal .sl-block-content[data-highlight-theme="vs2015"] pre,
-.reveal .sl-block-content[data-highlight-theme="vs2015"] code:not(.hljs) {
+.reveal .sl-block-content[data-highlight-theme='vs2015'] pre,
+.reveal .sl-block-content[data-highlight-theme='vs2015'] code:not(.hljs) {
   background-color: #1e1e1e;
   color: #dcdcdc;
 }
 
 /* XCode */
-.reveal .sl-block-content[data-highlight-theme="xcode"] pre,
-.reveal .sl-block-content[data-highlight-theme="xcode"] code:not(.hljs) {
+.reveal .sl-block-content[data-highlight-theme='xcode'] pre,
+.reveal .sl-block-content[data-highlight-theme='xcode'] code:not(.hljs) {
   background-color: #ffffff;
   color: #000000;
+}
+
+/* ─── Live editing (collab classrooms) ─────────────────────────────────────
+   Slide-level locks: a slide someone else is editing is read-only and
+   outlined in amber; the slide you hold carries a quiet blue outline. The
+   classes are editor chrome, stripped before anything is stored. */
+.reveal.editing-mode .slides section.cm-locked {
+  outline: 2px dashed rgba(217, 119, 6, 0.75);
+  outline-offset: 6px;
+  cursor: not-allowed;
+}
+.reveal.editing-mode .slides section.cm-held {
+  outline: 2px solid rgba(59, 130, 246, 0.35);
+  outline-offset: 6px;
+}
+/* A preview of a live deck: the slides the preview changes. */
+.reveal .slides section.cm-preview-changed {
+  outline: 3px solid rgba(245, 158, 11, 0.9);
+  outline-offset: 6px;
 }

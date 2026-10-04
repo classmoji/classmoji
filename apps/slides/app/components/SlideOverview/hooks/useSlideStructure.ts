@@ -34,7 +34,12 @@ interface MoveDestination {
  * - stacks: Array of stack objects, each containing slides
  * - Every top-level item is a "stack" (even single slides)
  */
-export function useSlideStructure(revealInstance: RevealApi | null, onContentChange?: () => void) {
+export function useSlideStructure(
+  revealInstance: RevealApi | null,
+  onContentChange?: () => void,
+  /** Re-read the DOM when this changes (live editing: someone else changed the deck). */
+  refreshKey?: unknown
+) {
   const [stacks, setStacks] = useState<StackData[]>([]);
   const [error, setError] = useState<string | null>(null);
   // Track if we need to sync changes to DOM (set after user actions, not initial load)
@@ -59,7 +64,7 @@ export function useSlideStructure(revealInstance: RevealApi | null, onContentCha
       console.error('[SlideOverview] No stacks found! Check slide structure.');
     }
     setStacks(parsed);
-  }, [revealInstance]);
+  }, [revealInstance, refreshKey]);
 
   // Find a slide by ID
   const findSlideById = useCallback(

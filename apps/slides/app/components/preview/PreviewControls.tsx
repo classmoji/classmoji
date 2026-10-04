@@ -630,7 +630,14 @@ const actionButtonBase =
  * Persistent top bar shown while previewing the pending branch.
  * Amber identity in both light and dark modes; fixed under the slides navbar.
  */
-export const PreviewBar = ({ preview }: { preview: PreviewInfo }) => {
+export const PreviewBar = ({
+  preview,
+  changedSlides = null,
+}: {
+  preview: PreviewInfo;
+  /** Live decks: how many slides the preview changes (they are outlined). */
+  changedSlides?: number | null;
+}) => {
   const {
     busy,
     pending,
@@ -661,6 +668,11 @@ export const PreviewBar = ({ preview }: { preview: PreviewInfo }) => {
                 · {preview.commitsAhead} commit{preview.commitsAhead === 1 ? '' : 's'}
                 {age ? ` · ${age}` : ''}
               </span>
+              {changedSlides != null && (
+                <span className="text-amber-700 dark:text-amber-300" data-testid="preview-changed">
+                  · {changedSlides} changed slide{changedSlides === 1 ? '' : 's'} outlined
+                </span>
+              )}
             </div>
 
             <div className="flex items-center gap-2">
