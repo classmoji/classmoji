@@ -3,6 +3,7 @@ import type { WebhookEvent } from '@octokit/webhooks-types';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import Tasks from '@classmoji/tasks';
 import getPrisma from '@classmoji/database';
+import { notifyCollabOfPush, type CollabPrisma } from '../collabExternal.ts';
 
 const githubWebhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
 if (!githubWebhookSecret) {
@@ -148,6 +149,8 @@ const githubWebhookHandlers: Record<string, (data: WebhookEvent) => Promise<void
 const GITHUB_COMMIT_CAP = 20;
 
 interface PushCommit {
+  id?: string;
+  message?: string;
   added?: string[];
   modified?: string[];
   removed?: string[];
@@ -234,8 +237,9 @@ function aggregateChanges(commits: PushCommit[]): {
  * own autograde workflow commits to every student repo whenever tests change,
  * and those must not count as anyone submitting.
  *
- * To a classroom's CONTENT repo it refreshes that classroom's asset map. No
- * classroom simply means "not ours to care about", never an error.
+ * To a classroom's CONTENT repo it refreshes that classroom's asset map and,
+ * for a live-editing classroom, hands changed pages/decks to the collab
+ * service. No classroom simply means "not ours to care about", never an error.
  *
  * Only the repo's DEFAULT branch counts for either: pages render from it, and
  * a feature branch is not a submission until it lands.
@@ -268,12 +272,28 @@ async function handlePush(data: PushEventPayload): Promise<void> {
 
   const classroom = await getPrisma().classroom.findFirst({
     where: { content_repo: repo, git_organization: { login: owner } },
-    select: { id: true },
+    select: { id: true, collab_enabled: true },
   });
 
   if (!classroom) return;
 
   const commits = data.commits ?? [];
+
+  // Live editing: tell the collab service about an outside push so the live
+  // doc merges it in (see collabExternal.ts). Fire-and-forget and started
+  // first, so neither side can hold up or break the other.
+  if (classroom.collab_enabled && !data.deleted && data.after) {
+    void notifyCollabOfPush(
+      {
+        classroomId: classroom.id,
+        after: data.after,
+        commits,
+        complete: commits.length < GITHUB_COMMIT_CAP,
+        forced: Boolean(data.forced),
+      },
+      { prisma: getPrisma() satisfies CollabPrisma }
+    );
+  }
 
   await Tasks.contentAssetsSyncTask.trigger(
     {

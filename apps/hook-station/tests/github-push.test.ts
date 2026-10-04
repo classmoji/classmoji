@@ -239,7 +239,7 @@ describe('which pushes are ours', () => {
     expect(response.statusCode).toBe(200);
     expect(findFirst).toHaveBeenCalledWith({
       where: { content_repo: 'content-cs101', git_organization: { login: 'acme' } },
-      select: { id: true },
+      select: { id: true, collab_enabled: true },
     });
     expect(contentAssetsSync).toHaveBeenCalledTimes(1);
     expect(contentAssetsSync).toHaveBeenCalledWith(
