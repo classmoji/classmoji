@@ -174,7 +174,10 @@ function setup() {
     getIndices: () => ({ h: 0, v: 0 }),
     on() {},
     off() {},
-    sync() {},
+    // Reveal's slide()/sync() blur the editor (what happened in the browser).
+    sync() {
+      (document.activeElement as HTMLElement | null)?.blur?.();
+    },
     layout() {},
     slide() {},
   } as unknown as RevealApi;
@@ -663,6 +666,24 @@ test.describe('live deck bridge', () => {
     t.session.setReady(true);
     t.session.ack();
     expect(t.remoteHtml('aaaa0002')).toBe('<h2>written offline</h2>');
+    t.bridge.destroy();
+  });
+
+  test('a remote insert keeps the focus and caret of someone typing', async () => {
+    const t = setup();
+    const el = t.section('aaaa0002');
+    t.setCurrent('aaaa0002');
+    el.setAttribute('tabindex', '-1'); // jsdom focuses only focusable elements
+    el.focus();
+    const text = el.querySelector('h2')?.firstChild as Text;
+    window.getSelection()?.setBaseAndExtent(text, 2, text, 2);
+    insertSlide(t.remote, 'newer001', { html: '<p>remote</p>' }, { parent: null, after: null });
+    await tick();
+    expect(t.order()[0]).toBe('newer001');
+    expect(document.activeElement).toBe(el);
+    const selection = window.getSelection();
+    expect(selection?.anchorNode).toBe(text);
+    expect(selection?.anchorOffset).toBe(2);
     t.bridge.destroy();
   });
 

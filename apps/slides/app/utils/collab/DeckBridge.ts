@@ -797,6 +797,7 @@ export class DeckBridge {
     const target = structureOfEntries(entries);
     let structural = false;
     const currentId = this.currentSlideId();
+    const bookmark = this.saveSelection();
 
     this.mutateDom(() => {
       const scan = scanDeckDom(slidesEl, taken => this.mintId(taken));
@@ -900,6 +901,10 @@ export class DeckBridge {
       this.goTo(currentId);
       reveal.layout();
     }
+    // Someone typing must not notice: Reveal's slide() blurs the active
+    // element, and moving siblings can disturb the selection. Put both back
+    // in the same tick, so no keystroke lands on <body>.
+    this.restoreSelection(bookmark);
     this.emit();
   }
 
@@ -970,10 +975,54 @@ export class DeckBridge {
     }
   }
 
+  /** Where the person's focus and selection are, when inside the slides. */
+  private saveSelection(): {
+    active: HTMLElement;
+    range: [Node, number, Node, number] | null;
+  } | null {
+    const slidesEl = this.slidesEl;
+    if (!slidesEl || typeof document === 'undefined') return null;
+    const active = document.activeElement as HTMLElement | null;
+    if (!active || !slidesEl.contains(active)) return null;
+    const selection = window.getSelection();
+    const range: [Node, number, Node, number] | null =
+      selection &&
+      selection.anchorNode &&
+      selection.focusNode &&
+      slidesEl.contains(selection.anchorNode)
+        ? [selection.anchorNode, selection.anchorOffset, selection.focusNode, selection.focusOffset]
+        : null;
+    return { active, range };
+  }
+
+  private restoreSelection(bookmark: ReturnType<DeckBridge['saveSelection']>): void {
+    if (!bookmark || !bookmark.active.isConnected) return;
+    if (document.activeElement !== bookmark.active) bookmark.active.focus({ preventScroll: true });
+    const range = bookmark.range;
+    if (!range || !range[0].isConnected || !range[2].isConnected) return;
+    const selection = window.getSelection();
+    if (!selection) return;
+    if (
+      selection.anchorNode === range[0] &&
+      selection.anchorOffset === range[1] &&
+      selection.focusNode === range[2] &&
+      selection.focusOffset === range[3]
+    ) {
+      return;
+    }
+    try {
+      selection.setBaseAndExtent(range[0], range[1], range[2], range[3]);
+    } catch {
+      // Offsets past a node that changed: leave the caret where focus put it.
+    }
+  }
+
   private goTo(slideId: string | null): void {
     if (!slideId || !this.reveal || !this.slidesEl) return;
     const el = this.slidesEl.querySelector(`section[data-cm-id="${CSS.escape(slideId)}"]`);
     if (!el) return;
+    // Already showing it: leave Reveal alone (its slide() blurs the editor).
+    if (this.reveal.getCurrentSlide?.() === el) return;
     const indices = this.reveal.getIndices(el as HTMLElement);
     const now = this.reveal.getIndices();
     if (indices.h !== now.h || indices.v !== now.v) this.reveal.slide(indices.h, indices.v ?? 0);
