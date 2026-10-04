@@ -10,3 +10,5 @@ export * from './locks.ts';
 export * from './render.ts';
 export * from './meta.ts';
 export * from './guard.ts';
+export * from './fieldMerge.ts';
+export * from './conflicts.ts';

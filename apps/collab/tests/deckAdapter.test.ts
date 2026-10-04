@@ -13,6 +13,7 @@ import {
   deckSlides,
   deckToYDoc,
   getLock,
+  readSlideConflicts,
   roomName,
   yDocToDeck,
 } from '@classmoji/collab';
@@ -577,5 +578,49 @@ describe('guarded ops', () => {
     const tail = deck.slides.slice(-2);
     expect(result.insertedIds).toEqual([tail[0].id, tail[1].id, tail[1].children?.[0].id]);
     expect(result.touchedId).toBe(tail[1].id);
+  });
+});
+
+describe('mergeExternal: conflict notices and per-field merges', () => {
+  it('a held slide keeps its html and its holder gets the pushed version to look at', async () => {
+    const deps = makeDeps();
+    deps.decks.set('push-sha', {
+      ...DECK,
+      slides: [{ id: 'aaaa0001', html: '<h1>From GitHub</h1>' }, ...DECK.slides.slice(1)],
+    });
+    const adapter = createDeckAdapter(deps);
+    const document = liveDoc(DECK, [7]);
+    acquireLock(document, 'aaaa0001', holder(7), { now: deps.now() });
+    adapter.attach(document);
+    const result = (await adapter.mergeExternal(context(document, { source_sha: 'base-sha' }), {
+      sha: 'push-sha',
+    })) as { conflictIds?: string[] };
+    expect(result.conflictIds).toEqual(['aaaa0001']);
+    expect(readSlideConflicts(document).get('aaaa0001')).toMatchObject({
+      sha: 'push-sha',
+      html: '<h1>From GitHub</h1>',
+      holderUserId: 'u7',
+    });
+  });
+
+  it('an unlocked slide both sides changed merges per field', async () => {
+    const deps = makeDeps();
+    deps.decks.set('push-sha', {
+      ...DECK,
+      slides: [
+        DECK.slides[0],
+        { id: 'aaaa0002', html: '<h2>From GitHub</h2>', notes: 'say hi' },
+        ...DECK.slides.slice(2),
+      ],
+    });
+    const adapter = createDeckAdapter(deps);
+    const document = liveDoc();
+    // Live: notes changed on the same slide.
+    const notes = (deckSlides(document).get('aaaa0002') as Y.Map<unknown>).get('notes') as Y.Text;
+    notes.insert(notes.length, ' loudly');
+    await adapter.mergeExternal(context(document, { source_sha: 'base-sha' }), { sha: 'push-sha' });
+    const slide = yDocToDeck(document).slides[1];
+    expect(slide.html).toBe('<h2>From GitHub</h2>');
+    expect(slide.notes).toBe('say hi loudly');
   });
 });

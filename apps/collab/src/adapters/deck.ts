@@ -54,6 +54,8 @@ import {
   expireLocks,
   installLockArbiter,
   installLockGuard,
+  mergeSlideFields,
+  recordSlideConflict,
   LOCK_DISCONNECT_GRACE_MS,
   markDisconnected,
   markReconnected,
@@ -236,22 +238,42 @@ function contentKey(slide: DeckSlide): string {
 
 /**
  * In `merged`, give every slide a person holds its live (`ours`) html back.
- * Returns how many slides that kept.
+ * Returns the slides that kept their html against a different pushed one.
  */
-function keepHeldHtml(ours: DeckJson, merged: DeckJson, locks: Map<string, unknown>): number {
+function keepHeldHtml(
+  ours: DeckJson,
+  merged: DeckJson,
+  locks: Map<string, unknown>,
+  theirs: DeckJson
+): Array<{ id: string; theirsHtml: string }> {
   const live = flattenSlides(ours);
   const next = flattenSlides(merged);
-  let kept = 0;
+  const pushed = flattenSlides(theirs);
+  const kept: Array<{ id: string; theirsHtml: string }> = [];
   for (const slideId of locks.keys()) {
     const mine = live.get(slideId);
-    const theirs = next.get(slideId);
-    if (!mine || !theirs || mine.children || theirs.children) continue;
-    if ((theirs.html ?? '') !== (mine.html ?? '')) {
-      theirs.html = mine.html;
-      kept++;
+    const target = next.get(slideId);
+    if (!mine || !target || mine.children || target.children) continue;
+    const theirsHtml = pushed.get(slideId)?.html;
+    if (theirsHtml !== undefined && theirsHtml !== (mine.html ?? '')) {
+      kept.push({ id: slideId, theirsHtml });
     }
+    if ((target.html ?? '') !== (mine.html ?? '')) target.html = mine.html;
   }
   return kept;
+}
+
+/** Put `slide` in place of the slide with its id (top level or in a stack). */
+function replaceSlide(deck: DeckJson, slide: DeckSlide): void {
+  const list = (slides: DeckSlide[]): boolean => {
+    const at = slides.findIndex(s => s.id === slide.id);
+    if (at !== -1) {
+      slides[at] = slide;
+      return true;
+    }
+    return slides.some(s => (s.children ? list(s.children) : false));
+  };
+  list(deck.slides);
 }
 
 /**
@@ -467,30 +489,60 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
     }
     const mergeBase = base;
     let conflicts = 0;
+    const conflictIds = new Set<string>();
     ctx.transact(doc => {
       const ours = yDocToDeck(doc);
       const locks = this.liveLocks(doc);
-      const first = merge3Units(mergeBase, ours, theirsLoaded.deck);
+      const theirs = theirsLoaded.deck;
+      const first = merge3Units(mergeBase, ours, theirs);
       conflicts = first.conflicts.length;
       let merged = first.merged;
       if (conflicts > 0) {
         // Conflicted slides someone is editing keep the live side; the rest
-        // take the push (provisional theirs).
+        // take the push (provisional theirs), then merge per field below.
         const resolutions: Record<string, MergeChoice> = {};
         for (const conflict of first.conflicts) {
           resolutions[conflict.id] = locks.has(conflict.id) ? 'ours' : 'theirs';
+          conflictIds.add(conflict.id);
         }
-        merged = merge3Units(mergeBase, ours, theirsLoaded.deck, { resolutions }).merged;
+        merged = merge3Units(mergeBase, ours, theirs, { resolutions }).merged;
+        // Both sides changed an unlocked slide: keep what each side changed
+        // (html, notes, visibility, each attribute); the push wins a field
+        // both changed.
+        const b = flattenSlides(mergeBase);
+        const o = flattenSlides(ours);
+        const t = flattenSlides(theirs);
+        for (const conflict of first.conflicts) {
+          if (locks.has(conflict.id)) continue;
+          const mine = o.get(conflict.id);
+          const pushed = t.get(conflict.id);
+          if (!mine || !pushed || mine.children || pushed.children) continue;
+          replaceSlide(merged, mergeSlideFields(b.get(conflict.id), mine, pushed, 'theirs'));
+        }
       }
       // A slide a person holds keeps its live html even when only the push
-      // changed it: their next keystroke would otherwise overwrite the push
-      // anyway, or worse, the push would replace what they see mid-edit.
+      // changed it; they are told, and can look at the pushed version.
       if (locks.size > 0) {
-        conflicts += keepHeldHtml(ours, merged, locks);
+        const kept = keepHeldHtml(ours, merged, locks, theirs);
+        conflicts += kept.filter(k => !conflictIds.has(k.id)).length;
+        for (const k of kept) {
+          conflictIds.add(k.id);
+          recordSlideConflict(doc, k.id, {
+            at: this.deps.now(),
+            sha,
+            html: k.theirsHtml,
+            holderUserId: (locks.get(k.id) as SlideLock).userId,
+          });
+        }
       }
       syncDeckIntoYDoc(doc, merged);
     });
-    return { sourceSha: theirsLoaded.sha, conflicts };
+    const result: ExternalMergeResult & { conflictIds?: string[] } = {
+      sourceSha: theirsLoaded.sha,
+      conflicts,
+      ...(conflictIds.size > 0 ? { conflictIds: [...conflictIds] } : {}),
+    };
+    return result;
   }
 
   async currentSourceSha(docId: string): Promise<string | null> {
