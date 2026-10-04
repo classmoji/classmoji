@@ -434,3 +434,58 @@ describe('mergeExternal without a base', () => {
     ).rejects.toMatchObject({ status: 409, body: { error: 'no-merge-base' } });
   });
 });
+
+describe('mergeExternal: bases, no-ops, held slides', () => {
+  const pushed = (): DeckJson => ({
+    ...DECK,
+    slides: [{ id: 'aaaa0001', html: '<h1>From GitHub</h1>' }, ...DECK.slides.slice(1)],
+  });
+
+  it('uses the push’s before commit as the base when readable', async () => {
+    const deps = makeDeps();
+    deps.decks.set('before-sha', DECK);
+    deps.decks.set('push-sha', pushed());
+    const adapter = createDeckAdapter(deps);
+    const document = liveDoc();
+    (deckSlides(document).get('aaaa0002') as Y.Map<unknown>).set('html', '<h2>live</h2>');
+    const result = await adapter.mergeExternal(context(document, {}), {
+      sha: 'push-sha',
+      before: 'before-sha',
+    });
+    expect(result.conflicts).toBe(0);
+    const deck = yDocToDeck(document);
+    expect(deck.slides[0].html).toBe('<h1>From GitHub</h1>');
+    expect(deck.slides[1].html).toBe('<h2>live</h2>');
+  });
+
+  it('no-op when the pushed deck is what the live doc descends from', async () => {
+    const deps = makeDeps();
+    deps.decks.set('push-sha', pushed());
+    const adapter = createDeckAdapter(deps);
+    const document = liveDoc();
+    const result = await adapter.mergeExternal(context(document, { source_sha: 'push-sha-sha' }), {
+      sha: 'push-sha',
+    });
+    expect(result).toEqual({ sourceSha: 'push-sha-sha', conflicts: 0, noop: true });
+    expect(yDocToDeck(document).slides[0].html).toBe('<h1>One</h1>');
+  });
+
+  it('a held slide keeps its live html even when only the push changed it', async () => {
+    const deps = makeDeps();
+    deps.decks.set('push-sha', pushed());
+    const adapter = createDeckAdapter(deps);
+    const document = liveDoc(DECK, [7]);
+    acquireLock(document, 'aaaa0001', holder(7), { now: deps.now() });
+    adapter.attach(document);
+    const result = await adapter.mergeExternal(context(document, { source_sha: 'base-sha' }), {
+      sha: 'push-sha',
+    });
+    expect(result.conflicts).toBe(1);
+    expect(yDocToDeck(document).slides[0].html).toBe('<h1>One</h1>');
+  });
+
+  it('currentSourceSha is the deck file’s blob sha', async () => {
+    const adapter = createDeckAdapter(makeDeps());
+    expect(await adapter.currentSourceSha(SLIDE.id)).toBe('main-sha');
+  });
+});

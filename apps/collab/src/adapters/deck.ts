@@ -206,6 +206,26 @@ function contentKey(slide: DeckSlide): string {
   return JSON.stringify(slide.html ?? null);
 }
 
+/**
+ * In `merged`, give every slide a person holds its live (`ours`) html back.
+ * Returns how many slides that kept.
+ */
+function keepHeldHtml(ours: DeckJson, merged: DeckJson, locks: Map<string, unknown>): number {
+  const live = flattenSlides(ours);
+  const next = flattenSlides(merged);
+  let kept = 0;
+  for (const slideId of locks.keys()) {
+    const mine = live.get(slideId);
+    const theirs = next.get(slideId);
+    if (!mine || !theirs || mine.children || theirs.children) continue;
+    if ((theirs.html ?? '') !== (mine.html ?? '')) {
+      theirs.html = mine.html;
+      kept++;
+    }
+  }
+  return kept;
+}
+
 function asHttpError(err: unknown): never {
   if (err instanceof DeckOpError || err instanceof SlideHtmlError) {
     throw new CollabHttpError(422, { error: 'invalid-op', message: err.message });
@@ -324,7 +344,7 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
 
   async mergeExternal(
     ctx: LiveEditContext,
-    { sha }: { sha: string }
+    { sha, before }: { sha: string; before?: string | null }
   ): Promise<ExternalMergeResult> {
     this.attach(ctx.document);
     const slide = await this.mustFindSlide(ctx.ref.docId);
@@ -339,10 +359,23 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
       }
       throw err;
     }
+    // What the live doc already descends from (our own push, a replay, an
+    // older push): nothing to merge.
+    if (ctx.row?.source_sha && theirsLoaded.sha === ctx.row.source_sha) {
+      return { sourceSha: ctx.row.source_sha, conflicts: 0, noop: true };
+    }
 
-    // base: what the live doc descends from (seeded from, or last pushed).
+    // base: the deck at the push's `before` (exactly the outside change),
+    // else what the live doc descends from (seeded from, or last pushed).
     let base: DeckJson | null = null;
-    if (ctx.row?.source_sha) {
+    if (before) {
+      try {
+        base = (await this.deps.loadDeck(slide, { ref: before })).deck;
+      } catch {
+        base = null;
+      }
+    }
+    if (!base && ctx.row?.source_sha) {
       base = parseDeckText(await this.deps.readBlob(slide, ctx.row.source_sha));
     }
     if (!base && ctx.row?.pushed_commit) {
@@ -352,35 +385,50 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
         base = null;
       }
     }
-
     if (!base) {
       // Merging against a made-up base would read every live-only change as
-      // "the push deleted it". Refuse; the caller logs it.
+      // "the push deleted it". Refuse and keep the live doc.
       throw new CollabHttpError(409, {
         error: 'no-merge-base',
-        message: `deck ${ctx.ref.docId}: neither the seeded nor the last pushed deck can be read`,
+        message: `deck ${ctx.ref.docId}: no readable base for the outside push`,
       });
     }
     const mergeBase = base;
     let conflicts = 0;
     ctx.transact(doc => {
       const ours = yDocToDeck(doc);
-      const merge = merge3Units(mergeBase, ours, theirsLoaded.deck);
-      conflicts = merge.conflicts.length;
-      let merged = merge.merged;
+      const locks = this.liveLocks(doc);
+      const first = merge3Units(mergeBase, ours, theirsLoaded.deck);
+      conflicts = first.conflicts.length;
+      let merged = first.merged;
       if (conflicts > 0) {
-        // Conflicted slides someone is editing right now keep the live side;
-        // everything else takes the push (provisional theirs).
-        const locks = this.liveLocks(doc);
+        // Conflicted slides someone is editing keep the live side; the rest
+        // take the push (provisional theirs).
         const resolutions: Record<string, MergeChoice> = {};
-        for (const conflict of merge.conflicts) {
+        for (const conflict of first.conflicts) {
           resolutions[conflict.id] = locks.has(conflict.id) ? 'ours' : 'theirs';
         }
         merged = merge3Units(mergeBase, ours, theirsLoaded.deck, { resolutions }).merged;
       }
+      // A slide a person holds keeps its live html even when only the push
+      // changed it: their next keystroke would otherwise overwrite the push
+      // anyway, or worse, the push would replace what they see mid-edit.
+      if (locks.size > 0) {
+        conflicts += keepHeldHtml(ours, merged, locks);
+      }
       syncDeckIntoYDoc(doc, merged);
     });
     return { sourceSha: theirsLoaded.sha, conflicts };
+  }
+
+  async currentSourceSha(docId: string): Promise<string | null> {
+    const slide = await this.mustFindSlide(docId);
+    try {
+      return (await this.deps.loadDeck(slide, {})).sha;
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('Slide content not found')) return null;
+      throw err;
+    }
   }
 
   /**
