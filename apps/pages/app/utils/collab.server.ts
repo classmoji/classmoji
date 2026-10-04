@@ -47,6 +47,14 @@ export function liveEditingEnv(classroom: unknown): CollabEnv | null {
   return collabEnv();
 }
 
+/** The buffer row's push bookkeeping for a page, or null when it has none. */
+export function readPageBookkeeping(pageId: string) {
+  return prisma.collabDoc.findUnique({
+    where: { kind_doc_id: { kind: 'page', doc_id: pageId } },
+    select: { version: true, pushed_version: true, pushed_commit: true, source_sha: true },
+  });
+}
+
 /** Whether the page has live edits not yet saved to GitHub (a dirty buffer row). */
 export async function readLiveBufferDirty(pageId: string): Promise<boolean> {
   const row = await prisma.collabDoc.findUnique({

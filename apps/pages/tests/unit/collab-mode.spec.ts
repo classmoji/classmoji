@@ -27,6 +27,7 @@ import {
   SAVE_VERSION_WAIT_MS,
   applyPageMeta,
   checkpointAnswersSaveVersion,
+  initialCheckpoint,
   parseStatelessMessage,
   relativeTimeFrom,
   savedToGitHubStatus,
@@ -625,5 +626,62 @@ test.describe('Save version note', () => {
     );
     expect(popover).toContain('maxLength={VERSION_NOTE_MAX}');
     expect(popover).toContain('export const VERSION_NOTE_MAX = 200;');
+  });
+});
+
+test.describe('saved to GitHub before checkpoint times were recorded', () => {
+  const row = (over: Partial<Parameters<typeof initialCheckpoint>[0]['row'] & object> = {}) => ({
+    version: 4,
+    pushed_version: 4,
+    pushed_commit: 'abcdef1234567',
+    source_sha: 'blob',
+    ...over,
+  });
+
+  test('a clean page in git reads "Saved to GitHub" with no time', () => {
+    const checkpoint = initialCheckpoint({
+      lastCheckpointAt: null,
+      lastCheckpointError: null,
+      row: row(),
+    });
+    expect(checkpoint).toEqual({ at: null, commit: 'abcdef1234567' });
+    expect(savedToGitHubStatus(checkpoint, Date.now())).toEqual({
+      tone: 'saved',
+      label: 'Saved to GitHub',
+      title: 'Commit abcdef1',
+    });
+    // Seeded from git, never pushed by live editing: saved, no commit known.
+    const seeded = initialCheckpoint({
+      lastCheckpointAt: null,
+      lastCheckpointError: null,
+      row: row({ version: 0, pushed_version: 0, pushed_commit: null }),
+    });
+    expect(savedToGitHubStatus(seeded, Date.now())).toEqual({
+      tone: 'saved',
+      label: 'Saved to GitHub',
+      title: undefined,
+    });
+  });
+
+  test('nothing for unsaved live edits, a page with no git history, or no row', () => {
+    for (const r of [row({ version: 5 }), row({ pushed_commit: null, source_sha: null }), null]) {
+      expect(
+        initialCheckpoint({ lastCheckpointAt: null, lastCheckpointError: null, row: r })
+      ).toBeNull();
+    }
+  });
+
+  test('a recorded checkpoint wins, with its error and the last commit', () => {
+    expect(
+      initialCheckpoint({
+        lastCheckpointAt: '2026-10-03T12:00:00Z',
+        lastCheckpointError: 'push refused',
+        row: row(),
+      })
+    ).toEqual({ at: '2026-10-03T12:00:00Z', commit: 'abcdef1234567', error: 'push refused' });
+  });
+
+  test('a time-less checkpoint never answers a pending Save version', () => {
+    expect(checkpointAnswersSaveVersion({ at: null }, Date.now())).toBe(false);
   });
 });

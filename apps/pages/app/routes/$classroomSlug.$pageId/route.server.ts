@@ -43,10 +43,12 @@ import {
   resolveDocumentAssets,
 } from '~/utils/assetRefs.server.ts';
 import type { CollabLoaderData } from '@classmoji/collab';
+import { initialCheckpoint, type LiveCheckpoint } from '~/utils/collab.ts';
 import {
   collabEditorData,
   fetchLiveSnapshot,
   liveEditingBlockedFor,
+  readPageBookkeeping,
   liveEditingEnv,
   notifyPageMeta,
   notifyPreviewChanged,
@@ -278,7 +280,7 @@ export const loader = async ({
   // serves that purpose instead (the editor itself then shows it is offline).
   // The last checkpoint covering the page, for the header's "saved to GitHub"
   // line until the room's own messages take over.
-  let liveCheckpoint: { at: string; error?: string } | null = null;
+  let liveCheckpoint: LiveCheckpoint | null = null;
   const readContent = async () => {
     if (collab && liveEnv) {
       try {
@@ -289,14 +291,12 @@ export const loader = async ({
           lastCheckpointAt?: unknown;
           lastCheckpointError?: unknown;
         };
-        if (typeof lastCheckpointAt === 'string' && lastCheckpointAt) {
-          liveCheckpoint = {
-            at: lastCheckpointAt,
-            ...(typeof lastCheckpointError === 'string' && lastCheckpointError
-              ? { error: lastCheckpointError }
-              : {}),
-          };
-        }
+        // Read after the snapshot, which creates the buffer row on first open.
+        liveCheckpoint = initialCheckpoint({
+          lastCheckpointAt,
+          lastCheckpointError,
+          row: await readPageBookkeeping(page.id),
+        });
         return {
           format: 'json' as const,
           content: Array.isArray(snapshot.content?.blocks) ? snapshot.content.blocks : [],

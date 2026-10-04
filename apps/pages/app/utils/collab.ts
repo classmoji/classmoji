@@ -308,8 +308,11 @@ export function liveUnreachable({
 
 /** The last checkpoint covering this page, as the header shows it. */
 export interface LiveCheckpoint {
-  /** ISO time of the run. */
-  at: string;
+  /**
+   * ISO time of the run; null when the page is saved to GitHub but the time
+   * is unknown (pushed before checkpoint times were recorded).
+   */
+  at: string | null;
   commit?: string;
   /** Why the run did not save this page (absent when it did). */
   error?: string;
@@ -394,7 +397,7 @@ export function savedToGitHubStatus(
       title: reason.length > REASON_CAP ? `${reason.slice(0, REASON_CAP - 1)}…` : reason,
     };
   }
-  const when = relativeTimeFrom(checkpoint.at, now);
+  const when = checkpoint.at ? relativeTimeFrom(checkpoint.at, now) : '';
   return {
     tone: 'saved',
     label: when ? `Saved to GitHub ${when}` : 'Saved to GitHub',
@@ -415,7 +418,7 @@ export function checkpointAnswersSaveVersion(
   pendingSince: number | null,
   skewMs = 30_000
 ): boolean {
-  if (pendingSince === null) return false;
+  if (pendingSince === null || checkpoint.at === null) return false;
   const at = Date.parse(checkpoint.at);
   return Number.isNaN(at) || at >= pendingSince - skewMs;
 }
@@ -451,4 +454,42 @@ export function offerCopyUnsaved({
   localUnsynced: boolean;
 }): boolean {
   return refused && hasSynced && localUnsynced;
+}
+
+/**
+ * The header's "saved to GitHub" state when the page is opened: the snapshot's
+ * last checkpoint when it has one; otherwise, from the buffer's bookkeeping, a
+ * page whose live document has nothing unsaved and that exists in git (it was
+ * seeded from a file, or pushed) is saved — just with no time known (pushed
+ * before checkpoint times were recorded). Null only for a page with no git
+ * history at all, or with unsaved live edits and no checkpoint yet.
+ */
+export function initialCheckpoint({
+  lastCheckpointAt,
+  lastCheckpointError,
+  row,
+}: {
+  lastCheckpointAt: unknown;
+  lastCheckpointError: unknown;
+  row: {
+    version: number;
+    pushed_version: number;
+    pushed_commit: string | null;
+    source_sha: string | null;
+  } | null;
+}): LiveCheckpoint | null {
+  const error =
+    typeof lastCheckpointError === 'string' && lastCheckpointError ? lastCheckpointError : null;
+  const commit = row?.pushed_commit ?? undefined;
+  if (typeof lastCheckpointAt === 'string' && lastCheckpointAt) {
+    return {
+      at: lastCheckpointAt,
+      ...(commit ? { commit } : {}),
+      ...(error ? { error } : {}),
+    };
+  }
+  if (!row || error) return null;
+  const clean = row.version === row.pushed_version;
+  const inGit = Boolean(row.pushed_commit || row.source_sha);
+  return clean && inGit ? { at: null, ...(commit ? { commit } : {}) } : null;
 }
