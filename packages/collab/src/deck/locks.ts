@@ -35,8 +35,6 @@ export const LOCK_TAKEOVER_IDLE_MS = 60_000;
 export const LOCK_EXPIRE_IDLE_MS = 120_000;
 /** A disconnected holder keeps the slide this long (a reload, a network blip). */
 export const LOCK_DISCONNECT_GRACE_MS = 30_000;
-/** How long a gone holder's unmarked lock waits for the server's mark. */
-export const LOCK_GONE_SETTLE_MS = 3_000;
 
 export type LockHolder = Pick<SlideLock, 'userId' | 'name' | 'color' | 'clientId'>;
 
@@ -91,6 +89,8 @@ export interface LockContext {
   connected?: ReadonlySet<number>;
   /** ms since the lock entry last changed, measured locally (LockActivity). */
   idleMs?: number;
+  /** ms the holder has been seen absent from `connected` (unmarked locks). */
+  goneMs?: number;
 }
 
 export type LockState =
@@ -109,16 +109,15 @@ export function lockState(lock: SlideLock | null, clientId: number, ctx: LockCon
   // A holder who dropped keeps the slide through the grace period (the
   // server marks the lock; the mark is the entry's last change).
   const disconnectedAt = (lock as StampedLock).disconnectedAt;
-  // Gone without a mark (a lock left in a stored state by a session long
-  // over): nothing to wait for. Only when the caller's view of who is
-  // connected is settled (`connected` given).
-  // A few seconds' settle first: the server's mark for a holder who JUST
-  // dropped arrives right after their presence goes.
+  // Gone without a mark (the server restarted, or the lock was left in a
+  // stored state): the same grace, counted from when THIS observer saw the
+  // holder go (`goneMs`) — a reconnecting holder is back well within it.
   if (
     typeof disconnectedAt !== 'number' &&
     ctx.connected &&
     !ctx.connected.has(lock.clientId) &&
-    (ctx.idleMs ?? Infinity) >= LOCK_GONE_SETTLE_MS
+    ctx.goneMs !== undefined &&
+    ctx.goneMs >= LOCK_DISCONNECT_GRACE_MS
   ) {
     return 'stale';
   }
@@ -245,6 +244,25 @@ export function markReconnected(
 }
 
 /**
+ * When a gone holder's grace started: the server's disconnect mark, else the
+ * holder's last activity — but never before `notBefore` (the server process's
+ * start): after a restart nobody's presence is known yet, and every holder
+ * gets the full grace to reconnect. Without a restart, `notBefore` is long
+ * past and the stored time decides, so short visits never extend a grace.
+ */
+export function goneSince(lock: SlideLock, notBefore = -Infinity): number {
+  return Math.max((lock as StampedLock).disconnectedAt ?? lock.lastActive, notBefore);
+}
+
+/** A gone holder's lock past its grace (see `goneSince`). */
+export function goneLockExpired(
+  lock: SlideLock,
+  ctx: { now: number; notBefore?: number; graceMs?: number }
+): boolean {
+  return goneSince(lock, ctx.notBefore) + (ctx.graceMs ?? LOCK_DISCONNECT_GRACE_MS) <= ctx.now;
+}
+
+/**
  * Server: drop locks whose holder is not connected and has been gone longer
  * than the grace period, judged by the STORED times (the server's
  * `disconnectedAt` mark, else the holder's `lastActive`) — never by when this
@@ -254,7 +272,7 @@ export function markReconnected(
  */
 export function expireGoneLocks(
   doc: Y.Doc,
-  ctx: { now: number; connected: ReadonlySet<number>; graceMs?: number },
+  ctx: { now: number; connected: ReadonlySet<number>; graceMs?: number; notBefore?: number },
   origin: unknown = null
 ): { expired: string[]; nextInMs: number | null } {
   const grace = ctx.graceMs ?? LOCK_DISCONNECT_GRACE_MS;
@@ -262,8 +280,7 @@ export function expireGoneLocks(
   let nextInMs: number | null = null;
   for (const [slideId, lock] of allLocks(doc)) {
     if (ctx.connected.has(lock.clientId)) continue;
-    const since = (lock as StampedLock).disconnectedAt ?? lock.lastActive;
-    const left = since + grace - ctx.now;
+    const left = goneSince(lock, ctx.notBefore) + grace - ctx.now;
     if (left <= 0) expired.push(slideId);
     else nextInMs = nextInMs === null ? left : Math.min(nextInMs, left);
   }
@@ -295,9 +312,10 @@ export function releaseLocksOf(
 }
 
 /**
- * Server: drop locks idle ≥ `maxIdleMs` (by local observation when an
- * activity tracker is given, else by `lastActive`) and locks of clients not
- * in `connected`.
+ * Server: drop locks idle ≥ `maxIdleMs` (a frozen tab still connected), by
+ * local observation when an activity tracker is given, else by `lastActive`;
+ * a marked (disconnected) holder's lock once its grace has passed. Holders
+ * who are simply gone are `expireGoneLocks`' business.
  */
 export function expireLocks(
   doc: Y.Doc,
@@ -305,13 +323,11 @@ export function expireLocks(
     now: number;
     maxIdleMs?: number;
     activity?: LockActivity;
-    connected?: ReadonlySet<number>;
   },
   origin: unknown = null
 ): string[] {
   const maxIdle = ctx.maxIdleMs ?? LOCK_EXPIRE_IDLE_MS;
   const expired: string[] = [];
-  const toMark: number[] = [];
   for (const [slideId, lock] of allLocks(doc)) {
     const idle = ctx.activity?.idleMs(slideId, ctx.now) ?? ctx.now - lock.lastActive;
     const disconnectedAt = (lock as StampedLock).disconnectedAt;
@@ -321,10 +337,6 @@ export function expireLocks(
       if (since >= LOCK_DISCONNECT_GRACE_MS) expired.push(slideId);
       continue;
     }
-    if (ctx.connected && !ctx.connected.has(lock.clientId)) {
-      toMark.push(lock.clientId); // gone without a mark (e.g. a stored state): grace starts now
-      continue;
-    }
     if (idle >= maxIdle) expired.push(slideId);
   }
   if (expired.length > 0) {
@@ -332,7 +344,6 @@ export function expireLocks(
       for (const slideId of expired) deckLocks(doc).delete(slideId);
     }, origin);
   }
-  if (toMark.length > 0) markDisconnected(doc, toMark, ctx.now, origin);
   return expired;
 }
 

@@ -752,6 +752,23 @@ test.describe('live deck bridge', () => {
     t.bridge.destroy();
   });
 
+  test('a holder gone without a mark (server restart) keeps the slide through the grace', async () => {
+    const t = setup();
+    acquireLock(
+      t.remote,
+      'aaaa0003',
+      { userId: 'other', name: 'Grace Hopper', color: '#e5484d', clientId: 999 },
+      { now: Date.now() - 10 * 60_000 } // an old lock, never marked
+    );
+    await tick();
+    expect(t.states.at(-1)?.locks['aaaa0003']?.canTakeOver).toBe(false);
+    expect(t.bridge.takeOver('aaaa0003')).toBe(false);
+    fakeNow = Date.now() + LOCK_DISCONNECT_GRACE_MS + 1;
+    await tick(1100);
+    expect(t.states.at(-1)?.locks['aaaa0003']?.canTakeOver).toBe(true);
+    t.bridge.destroy();
+  });
+
   test('Done: flushes and releases the lock', () => {
     const t = setup();
     t.section('aaaa0002').innerHTML = '<h2>bye</h2>';

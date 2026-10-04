@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { SlideLock } from '../../api.ts';
 import * as Y from 'yjs';
 
 import { cloneYDoc, deckLocks, deckToYDoc } from '../convert.ts';
@@ -6,6 +7,7 @@ import {
   LOCK_DISCONNECT_GRACE_MS,
   LOCK_TAKEOVER_IDLE_MS,
   expireGoneLocks,
+  goneLockExpired,
   markDisconnected,
   markReconnected,
   LockActivity,
@@ -70,14 +72,13 @@ describe('acquire / refresh / release', () => {
   it('a disconnected holder keeps the slide for the grace period', () => {
     const a = peer(10);
     acquireLock(a, 's1', holder(a, 'A'), { now: 0 });
-    // Gone, not marked yet: held for a moment (the server's mark follows)…
-    expect(lockState(getLock(a, 's1'), 99, { now: 1, connected: new Set([99]), idleMs: 0 })).toBe(
-      'held'
+    // Gone, not marked (a server restart): held until this observer has seen
+    // the holder absent for the grace period, then free to take over.
+    const gone = { now: 1, connected: new Set([99]) };
+    expect(lockState(getLock(a, 's1'), 99, { ...gone, goneMs: 29_000 })).toBe('held');
+    expect(lockState(getLock(a, 's1'), 99, { ...gone, goneMs: LOCK_DISCONNECT_GRACE_MS })).toBe(
+      'stale'
     );
-    // …a lock nobody marked (left in a stored state) is free to take over.
-    expect(
-      lockState(getLock(a, 's1'), 99, { now: 1, connected: new Set([99]), idleMs: 5_000 })
-    ).toBe('stale');
     markDisconnected(a, [10], 1_000);
     expect(lockState(getLock(a, 's1'), 99, { now: 2_000, idleMs: 1_000 })).toBe('held');
     expect(lockState(getLock(a, 's1'), 99, { now: 40_000, idleMs: LOCK_DISCONNECT_GRACE_MS })).toBe(
@@ -121,21 +122,6 @@ describe('server cleanup', () => {
     expect(expireLocks(doc, { now, activity, maxIdleMs: 120_000 })).toEqual(['s1']);
     activity.destroy();
   });
-
-  it('a gone holder is marked first, released after the grace', () => {
-    let now = 0;
-    const doc = peer(1);
-    const activity = new LockActivity(doc, () => now);
-    acquireLock(doc, 's1', { ...holder(doc, 'A'), clientId: 10 }, { now: 0 });
-    const connected = new Set<number>([1]);
-    expect(expireLocks(doc, { now, activity, connected })).toEqual([]);
-    expect(getLock(doc, 's1')).toHaveProperty('disconnectedAt', 0);
-    now = LOCK_DISCONNECT_GRACE_MS - 1;
-    expect(expireLocks(doc, { now, activity, connected })).toEqual([]);
-    now = LOCK_DISCONNECT_GRACE_MS;
-    expect(expireLocks(doc, { now, activity, connected })).toEqual(['s1']);
-    activity.destroy();
-  });
 });
 
 describe('expireGoneLocks (server, on load and before agent ops)', () => {
@@ -151,6 +137,32 @@ describe('expireGoneLocks (server, on load and before agent ops)', () => {
     expect(result.nextInMs).toBe(20_000);
     expect(getLock(doc, 'recent')).not.toBeNull();
     expect(getLock(doc, 'here')).not.toBeNull();
+  });
+
+  it('after a server start, every gone holder gets the full grace to reconnect', () => {
+    const doc = peer(1);
+    acquireLock(doc, 's1', { ...holder(doc, 'A'), clientId: 10 }, { now: 0 }); // stored long ago
+    const started = 500_000;
+    // Right after the start nobody is connected yet: nothing is cleared.
+    let result = expireGoneLocks(doc, {
+      now: started + 1_000,
+      connected: new Set(),
+      notBefore: started,
+    });
+    expect(result).toEqual({ expired: [], nextInMs: 29_000 });
+    expect(
+      goneLockExpired(getLock(doc, 's1') as SlideLock, {
+        now: started + 29_999,
+        notBefore: started,
+      })
+    ).toBe(false);
+    // The holder never came back: cleared when the grace from the start ends.
+    result = expireGoneLocks(doc, {
+      now: started + 30_000,
+      connected: new Set(),
+      notBefore: started,
+    });
+    expect(result.expired).toEqual(['s1']);
   });
 });
 

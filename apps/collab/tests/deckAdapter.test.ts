@@ -385,9 +385,16 @@ describe('lock bookkeeping', () => {
     document.destroy();
   });
 
-  it('on load, a lock whose holder left long ago is cleared at once (stored times)', () => {
+  /** An adapter whose process has been running for a while. */
+  const longRunning = () => {
     const deps = makeDeps();
     const adapter = createDeckAdapter(deps);
+    deps.tick(5 * 60_000);
+    return { deps, adapter };
+  };
+
+  it('on load, a lock whose holder left long ago is cleared at once (stored times)', () => {
+    const { deps, adapter } = longRunning();
     const document = liveDoc(DECK, [6]);
     acquireLock(document, 'aaaa0001', holder(5), { now: 0 }); // 5 left ages ago
     acquireLock(document, 'aaaa0002', holder(6), { now: deps.now() });
@@ -400,8 +407,7 @@ describe('lock bookkeeping', () => {
   it('on load, a holder gone within the grace keeps it until the grace (not a fresh one) ends', () => {
     vi.useFakeTimers();
     try {
-      const deps = makeDeps();
-      const adapter = createDeckAdapter(deps);
+      const { deps, adapter } = longRunning();
       const document = liveDoc(DECK, []);
       acquireLock(document, 'aaaa0001', holder(5), { now: deps.now() });
       markDisconnected(document, [5], deps.now() - 20_000); // dropped 20 s ago
@@ -417,8 +423,7 @@ describe('lock bookkeeping', () => {
   });
 
   it('agent ops treat a gone holder past the grace as free, and clear the lock', () => {
-    const deps = makeDeps();
-    const adapter = createDeckAdapter(deps);
+    const { deps, adapter } = longRunning();
     const document = liveDoc(DECK, [6]);
     adapter.attach(document);
     // Holder 5 joined after load and left; its lock was marked 31 s ago.
@@ -431,6 +436,53 @@ describe('lock bookkeeping', () => {
     expect(yDocToDeck(document).slides[0].html).toBe('x');
     expect(getLock(document, 'aaaa0001')).toBeNull();
     document.destroy();
+  });
+
+  it('after a server restart, a holder not yet reconnected keeps the slide for the grace', () => {
+    vi.useFakeTimers();
+    try {
+      // A fresh process (a deploy): the stored lock is old, nobody is connected yet.
+      const deps = makeDeps();
+      const adapter = createDeckAdapter(deps);
+      const document = liveDoc(DECK, []);
+      acquireLock(document, 'aaaa0001', holder(5), { now: deps.now() - 10 * 60_000 });
+      adapter.attach(document);
+      expect(getLock(document, 'aaaa0001')).not.toBeNull();
+      // Agents may not write over it meanwhile.
+      expect(() =>
+        adapter.applyOps(
+          context(document),
+          adapter.parseOps([{ op: 'update', id: 'aaaa0001', html: 'x' }])
+        )
+      ).toThrow(expect.objectContaining({ status: 409 }));
+      // The holder reconnects at 5 s: theirs, for good.
+      deps.tick(5_000);
+      vi.advanceTimersByTime(5_000);
+      document.awareness.reconnect(5);
+      deps.tick(60_000);
+      vi.advanceTimersByTime(60_000);
+      expect(getLock(document, 'aaaa0001')?.clientId).toBe(5);
+      document.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('after a server restart, a holder who never returns loses the slide when the grace ends', () => {
+    vi.useFakeTimers();
+    try {
+      const deps = makeDeps();
+      const adapter = createDeckAdapter(deps);
+      const document = liveDoc(DECK, []);
+      acquireLock(document, 'aaaa0001', holder(5), { now: deps.now() - 10 * 60_000 });
+      adapter.attach(document);
+      deps.tick(30_300);
+      vi.advanceTimersByTime(30_300);
+      expect(getLock(document, 'aaaa0001')).toBeNull();
+      document.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -1110,11 +1110,30 @@ export class DeckBridge {
   }
 
   private lockContext(slideId: string) {
+    const now = this.clock();
+    const connected = this.session.connectedClients();
+    const holder = getLock(this.doc, slideId)?.clientId;
     return {
-      now: this.clock(),
-      connected: this.session.connectedClients(),
+      now,
+      connected,
       idleMs: this.activity.idleMs(slideId),
+      goneMs: holder === undefined ? undefined : this.goneFor(holder, connected, now),
     };
+  }
+
+  /** When this editor first saw each lock holder absent (cleared when they return). */
+  private absentSince = new Map<number, number>();
+
+  /** How long a holder has been absent, as seen from here (0 while connected). */
+  private goneFor(clientId: number, connected: ReadonlySet<number>, now: number): number {
+    // While this editor itself is not in sync, nobody's presence is known.
+    if (connected.has(clientId) || !this.session.ready) {
+      this.absentSince.delete(clientId);
+      return 0;
+    }
+    const since = this.absentSince.get(clientId) ?? now;
+    this.absentSince.set(clientId, since);
+    return now - since;
   }
 
   private lockStateOf(slideId: string): LockState {

@@ -55,6 +55,7 @@ import {
   installLockArbiter,
   installLockGuard,
   expireGoneLocks,
+  goneLockExpired,
   mergeSlideFields,
   recordSlideConflict,
   LOCK_DISCONNECT_GRACE_MS,
@@ -313,8 +314,18 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
   private readonly deps: DeckAdapterDeps;
   private readonly attached = new WeakMap<Y.Doc, { activity: LockActivity }>();
 
+  /**
+   * When this server process started serving decks. A gone holder's grace is
+   * never counted from before it: right after a restart (a deploy) nobody's
+   * presence is known yet and the lock-only writes that would have marked
+   * them were never stored, so every holder gets the full grace to
+   * reconnect. Process start, not doc load: short visits must not extend it.
+   */
+  private readonly startedAt: number;
+
   constructor(deps: DeckAdapterDeps = defaultDeckAdapterDeps) {
     this.deps = deps;
+    this.startedAt = deps.now();
   }
 
   private async mustFindSlide(slideId: string): Promise<DeckRecord> {
@@ -387,14 +398,13 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
     const now = this.deps.now();
     const out = new Map<string, SlideLock>();
     for (const [slideId, lock] of allLocks(doc)) {
-      // A gone holder is judged by the stored times (when they dropped), an
-      // active one by what this process has seen of them.
-      const gone = connected ? !connected.has(lock.clientId) : false;
-      const state = lockState(lock, -1, {
-        now,
-        connected,
-        idleMs: gone ? undefined : activity?.idleMs(slideId, now),
-      });
+      // A gone holder keeps the slide until the grace from when they went —
+      // never counted from before this process started (see goneSince).
+      if (connected && !connected.has(lock.clientId)) {
+        if (!goneLockExpired(lock, { now, notBefore: this.startedAt })) out.set(slideId, lock);
+        continue;
+      }
+      const state = lockState(lock, -1, { now, connected, idleMs: activity?.idleMs(slideId, now) });
       if (state === 'held') out.set(slideId, lock);
     }
     return out;
@@ -404,7 +414,11 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
   clearGoneLocks(document: Y.Doc): { expired: string[]; nextInMs: number | null } {
     const connected = connectedClients(document);
     if (!connected) return { expired: [], nextInMs: null };
-    return expireGoneLocks(document, { now: this.deps.now(), connected }, LOCK_ORIGIN);
+    return expireGoneLocks(
+      document,
+      { now: this.deps.now(), connected, notBefore: this.startedAt },
+      LOCK_ORIGIN
+    );
   }
 
   /**
