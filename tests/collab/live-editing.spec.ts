@@ -33,6 +33,21 @@ const PAGE_EDIT_1 = ` [p1-${RUN}]`;
 const PAGE_EDIT_2 = ` [p2-${RUN}]`;
 const SLIDE_EDIT_A = ` [a-${RUN}]`;
 const SLIDE_EDIT_B = ` [b-${RUN}]`;
+// Concurrent typing may interleave around the brackets, so content checks
+// look for the run tokens, not the bracketed strings.
+const TOKEN_1 = `p1-${RUN}`;
+const TOKEN_2 = `p2-${RUN}`;
+
+/** A block's document text, without other people's cursor carets/labels. */
+async function docText(locator: import('@playwright/test').Locator): Promise<string> {
+  return locator.evaluate(el => {
+    const copy = el.cloneNode(true) as HTMLElement;
+    copy
+      .querySelectorAll('[class*="collaboration-cursor"]')
+      .forEach(node => node.remove());
+    return (copy.textContent ?? '').replace(/\u2060/g, '');
+  });
+}
 
 const SKIP_REASON = 'Set COLLAB_E2E=1 with the dev stack running';
 
@@ -127,18 +142,20 @@ test.describe('live editing', () => {
     await target(p1).click();
     await p1.keyboard.press('End');
     await p1.keyboard.type(PAGE_EDIT_1, { delay: 20 });
-    await expect(target(p2)).toContainText(PAGE_EDIT_1.trim());
+    await expect.poll(() => docText(target(p2))).toContain(TOKEN_1);
 
     await target(p2).click();
     await p2.keyboard.press('End');
     await p2.keyboard.type(PAGE_EDIT_2, { delay: 20 });
 
+    // Both edits are in both views, and the two views are identical.
     for (const p of [p1, p2]) {
-      await expect(target(p)).toContainText(PAGE_EDIT_1.trim());
-      await expect(target(p)).toContainText(PAGE_EDIT_2.trim());
+      await expect.poll(() => docText(target(p))).toContain(TOKEN_1);
+      await expect.poll(() => docText(target(p))).toContain(TOKEN_2);
     }
-    const [text1, text2] = await Promise.all([target(p1).innerText(), target(p2).innerText()]);
-    expect(text1).toBe(text2);
+    await expect
+      .poll(async () => (await docText(target(p1))) === (await docText(target(p2))))
+      .toBe(true);
 
     await one.close();
     await two.close();
@@ -246,8 +263,8 @@ test.describe('live editing', () => {
       path: `${deck.content_path}/deck.json`,
       skipCache: true,
     });
-    expect(pageFile?.content).toContain(PAGE_EDIT_1.trim());
-    expect(pageFile?.content).toContain(PAGE_EDIT_2.trim());
+    expect(pageFile?.content).toContain(TOKEN_1);
+    expect(pageFile?.content).toContain(TOKEN_2);
     expect(deckFile?.content).toContain(SLIDE_EDIT_A.trim());
     expect(deckFile?.content).toContain(SLIDE_EDIT_B.trim());
   });
