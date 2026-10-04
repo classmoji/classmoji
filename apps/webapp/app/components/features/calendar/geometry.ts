@@ -461,13 +461,19 @@ export const blockLanes = (
   events: readonly Pick<CalendarEventWithLinks, 'start_time' | 'end_time'>[],
   endHourExclusive: number = DEFAULT_END_HOUR
 ): BlockLane[] => {
+  // Whole minutes, not float hours: 12:50 + 65 minutes and 13:55 are the same
+  // instant, but as hours they round one ulp apart and back-to-back blocks
+  // would land in two lanes.
   const spans = events.map((event, index) => {
     const start = new Date(event.start_time);
     const end = new Date(event.end_time);
-    const startFloat = clockHour(start);
-    const hours = (end.getTime() - start.getTime()) / 3_600_000;
-    const drawnEnd = Math.min(startFloat + Math.max(hours, MIN_DURATION_HOURS), endHourExclusive);
-    return { index, start: startFloat, end: drawnEnd };
+    const startMinute = start.getHours() * 60 + start.getMinutes();
+    const minutes = Math.round((end.getTime() - start.getTime()) / 60_000);
+    const drawnEnd = Math.min(
+      startMinute + Math.max(minutes, MIN_DURATION_HOURS * 60),
+      endHourExclusive * 60
+    );
+    return { index, start: startMinute, end: drawnEnd };
   });
 
   // Earliest first, the longer of two equal starts first, then input order —

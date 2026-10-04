@@ -585,6 +585,19 @@ describe('blockLanes', () => {
     ]);
   });
 
+  it('keeps back-to-back events at five-minute times in one lane', () => {
+    // As float hours 12:50 + 65 min rounds above 13:55; in minutes they are equal.
+    expect(blockLanes([ev(12, 50, 13, 55), ev(13, 55, 14, 30)])).toEqual([
+      { lane: 0, lanes: 1 },
+      { lane: 0, lanes: 1 },
+    ]);
+    // Same on the minimum-duration path: 15:20 is drawn to 16:05.
+    expect(blockLanes([ev(15, 20, 15, 30), ev(16, 5, 16, 30)])).toEqual([
+      { lane: 0, lanes: 1 },
+      { lane: 0, lanes: 1 },
+    ]);
+  });
+
   it('reuses a freed lane inside a chain, and sizes the chain by its busiest moment', () => {
     // A 1–3, B 2–4, C 3–5: A and C never meet, so C takes A's lane back.
     expect(blockLanes([ev(13, 0, 15, 0), ev(14, 0, 16, 0), ev(15, 0, 17, 0)])).toEqual([
