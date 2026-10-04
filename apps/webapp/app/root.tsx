@@ -194,12 +194,17 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     // Connecting a self-managed Gitlab happens before its first sign-in.
     '/gitlab/setup',
   ];
-  const isPublicRoute = publicRoutes.some(
-    route =>
-      url.pathname === route ||
-      url.pathname.startsWith('/login') ||
-      url.pathname.startsWith('/test-login')
-  );
+  // The feedback board and roadmap are public to read; writing needs a session,
+  // which its actions check themselves.
+  const isFeedback = isUnder(url.pathname, ['/feedback']);
+  const isPublicRoute =
+    isFeedback ||
+    publicRoutes.some(
+      route =>
+        url.pathname === route ||
+        url.pathname.startsWith('/login') ||
+        url.pathname.startsWith('/test-login')
+    );
 
   // Get auth session (works for both OAuth and test-login sessions)
   const authData = await getAuthSession(request);
@@ -229,7 +234,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   // Before anything else, a signed-in person confirms a contact email
   // (registration) and then connects Github or Gitlab: every classroom runs on one.
   // Staff viewing as someone skip both; they are looking, not joining.
-  if (!isImpersonating) {
+  // Reading the feedback board does not need a finished account.
+  if (!isImpersonating && !isFeedback) {
     const gate = accountSetupRedirect(user, url);
     if (gate) return redirect(gate);
   }
