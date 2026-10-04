@@ -64,8 +64,11 @@ import {
   type SlideLock,
 } from '@classmoji/collab';
 
+import { itemHash } from '@classmoji/collab/hash';
+
 import {
   CollabHttpError,
+  type ApplyOpsResult,
   type AuthorizeResult,
   type CollabAdapter,
   type ExternalMergeResult,
@@ -251,6 +254,29 @@ function keepHeldHtml(ours: DeckJson, merged: DeckJson, locks: Map<string, unkno
   return kept;
 }
 
+/**
+ * From applyDeckOps' report: the ids minted for inserts, in op order (a new
+ * stack followed by its children), and the last slide the ops touched (the
+ * agent's presence shows there).
+ */
+export function opsOutcome(applied: Array<Record<string, unknown>>): ApplyOpsResult {
+  const insertedIds: string[] = [];
+  let touchedId: string | undefined;
+  for (const entry of applied) {
+    if (entry.op === 'insert' && Array.isArray(entry.ids)) {
+      const children = (entry.children ?? {}) as Record<string, string[]>;
+      for (const id of entry.ids as string[]) {
+        insertedIds.push(id);
+        for (const child of children[id] ?? []) insertedIds.push(child);
+        touchedId = id;
+      }
+    } else if (typeof entry.id === 'string') {
+      touchedId = entry.id;
+    }
+  }
+  return { ...(insertedIds.length ? { insertedIds } : {}), ...(touchedId ? { touchedId } : {}) };
+}
+
 function asHttpError(err: unknown): never {
   if (err instanceof DeckOpError || err instanceof SlideHtmlError) {
     throw new CollabHttpError(422, { error: 'invalid-op', message: err.message });
@@ -344,8 +370,23 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
     return out;
   }
 
-  applyOps(ctx: LiveEditContext, ops: DeckOp[]): void {
+  /**
+   * Guarded ops: the slide ids whose current entry (as `/snapshot` returns it,
+   * a stack with its children) no longer hashes to what the caller read.
+   */
+  checkExpect(doc: Y.Doc, expect: Record<string, string>): string[] {
+    const slides = flattenSlides(yDocToDeck(doc));
+    return Object.entries(expect)
+      .filter(([id, hash]) => {
+        const slide = slides.get(id);
+        return !slide || itemHash(slide) !== hash;
+      })
+      .map(([id]) => id);
+  }
+
+  applyOps(ctx: LiveEditContext, ops: DeckOp[]): ApplyOpsResult {
     this.attach(ctx.document);
+    const result: ApplyOpsResult = {};
     ctx.transact(doc => {
       const current = yDocToDeck(doc);
       const locks = this.liveLocks(doc);
@@ -355,16 +396,18 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
           throw new CollabHttpError(409, { error: 'slide-locked', slideId, holder });
         }
       }
-      let next: DeckJson;
+      let applied: ReturnType<typeof applyDeckOps>;
       try {
-        next = applyDeckOps(current, ops, {
+        applied = applyDeckOps(current, ops, {
           starterCustomCss: slideService.STARTER_CUSTOM_CSS,
-        }).deck;
+        });
       } catch (err) {
         asHttpError(err);
       }
-      syncDeckIntoYDoc(doc, next);
+      syncDeckIntoYDoc(doc, applied.deck);
+      Object.assign(result, opsOutcome(applied.applied));
     });
+    return result;
   }
 
   async mergeExternal(

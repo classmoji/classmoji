@@ -17,6 +17,7 @@ import {
   yDocToDeck,
 } from '@classmoji/collab';
 import type { DeckJson } from '@classmoji/services/slides';
+import { itemHash } from '@classmoji/collab/hash';
 
 import { CollabHttpError, type LiveEditContext } from '../src/adapters/types.ts';
 import {
@@ -518,5 +519,49 @@ describe('writersOf', () => {
     expect([...(seen ?? [])].sort()).toEqual([77, 88]);
     document.transact(() => deckSlides(document).delete('aaaa0002'), { source: 'local' });
     expect(seen).toBeNull();
+  });
+});
+
+describe('guarded ops', () => {
+  it('checkExpect names the slides whose snapshot entry changed (or vanished)', () => {
+    const adapter = createDeckAdapter(makeDeps());
+    const document = liveDoc();
+    const snap = adapter.snapshot(document);
+    const hashOf = (id: string) => {
+      const all = snap.slides.flatMap(s => [s, ...(s.children ?? [])]);
+      return itemHash(all.find(s => s.id === id));
+    };
+    const expect_ = {
+      aaaa0001: hashOf('aaaa0001'),
+      aaaa0002: hashOf('aaaa0002'),
+      aaaa0003: hashOf('aaaa0003'),
+      gone0001: 'x',
+    };
+    (deckSlides(document).get('aaaa0002') as Y.Map<unknown>).set('html', '<h2>moved on</h2>');
+    // A child edit changes its stack's entry too.
+    (deckSlides(document).get('aaaa0004') as Y.Map<unknown>).set('html', '<p>new</p>');
+    expect(adapter.checkExpect(document, expect_).sort()).toEqual(
+      ['aaaa0002', 'aaaa0003', 'gone0001'].sort()
+    );
+  });
+
+  it('applyOps returns the minted ids in op order and the last slide touched', () => {
+    const adapter = createDeckAdapter(makeDeps());
+    const document = liveDoc();
+    const result = adapter.applyOps(
+      context(document),
+      adapter.parseOps([
+        { op: 'update', id: 'aaaa0001', html: '<h1>x</h1>' },
+        {
+          op: 'insert',
+          position: { at: 'end' },
+          slides: [{ html: '<p>a</p>' }, { children: [{ html: '<p>b</p>' }] }],
+        },
+      ])
+    );
+    const deck = yDocToDeck(document);
+    const tail = deck.slides.slice(-2);
+    expect(result.insertedIds).toEqual([tail[0].id, tail[1].id, tail[1].children?.[0].id]);
+    expect(result.touchedId).toBe(tail[1].id);
   });
 });
