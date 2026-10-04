@@ -179,6 +179,10 @@ export class DeckBridge {
   private readonly cleanups: Array<() => void> = [];
   private destroyed = false;
   private flushing = false;
+  /** Slides with remote html not rendered yet because they are off screen. */
+  private deferred = new Set<string>();
+  /** Defer off-screen remote renders (false in tests that inspect the DOM). */
+  deferOffscreen = true;
   private flushAgain = false;
 
   constructor(opts: DeckBridgeOptions) {
@@ -773,7 +777,14 @@ export class DeckBridge {
             claiming: this.pendingEdits.has(entry.id),
           })
         ) {
-          this.renderHtml(entry.id, el, yHtml);
+          // Off-screen slides wait until they are shown: re-rendering a slide
+          // nobody is looking at restarts its Sandpack and iframes for nothing.
+          if (entry.id === this.currentSlideId() || !this.deferOffscreen) {
+            this.renderHtml(entry.id, el, yHtml);
+            this.deferred.delete(entry.id);
+          } else {
+            this.deferred.add(entry.id);
+          }
         }
         const yAttrs = readSlideAttrs(entry.map);
         const hidden = entry.map.get('hidden') === true;
@@ -1141,7 +1152,31 @@ export class DeckBridge {
   // ─── UI state ────────────────────────────────────────────────────────────
 
   private onSlideChanged(): void {
-    this.session.setCurrentSlide(this.currentSlideId());
+    const id = this.currentSlideId();
+    if (id && this.deferred.has(id)) this.renderDeferred([id]);
+    this.session.setCurrentSlide(id);
+    this.emit();
+  }
+
+  /**
+   * Render remote html that waited because its slide was off screen — the
+   * given slides, or all of them (the overview shows every slide).
+   */
+  renderDeferred(ids: Iterable<string> = [...this.deferred]): void {
+    const slidesEl = this.slidesEl;
+    if (!slidesEl) return;
+    for (const id of [...ids]) {
+      this.deferred.delete(id);
+      const map = deckSlides(this.doc).get(id);
+      const el = slidesEl.querySelector(
+        `section[data-cm-id="${CSS.escape(id)}"]`
+      ) as HTMLElement | null;
+      const base = this.baseline.get(id);
+      if (!el || !(map instanceof Y.Map) || !base) continue;
+      const yHtml = readSlideHtml(map);
+      if (yHtml === base.yHtml || this.held?.slideId === id || this.pendingEdits.has(id)) continue;
+      this.renderHtml(id, el, yHtml);
+    }
     this.emit();
   }
 

@@ -3197,6 +3197,8 @@ export default function SlideViewer() {
 
   // Open slide overview
   const handleOpenOverview = useCallback(() => {
+    // Live editing: the overview shows every slide, so bring them all up to date.
+    bridgeRef.current?.renderDeferred();
     setShowOverview(true);
   }, []);
 

@@ -163,6 +163,7 @@ function setup() {
     layout() {},
     slide() {},
   } as unknown as RevealApi;
+  bridge.deferOffscreen = false;
   bridge.attach(reveal, {
     setThemes: next => {
       themes.push(next);
@@ -499,6 +500,23 @@ test.describe('live deck bridge', () => {
     expect(t.session.pending).toBe(before);
     expect(t.remote.getMap('locks').size).toBe(0);
     expect(t.notices).toEqual([]);
+    t.bridge.destroy();
+  });
+
+  test('remote html for an off-screen slide waits until it is shown', async () => {
+    const t = setup();
+    t.bridge.deferOffscreen = true;
+    (deckSlides(t.remote).get('aaaa0003') as Y.Map<unknown>).set('html', '<h2>later</h2>');
+    (deckSlides(t.remote).get('aaaa0001') as Y.Map<unknown>).set('html', '<h1>now</h1>');
+    await tick();
+    expect(t.section('aaaa0001').innerHTML).toBe('<h1>now</h1>'); // on screen
+    expect(t.section('aaaa0003').innerHTML).toBe('<h2>Three</h2>');
+    // Waiting is not an edit.
+    t.bridge.flushLocal();
+    expect(t.session.pending).toBe(0);
+    t.setCurrent('aaaa0003');
+    t.bridge.renderDeferred(['aaaa0003']);
+    expect(t.section('aaaa0003').innerHTML).toBe('<h2>later</h2>');
     t.bridge.destroy();
   });
 
