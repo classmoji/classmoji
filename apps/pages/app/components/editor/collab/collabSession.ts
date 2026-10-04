@@ -21,14 +21,15 @@ import type { Awareness } from 'y-protocols/awareness';
 import {
   COLLAB_FORBIDDEN_CLOSE_CODE,
   type CollabLoaderData,
-  type CollabRejectReason,
   type CollabTokenPayload,
 } from '@classmoji/collab';
 
 import {
+  COLLAB_RELOAD_CLOSE_CODE,
   normalizeRejectReason,
   peersFromAwareness,
   type CollabPeer,
+  type LiveRefusal,
   type ProviderStatus,
 } from '~/utils/collab.ts';
 
@@ -43,7 +44,10 @@ export interface CollabProviderCallbacks {
   onStatus(data: { status: ProviderStatus | string }): void;
   onUnsyncedChanges(data: { number: number }): void;
   onAuthenticationFailed(data: { reason: string }): void;
-  /** The socket closed; `event.code` 4403 is the server's periodic re-check refusing. */
+  /**
+   * The socket closed. 4403: the server's periodic re-check refused access;
+   * 4409: the room was closed (flag off, page deleted) and the route reloads.
+   */
   onClose(data: { event: { code?: number } | null | undefined }): void;
 }
 
@@ -64,9 +68,16 @@ export interface CollabSessionState {
   /** The provider currently reports itself in sync. */
   synced: boolean;
   unsyncedChanges: number;
-  /** Why the server refused this session, once it has. */
-  rejected: CollabRejectReason | null;
+  /**
+   * This browser made edits the server has not acknowledged yet (counted from
+   * the document's own updates, so edits made while offline count too).
+   */
+  localUnsynced: boolean;
+  /** Why the session ended, once it has. */
+  rejected: LiveRefusal | null;
   peers: CollabPeer[];
+  /** When the session was opened (ms since epoch). */
+  openedAt: number;
 }
 
 export const INITIAL_SESSION_STATE: CollabSessionState = {
@@ -74,8 +85,10 @@ export const INITIAL_SESSION_STATE: CollabSessionState = {
   hasSynced: false,
   synced: false,
   unsyncedChanges: 0,
+  localUnsynced: false,
   rejected: null,
   peers: [],
+  openedAt: 0,
 };
 
 const asStatus = (value: unknown): ProviderStatus =>
@@ -91,11 +104,13 @@ export class CollabSession {
   private providerDestroyed = false;
   private readonly userId: string;
   private readonly onAwarenessChange: () => void;
+  private readonly onDocUpdate: (update: Uint8Array, origin: unknown) => void;
 
   constructor(collab: CollabLoaderData, createProvider: CollabProviderFactory) {
     this.room = collab.room;
     this.userId = collab.user.id;
     this.doc = new Y.Doc();
+    this.state = { ...INITIAL_SESSION_STATE, openedAt: Date.now() };
     const token: CollabTokenPayload = { schemaVersion: collab.schemaVersion };
 
     this.provider = createProvider({
@@ -105,8 +120,19 @@ export class CollabSession {
       token: JSON.stringify(token),
       onSynced: ({ state }) =>
         this.update({ synced: state, ...(state ? { hasSynced: true } : {}) }),
-      onStatus: ({ status }) => this.update({ status: asStatus(status) }),
-      onUnsyncedChanges: ({ number }) => this.update({ unsyncedChanges: number }),
+      onStatus: ({ status }) => {
+        const next = asStatus(status);
+        // The provider never reports `synced: false`; a dropped socket is it.
+        this.update(next === 'connected' ? { status: next } : { status: next, synced: false });
+      },
+      onUnsyncedChanges: ({ number }) =>
+        this.update({
+          unsyncedChanges: number,
+          // Everything sent has been acknowledged on a live connection.
+          ...(number === 0 && this.state.status === 'connected' && this.state.synced
+            ? { localUnsynced: false }
+            : {}),
+        }),
       onAuthenticationFailed: ({ reason }) => this.reject(reason),
       // The server re-checks access every minute and closes the socket with
       // 4403 when it fails. That is a close, not an auth message: without
@@ -114,8 +140,17 @@ export class CollabSession {
       // editable over a document that may never sync again.
       onClose: ({ event }) => {
         if (event?.code === COLLAB_FORBIDDEN_CLOSE_CODE) this.reject('forbidden');
+        else if (event?.code === COLLAB_RELOAD_CLOSE_CODE) this.end('reload');
       },
     });
+
+    // Local edits: every document update that did not come from the provider
+    // (remote updates carry the provider as their origin).
+    this.onDocUpdate = (_update, origin) => {
+      if (origin === this.provider || this.destroyed) return;
+      if (!this.state.localUnsynced) this.update({ localUnsynced: true });
+    };
+    this.doc.on('update', this.onDocUpdate);
 
     this.onAwarenessChange = () => this.refreshPeers();
     const awareness = this.provider.awareness;
@@ -150,6 +185,7 @@ export class CollabSession {
     if (this.destroyed) return;
     this.destroyed = true;
     this.provider.awareness?.off('change', this.onAwarenessChange);
+    this.doc.off('update', this.onDocUpdate);
     this.destroyProvider();
     this.doc.destroy();
     this.listeners.clear();
@@ -170,9 +206,13 @@ export class CollabSession {
    * so it is destroyed at once; the route decides what the person sees.
    */
   private reject(reason: unknown) {
-    if (this.destroyed) return;
+    this.end(normalizeRejectReason(reason));
+  }
+
+  private end(refusal: LiveRefusal) {
+    if (this.destroyed || this.state.rejected) return;
     this.destroyProvider();
-    this.update({ rejected: normalizeRejectReason(reason), status: 'disconnected' });
+    this.update({ rejected: refusal, status: 'disconnected', synced: false });
   }
 
   private refreshPeers() {

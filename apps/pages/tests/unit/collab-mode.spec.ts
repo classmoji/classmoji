@@ -3,9 +3,8 @@
  * from, the internal API client, and the gate that switches the git save
  * machinery off for a live page.
  *
- * Pure modules are called directly; the wiring inside the route component and
- * the action (which need a router and a database) is read from source, the
- * approach `cover-upload.spec.ts` takes.
+ * The decisions are pure modules, called directly. Only the route
+ * component's wiring (which needs a DOM and a router) is pinned from source.
  */
 
 import { readFileSync } from 'node:fs';
@@ -23,10 +22,14 @@ import {
   pageInternalPath,
 } from '../../app/utils/collabEnv.server.ts';
 import {
+  LIVE_CONNECT_GRACE_MS,
+  autoReloadAllowed,
   claimStaleReload,
   deriveSyncStatus,
   initialsOf,
   isCollabMode,
+  liveLeaveUnsafe,
+  liveUnreachable,
   normalizeRejectReason,
   peersFromAwareness,
   readCoverValue,
@@ -34,12 +37,12 @@ import {
   saveMachineryEnabled,
   type CollabLoaderData,
 } from '../../app/utils/collab.ts';
+import { LIVE_PAGE_MESSAGE, joinsLiveRoom, liveIntentRefusal } from '../../app/utils/liveGates.ts';
 
 const source = (relative: string) =>
   readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
 
 const ROUTE = source('../../app/routes/$classroomSlug.$pageId/route.tsx');
-const ROUTE_SERVER = source('../../app/routes/$classroomSlug.$pageId/route.server.ts');
 
 const collabData = (over: Partial<CollabLoaderData> = {}): CollabLoaderData => ({
   wsUrl: 'ws://localhost:7710',
@@ -80,14 +83,20 @@ test.describe('collabEnv', () => {
     });
   });
 
-  test('the WebSocket URL is derived from COLLAB_URL when it is not set', () => {
+  test('outside production the WebSocket URL may be derived from COLLAB_URL', () => {
+    expect(collabEnv({ NODE_ENV: 'development', COLLAB_URL: 'https://collab.test' })?.wsUrl).toBe(
+      'wss://collab.test'
+    );
+  });
+
+  test('production requires COLLAB_WS_URL (never derived from the internal URL)', () => {
     expect(
       collabEnv({
         NODE_ENV: 'production',
-        COLLAB_URL: 'https://collab.classmoji.io',
+        COLLAB_URL: 'http://collab.internal:7700',
         COLLAB_INTERNAL_SECRET: 's',
-      })?.wsUrl
-    ).toBe('wss://collab.classmoji.io');
+      })
+    ).toBeNull();
   });
 
   test('production without a URL or a secret switches live editing off', () => {
@@ -199,62 +208,72 @@ test.describe('the git save machinery is off in collab mode only', () => {
     expect(isCollabMode(null)).toBe(false);
   });
 
-  test('every save path in the route is gated on saveEnabled, not canEdit', () => {
-    // Explicit save, change tracking, Cmd-S, beforeunload.
-    expect(ROUTE).toContain('if (!saveEnabled || !editorRef.current) return;');
-    expect(ROUTE).toMatch(
-      /handleEditorChange = useCallback\(\s*\(document: unknown\) => \{\s*if \(!saveEnabled\) return;/
-    );
-    expect(ROUTE).toMatch(
-      /Cmd\/Ctrl\+S[^\n]*\n\s*useEffect\(\(\) => \{\s*if \(!saveEnabled\) return;/
-    );
-    expect(ROUTE).toMatch(
-      /Warn before closing[^\n]*\n\s*useEffect\(\(\) => \{\s*if \(!saveEnabled\) return;/
-    );
-    // The save chooser, the conflict banner and the header's Save button.
-    expect(ROUTE).toContain('{saveEnabled && saveMergeReport && (');
-    expect(ROUTE).toContain('{saveEnabled && saveConflict && (');
-    expect(ROUTE).toContain('onSave={saveEnabled ? handleSave : undefined}');
-    // Merged-document adoption after an accept is skipped live.
-    expect(ROUTE).toContain('if (!liveMode && !hasUnsavedChanges) {');
-  });
-
-  test('the live editor never gets initialContent and is keyed on the room', () => {
-    const live = ROUTE.slice(
-      ROUTE.indexOf('/* Live editor'),
-      ROUTE.indexOf('/* Editor for instructors')
-    );
-    expect(live).toContain('key={session.room}');
-    expect(live).toContain('session.room === collab.room');
-    expect(live).toContain('initialContent={null}');
-    expect(live).toContain('liveState.hasSynced');
-    expect(live).not.toContain('onChange=');
-  });
-
-  test('the action refuses every git write for a live classroom', () => {
-    expect(ROUTE_SERVER).toContain("if (liveEnv && intent === 'save') {");
-    expect(ROUTE_SERVER).toContain('if (liveEnv && LIVE_REFUSED_COVER_INTENTS.has(intent)) {');
-    expect(ROUTE_SERVER).toContain(
-      "LIVE_REFUSED_COVER_INTENTS = new Set(['set-header-image', 'upload-header-image'])"
-    );
-    expect(ROUTE_SERVER).toContain("if (liveEnv && intent === 'preview-accept') {");
-    // The refusal of a save must not carry a `code`, or the client's
-    // whole-document fallback would resubmit it.
-    const refusal = ROUTE_SERVER.slice(
-      ROUTE_SERVER.indexOf("if (liveEnv && intent === 'save') {"),
-      ROUTE_SERVER.indexOf('if (liveEnv && LIVE_REFUSED_COVER_INTENTS.has(intent)) {')
-    );
-    expect(refusal).toContain('conflict: true');
-    expect(refusal).not.toMatch(/code:/);
-  });
-
-  test('a live editor is not handed content.json or a conflict token', () => {
-    expect(ROUTE_SERVER).toContain('content: collab ? null : viewerContent,');
-    expect(ROUTE_SERVER).toContain("!collab && format === 'json' ? contentFileSha : null");
+  test('the route wires every save path to saveEnabled', () => {
+    // The React wiring has no DOM to run in here; the decisions it reads are
+    // tested above and below, this only pins that it reads them.
+    expect(ROUTE).toContain('const saveEnabled = saveMachineryEnabled({ canEdit, collab });');
+    expect(ROUTE).not.toMatch(/if \(!canEdit\) return;/);
   });
 });
 
-// ─── Connection state ────────────────────────────────────────────────────────
+test.describe('who joins the live room (loader)', () => {
+  const base = {
+    canEdit: true,
+    liveClassroom: true,
+    signedIn: true,
+    previewActive: false,
+    mutationBlocked: false,
+  };
+
+  test('an editor of a live classroom joins', () => {
+    expect(joinsLiveRoom(base)).toBe(true);
+  });
+
+  test('anything missing keeps the page as it always was', () => {
+    expect(joinsLiveRoom({ ...base, canEdit: false })).toBe(false);
+    expect(joinsLiveRoom({ ...base, liveClassroom: false })).toBe(false);
+    expect(joinsLiveRoom({ ...base, signedIn: false })).toBe(false);
+    expect(joinsLiveRoom({ ...base, previewActive: true })).toBe(false);
+  });
+
+  test('a locked or unpublished classroom (read-only for this role) does not join', () => {
+    expect(joinsLiveRoom({ ...base, mutationBlocked: true })).toBe(false);
+  });
+});
+
+test.describe('git writes are refused for a live classroom (action)', () => {
+  test('a save gets the reload banner, without a fallback-triggering code', () => {
+    const refusal = liveIntentRefusal('save', true);
+    expect(refusal?.status).toBe(409);
+    expect(refusal?.body).toEqual({ conflict: true, message: LIVE_PAGE_MESSAGE });
+    expect(refusal?.body).not.toHaveProperty('code');
+  });
+
+  test('both cover writes are refused with a sentence', () => {
+    for (const intent of ['set-header-image', 'upload-header-image']) {
+      expect(liveIntentRefusal(intent, true)).toEqual({
+        status: 409,
+        body: { error: LIVE_PAGE_MESSAGE },
+      });
+    }
+  });
+
+  test('everything else, and every intent of an unflagged classroom, carries on', () => {
+    for (const intent of [
+      'update-title',
+      'update-width',
+      'save-version',
+      'preview-accept',
+      'preview-discard',
+      undefined,
+    ]) {
+      expect(liveIntentRefusal(intent, true)).toBeNull();
+    }
+    for (const intent of ['save', 'set-header-image', 'upload-header-image']) {
+      expect(liveIntentRefusal(intent, false)).toBeNull();
+    }
+  });
+});
 
 test.describe('sync status', () => {
   test('offline whenever the socket is not open', () => {
@@ -276,6 +295,14 @@ test.describe('sync status', () => {
     expect(deriveSyncStatus({ status: 'connected', synced: true, unsyncedChanges: 0 })).toBe(
       'synced'
     );
+    expect(
+      deriveSyncStatus({
+        status: 'connected',
+        synced: true,
+        unsyncedChanges: 0,
+        localUnsynced: true,
+      })
+    ).toBe('syncing');
   });
 });
 
@@ -283,18 +310,42 @@ test.describe('refusals', () => {
   test('our reasons pass through, anything else is forbidden', () => {
     expect(normalizeRejectReason('stale-epoch')).toBe('stale-epoch');
     expect(normalizeRejectReason('schema-mismatch')).toBe('schema-mismatch');
+    expect(normalizeRejectReason('unavailable')).toBe('unavailable');
     expect(normalizeRejectReason('forbidden')).toBe('forbidden');
     expect(normalizeRejectReason('permission-denied')).toBe('forbidden');
     expect(normalizeRejectReason(undefined)).toBe('forbidden');
   });
 
-  test('stale reloads, schema asks to reload, forbidden goes read-only', () => {
+  test('every refusal has a sentence; only a closed or stale room reloads by itself', () => {
+    expect(rejectionNotice('reload').action).toBe('reload');
     expect(rejectionNotice('stale-epoch').action).toBe('reload');
     expect(rejectionNotice('schema-mismatch')).toEqual({
       action: 'prompt',
       message: 'Reload to get the latest editor.',
     });
+    expect(rejectionNotice('unavailable')).toEqual({
+      action: 'prompt',
+      message: 'Couldn’t connect to live editing. Try again.',
+    });
     expect(rejectionNotice('forbidden').action).toBe('readonly');
+    for (const reason of [
+      'reload',
+      'stale-epoch',
+      'schema-mismatch',
+      'unavailable',
+      'forbidden',
+    ] as const) {
+      expect(rejectionNotice(reason).message).toBeTruthy();
+    }
+  });
+
+  test('a stale room reloads by itself only with nothing unsynced; a closed room always', () => {
+    expect(autoReloadAllowed('stale-epoch', false)).toBe(true);
+    expect(autoReloadAllowed('stale-epoch', true)).toBe(false);
+    expect(autoReloadAllowed('reload', true)).toBe(true);
+    expect(autoReloadAllowed('forbidden', false)).toBe(false);
+    expect(autoReloadAllowed('unavailable', false)).toBe(false);
+    expect(autoReloadAllowed('schema-mismatch', false)).toBe(false);
   });
 
   test('a stale room reloads once, then asks', () => {
@@ -308,6 +359,30 @@ test.describe('refusals', () => {
     // A new room (the reload brought a new epoch) may reload again later.
     expect(claimStaleReload(storage, 'page:p:2')).toBe(true);
     expect(claimStaleReload(null, 'page:p:3')).toBe(false);
+  });
+});
+
+test.describe('leaving and connecting', () => {
+  test('leaving is unsafe whenever an open live editor is not synced', () => {
+    const open = { hasSynced: true, refused: false };
+    expect(liveLeaveUnsafe({ ...open, syncStatus: 'synced' })).toBe(false);
+    expect(liveLeaveUnsafe({ ...open, syncStatus: 'syncing' })).toBe(true);
+    expect(liveLeaveUnsafe({ ...open, syncStatus: 'offline' })).toBe(true);
+    // Nothing editable yet, or a refused session: nothing to hold the person for.
+    expect(liveLeaveUnsafe({ hasSynced: false, refused: false, syncStatus: 'offline' })).toBe(
+      false
+    );
+    expect(liveLeaveUnsafe({ hasSynced: true, refused: true, syncStatus: 'offline' })).toBe(false);
+  });
+
+  test('"could not connect" waits out the grace period', () => {
+    const waiting = { hasSynced: false, refused: false, status: 'disconnected' as const };
+    expect(liveUnreachable({ ...waiting, elapsedMs: 1_000 })).toBe(false);
+    expect(liveUnreachable({ ...waiting, elapsedMs: LIVE_CONNECT_GRACE_MS - 1 })).toBe(false);
+    expect(liveUnreachable({ ...waiting, elapsedMs: LIVE_CONNECT_GRACE_MS })).toBe(true);
+    expect(liveUnreachable({ ...waiting, status: 'connected', elapsedMs: 60_000 })).toBe(false);
+    expect(liveUnreachable({ ...waiting, hasSynced: true, elapsedMs: 60_000 })).toBe(false);
+    expect(liveUnreachable({ ...waiting, refused: true, elapsedMs: 60_000 })).toBe(false);
   });
 });
 

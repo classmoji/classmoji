@@ -11,6 +11,8 @@ export interface LiveHeaderControlsProps {
   /** Null while the editor cannot ask for a version (refused, not synced). */
   onSaveVersion: (() => void) | null;
   savingVersion: boolean;
+  /** The floating indicator of an embedded editor: status and Save version only. */
+  compact?: boolean;
 }
 
 const statusStyle: Record<SyncStatus, string> = {
@@ -34,13 +36,14 @@ const LiveHeaderControls = ({
   syncStatus,
   onSaveVersion,
   savingVersion,
+  compact = false,
 }: LiveHeaderControlsProps) => {
-  const shown = peers.slice(0, MAX_AVATARS);
-  const hidden = peers.slice(MAX_AVATARS);
+  const shown = compact ? [] : peers.slice(0, MAX_AVATARS);
+  const hidden = compact ? [] : peers.slice(MAX_AVATARS);
 
   return (
     <div className="flex items-center gap-3 text-sm" data-testid="live-header-controls">
-      {peers.length > 0 && (
+      {shown.length > 0 && (
         <div className="flex -space-x-1.5" data-testid="live-peers">
           {shown.map(peer => (
             <span

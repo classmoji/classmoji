@@ -1,52 +1,31 @@
-import type { CollabRejectReason } from '@classmoji/collab';
+import type { ReactNode } from 'react';
 
-import { rejectionNotice } from '~/utils/collab.ts';
+import { rejectionNotice, type LiveRefusal } from '~/utils/collab.ts';
 
 const reload = () => window.location.reload();
 
-const buttonClass =
+const primaryButton =
   'rounded px-3 py-1 text-sm font-medium transition-colors bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400';
 
-/**
- * The banner for a live session the server refused. A stale room reloads on
- * its own (the route does that); this is shown when it cannot (the reload
- * already happened once) or when the person has to act.
- */
-export function LiveRejectedBanner({
-  reason,
+function Bar({
+  testId,
   isEmbedded,
-  reloadAttempted,
+  message,
+  children,
 }: {
-  reason: CollabRejectReason;
+  testId: string;
   isEmbedded: boolean;
-  reloadAttempted: boolean;
+  message: string;
+  children?: ReactNode;
 }) {
-  const notice = rejectionNotice(reason);
-  const message =
-    notice.action === 'reload'
-      ? reloadAttempted
-        ? 'This page was updated. Reload to keep editing.'
-        : null
-      : notice.message;
-  if (!message) return null;
-  const offerReload = notice.action !== 'readonly';
-
   return (
-    <div
-      data-testid="live-rejected-banner"
-      data-reason={reason}
-      className={`sticky ${isEmbedded ? 'top-0' : 'top-12'} z-30`}
-    >
+    <div data-testid={testId} className={`sticky ${isEmbedded ? 'top-0' : 'top-12'} z-30`}>
       <div className="border-y border-amber-300 dark:border-amber-700/70 bg-amber-50/95 dark:bg-amber-950/90 backdrop-blur px-4 sm:px-6 lg:px-8 py-2">
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
           <span className="text-sm font-semibold text-amber-900 dark:text-amber-100">
             {message}
           </span>
-          {offerReload && (
-            <button type="button" onClick={reload} className={buttonClass}>
-              Reload
-            </button>
-          )}
+          {children}
         </div>
       </div>
     </div>
@@ -54,32 +33,98 @@ export function LiveRejectedBanner({
 }
 
 /**
- * The editor's place while the live document is not there yet: connecting,
- * or unreachable before it ever arrived.
+ * The banner for a live session that ended. Every case offers Reload — a
+ * refused session is never a dead end. Nothing is shown while the route is
+ * reloading by itself.
  */
-export function LiveEditorPlaceholder({ unreachable }: { unreachable: boolean }) {
-  if (!unreachable) {
-    return (
-      <div className="flex items-center justify-center py-12" data-testid="live-connecting">
-        <div className="text-gray-500 dark:text-gray-400">Loading editor...</div>
-      </div>
-    );
-  }
+export function LiveRejectedBanner({
+  reason,
+  isEmbedded,
+  autoReloading,
+}: {
+  reason: LiveRefusal;
+  isEmbedded: boolean;
+  /** The route is reloading on its own; the banner would only flash. */
+  autoReloading: boolean;
+}) {
+  if (autoReloading) return null;
+  const notice = rejectionNotice(reason);
   return (
-    <div
-      className="flex flex-col items-center justify-center gap-3 py-12"
-      data-testid="live-unreachable"
-    >
-      <div className="text-gray-600 dark:text-gray-300">
-        This page can&rsquo;t be opened for editing right now.
-      </div>
-      <button
-        type="button"
-        onClick={reload}
-        className="rounded px-3 py-1 text-sm font-medium transition-colors text-gray-700 ring-1 ring-gray-300 hover:bg-gray-100 dark:text-gray-200 dark:ring-neutral-600 dark:hover:bg-neutral-800"
-      >
+    <Bar testId="live-rejected-banner" isEmbedded={isEmbedded} message={notice.message}>
+      <button type="button" onClick={reload} className={primaryButton} data-reason={reason}>
         Reload
       </button>
+    </Bar>
+  );
+}
+
+/** The room did not arrive within the grace period; the page stays readable. */
+export function LiveUnreachableNotice({ isEmbedded }: { isEmbedded: boolean }) {
+  return (
+    <Bar
+      testId="live-unreachable"
+      isEmbedded={isEmbedded}
+      message="Couldn’t connect to live editing. Try again."
+    >
+      <button type="button" onClick={reload} className={primaryButton}>
+        Reload
+      </button>
+    </Bar>
+  );
+}
+
+/**
+ * Leaving a live page whose edits have not all reached the server: the app's
+ * own dialog (never the browser's), with staying as the default.
+ */
+export function LeaveLiveDialog({
+  offline,
+  onStay,
+  onLeave,
+}: {
+  offline: boolean;
+  onStay: () => void;
+  onLeave: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="leave-live-title"
+      data-testid="leave-live-dialog"
+      onKeyDown={event => {
+        if (event.key === 'Escape') onStay();
+      }}
+    >
+      <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl ring-1 ring-stone-200 dark:bg-neutral-900 dark:ring-neutral-800">
+        <h2
+          id="leave-live-title"
+          className="text-base font-semibold text-gray-900 dark:text-gray-100"
+        >
+          {offline ? 'You’re offline' : 'Your latest edits haven’t synced yet'}
+        </h2>
+        <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
+          If you leave now, edits that haven’t synced will be lost.
+        </p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onLeave}
+            className="rounded px-3 py-1.5 text-sm font-medium text-gray-700 ring-1 ring-gray-300 hover:bg-gray-100 dark:text-gray-200 dark:ring-neutral-600 dark:hover:bg-neutral-800"
+          >
+            Leave anyway
+          </button>
+          <button
+            type="button"
+            onClick={onStay}
+            autoFocus
+            className="rounded px-3 py-1.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
+          >
+            Stay
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

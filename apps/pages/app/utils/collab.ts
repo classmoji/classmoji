@@ -61,44 +61,97 @@ export function deriveSyncStatus({
   status,
   synced,
   unsyncedChanges,
+  localUnsynced = false,
 }: {
   status: ProviderStatus;
   synced: boolean;
   unsyncedChanges: number;
+  /** Local edits made since the server last acknowledged everything. */
+  localUnsynced?: boolean;
 }): SyncStatus {
   if (status !== 'connected') return 'offline';
-  if (!synced || unsyncedChanges > 0) return 'syncing';
+  if (!synced || unsyncedChanges > 0 || localUnsynced) return 'syncing';
   return 'synced';
+}
+
+/**
+ * Whether leaving now could lose edits: the live editor is open (synced at
+ * least once, not refused) and its state is anything but synced — local
+ * changes awaiting the server, or no connection to send them on. Drives the
+ * unload warning and the in-app navigation blocker.
+ */
+export function liveLeaveUnsafe({
+  hasSynced,
+  refused,
+  syncStatus,
+}: {
+  hasSynced: boolean;
+  refused: boolean;
+  syncStatus: SyncStatus;
+}): boolean {
+  return hasSynced && !refused && syncStatus !== 'synced';
 }
 
 // ─── Refusals ────────────────────────────────────────────────────────────────
 
 /**
- * The server's refusal, as the client acts on it. Hocuspocus sends
+ * Why a live session ended, as the client acts on it: the server's refusal
+ * reasons (`stale-epoch`, `schema-mismatch`, `forbidden`, `unavailable`), or
+ * `reload` — the server closed the room (flag turned off, page deleted;
+ * close code 4409) and the route must be loaded again.
+ */
+export type LiveRefusal = CollabRejectReason | 'unavailable' | 'reload';
+
+/** WebSocket close code: the room was closed; reload the route. */
+export const COLLAB_RELOAD_CLOSE_CODE = 4409;
+
+/**
+ * A refusal reason as the client acts on it. Hocuspocus sends
  * `error.reason ?? 'permission-denied'`; any reason that is not one of ours
  * is treated as forbidden (the safe reading: stop editing).
  */
-export function normalizeRejectReason(reason: unknown): CollabRejectReason {
-  if (reason === 'stale-epoch' || reason === 'schema-mismatch') return reason;
+export function normalizeRejectReason(reason: unknown): LiveRefusal {
+  if (reason === 'stale-epoch' || reason === 'schema-mismatch' || reason === 'unavailable') {
+    return reason;
+  }
   return 'forbidden';
 }
 
 export interface RejectionNotice {
-  /** `reload` reloads the route at once; `prompt` asks; `readonly` explains. */
+  /**
+   * `reload` reloads the route at once (when it is safe to); `prompt` asks
+   * the person to reload; `readonly` stops editing and offers a reload.
+   */
   action: 'reload' | 'prompt' | 'readonly';
-  message: string | null;
+  message: string;
 }
 
-export function rejectionNotice(reason: CollabRejectReason): RejectionNotice {
+export function rejectionNotice(reason: LiveRefusal): RejectionNotice {
   switch (reason) {
+    case 'reload':
+      return { action: 'reload', message: 'This page changed. Reload to keep working.' };
     case 'stale-epoch':
-      return { action: 'reload', message: null };
+      return { action: 'reload', message: 'This page was updated. Reload to keep editing.' };
     case 'schema-mismatch':
       return { action: 'prompt', message: 'Reload to get the latest editor.' };
+    case 'unavailable':
+      return { action: 'prompt', message: 'Couldn’t connect to live editing. Try again.' };
     case 'forbidden':
     default:
       return { action: 'readonly', message: 'You can no longer edit this page.' };
   }
+}
+
+/**
+ * Whether a refusal may reload the page by itself. A closed room always may
+ * (the server saved it first). A stale room may only when this browser holds
+ * no edits the server has not acknowledged — reloading would throw them away —
+ * and only once per room (`claimStaleReload`).
+ */
+export function autoReloadAllowed(reason: LiveRefusal, localUnsynced: boolean): boolean {
+  if (reason === 'reload') return true;
+  if (reason === 'stale-epoch') return !localUnsynced;
+  return false;
 }
 
 // ─── Presence ────────────────────────────────────────────────────────────────
@@ -199,4 +252,29 @@ export function claimStaleReload(
   } catch {
     return false;
   }
+}
+
+// ─── Connecting ──────────────────────────────────────────────────────────────
+
+/** How long the room may take to arrive before the page says it could not. */
+export const LIVE_CONNECT_GRACE_MS = 10_000;
+
+/**
+ * Whether to tell the person the live editor could not be reached: never
+ * before the grace period (the provider retries a failed connect on its own,
+ * and the read-only page is on screen meanwhile), and never once the room has
+ * synced or the server has refused (that has its own banner).
+ */
+export function liveUnreachable({
+  hasSynced,
+  refused,
+  status,
+  elapsedMs,
+}: {
+  hasSynced: boolean;
+  refused: boolean;
+  status: ProviderStatus;
+  elapsedMs: number;
+}): boolean {
+  return !hasSynced && !refused && status !== 'connected' && elapsedMs >= LIVE_CONNECT_GRACE_MS;
 }

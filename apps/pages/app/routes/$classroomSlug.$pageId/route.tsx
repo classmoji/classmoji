@@ -1,4 +1,4 @@
-import { useLoaderData, useFetcher, useOutletContext } from 'react-router';
+import { useLoaderData, useFetcher, useOutletContext, useBlocker } from 'react-router';
 import { useAssetMap, useAssetRetry } from '~/hooks/useAssetMap.ts';
 import type { AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
 import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from 'react';
@@ -20,14 +20,19 @@ import {
 import { diffBlockOps, type BlockOp } from '~/components/editor/blockOpsDiff.ts';
 import { useCollabSession } from '~/components/editor/collab/useCollabSession.ts';
 import { useLiveCover } from '~/components/editor/collab/useLiveCover.ts';
+import LiveHeaderControls from '~/components/editor/collab/LiveHeaderControls.tsx';
 import {
-  LiveEditorPlaceholder,
+  LeaveLiveDialog,
+  LiveUnreachableNotice,
   LiveRejectedBanner,
 } from '~/components/editor/collab/LiveNotices.tsx';
 import {
+  autoReloadAllowed,
   claimStaleReload,
   deriveSyncStatus,
   isCollabMode,
+  liveLeaveUnsafe,
+  liveUnreachable,
   rejectionNotice,
   saveMachineryEnabled,
 } from '~/utils/collab.ts';
@@ -163,6 +168,7 @@ const PageRoute = () => {
     preview,
     notice,
     noticeAutoMerged,
+    noticePreviewKept,
     contentSha,
     resolvedAssets,
     resolvedSrcSets,
@@ -514,6 +520,9 @@ const PageRoute = () => {
           ? `Preview merged —${noticeAutoMerged} change${noticeAutoMerged === 1 ? '' : 's'} merged automatically; changes are now live.`
           : 'Preview merged —changes are now live.'
       );
+      if (noticePreviewKept) {
+        toast.info('The preview is still listed. Discard it when you no longer need it.');
+      }
     } else if (notice === 'preview-discarded') {
       toast.success('Preview discarded.');
     }
@@ -521,8 +530,17 @@ const PageRoute = () => {
     const url = new URL(window.location.href);
     url.searchParams.delete('notice');
     url.searchParams.delete('auto_merged');
+    url.searchParams.delete('preview_kept');
     window.history.replaceState({}, '', url);
-  }, [notice, noticeAutoMerged, content, contentSha, hasUnsavedChanges, liveMode]);
+  }, [
+    notice,
+    noticeAutoMerged,
+    noticePreviewKept,
+    content,
+    contentSha,
+    hasUnsavedChanges,
+    liveMode,
+  ]);
 
   // Baseline capture is the editor's onReady (P2), not the raw loader JSON —
   // see handleEditorReady below.
@@ -671,13 +689,24 @@ const PageRoute = () => {
 
   // ── Live editing ───────────────────────────────────────────────────────────
 
-  // A refused room. A stale one (the document was reseeded since this page
-  // loaded) reloads at once, but only once per room, so a disagreement between
-  // the loader and the server cannot loop.
-  const [staleReloadBlocked, setStaleReloadBlocked] = useState(false);
+  // A session that ended. A closed room (flag off, page deleted) reloads the
+  // route at once. A stale one (the document was reseeded since this page
+  // loaded) reloads only when this browser has no edits the server has not
+  // acknowledged, and only once per room, so a disagreement between the
+  // loader and the server cannot loop. Everything else waits for the person.
+  const [autoReloadSkipped, setAutoReloadSkipped] = useState(false);
+  const liveLocalUnsynced = liveState.localUnsynced;
   useEffect(() => {
     if (!liveRefused || !collab) return;
     if (rejectionNotice(liveRefused).action !== 'reload') return;
+    if (!autoReloadAllowed(liveRefused, liveLocalUnsynced)) {
+      setAutoReloadSkipped(true);
+      return;
+    }
+    if (liveRefused === 'reload') {
+      window.location.reload();
+      return;
+    }
     let storage: Storage | null = null;
     try {
       storage = window.sessionStorage;
@@ -685,8 +714,29 @@ const PageRoute = () => {
       storage = null;
     }
     if (claimStaleReload(storage, collab.room)) window.location.reload();
-    else setStaleReloadBlocked(true);
+    else setAutoReloadSkipped(true);
+    // Decided once, when the session ends: later edits cannot happen (the
+    // editor is read-only once refused).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveRefused, collab]);
+
+  // Until the room arrives the page is shown read-only; only after a grace
+  // period does it say the live editor could not be reached.
+  const [connectClock, setConnectClock] = useState(0);
+  const waitingForRoom = liveMode && !liveState.hasSynced && !liveRefused;
+  useEffect(() => {
+    if (!waitingForRoom) return;
+    const timer = window.setInterval(() => setConnectClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [waitingForRoom]);
+  const showUnreachable =
+    liveMode &&
+    liveUnreachable({
+      hasSynced: liveState.hasSynced,
+      refused: Boolean(liveRefused),
+      status: liveState.status,
+      elapsedMs: liveState.openedAt ? connectClock - liveState.openedAt : 0,
+    });
 
   // The cover lives in the live document. Until the room has synced, the
   // loader's cover stands in for it.
@@ -737,14 +787,59 @@ const PageRoute = () => {
     );
   }, [versionFetcher]);
 
+  const liveSyncStatus = deriveSyncStatus(liveState);
+  const canSaveVersion = liveEditable && liveState.hasSynced;
   const liveHeader = liveMode
     ? {
         peers: liveState.peers,
-        syncStatus: deriveSyncStatus(liveState),
-        onSaveVersion: liveEditable && liveState.hasSynced ? handleSaveVersion : null,
+        syncStatus: liveSyncStatus,
+        onSaveVersion: canSaveVersion ? handleSaveVersion : null,
         savingVersion: versionFetcher.state !== 'idle',
       }
     : null;
+
+  // Cmd/Ctrl+S on a live page: never the browser's "save page"; a version.
+  useEffect(() => {
+    if (!liveMode) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault();
+        if (canSaveVersion && versionFetcher.state === 'idle') handleSaveVersion();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [liveMode, canSaveVersion, versionFetcher.state, handleSaveVersion]);
+
+  // Leaving while this browser's edits have not reached the server (or while
+  // it is offline) could lose them: warn on unload, and hold in-app
+  // navigation for a choice.
+  const liveUnsafe =
+    liveMode &&
+    liveLeaveUnsafe({
+      hasSynced: liveState.hasSynced,
+      refused: Boolean(liveRefused),
+      syncStatus: liveSyncStatus,
+    });
+  useEffect(() => {
+    if (!liveUnsafe) return;
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [liveUnsafe]);
+  const leaveBlocker = useBlocker(
+    ({ currentLocation, nextLocation }) =>
+      liveUnsafe &&
+      (currentLocation.pathname !== nextLocation.pathname ||
+        currentLocation.search !== nextLocation.search)
+  );
+  // Once everything has synced, a held navigation goes ahead by itself.
+  useEffect(() => {
+    if (leaveBlocker.state === 'blocked' && !liveUnsafe) leaveBlocker.proceed();
+  }, [leaveBlocker, liveUnsafe]);
 
   // The rendered preview marks the blocks it adds or edits (never a diff).
   const previewHighlightStyle =
@@ -798,7 +893,23 @@ const PageRoute = () => {
         <LiveRejectedBanner
           reason={liveRefused}
           isEmbedded={isEmbedded}
-          reloadAttempted={staleReloadBlocked}
+          autoReloading={!autoReloadSkipped && rejectionNotice(liveRefused).action === 'reload'}
+        />
+      )}
+      {showUnreachable && <LiveUnreachableNotice isEmbedded={isEmbedded} />}
+
+      {/* Embedded editors have no header: the live status floats instead. */}
+      {isEmbedded && liveHeader && (
+        <div className="fixed bottom-3 right-3 z-40 rounded-full bg-white/95 px-3 py-1.5 shadow-md ring-1 ring-stone-200 backdrop-blur dark:bg-neutral-900/95 dark:ring-neutral-700">
+          <LiveHeaderControls {...liveHeader} compact />
+        </div>
+      )}
+
+      {leaveBlocker.state === 'blocked' && (
+        <LeaveLiveDialog
+          offline={liveSyncStatus === 'offline'}
+          onStay={() => leaveBlocker.reset()}
+          onLeave={() => leaveBlocker.proceed()}
         />
       )}
 
@@ -936,9 +1047,26 @@ const PageRoute = () => {
                 />
               </Suspense>
             ) : (
-              <LiveEditorPlaceholder
-                unreachable={Boolean(liveRefused) || liveState.status === 'disconnected'}
-              />
+              /* Until the room arrives: the page as the loader read it, read-only. */
+              <Suspense
+                fallback={
+                  <div className="flex items-center justify-center py-12">
+                    <div className="text-gray-500 dark:text-gray-400">Loading content...</div>
+                  </div>
+                }
+              >
+                <div data-testid="live-pre-sync">
+                  <BlockNoteViewer
+                    key={`${page.id}:${assetEpoch}:pre-sync`}
+                    content={content}
+                    darkMode={darkMode}
+                    resolveFileUrl={assets.resolveFileUrl}
+                    srcSets={srcSets}
+                    displayUrl={assets.displayUrl}
+                    pageId={page.id}
+                  />
+                </div>
+              </Suspense>
             )
           ) : canEdit ? (
             /* Editor for instructors */

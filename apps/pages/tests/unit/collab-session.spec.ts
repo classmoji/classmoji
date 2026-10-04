@@ -5,6 +5,7 @@
  */
 
 import { test, expect } from '@playwright/test';
+import * as Y from 'yjs';
 import { Awareness } from 'y-protocols/awareness';
 import type { CollabLoaderData } from '@classmoji/collab';
 
@@ -107,6 +108,49 @@ test.describe('CollabSession', () => {
     provider.args.onClose({ event: { code: 4403 } });
     expect(session.getState().rejected).toBe('forbidden');
     expect(provider.destroyCalls).toBe(1);
+    session.destroy();
+  });
+
+  test('a 4409 close (room closed: flag off, page deleted) asks for a reload', () => {
+    const { session, provider } = open();
+    provider.args.onClose({ event: { code: 4409 } });
+    expect(session.getState().rejected).toBe('reload');
+    expect(provider.destroyCalls).toBe(1);
+    session.destroy();
+  });
+
+  test('an `unavailable` refusal is its own reason, not forbidden', () => {
+    const { session, provider } = open();
+    provider.args.onAuthenticationFailed({ reason: 'unavailable' });
+    expect(session.getState().rejected).toBe('unavailable');
+    session.destroy();
+  });
+
+  test('local edits count as unsynced until the server has acknowledged everything', () => {
+    const { session, provider } = open();
+    provider.args.onStatus({ status: 'connected' });
+    provider.args.onSynced({ state: true });
+    expect(session.getState().localUnsynced).toBe(false);
+
+    // A remote update (origin: the provider) is not a local edit.
+    const remote = new Y.Doc();
+    remote.getText('t').insert(0, 'from a peer');
+    Y.applyUpdate(session.doc, Y.encodeStateAsUpdate(remote), provider);
+    expect(session.getState().localUnsynced).toBe(false);
+
+    // A local edit is, until the provider reports nothing outstanding.
+    session.doc.getText('t').insert(0, 'mine ');
+    expect(session.getState().localUnsynced).toBe(true);
+    provider.args.onUnsyncedChanges({ number: 1 });
+    expect(session.getState().localUnsynced).toBe(true);
+    provider.args.onUnsyncedChanges({ number: 0 });
+    expect(session.getState().localUnsynced).toBe(false);
+
+    // Offline: an edit stays unsynced even if the counter reads zero.
+    provider.args.onStatus({ status: 'disconnected' });
+    session.doc.getText('t').insert(0, 'offline ');
+    provider.args.onUnsyncedChanges({ number: 0 });
+    expect(session.getState()).toMatchObject({ localUnsynced: true, synced: false });
     session.destroy();
   });
 
