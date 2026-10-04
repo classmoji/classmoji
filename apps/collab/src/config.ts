@@ -58,6 +58,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollabConfig {
     );
   }
 
+  // The git worker is the only way edits reach the content repo: a production
+  // server that cannot trigger it would buffer edits forever.
+  if (production && !env.TRIGGER_SECRET_KEY?.trim()) {
+    throw new Error('TRIGGER_SECRET_KEY must be set in production');
+  }
+
   const allowedOrigins = new Set<string>();
   for (const url of [env.WEBAPP_URL, env.PAGES_URL, env.SLIDES_URL]) {
     const origin = originOf(url);

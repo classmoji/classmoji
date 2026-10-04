@@ -42,6 +42,10 @@ export interface SnapshotResponse<K extends CollabKind = CollabKind> {
   version: number;
   live: boolean;
   content: SnapshotContent<K>;
+  /** ISO time of the last checkpoint run covering this doc (null: none yet). */
+  lastCheckpointAt: string | null;
+  /** Failure of that run (null when it succeeded). */
+  lastCheckpointError: string | null;
 }
 
 /**
@@ -52,10 +56,51 @@ export interface SnapshotResponse<K extends CollabKind = CollabKind> {
 export interface OpsRequest<Op = unknown> {
   ops: Op[];
   actor: CollabActor;
+  /**
+   * Guard: `{ [id]: itemHash(item) }` for the blocks/slides the ops were
+   * planned from (as `/snapshot` returned them). Any mismatch → 409
+   * `{ error: 'block-changed', changedIds }`, nothing applied.
+   */
+  expect?: Record<string, string>;
 }
 
 export interface OpsResponse {
+  epoch: number;
   version: number;
+  /** Ids minted/kept for inserted items, in op order. */
+  insertedIds?: string[];
+}
+
+/** 409 from a guarded `/ops`. */
+export interface BlockChangedError {
+  error: 'block-changed';
+  changedIds: string[];
+}
+
+/**
+ * Stateless messages collab broadcasts to a room (`provider.on('stateless')`,
+ * payload is this JSON):
+ * - `checkpoint`: the worker finished a run that covered this doc
+ *   (`POST /internal/checkpoint-result`);
+ * - `page-meta` / `deck-meta`: title (and page width) changed outside the
+ *   document (`POST /internal/:kind/:id/meta-changed`).
+ */
+export type CollabStatelessMessage =
+  | { type: 'checkpoint'; commit?: string; at: string; error?: string }
+  | { type: 'page-meta'; title?: string; width?: number }
+  | { type: 'deck-meta'; title?: string };
+
+/** `POST /internal/checkpoint-result` (from the worker; best effort). */
+export interface CheckpointResultRequest {
+  classroomId: string;
+  docs: { kind: CollabKind; id: string; commit?: string; at: string; error?: string }[];
+}
+
+/** `POST /internal/:kind/:id/meta-changed`. */
+export interface MetaChangedRequest {
+  title?: string;
+  /** Pages only (`Page.width`). */
+  width?: number;
 }
 
 /** 409 from a deck op on a slide a human holds. */
@@ -180,6 +225,8 @@ export interface CollabConnectionContext {
   classroomId: string;
   kind: CollabKind;
   docId: string;
+  /** The user's classroom role (audit rows). */
+  role?: string;
 }
 
 // ─── Loader data for a collab-enabled editor ────────────────────────────────

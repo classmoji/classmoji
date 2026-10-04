@@ -24,12 +24,12 @@ import {
   parseRoom,
   roomName,
   userColor,
-  type CheckpointDocEditors,
   type CheckpointReason,
   type CollabActor,
   type CollabConnectionContext,
   type CollabKind,
   type CollabRoom,
+  type CollabStatelessMessage,
 } from '@classmoji/collab';
 import { DEFAULT_COLLAB_PORT } from '@classmoji/collab/env';
 
@@ -45,6 +45,7 @@ import { CollabHttpError, type CollabAdapter, type LiveEditContext } from './ada
 import type { CheckpointTrigger } from './checkpoint.ts';
 import type { CollabConfig } from './config.ts';
 import { handleRequest } from './http.ts';
+import { recordAudit, type AuditSink } from './audit.ts';
 import { currentEpoch, isReseedMarker, type CollabDocStore } from './store/types.ts';
 
 export { DEFAULT_COLLAB_PORT };
@@ -65,6 +66,8 @@ export interface CollabDeps {
   sessions: SessionResolver;
   adapters: AdapterRegistry;
   checkpoints: CheckpointTrigger;
+  /** Audit log (COLLAB_JOIN / COLLAB_LEAVE / ACCESS_DENIED). Optional. */
+  audit?: AuditSink;
 }
 
 export interface CollabServerOptions {
@@ -95,10 +98,7 @@ export interface DirectEditContext {
 const REPAIR_CONTEXT = { repair: true } as const;
 
 /** How long an agent stays in awareness after its edit. */
-const AGENT_PRESENCE_MS = 4_000;
-
-/** Unpushed editors of a doc are forgotten after this long without a store. */
-const EDITOR_TTL_MS = 6 * 60 * 60 * 1000;
+const AGENT_PRESENCE_MS = 10_000;
 
 /**
  * "Now" triggers within this window of each other share one debounced run
@@ -125,22 +125,15 @@ interface LoadedDoc {
   classroomId: string;
   /** Changed since the last successful store (a no-op close stores nothing). */
   dirty: boolean;
+  /** `/close` reason `deleted`: never store this doc again. */
+  deleted?: boolean;
   /** The last transaction touched only ephemeral roots (deck locks). */
   lastTxEphemeral: boolean;
-}
-
-interface EditorEntry {
-  name: string;
-  /** Version the editor's latest edit was stored in; null = not stored yet. */
-  storedIn: number | null;
-}
-
-interface EditorBook {
-  kind: CollabKind;
-  docId: string;
-  classroomId: string;
-  editors: Map<string, EditorEntry>;
-  touchedAt: number;
+  /**
+   * Who edited since the last store; merged into collab_docs.editors by the
+   * next store (persisted, so co-author trailers survive a restart).
+   */
+  pendingEditors: Map<string, string>;
 }
 
 interface AgentPresence {
@@ -148,8 +141,6 @@ interface AgentPresence {
   awareness: Awareness;
   timer: NodeJS.Timeout | null;
 }
-
-const docKey = (kind: CollabKind, docId: string) => `${kind}:${docId}`;
 
 /** The root shared type a (possibly nested) type belongs to. */
 function rootOf(type: Y.AbstractType<any>): Y.AbstractType<any> {
@@ -174,7 +165,6 @@ export class CollabRuntime {
   readonly deps: CollabDeps;
 
   private readonly loaded = new Map<string, LoadedDoc>();
-  private readonly editorBooks = new Map<string, EditorBook>();
   private readonly agents = new Map<string, AgentPresence>();
   private readonly lastNow = new Map<
     string,
@@ -208,14 +198,18 @@ export class CollabRuntime {
         {
           extensionName: 'classmoji-collab',
           afterLoadDocument: async payload => this.afterLoad(payload),
-          connected: async ({ connection, requestHeaders }) => {
+          connected: async ({ connection, requestHeaders, context }) => {
             this.rechecker.track(
               connection as Connection<CollabConnectionContext>,
               requestHeaders.get('cookie') ?? ''
             );
+            this.auditConnection('COLLAB_JOIN', context);
           },
           onChange: async payload => this.onChange(payload),
-          onDisconnect: async payload => this.onLastLeave(payload),
+          onDisconnect: async payload => {
+            this.auditConnection('COLLAB_LEAVE', payload.context);
+            await this.onLastLeave(payload);
+          },
           afterStoreDocument: async payload => this.afterStore(payload),
           afterUnloadDocument: async ({ documentName }) => {
             this.loaded.delete(documentName);
@@ -346,6 +340,7 @@ export class CollabRuntime {
       classroomId: row.classroom_id,
       dirty: false,
       lastTxEphemeral: false,
+      pendingEditors: new Map(),
     });
     return row.state;
   }
@@ -395,19 +390,21 @@ export class CollabRuntime {
       | (Partial<CollabConnectionContext> & Partial<DirectEditContext> & { repair?: boolean })
       | undefined;
     if (!context?.userId || context.repair || context.external) return;
-    const key = docKey(doc.room.kind, doc.room.id);
-    let book = this.editorBooks.get(key);
-    if (!book) {
-      book = {
-        kind: doc.room.kind,
-        docId: doc.room.id,
-        classroomId: doc.classroomId,
-        editors: new Map(),
-        touchedAt: Date.now(),
-      };
-      this.editorBooks.set(key, book);
-    }
-    book.editors.set(context.userId, { name: context.name ?? 'Someone', storedIn: null });
+    doc.pendingEditors.set(context.userId, context.name ?? 'Someone');
+  }
+
+  /** A socket's join/leave in the audit log (direct connections carry no role). */
+  private auditConnection(action: 'COLLAB_JOIN' | 'COLLAB_LEAVE', context: unknown): void {
+    const ctx = context as Partial<CollabConnectionContext> | undefined;
+    if (!ctx?.userId || !ctx.classroomId || !ctx.role || !ctx.kind || !ctx.docId) return;
+    recordAudit(this.deps.audit, {
+      userId: ctx.userId,
+      classroomId: ctx.classroomId,
+      role: ctx.role,
+      action,
+      resourceType: `collab_${ctx.kind}`,
+      resourceId: ctx.docId,
+    });
   }
 
   /**
@@ -417,10 +414,12 @@ export class CollabRuntime {
    */
   private async store(payload: storePayload): Promise<void> {
     const doc = this.loaded.get(payload.documentName);
-    if (!doc || !doc.dirty) return;
+    if (!doc || !doc.dirty || doc.deleted) return;
     const adapter = await this.adapter(doc.room.kind);
 
     doc.dirty = false;
+    const editors = [...doc.pendingEditors].map(([userId, name]) => ({ userId, name }));
+    doc.pendingEditors.clear();
     let stored;
     try {
       stored = await this.deps.store.store({
@@ -430,9 +429,12 @@ export class CollabRuntime {
         classroomId: doc.classroomId,
         schemaVersion: adapter.schemaVersion,
         state: payload.state,
+        editors,
       });
     } catch (err) {
       doc.dirty = true;
+      for (const e of editors)
+        if (!doc.pendingEditors.has(e.userId)) doc.pendingEditors.set(e.userId, e.name);
       throw err;
     }
     if (!stored) {
@@ -443,36 +445,8 @@ export class CollabRuntime {
       return;
     }
 
-    const book = this.editorBooks.get(docKey(doc.room.kind, doc.room.id));
-    if (book) {
-      book.touchedAt = Date.now();
-      for (const [userId, entry] of book.editors) {
-        entry.storedIn ??= stored.version;
-        if (entry.storedIn <= stored.pushed_version) book.editors.delete(userId);
-      }
-    }
-
     const lastLeave = payload.document.getConnectionsCount() === 0;
     await this.triggerCheckpoint(doc.classroomId, lastLeave ? 'last-leave' : 'store', lastLeave);
-  }
-
-  /** Every doc of the classroom with editors not yet covered by a push. */
-  editorsFor(classroomId: string): CheckpointDocEditors[] {
-    const now = Date.now();
-    const out: CheckpointDocEditors[] = [];
-    for (const [key, book] of this.editorBooks) {
-      if (book.editors.size === 0 || now - book.touchedAt > EDITOR_TTL_MS) {
-        this.editorBooks.delete(key);
-        continue;
-      }
-      if (book.classroomId !== classroomId) continue;
-      out.push({
-        kind: book.kind,
-        docId: book.docId,
-        editors: [...book.editors].map(([userId, e]) => ({ userId, name: e.name })),
-      });
-    }
-    return out;
   }
 
   async triggerCheckpoint(
@@ -492,7 +466,13 @@ export class CollabRuntime {
       }
       this.lastNow.set(classroomId, { reason, ...(message ? { message } : {}), at });
     }
-    const editors = this.editorsFor(classroomId);
+    // Co-authors come from collab_docs.editors (persisted by every store).
+    let editors: Awaited<ReturnType<CollabDocStore['editorsForClassroom']>> = [];
+    try {
+      editors = await this.deps.store.editorsForClassroom(classroomId);
+    } catch (err) {
+      console.error(`[collab] could not read editors for classroom ${classroomId}:`, err);
+    }
     await this.deps.checkpoints.trigger(
       {
         classroomId,
@@ -572,6 +552,21 @@ export class CollabRuntime {
     return connections.length;
   }
 
+  /** The doc was deleted: its loaded copy (if any) is never stored again. */
+  markDeleted(kind: CollabKind, docId: string): void {
+    const document = this.loadedDocument(kind, docId);
+    const entry = document ? this.loaded.get(document.name) : undefined;
+    if (entry) entry.deleted = true;
+  }
+
+  /** A stateless JSON message to every socket on the doc; the count reached. */
+  broadcast(kind: CollabKind, docId: string, message: CollabStatelessMessage): number {
+    const document = this.loadedDocument(kind, docId);
+    if (!document) return 0;
+    document.broadcastStateless(JSON.stringify(message));
+    return document.getConnections().length;
+  }
+
   /** Close every browser socket on the doc. Default 4409 `reload`. */
   closeSockets(
     kind: CollabKind,
@@ -619,7 +614,7 @@ export class CollabRuntime {
     actor: CollabActor,
     fn: (ctx: LiveEditContext, adapter: CollabAdapter) => T | Promise<T>,
     options: { external?: boolean } = {}
-  ): Promise<{ result: T; version: number }> {
+  ): Promise<{ result: T; version: number; epoch: number }> {
     const adapter = await this.adapter(kind);
     const located = await adapter.locate(docId);
     if (!located) throw new CollabHttpError(404, { error: 'not-found' });
@@ -666,6 +661,14 @@ export class CollabRuntime {
         transact: write => document.transact(() => write(document), { source: 'local', context }),
       };
       result = await fn(ctx, adapter);
+      const touched = (result as { touchedId?: unknown } | undefined)?.touchedId;
+      if (!options.external && typeof touched === 'string') {
+        this.showAgent(
+          document,
+          actor,
+          kind === 'deck' ? { slide: touched } : { blockId: touched }
+        );
+      }
     } finally {
       await connection.disconnect();
     }
@@ -673,7 +676,7 @@ export class CollabRuntime {
     // covers this edit even when a store was already running.
     await this.flush(kind, docId);
     const row = await this.deps.store.get(kind, docId);
-    return { result, version: row?.version ?? 0 };
+    return { result, version: row?.version ?? 0, epoch: row?.epoch ?? epoch };
   }
 
   /**
@@ -681,7 +684,11 @@ export class CollabRuntime {
    * One awareness client per (doc, actor), so concurrent agents don't clear
    * each other's presence.
    */
-  private showAgent(document: Document, actor: CollabActor): void {
+  private showAgent(
+    document: Document,
+    actor: CollabActor,
+    focus: { blockId?: string; slide?: string } = {}
+  ): void {
     const key = `${document.name}\u0000${actor.userId}`;
     let presence = this.agents.get(key);
     if (!presence) {
@@ -692,6 +699,8 @@ export class CollabRuntime {
     const { doc, awareness } = presence;
     awareness.setLocalState({
       user: { name: `${actor.name} (agent)`, color: userColor(actor.userId), agent: true },
+      // What the agent last touched: page `blockId`, deck `slide`.
+      ...focus,
     });
     applyAwarenessUpdate(
       document.awareness,

@@ -1,4 +1,7 @@
+import { ClassmojiService } from '@classmoji/services';
+
 import { createAdapterRegistry } from './adapters/registry.ts';
+import { createServiceAuditSink } from './audit.ts';
 import { createTaskCheckpointTrigger } from './checkpoint.ts';
 import { loadConfig } from './config.ts';
 import { createCollabServer } from './server.ts';
@@ -17,6 +20,7 @@ const runtime = createCollabServer({
     sessions: createSessionResolver(),
     adapters: createAdapterRegistry(),
     checkpoints: createTaskCheckpointTrigger(config),
+    audit: createServiceAuditSink(data => ClassmojiService.audit.create(data as never)),
   },
 });
 

@@ -9,13 +9,14 @@ import WebSocket from 'ws';
 import * as Y from 'yjs';
 import type { Role } from '@prisma/client';
 import { HocuspocusProvider, HocuspocusProviderWebsocket } from '@hocuspocus/provider';
-import type { CollabKind, ContentCheckpointPayload } from '@classmoji/collab';
+import type { CollabActor, CollabKind, ContentCheckpointPayload } from '@classmoji/collab';
 import { SCHEMA_VERSION } from '@classmoji/page-schema';
 
 import { createAdapterRegistry } from '../src/adapters/registry.ts';
 import { createPageAdapter, type PageRecord } from '../src/adapters/page.ts';
 import type { CollabAdapter } from '../src/adapters/types.ts';
 import type { CollabSession, SessionResolver } from '../src/auth.ts';
+import type { AuditEntry, AuditSink } from '../src/audit.ts';
 import type { CheckpointTrigger } from '../src/checkpoint.ts';
 import { loadConfig, type CollabConfig } from '../src/config.ts';
 import { createCollabServer, type CollabRuntime } from '../src/server.ts';
@@ -29,6 +30,13 @@ import type {
 export const ORIGIN = 'http://localhost:7110';
 export const SECRET = 'test-secret';
 export const CLASSROOM_ID = 'class-1';
+
+/** Merge by userId: first-seen order, newest name. */
+function mergeActors(current: CollabActor[], added: CollabActor[]): CollabActor[] {
+  const out = new Map(current.map(e => [e.userId, e]));
+  for (const e of added) out.set(e.userId, { userId: e.userId, name: e.name });
+  return [...out.values()];
+}
 
 // ─── collab_docs in memory ─────────────────────────────────────────────────
 
@@ -61,6 +69,9 @@ export class MemoryStore implements CollabDocStore {
         source_sha: seed.source_sha,
         pushed_commit: existing?.pushed_commit ?? null,
         dirty_since: existing?.dirty_since ?? null,
+        editors: existing?.editors ?? [],
+        last_checkpoint_at: existing?.last_checkpoint_at ?? null,
+        last_checkpoint_error: existing?.last_checkpoint_error ?? null,
       });
     }
     return (await this.get(seed.kind, seed.doc_id))!;
@@ -73,6 +84,7 @@ export class MemoryStore implements CollabDocStore {
     classroomId: string;
     schemaVersion: number;
     state: Uint8Array;
+    editors?: CollabActor[];
   }): Promise<StoredVersion | null> {
     this.storeCalls++;
     const key = this.key(args.kind, args.docId);
@@ -84,6 +96,7 @@ export class MemoryStore implements CollabDocStore {
           state: new Uint8Array(args.state),
           version: row.version + 1,
           dirty_since: row.dirty_since ?? new Date(),
+          editors: mergeActors(row.editors, args.editors ?? []),
         }
       : {
           kind: args.kind,
@@ -97,6 +110,9 @@ export class MemoryStore implements CollabDocStore {
           source_sha: null,
           pushed_commit: null,
           dirty_since: new Date(),
+          editors: mergeActors([], args.editors ?? []),
+          last_checkpoint_at: null,
+          last_checkpoint_error: null,
         };
     this.rows.set(key, next);
     return {
@@ -105,6 +121,23 @@ export class MemoryStore implements CollabDocStore {
       epoch: next.epoch,
       classroom_id: next.classroom_id,
     };
+  }
+
+  async addEditors(kind: CollabKind, docId: string, editors: CollabActor[]) {
+    const row = this.rows.get(this.key(kind, docId));
+    if (row) row.editors = mergeActors(row.editors, editors);
+  }
+
+  async editorsForClassroom(classroomId: string) {
+    return [...this.rows.values()]
+      .filter(
+        r => r.classroom_id === classroomId && r.version > r.pushed_version && r.editors.length
+      )
+      .map(r => ({ kind: r.kind, docId: r.doc_id, editors: r.editors }));
+  }
+
+  async delete(kind: CollabKind, docId: string) {
+    this.rows.delete(this.key(kind, docId));
   }
 
   async markReseed(kind: CollabKind, docId: string) {
@@ -235,6 +268,13 @@ export function pageAdapterFor(world: FakeWorld) {
 
 // ─── Checkpoints ───────────────────────────────────────────────────────────
 
+export class RecordingAudit implements AuditSink {
+  entries: AuditEntry[] = [];
+  async record(entry: AuditEntry) {
+    this.entries.push(entry);
+  }
+}
+
 export class RecordingCheckpoints implements CheckpointTrigger {
   calls: { payload: ContentCheckpointPayload; now: boolean }[] = [];
   async trigger(payload: ContentCheckpointPayload, options: { now: boolean }) {
@@ -249,6 +289,7 @@ export interface TestServer {
   store: MemoryStore;
   sessions: FakeSessions;
   checkpoints: RecordingCheckpoints;
+  audit: RecordingAudit;
   world: FakeWorld;
   config: CollabConfig;
   wsUrl: string;
@@ -257,12 +298,19 @@ export interface TestServer {
 }
 
 export async function startServer(
-  options: { storeDebounceMs?: number; deck?: CollabAdapter | null } = {}
+  options: {
+    storeDebounceMs?: number;
+    deck?: CollabAdapter | null;
+    /** Reuse a store (and world) — a restart. */
+    store?: MemoryStore;
+    world?: FakeWorld;
+  } = {}
 ): Promise<TestServer> {
-  const store = new MemoryStore();
+  const store = options.store ?? new MemoryStore();
+  const audit = new RecordingAudit();
   const sessions = new FakeSessions();
   const checkpoints = new RecordingCheckpoints();
-  const world = createWorld();
+  const world = options.world ?? createWorld();
   const config: CollabConfig = {
     ...loadConfig({
       NODE_ENV: 'test',
@@ -270,7 +318,7 @@ export async function startServer(
       COLLAB_INTERNAL_SECRET: SECRET,
     }),
     storeDebounceMs: options.storeDebounceMs ?? 30,
-    storeMaxDebounceMs: 200,
+    storeMaxDebounceMs: Math.max(200, (options.storeDebounceMs ?? 0) * 2),
     recheckIntervalMs: 60 * 60 * 1000, // tests call sweep() themselves
   };
   const runtime = createCollabServer({
@@ -282,6 +330,7 @@ export async function startServer(
       store,
       sessions,
       checkpoints,
+      audit,
       adapters: createAdapterRegistry({ page: pageAdapterFor(world), deck: options.deck ?? null }),
     },
   });
@@ -292,6 +341,7 @@ export async function startServer(
     store,
     sessions,
     checkpoints,
+    audit,
     world,
     config,
     wsUrl: `ws://127.0.0.1:${port}`,
@@ -306,6 +356,8 @@ export interface TestClient {
   socket: HocuspocusProviderWebsocket;
   authFailures: string[];
   closeCodes: number[];
+  /** Parsed stateless messages from the server. */
+  stateless: Record<string, unknown>[];
   synced: Promise<void>;
   destroy(): void;
 }
@@ -329,6 +381,7 @@ export function connect(
   const doc = new Y.Doc();
   const authFailures: string[] = [];
   const closeCodes: number[] = [];
+  const stateless: Record<string, unknown>[] = [];
   const socket = new HocuspocusProviderWebsocket({
     url: server.wsUrl,
     WebSocketPolyfill: HeaderWebSocket,
@@ -349,6 +402,7 @@ export function connect(
       if (state) resolveSynced();
     },
     onClose: ({ event }) => closeCodes.push(event.code),
+    onStateless: ({ payload }) => stateless.push(JSON.parse(payload) as Record<string, unknown>),
   });
   // A provider handed its own websocketProvider is not attached automatically.
   provider.attach();
@@ -358,6 +412,7 @@ export function connect(
     socket,
     authFailures,
     closeCodes,
+    stateless,
     synced,
     destroy() {
       provider.destroy();

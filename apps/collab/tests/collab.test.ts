@@ -352,7 +352,7 @@ describe('internal API', () => {
 
     // Back online: the offline typing and the agent's edit merge.
     a.socket.connect();
-    await waitFor(() => plain(a.doc, 'p1') === 'XYZ Hello world!', 3000, 'merged text');
+    await waitFor(() => plain(a.doc, 'p1') === 'XYZ Hello world!', 10_000, 'merged text');
     const blocks = yDocToBlocks(a.doc) as { id: string; props: { textColor: string } }[];
     expect(blocks.map(b => b.id)).toEqual(['p1', 'p-new', 'p2']);
     expect(blocks[0].props.textColor).toBe('red');

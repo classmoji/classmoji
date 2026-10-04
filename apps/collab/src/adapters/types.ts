@@ -51,8 +51,24 @@ export type AuthorizeRefusal =
   | 'collab-disabled'; // classroom.collab_enabled is false
 
 export type AuthorizeResult =
-  | { ok: true; classroomId: string }
-  | { ok: false; reason: AuthorizeRefusal; message?: string };
+  | {
+      ok: true;
+      classroomId: string;
+      /** The user's role there (for the audit log). */
+      role?: string;
+    }
+  | {
+      ok: false;
+      reason: AuthorizeRefusal;
+      message?: string;
+      /**
+       * Set when the user IS a member of the doc's classroom: the refusal is
+       * audited as ACCESS_DENIED (non-members cannot be, the audit row needs a
+       * classroom role).
+       */
+      classroomId?: string;
+      role?: string;
+    };
 
 // ─── Seeding ───────────────────────────────────────────────────────────────
 
@@ -124,6 +140,14 @@ export interface ExternalMergeResult {
   noop?: boolean;
 }
 
+/** What `applyOps` may report back. */
+export interface ApplyOpsResult {
+  /** Ids the server minted or kept for inserted items, in op order. */
+  insertedIds?: string[];
+  /** The last item the ops touched (agent presence: page blockId / deck slide). */
+  touchedId?: string;
+}
+
 /** `POST /internal/:kind/:id/merge-preview`. */
 export interface MergePreviewArgs<K extends CollabKind = CollabKind> {
   /** The content the preview started from (snapshot shape). */
@@ -180,10 +204,21 @@ export interface CollabAdapter<K extends CollabKind = CollabKind, Op = unknown> 
   parseOps(raw: unknown): Op[];
 
   /**
+   * Guarded ops (`expect`): the ids whose CURRENT item differs from the
+   * expected `itemHash` (`@classmoji/collab/hash`) — a missing item counts as
+   * changed. The server calls it INSIDE the transaction the ops then run in
+   * (first thing in the adapter's first `ctx.transact`), so a non-empty answer
+   * means 409 `block-changed` with nothing applied. Hash the same normalized
+   * form `/snapshot` returns (page: a yDocToBlocks block; deck: the slide
+   * entry). An adapter without it refuses guarded ops (501).
+   */
+  checkExpect?(doc: Y.Doc, expect: Record<string, string>): string[];
+
+  /**
    * Apply ops id-aware through `ctx.transact`. Deck: an op on a slide a human
    * holds throws CollabHttpError(409, { error: 'slide-locked', slideId, holder }).
    */
-  applyOps(ctx: LiveEditContext, ops: Op[]): void | Promise<void>;
+  applyOps(ctx: LiveEditContext, ops: Op[]): void | ApplyOpsResult | Promise<void | ApplyOpsResult>;
 
   /**
    * An outside push changed this doc's content file while the doc is live or

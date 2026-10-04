@@ -14,9 +14,11 @@ import { canEditPages, findClassroomRole } from '@classmoji/auth/classroom-role'
 import { SCHEMA_VERSION, parsePageContent, type PageCoverImage } from '@classmoji/page-schema';
 import { pageContentToYDoc, yDocToBlocks } from '@classmoji/page-schema/server';
 import type { PageSnapshotContent } from '@classmoji/collab';
+import { itemHash } from '@classmoji/collab/hash';
 
 import {
   CollabHttpError,
+  type ApplyOpsResult,
   type AuthorizeResult,
   type CollabAdapter,
   type ExternalMergeResult,
@@ -46,6 +48,8 @@ export interface PageRecord {
   title: string;
   content_path: string;
   classroom_id: string;
+  header_image_url?: string | null;
+  header_image_position?: number | null;
   classroom: {
     id: string;
     status: string;
@@ -93,6 +97,13 @@ export const defaultPageAdapterDeps: PageAdapterDeps = {
 
 function blocksOf(doc: Y.Doc): PageBlock[] {
   return yDocToBlocks(doc) as PageBlock[];
+}
+
+/** The cover a legacy page keeps only in its DB columns (the pages loader's fallback). */
+function legacyCover(page: PageRecord): PageCoverImage | null {
+  return page.header_image_url
+    ? { url: page.header_image_url, position: page.header_image_position ?? 50 }
+    : null;
 }
 
 function arrayOf(value: unknown): unknown[] {
@@ -178,13 +189,16 @@ export function createPageAdapter(
     async authorize({ userId, docId }): Promise<AuthorizeResult> {
       const page = await deps.findPage(docId);
       if (!page) return { ok: false, reason: 'not-found' };
-      if (!page.classroom.collab_enabled) return { ok: false, reason: 'collab-disabled' };
       const role = await deps.findRole(userId, page.classroom_id);
-      if (!canEditPages(role)) return { ok: false, reason: 'forbidden' };
+      // A member's refusal is audited (classroomId + role); a non-member's isn't.
+      const member = role ? { classroomId: page.classroom_id, role } : {};
+      if (!page.classroom.collab_enabled)
+        return { ok: false, reason: 'collab-disabled', ...member };
+      if (!canEditPages(role)) return { ok: false, reason: 'forbidden', ...member };
       if (!canMutateClassroom({ status: page.classroom.status as never, role: role! })) {
-        return { ok: false, reason: 'classroom-locked' };
+        return { ok: false, reason: 'classroom-locked', ...member };
       }
-      return { ok: true, classroomId: page.classroom_id };
+      return { ok: true, classroomId: page.classroom_id, role: role! };
     },
 
     async locate(docId) {
@@ -197,10 +211,16 @@ export function createPageAdapter(
       const loaded = await deps.loadContent(page, {});
       if (loaded.format === 'none') {
         // How the pages app creates a page: no files until the first save.
-        const doc = pageContentToYDoc({ blocks: pageContent.blankPageBlocks() });
+        const doc = pageContentToYDoc({
+          blocks: pageContent.blankPageBlocks(),
+          coverImage: legacyCover(page),
+        });
         return { doc, sourceSha: null, classroomId: page.classroom_id };
       }
-      const { blocks, cover } = requireJson(loaded, `page ${docId}`);
+      const { blocks, cover: jsonCover } = requireJson(loaded, `page ${docId}`);
+      // Legacy pages keep the cover only in the DB columns: seed it the way
+      // the pages loader falls back today, so it doesn't vanish from the editor.
+      const cover = jsonCover ?? legacyCover(page);
       // Deterministic ids for any id-less block — the ids MCP derives on read,
       // so an agent's ops name blocks the live doc actually has — and the
       // multi-column invariants restored, so the seed always opens.
@@ -237,22 +257,62 @@ export function createPageAdapter(
       return parsed.data;
     },
 
-    applyOps(ctx: LiveEditContext, ops) {
+    checkExpect(doc, expect) {
+      const byId = new Map<string, PageBlock>();
+      const index = (blocks: PageBlock[]) => {
+        for (const block of blocks) {
+          if (block?.id) byId.set(block.id, block);
+          if (Array.isArray(block?.children)) index(block.children);
+        }
+      };
+      index(blocksOf(doc));
+      return Object.entries(expect)
+        .filter(([id, hash]) => {
+          const block = byId.get(id);
+          return !block || itemHash(block) !== hash;
+        })
+        .map(([id]) => id);
+    },
+
+    applyOps(ctx: LiveEditContext, rawOps): ApplyOpsResult {
+      // Inserted blocks get their (deterministic) ids up front, so the ids
+      // the response reports are the ones the doc ends up with.
+      const ops = rawOps.map(op =>
+        op.op === 'insert' ? { ...op, blocks: pageContent.ensureBlockIds(op.blocks) } : op
+      );
+      const result: ApplyOpsResult = {};
       ctx.transact(doc => {
         const current = blocksOf(doc);
         assertReadable(doc, current);
+        const remints = new Map<string, string>();
         let next: PageBlock[];
         try {
-          next = pageContent.ensureBlockIds(pageContent.applyBlockOps(current, ops)) as PageBlock[];
+          next = pageContent.ensureBlockIds(
+            pageContent.applyBlockOps(current, ops, {
+              onIdRemint: ({ op_index, from, to }) => remints.set(`${op_index}:${from}`, to),
+            })
+          ) as PageBlock[];
         } catch (err) {
           asHttpError(err);
         }
+        const insertedIds: string[] = [];
+        ops.forEach((op, i) => {
+          if (op.op !== 'insert') return;
+          for (const block of op.blocks as PageBlock[]) {
+            if (block.id) insertedIds.push(remints.get(`${i}:${block.id}`) ?? block.id);
+          }
+        });
+        if (insertedIds.length > 0) result.insertedIds = insertedIds;
+        const last = ops.at(-1);
+        result.touchedId =
+          last?.op === 'insert' ? insertedIds.at(-1) : last && 'id' in last ? last.id : undefined;
         next = nonEmpty(next);
         // Every node is built once BEFORE the first write: a bad block is a
         // 422 with nothing written, never half a reconcile.
         assertConvertible(next, 'ops');
         reconcileBlocks(doc, current, next);
       });
+      return result;
     },
 
     setCover(ctx, coverImage) {

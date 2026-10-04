@@ -16,6 +16,7 @@ import {
 } from '@classmoji/collab';
 
 import type { AdapterRegistry } from './adapters/registry.ts';
+import { recordAudit, type AuditSink } from './audit.ts';
 import type { CollabConfig } from './config.ts';
 import { currentEpoch, type CollabDocStore } from './store/types.ts';
 
@@ -70,6 +71,7 @@ export interface AuthDeps {
   sessions: SessionResolver;
   store: Pick<CollabDocStore, 'get'>;
   adapters: AdapterRegistry;
+  audit?: AuditSink;
 }
 
 function parseToken(token: string): { schemaVersion: number } | null {
@@ -134,6 +136,17 @@ async function authenticateOrRefuse(
   if (!session) throw new CollabAuthError('forbidden', 'no session');
 
   const access = await adapter.authorize({ userId: session.userId, docId: room.id });
+  if (!access.ok && access.classroomId && access.role) {
+    recordAudit(deps.audit, {
+      userId: session.userId,
+      classroomId: access.classroomId,
+      role: access.role,
+      action: 'ACCESS_DENIED',
+      resourceType: `collab_${room.kind}`,
+      resourceId: room.id,
+      data: { reason: access.reason },
+    });
+  }
   if (!access.ok) {
     throw new CollabAuthError('forbidden', `${access.reason} for user ${session.userId}`);
   }
@@ -153,6 +166,7 @@ async function authenticateOrRefuse(
     classroomId: access.classroomId,
     kind: room.kind,
     docId: room.id,
+    ...(access.role ? { role: access.role } : {}),
   };
 }
 

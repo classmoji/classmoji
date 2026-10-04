@@ -1,4 +1,4 @@
-import type { CollabKind } from '@classmoji/collab';
+import type { CollabActor, CheckpointDocEditors, CollabKind } from '@classmoji/collab';
 
 /**
  * One `collab_docs` row (Prisma `CollabDoc`). The live Yjs state of a page or
@@ -22,6 +22,10 @@ export interface CollabDocRow {
   source_sha: string | null;
   pushed_commit: string | null;
   dirty_since: Date | null;
+  /** Co-authors since the last push (merged by stores; trimmed by the worker). */
+  editors: CollabActor[];
+  last_checkpoint_at: Date | null;
+  last_checkpoint_error: string | null;
 }
 
 export interface NewCollabDoc {
@@ -68,7 +72,21 @@ export interface CollabDocStore {
     classroomId: string;
     schemaVersion: number;
     state: Uint8Array;
+    /** Editors since the previous store, merged into `editors` (by userId). */
+    editors?: CollabActor[];
   }): Promise<StoredVersion | null>;
+
+  /** Merge editors into an existing row's `editors` (by userId; latest name wins). */
+  addEditors(kind: CollabKind, docId: string, editors: CollabActor[]): Promise<void>;
+
+  /**
+   * Co-authors of every DIRTY doc of a classroom (version > pushed_version),
+   * for the checkpoint payload.
+   */
+  editorsForClassroom(classroomId: string): Promise<CheckpointDocEditors[]>;
+
+  /** Delete the row (the doc itself was deleted). */
+  delete(kind: CollabKind, docId: string): Promise<void>;
 
   /**
    * Turn a CLEAN row (`version = pushed_version`) into a reseed marker:

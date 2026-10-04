@@ -35,7 +35,7 @@ import {
 import { CollabAuthError } from './auth.ts';
 import { CollabHttpError } from './adapters/types.ts';
 import type { CollabRuntime } from './server.ts';
-import { currentEpoch, isReseedMarker } from './store/types.ts';
+import { currentEpoch, isReseedMarker, type CollabDocRow } from './store/types.ts';
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
 
@@ -103,7 +103,8 @@ function requireCover(value: unknown): PageCoverImage | null {
 
 type Route =
   | { scope: 'doc'; kind: CollabKind; id: string; action: string }
-  | { scope: 'classroom'; id: string; action: string };
+  | { scope: 'classroom'; id: string; action: string }
+  | { scope: 'global'; action: string };
 
 const DOC_ACTIONS: Record<string, 'GET' | 'POST'> = {
   snapshot: 'GET',
@@ -113,12 +114,15 @@ const DOC_ACTIONS: Record<string, 'GET' | 'POST'> = {
   external: 'POST',
   checkpoint: 'POST',
   close: 'POST',
+  'meta-changed': 'POST',
 };
 const CLASSROOM_ACTIONS: Record<string, 'GET' | 'POST'> = { flag: 'POST' };
+const GLOBAL_ACTIONS: Record<string, 'GET' | 'POST'> = { 'checkpoint-result': 'POST' };
 
 function parseRoute(pathname: string): Route | null {
   // /internal/:kind/:id/:action  |  /internal/classroom/:id/:action
   const parts = pathname.split('/').filter(Boolean);
+  if (parts.length === 2 && parts[0] === 'internal') return { scope: 'global', action: parts[1] };
   if (parts.length !== 4 || parts[0] !== 'internal') return null;
   const [, scope, rawId, action] = parts;
   let id: string;
@@ -165,7 +169,13 @@ export async function handleInternal(
     if (!route) return send(response, 404, { error: 'not-found' });
 
     const method = request.method ?? 'GET';
-    const allowed = (route.scope === 'doc' ? DOC_ACTIONS : CLASSROOM_ACTIONS)[route.action];
+    const allowed = (
+      route.scope === 'doc'
+        ? DOC_ACTIONS
+        : route.scope === 'classroom'
+          ? CLASSROOM_ACTIONS
+          : GLOBAL_ACTIONS
+    )[route.action];
     if (!allowed) return send(response, 404, { error: 'not-found' });
     if (method !== allowed) {
       response.setHeader('Allow', allowed);
@@ -176,7 +186,9 @@ export async function handleInternal(
     const result =
       route.scope === 'doc'
         ? await dispatch(route, body, runtime)
-        : await dispatchClassroom(route, body, runtime);
+        : route.scope === 'classroom'
+          ? await dispatchClassroom(route, body, runtime)
+          : await checkpointResult(body, runtime);
     return send(response, 200, result);
   } catch (err) {
     if (err instanceof CollabHttpError) return send(response, err.status, err.body);
@@ -219,10 +231,48 @@ async function dispatch(
       const actor = requireActor(body.actor);
       const adapter = await runtime.adapter(kind);
       const ops = adapter.parseOps(body.ops);
-      const { version } = await runtime.withLiveEdit(kind, id, actor, ctx =>
-        adapter.applyOps(ctx, ops)
-      );
-      return { version };
+      const expect = requireExpect(body.expect);
+      if (expect && !adapter.checkExpect) {
+        throw new CollabHttpError(501, { error: 'expect-unsupported', kind });
+      }
+      const { result, version, epoch } = await runtime.withLiveEdit(kind, id, actor, ctx => {
+        if (!expect) return adapter.applyOps(ctx, ops);
+        // The guard runs INSIDE the transaction the ops run in, before any
+        // write: a changed item means 409 with nothing applied.
+        let checked = false;
+        const guarded = {
+          ...ctx,
+          transact: (write: (doc: Y.Doc) => void) =>
+            ctx.transact(doc => {
+              if (!checked) {
+                checked = true;
+                const changedIds = adapter.checkExpect!(doc, expect);
+                if (changedIds.length > 0) {
+                  throw new CollabHttpError(409, { error: 'block-changed', changedIds });
+                }
+              }
+              write(doc);
+            }),
+        };
+        return adapter.applyOps(guarded, ops);
+      });
+      const insertedIds = result && 'insertedIds' in result ? result.insertedIds : undefined;
+      return { epoch, version, ...(insertedIds ? { insertedIds } : {}) };
+    }
+
+    case 'meta-changed': {
+      const message =
+        kind === 'page'
+          ? {
+              type: 'page-meta' as const,
+              ...(typeof body.title === 'string' ? { title: body.title } : {}),
+              ...(typeof body.width === 'number' ? { width: body.width } : {}),
+            }
+          : {
+              type: 'deck-meta' as const,
+              ...(typeof body.title === 'string' ? { title: body.title } : {}),
+            };
+      return { broadcast: runtime.broadcast(kind, id, message) };
     }
 
     case 'cover': {
@@ -276,11 +326,13 @@ async function dispatch(
       return external(kind, id, body, runtime);
 
     case 'checkpoint': {
-      requireActor(body.actor);
+      const actor = requireActor(body.actor);
       const adapter = await runtime.adapter(kind);
       const located = await adapter.locate(id);
       if (!located) throw new CollabHttpError(404, { error: 'not-found' });
       await runtime.flush(kind, id);
+      // Whoever saves the version co-authors it.
+      await runtime.deps.store.addEditors(kind, id, [actor]);
       const message =
         typeof body.message === 'string' && body.message.trim() ? body.message.trim() : undefined;
       await runtime.triggerCheckpoint(located.classroomId, 'save-version', true, message);
@@ -290,6 +342,14 @@ async function dispatch(
 
     case 'close': {
       const reason = typeof body.reason === 'string' && body.reason ? body.reason : 'closed';
+      if (reason === 'deleted') {
+        // The doc is gone: nothing to store or push. Stop storing it, close
+        // the room, drop the buffer.
+        runtime.markDeleted(kind, id);
+        const closed = runtime.closeSockets(kind, id);
+        await runtime.deps.store.delete(kind, id);
+        return { closed };
+      }
       const adapter = await runtime.adapter(kind);
       const located = await adapter.locate(id);
       await runtime.flush(kind, id);
@@ -329,6 +389,7 @@ async function snapshot(kind: CollabKind, id: string, runtime: CollabRuntime) {
           version: row?.version ?? 0,
           live: runtime.isLive(kind, id),
           content,
+          ...checkpointFields(row),
         };
       }
     }
@@ -348,7 +409,13 @@ async function snapshot(kind: CollabKind, id: string, runtime: CollabRuntime) {
     doc = (await adapter.seed({ docId: id })).doc;
   }
   try {
-    return { epoch, version, live: false, content: adapter.snapshot(doc) };
+    return {
+      epoch,
+      version,
+      live: false,
+      content: adapter.snapshot(doc),
+      ...checkpointFields(row),
+    };
   } finally {
     doc.destroy();
   }
@@ -380,10 +447,6 @@ async function external(
   const merge = async () => {
     // Pages: page.ts mergeExternal (base at `before`, else source_sha; no
     // base → 409 no-merge-base; theirs == source_sha → noop).
-    // TODO(slice D, deck.ts): use `args.before` as the merge base when it is
-    // readable, return `{ noop: true }` when deck.json at `sha` is the blob at
-    // row.source_sha, and never fall back to `base ?? ours` (that takes
-    // theirs wholesale) — refuse with 409 no-merge-base instead.
     const { result, version } = await runtime.withLiveEdit(
       kind,
       id,
@@ -411,4 +474,50 @@ async function external(
   const marked = await runtime.deps.store.markReseed(kind, id);
   if (!marked) return merge();
   return { action: 'reseeded', epoch: marked.epoch };
+}
+
+function checkpointFields(row: CollabDocRow | null) {
+  return {
+    lastCheckpointAt: row?.last_checkpoint_at ? row.last_checkpoint_at.toISOString() : null,
+    lastCheckpointError: row?.last_checkpoint_error ?? null,
+  };
+}
+
+function requireExpect(value: unknown): Record<string, string> | null {
+  if (value == null) return null;
+  if (
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    !Object.values(value).every(v => typeof v === 'string')
+  ) {
+    throw new CollabHttpError(400, {
+      error: 'invalid-expect',
+      message: 'expect is { [id]: itemHash }',
+    });
+  }
+  const entries = Object.entries(value as Record<string, string>);
+  return entries.length > 0 ? Object.fromEntries(entries) : null;
+}
+
+/**
+ * `POST /internal/checkpoint-result` from the worker after each run: stores
+ * nothing (the worker wrote last_checkpoint_at/_error) and tells every listed
+ * live room `{ type: 'checkpoint', commit?, at, error? }`.
+ */
+async function checkpointResult(body: Record<string, unknown>, runtime: CollabRuntime) {
+  if (!Array.isArray(body.docs)) {
+    throw new CollabHttpError(400, { error: 'invalid-docs', message: 'docs must be an array' });
+  }
+  let broadcast = 0;
+  for (const entry of body.docs as Record<string, unknown>[]) {
+    if (!entry || !isCollabKind(entry.kind) || typeof entry.id !== 'string') continue;
+    const at = typeof entry.at === 'string' ? entry.at : new Date().toISOString();
+    broadcast += runtime.broadcast(entry.kind, entry.id, {
+      type: 'checkpoint',
+      at,
+      ...(typeof entry.commit === 'string' ? { commit: entry.commit } : {}),
+      ...(typeof entry.error === 'string' ? { error: entry.error } : {}),
+    });
+  }
+  return { broadcast };
 }
