@@ -39,6 +39,7 @@ import {
 } from '@classmoji/services/render-contract';
 import { verifyDocViewToken } from '@classmoji/services/render-token';
 import { CollabRequestError } from './collab/env.server.ts';
+import { FRAME_SETTLE_JS } from './frameSettle.ts';
 import { fetchLiveDeck, liveEditingEnv } from './collab/collab.server.ts';
 import {
   deckDeliveryContext,
@@ -120,7 +121,7 @@ function jsonForScript(value: unknown): string {
  *
  *   window.__cmView.show(id) → Promise<SlideMeasure | {error}>
  *     go to the slide (a stack id shows its first child), reveal every
- *     fragment, wait for its images (capped), lay out, and measure.
+ *     fragment, wait for its images and frames (capped), lay out, and measure.
  *
  * Measurement is in the deck's LOGICAL px: element and text-node rects
  * relative to `.slides`, divided by the rendered scale. A box that scrolls or
@@ -143,6 +144,7 @@ export function viewScript(): string {
 <script>
 (function () {
   var META = JSON.parse(document.getElementById(${JSON.stringify(VIEW_META_ELEMENT_ID)}).textContent);
+${FRAME_SETTLE_JS}
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
   function frames() { return new Promise(function (r) { requestAnimationFrame(function () { requestAnimationFrame(r); }); }); }
   function describe(el, text) {
@@ -166,6 +168,8 @@ export function viewScript(): string {
       pending.push(new Promise(function (r) { var i = new Image(); i.onload = r; i.onerror = r; i.src = bg; }));
     }
     if (document.fonts && document.fonts.ready) pending.push(document.fonts.ready.catch(function () {}));
+    // html blocks and the embeds Reveal started on this slide.
+    pending.push(settleFrames(root, capMs));
     return Promise.race([Promise.all(pending), sleep(capMs)]);
   }
   function measure(target, entry) {
@@ -267,6 +271,9 @@ export function viewScript(): string {
     var idx = Reveal.getIndices(target);
     Reveal.slide(idx.h, idx.v || 0);
     target.querySelectorAll('.fragment').forEach(function (f) { f.classList.add('visible'); f.classList.remove('current-fragment'); });
+    // Reveal starts a slide's lazy embeds before the fragments above were
+    // shown; start them again so an embed in a fragment loads too.
+    if (Reveal.startEmbeddedContent) Reveal.startEmbeddedContent();
     return settleImages(target, 4000).then(function () {
       Reveal.layout();
       return frames();
