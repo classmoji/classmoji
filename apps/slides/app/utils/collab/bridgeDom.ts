@@ -110,6 +110,7 @@ export function serializeSection(el: HTMLElement): SerializedSection {
   const holder = el.ownerDocument.createElement('div');
   const clone = el.cloneNode(true) as HTMLElement;
   holder.appendChild(clone);
+  restoreInertMarkup(holder);
   undoRevealLazyLoad(holder);
   cleanupEditorContainer(holder);
 
@@ -165,16 +166,24 @@ export function applySectionAttrs(
     if (keepAlways.has(name) || RUNTIME_SECTION_ATTRS.has(name)) continue;
     if (name === 'hidden' || name === 'aria-hidden') continue;
     if (name === 'class' || name === 'style') continue;
-    if (!(attr.name in attrs)) el.removeAttribute(attr.name);
+    const authored = name.startsWith(INERT_PREFIX)
+      ? attr.name.slice(INERT_PREFIX.length)
+      : attr.name;
+    if (!(authored in attrs)) el.removeAttribute(attr.name);
   }
 
   for (const [name, value] of Object.entries(attrs)) {
     const lower = name.toLowerCase();
     if (lower === 'class' || lower === 'style') continue;
     if (!isRenderableAttr(name, value)) {
+      // Kept (under the inert name) so it is written back as authored.
       if (el.hasAttribute(name)) el.removeAttribute(name);
+      if (el.getAttribute(`${INERT_PREFIX}${name}`) !== value) {
+        el.setAttribute(`${INERT_PREFIX}${name}`, value);
+      }
       continue;
     }
+    if (el.hasAttribute(`${INERT_PREFIX}${name}`)) el.removeAttribute(`${INERT_PREFIX}${name}`);
     if (el.getAttribute(name) !== value) el.setAttribute(name, value);
   }
 
@@ -213,19 +222,55 @@ export function applySectionAttrs(
 }
 
 /**
- * Drop event-handler attributes and `javascript:` URLs from every element
- * under (and including) `root` — at display time only; nothing stored changes.
- * Iframe sandboxing is left as authored.
+ * Make event-handler attributes and `javascript:` URLs inert on every element
+ * under (and including) `root`, for display: each is renamed in place to
+ * `data-cm-inert-<name>`. Nothing stored changes — `restoreInertMarkup`
+ * (run by serialization) puts the authored attributes back. Iframe
+ * sandboxing is left as authored.
  */
 export function stripUnsafeMarkup(root: Element | DocumentFragment): void {
-  const elements: Element[] = [];
-  if ((root as Element).attributes) elements.push(root as Element);
-  elements.push(...Array.from(root.querySelectorAll('*')));
-  for (const el of elements) {
-    for (const attr of Array.from(el.attributes)) {
-      if (!isRenderableAttr(attr.name, attr.value)) el.removeAttribute(attr.name);
-    }
+  for (const el of elementsUnder(root)) {
+    const attrs = Array.from(el.attributes);
+    if (attrs.every(attr => isRenderableAttr(attr.name, attr.value))) continue;
+    // Renamed in place (same position), so putting them back restores the
+    // element's markup byte for byte.
+    rebuildAttributes(el, attrs, name => {
+      const attr = attrs.find(a => a.name === name) as Attr;
+      return isRenderableAttr(attr.name, attr.value) ? name : `${INERT_PREFIX}${name}`;
+    });
   }
+}
+
+/**
+ * Undo `stripUnsafeMarkup`: every `data-cm-inert-*` attribute gets its
+ * original name back, in place. Serialization runs this first, so what the
+ * editor writes is the authored markup — never the display-time version.
+ */
+export function restoreInertMarkup(root: Element | DocumentFragment): void {
+  for (const el of elementsUnder(root)) {
+    const attrs = Array.from(el.attributes);
+    if (!attrs.some(attr => attr.name.startsWith(INERT_PREFIX))) continue;
+    rebuildAttributes(el, attrs, name =>
+      name.startsWith(INERT_PREFIX) ? name.slice(INERT_PREFIX.length) : name
+    );
+  }
+}
+
+/** Prefix of an attribute the editor neutralized for display. */
+export const INERT_PREFIX = 'data-cm-inert-';
+
+function elementsUnder(root: Element | DocumentFragment): Element[] {
+  const out: Element[] = [];
+  if ((root as Element).attributes) out.push(root as Element);
+  out.push(...Array.from(root.querySelectorAll('*')));
+  return out;
+}
+
+/** Re-set every attribute, in order, under `rename(name)`. */
+function rebuildAttributes(el: Element, attrs: Attr[], rename: (name: string) => string): void {
+  const entries = attrs.map(attr => [rename(attr.name), attr.value] as const);
+  for (const attr of attrs) el.removeAttribute(attr.name);
+  for (const [name, value] of entries) el.setAttribute(name, value);
 }
 
 /** `html` with unsafe markup stripped (for innerHTML). */

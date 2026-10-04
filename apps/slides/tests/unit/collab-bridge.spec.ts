@@ -569,7 +569,7 @@ test.describe('live deck bridge', () => {
     t.bridge.destroy();
   });
 
-  test('display drops event handlers and script URLs; the stored html is untouched', async () => {
+  test('display makes handlers and script URLs inert; the stored html is untouched', async () => {
     const t = setup();
     const stored =
       '<p onclick="x()">hi</p><a href=" JavaScript:alert(1)">l</a><img src="/a.png" onerror="y()">';
@@ -577,17 +577,47 @@ test.describe('live deck bridge', () => {
     const attrs = (deckSlides(t.remote).get('aaaa0001') as Y.Map<unknown>).get(
       'attrs'
     ) as Y.Map<string>;
-    attrs.set('onmouseover', 'z()');
     attrs.set('data-background-iframe', 'javascript:alert(2)');
     await tick();
     const el = t.section('aaaa0001');
-    expect(el.innerHTML).not.toMatch(/onclick|onerror|javascript/i);
+    expect(el.querySelector('[onclick], [onerror]')).toBeNull();
+    expect(el.querySelector('a')?.hasAttribute('href')).toBe(false);
     expect(el.querySelector('img')?.getAttribute('src')).toBe('/a.png');
-    expect(el.hasAttribute('onmouseover')).toBe(false);
     expect(el.hasAttribute('data-background-iframe')).toBe(false);
     t.bridge.flushLocal();
     expect(t.session.pending).toBe(0);
     expect(t.remoteHtml('aaaa0001')).toBe(stored);
+    t.bridge.destroy();
+  });
+
+  test('editing other text on such a slide writes the handlers and links back as authored', async () => {
+    const t = setup();
+    const button = '<button type="button" onclick="reveal()" class="b">Show</button>';
+    const link = '<a href="javascript:void(go(1))" title="t">Go</a>';
+    (deckSlides(t.remote).get('aaaa0002') as Y.Map<unknown>).set(
+      'html',
+      `<h2>Two</h2>${button}${link}`
+    );
+    const attrs = (deckSlides(t.remote).get('aaaa0002') as Y.Map<unknown>).get(
+      'attrs'
+    ) as Y.Map<string>;
+    attrs.set('data-background-iframe', 'javascript:x');
+    t.setCurrent('aaaa0002');
+    await tick();
+    expect(t.section('aaaa0002').querySelector('[onclick]')).toBeNull();
+    // Edit the heading only.
+    (t.section('aaaa0002').querySelector('h2') as HTMLElement).textContent = 'Two, edited';
+    t.section('aaaa0002').setAttribute('data-transition', 'zoom');
+    t.bridge.flushLocal();
+    t.session.ack();
+    t.session.ack();
+    expect(t.remoteHtml('aaaa0002')).toBe(`<h2>Two, edited</h2>${button}${link}`);
+    const stored = (deckSlides(t.remote).get('aaaa0002') as Y.Map<unknown>).get(
+      'attrs'
+    ) as Y.Map<string>;
+    expect(stored.get('data-background-iframe')).toBe('javascript:x');
+    expect(stored.get('data-transition')).toBe('zoom');
+    expect([...stored.keys()].some(k => k.startsWith('data-cm-inert'))).toBe(false);
     t.bridge.destroy();
   });
 
