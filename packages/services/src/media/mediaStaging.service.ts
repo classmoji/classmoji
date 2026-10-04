@@ -12,9 +12,9 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { tasks } from '@trigger.dev/sdk';
 import { randomUUID } from 'node:crypto';
 import getPrisma from '@classmoji/database';
-import { REPO_REST_MAX_BYTES } from '@classmoji/utils';
+import { REPO_REST_MAX_BYTES, formatMegabytes } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
-import { stableFilename } from '../content/utils/validateFile.ts';
+import { stableFilename, validateFile } from '../content/utils/validateFile.ts';
 import { recordContentAsset } from '../classmoji/contentAssets.service.ts';
 import { uploadFileTypes } from '../classmoji/contentDelivery.service.ts';
 import { uploadPageAsset, type PageWithContentRepo } from '../classmoji/pageContent.service.ts';
@@ -47,6 +47,7 @@ import {
   type CapabilityClassroom,
 } from './uploadCapability.ts';
 import { kindOfFilename, storageTargetFor } from './storageRouter.ts';
+import { splitStagePath, stageFilename } from './stageFolder.ts';
 
 /**
  * Agent uploads: bytes that reach a page or a deck without passing through the
@@ -163,6 +164,27 @@ async function routeAgentFile(
   sizeBytes: number
 ): Promise<'repo' | 'media'> {
   const capability = await uploadCapabilityFor(classroom);
+  const { folder, name } = splitStagePath(filename);
+  if (folder !== null) {
+    // A file in a deck folder is found by its relative path next to its
+    // siblings, so it goes to the course repository or nowhere — never media.
+    if (sizeBytes > capability.repoMaxBytes) {
+      throw new MediaError(
+        'STORAGE_REFUSED',
+        'Files in a deck folder are stored in the course repository, which accepts files up ' +
+          `to ${formatMegabytes(capability.repoMaxBytes)}; this one is larger.`
+      );
+    }
+    const check = validateFile({
+      filename: name,
+      size: sizeBytes,
+      fileTypes: capability.repoFileTypes,
+    });
+    if (!check.valid) {
+      throw new MediaError('STORAGE_REFUSED', check.error ?? 'This file type cannot be stored.');
+    }
+    return 'repo';
+  }
   const target = storageTargetFor(capability, { name: filename, size: sizeBytes });
   if (target.kind === 'refused') throw new MediaError('STORAGE_REFUSED', target.message);
   return target.kind;
@@ -287,13 +309,16 @@ async function insertStagingRow(args: {
 export async function startStagedUpload({
   classroom,
   userId,
-  filename,
+  filename: name,
+  folder,
   sizeBytes,
   target,
 }: {
   classroom: CapabilityClassroom;
   userId: string;
   filename: string;
+  /** A slide deck's subfolder for the file (`games/minions`); see stageFolder.ts. */
+  folder?: string | null;
   sizeBytes: number;
   target: StageTarget;
 }): Promise<{
@@ -312,6 +337,7 @@ export async function startStagedUpload({
     throw new MediaError('FILE_TOO_LARGE', 'This file is larger than the 2 GB limit for one file.');
   }
 
+  const filename = stageFilename(name, folder, target.type);
   const destination = await routeAgentFile(classroom, filename, sizeBytes);
   const mediaId = randomUUID();
   const key = stageKey(classroom.id, mediaId);
@@ -409,23 +435,27 @@ export async function startUrlImport({
   userId,
   url,
   filename,
+  folder,
   target,
 }: {
   classroom: CapabilityClassroom;
   userId: string;
   url: string;
   filename?: string | null;
+  /** A slide deck's subfolder for the file (`games/minions`); see stageFolder.ts. */
+  folder?: string | null;
   target: StageTarget;
 }): Promise<{ uploadId: string; filename: string; maxBytes: number }> {
   requireClient();
   const parsed = assertImportUrlShape(url);
-  const name = (filename ?? '').trim() || filenameFromUrl(parsed) || '';
-  if (!extensionOf(name)) {
+  const given = (filename ?? '').trim() || filenameFromUrl(parsed) || '';
+  if (!extensionOf(given)) {
     throw new MediaError(
       'STORAGE_REFUSED',
       'Pass a filename with an extension (e.g. lecture.mp4) — the URL does not end in one.'
     );
   }
+  const name = stageFilename(given, folder, target.type);
 
   // A 1-byte probe: the type and name rules, before any fetch. The size rule is
   // the job's, on the real bytes.
@@ -838,7 +868,9 @@ async function readStagedObject(client: S3Client, bucket: string, key: string): 
  *             rule all come with it); the ref is what the editor would store;
  *   - slide → the deck's `images/` folder, the deck editor's own upload
  *             convention (`{content_path}/images`), with its asset-map row; the
- *             ref is the repo path.
+ *             ref is the repo path. A file staged into a deck folder goes to
+ *             `{content_path}/{folder}/{name}` under its own name, replacing
+ *             an older copy (`keepName`; see stageFolder.ts).
  *
  * Both store the file as `{sanitized-name}-{upload id's first 8}.{ext}`
  * (`stagedRepoName`) and write only if nothing is there yet: the job is retried,
@@ -877,19 +909,32 @@ async function commitToRepo(row: MediaRow, buffer: Buffer): Promise<string> {
     if (!classroom.git_organization || !classroom.content_repo) {
       throw new PlacementRefused('This class has no content repository to add the file to.');
     }
-    await assertRepoTarget(classroom as unknown as CapabilityClassroom, {
-      name: row.filename,
-      size: buffer.length,
-    });
+    const { folder, name } = splitStagePath(row.filename);
+    // A deck folder file was routed to the repository when it was staged
+    // (never media); ContentService.upload re-checks its type and size.
+    if (folder === null) {
+      await assertRepoTarget(classroom as unknown as CapabilityClassroom, {
+        name: row.filename,
+        size: buffer.length,
+      });
+    }
     const result = await ContentService.upload({
       gitOrganization: classroom.git_organization as never,
       repo: classroom.content_repo,
       file: buffer,
-      filename: row.filename,
-      folder: `${slide.content_path}/images`,
-      message: `Upload image for slides: ${slide.title}`,
+      filename: name,
       fileTypes: uploadFileTypes(classroom as never),
-      storedName,
+      ...(folder === null
+        ? {
+            folder: `${slide.content_path}/images`,
+            message: `Upload image for slides: ${slide.title}`,
+            storedName,
+          }
+        : {
+            folder: `${slide.content_path}/${folder}`,
+            message: `Upload ${folder}/${name} for slides: ${slide.title}`,
+            keepName: true,
+          }),
     });
     await recordContentAsset(row.classroom_id, {
       path: result.path,

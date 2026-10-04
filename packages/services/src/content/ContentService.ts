@@ -75,6 +75,9 @@ interface ErrorWithStatus {
  */
 const CONTENTS_PUT_MAX_BYTES = 1024 * 1024;
 
+/** A name `upload` may store verbatim (`keepName`): one plain path segment. */
+const KEPT_NAME = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}$/;
+
 const responseCache = new Map<string, CacheEntry>();
 const CACHE_TTL = 60 * 1000; // 60 seconds
 
@@ -1203,6 +1206,12 @@ export class ContentService {
    *   nothing is written and its `{ path, sha }` is returned. For a caller that
    *   may repeat the same upload (a retried placement job); `filename` is still
    *   what the type and size checks read.
+   * @param options.keepName - store the file under `filename` exactly (one
+   *   segment of letters, digits, `.`, `_`, `-`), replacing what is there —
+   *   for files that reference each other by name (a game's scripts and
+   *   sprites in a deck folder). A file already holding the same bytes is left
+   *   as it is and returned, so a retried placement commits nothing twice.
+   *   Exclusive with `storedName`.
    * @returns `{ path, sha, url }` — `url` is the raw.githubusercontent.com URL
    *   on `branch`.
    */
@@ -1217,6 +1226,7 @@ export class ContentService {
     message,
     fileTypes = 'allowlist',
     storedName,
+    keepName = false,
   }: {
     gitOrganization?: GitOrganizationRecord;
     orgLogin?: string;
@@ -1228,7 +1238,14 @@ export class ContentService {
     message?: string;
     fileTypes?: FileTypePolicy;
     storedName?: string;
+    keepName?: boolean;
   }): Promise<{ path: string; sha: string; url: string }> {
+    if (keepName && storedName !== undefined) {
+      throw new Error('ContentService.upload: keepName and storedName are exclusive');
+    }
+    if (keepName && !KEPT_NAME.test(filename)) {
+      throw new Error(`ContentService.upload: ${filename} cannot be kept as a file name`);
+    }
     // Validate before anything touches the network: a file that is too large or
     // of the wrong type costs no round trip to find out.
     const validation = validateFile({ filename, size: file.length, fileTypes });
@@ -1251,10 +1268,36 @@ export class ContentService {
     if (storedName !== undefined && !/^[a-z0-9-]+(\.[a-z0-9]+)?$/.test(storedName)) {
       throw new Error(`ContentService.upload: storedName is not a sanitized name (${storedName})`);
     }
-    const sanitizedFilename = storedName ?? sanitizeFilename(filename);
+    const sanitizedFilename = keepName ? filename : (storedName ?? sanitizeFilename(filename));
     const filePath = folder
       ? `${folder.replace(/\/$/, '')}/${sanitizedFilename}`
       : sanitizedFilename;
+
+    if (keepName) {
+      const existing = await this.getMeta({
+        gitOrganization: resolvedOrg,
+        repo,
+        path: filePath,
+        ref: branch,
+      });
+      if (existing?.sha === gitlab.gitBlobSha(file)) {
+        return {
+          path: filePath,
+          sha: existing.sha,
+          url: rawFileUrl(resolvedOrg, repo, branch, filePath),
+        };
+      }
+      // Blob → tree → commit writes whether or not the path exists (the
+      // Contents PUT would need the old sha), on Github and Gitlab alike.
+      return this.uploadLarge({
+        gitOrganization: resolvedOrg,
+        repo,
+        file,
+        filePath,
+        branch,
+        message: message || `Upload ${filePath}`,
+      });
+    }
 
     if (storedName !== undefined) {
       // Read at the branch itself (a ref-bearing read skips the cache), so a
