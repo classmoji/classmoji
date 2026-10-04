@@ -681,6 +681,20 @@ async function applyDeckLive(
   });
 }
 
+/**
+ * Where staff review a deck's preview: the slides app renders the preview
+ * branch at `/<slideId>?preview=1` with the changed slides outlined.
+ * SLIDES_URL is read at call time; outside production it defaults to the
+ * local slides app. Null in production without SLIDES_URL (no link then).
+ */
+function deckPreviewUrl(slide: SlideWithRepoRecord): string | null {
+  const base =
+    process.env.SLIDES_URL?.trim() ||
+    (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:6500');
+  if (!base) return null;
+  return `${base.replace(/\/+$/, '')}/${encodeURIComponent(slide.id)}?preview=1`;
+}
+
 export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
   name: 'deck_apply',
   annotations: { destructive: true, openWorld: true },
@@ -693,7 +707,7 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
     'slides someone changed since your read are refused (BLOCK_CHANGED). ' +
     "mode: 'live' edits the deck itself (with live editing on, people in the editor see it at " +
     "once, and a slide someone is editing refuses the call); mode: 'preview' stages the edits " +
-    "— students never see them — for review as rendered slides at the deck's ?preview=1 URL " +
+    "— students never see them — for review as rendered slides at the result's preview_url " +
     'with changed slides highlighted, then deck_preview_accept. Default: live for drafts, ' +
     'preview for published decks. Use preview for big edits: many slides, restructuring, ' +
     'rewrites. When a preview already ' +
@@ -904,12 +918,14 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
     // Open live editors refresh their pending-preview banner.
     if (committedTo === 'preview') await notifyPreviewChanged(slide.classroom, 'deck', slide.id);
 
+    const previewUrl = committedTo === 'preview' ? deckPreviewUrl(slide) : null;
     return ok({
       success: true,
       new_sha: saved.sha,
       // deck.json now exists on the written branch — future applies key on it.
       sha_source: 'deck',
       committed_to: committedTo,
+      ...(previewUrl ? { preview_url: previewUrl } : {}),
       slide_count: countSlides(newDeck.slides),
       applied,
     });

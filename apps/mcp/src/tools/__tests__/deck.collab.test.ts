@@ -191,6 +191,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 const UPDATE_OP = { op: 'update' as const, id: 'bbb', html: '<p>Second slide, edited</p>' };
@@ -261,6 +262,7 @@ describe('live apply', () => {
       sha_source: 'live',
       committed_to: 'live',
     });
+    expect(result).not.toHaveProperty('preview_url');
     expect(calls.find(call => call.method === 'POST')).toMatchObject({
       path: `/internal/deck/${SLIDE_ID}/ops`,
       body: { ops: [UPDATE_OP], actor: { userId: 'teacher-1', name: 'Grace Hopper' } },
@@ -328,6 +330,7 @@ describe('live apply', () => {
   });
 
   it('a published deck defaults to preview, cut from main, taking the live version', async () => {
+    vi.stubEnv('SLIDES_URL', 'https://slides.example.test/');
     mocks.slideFindById.mockResolvedValue(LIVE_SLIDE);
     const result = parse(
       await deckApplyTool.handler(
@@ -342,6 +345,7 @@ describe('live apply', () => {
       )
     );
     expect(result.committed_to).toBe('preview');
+    expect(result.preview_url).toBe(`https://slides.example.test/${SLIDE_ID}?preview=1`);
     expect(mocks.saveDeck.mock.calls[0][0]).toMatchObject({
       expectedSha: 'git-sha-1',
       shaSource: 'deck',
