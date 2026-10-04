@@ -105,18 +105,24 @@ export function parseLiveVersion(value: string | undefined | null): LivePin | nu
 const readTool = (kind: 'page' | 'deck') =>
   kind === 'page' ? 'page_content_get/outline' : 'deck_get/deck_outline';
 
-/** CONTENT_CONFLICT for a live apply whose pin is stale. */
-export function liveVersionConflict(
+/**
+ * CONTENT_CONFLICT for a pin this MCP has no snapshot for (not returned to
+ * this caller by a read or apply here, expired, or served by another
+ * instance): without it only the exact current version can be accepted.
+ */
+export function livePinUnknown(
   expected: string,
   current: { epoch: number; version: number },
   kind: 'page' | 'deck'
 ): ToolError {
+  const now = liveSha(current.epoch, current.version);
   return new ToolError(
     'invalid_params',
-    `The live ${kind} changed since you read it (you read '${expected}', it is now ` +
-      `'${liveSha(current.epoch, current.version)}') — someone may be editing it right now. ` +
-      `Re-read with ${readTool(kind)} and retry; for a larger edit use mode: 'preview'.`,
-    'CONTENT_CONFLICT'
+    `'${expected}' is not a version this server still holds your read of (it is now ` +
+      `'${now}'), so it cannot tell which ${kind === 'page' ? 'blocks' : 'slides'} changed ` +
+      `since; nothing was applied. Re-read with ${readTool(kind)} and retry with its sha.`,
+    'CONTENT_CONFLICT',
+    { reason: 'unknown-pin', current_sha: now }
   );
 }
 
@@ -126,7 +132,8 @@ export function liveEpochConflict(kind: 'page' | 'deck'): ToolError {
     'invalid_params',
     `The ${kind} was reloaded from git since you read it, so that version no longer applies — ` +
       `re-read with ${readTool(kind)} and retry.`,
-    'CONTENT_CONFLICT'
+    'CONTENT_CONFLICT',
+    { reason: 'reloaded' }
   );
 }
 
@@ -136,7 +143,8 @@ export function notALiveVersion(kind: 'page' | 'deck'): ToolError {
     'invalid_params',
     `This ${kind} is edited live: expected_sha must be the live version a read returned ` +
       `(like 'live:1.12'), not a git sha — call ${readTool(kind)} for it.`,
-    'CONTENT_CONFLICT'
+    'CONTENT_CONFLICT',
+    { reason: 'not-live-version' }
   );
 }
 
@@ -475,11 +483,25 @@ export function liveWriteError(
   if (error.status === 404) {
     return new ToolError('not_found', `The live ${what} was not found`);
   }
+  if (error.status === 409 && error.code === 'stale-epoch') {
+    return liveEpochConflict(what);
+  }
+  if (error.status === 409 && error.code === 'unreadable-live-doc') {
+    // A server-side read fault, not the agent's pin: re-reading won't help.
+    return new ToolError(
+      'internal',
+      `The live ${what} holds content the live editing service cannot read, so nothing was ` +
+        "changed. Use mode: 'preview', or ask someone to open it in the web editor.",
+      'LIVE_UNREADABLE',
+      { reason: error.code }
+    );
+  }
   if (error.status === 409) {
     return new ToolError(
       'invalid_params',
       error.detail ?? `The live ${what} refused the edit (${error.code ?? 'conflict'})`,
-      'CONTENT_CONFLICT'
+      'CONTENT_CONFLICT',
+      { reason: error.code ?? 'conflict' }
     );
   }
   return new ToolError('internal', `${error.message} (HTTP ${error.status})`);

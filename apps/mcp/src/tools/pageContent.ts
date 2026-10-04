@@ -286,12 +286,21 @@ const LIVE_FALLBACK_NOTE =
  */
 async function readLivePage(
   env: CollabEnv | null,
-  page: PageWithRepoRecord
+  page: PageWithRepoRecord,
+  viewer: string
 ): Promise<{ snapshot: SnapshotResponse<'page'> } | { fallbackNote: string | null }> {
   if (!env) return { fallbackNote: LIVE_UNCONFIGURED_NOTE };
   try {
     const snapshot = await fetchSnapshot(env, 'page', page.id);
-    rememberSnapshot('page', page.id, snapshot.epoch, snapshot.version, snapshot.content);
+    rememberSnapshot(
+      viewer,
+      'page',
+      page.id,
+      snapshot.epoch,
+      snapshot.version,
+      snapshot.content,
+      'read'
+    );
     return { snapshot };
   } catch (error) {
     if (error instanceof CollabRequestError) {
@@ -369,7 +378,7 @@ export const pageContentOutlineTool: ToolDefinition<PageContentOutlineArgs> = {
     const liveState = liveStateFor(page.classroom);
     let fallback: Record<string, unknown> = {};
     if (liveState && at === 'main') {
-      const live = await readLivePage(liveState.env, page);
+      const live = await readLivePage(liveState.env, page, ctx.viewer.userId);
       if ('snapshot' in live) {
         const outline = flattenOutline(live.snapshot.content.blocks as BlockNode[]);
         const cover = live.snapshot.content.coverImage;
@@ -478,7 +487,7 @@ export const pageContentGetTool: ToolDefinition<PageContentGetArgs> = {
     const liveState = liveStateFor(page.classroom);
     let fallback: Record<string, unknown> = {};
     if (liveState && !ref) {
-      const live = await readLivePage(liveState.env, page);
+      const live = await readLivePage(liveState.env, page, ctx.viewer.userId);
       if ('snapshot' in live) {
         return ok(
           selectBlocks(
@@ -640,13 +649,15 @@ function allIdsPresent(blocks: unknown): boolean {
 
 /**
  * Cache the agent's view of the version its apply produced — the snapshot it
- * READ plus its own ops, normalized through the page schema — so a follow-up
+ * READ (or, with no remembered read, the live page as the apply found it)
+ * plus its own ops, normalized through the page schema — so a follow-up
  * apply pinned to `new_sha` is checked per block, and an edit a person made
  * after the agent's read is still caught. Skipped (the follow-up then gets
- * the strict check) when there is no read snapshot, or when ids would be
- * minted: those depend on positions in the live document, not in the view.
+ * the strict check, logged) when ids would be minted: those depend on
+ * positions in the live document, not in the view.
  */
 async function rememberAgentView(
+  viewer: string,
   pageId: string,
   epoch: number,
   version: number,
@@ -654,12 +665,13 @@ async function rememberAgentView(
   ops: PageContentOp[],
   insertedIds: string[][] | null
 ): Promise<void> {
-  if (!agentView) return;
+  const skip = (why: string) =>
+    console.warn(`[mcp] live page ${pageId}: not caching live:${epoch}.${version} (${why})`);
   const view = agentView as { blocks: unknown[]; coverImage: unknown };
   // Give inserted blocks the ids the live page gave them, so the view and
   // the live page name them alike.
   if (ops.some(op => op.op === 'insert')) {
-    if (!insertedIds) return;
+    if (!insertedIds) return skip('inserted ids unknown');
     ops = ops.map((op, i) =>
       op.op === 'insert'
         ? {
@@ -682,15 +694,20 @@ async function rememberAgentView(
       { onIdRemint: () => (reminted = true) }
     );
   } catch {
-    return;
+    return skip('ops do not replay on the view');
   }
-  if (reminted || !allIdsPresent(next)) return;
+  if (reminted || !allIdsPresent(next)) return skip('ids would be minted');
   const normalized = await normalizePageBlocks(next);
-  if (!normalized) return;
-  rememberSnapshot('page', pageId, epoch, version, {
-    blocks: normalized,
-    coverImage: view.coverImage,
-  });
+  if (!normalized) return skip('view does not normalize');
+  rememberSnapshot(
+    viewer,
+    'page',
+    pageId,
+    epoch,
+    version,
+    { blocks: normalized, coverImage: view.coverImage },
+    'apply'
+  );
 }
 
 /**
@@ -714,7 +731,15 @@ async function applyLive(
     throw liveWriteError(error, 'page');
   }
   // Only what the ops depend on must still be as the agent read it.
-  const { agentView } = checkLivePin('page', page.id, args.expected_sha, snapshot, args.ops);
+  const viewer = ctx.viewer.userId;
+  const { agentView } = checkLivePin(
+    viewer,
+    'page',
+    page.id,
+    args.expected_sha,
+    snapshot,
+    args.ops
+  );
 
   const priorBlocks = snapshot.content.blocks as BlockNode[];
   const idRemints: Array<{ op_index: number; from: string; to: string }> = [];
@@ -754,7 +779,17 @@ async function applyLive(
   const epoch = response.epoch ?? snapshot.epoch;
   const insertedIds = splitInsertedIds(args.ops, response.insertedIds);
   const after = ClassmojiService.pageContent.ensureBlockIds(newBlocks) as BlockNode[];
-  await rememberAgentView(page.id, epoch, version, agentView, args.ops, insertedIds);
+  // No remembered read (pure insert, strict pass): the base is the page as
+  // this apply found it, so new_sha stays checkable per block.
+  await rememberAgentView(
+    viewer,
+    page.id,
+    epoch,
+    version,
+    agentView ?? snapshot.content,
+    args.ops,
+    insertedIds
+  );
 
   // Ids come from the live page: the server's insertedIds (re-mints
   // included), not this process's dry run.
@@ -813,9 +848,10 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
   description:
     'Applies granular block operations (update / insert / move / delete / replace_all) to a ' +
     "page's BlockNote content. Pass expected_sha from page_content_get or " +
-    'page_content_outline; a CONTENT_CONFLICT error means the content changed — re-read for a ' +
-    "fresh sha. In live mode it is the version ('live:E.V'), required except for pure inserts; ops on " +
-    'blocks someone changed since your read are refused (BLOCK_CHANGED). ' +
+    'page_content_outline, or the new_sha of your last apply; CONTENT_CONFLICT means that sha ' +
+    "is stale or unknown — re-read for a fresh one. In live mode it is the version ('live:E.V'), " +
+    'required except for pure inserts; edits elsewhere since do not block you, but ops on ' +
+    'blocks someone changed since are refused (BLOCK_CHANGED, ids named). ' +
     "mode: 'live' edits the page itself (with live editing on, people in the editor " +
     "see it at once); mode: 'preview' stages the edits — students never see them — for review " +
     'as a rendered page with the changed blocks highlighted (the preview_url the result ' +
@@ -1782,6 +1818,16 @@ async function setCoverLive(
   } catch (error) {
     throw liveWriteError(error, 'page', { previewHint: false });
   }
+  // The cover changes no block: new_sha is checkable per block like a read.
+  rememberSnapshot(
+    ctx.viewer.userId,
+    'page',
+    page.id,
+    snapshot.epoch,
+    version,
+    { ...snapshot.content, coverImage: nextCover },
+    'apply'
+  );
 
   await writeAudit(ctx, {
     resource_type: 'PAGES',

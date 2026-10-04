@@ -5,19 +5,23 @@
  * A live document's version bumps on every store, so while a person types,
  * any version an agent read is out of date within seconds. Refusing every
  * such apply would keep agents out of any page someone has open. Instead the
- * MCP remembers the snapshot each live read returned (process memory, keyed
- * by kind + doc + epoch + version, ~15 min, small LRU; the FIRST snapshot
- * seen for a key is kept, so a later read can never weaken an earlier pin),
+ * MCP remembers the snapshot each live read returned, and the agent's view
+ * after each live apply (process memory, keyed by caller + kind + doc + epoch
+ * + version, ~15 min, small LRU; between two reads the FIRST is kept, so a
+ * later read can never weaken an earlier pin, but a read always replaces a
+ * view an apply left, so re-reading clears a refusal that view caused; one
+ * agent's view never stands in for another's read),
  * and an apply compares ONLY what its ops depend on — the blocks/slides they
  * update, delete or move, that their position anchors still exist, the slide
  * order for a reorder, the theme for set_theme, the whole document for
  * replace_all — between that snapshot and the document now, whether or not
  * the versions differ. Untouched → the ops apply (the collab server applies
  * them id-aware, so typing elsewhere is safe); touched → BLOCK_CHANGED naming
- * the ids. A pin the MCP no longer remembers (restart, expiry), or the older
- * version-only form, falls back to the strict check (same version or
- * refused); a pin from another epoch (the document was reloaded from git) is
- * always refused.
+ * the ids. A pin the MCP no longer remembers (restart, expiry, another
+ * instance), or the older version-only form, falls back to the strict check
+ * (same version or CONTENT_CONFLICT reason 'unknown-pin'); a pin from another
+ * epoch (the document was reloaded from git) is always refused (reason
+ * 'reloaded').
  *
  * Pages are compared after a round trip through the page schema on both
  * sides (the live server's snapshots already are; what the MCP caches after
@@ -31,7 +35,7 @@ import type { DeckJson, DeckSlide } from '@classmoji/services/slides';
 import {
   blockChangedError,
   liveEpochConflict,
-  liveVersionConflict,
+  livePinUnknown,
   notALiveVersion,
   parseLiveVersion,
   pinRequired,
@@ -42,30 +46,40 @@ import {
 const TTL_MS = 15 * 60 * 1000;
 const MAX_ENTRIES = 100;
 
-const cache = new Map<string, { content: unknown; at: number }>();
+/** `read`: what a read returned; `apply`: the agent's view after its own apply. */
+export type SnapshotOrigin = 'read' | 'apply';
 
-const keyOf = (kind: CollabKind, id: string, epoch: number, version: number) =>
-  `${kind}:${id}:${epoch}.${version}`;
+const cache = new Map<string, { content: unknown; at: number; origin: SnapshotOrigin }>();
+
+const keyOf = (viewer: string, kind: CollabKind, id: string, epoch: number, version: number) =>
+  `${viewer}:${kind}:${id}:${epoch}.${version}`;
 
 /**
- * Remember what `kind/id` held at `epoch.version` as an agent was shown it.
- * An unexpired entry is never replaced: if two reads at one version saw
- * different content (edits not stored yet), the older one stays — comparing
- * against it can only refuse more, never less.
+ * Remember what `kind/id` held at `epoch.version` as `viewer` (the MCP
+ * caller's user id) was shown it, by a read or as its own apply left it.
+ * An unexpired entry is kept, with one exception: a read replaces a view an
+ * apply left (that view is the agent's read plus its ops and can lack an edit
+ * someone stored into the same version; the read is what the agent now
+ * holds). If two reads at one version saw different content (edits not
+ * stored yet), the older one stays — comparing against it can only refuse
+ * more, never less.
  */
 export function rememberSnapshot(
+  viewer: string,
   kind: CollabKind,
   id: string,
   epoch: number,
   version: number,
   content: unknown,
+  origin: SnapshotOrigin,
   now = Date.now()
 ): void {
-  const key = keyOf(kind, id, epoch, version);
+  const key = keyOf(viewer, kind, id, epoch, version);
   const existing = cache.get(key);
-  if (existing && now - existing.at <= TTL_MS) return;
+  const replaces = existing?.origin === 'apply' && origin === 'read';
+  if (existing && now - existing.at <= TTL_MS && !replaces) return;
   cache.delete(key);
-  cache.set(key, { content, at: now });
+  cache.set(key, { content, at: now, origin });
   while (cache.size > MAX_ENTRIES) {
     const oldest = cache.keys().next().value;
     if (oldest === undefined) break;
@@ -73,15 +87,16 @@ export function rememberSnapshot(
   }
 }
 
-/** The snapshot remembered for `kind/id` at `epoch.version`, if any. */
+/** The snapshot `viewer` was shown of `kind/id` at `epoch.version`, if any. */
 export function recallSnapshot<T>(
+  viewer: string,
   kind: CollabKind,
   id: string,
   epoch: number,
   version: number,
   now = Date.now()
 ): T | null {
-  const key = keyOf(kind, id, epoch, version);
+  const key = keyOf(viewer, kind, id, epoch, version);
   const entry = cache.get(key);
   if (!entry) return null;
   if (now - entry.at > TTL_MS) {
@@ -173,14 +188,30 @@ function collectTargets(ops: AnyOp[]): Targets {
   return targets;
 }
 
-/** Ids the ops depend on that changed between `then` and `now` (`'__document__'` for replace_all). */
+/** Top-level blocks added, removed or changed; `'__order__'` when only their order moved. */
+function changedTopLevel(then: unknown, now: unknown): string[] {
+  const list = (blocks: unknown) =>
+    (Array.isArray(blocks) ? (blocks as PageBlock[]) : []).filter(
+      b => b && typeof b.id === 'string'
+    );
+  const before = new Map(list(then).map(b => [b.id as string, b]));
+  const after = new Map(list(now).map(b => [b.id as string, b]));
+  const changed = [...new Set([...before.keys(), ...after.keys()])].filter(
+    id => !before.has(id) || !after.has(id) || !same(before.get(id), after.get(id))
+  );
+  return changed.length > 0 ? changed : ['__order__'];
+}
+
+/** Ids the ops depend on that changed between `then` and `now` (replace_all: every top-level block that did). */
 export function changedPageTargets(
   then: PageSnapshotContent,
   now: PageSnapshotContent,
   ops: AnyOp[]
 ): string[] {
   const targets = collectTargets(ops);
-  if (targets.whole && !same(then.blocks, now.blocks)) return ['__document__'];
+  if (targets.whole && !same(then.blocks, now.blocks)) {
+    return changedTopLevel(then.blocks, now.blocks);
+  }
   const changed: string[] = [];
   for (const id of targets.content) {
     const before = findBlock(then.blocks, id);
@@ -255,10 +286,16 @@ export function assertLivePin(
 
 /**
  * Decide whether a live apply may go ahead against `fresh`, and return the
- * snapshot the agent read when the MCP has it (the base for what it caches
- * after the apply). Call `assertLivePin` first.
+ * snapshot the agent read when the MCP has it. The base for what the caller
+ * caches after the apply is `agentView ?? fresh.content`: with no remembered
+ * read (a pure insert without a pin, or a strict-check pass) the agent's view
+ * is the document as its apply found it — exactly what the strict check
+ * accepts at an equal version — so a follow-up pinned to `new_sha` is still
+ * checked per block instead of failing on any keystroke. Call
+ * `assertLivePin` first.
  */
 export function checkLivePin(
+  viewer: string,
   kind: 'page' | 'deck',
   id: string,
   expectedSha: string | undefined,
@@ -269,18 +306,17 @@ export function checkLivePin(
   const pin = parseLiveVersion(expectedSha);
   if (pin === null) throw notALiveVersion(kind);
   const strict = () => {
-    if (pin.version !== fresh.version) throw liveVersionConflict(expectedSha, fresh, kind);
+    if (pin.version !== fresh.version) throw livePinUnknown(expectedSha, fresh, kind);
     return { agentView: null };
   };
   if (pin.epoch === null) return strict();
   if (pin.epoch !== fresh.epoch) throw liveEpochConflict(kind);
-  const then = recallSnapshot<unknown>(kind, id, pin.epoch, pin.version);
+  const then = recallSnapshot<unknown>(viewer, kind, id, pin.epoch, pin.version);
   if (then === null) return strict();
   const changed =
     kind === 'page'
       ? changedPageTargets(then as PageSnapshotContent, fresh.content as PageSnapshotContent, ops)
       : changedDeckTargets(then as DeckJson, fresh.content as DeckJson, ops);
-  if (changed.includes('__document__')) throw liveVersionConflict(expectedSha, fresh, kind);
   if (changed.length > 0) throw blockChangedError(kind, changed);
   return { agentView: then };
 }
@@ -326,14 +362,21 @@ export function expectFor(
   return expect;
 }
 
-/** How many top-level items each op inserts (0 for non-inserts). */
+/**
+ * How many ids the server reports for each op's inserts (0 for non-inserts):
+ * a page insert's top-level blocks; a deck insert's slides, each followed by
+ * a new stack's children.
+ */
 function insertCounts(ops: AnyOp[]): number[] {
   return ops.map(op => {
     if (op.op !== 'insert') return 0;
-    const items =
-      (op as { blocks?: unknown[]; slides?: unknown[] }).blocks ??
-      (op as { slides?: unknown[] }).slides;
-    return Array.isArray(items) ? items.length : 0;
+    const { blocks, slides } = op as { blocks?: unknown[]; slides?: unknown[] };
+    if (Array.isArray(blocks)) return blocks.length;
+    if (!Array.isArray(slides)) return 0;
+    return slides.reduce<number>((n, spec) => {
+      const children = (spec as { children?: unknown[] } | null)?.children;
+      return n + 1 + (Array.isArray(children) ? children.length : 0);
+    }, 0);
   });
 }
 

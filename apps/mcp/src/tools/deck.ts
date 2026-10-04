@@ -229,12 +229,21 @@ const LIVE_FALLBACK_NOTE =
  */
 async function readLiveDeck(
   env: CollabEnv | null,
-  slide: SlideWithRepoRecord
+  slide: SlideWithRepoRecord,
+  viewer: string
 ): Promise<{ snapshot: SnapshotResponse<'deck'> } | { fallbackNote: string | null }> {
   if (!env) return { fallbackNote: LIVE_UNCONFIGURED_NOTE };
   try {
     const snapshot = await fetchSnapshot(env, 'deck', slide.id);
-    rememberSnapshot('deck', slide.id, snapshot.epoch, snapshot.version, snapshot.content);
+    rememberSnapshot(
+      viewer,
+      'deck',
+      slide.id,
+      snapshot.epoch,
+      snapshot.version,
+      snapshot.content,
+      'read'
+    );
     return { snapshot };
   } catch (error) {
     if (error instanceof CollabRequestError) {
@@ -375,7 +384,7 @@ export const deckOutlineTool: ToolDefinition<DeckOutlineArgs> = {
     const liveState = liveStateFor(slide.classroom);
     let fallback: Record<string, unknown> = {};
     if (liveState && !ref) {
-      const live = await readLiveDeck(liveState.env, slide);
+      const live = await readLiveDeck(liveState.env, slide, ctx.viewer.userId);
       if ('snapshot' in live) {
         const { slide_id, ...head } = liveDeckHead(slide, live.snapshot);
         return ok({
@@ -473,7 +482,7 @@ export const deckGetTool: ToolDefinition<DeckGetArgs> = {
     const liveState = liveStateFor(slide.classroom);
     let fallback: Record<string, unknown> = {};
     if (liveState && !ref) {
-      const live = await readLiveDeck(liveState.env, slide);
+      const live = await readLiveDeck(liveState.env, slide, ctx.viewer.userId);
       if ('snapshot' in live) {
         return ok(
           selectSlides(liveDeckHead(slide, live.snapshot), live.snapshot.content, args.slide_ids)
@@ -559,6 +568,39 @@ interface DeckApplyArgs {
  * replayed on the snapshot here first so a bad id or html is reported
  * plainly; a slide a person is editing refuses the whole call (409).
  */
+/**
+ * The live ids for one insert's applied entry: `flat` is the server's list
+ * for that op — each new slide, then a new stack's children — in the order
+ * the entry lists them. `rename` maps the entry's local ids to the live ones.
+ * Null when they do not line up.
+ */
+function liveInsertIds(
+  entry: Record<string, unknown>,
+  flat: string[]
+): { ids: string[]; children: Record<string, string[]>; rename: Map<string, string> } | null {
+  const localIds = Array.isArray(entry.ids) ? (entry.ids as string[]) : [];
+  const localChildren = (entry.children ?? {}) as Record<string, string[]>;
+  const ids: string[] = [];
+  const children: Record<string, string[]> = {};
+  const rename = new Map<string, string>();
+  let at = 0;
+  for (const local of localIds) {
+    const top = flat[at++];
+    if (top === undefined) return null;
+    ids.push(top);
+    rename.set(local, top);
+    const kids = localChildren[local] ?? [];
+    if (kids.length > 0) children[top] = [];
+    for (const kid of kids) {
+      const id = flat[at++];
+      if (id === undefined) return null;
+      children[top].push(id);
+      rename.set(kid, id);
+    }
+  }
+  return at === flat.length ? { ids, children, rename } : null;
+}
+
 async function applyDeckLive(
   env: CollabEnv,
   slide: SlideWithRepoRecord,
@@ -573,7 +615,15 @@ async function applyDeckLive(
     throw liveWriteError(error, 'deck');
   }
   // Only what the ops depend on must still be as the agent read it.
-  const { agentView } = checkLivePin('deck', slide.id, args.expected_sha, snapshot, args.ops);
+  const viewer = ctx.viewer.userId;
+  const { agentView } = checkLivePin(
+    viewer,
+    'deck',
+    slide.id,
+    args.expected_sha,
+    snapshot,
+    args.ops
+  );
 
   let newDeck: DeckJson;
   let applied: Array<Record<string, unknown>>;
@@ -588,10 +638,6 @@ async function applyDeckLive(
     throw error;
   }
   const hasInsert = applied.some(entry => entry.op === 'insert');
-  // A new stack's children: the server reports top-level ids only.
-  const insertsStack = args.ops.some(
-    op => op.op === 'insert' && op.slides.some(spec => (spec.children?.length ?? 0) > 0)
-  );
 
   // The server re-checks the targeted slides inside the live transaction
   // against what the agent read (authoritative; the check above is early).
@@ -612,37 +658,51 @@ async function applyDeckLive(
   const insertedIds = splitInsertedIds(args.ops, response.insertedIds);
 
   // Inserted slides carry the ids the LIVE deck gave them, never this dry
-  // run's (random) ones.
+  // run's (random) ones; a new stack's children too.
   applied = applied.map((entry, i) => {
     if (entry.op !== 'insert') return entry;
     const { ids: _ids, children: _children, ...rest } = entry;
-    return insertedIds ? { ...rest, ids: insertedIds[i] } : rest;
+    const live = insertedIds ? liveInsertIds(entry, insertedIds[i]) : null;
+    if (!live) return rest;
+    return {
+      ...rest,
+      ids: live.ids,
+      ...(Object.keys(live.children).length > 0 ? { children: live.children } : {}),
+    };
   });
 
-  // Cache the agent's view of the new version — the snapshot it READ plus its
-  // own ops, inserted slides renamed to the live ids — so a follow-up pinned
-  // to `new_sha` is checked per slide and a person's edit since the read is
-  // still caught. Skipped when inserted ids are unknown (a new stack's
-  // children, or no insertedIds): the follow-up then gets the strict check.
-  if (agentView && (!hasInsert || (insertedIds && !insertsStack))) {
+  // Cache the agent's view of the new version — the snapshot it READ (or,
+  // with no remembered read — a pure insert, a strict pass — the deck as this
+  // apply found it) plus its own ops, inserted slides renamed to the live
+  // ids — so a follow-up pinned to `new_sha` is checked per slide and a
+  // person's edit since the read is still caught. Skipped when inserted ids
+  // are unknown (no insertedIds, or they do not line up): the follow-up then
+  // gets the strict check.
+  const base = (agentView ?? snapshot.content) as DeckJson;
+  if (!hasInsert || insertedIds) {
     try {
-      const replay = applyDeckOps(agentView as DeckJson, args.ops, {
+      const replay = applyDeckOps(base, args.ops, {
         starterCustomCss: slideService.STARTER_CUSTOM_CSS,
       });
       const rename = new Map<string, string>();
       replay.applied.forEach((entry, i) => {
         if (entry.op !== 'insert' || !insertedIds) return;
-        (entry.ids as string[]).forEach((local, j) => rename.set(local, insertedIds[i][j]));
+        const live = liveInsertIds(entry, insertedIds[i]);
+        if (!live) throw new Error('inserted ids do not line up');
+        for (const [local, id] of live.rename) rename.set(local, id);
       });
       const view = replay.deck;
       for (const top of view.slides) {
         top.id = rename.get(top.id) ?? top.id;
         for (const child of top.children ?? []) child.id = rename.get(child.id) ?? child.id;
       }
-      rememberSnapshot('deck', slide.id, epoch, version, view);
+      rememberSnapshot(viewer, 'deck', slide.id, epoch, version, view, 'apply');
     } catch {
       // The ops do not replay on the read snapshot: nothing to cache.
+      console.warn(`[mcp] live deck ${slide.id}: not caching live:${epoch}.${version} (no replay)`);
     }
+  } else {
+    console.warn(`[mcp] live deck ${slide.id}: not caching live:${epoch}.${version} (ids unknown)`);
   }
 
   const hasDestructiveOps = args.ops.some(op => op.op === 'delete');
@@ -671,12 +731,8 @@ async function applyDeckLive(
     ...(!insertedIds && Array.isArray(response.insertedIds) && response.insertedIds.length > 0
       ? { inserted_ids: response.insertedIds }
       : {}),
-    ...(hasInsert && (!insertedIds || insertsStack)
-      ? {
-          note:
-            'The live deck named the inserted slides; call deck_outline for ' +
-            (insertedIds ? "the new stack's child ids." : 'their ids.'),
-        }
+    ...(hasInsert && !insertedIds
+      ? { note: 'The live deck named the inserted slides; call deck_outline for their ids.' }
       : {}),
   });
 }
@@ -701,10 +757,11 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
   title: 'Apply deck edits',
   description:
     'Applies granular slide operations (update / insert / move / delete / reorder / set_theme) ' +
-    'to a deck. Pass expected_sha (+ sha_source) from deck_get or ' +
-    'deck_outline; a CONTENT_CONFLICT error means the deck changed — re-read for a fresh sha. ' +
-    "In live mode it is the version ('live:E.V'), required except for pure inserts; ops on " +
-    'slides someone changed since your read are refused (BLOCK_CHANGED). ' +
+    'to a deck. Pass expected_sha (+ sha_source) from deck_get or deck_outline, or your last ' +
+    'new_sha; CONTENT_CONFLICT means that sha is stale or unknown — re-read. ' +
+    "In live mode it is the version ('live:E.V'), required except for pure inserts; edits " +
+    'elsewhere do not block you, but ops on slides someone changed since are refused ' +
+    '(BLOCK_CHANGED, ids named). ' +
     "mode: 'live' edits the deck itself (with live editing on, people in the editor see it at " +
     "once, and a slide someone is editing refuses the call); mode: 'preview' stages the edits " +
     "— students never see them — for review as rendered slides at the result's preview_url " +

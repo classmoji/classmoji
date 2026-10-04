@@ -426,6 +426,62 @@ describe('per-slide staleness check', () => {
     });
   });
 
+  it("a pure insert's new_sha is checked per slide, not by version", async () => {
+    serve(4, DECK());
+    route('POST', 'ops', () => ({
+      status: 200,
+      body: { epoch: 1, version: 5, insertedIds: ['ccc'] },
+    }));
+    const insert = { op: 'insert', slides: [{ html: '<p>New</p>' }], position: { at: 'end' } };
+    const inserted = await deckApplyTool.handler(
+      { classroom: 'org/x', slide_id: SLIDE_ID, ops: [insert] as never },
+      CTX
+    );
+    expect(parse(inserted).new_sha).toBe('live:1.5');
+    const after = { ...DECK(), slides: [...DECK().slides, { id: 'ccc', html: '<p>New</p>' }] };
+    after.slides[0] = { ...after.slides[0], html: '<h1>Typed</h1>' };
+    serve(7, after);
+    route('POST', 'ops', () => ({ status: 200, body: { epoch: 1, version: 8 } }));
+    expect(parse(await apply([UPDATE_OP], 'live:1.5')).success).toBe(true);
+  });
+
+  it("a new stack's child ids come from the live deck and are cached for the follow-up", async () => {
+    serve(4, DECK());
+    await read();
+    route('POST', 'ops', () => ({
+      status: 200,
+      body: { epoch: 1, version: 5, insertedIds: ['stk', 'k1', 'k2'] },
+    }));
+    const insert = {
+      op: 'insert',
+      slides: [{ children: [{ html: '<p>One</p>' }, { html: '<p>Two</p>' }] }],
+      position: { at: 'end' },
+    };
+    const first = parse(await apply([insert]));
+    expect(first.applied[0]).toMatchObject({ ids: ['stk'], children: { stk: ['k1', 'k2'] } });
+    expect(first).not.toHaveProperty('note');
+    const after = {
+      ...DECK(),
+      slides: [
+        { ...DECK().slides[0], html: '<h1>Typed</h1>' },
+        DECK().slides[1],
+        {
+          id: 'stk',
+          children: [
+            { id: 'k1', html: '<p>One</p>' },
+            { id: 'k2', html: '<p>Two</p>' },
+          ],
+        },
+      ],
+    } as DeckJson;
+    serve(7, after);
+    route('POST', 'ops', () => ({ status: 200, body: { epoch: 1, version: 8 } }));
+    const second = parse(
+      await apply([{ op: 'update', id: 'k2', html: '<p>Two, edited</p>' }], 'live:1.5')
+    );
+    expect(second.success).toBe(true);
+  });
+
   it('without an insert the agent view is cached for the follow-up', async () => {
     serve(4, DECK());
     await read();
