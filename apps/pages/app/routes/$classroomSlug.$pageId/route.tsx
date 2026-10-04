@@ -25,6 +25,7 @@ import {
 } from '~/components/preview/PreviewControls.tsx';
 import { diffBlockOps, type BlockOp } from '~/components/editor/blockOpsDiff.ts';
 import { useCollabSession } from '~/components/editor/collab/useCollabSession.ts';
+import { agentTouchCss } from '~/components/editor/collab/agentTouch.ts';
 import { useLiveCover } from '~/components/editor/collab/useLiveCover.ts';
 import LiveHeaderControls from '~/components/editor/collab/LiveHeaderControls.tsx';
 import {
@@ -231,6 +232,11 @@ const PageRoute = () => {
   const saveEnabled = saveMachineryEnabled({ canEdit, collab });
   const { session, state: liveState } = useCollabSession(liveMode ? collab : null);
   const liveRefused = liveMode ? liveState.rejected : null;
+  // Blocks an agent just changed: a fading mark in the agent's colour.
+  const agentTouchStyles = useMemo(
+    () => agentTouchCss(liveState.agentTouches, 'page-editor'),
+    [liveState.agentTouches]
+  );
   const liveEditable = liveMode && !liveRefused;
   // Title and width changed by someone else on a live page arrive as a room
   // message and apply in place (no reload); otherwise the loader's.
@@ -1158,6 +1164,9 @@ const PageRoute = () => {
                   </div>
                 }
               >
+                {agentTouchStyles && (
+                  <style data-testid="agent-touch-styles">{agentTouchStyles}</style>
+                )}
                 <PageEditor
                   key={session.room}
                   ref={editorRef}

@@ -433,6 +433,17 @@ const PageEditor = forwardRef(function PageEditor(
           font-size: 16px !important;
           line-height: 1.6 !important;
         }
+        /* A live caret beside a block with no text (an image, a divider):
+           it marks the block's top-left corner instead of adding a line
+           under it. */
+        .page-editor .bn-block:has(> .bn-collaboration-cursor__base) {
+          position: relative;
+        }
+        .page-editor .bn-block > .bn-collaboration-cursor__base {
+          position: absolute;
+          top: 0;
+          left: 0;
+        }
         .page-editor h1,
         .page-editor h2,
         .page-editor h3 {

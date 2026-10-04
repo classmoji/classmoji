@@ -14,6 +14,7 @@
 
 import {
   isCollabRejectReason,
+  splitAgentName,
   type CollabLoaderData,
   type CollabRejectReason,
 } from '@classmoji/collab';
@@ -168,20 +169,24 @@ export interface CollabPeer {
   self: boolean;
   /** An agent editing through the collab server (MCP), not a person. */
   agent: boolean;
+  /**
+   * An agent's tag as the server numbers it: `agent`, or `agent 2` while the
+   * same person has several agent sessions on the page.
+   */
+  agentTag?: string;
 }
 
-/** The suffix the collab server puts on an agent's awareness name. */
-const AGENT_SUFFIX = /\s*\(agent\)\s*$/i;
-
-/** A name without the " (agent)" suffix. */
+/** A name without the server's " (agent)" / " (agent 2)" suffix. */
 export function stripAgentSuffix(name: string): string {
-  return name.replace(AGENT_SUFFIX, '').trim() || name.trim();
+  return splitAgentName(name).name;
 }
 
 /** What an avatar's tooltip says: the name, marked when it is an agent or you. */
-export function peerLabel(peer: Pick<CollabPeer, 'name' | 'self' | 'agent'>): string {
+export function peerLabel(
+  peer: Pick<CollabPeer, 'name' | 'self' | 'agent'> & { agentTag?: string }
+): string {
   if (peer.self) return `${peer.name} (you)`;
-  return peer.agent ? `${peer.name} (agent)` : peer.name;
+  return peer.agent ? `${peer.name} (${peer.agentTag ?? 'agent'})` : peer.name;
 }
 
 /**
@@ -208,16 +213,25 @@ export function peersFromAwareness(
       existing.self = existing.self || self;
       continue;
     }
+    const split = splitAgentName(user.name);
+    const agent = user.agent === true || split.tag !== null;
     byKey.set(key, {
       key,
-      name: stripAgentSuffix(user.name),
+      name: split.name,
       color: typeof user.color === 'string' && user.color ? user.color : '#6b7280',
       self,
-      agent: user.agent === true || AGENT_SUFFIX.test(user.name),
+      agent,
+      ...(agent ? { agentTag: split.tag ?? 'agent' } : {}),
     });
   }
   const peers = [...byKey.values()];
-  peers.sort((a, b) => Number(b.self) - Number(a.self) || a.name.localeCompare(b.name));
+  peers.sort(
+    (a, b) =>
+      Number(b.self) - Number(a.self) ||
+      a.name.localeCompare(b.name) ||
+      Number(a.agent) - Number(b.agent) ||
+      (a.agentTag ?? '').localeCompare(b.agentTag ?? '', undefined, { numeric: true })
+  );
   return peers;
 }
 
