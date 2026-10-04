@@ -68,6 +68,7 @@
     "@types/express": "^5.0.6",
     "@types/morgan": "^1.9.10",
     "@types/node": "^22.18.6",
+    "jsdom": "25.0.1",
     "postcss": "^8.4.49",
     "postcss-simple-vars": "^7.0.1",
     "tailwindcss": "^4.1.18",

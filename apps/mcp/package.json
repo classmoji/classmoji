@@ -16,6 +16,7 @@
     "@classmoji/auth": "*",
     "@classmoji/collab": "*",
     "@classmoji/database": "*",
+    "@classmoji/page-schema": "*",
     "@classmoji/services": "*",
     "@classmoji/tasks": "*",
     "@modelcontextprotocol/sdk": "^1.29.0",
