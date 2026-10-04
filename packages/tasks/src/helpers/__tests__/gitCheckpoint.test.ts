@@ -618,3 +618,85 @@ describe('isRepoNotFound', () => {
     expect(isRepoNotFound(err('fatal: some other not found thing'))).toBe(false);
   });
 });
+
+describe('commitFilesToRemote backstop: own pushes, absent files, before', () => {
+  const sha = (p: string, ref = 'main') => sh(['--git-dir', remote, 'rev-parse', `${ref}:${p}`]);
+
+  it('a head that already holds our bytes is our own earlier push, not an outside edit', async () => {
+    // First attempt lands, then the "row" still carries the old source sha.
+    const oldSha = sha('pages/intro/content.json');
+    await commitFilesToRemote({
+      remoteUrl,
+      files: [{ path: 'pages/intro/content.json', content: 'ours v2' }],
+      message: 'first\n',
+      author: ID,
+    });
+    const result = await commitFilesToRemote({
+      remoteUrl,
+      groups: [
+        {
+          id: 'intro',
+          files: [{ path: 'pages/intro/content.json', content: 'ours v2' }],
+          expectBase: { paths: ['pages/intro/content.json'], sha: oldSha },
+        },
+      ],
+      message: 'retry\n',
+      author: ID,
+    });
+    expect(result.excluded).toEqual([]);
+    expect(result.included).toEqual(['intro']);
+    expect(result.pushed).toBe(false);
+  });
+
+  it('a doc with no source file refuses to overwrite a file that appeared at its path', async () => {
+    const result = await commitFilesToRemote({
+      remoteUrl,
+      groups: [
+        {
+          id: 'lab',
+          files: [{ path: 'pages/lab-1/content.json', content: 'ours' }],
+          expectBase: { paths: ['pages/lab-1/content.json'], sha: null },
+        },
+        {
+          id: 'fresh',
+          files: [{ path: 'pages/fresh/content.json', content: 'fresh' }],
+          expectBase: { paths: ['pages/fresh/content.json'], sha: null },
+        },
+      ],
+      message: 'm\n',
+      author: ID,
+    });
+    expect(result.excluded.map(e => e.id)).toEqual(['lab']);
+    expect(result.included).toEqual(['fresh']);
+    expect(remoteFile('pages/lab-1/content.json')).toBe(bigText('lab'));
+    expect(remoteFile('pages/fresh/content.json')).toBe('fresh');
+  });
+
+  it('reports `before` only when that commit really holds the expected blob', async () => {
+    const seedCommit = remoteHead();
+    const seedSha = sha('pages/intro/content.json');
+    pushOutside('pages/intro/content.json', 'github web edit');
+    pushOutside('README2.md', 'more history so the seed commit is not the head');
+
+    const run = (commit: string) =>
+      commitFilesToRemote({
+        remoteUrl,
+        groups: [
+          {
+            id: 'intro',
+            files: [{ path: 'pages/intro/content.json', content: 'ours' }],
+            expectBase: { paths: ['pages/intro/content.json'], sha: seedSha, commit },
+          },
+        ],
+        message: 'm\n',
+        author: ID,
+      });
+
+    const good = await run(seedCommit);
+    expect(good.excluded[0]).toMatchObject({ id: 'intro', before: seedCommit });
+    expect(good.lazyFetches).toBe(0);
+
+    const wrong = await run(remoteHead());
+    expect(wrong.excluded[0].before).toBeUndefined();
+  });
+});

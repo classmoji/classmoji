@@ -154,8 +154,17 @@ describe('commit message', () => {
 
 type Row = CheckpointRow & {
   classroom_id: string;
-  pushed_commit: string | null;
   dirty_since: Date | null;
+  last_checkpoint_at?: Date | null;
+  last_checkpoint_error?: string | null;
+};
+
+const PAGE_PATHS: Record<string, string> = {
+  'page-a': 'pages/intro',
+  'page-b': 'pages/lab-1',
+  'page-c': 'pages/clean',
+  'page-dup': 'pages/intro',
+  'page-evil': '../outside',
 };
 
 const CLASSROOM = {
@@ -183,6 +192,8 @@ function makePrisma(rows: Row[]) {
     pushed_version: r.pushed_version,
     schema_version: r.schema_version,
     source_sha: r.source_sha,
+    pushed_commit: r.pushed_commit,
+    editors: r.editors,
   });
   return {
     rows,
@@ -196,6 +207,18 @@ function makePrisma(rows: Row[]) {
         .sort((a, b) => (a.kind + a.doc_id).localeCompare(b.kind + b.doc_id))
         .map(meta)
     ),
+    // Only the editors trim runs through $executeRaw: interpret it.
+    $executeRaw: vi.fn(async (sql: TemplateStringsArray, ...values: unknown[]) => {
+      if (!sql.join('?').includes('editors')) throw new Error('unexpected $executeRaw');
+      const [userIds, kind, docId, epoch] = values as [string[], string, string, number];
+      const r = rows.find(x => x.kind === kind && x.doc_id === docId && x.epoch === epoch);
+      if (!r || !Array.isArray(r.editors)) return 0;
+      const left = (r.editors as Array<{ userId: string }>).filter(
+        e => !userIds.includes(e.userId)
+      );
+      r.editors = left.length ? left : null;
+      return 1;
+    }),
     classroom: { findUnique: vi.fn(async () => CLASSROOM) },
     collabDoc: {
       findUnique: vi.fn(
@@ -253,12 +276,19 @@ function row(kind: string, docId: string, doc: Y.Doc, version = 1, extra: Partia
     pushed_version: 0,
     schema_version: kind === 'page' ? SCHEMA_VERSION : DECK_SCHEMA_VERSION,
     state: stateOf(doc),
-    source_sha: null,
+    // The blob the doc was seeded from: whatever main holds at its path.
+    source_sha:
+      kind === 'page' && PAGE_PATHS[docId] && !PAGE_PATHS[docId].startsWith('..')
+        ? blobOrNull(`${PAGE_PATHS[docId]}/content.json`)
+        : null,
     pushed_commit: null,
+    editors: null,
     dirty_since: new Date('2026-10-03T12:00:00Z'),
     ...extra,
   };
 }
+
+const NOW = new Date('2026-10-04T10:00:00Z');
 
 const realPageRenderer: PageRenderer = {
   fragment: FRAGMENT,
@@ -297,6 +327,14 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
+function blobOrNull(p: string): string | null {
+  try {
+    return sh(['--git-dir', remote, 'rev-parse', '--verify', '--quiet', `main:${p}`]) || null;
+  } catch {
+    return null;
+  }
+}
+
 const remoteFile = (p: string) => sh(['--git-dir', remote, 'show', `main:${p}`]);
 const remoteLog = () => sh(['--git-dir', remote, 'log', '--format=%s', 'main']).split('\n');
 
@@ -305,6 +343,8 @@ function makeDeps(prisma: ReturnType<typeof makePrisma>, over: Partial<Checkpoin
   const recordDeckCommit = vi.fn(async () => {});
   const ensureContentRepo = vi.fn(async () => {});
   const notifyOutsideEdit = vi.fn(async () => {});
+  const notifyCheckpointResult = vi.fn(async () => {});
+  const audit = vi.fn(async () => {});
   const deps: CheckpointDeps = {
     prisma: prisma as unknown as CheckpointDeps['prisma'],
     loadPageRenderer: async () => realPageRenderer,
@@ -325,11 +365,23 @@ function makeDeps(prisma: ReturnType<typeof makePrisma>, over: Partial<Checkpoin
     ensureContentRepo,
     commitFiles: input => commitFilesToRemote({ ...input, tmpRoot: root }),
     notifyOutsideEdit,
+    notifyCheckpointResult,
+    audit,
+    repoSizeKb: async () => 1234,
+    now: () => NOW,
     author: { name: 'Classmoji Bot', email: 'hello@classmoji.com' },
     log: { info: () => {}, warn: () => {}, error: () => {} },
     ...over,
   };
-  return { deps, recordPageFile, recordDeckCommit, ensureContentRepo, notifyOutsideEdit };
+  return {
+    deps,
+    recordPageFile,
+    recordDeckCommit,
+    ensureContentRepo,
+    notifyOutsideEdit,
+    notifyCheckpointResult,
+    audit,
+  };
 }
 
 describe('runContentCheckpoint', () => {
@@ -521,18 +573,37 @@ describe('runContentCheckpoint', () => {
     expect(report.pushed).toBe(true);
   });
 
-  it('a push failure throws (the task retries) and leaves every row dirty', async () => {
+  it('a push failure fails the run (retry), records the error, leaves every row dirty', async () => {
     const prisma = makePrisma([row('page', 'page-a', blocksToYDoc([para('a1', 'x')]), 1)]);
-    const { deps, recordPageFile } = makeDeps(prisma, {
+    const { deps, recordPageFile, notifyCheckpointResult } = makeDeps(prisma, {
       commitFiles: async () => {
         throw new GitCommandError(['push'], 1, 'remote: Permission denied');
       },
     });
-    await expect(
-      runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps)
-    ).rejects.toThrow(/Permission denied/);
-    expect(prisma.rows[0]).toMatchObject({ pushed_version: 0, pushed_commit: null });
+    const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
+    expect(report.failure).toMatchObject({
+      kind: 'retry',
+      message: expect.stringMatching(/Permission denied/),
+    });
+    expect(report.failure?.error).toBeInstanceOf(GitCommandError);
+    expect(prisma.rows[0]).toMatchObject({
+      pushed_version: 0,
+      pushed_commit: null,
+      last_checkpoint_at: NOW,
+      last_checkpoint_error: expect.stringMatching(/^failed: push failed: .*Permission denied/),
+    });
     expect(recordPageFile).not.toHaveBeenCalled();
+    expect(notifyCheckpointResult).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      docs: [
+        {
+          kind: 'page',
+          id: 'page-a',
+          at: NOW.toISOString(),
+          error: expect.stringMatching(/Permission denied/),
+        },
+      ],
+    });
   });
 
   it('leaves decks dirty while the converter is unavailable, pages unaffected', async () => {
@@ -803,5 +874,192 @@ describe('runContentCheckpoint review fixes', () => {
     expect(checkpointSubject(['Line one\nLine two', 'A <b>'])).toBe(
       'Update Line one Line two and A b (live editing)'
     );
+  });
+});
+
+describe('runContentCheckpoint bookkeeping round 2', () => {
+  const blobAt = (p: string) => sh(['--git-dir', remote, 'rev-parse', `main:${p}`]);
+
+  it('a retry after our own push landed is not an outside edit: rows end clean', async () => {
+    const doc = blocksToYDoc([para('a1', 'ours')]);
+    const prisma = makePrisma([row('page', 'page-a', doc, 2)]);
+    const { deps } = makeDeps(prisma);
+    await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r1' }, deps);
+    const pushedSha = blobAt('pages/intro/content.json');
+    // The crash: the push landed but the row update did not.
+    Object.assign(prisma.rows[0], {
+      pushed_version: 0,
+      source_sha: 'f'.repeat(40),
+      dirty_since: new Date(),
+    });
+    prisma.rows[0].source_sha = prisma.rows[0].source_sha; // stale on purpose
+    const { deps: deps2, notifyOutsideEdit } = makeDeps(prisma);
+    const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r2' }, deps2);
+    expect(notifyOutsideEdit).not.toHaveBeenCalled();
+    expect(report.docs[0]).toMatchObject({ status: 'unchanged', clean: true });
+    expect(prisma.rows[0]).toMatchObject({
+      pushed_version: 2,
+      source_sha: pushedSha,
+      dirty_since: null,
+    });
+    expect(report.failure).toBeUndefined();
+  });
+
+  it('a doc with no source refuses to overwrite a file that already exists, and tells collab', async () => {
+    const prisma = makePrisma([
+      row('page', 'page-a', blocksToYDoc([para('a1', 'ours')]), 1, { source_sha: null }),
+    ]);
+    const { deps, notifyOutsideEdit } = makeDeps(prisma);
+    const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
+    expect(report.docs[0]).toMatchObject({ status: 'refused', code: 'outside-edit-pending' });
+    expect(notifyOutsideEdit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        docId: 'page-a',
+        sha: sh(['--git-dir', remote, 'rev-parse', 'main']),
+      })
+    );
+    expect(remoteFile('pages/intro/content.json')).toBe('{"blocks":[]}');
+    // Waiting on collab is not a failed run (the sweeper alerts if it sticks).
+    expect(report.failure).toBeUndefined();
+    expect(prisma.rows[0].last_checkpoint_error).toMatch(/^outside-edit-pending: /);
+  });
+
+  it('passes `before` to collab when the last checkpoint commit holds the source blob', async () => {
+    const doc = blocksToYDoc([para('a1', 'v1')]);
+    const prisma = makePrisma([row('page', 'page-a', doc, 1)]);
+    await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r1' }, makeDeps(prisma).deps);
+    const checkpointCommit = prisma.rows[0].pushed_commit as string;
+    // Someone edits on GitHub; then the live doc changes again.
+    const work = path.join(root, 'work');
+    sh(['pull', '--ff-only', 'origin', 'main'], work);
+    writeFileSync(path.join(work, 'pages', 'intro', 'content.json'), '{"blocks":["web"]}');
+    sh(['commit', '-am', 'web edit'], work);
+    sh(['push', 'origin', 'main'], work);
+    sh(['--git-dir', remote, 'config', 'uploadpack.allowAnySHA1InWant', 'true']);
+    Object.assign(prisma.rows[0], {
+      version: 2,
+      state: stateOf(blocksToYDoc([para('a1', 'v2')])),
+      dirty_since: new Date(),
+    });
+    const { deps, notifyOutsideEdit } = makeDeps(prisma);
+    await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r2' }, deps);
+    expect(notifyOutsideEdit).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      kind: 'page',
+      docId: 'page-a',
+      sha: sh(['--git-dir', remote, 'rev-parse', 'main']),
+      before: checkpointCommit,
+    });
+  });
+
+  it('records outcomes per doc, credits row editors, trims them, audits and signals collab', async () => {
+    const prisma = makePrisma([
+      row('page', 'page-a', blocksToYDoc([para('a1', 'a')]), 1, {
+        editors: [
+          { userId: 'u-ada', name: 'Ada L' },
+          { userId: 'u-nogh', name: 'No GitHub' },
+        ],
+      }),
+      row('page', 'page-b', blocksToYDoc([para('b1', 'b')]), 1, {
+        schema_version: SCHEMA_VERSION + 1,
+      }),
+    ]);
+    const { deps, audit, notifyCheckpointResult } = makeDeps(prisma);
+    const report = await runContentCheckpoint(
+      {
+        classroomId: 'class-1',
+        // Payload editors are only a fallback: the row has its own.
+        editors: [{ kind: 'page', docId: 'page-a', editors: [{ userId: 'u-x', name: 'X' }] }],
+      },
+      { runId: 'run-9' },
+      deps
+    );
+    const head = sh(['--git-dir', remote, 'rev-parse', 'main']);
+    const body = sh(['--git-dir', remote, 'log', '-1', '--format=%B', 'main']);
+    expect(body).toContain('Co-authored-by: Ada L <101+ada@users.noreply.github.com>');
+    expect(body).not.toContain('X <');
+
+    expect(prisma.rows[0]).toMatchObject({
+      last_checkpoint_at: NOW,
+      last_checkpoint_error: null,
+      editors: null,
+    });
+    expect(prisma.rows[1]).toMatchObject({
+      last_checkpoint_at: NOW,
+      last_checkpoint_error: expect.stringMatching(/^schema-mismatch: /),
+    });
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(audit).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      userId: 'u-ada',
+      kind: 'page',
+      docId: 'page-a',
+      commit: head,
+      version: 1,
+      runId: 'run-9',
+    });
+    expect(notifyCheckpointResult).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      docs: expect.arrayContaining([
+        { kind: 'page', id: 'page-a', at: NOW.toISOString(), commit: head },
+        {
+          kind: 'page',
+          id: 'page-b',
+          at: NOW.toISOString(),
+          error: expect.stringMatching(/^schema-mismatch/),
+        },
+      ]),
+    });
+    expect(report.repoSizeKb).toBe(1234);
+    // A refusal fails the run, without retry, after the good doc was pushed.
+    expect(report.failure).toMatchObject({
+      kind: 'abort',
+      message: expect.stringMatching(/page-b/),
+    });
+    expect(report.docs.find(d => d.docId === 'page-a')?.status).toBe('pushed');
+  });
+
+  it('never fails the run over audit, signal or repo-size errors', async () => {
+    const prisma = makePrisma([
+      row('page', 'page-a', blocksToYDoc([para('a1', 'a')]), 1, {
+        editors: [{ userId: 'u-ada', name: 'Ada' }],
+      }),
+    ]);
+    const { deps } = makeDeps(prisma, {
+      audit: async () => {
+        throw new Error('audit down');
+      },
+      notifyCheckpointResult: async () => {
+        throw new Error('collab down');
+      },
+      repoSizeKb: async () => {
+        throw new Error('api down');
+      },
+    });
+    const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
+    expect(report.failure).toBeUndefined();
+    expect(report.docs[0].status).toBe('pushed');
+    expect(report.repoSizeKb).toBeNull();
+  });
+
+  it('keeps editors who were added after the push was built', async () => {
+    const prisma = makePrisma([
+      row('page', 'page-a', blocksToYDoc([para('a1', 'a')]), 1, {
+        editors: [{ userId: 'u-ada', name: 'Ada' }],
+      }),
+    ]);
+    const { deps } = makeDeps(prisma, {
+      commitFiles: async input => {
+        const result = await commitFilesToRemote({ ...input, tmpRoot: root });
+        prisma.rows[0].editors = [
+          { userId: 'u-ada', name: 'Ada' },
+          { userId: 'u-bob', name: 'Bob' },
+        ];
+        prisma.rows[0].version = 2;
+        return result;
+      },
+    });
+    await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
+    expect(prisma.rows[0].editors).toEqual([{ userId: 'u-bob', name: 'Bob' }]);
   });
 });

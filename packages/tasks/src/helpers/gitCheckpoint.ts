@@ -61,12 +61,26 @@ export interface CommitGroup {
   id: string;
   files: GitFileWrite[];
   /**
-   * Write this group only while the base's blob at the first of `paths` that
-   * exists equals `sha` (the blob the live document descends from). No file
-   * at any of the paths counts as a change. Omit for a document with no
-   * recorded source (a new one).
+   * What the base must hold for this group to be written: at the first of
+   * `paths` that exists, the blob `sha` (the one the live document descends
+   * from); `sha: null` = none of `paths` may exist (a document with no source
+   * file). Anything else is a change made outside the live document — unless
+   * the base already holds exactly the bytes this group writes (an earlier
+   * attempt of ours landed).
+   *
+   * Omit to skip the check; on a rebuild such a group is still dropped if its
+   * own paths changed between the old and the new base.
    */
-  expectBase?: { paths: string[]; sha: string };
+  expectBase?: {
+    paths: string[];
+    sha: string | null;
+    /**
+     * A commit believed to hold `sha` at the compared path (the doc's last
+     * checkpoint). Reported back as `before` on exclusion only if it does —
+     * collab uses it as the 3-way merge base.
+     */
+    commit?: string | null;
+  };
 }
 
 export interface CommitFilesInput {
@@ -99,6 +113,8 @@ export interface CommitFilesInput {
 export interface ExcludedGroup {
   id: string;
   reason: 'outside-edit';
+  /** `expectBase.commit`, verified to hold the expected blob; else absent. */
+  before?: string;
   /** The commit whose content showed the change. */
   headCommit: string;
   /** Path that was compared, and its blob there (null: absent). */
@@ -470,9 +486,47 @@ export async function commitFilesToRemote(input: CommitFilesInput): Promise<Comm
     const isExcluded = (id: string) => excluded.some(e => e.id === id);
 
     /** Drop every group whose file changed outside its document, as seen at `base`. */
+    /** Whether `base` already holds exactly the bytes this group writes. */
+    const alreadyOurs = async (base: string, group: CommitGroup) => {
+      for (const f of group.files) {
+        if ((await repo.blobAt(base, f.path)) !== blobShas[f.path]) return false;
+      }
+      return true;
+    };
+
+    /** `commit`, if it holds `sha` at `filePath` (fetched trees-only to check). */
+    const verifiedBefore = async (
+      commit: string | null | undefined,
+      filePath: string,
+      sha: string | null
+    ): Promise<string | undefined> => {
+      if (!commit || !sha) return undefined;
+      try {
+        // Fetched explicitly (commit + trees, no blobs) BEFORE asking: a
+        // lookup of a commit this shallow clone lacks would lazily fetch it
+        // object by object.
+        const packs = await repo.packCount();
+        await repo.git([
+          'fetch',
+          '--depth',
+          '1',
+          '--filter=blob:none',
+          '--no-tags',
+          'origin',
+          commit,
+        ]);
+        explicitPacks += (await repo.packCount()) - packs;
+        return (await repo.blobAt(commit, filePath)) === sha ? commit : undefined;
+      } catch {
+        return undefined;
+      }
+    };
+
+    /** Drop every group whose file changed outside its document, as seen at `base`. */
     const screen = async (base: string, previousBase: string | null) => {
       for (const { group } of parsedGroups) {
         if (isExcluded(group.id)) continue;
+        let changed: { path: string; headSha: string | null } | null = null;
         if (group.expectBase) {
           let comparedPath = group.expectBase.paths[0];
           let headSha: string | null = null;
@@ -484,31 +538,31 @@ export async function commitFilesToRemote(input: CommitFilesInput): Promise<Comm
               break;
             }
           }
-          if (headSha !== group.expectBase.sha) {
-            excluded.push({
-              id: group.id,
-              reason: 'outside-edit',
-              headCommit: base,
-              path: comparedPath,
-              headSha,
-            });
-          }
+          if (headSha !== group.expectBase.sha) changed = { path: comparedPath, headSha };
         } else if (previousBase) {
           for (const f of group.files) {
             const before = await repo.blobAt(previousBase, f.path);
             const after = await repo.blobAt(base, f.path);
             if (before !== after) {
-              excluded.push({
-                id: group.id,
-                reason: 'outside-edit',
-                headCommit: base,
-                path: f.path,
-                headSha: after,
-              });
+              changed = { path: f.path, headSha: after };
               break;
             }
           }
         }
+        // A retry after our own push landed (crash before the rows were
+        // written, or a rejection we raced ourselves): not an outside edit.
+        if (!changed || (await alreadyOurs(base, group))) continue;
+        const before = group.expectBase
+          ? await verifiedBefore(group.expectBase.commit, changed.path, group.expectBase.sha)
+          : undefined;
+        excluded.push({
+          id: group.id,
+          reason: 'outside-edit',
+          ...(before ? { before } : {}),
+          headCommit: base,
+          path: changed.path,
+          headSha: changed.headSha,
+        });
       }
     };
 

@@ -67,6 +67,9 @@ export interface DirtyRowMeta {
   pushed_version: number;
   schema_version: number;
   source_sha: string | null;
+  pushed_commit: string | null;
+  /** `{ userId, name }[]` accumulated by the collab store hook since the last push. */
+  editors: unknown;
 }
 
 /** The snapshot: state plus the counters read in the same statement. */
@@ -91,6 +94,7 @@ interface CountResult {
 /** The slice of Prisma the run uses. Kept narrow so tests can stub it. */
 export interface CheckpointPrisma {
   $queryRaw<T = unknown>(query: TemplateStringsArray, ...values: unknown[]): Promise<T>;
+  $executeRaw(query: TemplateStringsArray, ...values: unknown[]): Promise<number>;
   classroom: {
     findUnique(args: {
       where: { id: string };
@@ -108,6 +112,8 @@ export interface CheckpointPrisma {
         pushed_version: true;
         schema_version: true;
         source_sha: true;
+        pushed_commit: true;
+        editors: true;
         state: true;
       };
     }): Promise<CheckpointRow | null>;
@@ -119,12 +125,16 @@ export interface CheckpointPrisma {
         version?: number;
         pushed_version?: { lt: number };
       };
-      data: {
-        pushed_version: number;
-        pushed_commit: string;
-        source_sha: string;
-        dirty_since?: null;
-      };
+      data:
+        | {
+            pushed_version: number;
+            pushed_commit: string;
+            source_sha: string;
+            dirty_since?: null;
+            last_checkpoint_at?: Date;
+            last_checkpoint_error?: null;
+          }
+        | { last_checkpoint_at: Date; last_checkpoint_error: string | null };
     }): Promise<CountResult>;
   };
   page: {
@@ -186,6 +196,26 @@ export interface OutsideEditNotice {
   docId: string;
   /** The head commit that showed the outside change. */
   sha: string;
+  /** A commit holding the blob the live doc descends from (merge base), when verified. */
+  before?: string;
+}
+
+export interface CheckpointResultDoc {
+  kind: string;
+  id: string;
+  commit?: string;
+  at: string;
+  error?: string;
+}
+
+export interface CheckpointAuditEntry {
+  classroomId: string;
+  userId: string;
+  kind: string;
+  docId: string;
+  commit: string;
+  version: number;
+  runId: string;
 }
 
 export interface CheckpointDeps {
@@ -228,6 +258,17 @@ export interface CheckpointDeps {
   commitFiles(input: CommitFilesInput): Promise<CommitFilesResult>;
   /** Tell collab an outside edit is waiting to be merged (`collab-external`). */
   notifyOutsideEdit(notice: OutsideEditNotice): Promise<void>;
+  /** Collab `POST /internal/checkpoint-result` (best effort). */
+  notifyCheckpointResult(result: {
+    classroomId: string;
+    docs: CheckpointResultDoc[];
+  }): Promise<void>;
+  /** One COLLAB_CHECKPOINT audit row (best effort). */
+  audit(entry: CheckpointAuditEntry): Promise<void>;
+  /** The content repo's size in KB, or null (reporting only). */
+  repoSizeKb(classroom: CheckpointClassroom): Promise<number | null>;
+  /** Clock (tests). */
+  now?: () => Date;
   /** The commit author (Classmoji Bot). */
   author: GitIdentity;
   log: {
@@ -275,6 +316,10 @@ export interface DocReport {
   paths?: string[];
   /** False when `version` moved after the snapshot (the row stays dirty). */
   clean?: boolean;
+  /** The row's epoch when it was read (every row write is pinned to it). */
+  epoch?: number;
+  /** The commit holding this doc's content (pushed/unchanged). */
+  commit?: string;
 }
 
 export interface CheckpointReport {
@@ -293,6 +338,15 @@ export interface CheckpointReport {
    */
   unusedMessage?: string;
   docs: DocReport[];
+  /** The content repo's size in KB as GitHub reports it (null if unknown). */
+  repoSizeKb?: number | null;
+  /**
+   * Set when the run should be marked failed AFTER everything that succeeded
+   * was committed and recorded: 'abort' = a doc was refused (retrying cannot
+   * help), 'retry' = a doc or the push failed (transient). Outside edits
+   * waiting for collab do not fail the run (the sweeper alerts if one sticks).
+   */
+  failure?: { kind: 'abort' | 'retry'; message: string; error?: unknown };
 }
 
 export type CheckpointPayload = ContentCheckpointPayload;
@@ -341,27 +395,44 @@ export function checkpointMessage({
   return lines.join('\n') + '\n';
 }
 
+/** The row's `editors` JSON as actors (malformed entries dropped). */
+export function parseEditors(value: unknown): CollabActor[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(
+      (e): e is { userId: string; name?: unknown } =>
+        !!e && typeof e === 'object' && typeof (e as { userId?: unknown }).userId === 'string'
+    )
+    .map(e => ({ userId: e.userId, name: typeof e.name === 'string' ? e.name : '' }));
+}
+
 /**
- * Co-author trailers per doc (`kind:docId` -> trailers): the payload's per-doc
- * editors resolved to GitHub no-reply addresses. An editor with no GitHub
- * account gets no trailer (no address is invented for them).
+ * Co-author trailers per doc (`kind:docId` -> trailers). The source is the
+ * row's `editors` (kept by the collab store hook, survives a collab restart);
+ * the payload's per-doc editors are the fallback for a row that has none. An
+ * editor with no GitHub account gets no trailer (no address is invented).
  */
 async function resolveCoAuthors(
   prisma: CheckpointPrisma,
-  editors: CheckpointDocEditors[] | undefined,
+  rowEditors: Map<string, CollabActor[]>,
+  payloadEditors: CheckpointDocEditors[] | undefined,
   docs: Set<string>
 ): Promise<Map<string, Array<{ userId: string; name: string; email: string }>>> {
   const out = new Map<string, Array<{ userId: string; name: string; email: string }>>();
-  if (!editors?.length) return out;
   const perDoc = new Map<string, CollabActor[]>();
-  const userIds = new Set<string>();
-  for (const entry of editors) {
-    const key = `${entry.kind}:${entry.docId}`;
-    if (!docs.has(key)) continue;
-    const actors = (entry.editors ?? []).filter(a => a?.userId);
-    perDoc.set(key, [...(perDoc.get(key) ?? []), ...actors]);
-    for (const a of actors) userIds.add(a.userId);
+  for (const key of docs) {
+    const fromRow = rowEditors.get(key) ?? [];
+    if (fromRow.length) perDoc.set(key, fromRow);
   }
+  for (const entry of payloadEditors ?? []) {
+    const key = `${entry.kind}:${entry.docId}`;
+    if (!docs.has(key) || perDoc.has(key)) continue;
+    perDoc.set(
+      key,
+      (entry.editors ?? []).filter(a => a?.userId)
+    );
+  }
+  const userIds = new Set([...perDoc.values()].flat().map(a => a.userId));
   if (userIds.size === 0) return out;
   const accounts = await prisma.account.findMany({
     where: { user_id: { in: [...userIds] }, provider_id: 'github' },
@@ -480,22 +551,14 @@ function refuseConflictingPaths(candidates: Candidate[]): {
   };
 }
 
-export async function runContentCheckpoint(
+async function checkpointDocs(
   payload: CheckpointPayload,
   ctx: { runId: string },
-  deps: CheckpointDeps
+  deps: CheckpointDeps,
+  report: CheckpointReport
 ): Promise<CheckpointReport> {
   const { prisma, log } = deps;
   const { classroomId } = payload;
-  const report: CheckpointReport = {
-    classroomId,
-    runId: ctx.runId,
-    ...(payload.reason ? { reason: payload.reason } : {}),
-    commit: null,
-    pushed: false,
-    attempts: 0,
-    docs: [],
-  };
   const noteUnusedMessage = () => {
     if (!payload.message?.trim()) return;
     report.unusedMessage = payload.message;
@@ -516,7 +579,8 @@ export async function runContentCheckpoint(
 
   // 1. The dirty rows, filtered in SQL: metadata only, no state.
   const dirty = await prisma.$queryRaw<DirtyRowMeta[]>`
-    SELECT kind, doc_id, epoch, version, pushed_version, schema_version, source_sha
+    SELECT kind, doc_id, epoch, version, pushed_version, schema_version, source_sha,
+           pushed_commit, editors
     FROM collab_docs
     WHERE classroom_id = ${classroomId}
       AND version > pushed_version
@@ -584,6 +648,7 @@ export async function runContentCheckpoint(
       docId: meta.doc_id,
       version: meta.version,
       status: 'skipped',
+      epoch: meta.epoch,
     };
     try {
       if (meta.kind !== 'page' && meta.kind !== 'deck') {
@@ -653,6 +718,8 @@ export async function runContentCheckpoint(
           pushed_version: true,
           schema_version: true,
           source_sha: true,
+          pushed_commit: true,
+          editors: true,
           state: true,
         },
       });
@@ -665,6 +732,7 @@ export async function runContentCheckpoint(
         continue; // reseeded, pushed or rewritten since the filter: not ours now
       }
       base.version = row.version;
+      base.epoch = row.epoch;
       const doc = new Y.Doc();
       Y.applyUpdate(doc, row.state);
 
@@ -694,7 +762,9 @@ export async function runContentCheckpoint(
           row,
           report: { ...base, paths: [prepared.path] },
           sourcePath: prepared.path,
-          sourcePaths: [prepared.path],
+          // A legacy page was seeded from index.html: its source_sha is that
+          // file's until content.json exists.
+          sourcePaths: [prepared.path, prepared.path.replace(/content\.json$/, 'index.html')],
           files: [{ path: prepared.path, content: prepared.content }],
           record: shas =>
             deps.recordPageFile(pageTarget, prepared.path, shas[prepared.path], prepared.content, {
@@ -772,10 +842,15 @@ export async function runContentCheckpoint(
   const groups: CommitGroup[] = ok.map(c => ({
     id: docKey(c.row.kind, c.row.doc_id),
     files: c.files,
-    ...(c.row.source_sha ? { expectBase: { paths: c.sourcePaths, sha: c.row.source_sha } } : {}),
+    // Null source = a doc with no file yet: the paths must still be absent.
+    expectBase: { paths: c.sourcePaths, sha: c.row.source_sha, commit: c.row.pushed_commit },
   }));
+  const rowEditors = new Map(
+    ok.map(c => [docKey(c.row.kind, c.row.doc_id), parseEditors(c.row.editors)])
+  );
   const coAuthorsByDoc = await resolveCoAuthors(
     prisma,
+    rowEditors,
     payload.editors,
     new Set(groups.map(g => g.id))
   );
@@ -795,25 +870,38 @@ export async function runContentCheckpoint(
     return message;
   };
 
-  const remote = await deps.remote(classroom);
-  const input: CommitFilesInput = {
-    remoteUrl: remote.url,
-    ...(remote.auth ? { auth: remote.auth } : {}),
-    groups,
-    message: buildMessage,
-    author: deps.author,
-  };
   let result: CommitFilesResult;
   try {
-    result = await deps.commitFiles(input);
+    const remote = await deps.remote(classroom);
+    const input: CommitFilesInput = {
+      remoteUrl: remote.url,
+      ...(remote.auth ? { auth: remote.auth } : {}),
+      groups,
+      message: buildMessage,
+      author: deps.author,
+    };
+    try {
+      result = await deps.commitFiles(input);
+    } catch (error) {
+      if (!isRepoNotFound(error)) throw error;
+      // A content repo that does not exist yet: create it through the usual
+      // path (which asks the API, so a 403 is never mistaken for a 404), then
+      // try once more.
+      log.warn('content-checkpoint: content repo missing; creating it', { classroomId });
+      await deps.ensureContentRepo(classroomId);
+      result = await deps.commitFiles(input);
+    }
   } catch (error) {
-    if (!isRepoNotFound(error)) throw error;
-    // A content repo that does not exist yet: create it through the usual
-    // path (which asks the API, so a 403 is never mistaken for a 404), then
-    // try once more.
-    log.warn('content-checkpoint: content repo missing; creating it', { classroomId });
-    await deps.ensureContentRepo(classroomId);
-    result = await deps.commitFiles(input);
+    // Nothing was committed: every prepared doc stays dirty, with the reason.
+    for (const c of ok) {
+      report.docs.push({
+        ...c.report,
+        status: 'failed',
+        reason: `push failed: ${errMessage(error)}`,
+      });
+    }
+    report.failure = { kind: 'retry', message: errMessage(error), error };
+    return report;
   }
   report.commit = result.commit;
   report.pushed = result.pushed;
@@ -831,17 +919,26 @@ export async function runContentCheckpoint(
   for (const c of ok) {
     const e = excluded.get(docKey(c.row.kind, c.row.doc_id));
     if (!e) continue;
-    refuse(
-      c.report,
-      'outside-edit-pending',
-      `${e.path} changed outside the live document (at ${e.headCommit.slice(0, 12)}); waiting for collab to merge it`
-    );
+    log.warn('content-checkpoint: outside edit waiting for collab', {
+      classroomId,
+      kind: c.row.kind,
+      docId: c.row.doc_id,
+      path: e.path,
+      head: e.headCommit,
+    });
+    report.docs.push({
+      ...c.report,
+      status: 'refused',
+      code: 'outside-edit-pending',
+      reason: `${e.path} changed outside the live document (at ${e.headCommit.slice(0, 12)}); waiting for collab to merge it`,
+    });
     try {
       await deps.notifyOutsideEdit({
         classroomId,
         kind: c.row.kind,
         docId: c.row.doc_id,
         sha: e.headCommit,
+        ...(e.before ? { before: e.before } : {}),
       });
     } catch (error) {
       log.error('content-checkpoint: could not notify collab of an outside edit', {
@@ -871,12 +968,16 @@ export async function runContentCheckpoint(
   }
 
   // 7. Rows. Clean only if nothing was stored since the snapshot.
+  const at = deps.now?.() ?? new Date();
   for (const c of included) {
+    const key = docKey(c.row.kind, c.row.doc_id);
     const where = { kind: c.row.kind, doc_id: c.row.doc_id, epoch: c.row.epoch };
     const data = {
       pushed_version: c.row.version,
       pushed_commit: result.commit,
       source_sha: result.blobShas[c.sourcePath],
+      last_checkpoint_at: at,
+      last_checkpoint_error: null,
     };
     const cleaned = await prisma.collabDoc.updateMany({
       where: { ...where, version: c.row.version },
@@ -891,10 +992,62 @@ export async function runContentCheckpoint(
         data,
       });
     }
+
+    // Editors credited in this commit leave the row's list; anyone the store
+    // hook added meanwhile stays. (Someone credited here who also typed after
+    // the snapshot loses the trailer on the next commit — a missed credit,
+    // never a wrong one.)
+    const credited = [
+      ...new Set(
+        (coAuthorsByDoc.get(key) ?? [])
+          .map(a => a.userId)
+          .concat((rowEditors.get(key) ?? []).map(a => a.userId))
+      ),
+    ];
+    if (credited.length && result.pushed) {
+      try {
+        await trimEditors(prisma, c.row, credited);
+      } catch (error) {
+        log.warn('content-checkpoint: could not trim editors', {
+          classroomId,
+          docId: c.row.doc_id,
+          error: errMessage(error),
+        });
+      }
+    }
+
+    if (result.pushed) {
+      const actor =
+        (coAuthorsByDoc.get(key) ?? [])[0]?.userId ??
+        (rowEditors.get(key) ?? [])[0]?.userId ??
+        payload.editors?.find(e => `${e.kind}:${e.docId}` === key)?.editors?.[0]?.userId;
+      if (actor) {
+        try {
+          await deps.audit({
+            classroomId,
+            userId: actor,
+            kind: c.row.kind,
+            docId: c.row.doc_id,
+            commit: result.commit,
+            version: c.row.version,
+            runId: ctx.runId,
+          });
+        } catch (error) {
+          log.warn('content-checkpoint: audit failed', {
+            docId: c.row.doc_id,
+            error: errMessage(error),
+          });
+        }
+      } else {
+        log.info('content-checkpoint: no editor to audit as', { docId: c.row.doc_id });
+      }
+    }
+
     report.docs.push({
       ...c.report,
       status: result.pushed ? 'pushed' : 'unchanged',
       clean,
+      commit: result.commit,
     });
   }
 
@@ -905,5 +1058,124 @@ export async function runContentCheckpoint(
     attempts: result.attempts,
     docs: report.docs.map(d => `${d.kind}:${d.docId}=${d.status}`),
   });
+  return report;
+}
+
+/** Remove `userIds` from the row's `editors` list (null when it empties). */
+async function trimEditors(prisma: CheckpointPrisma, row: CheckpointRow, userIds: string[]) {
+  await prisma.$executeRaw`
+    UPDATE collab_docs SET editors = (
+      SELECT CASE WHEN count(*) = 0 THEN NULL ELSE jsonb_agg(e) END
+      FROM jsonb_array_elements(editors) AS e
+      WHERE NOT ((e ->> 'userId') = ANY(${userIds}::text[]))
+    )
+    WHERE kind = ${row.kind} AND doc_id = ${row.doc_id} AND epoch = ${row.epoch}
+      AND jsonb_typeof(editors) = 'array'`;
+}
+
+/** A doc's outcome as stored in `last_checkpoint_error`: code + short message. */
+export function checkpointErrorText(doc: DocReport): string | null {
+  if (doc.status === 'pushed' || doc.status === 'unchanged') return null;
+  const text = `${doc.code ?? doc.status}: ${doc.reason ?? doc.status}`;
+  return text.length > 500 ? `${text.slice(0, 497)}...` : text;
+}
+
+/**
+ * Push every dirty live doc of a classroom; then, whatever happened, persist
+ * each doc's outcome, tell collab (Saved-to-GitHub signal), and work out
+ * whether the run must be marked failed (`report.failure`; the task throws).
+ */
+export async function runContentCheckpoint(
+  payload: CheckpointPayload,
+  ctx: { runId: string },
+  deps: CheckpointDeps
+): Promise<CheckpointReport> {
+  const { log } = deps;
+  const report: CheckpointReport = {
+    classroomId: payload.classroomId,
+    runId: ctx.runId,
+    ...(payload.reason ? { reason: payload.reason } : {}),
+    commit: null,
+    pushed: false,
+    attempts: 0,
+    docs: [],
+  };
+  try {
+    await checkpointDocs(payload, ctx, deps, report);
+  } catch (error) {
+    report.failure = { kind: 'retry', message: errMessage(error), error };
+  }
+
+  const at = deps.now?.() ?? new Date();
+  // Persist the outcome of every doc that is NOT pushed/unchanged (those were
+  // written with their row update above).
+  for (const doc of report.docs) {
+    const error = checkpointErrorText(doc);
+    if (error === null || doc.epoch === undefined) continue;
+    try {
+      await deps.prisma.collabDoc.updateMany({
+        where: { kind: doc.kind, doc_id: doc.docId, epoch: doc.epoch },
+        data: { last_checkpoint_at: at, last_checkpoint_error: error },
+      });
+    } catch (e) {
+      log.warn('content-checkpoint: could not record a doc outcome', {
+        docId: doc.docId,
+        error: errMessage(e),
+      });
+    }
+  }
+
+  if (report.docs.length) {
+    try {
+      await deps.notifyCheckpointResult({
+        classroomId: payload.classroomId,
+        docs: report.docs.map(d => {
+          const error = checkpointErrorText(d);
+          return {
+            kind: d.kind,
+            id: d.docId,
+            at: at.toISOString(),
+            ...(d.commit && !error ? { commit: d.commit } : {}),
+            ...(error ? { error } : {}),
+          };
+        }),
+      });
+    } catch (e) {
+      log.warn('content-checkpoint: checkpoint-result not delivered', { error: errMessage(e) });
+    }
+  }
+
+  if (report.commit || report.docs.length) {
+    const classroom = await deps.prisma.classroom
+      .findUnique({ where: { id: payload.classroomId }, include: { git_organization: true } })
+      .catch(() => null);
+    if (classroom) {
+      report.repoSizeKb = await deps.repoSizeKb(classroom).catch(() => null);
+      log.info('content-checkpoint: content repo size', {
+        classroomId: payload.classroomId,
+        sizeKb: report.repoSizeKb,
+      });
+    }
+  }
+
+  if (!report.failure) {
+    const refused = report.docs.filter(
+      d => d.status === 'refused' && d.code !== 'outside-edit-pending'
+    );
+    const failed = report.docs.filter(d => d.status === 'failed');
+    if (failed.length) {
+      report.failure = {
+        kind: 'retry',
+        message: `${failed.length} document(s) failed: ${failed.map(d => `${d.kind}:${d.docId}`).join(', ')}`,
+      };
+    } else if (refused.length) {
+      report.failure = {
+        kind: 'abort',
+        message: `${refused.length} document(s) refused: ${refused
+          .map(d => `${d.kind}:${d.docId} (${d.code})`)
+          .join(', ')}`,
+      };
+    }
+  }
   return report;
 }

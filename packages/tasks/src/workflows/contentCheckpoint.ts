@@ -28,7 +28,7 @@
  * with every trigger — a trailing debounce runs with the LAST payload.
  */
 
-import { idempotencyKeys, logger, task, tasks } from '@trigger.dev/sdk';
+import { AbortTaskRunError, idempotencyKeys, logger, task, tasks } from '@trigger.dev/sdk';
 import type * as Y from 'yjs';
 import getPrisma from '@classmoji/database';
 import { CLASSMOJI_BOT_EMAIL, ClassmojiService, getGitProvider } from '@classmoji/services';
@@ -41,11 +41,14 @@ import {
   type SlideContentTarget,
 } from '@classmoji/services/slides'; // eslint-disable-line import/no-unresolved
 
+import { resolveCollabEnv } from '@classmoji/collab/env'; // eslint-disable-line import/no-unresolved
+
 import { commitFilesToRemote } from '../helpers/gitCheckpoint.ts';
 import {
   runContentCheckpoint,
   type CheckpointClassroom,
   type CheckpointDeps,
+  type CheckpointResultDoc,
   type CheckpointPayload,
   type CheckpointPrisma,
   type DeckLike,
@@ -129,6 +132,26 @@ async function contentRemote(classroom: CheckpointClassroom) {
   };
 }
 
+/**
+ * Collab `POST /internal/checkpoint-result`: the Saved-to-GitHub signal for
+ * the listed docs' live rooms. Best effort — a collab that is down or not
+ * configured only means the header updates on the next snapshot instead.
+ */
+async function postCheckpointResult(result: {
+  classroomId: string;
+  docs: CheckpointResultDoc[];
+}): Promise<void> {
+  const env = resolveCollabEnv();
+  if (!env) return;
+  const response = await fetch(`${env.httpUrl}/internal/checkpoint-result`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-collab-secret': env.secret },
+    body: JSON.stringify(result),
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) throw new Error(`checkpoint-result answered ${response.status}`);
+}
+
 export function realCheckpointDeps(): CheckpointDeps {
   const pageContent = ClassmojiService.pageContent;
   return {
@@ -152,18 +175,43 @@ export function realCheckpointDeps(): CheckpointDeps {
       await ClassmojiService.page.ensureContentRepo(classroomId);
     },
     commitFiles: commitFilesToRemote,
-    notifyOutsideEdit: async ({ classroomId, kind, docId, sha }) => {
-      // Once per (doc, head) across this run's retries and later runs: the
-      // same unmerged outside edit seen again is the same notification.
+    notifyOutsideEdit: async payload => {
+      // Same key shape and concurrency as hook-station's trigger, so the same
+      // outside edit seen by both (or by this run's retries) is one run.
       const idempotencyKey = await idempotencyKeys.create(
-        `collab-external:${kind}:${docId}:${sha}`,
+        `collab-external:${payload.kind}:${payload.docId}:${payload.before ?? ''}..${payload.sha}`,
         { scope: 'global' }
       );
-      await tasks.trigger(
-        COLLAB_EXTERNAL_TASK_ID,
-        { classroomId, kind, docId, sha },
-        { idempotencyKey, idempotencyKeyTTL: '1h' }
-      );
+      await tasks.trigger(COLLAB_EXTERNAL_TASK_ID, payload, {
+        concurrencyKey: payload.classroomId,
+        idempotencyKey,
+        idempotencyKeyTTL: '1h',
+      });
+    },
+    notifyCheckpointResult: postCheckpointResult,
+    audit: async ({ classroomId, userId, kind, docId, commit, version, runId }) => {
+      const membership = await getPrisma().classroomMembership.findFirst({
+        where: { classroom_id: classroomId, user_id: userId },
+        select: { role: true },
+      });
+      if (!membership) return;
+      await ClassmojiService.audit.create({
+        classroom_id: classroomId,
+        user_id: userId,
+        role: membership.role,
+        action: 'COLLAB_CHECKPOINT',
+        resource_type: kind === 'deck' ? 'slide' : 'page',
+        resource_id: docId,
+        data: { commit, version, runId },
+      });
+    },
+    repoSizeKb: async classroom => {
+      const org = classroom.git_organization;
+      if (!org?.login || org.provider === 'GITLAB') return null;
+      const provider = getGitProvider(org as Parameters<typeof getGitProvider>[0]) as {
+        getRepositorySizeKb?: (owner: string, repo: string) => Promise<number | null>;
+      };
+      return (await provider.getRepositorySizeKb?.(org.login, classroom.content_repo)) ?? null;
     },
     author: { name: 'Classmoji Bot', email: CLASSMOJI_BOT_EMAIL },
     log: {
@@ -192,6 +240,16 @@ export const contentCheckpoint = task({
    */
   retry: { maxAttempts: 3, minTimeoutInMs: 2000, maxTimeoutInMs: 20000, factor: 2 },
   run: async (payload: CheckpointPayload, { ctx }) => {
-    return runContentCheckpoint(payload, { runId: ctx.run.id }, realCheckpointDeps());
+    const report = await runContentCheckpoint(payload, { runId: ctx.run.id }, realCheckpointDeps());
+    // Everything that succeeded is committed and recorded by now; a refused
+    // or failed doc still marks the run failed, so dashboards and alerts see
+    // it. A refusal is deterministic (no retry); a failure may be transient.
+    if (report.failure) {
+      const { failure, ...rest } = report;
+      logger.error('content-checkpoint: run failed', { ...rest, failure: failure.message });
+      if (failure.kind === 'abort') throw new AbortTaskRunError(failure.message);
+      throw failure.error instanceof Error ? failure.error : new Error(failure.message);
+    }
+    return report;
   },
 });
