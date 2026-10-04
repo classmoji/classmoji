@@ -23,9 +23,10 @@ import { ClassmojiService } from '~/utils/db.server.ts';
 import { loadPageContent } from '~/utils/content.server.ts';
 import type { PageForContent } from '~/types/pages.ts';
 import type { CollabEnv } from '~/utils/collabEnv.server.ts';
-import { mergePreviewLive } from '~/utils/collab.server.ts';
+import { fetchLiveSnapshot, mergePreviewLive } from '~/utils/collab.server.ts';
 import {
   mergePreviewFailure,
+  orderUnitPreviews,
   resolutionList,
   type MergeConflictUnit,
   type PageContentBody,
@@ -87,14 +88,15 @@ async function contentAt(page: LivePage, ref: string): Promise<PageContentBody |
 }
 
 /**
- * The page as it was when its preview started (normalized blocks), or null
- * when that cannot be read — the preview then renders without highlights.
+ * The page as it was when its preview started (normalized blocks and its
+ * cover), or null when that cannot be read — the preview then renders
+ * without highlights.
  */
-export async function previewBaseBlocks(page: LivePage): Promise<unknown[] | null> {
+export async function previewBaseContent(page: LivePage): Promise<PageContentBody | null> {
   try {
     const state = await previewBranchState(page);
     if (!state?.mergeBaseSha) return null;
-    return (await contentAt(page, state.mergeBaseSha))?.blocks ?? null;
+    return await contentAt(page, state.mergeBaseSha);
   } catch (error) {
     console.warn('[pages] Preview merge-base unavailable for highlighting:', error);
     return null;
@@ -103,7 +105,12 @@ export async function previewBaseBlocks(page: LivePage): Promise<unknown[] | nul
 
 export type LiveAcceptResult =
   | { merged: true; previewKept: boolean }
-  | { merged: false; conflict: true; units: MergeConflictUnit[] }
+  | {
+      merged: false;
+      conflict: true;
+      units: MergeConflictUnit[];
+      unitPreviews: Record<string, { index: number; summary: string }> | null;
+    }
   | { merged: false; conflict: false; status: number; error: string };
 
 /**
@@ -171,7 +178,25 @@ export async function acceptPreviewLive({
     });
   } catch (error) {
     const failure = mergePreviewFailure(error);
-    if (failure.kind === 'conflict') return { merged: false, conflict: true, units: failure.units };
+    if (failure.kind === 'conflict') {
+      // An order conflict lists block ids; the chooser shows them as text.
+      // The live page is read for blocks only it has (best effort).
+      let live: unknown[] = [];
+      if (failure.units.some(unit => unit.reason === 'order')) {
+        try {
+          const snapshot = await fetchLiveSnapshot(env, page.id, { timeoutMs: 3000 });
+          live = Array.isArray(snapshot.content?.blocks) ? snapshot.content.blocks : [];
+        } catch {
+          live = [];
+        }
+      }
+      return {
+        merged: false,
+        conflict: true,
+        units: failure.units,
+        unitPreviews: orderUnitPreviews(failure.units, [live, theirs.blocks, base.blocks]),
+      };
+    }
     return { merged: false, conflict: false, status: failure.status, error: failure.message };
   }
 

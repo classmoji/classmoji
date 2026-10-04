@@ -24,6 +24,8 @@ interface HeaderImageProps {
    * `imageUrl` is only the URL it is displayed with.
    */
   live?: { storedUrl: string | null; target: LiveCoverTarget } | null;
+  /** A rendered preview marks the cover it changes (never a diff). */
+  highlighted?: boolean;
 }
 
 const HeaderImage = ({
@@ -33,6 +35,7 @@ const HeaderImage = ({
   pageId: _pageId,
   uploadCapability = null,
   live = null,
+  highlighted = false,
 }: HeaderImageProps) => {
   const [isHovering, setIsHovering] = useState(false);
   const [isRepositioning, setIsRepositioning] = useState(false);
@@ -189,6 +192,17 @@ const HeaderImage = ({
       onTouchStart={isRepositioning ? handleTouchStart : undefined}
     >
       {fileInput}
+
+      {highlighted && (
+        <div
+          data-testid="preview-cover-changed"
+          className="pointer-events-none absolute inset-0 z-10 shadow-[inset_0_0_0_3px_rgb(245,158,11)] dark:shadow-[inset_0_0_0_3px_rgb(251,191,36)]"
+        >
+          <span className="absolute left-3 top-3 rounded-full bg-amber-500 px-2 py-0.5 text-xs font-semibold text-white dark:bg-amber-400 dark:text-amber-950">
+            Cover changed
+          </span>
+        </div>
+      )}
 
       {/* Uploading spinner overlay */}
       {isBusy && (

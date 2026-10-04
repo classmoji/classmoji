@@ -12,6 +12,7 @@
  * Tested on its own in tests/unit/collab-accept.spec.ts.
  */
 
+import { blockSummary } from '~/components/preview/conflictChooser.ts';
 import { CollabRequestError } from '~/utils/collabEnv.server.ts';
 
 export type MergeChoice = 'ours' | 'theirs';
@@ -80,4 +81,41 @@ export function mergePreviewFailure(error: unknown): MergePreviewFailure {
     status: 502,
     message: 'The preview could not be merged into the live page. Try again.',
   };
+}
+
+/** Longest slice of a block's text in an order-conflict row. */
+const ORDER_SUMMARY_CAP = 80;
+
+/**
+ * Text previews for the blocks an order conflict lists (the chooser shows
+ * them instead of raw ids): `type: text…`, from the first document that has
+ * the block — the live page, then the preview, then the merge-base. Null when
+ * there is no order conflict.
+ */
+export function orderUnitPreviews(
+  units: MergeConflictUnit[],
+  docs: unknown[][]
+): Record<string, { index: number; summary: string }> | null {
+  const ids = new Set<string>();
+  for (const unit of units) {
+    if (unit.reason !== 'order') continue;
+    for (const key of ['ours', 'theirs', 'base'] as const) {
+      const list = unit[key];
+      if (Array.isArray(list)) for (const id of list) if (typeof id === 'string') ids.add(id);
+    }
+  }
+  if (ids.size === 0) return null;
+  const previews: Record<string, { index: number; summary: string }> = {};
+  for (const id of ids) {
+    for (const doc of docs) {
+      const index = doc.findIndex(block => Boolean(block) && (block as { id?: unknown }).id === id);
+      if (index === -1) continue;
+      const { type, text } = blockSummary(doc[index]);
+      const shown =
+        text.length > ORDER_SUMMARY_CAP ? `${text.slice(0, ORDER_SUMMARY_CAP - 1)}…` : text;
+      previews[id] = { index, summary: shown ? `${type}: ${shown}` : type };
+      break;
+    }
+  }
+  return previews;
 }

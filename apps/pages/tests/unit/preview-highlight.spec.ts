@@ -8,7 +8,9 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 
+import { previewReviewedAsPage } from '../../app/utils/liveGates.ts';
 import {
+  coverDiffers,
   cssAttrValue,
   hasPreviewChanges,
   previewBlockChanges,
@@ -123,4 +125,55 @@ test('the mark sits in the gutter, so the first letter is not covered', () => {
   expect(rules.length).toBe(4);
   // Light rules carry the offset; dark rules only recolour (they inherit it).
   expect(css.match(/padding-left: 0\.75rem; margin-left: -0\.75rem;/g)).toHaveLength(2);
+});
+
+test.describe('a cover change is part of the preview', () => {
+  test('coverDiffers', () => {
+    const a = { url: 'pages/p/a.png', position: 50 };
+    expect(coverDiffers(a, { ...a })).toBe(false);
+    expect(coverDiffers(a, { url: 'pages/p/b.png', position: 50 })).toBe(true);
+    expect(coverDiffers(a, { ...a, position: 20 })).toBe(true);
+    expect(coverDiffers(a, null)).toBe(true);
+    expect(coverDiffers(null, a)).toBe(true);
+    expect(coverDiffers(null, undefined)).toBe(false);
+    expect(coverDiffers({ url: 'x' }, { url: 'x', position: 50 })).toBe(false);
+  });
+
+  test('counts as a change and reads in the summary', () => {
+    const coverOnly = { changed: [], added: [], removed: 0, coverChanged: true };
+    expect(hasPreviewChanges(coverOnly)).toBe(true);
+    expect(previewChangesSummary(coverOnly)).toBe('Cover changed');
+    expect(previewChangesSummary({ ...coverOnly, changed: ['a'] })).toBe(
+      '1 block edited · cover changed'
+    );
+  });
+
+  test('the preview marks the cover it changes', () => {
+    const route = readFileSync(
+      fileURLToPath(new URL('../../app/routes/$classroomSlug.$pageId/route.tsx', import.meta.url)),
+      'utf8'
+    );
+    expect(route).toContain('highlighted={isPreview && Boolean(previewChanges?.coverChanged)}');
+  });
+});
+
+test.describe('one predicate for reviewing a preview as the page', () => {
+  test('previewReviewedAsPage is the classroom flag', () => {
+    expect(previewReviewedAsPage({ collab_enabled: true })).toBe(true);
+    expect(previewReviewedAsPage({ collab_enabled: false })).toBe(false);
+    expect(previewReviewedAsPage({})).toBe(false);
+    expect(previewReviewedAsPage(null)).toBe(false);
+  });
+
+  test('the highlight and the diff link both read it', () => {
+    const loader = readFileSync(
+      fileURLToPath(
+        new URL('../../app/routes/$classroomSlug.$pageId/route.server.ts', import.meta.url)
+      ),
+      'utf8'
+    );
+    expect(loader).toContain('const reviewPreviewAsPage = previewReviewedAsPage(page.classroom);');
+    expect(loader).toContain('&& reviewPreviewAsPage) {');
+    expect(loader).toContain('!reviewPreviewAsPage && gitOrg?.login && repoName');
+  });
 });

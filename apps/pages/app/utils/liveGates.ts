@@ -52,3 +52,17 @@ export function liveIntentRefusal(
   }
   return { status: 409, body: { error: LIVE_PAGE_MESSAGE } };
 }
+
+/**
+ * Whether a pending preview is reviewed as the rendered page with its changes
+ * marked (and never as a diff): classrooms with live editing switched on. The
+ * one predicate for both the highlight and dropping the diff link, so the two
+ * never disagree.
+ */
+export function previewReviewedAsPage(classroom: unknown): boolean {
+  return Boolean(
+    classroom &&
+    typeof classroom === 'object' &&
+    (classroom as { collab_enabled?: unknown }).collab_enabled === true
+  );
+}

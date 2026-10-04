@@ -44,7 +44,6 @@ import {
 } from '~/utils/assetRefs.server.ts';
 import type { CollabLoaderData } from '@classmoji/collab';
 import {
-  classroomCollabEnabled,
   collabEditorData,
   fetchLiveSnapshot,
   liveEditingEnv,
@@ -55,10 +54,14 @@ import {
 import {
   acceptPreviewLive,
   normalizePageBlocks,
-  previewBaseBlocks,
+  previewBaseContent,
 } from '~/utils/collabPreview.server.ts';
-import { joinsLiveRoom, liveIntentRefusal } from '~/utils/liveGates.ts';
-import { previewBlockChanges, type PreviewChanges } from '~/components/preview/previewHighlight.ts';
+import { joinsLiveRoom, liveIntentRefusal, previewReviewedAsPage } from '~/utils/liveGates.ts';
+import {
+  coverDiffers,
+  previewBlockChanges,
+  type PreviewChanges,
+} from '~/components/preview/previewHighlight.ts';
 
 /**
  * The most a JSON request to the page action may send.
@@ -320,12 +323,17 @@ export const loader = async ({
   // Which blocks the pending preview adds or edits — the changes the preview
   // makes, against the page as it was when the preview started (its
   // merge-base). The rendered preview highlights them; there is no diff view.
-  // Live-edited classrooms only: everyone else's preview renders as before.
+  // Live-edited classrooms only (`reviewPreviewAsPage`, the same predicate
+  // that drops the diff link below): everyone else's preview renders as before.
+  const reviewPreviewAsPage = previewReviewedAsPage(page.classroom);
   let previewChanges: PreviewChanges | null = null;
-  if (previewActive && Array.isArray(viewerContent) && liveEditingEnv(page.classroom)) {
-    const baseBlocks = await previewBaseBlocks({ ...pageForContent, id: page.id });
-    if (baseBlocks) {
-      previewChanges = previewBlockChanges(baseBlocks, normalizePageBlocks(viewerContent));
+  if (previewActive && Array.isArray(viewerContent) && reviewPreviewAsPage) {
+    const base = await previewBaseContent({ ...pageForContent, id: page.id });
+    if (base) {
+      previewChanges = {
+        ...previewBlockChanges(base.blocks, normalizePageBlocks(viewerContent)),
+        coverChanged: coverDiffers(base.coverImage, jsonCoverImage ?? null),
+      };
     }
   }
 
@@ -422,7 +430,7 @@ export const loader = async ({
   // Not for a live-edited classroom: a preview there is reviewed as the
   // rendered page with its changes highlighted, never as a diff.
   const diffUrl =
-    !classroomCollabEnabled(page.classroom) && gitOrg?.login && repoName
+    !reviewPreviewAsPage && gitOrg?.login && repoName
       ? gitWeb({
           provider: gitOrg.provider,
           login: gitOrg.login,
@@ -668,7 +676,12 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
         // The chooser's shape; its picks come back as `resolutions` and are
         // matched against a fresh merge on the collab server.
         return Response.json(
-          { conflict: true, units: result.units, unitPreviews: null, autoMerged: 0 },
+          {
+            conflict: true,
+            units: result.units,
+            unitPreviews: result.unitPreviews,
+            autoMerged: 0,
+          },
           { status: 409 }
         );
       }

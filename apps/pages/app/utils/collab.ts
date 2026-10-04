@@ -450,3 +450,9 @@ export function offerCopyUnsaved({
 }): boolean {
   return refused && hasSynced && localUnsynced;
 }
+
+/**
+ * How often an open live page asks the loader again for what lives outside
+ * the document (a pending preview, the classroom's state). Also on focus.
+ */
+export const LIVE_REFRESH_MS = 90_000;

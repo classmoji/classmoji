@@ -18,6 +18,8 @@ export interface PreviewChanges {
   added: string[];
   /** How many blocks the live page has that the preview does not. */
   removed: number;
+  /** The preview sets, changes or removes the cover. */
+  coverChanged?: boolean;
 }
 
 export const NO_PREVIEW_CHANGES: PreviewChanges = { changed: [], added: [], removed: 0 };
@@ -88,8 +90,21 @@ export function previewBlockChanges(live: unknown, preview: unknown): PreviewCha
 /** True when there is anything to show. */
 export function hasPreviewChanges(changes: PreviewChanges | null | undefined): boolean {
   return Boolean(
-    changes && (changes.changed.length > 0 || changes.added.length > 0 || changes.removed > 0)
+    changes &&
+    (changes.changed.length > 0 ||
+      changes.added.length > 0 ||
+      changes.removed > 0 ||
+      changes.coverChanged)
   );
+}
+
+/** Whether two covers differ (url or position; no cover vs a cover). */
+export function coverDiffers(
+  before: { url: string; position?: number } | null | undefined,
+  after: { url: string; position?: number } | null | undefined
+): boolean {
+  if (!before || !after) return Boolean(before) !== Boolean(after);
+  return before.url !== after.url || (before.position ?? 50) !== (after.position ?? 50);
 }
 
 /**
@@ -146,5 +161,8 @@ export function previewChangesSummary(changes: PreviewChanges): string | null {
   if (changes.changed.length > 0) parts.push(`${n(changes.changed.length, 'block')} edited`);
   if (changes.added.length > 0) parts.push(`${n(changes.added.length, 'block')} added`);
   if (changes.removed > 0) parts.push(`${n(changes.removed, 'block')} removed`);
-  return parts.length > 0 ? parts.join(' · ') : null;
+  if (changes.coverChanged) parts.push('cover changed');
+  if (parts.length === 0) return null;
+  const line = parts.join(' · ');
+  return line.charAt(0).toUpperCase() + line.slice(1);
 }

@@ -8,7 +8,11 @@
 import { test, expect } from '@playwright/test';
 
 import { CollabRequestError } from '../../app/utils/collabEnv.server.ts';
-import { mergePreviewFailure, resolutionList } from '../../app/utils/collabAccept.server.ts';
+import {
+  mergePreviewFailure,
+  orderUnitPreviews,
+  resolutionList,
+} from '../../app/utils/collabAccept.server.ts';
 
 test.describe('resolutionList', () => {
   test('keeps one well-formed pick per id, in order', () => {
@@ -70,5 +74,39 @@ test.describe('mergePreviewFailure', () => {
 
   test('a bug is not swallowed as a refusal', () => {
     expect(() => mergePreviewFailure(new TypeError('boom'))).toThrow('boom');
+  });
+});
+
+test.describe('orderUnitPreviews', () => {
+  const p = (id: string, text: string, type = 'paragraph') => ({
+    id,
+    type,
+    content: [{ type: 'text', text, styles: {} }],
+  });
+
+  test('an order conflict lists blocks as text, from live, then preview, then base', () => {
+    const live = [p('a', 'Intro typed live'), p('b', 'Second')];
+    const preview = [p('b', 'Second'), p('a', 'Intro'), p('c', 'New from the agent', 'heading')];
+    const base = [p('a', 'Intro'), p('b', 'Second'), p('z', 'x'.repeat(200))];
+    const previews = orderUnitPreviews(
+      [
+        {
+          id: '__order__',
+          reason: 'order',
+          ours: ['a', 'b'],
+          theirs: ['b', 'a', 'c'],
+          base: ['a', 'b', 'z'],
+        },
+      ],
+      [live, preview, base]
+    );
+    expect(previews?.a).toEqual({ index: 0, summary: 'paragraph: Intro typed live' });
+    expect(previews?.c).toEqual({ index: 2, summary: 'heading: New from the agent' });
+    expect(previews?.z.summary.length).toBeLessThanOrEqual('paragraph: '.length + 80);
+    expect(previews?.z.summary.endsWith('…')).toBe(true);
+  });
+
+  test('no order conflict, no previews', () => {
+    expect(orderUnitPreviews([{ id: 'a', reason: 'content' }], [[]])).toBeNull();
   });
 });

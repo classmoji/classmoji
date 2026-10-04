@@ -1,4 +1,10 @@
-import { useLoaderData, useFetcher, useOutletContext, useBlocker } from 'react-router';
+import {
+  useLoaderData,
+  useFetcher,
+  useOutletContext,
+  useBlocker,
+  useRevalidator,
+} from 'react-router';
 import { useAssetMap, useAssetRetry } from '~/hooks/useAssetMap.ts';
 import type { AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
 import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from 'react';
@@ -27,6 +33,7 @@ import {
   LiveRejectedBanner,
 } from '~/components/editor/collab/LiveNotices.tsx';
 import {
+  LIVE_REFRESH_MS,
   SAVE_VERSION_WAIT_MS,
   offerCopyUnsaved,
   applyPageMeta,
@@ -733,6 +740,27 @@ const PageRoute = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveRefused, collab]);
 
+  // A live page never reloads on its own, so news the loader carries — above
+  // all a preview an agent just left — is fetched again while the tab is in
+  // view: every LIVE_REFRESH_MS, and whenever it comes back into view.
+  const liveRevalidator = useRevalidator();
+  const liveRevalidatorRef = useRef(liveRevalidator);
+  liveRevalidatorRef.current = liveRevalidator;
+  useEffect(() => {
+    if (!liveMode) return;
+    const refresh = () => {
+      const revalidator = liveRevalidatorRef.current;
+      if (document.visibilityState !== 'visible' || revalidator.state !== 'idle') return;
+      void revalidator.revalidate();
+    };
+    const timer = window.setInterval(refresh, LIVE_REFRESH_MS);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [liveMode]);
+
   // Edits the server never acknowledged are lost on reload; before that, the
   // person can take them along as text.
   const handleCopyUnsaved = useCallback(async () => {
@@ -1052,6 +1080,7 @@ const PageRoute = () => {
           pageId={page.id}
           uploadCapability={uploadCapability}
           live={liveCoverTarget ? { storedUrl: shownCover.url, target: liveCoverTarget } : null}
+          highlighted={isPreview && Boolean(previewChanges?.coverChanged)}
         />
       )}
 
