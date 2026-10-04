@@ -51,6 +51,11 @@ export default () => {
       // HMR websocket on app port + 1 — the vite default (24678) is shared by
       // every vite app in the monorepo, so concurrent dev servers race for it.
       hmr: { port: (process.env.PORT ? Number(process.env.PORT) : 6500) + 1 },
+      // Playwright writes its HTML report and per-test artifacts inside this
+      // app while specs run; a watched write there would reload open editors.
+      watch: {
+        ignored: ['**/playwright-report/**', '**/test-results/**'],
+      },
     },
     build: {
       sourcemap: process.env.NODE_ENV === 'production' ? 'hidden' : true,
