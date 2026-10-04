@@ -224,7 +224,8 @@ test.describe('the git save machinery is off in collab mode only', () => {
       ROUTE.indexOf('/* Live editor'),
       ROUTE.indexOf('/* Editor for instructors')
     );
-    expect(live).toContain('key={collab.room}');
+    expect(live).toContain('key={session.room}');
+    expect(live).toContain('session.room === collab.room');
     expect(live).toContain('initialContent={null}');
     expect(live).toContain('liveState.hasSynced');
     expect(live).not.toContain('onChange=');

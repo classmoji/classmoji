@@ -909,7 +909,10 @@ const PageRoute = () => {
             </div>
           ) : liveMode ? (
             /* Live editor: mounted once the room's document has arrived */
-            session && liveState.hasSynced && collab ? (
+            // `session.room === collab.room`: after a navigation the loader
+            // names the new room one render before the effect opens it, and
+            // the editor must never bind to the previous page's document.
+            session && collab && session.room === collab.room && liveState.hasSynced ? (
               <Suspense
                 fallback={
                   <div className="flex items-center justify-center py-12">
@@ -918,7 +921,7 @@ const PageRoute = () => {
                 }
               >
                 <PageEditor
-                  key={collab.room}
+                  key={session.room}
                   ref={editorRef}
                   initialContent={null}
                   pageId={page.id}
