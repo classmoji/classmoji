@@ -12,6 +12,7 @@ import {
   HOUR_HEIGHT_REM,
   META_ROW_MIN_HOURS,
   MIN_DURATION_HOURS,
+  blockLanes,
   blockLayout,
   crossesMidnight,
   fitsMetaRow,
@@ -23,6 +24,7 @@ import {
   hoursInWindow,
   isOutsideWindow,
   isTightBlock,
+  laneInset,
   monthDropId,
   parseDropId,
   remForHours,
@@ -558,5 +560,75 @@ describe('isTightBlock', () => {
     // The two rules meet here: a block can be short enough to need the tighter
     // padding AND long enough to keep its row. That window is the x-hour.
     expect(isTightBlock(50 / 60) && fitsMetaRow(50 / 60)).toBe(true);
+  });
+});
+
+describe('blockLanes', () => {
+  // Local times on one day, as the grid reads them.
+  const at = (h: number, m = 0) => new Date(2026, 9, 5, h, m).toISOString();
+  const ev = (sh: number, sm: number, eh: number, em: number) => ({
+    start_time: at(sh, sm),
+    end_time: at(eh, em),
+  });
+
+  it('puts two events at the same time side by side', () => {
+    expect(blockLanes([ev(14, 10, 15, 15), ev(14, 10, 15, 15)])).toEqual([
+      { lane: 0, lanes: 2 },
+      { lane: 1, lanes: 2 },
+    ]);
+  });
+
+  it('keeps a lone event and back-to-back events full width', () => {
+    expect(blockLanes([ev(9, 0, 10, 0), ev(10, 0, 11, 0)])).toEqual([
+      { lane: 0, lanes: 1 },
+      { lane: 0, lanes: 1 },
+    ]);
+  });
+
+  it('reuses a freed lane inside a chain, and sizes the chain by its busiest moment', () => {
+    // A 1–3, B 2–4, C 3–5: A and C never meet, so C takes A's lane back.
+    expect(blockLanes([ev(13, 0, 15, 0), ev(14, 0, 16, 0), ev(15, 0, 17, 0)])).toEqual([
+      { lane: 0, lanes: 2 },
+      { lane: 1, lanes: 2 },
+      { lane: 0, lanes: 2 },
+    ]);
+  });
+
+  it('does not squeeze an event outside the cluster', () => {
+    const lanes = blockLanes([ev(9, 0, 10, 0), ev(14, 0, 15, 0), ev(14, 0, 15, 0)]);
+    expect(lanes[0]).toEqual({ lane: 0, lanes: 1 });
+    expect(lanes[1].lanes).toBe(2);
+  });
+
+  it('measures overlap on the drawn block, not the raw times', () => {
+    // A 10-minute event is drawn 45 minutes tall, so one 20 minutes later collides.
+    expect(blockLanes([ev(9, 0, 9, 10), ev(9, 20, 10, 0)])).toEqual([
+      { lane: 0, lanes: 2 },
+      { lane: 1, lanes: 2 },
+    ]);
+  });
+
+  it('packs by start time whatever order the events arrive in', () => {
+    expect(blockLanes([ev(14, 30, 15, 30), ev(14, 0, 15, 0)])).toEqual([
+      { lane: 1, lanes: 2 },
+      { lane: 0, lanes: 2 },
+    ]);
+  });
+});
+
+describe('laneInset', () => {
+  it('is the old left-1 right-1 for a single lane', () => {
+    expect(laneInset({ lane: 0, lanes: 1 })).toEqual({
+      left: 'calc(0.25rem + (100% - 0.5rem) * 0)',
+      width: 'calc((100% - 0.5rem) / 1 - 0rem)',
+    });
+  });
+
+  it('leaves a gap after every lane but the last', () => {
+    expect(laneInset({ lane: 0, lanes: 2 }).width).toBe('calc((100% - 0.5rem) / 2 - 0.125rem)');
+    expect(laneInset({ lane: 1, lanes: 2 })).toEqual({
+      left: 'calc(0.25rem + (100% - 0.5rem) * 0.5)',
+      width: 'calc((100% - 0.5rem) / 2 - 0rem)',
+    });
   });
 });

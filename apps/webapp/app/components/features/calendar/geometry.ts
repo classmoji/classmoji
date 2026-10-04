@@ -434,6 +434,89 @@ export const heightForBlock = (
     Math.max(0, Math.min(Math.max(hours, MIN_DURATION_HOURS), endHourExclusive - startHourFloat))
   );
 
+/** Where one block sits across its day column: lane `lane` of `lanes`. */
+export interface BlockLane {
+  lane: number;
+  lanes: number;
+}
+
+/**
+ * Side-by-side lanes for one day's timed blocks, so two events at the same
+ * time are drawn next to each other rather than on top of each other.
+ *
+ * Blocks that overlap — directly or through a chain — form a cluster, and every
+ * block in a cluster is as wide as the cluster's busiest moment allows. A block
+ * outside it keeps the full column: a 9 AM lecture is not squeezed because two
+ * things collide at 2 PM.
+ *
+ * Overlap is measured on the DRAWN extent, not the event's own times: a
+ * 15-minute event is drawn 45 minutes tall, so it collides with whatever starts
+ * 20 minutes after it even though their times never touch. Back-to-back blocks
+ * (one ends exactly when the next starts) share a lane; `pb-1` already parts
+ * them.
+ *
+ * Returned in the order the events came in, so the caller can zip it.
+ */
+export const blockLanes = (
+  events: readonly Pick<CalendarEventWithLinks, 'start_time' | 'end_time'>[],
+  endHourExclusive: number = DEFAULT_END_HOUR
+): BlockLane[] => {
+  const spans = events.map((event, index) => {
+    const start = new Date(event.start_time);
+    const end = new Date(event.end_time);
+    const startFloat = clockHour(start);
+    const hours = (end.getTime() - start.getTime()) / 3_600_000;
+    const drawnEnd = Math.min(startFloat + Math.max(hours, MIN_DURATION_HOURS), endHourExclusive);
+    return { index, start: startFloat, end: drawnEnd };
+  });
+
+  // Earliest first, the longer of two equal starts first, then input order —
+  // so the same week always packs the same way.
+  const order = [...spans].sort((a, b) => a.start - b.start || b.end - a.end || a.index - b.index);
+
+  const result: BlockLane[] = new Array(events.length);
+  let cluster: number[] = [];
+  let laneEnds: number[] = [];
+  let clusterEnd = Number.NEGATIVE_INFINITY;
+
+  const closeCluster = () => {
+    for (const index of cluster) result[index].lanes = laneEnds.length;
+    cluster = [];
+    laneEnds = [];
+  };
+
+  for (const span of order) {
+    if (span.start >= clusterEnd) closeCluster();
+    let lane = laneEnds.findIndex(end => end <= span.start);
+    if (lane === -1) lane = laneEnds.length;
+    laneEnds[lane] = span.end;
+    result[span.index] = { lane, lanes: 1 };
+    cluster.push(span.index);
+    clusterEnd = Math.max(clusterEnd, span.end);
+  }
+  closeCluster();
+
+  return result;
+};
+
+/** The grid's gutter on each side of a column, and between two lanes. */
+const LANE_EDGE_REM = 0.25;
+const LANE_GAP_REM = 0.125;
+
+/**
+ * `left` and `width` for a block in lane `lane` of `lanes`. One lane is the
+ * old `left-1 right-1`; more split what is between those gutters evenly, with
+ * a hairline between neighbours.
+ */
+export const laneInset = ({ lane, lanes }: BlockLane): { left: string; width: string } => {
+  const inner = `(100% - ${2 * LANE_EDGE_REM}rem)`;
+  const gap = lane < lanes - 1 ? LANE_GAP_REM : 0;
+  return {
+    left: `calc(${LANE_EDGE_REM}rem + ${inner} * ${lane / lanes})`,
+    width: `calc(${inner} / ${lanes} - ${gap}rem)`,
+  };
+};
+
 /**
  * An hour label split into its parts, for views that stack the number over the
  * meridiem. `hour % 12 || 12` is what keeps midnight and 24 printing "12 AM"
