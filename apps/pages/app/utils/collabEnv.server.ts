@@ -13,10 +13,10 @@
  *  - `COLLAB_PORT`            devport's port, used only for dev fallbacks.
  *
  * Outside production every value falls back to the local collab server on
- * `COLLAB_PORT` (7700 + devport id × 10) and the shared dev secret. In
- * production a missing URL or secret switches live editing OFF for every
- * classroom (one error in the log) rather than failing the page: the
- * classroom then keeps the git editor.
+ * `COLLAB_PORT` (7700 + devport id × 10) and the shared dev secret
+ * (`@classmoji/collab/env`). In production a missing URL or secret switches
+ * live editing OFF for every classroom (one error in the log) rather than
+ * failing the page: the classroom then keeps the git editor.
  */
 
 import {
@@ -27,63 +27,37 @@ import {
   type CollabLoaderData,
 } from '@classmoji/collab';
 import { SCHEMA_VERSION } from '@classmoji/page-schema/constants';
+import { resolveCollabEnv, type CollabEnv } from '@classmoji/collab/env';
 
-/**
- * The internal secret every service uses outside production when
- * `COLLAB_INTERNAL_SECRET` is unset. Must match the collab server's own dev
- * fallback.
- */
-export const DEV_COLLAB_INTERNAL_SECRET = 'classmoji-collab-dev-secret';
-
-/** The collab port when devport has not exported one. */
-export const DEFAULT_COLLAB_PORT = 7700;
-
-export interface CollabEnv {
-  /** Browser WebSocket URL, e.g. `ws://localhost:7710`. */
-  wsUrl: string;
-  /** Internal HTTP base, e.g. `http://localhost:7710`. No trailing slash. */
-  httpUrl: string;
-  secret: string;
-}
+export { DEV_COLLAB_INTERNAL_SECRET, DEFAULT_COLLAB_PORT } from '@classmoji/collab/env';
+export type { CollabEnv };
 
 type Env = Record<string, string | undefined>;
-
-const trimSlash = (url: string) => url.replace(/\/+$/, '');
 
 let warnedMissing = false;
 
 /**
- * The collab endpoints, or null when live editing is unavailable (production
- * without the env). `COLLAB_WS_URL` may be omitted when `COLLAB_URL` is set:
- * the WebSocket URL is the same origin with the ws scheme.
+ * The collab endpoints, or null when live editing is unavailable.
+ *
+ * Resolved by `@classmoji/collab/env`, the same rules every service uses, with
+ * one addition: in production the browser's `COLLAB_WS_URL` must be set
+ * explicitly. The internal `COLLAB_URL` is a private address there, and a
+ * WebSocket URL derived from it would point browsers at something they cannot
+ * reach.
  */
 export function collabEnv(env: Env = process.env): CollabEnv | null {
-  const production = env.NODE_ENV === 'production';
-  const port = env.COLLAB_PORT && /^\d+$/.test(env.COLLAB_PORT) ? env.COLLAB_PORT : null;
-  const devBase = `localhost:${port ?? DEFAULT_COLLAB_PORT}`;
-
-  const httpUrl = env.COLLAB_URL
-    ? trimSlash(env.COLLAB_URL)
-    : production
-      ? null
-      : `http://${devBase}`;
-  const wsUrl = env.COLLAB_WS_URL
-    ? trimSlash(env.COLLAB_WS_URL)
-    : httpUrl
-      ? httpUrl.replace(/^http(s?):/, 'ws$1:')
-      : null;
-  const secret = env.COLLAB_INTERNAL_SECRET || (production ? null : DEV_COLLAB_INTERNAL_SECRET);
-
-  if (!httpUrl || !wsUrl || !secret) {
+  const resolved = resolveCollabEnv(env);
+  const wsMissing = env.NODE_ENV === 'production' && !env.COLLAB_WS_URL?.trim();
+  if (!resolved || wsMissing) {
     if (!warnedMissing) {
       warnedMissing = true;
       console.error(
-        '[pages] Live editing is off: COLLAB_URL (or COLLAB_WS_URL) and COLLAB_INTERNAL_SECRET must be set.'
+        '[pages] Live editing is off: COLLAB_URL, COLLAB_WS_URL and COLLAB_INTERNAL_SECRET must be set.'
       );
     }
     return null;
   }
-  return { wsUrl, httpUrl, secret };
+  return resolved;
 }
 
 /**

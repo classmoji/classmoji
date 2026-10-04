@@ -3,8 +3,8 @@
  *
  * The loader asks `collabEditorData` whether this editor works on the live
  * document and, if so, which room to join; the action reads the live
- * document (`fetchLiveSnapshot`), applies merged preview changes (`applyLiveOps`,
- * `setLiveCover`) and asks for an immediate checkpoint (`requestCheckpoint`).
+ * document (`fetchLiveSnapshot`), merges a preview into it (`mergePreviewLive`)
+ * and asks for an immediate checkpoint (`requestCheckpoint`).
  * All of it goes through the collab server's internal API — this app never
  * writes the live document's state itself.
  */
@@ -13,10 +13,7 @@ import type {
   CheckpointRequest,
   CollabActor,
   CollabLoaderData,
-  CoverRequest,
-  OpsRequest,
-  OpsResponse,
-  PageCoverImage,
+  PageSnapshotContent,
   SnapshotResponse,
 } from '@classmoji/collab';
 import { prisma } from '~/utils/db.server.ts';
@@ -101,21 +98,30 @@ export function fetchLiveSnapshot(
   );
 }
 
-/** Apply id-aware block ops to the live document as `actor`. */
-export function applyLiveOps(env: CollabEnv, pageId: string, ops: unknown[], actor: CollabActor) {
-  const body: OpsRequest = { ops, actor };
-  return collabInternalRequest<OpsResponse>(env, 'POST', pageInternalPath(pageId, 'ops'), body);
-}
-
-/** Set (or clear) the live document's cover. */
-export function setLiveCover(
+/**
+ * Merge a preview into the live document, server-side and atomically
+ * (`merge-preview`): base = the page when the preview started, theirs = the
+ * preview, ours = the live document at the moment of the merge. Conflicts come
+ * back as 409 `{ error: 'conflicts', conflicts }` with nothing applied.
+ */
+export function mergePreviewLive(
   env: CollabEnv,
   pageId: string,
-  coverImage: PageCoverImage | null,
-  actor: CollabActor
+  body: {
+    base: PageSnapshotContent;
+    theirs: PageSnapshotContent;
+    resolutions?: Array<{ id: string; choose: 'ours' | 'theirs' }>;
+    actor: CollabActor;
+  }
 ) {
-  const body: CoverRequest = { coverImage, actor };
-  return collabInternalRequest<unknown>(env, 'POST', pageInternalPath(pageId, 'cover'), body);
+  return collabInternalRequest<{ applied: true; version: number }>(
+    env,
+    'POST',
+    pageInternalPath(pageId, 'merge-preview'),
+    body,
+    // The merge runs inside the live transaction; give it longer than a read.
+    { timeoutMs: 30_000 }
+  );
 }
 
 /** "Save version": ask for a checkpoint now. */

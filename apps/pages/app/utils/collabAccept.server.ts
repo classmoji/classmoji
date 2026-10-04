@@ -1,124 +1,83 @@
 /**
- * Accepting a preview into a LIVE page: the pure plan.
+ * Accepting a preview into a LIVE page: the pure halves.
  *
  * In a classroom that edits pages live, main is only the last checkpoint —
- * the page is the live document. So an accept is not a git merge into main:
- * it is a three-way merge of the block documents (base = the preview's
- * merge-base, ours = the live document, theirs = the preview), turned into
- * id-aware block ops the collab server applies to the live document. People
- * typing at that moment keep their typing: only the blocks the merge changes
- * are touched.
+ * the page is the live document. An accept therefore sends the preview and
+ * the page as it was when the preview started (its merge-base) to the collab
+ * server's `merge-preview`, which runs the three-way merge against the live
+ * document INSIDE its own transaction and applies the result id-aware. Nothing
+ * is planned here from a snapshot: a snapshot is stale the moment it is read,
+ * and ops planned from it would undo whatever was typed in between.
  *
- * The merge engine is injected (it lives in @classmoji/services, which the
- * unit suite does not load), so this stays testable on its own
- * (tests/unit/collab-accept.spec.ts).
+ * Tested on its own in tests/unit/collab-accept.spec.ts.
  */
 
-import { diffBlockOps, type BlockOp } from '~/components/editor/blockOpsDiff.ts';
+import { CollabRequestError } from '~/utils/collabEnv.server.ts';
 
 export type MergeChoice = 'ours' | 'theirs';
+
+export interface MergeResolution {
+  id: string;
+  choose: MergeChoice;
+}
 
 export interface MergeConflictUnit {
   id: string;
   [key: string]: unknown;
 }
 
-export interface MergeResult {
-  merged: unknown[];
-  conflicts: MergeConflictUnit[];
-  autoMerged: number;
+/** Page content in the snapshot shape the collab server takes. */
+export interface PageContentBody {
+  blocks: unknown[];
+  coverImage: { url: string; position: number } | null;
 }
 
-export type MergeFn = (
-  base: unknown[],
-  ours: unknown[],
-  theirs: unknown[],
-  opts?: { resolutions?: Record<string, MergeChoice> }
-) => MergeResult;
-
-export interface CoverValue {
-  url: string;
-  position: number;
-}
-
-/** A live-document op: the editor diff's vocabulary plus `replace_all`. */
-export type LiveBlockOp = BlockOp | { op: 'replace_all'; blocks: unknown[] };
-
-export type CollabAcceptPlan =
-  | { kind: 'conflict'; units: MergeConflictUnit[]; autoMerged: number }
-  | {
-      kind: 'apply';
-      ops: LiveBlockOp[];
-      /** Set only when the cover must change; `value: null` removes it. */
-      cover: { value: CoverValue | null } | null;
-      autoMerged: number;
-    };
-
-const sameJson = (a: unknown, b: unknown) =>
-  JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
-
-/**
- * The cover's three-way: a change on the preview side wins, anything else
- * keeps the live cover (the same rule as the git accept).
- */
-export function mergeCoverValue(
-  base: CoverValue | null,
-  ours: CoverValue | null,
-  theirs: CoverValue | null
-): CoverValue | null {
-  const theirsChanged = !sameJson(theirs, base);
-  const oursChanged = !sameJson(ours, base);
-  if (theirsChanged && !oursChanged) return theirs;
-  return ours;
-}
-
-/** Resolutions as the merge engine takes them; malformed entries are dropped. */
-export function resolutionMap(
+/** The chooser's picks, as the merge takes them; malformed entries are dropped. */
+export function resolutionList(
   resolutions: Array<{ id?: unknown; choose?: unknown }> | null | undefined
-): Record<string, MergeChoice> {
-  const map: Record<string, MergeChoice> = {};
+): MergeResolution[] {
+  const out: MergeResolution[] = [];
+  const seen = new Set<string>();
   for (const entry of resolutions ?? []) {
-    if (!entry || typeof entry.id !== 'string' || !entry.id) continue;
-    if (entry.choose === 'ours' || entry.choose === 'theirs') map[entry.id] = entry.choose;
+    if (!entry || typeof entry.id !== 'string' || !entry.id || seen.has(entry.id)) continue;
+    if (entry.choose !== 'ours' && entry.choose !== 'theirs') continue;
+    seen.add(entry.id);
+    out.push({ id: entry.id, choose: entry.choose });
   }
-  return map;
+  return out;
 }
 
+export type MergePreviewFailure =
+  | { kind: 'conflict'; units: MergeConflictUnit[] }
+  | { kind: 'failed'; status: number; message: string };
+
 /**
- * Merge, then express the result as ops against the live document. Conflicts
- * (after any resolutions) come back as a report for the chooser. A merge the
- * op diff cannot express (a block moved between nesting levels, duplicated
- * ids) is sent as one `replace_all`, which the collab server still applies
- * id-aware.
+ * What a refused `merge-preview` means for the person: a conflict report for
+ * the chooser (409 `{ error: 'conflicts', conflicts }`, nothing applied), or a
+ * failure with a sentence. Anything else rethrows.
  */
-export function planCollabAccept(
-  {
-    base,
-    ours,
-    theirs,
-    baseCover,
-    oursCover,
-    theirsCover,
-    resolutions,
-  }: {
-    base: unknown[];
-    ours: unknown[];
-    theirs: unknown[];
-    baseCover: CoverValue | null;
-    oursCover: CoverValue | null;
-    theirsCover: CoverValue | null;
-    resolutions?: Record<string, MergeChoice>;
-  },
-  merge: MergeFn
-): CollabAcceptPlan {
-  const hasResolutions = resolutions && Object.keys(resolutions).length > 0;
-  const result = merge(base, ours, theirs, hasResolutions ? { resolutions } : {});
-  if (result.conflicts.length > 0) {
-    return { kind: 'conflict', units: result.conflicts, autoMerged: result.autoMerged };
+export function mergePreviewFailure(error: unknown): MergePreviewFailure {
+  if (!(error instanceof CollabRequestError)) throw error;
+  const body = error.body as { error?: unknown; conflicts?: unknown } | null;
+  if (error.status === 409 && body?.error === 'conflicts' && Array.isArray(body.conflicts)) {
+    return {
+      kind: 'conflict',
+      units: body.conflicts.filter(
+        (unit): unit is MergeConflictUnit =>
+          Boolean(unit) && typeof (unit as { id?: unknown }).id === 'string'
+      ),
+    };
   }
-  const diff = diffBlockOps(ours, result.merged, { maxMoves: Infinity });
-  const ops: LiveBlockOp[] = diff ?? [{ op: 'replace_all', blocks: result.merged }];
-  const coverAfter = mergeCoverValue(baseCover, oursCover, theirsCover);
-  const cover = sameJson(coverAfter, oursCover) ? null : { value: coverAfter };
-  return { kind: 'apply', ops, cover, autoMerged: result.autoMerged };
+  if (error.status === 0) {
+    return {
+      kind: 'failed',
+      status: 503,
+      message: 'Couldn’t reach live editing. Try again.',
+    };
+  }
+  return {
+    kind: 'failed',
+    status: 502,
+    message: 'The preview could not be merged into the live page. Try again.',
+  };
 }
