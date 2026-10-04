@@ -445,40 +445,34 @@ async function canonicalizePageCover(
 }
 
 /**
- * Save BlockNote JSON content to `content.json` (wrapper format
- * `{ blocks, coverImage? }`). Does NOT touch the legacy `index.html`.
- *
- * @param page - Page with classroom.git_organization
- * @param blocks - BlockNote document blocks array
- * @param options.coverImage - Cover image metadata; `undefined` (omitted)
- *   preserves the existing coverImage via a fresh re-read, `null` removes it.
- *   A re-read that cannot be MADE rejects rather than writing without the key;
- *   one whose file will not parse proceeds without it — see the re-read below.
- * @param options.expectedSha - Optimistic-lock sha; mismatch → error with
- *   status 409 (propagated from ContentService.put).
- * @param options.message - Commit message (default `Update page: <title>`).
- * @param options.branch - Branch to commit to (default: repo default branch).
- * @returns The new file sha, the commit sha, and the coverImage AS STORED —
- *   canonicalized, and resolved to the existing one when the caller omitted it.
- *   Returned rather than left for the caller to reconstruct because a caller
- *   that echoes its own input describes a document that may not exist: hand it
- *   a signed URL and the store holds a repo path.
+ * A page's `content.json` as it is about to be committed: the PREPARE step of
+ * `savePageContent`, split out so the live-editing checkpoint worker (which
+ * commits through git, not the Contents API) writes exactly the bytes a save
+ * would have.
  */
-export async function savePageContent(
+export interface PreparedPageContent {
+  /** `<content_path>/content.json`. */
+  path: string;
+  /** The serialized wrapper — the exact bytes to commit. */
+  content: string;
+  /** The cover as stored: canonicalized, or re-read when the caller omitted it. */
+  coverImage: PageCoverImage | null;
+}
+
+/**
+ * PREPARE: canonicalize asset refs (blocks and cover), re-read the existing
+ * cover when `coverImage` is omitted, `normalizeBlockStructure`, serialize.
+ * No write. See `savePageContent` for the rules each step enforces.
+ *
+ * @param options.coverImage - `undefined` re-reads the stored cover (on
+ *   `branch` when given); `null` removes it; a value replaces it.
+ * @param options.branch - Branch the cover re-read reads from.
+ */
+export async function preparePageContent(
   page: PageWithContentRepo,
   blocks: unknown,
-  {
-    coverImage,
-    expectedSha,
-    message,
-    branch,
-  }: {
-    coverImage?: PageCoverImage | null;
-    expectedSha?: string;
-    message?: string;
-    branch?: string;
-  } = {}
-): Promise<{ sha: string; commit: string; coverImage: PageCoverImage | null }> {
+  { coverImage, branch }: { coverImage?: PageCoverImage | null; branch?: string } = {}
+): Promise<PreparedPageContent> {
   const { gitOrganization, repo } = contentRepoFor(page);
   const path = `${page.content_path}/content.json`;
 
@@ -556,14 +550,86 @@ export async function savePageContent(
     wrapper.coverImage = coverImage;
   }
 
-  const content = JSON.stringify(wrapper, null, 2);
-  const result = await ContentService.put({
+  return {
+    path,
+    content: JSON.stringify(wrapper, null, 2),
+    // `wrapper.coverImage` is the written truth: canonicalized above, and
+    // filled in from the existing file when the caller passed nothing.
+    coverImage: wrapper.coverImage ?? null,
+  };
+}
+
+/**
+ * WRITE: commit a prepared `content.json` through the Contents API.
+ * Records nothing — see `recordPageFile`.
+ */
+export async function writePageContent(
+  page: PageWithContentRepo,
+  prepared: Pick<PreparedPageContent, 'path' | 'content'>,
+  {
+    expectedSha,
+    message,
+    branch,
+  }: { expectedSha?: string; message?: string; branch?: string } = {}
+): Promise<{ sha: string; commit: string }> {
+  const { gitOrganization, repo } = contentRepoFor(page);
+  return ContentService.put({
     gitOrganization,
     repo,
-    path,
-    content,
+    path: prepared.path,
+    content: prepared.content,
     message: message ?? `Update page: ${page.title}`,
     ...(expectedSha ? { expectedSha } : {}),
+    ...(branch ? { branch } : {}),
+  });
+}
+
+/**
+ * Save BlockNote JSON content to `content.json` (wrapper format
+ * `{ blocks, coverImage? }`). Does NOT touch the legacy `index.html`.
+ *
+ * prepare (`preparePageContent`) → write (`writePageContent`) → record
+ * (`recordPageFile`, default branch only).
+ *
+ * @param page - Page with classroom.git_organization
+ * @param blocks - BlockNote document blocks array
+ * @param options.coverImage - Cover image metadata; `undefined` (omitted)
+ *   preserves the existing coverImage via a fresh re-read, `null` removes it.
+ *   A re-read that cannot be MADE rejects rather than writing without the key;
+ *   one whose file will not parse proceeds without it — see the re-read in
+ *   `preparePageContent`.
+ * @param options.expectedSha - Optimistic-lock sha; mismatch → error with
+ *   status 409 (propagated from ContentService.put).
+ * @param options.message - Commit message (default `Update page: <title>`).
+ * @param options.branch - Branch to commit to (default: repo default branch).
+ * @returns The new file sha, the commit sha, and the coverImage AS STORED —
+ *   canonicalized, and resolved to the existing one when the caller omitted it.
+ *   Returned rather than left for the caller to reconstruct because a caller
+ *   that echoes its own input describes a document that may not exist: hand it
+ *   a signed URL and the store holds a repo path.
+ */
+export async function savePageContent(
+  page: PageWithContentRepo,
+  blocks: unknown,
+  {
+    coverImage,
+    expectedSha,
+    message,
+    branch,
+  }: {
+    coverImage?: PageCoverImage | null;
+    expectedSha?: string;
+    message?: string;
+    branch?: string;
+  } = {}
+): Promise<{ sha: string; commit: string; coverImage: PageCoverImage | null }> {
+  const prepared = await preparePageContent(page, blocks, {
+    ...(coverImage !== undefined ? { coverImage } : {}),
+    ...(branch ? { branch } : {}),
+  });
+  const result = await writePageContent(page, prepared, {
+    ...(expectedSha ? { expectedSha } : {}),
+    ...(message !== undefined ? { message } : {}),
     ...(branch ? { branch } : {}),
   });
 
@@ -581,22 +647,22 @@ export async function savePageContent(
   // one that did would otherwise write the default branch and silently lose its
   // map row, which is exactly the stale read this path exists to close.
   if (!branch || !branch.startsWith(PAGE_PREVIEW_BRANCH_PREFIX)) {
-    await recordPageFile(page, path, result.sha, content);
+    await recordPageFile(page, prepared.path, result.sha, prepared.content);
   }
 
-  // `wrapper.coverImage` is the written truth: canonicalized above, and filled
-  // in from the existing file when the caller passed nothing.
-  return { ...result, coverImage: wrapper.coverImage ?? null };
+  return { ...result, coverImage: prepared.coverImage };
 }
 
 /**
- * Put a just-committed page file into the asset map.
+ * RECORD: put a just-committed page file into the asset map, warm the
+ * delivery cache and feed the search index (the tail of `savePageContent`,
+ * also run by the live-editing checkpoint worker after its git push).
  *
  * Never throws — `recordContentAsset` swallows its own failures, and this adds
  * the one branch it cannot: a page assembled without its classroom id has
  * nothing to key a row on. The commit still stands; the next sync picks it up.
  */
-async function recordPageFile(
+export async function recordPageFile(
   page: PageWithContentRepo,
   path: string,
   sha: string,

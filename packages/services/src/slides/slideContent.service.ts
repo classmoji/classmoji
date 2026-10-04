@@ -368,6 +368,60 @@ export async function canonicalizeDeckForSave(
   }
 }
 
+/** A deck as it is about to be committed: the PREPARE step of `saveDeck`. */
+export interface PreparedDeck {
+  /** Canonicalized, runtime attrs stripped — the deck the files below encode. */
+  deck: DeckJson;
+  deckPath: string;
+  htmlPath: string;
+  /** deck.json bytes (two-space indent, trailing newline). */
+  deckJson: string;
+  /** index.html bytes, generated from `deck`. */
+  html: string;
+}
+
+/**
+ * PREPARE: the kind gate, `canonicalizeDeckForSave`, `stripDeckRuntimeAttrs`,
+ * `generateDeckHtml` and deck.json serialization. No reads of the repo beyond
+ * what canonicalization needs, no write. Split out of `saveDeck` so the
+ * live-editing checkpoint worker (which commits through git) writes exactly
+ * the bytes a save would have.
+ */
+export async function prepareDeckForSave(
+  slide: SlideContentTarget,
+  deck: DeckJson,
+  { themeUrls }: { themeUrls?: DeckThemeUrls } = {}
+): Promise<PreparedDeck> {
+  // The kind gate, before the repo context and before a single byte is
+  // serialized. A FILE slide's folder holds the uploaded document and a LINK
+  // slide's folder holds nothing at all; writing `deck.json` and `index.html`
+  // into either would not just be wrong, it would make the slide LOOK like a
+  // deck to every path that keys off those two files — the thumbnail task, the
+  // search index, the class site. Every writer passes through here (the
+  // editor, MCP `deck_apply`, the merge and ops save paths, the importer, the
+  // checkpoint worker), so it is the only place the refusal has to exist.
+  assertDeckSlide(slide, 'Saving deck content');
+
+  // Resolved here (and thrown here) for the same ordering `saveDeck` always
+  // had: a target with no git org fails before anything is canonicalized.
+  resolveSlideRepoContext(slide);
+  const deckPath = `${slide.content_path}/deck.json`;
+  const htmlPath = `${slide.content_path}/index.html`;
+
+  // Before anything is serialized: a signed delivery URL must not reach
+  // deck.json. It would freeze one viewer's tier and one expiring signature
+  // into the deck, and stop the reference following its file.
+  deck = await canonicalizeDeckForSave(slide, deck);
+  // Same reasoning, the other half of the boundary: Reveal's runtime paint
+  // never reaches a commit, whatever the caller handed us (issue #361). Both
+  // the deck.json body and the regenerated index.html below come from this.
+  deck = stripDeckRuntimeAttrs(deck);
+
+  const html = generateDeckHtml(deck, { title: slide.title, themeUrls, includeNotes: true });
+  const deckJson = JSON.stringify(deck, null, 2) + '\n';
+  return { deck, deckPath, htmlPath, deckJson, html };
+}
+
 /**
  * Save a deck: conflict check (§3 2×2 table) → generateDeckHtml → ONE atomic
  * uploadBatch commit (deck.json + index.html on main; deck.json only on
@@ -405,30 +459,11 @@ export async function saveDeck({
   branch,
   themeUrls,
 }: SaveDeckArgs): Promise<SaveDeckResult> {
-  // The kind gate, before the repo context and before a single byte is
-  // serialized. A FILE slide's folder holds the uploaded document and a LINK
-  // slide's folder holds nothing at all; writing `deck.json` and `index.html`
-  // into either would not just be wrong, it would make the slide LOOK like a
-  // deck to every path that keys off those two files — the thumbnail task, the
-  // search index, the class site. This is the choke point every writer passes
-  // (the editor, MCP `deck_apply`, the merge and ops save paths, the importer),
-  // so it is the only place the refusal has to exist.
-  assertDeckSlide(slide, 'Saving deck content');
-
+  // PREPARE — the kind gate, canonicalization, the runtime-attr strip and
+  // the generated index.html (see `prepareDeckForSave`).
+  const prepared = await prepareDeckForSave(slide, deck, { themeUrls });
   const { gitOrganization, repo } = resolveSlideRepoContext(slide);
-  const deckPath = `${slide.content_path}/deck.json`;
-  const htmlPath = `${slide.content_path}/index.html`;
-
-  // Before anything is serialized: a signed delivery URL must not reach
-  // deck.json. It would freeze one viewer's tier and one expiring signature
-  // into the deck, and stop the reference following its file. This is the only
-  // choke point every writer passes — the editor, deck_apply over MCP, the
-  // importer — so it is the only place the invariant can actually be promised.
-  deck = await canonicalizeDeckForSave(slide, deck);
-  // Same reasoning, the other half of the boundary: Reveal's runtime paint
-  // never reaches a commit, whatever the caller handed us (issue #361). Both
-  // the deck.json body and the regenerated index.html below come from this.
-  deck = stripDeckRuntimeAttrs(deck);
+  const { deckPath, htmlPath, deckJson, html } = prepared;
 
   const isPreviewBranch = branch != null && branch.startsWith(PREVIEW_BRANCH_PREFIX);
   // ASSUMED `main`, where `uploadPageAsset` ASKS — and the asymmetry is
@@ -449,9 +484,6 @@ export async function saveDeck({
   // Ref for conflict checks: the branch being written (main when absent) —
   // §3b: expected_sha refers to the file on the branch being written.
   const checkRef = branch;
-
-  const html = generateDeckHtml(deck, { title: slide.title, themeUrls, includeNotes: true });
-  const deckJson = JSON.stringify(deck, null, 2) + '\n';
 
   // Conflict check — immediately before the batch call (see CAS note above).
   if (expectedSha) {
@@ -560,19 +592,32 @@ export async function saveDeck({
   // Main writes only. A preview branch is not in the map, and recording its
   // shas would point every reader at unpublished content.
   if (!isPreviewBranch) {
-    await recordDeckFiles(slide, result.files, files);
+    await recordDeckCommit(slide, result.files, files);
   }
 
-  // Bump updated_at for main writes (a preview-branch commit changes nothing
-  // students or the live viewer can see).
-  if (slide.id && !isPreviewBranch) {
+  return { sha: newDeckSha, commit: result.commit, html };
+}
+
+/**
+ * RECORD: everything `saveDeck` does after a main-branch commit — the asset
+ * map rows, cache warm, thumbnail and search index (`recordDeckFiles`), then
+ * the `updated_at` bump. Exported for the live-editing checkpoint worker,
+ * which commits through git and runs this after its push. Main writes only;
+ * a preview-branch commit changes nothing students or the live viewer can see.
+ */
+export async function recordDeckCommit(
+  slide: SlideContentTarget,
+  committed: Array<{ path: string; sha: string }>,
+  written: Array<{ path: string; content: string }>
+): Promise<void> {
+  await recordDeckFiles(slide, committed, written);
+
+  if (slide.id) {
     await getPrisma().slide.update({
       where: { id: slide.id },
       data: { updated_at: new Date() },
     });
   }
-
-  return { sha: newDeckSha, commit: result.commit, html };
 }
 
 /**
