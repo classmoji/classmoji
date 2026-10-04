@@ -149,7 +149,7 @@ const PY = /(\b(?:for|in|if|return)\b|\benumerate\b|\d+)/g;
 /** Github-light colors, as the card's highlight.js theme draws Python. */
 function Code({ lines }: { lines: string[] }) {
   return (
-    <pre className="m-0 overflow-hidden rounded-md border border-[#d0d7de] bg-[#f6f8fa] p-2.5 font-mono text-[11px] leading-[1.5] text-[#1f2328]">
+    <pre className="m-0 overflow-hidden rounded-md border border-[#d0d7de] bg-[#f6f8fa] p-2.5 font-sans text-[11px] leading-[1.5] text-[#1f2328]">
       {lines.map((line, i) => (
         <div key={i}>
           {line.split(PY).map((part, j) =>
@@ -219,7 +219,7 @@ function Steps({ files, open }: { files: number; open: boolean }) {
           {FILES.slice(0, files).map(f => (
             <li
               key={f}
-              className="flex items-center gap-2 py-0.5 font-mono text-[11px] text-gray-500"
+              className="flex items-center gap-2 py-0.5 font-sans text-[11px] text-gray-500"
             >
               <FileTextOutlined style={{ color: '#10b981' }} />
               {f}
@@ -243,7 +243,7 @@ function Question({ n, code, text }: { n: number; code: typeof CODE1; text: stri
             <span className="text-[12.5px] font-semibold text-[#0958d9]">Question {n} of 2</span>
           </div>
           <div className="mb-1 flex items-center gap-1.5 text-[11px] text-[#4b5563]">
-            <span className="font-mono">{code.path}</span>
+            <span className="font-[family-name:monospace]">{code.path}</span>
             <span aria-hidden>·</span>
             <span>{code.lines.includes('–') ? `lines ${code.lines}` : `line ${code.lines}`}</span>
           </div>
