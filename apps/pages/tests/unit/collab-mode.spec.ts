@@ -31,6 +31,7 @@ import {
   liveLeaveUnsafe,
   liveUnreachable,
   normalizeRejectReason,
+  peerLabel,
   peersFromAwareness,
   readCoverValue,
   rejectionNotice,
@@ -437,5 +438,30 @@ test.describe('page delete closes the live room first', () => {
     expect(closeBeforeDelete({ classroomFlagged: true, hasCollabDoc: false })).toBe(true);
     expect(closeBeforeDelete({ classroomFlagged: false, hasCollabDoc: true })).toBe(true);
     expect(closeBeforeDelete({ classroomFlagged: false, hasCollabDoc: false })).toBe(false);
+  });
+});
+
+test.describe('agents in presence', () => {
+  test('an agent shows its own initials and is marked', () => {
+    const states = new Map<number, Record<string, unknown>>([
+      [1, { user: { id: 'u1', name: 'Ada Lovelace', color: '#0090ff' } }],
+      [2, { user: { name: 'Claude (agent)', color: '#30a46c', agent: true } }],
+      [3, { user: { name: 'Grace Hopper (agent)', color: '#e5484d' } }],
+    ]);
+    const peers = peersFromAwareness(states, 1, 'u1');
+    const claude = peers.find(p => p.name === 'Claude');
+    expect(claude).toMatchObject({ agent: true, self: false });
+    expect(initialsOf(claude!.name)).toBe('C');
+    expect(peerLabel(claude!)).toBe('Claude (agent)');
+    // The suffix alone marks an agent too.
+    expect(peers.find(p => p.name === 'Grace Hopper')?.agent).toBe(true);
+    expect(peers.find(p => p.name === 'Ada Lovelace')).toMatchObject({ agent: false, self: true });
+    expect(peerLabel(peers[0])).toBe('Ada Lovelace (you)');
+  });
+
+  test('initials never include punctuation', () => {
+    expect(initialsOf('Claude (agent)')).toBe('C');
+    expect(initialsOf('Ada (Countess) Lovelace')).toBe('AL');
+    expect(initialsOf('(agent)')).toBe('A');
   });
 });

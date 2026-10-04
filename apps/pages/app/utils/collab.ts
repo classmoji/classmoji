@@ -162,10 +162,27 @@ export function autoReloadAllowed(reason: LiveRefusal, localUnsynced: boolean): 
 export interface CollabPeer {
   /** User id when known; peers without one are keyed by their client id. */
   key: string;
+  /** The display name, without the server's " (agent)" suffix. */
   name: string;
   color: string;
   /** True for the local user. */
   self: boolean;
+  /** An agent editing through the collab server (MCP), not a person. */
+  agent: boolean;
+}
+
+/** The suffix the collab server puts on an agent's awareness name. */
+const AGENT_SUFFIX = /\s*\(agent\)\s*$/i;
+
+/** A name without the " (agent)" suffix. */
+export function stripAgentSuffix(name: string): string {
+  return name.replace(AGENT_SUFFIX, '').trim() || name.trim();
+}
+
+/** What an avatar's tooltip says: the name, marked when it is an agent or you. */
+export function peerLabel(peer: Pick<CollabPeer, 'name' | 'self' | 'agent'>): string {
+  if (peer.self) return `${peer.name} (you)`;
+  return peer.agent ? `${peer.name} (agent)` : peer.name;
 }
 
 /**
@@ -180,7 +197,9 @@ export function peersFromAwareness(
 ): CollabPeer[] {
   const byKey = new Map<string, CollabPeer>();
   for (const [clientId, state] of states) {
-    const user = state?.user as { id?: unknown; name?: unknown; color?: unknown } | undefined;
+    const user = state?.user as
+      | { id?: unknown; name?: unknown; color?: unknown; agent?: unknown }
+      | undefined;
     if (!user || typeof user.name !== 'string' || !user.name) continue;
     const id = typeof user.id === 'string' && user.id ? user.id : null;
     const key = id ?? `client:${clientId}`;
@@ -192,9 +211,10 @@ export function peersFromAwareness(
     }
     byKey.set(key, {
       key,
-      name: user.name,
+      name: stripAgentSuffix(user.name),
       color: typeof user.color === 'string' && user.color ? user.color : '#6b7280',
       self,
+      agent: user.agent === true || AGENT_SUFFIX.test(user.name),
     });
   }
   const peers = [...byKey.values()];
@@ -202,9 +222,12 @@ export function peersFromAwareness(
   return peers;
 }
 
-/** One or two initials for an avatar. */
+/** One or two initials for an avatar (letters and digits only, agent suffix ignored). */
 export function initialsOf(name: string): string {
-  const words = name.trim().split(/\s+/).filter(Boolean);
+  const words = stripAgentSuffix(name)
+    .split(/\s+/)
+    .map(word => word.replace(/[^\p{L}\p{N}]/gu, ''))
+    .filter(Boolean);
   if (words.length === 0) return '?';
   const first = words[0][0] ?? '';
   const last = words.length > 1 ? (words[words.length - 1][0] ?? '') : '';

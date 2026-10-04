@@ -1,6 +1,12 @@
-import { IconCloudCheck, IconCloudOff, IconRefresh } from '@tabler/icons-react';
+import { IconCloudCheck, IconCloudOff, IconRefresh, IconSparkles } from '@tabler/icons-react';
 
-import { SYNC_STATUS_LABEL, initialsOf, type CollabPeer, type SyncStatus } from '~/utils/collab.ts';
+import {
+  SYNC_STATUS_LABEL,
+  initialsOf,
+  peerLabel,
+  type CollabPeer,
+  type SyncStatus,
+} from '~/utils/collab.ts';
 
 /** Avatars shown before the rest collapse into "+N". */
 const MAX_AVATARS = 4;
@@ -48,17 +54,26 @@ const LiveHeaderControls = ({
           {shown.map(peer => (
             <span
               key={peer.key}
-              title={peer.self ? `${peer.name} (you)` : peer.name}
-              aria-label={peer.self ? `${peer.name} (you)` : peer.name}
-              className="inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-semibold text-white ring-2 ring-white dark:ring-[#191919]"
+              title={peerLabel(peer)}
+              aria-label={peerLabel(peer)}
+              data-agent={peer.agent ? 'true' : undefined}
+              className="relative inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-semibold text-white ring-2 ring-white dark:ring-[#191919]"
               style={{ backgroundColor: peer.color }}
             >
               {initialsOf(peer.name)}
+              {peer.agent && (
+                <span
+                  aria-hidden
+                  className="absolute -bottom-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-violet-600 text-white ring-2 ring-white dark:bg-violet-500 dark:ring-[#191919]"
+                >
+                  <IconSparkles size={9} stroke={2.5} />
+                </span>
+              )}
             </span>
           ))}
           {hidden.length > 0 && (
             <span
-              title={hidden.map(peer => peer.name).join(', ')}
+              title={hidden.map(peerLabel).join(', ')}
               className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-gray-200 px-1 text-[10px] font-semibold text-gray-700 ring-2 ring-white dark:bg-neutral-700 dark:text-gray-200 dark:ring-[#191919]"
             >
               +{hidden.length}

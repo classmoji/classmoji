@@ -184,7 +184,7 @@ test.describe('CollabSession', () => {
       color: '#0090ff',
     });
     expect(session.getState().peers).toEqual([
-      { key: 'u1', name: 'Ada Lovelace', color: '#0090ff', self: true },
+      { key: 'u1', name: 'Ada Lovelace', color: '#0090ff', self: true, agent: false },
     ]);
     session.destroy();
   });
