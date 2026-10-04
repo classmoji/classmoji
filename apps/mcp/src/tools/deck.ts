@@ -79,6 +79,7 @@ import {
   requireLiveEnv,
   liveSha,
   liveWriteError,
+  notifyPreviewChanged,
   parseLiveVersion,
   postMergePreview,
   postOps,
@@ -900,6 +901,9 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
       } as Prisma.InputJsonValue,
     });
 
+    // Open live editors refresh their pending-preview banner.
+    if (committedTo === 'preview') await notifyPreviewChanged(slide.classroom, 'deck', slide.id);
+
     return ok({
       success: true,
       new_sha: saved.sha,
@@ -1047,6 +1051,7 @@ async function acceptDeckPreviewLive(
       'The preview is merged into the live deck, but its branch could not be deleted — ' +
       'call deck_preview_discard to remove it.';
   }
+  await notifyPreviewChanged(slide.classroom, 'deck', slide.id);
 
   await writeAudit(ctx, {
     resource_type: 'SLIDES',
@@ -1164,6 +1169,7 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewAcceptArgs> = {
       } catch (error: unknown) {
         throw mapSemanticMergeError(error, 'deck_preview_accept');
       }
+      await notifyPreviewChanged(slide.classroom, 'deck', slide.id);
 
       await writeAudit(ctx, {
         resource_type: 'SLIDES',
@@ -1202,6 +1208,8 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewAcceptArgs> = {
     }
 
     if (result.merged) {
+      await notifyPreviewChanged(slide.classroom, 'deck', slide.id);
+
       await writeAudit(ctx, {
         resource_type: 'SLIDES',
         resource_id: slide.id,
@@ -1288,6 +1296,7 @@ export const deckPreviewDiscardTool: ToolDefinition<DeckPreviewArgs> = {
     await assertSlideEditable(slide, ctx);
 
     const result = await discardDeckPreview(slide);
+    await notifyPreviewChanged(slide.classroom, 'deck', slide.id);
 
     await writeAudit(ctx, {
       resource_type: 'SLIDES',

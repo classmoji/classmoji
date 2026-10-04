@@ -761,6 +761,59 @@ describe('guarded ops, inserted ids and save status', () => {
   });
 });
 
+describe('preview-changed notifications', () => {
+  const notified = () =>
+    calls.filter(call => call.method === 'POST' && call.path.endsWith('/preview-changed'));
+
+  beforeEach(() => {
+    route('POST', 'preview-changed', () => ({ status: 200, body: { broadcast: 1 } }));
+  });
+
+  it('a preview apply tells open editors', async () => {
+    mocks.pageFindById.mockResolvedValue(LIVE_PAGE);
+    await pageContentApplyTool.handler(
+      { classroom: 'org/x', page_id: PAGE_ID, expected_sha: 'live:1.7', ops: [UPDATE_OP] },
+      CTX
+    );
+    expect(notified()).toHaveLength(1);
+    expect(notified()[0]).toMatchObject({
+      path: `/internal/page/${PAGE_ID}/preview-changed`,
+      body: {},
+      secret: expect.any(String),
+    });
+  });
+
+  it('a discard tells open editors, and a failed notice does not fail the discard', async () => {
+    route('POST', 'preview-changed', () => ({ status: 500, body: { error: 'internal-error' } }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = parse(
+      await pagePreviewDiscardTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+    );
+    expect(result.discarded).toBe(true);
+    expect(notified()).toHaveLength(1);
+    warn.mockRestore();
+  });
+
+  it('an unflagged classroom is never notified', async () => {
+    mocks.pageFindById.mockResolvedValue(PLAIN_PAGE);
+    await pagePreviewDiscardTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX);
+    await pageContentApplyTool.handler(
+      { classroom: 'org/x', page_id: PAGE_ID, expected_sha: 'git-sha-1', ops: [UPDATE_OP] },
+      CTX
+    );
+    expect(fakeFetch).not.toHaveBeenCalled();
+  });
+
+  it('a live accept tells open editors', async () => {
+    mocks.pageFindById.mockResolvedValue(LIVE_PAGE);
+    mocks.getPreviewStatus.mockResolvedValue({ exists: true });
+    mocks.compareBranches.mockResolvedValue({ merge_base_sha: 'base-commit', head_sha: 'h1' });
+    route('POST', 'merge-preview', () => ({ status: 200, body: { applied: true, version: 11 } }));
+    await pagePreviewAcceptTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX);
+    expect(notified()).toHaveLength(1);
+  });
+});
+
 describe('live write refusals', () => {
   it.each([
     [409, 'content-missing'],
@@ -796,7 +849,8 @@ describe('preview mode with live editing', () => {
       expectedSha: 'git-sha-1',
       branch: PREVIEW_BRANCH,
     });
-    expect(calls.some(call => call.method === 'POST')).toBe(false);
+    // Nothing goes into the live document (only the preview notice is posted).
+    expect(calls.some(call => call.path.endsWith('/ops'))).toBe(false);
   });
 
   it('stacking onto an existing preview needs the preview sha, not a live version', async () => {

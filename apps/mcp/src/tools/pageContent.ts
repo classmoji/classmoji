@@ -38,6 +38,7 @@ import {
   requireLiveEnv,
   liveSha,
   liveWriteError,
+  notifyPreviewChanged,
   parseLiveVersion,
   postCover,
   postMergePreview,
@@ -1047,6 +1048,8 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
       } as Prisma.InputJsonValue,
     });
 
+    // Open live editors refresh their pending-preview banner.
+    if (committedTo === 'preview') await notifyPreviewChanged(page.classroom, 'page', page.id);
     const previewUrl = committedTo === 'preview' ? pagePreviewUrl(page) : null;
     return ok({
       success: true,
@@ -1207,6 +1210,7 @@ async function acceptPreviewLive(
       'The preview is merged into the live page, but its branch could not be deleted — ' +
       'call page_preview_discard to remove it.';
   }
+  await notifyPreviewChanged(page.classroom, 'page', page.id);
 
   await writeAudit(ctx, {
     resource_type: 'PAGES',
@@ -1320,6 +1324,7 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewAcceptArgs> = {
       } catch (error: unknown) {
         throw mapSemanticMergeError(error, 'page_preview_accept');
       }
+      await notifyPreviewChanged(page.classroom, 'page', page.id);
 
       await writeAudit(ctx, {
         resource_type: 'PAGES',
@@ -1354,6 +1359,8 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewAcceptArgs> = {
     }
 
     if (result.merged) {
+      await notifyPreviewChanged(page.classroom, 'page', page.id);
+
       await writeAudit(ctx, {
         resource_type: 'PAGES',
         resource_id: page.id,
@@ -1434,6 +1441,7 @@ export const pagePreviewDiscardTool: ToolDefinition<PagePreviewArgs> = {
     const page = await loadPageWithRepoInClassroom(args.page_id, ctx);
 
     const result = await ClassmojiService.pageContent.discardPreview(page);
+    await notifyPreviewChanged(page.classroom, 'page', page.id);
 
     await writeAudit(ctx, {
       resource_type: 'PAGES',

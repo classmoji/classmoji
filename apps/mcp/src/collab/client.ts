@@ -371,6 +371,29 @@ export function postClose(
   return collabRequest<{ closed: number }>(env, 'POST', docPath(kind, id, 'close'), { reason });
 }
 
+/**
+ * Tell open editors that this doc's preview was created, updated or
+ * discarded (`POST /internal/:kind/:id/preview-changed`), so their
+ * pending-preview banner refreshes. Only for live classrooms with the collab
+ * env; best effort — a failure is logged and never fails the tool call.
+ */
+export async function notifyPreviewChanged(
+  classroom: unknown,
+  kind: CollabKind,
+  id: string
+): Promise<void> {
+  const env = liveStateFor(classroom)?.env;
+  if (!env) return;
+  try {
+    await collabRequest<unknown>(env, 'POST', docPath(kind, id, 'preview-changed'), {});
+  } catch (error) {
+    console.warn(
+      `[mcp] Could not tell live editors the ${kind} preview changed:`,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+}
+
 // ─── Actor ───────────────────────────────────────────────────────────────────
 
 /**

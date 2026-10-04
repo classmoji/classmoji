@@ -347,7 +347,8 @@ describe('live apply', () => {
       shaSource: 'deck',
       branch: PREVIEW_BRANCH,
     });
-    expect(calls.some(call => call.method === 'POST')).toBe(false);
+    // Nothing goes into the live document (only the preview notice is posted).
+    expect(calls.some(call => call.path.endsWith('/ops'))).toBe(false);
   });
 });
 
@@ -500,6 +501,25 @@ describe('guarded deck ops and inserted ids', () => {
       (e: unknown) => e
     );
     expect((error as Error).message).toMatch(/notes and attributes included/);
+  });
+});
+
+describe('preview-changed notifications', () => {
+  const notified = () =>
+    calls.filter(call => call.method === 'POST' && call.path.endsWith('/preview-changed'));
+
+  it('a preview apply and a discard tell open editors', async () => {
+    route('POST', 'preview-changed', () => ({ status: 200, body: { broadcast: 0 } }));
+    mocks.slideFindById.mockResolvedValue(LIVE_SLIDE);
+    await deckApplyTool.handler(
+      { classroom: 'org/x', slide_id: SLIDE_ID, expected_sha: 'live:1.4', ops: [UPDATE_OP] },
+      CTX
+    );
+    await deckPreviewDiscardTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID }, CTX);
+    expect(notified().map(call => call.path)).toEqual([
+      `/internal/deck/${SLIDE_ID}/preview-changed`,
+      `/internal/deck/${SLIDE_ID}/preview-changed`,
+    ]);
   });
 });
 
