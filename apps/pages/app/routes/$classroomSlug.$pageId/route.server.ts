@@ -115,6 +115,9 @@ async function loadUploadCapability(page: {
  */
 const LIVE_PAGE_MESSAGE = 'This page is now edited live. Reload to keep editing.';
 
+/** The cover intents that write content.json; a live page sets its cover in the room. */
+const LIVE_REFUSED_COVER_INTENTS = new Set(['set-header-image', 'upload-header-image']);
+
 /** Extensions a page cover may have — the image half of the upload allowlist. */
 const COVER_IMAGE_EXTENSION = /\.(png|jpe?g|gif|webp|svg)$/i;
 
@@ -599,7 +602,7 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
     // which would start the whole-document fallback against this refusal.
     return Response.json({ conflict: true, message: LIVE_PAGE_MESSAGE }, { status: 409 });
   }
-  if (liveEnv && (intent === 'set-header-image' || intent === 'upload-header-image')) {
+  if (liveEnv && LIVE_REFUSED_COVER_INTENTS.has(intent)) {
     return Response.json({ error: LIVE_PAGE_MESSAGE }, { status: 409 });
   }
 

@@ -98,7 +98,11 @@ export function hasPreviewChanges(changes: PreviewChanges | null | undefined): b
  * alphabet is escaped rather than trusted.
  */
 export function cssAttrValue(id: string): string {
-  return `"${id.replace(/["\\]/g, ch => `\\${ch}`).replace(/[\n\r\f]/g, ' ')}"`;
+  return `"${id
+    .replace(/["\\]/g, ch => `\\${ch}`)
+    .replace(/[\n\r\f]/g, ' ')
+    // Never `</style>` inside a stylesheet, whatever the id says.
+    .replace(/</g, '\\3c ')}"`;
 }
 
 /**
