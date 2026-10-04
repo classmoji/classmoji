@@ -14,6 +14,7 @@
     "format:check": "prettier --check \"**/*.{js,jsx,ts,tsx,json,md}\""
   },
   "dependencies": {
+    "@classmoji/services": "*",
     "fractional-indexing": "^4.0.0",
     "yjs": "^13.6.33"
   },

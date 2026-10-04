@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import type { BlockConfig } from '@blocknote/core';
 import { createReactBlockSpec, type ReactCustomBlockRenderProps } from '@blocknote/react';
+import { pageLinkConfig } from '@classmoji/page-schema';
 import { IconFileText } from '@tabler/icons-react';
 import { useNavigate } from 'react-router';
 
@@ -184,122 +184,110 @@ const SelectedState = ({
   );
 };
 
-const pageLinkPropSchema = {
-  pageId: { default: '' },
-  pageTitle: { default: '' },
-};
+type PageLinkRenderProps = ReactCustomBlockRenderProps<typeof pageLinkConfig>;
 
-type PageLinkRenderProps = ReactCustomBlockRenderProps<BlockConfig<'pageLink', typeof pageLinkPropSchema, 'none'>>;
+export const PageLink = createReactBlockSpec(pageLinkConfig, {
+  render: function PageLinkRenderer(props: PageLinkRenderProps) {
+    const { pageId, pageTitle } = props.block.props;
+    const [isOpen, setIsOpen] = useState(!pageId);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [availablePages, setAvailablePages] = useState<PageLinkPage[]>([]);
+    const [isLoading, setIsLoading] = useState(false);
+    const [currentPageId, setCurrentPageId] = useState('');
+    const inputRef = useRef<HTMLInputElement>(null);
+    const dropdownRef = useRef<HTMLDivElement>(null);
+    const navigate = useNavigate();
 
-export const PageLink = createReactBlockSpec(
-  {
-    type: 'pageLink',
-    propSchema: pageLinkPropSchema,
-    content: 'none',
-  },
-  {
-    render: function PageLinkRenderer(props: PageLinkRenderProps) {
-      const { pageId, pageTitle } = props.block.props;
-      const [isOpen, setIsOpen] = useState(!pageId);
-      const [searchQuery, setSearchQuery] = useState('');
-      const [availablePages, setAvailablePages] = useState<PageLinkPage[]>([]);
-      const [isLoading, setIsLoading] = useState(false);
-      const [currentPageId, setCurrentPageId] = useState('');
-      const inputRef = useRef<HTMLInputElement>(null);
-      const dropdownRef = useRef<HTMLDivElement>(null);
-      const navigate = useNavigate();
-
-      // Get current page ID from URL
-      useEffect(() => {
-        if (typeof window !== 'undefined') {
-          const pathParts = window.location.pathname.split('/');
-          const currentId = pathParts[2]; // classroomSlug is [1], pageId is [2]
-          setCurrentPageId(currentId || '');
-        }
-      }, []);
-
-      // Fetch pages when dropdown opens
-      useEffect(() => {
-        if (isOpen && availablePages.length === 0 && !isLoading && typeof window !== 'undefined') {
-          const classroomSlug = window.location.pathname.split('/')[1];
-
-          setIsLoading(true);
-          fetch(`/api/pages/${classroomSlug}`)
-            .then(res => res.json())
-            .then(data => {
-              setAvailablePages(data.pages || []);
-              setIsLoading(false);
-            })
-            .catch(err => {
-              console.error('Failed to fetch pages:', err);
-              setIsLoading(false);
-            });
-        }
-      }, [isOpen, availablePages.length, isLoading]);
-
-      // Focus input when block is first inserted (empty state)
-      useEffect(() => {
-        if (!pageId && inputRef.current) {
-          // Small delay to ensure the block is fully rendered
-          const timer = setTimeout(() => {
-            inputRef.current?.focus();
-          }, 10);
-          return () => clearTimeout(timer);
-        }
-      }, [pageId]);
-
-      // Filter pages: exclude current page, apply search
-      const filteredPages = availablePages.filter(p => p.id !== currentPageId);
-
-      const handleSelectPage = (page: PageLinkPage) => {
-        props.editor.updateBlock(props.block, {
-          props: {
-            pageId: page.id,
-            pageTitle: page.title || 'Untitled',
-          },
-        });
-        setIsOpen(false);
-        setSearchQuery('');
-      };
-
-      const handleClickLink = (e: React.MouseEvent | React.KeyboardEvent) => {
-        e.preventDefault();
-        if (typeof window !== 'undefined') {
-          const classroomSlug = window.location.pathname.split('/')[1];
-          // Preserve the embed context (embed/parentOrigin/theme) when the block
-          // is clicked inside the webapp's reader, and stay bare in the canonical
-          // editor — buildEmbeddedPageHref forwards, never forces, `embed`.
-          navigate(buildEmbeddedPageHref(classroomSlug, pageId, window.location.search));
-        }
-      };
-
-      // Empty state - no page selected yet
-      if (!pageId) {
-        return (
-          <EmptyState
-            searchQuery={searchQuery}
-            setSearchQuery={setSearchQuery}
-            isOpen={isOpen}
-            setIsOpen={setIsOpen}
-            filteredPages={filteredPages}
-            onSelectPage={handleSelectPage}
-            inputRef={inputRef}
-            dropdownRef={dropdownRef}
-            isLoading={isLoading}
-          />
-        );
+    // Get current page ID from URL
+    useEffect(() => {
+      if (typeof window !== 'undefined') {
+        const pathParts = window.location.pathname.split('/');
+        const currentId = pathParts[2]; // classroomSlug is [1], pageId is [2]
+        setCurrentPageId(currentId || '');
       }
+    }, []);
 
-      // Selected state - page has been chosen
-      const pageExists = availablePages.length === 0 || availablePages.some(p => p.id === pageId);
+    // Fetch pages when dropdown opens
+    useEffect(() => {
+      if (isOpen && availablePages.length === 0 && !isLoading && typeof window !== 'undefined') {
+        const classroomSlug = window.location.pathname.split('/')[1];
+
+        setIsLoading(true);
+        fetch(`/api/pages/${classroomSlug}`)
+          .then(res => res.json())
+          .then(data => {
+            setAvailablePages(data.pages || []);
+            setIsLoading(false);
+          })
+          .catch(err => {
+            console.error('Failed to fetch pages:', err);
+            setIsLoading(false);
+          });
+      }
+    }, [isOpen, availablePages.length, isLoading]);
+
+    // Focus input when block is first inserted (empty state)
+    useEffect(() => {
+      if (!pageId && inputRef.current) {
+        // Small delay to ensure the block is fully rendered
+        const timer = setTimeout(() => {
+          inputRef.current?.focus();
+        }, 10);
+        return () => clearTimeout(timer);
+      }
+    }, [pageId]);
+
+    // Filter pages: exclude current page, apply search
+    const filteredPages = availablePages.filter(p => p.id !== currentPageId);
+
+    const handleSelectPage = (page: PageLinkPage) => {
+      props.editor.updateBlock(props.block, {
+        props: {
+          pageId: page.id,
+          pageTitle: page.title || 'Untitled',
+        },
+      });
+      setIsOpen(false);
+      setSearchQuery('');
+    };
+
+    const handleClickLink = (e: React.MouseEvent | React.KeyboardEvent) => {
+      e.preventDefault();
+      if (typeof window !== 'undefined') {
+        const classroomSlug = window.location.pathname.split('/')[1];
+        // Preserve the embed context (embed/parentOrigin/theme) when the block
+        // is clicked inside the webapp's reader, and stay bare in the canonical
+        // editor — buildEmbeddedPageHref forwards, never forces, `embed`.
+        navigate(buildEmbeddedPageHref(classroomSlug, pageId, window.location.search));
+      }
+    };
+
+    // Empty state - no page selected yet
+    if (!pageId) {
       return (
-        <SelectedState
-          pageId={pageId}
-          pageTitle={pageTitle}
-          pageExists={pageExists}
-          onClickLink={handleClickLink}
+        <EmptyState
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+          isOpen={isOpen}
+          setIsOpen={setIsOpen}
+          filteredPages={filteredPages}
+          onSelectPage={handleSelectPage}
+          inputRef={inputRef}
+          dropdownRef={dropdownRef}
+          isLoading={isLoading}
         />
       );
-    },
-  }
-);
+    }
+
+    // Selected state - page has been chosen
+    const pageExists = availablePages.length === 0 || availablePages.some(p => p.id === pageId);
+    return (
+      <SelectedState
+        pageId={pageId}
+        pageTitle={pageTitle}
+        pageExists={pageExists}
+        onClickLink={handleClickLink}
+      />
+    );
+  },
+});

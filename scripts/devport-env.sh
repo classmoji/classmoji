@@ -21,6 +21,7 @@ if [ -f ".devport" ]; then
   export PAGES_PORT=$((7100 + DEVPORT_ID * 10))
   export ADMIN_PORT=$((7500 + DEVPORT_ID * 10))
   export MCP_PORT=$((8100 + DEVPORT_ID * 10))
+  export COLLAB_PORT=$((7700 + DEVPORT_ID * 10))
 
   # Export service URLs (these override .env values if needed)
   export QUIZ_AGENT_URL="http://localhost:$QUIZ_AGENT_PORT"
@@ -47,6 +48,7 @@ else
   export PAGES_PORT=7100
   export ADMIN_PORT=7500
   export MCP_PORT=8100
+  export COLLAB_PORT=7700
 
   # Service URLs use defaults from .env
   export QUIZ_AGENT_URL="http://localhost:6000"

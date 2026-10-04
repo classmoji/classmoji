@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { BlockConfig } from '@blocknote/core';
 import { createReactBlockSpec, type ReactCustomBlockRenderProps } from '@blocknote/react';
+import { navGridConfig } from '@classmoji/page-schema';
 import {
   IconArrowUp,
   IconArrowDown,
@@ -14,7 +14,6 @@ import {
 } from '@tabler/icons-react';
 
 import {
-  NAV_GRID_EMPTY_ENTRIES,
   NAV_GRID_SCHEDULE_PATH,
   hasNavGridScheduleEntry,
   moveNavGridEntry,
@@ -551,13 +550,8 @@ function EntryRow({
  * Block spec
  * ------------------------------------------------------------------ */
 
-const navGridPropSchema = {
-  /** JSON string — see navGridShared.ts for the entry shape. */
-  entries: { default: NAV_GRID_EMPTY_ENTRIES },
-  columns: { default: 2, values: [1, 2] },
-};
-
-type NavGridRenderProps = ReactCustomBlockRenderProps<BlockConfig<'navGrid', typeof navGridPropSchema, 'none'>>;
+// The config (entries JSON string, columns 1|2) lives in @classmoji/page-schema.
+type NavGridRenderProps = ReactCustomBlockRenderProps<typeof navGridConfig>;
 
 const navGridImplementation = {
   toExternalHTML: function NavGridExternalHTML(props: NavGridRenderProps) {
@@ -903,11 +897,4 @@ const navGridImplementation = {
  */
 export const NavGridBlockView = navGridImplementation.render;
 
-export const NavGrid = createReactBlockSpec(
-  {
-    type: 'navGrid' as const,
-    propSchema: navGridPropSchema,
-    content: 'none' as const,
-  },
-  navGridImplementation
-);
+export const NavGrid = createReactBlockSpec(navGridConfig, navGridImplementation);
