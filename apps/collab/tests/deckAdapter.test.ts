@@ -683,7 +683,12 @@ describe('guarded ops', () => {
         { op: 'reorder', count: 3 },
       ])
     ).toEqual({ insertedIds: ['n1'], touchedId: 'b', touchedIds: ['a', 'b'] });
-    expect(opsOutcome([{ op: 'update', id: 'a' }, { op: 'delete', id: 'a' }])).toEqual({});
+    expect(
+      opsOutcome([
+        { op: 'update', id: 'a' },
+        { op: 'delete', id: 'a' },
+      ])
+    ).toEqual({});
     // A slide touched twice counts where it was touched last; at most the last 40.
     const many = Array.from({ length: 45 }, (_, i) => ({ op: 'update', id: `s${i}` }));
     const outcome = opsOutcome([...many, { op: 'update', id: 's0' }]);

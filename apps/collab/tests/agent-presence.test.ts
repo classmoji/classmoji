@@ -55,7 +55,10 @@ function agents(client: TestClient): Map<number, AgentState> {
   return out;
 }
 const agentList = (client: TestClient) => [...agents(client).values()];
-const names = (client: TestClient) => agentList(client).map(a => a.user.name).sort();
+const names = (client: TestClient) =>
+  agentList(client)
+    .map(a => a.user.name)
+    .sort();
 
 /** Where a caret's relative position lands in a client's doc: block id + offset in its text. */
 function landing(client: TestClient, rel: unknown): { block: string | null; index: number } | null {
@@ -68,7 +71,10 @@ function landing(client: TestClient, rel: unknown): { block: string | null; inde
   while (node && !(node instanceof Y.XmlElement && node.getAttribute('id'))) {
     node = (node._item?.parent as Y.AbstractType<unknown> | null) ?? null;
   }
-  return { block: node ? ((node as Y.XmlElement).getAttribute('id') ?? null) : null, index: abs.index };
+  return {
+    block: node ? ((node as Y.XmlElement).getAttribute('id') ?? null) : null,
+    index: abs.index,
+  };
 }
 
 let server: TestServer;
@@ -140,7 +146,9 @@ describe('what an op batch touched', () => {
   it('a replace_all touches the new top-level blocks', async () => {
     const a = open();
     await a.synced;
-    await ops(ada, [{ op: 'replace_all', blocks: [paragraph('r1', 'One'), paragraph('r2', 'Two')] }]);
+    await ops(ada, [
+      { op: 'replace_all', blocks: [paragraph('r1', 'One'), paragraph('r2', 'Two')] },
+    ]);
     await waitFor(() => !!agentList(a)[0]?.touched, 3000, 'touched');
     expect(agentList(a)[0].touched!.ids).toEqual(['r1', 'r2']);
   });
@@ -272,7 +280,8 @@ describe('the page caret', () => {
       const walk = (n: Y.XmlElement | Y.XmlFragment) => {
         for (const c of n.toArray()) {
           if (c instanceof Y.XmlElement) {
-            if (c.getAttribute('id') === 'p1') found = (c.get(0) as Y.XmlElement).get(0) as Y.XmlText;
+            if (c.getAttribute('id') === 'p1')
+              found = (c.get(0) as Y.XmlElement).get(0) as Y.XmlText;
             else walk(c);
           }
         }
@@ -415,7 +424,10 @@ describe('decks', () => {
     await waitFor(() => agentList(client)[0]?.slide === 's1', 3000, 'pointed slide');
     expect(agentList(client)[0].cursor).toBeUndefined();
 
-    const missing = await internal(server, 'POST', '/deck/deck-1/cursor', { actor: ada, slide: 'zz' });
+    const missing = await internal(server, 'POST', '/deck/deck-1/cursor', {
+      actor: ada,
+      slide: 'zz',
+    });
     expect(missing).toEqual({ status: 404, body: { error: 'not-found', what: 'slide' } });
     const bad = await internal(server, 'POST', '/deck/deck-1/cursor', { actor: ada });
     expect(bad.status).toBe(400);

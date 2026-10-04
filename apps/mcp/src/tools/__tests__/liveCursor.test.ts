@@ -39,7 +39,12 @@ const CLASSROOM = {
   git_organization: { provider: 'GITHUB', login: 'test-org' },
   collab_enabled: true,
 };
-const PAGE = { id: PAGE_ID, classroom_id: 'class-1', content_path: 'pages/p', classroom: CLASSROOM };
+const PAGE = {
+  id: PAGE_ID,
+  classroom_id: 'class-1',
+  content_path: 'pages/p',
+  classroom: CLASSROOM,
+};
 const DECK = {
   id: DECK_ID,
   classroom_id: 'class-1',
@@ -77,7 +82,10 @@ let respond: (call: Call) => { status: number; body: unknown } = () => ({
 });
 
 const fakeFetch = vi.fn(async (url: string | URL, init?: RequestInit) => {
-  const call = { path: new URL(String(url)).pathname, body: JSON.parse(String(init?.body ?? '{}')) };
+  const call = {
+    path: new URL(String(url)).pathname,
+    body: JSON.parse(String(init?.body ?? '{}')),
+  };
   calls.push(call);
   const { status, body } = respond(call);
   return new Response(JSON.stringify(body), { status });
@@ -190,7 +198,7 @@ describe('deck_cursor_set', () => {
     ]);
   });
 
-  it("an assistant may only point in decks they may edit", async () => {
+  it('an assistant may only point in decks they may edit', async () => {
     mocks.slideFindById.mockResolvedValue({ ...DECK, created_by: 'someone-else' });
     await expect(
       deckCursorSetTool.handler(

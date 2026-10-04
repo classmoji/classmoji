@@ -24,14 +24,22 @@ vi.mock('../../mcp/registry.ts', () => ({
 }));
 vi.mock('../../resources/index.ts', () => ({ registerAllResources: vi.fn() }));
 
-const { default: mcpRoutes, agentSessionFrom, isInitializeRequest, SESSION_HEADER } =
-  await import('../mcp.ts');
+const {
+  default: mcpRoutes,
+  agentSessionFrom,
+  isInitializeRequest,
+  SESSION_HEADER,
+} = await import('../mcp.ts');
 
 const INIT = {
   jsonrpc: '2.0',
   id: 1,
   method: 'initialize',
-  params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '0' } },
+  params: {
+    protocolVersion: '2025-06-18',
+    capabilities: {},
+    clientInfo: { name: 't', version: '0' },
+  },
 };
 
 async function app() {
