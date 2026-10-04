@@ -107,6 +107,24 @@ export interface CollabPeer {
   self: boolean;
   /** The slide (data-cm-id) this person is on, when they share it. */
   slideId: string | null;
+  /** An agent editing on someone's behalf (`name` is without the " (agent)" suffix). */
+  agent: boolean;
+}
+
+const AGENT_SUFFIX = ' (agent)';
+
+/** An awareness name split into the person's name and whether it is an agent. */
+export function agentName(name: string, flagged = false): { name: string; agent: boolean } {
+  if (name.endsWith(AGENT_SUFFIX)) {
+    return { name: name.slice(0, -AGENT_SUFFIX.length).trim() || name, agent: true };
+  }
+  return { name, agent: flagged };
+}
+
+/** The label for a peer: "Name" or "Name (agent)". */
+export function peerLabel(peer: Pick<CollabPeer, 'name' | 'agent'> & { self?: boolean }): string {
+  if (peer.self) return `${peer.name} (you)`;
+  return peer.agent ? `${peer.name}${AGENT_SUFFIX}` : peer.name;
 }
 
 /**
@@ -121,7 +139,9 @@ export function peersFromAwareness(
 ): CollabPeer[] {
   const byKey = new Map<string, CollabPeer>();
   for (const [clientId, state] of states) {
-    const user = state?.user as { id?: unknown; name?: unknown; color?: unknown } | undefined;
+    const user = state?.user as
+      | { id?: unknown; name?: unknown; color?: unknown; agent?: unknown }
+      | undefined;
     if (!user || typeof user.name !== 'string' || !user.name) continue;
     const id = typeof user.id === 'string' && user.id ? user.id : null;
     const key = id ?? `client:${clientId}`;
@@ -133,9 +153,11 @@ export function peersFromAwareness(
       existing.slideId ??= slideId;
       continue;
     }
+    const who = agentName(user.name, user.agent === true);
     byKey.set(key, {
       key,
-      name: user.name,
+      name: who.name,
+      agent: who.agent,
       color: typeof user.color === 'string' && user.color ? user.color : '#6b7280',
       self,
       slideId,
@@ -146,9 +168,9 @@ export function peersFromAwareness(
   return peers;
 }
 
-/** One or two initials for an avatar. */
+/** One or two initials for an avatar (an agent's suffix ignored). */
 export function initialsOf(name: string): string {
-  const words = name.trim().split(/\s+/).filter(Boolean);
+  const words = agentName(name).name.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return '?';
   const first = words[0][0] ?? '';
   const last = words.length > 1 ? (words[words.length - 1][0] ?? '') : '';

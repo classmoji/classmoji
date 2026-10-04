@@ -107,8 +107,8 @@ export function lockView(slideId: string, lock: SlideLock, state: LockState): Sl
   };
 }
 
-/** "Tim is editing" — the holder's first name. */
+/** "Collab Teacher 1 is editing" — the holder's full display name. */
 export function editingLabel(name: string): string {
-  const first = name.trim().split(/\s+/)[0] || 'Someone';
-  return `${first} is editing`;
+  const full = name.trim().replace(/\s+/g, ' ');
+  return `${full || 'Someone'} is editing`;
 }

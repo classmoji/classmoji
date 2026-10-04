@@ -1,8 +1,9 @@
-import { IconCloudCheck, IconCloudOff, IconRefresh } from '@tabler/icons-react';
+import { IconCloudCheck, IconCloudOff, IconRefresh, IconSparkles } from '@tabler/icons-react';
 
 import {
   SYNC_STATUS_LABEL,
   initialsOf,
+  peerLabel,
   type CollabPeer,
   type SyncStatus,
 } from '~/utils/collab/collab';
@@ -26,20 +27,29 @@ export function PeerAvatar({
   peer,
   size = 'md',
 }: {
-  peer: Pick<CollabPeer, 'name' | 'color'> & { self?: boolean };
+  peer: Pick<CollabPeer, 'name' | 'color'> & { self?: boolean; agent?: boolean };
   size?: 'sm' | 'md';
 }) {
-  const label = peer.self ? `${peer.name} (you)` : peer.name;
+  const label = peerLabel({ name: peer.name, agent: peer.agent ?? false, self: peer.self });
   return (
     <span
       title={label}
       aria-label={label}
-      className={`inline-flex items-center justify-center rounded-full font-semibold text-white ring-2 ring-white dark:ring-gray-900 ${
+      className={`relative inline-flex items-center justify-center rounded-full font-semibold text-white ring-2 ring-white dark:ring-gray-900 ${
         size === 'sm' ? 'h-5 w-5 text-[9px]' : 'h-6 w-6 text-[10px]'
       }`}
       style={{ backgroundColor: peer.color }}
+      data-agent={peer.agent ? 'true' : undefined}
     >
       {initialsOf(peer.name)}
+      {peer.agent && (
+        <span
+          className="absolute -bottom-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-violet-600 text-white ring-2 ring-white dark:bg-violet-500 dark:ring-gray-900"
+          aria-hidden
+        >
+          <IconSparkles size={9} stroke={2.5} />
+        </span>
+      )}
     </span>
   );
 }
@@ -72,7 +82,7 @@ export default function CollabHeaderControls({
           ))}
           {hidden.length > 0 && (
             <span
-              title={hidden.map(peer => peer.name).join(', ')}
+              title={hidden.map(peer => peerLabel(peer)).join(', ')}
               className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-gray-200 px-1 text-[10px] font-semibold text-gray-700 ring-2 ring-white dark:bg-gray-700 dark:text-gray-200 dark:ring-gray-900"
             >
               +{hidden.length}

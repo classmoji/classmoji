@@ -80,8 +80,9 @@ test.describe('shouldRelease / heartbeat', () => {
     expect(heartbeatDue(0, 9_999)).toBe(false);
     expect(heartbeatDue(0, 10_000)).toBe(true);
   });
-  test('"Tim is editing"', () => {
-    expect(editingLabel('Tim Tregubov')).toBe('Tim is editing');
+  test('"Collab Teacher 1 is editing": the full name', () => {
+    expect(editingLabel('Tim Tregubov')).toBe('Tim Tregubov is editing');
+    expect(editingLabel('Collab Teacher 1')).toBe('Collab Teacher 1 is editing');
     expect(editingLabel('  ')).toBe('Someone is editing');
   });
 });

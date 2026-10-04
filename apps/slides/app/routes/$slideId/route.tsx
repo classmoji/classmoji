@@ -3010,7 +3010,7 @@ export default function SlideViewer() {
     const data = versionFetcher.data;
     if (!data || data.intent !== 'collab-save-version') return;
     // Once per answer: the effect keys on the data alone.
-    if (data.success) toastRef.current.success('Version saved');
+    if (data.success) toastRef.current.success('Version saved.');
     else if (data.error) toastRef.current.error(data.error);
   }, [versionFetcher.data]);
 
@@ -3269,7 +3269,12 @@ export default function SlideViewer() {
         lock: lock
           ? { name: lock.holder.name, color: lock.holder.color, mine: lock.state === 'mine' }
           : null,
-        peers: here.map(peer => ({ key: peer.key, name: peer.name, color: peer.color })),
+        peers: here.map(peer => ({
+          key: peer.key,
+          name: peer.name,
+          color: peer.color,
+          agent: peer.agent,
+        })),
       };
     },
     [bridgeState.locks, peers]

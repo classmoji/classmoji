@@ -6,7 +6,7 @@ import type { StackData, SlideData } from './hooks/useSlideStructure';
 /** Live editing: who holds a slide and who is on it. */
 export interface SlideCollabBadge {
   lock: { name: string; color: string; mine: boolean } | null;
-  peers: Array<{ key: string; name: string; color: string }>;
+  peers: Array<{ key: string; name: string; color: string; agent?: boolean }>;
 }
 
 type BadgesFor = (slideId: string | null) => SlideCollabBadge | null;
@@ -40,8 +40,10 @@ function CollabBadge({ badge }: { badge: SlideCollabBadge }) {
       {badge.peers.map(peer => (
         <span
           key={peer.key}
-          title={peer.name}
-          className="inline-flex h-4 w-4 items-center justify-center rounded-full text-[8px] font-semibold text-white ring-1 ring-white dark:ring-gray-800"
+          title={peer.agent ? `${peer.name} (agent)` : peer.name}
+          className={`inline-flex h-4 w-4 items-center justify-center rounded-full text-[8px] font-semibold text-white ring-1 ${
+            peer.agent ? 'ring-violet-500' : 'ring-white dark:ring-gray-800'
+          }`}
           style={{ backgroundColor: peer.color }}
         >
           {initials(peer.name)}

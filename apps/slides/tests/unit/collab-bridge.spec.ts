@@ -284,7 +284,7 @@ test.describe('live deck bridge', () => {
     expect(t.remoteHtml('aaaa0002')).toBe('<h2>Two</h2>');
     expect(t.section('aaaa0002').innerHTML).toBe('<h2>Two</h2>');
     expect(t.section('aaaa0002').getAttribute('contenteditable')).toBe('false');
-    expect(t.notices.at(-1)).toBe('Grace is editing this slide.');
+    expect(t.notices.at(-1)).toBe('Grace Hopper is editing this slide.');
     t.bridge.destroy();
   });
 
@@ -321,7 +321,7 @@ test.describe('live deck bridge', () => {
     t.bridge.flushLocal();
     expect(t.section('aaaa0003').innerHTML).toBe('<h2>Three</h2>');
     expect(t.remoteHtml('aaaa0003')).toBe('<h2>Three</h2>');
-    expect(t.notices).toContain('Grace is editing this slide.');
+    expect(t.notices).toContain('Grace Hopper is editing this slide.');
     t.bridge.destroy();
   });
 
@@ -369,7 +369,7 @@ test.describe('live deck bridge', () => {
       'stack001',
     ]);
     expect(t.order()).toEqual(['aaaa0002', 'aaaa0003', 'stack001', 'aaaa0004', 'aaaa0005']);
-    expect(t.notices.at(-1)).toBe('Grace is editing that slide, so it stays.');
+    expect(t.notices.at(-1)).toBe('Grace Hopper is editing that slide, so it stays.');
     t.bridge.destroy();
   });
 

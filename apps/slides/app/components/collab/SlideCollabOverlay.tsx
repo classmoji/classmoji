@@ -34,7 +34,10 @@ export default function SlideCollabOverlay({
           data-holder={other.holder.name}
         >
           <PeerAvatar peer={other.holder} size="sm" />
-          <span className="font-medium text-amber-900 dark:text-amber-100">
+          <span
+            className="max-w-[16rem] truncate font-medium text-amber-900 dark:text-amber-100"
+            title={editingLabel(other.holder.name)}
+          >
             {editingLabel(other.holder.name)}
           </span>
           {other.canTakeOver && (

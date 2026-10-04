@@ -10,7 +10,9 @@ import type { CollabLoaderData } from '@classmoji/collab';
 import {
   liveLeaveRisk,
   mayAutoReloadStale,
+  initialsOf,
   normalizeRejectReason,
+  peersFromAwareness,
   rejectionNotice,
 } from '../../app/utils/collab/collab.ts';
 import { DeckCollabSession, type CollabProviderArgs } from '../../app/utils/collab/session.ts';
@@ -108,5 +110,20 @@ test.describe('refusals and closes', () => {
     // After Done: still guarded until every update is acknowledged.
     expect(liveLeaveRisk({ ...base, editing: false, unsyncedChanges: 3 })).toBe(true);
     expect(liveLeaveRisk({ ...base, editing: false, status: 'disconnected' })).toBe(false);
+  });
+
+  test('agents: marked, named without the suffix, initials from the name', () => {
+    const peers = peersFromAwareness(
+      [
+        [1, { user: { id: 'u1', name: 'Ada Lovelace', color: '#000' } }],
+        [99, { user: { name: 'Ada Lovelace (agent)', color: '#111', agent: true } }],
+      ],
+      1,
+      'u1'
+    );
+    expect(peers).toHaveLength(2);
+    const agent = peers.find(p => p.agent);
+    expect(agent).toMatchObject({ name: 'Ada Lovelace', agent: true, self: false });
+    expect(initialsOf('Ada Lovelace (agent)')).toBe('AL');
   });
 });
