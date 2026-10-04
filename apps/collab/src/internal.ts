@@ -462,7 +462,19 @@ async function external(
     );
     if (result.noop) return { action: 'none', reason: 'already-merged', version };
     await runtime.deps.store.setSourceSha(kind, id, result.sourceSha);
-    return { action: 'merged', version, conflicts: result.conflicts };
+    if (result.conflictIds?.length) {
+      await runtime.deps.store.setLastConflict(kind, id, {
+        at: new Date().toISOString(),
+        sha,
+        ids: result.conflictIds,
+      });
+    }
+    return {
+      action: 'merged',
+      version,
+      conflicts: result.conflicts,
+      ...(result.conflictIds?.length ? { conflictIds: result.conflictIds } : {}),
+    };
   };
 
   const loaded = !!runtime.loadedDocument(kind, id);

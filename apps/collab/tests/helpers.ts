@@ -72,6 +72,7 @@ export class MemoryStore implements CollabDocStore {
         editors: existing?.editors ?? [],
         last_checkpoint_at: existing?.last_checkpoint_at ?? null,
         last_checkpoint_error: existing?.last_checkpoint_error ?? null,
+        last_conflict: existing?.last_conflict ?? null,
       });
     }
     return (await this.get(seed.kind, seed.doc_id))!;
@@ -113,6 +114,7 @@ export class MemoryStore implements CollabDocStore {
           editors: mergeActors([], args.editors ?? []),
           last_checkpoint_at: null,
           last_checkpoint_error: null,
+          last_conflict: null,
         };
     this.rows.set(key, next);
     return {
@@ -134,6 +136,15 @@ export class MemoryStore implements CollabDocStore {
         r => r.classroom_id === classroomId && r.version > r.pushed_version && r.editors.length
       )
       .map(r => ({ kind: r.kind, docId: r.doc_id, editors: r.editors }));
+  }
+
+  async setLastConflict(
+    kind: CollabKind,
+    docId: string,
+    conflict: { at: string; sha: string; ids: string[] }
+  ) {
+    const row = this.rows.get(this.key(kind, docId));
+    if (row) row.last_conflict = conflict;
   }
 
   async delete(kind: CollabKind, docId: string) {

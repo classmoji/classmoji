@@ -26,6 +26,8 @@ export interface CollabDocRow {
   editors: CollabActor[];
   last_checkpoint_at: Date | null;
   last_checkpoint_error: string | null;
+  /** Last outside-push conflict: `{ at, sha, ids }` (null: none). */
+  last_conflict: { at: string; sha: string; ids: string[] } | null;
 }
 
 export interface NewCollabDoc {
@@ -84,6 +86,13 @@ export interface CollabDocStore {
    * for the checkpoint payload.
    */
   editorsForClassroom(classroomId: string): Promise<CheckpointDocEditors[]>;
+
+  /** Record the last outside-push conflict summary (`last_conflict`). */
+  setLastConflict(
+    kind: CollabKind,
+    docId: string,
+    conflict: { at: string; sha: string; ids: string[] }
+  ): Promise<void>;
 
   /** Delete the row (the doc itself was deleted). */
   delete(kind: CollabKind, docId: string): Promise<void>;

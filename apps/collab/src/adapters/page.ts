@@ -370,6 +370,7 @@ export function createPageAdapter(
       const theirs = throughSchema(theirsRaw.blocks, normalize, 'pushed content');
 
       let conflicts = 0;
+      let conflictIds: string[] = [];
       // ours is read INSIDE the transaction, so typing that landed while the
       // files were fetched is part of the merge, not reverted by it.
       ctx.transact(doc => {
@@ -377,6 +378,7 @@ export function createPageAdapter(
         assertReadable(doc, ours);
         const result = pageContent.merge3Blocks(base, ours, theirs);
         conflicts = result.conflicts.length;
+        conflictIds = result.conflicts.map(c => c.id);
         const merged = nonEmpty(normalize(result.merged) as PageBlock[]);
         assertConvertible(merged, 'merged content');
         reconcileBlocks(doc, ours, merged);
@@ -385,7 +387,11 @@ export function createPageAdapter(
         }
       });
 
-      return { sourceSha: theirsLoaded.sha, conflicts };
+      return {
+        sourceSha: theirsLoaded.sha,
+        conflicts,
+        ...(conflictIds.length ? { conflictIds } : {}),
+      };
     },
 
     mergePreview(ctx, { base, theirs, resolutions }): MergePreviewResult {

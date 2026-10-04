@@ -54,6 +54,7 @@ function toRow(row: {
   editors?: unknown;
   last_checkpoint_at?: Date | null;
   last_checkpoint_error?: string | null;
+  last_conflict?: unknown;
 }): CollabDocRow {
   return {
     kind: row.kind as CollabKind,
@@ -70,6 +71,7 @@ function toRow(row: {
     editors: actorsOf(row.editors),
     last_checkpoint_at: row.last_checkpoint_at ?? null,
     last_checkpoint_error: row.last_checkpoint_error ?? null,
+    last_conflict: (row.last_conflict as CollabDocRow['last_conflict']) ?? null,
   };
 }
 
@@ -163,6 +165,17 @@ export class PrismaCollabDocStore implements CollabDocStore {
       classroomId
     );
     return rows.map(r => ({ kind: r.kind, docId: r.doc_id, editors: actorsOf(r.editors) }));
+  }
+
+  async setLastConflict(
+    kind: CollabKind,
+    docId: string,
+    conflict: { at: string; sha: string; ids: string[] }
+  ): Promise<void> {
+    await getPrisma().collabDoc.updateMany({
+      where: { kind, doc_id: docId },
+      data: { last_conflict: conflict },
+    });
   }
 
   async delete(kind: CollabKind, docId: string): Promise<void> {

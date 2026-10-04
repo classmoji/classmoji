@@ -418,6 +418,33 @@ describe('outside pushes', () => {
     expect(plain(a.doc, 'p1')).toBe('Live One');
   });
 
+  it('records a conflicting outside push in last_conflict', async () => {
+    server.world.contentAt.set(`${PAGE}@b1`, { blocks: structuredClone(INITIAL) });
+    server.world.contentAt.set(`${PAGE}@c3`, {
+      blocks: structuredClone(INITIAL).map(b =>
+        b.id === 'p1' ? paragraph('p1', 'One, GitHub') : b
+      ),
+    });
+    const a = open();
+    await a.synced;
+    a.doc.transact(() => textOf(a.doc, 'p1').insert(3, ', live'));
+    await waitFor(
+      () => server.runtime.hasUnstoredChanges('page', PAGE) || server.store.storeCalls > 0,
+      3000,
+      'live edit'
+    );
+
+    const res = await internal(server, 'POST', `/page/${PAGE}/external`, {
+      sha: 'c3',
+      before: 'b1',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ action: 'merged', conflicts: 1, conflictIds: ['p1'] });
+    const conflict = (await server.store.get('page', PAGE))!.last_conflict;
+    expect(conflict).toMatchObject({ sha: 'c3', ids: ['p1'] });
+    expect(typeof conflict!.at).toBe('string');
+  });
+
   it('keeps the live doc and answers 409 when no base is readable', async () => {
     server.world.contentAt.set(`${PAGE}@c2`, { blocks: [paragraph('only', 'GitHub wholesale')] });
     const a = open();

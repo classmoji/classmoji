@@ -133,6 +133,11 @@ export interface ExternalMergeResult {
   /** Units the 3-way merge could not decide (theirs was taken provisionally). */
   conflicts: number;
   /**
+   * Ids of those units (page: top-level block ids, `__order__` for an order
+   * conflict; deck: slide ids). Persisted to collab_docs.last_conflict.
+   */
+  conflictIds?: string[];
+  /**
    * True when theirs is what the live doc already descends from (the file at
    * `sha` IS the blob at source_sha: our own push, a replay, or an older
    * push): nothing was applied.
