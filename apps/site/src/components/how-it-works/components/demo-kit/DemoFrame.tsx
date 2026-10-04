@@ -60,7 +60,7 @@ export function DemoFrame<S extends DemoBase>({
       <div
         ref={stageRef}
         inert
-        className={`pointer-events-none relative aspect-[4/3] w-full overflow-hidden ${ui.app}`}
+        className={`pointer-events-none relative aspect-[14/9] w-full overflow-hidden ${ui.app}`}
       >
         <div
           ref={innerRef}
