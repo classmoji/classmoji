@@ -1,9 +1,17 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { Popconfirm, Popover, Tooltip, Dropdown } from 'antd';
 
+import {
+  blockMarkup,
+  htmlBlockMarkup,
+  mintBlockId,
+  type BlockBox,
+} from '@classmoji/services/slides/runtime-attrs';
+
 import { useToast } from '~/hooks';
 import ImageUploadModal from './ImageUploadModal';
 import { useElementSelection } from './properties/ElementSelectionContext';
+import { DEFAULT_SVG_SOURCE, STARTER_HTML_SOURCE, svgFromSource } from './blocks/slideBlocks';
 
 // ─────────────────────────────────────────────────────────────
 // Overflow Detection Hook - Progressively hides groups when toolbar overflows
@@ -182,7 +190,7 @@ export default function SlideToolbar({
   const toolbarRef = useRef<HTMLDivElement>(null);
 
   // Get snippets from context
-  const { snippets } = useElementSelection();
+  const { snippets, selectElement, openBlockSource } = useElementSelection();
 
   // Overflow detection - progressively hide groups when toolbar doesn't fit
   // Note: Themes moved to SlideProperties panel, Insert Content group was removed (only draggable blocks remain)
@@ -616,6 +624,43 @@ document.querySelector('h1').addEventListener('click', () => {
     });
   }, [getCurrentSection, createSlBlock, onContentChange]);
 
+  // Insert an svg or html block (built by the shared block builders, so it
+  // carries a data-cm-block-id), select it; an html block opens its source.
+  const insertSourceBlock = useCallback(
+    (kind: 'svg' | 'html') => {
+      requestAnimationFrame(() => {
+        const section = getCurrentSection();
+        if (!section) return;
+        const width = kind === 'svg' ? 400 : 640;
+        const height = kind === 'svg' ? 240 : 400;
+        const box: BlockBox = {
+          left: Math.round((960 - width) / 2),
+          top: Math.round((700 - height) / 2),
+          width,
+          height,
+        };
+        const id = mintBlockId();
+        const template = document.createElement('template');
+        if (kind === 'html') {
+          template.innerHTML = htmlBlockMarkup({ id, box, source: STARTER_HTML_SOURCE });
+        } else {
+          template.innerHTML = blockMarkup('svg', id, box, '');
+          const drawing = svgFromSource(DEFAULT_SVG_SOURCE, document);
+          if (!drawing.ok) return;
+          template.content.querySelector('.sl-block-content')?.append(drawing.svg);
+        }
+        const block = template.content.firstElementChild as HTMLElement | null;
+        if (!block) return;
+        block.querySelector('.sl-block-content')?.setAttribute('contenteditable', 'false');
+        section.appendChild(block);
+        onContentChange?.();
+        selectElement(block);
+        if (kind === 'html') openBlockSource(block);
+      });
+    },
+    [getCurrentSection, onContentChange, selectElement, openBlockSource]
+  );
+
   // Insert a snippet as an sl-block
   const insertSnippet = useCallback(
     (snippet: { id: string; name: string; content: string }) => {
@@ -864,6 +909,40 @@ document.querySelector('h1').addEventListener('click', () => {
             strokeLinejoin="round"
             strokeWidth={2}
             d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
+        </svg>
+        <svg className="w-3 h-3 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"
+          />
+        </svg>
+      </ToolbarButton>
+      <ToolbarButton onClick={() => insertSourceBlock('svg')} title="Add SVG block">
+        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <circle cx="8" cy="8" r="4" strokeWidth={2} />
+          <path strokeLinejoin="round" strokeWidth={2} d="M13 20l4-7 4 7h-8z" />
+          <rect x="3" y="15" width="6" height="6" rx="1" strokeWidth={2} />
+        </svg>
+        <svg className="w-3 h-3 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"
+          />
+        </svg>
+      </ToolbarButton>
+      <ToolbarButton onClick={() => insertSourceBlock('html')} title="Add HTML block">
+        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <rect x="3" y="4" width="18" height="16" rx="2" strokeWidth={2} />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M3 9h18M10 13l-2 2 2 2m4-4l2 2-2 2"
           />
         </svg>
         <svg className="w-3 h-3 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

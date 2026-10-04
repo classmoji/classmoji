@@ -7,6 +7,8 @@ import ImageProperties from './ImageProperties';
 import CodeBlockProperties from './CodeBlockProperties';
 import IframeProperties from './IframeProperties';
 import VideoProperties from './VideoProperties';
+import HtmlBlockProperties from './HtmlBlockProperties';
+import SvgProperties from './SvgProperties';
 
 /**
  * BlockProperties - Property editor for sl-block elements
@@ -139,6 +141,7 @@ export default function BlockProperties({ element }: { element: HTMLElement }) {
   const getBlockType = useCallback(() => {
     if (!element) return 'Block';
     const type = element.dataset.blockType || 'unknown';
+    if (type === 'html' || type === 'svg') return type.toUpperCase();
     return type.charAt(0).toUpperCase() + type.slice(1);
   }, [element]);
 
@@ -181,7 +184,12 @@ export default function BlockProperties({ element }: { element: HTMLElement }) {
     contentEditor = <VideoProperties element={contentElement} />;
   } else if (blockType === 'text' && contentElement instanceof HTMLElement) {
     contentEditor = <TextProperties element={contentElement} />;
+  } else if (blockType === 'html') {
+    contentEditor = <HtmlBlockProperties block={element} />;
+  } else if (blockType === 'svg') {
+    contentEditor = <SvgProperties block={element} />;
   }
+  const isSourceBlock = blockType === 'html' || blockType === 'svg';
 
   return (
     <div className="space-y-4">
@@ -289,7 +297,11 @@ export default function BlockProperties({ element }: { element: HTMLElement }) {
         <div className="text-xs text-gray-500 dark:text-gray-400 space-y-1">
           <p>• Drag block center to move</p>
           <p>• Drag corners/edges to resize</p>
-          <p>• Double-click to edit content</p>
+          {blockType === 'html' ? (
+            <p>• Double-click to play</p>
+          ) : isSourceBlock ? null : (
+            <p>• Double-click to edit content</p>
+          )}
           <p>• Hold Shift for aspect ratio lock</p>
         </div>
       </PropertySection>

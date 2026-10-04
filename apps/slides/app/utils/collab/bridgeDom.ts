@@ -290,6 +290,24 @@ export function safeInnerHtml(doc: Document, html: string): DocumentFragment {
   return template.content;
 }
 
+/** Block contents edited through the inspector, never by typing into the slide. */
+const SOURCE_BLOCK_CONTENT =
+  '.sl-block[data-block-type="svg"] > .sl-block-content, ' +
+  '.sl-block[data-block-type="html"] > .sl-block-content';
+
+/**
+ * Display time: svg and html block content is not part of the slide's
+ * editable text (contenteditable=false). Editor chrome only — serialization
+ * strips contenteditable (`cleanupEditorContainer`).
+ */
+export function lockSourceBlockContent(root: Element | DocumentFragment): void {
+  for (const content of Array.from(root.querySelectorAll(SOURCE_BLOCK_CONTENT))) {
+    if (content.getAttribute('contenteditable') !== 'false') {
+      content.setAttribute('contenteditable', 'false');
+    }
+  }
+}
+
 /** Editor chrome on a section the bridge created or re-rendered. */
 export function prepareEditorSection(el: HTMLElement, editable: boolean): void {
   const targets = [el, ...sectionChildren(el)];
@@ -300,6 +318,7 @@ export function prepareEditorSection(el: HTMLElement, editable: boolean): void {
       target.setAttribute('contenteditable', editable ? 'true' : 'false');
     }
   }
+  lockSourceBlockContent(el);
 }
 
 /** A detached `<section>` from markup (renderSlideSection output). */

@@ -639,6 +639,62 @@
   pointer-events: auto;
 }
 
+/* html blocks the same way: a click selects the block; double-click plays the
+   frame (.editing) until the block is deselected, Escape, or a click outside. */
+.reveal.editing-mode .sl-block[data-block-type='html'] iframe {
+  pointer-events: none;
+}
+
+.reveal.editing-mode .sl-block[data-block-type='html'].editing iframe {
+  pointer-events: auto;
+}
+
+.reveal.editing-mode .sl-block[data-block-type='html'].editing,
+.reveal.editing-mode .sl-block[data-block-type='html'].editing .sl-block-content {
+  cursor: default;
+}
+
+/* Overview thumbnails never run an html block: a placeholder stands in. */
+.reveal-thumbnail .sl-block[data-block-type='html'] > .sl-block-content {
+  position: relative;
+  border-radius: 6px;
+  border: 3px dashed rgba(100, 116, 139, 0.6);
+  background: repeating-linear-gradient(
+    135deg,
+    rgba(148, 163, 184, 0.18) 0 14px,
+    rgba(148, 163, 184, 0.06) 14px 28px
+  );
+}
+
+.reveal-thumbnail .sl-block[data-block-type='html'] > .sl-block-content iframe {
+  visibility: hidden;
+}
+
+.reveal-thumbnail .sl-block[data-block-type='html'] > .sl-block-content::after {
+  content: '</>';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font:
+    600 64px/1 ui-monospace,
+    monospace;
+  color: rgba(71, 85, 105, 0.8);
+}
+
+.dark .reveal-thumbnail .sl-block[data-block-type='html'] > .sl-block-content {
+  border-color: rgba(148, 163, 184, 0.55);
+  background: repeating-linear-gradient(
+    135deg,
+    rgba(148, 163, 184, 0.16) 0 14px,
+    rgba(148, 163, 184, 0.04) 14px 28px
+  );
+}
+
+.dark .reveal-thumbnail .sl-block[data-block-type='html'] > .sl-block-content::after {
+  color: rgba(203, 213, 225, 0.85);
+}
+
 /* Block selection overlay styles */
 .block-resize-overlay {
   position: fixed;

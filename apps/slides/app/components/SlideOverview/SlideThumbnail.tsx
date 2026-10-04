@@ -1,5 +1,7 @@
 import { useMemo } from 'react';
 
+import { thumbnailHtml } from '../blocks/slideBlocks';
+
 /**
  * SlideThumbnail - CSS-scaled preview of a slide
  *
@@ -29,11 +31,12 @@ export default function SlideThumbnail({
   showDelete = true,
   canDelete = true,
 }: SlideThumbnailProps) {
-  // Get the innerHTML from the slide element
+  // The slide's markup, with html blocks kept from running (a placeholder
+  // shows instead). Re-read for every parse of the deck (a new `slide`).
   const slideHtml = useMemo(() => {
     if (!slide?.element) return '<p>Empty slide</p>';
-    return slide.element.innerHTML;
-  }, [slide?.element]);
+    return thumbnailHtml(slide.element);
+  }, [slide]);
 
   // Dimensions based on size
   const containerWidth = small ? 120 : 180;

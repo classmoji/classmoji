@@ -3,6 +3,7 @@ import { handleCodeBlockTab, handleCodeBlockEnter } from './properties/utils/cod
 import { neutralizeHtmlBlockFrames } from '@classmoji/services/slides/runtime-attrs';
 import { stripMediaRefs } from '~/utils/mediaRefs';
 import { cleanupEditorContainer } from '~/utils/editorCleanup';
+import { lockSourceBlockContent } from '~/utils/collab/bridgeDom';
 
 // Built-in Reveal.js themes (exported for use in SlideToolbar)
 export const BUILTIN_THEMES = [
@@ -469,6 +470,8 @@ const RevealSlides = forwardRef(function RevealSlides(
             onContentChange?.();
           });
         });
+        // svg and html blocks are edited from the inspector, not typed into.
+        lockSourceBlockContent(deckRef.current);
 
         // Handle Tab and Enter in code blocks
         // We attach to the deck because contenteditable is on <section>, not <code>

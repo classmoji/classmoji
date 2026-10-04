@@ -9,6 +9,8 @@ import { useElementSelection } from './properties/ElementSelectionContext';
  * - A central move area for dragging the block position
  * - Position/size indicators during operations
  * - Code editing mode for Sandpack blocks (double-click to enter)
+ * - Play mode for html blocks (double-click: the frame takes the pointer until
+ *   the block is deselected, Escape, or a click outside)
  *
  * Key implementation details:
  * - Screen pixels are converted to slide coordinates (960×700 space) using CSS transform scale
@@ -59,6 +61,7 @@ export default function BlockHandles() {
   const [currentPosition, setCurrentPosition] = useState({ left: 0, top: 0 });
   const [currentSize, setCurrentSize] = useState({ width: 0, height: 0 });
   const [isEditingCode, setIsEditingCode] = useState(false); // For Sandpack code editing mode
+  const [isPlaying, setIsPlaying] = useState(false); // html block: the frame has the pointer
   const dragStateRef = useRef<DragState | null>(null);
 
   // Only show handles for sl-blocks
@@ -78,6 +81,9 @@ export default function BlockHandles() {
 
   // The actual element to drag/resize (prefer blockElement for sandpack)
   const targetElement = isSandpackBlock ? effectiveBlockElement : selectedElement;
+  const isHtmlBlock = isBlock && targetElement?.dataset?.blockType === 'html';
+  // The overlay steps aside: Sandpack code editing, or an html block playing.
+  const overlayAside = isEditingCode || isPlaying;
 
   // Get Reveal.js scale factor for coordinate conversion
   // CRITICAL: Use the actual CSS transform scale, not Reveal.getScale()
@@ -411,6 +417,15 @@ export default function BlockHandles() {
 
       if (!targetElement) return;
 
+      // html blocks play: the frame gets the pointer (CSS: .editing iframe).
+      if (isHtmlBlock) {
+        setIsPlaying(true);
+        return;
+      }
+
+      // svg blocks have no text to edit (their source is in the inspector).
+      if (targetElement.dataset.blockType === 'svg') return;
+
       // For sandpack blocks, enter code editing mode (allow clicks through to Sandpack editor)
       if (isSandpackBlock) {
         setIsEditingCode(true);
@@ -443,8 +458,40 @@ export default function BlockHandles() {
         selection!.addRange(range);
       }
     },
-    [targetElement, isSandpackBlock]
+    [targetElement, isSandpackBlock, isHtmlBlock]
   );
+
+  // html block play mode: `.editing` on the block for as long as it lasts —
+  // removed however it ends (deselect, Escape, click outside, unmount), since
+  // a live deck holds remote changes to a slide with an open block.
+  useEffect(() => {
+    if (!isPlaying || !targetElement) return;
+    targetElement.classList.add('editing');
+    const stop = () => setIsPlaying(false);
+    // A click inside the frame never reaches this document.
+    const onMouseDown = (e: MouseEvent) => {
+      if (!targetElement.contains(e.target as Node)) stop();
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') stop();
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('keydown', onKeyDown);
+    targetElement.querySelector('iframe')?.focus();
+    return () => {
+      targetElement.classList.remove('editing');
+      document.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [isPlaying, targetElement]);
+
+  // Sandpack code editing leaves no editor class behind, however it ends.
+  useEffect(() => {
+    if (!isEditingCode || !targetElement) return;
+    return () => {
+      targetElement.classList.remove('editing-code');
+    };
+  }, [isEditingCode, targetElement]);
 
   // Exit code editing mode when clicking outside the Sandpack block
   useEffect(() => {
@@ -507,6 +554,7 @@ export default function BlockHandles() {
   // Reset editing state when selection changes
   useEffect(() => {
     setIsEditingCode(false);
+    setIsPlaying(false);
   }, [selectedElement]);
 
   // Don't render if not a block or no bounds
@@ -516,27 +564,28 @@ export default function BlockHandles() {
 
   return (
     <div
-      className={`block-resize-overlay ${isEditingCode ? 'editing-code-mode' : ''}`}
+      className={`block-resize-overlay ${overlayAside ? 'editing-code-mode' : ''}`}
+      data-testid="block-resize-overlay"
       style={{
         left: bounds.left,
         top: bounds.top,
         width: bounds.width,
         height: bounds.height,
-        // Allow clicks through when editing Sandpack code
-        pointerEvents: isEditingCode ? 'none' : 'auto',
+        // Allow clicks through when editing Sandpack code or playing an html block
+        pointerEvents: overlayAside ? 'none' : 'auto',
       }}
     >
       {/* Selection border - always visible, but styled differently in edit mode */}
       <div
         className="block-resize-border"
         style={{
-          borderColor: isEditingCode ? '#10b981' : undefined, // Green border when editing
-          borderStyle: isEditingCode ? 'solid' : undefined,
+          borderColor: overlayAside ? '#10b981' : undefined, // Green border when editing
+          borderStyle: overlayAside ? 'solid' : undefined,
         }}
       />
 
       {/* Move area (center) - for dragging position - hidden when editing code */}
-      {!isEditingCode && (
+      {!overlayAside && (
         <div
           className="block-move-area"
           onMouseDown={handleMoveStart}
@@ -545,7 +594,7 @@ export default function BlockHandles() {
       )}
 
       {/* Resize handles - hidden when editing code */}
-      {!isEditingCode &&
+      {!overlayAside &&
         HANDLES.map(handle => (
           <div
             key={handle.id}
@@ -564,6 +613,7 @@ export default function BlockHandles() {
       {isEditingCode && (
         <div className="block-editing-indicator">Editing Code • Click outside to finish</div>
       )}
+      {isPlaying && <div className="block-editing-indicator">Playing • Click outside to stop</div>}
 
       {/* Position indicator during move */}
       {isMoving && (
