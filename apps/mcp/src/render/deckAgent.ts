@@ -116,7 +116,8 @@ export interface DeckRenderOutcome {
 /** Cache first, then one render for whatever is missing. */
 export async function renderDeckFor(
   target: DeckRenderTarget,
-  options: DeckRenderOptions
+  options: DeckRenderOptions,
+  retried = false
 ): Promise<DeckRenderOutcome> {
   const started = Date.now();
   const deckId = target.slide.id;
@@ -200,13 +201,12 @@ export async function renderDeckFor(
     );
   }
 
-  // A newer version than the caller read means an edit landed in between;
-  // whatever the cache gave us belongs to the older one, so start over from
-  // what the page actually rendered.
-  if (cacheable(target.version) && result.version !== target.version) {
-    measures.clear();
-    images.clear();
-  }
+  const servedFromCache =
+    needIds.length < options.ids.length ||
+    needImages.length < options.imageIds.length ||
+    (options.sheetIds.length > 0 && needSheet.length === 0);
+  const moved = cacheable(target.version) && result.version !== target.version;
+
   for (const m of result.measures) {
     measures.set(m.id, m);
     if (cacheable(result.version)) measureCache.set(mKey(deckId, result.version, m.id), m);
@@ -220,6 +220,21 @@ export async function renderDeckFor(
     if (cacheable(result.version)) {
       sheetCache.set(sKey(deckId, result.version, options.sheetIds), result.sheet);
     }
+  }
+  // A newer version than the caller read means an edit landed in between, so
+  // what the cache supplied belongs to the older one. Go again at the version
+  // the page actually rendered: what was just rendered is cached under it, so
+  // only the rest is drawn. Once — a deck still moving after that reports
+  // only what this pass rendered.
+  if (moved && servedFromCache) {
+    if (!retried && cacheable(result.version)) {
+      return renderDeckFor({ ...target, version: result.version }, options, true);
+    }
+    measures.clear();
+    images.clear();
+    sheet = result.sheet ?? null;
+    for (const m of result.measures) measures.set(m.id, m);
+    for (const [id, img] of result.images) images.set(id, img);
   }
   return {
     version: result.version,

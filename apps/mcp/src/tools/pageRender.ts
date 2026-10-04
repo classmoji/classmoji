@@ -17,6 +17,7 @@ import type { ViewAt } from '@classmoji/services/render-contract';
 import { z } from 'zod';
 import { liveSha, liveStateFor } from '../collab/client.ts';
 import { ToolError } from '../mcp/errors.ts';
+import { tryConsume } from '../mcp/rateLimit.ts';
 import type { ToolContext, ToolDefinition, ToolResult } from '../mcp/registry.ts';
 import { RenderError } from '../render/browser.ts';
 import { LruCache } from '../render/cache.ts';
@@ -352,6 +353,16 @@ export async function renderAfterPageApply(
     payload = JSON.parse(first?.type === 'text' ? first.text : '{}') as Record<string, unknown>;
   } catch {
     return result;
+  }
+  // Renders after an apply draw from page_render's own bucket, not the apply's.
+  if (!tryConsume(`${ctx.viewer.userId}:page_render`, RENDER_RATE_LIMIT)) {
+    return withImages(
+      {
+        ...payload,
+        render_error: 'Render rate limit reached; the edit was applied. Retry page_render shortly.',
+      },
+      []
+    );
   }
   try {
     const page = await loadPageWithRepoInClassroom(pageId, ctx);

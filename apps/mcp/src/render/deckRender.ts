@@ -6,6 +6,7 @@
 
 import {
   VIEW_API_GLOBAL,
+  VIEW_META_ELEMENT_ID,
   VIEW_READY_SELECTOR,
   deckViewUrl,
   viewTarget,
@@ -16,7 +17,13 @@ import {
 } from '@classmoji/services/render-contract';
 import { signDocViewToken } from '@classmoji/services/render-token';
 import type { Page } from 'playwright-core';
-import { RenderError, withRenderPage, type RenderBackend } from './browser.ts';
+import {
+  EVALUATE_DEADLINE_MS,
+  RenderError,
+  within,
+  withRenderPage,
+  type RenderBackend,
+} from './browser.ts';
 
 export interface DeckRenderRequest {
   /** Slides app origin (SLIDES_URL). */
@@ -109,6 +116,21 @@ ${cells}
 </main></body></html>`;
 }
 
+/** The meta blob out of the served HTML, or null. Exported for tests. */
+export function metaFromHtml(html: string): DeckViewMeta | null {
+  const at = html.indexOf(`id="${VIEW_META_ELEMENT_ID}"`);
+  if (at === -1) return null;
+  const start = html.indexOf('>', at) + 1;
+  const end = html.indexOf('</script>', start);
+  if (start <= 0 || end === -1) return null;
+  try {
+    const meta = JSON.parse(html.slice(start, end)) as DeckViewMeta;
+    return meta?.kind === 'deck' && Array.isArray(meta.slides) ? meta : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function renderDeck(request: DeckRenderRequest): Promise<DeckRenderResult> {
   const token = await signDocViewToken({
     origin: request.origin,
@@ -145,14 +167,15 @@ export async function renderDeck(request: DeckRenderRequest): Promise<DeckRender
           `The render page answered ${response ? response.status() : 'nothing'}.`
         );
       }
+      // The meta (version rendered, logical size) is read from the RESPONSE,
+      // not the window: the page runs the deck author's scripts, which could
+      // rewrite anything in the DOM before we asked.
+      const meta = metaFromHtml(await response.text());
+      if (!meta) throw new RenderError('RENDER_FAILED', 'The render page carried no meta.');
       await page.waitForSelector(VIEW_READY_SELECTOR, {
         state: 'attached',
         timeout: READY_TIMEOUT_MS,
       });
-      const meta = (await page.evaluate(
-        name => (window as unknown as Record<string, { meta: DeckViewMeta }>)[name].meta,
-        VIEW_API_GLOBAL
-      )) as DeckViewMeta;
 
       const height = heightFor(request.width, meta);
       if (height !== initialHeight) {
@@ -166,15 +189,22 @@ export async function renderDeck(request: DeckRenderRequest): Promise<DeckRender
       const tiles = new Map<string, string>();
 
       for (const id of request.ids) {
-        const measured = (await page.evaluate(
-          ([name, slideId]) =>
-            (
-              window as unknown as Record<
-                string,
-                { show: (id: string) => Promise<SlideMeasure | { error: string }> }
-              >
-            )[name].show(slideId),
-          [VIEW_API_GLOBAL, id] as const
+        // Measurements come from the page and are trusted as far as the deck's
+        // own scripts are: they can only misreport their own deck, and the
+        // cache key's deck id comes from the server-side load, not from here.
+        const measured = (await within(
+          page.evaluate(
+            ([name, slideId]) =>
+              (
+                window as unknown as Record<
+                  string,
+                  { show: (id: string) => Promise<SlideMeasure | { error: string }> }
+                >
+              )[name].show(slideId),
+            [VIEW_API_GLOBAL, id] as const
+          ),
+          EVALUATE_DEADLINE_MS,
+          `Rendering slide ${id}`
         )) as SlideMeasure | { error: string };
         if (!measured || 'error' in measured) {
           console.warn('[render] slide not rendered', id, JSON.stringify(measured ?? null));
@@ -203,18 +233,26 @@ export async function renderDeck(request: DeckRenderRequest): Promise<DeckRender
         await page.setContent(sheetHtml(ordered, meta.height / meta.width), {
           waitUntil: 'load',
         });
-        const box = await page.evaluate(() => {
-          const main = document.querySelector('main');
-          return { width: main?.scrollWidth ?? 800, height: main?.scrollHeight ?? 600 };
-        });
+        const box = await within(
+          page.evaluate(() => {
+            const main = document.querySelector('main');
+            return { width: main?.scrollWidth ?? 800, height: main?.scrollHeight ?? 600 };
+          }),
+          EVALUATE_DEADLINE_MS,
+          'Laying out the contact sheet'
+        );
         await page.setViewportSize({ width: box.width, height: Math.min(box.height, 8000) });
         // Let the compositor catch up with the resize before capturing, or the
         // capture can show the previous surface tiled into the new size.
-        await page.evaluate(
-          () =>
-            new Promise<void>(resolve =>
-              requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-            )
+        await within(
+          page.evaluate(
+            () =>
+              new Promise<void>(resolve =>
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+              )
+          ),
+          EVALUATE_DEADLINE_MS,
+          'Painting the contact sheet'
         );
         const buffer = await page
           .locator('main')

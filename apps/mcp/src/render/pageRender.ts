@@ -13,7 +13,13 @@ import {
   type ViewAt,
 } from '@classmoji/services/render-contract';
 import { signDocViewToken } from '@classmoji/services/render-token';
-import { RenderError, withRenderPage, type RenderBackend } from './browser.ts';
+import {
+  EVALUATE_DEADLINE_MS,
+  RenderError,
+  within,
+  withRenderPage,
+  type RenderBackend,
+} from './browser.ts';
 
 /** The page is laid out at this CSS width. */
 export const PAGE_RENDER_WIDTH = 900;
@@ -102,79 +108,83 @@ export async function renderPage(request: PageRenderRequest): Promise<PageRender
         });
       }
 
-      const measured = await page.evaluate(
-        async ({ metaId, ids }) => {
-          const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
-          // Images below the fold are lazy; a capture of the whole page needs them.
-          const pending: Array<Promise<unknown>> = [];
-          document.querySelectorAll('img').forEach(img => {
-            img.loading = 'eager';
-            if (img.complete) return;
-            pending.push(
-              new Promise(resolve => {
-                img.addEventListener('load', resolve, { once: true });
-                img.addEventListener('error', resolve, { once: true });
-              })
-            );
-          });
-          if (document.fonts?.ready) pending.push(document.fonts.ready.catch(() => undefined));
-          await Promise.race([Promise.all(pending), sleep(5000)]);
-          await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-
-          const describe = (el: Element) => {
-            const tag = el.tagName.toLowerCase();
-            const cls = (el.getAttribute('class') || '').trim().split(/\s+/).filter(Boolean)[0];
-            let text = (el.textContent || '').replace(/\s+/g, ' ').trim();
-            if (text.length > 40) text = `${text.slice(0, 39)}…`;
-            return `${tag}${cls ? `.${cls}` : ''}${text ? ` "${text}"` : ''}`;
-          };
-          const blocks = ids
-            .map(id => {
-              const el = document.querySelector(
-                `.bn-block-outer[data-id="${CSS.escape(id)}"] > .bn-block`
+      const measured = await within(
+        page.evaluate(
+          async ({ metaId, ids }) => {
+            const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+            // Images below the fold are lazy; a capture of the whole page needs them.
+            const pending: Array<Promise<unknown>> = [];
+            document.querySelectorAll('img').forEach(img => {
+              img.loading = 'eager';
+              if (img.complete) return;
+              pending.push(
+                new Promise(resolve => {
+                  img.addEventListener('load', resolve, { once: true });
+                  img.addEventListener('error', resolve, { once: true });
+                })
               );
-              if (!el) return null;
-              const r = el.getBoundingClientRect();
-              return {
-                id,
-                top: Math.round(r.top + window.scrollY),
-                bottom: Math.round(r.bottom + window.scrollY),
-              };
-            })
-            .filter(Boolean);
-          const clipped: Array<{
-            block_id: string | null;
-            element: string;
-            hidden_px: { x: number; y: number };
-          }> = [];
-          document.querySelectorAll('.site-article *').forEach(el => {
-            const cs = getComputedStyle(el);
-            if (cs.overflowX === 'visible' && cs.overflowY === 'visible') return;
-            const hx = Math.max(0, el.scrollWidth - el.clientWidth);
-            const hy = Math.max(0, el.scrollHeight - el.clientHeight);
-            if (hx <= 1 && hy <= 1) return;
-            const owner = el.closest('.bn-block-outer');
-            clipped.push({
-              block_id: owner?.getAttribute('data-id') ?? null,
-              element: describe(el),
-              hidden_px: { x: Math.round(hx), y: Math.round(hy) },
             });
-          });
-          const metaEl = document.getElementById(metaId);
-          return {
-            meta: metaEl ? (JSON.parse(metaEl.textContent || '{}') as { version?: string }) : {},
-            // The article's own extent, not the document's: a short page is not
-            // padded out to the viewport with blank space.
-            height: Math.ceil(
-              (document.querySelector('article')?.getBoundingClientRect().bottom ??
-                document.documentElement.scrollHeight) + window.scrollY
-            ),
-            overflowX: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
-            blocks,
-            clipped: clipped.slice(0, 10),
-          };
-        },
-        { metaId: VIEW_META_ELEMENT_ID, ids: request.blockIds }
+            if (document.fonts?.ready) pending.push(document.fonts.ready.catch(() => undefined));
+            await Promise.race([Promise.all(pending), sleep(5000)]);
+            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+            const describe = (el: Element) => {
+              const tag = el.tagName.toLowerCase();
+              const cls = (el.getAttribute('class') || '').trim().split(/\s+/).filter(Boolean)[0];
+              let text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+              if (text.length > 40) text = `${text.slice(0, 39)}…`;
+              return `${tag}${cls ? `.${cls}` : ''}${text ? ` "${text}"` : ''}`;
+            };
+            const blocks = ids
+              .map(id => {
+                const el = document.querySelector(
+                  `.bn-block-outer[data-id="${CSS.escape(id)}"] > .bn-block`
+                );
+                if (!el) return null;
+                const r = el.getBoundingClientRect();
+                return {
+                  id,
+                  top: Math.round(r.top + window.scrollY),
+                  bottom: Math.round(r.bottom + window.scrollY),
+                };
+              })
+              .filter(Boolean);
+            const clipped: Array<{
+              block_id: string | null;
+              element: string;
+              hidden_px: { x: number; y: number };
+            }> = [];
+            document.querySelectorAll('.site-article *').forEach(el => {
+              const cs = getComputedStyle(el);
+              if (cs.overflowX === 'visible' && cs.overflowY === 'visible') return;
+              const hx = Math.max(0, el.scrollWidth - el.clientWidth);
+              const hy = Math.max(0, el.scrollHeight - el.clientHeight);
+              if (hx <= 1 && hy <= 1) return;
+              const owner = el.closest('.bn-block-outer');
+              clipped.push({
+                block_id: owner?.getAttribute('data-id') ?? null,
+                element: describe(el),
+                hidden_px: { x: Math.round(hx), y: Math.round(hy) },
+              });
+            });
+            const metaEl = document.getElementById(metaId);
+            return {
+              meta: metaEl ? (JSON.parse(metaEl.textContent || '{}') as { version?: string }) : {},
+              // The article's own extent, not the document's: a short page is not
+              // padded out to the viewport with blank space.
+              height: Math.ceil(
+                (document.querySelector('article')?.getBoundingClientRect().bottom ??
+                  document.documentElement.scrollHeight) + window.scrollY
+              ),
+              overflowX: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
+              blocks,
+              clipped: clipped.slice(0, 10),
+            };
+          },
+          { metaId: VIEW_META_ELEMENT_ID, ids: request.blockIds }
+        ),
+        EVALUATE_DEADLINE_MS,
+        'Measuring the page'
       );
 
       const height = Math.max(1, measured.height);

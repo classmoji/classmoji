@@ -13,12 +13,18 @@ import type { HeadersFunction, LoaderFunctionArgs } from 'react-router';
 import { useLoaderData } from 'react-router';
 import { VIEW_HEADERS, VIEW_META_ELEMENT_ID } from '@classmoji/services/render-contract';
 import { CoverImage } from '~/site/chrome.tsx';
+import { contentSecurityPolicy } from '~/site/headers.server.ts';
 import { SITE_STYLES } from '~/site/styles.ts';
 import { pageViewLoader } from '~/utils/pageView.server.ts';
 
 export const loader = (args: LoaderFunctionArgs) => pageViewLoader(args);
 
-export const headers: HeadersFunction = () => VIEW_HEADERS;
+// The class site's own CSP too: whatever markup the static renderer let
+// through, no script runs here but the site's one hashed dark-mode script.
+export const headers: HeadersFunction = () => ({
+  ...VIEW_HEADERS,
+  'Content-Security-Policy': contentSecurityPolicy(),
+});
 
 export const meta = () => [{ title: 'Render' }, { name: 'robots', content: 'noindex' }];
 

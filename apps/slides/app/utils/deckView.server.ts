@@ -184,20 +184,45 @@ export function viewScript(): string {
       if (r > ext.right) { ext.right = r; who.right = label; }
       if (b > ext.bottom) { ext.bottom = b; who.bottom = label; }
     }
+    var REPLACED = /^(img|svg|video|canvas|iframe|object|embed|input|textarea|select|button|hr|picture|math)$/i;
+    function transparent(color) {
+      return !color || color === 'transparent' || /rgba?\([^)]*,\s*0(\.0+)?\)$/.test(color);
+    }
+    // Does this element's OWN box draw anything? A wrapper with no
+    // background, border or shadow paints nothing, so its box running past
+    // the edge (padding, a flex row, a fixed width) is not overflow anyone
+    // sees; its text and children are measured on their own.
+    function paints(el, cs) {
+      if (REPLACED.test(el.tagName)) return true;
+      if (cs.backgroundImage !== 'none' || !transparent(cs.backgroundColor)) return true;
+      if (cs.boxShadow !== 'none') return true;
+      return ['Top', 'Right', 'Bottom', 'Left'].some(function (side) {
+        var style = cs['border' + side + 'Style'];
+        return style !== 'none' && style !== 'hidden' && parseFloat(cs['border' + side + 'Width']) > 0;
+      });
+    }
     function walk(el) {
       var cs = getComputedStyle(el);
-      if (cs.display === 'none' || cs.visibility === 'hidden' || cs.position === 'fixed') return;
+      if (cs.display === 'none' || cs.position === 'fixed') return;
       if (el.matches('aside.notes, script, style, template')) return;
-      take(el.getBoundingClientRect(), function () { return describe(el); });
+      // visibility:hidden hides this box and its text, but a child may set
+      // itself visible again — so skip the box, keep walking.
+      var shown = cs.visibility !== 'hidden';
       var clips = cs.overflowX !== 'visible' || cs.overflowY !== 'visible';
+      // A clipping box counts by its own rect whether or not it paints: it is
+      // the edge of what its content can show.
+      if (shown && (clips || paints(el, cs))) {
+        take(el.getBoundingClientRect(), function () { return describe(el); });
+      }
       if (clips) {
         var hx = Math.max(0, el.scrollWidth - el.clientWidth), hy = Math.max(0, el.scrollHeight - el.clientHeight);
-        if (hx > 1 || hy > 1) clipped.push({ element: describe(el), hidden_px: { x: Math.round(hx), y: Math.round(hy) } });
+        if (shown && (hx > 1 || hy > 1)) clipped.push({ element: describe(el), hidden_px: { x: Math.round(hx), y: Math.round(hy) } });
         return;
       }
+      if (REPLACED.test(el.tagName)) return;
       for (var n = el.firstChild; n; n = n.nextSibling) {
         if (n.nodeType === 1) walk(n);
-        else if (n.nodeType === 3 && n.textContent.trim()) {
+        else if (shown && n.nodeType === 3 && n.textContent.trim()) {
           var range = document.createRange();
           range.selectNodeContents(n);
           var rects = range.getClientRects();

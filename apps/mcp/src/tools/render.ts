@@ -19,6 +19,7 @@ import type { ViewAt } from '@classmoji/services/render-contract';
 import { z } from 'zod';
 import { liveSha, liveStateFor } from '../collab/client.ts';
 import { ToolError } from '../mcp/errors.ts';
+import { tryConsume } from '../mcp/rateLimit.ts';
 import type { ToolContext, ToolDefinition, ToolResult } from '../mcp/registry.ts';
 import {
   IMAGE_WIDTH,
@@ -35,7 +36,7 @@ import { LEGACY_GUIDANCE, loadDeckForTool, previewReadRef, readLiveDeck } from '
 import { loadSlideInClassroom, TEACHING_TEAM, type SlideWithRepoRecord } from './shared.ts';
 
 /** Renders are heavier than reads: a smaller bucket than the default. */
-const RENDER_RATE_LIMIT = { capacity: 12, refillPerSecond: 0.2 };
+export const RENDER_RATE_LIMIT = { capacity: 12, refillPerSecond: 0.2 };
 
 /** Which copy, and the deck as read there, with its version. */
 export async function readDeckForRender(
@@ -204,6 +205,17 @@ export async function renderAfterDeckApply(
   const changed = changedSlideIds(payload.applied);
   if (changed.length === 0) {
     return withImages({ ...payload, render: { note: 'No slide content changed to show.' } }, []);
+  }
+  // Renders after an apply draw from deck_render's own bucket, not the
+  // apply's: render: true must not be a way around the render rate limit.
+  if (!tryConsume(`${ctx.viewer.userId}:deck_render`, RENDER_RATE_LIMIT)) {
+    return withImages(
+      {
+        ...payload,
+        render_error: 'Render rate limit reached; the edit was applied. Retry deck_render shortly.',
+      },
+      []
+    );
   }
   try {
     const slide = await loadSlideInClassroom(slideId, ctx);

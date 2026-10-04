@@ -7,10 +7,10 @@ import {
   viewTokenFromCookies,
 } from '@classmoji/services/render-contract';
 import { viewSigningSecret, DEV_VIEW_SIGNING_SECRET } from '@classmoji/services/render-token';
-import { allowRequest, renderBackend } from '../browser.ts';
+import { allowRequest, RenderError, renderBackend, within } from '../browser.ts';
 import { LruCache } from '../cache.ts';
 import { deckIdSet, deckSlideOrder, overflowReport } from '../deckAgent.ts';
-import { sheetHtml } from '../deckRender.ts';
+import { metaFromHtml, sheetHtml } from '../deckRender.ts';
 import { changedSlideIds, deckRenderTool } from '../../tools/render.ts';
 import { deckApplyTool } from '../../tools/deck.ts';
 import { pageContentApplyTool } from '../../tools/pageContent.ts';
@@ -260,5 +260,21 @@ describe('page render helpers', () => {
 
   it.each([pageRenderTool, pageContentApplyTool])('$name description < 1,500 bytes', tool => {
     expect(new TextEncoder().encode(tool.description).length).toBeLessThan(1500);
+  });
+});
+
+describe('deadlines and meta', () => {
+  it('within() rejects with a RenderError once the deadline passes', async () => {
+    const never = new Promise<never>(() => {});
+    await expect(within(never, 20, 'Waiting')).rejects.toBeInstanceOf(RenderError);
+    await expect(within(Promise.resolve(3), 1000, 'Quick')).resolves.toBe(3);
+  });
+
+  it('reads the deck meta from the served HTML, not the window', () => {
+    const meta = { kind: 'deck', version: 'live:2.5', width: 960, height: 700, slides: [] };
+    const html = `<body><script type="application/json" id="cm-view-meta">${JSON.stringify(meta)}</script></body>`;
+    expect(metaFromHtml(html)).toEqual(meta);
+    expect(metaFromHtml('<body></body>')).toBeNull();
+    expect(metaFromHtml('<script id="cm-view-meta">{nope</script>')).toBeNull();
   });
 });
