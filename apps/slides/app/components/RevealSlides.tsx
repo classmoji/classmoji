@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { handleCodeBlockTab, handleCodeBlockEnter } from './properties/utils/codeBlockUtils';
+import { neutralizeHtmlBlockFrames } from '@classmoji/services/slides/runtime-attrs';
 import { stripMediaRefs } from '~/utils/mediaRefs';
 import { cleanupEditorContainer } from '~/utils/editorCleanup';
 
@@ -297,6 +298,9 @@ const RevealSlides = forwardRef(function RevealSlides(
       container.querySelectorAll('[contenteditable]').forEach(el => {
         el.removeAttribute('contenteditable');
       });
+
+      // An html block's frame loads only in its sandbox (deckBlocks.ts).
+      neutralizeHtmlBlockFrames(container);
 
       // When editing, strip highlight.js spans from code blocks
       // This allows clean editing - highlighting will be re-applied on save/view

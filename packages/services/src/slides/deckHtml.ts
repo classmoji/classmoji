@@ -27,6 +27,20 @@ import { randomBytes } from 'node:crypto';
 // issue #361). The list lives in deckRuntimeAttrs.ts, the browser-safe module
 // the slides client imports so the two strippers can never drift.
 import { splitStyleDeclarations, stripRuntimeSectionAttrs } from './deckRuntimeAttrs.ts';
+import {
+  BLOCK_ID_ATTR,
+  HTML_BLOCK_SELECTOR,
+  INERT_ATTR_PREFIX,
+  SVG_BLOCK_SELECTOR,
+  cssPx,
+  htmlBlockFrameMarkup,
+  htmlBlockSource,
+  isAllowedSvgAnimation,
+  isAllowedSvgAttr,
+  isAllowedSvgElement,
+  isBlockedFrameAttr,
+  type BlockBox,
+} from './deckBlocks.ts';
 import type { DeckConfig, DeckExtraCss, DeckJson, DeckSlide } from './deckTypes.ts';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -223,7 +237,7 @@ function renderSection(slide: DeckSlide, includeNotes: boolean): string {
     return `<section${attrStr}>\n${inner}\n${aside ? `${aside}\n` : ''}</section>`;
   }
 
-  return `<section${attrStr}>${slide.html ?? ''}${aside}</section>`;
+  return `<section${attrStr}>${neutralizeHtmlBlocksInHtml(slide.html ?? '')}${aside}</section>`;
 }
 
 /**
@@ -445,7 +459,7 @@ function sectionToSlide(el: Element, ctx: ParseContext): DeckSlide {
     .toArray()
     .filter(aside => hasNotesClass(aside) && $(aside).parents('section')[0] === el);
   const notes =
-    asides.length > 0 ? asides.map(aside => $(aside).html() ?? '').join('\n') : undefined;
+    asides.length > 0 ? asides.map(aside => browserFormHtml($, $(aside))).join('\n') : undefined;
   for (const aside of asides) {
     $(aside).remove();
   }
@@ -481,7 +495,7 @@ function sectionToSlide(el: Element, ctx: ParseContext): DeckSlide {
 
   const slide: DeckSlide = { id };
   if (!isContainer) {
-    slide.html = $el.html() ?? '';
+    slide.html = browserFormHtml($, $el);
   }
   if (notes !== undefined) slide.notes = notes;
   if (hidden) slide.hidden = true;
@@ -597,7 +611,10 @@ export function parseDeckHtml(html: string, opts: ParseOptions = {}): ParsedDeck
 
       const themeMatch = href.match(BUILTIN_THEME_RE);
       if (themeMatch) {
-        themeCandidates.push({ name: themeMatch[1], ...(media ? { media } : {}) });
+        themeCandidates.push({
+          name: themeMatch[1],
+          ...(media ? { media } : {}),
+        });
         return;
       }
       const hlMatch = href.match(HIGHLIGHT_RE) ?? href.match(REVEAL_PLUGIN_HIGHLIGHT_RE);
@@ -775,7 +792,403 @@ export function normalizeSlideHtml(html: string): string {
   // Reveal fragment runtime paint (visible / current-fragment) never persists.
   stripFragmentRuntimeClasses($.root());
 
-  return $.root().html() ?? '';
+  // svg blocks held to the drawing lists; an html block's frame whose
+  // sandbox would let it out is stored inert.
+  sanitizeSvgBlocksIn($);
+  neutralizeHtmlBlocksIn($);
+
+  return serializeBrowserForm($);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Blocks: svg and html (rules in deckBlocks.ts, applied here with cheerio)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+// Private-use stand-ins for `<` / `>` inside attribute values while cheerio
+// serializes (it leaves both raw; Chromium writes `&lt;` / `&gt;`).
+const ATTR_LT = '\uE000';
+const ATTR_GT = '\uE001';
+const STAND_IN_RE = /[\uE000\uE001]/;
+
+/**
+ * The fragment serialized the way current Chromium serializes it. cheerio
+ * (parse5 7) differs in one place: it leaves `<` and `>` raw inside attribute
+ * values, which Chromium escapes (fixture-pinned in
+ * __tests__/fixtures/browserSerialization.ts). Writing the browser's form
+ * means markup the server stores reads back from the live editor unchanged —
+ * above all an html block's srcdoc, which is full of both.
+ */
+function serializeBrowserForm($: CheerioAPI): string {
+  return browserFormHtml($, $.root());
+}
+
+/**
+ * The inner html of `$el` in the browser's form (see serializeBrowserForm).
+ * The tree is left as it was. Markup already carrying the stand-in
+ * characters is serialized as cheerio writes it.
+ */
+function browserFormHtml($: CheerioAPI, $el: Cheerio<AnyNode>): string {
+  const touched: Array<[Element, string, string]> = [];
+  let standIns = false;
+  $el.find('*').each((_i, node) => {
+    const attribs = (node as Element).attribs;
+    for (const [name, value] of Object.entries(attribs)) {
+      if (STAND_IN_RE.test(value)) standIns = true;
+      if (/[<>]/.test(value)) touched.push([node as Element, name, value]);
+    }
+  });
+  if (touched.length === 0) return $el.html() ?? '';
+  const plain = $el.html() ?? '';
+  if (standIns || STAND_IN_RE.test(plain)) return plain;
+  for (const [el, name, value] of touched) {
+    el.attribs[name] = value.replace(/</g, ATTR_LT).replace(/>/g, ATTR_GT);
+  }
+  const out = ($el.html() ?? '').replace(/\uE000/g, '&lt;').replace(/\uE001/g, '&gt;');
+  for (const [el, name, value] of touched) el.attribs[name] = value;
+  return out;
+}
+
+/** Rename attributes in place (order kept), `rename` returning the new name. */
+function renameAttribs(el: Element, rename: (name: string) => string): void {
+  const next: Record<string, string> = {};
+  for (const [name, value] of Object.entries(el.attribs)) next[rename(name)] = value;
+  el.attribs = next;
+}
+
+function insideHtmlBlock($: CheerioAPI, el: Element): boolean {
+  return $(el).closest(HTML_BLOCK_SELECTOR).length > 0;
+}
+
+/** Html-block frames whose sandbox would let them out get inert sources. Returns the count. */
+function neutralizeHtmlBlocksIn($: CheerioAPI): number {
+  let count = 0;
+  $(
+    `${HTML_BLOCK_SELECTOR} iframe, ${HTML_BLOCK_SELECTOR} object, ${HTML_BLOCK_SELECTOR} embed`
+  ).each((_i, node) => {
+    const el = node as Element;
+    const inside = insideHtmlBlock($, el);
+    const blocked = (name: string) =>
+      isBlockedFrameAttr(el.tagName, name, el.attribs['sandbox'], inside);
+    if (!Object.keys(el.attribs).some(blocked)) return;
+    renameAttribs(el, name => {
+      if (!blocked(name)) return name;
+      count++;
+      return `${INERT_ATTR_PREFIX}${name}`;
+    });
+  });
+  return count;
+}
+
+/**
+ * Slide html with every html-block frame that may not load made inert — the
+ * generator's pass (render-view and thumbnails open the generated document
+ * as is). Html with no html block, or none to change, comes back byte for
+ * byte.
+ */
+export function neutralizeHtmlBlocksInHtml(html: string): string {
+  if (!/data-block-type\s*=\s*["']?html/i.test(html)) return html;
+  const $ = cheerio.load(html, null, false);
+  if (neutralizeHtmlBlocksIn($) === 0) return html;
+  return serializeBrowserForm($);
+}
+
+function lowerAttribs(el: Element): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(el.attribs)) out[name.toLowerCase()] = value;
+  return out;
+}
+
+/** cheerio's local name and namespace for an element (svg names keep their case). */
+function svgAllowed(el: Element): boolean {
+  return (
+    isAllowedSvgElement(el.tagName, el.namespace ?? null) &&
+    isAllowedSvgAnimation(el.tagName, lowerAttribs(el))
+  );
+}
+
+function stripHandlers(el: Element): void {
+  for (const name of Object.keys(el.attribs)) {
+    if (name.toLowerCase().startsWith('on')) delete el.attribs[name];
+  }
+}
+
+/** The svg-block lists applied under `root` (cheerio twin of deckBlocks sanitizeSvgTree). */
+function sanitizeSvgTreeIn(root: Element): void {
+  stripHandlers(root);
+  const visit = (parent: Element): void => {
+    for (const node of [...parent.children] as AnyNode[]) {
+      if (node.type === 'tag' || node.type === 'script' || node.type === 'style') {
+        const el = node as Element;
+        if (!svgAllowed(el)) {
+          removeNode(el);
+          continue;
+        }
+        // cheerio keys `xlink:href` as `href` (namespace kept aside) — the
+        // link rule reads both the same way.
+        for (const [name, value] of Object.entries(el.attribs)) {
+          if (!isAllowedSvgAttr(name, value)) delete el.attribs[name];
+        }
+        visit(el);
+      } else if (node.type !== 'text') {
+        removeNode(node);
+      }
+    }
+  };
+  visit(root);
+}
+
+function removeNode(node: AnyNode): void {
+  const parent = node.parent as Element | null;
+  if (!parent) return;
+  const siblings = parent.children as AnyNode[];
+  const at = siblings.indexOf(node);
+  if (at >= 0) siblings.splice(at, 1);
+  const prev = node.prev;
+  const next = node.next;
+  if (prev) prev.next = next;
+  if (next) next.prev = prev;
+  node.parent = null;
+  node.prev = null;
+  node.next = null;
+}
+
+/** Every svg block held to the lists: content sanitized, anything else in the block dropped. */
+function sanitizeSvgBlocksIn($: CheerioAPI): void {
+  $(SVG_BLOCK_SELECTOR).each((_i, node) => {
+    const block = node as Element;
+    stripHandlers(block);
+    for (const child of [...block.children] as AnyNode[]) {
+      if (child.type === 'text') continue;
+      const isContent =
+        child.type === 'tag' &&
+        ((child as Element).attribs['class'] ?? '').split(/\s+/).includes('sl-block-content');
+      if (isContent) sanitizeSvgTreeIn(child as Element);
+      else removeNode(child);
+    }
+  });
+}
+
+/**
+ * An svg block's content from an author's (or agent's) SVG: exactly one
+ * `<svg>` root, held to the lists, sized to fill its block (`width`/`height`
+ * 100%, `preserveAspectRatio` meet unless set), with a `viewBox` derived from
+ * numeric width/height when it has none, so the drawing scales with the box.
+ *
+ * @throws {SlideHtmlError} when the markup has no single `<svg>` root.
+ */
+export function normalizeSvgBlockSource(svg: string): string {
+  const $ = cheerio.load(svg.trim(), null, false);
+  // An exported file's prolog (`<?xml …?>`, comments, a doctype) is dropped.
+  const top = [...($.root()[0].children as AnyNode[])];
+  const elements = top.filter(n => n.type === 'tag' || n.type === 'script' || n.type === 'style');
+  const strayText = top.some(n => n.type === 'text' && (n as { data?: string }).data?.trim());
+  const root = elements[0] as Element | undefined;
+  if (
+    elements.length !== 1 ||
+    strayText ||
+    !root ||
+    root.tagName !== 'svg' ||
+    root.namespace !== SVG_NS
+  ) {
+    throw new SlideHtmlError('An svg block needs exactly one <svg> element as its source');
+  }
+  for (const node of top) if (node !== root) removeNode(node);
+  for (const [name, value] of Object.entries(root.attribs)) {
+    if (!isAllowedSvgAttr(name, value)) delete root.attribs[name];
+  }
+  sanitizeSvgTreeIn(root);
+  const attribs = root.attribs;
+  const viewBoxKey = Object.keys(attribs).find(k => k.toLowerCase() === 'viewbox');
+  if (!viewBoxKey) {
+    const w = parseFloat(attribs['width'] ?? '');
+    const h = parseFloat(attribs['height'] ?? '');
+    const numeric = (v: string | undefined) => v != null && /^\s*[\d.]+(?:px)?\s*$/.test(v);
+    if (numeric(attribs['width']) && numeric(attribs['height']) && w > 0 && h > 0) {
+      attribs['viewBox'] = `0 0 ${w} ${h}`;
+    }
+  }
+  attribs['width'] = '100%';
+  attribs['height'] = '100%';
+  if (!Object.keys(attribs).some(k => k.toLowerCase() === 'preserveaspectratio')) {
+    attribs['preserveAspectRatio'] = 'xMidYMid meet';
+  }
+  return serializeBrowserForm($);
+}
+
+/** One block on a slide, as agents read it (deck_get / deck_outline). */
+export interface SlideBlockInfo {
+  /** `data-cm-block-id`, or null for a block made before block ids. */
+  id: string | null;
+  /** `data-block-type` (text, image, code, iframe, svg, html, sandpack, …). */
+  type: string;
+  /** left/top/width/height in px, each present when the block's style sets it in px. */
+  box: Partial<BlockBox>;
+  /** html blocks: the source, decoded from srcdoc (storage shim taken out). */
+  source?: string;
+  /** svg blocks: the `<svg>` markup. */
+  svg?: string;
+  /** iframe blocks: the frame's URL (`data-src`, else `src`). */
+  src?: string;
+}
+
+const BOX_KEYS = ['left', 'top', 'width', 'height'] as const;
+
+function boxFromStyle(style: string): Partial<BlockBox> {
+  const box: Partial<BlockBox> = {};
+  for (const decl of splitStyleDeclarations(style)) {
+    const at = decl.indexOf(':');
+    if (at === -1) continue;
+    const prop = decl.slice(0, at).trim().toLowerCase();
+    const match = decl
+      .slice(at + 1)
+      .trim()
+      .match(/^(-?\d+(?:\.\d+)?)px$/i);
+    if (match && (BOX_KEYS as readonly string[]).includes(prop)) {
+      box[prop as keyof BlockBox] = Number(match[1]);
+    }
+  }
+  return box;
+}
+
+function blockFrame($: CheerioAPI, block: Element): Element | undefined {
+  return $(block).find('iframe').toArray()[0] as Element | undefined;
+}
+
+/** The draggable blocks of a slide's html, top-level `.sl-block`s in document order. */
+export function readSlideBlocks(html: string, opts: { content?: boolean } = {}): SlideBlockInfo[] {
+  if (!html.includes('sl-block')) return [];
+  const $ = cheerio.load(html, null, false);
+  return $('.sl-block')
+    .toArray()
+    .filter(el => $(el).parents('.sl-block').length === 0)
+    .map(node => {
+      const el = node as Element;
+      const type = el.attribs['data-block-type'] ?? 'text';
+      const info: SlideBlockInfo = {
+        id: el.attribs[BLOCK_ID_ATTR] ?? null,
+        type,
+        box: boxFromStyle(el.attribs['style'] ?? ''),
+      };
+      if (opts.content === false) return info;
+      if (type === 'html') {
+        const frame = blockFrame($, el);
+        const srcdoc = frame?.attribs['srcdoc'] ?? frame?.attribs[`${INERT_ATTR_PREFIX}srcdoc`];
+        if (srcdoc != null) info.source = htmlBlockSource(srcdoc);
+      } else if (type === 'svg') {
+        const svg = $(el).find('svg').first();
+        if (svg.length > 0) info.svg = $.html(svg);
+      } else if (type === 'iframe') {
+        const frame = blockFrame($, el);
+        const src = frame?.attribs['data-src'] ?? frame?.attribs['src'];
+        if (src != null) info.src = src;
+      }
+      return info;
+    });
+}
+
+/** What a block edit changes; only the fields given. */
+export interface SlideBlockEdit {
+  box?: Partial<BlockBox>;
+  /** html blocks: new source (the frame is rebuilt with the standard sandbox). */
+  source?: string;
+  /** svg blocks: new `<svg>` markup. */
+  svg?: string;
+  /** iframe blocks: new URL (stored as `data-src`, so it loads lazily). */
+  src?: string;
+}
+
+/** Typed failure for a block edit (unknown block id, field that does not fit the type). */
+export class SlideBlockError extends Error {
+  code = 'INVALID_BLOCK_EDIT' as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'SlideBlockError';
+  }
+}
+
+function findBlock($: CheerioAPI, blockId: string): Element {
+  const matches = $('.sl-block')
+    .toArray()
+    .filter(el => (el as Element).attribs[BLOCK_ID_ATTR] === blockId) as Element[];
+  if (matches.length === 0) throw new SlideBlockError(`No block '${blockId}' on this slide`);
+  return matches[0];
+}
+
+/** `style` with left/top/width/height set from `box` (other declarations kept, in order). */
+function styleWithBox(style: string, box: Partial<BlockBox>): string {
+  const decls = splitStyleDeclarations(style)
+    .map(d => d.trim())
+    .filter(Boolean);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const set: Record<string, string> = {};
+  for (const key of BOX_KEYS) {
+    const value = box[key];
+    if (value !== undefined) set[key] = cssPx(value);
+  }
+  for (const decl of decls) {
+    const prop = decl.slice(0, decl.indexOf(':')).trim().toLowerCase();
+    if (prop in set) {
+      if (!seen.has(prop)) out.push(`${prop}: ${set[prop]}`);
+      seen.add(prop);
+    } else {
+      out.push(decl);
+    }
+  }
+  for (const [prop, value] of Object.entries(set)) {
+    if (!seen.has(prop)) out.push(`${prop}: ${value}`);
+  }
+  return out.length > 0 ? `${out.join('; ')};` : '';
+}
+
+/**
+ * A slide's html with one block (by `data-cm-block-id`) changed, through the
+ * same cleanup as any written slide html.
+ *
+ * @throws {SlideBlockError} unknown block id, or a field that does not fit
+ *   the block's type.
+ */
+export function updateSlideBlock(html: string, blockId: string, edit: SlideBlockEdit): string {
+  const $ = cheerio.load(html, null, false);
+  const block = findBlock($, blockId);
+  const type = block.attribs['data-block-type'] ?? 'text';
+  const content = $(block).children('.sl-block-content').first();
+  if ((edit.source !== undefined || edit.svg !== undefined) && content.length === 0) {
+    throw new SlideBlockError(`Block '${blockId}' has no content to replace`);
+  }
+  if (edit.source !== undefined) {
+    if (type !== 'html') throw new SlideBlockError(`Block '${blockId}' is ${type}, not html`);
+    content.empty().append(htmlBlockFrameMarkup(edit.source));
+  }
+  if (edit.svg !== undefined) {
+    if (type !== 'svg') throw new SlideBlockError(`Block '${blockId}' is ${type}, not svg`);
+    content.empty().append(normalizeSvgBlockSource(edit.svg));
+  }
+  if (edit.src !== undefined) {
+    if (type !== 'iframe') throw new SlideBlockError(`Block '${blockId}' is ${type}, not iframe`);
+    const frame = blockFrame($, block);
+    if (!frame) throw new SlideBlockError(`Block '${blockId}' has no frame`);
+    delete frame.attribs['src'];
+    frame.attribs['data-src'] = edit.src;
+  }
+  if (edit.box && Object.keys(edit.box).length > 0) {
+    const style = styleWithBox(block.attribs['style'] ?? '', edit.box);
+    if (style) block.attribs['style'] = style;
+  }
+  return normalizeSlideHtml(serializeBrowserForm($));
+}
+
+/**
+ * A slide's html without one block (by `data-cm-block-id`).
+ *
+ * @throws {SlideBlockError} unknown block id.
+ */
+export function removeSlideBlock(html: string, blockId: string): string {
+  const $ = cheerio.load(html, null, false);
+  removeNode(findBlock($, blockId));
+  return normalizeSlideHtml(serializeBrowserForm($));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

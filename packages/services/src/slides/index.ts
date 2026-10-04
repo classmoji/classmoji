@@ -11,6 +11,7 @@
 export * from './deckTypes.ts';
 export * from './slideSource.ts';
 export * from './deckHtml.ts';
+export * from './deckBlocks.ts';
 export * from './deckAssets.ts';
 export * from './deckMerge.ts';
 export * from './deckOps.ts';

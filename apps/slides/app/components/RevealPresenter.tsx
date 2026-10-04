@@ -3,6 +3,7 @@ import { marked } from 'marked';
 import { io } from 'socket.io-client';
 import { IconUsers } from '@tabler/icons-react';
 import QRCodeOverlay from './QRCodeOverlay';
+import { neutralizeHtmlBlockFrames } from '@classmoji/services/slides/runtime-attrs';
 import { stripMediaRefs } from '~/utils/mediaRefs';
 
 /**
@@ -276,6 +277,9 @@ export default function RevealPresenter({
         // Remove hidden sections
         tempContainer.querySelectorAll('section[data-hidden="true"]').forEach(el => el.remove());
 
+        // An html block's frame loads only in its sandbox (deckBlocks.ts).
+        neutralizeHtmlBlockFrames(tempContainer);
+
         // Clean up empty vertical stacks (parent sections that only contained hidden slides)
         tempContainer.querySelectorAll(':scope > section').forEach(section => {
           const nestedSections = section.querySelectorAll(':scope > section');
@@ -296,6 +300,7 @@ export default function RevealPresenter({
 
         setHtmlContent(content);
       } else {
+        neutralizeHtmlBlockFrames(doc.body);
         setHtmlContent(doc.body.innerHTML);
       }
       setLoading(false);

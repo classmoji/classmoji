@@ -11,8 +11,10 @@
  * what a save would have stored.
  */
 import {
+  INERT_ATTR_PREFIX,
   RUNTIME_SECTION_ATTRS,
   RUNTIME_SECTION_CLASSES,
+  isBlockedHtmlBlockAttr,
   splitStyleDeclarations,
 } from '@classmoji/services/slides/runtime-attrs';
 import { EDITOR_BLOCK_CLASSES, isRenderableAttr, type DeckStructure } from '@classmoji/collab';
@@ -228,19 +230,22 @@ export function applySectionAttrs(
 /**
  * Make event-handler attributes and `javascript:` URLs inert on every element
  * under (and including) `root`, for display: each is renamed in place to
- * `data-cm-inert-<name>`. Nothing stored changes — `restoreInertMarkup`
- * (run by serialization) puts the authored attributes back. Iframe
- * sandboxing is left as authored.
+ * `data-cm-inert-<name>`. So are the sources of a frame inside an html block
+ * whose sandbox would let it out (deckBlocks.ts). Nothing stored changes —
+ * `restoreInertMarkup` (run by serialization) puts the authored attributes
+ * back.
  */
 export function stripUnsafeMarkup(root: Element | DocumentFragment): void {
   for (const el of elementsUnder(root)) {
     const attrs = Array.from(el.attributes);
-    if (attrs.every(attr => isRenderableAttr(attr.name, attr.value))) continue;
+    const renders = (attr: Attr) =>
+      isRenderableAttr(attr.name, attr.value) && !isBlockedHtmlBlockAttr(el, attr.name);
+    if (attrs.every(renders)) continue;
     // Renamed in place (same position), so putting them back restores the
     // element's markup byte for byte.
     rebuildAttributes(el, attrs, name => {
       const attr = attrs.find(a => a.name === name) as Attr;
-      return isRenderableAttr(attr.name, attr.value) ? name : `${INERT_PREFIX}${name}`;
+      return renders(attr) ? name : `${INERT_PREFIX}${name}`;
     });
   }
 }
@@ -261,7 +266,7 @@ export function restoreInertMarkup(root: Element | DocumentFragment): void {
 }
 
 /** Prefix of an attribute the editor neutralized for display. */
-export const INERT_PREFIX = 'data-cm-inert-';
+export const INERT_PREFIX = INERT_ATTR_PREFIX;
 
 function elementsUnder(root: Element | DocumentFragment): Element[] {
   const out: Element[] = [];

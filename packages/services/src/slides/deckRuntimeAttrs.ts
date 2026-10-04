@@ -179,3 +179,6 @@ function stripSlideRuntimeAttrs(slide: DeckSlide): DeckSlide {
 export function stripDeckRuntimeAttrs(deck: DeckJson): DeckJson {
   return { ...deck, slides: deck.slides.map(stripSlideRuntimeAttrs) };
 }
+
+// svg and html slide blocks: browser-safe like this module, so published on the same subpath.
+export * from './deckBlocks.ts';
