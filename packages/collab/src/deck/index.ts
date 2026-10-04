@@ -8,3 +8,4 @@ export * from './convert.ts';
 export * from './structure.ts';
 export * from './locks.ts';
 export * from './render.ts';
+export * from './ops.ts';
