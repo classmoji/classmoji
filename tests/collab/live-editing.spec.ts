@@ -34,10 +34,31 @@ const PAGE_EDIT_2 = ` [p2-${RUN}]`;
 const SLIDE_EDIT_A = ` [a-${RUN}]`;
 const SLIDE_EDIT_B = ` [b-${RUN}]`;
 
-test.describe.configure({ mode: 'serial' });
+const SKIP_REASON = 'Set COLLAB_E2E=1 with the dev stack running';
+
+// Independent of the serial chain below, so a failure here never skips it.
+test.describe('test-login ?as=', () => {
+  test.skip(!process.env.COLLAB_E2E, SKIP_REASON);
+
+  test('refuses unknown users and off-origin redirects', async ({ request }) => {
+    const unknown = await request.get(`${WEBAPP_URL}/test-login?as=no-such-user-${RUN}`, {
+      maxRedirects: 0,
+    });
+    expect(unknown.status()).toBe(404);
+
+    const offOrigin = await request.get(
+      `${WEBAPP_URL}/test-login?as=${TEACHER_1.login}&redirect=${encodeURIComponent('//evil.example')}`,
+      { maxRedirects: 0 }
+    );
+    expect(offOrigin.status()).toBe(302);
+    expect(offOrigin.headers()['location']).toBe(`/teacher/${CLASSROOM_SLUG}/dashboard`);
+  });
+});
 
 test.describe('live editing', () => {
-  test.skip(!process.env.COLLAB_E2E, 'Set COLLAB_E2E=1 with the dev stack running');
+  test.skip(!process.env.COLLAB_E2E, SKIP_REASON);
+  // Each step builds on the one before (same documents, then their checkpoint).
+  test.describe.configure({ mode: 'serial' });
 
   let pageId = '';
   let deckId = '';
@@ -81,20 +102,6 @@ test.describe('live editing', () => {
     pageId = page.id;
     deckId = deck.id;
     headBefore = await contentHead();
-  });
-
-  test('test-login ?as= refuses unknown users and off-origin redirects', async ({ request }) => {
-    const unknown = await request.get(`${WEBAPP_URL}/test-login?as=no-such-user-${RUN}`, {
-      maxRedirects: 0,
-    });
-    expect(unknown.status()).toBe(404);
-
-    const offOrigin = await request.get(
-      `${WEBAPP_URL}/test-login?as=${TEACHER_1.login}&redirect=${encodeURIComponent('//evil.example')}`,
-      { maxRedirects: 0 }
-    );
-    expect(offOrigin.status()).toBe(302);
-    expect(offOrigin.headers()['location']).toBe(`/teacher/${CLASSROOM_SLUG}/dashboard`);
   });
 
   test('page: two teachers type in one paragraph and converge', async ({ browser }) => {
@@ -144,6 +151,9 @@ test.describe('live editing', () => {
     const p1 = await one.newPage();
     const p2 = await two.newPage();
     const deckUrl = `${SLIDES_URL}/${deckId}?mode=edit`;
+    // The deck bridge writes a slide's html into the live doc 300 ms after the
+    // last keystroke (SERIALIZE_DEBOUNCE_MS), so remote text shows up while the
+    // editor is still on the slide — no blur needed.
     const present = (p: Page) => p.locator('.reveal .slides > section.present');
     const goTo = async (p: Page, index: number) => {
       await p.evaluate(i => {
