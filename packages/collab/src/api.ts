@@ -83,12 +83,15 @@ export interface BlockChangedError {
  * - `checkpoint`: the worker finished a run that covered this doc
  *   (`POST /internal/checkpoint-result`);
  * - `page-meta` / `deck-meta`: title (and page width) changed outside the
- *   document (`POST /internal/:kind/:id/meta-changed`).
+ *   document (`POST /internal/:kind/:id/meta-changed`);
+ * - `preview-changed`: a preview of this doc was created, updated or
+ *   discarded (`POST /internal/:kind/:id/preview-changed`) — refresh the banner.
  */
 export type CollabStatelessMessage =
   | { type: 'checkpoint'; commit?: string; at: string; error?: string }
   | { type: 'page-meta'; title?: string; width?: number }
-  | { type: 'deck-meta'; title?: string };
+  | { type: 'deck-meta'; title?: string }
+  | { type: 'preview-changed' };
 
 /** `POST /internal/checkpoint-result` (from the worker; best effort). */
 export interface CheckpointResultRequest {

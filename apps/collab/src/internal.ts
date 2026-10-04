@@ -12,6 +12,7 @@
  *        → { action: 'merged' | 'reseeded' | 'none', … } | 409 { error: 'no-merge-base' }
  *   POST /internal/:kind/:id/checkpoint     { message?, actor } → { version }
  *   POST /internal/:kind/:id/close          { reason } → { closed }   (sockets: 4409 reload)
+ *   POST /internal/:kind/:id/preview-changed {} → { broadcast }  (stateless { type: 'preview-changed' })
  *   POST /internal/classroom/:id/flag       { enabled } → { closed, reseeded }
  *
  * /external: `sha` is the COMMIT the outside push landed as (theirs is read
@@ -115,6 +116,7 @@ const DOC_ACTIONS: Record<string, 'GET' | 'POST'> = {
   checkpoint: 'POST',
   close: 'POST',
   'meta-changed': 'POST',
+  'preview-changed': 'POST',
 };
 const CLASSROOM_ACTIONS: Record<string, 'GET' | 'POST'> = { flag: 'POST' };
 const GLOBAL_ACTIONS: Record<string, 'GET' | 'POST'> = { 'checkpoint-result': 'POST' };
@@ -259,6 +261,10 @@ async function dispatch(
       const insertedIds = result && 'insertedIds' in result ? result.insertedIds : undefined;
       return { epoch, version, ...(insertedIds ? { insertedIds } : {}) };
     }
+
+    case 'preview-changed':
+      // No-op when nobody has the doc open.
+      return { broadcast: runtime.broadcast(kind, id, { type: 'preview-changed' }) };
 
     case 'meta-changed': {
       const message =

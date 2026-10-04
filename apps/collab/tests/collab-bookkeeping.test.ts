@@ -294,6 +294,19 @@ describe('stateless broadcasts', () => {
   });
 });
 
+describe('preview-changed', () => {
+  it('tells an open room, and is a no-op otherwise', async () => {
+    const closed = await internal(server, 'POST', `/page/${PAGE}/preview-changed`, {});
+    expect(closed).toEqual({ status: 200, body: { broadcast: 0 } });
+    const a = open();
+    await a.synced;
+    const res = await internal(server, 'POST', `/page/${PAGE}/preview-changed`, {});
+    expect(res.body).toEqual({ broadcast: 1 });
+    await waitFor(() => a.stateless.length > 0, 3000, 'stateless');
+    expect(a.stateless[0]).toEqual({ type: 'preview-changed' });
+  });
+});
+
 describe('snapshot checkpoint fields', () => {
   it('returns lastCheckpointAt / lastCheckpointError from the row', async () => {
     expect(await snapshot()).toMatchObject({ lastCheckpointAt: null, lastCheckpointError: null });
