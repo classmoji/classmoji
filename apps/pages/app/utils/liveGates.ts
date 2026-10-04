@@ -95,3 +95,16 @@ export function previewReviewedAsPage(classroom: unknown): boolean {
     (classroom as { collab_enabled?: unknown }).collab_enabled === true
   );
 }
+
+/** The longest note a saved version may carry (it becomes part of the commit message). */
+export const VERSION_NOTE_MAX = 200;
+
+/**
+ * A Save version note as the checkpoint takes it: trimmed, on one line,
+ * capped at VERSION_NOTE_MAX; undefined when there is none.
+ */
+export function versionNote(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const note = value.replace(/\s+/g, ' ').trim();
+  return note ? note.slice(0, VERSION_NOTE_MAX) : undefined;
+}

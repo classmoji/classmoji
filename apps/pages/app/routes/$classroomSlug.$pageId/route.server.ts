@@ -58,7 +58,12 @@ import {
   normalizePageBlocks,
   previewBaseContent,
 } from '~/utils/collabPreview.server.ts';
-import { joinsLiveRoom, liveIntentRefusal, previewReviewedAsPage } from '~/utils/liveGates.ts';
+import {
+  joinsLiveRoom,
+  liveIntentRefusal,
+  previewReviewedAsPage,
+  versionNote,
+} from '~/utils/liveGates.ts';
 import {
   coverDiffers,
   previewBlockChanges,
@@ -647,7 +652,12 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
     if (!liveEnv) return Response.json({ error: 'Invalid action' }, { status: 400 });
     try {
       const name = await readEditorName(authData.userId, authData.userLogin);
-      await requestCheckpoint(liveEnv, pageId, { userId: authData.userId, name });
+      await requestCheckpoint(
+        liveEnv,
+        pageId,
+        { userId: authData.userId, name },
+        versionNote(data.message)
+      );
       return Response.json({ success: true, savedVersion: true });
     } catch (error: unknown) {
       console.error('[pages] Save version failed:', error);

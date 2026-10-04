@@ -51,6 +51,8 @@ import {
   joinsLiveRoom,
   liveEditingBlocked,
   liveIntentRefusal,
+  versionNote,
+  VERSION_NOTE_MAX,
 } from '../../app/utils/liveGates.ts';
 import { closeBeforeDelete } from '../../app/utils/collab.server.ts';
 
@@ -594,4 +596,34 @@ test('the live route refreshes on preview-changed and on returning to view, neve
   expect(ROUTE).toContain('if (liveMode && previewChangedSeq > 0) refreshLoader();');
   expect(ROUTE).toContain("document.addEventListener('visibilitychange', onVisible);");
   expect(ROUTE).not.toMatch(/setInterval\(refresh/);
+});
+
+test.describe('Save version note', () => {
+  test('trimmed, one line, capped; empty is no note', () => {
+    expect(versionNote('  Week 3 readings  ')).toBe('Week 3 readings');
+    expect(versionNote('line one\nline two')).toBe('line one line two');
+    expect(versionNote('x'.repeat(500))).toHaveLength(VERSION_NOTE_MAX);
+    expect(versionNote('   ')).toBeUndefined();
+    expect(versionNote(undefined)).toBeUndefined();
+    expect(versionNote(42)).toBeUndefined();
+  });
+
+  test('the header asks through the note popover; Cmd-S saves without a note', () => {
+    expect(ROUTE).toContain('if (canSaveVersion && !savingVersion) handleSaveVersion();');
+    const header = readFileSync(
+      fileURLToPath(
+        new URL('../../app/components/editor/collab/LiveHeaderControls.tsx', import.meta.url)
+      ),
+      'utf8'
+    );
+    expect(header).toContain('<SaveVersionPopover');
+    const popover = readFileSync(
+      fileURLToPath(
+        new URL('../../app/components/editor/collab/SaveVersionPopover.tsx', import.meta.url)
+      ),
+      'utf8'
+    );
+    expect(popover).toContain('maxLength={VERSION_NOTE_MAX}');
+    expect(popover).toContain('export const VERSION_NOTE_MAX = 200;');
+  });
 });

@@ -17,6 +17,8 @@ import {
   type SyncStatus,
 } from '~/utils/collab.ts';
 
+import SaveVersionPopover from './SaveVersionPopover.tsx';
+
 /** Avatars shown before the rest collapse into "+N". */
 const MAX_AVATARS = 4;
 /** The floating indicator of an embed has less room. */
@@ -27,8 +29,11 @@ export interface LiveHeaderControlsProps {
   syncStatus: SyncStatus;
   /** The last checkpoint covering this page (null before anything is known). */
   checkpoint?: LiveCheckpoint | null;
-  /** Null while the editor cannot ask for a version (refused, not synced). */
-  onSaveVersion: (() => void) | null;
+  /**
+   * Save a version, with an optional note (the checkpoint's message). Null
+   * while the editor cannot ask for one (refused, not synced).
+   */
+  onSaveVersion: ((message?: string) => void) | null;
   savingVersion: boolean;
   /** The floating indicator of an embedded editor: smaller, same contents. */
   compact?: boolean;
@@ -153,14 +158,11 @@ const LiveHeaderControls = ({
       )}
 
       {onSaveVersion && (
-        <button
-          type="button"
-          onClick={onSaveVersion}
-          disabled={savingVersion}
-          className={`${compact ? 'px-2 py-0.5 text-xs' : 'px-2.5 py-1 text-sm'} font-medium rounded transition-colors text-gray-700 ring-1 ring-gray-300 hover:bg-gray-100 disabled:opacity-60 disabled:cursor-not-allowed dark:text-gray-200 dark:ring-neutral-600 dark:hover:bg-neutral-800`}
-        >
-          {savingVersion ? 'Saving version…' : 'Save version'}
-        </button>
+        <SaveVersionPopover
+          onSave={message => onSaveVersion(message || undefined)}
+          saving={savingVersion}
+          compact={compact}
+        />
       )}
     </div>
   );

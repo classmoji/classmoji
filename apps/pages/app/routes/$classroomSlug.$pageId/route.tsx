@@ -887,12 +887,15 @@ const PageRoute = () => {
     return () => window.clearTimeout(timer);
   }, [versionPendingSince]);
   const savingVersion = versionFetcher.state !== 'idle' || versionPendingSince !== null;
-  const handleSaveVersion = useCallback(() => {
-    versionFetcher.submit(
-      { intent: 'save-version' },
-      { method: 'POST', encType: 'application/json' }
-    );
-  }, [versionFetcher]);
+  const handleSaveVersion = useCallback(
+    (message?: string) => {
+      versionFetcher.submit(
+        { intent: 'save-version', ...(message ? { message } : {}) },
+        { method: 'POST', encType: 'application/json' }
+      );
+    },
+    [versionFetcher]
+  );
 
   const liveSyncStatus = deriveSyncStatus(liveState);
   const canSaveVersion = liveEditable && liveState.hasSynced;

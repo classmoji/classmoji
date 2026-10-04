@@ -195,8 +195,13 @@ export async function notifyPreviewChanged(env: CollabEnv, pageId: string): Prom
 }
 
 /** "Save version": ask for a checkpoint now. */
-export function requestCheckpoint(env: CollabEnv, pageId: string, actor: CollabActor) {
-  const body: CheckpointRequest = { actor };
+export function requestCheckpoint(
+  env: CollabEnv,
+  pageId: string,
+  actor: CollabActor,
+  message?: string
+) {
+  const body: CheckpointRequest = { actor, ...(message ? { message } : {}) };
   return collabInternalRequest<unknown>(env, 'POST', pageInternalPath(pageId, 'checkpoint'), body);
 }
 
