@@ -1,9 +1,13 @@
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+import { ArrowLeftIcon, EyeIcon, EyeOffIcon, Loader2Icon, MailIcon } from 'lucide-react';
 import { authClient } from '@classmoji/auth/client';
 import { Emoji } from '~/components';
-import GitHubIcon from './github.svg';
+import { fieldClass, labelClass, optionButton, primaryButton, quietLink } from './signInStyles';
+import siteBackdrop from './site-backdrop.jpg';
 
-type Mode = 'sign-in' | 'sign-up' | 'verify' | 'forgot' | 'reset';
+/** `providers` lists the ways in; the rest are the email flows behind "Continue with email". */
+type Mode = 'providers' | 'sign-in' | 'sign-up' | 'verify' | 'forgot' | 'reset';
 
 interface SignInPageProps {
   handleGitHubLogin: () => void;
@@ -13,8 +17,13 @@ interface SignInPageProps {
   oauthError?: string | null;
   /** The Gitlab sign-in control; null when no Gitlab is available. */
   gitlabSignIn?: ReactNode;
-  /** The Gitlab chooser is open: it gets the column, everything else steps aside. */
-  gitlabChoosing?: boolean;
+  /**
+   * Show classmoji.io blurred behind the card, so arriving from the site's
+   * "Sign In" reads as a dialog over the page just left. Off when the visit
+   * has its own context (a class invite, a school's Gitlab).
+   */
+  backdrop?: boolean;
+  /** Shown above the card (the development quick logins). */
   children?: ReactNode;
 }
 
@@ -37,13 +46,23 @@ const OAUTH_ERRORS: Record<string, string> = {
   email_is_missing: 'Your Gitlab account has no email address Classmoji can read.',
 };
 
-const inputClass =
-  'w-full rounded-lg border border-stone-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 px-3 py-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary';
+/** Where "closing" the sign-in goes when there's no page to return to. */
+const PUBLIC_SITE = 'https://classmoji.io';
 
-const primaryButtonClass =
-  'w-full bg-primary hover:bg-primary/90 disabled:opacity-60 text-white font-medium rounded-lg px-4 py-2.5 transition-colors cursor-pointer disabled:cursor-default';
-
-const linkClass = 'text-gray-900 dark:text-gray-100 hover:underline cursor-pointer';
+/**
+ * Back to the page the visitor came from when it was another site (classmoji.io,
+ * or the local site in development), else the public site.
+ */
+const leaveSignIn = () => {
+  let target = PUBLIC_SITE;
+  try {
+    const from = document.referrer ? new URL(document.referrer) : null;
+    if (from && from.origin !== window.location.origin) target = from.href;
+  } catch {
+    // An unreadable referrer: fall back to the public site.
+  }
+  window.location.href = target;
+};
 
 const errorMessage = (error: { message?: string; code?: string } | null | undefined) =>
   error?.message || 'Something went wrong. Please try again.';
@@ -53,10 +72,26 @@ const SignInPage = ({
   callbackURL,
   oauthError,
   gitlabSignIn,
-  gitlabChoosing = false,
+  backdrop = false,
   children,
 }: SignInPageProps) => {
-  const [mode, setMode] = useState<Mode>('sign-in');
+  const reduced = useReducedMotion();
+  const [mode, setMode] = useState<Mode>('providers');
+
+  // With the backdrop the card reads as a dialog over the site, so it closes like
+  // one: Escape, or a click outside the card.
+  useEffect(() => {
+    if (!backdrop) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') leaveSignIn();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [backdrop]);
+  const onOutsideClick = (e: MouseEvent) => {
+    if (backdrop && e.target === e.currentTarget) leaveSignIn();
+  };
+  const [showPassword, setShowPassword] = useState(false);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -180,245 +215,360 @@ const SignInPage = ({
     });
   };
 
-  const title: Record<Mode, string> = {
-    'sign-in': 'Sign in to Classmoji',
+  const title: Record<Exclude<Mode, 'providers'>, string> = {
+    'sign-in': 'Sign in with email',
     'sign-up': 'Create your account',
     verify: 'Check your email',
     forgot: 'Reset your password',
     reset: 'Choose a new password',
   };
 
+  // Each screen slides in from the side it was reached from.
+  const forward = mode !== 'providers';
+  const motionProps = reduced
+    ? {}
+    : {
+        initial: { opacity: 0, x: forward ? 12 : -12 },
+        animate: { opacity: 1, x: 0 },
+        exit: { opacity: 0, x: forward ? -12 : 12 },
+        transition: { duration: 0.18, ease: [0.22, 1, 0.36, 1] as const },
+      };
+
+  const spinner = busy && <Loader2Icon className="h-4 w-4 animate-spin" aria-hidden />;
+
+  const messages = (
+    <>
+      {error && (
+        <div
+          role="alert"
+          className="mb-5 rounded-lg border border-rose-bord bg-rose-bg px-3.5 py-2.5 text-sm text-rose-ink"
+        >
+          {error}
+        </div>
+      )}
+      {notice && !error && (
+        <div
+          role="status"
+          className="mb-5 rounded-lg border border-mint-bord bg-mint-bg px-3.5 py-2.5 text-sm text-mint-ink"
+        >
+          {notice}
+        </div>
+      )}
+    </>
+  );
+
+  const codeField = (
+    <div>
+      <label htmlFor="auth-code" className={labelClass}>
+        6-digit code
+      </label>
+      <input
+        id="auth-code"
+        className={`mt-1.5 ${fieldClass} text-center font-mono text-base tracking-[0.4em]`}
+        inputMode="numeric"
+        autoComplete="one-time-code"
+        autoFocus
+        maxLength={6}
+        value={code}
+        onChange={e => setCode(e.target.value.replace(/\D/g, ''))}
+        required
+      />
+    </div>
+  );
+
+  const emailField = (label: string, autoFocus = false) => (
+    <div>
+      <label htmlFor="auth-email" className={labelClass}>
+        {label}
+      </label>
+      <input
+        id="auth-email"
+        className={`mt-1.5 ${fieldClass}`}
+        type="email"
+        autoComplete="email"
+        autoFocus={autoFocus}
+        placeholder="you@school.edu"
+        value={email}
+        onChange={e => setEmail(e.target.value)}
+        required
+      />
+    </div>
+  );
+
   return (
-    <div className="min-h-screen bg-[#fafaf9] dark:bg-neutral-950 flex flex-col">
-      <main className="flex-1 flex items-center justify-center px-4">
-        <div className={`w-full ${gitlabChoosing ? 'max-w-md' : 'max-w-xs'}`}>
-          {children}
-          <div className="flex justify-center mb-3">
-            <Emoji emoji="apple" fontSize="48px" logo />
+    <div
+      onClick={onOutsideClick}
+      className="relative isolate flex min-h-screen flex-col items-center overflow-hidden bg-[#fafaf9] px-4 py-8 dark:bg-neutral-950 sm:px-6"
+    >
+      {backdrop && (
+        <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
+          {/* A still of the site's home page: blurred and dimmed, it's only a hint. */}
+          <img
+            src={siteBackdrop}
+            alt=""
+            className="h-full w-full scale-110 object-cover object-top blur-xl"
+          />
+          <div className="absolute inset-0 bg-stone-900/25 dark:bg-neutral-950/75" />
+        </div>
+      )}
+      <main
+        onClick={onOutsideClick}
+        className="flex w-full flex-1 flex-col items-center justify-center py-10"
+      >
+        {children}
+
+        <div className="w-full max-w-[440px] overflow-hidden rounded-2xl bg-panel shadow-[0_1px_2px_rgba(20,10,40,0.04),0_12px_32px_-20px_rgba(20,25,50,0.22)] ring-1 ring-stone-200 dark:shadow-[0_12px_32px_-18px_rgba(0,0,0,0.6)] dark:ring-neutral-800">
+          <div className="px-6 pb-8 pt-9 sm:px-8">
+            <AnimatePresence mode="wait" initial={false}>
+              {mode === 'providers' ? (
+                <motion.div key="providers" {...motionProps}>
+                  <h1 className="flex items-center justify-center gap-2.5 text-center text-2xl font-bold leading-tight tracking-tight text-ink-0">
+                    <Emoji emoji="apple" fontSize="30px" logo />
+                    Sign in to Classmoji
+                  </h1>
+                  <p className="mt-2 text-center text-sm text-ink-2">
+                    Use the account your class runs on.
+                  </p>
+
+                  <div className="mt-8">
+                    {messages}
+                    <div className="flex flex-col gap-3">
+                      <button type="button" onClick={handleGitHubLogin} className={optionButton}>
+                        <svg viewBox="0 0 16 16" aria-hidden className="h-4 w-4 fill-current">
+                          <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
+                        </svg>
+                        Continue with Github
+                      </button>
+                      {gitlabSignIn}
+                    </div>
+
+                    <div
+                      className="my-3 flex items-center gap-4 text-sm text-ink-3"
+                      role="separator"
+                    >
+                      <span className="h-px flex-1 bg-line" />
+                      or
+                      <span className="h-px flex-1 bg-line" />
+                    </div>
+
+                    <button type="button" onClick={() => go('sign-in')} className={optionButton}>
+                      <MailIcon className="h-4 w-4 text-ink-2" aria-hidden />
+                      Continue with email
+                    </button>
+                  </div>
+                </motion.div>
+              ) : (
+                <motion.div key={mode} {...motionProps}>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      go(mode === 'reset' || mode === 'forgot' ? 'sign-in' : 'providers')
+                    }
+                    className="-ml-1 inline-flex items-center gap-1.5 rounded-md px-1 text-sm font-medium text-ink-3 transition-colors duration-150 hover:text-ink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent cursor-pointer"
+                  >
+                    <ArrowLeftIcon className="h-4 w-4" aria-hidden />
+                    {mode === 'reset' || mode === 'forgot'
+                      ? 'Back to sign in'
+                      : 'Other sign-in options'}
+                  </button>
+                  <h1 className="mt-4 text-xl font-semibold leading-tight tracking-tight text-ink-0">
+                    {title[mode]}
+                  </h1>
+
+                  <div className="mt-7">
+                    {messages}
+
+                    {mode === 'sign-in' && (
+                      <form onSubmit={onSignIn} className="flex flex-col gap-4">
+                        {emailField('Email', true)}
+                        <div>
+                          <div className="flex items-center justify-between">
+                            <label htmlFor="auth-password" className={labelClass}>
+                              Password
+                            </label>
+                            <button
+                              type="button"
+                              className={quietLink}
+                              onClick={() => go('forgot')}
+                            >
+                              Forgot password?
+                            </button>
+                          </div>
+                          <div className="relative mt-1.5">
+                            <input
+                              id="auth-password"
+                              className={`${fieldClass} pr-11`}
+                              type={showPassword ? 'text' : 'password'}
+                              autoComplete="current-password"
+                              value={password}
+                              onChange={e => setPassword(e.target.value)}
+                              required
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowPassword(v => !v)}
+                              aria-label={showPassword ? 'Hide password' : 'Show password'}
+                              aria-pressed={showPassword}
+                              className="absolute right-1.5 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-md text-ink-3 transition-colors duration-150 hover:text-ink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent cursor-pointer"
+                            >
+                              {showPassword ? (
+                                <EyeOffIcon className="h-4 w-4" aria-hidden />
+                              ) : (
+                                <EyeIcon className="h-4 w-4" aria-hidden />
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                        <button type="submit" className={primaryButton} disabled={busy}>
+                          {spinner}
+                          {busy ? 'Signing in' : 'Sign in'}
+                        </button>
+                      </form>
+                    )}
+
+                    {mode === 'sign-up' && (
+                      <form onSubmit={onSignUp} className="flex flex-col gap-4">
+                        <div>
+                          <label htmlFor="auth-name" className={labelClass}>
+                            Full name
+                          </label>
+                          <input
+                            id="auth-name"
+                            className={`mt-1.5 ${fieldClass}`}
+                            autoComplete="name"
+                            autoFocus
+                            value={name}
+                            onChange={e => setName(e.target.value)}
+                            required
+                          />
+                        </div>
+                        {emailField('School email')}
+                        <div>
+                          <label htmlFor="auth-new-password" className={labelClass}>
+                            Password
+                          </label>
+                          <input
+                            id="auth-new-password"
+                            className={`mt-1.5 ${fieldClass}`}
+                            type="password"
+                            autoComplete="new-password"
+                            placeholder="8+ characters"
+                            minLength={8}
+                            value={password}
+                            onChange={e => setPassword(e.target.value)}
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label htmlFor="auth-confirm-password" className={labelClass}>
+                            Confirm password
+                          </label>
+                          <input
+                            id="auth-confirm-password"
+                            className={`mt-1.5 ${fieldClass}`}
+                            type="password"
+                            autoComplete="new-password"
+                            value={confirmPassword}
+                            onChange={e => setConfirmPassword(e.target.value)}
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label htmlFor="auth-school-id" className={labelClass}>
+                            School ID <span className="font-normal text-ink-3">(optional)</span>
+                          </label>
+                          <input
+                            id="auth-school-id"
+                            className={`mt-1.5 ${fieldClass}`}
+                            value={schoolId}
+                            onChange={e => setSchoolId(e.target.value)}
+                          />
+                        </div>
+                        <button type="submit" className={primaryButton} disabled={busy}>
+                          {spinner}
+                          {busy ? 'Creating account' : 'Create account'}
+                        </button>
+                        <p className="text-xs leading-relaxed text-ink-3">
+                          You will connect your Github or Gitlab account before creating or joining
+                          a classroom.
+                        </p>
+                      </form>
+                    )}
+
+                    {mode === 'verify' && (
+                      <form onSubmit={onVerify} className="flex flex-col gap-4">
+                        {codeField}
+                        <button type="submit" className={primaryButton} disabled={busy}>
+                          {spinner}
+                          {busy ? 'Verifying' : 'Verify email'}
+                        </button>
+                        <button
+                          type="button"
+                          className={`${quietLink} self-center`}
+                          onClick={onResendVerification}
+                        >
+                          Send a new code
+                        </button>
+                      </form>
+                    )}
+
+                    {mode === 'forgot' && (
+                      <form onSubmit={onForgot} className="flex flex-col gap-4">
+                        {emailField('Email', true)}
+                        <button type="submit" className={primaryButton} disabled={busy}>
+                          {spinner}
+                          {busy ? 'Sending' : 'Send reset code'}
+                        </button>
+                      </form>
+                    )}
+
+                    {mode === 'reset' && (
+                      <form onSubmit={onReset} className="flex flex-col gap-4">
+                        {codeField}
+                        <div>
+                          <label htmlFor="auth-reset-password" className={labelClass}>
+                            New password
+                          </label>
+                          <input
+                            id="auth-reset-password"
+                            className={`mt-1.5 ${fieldClass}`}
+                            type="password"
+                            autoComplete="new-password"
+                            placeholder="8+ characters"
+                            minLength={8}
+                            value={password}
+                            onChange={e => setPassword(e.target.value)}
+                            required
+                          />
+                        </div>
+                        <button type="submit" className={primaryButton} disabled={busy}>
+                          {spinner}
+                          {busy ? 'Saving' : 'Set new password'}
+                        </button>
+                      </form>
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
 
-          <h1 className="text-xl font-semibold text-gray-900 dark:text-white text-center mb-6">
-            {title[mode]}
-          </h1>
-
-          {error && (
-            <div className="mb-4 rounded-lg bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 text-sm px-3 py-2">
-              {error}
+          {mode !== 'verify' && mode !== 'forgot' && mode !== 'reset' && (
+            <div className="border-t border-line bg-[#fafaf9] px-6 py-5 text-center text-sm text-ink-1 dark:bg-neutral-950/40">
+              {mode === 'sign-up' ? 'Already have an account?' : 'New to Classmoji?'}{' '}
+              <button
+                type="button"
+                onClick={() => go(mode === 'sign-up' ? 'sign-in' : 'sign-up')}
+                className="rounded-md font-semibold text-accent transition-colors duration-150 hover:text-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent cursor-pointer"
+              >
+                {mode === 'sign-up' ? 'Sign in' : 'Create an account'}
+              </button>
             </div>
-          )}
-          {notice && !error && (
-            <div className="mb-4 rounded-lg bg-stone-100 dark:bg-neutral-900 text-gray-700 dark:text-gray-300 text-sm text-center px-3 py-2">
-              {notice}
-            </div>
-          )}
-
-          {(mode === 'sign-in' || mode === 'sign-up') && (
-            <>
-              {!gitlabChoosing && (
-                <button
-                  onClick={handleGitHubLogin}
-                  className="w-full flex items-center justify-center gap-2 bg-black hover:bg-neutral-800 text-white dark:ring-1 dark:ring-neutral-700 font-medium rounded-lg px-4 py-2.5 transition-colors cursor-pointer"
-                >
-                  <img src={GitHubIcon} alt="" className="w-5 h-5" />
-                  Continue with Github
-                </button>
-              )}
-              {gitlabSignIn && <div className={gitlabChoosing ? '' : 'mt-2'}>{gitlabSignIn}</div>}
-              {!gitlabChoosing && (
-                <div className="flex items-center gap-3 my-5 text-xs text-gray-400 dark:text-gray-500">
-                  <div className="h-px flex-1 bg-stone-200 dark:bg-neutral-800" />
-                  or
-                  <div className="h-px flex-1 bg-stone-200 dark:bg-neutral-800" />
-                </div>
-              )}
-            </>
-          )}
-
-          {mode === 'sign-in' && !gitlabChoosing && (
-            <form onSubmit={onSignIn} className="flex flex-col gap-3">
-              <input
-                className={inputClass}
-                type="email"
-                autoComplete="email"
-                placeholder="Email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                required
-              />
-              <input
-                className={inputClass}
-                type="password"
-                autoComplete="current-password"
-                placeholder="Password"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                required
-              />
-              <button type="submit" className={primaryButtonClass} disabled={busy}>
-                {busy ? 'Signing in…' : 'Sign in'}
-              </button>
-              <div className="flex justify-between text-sm">
-                <button type="button" className={linkClass} onClick={() => go('forgot')}>
-                  Forgot password?
-                </button>
-                <button type="button" className={linkClass} onClick={() => go('sign-up')}>
-                  Create account
-                </button>
-              </div>
-            </form>
-          )}
-
-          {mode === 'sign-up' && !gitlabChoosing && (
-            <form onSubmit={onSignUp} className="flex flex-col gap-3">
-              <input
-                className={inputClass}
-                autoComplete="name"
-                placeholder="Full name"
-                value={name}
-                onChange={e => setName(e.target.value)}
-                required
-              />
-              <input
-                className={inputClass}
-                type="email"
-                autoComplete="email"
-                placeholder="School email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                required
-              />
-              <input
-                className={inputClass}
-                type="password"
-                autoComplete="new-password"
-                placeholder="Password (8+ characters)"
-                minLength={8}
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                required
-              />
-              <input
-                className={inputClass}
-                type="password"
-                autoComplete="new-password"
-                placeholder="Confirm password"
-                value={confirmPassword}
-                onChange={e => setConfirmPassword(e.target.value)}
-                required
-              />
-              <input
-                className={inputClass}
-                placeholder="School ID (optional)"
-                value={schoolId}
-                onChange={e => setSchoolId(e.target.value)}
-              />
-              <button type="submit" className={primaryButtonClass} disabled={busy}>
-                {busy ? 'Creating account…' : 'Create account'}
-              </button>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                You will connect your Github or Gitlab account before creating or joining a
-                classroom.
-              </p>
-              <button
-                type="button"
-                className={`${linkClass} text-sm`}
-                onClick={() => go('sign-in')}
-              >
-                Already have an account? Sign in
-              </button>
-            </form>
-          )}
-
-          {mode === 'verify' && (
-            <form onSubmit={onVerify} className="flex flex-col gap-3">
-              <input
-                className={`${inputClass} text-center tracking-widest font-mono text-lg`}
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                placeholder="6-digit code"
-                maxLength={6}
-                value={code}
-                onChange={e => setCode(e.target.value.replace(/\D/g, ''))}
-                required
-              />
-              <button type="submit" className={primaryButtonClass} disabled={busy}>
-                {busy ? 'Verifying…' : 'Verify email'}
-              </button>
-              <div className="flex justify-between text-sm">
-                <button type="button" className={linkClass} onClick={onResendVerification}>
-                  Send a new code
-                </button>
-                <button type="button" className={linkClass} onClick={() => go('sign-in')}>
-                  Back
-                </button>
-              </div>
-            </form>
-          )}
-
-          {mode === 'forgot' && (
-            <form onSubmit={onForgot} className="flex flex-col gap-3">
-              <input
-                className={inputClass}
-                type="email"
-                autoComplete="email"
-                placeholder="Email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                required
-              />
-              <button type="submit" className={primaryButtonClass} disabled={busy}>
-                {busy ? 'Sending…' : 'Send reset code'}
-              </button>
-              <button
-                type="button"
-                className={`${linkClass} text-sm`}
-                onClick={() => go('sign-in')}
-              >
-                Back to sign in
-              </button>
-            </form>
-          )}
-
-          {mode === 'reset' && (
-            <form onSubmit={onReset} className="flex flex-col gap-3">
-              <input
-                className={`${inputClass} text-center tracking-widest font-mono text-lg`}
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                placeholder="6-digit code"
-                maxLength={6}
-                value={code}
-                onChange={e => setCode(e.target.value.replace(/\D/g, ''))}
-                required
-              />
-              <input
-                className={inputClass}
-                type="password"
-                autoComplete="new-password"
-                placeholder="New password (8+ characters)"
-                minLength={8}
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                required
-              />
-              <button type="submit" className={primaryButtonClass} disabled={busy}>
-                {busy ? 'Saving…' : 'Set new password'}
-              </button>
-              <button
-                type="button"
-                className={`${linkClass} text-sm`}
-                onClick={() => go('sign-in')}
-              >
-                Back to sign in
-              </button>
-            </form>
           )}
         </div>
       </main>
 
-      <footer className="py-6 text-center text-sm text-ink-3">
-        © {new Date().getFullYear()} Classmoji
-      </footer>
+      <footer className="text-xs text-ink-4">© {new Date().getFullYear()} Classmoji</footer>
     </div>
   );
 };

@@ -1,8 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+import { ChevronDownIcon, ServerIcon } from 'lucide-react';
 import { authClient } from '@classmoji/auth/client';
 import GitLabIcon from '~/components/ui/display/gitlab.svg';
-import { GITLAB_BUTTON_LOGO } from '~/components/ui/gitlabButton';
 import type { GitLabChoice, GitLabSignInOptions } from './gitlabSignIn.server';
+import { optionButton } from './signInStyles';
 
 /** The last GitLab signed in with on this browser, so it is one click next time. */
 const STORAGE_KEY = 'classmoji:gitlab-instance';
@@ -35,23 +37,19 @@ const pendingText = (host: string) =>
 /**
  * "Continue with Gitlab" for gitlab.com and self-managed instances.
  *
- * Goes straight to the GitLab this visit is for (an invite or `?gitlab=` link),
- * else the one this browser used last, else gitlab.com. The button names the
- * server; the link under it opens a chooser where a school's address can be
- * typed.
+ * The first button goes straight to the GitLab this visit is for (an invite or
+ * `?gitlab=` link), else the one this browser used last, else gitlab.com, and
+ * names the server. The second opens a field in place where a school's
+ * address can be typed.
  */
 export default function GitLabSignIn({
   options,
   callbackURL,
-  buttonClassName,
-  onChoosingChange,
 }: {
   options: GitLabSignInOptions;
   callbackURL: string;
-  buttonClassName: string;
-  /** The chooser opened or closed, so the page can give it the room. */
-  onChoosingChange?: (choosing: boolean) => void;
 }) {
+  const reduced = useReducedMotion();
   const [remembered, setRemembered] = useState<GitLabChoice | null>(null);
   useEffect(() => setRemembered(readRemembered()), []);
 
@@ -61,7 +59,6 @@ export default function GitLabSignIn({
   const target = options.preselected ?? remembered ?? defaultChoice;
 
   const [choosing, setChoosing] = useState(Boolean(options.unknownHost || options.pendingHost));
-  useEffect(() => onChoosingChange?.(choosing), [choosing, onChoosingChange]);
   const [hostInput, setHostInput] = useState(
     options.unknownHost || options.pendingHost
       ? hostLabel((options.unknownHost || options.pendingHost) as string)
@@ -150,104 +147,127 @@ export default function GitLabSignIn({
     await checkHost(hostInput.trim());
   };
 
-  if (!choosing && target) {
-    return (
-      <div className="w-full">
-        <button
-          onClick={() => signIn(target)}
-          disabled={busy}
-          title={hostLabel(target.host)}
-          className={buttonClassName}
-        >
-          <img src={GitLabIcon} alt="" className={`w-4 h-4 shrink-0 ${GITLAB_BUTTON_LOGO}`} />
-          {/* Name the server, so gitlab.com and a school's Gitlab never look alike. */}
-          <span className="min-w-0 truncate whitespace-nowrap">
-            Continue with {target.id === null ? 'Gitlab.com' : hostLabel(target.host)}
-          </span>
-        </button>
-        <div className="mt-3 text-center text-sm text-ink-3">
-          <button
-            type="button"
-            onClick={() => setChoosing(true)}
-            className="underline-offset-2 hover:underline cursor-pointer"
-          >
-            {target.id === null ? 'Use a self-hosted Gitlab' : 'Use a different Gitlab'}
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="w-full rounded-lg ring-1 ring-stone-200 dark:ring-neutral-700 bg-white dark:bg-neutral-900 p-5 text-left">
-      <div className="flex items-center gap-2 text-sm font-medium text-gray-900 dark:text-white mb-2">
-        <img src={GitLabIcon} alt="" className="w-4 h-4" />
-        Sign in with Gitlab
-      </div>
-
-      {defaultChoice && (
-        <button
-          type="button"
-          onClick={() => signIn(defaultChoice)}
-          disabled={busy}
-          className="w-full mb-3 rounded-md px-3 py-2 text-sm font-medium text-gray-900 dark:text-white ring-1 ring-stone-200 dark:ring-neutral-700 hover:bg-stone-50 dark:hover:bg-neutral-800 cursor-pointer"
-        >
-          {hostLabel(defaultChoice.host)}
-        </button>
-      )}
-
-      <form onSubmit={lookUp}>
-        <label htmlFor="gitlab-host" className="block text-xs text-ink-3 mb-1">
-          Self-hosted Gitlab address
-        </label>
-        <div className="flex gap-2">
-          <input
-            id="gitlab-host"
-            value={hostInput}
-            onChange={e => setHostInput(e.target.value)}
-            placeholder="gitlab.school.edu"
-            autoComplete="url"
-            className="min-w-0 flex-1 rounded-md px-3 py-2 text-sm bg-white dark:bg-neutral-950 text-gray-900 dark:text-white ring-1 ring-stone-200 dark:ring-neutral-700 focus:outline-none focus:ring-2 focus:ring-primary"
-          />
-          <button
-            type="submit"
-            disabled={busy || !hostInput.trim()}
-            className="rounded-md px-4 py-2 text-sm font-medium bg-primary text-white hover:bg-primary/90 disabled:opacity-50 cursor-pointer"
-          >
-            Go
-          </button>
-        </div>
-      </form>
-
-      {status?.kind === 'unknown' && (
-        <p className="mt-3 text-xs text-gray-700 dark:text-gray-300">
-          {hostLabel(status.host)} isn&apos;t connected to Classmoji yet. Students: ask your
-          instructor for the class sign-in link. Instructors and Gitlab admins:{' '}
-          <a
-            href={`/gitlab/setup?host=${encodeURIComponent(status.host)}`}
-            className="font-medium text-primary hover:underline"
-          >
-            set it up
-          </a>
-          .
-        </p>
-      )}
-      {status?.kind === 'error' && (
-        <p className="mt-3 text-xs text-red-600 dark:text-red-400">{status.text}</p>
-      )}
-
+    <div className="flex flex-col gap-3">
       {target && (
         <button
           type="button"
-          onClick={() => {
-            setChoosing(false);
-            setStatus(null);
-          }}
-          className="mt-3 text-xs text-ink-3 hover:underline cursor-pointer"
+          onClick={() => signIn(target)}
+          disabled={busy}
+          title={hostLabel(target.host)}
+          className={optionButton}
         >
-          Back
+          <img src={GitLabIcon} alt="" className="h-4 w-4 shrink-0" />
+          {/* Name the server, so gitlab.com and a school's Gitlab never look alike. */}
+          <span className="min-w-0 truncate">
+            Continue with {target.id === null ? 'Gitlab.com' : hostLabel(target.host)}
+          </span>
         </button>
       )}
+
+      <div>
+        <button
+          type="button"
+          aria-expanded={choosing}
+          aria-controls="self-hosted-gitlab"
+          onClick={() => {
+            setChoosing(open => !open);
+            setStatus(null);
+          }}
+          className={optionButton}
+        >
+          <ServerIcon className="h-4 w-4 shrink-0 text-ink-2" aria-hidden />
+          {target && target.id !== null
+            ? 'Use a different Gitlab'
+            : 'Continue with self-hosted Gitlab'}
+          <ChevronDownIcon
+            className={`h-3.5 w-3.5 text-ink-3 transition-transform duration-200 ease-out ${choosing ? 'rotate-180' : ''}`}
+            aria-hidden
+          />
+        </button>
+
+        <AnimatePresence initial={false}>
+          {choosing && (
+            <motion.div
+              id="self-hosted-gitlab"
+              initial={reduced ? false : { height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={reduced ? undefined : { height: 0, opacity: 0 }}
+              transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+              // Clips while it grows; the inset gives the focus ring room inside the clip.
+              className="-mx-1 overflow-hidden px-1"
+            >
+              <form onSubmit={lookUp} noValidate className="pb-1 pt-3">
+                <label htmlFor="gitlab-host" className="text-xs font-medium text-ink-1">
+                  Your Gitlab address
+                </label>
+                <div className="mt-1.5 flex gap-2">
+                  <input
+                    id="gitlab-host"
+                    type="text"
+                    inputMode="url"
+                    autoComplete="url"
+                    placeholder="gitlab.yourschool.edu"
+                    value={hostInput}
+                    onChange={e => {
+                      setHostInput(e.target.value);
+                      if (status?.kind === 'error') setStatus(null);
+                    }}
+                    aria-invalid={status?.kind === 'error'}
+                    aria-describedby={status ? 'gitlab-host-status' : undefined}
+                    className={`h-[32px] min-w-0 flex-1 rounded-lg border bg-panel px-3 text-sm text-ink-0 placeholder:text-ink-4 focus:outline-none focus:ring-2 ${
+                      status?.kind === 'error'
+                        ? 'border-rose-ink focus:ring-rose-ink/25'
+                        : 'border-line-2 focus:border-accent focus:ring-accent/25'
+                    }`}
+                  />
+                  <button
+                    type="submit"
+                    disabled={busy || !hostInput.trim()}
+                    className="h-[32px] shrink-0 rounded-lg bg-accent px-3 text-sm font-semibold text-white transition-colors duration-150 hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-50 cursor-pointer disabled:cursor-default"
+                  >
+                    Continue
+                  </button>
+                </div>
+
+                {status?.kind === 'unknown' && (
+                  <p
+                    id="gitlab-host-status"
+                    className="mt-2 text-xs leading-relaxed text-ink-2"
+                  >
+                    {hostLabel(status.host)} isn&apos;t connected to Classmoji yet. Students: ask
+                    your instructor for the class sign-in link. Instructors and Gitlab admins:{' '}
+                    <a
+                      href={`/gitlab/setup?host=${encodeURIComponent(status.host)}`}
+                      className="font-medium text-accent hover:underline"
+                    >
+                      set it up
+                    </a>
+                    .
+                  </p>
+                )}
+                {status?.kind === 'error' && (
+                  <p id="gitlab-host-status" className="mt-1.5 text-xs text-rose-ink">
+                    {status.text}
+                  </p>
+                )}
+
+                {/* A school's Gitlab is remembered; gitlab.com stays one click away. */}
+                {defaultChoice && target?.id !== null && (
+                  <button
+                    type="button"
+                    onClick={() => signIn(defaultChoice)}
+                    disabled={busy}
+                    className="mt-2 text-xs font-medium text-ink-3 hover:text-ink-0 cursor-pointer"
+                  >
+                    Use {hostLabel(defaultChoice.host)} instead
+                  </button>
+                )}
+              </form>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
     </div>
   );
 }
