@@ -93,7 +93,8 @@ import {
   splitInsertedIds,
 } from '../collab/liveCheck.ts';
 import { ToolError } from '../mcp/errors.ts';
-import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
+import type { ToolContext, ToolDefinition, ToolResult } from '../mcp/registry.ts';
+import { renderAfterDeckApply } from './render.ts';
 import {
   assertSlideEditable,
   loadSlideInClassroom,
@@ -106,7 +107,7 @@ import {
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
-const LEGACY_GUIDANCE =
+export const LEGACY_GUIDANCE =
   "This deck's HTML could not be parsed into a structured deck, so granular slide ops are " +
   'unavailable. Open it once in the web slides editor and save to migrate it.';
 
@@ -138,7 +139,7 @@ function legacyIdGen(): () => string {
 }
 
 /** Load the deck for a tool call, mapping load failures to tool errors. */
-async function loadDeckForTool(
+export async function loadDeckForTool(
   slide: SlideWithRepoRecord,
   ref?: string
 ): Promise<Awaited<ReturnType<typeof loadDeck>> | { parseError: string }> {
@@ -195,7 +196,7 @@ function previewPayload(status: {
  * preview branch to exist; reads then target it (API-path only — the CDN and
  * students always see main).
  */
-function previewReadRef(
+export function previewReadRef(
   slide: SlideWithRepoRecord,
   at: 'main' | 'preview',
   status: { exists: boolean }
@@ -227,7 +228,7 @@ const LIVE_FALLBACK_NOTE =
  * the service is down (said in the result), none for a deck the live service
  * cannot hold (unparseable HTML, no content yet) — git then answers as today.
  */
-async function readLiveDeck(
+export async function readLiveDeck(
   env: CollabEnv | null,
   slide: SlideWithRepoRecord,
   viewer: string
@@ -559,6 +560,7 @@ interface DeckApplyArgs {
   ops: DeckOp[];
   commit?: 'preview' | 'direct';
   mode?: 'live' | 'preview';
+  render?: boolean;
 }
 
 /**
@@ -772,7 +774,8 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
     "(main's sha will conflict). Slide html/notes must not contain <section> tags (slide " +
     'structure is managed via ops). To create a vertical stack, insert a slide with ' +
     "children (child slides, one nesting level) instead of html; the response's applied " +
-    "entry reports the new ids (in live mode, a new stack's child ids come from deck_outline).",
+    "entry reports the new ids (in live mode, a new stack's child ids come from deck_outline). " +
+    'render: true also returns images + the overflow report of the slides changed (see deck_render).',
   scope: 'write',
   roles: TEACHING_TEAM,
   inputSchema: {
@@ -810,184 +813,194 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
         "Older name for mode: 'preview', or 'direct' (= live). " +
           'Default: preview for published decks, direct for drafts'
       ),
+    render: z
+      .boolean()
+      .optional()
+      .describe('Also return images + overflow of the changed slides (default false)'),
   },
   handler: async (args, ctx) => {
-    const slide = await loadSlideInClassroom(args.slide_id, ctx);
-    await assertSlideEditable(slide, ctx);
-
-    // Live editing: 'live' goes into the live deck through the collab server;
-    // git main is only its checkpoint and is never written here.
-    const liveState = liveStateFor(slide.classroom);
-    const commit =
-      args.mode !== undefined ? (args.mode === 'live' ? 'direct' : 'preview') : args.commit;
-
-    // §3b default routing: published decks preview, drafts direct.
-    const committedTo: 'main' | 'preview' =
-      (commit ?? (slide.is_draft === false ? 'preview' : 'direct')) === 'preview'
-        ? 'preview'
-        : 'main';
-
-    if (liveState && committedTo === 'main') {
-      return applyDeckLive(requireLiveEnv(liveState), slide, args, ctx);
-    }
-    if (!args.expected_sha) {
-      throw new ToolError(
-        'invalid_params',
-        'expected_sha is required — pass the sha from deck_get or deck_outline'
-      );
-    }
-    // A live read's version stands in for main's sha when a NEW preview is
-    // cut from main: the agent read the live deck, which has no git sha.
-    const liveRead =
-      liveState !== null &&
-      (args.sha_source === 'live' || parseLiveVersion(args.expected_sha) !== null);
-    const shaSource = (args.sha_source ?? 'deck') as DeckShaSource;
-
-    // Stacking: when a preview already exists and we're committing to it,
-    // load FROM it so this apply builds on the pending changes.
-    let loadRef: string | undefined;
-    if (committedTo === 'preview') {
-      const status = await getDeckPreviewStatus(slide);
-      if (status.exists) {
-        loadRef = previewBranchName(slide.content_path);
-      }
-    }
-
-    const loaded = await loadDeckForTool(slide, loadRef);
-    if ('parseError' in loaded) {
-      throw new ToolError('invalid_params', LEGACY_GUIDANCE);
-    }
-
-    // Which ref the sha was compared against — names the right re-read in
-    // CONTENT_CONFLICT messages (stacking reads target the preview branch).
-    const conflictAt: 'main' | 'preview' = loadRef ? 'preview' : 'main';
-
-    // Stacking onto a preview needs the preview's own sha, never a live one.
-    if (liveRead && loadRef) throw contentConflict('preview');
-    const expectedSha = liveRead ? loaded.sha : args.expected_sha;
-    const expectedSource = liveRead ? loaded.sha_source : shaSource;
-
-    // Optimistic lock (tool-level): the sha AND source the caller read must
-    // still describe the file we loaded. saveDeck re-verifies both inside the
-    // git operation (true CAS), so a racer between here and the commit still
-    // surfaces as a 409, never a clobber.
-    if (loaded.sha !== expectedSha || loaded.sha_source !== expectedSource) {
-      throw contentConflict(conflictAt);
-    }
-
-    const priorSlideCount = countSlides(loaded.deck.slides);
-
-    let newDeck: DeckJson;
-    let applied: Array<Record<string, unknown>>;
-    try {
-      ({ deck: newDeck, applied } = applyDeckOps(loaded.deck, args.ops, {
-        starterCustomCss: slideService.STARTER_CUSTOM_CSS,
-      }));
-    } catch (error: unknown) {
-      if (error instanceof DeckOpError || error instanceof SlideHtmlError) {
-        throw new ToolError(
-          'invalid_params',
-          liveRead && error instanceof DeckOpError
-            ? `${error.message}. A preview starts from the last saved version, which may not ` +
-                "have slides added in the last minute yet — retry shortly or use mode: 'live'."
-            : error.message
-        );
-      }
-      throw error;
-    }
-
-    let createdPreviewBranch = false;
-    if (committedTo === 'preview') {
-      // Create the branch from main's current HEAD when absent (no-op when
-      // stacking on an existing preview).
-      const ensured = await ensureDeckPreviewBranch(slide);
-      createdPreviewBranch = ensured.created;
-    }
-
-    // Shared-theme URLs are caller-resolved (the engine never calls services
-    // itself); builtin/custom themes need none.
-    const themeUrls = await resolveSharedThemeUrls(slide, newDeck);
-
-    let saved: { sha: string; commit: string };
-    try {
-      saved = await saveDeck({
-        slide,
-        deck: newDeck,
-        expectedSha: expectedSha ?? args.expected_sha,
-        shaSource: expectedSource,
-        message: `deck_apply: ${slide.title}`,
-        ...(committedTo === 'preview' ? { branch: previewBranchName(slide.content_path) } : {}),
-        ...(themeUrls ? { themeUrls } : {}),
-      });
-    } catch (error: unknown) {
-      if ((error as { status?: number }).status === 409) {
-        // The branch was created by THIS apply and the save failed — delete
-        // the fresh (empty) branch so it doesn't strand the deck in preview
-        // mode with no pending edits. Best-effort.
-        //
-        // BUT re-check first: a concurrent apply (the racer that got the 422
-        // "already exists" from ensureDeckPreviewBranch) may have committed to
-        // the branch between our creation and this failed save. Deleting it
-        // then would silently discard that writer's commits — so skip the
-        // discard when the branch moved past main (same ahead_by guard the
-        // Phase 7 accept paths use).
-        if (createdPreviewBranch) {
-          try {
-            const status = await getDeckPreviewStatus(slide);
-            if (status.exists && (status.commits_ahead ?? 0) > 0) {
-              console.warn(
-                `[deck_apply] Preview branch gained ${status.commits_ahead} concurrent ` +
-                  'commit(s) after creation — keeping it instead of discarding after the ' +
-                  'failed save.'
-              );
-            } else {
-              await discardDeckPreview(slide);
-            }
-          } catch (cleanupError: unknown) {
-            console.warn(
-              '[deck_apply] Failed to clean up the freshly created preview branch:',
-              cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
-            );
-          }
-        }
-        throw contentConflict(conflictAt);
-      }
-      throw error;
-    }
-
-    const hasDestructiveOps = args.ops.some(op => op.op === 'delete');
-
-    await writeAudit(ctx, {
-      resource_type: 'SLIDES',
-      resource_id: slide.id,
-      action: 'UPDATE',
-      data: {
-        tool: 'deck_apply',
-        ops: applied,
-        expected_sha: args.expected_sha,
-        new_sha: saved.sha,
-        commit_sha: saved.commit,
-        committed_to: committedTo,
-        ...(hasDestructiveOps ? { prior_slide_count: priorSlideCount } : {}),
-      } as Prisma.InputJsonValue,
-    });
-
-    // Open live editors refresh their pending-preview banner.
-    if (committedTo === 'preview') await notifyPreviewChanged(slide.classroom, 'deck', slide.id);
-
-    const previewUrl = committedTo === 'preview' ? deckPreviewUrl(slide) : null;
-    return ok({
-      success: true,
-      new_sha: saved.sha,
-      // deck.json now exists on the written branch — future applies key on it.
-      sha_source: 'deck',
-      committed_to: committedTo,
-      ...(previewUrl ? { preview_url: previewUrl } : {}),
-      slide_count: countSlides(newDeck.slides),
-      applied,
-    });
+    const result = await applyDeckEdits(args, ctx);
+    return args.render ? renderAfterDeckApply(result, args.slide_id, ctx) : result;
   },
 };
+
+/** deck_apply itself; `render: true` is layered on by the handler above. */
+async function applyDeckEdits(args: DeckApplyArgs, ctx: ToolContext): Promise<ToolResult> {
+  const slide = await loadSlideInClassroom(args.slide_id, ctx);
+  await assertSlideEditable(slide, ctx);
+
+  // Live editing: 'live' goes into the live deck through the collab server;
+  // git main is only its checkpoint and is never written here.
+  const liveState = liveStateFor(slide.classroom);
+  const commit =
+    args.mode !== undefined ? (args.mode === 'live' ? 'direct' : 'preview') : args.commit;
+
+  // §3b default routing: published decks preview, drafts direct.
+  const committedTo: 'main' | 'preview' =
+    (commit ?? (slide.is_draft === false ? 'preview' : 'direct')) === 'preview'
+      ? 'preview'
+      : 'main';
+
+  if (liveState && committedTo === 'main') {
+    return applyDeckLive(requireLiveEnv(liveState), slide, args, ctx);
+  }
+  if (!args.expected_sha) {
+    throw new ToolError(
+      'invalid_params',
+      'expected_sha is required — pass the sha from deck_get or deck_outline'
+    );
+  }
+  // A live read's version stands in for main's sha when a NEW preview is
+  // cut from main: the agent read the live deck, which has no git sha.
+  const liveRead =
+    liveState !== null &&
+    (args.sha_source === 'live' || parseLiveVersion(args.expected_sha) !== null);
+  const shaSource = (args.sha_source ?? 'deck') as DeckShaSource;
+
+  // Stacking: when a preview already exists and we're committing to it,
+  // load FROM it so this apply builds on the pending changes.
+  let loadRef: string | undefined;
+  if (committedTo === 'preview') {
+    const status = await getDeckPreviewStatus(slide);
+    if (status.exists) {
+      loadRef = previewBranchName(slide.content_path);
+    }
+  }
+
+  const loaded = await loadDeckForTool(slide, loadRef);
+  if ('parseError' in loaded) {
+    throw new ToolError('invalid_params', LEGACY_GUIDANCE);
+  }
+
+  // Which ref the sha was compared against — names the right re-read in
+  // CONTENT_CONFLICT messages (stacking reads target the preview branch).
+  const conflictAt: 'main' | 'preview' = loadRef ? 'preview' : 'main';
+
+  // Stacking onto a preview needs the preview's own sha, never a live one.
+  if (liveRead && loadRef) throw contentConflict('preview');
+  const expectedSha = liveRead ? loaded.sha : args.expected_sha;
+  const expectedSource = liveRead ? loaded.sha_source : shaSource;
+
+  // Optimistic lock (tool-level): the sha AND source the caller read must
+  // still describe the file we loaded. saveDeck re-verifies both inside the
+  // git operation (true CAS), so a racer between here and the commit still
+  // surfaces as a 409, never a clobber.
+  if (loaded.sha !== expectedSha || loaded.sha_source !== expectedSource) {
+    throw contentConflict(conflictAt);
+  }
+
+  const priorSlideCount = countSlides(loaded.deck.slides);
+
+  let newDeck: DeckJson;
+  let applied: Array<Record<string, unknown>>;
+  try {
+    ({ deck: newDeck, applied } = applyDeckOps(loaded.deck, args.ops, {
+      starterCustomCss: slideService.STARTER_CUSTOM_CSS,
+    }));
+  } catch (error: unknown) {
+    if (error instanceof DeckOpError || error instanceof SlideHtmlError) {
+      throw new ToolError(
+        'invalid_params',
+        liveRead && error instanceof DeckOpError
+          ? `${error.message}. A preview starts from the last saved version, which may not ` +
+              "have slides added in the last minute yet — retry shortly or use mode: 'live'."
+          : error.message
+      );
+    }
+    throw error;
+  }
+
+  let createdPreviewBranch = false;
+  if (committedTo === 'preview') {
+    // Create the branch from main's current HEAD when absent (no-op when
+    // stacking on an existing preview).
+    const ensured = await ensureDeckPreviewBranch(slide);
+    createdPreviewBranch = ensured.created;
+  }
+
+  // Shared-theme URLs are caller-resolved (the engine never calls services
+  // itself); builtin/custom themes need none.
+  const themeUrls = await resolveSharedThemeUrls(slide, newDeck);
+
+  let saved: { sha: string; commit: string };
+  try {
+    saved = await saveDeck({
+      slide,
+      deck: newDeck,
+      expectedSha: expectedSha ?? args.expected_sha,
+      shaSource: expectedSource,
+      message: `deck_apply: ${slide.title}`,
+      ...(committedTo === 'preview' ? { branch: previewBranchName(slide.content_path) } : {}),
+      ...(themeUrls ? { themeUrls } : {}),
+    });
+  } catch (error: unknown) {
+    if ((error as { status?: number }).status === 409) {
+      // The branch was created by THIS apply and the save failed — delete
+      // the fresh (empty) branch so it doesn't strand the deck in preview
+      // mode with no pending edits. Best-effort.
+      //
+      // BUT re-check first: a concurrent apply (the racer that got the 422
+      // "already exists" from ensureDeckPreviewBranch) may have committed to
+      // the branch between our creation and this failed save. Deleting it
+      // then would silently discard that writer's commits — so skip the
+      // discard when the branch moved past main (same ahead_by guard the
+      // Phase 7 accept paths use).
+      if (createdPreviewBranch) {
+        try {
+          const status = await getDeckPreviewStatus(slide);
+          if (status.exists && (status.commits_ahead ?? 0) > 0) {
+            console.warn(
+              `[deck_apply] Preview branch gained ${status.commits_ahead} concurrent ` +
+                'commit(s) after creation — keeping it instead of discarding after the ' +
+                'failed save.'
+            );
+          } else {
+            await discardDeckPreview(slide);
+          }
+        } catch (cleanupError: unknown) {
+          console.warn(
+            '[deck_apply] Failed to clean up the freshly created preview branch:',
+            cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+          );
+        }
+      }
+      throw contentConflict(conflictAt);
+    }
+    throw error;
+  }
+
+  const hasDestructiveOps = args.ops.some(op => op.op === 'delete');
+
+  await writeAudit(ctx, {
+    resource_type: 'SLIDES',
+    resource_id: slide.id,
+    action: 'UPDATE',
+    data: {
+      tool: 'deck_apply',
+      ops: applied,
+      expected_sha: args.expected_sha,
+      new_sha: saved.sha,
+      commit_sha: saved.commit,
+      committed_to: committedTo,
+      ...(hasDestructiveOps ? { prior_slide_count: priorSlideCount } : {}),
+    } as Prisma.InputJsonValue,
+  });
+
+  // Open live editors refresh their pending-preview banner.
+  if (committedTo === 'preview') await notifyPreviewChanged(slide.classroom, 'deck', slide.id);
+
+  const previewUrl = committedTo === 'preview' ? deckPreviewUrl(slide) : null;
+  return ok({
+    success: true,
+    new_sha: saved.sha,
+    // deck.json now exists on the written branch — future applies key on it.
+    sha_source: 'deck',
+    committed_to: committedTo,
+    ...(previewUrl ? { preview_url: previewUrl } : {}),
+    slide_count: countSlides(newDeck.slides),
+    applied,
+  });
+}
 
 // ─── deck_preview_accept ─────────────────────────────────────────────────────
 

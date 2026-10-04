@@ -51,6 +51,7 @@ import {
   deckPreviewDiscardTool,
 } from './deck.ts';
 import { pageCursorSetTool, deckCursorSetTool } from './liveCursor.ts';
+import { deckRenderTool } from './render.ts';
 import { contentSearchTool, contentListTool, contentGetTool } from './contentSearch.ts';
 import { tokenGrantTool } from './tokens.ts';
 import { extensionPurchaseTool } from './extensions.ts';
@@ -204,6 +205,8 @@ export function registerAllTools(): void {
   registerToolDefinition(deckCursorSetTool);
   registerToolDefinition(deckPreviewAcceptTool);
   registerToolDefinition(deckPreviewDiscardTool);
+  // Renders: the deck as images + an overflow report (read gate, like deck_get)
+  registerToolDefinition(deckRenderTool);
 
   // Quizzes (OWNER+TEACHER+ASSISTANT; each tool also re-checks Pro tier +
   // quizzes_enabled in-handler)
