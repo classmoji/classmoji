@@ -84,6 +84,8 @@ export class DeckCollabSession {
   private state: CollabSessionState = INITIAL_SESSION_STATE;
   private listeners = new Set<() => void>();
   private unsyncedListeners = new Set<(pending: number) => void>();
+  private readyListeners = new Set<(ready: boolean) => void>();
+  private readyFlag = false;
   private destroyed = false;
   private providerDestroyed = false;
   private readonly onAwarenessChange: () => void;
@@ -99,9 +101,14 @@ export class DeckCollabSession {
       name: collab.room,
       document: this.doc,
       token: JSON.stringify(token),
-      onSynced: ({ state }) =>
-        this.update({ synced: state, ...(state ? { hasSynced: true } : {}) }),
-      onStatus: ({ status }) => this.update({ status: asStatus(status) }),
+      onSynced: ({ state }) => {
+        this.update({ synced: state, ...(state ? { hasSynced: true } : {}) });
+        this.setReady(state && this.state.status === 'connected');
+      },
+      onStatus: ({ status }) => {
+        this.update({ status: asStatus(status) });
+        if (asStatus(status) !== 'connected') this.setReady(false);
+      },
       onUnsyncedChanges: ({ number }) => {
         this.update({ unsyncedChanges: number });
         for (const listener of this.unsyncedListeners) listener(number);
@@ -146,6 +153,24 @@ export class DeckCollabSession {
     };
   }
 
+  /** Connected and synced since the last (re)connect: server state is known. */
+  get ready(): boolean {
+    return this.readyFlag && !this.providerDestroyed;
+  }
+
+  onReady(listener: (ready: boolean) => void): () => void {
+    this.readyListeners.add(listener);
+    return () => {
+      this.readyListeners.delete(listener);
+    };
+  }
+
+  private setReady(ready: boolean) {
+    if (this.readyFlag === ready) return;
+    this.readyFlag = ready;
+    for (const listener of this.readyListeners) listener(ready);
+  }
+
   get isDestroyed(): boolean {
     return this.destroyed;
   }
@@ -178,6 +203,7 @@ export class DeckCollabSession {
     this.doc.destroy();
     this.listeners.clear();
     this.unsyncedListeners.clear();
+    this.readyListeners.clear();
   }
 
   private destroyProvider() {
@@ -194,6 +220,7 @@ export class DeckCollabSession {
   private reject(reason: unknown) {
     if (this.destroyed) return;
     this.destroyProvider();
+    this.setReady(false);
     this.update({ rejected: normalizeRejectReason(reason), status: 'disconnected' });
   }
 

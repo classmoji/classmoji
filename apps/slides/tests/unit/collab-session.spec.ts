@@ -73,6 +73,22 @@ test.describe('refusals and closes', () => {
     expect(normalizeRejectReason('permission-denied')).toBe('forbidden');
   });
 
+  test('ready: connected and synced since the last (re)connect', () => {
+    const t = stubbed();
+    const seen: boolean[] = [];
+    t.session.onReady(ready => seen.push(ready));
+    t.args().onStatus({ status: 'connected' });
+    expect(t.session.ready).toBe(false);
+    t.args().onSynced({ state: true });
+    expect(t.session.ready).toBe(true);
+    t.args().onStatus({ status: 'connecting' });
+    expect(t.session.ready).toBe(false);
+    t.args().onStatus({ status: 'connected' });
+    expect(t.session.ready).toBe(false); // not until the resync
+    t.args().onSynced({ state: true });
+    expect(seen).toEqual([true, false, true]);
+  });
+
   test('stale rooms auto-reload only with nothing unsent', () => {
     expect(mayAutoReloadStale(0)).toBe(true);
     expect(mayAutoReloadStale(2)).toBe(false);

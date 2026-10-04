@@ -38,6 +38,7 @@ import {
   deckSlideList,
   deckSlides,
   getLock,
+  isConfirmedFor,
   lockState,
   mintUniqueSlideId,
   planLocalStructure,
@@ -92,9 +93,10 @@ export interface BridgeSession {
   readonly doc: Y.Doc;
   readonly user: { id: string; name: string; color: string };
   /** Every local update has reached the server. */
-  readonly settled: boolean;
+  /** Connected, and synced with the server since the last (re)connect. */
+  readonly ready: boolean;
+  onReady(listener: (ready: boolean) => void): () => void;
   connectedClients(): Set<number>;
-  onUnsynced(listener: (pending: number) => void): () => void;
   setCurrentSlide(slideId: string | null): void;
 }
 
@@ -202,7 +204,18 @@ export class DeckBridge {
     locks.observe(onLocks as never);
     this.cleanups.push(() => locks.unobserve(onLocks as never));
 
-    this.cleanups.push(this.session.onUnsynced(() => this.checkClaim()));
+    this.cleanups.push(
+      this.session.onReady(ready => {
+        if (!ready) {
+          // Offline: whatever the server decides meanwhile, html waits until
+          // we are back and the lock (still) names us.
+          if (this.held) this.held.confirmed = false;
+          this.emit();
+          return;
+        }
+        this.onLocksChanged();
+      })
+    );
   }
 
   // ─── Lifecycle ───────────────────────────────────────────────────────────
@@ -996,30 +1009,39 @@ export class DeckBridge {
   }
 
   /** Our claim is confirmed once the server has it and the lock still names us. */
+  /**
+   * Our claim is confirmed only when the SERVER's arbiter has stamped our own
+   * lock (a round trip — not merely the ack of our write) and we are in sync.
+   */
   private checkClaim(): void {
     const held = this.held;
     if (!held || held.confirmed) return;
-    const lock = getLock(this.doc, held.slideId);
-    if (!lock || lock.clientId !== this.doc.clientID) return; // onLocksChanged handles the loss
-    if (!this.session.settled) return;
+    if (!this.session.ready) return;
+    if (!isConfirmedFor(getLock(this.doc, held.slideId), this.doc.clientID)) return;
     held.confirmed = true;
     if (this.pendingEdits.size > 0) this.flushLocal();
   }
 
   private onLocksChanged(): void {
     const held = this.held;
-    if (held) {
+    // Only judge a lost lock against the server's state (not mid-reconnect).
+    if (held && this.session.ready) {
       const lock = getLock(this.doc, held.slideId);
       if (!lock || lock.clientId !== this.doc.clientID) {
-        // Lost: a simultaneous claim that won, or a takeover after we idled.
         this.held = null;
-        const el = this.slidesEl?.querySelector(
-          `section[data-cm-id="${CSS.escape(held.slideId)}"]`
-        ) as HTMLElement | null;
-        const map = deckSlides(this.doc).get(held.slideId);
-        this.pendingEdits.delete(held.slideId);
-        if (el && map instanceof Y.Map && lock) {
-          this.revertSlide(held.slideId, el, map);
+        if (!lock && this.pendingEdits.has(held.slideId)) {
+          // Released under us (the server dropped it while we were away) and
+          // nobody else took it: claim it again; the edit waits for the stamp.
+          this.claim(held.slideId);
+        } else {
+          // Taken: a claim that came first, or a takeover after we idled or
+          // dropped. The doc's html wins; this slide shows as theirs.
+          const el = this.slidesEl?.querySelector(
+            `section[data-cm-id="${CSS.escape(held.slideId)}"]`
+          ) as HTMLElement | null;
+          const map = deckSlides(this.doc).get(held.slideId);
+          this.pendingEdits.delete(held.slideId);
+          if (el && map instanceof Y.Map) this.revertSlide(held.slideId, el, map);
         }
       } else {
         this.checkClaim();

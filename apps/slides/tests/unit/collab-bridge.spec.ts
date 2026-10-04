@@ -20,6 +20,8 @@ import {
   deckToYDoc,
   getLock,
   insertSlide,
+  installLockArbiter,
+  isConfirmedFor,
   moveSlide,
   setDeckThemes,
   yDocToDeck,
@@ -63,53 +65,59 @@ const DECK: DeckJson = {
   ],
 };
 
-/** A session whose local updates wait for an explicit server ack. */
+/**
+ * This editor's connection. Local updates queue until `ack()` delivers them to
+ * the server doc (`remote`, which runs the lock arbiter); the server's updates
+ * arrive at once. `pending` counts local updates ever produced since the last ack.
+ */
 class FakeSession implements BridgeSession {
   readonly doc = new Y.Doc();
   readonly user = { id: 'user-me', name: 'Ada Lovelace', color: '#0090ff' };
   pending = 0;
+  ready = true;
   connected = new Set<number>();
-  private listeners = new Set<(pending: number) => void>();
+  server: Y.Doc | null = null;
+  private queue: Uint8Array[] = [];
+  private readyListeners = new Set<(ready: boolean) => void>();
   constructor() {
-    this.doc.on('update', (_update: Uint8Array, origin: unknown) => {
-      if (origin !== 'relay') this.pending++;
+    this.doc.on('update', (update: Uint8Array, origin: unknown) => {
+      if (origin === 'relay') return;
+      this.pending++;
+      this.queue.push(update);
     });
-  }
-  get settled() {
-    return this.pending === 0;
   }
   connectedClients() {
     return new Set([this.doc.clientID, ...this.connected]);
   }
-  onUnsynced(listener: (pending: number) => void) {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+  onReady(listener: (ready: boolean) => void) {
+    this.readyListeners.add(listener);
+    return () => this.readyListeners.delete(listener);
   }
   setCurrentSlide() {}
-  /** The server acknowledged everything. */
+  /** Deliver everything to the server (whose answers come straight back). */
   ack() {
+    const queued = this.queue;
+    this.queue = [];
     this.pending = 0;
-    for (const listener of this.listeners) listener(0);
+    for (const update of queued) Y.applyUpdate(this.server as Y.Doc, update, 'relay');
   }
-}
-
-/** Two docs kept in sync, synchronously, like a server relaying updates. */
-function relay(a: Y.Doc, b: Y.Doc) {
-  a.on('update', (update: Uint8Array, origin: unknown) => {
-    if (origin !== 'relay') Y.applyUpdate(b, update, 'relay');
-  });
-  b.on('update', (update: Uint8Array, origin: unknown) => {
-    if (origin !== 'relay') Y.applyUpdate(a, update, 'relay');
-  });
+  setReady(ready: boolean) {
+    this.ready = ready;
+    for (const listener of this.readyListeners) listener(ready);
+  }
 }
 
 const tick = (ms = 5) => new Promise(resolve => setTimeout(resolve, ms));
 
 function setup() {
   const remote = deckToYDoc(DECK);
+  installLockArbiter(remote);
   const session = new FakeSession();
+  session.server = remote;
   Y.applyUpdate(session.doc, Y.encodeStateAsUpdate(remote), 'relay');
-  relay(session.doc, remote);
+  remote.on('update', (update: Uint8Array, origin: unknown) => {
+    if (origin !== 'relay') Y.applyUpdate(session.doc, update, 'relay');
+  });
   session.connected.add(remote.clientID);
 
   const notices: string[] = [];
@@ -201,20 +209,51 @@ test.describe('live deck bridge', () => {
     t.bridge.destroy();
   });
 
-  test('an edit claims the lock and is written once the claim is confirmed', () => {
+  test('an edit claims the lock and is written only once the server stamps the claim', () => {
     const t = setup();
     t.section('aaaa0002').innerHTML = '<h2>Two, edited</h2>';
     t.bridge.flushLocal();
-    // Claimed, not yet written: the server has not confirmed the claim.
-    expect(getLock(t.remote, 'aaaa0002')?.userId).toBe('user-me');
+    // Claimed locally, nothing written: the server has not seen the claim.
+    expect(getLock(t.session.doc, 'aaaa0002')?.userId).toBe('user-me');
+    expect(isConfirmedFor(getLock(t.session.doc, 'aaaa0002'), t.session.doc.clientID)).toBe(false);
+    t.session.ack(); // the claim reaches the server; its stamp comes back
+    expect(isConfirmedFor(getLock(t.remote, 'aaaa0002'), t.session.doc.clientID)).toBe(true);
     expect(t.remoteHtml('aaaa0002')).toBe('<h2>Two</h2>');
-    t.session.ack();
+    t.session.ack(); // the html, written once confirmed
     expect(t.remoteHtml('aaaa0002')).toBe('<h2>Two, edited</h2>');
     expect(t.section('aaaa0002').classList.contains('cm-held')).toBe(true);
-    // The stored html carries no editor chrome.
     t.section('aaaa0002').innerHTML = '<h2>Two, again</h2>';
     t.bridge.flushLocal();
+    t.session.ack();
     expect(t.remoteHtml('aaaa0002')).toBe('<h2>Two, again</h2>');
+    t.bridge.destroy();
+  });
+
+  test('offline: html waits; back online with the lock taken → put back', () => {
+    const t = setup();
+    t.section('aaaa0002').innerHTML = '<h2>one</h2>';
+    t.bridge.flushLocal();
+    t.session.ack();
+    t.session.ack();
+    expect(t.remoteHtml('aaaa0002')).toBe('<h2>one</h2>');
+    t.session.setReady(false);
+    t.section('aaaa0002').innerHTML = '<h2>offline edit</h2>';
+    t.bridge.flushLocal();
+    expect(t.session.pending).toBe(0); // nothing written while offline
+    // Meanwhile the server let someone else take the slide over.
+    t.remote.getMap('locks').set('aaaa0002', {
+      userId: 'other',
+      name: 'Grace Hopper',
+      color: '#e5484d',
+      clientId: t.remote.clientID,
+      since: Date.now(),
+      lastActive: Date.now(),
+    });
+    t.session.setReady(true);
+    expect(t.section('aaaa0002').innerHTML).toBe('<h2>one</h2>');
+    expect(t.section('aaaa0002').getAttribute('contenteditable')).toBe('false');
+    t.session.ack();
+    expect(t.remoteHtml('aaaa0002')).toBe('<h2>one</h2>');
     t.bridge.destroy();
   });
 
@@ -247,6 +286,7 @@ test.describe('live deck bridge', () => {
     const t = setup();
     t.section('aaaa0002').innerHTML = '<h2>local</h2>';
     t.bridge.flushLocal();
+    t.session.ack();
     t.session.ack();
     (deckSlides(t.remote).get('aaaa0003') as Y.Map<unknown>).set('html', '<h2>Remote three</h2>');
     (deckSlides(t.remote).get('aaaa0002') as Y.Map<unknown>).set('html', '<h2>clobber</h2>');
@@ -283,6 +323,7 @@ test.describe('live deck bridge', () => {
     t.section('aaaa0001').after(added);
     t.slidesEl.appendChild(t.section('aaaa0002')); // move to the end
     t.bridge.flushLocal();
+    t.session.ack();
     const deck = yDocToDeck(t.remote);
     const newId = added.getAttribute('data-cm-id') as string;
     expect(newId).toMatch(/^[0-9a-f]{8}$/);
@@ -311,6 +352,7 @@ test.describe('live deck bridge', () => {
     t.section('aaaa0003').remove();
     t.section('aaaa0001').remove(); // free: deleted
     t.bridge.flushLocal();
+    t.session.ack();
     await tick();
     expect(yDocToDeck(t.remote).slides.map(s => s.id)).toEqual([
       'aaaa0002',
@@ -353,6 +395,7 @@ test.describe('live deck bridge', () => {
     t.section('aaaa0002').setAttribute('data-background-color', '#123456');
     t.section('aaaa0002').setAttribute('data-hidden', 'true');
     t.bridge.flushLocal();
+    t.session.ack();
     const deck = yDocToDeck(t.remote);
     expect(deck.slides[1]).toEqual({
       id: 'aaaa0002',
@@ -371,6 +414,7 @@ test.describe('live deck bridge', () => {
     t.section('aaaa0003').setAttribute('style', 'display: block; top: 10px;');
     const before = t.session.pending;
     t.bridge.flushLocal();
+    t.session.ack();
     expect(t.session.pending).toBe(before);
     t.bridge.destroy();
   });
@@ -379,6 +423,7 @@ test.describe('live deck bridge', () => {
     const t = setup();
     t.revealEl.setAttribute('data-theme', 'moon');
     t.bridge.flushLocal();
+    t.session.ack();
     expect(t.remote.getMap('meta').get('theme')).toBe('moon');
     setDeckThemes(t.remote, { codeTheme: 'monokai' });
     await tick();
@@ -391,6 +436,7 @@ test.describe('live deck bridge', () => {
     const text = t.bridge.notesText('aaaa0001');
     expect(text?.toString()).toBe('first notes');
     t.session.doc.transact(() => text?.insert(0, 'NEW '), BRIDGE_ORIGIN);
+    t.session.ack();
     expect(yDocToDeck(t.remote).slides[0].notes).toBe('NEW first notes');
 
     // The other client's lock, with them gone from awareness: stale.
@@ -404,6 +450,7 @@ test.describe('live deck bridge', () => {
     const lockState = t.states.at(-1)?.locks['aaaa0003'];
     expect(lockState?.canTakeOver).toBe(true);
     expect(t.bridge.takeOver('aaaa0003')).toBe(true);
+    t.session.ack();
     expect(getLock(t.remote, 'aaaa0003')?.userId).toBe('user-me');
     expect(t.section('aaaa0003').getAttribute('contenteditable')).toBe('true');
     t.bridge.destroy();
@@ -460,8 +507,10 @@ test.describe('live deck bridge', () => {
     t.section('aaaa0002').innerHTML = '<h2>bye</h2>';
     t.bridge.flushLocal();
     t.session.ack();
+    t.session.ack();
     expect(getLock(t.remote, 'aaaa0002')).not.toBeNull();
     t.bridge.detach();
+    t.session.ack();
     expect(getLock(t.remote, 'aaaa0002')).toBeNull();
     expect(t.remoteHtml('aaaa0002')).toBe('<h2>bye</h2>');
     expect(t.bridge.currentDocument()).toContain('<h2>bye</h2>');
