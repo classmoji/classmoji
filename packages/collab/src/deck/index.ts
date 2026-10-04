@@ -9,3 +9,4 @@ export * from './structure.ts';
 export * from './locks.ts';
 export * from './render.ts';
 export * from './ops.ts';
+export * from './meta.ts';
