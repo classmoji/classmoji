@@ -20,6 +20,7 @@ import {
   type AgentTouch,
   type CollabLoaderData,
   type CollabTokenPayload,
+  type SlidePointer,
 } from '@classmoji/collab';
 
 import {
@@ -90,6 +91,24 @@ export const INITIAL_SESSION_STATE: CollabSessionState = {
   liveTitle: null,
   previewSeq: 0,
 };
+
+/** Two peer lists say the same (same people, same order, same slides). */
+export function sameCollabPeers(a: CollabPeer[], b: CollabPeer[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  return a.every((peer, i) => {
+    const other = b[i];
+    return (
+      peer.key === other.key &&
+      peer.name === other.name &&
+      peer.color === other.color &&
+      peer.self === other.self &&
+      peer.slideId === other.slideId &&
+      peer.agent === other.agent &&
+      peer.agentTag === other.agentTag
+    );
+  });
+}
 
 const asStatus = (value: unknown): ProviderStatus =>
   value === 'connected' || value === 'disconnected' ? value : 'connecting';
@@ -221,6 +240,11 @@ export class DeckCollabSession {
     this.awareness?.setLocalStateField('slide', slideId);
   }
 
+  /** Share where this person's mouse is on their slide (slide coordinates), or none. */
+  setPointer(pointer: SlidePointer | null): void {
+    this.awareness?.setLocalStateField('pointer', pointer);
+  }
+
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
@@ -275,8 +299,13 @@ export class DeckCollabSession {
     // Only a new agent batch replaces the touches (awareness also changes on
     // every slide change and lock heartbeat).
     const touched = this.touches.update(states, this.doc.clientID);
+    const peers = peersFromAwareness(states, this.doc.clientID, this.user.id);
+    // Pointers change awareness many times a second; the route re-renders
+    // only when who is here, or where, changed.
+    const samePeers = sameCollabPeers(peers, this.state.peers);
+    if (samePeers && !touched) return;
     this.update({
-      peers: peersFromAwareness(states, this.doc.clientID, this.user.id),
+      ...(samePeers ? {} : { peers }),
       ...(touched ? { agentTouches: this.touches.touches() } : {}),
     });
     if (touched) this.scheduleTouchExpiry();

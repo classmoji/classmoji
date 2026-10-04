@@ -102,6 +102,7 @@ import RevealSlides, { type RevealSlidesHandle } from '~/components/RevealSlides
 import { useDeckCollab } from '~/components/collab/useDeckCollab';
 import CollabHeaderControls from '~/components/collab/CollabHeaderControls';
 import SlideCollabOverlay from '~/components/collab/SlideCollabOverlay';
+import LivePointers from '~/components/collab/LivePointers';
 import type { SlideAgentTouch } from '~/components/SlideOverview/SlideGrid';
 import { CollabRejectedBanner } from '~/components/collab/CollabNotices';
 import LiveLeaveDialog from '~/components/collab/LiveLeaveDialog';
@@ -2358,6 +2359,7 @@ export default function SlideViewer() {
   toastRef.current = toast;
   const collabNotify = useCallback((message: string) => toastRef.current.info(message), []);
   const {
+    session: collabSession,
     bridge,
     state: collabState,
     bridgeState,
@@ -3820,6 +3822,15 @@ export default function SlideViewer() {
                   peersHere={peersOnSlide}
                   agentTouch={liveAgentTouch}
                   onTakeOver={handleTakeOver}
+                />
+              )}
+              {/* Live editing: everyone's pointer over this slide (a layer, not the deck) */}
+              {collabMode && isEditing && (
+                <LivePointers
+                  session={collabSession}
+                  reveal={revealInstance}
+                  slideId={currentLiveSlide}
+                  hidden={showOverview}
                 />
               )}
               {/* Mount Sandpack components into .sandpack-embed elements */}
