@@ -30,6 +30,7 @@ export {
   REPLACED_DEFAULT_BLOCKS,
   pageDefaultBlockSpecs,
   createPageCodeBlockSpec,
+  codeBlockDisplayLanguage,
   createPageSchema,
   type PageSchema,
 } from './schema.ts';
