@@ -24,7 +24,17 @@
  *   anyway") instead of fetching it. The config is restored after the push —
  *   the rejection path's `fetch --filter` needs it.
  * - Never a force push. A non-fast-forward rejection fetches the new head
- *   (trees only) and rebuilds the same file set on it, up to `maxAttempts`.
+ *   (trees only) and rebuilds on it, up to `maxAttempts`.
+ * - Files come in GROUPS (one per live document). A group may carry the blob
+ *   sha its document descends from (`expectBase`); at the clone head and at
+ *   every rebuild base, a group whose file no longer has that sha was changed
+ *   outside the live document, and is dropped from the commit rather than
+ *   written over the outside change. On a rebuild, a group without
+ *   `expectBase` is dropped when its own paths changed between the old and
+ *   the new base. Dropped groups are reported; the rest still commit.
+ * - The credential never touches the command line or the disk: the remote URL
+ *   carries none, and the Authorization header reaches git through
+ *   GIT_CONFIG_COUNT / GIT_CONFIG_KEY_0 / GIT_CONFIG_VALUE_0 in its environment.
  *
  * Self-contained (node + the git binary) so it can be unit-tested against a
  * local bare repository, over file:// and over smart HTTP (`git http-backend`).
@@ -46,14 +56,28 @@ export interface GitFileWrite {
   content: string | Buffer;
 }
 
-export interface CommitFilesInput {
-  /**
-   * Clone/push URL. Carries the credential for HTTPS
-   * (`https://x-access-token:<token>@github.com/org/repo.git`); never logged —
-   * every error message passes through `redactGitSecrets`.
-   */
-  remoteUrl: string;
+/** One document's files, written together or not at all. */
+export interface CommitGroup {
+  id: string;
   files: GitFileWrite[];
+  /**
+   * Write this group only while the base's blob at the first of `paths` that
+   * exists equals `sha` (the blob the live document descends from). No file
+   * at any of the paths counts as a change. Omit for a document with no
+   * recorded source (a new one).
+   */
+  expectBase?: { paths: string[]; sha: string };
+}
+
+export interface CommitFilesInput {
+  /** Clone/push URL WITHOUT credentials (`https://github.com/org/repo.git`). */
+  remoteUrl: string;
+  /** HTTP basic credentials, sent as an `Authorization` header via the env. */
+  auth?: { username: string; password: string };
+  /** The documents' files. */
+  groups?: CommitGroup[];
+  /** Shorthand for one unchecked group (`id: 'files'`). */
+  files?: GitFileWrite[];
   /** Full commit message, trailers included. */
   message: string;
   author: GitIdentity;
@@ -69,16 +93,30 @@ export interface CommitFilesInput {
   beforePush?: (info: { attempt: number; commit: string; parent: string }) => Promise<void>;
 }
 
+export interface ExcludedGroup {
+  id: string;
+  reason: 'outside-edit';
+  /** The commit whose content showed the change. */
+  headCommit: string;
+  /** Path that was compared, and its blob there (null: absent). */
+  path: string;
+  headSha: string | null;
+}
+
 export interface CommitFilesResult {
   /** The pushed commit, or `parent` when nothing changed (`pushed: false`). */
   commit: string;
   /** The commit it was built on (the head the push fast-forwarded). */
   parent: string;
   branch: string;
-  /** False when every file already had these exact bytes: no commit, no push. */
+  /** False when nothing was committed (no change, or every group excluded). */
   pushed: boolean;
   /** Push attempts made (0 when nothing was pushed). */
   attempts: number;
+  /** Ids of the groups in `commit` (or already identical at `parent`). */
+  included: string[];
+  /** Groups left out because their file changed outside the live document. */
+  excluded: ExcludedGroup[];
   /** Git blob sha per written path (equal to the Contents API's file sha). */
   blobShas: Record<string, string>;
   /**
@@ -120,21 +158,64 @@ export function isNonFastForward(error: unknown): boolean {
   );
 }
 
-/** The clone failed because the repository does not exist (or is invisible to the token). */
+/**
+ * The clone failed because the repository does not exist: GitHub's
+ * "Repository not found", GitLab's "could not be found". Never an auth
+ * failure (401/403, "Authentication failed", "denied") — creating a repo is
+ * not the answer to a bad token. GitHub also answers "not found" for a repo
+ * the token cannot see; the caller's create path asks the API, which tells a
+ * 404 from a 403, before it creates anything.
+ */
 export function isRepoNotFound(error: unknown): boolean {
   const msg = error instanceof GitCommandError ? error.stderr : String(error);
-  return /repository .* not found|not found|does not appear to be a git repository/i.test(msg);
+  if (
+    /authentication failed|permission denied|access denied|\b40[13]\b|not granted|denied to/i.test(
+      msg
+    )
+  ) {
+    return false;
+  }
+  return /repository not found|could not be found|does not appear to be a git repository/i.test(
+    msg
+  );
 }
 
-function gitEnv(author: GitIdentity, committer: GitIdentity): NodeJS.ProcessEnv {
+function authHeaderKey(remoteUrl?: string): string {
+  try {
+    const url = new URL(remoteUrl ?? '');
+    if (url.protocol === 'https:' || url.protocol === 'http:') {
+      return `http.${url.protocol}//${url.host}/.extraHeader`;
+    }
+  } catch {
+    // Not a URL: fall through to the unscoped key.
+  }
+  return 'http.extraHeader';
+}
+
+function gitEnv(
+  author: GitIdentity,
+  committer: GitIdentity,
+  auth?: { username: string; password: string },
+  remoteUrl?: string
+): NodeJS.ProcessEnv {
+  const basic = auth ? Buffer.from(`${auth.username}:${auth.password}`).toString('base64') : null;
   return {
     ...process.env,
+    // The credential as config from the environment (git >= 2.31): never on
+    // a command line (visible in `ps`) and never in the clone's config file.
+    ...(basic
+      ? {
+          GIT_CONFIG_COUNT: '1',
+          // Scoped to the remote's origin, so no other host ever sees it.
+          GIT_CONFIG_KEY_0: authHeaderKey(remoteUrl),
+          GIT_CONFIG_VALUE_0: `Authorization: Basic ${basic}`,
+        }
+      : {}),
     // Isolated from the machine's git config: a global `url.<ssh>.insteadOf`
     // or credential helper would otherwise rewrite or override the token URL.
     GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_CONFIG_NOSYSTEM: '1',
     GIT_TERMINAL_PROMPT: '0',
-    GIT_ASKPASS: 'echo',
     GIT_AUTHOR_NAME: author.name,
     GIT_AUTHOR_EMAIL: author.email,
     GIT_COMMITTER_NAME: committer.name,
@@ -162,6 +243,9 @@ function run(args: string[], env: NodeJS.ProcessEnv, input?: Buffer | string): P
           )
         );
     });
+    // A git that exits before reading its stdin (a failed clone, a refused
+    // push) makes the write fail with EPIPE; the exit code is the real answer.
+    child.stdin.on('error', () => {});
     child.stdin.end(input ?? '');
   });
 }
@@ -170,6 +254,16 @@ type TreeEntry = { mode: string; type: string; sha: string };
 
 /** Nested map of pending writes: a blob sha at a leaf, a subtree otherwise. */
 type ChangeTree = Map<string, string | ChangeTree>;
+
+/** A safe repo-relative path (no `..`, `.git`, empty or absolute parts). */
+export function isSafeRepoPath(p: string): boolean {
+  const parts = p.split('/');
+  return !(
+    !p ||
+    p.startsWith('/') ||
+    parts.some(s => !s || s === '.' || s === '..' || s === '.git')
+  );
+}
 
 function validatePath(p: string): string[] {
   const parts = p.split('/');
@@ -297,27 +391,46 @@ export function bareRepo(gitDir: string, env: NodeJS.ProcessEnv) {
     }
   }
 
-  return { git, gitStr, readTree, writeTree, applyChanges, packCount, withoutPromisor };
+  /** The blob sha at `path` in `commit` (trees only — no blob is read), or null. */
+  async function blobAt(commit: string, filePath: string): Promise<string | null> {
+    try {
+      const sha = await gitStr(['rev-parse', '--verify', '--quiet', `${commit}:${filePath}`]);
+      return sha || null;
+    } catch {
+      return null;
+    }
+  }
+
+  return { git, gitStr, readTree, writeTree, applyChanges, packCount, withoutPromisor, blobAt };
 }
 
 /**
- * Commit `files` on top of the remote branch and push it (fast-forward only).
- * Clones into a fresh temp dir and always removes it.
+ * Commit the groups' files on top of the remote branch and push (fast-forward
+ * only). Clones into a fresh temp dir and always removes it.
  *
  * @throws {GitCommandError} clone/push failures (credentials redacted); a push
  *   still rejected after `maxAttempts` rebuilds rethrows the last rejection.
  */
 export async function commitFilesToRemote(input: CommitFilesInput): Promise<CommitFilesResult> {
   const maxAttempts = input.maxAttempts ?? 3;
-  if (input.files.length === 0) throw new Error('commitFilesToRemote: no files');
+  const groups: CommitGroup[] = [
+    ...(input.groups ?? []),
+    ...(input.files?.length ? [{ id: 'files', files: input.files }] : []),
+  ];
+  if (groups.length === 0 || groups.every(g => g.files.length === 0)) {
+    throw new Error('commitFilesToRemote: no files');
+  }
   const seen = new Set<string>();
-  const parsed = input.files.map(f => {
-    if (seen.has(f.path)) throw new Error(`Duplicate path: ${f.path}`);
-    seen.add(f.path);
-    return { file: f, parts: validatePath(f.path) };
-  });
+  const parsedGroups = groups.map(group => ({
+    group,
+    files: group.files.map(f => {
+      if (seen.has(f.path)) throw new Error(`Duplicate path: ${f.path}`);
+      seen.add(f.path);
+      return { file: f, parts: validatePath(f.path) };
+    }),
+  }));
 
-  const env = gitEnv(input.author, input.committer ?? input.author);
+  const env = gitEnv(input.author, input.committer ?? input.author, input.auth, input.remoteUrl);
   const workDir = await mkdtemp(path.join(input.tmpRoot ?? tmpdir(), 'classmoji-checkpoint-'));
   const gitDir = path.join(workDir, 'repo.git');
 
@@ -346,21 +459,69 @@ export async function commitFilesToRemote(input: CommitFilesInput): Promise<Comm
 
     // Blobs once: their shas do not depend on the parent.
     const blobShas: Record<string, string> = {};
-    const changes: Array<{ parts: string[]; sha: string }> = [];
-    for (const { file, parts } of parsed) {
-      const sha = await repo.gitStr(['hash-object', '-w', '--stdin'], file.content);
-      blobShas[file.path] = sha;
-      changes.push({ parts, sha });
+    for (const { file } of parsedGroups.flatMap(g => g.files)) {
+      blobShas[file.path] = await repo.gitStr(['hash-object', '-w', '--stdin'], file.content);
     }
-    const changeTree = buildChangeTree(changes);
+
+    const excluded: ExcludedGroup[] = [];
+    const isExcluded = (id: string) => excluded.some(e => e.id === id);
+
+    /** Drop every group whose file changed outside its document, as seen at `base`. */
+    const screen = async (base: string, previousBase: string | null) => {
+      for (const { group } of parsedGroups) {
+        if (isExcluded(group.id)) continue;
+        if (group.expectBase) {
+          let comparedPath = group.expectBase.paths[0];
+          let headSha: string | null = null;
+          for (const candidate of group.expectBase.paths) {
+            const sha = await repo.blobAt(base, candidate);
+            if (sha) {
+              comparedPath = candidate;
+              headSha = sha;
+              break;
+            }
+          }
+          if (headSha !== group.expectBase.sha) {
+            excluded.push({
+              id: group.id,
+              reason: 'outside-edit',
+              headCommit: base,
+              path: comparedPath,
+              headSha,
+            });
+          }
+        } else if (previousBase) {
+          for (const f of group.files) {
+            const before = await repo.blobAt(previousBase, f.path);
+            const after = await repo.blobAt(base, f.path);
+            if (before !== after) {
+              excluded.push({
+                id: group.id,
+                reason: 'outside-edit',
+                headCommit: base,
+                path: f.path,
+                headSha: after,
+              });
+              break;
+            }
+          }
+        }
+      }
+    };
 
     const build = async (base: string) => {
+      const live = parsedGroups.filter(g => !isExcluded(g.group.id));
+      if (live.length === 0) return null;
+      const changeTree = buildChangeTree(
+        live.flatMap(g => g.files.map(({ file, parts }) => ({ parts, sha: blobShas[file.path] })))
+      );
       const baseTree = await repo.gitStr(['rev-parse', `${base}^{tree}`]);
       const tree = await repo.applyChanges(baseTree, changeTree);
       if (tree === baseTree) return null;
       return repo.gitStr(['commit-tree', '--no-gpg-sign', tree, '-p', base], input.message);
     };
 
+    await screen(parent, null);
     let commit = await build(parent);
     let attempts = 0;
     while (commit !== null) {
@@ -383,7 +544,9 @@ export async function commitFilesToRemote(input: CommitFilesInput): Promise<Comm
           branch,
         ]);
         explicitPacks += (await repo.packCount()) - before;
+        const previous = parent;
         parent = await repo.gitStr(['rev-parse', 'FETCH_HEAD']);
+        await screen(parent, previous);
         commit = await build(parent);
       }
     }
@@ -395,6 +558,8 @@ export async function commitFilesToRemote(input: CommitFilesInput): Promise<Comm
       branch,
       pushed: commit !== null,
       attempts,
+      included: parsedGroups.map(g => g.group.id).filter(id => !isExcluded(id)),
+      excluded,
       blobShas,
       lazyFetches,
     };
