@@ -115,6 +115,15 @@ export interface CollabAdapter<K extends CollabKind = CollabKind, Op = unknown> 
   readonly kind: K;
 
   /**
+   * The schema version a client of this kind must send in its provider token
+   * (`{ schemaVersion }`); any other is refused with `schema-mismatch`.
+   * Page: `SCHEMA_VERSION` from `@classmoji/page-schema`. Deck: the deck
+   * doc-shape version slice D defines. Bump it on any change that would make
+   * an old client delete or misread content.
+   */
+  readonly schemaVersion: number;
+
+  /**
    * Today's EDIT rule for this user on this doc, plus the classroom lock
    * (`assertClassroomMutationAllowed`) and `classroom.collab_enabled`.
    * Called on connect and on every 60-s re-check.
