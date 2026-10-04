@@ -20,6 +20,8 @@ import {
   deckToYDoc,
   getLock,
   insertSlide,
+  LOCK_DISCONNECT_GRACE_MS,
+  markDisconnected,
   installLockArbiter,
   isConfirmedFor,
   moveSlide,
@@ -113,7 +115,11 @@ const MEDIA_REF = 'media://0b6c9b7e-1c2d-4e5f-8a9b-0c1d2e3f4a5b';
 const MEDIA_URL =
   'https://content.test/c/class-1/media/0b6c9b7e-1c2d-4e5f-8a9b-0c1d2e3f4a5b/v.mp4?sig=abc';
 
+let fakeNow: number | null = null;
+const clock = () => fakeNow ?? Date.now();
+
 function setup() {
+  fakeNow = null;
   const remote = deckToYDoc(DECK);
   installLockArbiter(remote);
   const session = new FakeSession();
@@ -134,6 +140,7 @@ function setup() {
       new Map(refs.filter(ref => ref === MEDIA_REF).map(ref => [ref, MEDIA_URL])),
     notify: message => notices.push(message),
     onState: state => states.push(state),
+    clock,
   });
 
   // What RevealSlides does with the initial document in edit mode.
@@ -448,16 +455,22 @@ test.describe('live deck bridge', () => {
     t.session.ack();
     expect(yDocToDeck(t.remote).slides[0].notes).toBe('NEW first notes');
 
-    // The other client's lock, with them gone from awareness: stale.
+    // The other client's lock; they drop (the server marks it).
     acquireLock(
       t.remote,
       'aaaa0003',
       { userId: 'other', name: 'Grace Hopper', color: '#e5484d', clientId: 999 },
       { now: Date.now() }
     );
+    markDisconnected(t.remote, [999], Date.now());
     await tick();
-    const lockState = t.states.at(-1)?.locks['aaaa0003'];
-    expect(lockState?.canTakeOver).toBe(true);
+    // Within the grace it is still theirs…
+    expect(t.states.at(-1)?.locks['aaaa0003']?.canTakeOver).toBe(false);
+    expect(t.bridge.takeOver('aaaa0003')).toBe(false);
+    // …after it, it may be taken over.
+    fakeNow = Date.now() + LOCK_DISCONNECT_GRACE_MS + 1;
+    await tick(1100); // the bridge's 1 s tick re-reads idle times
+    expect(t.states.at(-1)?.locks['aaaa0003']?.canTakeOver).toBe(true);
     expect(t.bridge.takeOver('aaaa0003')).toBe(true);
     t.session.ack();
     expect(getLock(t.remote, 'aaaa0003')?.userId).toBe('user-me');
