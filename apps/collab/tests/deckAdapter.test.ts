@@ -422,3 +422,15 @@ describe('mergePreview', () => {
     expect(yDocToDeck(document).slides[0].html).toBe('<h1>One</h1>');
   });
 });
+
+describe('mergeExternal without a base', () => {
+  it('refuses rather than merging against a made-up base', async () => {
+    const deps = makeDeps();
+    deps.decks.set('push-sha', DECK);
+    const adapter = createDeckAdapter(deps);
+    const document = liveDoc();
+    await expect(
+      adapter.mergeExternal(context(document, { source_sha: 'missing-sha' }), { sha: 'push-sha' })
+    ).rejects.toMatchObject({ status: 409, body: { error: 'no-merge-base' } });
+  });
+});

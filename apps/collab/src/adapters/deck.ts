@@ -353,11 +353,19 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
       }
     }
 
+    if (!base) {
+      // Merging against a made-up base would read every live-only change as
+      // "the push deleted it". Refuse; the caller logs it.
+      throw new CollabHttpError(409, {
+        error: 'no-merge-base',
+        message: `deck ${ctx.ref.docId}: neither the seeded nor the last pushed deck can be read`,
+      });
+    }
+    const mergeBase = base;
     let conflicts = 0;
     ctx.transact(doc => {
       const ours = yDocToDeck(doc);
-      // No base at all: the outside push wins (it is the newest thing in git).
-      const merge = merge3Units(base ?? ours, ours, theirsLoaded.deck);
+      const merge = merge3Units(mergeBase, ours, theirsLoaded.deck);
       conflicts = merge.conflicts.length;
       let merged = merge.merged;
       if (conflicts > 0) {
@@ -368,7 +376,7 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
         for (const conflict of merge.conflicts) {
           resolutions[conflict.id] = locks.has(conflict.id) ? 'ours' : 'theirs';
         }
-        merged = merge3Units(base ?? ours, ours, theirsLoaded.deck, { resolutions }).merged;
+        merged = merge3Units(mergeBase, ours, theirsLoaded.deck, { resolutions }).merged;
       }
       syncDeckIntoYDoc(doc, merged);
     });

@@ -2142,6 +2142,9 @@ export const action = async ({
   }
 };
 
+/** How long Edit waits for the live deck before offering to try again. */
+const LIVE_CONNECT_TIMEOUT_MS = 10_000;
+
 export default function SlideViewer() {
   const toast = useToast();
   const {
@@ -2328,6 +2331,8 @@ export default function SlideViewer() {
   const [collabInitialContent, setCollabInitialContent] = useState<string | null>(null);
   const [collabViewContent, setCollabViewContent] = useState<string | null>(null);
   const [staleReloadAttempted, setStaleReloadAttempted] = useState(false);
+  // The room never synced in time: offer to try again (never read-only for good).
+  const [liveTimedOut, setLiveTimedOut] = useState(false);
   const versionFetcher = useFetcher<{ intent?: string; success?: boolean; error?: string }>();
   const toastRef = useRef(toast);
   toastRef.current = toast;
@@ -2914,6 +2919,7 @@ export default function SlideViewer() {
   // Enter edit mode - first fetch latest content from GitHub API
   const handleStartEditing = useCallback(() => {
     if (collabMode) {
+      setLiveTimedOut(false);
       setCollabActive(true);
       setWantsLiveEdit(true);
       return;
@@ -2938,6 +2944,16 @@ export default function SlideViewer() {
       cancelled = true;
     };
   }, [wantsLiveEdit, bridge, collabState.hasSynced, isEditing]);
+
+  // Live editing: a room that does not sync in time is reported, not waited on.
+  useEffect(() => {
+    if (!wantsLiveEdit || collabState.hasSynced) return;
+    const timer = setTimeout(() => {
+      setWantsLiveEdit(false);
+      setLiveTimedOut(true);
+    }, LIVE_CONNECT_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [wantsLiveEdit, collabState.hasSynced]);
 
   // Live editing: a refused room. A stale one reloads once; otherwise editing
   // stops and the banner says why.
@@ -3483,7 +3499,7 @@ export default function SlideViewer() {
                 </button>
               </Tooltip>
             )}
-            {effectiveCanEdit && !isEditing && (
+            {effectiveCanEdit && !isEditing && !(collabMode && collabState.rejected) && (
               <button
                 onClick={handleStartEditing}
                 disabled={isLoadingLatest || isFetchingLatest || wantsLiveEdit}
@@ -3514,9 +3530,9 @@ export default function SlideViewer() {
         </nav>
 
         {/* Live editing: the room was refused */}
-        {collabMode && collabState.rejected && (
+        {collabMode && (collabState.rejected || liveTimedOut) && (
           <CollabRejectedBanner
-            reason={collabState.rejected}
+            reason={collabState.rejected ?? 'unavailable'}
             reloadAttempted={staleReloadAttempted}
           />
         )}

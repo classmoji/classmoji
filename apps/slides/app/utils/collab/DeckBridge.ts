@@ -617,6 +617,9 @@ export class DeckBridge {
       );
     }
 
+    // Structural edits elsewhere (the overview rebuilds the stack from clones,
+    // all editable) must not leave someone else's slide editable.
+    this.applyLockChrome();
     if (restore) this.queueRender();
   }
 

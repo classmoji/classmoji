@@ -409,6 +409,28 @@ test.describe('live deck bridge', () => {
     t.bridge.destroy();
   });
 
+  test("the overview's rebuild from editable clones keeps a held slide read-only", async () => {
+    const t = setup();
+    acquireLock(
+      t.remote,
+      'aaaa0003',
+      { userId: 'other', name: 'Grace Hopper', color: '#e5484d', clientId: t.remote.clientID },
+      { now: Date.now() }
+    );
+    await tick();
+    // useSlideStructure.syncToDOM: every section replaced by a clone marked editable.
+    const clones = Array.from(t.slidesEl.children).map(el => {
+      const clone = el.cloneNode(true) as HTMLElement;
+      clone.setAttribute('contenteditable', 'true');
+      return clone;
+    });
+    t.slidesEl.innerHTML = '';
+    for (const clone of clones.reverse()) t.slidesEl.appendChild(clone);
+    t.bridge.flushLocal();
+    expect(t.section('aaaa0003').getAttribute('contenteditable')).toBe('false');
+    t.bridge.destroy();
+  });
+
   test('Done: flushes and releases the lock', () => {
     const t = setup();
     t.section('aaaa0002').innerHTML = '<h2>bye</h2>';
