@@ -109,6 +109,10 @@ class FakeSession implements BridgeSession {
 
 const tick = (ms = 5) => new Promise(resolve => setTimeout(resolve, ms));
 
+const MEDIA_REF = 'media://0b6c9b7e-1c2d-4e5f-8a9b-0c1d2e3f4a5b';
+const MEDIA_URL =
+  'https://content.test/c/class-1/media/0b6c9b7e-1c2d-4e5f-8a9b-0c1d2e3f4a5b/v.mp4?sig=abc';
+
 function setup() {
   const remote = deckToYDoc(DECK);
   installLockArbiter(remote);
@@ -125,8 +129,9 @@ function setup() {
   const themes: Array<{ theme?: string; codeTheme?: string }> = [];
   const bridge = new DeckBridge({
     session,
-    mediaScope: { host: null, classroomId: null },
-    resolveMedia: async () => new Map(),
+    mediaScope: { host: 'content.test', classroomId: 'class-1' },
+    resolveMedia: async refs =>
+      new Map(refs.filter(ref => ref === MEDIA_REF).map(ref => [ref, MEDIA_URL])),
     notify: message => notices.push(message),
     onState: state => states.push(state),
   });
@@ -308,6 +313,9 @@ test.describe('live deck bridge', () => {
     await tick();
     expect(t.section('aaaa0003').getAttribute('contenteditable')).toBe('false');
     expect(t.section('aaaa0003').classList.contains('cm-locked')).toBe(true);
+    // What RevealSlides asks at init, so the slide is never editable for a frame.
+    expect(t.bridge.isEditableSection(t.section('aaaa0003'))).toBe(false);
+    expect(t.bridge.isEditableSection(t.section('aaaa0002'))).toBe(true);
     // The toolbar inserts a block into it anyway.
     t.section('aaaa0003').insertAdjacentHTML('beforeend', '<p>sneaky</p>');
     t.bridge.flushLocal();
@@ -517,6 +525,29 @@ test.describe('live deck bridge', () => {
     t.setCurrent('aaaa0003');
     t.bridge.renderDeferred(['aaaa0003']);
     expect(t.section('aaaa0003').innerHTML).toBe('<h2>later</h2>');
+    t.bridge.destroy();
+  });
+
+  test('media refs in section attributes play, and are stored as refs', async () => {
+    const t = setup();
+    insertSlide(
+      t.remote,
+      'vid00001',
+      { html: '<h2>Video bg</h2>', attrs: { 'data-background-video': MEDIA_REF } },
+      { parent: null, after: 'aaaa0001' }
+    );
+    await tick();
+    await tick();
+    expect(t.section('vid00001').getAttribute('data-background-video')).toBe(MEDIA_URL);
+    expect(t.session.pending).toBe(0); // resolving for display is not an edit
+    t.section('vid00001').setAttribute('data-background-video-loop', '');
+    t.bridge.flushLocal();
+    t.session.ack();
+    const attrs = (deckSlides(t.remote).get('vid00001') as Y.Map<unknown>).get(
+      'attrs'
+    ) as Y.Map<string>;
+    expect(attrs.get('data-background-video')).toBe(MEDIA_REF);
+    expect(attrs.get('data-background-video-loop')).toBe('');
     t.bridge.destroy();
   });
 

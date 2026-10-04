@@ -2984,8 +2984,9 @@ export default function SlideViewer() {
   const liveRiskRef = useRef<() => boolean>(() => false);
   liveRiskRef.current = () =>
     collabMode &&
+    !collabState.rejected &&
     liveLeaveRisk({
-      editing: isEditingRef.current && !collabState.rejected,
+      editing: isEditingRef.current,
       unsyncedChanges: collabState.unsyncedChanges,
       status: collabState.status,
       localPending: Boolean(bridgeRef.current?.hasPendingLocal()),
@@ -3017,6 +3018,12 @@ export default function SlideViewer() {
     bridgeRef.current?.flushLocal();
     versionFetcher.submit({ intent: 'collab-save-version' }, { method: 'post' });
   }, [versionFetcher]);
+
+  // Live editing: a slide someone else holds is read-only from the first frame.
+  const handleSectionEditable = useCallback(
+    (section: Element) => bridgeRef.current?.isEditableSection(section) ?? true,
+    []
+  );
 
   const handleTakeOver = useCallback((slideId: string) => {
     bridgeRef.current?.takeOver(slideId);
@@ -3705,6 +3712,7 @@ export default function SlideViewer() {
                 isEditing={isEditing}
                 onContentChange={handleContentChange}
                 onRevealReady={handleRevealReady}
+                sectionEditable={collabMode && isEditing ? handleSectionEditable : undefined}
                 onThemeChange={handleThemeChange}
                 customThemes={customThemes}
                 sharedThemes={sharedThemes}

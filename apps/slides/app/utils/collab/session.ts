@@ -14,13 +14,13 @@
 import * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 import {
-  COLLAB_FORBIDDEN_CLOSE_CODE,
+  COLLAB_CLOSE_FORBIDDEN,
+  COLLAB_CLOSE_RELOAD,
   type CollabLoaderData,
   type CollabTokenPayload,
 } from '@classmoji/collab';
 
 import {
-  COLLAB_RELOAD_CLOSE_CODE,
   normalizeRejectReason,
   type LiveRejectReason,
   peersFromAwareness,
@@ -115,8 +115,8 @@ export class DeckCollabSession {
       },
       onAuthenticationFailed: ({ reason }) => this.reject(reason),
       onClose: ({ event }) => {
-        if (event?.code === COLLAB_FORBIDDEN_CLOSE_CODE) this.reject('forbidden');
-        else if (event?.code === COLLAB_RELOAD_CLOSE_CODE) {
+        if (event?.code === COLLAB_CLOSE_FORBIDDEN) this.reject('forbidden');
+        else if (event?.code === COLLAB_CLOSE_RELOAD) {
           this.destroyProvider();
           this.update({ reloadRequired: true, status: 'disconnected' });
         }

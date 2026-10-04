@@ -105,6 +105,8 @@ test.describe('refusals and closes', () => {
     expect(liveLeaveRisk({ ...base, unsyncedChanges: 1 })).toBe(true);
     expect(liveLeaveRisk({ ...base, localPending: true })).toBe(true);
     expect(liveLeaveRisk({ ...base, status: 'disconnected' })).toBe(true);
-    expect(liveLeaveRisk({ ...base, editing: false, unsyncedChanges: 3 })).toBe(false);
+    // After Done: still guarded until every update is acknowledged.
+    expect(liveLeaveRisk({ ...base, editing: false, unsyncedChanges: 3 })).toBe(true);
+    expect(liveLeaveRisk({ ...base, editing: false, status: 'disconnected' })).toBe(false);
   });
 });

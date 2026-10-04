@@ -11,7 +11,11 @@
  * only thing that writes deck.json.
  */
 
-import type { CollabLoaderData, CollabRejectReason } from '@classmoji/collab';
+import {
+  isCollabRejectReason,
+  type CollabLoaderData,
+  type CollabRejectReason,
+} from '@classmoji/collab';
 
 export type { CollabLoaderData, CollabRejectReason };
 
@@ -62,20 +66,12 @@ export function deriveSyncStatus({
  * `error.reason ?? 'permission-denied'`; any reason that is not one of ours
  * is treated as forbidden (the safe reading: stop editing).
  */
-/**
- * Why live editing stopped. `unavailable`: the server could not check access
- * (a database blip) — try again, never a permanent read-only.
- */
-export type LiveRejectReason = CollabRejectReason | 'unavailable';
+/** Why live editing stopped (the shared contract's reasons). */
+export type LiveRejectReason = CollabRejectReason;
 
-/** Close code of a deck closed under its editors (flag off, deck deleted): reload. */
-export const COLLAB_RELOAD_CLOSE_CODE = 4409;
-
+/** Anything that is not one of ours reads as forbidden (the safe reading). */
 export function normalizeRejectReason(reason: unknown): LiveRejectReason {
-  if (reason === 'stale-epoch' || reason === 'schema-mismatch' || reason === 'unavailable') {
-    return reason;
-  }
-  return 'forbidden';
+  return isCollabRejectReason(reason) ? reason : 'forbidden';
 }
 
 export interface RejectionNotice {
@@ -92,6 +88,8 @@ export function rejectionNotice(reason: LiveRejectReason): RejectionNotice {
       return { action: 'prompt', message: 'Reload to get the latest editor.' };
     case 'unavailable':
       return { action: 'prompt', message: "Couldn't connect to live editing. Try again." };
+    case 'legacy-html':
+      return { action: 'readonly', message: "This deck can't be edited live." };
     case 'forbidden':
     default:
       return { action: 'readonly', message: 'You can no longer edit this deck.' };
@@ -185,8 +183,9 @@ export function liveLeaveRisk({
   status: ProviderStatus;
   localPending: boolean;
 }): boolean {
-  if (!editing) return false;
-  return localPending || unsyncedChanges > 0 || status !== 'connected';
+  // After Done too: until the server has every update, leaving loses them.
+  if (localPending || unsyncedChanges > 0) return true;
+  return editing && status !== 'connected';
 }
 
 /**

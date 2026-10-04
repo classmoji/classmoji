@@ -62,6 +62,8 @@ import {
   type SlideLock,
 } from '@classmoji/collab';
 
+import type { DeckSlide } from '@classmoji/services/slides';
+
 import { canonicalMediaUrls } from '../mediaRefs.ts';
 import {
   applySectionAttrs,
@@ -231,7 +233,8 @@ export class DeckBridge {
   async prepare(timeoutMs = 3000): Promise<void> {
     const refs = new Set<string>();
     for (const entry of deckSlideList(this.doc)) {
-      for (const ref of (readSlideHtml(entry.map) ?? '').match(MEDIA_REF_RE) ?? []) {
+      const text = [readSlideHtml(entry.map) ?? '', ...Object.values(readSlideAttrs(entry.map))];
+      for (const ref of text.join(' ').match(MEDIA_REF_RE) ?? []) {
         refs.add(ref.toLowerCase());
       }
     }
@@ -250,7 +253,12 @@ export class DeckBridge {
   initialDocument(): string {
     const deck = yDocToDeck(this.doc);
     this.baseline.clear();
-    const sections = deck.slides
+    const stored = new Map<string, DeckSlide>();
+    for (const slide of deck.slides) {
+      stored.set(slide.id, slide);
+      for (const child of slide.children ?? []) stored.set(child.id, child);
+    }
+    const sections = this.displaySlides(deck.slides)
       .map(slide =>
         renderSlideSection(slide, {
           includeNotes: false,
@@ -258,7 +266,7 @@ export class DeckBridge {
             this.baseline.set(s.id, {
               yHtml: html,
               domHtml: undefined,
-              yAttrs: json(s.attrs ?? {}),
+              yAttrs: json(stored.get(s.id)?.attrs ?? {}),
               domAttrs: '',
               hidden: Boolean(s.hidden),
             });
@@ -284,10 +292,37 @@ export class DeckBridge {
   /** The live deck as a static document (view mode after editing). */
   currentDocument(): string {
     const deck = yDocToDeck(this.doc);
-    const sections = deck.slides
+    const sections = this.displaySlides(deck.slides)
       .map(slide => renderSlideSection(slide, { mapHtml: html => this.mapMedia(html) }))
       .join('\n');
     return this.documentShell(deck.theme, deck.codeTheme, sections);
+  }
+
+  /** Slides as displayed: `media://` refs in section attributes made playable. */
+  private displaySlides(slides: DeckSlide[]): DeckSlide[] {
+    return slides.map(slide => ({
+      ...slide,
+      ...(slide.attrs ? { attrs: this.mapAttrs(slide.attrs) } : {}),
+      ...(slide.children ? { children: this.displaySlides(slide.children) } : {}),
+    }));
+  }
+
+  /** Section attributes for display (`media://` → playable URL). */
+  private mapAttrs(attrs: Record<string, string>): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const [name, value] of Object.entries(attrs)) {
+      out[name] = value.includes('media://') ? this.mapMedia(value) : value;
+    }
+    return out;
+  }
+
+  /** Section attributes as stored (a signed media URL of ours → its ref). */
+  private canonAttrs(attrs: Record<string, string>): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const [name, value] of Object.entries(attrs)) {
+      out[name] = canonicalMediaUrls(value, this.opts.mediaScope);
+    }
+    return out;
   }
 
   private documentShell(theme: string, codeTheme: string, sections: string): string {
@@ -429,6 +464,13 @@ export class DeckBridge {
     if (map instanceof Y.Map && map.has('hasNotes')) {
       this.doc.transact(() => map.delete('hasNotes'), BRIDGE_ORIGIN);
     }
+  }
+
+  /** Whether the editor may make a section editable (not while someone else holds it). */
+  isEditableSection(section: Element): boolean {
+    const id = section.getAttribute('data-cm-id');
+    if (!id || sectionChildren(section).length > 0) return true;
+    return !this.lockedByOther(id);
   }
 
   /** Edits made here that have not been written into the doc yet. */
@@ -586,11 +628,13 @@ export class DeckBridge {
             attrs = new Y.Map<unknown>();
             map.set('attrs', attrs);
           }
-          if (domAttrs !== base.domAttrs) writeAttrs(map, attrs as Y.Map<unknown>, ser.attrs);
+          if (domAttrs !== base.domAttrs) {
+            writeAttrs(map, attrs as Y.Map<unknown>, this.canonAttrs(ser.attrs));
+          }
           if (map.get('hidden') !== ser.hidden) map.set('hidden', ser.hidden);
         }, BRIDGE_ORIGIN);
         base.domAttrs = domAttrs;
-        base.yAttrs = domAttrs;
+        base.yAttrs = json(this.canonAttrs(ser.attrs));
         base.hidden = ser.hidden;
       }
 
@@ -643,7 +687,7 @@ export class DeckBridge {
   private newSlideFields(el: HTMLElement | undefined, container: boolean): NewSlideFields {
     if (!el) return container ? {} : { html: '' };
     const ser = serializeSection(el);
-    const fields: NewSlideFields = { attrs: ser.attrs, hidden: ser.hidden };
+    const fields: NewSlideFields = { attrs: this.canonAttrs(ser.attrs), hidden: ser.hidden };
     if (!container) fields.html = canonicalMediaUrls(ser.html ?? '', this.opts.mediaScope);
     if (ser.asideNotes) fields.notes = ser.asideNotes;
     return fields;
@@ -789,7 +833,7 @@ export class DeckBridge {
         const yAttrs = readSlideAttrs(entry.map);
         const hidden = entry.map.get('hidden') === true;
         if (json(yAttrs) !== base.yAttrs || hidden !== base.hidden) {
-          applySectionAttrs(el, yAttrs, hidden);
+          applySectionAttrs(el, this.mapAttrs(yAttrs), hidden);
           this.revision++;
           base.yAttrs = json(yAttrs);
           base.domAttrs = json(serializeSection(el).attrs);
@@ -840,7 +884,7 @@ export class DeckBridge {
     const slide = {
       id: entry.id,
       hidden: entry.map.get('hidden') === true,
-      attrs: readSlideAttrs(entry.map),
+      attrs: this.mapAttrs(readSlideAttrs(entry.map)),
       ...(entry.container ? {} : { html: readSlideHtml(entry.map) ?? '' }),
     };
     const markup = entry.container
@@ -936,6 +980,16 @@ export class DeckBridge {
     if (!this.slidesEl) return;
     const scan = scanDeckDom(this.slidesEl, taken => this.mintId(taken));
     for (const entry of deckSlideList(this.doc)) {
+      const el0 = scan.elements.get(entry.id);
+      // Section attributes (a background video) with a ref that now has a URL.
+      const yAttrs = readSlideAttrs(entry.map);
+      if (el0 && Object.values(yAttrs).some(v => v.includes('media://'))) {
+        const base = this.baseline.get(entry.id);
+        this.mutateDom(() =>
+          applySectionAttrs(el0, this.mapAttrs(yAttrs), entry.map.get('hidden') === true)
+        );
+        if (base) base.domAttrs = json(serializeSection(el0).attrs);
+      }
       const html = readSlideHtml(entry.map);
       if (!html || entry.container || this.held?.slideId === entry.id) continue;
       const el = scan.elements.get(entry.id);

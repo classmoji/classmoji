@@ -60,6 +60,8 @@ interface RevealSlidesProps {
   onRevealReady?: (deck: RevealApi | null) => void;
   customThemes?: CustomTheme[];
   sharedThemes?: SharedTheme[];
+  /** Live editing: whether a section may be made editable (false = someone else holds it). */
+  sectionEditable?: (section: Element) => boolean;
 }
 
 export interface RevealSlidesHandle {
@@ -116,6 +118,7 @@ const RevealSlides = forwardRef(function RevealSlides(
     onRevealReady,
     customThemes = [], // Custom themes with cssUrl for loading
     sharedThemes = [], // Shared themes from slides.com imports (with lib/ folder)
+    sectionEditable,
   }: RevealSlidesProps,
   ref: React.Ref<RevealSlidesHandle>
 ) {
@@ -125,6 +128,8 @@ const RevealSlides = forwardRef(function RevealSlides(
   // below (which would destroy and rebuild the deck).
   const onRevealReadyRef = useRef(onRevealReady);
   onRevealReadyRef.current = onRevealReady;
+  const sectionEditableRef = useRef(sectionEditable);
+  sectionEditableRef.current = sectionEditable;
   const [loading, setLoading] = useState(!initialContent && !initialError);
   const [error, setError] = useState(initialError);
   const [htmlContent, setHtmlContent] = useState<string | null>(null);
@@ -448,7 +453,8 @@ const RevealSlides = forwardRef(function RevealSlides(
 
         const slides = deckRef.current.querySelectorAll('section');
         slides.forEach((slide: Element) => {
-          slide.setAttribute('contenteditable', 'true');
+          const editable = sectionEditableRef.current?.(slide) ?? true;
+          slide.setAttribute('contenteditable', editable ? 'true' : 'false');
           // Add editing-mode class for sl-block visual feedback
           slide.classList.add('editing-mode');
           // Add visual indicator for hidden slides
