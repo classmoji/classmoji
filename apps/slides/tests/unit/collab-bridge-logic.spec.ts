@@ -223,3 +223,39 @@ test.describe('changedSlideIds (preview highlight)', () => {
     expect(changedSlideIds(live, preview)).toEqual(['n', 'c']);
   });
 });
+
+test.describe('Reveal lazy loading is not an edit', () => {
+  test('navigating to and away from a slide serializes back to the stored data-src', () => {
+    const stored = `<div class="slides"><section data-cm-id="lz"><img data-src="/content/o/r/a.png" alt=""><iframe data-src="https://example.com/x" width="400"></iframe><video controls><source data-src="/v.mp4" type="video/mp4"></video></section></div>`;
+    const before = serializeSection(dom(stored).querySelector('section') as HTMLElement).html;
+
+    // What Reveal's loadSlide does on arrival…
+    const doc = dom(stored);
+    const section = doc.querySelector('section') as HTMLElement;
+    for (const el of Array.from(section.querySelectorAll('[data-src]'))) {
+      el.setAttribute('src', el.getAttribute('data-src') as string);
+      el.setAttribute('data-lazy-loaded', '');
+      el.removeAttribute('data-src');
+    }
+    expect(serializeSection(section).html).toBe(before);
+
+    // …and unloadSlide on leaving (video/audio/iframe go back to data-src, img stays).
+    for (const el of Array.from(
+      section.querySelectorAll('iframe[data-lazy-loaded][src], source[src]')
+    )) {
+      el.setAttribute('data-src', el.getAttribute('src') as string);
+      el.removeAttribute('src');
+    }
+    expect(serializeSection(section).html).toBe(before);
+  });
+
+  test('a started iframe (src mirrors data-src) is not an edit either', () => {
+    const doc = dom(
+      `<div class="slides"><section data-cm-id="if"><iframe data-src="https://e.com/a"></iframe></section></div>`
+    );
+    const section = doc.querySelector('section') as HTMLElement;
+    const before = serializeSection(section).html;
+    (section.querySelector('iframe') as HTMLElement).setAttribute('src', 'https://e.com/a');
+    expect(serializeSection(section).html).toBe(before);
+  });
+});

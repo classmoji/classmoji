@@ -18,7 +18,7 @@ import {
 import type { DeckStructure } from '@classmoji/collab';
 
 import { cleanSectionAttrs } from '../deckOpsDiff.ts';
-import { cleanupEditorContainer } from '../editorCleanup.ts';
+import { cleanupEditorContainer, undoRevealLazyLoad } from '../editorCleanup.ts';
 
 /** Classes the live editor puts on sections (never authored, never saved). */
 export const COLLAB_SECTION_CLASSES = ['cm-locked', 'cm-held'] as const;
@@ -110,6 +110,7 @@ export function serializeSection(el: HTMLElement): SerializedSection {
   const holder = el.ownerDocument.createElement('div');
   const clone = el.cloneNode(true) as HTMLElement;
   holder.appendChild(clone);
+  undoRevealLazyLoad(holder);
   cleanupEditorContainer(holder);
 
   const kids = sectionChildren(clone);

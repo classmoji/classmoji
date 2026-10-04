@@ -431,6 +431,30 @@ test.describe('live deck bridge', () => {
     t.bridge.destroy();
   });
 
+  test('navigating (Reveal lazy loading) claims nothing and writes nothing', async () => {
+    const t = setup();
+    insertSlide(
+      t.remote,
+      'lazy0001',
+      {
+        html: '<iframe data-src="https://e.com/x" width="400"></iframe><img alt="" data-src="/a.png">',
+      },
+      { parent: null, after: 'aaaa0003' }
+    );
+    await tick();
+    const before = t.session.pending;
+    for (const el of Array.from(t.section('lazy0001').querySelectorAll('[data-src]'))) {
+      el.setAttribute('src', el.getAttribute('data-src') as string);
+      el.setAttribute('data-lazy-loaded', '');
+      el.removeAttribute('data-src');
+    }
+    t.bridge.flushLocal();
+    expect(t.session.pending).toBe(before);
+    expect(t.remote.getMap('locks').size).toBe(0);
+    expect(t.notices).toEqual([]);
+    t.bridge.destroy();
+  });
+
   test('Done: flushes and releases the lock', () => {
     const t = setup();
     t.section('aaaa0002').innerHTML = '<h2>bye</h2>';

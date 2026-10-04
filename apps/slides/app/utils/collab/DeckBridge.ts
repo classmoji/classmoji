@@ -787,9 +787,13 @@ export class DeckBridge {
     this.baselineStructure = target;
     if (structural) this.revision++;
     if (structural && this.reveal) {
-      this.reveal.sync();
+      const reveal = this.reveal;
+      // Reveal's sync reformats embeds (YouTube/Vimeo api params): its paint,
+      // not an edit — the DOM baselines take it in.
+      this.mutateDom(() => reveal.sync());
+      this.rebaseDomSerializations();
       this.goTo(currentId);
-      this.reveal.layout();
+      reveal.layout();
     }
     this.emit();
   }
@@ -845,6 +849,19 @@ export class DeckBridge {
       fn();
     } finally {
       this.observer?.takeRecords();
+    }
+  }
+
+  /** Re-read the DOM side of every baseline (after Reveal repainted the DOM). */
+  private rebaseDomSerializations(): void {
+    if (!this.slidesEl) return;
+    for (const el of Array.from(this.slidesEl.querySelectorAll('section[data-cm-id]'))) {
+      const id = el.getAttribute('data-cm-id') as string;
+      const base = this.baseline.get(id);
+      if (!base || this.held?.slideId === id || this.pendingEdits.has(id)) continue;
+      const ser = serializeSection(el as HTMLElement);
+      base.domHtml = ser.html;
+      base.domAttrs = json(ser.attrs);
     }
   }
 

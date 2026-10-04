@@ -48,3 +48,35 @@ export function cleanupEditorContainer(container: Element): void {
     el.classList.remove('visible', 'current-fragment');
   });
 }
+
+/**
+ * Undo Reveal's lazy loading inside an editor container. Navigating to a slide
+ * turns `data-src` into `src` (+ `data-lazy-loaded`) on its media and iframes,
+ * and leaving it can move `src` back; a started iframe carries both. None of
+ * that is authored, so reading the slide back must give the stored
+ * `data-src` again — otherwise merely viewing a slide reads as an edit.
+ *
+ * Used by the live editor's per-slide serialization. Idempotent.
+ */
+export function undoRevealLazyLoad(container: Element): void {
+  container.querySelectorAll('[data-lazy-loaded]').forEach(el => {
+    const src = el.getAttribute('src');
+    if (src != null && !el.hasAttribute('data-src')) el.setAttribute('data-src', src);
+    el.removeAttribute('src');
+    el.removeAttribute('data-lazy-loaded');
+  });
+  // An iframe Reveal started without the lazy-load marker: src mirrors data-src.
+  container.querySelectorAll('iframe[data-src][src]').forEach(el => {
+    if (el.getAttribute('src') === el.getAttribute('data-src')) el.removeAttribute('src');
+  });
+  // Reveal re-adds `data-src` at the end of the attribute list, so the order
+  // of a lazy element's attributes depends on whether it was ever shown. Fix
+  // one order (by name) for every element that lazy-loads.
+  container.querySelectorAll('[data-src]').forEach(el => {
+    const attrs = Array.from(el.attributes).map(a => [a.name, a.value] as const);
+    const sorted = [...attrs].sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
+    if (sorted.every((a, i) => a[0] === attrs[i][0])) return;
+    for (const [name] of attrs) el.removeAttribute(name);
+    for (const [name, value] of sorted) el.setAttribute(name, value);
+  });
+}
