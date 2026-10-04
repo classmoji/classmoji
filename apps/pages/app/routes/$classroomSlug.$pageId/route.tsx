@@ -9,7 +9,7 @@ import Header from '~/components/layout/Header.tsx';
 import HeaderImage from '~/components/editor/HeaderImage.tsx';
 import { PageMediaProvider, usePageMedia } from '~/components/editor/media/PageMedia.tsx';
 import { fetchMediaDisplayUrl } from '~/components/editor/media/mediaDisplayUrl.ts';
-import { useCoverUpload } from '~/components/editor/media/useCoverUpload.ts';
+import { useCoverUpload, type LiveCoverTarget } from '~/components/editor/media/useCoverUpload.ts';
 import type { UploadCapability } from '@classmoji/services/media/router';
 import {
   PreviewBar,
@@ -18,6 +18,25 @@ import {
   ConflictPanel,
 } from '~/components/preview/PreviewControls.tsx';
 import { diffBlockOps, type BlockOp } from '~/components/editor/blockOpsDiff.ts';
+import { useCollabSession } from '~/components/editor/collab/useCollabSession.ts';
+import { useLiveCover } from '~/components/editor/collab/useLiveCover.ts';
+import {
+  LiveEditorPlaceholder,
+  LiveRejectedBanner,
+} from '~/components/editor/collab/LiveNotices.tsx';
+import {
+  claimStaleReload,
+  deriveSyncStatus,
+  isCollabMode,
+  rejectionNotice,
+  saveMachineryEnabled,
+} from '~/utils/collab.ts';
+import { isMediaRef } from '~/utils/mediaRefs.ts';
+import {
+  hasPreviewChanges,
+  previewChangesSummary,
+  previewHighlightCss,
+} from '~/components/preview/previewHighlight.ts';
 import {
   opsPathEligible,
   deriveSaveMergeReport,
@@ -78,11 +97,14 @@ function ChooseCoverFromMedia({ onChoose }: { onChoose: (ref: string) => void })
 function CoverAdder({
   fetcher,
   capability,
+  live = null,
 }: {
   fetcher: ReturnType<typeof useFetcher>;
   capability: UploadCapability | null;
+  /** Live editing: the cover is set in the live document, not by the action. */
+  live?: LiveCoverTarget | null;
 }) {
-  const cover = useCoverUpload(fetcher, capability);
+  const cover = useCoverUpload(fetcher, capability, live);
 
   return (
     <div className="flex items-center gap-2 mb-2">
@@ -118,10 +140,12 @@ function CoverAdder({
       {fetcher.state === 'idle' && !cover.uploading && (
         <ChooseCoverFromMedia
           onChoose={ref =>
-            fetcher.submit(
-              { intent: 'set-header-image', url: ref, position: 50 },
-              { method: 'POST', encType: 'application/json' }
-            )
+            live
+              ? live.setCover({ url: ref, position: 50 })
+              : fetcher.submit(
+                  { intent: 'set-header-image', url: ref, position: 50 },
+                  { method: 'POST', encType: 'application/json' }
+                )
           }
         />
       )}
@@ -144,6 +168,8 @@ const PageRoute = () => {
     resolvedSrcSets,
     mediaDownloads,
     uploadCapability,
+    collab,
+    previewChanges,
   } = useLoaderData<typeof import('./route.server.ts').loader>();
   // Stored refs stay in the document; these are the URLs to display them with.
   const assets = useAssetMap(resolvedAssets, page.id);
@@ -176,6 +202,14 @@ const PageRoute = () => {
   // rendering the pending preview branch (plan §3b).
   const isPreview = Boolean(preview?.active);
   const canEdit = canEditRole && !isPreview;
+  // Live editing (a classroom with collab on): the document is the room's,
+  // and none of the git save machinery below runs — no ops diff, chooser,
+  // merged adoption, Cmd-S save, unload warning or unsaved tracking.
+  const liveMode = canEdit && isCollabMode(collab);
+  const saveEnabled = saveMachineryEnabled({ canEdit, collab });
+  const { session, state: liveState } = useCollabSession(liveMode ? collab : null);
+  const liveRefused = liveMode ? liveState.rejected : null;
+  const liveEditable = liveMode && !liveRefused;
   const widthClass = widthClasses[page.width] || 'max-w-4xl';
   const editorRef = useRef<{ getContent: () => unknown } | null>(null);
   const fetcher = useFetcher();
@@ -268,7 +302,7 @@ const PageRoute = () => {
 
   // Explicit save — called by Cmd/Ctrl+S or Save button
   const handleSave = useCallback(() => {
-    if (!canEdit || !editorRef.current) return;
+    if (!saveEnabled || !editorRef.current) return;
 
     const currentContent = editorRef.current.getContent();
     const currentContentStr = JSON.stringify(currentContent);
@@ -328,7 +362,7 @@ const PageRoute = () => {
       { intent: 'save', content: currentContentStr, content_sha: contentToken },
       { method: 'POST', encType: 'application/json' }
     );
-  }, [canEdit, fetcher, contentToken, page.id]);
+  }, [saveEnabled, fetcher, contentToken, page.id]);
 
   // Apply the save-merge chooser's decisions (Phase 7.5): re-submit the SAME
   // posted content with one {id, choose} per conflict and the report's
@@ -403,7 +437,7 @@ const PageRoute = () => {
   // Track editor changes (mark unsaved, but don't auto-save)
   const handleEditorChange = useCallback(
     (document: unknown) => {
-      if (!canEdit) return;
+      if (!saveEnabled) return;
 
       const currentContentStr = JSON.stringify(document);
       // Compared against the normalized baseline (P2) — an unchanged document
@@ -413,7 +447,7 @@ const PageRoute = () => {
       setHasUnsavedChanges(true);
       setSaveStatus('unsaved');
     },
-    [canEdit]
+    [saveEnabled]
   );
 
   /**
@@ -465,7 +499,9 @@ const PageRoute = () => {
       // Skipped when this session has unsaved edits: remounting would discard
       // them, and the next save's 3-way merge reconciles them against the new
       // main instead.
-      if (!hasUnsavedChanges) {
+      // Live: nothing to adopt — the accept went into the live document, which
+      // every open editor already has.
+      if (!liveMode && !hasUnsavedChanges) {
         pendingBaselineShaRef.current = contentSha;
         savedBaselineRef.current = null;
         setEditorDoc(content);
@@ -486,7 +522,7 @@ const PageRoute = () => {
     url.searchParams.delete('notice');
     url.searchParams.delete('auto_merged');
     window.history.replaceState({}, '', url);
-  }, [notice, noticeAutoMerged, content, contentSha, hasUnsavedChanges]);
+  }, [notice, noticeAutoMerged, content, contentSha, hasUnsavedChanges, liveMode]);
 
   // Baseline capture is the editor's onReady (P2), not the raw loader JSON —
   // see handleEditorReady below.
@@ -567,9 +603,9 @@ const PageRoute = () => {
   // toasted by `CoverAdder`'s upload hook, which owns `coverFetcher` — the
   // cover flow has no inline status indicator of its own.
 
-  // Cmd/Ctrl+S to save
+  // Cmd/Ctrl+S to save (the git editor only: a live page has nothing to save)
   useEffect(() => {
-    if (!canEdit) return;
+    if (!saveEnabled) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
@@ -580,11 +616,11 @@ const PageRoute = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [canEdit, handleSave]);
+  }, [saveEnabled, handleSave]);
 
-  // Warn before closing with unsaved changes
+  // Warn before closing with unsaved changes (the git editor only)
   useEffect(() => {
-    if (!canEdit) return;
+    if (!saveEnabled) return;
 
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (hasUnsavedChanges && !skipUnloadWarningRef.current) {
@@ -595,7 +631,7 @@ const PageRoute = () => {
 
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [canEdit, hasUnsavedChanges]);
+  }, [saveEnabled, hasUnsavedChanges]);
 
   // Title editing handlers
   const saveTitle = () => {
@@ -633,6 +669,90 @@ const PageRoute = () => {
     };
   }, []);
 
+  // ── Live editing ───────────────────────────────────────────────────────────
+
+  // A refused room. A stale one (the document was reseeded since this page
+  // loaded) reloads at once, but only once per room, so a disagreement between
+  // the loader and the server cannot loop.
+  const [staleReloadBlocked, setStaleReloadBlocked] = useState(false);
+  useEffect(() => {
+    if (!liveRefused || !collab) return;
+    if (rejectionNotice(liveRefused).action !== 'reload') return;
+    let storage: Storage | null = null;
+    try {
+      storage = window.sessionStorage;
+    } catch {
+      storage = null;
+    }
+    if (claimStaleReload(storage, collab.room)) window.location.reload();
+    else setStaleReloadBlocked(true);
+  }, [liveRefused, collab]);
+
+  // The cover lives in the live document. Until the room has synced, the
+  // loader's cover stands in for it.
+  const liveCover = useLiveCover(
+    liveMode ? (session?.doc ?? null) : null,
+    liveState.hasSynced,
+    coverImage
+  );
+  const shownCover = liveMode ? liveCover.cover : coverImage;
+  const liveCoverTarget = useMemo<LiveCoverTarget | null>(
+    () =>
+      liveEditable
+        ? { pageId: page.id, setCover: liveCover.setCover, remember: assets.remember }
+        : null,
+    [liveEditable, page.id, liveCover.setCover, assets.remember]
+  );
+  // A media cover a peer set has no display URL in this browser's map yet.
+  const [, setCoverUrlTick] = useState(0);
+  const shownCoverRef = shownCover?.url ?? null;
+  useEffect(() => {
+    if (!liveMode || !shownCoverRef || !isMediaRef(shownCoverRef)) return;
+    if (assets.displayUrl(shownCoverRef) !== shownCoverRef) return;
+    let cancelled = false;
+    void fetchMediaDisplayUrl(page.id, shownCoverRef).then(url => {
+      if (cancelled || !url) return;
+      assets.remember(shownCoverRef, url);
+      setCoverUrlTick(tick => tick + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [liveMode, shownCoverRef, assets, page.id]);
+
+  // "Save version": a checkpoint of the live document now.
+  const versionFetcher = useFetcher<{ success?: boolean; error?: string }>();
+  const handledVersionRef = useRef<unknown>(null);
+  useEffect(() => {
+    if (versionFetcher.state !== 'idle' || !versionFetcher.data) return;
+    if (handledVersionRef.current === versionFetcher.data) return;
+    handledVersionRef.current = versionFetcher.data;
+    if (versionFetcher.data.success) toast.success('Version saved.');
+    else toast.error(versionFetcher.data.error ?? 'The version could not be saved. Try again.');
+  }, [versionFetcher.state, versionFetcher.data]);
+  const handleSaveVersion = useCallback(() => {
+    versionFetcher.submit(
+      { intent: 'save-version' },
+      { method: 'POST', encType: 'application/json' }
+    );
+  }, [versionFetcher]);
+
+  const liveHeader = liveMode
+    ? {
+        peers: liveState.peers,
+        syncStatus: deriveSyncStatus(liveState),
+        onSaveVersion: liveEditable && liveState.hasSynced ? handleSaveVersion : null,
+        savingVersion: versionFetcher.state !== 'idle',
+      }
+    : null;
+
+  // The rendered preview marks the blocks it adds or edits (never a diff).
+  const previewHighlightStyle =
+    isPreview && previewChanges && hasPreviewChanges(previewChanges)
+      ? previewHighlightCss(previewChanges, 'preview-highlight')
+      : null;
+  const previewSummary = isPreview && previewChanges ? previewChangesSummary(previewChanges) : null;
+
   return (
     <PageMediaProvider
       classroomId={classroom.id}
@@ -646,17 +766,25 @@ const PageRoute = () => {
         <Header
           classroom={classroom}
           page={page}
-          saveStatus={canEdit ? saveStatus : undefined}
-          hasUnsavedChanges={canEdit ? hasUnsavedChanges : undefined}
+          saveStatus={saveEnabled ? saveStatus : undefined}
+          hasUnsavedChanges={saveEnabled ? hasUnsavedChanges : undefined}
           canEdit={canEdit}
-          onSave={canEdit ? handleSave : undefined}
+          onSave={saveEnabled ? handleSave : undefined}
+          live={liveHeader}
         />
       )}
 
       {/* Preview-branch chrome (staff only — `preview` is null otherwise).
           Keyed on page.id so the preview fetcher's conflict state resets on
           same-route navigation (P4) instead of ghosting onto the next page. */}
-      {preview?.active && <PreviewBar key={page.id} preview={preview} isEmbedded={isEmbedded} />}
+      {preview?.active && (
+        <PreviewBar
+          key={page.id}
+          preview={preview}
+          isEmbedded={isEmbedded}
+          changesSummary={previewSummary}
+        />
+      )}
       {preview?.missing && <NoPreviewNotice />}
       {preview && !preview.active && preview.exists && (
         <PendingPreviewBanner key={page.id} preview={preview} />
@@ -666,7 +794,15 @@ const PageRoute = () => {
           pick a side per block, then the same content re-submits with the
           choices. The editor (and lastPostedContentRef) preserve the document
           until the resolution completes. */}
-      {canEdit && saveMergeReport && (
+      {liveMode && liveRefused && (
+        <LiveRejectedBanner
+          reason={liveRefused}
+          isEmbedded={isEmbedded}
+          reloadAttempted={staleReloadBlocked}
+        />
+      )}
+
+      {saveEnabled && saveMergeReport && (
         <div className={`sticky ${isEmbedded ? 'top-0' : 'top-12'} z-30 shadow-lg`}>
           <ConflictPanel
             variant="save"
@@ -683,7 +819,7 @@ const PageRoute = () => {
       {/* Save-conflict notice (F2): the last save 409'd — content.json changed
           under this editor session (another editor, an MCP apply). Amber, same
           visual language as the preview chrome. */}
-      {canEdit && saveConflict && (
+      {saveEnabled && saveConflict && (
         <div
           data-testid="save-conflict-banner"
           className={`sticky ${isEmbedded ? 'top-0' : 'top-12'} z-30`}
@@ -710,23 +846,28 @@ const PageRoute = () => {
         </div>
       )}
 
-      {coverImage?.url && (
+      {shownCover?.url && (
         <HeaderImage
-          imageUrl={assets.displayUrl(coverImage.url) as string}
-          position={coverImage.position ?? 50}
-          editMode={canEdit}
+          imageUrl={assets.displayUrl(shownCover.url) as string}
+          position={shownCover.position ?? 50}
+          editMode={liveMode ? liveEditable && liveState.hasSynced : canEdit}
           pageId={page.id}
           uploadCapability={uploadCapability}
+          live={liveCoverTarget ? { storedUrl: shownCover.url, target: liveCoverTarget } : null}
         />
       )}
 
       <div
-        className={`mx-auto px-4 sm:px-6 lg:px-8 pb-16 ${widthClass} ${coverImage?.url ? 'mt-12' : 'mt-16'}`}
+        className={`mx-auto px-4 sm:px-6 lg:px-8 pb-16 ${widthClass} ${shownCover?.url ? 'mt-12' : 'mt-16'}`}
       >
         <div>
           {/* "Add cover" button — always visible in edit mode when no image */}
-          {!coverImage?.url && canEdit && (
-            <CoverAdder fetcher={coverFetcher} capability={uploadCapability} />
+          {!shownCover?.url && canEdit && (!liveMode || (liveEditable && liveState.hasSynced)) && (
+            <CoverAdder
+              fetcher={coverFetcher}
+              capability={uploadCapability}
+              live={liveCoverTarget}
+            />
           )}
 
           {canEdit && isEditingTitle ? (
@@ -766,6 +907,36 @@ const PageRoute = () => {
             <div className="flex items-center justify-center py-12">
               <div className="text-gray-500 dark:text-gray-400">Loading content...</div>
             </div>
+          ) : liveMode ? (
+            /* Live editor: mounted once the room's document has arrived */
+            session && liveState.hasSynced && collab ? (
+              <Suspense
+                fallback={
+                  <div className="flex items-center justify-center py-12">
+                    <div className="text-gray-500 dark:text-gray-400">Loading editor...</div>
+                  </div>
+                }
+              >
+                <PageEditor
+                  key={collab.room}
+                  ref={editorRef}
+                  initialContent={null}
+                  pageId={page.id}
+                  darkMode={darkMode}
+                  resolveFileUrl={assets.resolveFileUrl}
+                  srcSets={srcSets}
+                  displayUrl={assets.displayUrl}
+                  onAssetUploaded={assets.remember}
+                  uploadCapability={uploadCapability}
+                  editable={liveEditable}
+                  collab={{ doc: session.doc, provider: session.provider, user: collab.user }}
+                />
+              </Suspense>
+            ) : (
+              <LiveEditorPlaceholder
+                unreachable={Boolean(liveRefused) || liveState.status === 'disconnected'}
+              />
+            )
           ) : canEdit ? (
             /* Editor for instructors */
             <Suspense
@@ -803,20 +974,23 @@ const PageRoute = () => {
                 </div>
               }
             >
-              <BlockNoteViewer
-                // The epoch rebuilds the viewer after a 403 retry — BlockNote
-                // asks for a file URL once per mount, so a refreshed map only
-                // reaches it through a remount. Safe here and only here: the
-                // viewer holds no unsaved state, the editor does.
-                key={`${page.id}:${assetEpoch}`}
-                content={content}
-                darkMode={darkMode}
-                resolveFileUrl={assets.resolveFileUrl}
-                srcSets={srcSets}
-                displayUrl={assets.displayUrl}
-                pageId={page.id}
-                mediaDownloads={mediaDownloads}
-              />
+              {previewHighlightStyle && <style>{previewHighlightStyle}</style>}
+              <div className={previewHighlightStyle ? 'preview-highlight' : undefined}>
+                <BlockNoteViewer
+                  // The epoch rebuilds the viewer after a 403 retry — BlockNote
+                  // asks for a file URL once per mount, so a refreshed map only
+                  // reaches it through a remount. Safe here and only here: the
+                  // viewer holds no unsaved state, the editor does.
+                  key={`${page.id}:${assetEpoch}`}
+                  content={content}
+                  darkMode={darkMode}
+                  resolveFileUrl={assets.resolveFileUrl}
+                  srcSets={srcSets}
+                  displayUrl={assets.displayUrl}
+                  pageId={page.id}
+                  mediaDownloads={mediaDownloads}
+                />
+              </div>
             </Suspense>
           )}
         </div>

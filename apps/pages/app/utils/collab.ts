@@ -175,3 +175,28 @@ export function readCoverValue(value: unknown): CollabCoverImage | null {
 
 /** Extensions a page cover may have (the server's own cover rule). */
 export const COVER_IMAGE_EXTENSION = /\.(png|jpe?g|gif|webp|svg)$/i;
+
+// ─── Stale rooms ─────────────────────────────────────────────────────────────
+
+/** Session-storage key recording that a stale room already reloaded once. */
+export const STALE_RELOAD_KEY = 'classmoji:collab-stale-reload';
+
+/**
+ * Whether a `stale-epoch` refusal for `room` may reload the page now. Once per
+ * room: if the reloaded page is refused for the same room again, the loader
+ * and the server disagree about the epoch, and reloading again would loop —
+ * the person is asked instead.
+ */
+export function claimStaleReload(
+  storage: Pick<Storage, 'getItem' | 'setItem'> | null | undefined,
+  room: string
+): boolean {
+  if (!storage) return false;
+  try {
+    if (storage.getItem(STALE_RELOAD_KEY) === room) return false;
+    storage.setItem(STALE_RELOAD_KEY, room);
+    return true;
+  } catch {
+    return false;
+  }
+}

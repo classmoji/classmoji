@@ -28,6 +28,11 @@ import {
   locales as multiColumnLocales,
 } from '@blocknote/xl-multi-column';
 import { toast } from 'react-toastify';
+import { withCollaboration } from '@blocknote/core/yjs';
+import type * as Y from 'yjs';
+import type { Awareness } from 'y-protocols/awareness';
+import { FRAGMENT } from '@classmoji/page-schema/constants';
+import type { CollabUser } from '@classmoji/collab';
 import { kindOfFilename, type UploadCapability } from '@classmoji/services/media/router';
 
 import {
@@ -69,6 +74,16 @@ const CustomDragHandleMenu = () => (
     <RemoveProfileImageItem>Remove Image</RemoveProfileImageItem>
   </DragHandleMenu>
 );
+
+/**
+ * The live document an editor binds to, in a classroom that edits pages live.
+ * Made once per room by `useCollabSession` and handed in already synced.
+ */
+export interface PageEditorCollab {
+  doc: Y.Doc;
+  provider: { awareness: Awareness | null };
+  user: CollabUser;
+}
 
 /**
  * PageEditor — the main BlockNote-powered page editor.
@@ -120,6 +135,13 @@ interface PageEditorProps {
    * cap, and the server still redirects a file that belongs in media.
    */
   uploadCapability?: UploadCapability | null;
+  /**
+   * Live editing: bind to this document instead of `initialContent`. The
+   * blocks live in the doc's `FRAGMENT`, peers' cursors come through the
+   * provider's awareness, and undo/redo is Yjs's, per user. Must not change
+   * for a mounted editor — the parent keys the editor on the room.
+   */
+  collab?: PageEditorCollab | null;
 }
 
 const PageEditor = forwardRef(function PageEditor(
@@ -135,6 +157,7 @@ const PageEditor = forwardRef(function PageEditor(
     displayUrl,
     onAssetUploaded,
     uploadCapability = null,
+    collab = null,
   }: PageEditorProps,
   ref: React.Ref<{ getContent: () => unknown }>
 ) {
@@ -257,21 +280,39 @@ const PageEditor = forwardRef(function PageEditor(
       ? (initialContent as PageBlockInsertions)
       : undefined;
 
-  // Create the BlockNote editor with multi-column drop cursor + dictionary
+  // The options both modes share.
+  const baseOptions = {
+    // The shared schema with BlockNote's React file and audio blocks, whose
+    // "Loading..." ends when a refused upload does (see editingSchema.ts).
+    schema: editingSchema,
+    uploadFile,
+    // The one place a stored reference becomes a signed URL. BlockNote calls
+    // it per file block at render; the document it saves back is untouched.
+    ...(resolveFileUrl ? { resolveFileUrl } : {}),
+    dropCursor: multiColumnDropCursor,
+    dictionary: { ...defaultLocale, multi_column: multiColumnLocales.en },
+  };
+
+  // Create the BlockNote editor with multi-column drop cursor + dictionary.
+  //
+  // Live: the document is the room's — never `initialContent` (the provider
+  // has already synced it into `collab.doc`). `withCollaboration` swaps
+  // ProseMirror's history for Yjs's undo manager, so undo only undoes this
+  // user's edits. Rebuilt only for a new document: anything else (a new
+  // `onChange` identity) would bind a second editor to the same fragment.
   const editor = useCreateBlockNote(
-    {
-      // The shared schema with BlockNote's React file and audio blocks, whose
-      // "Loading..." ends when a refused upload does (see editingSchema.ts).
-      schema: editingSchema,
-      initialContent: typedInitialContent,
-      uploadFile,
-      // The one place a stored reference becomes a signed URL. BlockNote calls
-      // it per file block at render; the document it saves back is untouched.
-      ...(resolveFileUrl ? { resolveFileUrl } : {}),
-      dropCursor: multiColumnDropCursor,
-      dictionary: { ...defaultLocale, multi_column: multiColumnLocales.en },
-    },
-    [onChange]
+    collab
+      ? withCollaboration({
+          ...baseOptions,
+          collaboration: {
+            provider: collab.provider as { awareness?: Awareness },
+            fragment: collab.doc.getXmlFragment(FRAGMENT),
+            user: { id: collab.user.id, name: collab.user.name, color: collab.user.color },
+            showCursorLabels: 'activity',
+          },
+        })
+      : { ...baseOptions, initialContent: typedInitialContent },
+    collab ? [collab.doc] : [onChange]
   );
 
   editorRef.current = editor;
