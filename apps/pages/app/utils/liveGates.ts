@@ -44,13 +44,42 @@ const GIT_WRITE_INTENTS = new Set(['save', 'set-header-image', 'upload-header-im
  */
 export function liveIntentRefusal(
   intent: unknown,
-  liveClassroom: boolean
+  liveClassroom: boolean,
+  /** Live editing is switched on but unreachable while the page has unsaved live edits. */
+  liveUnavailable = false
 ): { status: number; body: Record<string, unknown> } | null {
-  if (!liveClassroom || typeof intent !== 'string' || !GIT_WRITE_INTENTS.has(intent)) return null;
+  if (!liveClassroom && !liveUnavailable) return null;
+  if (typeof intent !== 'string' || !GIT_WRITE_INTENTS.has(intent)) return null;
+  if (liveUnavailable && !liveClassroom) {
+    return { status: 409, body: { error: LIVE_UNAVAILABLE_MESSAGE } };
+  }
   if (intent === 'save') {
     return { status: 409, body: { conflict: true, message: LIVE_PAGE_MESSAGE } };
   }
   return { status: 409, body: { error: LIVE_PAGE_MESSAGE } };
+}
+
+/** What an editor sees when live editing is unreachable and the page has unsaved live edits. */
+export const LIVE_UNAVAILABLE_MESSAGE =
+  'This page can’t be edited right now: live editing is unavailable. Try again later.';
+
+/**
+ * Whether a page must stay read-only because live editing is switched on
+ * for its classroom but cannot be reached (its configuration is missing),
+ * while the page has live edits not yet saved to GitHub. Editing the git copy
+ * then would fork the page from those edits, so nobody edits until live
+ * editing is back. Without unsaved live edits the git editor is safe.
+ */
+export function liveEditingBlocked({
+  flagged,
+  envAvailable,
+  bufferDirty,
+}: {
+  flagged: boolean;
+  envAvailable: boolean;
+  bufferDirty: boolean;
+}): boolean {
+  return flagged && !envAvailable && bufferDirty;
 }
 
 /**

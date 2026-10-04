@@ -46,6 +46,7 @@ import type { CollabLoaderData } from '@classmoji/collab';
 import {
   collabEditorData,
   fetchLiveSnapshot,
+  liveEditingBlockedFor,
   liveEditingEnv,
   notifyPageMeta,
   readEditorName,
@@ -242,6 +243,11 @@ export const loader = async ({
           userLogin: authData.userLogin,
         })
       : null;
+
+  // Live editing switched on but unreachable, with live edits not yet saved to
+  // GitHub: the page opens read-only rather than in the git editor, whose
+  // saves would fork the page from those edits.
+  const liveUnavailable = canEdit && !liveEnv ? await liveEditingBlockedFor(page) : false;
 
   // Load content. This loader serves two surfaces, and they read differently.
   //
@@ -479,6 +485,7 @@ export const loader = async ({
     // Live editing: the room to join, or null for the git editor / a reader.
     collab,
     liveCheckpoint,
+    liveUnavailable,
     // The preview's added/edited block ids and removed count (preview only).
     previewChanges,
     // Display-only: `{ storedRef: signedUrl }`. Absent keys mean "use the ref
@@ -628,7 +635,11 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
   // the loader never hands out these paths for such a page, so this only
   // meets a tab opened before the classroom switched over (or a stray post).
   const liveEnv = liveEditingEnv(page.classroom);
-  const refusal = liveIntentRefusal(intent, Boolean(liveEnv));
+  const refusal = liveIntentRefusal(
+    intent,
+    Boolean(liveEnv),
+    !liveEnv && (await liveEditingBlockedFor(page))
+  );
   if (refusal) return Response.json(refusal.body, { status: refusal.status });
 
   if (intent === 'save-version') {

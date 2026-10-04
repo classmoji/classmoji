@@ -45,7 +45,13 @@ import {
   saveMachineryEnabled,
   type CollabLoaderData,
 } from '../../app/utils/collab.ts';
-import { LIVE_PAGE_MESSAGE, joinsLiveRoom, liveIntentRefusal } from '../../app/utils/liveGates.ts';
+import {
+  LIVE_PAGE_MESSAGE,
+  LIVE_UNAVAILABLE_MESSAGE,
+  joinsLiveRoom,
+  liveEditingBlocked,
+  liveIntentRefusal,
+} from '../../app/utils/liveGates.ts';
 import { closeBeforeDelete } from '../../app/utils/collab.server.ts';
 
 const source = (relative: string) =>
@@ -551,4 +557,32 @@ test('copying unsaved edits is offered only when there are some to lose', () => 
   expect(offerCopyUnsaved({ refused: true, hasSynced: true, localUnsynced: false })).toBe(false);
   expect(offerCopyUnsaved({ refused: true, hasSynced: false, localUnsynced: true })).toBe(false);
   expect(offerCopyUnsaved({ refused: false, hasSynced: true, localUnsynced: true })).toBe(false);
+});
+
+test.describe('live editing on but unreachable', () => {
+  test('read-only only while unsaved live edits exist', () => {
+    expect(liveEditingBlocked({ flagged: true, envAvailable: false, bufferDirty: true })).toBe(
+      true
+    );
+    expect(liveEditingBlocked({ flagged: true, envAvailable: false, bufferDirty: false })).toBe(
+      false
+    );
+    expect(liveEditingBlocked({ flagged: true, envAvailable: true, bufferDirty: true })).toBe(
+      false
+    );
+    expect(liveEditingBlocked({ flagged: false, envAvailable: false, bufferDirty: true })).toBe(
+      false
+    );
+  });
+
+  test('git writes are refused with a sentence, other intents carry on', () => {
+    for (const intent of ['save', 'set-header-image', 'upload-header-image']) {
+      expect(liveIntentRefusal(intent, false, true)).toEqual({
+        status: 409,
+        body: { error: LIVE_UNAVAILABLE_MESSAGE },
+      });
+    }
+    expect(liveIntentRefusal('update-title', false, true)).toBeNull();
+    expect(liveIntentRefusal('save', false, false)).toBeNull();
+  });
 });

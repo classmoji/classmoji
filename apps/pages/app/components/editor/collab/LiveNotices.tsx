@@ -1,6 +1,7 @@
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
 
 import { rejectionNotice, type LiveRefusal } from '~/utils/collab.ts';
+import { LIVE_UNAVAILABLE_MESSAGE } from '~/utils/liveGates.ts';
 
 const reload = () => window.location.reload();
 
@@ -84,6 +85,20 @@ export function LiveUnreachableNotice({ isEmbedded }: { isEmbedded: boolean }) {
       isEmbedded={isEmbedded}
       message="Couldn’t connect to live editing. Try again."
     >
+      <button type="button" onClick={reload} className={primaryButton}>
+        Reload
+      </button>
+    </Bar>
+  );
+}
+
+/**
+ * Live editing is switched on for this classroom but unavailable, and the
+ * page has live edits not yet saved: it is shown read-only until it is back.
+ */
+export function LiveUnavailableNotice({ isEmbedded }: { isEmbedded: boolean }) {
+  return (
+    <Bar testId="live-unavailable" isEmbedded={isEmbedded} message={LIVE_UNAVAILABLE_MESSAGE}>
       <button type="button" onClick={reload} className={primaryButton}>
         Reload
       </button>

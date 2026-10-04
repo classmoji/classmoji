@@ -29,6 +29,7 @@ import { useLiveCover } from '~/components/editor/collab/useLiveCover.ts';
 import LiveHeaderControls from '~/components/editor/collab/LiveHeaderControls.tsx';
 import {
   LeaveLiveDialog,
+  LiveUnavailableNotice,
   LiveUnreachableNotice,
   LiveRejectedBanner,
 } from '~/components/editor/collab/LiveNotices.tsx';
@@ -188,6 +189,7 @@ const PageRoute = () => {
     uploadCapability,
     collab,
     liveCheckpoint,
+    liveUnavailable,
     previewChanges,
   } = useLoaderData<typeof import('./route.server.ts').loader>();
   // Stored refs stay in the document; these are the URLs to display them with.
@@ -220,7 +222,9 @@ const PageRoute = () => {
   // Preview mode is strictly read-only — editing chrome is suppressed while
   // rendering the pending preview branch (plan §3b).
   const isPreview = Boolean(preview?.active);
-  const canEdit = canEditRole && !isPreview;
+  // Live editing switched on but unreachable, with unsaved live edits: the
+  // page is shown read-only (the loader explains why below the header).
+  const canEdit = canEditRole && !isPreview && !liveUnavailable;
   // Live editing (a classroom with collab on): the document is the room's,
   // and none of the git save machinery below runs — no ops diff, chooser,
   // merged adoption, Cmd-S save, unload warning or unsaved tracking.
@@ -1012,6 +1016,7 @@ const PageRoute = () => {
         />
       )}
       {showUnreachable && <LiveUnreachableNotice isEmbedded={isEmbedded} />}
+      {canEditRole && liveUnavailable && <LiveUnavailableNotice isEmbedded={isEmbedded} />}
 
       {/* Embedded editors have no header: the live status floats instead. */}
       {isEmbedded && liveHeader && (

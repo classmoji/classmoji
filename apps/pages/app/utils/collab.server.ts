@@ -18,6 +18,7 @@ import type {
   SnapshotResponse,
 } from '@classmoji/collab';
 import { resolveCollabEnv } from '@classmoji/collab/env';
+import { liveEditingBlocked } from '~/utils/liveGates.ts';
 import { prisma } from '~/utils/db.server.ts';
 import {
   buildCollabLoaderData,
@@ -44,6 +45,32 @@ export function classroomCollabEnabled(classroom: unknown): boolean {
 export function liveEditingEnv(classroom: unknown): CollabEnv | null {
   if (!classroomCollabEnabled(classroom)) return null;
   return collabEnv();
+}
+
+/** Whether the page has live edits not yet saved to GitHub (a dirty buffer row). */
+export async function readLiveBufferDirty(pageId: string): Promise<boolean> {
+  const row = await prisma.collabDoc.findUnique({
+    where: { kind_doc_id: { kind: 'page', doc_id: pageId } },
+    select: { version: true, pushed_version: true },
+  });
+  return Boolean(row && row.version > row.pushed_version);
+}
+
+/**
+ * Live editing is switched on for the classroom but unreachable (no env) and
+ * the page has unsaved live edits: the page stays read-only (`liveEditingBlocked`).
+ */
+export async function liveEditingBlockedFor(page: {
+  id: string;
+  classroom: unknown;
+}): Promise<boolean> {
+  const flagged = classroomCollabEnabled(page.classroom);
+  if (!flagged || collabEnv()) return false;
+  return liveEditingBlocked({
+    flagged,
+    envAvailable: false,
+    bufferDirty: await readLiveBufferDirty(page.id),
+  });
 }
 
 /** The room's epoch: the collab_docs row's, or 1 before the first open. */
