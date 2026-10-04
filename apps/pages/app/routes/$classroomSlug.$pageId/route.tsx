@@ -39,7 +39,7 @@ import {
   rejectionNotice,
   saveMachineryEnabled,
 } from '~/utils/collab.ts';
-import { isMediaRef } from '~/utils/mediaRefs.ts';
+import { createAssetResolver } from '~/utils/liveAssets.ts';
 import {
   hasPreviewChanges,
   previewChangesSummary,
@@ -764,14 +764,39 @@ const PageRoute = () => {
         : null,
     [liveEditable, page.id, liveCover.setCover, assets.remember]
   );
-  // A media cover a peer set has no display URL in this browser's map yet.
+  // Assets that arrive after the page loaded (a peer's image, an agent's
+  // file, an accepted preview, a push made on GitHub) are not in this
+  // browser's display map. On a live page a miss is asked for, in batches.
+  const liveAssetResolver = useMemo(
+    () =>
+      createAssetResolver({
+        pageId: page.id,
+        onResolved: ({ assets: urls, srcSets: sets }) => {
+          for (const [ref, url] of Object.entries(urls)) assets.remember(ref, url);
+          if (Object.keys(sets).length > 0) {
+            setMergedSrcSets(current => ({ ...current, ...sets }));
+          }
+        },
+      }),
+    [page.id, assets]
+  );
+  const liveResolveFileUrl = useCallback(
+    async (url: string) => {
+      const known = assets.displayUrl(url);
+      if (known !== url) return known;
+      return (await liveAssetResolver.resolve(url)) ?? url;
+    },
+    [assets, liveAssetResolver]
+  );
+
+  // The cover is drawn as a CSS background, outside BlockNote: it asks itself.
   const [, setCoverUrlTick] = useState(0);
   const shownCoverRef = shownCover?.url ?? null;
   useEffect(() => {
-    if (!liveMode || !shownCoverRef || !isMediaRef(shownCoverRef)) return;
+    if (!liveMode || !shownCoverRef) return;
     if (assets.displayUrl(shownCoverRef) !== shownCoverRef) return;
     let cancelled = false;
-    void fetchMediaDisplayUrl(page.id, shownCoverRef).then(url => {
+    void liveAssetResolver.resolve(shownCoverRef).then(url => {
       if (cancelled || !url) return;
       assets.remember(shownCoverRef, url);
       setCoverUrlTick(tick => tick + 1);
@@ -779,7 +804,7 @@ const PageRoute = () => {
     return () => {
       cancelled = true;
     };
-  }, [liveMode, shownCoverRef, assets, page.id]);
+  }, [liveMode, shownCoverRef, assets, liveAssetResolver]);
 
   // "Save version": a checkpoint of the live document now. The request being
   // accepted is not the version being saved: the toast waits for the room's
@@ -1076,7 +1101,7 @@ const PageRoute = () => {
                   initialContent={null}
                   pageId={page.id}
                   darkMode={darkMode}
-                  resolveFileUrl={assets.resolveFileUrl}
+                  resolveFileUrl={liveResolveFileUrl}
                   srcSets={srcSets}
                   displayUrl={assets.displayUrl}
                   onAssetUploaded={assets.remember}
