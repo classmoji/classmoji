@@ -1,5 +1,7 @@
 import { useMemo } from 'react';
+import { ConfigProvider, Popconfirm, theme } from 'antd';
 
+import { useIsDarkMode } from '~/hooks/useIsDarkMode';
 import { thumbnailHtml } from '../blocks/slideBlocks';
 
 /**
@@ -31,6 +33,7 @@ export default function SlideThumbnail({
   showDelete = true,
   canDelete = true,
 }: SlideThumbnailProps) {
+  const isDark = useIsDarkMode();
   // The slide's markup, with html blocks kept from running (a placeholder
   // shows instead). Re-read for every parse of the deck (a new `slide`).
   const slideHtml = useMemo(() => {
@@ -84,32 +87,52 @@ export default function SlideThumbnail({
         </div>
       </div>
 
-      {/* Delete button overlay */}
+      {/* Delete button overlay. Its events (and the confirm's, which bubble
+          through React from a portal) stay here: never a drag, never a click
+          on the thumbnail. */}
       {showDelete && canDelete && (
-        <button
-          onClick={e => {
-            e.stopPropagation();
-            onDelete?.();
-          }}
-          className={`
-            absolute top-1 right-1
+        <span
+          className="absolute top-1 right-1"
+          onPointerDown={e => e.stopPropagation()}
+          onMouseDown={e => e.stopPropagation()}
+          onClick={e => e.stopPropagation()}
+          onKeyDown={e => e.stopPropagation()}
+        >
+          <ConfigProvider
+            theme={{ algorithm: isDark ? theme.darkAlgorithm : theme.defaultAlgorithm }}
+          >
+            <Popconfirm
+              title="Delete this slide?"
+              okText="Delete"
+              okButtonProps={{ danger: true }}
+              cancelText="Cancel"
+              placement="bottom"
+              onConfirm={() => onDelete?.()}
+            >
+              <button
+                type="button"
+                data-testid="overview-delete-slide"
+                className={`
             p-1.5 rounded-md
             bg-red-600 text-white
-            opacity-0 group-hover:opacity-100
+            opacity-0 group-hover:opacity-100 focus:opacity-100
             transition-opacity duration-200
             hover:bg-red-700
           `}
-          title="Delete slide"
-        >
-          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M6 18L18 6M6 6l12 12"
-            />
-          </svg>
-        </button>
+                title="Delete slide"
+              >
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+              </button>
+            </Popconfirm>
+          </ConfigProvider>
+        </span>
       )}
 
       {/* Slide number indicator */}

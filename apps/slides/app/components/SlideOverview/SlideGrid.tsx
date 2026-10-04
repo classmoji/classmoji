@@ -268,6 +268,8 @@ function DraggableSlide({
       ref={setNodeRef}
       {...attributes}
       {...listeners}
+      data-testid="overview-slide"
+      data-slide-id={slide.element.getAttribute('data-cm-id') ?? undefined}
       className={`
         relative cursor-grab active:cursor-grabbing
         ${isDragging ? 'opacity-50' : ''}

@@ -11,7 +11,16 @@ import {
 import { useToast } from '~/hooks';
 import ImageUploadModal from './ImageUploadModal';
 import { useElementSelection } from './properties/ElementSelectionContext';
-import { DEFAULT_SVG_SOURCE, STARTER_HTML_SOURCE, svgFromSource } from './blocks/slideBlocks';
+import {
+  DEFAULT_SVG_SOURCE,
+  STARTER_HTML_SOURCE,
+  captureSlideTarget,
+  countLeafSlides,
+  removeSlideElement,
+  resolveDeleteTarget,
+  svgFromSource,
+  type SlideTarget,
+} from './blocks/slideBlocks';
 
 // ─────────────────────────────────────────────────────────────
 // Overflow Detection Hook - Progressively hides groups when toolbar overflows
@@ -344,10 +353,41 @@ export default function SlideToolbar({
     return allSlides.length > 1;
   }, []);
 
+  // The slide the open confirm is about: captured when it opens, so the
+  // slide deleted is the one shown when Delete was clicked — even if the
+  // current slide changes (or a co-editor moves slides) before confirming.
+  const deleteTargetRef = useRef<SlideTarget | null>(null);
+  const handleDeleteOpenChange = useCallback(
+    (open: boolean) => {
+      if (open) deleteTargetRef.current = captureSlideTarget(getCurrentSlide());
+    },
+    [getCurrentSlide]
+  );
+
   // Perform the actual deletion (called by Popconfirm onConfirm)
   const performDeleteSlide = useCallback(() => {
-    const currentSlide = getCurrentSlide();
-    if (!currentSlide || !revealInstance) return;
+    const captured = deleteTargetRef.current;
+    deleteTargetRef.current = null;
+    if (!revealInstance) return;
+    const slidesEl =
+      (revealInstance.getSlidesElement?.() as HTMLElement | null | undefined) ??
+      document.querySelector('.reveal .slides');
+    // Gone since the confirm opened (deleted elsewhere): nothing to delete.
+    const currentSlide = resolveDeleteTarget(captured, slidesEl) as HTMLElement | null;
+    if (!currentSlide || !slidesEl) return;
+    if (countLeafSlides(slidesEl) <= 1) {
+      toast.info('A presentation needs at least one slide');
+      return;
+    }
+
+    // No longer the slide on screen: take it out where it is, stay put.
+    if (currentSlide !== getCurrentSlide()) {
+      removeSlideElement(currentSlide);
+      revealInstance.sync();
+      revealInstance.layout();
+      onContentChange?.();
+      return;
+    }
 
     const parent = currentSlide.parentElement;
     if (!parent) return;
@@ -391,7 +431,7 @@ export default function SlideToolbar({
     revealInstance.sync();
     revealInstance.layout(); // Recalculate slide positioning
     onContentChange?.();
-  }, [getCurrentSlide, revealInstance, onContentChange]);
+  }, [getCurrentSlide, revealInstance, onContentChange, toast]);
 
   // Handle delete button click - show warning if can't delete
   const handleDeleteClick = useCallback(
@@ -791,6 +831,7 @@ document.querySelector('h1').addEventListener('click', () => {
         title="Delete Slide"
         description="Are you sure you want to delete this slide?"
         onConfirm={performDeleteSlide}
+        onOpenChange={handleDeleteOpenChange}
         okText="Delete"
         okButtonProps={{ danger: true }}
         cancelText="Cancel"
