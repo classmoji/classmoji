@@ -27,7 +27,23 @@
  * classroom_id before touching GitHub (loadPageWithRepoInClassroom).
  */
 
-import { ClassmojiService, validateFile } from '@classmoji/services';
+import { ClassmojiService, ContentService, validateFile } from '@classmoji/services';
+import type { SnapshotResponse } from '@classmoji/collab';
+import {
+  CollabRequestError,
+  actorFor,
+  fetchSnapshot,
+  liveEnvFor,
+  liveSha,
+  liveVersionConflict,
+  liveWriteError,
+  notALiveVersion,
+  parseLiveVersion,
+  postCover,
+  postMergePreview,
+  postOps,
+  type CollabEnv,
+} from '../collab/client.ts';
 import {
   REPO_REST_MAX_BYTES,
   formatMegabytes,
@@ -37,7 +53,7 @@ import { MCP_BODY_LIMIT_BYTES } from '../bodyLimit.ts';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
-import type { ToolDefinition } from '../mcp/registry.ts';
+import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import {
   loadPageWithRepoInClassroom,
   mapSemanticMergeError,
@@ -242,6 +258,51 @@ async function resolveReadRef(
   return ClassmojiService.pageContent.previewBranchName(page.content_path);
 }
 
+// ─── Live editing (classrooms with collab_enabled) ───────────────────────────
+
+/** Said whenever a read falls back to git because the live service is down. */
+const LIVE_FALLBACK_NOTE =
+  'The live editing service did not answer, so this is the last saved version from git — it ' +
+  "may be behind the live page. Live edits fail until the service is back; mode: 'preview' " +
+  'still works.';
+
+/**
+ * The live page for a read, or why the read falls back to git: `note` when
+ * the service is down (said in the result), none for a page the live service
+ * cannot hold (legacy HTML, no content file) — git then answers as today.
+ */
+async function readLivePage(
+  env: CollabEnv,
+  page: PageWithRepoRecord
+): Promise<{ snapshot: SnapshotResponse<'page'> } | { fallbackNote: string | null }> {
+  try {
+    return { snapshot: await fetchSnapshot(env, 'page', page.id) };
+  } catch (error) {
+    if (error instanceof CollabRequestError) {
+      if (error.unavailable) {
+        console.warn('[mcp] Live page snapshot unavailable, reading git:', error.message);
+        return { fallbackNote: LIVE_FALLBACK_NOTE };
+      }
+      if (error.code === 'legacy-html' || error.code === 'content-missing') {
+        return { fallbackNote: null };
+      }
+      if (error.status === 404)
+        throw new ToolError('not_found', 'Page not found in this classroom');
+    }
+    throw error;
+  }
+}
+
+/** The fields every live read reports about the version it read. */
+function liveVersionFields(snapshot: SnapshotResponse<'page'>) {
+  return {
+    sha: liveSha(snapshot.version),
+    sha_source: 'live',
+    version: snapshot.version,
+    live: { open_now: snapshot.live },
+  };
+}
+
 // ─── page_content_outline ────────────────────────────────────────────────────
 
 interface PageContentOutlineArgs {
@@ -258,7 +319,8 @@ export const pageContentOutlineTool: ToolDefinition<PageContentOutlineArgs> = {
     '(id, type, ≤80-char text preview, depth, children_count) plus the content sha, the ' +
     'cover image and pending-preview status. Start here, then fetch only the blocks you need with ' +
     'page_content_get (block_ids) and edit them with page_content_apply — never round-trip ' +
-    "whole documents. Pass at: 'preview' to outline the pending preview instead of main.",
+    "whole documents. Pass at: 'preview' to outline the pending preview instead of main. In a " +
+    "classroom with live editing, main is the live page and sha is its version ('live:N').",
   scope: 'read',
   roles: OWNER_TEACHER,
   inputSchema: {
@@ -285,6 +347,29 @@ export const pageContentOutlineTool: ToolDefinition<PageContentOutlineArgs> = {
         ? ClassmojiService.pageContent.previewBranchName(page.content_path)
         : undefined;
 
+    // Live editing: 'main' is the live page, read from the collab server.
+    const env = liveEnvFor(page.classroom);
+    let fallback: Record<string, unknown> = {};
+    if (env && at === 'main') {
+      const live = await readLivePage(env, page);
+      if ('snapshot' in live) {
+        const outline = flattenOutline(live.snapshot.content.blocks as BlockNode[]);
+        const cover = live.snapshot.content.coverImage;
+        return ok({
+          page_id: page.id,
+          title: page.title,
+          format: 'json',
+          ...liveVersionFields(live.snapshot),
+          block_count: outline.length,
+          has_cover_image: Boolean(cover),
+          cover_image: await coverPayload(page, cover),
+          preview: previewPayload(status),
+          blocks: outline,
+        });
+      }
+      if (live.fallbackNote) fallback = { live_unavailable: true, note: live.fallbackNote };
+    }
+
     const content = await ClassmojiService.pageContent.loadPageContent(page, {
       skipCache: true,
       ...(ref ? { ref } : {}),
@@ -306,6 +391,7 @@ export const pageContentOutlineTool: ToolDefinition<PageContentOutlineArgs> = {
           content.format === 'html'
             ? LEGACY_GUIDANCE
             : 'This page has no content file yet — create one with a page_content_apply replace_all op.',
+        ...fallback,
       });
     }
 
@@ -325,6 +411,7 @@ export const pageContentOutlineTool: ToolDefinition<PageContentOutlineArgs> = {
       cover_image: await coverPayload(page, content.coverImage),
       preview: previewPayload(status),
       blocks: outline,
+      ...fallback,
     });
   },
 };
@@ -345,7 +432,8 @@ export const pageContentGetTool: ToolDefinition<PageContentGetArgs> = {
     'Returns full BlockNote JSON blocks for a page, with stable block ids. Pass block_ids ' +
     '(from page_content_outline) to fetch only specific blocks — preferred on large pages. ' +
     'Omitting block_ids returns the whole document. The returned sha is the expected_sha for ' +
-    "a subsequent page_content_apply. Pass at: 'preview' to read the pending preview branch.",
+    "a subsequent page_content_apply. Pass at: 'preview' to read the pending preview branch. " +
+    "In a classroom with live editing, main is the live page and sha is its version ('live:N').",
   scope: 'read',
   roles: OWNER_TEACHER,
   inputSchema: {
@@ -368,6 +456,28 @@ export const pageContentGetTool: ToolDefinition<PageContentGetArgs> = {
     const page = await loadPageWithRepoInClassroom(args.page_id, ctx);
     const ref = await resolveReadRef(page, args.at ?? 'main');
 
+    // Live editing: 'main' is the live page, read from the collab server.
+    const env = liveEnvFor(page.classroom);
+    let fallback: Record<string, unknown> = {};
+    if (env && !ref) {
+      const live = await readLivePage(env, page);
+      if ('snapshot' in live) {
+        return ok(
+          selectBlocks(
+            {
+              page_id: page.id,
+              format: 'json',
+              ...liveVersionFields(live.snapshot),
+            },
+            live.snapshot.content.blocks as BlockNode[],
+            await coverPayload(page, live.snapshot.content.coverImage),
+            args.block_ids
+          )
+        );
+      }
+      if (live.fallbackNote) fallback = { live_unavailable: true, note: live.fallbackNote };
+    }
+
     const content = await ClassmojiService.pageContent.loadPageContent(page, {
       skipCache: true,
       ...(ref ? { ref } : {}),
@@ -384,54 +494,63 @@ export const pageContentGetTool: ToolDefinition<PageContentGetArgs> = {
           content.format === 'html'
             ? LEGACY_GUIDANCE
             : 'This page has no content file yet — create one with a page_content_apply replace_all op.',
+        ...fallback,
       });
     }
 
     const blocks = ClassmojiService.pageContent.ensureBlockIds(
       content.blocks as BlockNode[]
     ) as BlockNode[];
-    const totalCount = countBlocks(blocks);
-    const cover = await coverPayload(page, content.coverImage);
-
-    if (args.block_ids?.length) {
-      const selected: BlockNode[] = [];
-      for (const id of args.block_ids) {
-        const block = findBlockById(blocks, id);
-        if (!block) {
-          throw new ToolError(
-            'invalid_params',
-            `Unknown block id '${id}' — call page_content_outline for current ids`
-          );
-        }
-        selected.push(block);
-      }
-      return ok({
-        page_id: page.id,
-        format: 'json',
-        sha: content.sha,
-        sha_source: 'content_json',
-        block_count: totalCount,
-        cover_image: cover,
-        blocks: selected,
-      });
-    }
 
     return ok({
-      page_id: page.id,
-      format: 'json',
-      sha: content.sha,
-      sha_source: 'content_json',
-      block_count: totalCount,
-      cover_image: cover,
-      blocks,
-      ...(totalCount >= 100
-        ? {
-            warning: `This document has ${totalCount} blocks — prefer page_content_outline + block_ids to keep responses small`,
-          }
-        : {}),
+      ...selectBlocks(
+        { page_id: page.id, format: 'json', sha: content.sha, sha_source: 'content_json' },
+        blocks,
+        await coverPayload(page, content.coverImage),
+        args.block_ids
+      ),
+      ...fallback,
     });
   },
 };
+
+/**
+ * page_content_get's payload: the requested blocks (or all of them, with a
+ * size warning past 100) after `head` (id, format, version fields).
+ */
+function selectBlocks(
+  head: Record<string, unknown>,
+  blocks: BlockNode[],
+  cover: Awaited<ReturnType<typeof coverPayload>>,
+  blockIds: string[] | undefined
+): Record<string, unknown> {
+  const totalCount = countBlocks(blocks);
+  if (blockIds?.length) {
+    const selected: BlockNode[] = [];
+    for (const id of blockIds) {
+      const block = findBlockById(blocks, id);
+      if (!block) {
+        throw new ToolError(
+          'invalid_params',
+          `Unknown block id '${id}' — call page_content_outline for current ids`
+        );
+      }
+      selected.push(block);
+    }
+    return { ...head, block_count: totalCount, cover_image: cover, blocks: selected };
+  }
+  return {
+    ...head,
+    block_count: totalCount,
+    cover_image: cover,
+    blocks,
+    ...(totalCount >= 100
+      ? {
+          warning: `This document has ${totalCount} blocks — prefer page_content_outline + block_ids to keep responses small`,
+        }
+      : {}),
+  };
+}
 
 // ─── page_content_apply ──────────────────────────────────────────────────────
 
@@ -449,6 +568,7 @@ interface PageContentApplyArgs {
   expected_sha: string;
   ops: PageContentOp[];
   commit?: 'preview' | 'direct';
+  mode?: 'live' | 'preview';
 }
 
 /** Compact per-op summary for the result payload and the audit row. */
@@ -465,17 +585,120 @@ function summarizeOps(ops: PageContentOp[]): Array<Record<string, unknown>> {
   });
 }
 
+/** The note a repaired column layout gets in the apply result. */
+const STRUCTURE_REPAIR_NOTE =
+  'The ops would have left a column layout BlockNote cannot open, so it was repaired ' +
+  '(a columnList needs at least two columns and only columns as children, and a ' +
+  'column cannot contain another columnList — a nested one is lifted out to sit ' +
+  'after the row). Re-read the outline to see the resulting structure.';
+
+/**
+ * page_content_apply in live mode: the ops go into the live document through
+ * the collab server, as the caller (peers see them as `<name> (agent)`).
+ * `expected_sha` is the live version a read returned; a stale one is refused.
+ * The ops are first replayed on the snapshot here, so a bad id or position is
+ * reported plainly before anything is sent.
+ */
+async function applyLive(
+  env: CollabEnv,
+  page: PageWithRepoRecord,
+  args: PageContentApplyArgs,
+  ctx: ToolContext
+) {
+  const expected = parseLiveVersion(args.expected_sha);
+  if (expected === null) throw notALiveVersion('page');
+
+  let snapshot: SnapshotResponse<'page'>;
+  try {
+    snapshot = await fetchSnapshot(env, 'page', page.id);
+  } catch (error) {
+    throw liveWriteError(error, 'page');
+  }
+  if (snapshot.version !== expected) {
+    throw liveVersionConflict(args.expected_sha, snapshot.version, 'page');
+  }
+
+  const priorBlocks = snapshot.content.blocks as BlockNode[];
+  const idRemints: Array<{ op_index: number; from: string; to: string }> = [];
+  const structureRepairs: Array<{ kind: string; id?: string }> = [];
+  let newBlocks: unknown[];
+  try {
+    newBlocks = ClassmojiService.pageContent.applyBlockOps(
+      priorBlocks,
+      args.ops as Parameters<typeof ClassmojiService.pageContent.applyBlockOps>[1],
+      {
+        onIdRemint: remint => idRemints.push(remint),
+        onStructureRepair: repair => structureRepairs.push(repair),
+      }
+    );
+  } catch (error) {
+    if (error instanceof Error && error.name === 'BlockOpError') {
+      throw new ToolError('invalid_params', error.message);
+    }
+    throw error;
+  }
+
+  const actor = await actorFor(ctx);
+  let version: number;
+  try {
+    ({ version } = await postOps(env, 'page', page.id, args.ops, actor));
+  } catch (error) {
+    throw liveWriteError(error, 'page');
+  }
+
+  const applied = summarizeOps(args.ops);
+  for (const remint of idRemints) {
+    const entry = applied[remint.op_index];
+    if (entry) {
+      const reminted =
+        (entry.reminted_ids as Array<{ from: string; to: string }> | undefined) ?? [];
+      reminted.push({ from: remint.from, to: remint.to });
+      entry.reminted_ids = reminted;
+    }
+  }
+  const hasDestructiveOps = args.ops.some(op => op.op === 'replace_all' || op.op === 'delete');
+
+  await writeAudit(ctx, {
+    resource_type: 'PAGES',
+    resource_id: page.id,
+    action: 'UPDATE',
+    data: {
+      tool: 'page_content_apply',
+      ops: applied,
+      expected_sha: args.expected_sha,
+      new_sha: liveSha(version),
+      committed_to: 'live',
+      ...(hasDestructiveOps ? { prior_block_count: countBlocks(priorBlocks) } : {}),
+      ...(structureRepairs.length > 0 ? { structure_repairs: structureRepairs } : {}),
+    } as Prisma.InputJsonValue,
+  });
+
+  return ok({
+    success: true,
+    new_sha: liveSha(version),
+    version,
+    block_count: countBlocks(ClassmojiService.pageContent.ensureBlockIds(newBlocks) as BlockNode[]),
+    committed_to: 'live',
+    applied,
+    ...(structureRepairs.length > 0
+      ? { structure_repairs: structureRepairs, note: STRUCTURE_REPAIR_NOTE }
+      : {}),
+  });
+}
+
 export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
   name: 'page_content_apply',
   annotations: { destructive: true, openWorld: true },
   title: 'Apply page content edits',
   description:
     'Applies granular block operations (update / insert / move / delete / replace_all) to a ' +
-    "page's BlockNote content in one commit. Requires expected_sha from page_content_get or " +
+    "page's BlockNote content. Requires expected_sha from page_content_get or " +
     'page_content_outline; a CONTENT_CONFLICT error means the content changed — re-read for a ' +
-    "fresh sha. Published pages default to commit: 'preview' (a preview branch students never " +
-    "see — review then page_preview_accept); drafts default to commit: 'direct'. Pass commit " +
-    'explicitly to override either way. When a preview already exists, applies STACK onto it ' +
+    "fresh sha. mode: 'live' edits the page itself (with live editing on, people in the editor " +
+    "see it at once); mode: 'preview' stages the edits — students never see them — for review " +
+    'as a rendered page with the changed blocks highlighted, then page_preview_accept. Default: ' +
+    'live for drafts, preview for published pages. Use preview for big edits: many blocks, ' +
+    'restructuring, rewrites. When a preview already exists, preview applies STACK onto it ' +
     "and expected_sha must come from a read at: 'preview' (main's sha will conflict).",
   scope: 'write',
   roles: OWNER_TEACHER,
@@ -491,22 +714,40 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
       .min(1)
       .max(25)
       .describe('Block operations, applied sequentially (later ops see earlier effects)'),
+    mode: z
+      .enum(['live', 'preview'])
+      .optional()
+      .describe(
+        "'live' edits the page itself; 'preview' stages the edits for review. Default: live " +
+          'for drafts, preview for published pages. Takes precedence over commit'
+      ),
     commit: z
       .enum(['preview', 'direct'])
       .optional()
       .describe(
-        "Where to commit: 'preview' (singleton preview branch) or 'direct' (main). " +
+        "Older name for mode: 'preview', or 'direct' (= live). " +
           'Default: preview for published pages, direct for drafts'
       ),
   },
   handler: async (args, ctx) => {
     const page = await loadPageWithRepoInClassroom(args.page_id, ctx);
 
+    // Live editing: 'live' goes into the live document through the collab
+    // server; git main is only its checkpoint and is never written here.
+    const env = liveEnvFor(page.classroom);
+    const commit =
+      args.mode !== undefined ? (args.mode === 'live' ? 'direct' : 'preview') : args.commit;
+
     // §3b default routing: published pages preview, drafts direct.
     const committedTo: 'main' | 'preview' =
-      (args.commit ?? (page.is_draft === false ? 'preview' : 'direct')) === 'preview'
+      (commit ?? (page.is_draft === false ? 'preview' : 'direct')) === 'preview'
         ? 'preview'
         : 'main';
+
+    if (env && committedTo === 'main') return applyLive(env, page, args, ctx);
+    // A live read's version stands in for main's sha when a NEW preview is
+    // cut from main: the agent read the live page, which has no git sha.
+    const liveRead = env !== null && parseLiveVersion(args.expected_sha) !== null;
 
     // Stacking: when a preview already exists and we're committing to it,
     // load FROM it so this apply builds on the pending changes.
@@ -536,9 +777,13 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
     // CONTENT_CONFLICT messages (stacking reads target the preview branch).
     const conflictAt: 'main' | 'preview' = loadRef ? 'preview' : 'main';
 
+    // Stacking onto a preview needs the preview's own sha, never a live one.
+    if (liveRead && loadRef) throw contentConflict('preview');
+    const expectedSha = liveRead ? content.sha : args.expected_sha;
+
     // Optimistic lock (tool-level, works for BOTH sha sources): the sha the
     // caller read must still be the sha of the file we loaded.
-    if (content.sha !== null && content.sha !== args.expected_sha) {
+    if (content.sha !== null && content.sha !== expectedSha) {
       throw contentConflict(conflictAt);
     }
 
@@ -575,7 +820,13 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
       );
     } catch (error) {
       if (error instanceof Error && error.name === 'BlockOpError') {
-        throw new ToolError('invalid_params', error.message);
+        throw new ToolError(
+          'invalid_params',
+          liveRead && (error as { code?: string }).code === 'UNKNOWN_BLOCK_ID'
+            ? `${error.message}. A preview starts from the last saved version, which may not ` +
+                "have blocks added in the last minute yet — retry shortly or use mode: 'live'."
+            : error.message
+        );
       }
       throw error;
     }
@@ -604,7 +855,7 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
         // Also enforced GitHub-side at write time: catches a racing writer
         // between our read and this commit (and a content.json materialized
         // out-of-band under a legacy page).
-        ...(isCreate ? {} : { expectedSha: args.expected_sha }),
+        ...(isCreate ? {} : { expectedSha: expectedSha ?? args.expected_sha }),
         ...(committedTo === 'preview'
           ? { branch: ClassmojiService.pageContent.previewBranchName(page.content_path) }
           : {}),
@@ -668,14 +919,7 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
       committed_to: committedTo,
       applied,
       ...(structureRepairs.length > 0
-        ? {
-            structure_repairs: structureRepairs,
-            note:
-              'The ops would have left a column layout BlockNote cannot open, so it was repaired ' +
-              '(a columnList needs at least two columns and only columns as children, and a ' +
-              'column cannot contain another columnList — a nested one is lifted out to sit ' +
-              'after the row). Re-read the outline to see the resulting structure.',
-          }
+        ? { structure_repairs: structureRepairs, note: STRUCTURE_REPAIR_NOTE }
         : {}),
     });
   },
@@ -692,6 +936,152 @@ interface PagePreviewAcceptArgs extends PagePreviewArgs {
   resolutions?: Array<{ id: string; choose: 'ours' | 'theirs' }>;
   expected_ours_sha?: string;
   expected_theirs_sha?: string;
+}
+
+/**
+ * page_preview_accept in live mode. The collab server runs the three-way
+ * merge (base = the preview's merge-base with main, ours = the live page,
+ * theirs = the preview) inside the live transaction and applies it id-aware,
+ * so nothing typed meanwhile is reverted; conflicts apply nothing and come
+ * back as the usual report. The branch is deleted only once the merge landed.
+ */
+async function acceptPreviewLive(
+  env: CollabEnv,
+  page: PageWithRepoRecord,
+  args: PagePreviewAcceptArgs,
+  ctx: ToolContext
+) {
+  const pageContent = ClassmojiService.pageContent;
+  const branch = pageContent.previewBranchName(page.content_path);
+  const comparison = await ContentService.compareBranches({
+    gitOrganization: page.classroom.git_organization as never,
+    repo: page.classroom.content_repo,
+    base: 'main',
+    head: branch,
+  });
+  if (!comparison) {
+    throw new ToolError('invalid_params', 'No pending preview for this page — nothing to accept');
+  }
+  const [theirs, base] = await Promise.all([
+    pageContent.loadPageContent(page, { ref: branch, skipCache: true }),
+    comparison.merge_base_sha
+      ? pageContent.loadPageContent(page, { ref: comparison.merge_base_sha })
+      : Promise.resolve(null),
+  ]);
+  if (theirs.format !== 'json') {
+    throw new ToolError(
+      'invalid_params',
+      'The preview has no page content to merge — discard it with page_preview_discard'
+    );
+  }
+  // Without the page as it was when the preview started there is no telling
+  // the preview's edits from what the live page gained since; guessing would
+  // delete live work. A page with no content file then merges from empty.
+  if (!base || base.format === 'html') {
+    throw new ToolError(
+      'invalid_params',
+      'This preview can no longer be merged into the live page — discard it with ' +
+        'page_preview_discard and make the change again'
+    );
+  }
+  if (
+    args.resolutions?.length &&
+    args.expected_theirs_sha &&
+    args.expected_theirs_sha !== theirs.sha
+  ) {
+    throw new ToolError(
+      'invalid_params',
+      'The preview changed since that conflict report — call page_preview_accept again ' +
+        'without resolutions for a fresh report',
+      'CONTENT_CONFLICT'
+    );
+  }
+
+  const actor = await actorFor(ctx);
+  let outcome;
+  try {
+    outcome = await postMergePreview(env, 'page', page.id, {
+      base: {
+        blocks: pageContent.ensureBlockIds((base.blocks as unknown[] | null) ?? []),
+        coverImage: base.coverImage ?? null,
+      },
+      theirs: {
+        blocks: pageContent.ensureBlockIds(theirs.blocks as unknown[]),
+        coverImage: theirs.coverImage ?? null,
+      },
+      ...(args.resolutions?.length
+        ? { resolutions: args.resolutions.map(({ id, choose }) => ({ id, choose })) }
+        : {}),
+      actor,
+    });
+  } catch (error) {
+    throw liveWriteError(error, 'page', { previewHint: false });
+  }
+
+  if (!outcome.applied) {
+    const ids = outcome.conflicts.map(unit => String(unit.id));
+    await writeAudit(ctx, {
+      resource_type: 'PAGES',
+      resource_id: page.id,
+      action: 'UPDATE',
+      data: {
+        tool: 'page_preview_accept',
+        outcome: 'conflict',
+        committed_to: 'live',
+        conflict_unit_ids: ids,
+        theirs_sha: theirs.sha,
+      } as Prisma.InputJsonValue,
+    });
+    return ok({
+      conflict: true,
+      units: outcome.conflicts,
+      ...(outcome.autoMerged !== undefined ? { auto_merged: outcome.autoMerged } : {}),
+      ours_sha: 'live',
+      theirs_sha: theirs.sha,
+      message:
+        `${ids.length} conflict(s) between the live page (ours) and the preview (theirs) need a ` +
+        'decision; nothing was applied. Call page_preview_accept again with resolutions (one ' +
+        "{id, choose: 'ours'|'theirs'} per conflict id — '__order__' addresses a block-order " +
+        "conflict), passing this report's theirs_sha as expected_theirs_sha; the live side is " +
+        're-merged at that moment. Or page_preview_discard to drop the preview.',
+    });
+  }
+
+  let previewKept: string | null = null;
+  try {
+    await pageContent.discardPreview(page);
+  } catch (error) {
+    console.warn('[page_preview_accept] Merged live but could not delete the preview:', error);
+    previewKept =
+      'The preview is merged into the live page, but its branch could not be deleted — ' +
+      'call page_preview_discard to remove it.';
+  }
+
+  await writeAudit(ctx, {
+    resource_type: 'PAGES',
+    resource_id: page.id,
+    action: 'UPDATE',
+    data: {
+      tool: 'page_preview_accept',
+      outcome: 'merged',
+      committed_to: 'live',
+      semantic: true,
+      new_sha: liveSha(outcome.version),
+      ...(args.resolutions?.length
+        ? { resolutions: args.resolutions.map(({ id, choose }) => ({ id, choose })) }
+        : {}),
+      ...(previewKept ? { preview_kept: true } : {}),
+    } as unknown as Prisma.InputJsonValue,
+  });
+  return ok({
+    success: true,
+    merged: true,
+    committed_to: 'live',
+    new_sha: liveSha(outcome.version),
+    version: outcome.version,
+    ...(args.resolutions?.length ? { resolved: args.resolutions } : {}),
+    ...(previewKept ? { preview_kept: true, message: previewKept } : {}),
+  });
 }
 
 export const pagePreviewAcceptTool: ToolDefinition<PagePreviewAcceptArgs> = {
@@ -711,7 +1101,8 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewAcceptArgs> = {
     "report's ours_sha/theirs_sha as expected_ours_sha/expected_theirs_sha to pin your choices " +
     'to the state you reviewed — or re-read ' +
     'fresh main with page_content_get, re-apply merged blocks with page_content_apply and ' +
-    'accept again, or page_preview_discard.',
+    'accept again, or page_preview_discard. With live editing on, the preview merges into the ' +
+    'live page (ours = live) and a conflict applies nothing.',
   scope: 'write',
   roles: OWNER_TEACHER,
   inputSchema: {
@@ -760,6 +1151,10 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewAcceptArgs> = {
     if (!status.exists) {
       throw new ToolError('invalid_params', 'No pending preview for this page — nothing to accept');
     }
+
+    // Live editing: the preview merges into the live document, not main.
+    const env = liveEnvFor(page.classroom);
+    if (env) return acceptPreviewLive(env, page, args, ctx);
 
     // ── Resolutions path: apply chooser decisions to the conflicted merge ──
     if (args.resolutions?.length) {
@@ -1123,6 +1518,134 @@ interface PageCoverSetArgs {
   position?: number;
 }
 
+/**
+ * What a cover call asks for, against the page's current cover: either a
+ * result to return as is (nothing to change) or the cover to write. Shared by
+ * the git write and the live one.
+ */
+async function planCover(
+  page: PageWithRepoRecord,
+  current: { url?: string; position?: number } | null | undefined,
+  args: PageCoverSetArgs
+): Promise<
+  | { kind: 'unchanged'; result: ReturnType<typeof ok> }
+  | { kind: 'write'; nextCover: { url: string; position: number } | null }
+> {
+  // Removing a cover that isn't there changed nothing, and committing an
+  // identical content.json to say so would still bump the sha under every
+  // reader holding one. Idempotent, and free.
+  if (args.url === null && !current) {
+    return {
+      kind: 'unchanged' as const,
+      result: ok({
+        success: true,
+        cover_image: null,
+        unchanged: true,
+        note: 'This page had no cover image — nothing to remove',
+      }),
+    };
+  }
+  if (args.url === undefined && !current) {
+    throw new ToolError(
+      'invalid_params',
+      'This page has no cover image to reposition — pass url to set one'
+    );
+  }
+
+  // Omitted position keeps what the page has, so swapping the image alone
+  // does not silently re-centre a cover somebody had positioned. A stored
+  // cover with no position reads as 50, which is what a content read reports
+  // for it too.
+  const currentPosition = current?.position ?? DEFAULT_COVER_POSITION;
+  const nextPosition = args.position ?? currentPosition;
+
+  // What a caller hands back is whatever it was last shown, and what it was
+  // shown is a signed display_url. Canonicalizing here (rather than leaving
+  // it to the save) is what makes the ownership check below meaningful and
+  // the no-op comparison honest — both need the STORED form, not the input.
+  let nextUrl = current?.url ?? '';
+  if (typeof args.url === 'string') {
+    const canonical = await ClassmojiService.pageContent.canonicalizePageCoverRef(page, args.url);
+    if (canonical === null) {
+      throw new ToolError(
+        'invalid_params',
+        `A cover must be an image in this classroom's content repo — upload one with ` +
+          `page_asset_upload, or pass a media://… image ref from media_list. '${args.url}' ` +
+          'does not name one.'
+      );
+    }
+    nextUrl = canonical;
+  }
+
+  const nextCover = args.url === null ? null : { url: nextUrl, position: nextPosition };
+
+  // Asking for the cover the page already has is a legitimate call — a retry,
+  // or an agent re-asserting state it cannot see. Committing it would bump
+  // content.json's sha and stamp the page for no change at all.
+  if (nextCover && current && current.url === nextCover.url && currentPosition === nextPosition) {
+    return {
+      kind: 'unchanged' as const,
+      result: ok({
+        success: true,
+        cover_image: await coverPayload(page, current),
+        unchanged: true,
+        note: 'This page already had exactly this cover image and position',
+      }),
+    };
+  }
+
+  return { kind: 'write' as const, nextCover };
+}
+
+/** page_cover_set in live mode: the cover goes into the live document. */
+async function setCoverLive(
+  env: CollabEnv,
+  page: PageWithRepoRecord,
+  args: PageCoverSetArgs,
+  ctx: ToolContext
+) {
+  let snapshot: SnapshotResponse<'page'>;
+  try {
+    snapshot = await fetchSnapshot(env, 'page', page.id);
+  } catch (error) {
+    throw liveWriteError(error, 'page', { previewHint: false });
+  }
+  const current = snapshot.content.coverImage;
+  const planned = await planCover(page, current, args);
+  if (planned.kind === 'unchanged') return planned.result;
+  const { nextCover } = planned;
+
+  const actor = await actorFor(ctx);
+  let version: number;
+  try {
+    ({ version } = await postCover(env, page.id, nextCover, actor));
+  } catch (error) {
+    throw liveWriteError(error, 'page', { previewHint: false });
+  }
+
+  await writeAudit(ctx, {
+    resource_type: 'PAGES',
+    resource_id: page.id,
+    action: 'UPDATE',
+    data: {
+      tool: 'page_cover_set',
+      ...(nextCover ? { url: nextCover.url, position: nextCover.position } : { removed: true }),
+      ...(current ? { prior_url: current.url, prior_position: current.position } : {}),
+      new_sha: liveSha(version),
+      committed_to: 'live',
+    } as Prisma.InputJsonValue,
+  });
+
+  await ClassmojiService.page.quickUpdate(page.id, { updated_at: new Date() });
+
+  return ok({
+    success: true,
+    cover_image: await coverPayload(page, nextCover),
+    new_sha: liveSha(version),
+    version,
+  });
+}
+
 export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
   name: 'page_cover_set',
   annotations: { destructive: false, idempotent: true, openWorld: true },
@@ -1188,6 +1711,11 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
       }
     }
 
+    // Live editing: the cover lives in the live document's meta, written
+    // through the collab server; git is never touched here.
+    const env = liveEnvFor(page.classroom);
+    if (env) return setCoverLive(env, page, args, ctx);
+
     const content = await ClassmojiService.pageContent.loadPageContent(page, { skipCache: true });
 
     // The web's savePageCoverImage migrates a legacy page through the React
@@ -1206,63 +1734,9 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
     }
 
     const current = content.coverImage;
-
-    // Removing a cover that isn't there changed nothing, and committing an
-    // identical content.json to say so would still bump the sha under every
-    // reader holding one. Idempotent, and free.
-    if (args.url === null && !current) {
-      return ok({
-        success: true,
-        cover_image: null,
-        unchanged: true,
-        note: 'This page had no cover image — nothing to remove',
-      });
-    }
-    if (args.url === undefined && !current) {
-      throw new ToolError(
-        'invalid_params',
-        'This page has no cover image to reposition — pass url to set one'
-      );
-    }
-
-    // Omitted position keeps what the page has, so swapping the image alone
-    // does not silently re-centre a cover somebody had positioned. A stored
-    // cover with no position reads as 50, which is what a content read reports
-    // for it too.
-    const currentPosition = current?.position ?? DEFAULT_COVER_POSITION;
-    const nextPosition = args.position ?? currentPosition;
-
-    // What a caller hands back is whatever it was last shown, and what it was
-    // shown is a signed display_url. Canonicalizing here (rather than leaving
-    // it to the save) is what makes the ownership check below meaningful and
-    // the no-op comparison honest — both need the STORED form, not the input.
-    let nextUrl = current?.url ?? '';
-    if (typeof args.url === 'string') {
-      const canonical = await ClassmojiService.pageContent.canonicalizePageCoverRef(page, args.url);
-      if (canonical === null) {
-        throw new ToolError(
-          'invalid_params',
-          `A cover must be an image in this classroom's content repo — upload one with ` +
-            `page_asset_upload, or pass a media://… image ref from media_list. '${args.url}' ` +
-            'does not name one.'
-        );
-      }
-      nextUrl = canonical;
-    }
-
-    const nextCover = args.url === null ? null : { url: nextUrl, position: nextPosition };
-
-    // Asking for the cover the page already has is a legitimate call — a retry,
-    // or an agent re-asserting state it cannot see. Committing it would bump
-    // content.json's sha and stamp the page for no change at all.
-    if (nextCover && current && current.url === nextCover.url && currentPosition === nextPosition) {
-      return ok({
-        success: true,
-        cover_image: await coverPayload(page, current),
-        unchanged: true,
-        note: 'This page already had exactly this cover image and position',
-      });
-    }
+    const planned = await planCover(page, current, args);
+    if (planned.kind === 'unchanged') return planned.result;
+    const { nextCover } = planned;
 
     let saved: {
       sha: string;
