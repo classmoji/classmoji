@@ -23,6 +23,7 @@ import {
 } from '../../app/utils/collabEnv.server.ts';
 import {
   LIVE_CONNECT_GRACE_MS,
+  offerCopyUnsaved,
   SAVE_VERSION_WAIT_MS,
   applyPageMeta,
   checkpointAnswersSaveVersion,
@@ -353,10 +354,11 @@ test.describe('refusals', () => {
     }
   });
 
-  test('a stale room reloads by itself only with nothing unsynced; a closed room always', () => {
+  test('a stale or closed room reloads by itself only with nothing unsynced', () => {
     expect(autoReloadAllowed('stale-epoch', false)).toBe(true);
     expect(autoReloadAllowed('stale-epoch', true)).toBe(false);
-    expect(autoReloadAllowed('reload', true)).toBe(true);
+    expect(autoReloadAllowed('reload', false)).toBe(true);
+    expect(autoReloadAllowed('reload', true)).toBe(false);
     expect(autoReloadAllowed('forbidden', false)).toBe(false);
     expect(autoReloadAllowed('unavailable', false)).toBe(false);
     expect(autoReloadAllowed('schema-mismatch', false)).toBe(false);
@@ -542,4 +544,11 @@ test.describe('saved to GitHub', () => {
     expect(checkpointAnswersSaveVersion({ at: '2026-10-03T12:00:05Z' }, null)).toBe(false);
     expect(SAVE_VERSION_WAIT_MS).toBe(60_000);
   });
+});
+
+test('copying unsaved edits is offered only when there are some to lose', () => {
+  expect(offerCopyUnsaved({ refused: true, hasSynced: true, localUnsynced: true })).toBe(true);
+  expect(offerCopyUnsaved({ refused: true, hasSynced: true, localUnsynced: false })).toBe(false);
+  expect(offerCopyUnsaved({ refused: true, hasSynced: false, localUnsynced: true })).toBe(false);
+  expect(offerCopyUnsaved({ refused: false, hasSynced: true, localUnsynced: true })).toBe(false);
 });

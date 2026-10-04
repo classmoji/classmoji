@@ -45,19 +45,33 @@ export function LiveRejectedBanner({
   reason,
   isEmbedded,
   autoReloading,
+  onCopyUnsaved = null,
 }: {
   reason: LiveRefusal;
   isEmbedded: boolean;
   /** The route is reloading on its own; the banner would only flash. */
   autoReloading: boolean;
+  /** Offered when this browser holds edits the server never acknowledged. */
+  onCopyUnsaved?: (() => void) | null;
 }) {
   if (autoReloading) return null;
   const notice = rejectionNotice(reason);
   return (
     <Bar testId="live-rejected-banner" isEmbedded={isEmbedded} message={notice.message}>
-      <button type="button" onClick={reload} className={primaryButton} data-reason={reason}>
-        Reload
-      </button>
+      <div className="flex items-center gap-2">
+        {onCopyUnsaved && (
+          <button
+            type="button"
+            onClick={onCopyUnsaved}
+            className="rounded px-3 py-1 text-sm font-medium transition-colors text-amber-900 ring-1 ring-amber-400 hover:bg-amber-100 dark:text-amber-100 dark:ring-amber-600 dark:hover:bg-amber-900/50"
+          >
+            Copy my unsaved changes
+          </button>
+        )}
+        <button type="button" onClick={reload} className={primaryButton} data-reason={reason}>
+          Reload
+        </button>
+      </div>
     </Bar>
   );
 }

@@ -77,6 +77,12 @@ const CustomDragHandleMenu = () => (
   </DragHandleMenu>
 );
 
+/** What the page route can ask of a mounted editor. */
+export interface PageEditorHandle {
+  getContent: () => unknown;
+  getMarkdown?: () => string;
+}
+
 /**
  * The live document an editor binds to, in a classroom that edits pages live.
  * Made once per room by `useCollabSession` and handed in already synced.
@@ -161,7 +167,7 @@ const PageEditor = forwardRef(function PageEditor(
     uploadCapability = null,
     collab = null,
   }: PageEditorProps,
-  ref: React.Ref<{ getContent: () => unknown }>
+  ref: React.Ref<PageEditorHandle>
 ) {
   const media = usePageMedia();
   const classroomId = media.classroomId;
@@ -330,6 +336,8 @@ const PageEditor = forwardRef(function PageEditor(
     ref,
     () => ({
       getContent: () => editor.document,
+      // Plain text a person can paste anywhere (lossy by design).
+      getMarkdown: () => editor.blocksToMarkdownLossy(editor.document),
     }),
     [editor]
   );

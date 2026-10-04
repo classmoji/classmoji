@@ -146,14 +146,13 @@ export function rejectionNotice(reason: LiveRefusal): RejectionNotice {
 }
 
 /**
- * Whether a refusal may reload the page by itself. A closed room always may
- * (the server saved it first). A stale room may only when this browser holds
- * no edits the server has not acknowledged — reloading would throw them away —
- * and only once per room (`claimStaleReload`).
+ * Whether a refusal may reload the page by itself: a closed or stale room,
+ * and only when this browser holds no edits the server has not acknowledged —
+ * reloading would throw them away (the banner then offers to copy them). A
+ * stale room reloads only once per room (`claimStaleReload`).
  */
 export function autoReloadAllowed(reason: LiveRefusal, localUnsynced: boolean): boolean {
-  if (reason === 'reload') return true;
-  if (reason === 'stale-epoch') return !localUnsynced;
+  if (reason === 'reload' || reason === 'stale-epoch') return !localUnsynced;
   return false;
 }
 
@@ -433,4 +432,21 @@ export function applyPageMeta<T extends string | null>(
     title: typeof meta.title === 'string' && meta.title.trim() ? meta.title : loaded.title,
     width: typeof meta.width === 'number' ? meta.width : loaded.width,
   };
+}
+
+/**
+ * Whether a refused session's banner offers "Copy my unsaved changes": the
+ * editor was open and holds edits the server never acknowledged, which a
+ * reload would throw away.
+ */
+export function offerCopyUnsaved({
+  refused,
+  hasSynced,
+  localUnsynced,
+}: {
+  refused: boolean;
+  hasSynced: boolean;
+  localUnsynced: boolean;
+}): boolean {
+  return refused && hasSynced && localUnsynced;
 }

@@ -28,6 +28,7 @@ import {
 } from '~/components/editor/collab/LiveNotices.tsx';
 import {
   SAVE_VERSION_WAIT_MS,
+  offerCopyUnsaved,
   applyPageMeta,
   autoReloadAllowed,
   checkpointAnswersSaveVersion,
@@ -40,6 +41,7 @@ import {
   saveMachineryEnabled,
 } from '~/utils/collab.ts';
 import { createAssetResolver } from '~/utils/liveAssets.ts';
+import type { PageEditorHandle } from '~/components/editor/PageEditor.tsx';
 import {
   hasPreviewChanges,
   previewChangesSummary,
@@ -228,7 +230,7 @@ const PageRoute = () => {
     liveMeta
   );
   const widthClass = widthClasses[pageWidth] || 'max-w-4xl';
-  const editorRef = useRef<{ getContent: () => unknown } | null>(null);
+  const editorRef = useRef<PageEditorHandle | null>(null);
   const fetcher = useFetcher();
   const titleFetcher = useFetcher();
   const coverFetcher = useFetcher();
@@ -731,6 +733,18 @@ const PageRoute = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveRefused, collab]);
 
+  // Edits the server never acknowledged are lost on reload; before that, the
+  // person can take them along as text.
+  const handleCopyUnsaved = useCallback(async () => {
+    const text = editorRef.current?.getMarkdown?.() ?? '';
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success('Copied. Paste it back after reloading.');
+    } catch {
+      toast.error('Couldn’t copy. Select the text on the page and copy it yourself.');
+    }
+  }, []);
+
   // Until the room arrives the page is shown read-only; only after a grace
   // period does it say the live editor could not be reached.
   const [connectClock, setConnectClock] = useState(0);
@@ -958,6 +972,15 @@ const PageRoute = () => {
           reason={liveRefused}
           isEmbedded={isEmbedded}
           autoReloading={!autoReloadSkipped && rejectionNotice(liveRefused).action === 'reload'}
+          onCopyUnsaved={
+            offerCopyUnsaved({
+              refused: true,
+              hasSynced: liveState.hasSynced,
+              localUnsynced: liveState.localUnsynced,
+            })
+              ? handleCopyUnsaved
+              : null
+          }
         />
       )}
       {showUnreachable && <LiveUnreachableNotice isEmbedded={isEmbedded} />}
