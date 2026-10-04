@@ -150,9 +150,30 @@ export const CONTENT_CHECKPOINT_QUEUE = 'content-checkpoint';
 
 export type CheckpointReason = 'store' | 'save-version' | 'last-leave' | 'flag-off';
 
+/**
+ * Who edited one doc since its last push, for the commit's `Co-authored-by:`
+ * trailers. Kept IN MEMORY by the collab server (from each change's
+ * connection context, agents included under the user they act for) and sent
+ * with every trigger — the trailing debounce runs with the last payload, so
+ * each payload carries every doc of the classroom with unpushed editors. An
+ * editor is dropped once a push covers the version their edit was stored in.
+ * A collab restart forgets them: the next commit then has no co-author
+ * trailers for edits made before the restart (the content itself is safe in
+ * collab_docs).
+ */
+export interface CheckpointDocEditors {
+  kind: CollabKind;
+  docId: string;
+  editors: CollabActor[];
+}
+
 export interface ContentCheckpointPayload {
   classroomId: string;
   reason?: CheckpointReason;
+  /** Optional; see CheckpointDocEditors. Absent = no co-author trailers. */
+  editors?: CheckpointDocEditors[];
+  /** "Save version" message from `POST /internal/:kind/:id/checkpoint`, if any. */
+  message?: string;
 }
 
 /** Commit trailer marking a push as ours (hook-station skips these). */
