@@ -1,7 +1,11 @@
 import { logger, schedules, task } from '@trigger.dev/sdk';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService, getGitProvider, type GitLabProvider } from '@classmoji/services';
-import { GITLAB_PROJECTS_SUBGROUP } from '@classmoji/utils';
+import {
+  extendedDeadlineMs,
+  GITLAB_PROJECTS_SUBGROUP,
+  type ExtensionTransaction,
+} from '@classmoji/utils';
 
 /**
  * Repair GitLab webhooks: make every student project and content project of a
@@ -120,11 +124,35 @@ export const repairGitlabWebhooksNightly = schedules.task({
  * the way the webhook would have. Harmless when webhooks work: a push already
  * recorded is not newer than `last_push_at`, so it is skipped.
  *
- * "Active": a published REPO-mode assignment whose deadline is not more than
- * two days past (late pushes still count; long-closed ones don't need polling).
+ * "Active": a published REPO-mode assignment whose deadline, pushed out by the
+ * extension hours the student bought (net of refunds), is not more than two
+ * days past (late pushes still count; long-closed ones don't need polling).
  */
 const POLL_GRACE_MS = 2 * 24 * 60 * 60 * 1000;
+/** How far back a deadline can be and still be extended into the poll window. */
+const POLL_EXTENSION_HORIZON_MS = 30 * 24 * 60 * 60 * 1000;
 const POLL_MAX_REPOS = 500;
+
+const ACTIVE_ASSIGNMENT = {
+  type: 'REPO',
+  submission_mode: 'REPO',
+  is_published: true,
+} as const;
+
+/**
+ * Whether one submission row still needs its repo polled: no deadline, or the
+ * deadline plus the row's net purchased hours plus the grace period is still
+ * ahead. Exported for tests.
+ */
+export function isPollWindowOpen(
+  deadline: Date | string | null | undefined,
+  transactions: ExtensionTransaction[] | null | undefined,
+  now: number = Date.now()
+): boolean {
+  if (!deadline) return true;
+  const cutoff = extendedDeadlineMs(deadline, transactions);
+  return cutoff === null || cutoff + POLL_GRACE_MS > now;
+}
 
 export async function pollGitlabPushes(): Promise<{
   repos: number;
@@ -132,21 +160,29 @@ export async function pollGitlabPushes(): Promise<{
   failed: number;
 }> {
   const result = { repos: 0, recorded: 0, failed: 0 };
-  const since = new Date(Date.now() - POLL_GRACE_MS);
-  const repos = await getPrisma().gitRepo.findMany({
+  const now = Date.now();
+  const since = new Date(now - POLL_GRACE_MS);
+  const horizon = new Date(now - POLL_EXTENSION_HORIZON_MS);
+  // A Prisma filter cannot sum a row's purchased hours, so the query keeps
+  // every row that MIGHT be open (plain deadline in the window, or any
+  // purchase on a deadline in the last 30 days) and `isPollWindowOpen` makes
+  // the exact call below.
+  const rowFilter = {
+    assignment: ACTIVE_ASSIGNMENT,
+    OR: [
+      { assignment: { student_deadline: null } },
+      { assignment: { student_deadline: { gt: since } } },
+      {
+        assignment: { student_deadline: { gt: horizon } },
+        token_transactions: { some: { type: 'PURCHASE' as const } },
+      },
+    ],
+  };
+  const candidates = await getPrisma().gitRepo.findMany({
     where: {
       provider: 'GITLAB',
       classroom: { is_archived: false, git_namespace: { not: null } },
-      assignments: {
-        some: {
-          assignment: {
-            type: 'REPO',
-            submission_mode: 'REPO',
-            is_published: true,
-            OR: [{ student_deadline: null }, { student_deadline: { gt: since } }],
-          },
-        },
-      },
+      assignments: { some: rowFilter },
     },
     take: POLL_MAX_REPOS,
     // Least recently polled first, so every active repo gets its turn however
@@ -157,6 +193,14 @@ export async function pollGitlabPushes(): Promise<{
       id: true,
       name: true,
       last_push_at: true,
+      assignments: {
+        where: rowFilter,
+        select: {
+          assignment: { select: { student_deadline: true } },
+          // Every row, refunds included: a REFUND carries negative hours.
+          token_transactions: { select: { hours_purchased: true } },
+        },
+      },
       classroom: {
         select: {
           git_namespace: true,
@@ -167,6 +211,19 @@ export async function pollGitlabPushes(): Promise<{
       },
     },
   });
+  const repos = candidates.filter(repo =>
+    repo.assignments.some(row =>
+      isPollWindowOpen(row.assignment.student_deadline, row.token_transactions, now)
+    )
+  );
+  // A repo the pre-filter kept but whose extension has run out still had its
+  // turn: send it to the back of the queue so it cannot hold a slot forever.
+  const closed = candidates.filter(repo => !repos.includes(repo)).map(repo => repo.id);
+  if (closed.length > 0) {
+    await getPrisma()
+      .gitRepo.updateMany({ where: { id: { in: closed } }, data: { push_polled_at: new Date() } })
+      .catch(() => {});
+  }
 
   for (const repo of repos) {
     const org = repo.classroom?.git_organization;

@@ -4,6 +4,7 @@ const countMock = vi.fn();
 const findManyMock = vi.fn();
 const upsertMock = vi.fn();
 const updateManyMock = vi.fn();
+const updateManyAndReturnMock = vi.fn();
 const findUniqueMock = vi.fn();
 const findFirstMock = vi.fn();
 const updateMock = vi.fn();
@@ -20,6 +21,7 @@ vi.mock('@classmoji/database', () => ({
       findMany: findManyMock,
       upsert: upsertMock,
       updateMany: updateManyMock,
+      updateManyAndReturn: updateManyAndReturnMock,
       findUnique: findUniqueMock,
       findFirst: findFirstMock,
       update: updateMock,
@@ -33,19 +35,29 @@ vi.mock('../../git/index.ts', () => ({
   getGitProvider: () => ({ listCommits: (...a: unknown[]) => listCommitsMock(...a) }),
 }));
 
-const { create, getLatePercentage, recordPush, recordExistingPush } =
-  await import('../gitRepoAssignment.service.ts');
+const {
+  create,
+  getLateCount,
+  getLatePercentage,
+  isCountedLate,
+  latePercentage,
+  recordPush,
+  recordExistingPush,
+  recordPushAfterExtension,
+} = await import('../gitRepoAssignment.service.ts');
 
 type Row = {
   closed_at: Date | null;
   is_late_override: boolean;
   assignment: { student_deadline: Date | null };
+  token_transactions: { hours_purchased: number | null }[];
 };
 
 const row = (partial: Partial<Row> = {}): Row => ({
   closed_at: null,
   is_late_override: false,
   assignment: { student_deadline: null },
+  token_transactions: [],
   ...partial,
 });
 
@@ -57,19 +69,23 @@ describe('getLatePercentage', () => {
   });
 
   it('returns 0 when classroom has no assignments', async () => {
-    countMock.mockResolvedValue(0);
     findManyMock.mockResolvedValue([]);
     expect(await getLatePercentage('empty-class')).toBe(0);
   });
 
-  it('counts is_late_override=true regardless of timestamps', async () => {
-    countMock.mockResolvedValue(1);
-    findManyMock.mockResolvedValue([row({ is_late_override: true })]);
+  it('counts a submitted row with is_late_override=true even when on time', async () => {
+    findManyMock.mockResolvedValue([
+      row({ is_late_override: true, closed_at: new Date('2026-01-05T00:00:00Z') }),
+    ]);
     expect(await getLatePercentage('cls')).toBe(100);
   });
 
+  it('does not count an exempted row with nothing turned in', async () => {
+    findManyMock.mockResolvedValue([row({ is_late_override: true })]);
+    expect(await getLatePercentage('cls')).toBe(0);
+  });
+
   it('does not count rows missing closed_at', async () => {
-    countMock.mockResolvedValue(2);
     findManyMock.mockResolvedValue([
       row({
         closed_at: null,
@@ -84,7 +100,6 @@ describe('getLatePercentage', () => {
   });
 
   it('does not count rows missing student_deadline (no due date)', async () => {
-    countMock.mockResolvedValue(1);
     findManyMock.mockResolvedValue([
       row({
         closed_at: new Date('2026-01-05T00:00:00Z'),
@@ -95,7 +110,6 @@ describe('getLatePercentage', () => {
   });
 
   it('does not count on-time submissions (closed_at <= deadline)', async () => {
-    countMock.mockResolvedValue(2);
     const deadline = new Date('2026-01-10T00:00:00Z');
     findManyMock.mockResolvedValue([
       row({
@@ -108,7 +122,6 @@ describe('getLatePercentage', () => {
   });
 
   it('counts late submissions (closed_at > deadline)', async () => {
-    countMock.mockResolvedValue(4);
     const deadline = new Date('2026-01-10T00:00:00Z');
     findManyMock.mockResolvedValue([
       row({
@@ -129,7 +142,6 @@ describe('getLatePercentage', () => {
   });
 
   it('rounds the percentage to 0 decimals', async () => {
-    countMock.mockResolvedValue(3);
     const deadline = new Date('2026-01-10T00:00:00Z');
     findManyMock.mockResolvedValue([
       row({
@@ -141,6 +153,87 @@ describe('getLatePercentage', () => {
     ]);
     // 1/3 = 33.333...% → rounded to 0 decimals → 33
     expect(await getLatePercentage('cls')).toBe(33);
+  });
+
+  it('reads every token transaction of each row, refunds included', async () => {
+    findManyMock.mockResolvedValue([]);
+    await getLatePercentage('cls');
+    expect(findManyMock.mock.calls[0][0].select.token_transactions).toEqual({
+      select: { hours_purchased: true },
+    });
+  });
+
+  it('measures lateness from the deadline plus the hours the student bought', async () => {
+    const deadline = new Date('2026-01-10T00:00:00Z');
+    const hoursAfter = (h: number) => new Date(deadline.getTime() + h * 3_600_000);
+    findManyMock.mockResolvedValue([
+      // 3 hours late, 3 bought: on time.
+      row({
+        closed_at: hoursAfter(3),
+        assignment: { student_deadline: deadline },
+        token_transactions: [{ hours_purchased: 3 }],
+      }),
+      // 5 hours late, 4 bought: late.
+      row({
+        closed_at: hoursAfter(5),
+        assignment: { student_deadline: deadline },
+        token_transactions: [{ hours_purchased: 4 }],
+      }),
+      // 3 hours late, 3 bought then refunded: late.
+      row({
+        closed_at: hoursAfter(3),
+        assignment: { student_deadline: deadline },
+        token_transactions: [{ hours_purchased: 3 }, { hours_purchased: -3 }],
+      }),
+      // Under an hour late counts in whole hours, as is_late does: on time.
+      row({ closed_at: hoursAfter(0.5), assignment: { student_deadline: deadline } }),
+    ]);
+    expect(await getLateCount('cls')).toEqual({ total: 4, late: 2 });
+    expect(await getLatePercentage('cls')).toBe(50);
+  });
+});
+
+describe('latePercentage', () => {
+  it('derives the whole percentage from counts already read', () => {
+    expect(latePercentage({ total: 0, late: 0 })).toBe(0);
+    expect(latePercentage({ total: 3, late: 1 })).toBe(33);
+    expect(latePercentage({ total: 4, late: 2 })).toBe(50);
+  });
+});
+
+describe('isCountedLate', () => {
+  const deadline = new Date('2026-01-10T00:00:00Z');
+
+  it('counts an exempted submission and one past the extended deadline', () => {
+    expect(
+      isCountedLate(
+        row({
+          is_late_override: true,
+          closed_at: new Date('2026-01-09T00:00:00Z'),
+          assignment: { student_deadline: deadline },
+        })
+      )
+    ).toBe(true);
+    expect(
+      isCountedLate(
+        row({
+          closed_at: new Date('2026-01-10T05:00:00Z'),
+          assignment: { student_deadline: deadline },
+          token_transactions: [{ hours_purchased: 2 }],
+        })
+      )
+    ).toBe(true);
+  });
+
+  it('never counts a row with nothing turned in', () => {
+    expect(isCountedLate(row({ assignment: { student_deadline: deadline } }))).toBe(false);
+  });
+
+  it('never counts an exempted row with nothing turned in', () => {
+    expect(isCountedLate(row({ is_late_override: true }))).toBe(false);
+    expect(
+      isCountedLate(row({ is_late_override: true, assignment: { student_deadline: deadline } }))
+    ).toBe(false);
   });
 });
 
@@ -270,6 +363,7 @@ describe('recordPush', () => {
   beforeEach(() => {
     findManyMock.mockReset();
     updateManyMock.mockReset();
+    updateManyAndReturnMock.mockReset();
   });
 
   const pushedAt = new Date('2026-09-20T12:00:00.000Z');
@@ -286,9 +380,17 @@ describe('recordPush', () => {
     token_transactions: hours.map(h => ({ hours_purchased: h })),
   });
 
+  // The candidate conditions, repeated in the write so a newer stamp or a
+  // grade landing between the read and the write wins.
+  const inTimeWhere = (ids: string[]) => ({
+    id: { in: ids },
+    OR: [{ closed_at: null }, { closed_at: { lt: pushedAt }, grades: { none: {} } }],
+  });
+  const lateFirstWhere = (ids: string[]) => ({ id: { in: ids }, closed_at: null });
+
   it('submits published REPO-mode rows: any first push, and later pushes only while ungraded', async () => {
     findManyMock.mockResolvedValue([candidate('ra-1', null), candidate('ra-2', null)]);
-    updateManyMock.mockResolvedValue({ count: 2 });
+    updateManyAndReturnMock.mockResolvedValue([{ id: 'ra-1' }, { id: 'ra-2' }]);
 
     const touched = await recordPush('gitrepo-1', pushedAt);
 
@@ -299,10 +401,12 @@ describe('recordPush', () => {
       assignment: { type: 'REPO', submission_mode: 'REPO', is_published: true },
       OR: [{ closed_at: null }, { closed_at: { lt: pushedAt }, grades: { none: {} } }],
     });
-    expect(updateManyMock).toHaveBeenCalledWith({
-      where: { id: { in: ['ra-1', 'ra-2'] } },
+    expect(updateManyAndReturnMock).toHaveBeenCalledWith({
+      where: { OR: [inTimeWhere(['ra-1', 'ra-2'])] },
       data: { status: 'CLOSED', closed_at: pushedAt },
+      select: { id: true },
     });
+    expect(updateManyMock).not.toHaveBeenCalled();
     expect(touched).toEqual([{ id: 'ra-1' }, { id: 'ra-2' }]);
   });
 
@@ -316,36 +420,66 @@ describe('recordPush', () => {
       candidate('extension-too-short-submitted', threeHoursBefore, [1], onTime),
       candidate('no-deadline', null),
     ]);
-    updateManyMock.mockResolvedValue({ count: 2 });
+    updateManyAndReturnMock.mockResolvedValue([{ id: 'within-extension' }, { id: 'no-deadline' }]);
 
     const touched = await recordPush('gitrepo-1', pushedAt);
 
-    expect(updateManyMock).toHaveBeenCalledWith({
-      where: { id: { in: ['within-extension', 'no-deadline'] } },
+    expect(updateManyAndReturnMock).toHaveBeenCalledWith({
+      where: { OR: [inTimeWhere(['within-extension', 'no-deadline'])] },
       data: { status: 'CLOSED', closed_at: pushedAt },
+      select: { id: true },
     });
     expect(touched).toEqual([{ id: 'within-extension' }, { id: 'no-deadline' }]);
   });
 
-  it('records a first push after the deadline as a late submission', async () => {
+  it('records a first push after the deadline as a late submission, only while still unsubmitted', async () => {
     const hourBefore = new Date(pushedAt.getTime() - 3_600_000);
-    findManyMock.mockResolvedValue([candidate('never-submitted', hourBefore)]);
-    updateManyMock.mockResolvedValue({ count: 1 });
+    findManyMock.mockResolvedValue([
+      candidate('never-submitted', hourBefore),
+      candidate('no-deadline', null),
+    ]);
+    updateManyAndReturnMock.mockResolvedValue([{ id: 'never-submitted' }, { id: 'no-deadline' }]);
 
     const touched = await recordPush('gitrepo-1', pushedAt);
 
-    expect(updateManyMock).toHaveBeenCalledWith({
-      where: { id: { in: ['never-submitted'] } },
+    expect(updateManyAndReturnMock).toHaveBeenCalledWith({
+      where: { OR: [inTimeWhere(['no-deadline']), lateFirstWhere(['never-submitted'])] },
       data: { status: 'CLOSED', closed_at: pushedAt },
+      select: { id: true },
     });
-    expect(touched).toEqual([{ id: 'never-submitted' }]);
+    expect(touched).toEqual([{ id: 'never-submitted' }, { id: 'no-deadline' }]);
+  });
+
+  it('returns only the rows the write changed: an older push after a newer stamp leaves it alone', async () => {
+    // Read before a newer push stamped the row; by the time this older push
+    // writes, the row's closed_at is later than pushedAt, so the conditional
+    // write matches nothing and reports nothing changed.
+    findManyMock.mockResolvedValue([candidate('stamped-meanwhile', null)]);
+    updateManyAndReturnMock.mockResolvedValue([]);
+
+    const touched = await recordPush('gitrepo-1', pushedAt);
+
+    const where = updateManyAndReturnMock.mock.calls[0][0].where;
+    expect(where).toEqual({ OR: [inTimeWhere(['stamped-meanwhile'])] });
+    // Only an empty closed_at or an earlier, ungraded one can be overwritten.
+    expect(where.OR[0].OR).not.toContainEqual({});
+    expect(touched).toEqual([]);
   });
 
   it('writes nothing when no row qualifies', async () => {
     findManyMock.mockResolvedValue([]);
 
     expect(await recordPush('gitrepo-1', pushedAt)).toEqual([]);
-    expect(updateManyMock).not.toHaveBeenCalled();
+    expect(updateManyAndReturnMock).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing when every candidate is past the cutoff with a submission', async () => {
+    const hourBefore = new Date(pushedAt.getTime() - 3_600_000);
+    const onTime = new Date(pushedAt.getTime() - 2 * 3_600_000);
+    findManyMock.mockResolvedValue([candidate('submitted', hourBefore, [], onTime)]);
+
+    expect(await recordPush('gitrepo-1', pushedAt)).toEqual([]);
+    expect(updateManyAndReturnMock).not.toHaveBeenCalled();
   });
 });
 
@@ -426,5 +560,109 @@ describe('recordExistingPush', () => {
     findUniqueMock.mockResolvedValueOnce(rowFor(null, 'REPO', new Date()));
     expect(await recordExistingPush('ra-1')).toBeNull();
     expect(listCommitsMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('recordPushAfterExtension', () => {
+  beforeEach(() => {
+    findUniqueMock.mockReset();
+    updateManyMock.mockReset();
+    updateManyMock.mockResolvedValue({ count: 1 });
+  });
+
+  const deadline = new Date('2026-09-20T00:00:00.000Z');
+  const hoursAfter = (h: number) => new Date(deadline.getTime() + h * 3_600_000);
+  const onTime = new Date('2026-09-19T12:00:00.000Z');
+
+  const rowFor = ({
+    mode = 'REPO',
+    published = true,
+    hours = [3] as number[],
+    lastPush = hoursAfter(2) as Date | null,
+    closed = onTime as Date | null,
+    grades = 0,
+    studentDeadline = deadline as Date | null,
+  } = {}) => ({
+    id: 'ra-1',
+    closed_at: closed,
+    assignment: {
+      type: 'REPO',
+      submission_mode: mode,
+      is_published: published,
+      student_deadline: studentDeadline,
+    },
+    token_transactions: hours.map(h => ({ hours_purchased: h })),
+    git_repo: { last_push_at: lastPush },
+    _count: { grades },
+  });
+
+  it('stamps a push the bought hours now cover', async () => {
+    findUniqueMock.mockResolvedValue(rowFor());
+
+    expect(await recordPushAfterExtension('ra-1')).toEqual(hoursAfter(2));
+    expect(findUniqueMock.mock.calls[0][0].select.token_transactions).toEqual({
+      select: { hours_purchased: true },
+    });
+    // The write re-checks the frozen and never-backwards rules itself.
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: {
+        id: 'ra-1',
+        grades: { none: {} },
+        OR: [{ closed_at: null }, { closed_at: { lt: hoursAfter(2) } }],
+      },
+      data: { status: 'CLOSED', closed_at: hoursAfter(2) },
+    });
+  });
+
+  it('counts a push exactly at the new cutoff', async () => {
+    findUniqueMock.mockResolvedValue(rowFor({ lastPush: hoursAfter(3) }));
+    expect(await recordPushAfterExtension('ra-1')).toEqual(hoursAfter(3));
+  });
+
+  it('leaves a push after the new cutoff alone', async () => {
+    findUniqueMock.mockResolvedValue(rowFor({ lastPush: hoursAfter(4) }));
+    expect(await recordPushAfterExtension('ra-1')).toBeNull();
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it('nets refunds out of the bought hours', async () => {
+    findUniqueMock.mockResolvedValue(rowFor({ hours: [3, -3] }));
+    expect(await recordPushAfterExtension('ra-1')).toBeNull();
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it('never touches a graded row', async () => {
+    findUniqueMock.mockResolvedValue(rowFor({ grades: 1 }));
+    expect(await recordPushAfterExtension('ra-1')).toBeNull();
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it('never moves the submission time backwards', async () => {
+    findUniqueMock.mockResolvedValue(rowFor({ lastPush: onTime }));
+    expect(await recordPushAfterExtension('ra-1')).toBeNull();
+    findUniqueMock.mockResolvedValue(rowFor({ lastPush: new Date(onTime.getTime() - 60_000) }));
+    expect(await recordPushAfterExtension('ra-1')).toBeNull();
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it('reports nothing when a concurrent push or grade wins the write', async () => {
+    findUniqueMock.mockResolvedValue(rowFor());
+    updateManyMock.mockResolvedValue({ count: 0 });
+    expect(await recordPushAfterExtension('ra-1')).toBeNull();
+  });
+
+  it('skips issue-mode, unpublished, never-pushed and deadline-free rows', async () => {
+    for (const r of [
+      rowFor({ mode: 'ISSUE' }),
+      rowFor({ published: false }),
+      rowFor({ lastPush: null }),
+      rowFor({ studentDeadline: null }),
+    ]) {
+      findUniqueMock.mockResolvedValueOnce(r);
+      expect(await recordPushAfterExtension('ra-1')).toBeNull();
+    }
+    findUniqueMock.mockResolvedValueOnce(null);
+    expect(await recordPushAfterExtension('missing')).toBeNull();
+    expect(updateManyMock).not.toHaveBeenCalled();
   });
 });

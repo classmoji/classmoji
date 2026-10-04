@@ -3,12 +3,14 @@
  * own repository submission or on a quiz assignment they take.
  *
  * Mirrors the student Assignments page's purchase action, student path only:
- * STUDENT tier, always self — the paying student is ALWAYS the caller.
+ * STUDENT tier, always self — the paying student is ALWAYS the caller, who
+ * pays from their own balance.
  *
  * Exactly one target, checked in the handler (the input is a flat shape, so
  * the schema cannot say "one of"):
- *   - git_repo_assignment_id: the caller's own individual submission (derived
- *     from the DB, never the request) → token.purchaseExtensionHours.
+ *   - git_repo_assignment_id: the caller's own submission, or one of a team
+ *     they are on (derived from the DB, never the request), as the web lets
+ *     any team member buy hours for their team → token.purchaseExtensionHours.
  *   - assignment_id: a QUIZ assignment open to students in this classroom →
  *     token.purchaseQuizExtensionHours. The hours move the caller's own due
  *     date on that quiz. A draft, not-yet-open, hidden or foreign assignment
@@ -104,10 +106,15 @@ async function purchaseOnSubmission(
   ctx: ToolContext
 ) {
   // S1 + self-scoping: the submission must exist in the authorized classroom
-  // AND belong to the calling student's own individual repo (team repos have
-  // no single owner to charge). Same non-leaking error either way.
+  // AND be the calling student's own repo or their team's (the caller pays
+  // from their own balance). Same non-leaking error either way.
   const gra = await loadGitRepoAssignmentInClassroom(args.git_repo_assignment_id, ctx);
-  if (gra.git_repo.student_id !== ctx.viewer.userId) {
+  const ownRepo = gra.git_repo.student_id === ctx.viewer.userId;
+  const teamRepo =
+    !ownRepo && gra.git_repo.team_id
+      ? await ClassmojiService.teamMembership.isTeamMember(gra.git_repo.team_id, ctx.viewer.userId)
+      : false;
+  if (!ownRepo && !teamRepo) {
     throw scopedNotFound('Submission');
   }
 
@@ -214,15 +221,17 @@ export const extensionPurchaseTool: ToolDefinition<ExtensionPurchaseArgs> = {
   annotations: { destructive: false },
   title: 'Purchase extension hours',
   description:
-    'Spends YOUR tokens to buy extension hours on one of YOUR OWN assignments (students ' +
-    'only). Give exactly one of: git_repo_assignment_id for a repository assignment (your ' +
-    'submission, my_submission.id in list_repos) or assignment_id for a quiz (assignment_id ' +
-    'in list_quizzes). Works at any time: before the deadline the hours push your deadline ' +
-    'out, after it they reduce how late the submission or quiz attempt counts. The price per ' +
-    'hour is the assignment’s tokens_per_hour, or the classroom’s default when that is null ' +
-    '(effective_tokens_per_hour in list_repos and list_quizzes; 0 = no extensions). Nothing ' +
-    'but your balance limits how many you buy, so buy no more hours than you need. An ' +
-    'assignment with no deadline has nothing to extend. Check your balance with my_tokens first.',
+    'Spends YOUR tokens to buy extension hours on one of YOUR OWN assignments, or on your ' +
+    'team’s repository (students only). Give exactly one of: git_repo_assignment_id for a ' +
+    'repository assignment (your or your team’s submission, my_submission.id in list_repos) ' +
+    'or assignment_id for a quiz (assignment_id in list_quizzes). Works at any time: before ' +
+    'the deadline the hours push your deadline out, after it they reduce how late the ' +
+    'submission or quiz attempt counts. Hours count net of refunds: a cancelled purchase ' +
+    'takes its hours back. The price per hour is the assignment’s tokens_per_hour, or the ' +
+    'classroom’s default when that is null (effective_tokens_per_hour in list_repos and ' +
+    'list_quizzes; 0 = no extensions). Nothing but your balance limits how many you buy, so ' +
+    'buy no more hours than you need. An assignment with no deadline has nothing to extend. ' +
+    'Check your balance with my_tokens first.',
   scope: 'write',
   roles: ['STUDENT'],
   inputSchema: {

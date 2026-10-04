@@ -44,6 +44,11 @@ vi.mock('@classmoji/database', () => {
   };
 });
 
+const recordPushAfterExtensionMock = vi.fn();
+vi.mock('../gitRepoAssignment.service.ts', () => ({
+  recordPushAfterExtension: (...args: unknown[]) => recordPushAfterExtensionMock(...args),
+}));
+
 const LONG_AGO = new Date('2026-01-01T00:00:00Z');
 
 const { purchaseExtensionHours, cancelPurchase } = await import('../token.service.ts');
@@ -391,5 +396,65 @@ describe('token.cancelPurchase', () => {
 
     const created = txCreateMock.mock.calls[0][0] as { data: { created_at: Date } };
     expect(created.data.created_at.getTime()).toBe(latest.getTime() + 1);
+  });
+});
+
+describe('token.purchaseExtensionHours re-reads a push-mode submission', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    txFindFirstMock.mockResolvedValue({ balance_after: 100, created_at: LONG_AGO });
+    settingsFindUniqueMock.mockResolvedValue({ default_tokens_per_hour: 0 });
+    txCreateMock.mockImplementation((args: { data: Record<string, unknown> }) => ({
+      id: 'tx-1',
+      ...args.data,
+    }));
+    recordPushAfterExtensionMock.mockResolvedValue(null);
+  });
+
+  const withMode = (mode: 'REPO' | 'ISSUE') => {
+    const gra = baseRepoAssignment();
+    (gra.assignment as Record<string, unknown>).submission_mode = mode;
+    return gra;
+  };
+
+  const purchase = () =>
+    purchaseExtensionHours({
+      classroomId: 'class-1',
+      studentId: 'student-1',
+      gitRepoAssignmentId: 'gra-1',
+      hours: 2,
+    });
+
+  it('runs after the purchase is written, on a REPO-mode submission', async () => {
+    graFindUniqueMock.mockResolvedValue(withMode('REPO'));
+
+    await expect(purchase()).resolves.toMatchObject({ id: 'tx-1', hours_purchased: 2 });
+    expect(recordPushAfterExtensionMock).toHaveBeenCalledWith('gra-1');
+    expect(txCreateMock.mock.invocationCallOrder[0]).toBeLessThan(
+      recordPushAfterExtensionMock.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('skips an issue-mode submission: closing the issue is the submission', async () => {
+    graFindUniqueMock.mockResolvedValue(withMode('ISSUE'));
+    await expect(purchase()).resolves.toBeTruthy();
+    expect(recordPushAfterExtensionMock).not.toHaveBeenCalled();
+  });
+
+  it('does not run when the purchase fails', async () => {
+    graFindUniqueMock.mockResolvedValue(withMode('REPO'));
+    txFindFirstMock.mockResolvedValue({ balance_after: 1, created_at: LONG_AGO });
+    await expect(purchase()).rejects.toThrow('Insufficient token balance');
+    expect(recordPushAfterExtensionMock).not.toHaveBeenCalled();
+  });
+
+  it('never fails a purchase that has been written', async () => {
+    graFindUniqueMock.mockResolvedValue(withMode('REPO'));
+    recordPushAfterExtensionMock.mockRejectedValue(new Error('connection reset'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(purchase()).resolves.toMatchObject({ id: 'tx-1' });
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    errorSpy.mockRestore();
   });
 });
