@@ -77,7 +77,12 @@ export function structuresEqual(a: DeckStructure, b: DeckStructure): boolean {
   for (let i = 0; i < orderA.length; i++) {
     if (orderA[i] !== orderB[i]) return false;
     if (parentsA.get(orderA[i]) !== parentsB.get(orderB[i])) return false;
-    if (a.containers.has(orderA[i]) !== b.containers.has(orderB[i])) return false;
+    // A stack with no children looks like an empty slide in the editor: only
+    // a stack that has children must be one on both sides.
+    if (a.containers.has(orderA[i]) !== b.containers.has(orderB[i])) {
+      const id = orderA[i];
+      if ((a.scopes.get(id)?.length ?? 0) > 0 || (b.scopes.get(id)?.length ?? 0) > 0) return false;
+    }
   }
   return true;
 }

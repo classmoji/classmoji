@@ -13,6 +13,7 @@ import {
   setSlideHidden,
   structureOfDoc,
   structureOrder,
+  structuresEqual,
   type DeckStructure,
 } from '../structure.ts';
 
@@ -171,5 +172,21 @@ describe('planReorder', () => {
 
   it('counts new ids as moves (inserts)', () => {
     expect([...planReorder(['a', 'b'], ['a', 'x', 'b']).move]).toEqual(['x']);
+  });
+});
+
+describe('structuresEqual', () => {
+  it('an empty stack equals the empty slide the editor shows for it', () => {
+    const doc = deckToYDoc({
+      version: 1,
+      theme: 'white',
+      codeTheme: 'github',
+      slides: [
+        { id: 'a', html: 'x' },
+        { id: 'st', children: [] },
+      ],
+    });
+    expect(structuresEqual(structureOfDoc(doc), struct(['a', 'st']))).toBe(true);
+    expect(structuresEqual(structureOfDoc(doc), struct(['a', ['st', 'c']]))).toBe(false);
   });
 });
