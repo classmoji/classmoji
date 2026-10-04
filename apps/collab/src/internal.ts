@@ -311,15 +311,32 @@ async function dispatch(
 
 async function snapshot(kind: CollabKind, id: string, runtime: CollabRuntime) {
   const adapter = await runtime.adapter(kind);
-  const row = await runtime.deps.store.get(kind, id);
-  const epoch = currentEpoch(row);
-  const version = row?.version ?? 0;
 
   const document = runtime.loadedDocument(kind, id);
   if (document && !document.isLoading) {
-    // adapter.snapshot reads from a clone of the live doc.
-    return { epoch, version, live: runtime.isLive(kind, id), content: adapter.snapshot(document) };
+    // Store pending edits first so `version` covers the content returned
+    // (MCP pins `live:<epoch>.<version>`). Content is read right after the
+    // row, with no await in between; an edit that lands during the row read
+    // makes the doc dirty again, so retry a few times.
+    for (let attempt = 0; ; attempt++) {
+      await runtime.flush(kind, id);
+      const row = await runtime.deps.store.get(kind, id);
+      // adapter.snapshot reads from a clone of the live doc.
+      const content = adapter.snapshot(document);
+      if (!runtime.hasUnstoredChanges(kind, id) || attempt >= 3) {
+        return {
+          epoch: currentEpoch(row),
+          version: row?.version ?? 0,
+          live: runtime.isLive(kind, id),
+          content,
+        };
+      }
+    }
   }
+
+  const row = await runtime.deps.store.get(kind, id);
+  const epoch = currentEpoch(row);
+  const version = row?.version ?? 0;
 
   let doc: Y.Doc;
   if (row && !isReseedMarker(row)) {

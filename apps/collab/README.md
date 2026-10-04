@@ -31,6 +31,16 @@ A restart is safe — `stopOnSignals` flushes pending stores on SIGTERM
 (raise the platform's kill timeout to cover it) and clients reconnect — but
 editors recorded before the restart get no co-author trailer.
 
+## Broadcasts are unbatched (`flushDelay: false`)
+
+Hocuspocus 4.7 batches broadcasts per event-loop turn by default. Collab
+turns that off so a server-side correction (the deck lock arbiter reverting
+a losing lock claim) goes out in the same tick as the change it answers.
+The cost: one WebSocket message per connection per change instead of one
+per turn — `changes × connections` messages. Fine for classroom-sized rooms
+(a handful of editors); if a room ever has hundreds of active writers,
+revisit (e.g. batch only non-deck rooms).
+
 ## Close codes and refusal reasons
 
 Constants in `@classmoji/collab`: 4403 (`COLLAB_CLOSE_FORBIDDEN`) when the

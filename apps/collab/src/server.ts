@@ -193,6 +193,11 @@ export class CollabRuntime {
       quiet: options.quiet ?? false,
       debounce: config.storeDebounceMs,
       maxDebounce: config.storeMaxDebounceMs,
+      // Broadcast every change synchronously, in the tick that applied it:
+      // a server correction (the deck lock arbiter undoing a losing claim)
+      // reaches clients before or with the losing update's ack, never a
+      // batch later. Costs one message per connection per change (see README).
+      flushDelay: false,
       onAuthenticate: payload => authenticate(payload, this.deps),
       onRequest: payload => handleRequest(payload, this),
       extensions: [
@@ -664,6 +669,9 @@ export class CollabRuntime {
     } finally {
       await connection.disconnect();
     }
+    // The disconnect stores right away; flush anyway so the version returned
+    // covers this edit even when a store was already running.
+    await this.flush(kind, docId);
     const row = await this.deps.store.get(kind, docId);
     return { result, version: row?.version ?? 0 };
   }

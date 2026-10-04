@@ -445,6 +445,38 @@ describe('outside pushes', () => {
   });
 });
 
+describe('snapshot / ops versions', () => {
+  it('a snapshot of a loaded doc stores pending edits first, so version covers content', async () => {
+    await server.close();
+    await setup({ storeDebounceMs: 60_000 });
+    const a = open();
+    await a.synced;
+    a.doc.transact(() => textOf(a.doc, 'p1').insert(0, 'x'));
+    await waitFor(() => server.runtime.hasUnstoredChanges('page', PAGE), 3000, 'change');
+    expect(server.store.storeCalls).toBe(0);
+
+    const res = await internal(server, 'GET', `/page/${PAGE}/snapshot`);
+    expect(res.body).toMatchObject({ epoch: 1, version: 1, live: true });
+    const p1 = (res.body.content as { blocks: { id: string; content: { text: string }[] }[] })
+      .blocks[0];
+    expect(p1.content[0].text).toBe('xOne');
+  });
+
+  it('ops return the version that includes them, with a browser connected', async () => {
+    await server.close();
+    await setup({ storeDebounceMs: 60_000 });
+    const a = open();
+    await a.synced;
+    const res = await internal(server, 'POST', `/page/${PAGE}/ops`, {
+      actor,
+      ops: [{ op: 'delete', id: 'p3' }],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.version).toBe((await server.store.get('page', PAGE))!.version);
+    expect(res.body.version).toBeGreaterThanOrEqual(1);
+  });
+});
+
 describe('checkpoint payloads', () => {
   it('a last-leave trigger within the window keeps the Save-version message', async () => {
     await server.runtime.triggerCheckpoint(CLASSROOM_ID, 'save-version', true, 'Week 3');
