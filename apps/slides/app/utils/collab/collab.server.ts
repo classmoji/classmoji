@@ -60,6 +60,28 @@ export function liveEditingEnv(classroom: unknown): CollabEnv | null {
   return collabEnv();
 }
 
+/**
+ * The last checkpoint covering the deck, for the header's "saved to GitHub"
+ * line until the room's own messages take over. Null before any run.
+ */
+export async function readDeckCheckpoint(
+  slideId: string
+): Promise<{ at: string; commit?: string; error?: string } | null> {
+  const row = await getPrisma().collabDoc.findUnique({
+    where: { kind_doc_id: { kind: 'deck', doc_id: slideId } },
+    select: { last_checkpoint_at: true, last_checkpoint_error: true, pushed_commit: true },
+  });
+  if (!row?.last_checkpoint_at) return null;
+  return {
+    at: row.last_checkpoint_at.toISOString(),
+    ...(row.last_checkpoint_error
+      ? { error: row.last_checkpoint_error }
+      : row.pushed_commit
+        ? { commit: row.pushed_commit }
+        : {}),
+  };
+}
+
 export async function readDeckEpoch(slideId: string): Promise<number> {
   const row = await getPrisma().collabDoc.findUnique({
     where: { kind_doc_id: { kind: 'deck', doc_id: slideId } },
@@ -119,8 +141,13 @@ export function closeLiveDeck(env: CollabEnv, slideId: string) {
   return collabInternalRequest<unknown>(env, 'POST', deckInternalPath(slideId, 'close'), body);
 }
 
-export function requestDeckCheckpoint(env: CollabEnv, slideId: string, actor: CollabActor) {
-  const body: CheckpointRequest = { actor };
+export function requestDeckCheckpoint(
+  env: CollabEnv,
+  slideId: string,
+  actor: CollabActor,
+  message?: string
+) {
+  const body: CheckpointRequest = { actor, ...(message ? { message } : {}) };
   return collabInternalRequest<unknown>(env, 'POST', deckInternalPath(slideId, 'checkpoint'), body);
 }
 

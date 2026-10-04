@@ -84,9 +84,11 @@ import {
   deckCollabData,
   liveEditingEnv,
   previewChangedSlides,
+  readDeckCheckpoint,
   readEditorName,
   requestDeckCheckpoint,
 } from '~/utils/collab/collab.server';
+import { VERSION_NOTE_MAX } from '~/components/collab/SaveVersionPopover';
 import { CollabRequestError } from '~/utils/collab/env.server';
 import RevealSlides, { type RevealSlidesHandle } from '~/components/RevealSlides';
 import { useDeckCollab } from '~/components/collab/useDeckCollab';
@@ -98,6 +100,8 @@ import LockDescriptions from '~/components/collab/LockDescriptions';
 import {
   claimStaleReload,
   deriveSyncStatus,
+  SAVE_VERSION_WAIT_MS,
+  checkpointAnswersSaveVersion,
   isCollabMode,
   liveLeaveRisk,
   mayAutoReloadStale,
@@ -299,6 +303,8 @@ export const loader = async ({
     liveEnv && userId && !previewActive
       ? await deckCollabData({ env: liveEnv, slideId, userId })
       : null;
+  // The header's "saved to GitHub" line until the room's own messages arrive.
+  const liveCheckpoint = collab ? await readDeckCheckpoint(slideId).catch(() => null) : null;
 
   // The deck VIEWER is the one EDITING surface, so it is the only one that can
   // mint the short-lived `edit` bucket: staff, and a staff read of the preview
@@ -636,6 +642,7 @@ export const loader = async ({
     noticeAutoMerged,
     // Live editing (flagged classroom + edit access); null keeps the git editor.
     collab,
+    liveCheckpoint,
     // Live classrooms: slides the pending preview changes (outlined in the preview view).
     previewChangedIds,
     // Preview state is staff-only; students/anonymous always get null.
@@ -837,7 +844,10 @@ export const action = async ({
   if (intent === 'collab-save-version') {
     if (!liveEnv) return data({ error: 'This deck is not edited live.' }, { status: 409 });
     try {
-      await requestDeckCheckpoint(liveEnv, slideId, await liveActor());
+      const rawNote = formData.get('message');
+      const note =
+        typeof rawNote === 'string' ? rawNote.trim().slice(0, VERSION_NOTE_MAX) : undefined;
+      await requestDeckCheckpoint(liveEnv, slideId, await liveActor(), note || undefined);
       return { intent: 'collab-save-version' as const, success: true };
     } catch (error: unknown) {
       console.error('[slides] Save version failed:', error);
@@ -2170,6 +2180,7 @@ export default function SlideViewer() {
     notice,
     noticeAutoMerged,
     collab,
+    liveCheckpoint,
     previewChangedIds,
   } = useLoaderData<typeof loader>();
   // Live editing: the deck is edited on the collab server, slide by slide.
@@ -3008,18 +3019,41 @@ export default function SlideViewer() {
       collabMode && currentLocation.pathname !== nextLocation.pathname && liveRiskRef.current()
   );
 
+  // "Version saved." only once the checkpoint that answers it arrives (or
+  // its failure); the button says "Saving version…" until then, at most
+  // SAVE_VERSION_WAIT_MS.
+  const [versionPendingSince, setVersionPendingSince] = useState<number | null>(null);
   useEffect(() => {
     const data = versionFetcher.data;
     if (!data || data.intent !== 'collab-save-version') return;
-    // Once per answer: the effect keys on the data alone.
-    if (data.success) toastRef.current.success('Version saved.');
+    if (data.success) setVersionPendingSince(Date.now());
     else if (data.error) toastRef.current.error(data.error);
   }, [versionFetcher.data]);
+  useEffect(() => {
+    const checkpoint = collabState.lastCheckpoint;
+    if (!checkpoint || !checkpointAnswersSaveVersion(checkpoint, versionPendingSince)) return;
+    setVersionPendingSince(null);
+    if (checkpoint.error) toastRef.current.error("Couldn't save this version to GitHub.");
+    else toastRef.current.success('Version saved.');
+    // Once per checkpoint message.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collabState.lastCheckpoint?.seq]);
+  useEffect(() => {
+    if (versionPendingSince === null) return;
+    const timer = setTimeout(() => setVersionPendingSince(null), SAVE_VERSION_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [versionPendingSince]);
 
-  const handleSaveVersion = useCallback(() => {
-    bridgeRef.current?.flushLocal();
-    versionFetcher.submit({ intent: 'collab-save-version' }, { method: 'post' });
-  }, [versionFetcher]);
+  const handleSaveVersion = useCallback(
+    (message: string) => {
+      bridgeRef.current?.flushLocal();
+      versionFetcher.submit(
+        { intent: 'collab-save-version', ...(message ? { message } : {}) },
+        { method: 'post' }
+      );
+    },
+    [versionFetcher]
+  );
 
   // Live editing: a slide someone else holds is read-only from the first frame.
   const handleSectionEditable = useCallback(
@@ -3387,7 +3421,7 @@ export default function SlideViewer() {
               </svg>
             </a>
             <h1 className="text-lg font-semibold text-gray-900 dark:text-white truncate">
-              {slide.title}
+              {collabState.liveTitle ?? slide.title}
             </h1>
           </div>
 
@@ -3413,7 +3447,8 @@ export default function SlideViewer() {
                 onSaveVersion={
                   collabState.hasSynced && !collabState.rejected ? handleSaveVersion : null
                 }
-                savingVersion={versionFetcher.state !== 'idle'}
+                savingVersion={versionFetcher.state !== 'idle' || versionPendingSince !== null}
+                checkpoint={collabState.lastCheckpoint ?? liveCheckpoint}
               />
             )}
             {collabMode && isEditing && (

@@ -1,9 +1,20 @@
-import { IconCloudCheck, IconCloudOff, IconRefresh, IconSparkles } from '@tabler/icons-react';
+import { useEffect, useState } from 'react';
+import {
+  IconBrandGithub,
+  IconCloudCheck,
+  IconCloudOff,
+  IconRefresh,
+  IconSparkles,
+} from '@tabler/icons-react';
+
+import SaveVersionPopover from './SaveVersionPopover';
 
 import {
   SYNC_STATUS_LABEL,
   initialsOf,
   peerLabel,
+  savedToGitHubStatus,
+  type LiveCheckpoint,
   type CollabPeer,
   type SyncStatus,
 } from '~/utils/collab/collab';
@@ -20,7 +31,17 @@ const statusStyle: Record<SyncStatus, string> = {
 function StatusIcon({ status }: { status: SyncStatus }) {
   if (status === 'synced') return <IconCloudCheck size={16} aria-hidden />;
   if (status === 'offline') return <IconCloudOff size={16} aria-hidden />;
-  return <IconRefresh size={16} className="animate-spin" aria-hidden />;
+  return <IconRefresh size={16} className="motion-safe:animate-spin" aria-hidden />;
+}
+
+/** Re-render every `ms` so a relative time stays true. */
+function useNow(ms: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), ms);
+    return () => window.clearInterval(timer);
+  }, [ms]);
+  return now;
 }
 
 export function PeerAvatar({
@@ -62,15 +83,20 @@ export function PeerAvatar({
 export default function CollabHeaderControls({
   peers,
   syncStatus,
+  checkpoint = null,
   onSaveVersion,
   savingVersion,
 }: {
   peers: CollabPeer[];
   syncStatus: SyncStatus;
+  /** The last checkpoint covering this deck (null before anything is known). */
+  checkpoint?: LiveCheckpoint | null;
   /** Null while a version cannot be asked for (refused, not synced). */
-  onSaveVersion: (() => void) | null;
+  onSaveVersion: ((message: string) => void) | null;
   savingVersion: boolean;
 }) {
+  const now = useNow(30_000);
+  const saved = savedToGitHubStatus(checkpoint, now);
   const shown = peers.slice(0, MAX_AVATARS);
   const hidden = peers.slice(MAX_AVATARS);
 
@@ -83,6 +109,8 @@ export default function CollabHeaderControls({
           ))}
           {hidden.length > 0 && (
             <span
+              role="img"
+              aria-label={hidden.map(peer => peerLabel(peer)).join(', ')}
               title={hidden.map(peer => peerLabel(peer)).join(', ')}
               className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-gray-200 px-1 text-[10px] font-semibold text-gray-700 ring-2 ring-white dark:bg-gray-700 dark:text-gray-200 dark:ring-gray-900"
             >
@@ -93,6 +121,8 @@ export default function CollabHeaderControls({
       )}
 
       <span
+        role="status"
+        aria-live="polite"
         className={`flex items-center gap-1 ${statusStyle[syncStatus]}`}
         data-testid="live-sync-status"
         data-status={syncStatus}
@@ -101,16 +131,25 @@ export default function CollabHeaderControls({
         {SYNC_STATUS_LABEL[syncStatus]}
       </span>
 
-      {onSaveVersion && (
-        <button
-          type="button"
-          onClick={onSaveVersion}
-          disabled={savingVersion}
-          className="px-2.5 py-1 text-sm font-medium rounded-md transition-colors text-gray-700 ring-1 ring-gray-300 hover:bg-gray-100 disabled:opacity-60 disabled:cursor-not-allowed dark:text-gray-200 dark:ring-gray-600 dark:hover:bg-gray-700"
+      {saved && (
+        <span
+          role="status"
+          aria-live="polite"
+          title={saved.title}
+          data-testid="live-saved-status"
+          data-tone={saved.tone}
+          className={`hidden md:flex items-center gap-1 ${
+            saved.tone === 'saved'
+              ? 'text-gray-500 dark:text-gray-400'
+              : 'text-amber-600 dark:text-amber-400'
+          }`}
         >
-          {savingVersion ? 'Saving version…' : 'Save version'}
-        </button>
+          <IconBrandGithub size={14} aria-hidden />
+          {saved.label}
+        </span>
       )}
+
+      {onSaveVersion && <SaveVersionPopover onSave={onSaveVersion} saving={savingVersion} />}
     </div>
   );
 }

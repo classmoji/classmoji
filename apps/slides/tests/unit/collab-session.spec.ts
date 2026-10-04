@@ -10,8 +10,11 @@ import type { CollabLoaderData } from '@classmoji/collab';
 import {
   liveLeaveRisk,
   mayAutoReloadStale,
+  checkpointAnswersSaveVersion,
   initialsOf,
   normalizeRejectReason,
+  parseStatelessMessage,
+  savedToGitHubStatus,
   peersFromAwareness,
   rejectionNotice,
 } from '../../app/utils/collab/collab.ts';
@@ -125,5 +128,47 @@ test.describe('refusals and closes', () => {
     const agent = peers.find(p => p.agent);
     expect(agent).toMatchObject({ name: 'Ada Lovelace', agent: true, self: false });
     expect(initialsOf('Ada Lovelace (agent)')).toBe('AL');
+  });
+
+  test('checkpoint messages: saved-to-GitHub line and the Save version answer', () => {
+    const t = stubbed();
+    t.args().onStateless({
+      payload: JSON.stringify({
+        type: 'checkpoint',
+        at: '2026-10-04T03:00:00Z',
+        commit: 'abcdef1234',
+      }),
+    });
+    expect(t.session.getState().lastCheckpoint).toMatchObject({ commit: 'abcdef1234', seq: 1 });
+    t.args().onStateless({ payload: JSON.stringify({ type: 'deck-meta', title: 'Renamed' }) });
+    expect(t.session.getState().liveTitle).toBe('Renamed');
+    t.args().onStateless({ payload: 'not json' });
+    expect(parseStatelessMessage({ type: 'other' })).toBeNull();
+
+    const now = Date.parse('2026-10-04T03:02:00Z');
+    expect(savedToGitHubStatus({ at: '2026-10-04T03:00:00Z', commit: 'abcdef1234' }, now)).toEqual({
+      tone: 'saved',
+      label: 'Saved to GitHub 2 minutes ago',
+      title: 'Commit abcdef1',
+    });
+    expect(
+      savedToGitHubStatus({ at: '2026-10-04T03:00:00Z', error: 'push refused' }, now)
+    ).toMatchObject({
+      tone: 'unsaved',
+      label: 'Not saved to GitHub yet',
+      title: 'push refused',
+    });
+    expect(checkpointAnswersSaveVersion({ at: '2026-10-04T03:00:00Z' }, null)).toBe(false);
+    expect(checkpointAnswersSaveVersion({ at: '2026-10-04T03:00:00Z' }, now - 110_000)).toBe(true);
+    expect(checkpointAnswersSaveVersion({ at: '2026-10-04T02:00:00Z' }, now)).toBe(false);
+  });
+
+  test('an agent on a slide is placed there', () => {
+    const peers = peersFromAwareness(
+      [[5, { user: { name: 'Ada (agent)', color: '#111', agent: true }, slide: 's9' }]],
+      1,
+      'me'
+    );
+    expect(peers[0]).toMatchObject({ agent: true, slideId: 's9', name: 'Ada' });
   });
 });

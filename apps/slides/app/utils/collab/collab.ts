@@ -177,6 +177,106 @@ export function initialsOf(name: string): string {
   return (first + last).toUpperCase();
 }
 
+// ─── Messages from the collab server ─────────────────────────────────────────
+
+/** The last checkpoint covering this deck, as the header shows it. */
+export interface LiveCheckpoint {
+  /** ISO time of the run. */
+  at: string;
+  commit?: string;
+  /** Why the run did not save this deck (absent when it did). */
+  error?: string;
+}
+
+/** Stateless messages the collab server broadcasts to a deck's room. */
+export type LiveStatelessMessage =
+  | ({ type: 'checkpoint' } & LiveCheckpoint)
+  | { type: 'deck-meta'; title?: string };
+
+/** A stateless payload as one of ours, or null for anything else. */
+export function parseStatelessMessage(payload: unknown): LiveStatelessMessage | null {
+  let value: unknown = payload;
+  if (typeof payload === 'string') {
+    try {
+      value = JSON.parse(payload);
+    } catch {
+      return null;
+    }
+  }
+  if (!value || typeof value !== 'object') return null;
+  const message = value as Record<string, unknown>;
+  if (message.type === 'checkpoint') {
+    if (typeof message.at !== 'string' || !message.at) return null;
+    return {
+      type: 'checkpoint',
+      at: message.at,
+      ...(typeof message.commit === 'string' && message.commit ? { commit: message.commit } : {}),
+      ...(typeof message.error === 'string' && message.error ? { error: message.error } : {}),
+    };
+  }
+  if (message.type === 'deck-meta') {
+    if (typeof message.title !== 'string' || !message.title) return null;
+    return { type: 'deck-meta', title: message.title };
+  }
+  return null;
+}
+
+/** "just now", "2 minutes ago", "3 hours ago", "4 days ago". */
+export function relativeTimeFrom(iso: string, now: number): string {
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return '';
+  const seconds = Math.max(0, Math.round((now - then) / 1000));
+  if (seconds < 45) return 'just now';
+  const unit = (value: number, word: string) => `${value} ${word}${value === 1 ? '' : 's'} ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return unit(minutes, 'minute');
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return unit(hours, 'hour');
+  return unit(Math.round(hours / 24), 'day');
+}
+
+const REASON_CAP = 120;
+
+/**
+ * The header's "saved to GitHub" line: when the last checkpoint covering the
+ * deck saved it (tooltip: the commit), or that it has not been saved yet
+ * (tooltip: a short reason). Null before anything is known.
+ */
+export function savedToGitHubStatus(
+  checkpoint: LiveCheckpoint | null,
+  now: number
+): { tone: 'saved' | 'unsaved'; label: string; title: string | undefined } | null {
+  if (!checkpoint) return null;
+  if (checkpoint.error) {
+    const reason = checkpoint.error.replace(/\s+/g, ' ').trim();
+    return {
+      tone: 'unsaved',
+      label: 'Not saved to GitHub yet',
+      title: reason.length > REASON_CAP ? `${reason.slice(0, REASON_CAP - 1)}…` : reason,
+    };
+  }
+  const when = relativeTimeFrom(checkpoint.at, now);
+  return {
+    tone: 'saved',
+    label: when ? `Saved to GitHub ${when}` : 'Saved to GitHub',
+    title: checkpoint.commit ? `Commit ${checkpoint.commit.slice(0, 7)}` : undefined,
+  };
+}
+
+/** How long "Saving version…" waits for the checkpoint that answers it. */
+export const SAVE_VERSION_WAIT_MS = 60_000;
+
+/** A checkpoint message that arrived after "Save version" was accepted (clock skew allowed). */
+export function checkpointAnswersSaveVersion(
+  checkpoint: LiveCheckpoint,
+  pendingSince: number | null,
+  skewMs = 30_000
+): boolean {
+  if (pendingSince === null) return false;
+  const at = Date.parse(checkpoint.at);
+  return Number.isNaN(at) || at >= pendingSince - skewMs;
+}
+
 // ─── Stale rooms ─────────────────────────────────────────────────────────────
 
 /** Session-storage key recording that a stale room already reloaded once. */

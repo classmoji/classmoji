@@ -22,6 +22,8 @@ import {
 
 import {
   normalizeRejectReason,
+  parseStatelessMessage,
+  type LiveCheckpoint,
   type LiveRejectReason,
   peersFromAwareness,
   type CollabPeer,
@@ -47,6 +49,8 @@ export interface CollabProviderArgs {
   onAuthenticationFailed(data: { reason: string }): void;
   /** The socket closed: 4403 = access re-check failed, 4409 = deck closed (reload). */
   onClose(data: { event: { code?: number } | null | undefined }): void;
+  /** A stateless message from the server (checkpoint results, deck title). */
+  onStateless(data: { payload: string }): void;
 }
 
 export type CollabProviderFactory = (args: CollabProviderArgs) => CollabProviderLike;
@@ -61,6 +65,10 @@ export interface CollabSessionState {
   /** The server closed the deck under us (flag off, deck deleted): reload the route. */
   reloadRequired: boolean;
   peers: CollabPeer[];
+  /** The last checkpoint message (seq increments per message). */
+  lastCheckpoint: (LiveCheckpoint & { seq: number }) | null;
+  /** The deck's title when it changed while open. */
+  liveTitle: string | null;
 }
 
 export const INITIAL_SESSION_STATE: CollabSessionState = {
@@ -71,6 +79,8 @@ export const INITIAL_SESSION_STATE: CollabSessionState = {
   rejected: null,
   reloadRequired: false,
   peers: [],
+  lastCheckpoint: null,
+  liveTitle: null,
 };
 
 const asStatus = (value: unknown): ProviderStatus =>
@@ -114,6 +124,7 @@ export class DeckCollabSession {
         for (const listener of this.unsyncedListeners) listener(number);
       },
       onAuthenticationFailed: ({ reason }) => this.reject(reason),
+      onStateless: ({ payload }) => this.receive(payload),
       onClose: ({ event }) => {
         if (event?.code === COLLAB_CLOSE_FORBIDDEN) this.reject('forbidden');
         else if (event?.code === COLLAB_CLOSE_RELOAD) {
@@ -213,6 +224,20 @@ export class DeckCollabSession {
       this.provider.destroy();
     } catch (error) {
       console.warn('[collab] provider destroy failed:', error);
+    }
+  }
+
+  private seq = 0;
+
+  /** A stateless message: a checkpoint result, or the deck's new title. */
+  private receive(payload: string) {
+    const message = parseStatelessMessage(payload);
+    if (!message || this.destroyed) return;
+    if (message.type === 'checkpoint') {
+      const { type: _type, ...checkpoint } = message;
+      this.update({ lastCheckpoint: { ...checkpoint, seq: ++this.seq } });
+    } else if (message.title) {
+      this.update({ liveTitle: message.title });
     }
   }
 
