@@ -205,6 +205,8 @@ export const findAssignedByGrader = async (graderId: string, classroomId: string
             analytics_snapshot: {
               select: { total_commits: true, last_commit_at: true, fetched_at: true },
             },
+            // Purchased extension hours, for lateness (is_late, num_late_hours).
+            token_transactions: { select: { hours_purchased: true } },
             grades: {
               include: {
                 token_transaction: true,

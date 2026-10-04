@@ -15,7 +15,11 @@
  *                            rendering it — a data API must not mirror that leak.
  */
 
-import type { GitWebContext } from '@classmoji/utils';
+import {
+  isPastDeadlineIgnoringOverride,
+  netExtensionHours,
+  type GitWebContext,
+} from '@classmoji/utils';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
 import { ToolError } from '../mcp/errors.ts';
@@ -38,13 +42,27 @@ import {
  * Compact queue row: identity narrowed, no token/transaction internals.
  * Exported so the `list_submissions` tool (tools/reads.ts) renders the SAME
  * per-submission shape as the grading-queue resource — the two must never drift.
+ *
+ * `extension_hours` is the net hours the student bought (never below 0), and
+ * `is_late` follows the web's `is_late`: submitted after the deadline plus
+ * those hours, or not submitted with that time passed; false under
+ * `is_late_override`. Unlike the dashboard late count (`isCountedLate`),
+ * which counts submitted work only, an unsubmitted row can be late here.
+ * Every source must load `token_transactions`, refunds included.
  */
 export function queueRow(s: SubmissionLike, git: GitWebContext | null) {
+  const lateness = {
+    closed_at: s.closed_at ?? null,
+    assignment: s.assignment ?? null,
+    token_transactions: s.token_transactions ?? [],
+  };
   return {
     id: s.id,
     status: s.status,
     closed_at: s.closed_at ?? null,
     is_late_override: s.is_late_override ?? false,
+    extension_hours: netExtensionHours(s.token_transactions),
+    is_late: !s.is_late_override && isPastDeadlineIgnoringOverride(lateness),
     assignment: s.assignment
       ? {
           id: s.assignment.id,
@@ -137,8 +155,11 @@ export const gradingQueueResource: ResourceDefinition = {
   title: 'Grading queue',
   description:
     'All submissions (GitRepoAssignments) in the classroom plus the subset assigned to you as ' +
-    'grader, with grade emojis, grader assignments, and the classroom emoji scale. Teaching ' +
-    'team only.',
+    'grader, with grade emojis, grader assignments, and the classroom emoji scale. Each row ' +
+    'has extension_hours (hours bought with tokens, net of refunds) and is_late (past ' +
+    'student_deadline plus extension_hours; false when is_late_override). is_late includes ' +
+    'unsubmitted rows past that time, unlike the dashboard late count, which counts submitted ' +
+    'work only. Teaching team only.',
   scope: 'read',
   roles: TEACHING_TEAM,
   handler: async (_vars, ctx) => {
@@ -171,7 +192,9 @@ export const submissionResource: ResourceDefinition = {
   uriTemplate: 'classmoji://{org}/{slug}/submissions/{submissionId}',
   title: 'Submission detail',
   description:
-    'One submission (GitRepoAssignment) with its grades, graders, and analytics snapshot if ' +
+    'One submission (GitRepoAssignment) with its grades, graders, extension_hours (net of ' +
+    'refunds), is_late (past student_deadline plus extension_hours, submitted or not, unlike ' +
+    'the dashboard late count, which counts submitted work only) and analytics snapshot if ' +
     'present. Teaching team only. submissionId comes from the grading-queue resource.',
   scope: 'read',
   roles: TEACHING_TEAM,
@@ -189,6 +212,8 @@ export const submissionResource: ResourceDefinition = {
         git_repo: { include: { student: true, team: true, repository: true } },
         grades: { include: { grader: true } },
         graders: { include: { grader: true } },
+        // Purchased extension hours, for queueRow's lateness fields.
+        token_transactions: { select: { hours_purchased: true } },
         analytics_snapshot: true,
       },
     })) as (SubmissionLike & { analytics_snapshot?: unknown }) | null;

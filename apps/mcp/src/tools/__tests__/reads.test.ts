@@ -175,6 +175,45 @@ describe('list_submissions', () => {
     expect(payload.truncated).toBe(true);
   });
 
+  it('reports extension hours and lateness measured from the extended deadline', async () => {
+    const deadline = new Date('2026-03-01T00:00:00Z');
+    const at = (hours: number) => new Date(deadline.getTime() + hours * 3_600_000);
+    const sub = (id: string, closedAt: Date | null, hours: number[], isLateOverride = false) => ({
+      id,
+      status: closedAt ? 'CLOSED' : 'OPEN',
+      closed_at: closedAt,
+      is_late_override: isLateOverride,
+      assignment: { id: 'a-1', title: 'HW1', student_deadline: deadline },
+      git_repo: { id: `r-${id}`, repository: null, student: null, team: null },
+      token_transactions: hours.map(h => ({ hours_purchased: h })),
+      grades: [],
+      graders: [],
+    });
+    mocks.findByClassroomId.mockResolvedValue([
+      sub('covered', at(3), [3]),
+      sub('late', at(5), [2, 2]),
+      sub('refunded', at(3), [3, -3]),
+      sub('waived', at(5), [], true),
+      sub('missing', null, [1]),
+    ]);
+
+    const payload = parse(await listSubmissionsTool.handler({ classroom: CLASSROOM }, staffCtx()));
+    const rows = Object.fromEntries(
+      (payload.submissions as Array<{ id: string; extension_hours: number; is_late: boolean }>).map(
+        r => [r.id, { extension_hours: r.extension_hours, is_late: r.is_late }]
+      )
+    );
+    expect(rows).toEqual({
+      covered: { extension_hours: 3, is_late: false },
+      late: { extension_hours: 4, is_late: true },
+      refunded: { extension_hours: 0, is_late: true },
+      waived: { extension_hours: 0, is_late: false },
+      missing: { extension_hours: 1, is_late: true },
+    });
+    // The transactions themselves stay out of the payload.
+    expect(payload.submissions[0]).not.toHaveProperty('token_transactions');
+  });
+
   it('NO-DRIFT: per-submission rows are identical to the grading-queue resource', async () => {
     const tool = parse(await listSubmissionsTool.handler({ classroom: CLASSROOM }, staffCtx()));
     const resource = (await gradingQueueResource.handler(

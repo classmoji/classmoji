@@ -1,7 +1,9 @@
 /**
  * Unit tests for extension_purchase: the exactly-one target rule, the quiz
  * path (assignment_id), the uniform not_found for every quiz a student may not
- * see, the REPO pointer, the mapping of the service's refusals, the audit row,
+ * see, the REPO pointer, who may buy on which submission (own repo or a team
+ * they are on; anything else is the not-found an unknown id gets), the
+ * mapping of the service's refusals, the audit row,
  * and the description's byte budget. `@classmoji/services` is mocked
  * factory-style; the messages fed to the error mapping are the ones
  * token.purchaseQuizExtensionHours / updateExtension actually throw.
@@ -14,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   assignmentFindById: vi.fn(),
   quizzesVisible: vi.fn(),
   graFindById: vi.fn(),
+  isTeamMember: vi.fn(),
   purchaseExtensionHours: vi.fn(),
   purchaseQuizExtensionHours: vi.fn(),
   auditCreate: vi.fn(),
@@ -29,6 +32,7 @@ vi.mock('@classmoji/services', () => ({
     assignment: { findById: (...a: unknown[]) => mocks.assignmentFindById(...a) },
     entitlement: { quizzesVisible: (...a: unknown[]) => mocks.quizzesVisible(...a) },
     gitRepoAssignment: { findById: (...a: unknown[]) => mocks.graFindById(...a) },
+    teamMembership: { isTeamMember: (...a: unknown[]) => mocks.isTeamMember(...a) },
     token: {
       purchaseExtensionHours: (...a: unknown[]) => mocks.purchaseExtensionHours(...a),
       purchaseQuizExtensionHours: (...a: unknown[]) => mocks.purchaseQuizExtensionHours(...a),
@@ -98,6 +102,7 @@ beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.auditCreate.mockResolvedValue(undefined);
   mocks.quizzesVisible.mockResolvedValue(true);
+  mocks.isTeamMember.mockResolvedValue(false);
   mocks.assignmentFindById.mockResolvedValue(quizAssignment());
   mocks.purchaseQuizExtensionHours.mockResolvedValue({
     id: 'tx-1',
@@ -347,6 +352,99 @@ describe('extension_purchase on a submission (git_repo_assignment_id)', () => {
   });
 });
 
+describe('extension_purchase: whose submission (own repo or a team the caller is on)', () => {
+  const submission = (gitRepo: {
+    classroom_id?: string;
+    student_id: string | null;
+    team_id: string | null;
+  }) => ({
+    id: SUBMISSION,
+    git_repo: { classroom_id: 'class-1', ...gitRepo },
+  });
+
+  const buySubmission = () =>
+    extensionPurchaseTool.handler(
+      { classroom: 'org/w26', git_repo_assignment_id: SUBMISSION, hours: 2 },
+      CTX
+    );
+
+  const SUBMISSION_NOT_FOUND = {
+    kind: 'not_found',
+    message: 'Submission not found in this classroom',
+  };
+
+  beforeEach(() => {
+    mocks.purchaseExtensionHours.mockResolvedValue({
+      id: 'tx-3',
+      hours_purchased: 2,
+      amount: -6,
+      balance_after: 94,
+    });
+  });
+
+  it("sells hours on the caller's own repo without a team lookup", async () => {
+    mocks.graFindById.mockResolvedValue(submission({ student_id: 'stu-1', team_id: null }));
+
+    expect(parse(await buySubmission()).success).toBe(true);
+    expect(mocks.isTeamMember).not.toHaveBeenCalled();
+    expect(mocks.purchaseExtensionHours).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      studentId: 'stu-1',
+      gitRepoAssignmentId: SUBMISSION,
+      hours: 2,
+    });
+  });
+
+  it("sells hours on a team's repo to a member, paid from the member's own balance", async () => {
+    mocks.graFindById.mockResolvedValue(submission({ student_id: null, team_id: 'team-1' }));
+    mocks.isTeamMember.mockResolvedValue(true);
+
+    expect(parse(await buySubmission()).success).toBe(true);
+    expect(mocks.isTeamMember).toHaveBeenCalledWith('team-1', 'stu-1');
+    expect(mocks.purchaseExtensionHours).toHaveBeenCalledWith(
+      expect.objectContaining({ studentId: 'stu-1', gitRepoAssignmentId: SUBMISSION })
+    );
+  });
+
+  it("refuses a team's repo to a non-member with the not-found error", async () => {
+    mocks.graFindById.mockResolvedValue(submission({ student_id: null, team_id: 'team-1' }));
+
+    expect(await rejection(buySubmission())).toEqual(SUBMISSION_NOT_FOUND);
+    expect(mocks.purchaseExtensionHours).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it("refuses a member of another team, asking about the repo's own team", async () => {
+    // The caller is on team-2; the submission belongs to team-1.
+    mocks.isTeamMember.mockImplementation(
+      async (teamId: string, userId: string) => teamId === 'team-2' && userId === 'stu-1'
+    );
+    mocks.graFindById.mockResolvedValue(submission({ student_id: null, team_id: 'team-1' }));
+
+    expect(await rejection(buySubmission())).toEqual(SUBMISSION_NOT_FOUND);
+    expect(mocks.isTeamMember).toHaveBeenCalledWith('team-1', 'stu-1');
+    expect(mocks.purchaseExtensionHours).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it("refuses a classmate's individual repo the same way", async () => {
+    mocks.graFindById.mockResolvedValue(submission({ student_id: 'stu-2', team_id: null }));
+
+    expect(await rejection(buySubmission())).toEqual(SUBMISSION_NOT_FOUND);
+    expect(mocks.isTeamMember).not.toHaveBeenCalled();
+    expect(mocks.purchaseExtensionHours).not.toHaveBeenCalled();
+  });
+
+  it('refuses a submission from another classroom the same way', async () => {
+    mocks.graFindById.mockResolvedValue(
+      submission({ classroom_id: 'class-2', student_id: 'stu-1', team_id: null })
+    );
+
+    expect(await rejection(buySubmission())).toEqual(SUBMISSION_NOT_FOUND);
+    expect(mocks.purchaseExtensionHours).not.toHaveBeenCalled();
+  });
+});
+
 describe('extension_purchase definition', () => {
   it('keeps its description under the 1,500-byte client cut and names both ids', () => {
     const description = extensionPurchaseTool.description;
@@ -354,6 +452,8 @@ describe('extension_purchase definition', () => {
     expect(description).toContain('exactly one of');
     expect(description).toContain('git_repo_assignment_id');
     expect(description).toContain('assignment_id for a quiz');
+    expect(description).toContain('team');
+    expect(description).toContain('net of refunds');
   });
 
   it('stays a STUDENT write with its annotations', () => {

@@ -9,6 +9,7 @@ import {
 import { Prisma } from '@prisma/client';
 import type { TokenTransactionType } from '@prisma/client';
 import { quizzesVisibleOrThrow } from './entitlement.service.ts';
+import { recordPushAfterExtension } from './gitRepoAssignment.service.ts';
 
 /**
  * One extension row. A row names at most one thing it was bought for: a
@@ -188,6 +189,9 @@ export const updateExtension = async (data: UpdateExtensionInput) => {
  * The submission must be the paying student's own: their repo, or a repo of a
  * team they are on. Anything else reads as not found.
  *
+ * On a push-mode (REPO) submission, a push the old cutoff left out is
+ * re-read once the purchase has committed (`recordPushAfterExtension`).
+ *
  * NOTE: callers are responsible for authorizing `studentId` (self-access or
  * teaching-team).
  */
@@ -245,7 +249,7 @@ export const purchaseExtensionHours = async ({
   }
 
   // Recompute the price; the balance check still runs inside updateExtension.
-  return updateExtension({
+  const transaction = await updateExtension({
     classroom_id: classroomId,
     student_id: studentId,
     git_repo_assignment_id: repoAssignment.id,
@@ -254,6 +258,22 @@ export const purchaseExtensionHours = async ({
     type: 'PURCHASE',
     description: `Purchase of ${hours} hour(s).`,
   });
+
+  // Push mode: a push the old cutoff left out may count now. The purchase has
+  // committed, so a failure here is logged, never thrown; the next push
+  // stamps the submission as usual.
+  if (repoAssignment.assignment.submission_mode === 'REPO') {
+    try {
+      await recordPushAfterExtension(repoAssignment.id);
+    } catch (error) {
+      console.error('[token] could not re-read the submission after an extension purchase', {
+        gitRepoAssignmentId: repoAssignment.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return transaction;
 };
 
 /**
