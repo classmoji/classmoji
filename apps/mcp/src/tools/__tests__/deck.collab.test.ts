@@ -11,6 +11,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { itemHash } from '@classmoji/collab/hash';
 import type { ToolContext } from '../../mcp/registry.ts';
 import type { DeckJson } from '../../../../../packages/services/src/slides/deckTypes.ts';
 
@@ -440,6 +441,65 @@ describe('per-slide staleness check', () => {
     serve(9, DECK());
     await expect(apply([UPDATE_OP])).rejects.toMatchObject({ code: 'CONTENT_CONFLICT' });
     expect(posted()).toHaveLength(0);
+  });
+});
+
+describe('guarded deck ops and inserted ids', () => {
+  const serve = (version: number, deck: DeckJson) =>
+    route('GET', 'snapshot', () => ({
+      status: 200,
+      body: { epoch: 1, version, live: true, content: deck },
+    }));
+  const read = () => deckOutlineTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID }, CTX);
+  const apply = (ops: unknown[], expected_sha = 'live:1.4') =>
+    deckApplyTool.handler(
+      { classroom: 'org/x', slide_id: SLIDE_ID, expected_sha, ops: ops as never },
+      CTX
+    );
+  const lastPost = () => calls.filter(call => call.method === 'POST').at(-1);
+
+  it('sends itemHash of each targeted slide as the agent read it', async () => {
+    serve(4, DECK());
+    await read();
+    await apply([UPDATE_OP]);
+    expect(lastPost()?.body?.expect).toEqual({ bbb: itemHash(DECK().slides[1]) });
+  });
+
+  it("returns the live deck's ids for inserted slides and caches them", async () => {
+    serve(4, DECK());
+    await read();
+    route('POST', 'ops', () => ({
+      status: 200,
+      body: { epoch: 1, version: 5, insertedIds: ['srv-slide'] },
+    }));
+    const insert = { op: 'insert', slides: [{ html: '<p>New</p>' }], position: { at: 'end' } };
+    const first = parse(await apply([insert]));
+    expect(first.applied[0]).toEqual({ op: 'insert', count: 1, ids: ['srv-slide'] });
+    expect(first).not.toHaveProperty('note');
+    serve(8, {
+      ...DECK(),
+      slides: [
+        { id: 'aaa', html: '<h1>Edited by someone</h1>' },
+        DECK().slides[1],
+        { id: 'srv-slide', html: '<p>New</p>' },
+      ],
+    });
+    route('POST', 'ops', () => ({ status: 200, body: { epoch: 1, version: 9 } }));
+    const second = parse(
+      await apply([{ op: 'update', id: 'srv-slide', html: '<p>Newer</p>' }], 'live:1.5')
+    );
+    expect(second.success).toBe(true);
+  });
+
+  it('a held slide refuses any change, and the message says notes and attributes too', async () => {
+    route('POST', 'ops', () => ({
+      status: 409,
+      body: { error: 'slide-locked', slideId: 'bbb', holder: { name: 'Alan Turing' } },
+    }));
+    const error = await apply([{ op: 'update', id: 'bbb', notes: '<p>n</p>' }]).catch(
+      (e: unknown) => e
+    );
+    expect((error as Error).message).toMatch(/notes and attributes included/);
   });
 });
 

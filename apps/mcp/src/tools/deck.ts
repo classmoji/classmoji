@@ -73,6 +73,7 @@ import { z } from 'zod';
 import {
   CollabRequestError,
   actorFor,
+  checkpointFields,
   fetchSnapshot,
   liveStateFor,
   requireLiveEnv,
@@ -83,7 +84,13 @@ import {
   postOps,
   type CollabEnv,
 } from '../collab/client.ts';
-import { assertLivePin, checkLivePin, rememberSnapshot } from '../collab/liveCheck.ts';
+import {
+  assertLivePin,
+  checkLivePin,
+  expectFor,
+  rememberSnapshot,
+  splitInsertedIds,
+} from '../collab/liveCheck.ts';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import {
@@ -255,6 +262,7 @@ function liveDeckHead(slide: SlideWithRepoRecord, snapshot: SnapshotResponse<'de
     version: snapshot.version,
     epoch: snapshot.epoch,
     live: { open_now: snapshot.live },
+    ...checkpointFields(snapshot),
     at: 'main',
     theme: deck.theme,
     ...(deck.themeDark ? { theme_dark: deck.themeDark } : {}),
@@ -578,33 +586,59 @@ async function applyDeckLive(
     }
     throw error;
   }
-  // The live deck mints its own ids for inserted slides; the ones minted in
-  // this dry run would be wrong, so they are not reported.
   const hasInsert = applied.some(entry => entry.op === 'insert');
-  applied = applied.map(entry => {
-    if (entry.op !== 'insert') return entry;
-    const { ids: _ids, children: _children, ...rest } = entry;
-    return rest;
-  });
+  // A new stack's children: the server reports top-level ids only.
+  const insertsStack = args.ops.some(
+    op => op.op === 'insert' && op.slides.some(spec => (spec.children?.length ?? 0) > 0)
+  );
 
+  // The server re-checks the targeted slides inside the live transaction
+  // against what the agent read (authoritative; the check above is early).
+  const expect = expectFor(
+    'deck',
+    agentView ?? (args.expected_sha ? snapshot.content : null),
+    args.ops
+  );
   const actor = await actorFor(ctx);
-  let version: number;
+  let response: Awaited<ReturnType<typeof postOps>>;
   try {
-    ({ version } = await postOps(env, 'deck', slide.id, args.ops, actor));
+    response = await postOps(env, 'deck', slide.id, args.ops, actor, expect);
   } catch (error) {
     throw liveWriteError(error, 'deck');
   }
+  const { version } = response;
+  const epoch = response.epoch ?? snapshot.epoch;
+  const insertedIds = splitInsertedIds(args.ops, response.insertedIds);
+
+  // Inserted slides carry the ids the LIVE deck gave them, never this dry
+  // run's (random) ones.
+  applied = applied.map((entry, i) => {
+    if (entry.op !== 'insert') return entry;
+    const { ids: _ids, children: _children, ...rest } = entry;
+    return insertedIds ? { ...rest, ids: insertedIds[i] } : rest;
+  });
+
   // Cache the agent's view of the new version — the snapshot it READ plus its
-  // own ops — so a follow-up pinned to `new_sha` is checked per slide and a
-  // person's edit since the read is still caught. Not after an insert: the
-  // live deck minted different ids than this dry run (the follow-up then gets
-  // the strict check; re-reading caches the real ids).
-  if (agentView && !hasInsert) {
+  // own ops, inserted slides renamed to the live ids — so a follow-up pinned
+  // to `new_sha` is checked per slide and a person's edit since the read is
+  // still caught. Skipped when inserted ids are unknown (a new stack's
+  // children, or no insertedIds): the follow-up then gets the strict check.
+  if (agentView && (!hasInsert || (insertedIds && !insertsStack))) {
     try {
-      const view = applyDeckOps(agentView as DeckJson, args.ops, {
+      const replay = applyDeckOps(agentView as DeckJson, args.ops, {
         starterCustomCss: slideService.STARTER_CUSTOM_CSS,
-      }).deck;
-      rememberSnapshot('deck', slide.id, snapshot.epoch, version, view);
+      });
+      const rename = new Map<string, string>();
+      replay.applied.forEach((entry, i) => {
+        if (entry.op !== 'insert' || !insertedIds) return;
+        (entry.ids as string[]).forEach((local, j) => rename.set(local, insertedIds[i][j]));
+      });
+      const view = replay.deck;
+      for (const top of view.slides) {
+        top.id = rename.get(top.id) ?? top.id;
+        for (const child of top.children ?? []) child.id = rename.get(child.id) ?? child.id;
+      }
+      rememberSnapshot('deck', slide.id, epoch, version, view);
     } catch {
       // The ops do not replay on the read snapshot: nothing to cache.
     }
@@ -619,7 +653,7 @@ async function applyDeckLive(
       tool: 'deck_apply',
       ops: applied,
       ...(args.expected_sha ? { expected_sha: args.expected_sha } : {}),
-      new_sha: liveSha(snapshot.epoch, version),
+      new_sha: liveSha(epoch, version),
       committed_to: 'live',
       ...(hasDestructiveOps ? { prior_slide_count: countSlides(snapshot.content.slides) } : {}),
     } as Prisma.InputJsonValue,
@@ -627,14 +661,21 @@ async function applyDeckLive(
 
   return ok({
     success: true,
-    new_sha: liveSha(snapshot.epoch, version),
+    new_sha: liveSha(epoch, version),
     sha_source: 'live',
     version,
     committed_to: 'live',
     slide_count: countSlides(newDeck.slides),
     applied,
-    ...(hasInsert
-      ? { note: 'Inserted slides get their ids in the live deck — call deck_outline for them.' }
+    ...(!insertedIds && Array.isArray(response.insertedIds) && response.insertedIds.length > 0
+      ? { inserted_ids: response.insertedIds }
+      : {}),
+    ...(hasInsert && (!insertedIds || insertsStack)
+      ? {
+          note:
+            'The live deck named the inserted slides; call deck_outline for ' +
+            (insertedIds ? "the new stack's child ids." : 'their ids.'),
+        }
       : {}),
   });
 }
@@ -659,7 +700,7 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
     "(main's sha will conflict). Slide html/notes must not contain <section> tags (slide " +
     'structure is managed via ops). To create a vertical stack, insert a slide with ' +
     "children (child slides, one nesting level) instead of html; the response's applied " +
-    'entry reports the minted container and child ids.',
+    "entry reports the new ids (in live mode, a new stack's child ids come from deck_outline).",
   scope: 'write',
   roles: TEACHING_TEAM,
   inputSchema: {

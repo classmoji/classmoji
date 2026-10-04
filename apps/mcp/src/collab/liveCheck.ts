@@ -26,9 +26,10 @@
  */
 
 import type { CollabKind, PageSnapshotContent } from '@classmoji/collab';
+import { itemHash } from '@classmoji/collab/hash';
 import type { DeckJson, DeckSlide } from '@classmoji/services/slides';
-import { ToolError } from '../mcp/errors.ts';
 import {
+  blockChangedError,
   liveEpochConflict,
   liveVersionConflict,
   notALiveVersion,
@@ -237,20 +238,6 @@ export function changedDeckTargets(then: DeckJson, now: DeckJson, ops: AnyOp[]):
   return changed;
 }
 
-/** The refusal when something an apply depends on changed since the agent's read. */
-export function blockChangedError(kind: 'page' | 'deck', ids: string[]): ToolError {
-  const what = kind === 'page' ? 'block' : 'slide';
-  const read = kind === 'page' ? 'page_content_get' : 'deck_get';
-  const named = ids.map(id => `'${id}'`).join(', ');
-  return new ToolError(
-    'invalid_params',
-    `Someone changed what these ops touch since you read it (${what}s: ${named}), so nothing ` +
-      `was applied. Re-read with ${read} and retry, or use mode: 'preview'.`,
-    'BLOCK_CHANGED',
-    { changed_ids: ids }
-  );
-}
-
 // ─── The check ───────────────────────────────────────────────────────────────
 
 /** Refuse, before any request, a missing or malformed pin. */
@@ -296,4 +283,76 @@ export function checkLivePin(
   if (changed.includes('__document__')) throw liveVersionConflict(expectedSha, fresh, kind);
   if (changed.length > 0) throw blockChangedError(kind, changed);
   return { agentView: then };
+}
+
+// ─── Server-side guard (`expect`) and inserted ids ──────────────────────────
+
+/**
+ * The `expect` map for a guarded `/ops` call: `itemHash` of every block/slide
+ * the ops update, delete or move — and, for replace_all, every top-level
+ * block — as it was in `base` (the snapshot the agent read, or the fresh one
+ * when the MCP no longer has the read). The collab server recomputes these
+ * inside the live transaction and refuses with block-changed on a mismatch,
+ * which also closes the gap between this process's check and the apply.
+ * Anchors are not listed: an insert after a paragraph someone is typing in
+ * is fine, and an anchor that is gone fails the op on its own.
+ */
+export function expectFor(
+  kind: 'page' | 'deck',
+  base: unknown,
+  ops: AnyOp[]
+): Record<string, string> {
+  if (!base) return {};
+  const targets = collectTargets(ops);
+  const expect: Record<string, string> = {};
+  if (kind === 'page') {
+    const blocks = (base as PageSnapshotContent).blocks;
+    if (targets.whole && Array.isArray(blocks)) {
+      for (const block of blocks as PageBlock[]) {
+        if (block && typeof block.id === 'string') expect[block.id] = itemHash(block);
+      }
+    }
+    for (const id of targets.content) {
+      const block = findBlock(blocks, id);
+      if (block) expect[id] = itemHash(block);
+    }
+  } else {
+    const slides = (base as DeckJson).slides ?? [];
+    for (const id of targets.content) {
+      const slide = findSlide(slides, id);
+      if (slide) expect[id] = itemHash(slide);
+    }
+  }
+  return expect;
+}
+
+/** How many top-level items each op inserts (0 for non-inserts). */
+function insertCounts(ops: AnyOp[]): number[] {
+  return ops.map(op => {
+    if (op.op !== 'insert') return 0;
+    const items =
+      (op as { blocks?: unknown[]; slides?: unknown[] }).blocks ??
+      (op as { slides?: unknown[] }).slides;
+    return Array.isArray(items) ? items.length : 0;
+  });
+}
+
+/**
+ * The server's `insertedIds` (flat, op order) split per op, or null when they
+ * do not line up with the ops' inserted items one to one (then the caller
+ * reports them flat and does not cache a view built on guessed ids).
+ */
+export function splitInsertedIds(ops: AnyOp[], insertedIds: unknown): string[][] | null {
+  if (!Array.isArray(insertedIds) || !insertedIds.every(id => typeof id === 'string')) {
+    return null;
+  }
+  const counts = insertCounts(ops);
+  if (counts.reduce((a, b) => a + b, 0) !== insertedIds.length) return null;
+  const out: string[][] = [];
+  let at = 0;
+  for (const count of counts) {
+    out.push((insertedIds as string[]).slice(at, at + count));
+    at += count;
+  }
+  return out;
 }

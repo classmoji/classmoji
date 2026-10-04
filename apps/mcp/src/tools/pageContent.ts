@@ -32,6 +32,7 @@ import type { SnapshotResponse } from '@classmoji/collab';
 import {
   CollabRequestError,
   actorFor,
+  checkpointFields,
   fetchSnapshot,
   liveStateFor,
   requireLiveEnv,
@@ -43,7 +44,13 @@ import {
   postOps,
   type CollabEnv,
 } from '../collab/client.ts';
-import { assertLivePin, checkLivePin, rememberSnapshot } from '../collab/liveCheck.ts';
+import {
+  assertLivePin,
+  checkLivePin,
+  expectFor,
+  rememberSnapshot,
+  splitInsertedIds,
+} from '../collab/liveCheck.ts';
 import { normalizePageBlocks } from '../collab/pageSchema.ts';
 import {
   REPO_REST_MAX_BYTES,
@@ -309,6 +316,7 @@ function liveVersionFields(snapshot: SnapshotResponse<'page'>) {
     version: snapshot.version,
     epoch: snapshot.epoch,
     live: { open_now: snapshot.live },
+    ...checkpointFields(snapshot),
   };
 }
 
@@ -642,10 +650,28 @@ async function rememberAgentView(
   epoch: number,
   version: number,
   agentView: unknown,
-  ops: PageContentOp[]
+  ops: PageContentOp[],
+  insertedIds: string[][] | null
 ): Promise<void> {
   if (!agentView) return;
   const view = agentView as { blocks: unknown[]; coverImage: unknown };
+  // Give inserted blocks the ids the live page gave them, so the view and
+  // the live page name them alike.
+  if (ops.some(op => op.op === 'insert')) {
+    if (!insertedIds) return;
+    ops = ops.map((op, i) =>
+      op.op === 'insert'
+        ? {
+            ...op,
+            // The server fills missing ids from the op's own blocks first (so
+            // nested ids match), then reports the top-level ids it kept.
+            blocks: ClassmojiService.pageContent
+              .ensureBlockIds(op.blocks)
+              .map((block, j) => ({ ...block, id: insertedIds[i][j] })),
+          }
+        : op
+    );
+  }
   let reminted = false;
   let next: unknown[];
   try {
@@ -709,24 +735,41 @@ async function applyLive(
     throw error;
   }
 
+  // The server re-checks the targeted blocks inside the live transaction
+  // against what the agent read (authoritative; the check above is early).
+  const expect = expectFor(
+    'page',
+    agentView ?? (args.expected_sha ? snapshot.content : null),
+    args.ops
+  );
   const actor = await actorFor(ctx);
-  let version: number;
+  let response: Awaited<ReturnType<typeof postOps>>;
   try {
-    ({ version } = await postOps(env, 'page', page.id, args.ops, actor));
+    response = await postOps(env, 'page', page.id, args.ops, actor, expect);
   } catch (error) {
     throw liveWriteError(error, 'page');
   }
+  const { version } = response;
+  const epoch = response.epoch ?? snapshot.epoch;
+  const insertedIds = splitInsertedIds(args.ops, response.insertedIds);
   const after = ClassmojiService.pageContent.ensureBlockIds(newBlocks) as BlockNode[];
-  await rememberAgentView(page.id, snapshot.epoch, version, agentView, args.ops);
+  await rememberAgentView(page.id, epoch, version, agentView, args.ops, insertedIds);
 
+  // Ids come from the live page: the server's insertedIds (re-mints
+  // included), not this process's dry run.
   const applied = summarizeOps(args.ops);
-  for (const remint of idRemints) {
-    const entry = applied[remint.op_index];
-    if (entry) {
-      const reminted =
-        (entry.reminted_ids as Array<{ from: string; to: string }> | undefined) ?? [];
-      reminted.push({ from: remint.from, to: remint.to });
-      entry.reminted_ids = reminted;
+  applied.forEach((entry, i) => {
+    if (insertedIds && insertedIds[i].length > 0) entry.ids = insertedIds[i];
+  });
+  if (!insertedIds) {
+    for (const remint of idRemints) {
+      const entry = applied[remint.op_index];
+      if (entry) {
+        const reminted =
+          (entry.reminted_ids as Array<{ from: string; to: string }> | undefined) ?? [];
+        reminted.push({ from: remint.from, to: remint.to });
+        entry.reminted_ids = reminted;
+      }
     }
   }
   const hasDestructiveOps = args.ops.some(op => op.op === 'replace_all' || op.op === 'delete');
@@ -739,7 +782,7 @@ async function applyLive(
       tool: 'page_content_apply',
       ops: applied,
       ...(args.expected_sha ? { expected_sha: args.expected_sha } : {}),
-      new_sha: liveSha(snapshot.epoch, version),
+      new_sha: liveSha(epoch, version),
       committed_to: 'live',
       ...(hasDestructiveOps ? { prior_block_count: countBlocks(priorBlocks) } : {}),
       ...(structureRepairs.length > 0 ? { structure_repairs: structureRepairs } : {}),
@@ -748,11 +791,14 @@ async function applyLive(
 
   return ok({
     success: true,
-    new_sha: liveSha(snapshot.epoch, version),
+    new_sha: liveSha(epoch, version),
     version,
     block_count: countBlocks(after),
     committed_to: 'live',
     applied,
+    ...(!insertedIds && Array.isArray(response.insertedIds) && response.insertedIds.length > 0
+      ? { inserted_ids: response.insertedIds }
+      : {}),
     ...(structureRepairs.length > 0
       ? { structure_repairs: structureRepairs, note: STRUCTURE_REPAIR_NOTE }
       : {}),

@@ -140,6 +140,20 @@ export function notALiveVersion(kind: 'page' | 'deck'): ToolError {
   );
 }
 
+/** The refusal when something an apply depends on changed since the agent's read. */
+export function blockChangedError(kind: 'page' | 'deck', ids: string[]): ToolError {
+  const what = kind === 'page' ? 'block' : 'slide';
+  const read = kind === 'page' ? 'page_content_get' : 'deck_get';
+  const named = ids.map(id => `'${id}'`).join(', ');
+  return new ToolError(
+    'invalid_params',
+    `Someone changed what these ops touch since you read it (${what}s: ${named}), so nothing ` +
+      `was applied. Re-read with ${read} and retry, or use mode: 'preview'.`,
+    'BLOCK_CHANGED',
+    { changed_ids: ids }
+  );
+}
+
 /** Live ops that change or remove existing content, sent without a pin. */
 export function pinRequired(kind: 'page' | 'deck'): ToolError {
   const what = kind === 'page' ? 'blocks' : 'slides';
@@ -150,6 +164,23 @@ export function pinRequired(kind: 'page' | 'deck'): ToolError {
       'people made since your read are not overwritten.',
     'EXPECTED_SHA_REQUIRED'
   );
+}
+
+// ─── Checkpoint status ───
+
+/**
+ * When the live document last reached GitHub, for read results:
+ * `saved_to_github_at` (ISO) and `save_error` when that save failed. Absent
+ * fields (an older collab server) are simply left out.
+ */
+export function checkpointFields(snapshot: {
+  lastCheckpointAt?: string | null;
+  lastCheckpointError?: string | null;
+}): { saved_to_github_at: string | null; save_error?: string } {
+  return {
+    saved_to_github_at: snapshot.lastCheckpointAt ?? null,
+    ...(snapshot.lastCheckpointError ? { save_error: snapshot.lastCheckpointError } : {}),
+  };
 }
 
 // ─── Internal API ────────────────────────────────────────────────────────────
@@ -245,14 +276,25 @@ export function fetchSnapshot<K extends CollabKind>(
 }
 
 /** Apply id-aware ops to the live document as `actor`. */
+/**
+ * Apply id-aware ops to the live document as `actor`. `expect` maps each id
+ * the ops depend on to `itemHash` of that item as the agent read it; the
+ * server recomputes them inside the live transaction and refuses with 409
+ * `block-changed` (nothing applied) on any mismatch.
+ */
 export function postOps(
   env: CollabEnv,
   kind: CollabKind,
   id: string,
   ops: unknown[],
-  actor: CollabActor
+  actor: CollabActor,
+  expect?: Record<string, string>
 ): Promise<OpsResponse> {
-  return collabRequest<OpsResponse>(env, 'POST', docPath(kind, id, 'ops'), { ops, actor });
+  return collabRequest<OpsResponse>(env, 'POST', docPath(kind, id, 'ops'), {
+    ops,
+    actor,
+    ...(expect && Object.keys(expect).length > 0 ? { expect } : {}),
+  });
 }
 
 /** Set (or clear, with null) a live page's cover. */
@@ -376,6 +418,13 @@ export function liveWriteError(
   if (error.status === 409 && error.code === 'slide-locked') {
     return slideLockedError(error.body);
   }
+  if (error.status === 409 && error.code === 'block-changed') {
+    const ids = (error.body as { changedIds?: unknown }).changedIds;
+    return blockChangedError(
+      what,
+      Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string') : []
+    );
+  }
   if (
     error.code === 'legacy-html' ||
     error.code === 'unparseable-deck' ||
@@ -420,8 +469,10 @@ export function slideLockedError(body: unknown): ToolError {
   const slide = slideId ? `slide '${slideId}'` : 'a slide these ops touch';
   return new ToolError(
     'invalid_params',
-    `${who} is editing ${slide} right now, so nothing was changed. Edit another slide, try this ` +
-      "one again once they are done, or use mode: 'preview' to propose the change for review.",
+    `${who} is editing ${slide} right now, so nothing was changed — while someone holds a ` +
+      'slide, every change to it is refused, its notes and attributes included. Edit another ' +
+      "slide, try this one again once they are done, or use mode: 'preview' to propose the " +
+      'change for review.',
     'SLIDE_LOCKED',
     { ...(slideId ? { slide_id: slideId } : {}), held_by: who }
   );

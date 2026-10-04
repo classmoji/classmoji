@@ -11,6 +11,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { itemHash } from '@classmoji/collab/hash';
 import type { ToolContext } from '../../mcp/registry.ts';
 
 const mocks = vi.hoisted(() => ({
@@ -670,6 +671,93 @@ describe('pinned live applies (live:<epoch>.<version>)', () => {
     mocks.pageFindById.mockResolvedValue(PLAIN_DRAFT);
     await expect(apply([UPDATE_OP])).rejects.toMatchObject({ kind: 'invalid_params' });
     expect(mocks.savePageContent).not.toHaveBeenCalled();
+  });
+});
+
+describe('guarded ops, inserted ids and save status', () => {
+  const serve = (version: number, blocks: unknown[], extra: Record<string, unknown> = {}) =>
+    route('GET', 'snapshot', () => ({
+      status: 200,
+      body: { epoch: 1, version, live: true, content: { blocks, coverImage: null }, ...extra },
+    }));
+  const readOutline = () =>
+    pageContentOutlineTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX);
+  const apply = (ops: unknown[], expected_sha?: string) =>
+    pageContentApplyTool.handler(
+      {
+        classroom: 'org/x',
+        page_id: PAGE_ID,
+        ...(expected_sha ? { expected_sha } : {}),
+        ops: ops as never,
+      },
+      CTX
+    );
+  const lastPost = () => calls.filter(call => call.method === 'POST').at(-1);
+
+  it('sends itemHash of each targeted block as the agent read it', async () => {
+    serve(7, LIVE_BLOCKS());
+    await readOutline();
+    serve(9, LIVE_BLOCKS());
+    await apply([UPDATE_OP], 'live:1.7');
+    expect(lastPost()?.body?.expect).toEqual({ p1: itemHash(LIVE_BLOCKS()[1]) });
+  });
+
+  it("maps the server's 409 block-changed to BLOCK_CHANGED with its ids", async () => {
+    route('POST', 'ops', () => ({
+      status: 409,
+      body: { error: 'block-changed', changedIds: ['p1'] },
+    }));
+    await expect(apply([UPDATE_OP], 'live:1.7')).rejects.toMatchObject({
+      code: 'BLOCK_CHANGED',
+      data: { changed_ids: ['p1'] },
+    });
+  });
+
+  it("reports the live page's ids for inserted blocks and caches them for follow-ups", async () => {
+    serve(7, LIVE_BLOCKS());
+    await readOutline();
+    route('POST', 'ops', () => ({
+      status: 200,
+      body: { epoch: 1, version: 8, insertedIds: ['srv1'] },
+    }));
+    const insert = {
+      op: 'insert',
+      blocks: [{ type: 'paragraph', content: [] }],
+      position: { at: 'end' },
+    };
+    const first = parse(await apply([insert], 'live:1.7'));
+    expect(first.applied[0]).toMatchObject({ op: 'insert', count: 1, ids: ['srv1'] });
+    // Someone types in the heading; the agent edits its new block.
+    const typed = LIVE_BLOCKS();
+    typed[0].content = [{ type: 'text', text: 'Week one' }];
+    const srv1 = {
+      id: 'srv1',
+      type: 'paragraph',
+      content: [],
+      props: { textColor: 'default' },
+      children: [],
+    };
+    serve(11, [...typed, srv1]);
+    route('POST', 'ops', () => ({ status: 200, body: { epoch: 1, version: 12 } }));
+    const second = parse(
+      await apply(
+        [{ op: 'update', id: 'srv1', block: { type: 'paragraph', content: [] } }],
+        'live:1.8'
+      )
+    );
+    expect(second.success).toBe(true);
+  });
+
+  it('live reads say when the page last reached GitHub and why it did not', async () => {
+    serve(7, LIVE_BLOCKS(), {
+      lastCheckpointAt: '2026-10-03T21:00:00.000Z',
+      lastCheckpointError: 'push rejected',
+    });
+    const outline = parse(await readOutline());
+    expect(outline).toMatchObject({
+      saved_to_github_at: '2026-10-03T21:00:00.000Z',
+      save_error: 'push rejected',
+    });
   });
 });
 
