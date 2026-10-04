@@ -504,6 +504,16 @@ export {
   SurveyValidationError,
   type SurveyContext,
 } from './classmoji/survey.service.ts';
+export {
+  FeedbackValidationError,
+  FeedbackNotFoundError,
+  FEEDBACK_STATUSES,
+  FEEDBACK_CATEGORIES,
+  FEEDBACK_STATUS_LABELS,
+  isFeedbackStatus,
+  isFeedbackCategory,
+  type FeedbackSort,
+} from './classmoji/feedback.service.ts';
 
 // Fly certificate automation for class-site custom domains. Every method throws
 // a typed FlyCertError when the credentials are absent, so importing this in a

@@ -28,7 +28,13 @@ const TA_PREFS: PrefRow[] = [
   { key: 'email_ta_regrade_assigned', label: 'Assigned a regrade request' },
 ];
 
-const ALLOWED_KEYS = new Set<EmailPrefKey>([...STUDENT_PREFS, ...TA_PREFS].map(p => p.key));
+const FEEDBACK_PREFS: PrefRow[] = [
+  { key: 'email_feedback_status_changed', label: 'A feedback post you follow changes status' },
+];
+
+const ALLOWED_KEYS = new Set<EmailPrefKey>(
+  [...STUDENT_PREFS, ...TA_PREFS, ...FEEDBACK_PREFS].map(p => p.key)
+);
 
 const isAllowedKey = (key: string): key is EmailPrefKey => (ALLOWED_KEYS as Set<string>).has(key);
 
@@ -126,6 +132,15 @@ const SettingsNotifications = ({ loaderData }: Route.ComponentProps) => {
         <h2 className="text-sm font-semibold text-ink-1 mb-2">As a teaching assistant</h2>
         <div className="rounded-xl border border-line px-4">
           {TA_PREFS.map(p => (
+            <Toggle key={p.key} prefKey={p.key} label={p.label} checked={Boolean(prefs[p.key])} />
+          ))}
+        </div>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-sm font-semibold text-ink-1 mb-2">Feedback board</h2>
+        <div className="rounded-xl border border-line px-4">
+          {FEEDBACK_PREFS.map(p => (
             <Toggle key={p.key} prefKey={p.key} label={p.label} checked={Boolean(prefs[p.key])} />
           ))}
         </div>

@@ -13,9 +13,7 @@ type DoodleHighlightProps = {
 export function DoodleHighlight({ children, tone, delay = 0 }: DoodleHighlightProps) {
   const reduced = useReducedMotion();
   const fill =
-    tone === 'github'
-      ? 'fill-[#D1D5DB] dark:fill-[#3F4654]'
-      : 'fill-[#FDD3BD] dark:fill-[#7A3A1C]';
+    tone === 'github' ? 'fill-[#D1D5DB] dark:fill-[#3F4654]' : 'fill-[#FDD3BD] dark:fill-[#7A3A1C]';
 
   return (
     <span className="relative inline-block whitespace-nowrap px-[0.06em]">

@@ -146,3 +146,20 @@ describe('notificationLink — the prefix is deterministic', () => {
     );
   });
 });
+
+describe('notificationLink — feedback posts', () => {
+  it('opens the post itself, with no classroom or role needed', () => {
+    expect(
+      notificationLink(
+        {
+          type: 'FEEDBACK_STATUS_CHANGED',
+          resource_type: 'feedback_post',
+          resource_id: 'post-1',
+          classroom: null,
+          metadata: { status_label: 'Planned' },
+        } as Parameters<typeof notificationLink>[0],
+        []
+      )
+    ).toBe('/feedback/p/post-1');
+  });
+});

@@ -16,7 +16,8 @@ type EmailPrefKey =
   | 'email_assignment_due_date_changed'
   | 'email_assignment_graded'
   | 'email_ta_grading_assigned'
-  | 'email_ta_regrade_assigned';
+  | 'email_ta_regrade_assigned'
+  | 'email_feedback_status_changed';
 
 const PREF_FIELD_BY_TYPE: Record<NotificationType, EmailPrefKey> = {
   QUIZ_PUBLISHED: 'email_quiz_published',
@@ -28,6 +29,7 @@ const PREF_FIELD_BY_TYPE: Record<NotificationType, EmailPrefKey> = {
   ASSIGNMENT_GRADED: 'email_assignment_graded',
   TA_GRADING_ASSIGNED: 'email_ta_grading_assigned',
   TA_REGRADE_ASSIGNED: 'email_ta_regrade_assigned',
+  FEEDBACK_STATUS_CHANGED: 'email_feedback_status_changed',
 };
 
 const DEFAULT_PREFS: Record<EmailPrefKey, boolean> = {
@@ -40,6 +42,7 @@ const DEFAULT_PREFS: Record<EmailPrefKey, boolean> = {
   email_assignment_graded: true,
   email_ta_grading_assigned: true,
   email_ta_regrade_assigned: true,
+  email_feedback_status_changed: true,
 };
 
 export interface CreateNotificationsInput {
