@@ -78,8 +78,11 @@ export interface CommitFilesInput {
   groups?: CommitGroup[];
   /** Shorthand for one unchecked group (`id: 'files'`). */
   files?: GitFileWrite[];
-  /** Full commit message, trailers included. */
-  message: string;
+  /**
+   * Full commit message, trailers included — or built from the ids of the
+   * groups actually in the commit (excluded groups must not be named in it).
+   */
+  message: string | ((includedIds: string[]) => string);
   author: GitIdentity;
   /** Defaults to `author`. */
   committer?: GitIdentity;
@@ -518,7 +521,11 @@ export async function commitFilesToRemote(input: CommitFilesInput): Promise<Comm
       const baseTree = await repo.gitStr(['rev-parse', `${base}^{tree}`]);
       const tree = await repo.applyChanges(baseTree, changeTree);
       if (tree === baseTree) return null;
-      return repo.gitStr(['commit-tree', '--no-gpg-sign', tree, '-p', base], input.message);
+      const message =
+        typeof input.message === 'function'
+          ? input.message(live.map(g => g.group.id))
+          : input.message;
+      return repo.gitStr(['commit-tree', '--no-gpg-sign', tree, '-p', base], message);
     };
 
     await screen(parent, null);

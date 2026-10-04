@@ -11,11 +11,17 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 
-import { FRAGMENT, serializePageContent } from '@classmoji/page-schema'; // eslint-disable-line import/no-unresolved
+import { FRAGMENT, SCHEMA_VERSION, serializePageContent } from '@classmoji/page-schema'; // eslint-disable-line import/no-unresolved
 // eslint-disable-next-line import/no-unresolved
 import { blocksToYDoc, pageContentToYDoc, yDocToPageContent } from '@classmoji/page-schema/server';
 import { ClassmojiService } from '@classmoji/services';
-import { deckToYDoc, yDocToDeck } from '@classmoji/collab'; // eslint-disable-line import/no-unresolved
+import {
+  CONTENT_CHECKPOINT_QUEUE,
+  CONTENT_CHECKPOINT_TASK,
+  DECK_SCHEMA_VERSION,
+  deckToYDoc,
+  yDocToDeck,
+} from '@classmoji/collab'; // eslint-disable-line import/no-unresolved
 import {
   generateDeckHtml,
   prepareDeckForSave,
@@ -31,8 +37,11 @@ import {
   type CheckpointDeps,
   type CheckpointRow,
   type DeckLike,
+  type DeckRenderer,
+  type PageRenderer,
 } from '../contentCheckpointCore.ts';
 import { GitCommandError, commitFilesToRemote } from '../gitCheckpoint.ts';
+import { CHECKPOINT_QUEUE_NAME, CHECKPOINT_TASK_ID } from '../../workflows/contentCheckpoint.ts';
 
 // ─── fixtures ────────────────────────────────────────────────────────────────
 
@@ -145,7 +154,6 @@ describe('commit message', () => {
 
 type Row = CheckpointRow & {
   classroom_id: string;
-  source_sha: string | null;
   pushed_commit: string | null;
   dirty_since: Date | null;
 };
@@ -167,21 +175,36 @@ function makePrisma(rows: Row[]) {
       }
       return actual === v;
     });
+  const meta = (r: Row) => ({
+    kind: r.kind,
+    doc_id: r.doc_id,
+    epoch: r.epoch,
+    version: r.version,
+    pushed_version: r.pushed_version,
+    schema_version: r.schema_version,
+    source_sha: r.source_sha,
+  });
   return {
     rows,
+    // The dirty-row filter, as the SQL states it.
+    $queryRaw: vi.fn(async (_sql: TemplateStringsArray, classroomId: string) =>
+      rows
+        .filter(
+          r =>
+            r.classroom_id === classroomId && r.version > r.pushed_version && r.state.byteLength > 0
+        )
+        .sort((a, b) => (a.kind + a.doc_id).localeCompare(b.kind + b.doc_id))
+        .map(meta)
+    ),
     classroom: { findUnique: vi.fn(async () => CLASSROOM) },
     collabDoc: {
-      findMany: vi.fn(async ({ where }: { where: { classroom_id: string } }) =>
-        rows
-          .filter(r => r.classroom_id === where.classroom_id)
-          .map(r => ({
-            kind: r.kind,
-            doc_id: r.doc_id,
-            epoch: r.epoch,
-            version: r.version,
-            pushed_version: r.pushed_version,
-            state: r.state,
-          }))
+      findUnique: vi.fn(
+        async ({ where }: { where: { kind_doc_id: { kind: string; doc_id: string } } }) => {
+          const r = rows.find(
+            x => x.kind === where.kind_doc_id.kind && x.doc_id === where.kind_doc_id.doc_id
+          );
+          return r ? { ...meta(r), state: r.state } : null;
+        }
       ),
       updateMany: vi.fn(
         async ({ where, data }: { where: Record<string, unknown>; data: Partial<Row> }) => {
@@ -201,6 +224,9 @@ function makePrisma(rows: Row[]) {
           { id: 'page-a', title: 'Intro', content_path: 'pages/intro' },
           { id: 'page-b', title: 'Lab 1', content_path: 'pages/lab-1' },
           { id: 'page-c', title: 'Clean', content_path: 'pages/clean' },
+          // Same folder as page-a: a path conflict.
+          { id: 'page-dup', title: 'Intro copy', content_path: 'pages/intro' },
+          { id: 'page-evil', title: 'Evil', content_path: '../outside' },
         ].filter(p => where.id.in.includes(p.id))
       ),
     },
@@ -225,6 +251,7 @@ function row(kind: string, docId: string, doc: Y.Doc, version = 1, extra: Partia
     epoch: 1,
     version,
     pushed_version: 0,
+    schema_version: kind === 'page' ? SCHEMA_VERSION : DECK_SCHEMA_VERSION,
     state: stateOf(doc),
     source_sha: null,
     pushed_commit: null,
@@ -232,6 +259,20 @@ function row(kind: string, docId: string, doc: Y.Doc, version = 1, extra: Partia
     ...extra,
   };
 }
+
+const realPageRenderer: PageRenderer = {
+  fragment: FRAGMENT,
+  schemaVersion: SCHEMA_VERSION,
+  render: doc => {
+    const c = yDocToPageContent(doc);
+    return { blocks: c.blocks, coverImage: c.coverImage ?? null };
+  },
+};
+
+const deckRenderer = (render: (doc: Y.Doc) => DeckLike): DeckRenderer => ({
+  schemaVersion: DECK_SCHEMA_VERSION,
+  render,
+});
 
 let root: string;
 let remote: string;
@@ -263,13 +304,10 @@ function makeDeps(prisma: ReturnType<typeof makePrisma>, over: Partial<Checkpoin
   const recordPageFile = vi.fn(async () => {});
   const recordDeckCommit = vi.fn(async () => {});
   const ensureContentRepo = vi.fn(async () => {});
+  const notifyOutsideEdit = vi.fn(async () => {});
   const deps: CheckpointDeps = {
     prisma: prisma as unknown as CheckpointDeps['prisma'],
-    pageFragment: FRAGMENT,
-    renderPage: doc => {
-      const c = yDocToPageContent(doc);
-      return { blocks: c.blocks, coverImage: c.coverImage ?? null };
-    },
+    loadPageRenderer: async () => realPageRenderer,
     loadDeckRenderer: async () => null,
     // The REAL prepare step a save runs.
     preparePageContent: (page, blocks, options) =>
@@ -283,13 +321,15 @@ function makeDeps(prisma: ReturnType<typeof makePrisma>, over: Partial<Checkpoin
       html: `<html>${deck.slides.length}</html>`,
     }),
     recordDeckCommit,
-    remoteUrl: async () => `file://${remote}`,
+    remote: async () => ({ url: `file://${remote}` }),
     ensureContentRepo,
     commitFiles: input => commitFilesToRemote({ ...input, tmpRoot: root }),
+    notifyOutsideEdit,
+    author: { name: 'Classmoji Bot', email: 'hello@classmoji.com' },
     log: { info: () => {}, warn: () => {}, error: () => {} },
     ...over,
   };
-  return { deps, recordPageFile, recordDeckCommit, ensureContentRepo };
+  return { deps, recordPageFile, recordDeckCommit, ensureContentRepo, notifyOutsideEdit };
 }
 
 describe('runContentCheckpoint', () => {
@@ -430,7 +470,10 @@ describe('runContentCheckpoint', () => {
   it('refuses a single-column layout (no repair in the worker)', async () => {
     const prisma = makePrisma([row('page', 'page-a', blocksToYDoc([para('a', 'a')]), 1)]);
     const { deps } = makeDeps(prisma, {
-      renderPage: () => ({ blocks: [para('a', 'a'), columns('one', 1)], coverImage: null }),
+      loadPageRenderer: async () => ({
+        ...realPageRenderer,
+        render: () => ({ blocks: [para('a', 'a'), columns('one', 1)], coverImage: null }),
+      }),
     });
     const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
     expect(report.docs[0]).toMatchObject({ status: 'refused' });
@@ -454,7 +497,8 @@ describe('runContentCheckpoint', () => {
     expect(sh(['--git-dir', remote, 'rev-parse', 'main'])).toBe(head);
     expect(prisma.rows[0]).toMatchObject({ pushed_version: 2, dirty_since: null });
     expect(report.docs[0].status).toBe('unchanged');
-    expect(recordPageFile).not.toHaveBeenCalled();
+    // Recorded again anyway (idempotent): covers a crash between push and record.
+    expect(recordPageFile).toHaveBeenCalledTimes(1);
   });
 
   it('creates a missing content repo through ensureContentRepo, then pushes', async () => {
@@ -522,7 +566,7 @@ describe('runContentCheckpoint', () => {
       slides: [{ id: 's1', html: '<h1>Hi</h1>' }],
     };
     const { deps, recordDeckCommit } = makeDeps(prisma, {
-      loadDeckRenderer: async () => () => deck,
+      loadDeckRenderer: async () => deckRenderer(() => deck),
     });
     const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
 
@@ -559,7 +603,8 @@ describe('runContentCheckpoint', () => {
     deckDoc.getMap('slides').set('s2', new Y.Map());
     const prisma = makePrisma([row('deck', 'deck-a', deckDoc, 1)]);
     const { deps } = makeDeps(prisma, {
-      loadDeckRenderer: async () => () => ({ version: 1, slides: [{ id: 's1', html: '' }] }),
+      loadDeckRenderer: async () =>
+        deckRenderer(() => ({ version: 1, slides: [{ id: 's1', html: '' }] })),
     });
     const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
     expect(report.docs[0]).toMatchObject({
@@ -573,10 +618,10 @@ describe('runContentCheckpoint', () => {
     const prisma = makePrisma([
       row('page', 'page-a', blocksToYDoc([para('a', 'a')]), 1, { pushed_version: 1 }),
     ]);
-    const { deps } = makeDeps(prisma, { remoteUrl: vi.fn() });
+    const { deps } = makeDeps(prisma, { remote: vi.fn() });
     const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
     expect(report).toMatchObject({ commit: null, pushed: false, docs: [] });
-    expect(deps.remoteUrl).not.toHaveBeenCalled();
+    expect(deps.remote).not.toHaveBeenCalled();
   });
 });
 
@@ -607,7 +652,7 @@ describe('runContentCheckpoint with the real deck converter', () => {
     const doc = deckToYDoc(deck);
     const prisma = makePrisma([row('deck', 'deck-a', doc, 2)]);
     const { deps } = makeDeps(prisma, {
-      loadDeckRenderer: async () => yDocToDeck as unknown as (d: Y.Doc) => DeckLike,
+      loadDeckRenderer: async () => deckRenderer(yDocToDeck as unknown as (d: Y.Doc) => DeckLike),
       prepareDeckForSave: (slide, d, options) =>
         prepareDeckForSave(
           slide as unknown as SlideContentTarget,
@@ -623,6 +668,140 @@ describe('runContentCheckpoint with the real deck converter', () => {
     expect(remoteFile('slides/week-1/deck.json') + '\n').toBe(JSON.stringify(deck, null, 2) + '\n');
     expect(remoteFile('slides/week-1/index.html')).toBe(
       generateDeckHtml(deck, { title: 'Week 1', includeNotes: true }).trimEnd()
+    );
+  });
+});
+
+describe('runContentCheckpoint review fixes', () => {
+  const blobAt = (p: string) => sh(['--git-dir', remote, 'rev-parse', `main:${p}`]);
+
+  it('task ids match the @classmoji/collab contract', () => {
+    expect(CHECKPOINT_TASK_ID).toBe(CONTENT_CHECKPOINT_TASK);
+    expect(CHECKPOINT_QUEUE_NAME).toBe(CONTENT_CHECKPOINT_QUEUE);
+  });
+
+  it('refuses rows written with another schema version, without loading their state', async () => {
+    const prisma = makePrisma([
+      row('page', 'page-a', blocksToYDoc([para('a1', 'x')]), 1, {
+        schema_version: SCHEMA_VERSION + 1,
+      }),
+      row('page', 'page-b', blocksToYDoc([para('b1', 'fine')]), 1),
+    ]);
+    const { deps } = makeDeps(prisma);
+    const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
+    expect(report.docs.find(d => d.docId === 'page-a')).toMatchObject({
+      status: 'refused',
+      code: 'schema-mismatch',
+    });
+    expect(prisma.collabDoc.findUnique).toHaveBeenCalledTimes(1);
+    expect(prisma.rows[0]).toMatchObject({ pushed_version: 0 });
+    expect(prisma.rows[1]).toMatchObject({ pushed_version: 1 });
+  });
+
+  it('refuses a deck row from another deck schema', async () => {
+    const d = new Y.Doc();
+    d.getMap('slides').set('s1', new Y.Map());
+    const prisma = makePrisma([row('deck', 'deck-a', d, 1, { schema_version: 99 })]);
+    const { deps } = makeDeps(prisma, {
+      loadDeckRenderer: async () => deckRenderer(() => ({ version: 1, slides: [{ id: 's1' }] })),
+    });
+    const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
+    expect(report.docs[0]).toMatchObject({ status: 'refused', code: 'schema-mismatch' });
+  });
+
+  it('refuses a page that renders to zero blocks and a deck with zero slides', async () => {
+    const d = new Y.Doc();
+    d.getMap('meta').set('theme', 'white');
+    const prisma = makePrisma([
+      row('page', 'page-a', blocksToYDoc([para('a1', 'x')]), 1),
+      row('deck', 'deck-a', d, 1),
+    ]);
+    const { deps } = makeDeps(prisma, {
+      loadPageRenderer: async () => ({ ...realPageRenderer, render: () => ({ blocks: [] }) }),
+      loadDeckRenderer: async () => deckRenderer(() => ({ version: 1, slides: [] })),
+    });
+    const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
+    expect(report.docs.map(x => [x.docId, x.code])).toEqual([
+      ['deck-a', 'empty-render'],
+      ['page-a', 'empty-render'],
+    ]);
+    expect(remoteLog()).toEqual(['seed']);
+  });
+
+  it('refuses docs sharing a path or with an unsafe path, commits the rest', async () => {
+    const prisma = makePrisma([
+      row('page', 'page-a', blocksToYDoc([para('a1', 'a')]), 1),
+      row('page', 'page-b', blocksToYDoc([para('b1', 'b')]), 1),
+      row('page', 'page-dup', blocksToYDoc([para('d1', 'd')]), 1),
+      row('page', 'page-evil', blocksToYDoc([para('e1', 'e')]), 1),
+    ]);
+    const { deps } = makeDeps(prisma);
+    const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
+    const byId = Object.fromEntries(report.docs.map(d => [d.docId, d]));
+    expect(byId['page-a']).toMatchObject({ status: 'refused', code: 'path-conflict' });
+    expect(byId['page-dup']).toMatchObject({ status: 'refused', code: 'path-conflict' });
+    expect(byId['page-evil']).toMatchObject({ status: 'refused', code: 'unsafe-path' });
+    expect(byId['page-b']).toMatchObject({ status: 'pushed' });
+    expect(remoteFile('pages/intro/content.json')).toBe('{"blocks":[]}');
+    expect(remoteLog()[0]).toBe('Update Lab 1 (live editing)');
+  });
+
+  it('backstop: a file changed outside since source_sha is left alone and collab is told', async () => {
+    const prisma = makePrisma([
+      // The live doc descends from some other blob than what main holds now.
+      row('page', 'page-a', blocksToYDoc([para('a1', 'ours')]), 3, { source_sha: 'f'.repeat(40) }),
+      row('page', 'page-b', blocksToYDoc([para('b1', 'b')]), 1),
+    ]);
+    const { deps, notifyOutsideEdit, recordPageFile } = makeDeps(prisma);
+    const head = sh(['--git-dir', remote, 'rev-parse', 'main']);
+    const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
+
+    expect(report.docs.find(d => d.docId === 'page-a')).toMatchObject({
+      status: 'refused',
+      code: 'outside-edit-pending',
+    });
+    expect(notifyOutsideEdit).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      kind: 'page',
+      docId: 'page-a',
+      sha: head,
+    });
+    expect(remoteFile('pages/intro/content.json')).toBe('{"blocks":[]}');
+    expect(prisma.rows[0]).toMatchObject({ pushed_version: 0, source_sha: 'f'.repeat(40) });
+    expect(prisma.rows[1]).toMatchObject({ pushed_version: 1 });
+    expect(remoteLog()[0]).toBe('Update Lab 1 (live editing)');
+    expect(recordPageFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('backstop: a matching source_sha writes as usual', async () => {
+    const prisma = makePrisma([
+      row('page', 'page-a', blocksToYDoc([para('a1', 'ours')]), 2, {
+        source_sha: blobAt('pages/intro/content.json'),
+      }),
+    ]);
+    const { deps, notifyOutsideEdit } = makeDeps(prisma);
+    const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
+    expect(report.docs[0]).toMatchObject({ status: 'pushed', clean: true });
+    expect(notifyOutsideEdit).not.toHaveBeenCalled();
+    expect(prisma.rows[0].source_sha).toBe(blobAt('pages/intro/content.json'));
+  });
+
+  it('keeps a Save-version message visible when nothing was left to push', async () => {
+    const prisma = makePrisma([
+      row('page', 'page-a', blocksToYDoc([para('a', 'a')]), 1, { pushed_version: 1 }),
+    ]);
+    const { deps } = makeDeps(prisma);
+    const report = await runContentCheckpoint(
+      { classroomId: 'class-1', reason: 'save-version', message: 'Before the midterm' },
+      { runId: 'r' },
+      deps
+    );
+    expect(report.unusedMessage).toBe('Before the midterm');
+  });
+
+  it('subject lines never carry a newline from a title', () => {
+    expect(checkpointSubject(['Line one\nLine two', 'A <b>'])).toBe(
+      'Update Line one Line two and A b (live editing)'
     );
   });
 });
