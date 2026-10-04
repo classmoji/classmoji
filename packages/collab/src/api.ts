@@ -76,6 +76,38 @@ export interface ExternalRequest {
   sha: string;
 }
 
+/** One chooser decision: keep `ours` (live) or `theirs` (the preview) for a conflict id. */
+export interface CollabMergeResolution {
+  id: string;
+  choose: 'ours' | 'theirs';
+}
+
+/**
+ * `POST /internal/:kind/:id/merge-preview`: base/theirs in the snapshot shape.
+ * 200 `{ applied: true, version }`; conflicts left after `resolutions` → 409
+ * `{ error: 'conflicts', conflicts, autoMerged? }` with nothing applied.
+ */
+export interface MergePreviewRequest<K extends CollabKind = CollabKind> {
+  base: SnapshotContent<K>;
+  theirs: SnapshotContent<K>;
+  resolutions?: CollabMergeResolution[];
+  actor: CollabActor;
+}
+
+export interface MergePreviewResponse {
+  applied: true;
+  version: number;
+}
+
+/**
+ * `POST /internal/classroom/:id/flag` `{ enabled }`: the classroom's
+ * collab_enabled flipped. Every open room closes (4409) and every clean row
+ * is reseeded (epoch + 1); with `enabled: false` a final checkpoint runs.
+ */
+export interface FlagRequest {
+  enabled: boolean;
+}
+
 /** `POST /internal/:kind/:id/checkpoint` — "Save version": checkpoint now. */
 export interface CheckpointRequest {
   message?: string;
@@ -98,11 +130,47 @@ export interface CollabTokenPayload {
   schemaVersion: number;
 }
 
-/** Why the server refused a connection (the provider's auth-failure reason). */
-export type CollabRejectReason = 'stale-epoch' | 'schema-mismatch' | 'forbidden';
+/**
+ * Why the server refused a connection (the provider's auth-failure reason):
+ * - `stale-epoch`: the room was reseeded — reload the route.
+ * - `schema-mismatch`: the editor bundle is out of date — reload to update.
+ * - `forbidden`: no edit access (signed out, role, classroom lock, flag off).
+ * - `legacy-html`: the page is still legacy HTML; it cannot be edited live.
+ * - `unavailable`: an unexpected server error (DB blip, git read failed) —
+ *   "try again" + Reload, never a permanent read-only state.
+ */
+export type CollabRejectReason =
+  | 'stale-epoch'
+  | 'schema-mismatch'
+  | 'forbidden'
+  | 'legacy-html'
+  | 'unavailable';
 
-/** WebSocket close code used when a periodic re-check fails. */
-export const COLLAB_FORBIDDEN_CLOSE_CODE = 4403;
+export const COLLAB_REJECT_REASONS: readonly CollabRejectReason[] = [
+  'stale-epoch',
+  'schema-mismatch',
+  'forbidden',
+  'legacy-html',
+  'unavailable',
+];
+
+export function isCollabRejectReason(value: unknown): value is CollabRejectReason {
+  return COLLAB_REJECT_REASONS.includes(value as CollabRejectReason);
+}
+
+/** Socket close: access revoked by the 60-s re-check → read-only + Reload. */
+export const COLLAB_CLOSE_FORBIDDEN = 4403;
+
+/**
+ * Socket close: the room is gone or moved (`/close` on flag off / delete, a
+ * reseed, a store refused for a bumped epoch) → reload the route. The close
+ * reason string is `reload` or the refusal reason (`stale-epoch`).
+ */
+export const COLLAB_CLOSE_RELOAD = 4409;
+
+/** Older names for the same codes. */
+export const COLLAB_FORBIDDEN_CLOSE_CODE = COLLAB_CLOSE_FORBIDDEN;
+export const COLLAB_RELOAD_CLOSE_CODE = COLLAB_CLOSE_RELOAD;
 
 /** What `onAuthenticate` puts in the connection context. */
 export interface CollabConnectionContext {
