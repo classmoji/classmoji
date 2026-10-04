@@ -2,7 +2,9 @@
   "name": "@classmoji/tasks",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./browser-run": "./src/helpers/browserRun.ts",
+    "./safe-url": "./src/helpers/safeUrlFetch.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
