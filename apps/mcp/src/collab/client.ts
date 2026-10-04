@@ -16,6 +16,8 @@ import {
   COLLAB_SECRET_HEADER,
   type CollabActor,
   type CollabKind,
+  type CursorRequest,
+  type CursorResponse,
   type OpsResponse,
   type PageCoverImage,
   type SlideLock,
@@ -369,6 +371,20 @@ export async function postMergePreview(
   }
 }
 
+/**
+ * `POST /internal/:kind/:id/cursor`: the agent's caret (page) or the slide it
+ * points at (deck), with no content change. `{ shown: false }` when nobody
+ * has the doc open; 404 for an unknown block or slide.
+ */
+export function postCursor(
+  env: CollabEnv,
+  kind: CollabKind,
+  id: string,
+  request: CursorRequest
+): Promise<CursorResponse> {
+  return collabRequest<CursorResponse>(env, 'POST', docPath(kind, id, 'cursor'), request);
+}
+
 /** `POST /internal/:kind/:id/close`: checkpoint now, then close every connection. */
 export function postClose(
   env: CollabEnv,
@@ -406,7 +422,9 @@ export async function notifyPreviewChanged(
 
 /**
  * Who the agent edits as: the MCP caller, under their name (peers see
- * `<name> (agent)`). Falls back to the login, then a placeholder.
+ * `<name> (agent)`). Falls back to the login, then a placeholder. The MCP
+ * session (`Mcp-Session-Id`) rides along, so each of the caller's agent
+ * sessions is its own presence.
  */
 export async function actorFor(ctx: ToolContext): Promise<CollabActor> {
   const userId = ctx.viewer.userId;
@@ -420,7 +438,8 @@ export async function actorFor(ctx: ToolContext): Promise<CollabActor> {
   } catch (error) {
     console.warn('[mcp] Could not read the editor name for a live edit:', error);
   }
-  return { userId, name: name || 'Teacher' };
+  const agentSession = ctx.viewer.agentSession;
+  return { userId, name: name || 'Teacher', ...(agentSession ? { agentSession } : {}) };
 }
 
 // ─── Error mapping ───────────────────────────────────────────────────────────

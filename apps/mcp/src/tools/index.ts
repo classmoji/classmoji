@@ -50,6 +50,7 @@ import {
   deckPreviewAcceptTool,
   deckPreviewDiscardTool,
 } from './deck.ts';
+import { pageCursorSetTool, deckCursorSetTool } from './liveCursor.ts';
 import { contentSearchTool, contentListTool, contentGetTool } from './contentSearch.ts';
 import { tokenGrantTool } from './tokens.ts';
 import { extensionPurchaseTool } from './extensions.ts';
@@ -173,6 +174,7 @@ export function registerAllTools(): void {
   // branch — the same boundary the web editor draws around cover changes.
   registerToolDefinition(pageAssetUploadTool);
   registerToolDefinition(pageCoverSetTool);
+  registerToolDefinition(pageCursorSetTool);
 
   // Media + agent file uploads (TEACHING_TEAM — the web media routes' gate —
   // with the target page's or deck's own edit gate in-handler). Bytes never
@@ -199,6 +201,7 @@ export function registerAllTools(): void {
   registerToolDefinition(deckOutlineTool);
   registerToolDefinition(deckGetTool);
   registerToolDefinition(deckApplyTool);
+  registerToolDefinition(deckCursorSetTool);
   registerToolDefinition(deckPreviewAcceptTool);
   registerToolDefinition(deckPreviewDiscardTool);
 
