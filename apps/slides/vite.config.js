@@ -19,7 +19,9 @@ export default () => {
       alias: {
         '.prisma/client/index-browser': '../../node_modules/.prisma/client/index-browser.js',
       },
-      dedupe: ['react', 'react-dom', 'react-router', 'react-router-dom'],
+      // yjs too: two copies in one bundle break live editing ("Yjs was
+      // already imported") — the bridge's doc and the provider's would differ.
+      dedupe: ['react', 'react-dom', 'react-router', 'react-router-dom', 'yjs'],
     },
     optimizeDeps: {
       include: [
@@ -28,6 +30,10 @@ export default () => {
         'react-router',
         'react-router-dom',
         'reveal.js',
+        // Live editing: pre-bundled together so every importer gets one yjs.
+        'yjs',
+        'y-protocols/awareness',
+        '@hocuspocus/provider',
       ],
       entries: ['./app/root.jsx'],
       exclude: [
