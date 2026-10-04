@@ -1182,3 +1182,14 @@
 .dark .reveal .slides section.cm-preview-changed {
   outline-color: rgba(251, 191, 36, 0.95);
 }
+/* An agent just changed a slide: its frame and name chip fade out
+   (SlideCollabOverlay, the overview grid; static with reduced motion). */
+@keyframes cm-agent-touch-fade {
+  0%,
+  60% {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}

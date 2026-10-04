@@ -3,10 +3,18 @@ import SlideThumbnail from './SlideThumbnail';
 import DropZone from './DropZone';
 import type { StackData, SlideData } from './hooks/useSlideStructure';
 
-/** Live editing: who holds a slide and who is on it. */
+/** An agent's recent change to a slide: its name and colour, numbered per batch. */
+export interface SlideAgentTouch {
+  name: string;
+  color: string;
+  batch: number;
+}
+
+/** Live editing: who holds a slide, who is on it, and an agent's recent change. */
 export interface SlideCollabBadge {
   lock: { name: string; color: string; mine: boolean } | null;
-  peers: Array<{ key: string; name: string; color: string; agent?: boolean }>;
+  peers: Array<{ key: string; name: string; color: string; agent?: boolean; agentTag?: string }>;
+  agentTouch?: SlideAgentTouch | null;
 }
 
 type BadgesFor = (slideId: string | null) => SlideCollabBadge | null;
@@ -42,9 +50,9 @@ function CollabBadge({ badge }: { badge: SlideCollabBadge }) {
       {badge.peers.map(peer => (
         <span
           key={peer.key}
-          title={peer.agent ? `${peer.name} (agent)` : peer.name}
+          title={peer.agent ? `${peer.name} (${peer.agentTag ?? 'agent'})` : peer.name}
           role="img"
-          aria-label={peer.agent ? `${peer.name} (agent)` : peer.name}
+          aria-label={peer.agent ? `${peer.name} (${peer.agentTag ?? 'agent'})` : peer.name}
           className={`inline-flex h-4 w-4 items-center justify-center rounded-full text-[8px] font-semibold text-white ring-1 ${
             peer.agent ? 'ring-violet-500' : 'ring-white dark:ring-gray-800'
           }`}
@@ -276,6 +284,28 @@ function DraggableSlide({
         onDelete={() => onDeleteSlide(slide.id)}
       />
       {badge && <CollabBadge badge={badge} />}
+      {/* Keyed by batch: a new change restarts the fade. */}
+      {badge?.agentTouch && (
+        <AgentTouchMark key={badge.agentTouch.batch} touch={badge.agentTouch} />
+      )}
+    </div>
+  );
+}
+
+/** A thumbnail an agent just changed: a frame and a name chip in its colour, fading out. */
+function AgentTouchMark({ touch }: { touch: SlideAgentTouch }) {
+  return (
+    <div
+      className="pointer-events-none absolute inset-0 z-10 rounded-lg motion-safe:animate-[cm-agent-touch-fade_5s_ease-out_forwards]"
+      style={{ boxShadow: `0 0 0 2px ${touch.color}` }}
+      data-testid="agent-touch"
+      data-agent-name={touch.name}
+      aria-hidden
+    >
+      <span className="absolute bottom-1 right-1 flex max-w-[75%] items-center gap-1 truncate rounded-full bg-white/95 py-px pl-1 pr-1.5 text-[10px] font-semibold text-gray-800 shadow-sm ring-1 ring-gray-200 dark:bg-gray-800/95 dark:text-gray-100 dark:ring-gray-700">
+        <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: touch.color }} />
+        <span className="truncate">{touch.name}</span>
+      </span>
     </div>
   );
 }

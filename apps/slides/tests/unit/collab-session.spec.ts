@@ -5,7 +5,8 @@
  * nothing unsent, and the leave guard while edits are on their way.
  */
 import { test, expect } from '@playwright/test';
-import type { CollabLoaderData } from '@classmoji/collab';
+import { Awareness } from 'y-protocols/awareness';
+import { AGENT_TOUCH_EXPIRE_MS, type CollabLoaderData } from '@classmoji/collab';
 
 import {
   liveLeaveRisk,
@@ -16,6 +17,7 @@ import {
   normalizeRejectReason,
   parseStatelessMessage,
   savedToGitHubStatus,
+  peerLabel,
   peersFromAwareness,
   rejectionNotice,
 } from '../../app/utils/collab/collab.ts';
@@ -210,5 +212,88 @@ test.describe('saved to GitHub before runs were recorded', () => {
       at: at.toISOString(),
       commit: 'c972c0c5aa',
     });
+  });
+});
+
+// ─── Agents: numbered sessions and the slides they just changed ──────────────
+
+test.describe('agent activity', () => {
+  test('numbered agent sessions keep their number in the label', () => {
+    const peers = peersFromAwareness(
+      [
+        [1, { user: { id: 'u1', name: 'Ada', color: '#000' } }],
+        [7, { user: { name: 'Grace (agent 2)', color: '#111', agent: true }, slide: 's2' }],
+        [8, { user: { name: 'Grace (agent 1)', color: '#222', agent: true }, slide: 's1' }],
+      ],
+      1,
+      'u1'
+    );
+    expect(peers.map(p => peerLabel(p))).toEqual([
+      'Ada (you)',
+      'Grace (agent 1)',
+      'Grace (agent 2)',
+    ]);
+    expect(peers[1]).toMatchObject({ agent: true, agentTag: 'agent 1', slideId: 's1' });
+  });
+
+  function withAwareness() {
+    let now = 50_000;
+    let awareness: Awareness | null = null;
+    const session = new DeckCollabSession(
+      COLLAB,
+      a => {
+        awareness = new Awareness(a.document);
+        return { awareness, hasUnsyncedChanges: false, destroy: () => awareness?.destroy() };
+      },
+      () => now
+    );
+    const aw = awareness as unknown as Awareness;
+    const remote = (clientId: number, state: Record<string, unknown>) => {
+      (aw.getStates() as Map<number, Record<string, unknown>>).set(clientId, state);
+      aw.emit('change', [{ added: [], updated: [clientId], removed: [] }, 'remote']);
+    };
+    return { session, remote, tick: (ms: number) => (now += ms) };
+  }
+
+  const agent = (seq: number, ids: string[]) => ({
+    user: { name: 'Grace (agent)', color: '#30a46c', agent: true },
+    slide: ids.at(-1),
+    touched: { ids, seq },
+  });
+
+  test('the slides a batch touched show until they expire; a resend changes nothing', () => {
+    const t = withAwareness();
+    t.remote(9, agent(1, ['s1', 's2']));
+    const first = t.session.getState().agentTouches;
+    expect(first.map(x => [x.id, x.name, x.color])).toEqual([
+      ['s1', 'Grace (agent)', '#30a46c'],
+      ['s2', 'Grace (agent)', '#30a46c'],
+    ]);
+    t.tick(2_000);
+    t.remote(9, agent(1, ['s1', 's2']));
+    expect(t.session.getState().agentTouches).toBe(first);
+    t.remote(9, agent(2, ['s2']));
+    expect(t.session.getState().agentTouches.map(x => [x.id, x.batch])).toEqual([
+      ['s1', 1],
+      ['s2', 2],
+    ]);
+    t.tick(AGENT_TOUCH_EXPIRE_MS - 2_000);
+    t.remote(3, { user: { id: 'u3', name: 'Bob', color: '#333' }, slide: 's3' });
+    expect(t.session.getState().agentTouches.map(x => x.id)).toEqual(['s2']);
+    t.session.destroy();
+  });
+
+  test('people and malformed lists are not agent touches', () => {
+    const t = withAwareness();
+    t.remote(3, {
+      user: { id: 'u3', name: 'Bob', color: '#333' },
+      touched: { ids: ['s1'], seq: 1 },
+    });
+    t.remote(4, {
+      user: { name: 'Bot (agent)', color: '#333', agent: true },
+      touched: { ids: 's1', seq: 1 },
+    });
+    expect(t.session.getState().agentTouches).toEqual([]);
+    t.session.destroy();
   });
 });

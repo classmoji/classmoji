@@ -14,8 +14,10 @@
 import * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 import {
+  AgentTouchTracker,
   COLLAB_CLOSE_FORBIDDEN,
   COLLAB_CLOSE_RELOAD,
+  type AgentTouch,
   type CollabLoaderData,
   type CollabTokenPayload,
 } from '@classmoji/collab';
@@ -65,6 +67,8 @@ export interface CollabSessionState {
   /** The server closed the deck under us (flag off, deck deleted): reload the route. */
   reloadRequired: boolean;
   peers: CollabPeer[];
+  /** Slides an agent just inserted, changed or moved, while their mark shows. */
+  agentTouches: AgentTouch[];
   /** The last checkpoint message (seq increments per message). */
   lastCheckpoint: (LiveCheckpoint & { seq: number }) | null;
   /** The deck's title when it changed while open. */
@@ -81,6 +85,7 @@ export const INITIAL_SESSION_STATE: CollabSessionState = {
   rejected: null,
   reloadRequired: false,
   peers: [],
+  agentTouches: [],
   lastCheckpoint: null,
   liveTitle: null,
   previewSeq: 0,
@@ -102,8 +107,15 @@ export class DeckCollabSession {
   private destroyed = false;
   private providerDestroyed = false;
   private readonly onAwarenessChange: () => void;
+  private readonly touches: AgentTouchTracker;
+  private touchTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(collab: CollabLoaderData, createProvider: CollabProviderFactory) {
+  constructor(
+    collab: CollabLoaderData,
+    createProvider: CollabProviderFactory,
+    now: () => number = () => Date.now()
+  ) {
+    this.touches = new AgentTouchTracker(now);
     this.room = collab.room;
     this.user = collab.user;
     this.doc = new Y.Doc();
@@ -212,6 +224,8 @@ export class DeckCollabSession {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    if (this.touchTimer) clearTimeout(this.touchTimer);
+    this.touchTimer = null;
     this.provider.awareness?.off('change', this.onAwarenessChange);
     this.destroyProvider();
     this.doc.destroy();
@@ -257,13 +271,29 @@ export class DeckCollabSession {
   private refreshPeers() {
     const awareness = this.provider.awareness;
     if (!awareness || this.destroyed) return;
+    const states = awareness.getStates() as Map<number, Record<string, unknown>>;
+    // Only a new agent batch replaces the touches (awareness also changes on
+    // every slide change and lock heartbeat).
+    const touched = this.touches.update(states, this.doc.clientID);
     this.update({
-      peers: peersFromAwareness(
-        awareness.getStates() as Map<number, Record<string, unknown>>,
-        this.doc.clientID,
-        this.user.id
-      ),
+      peers: peersFromAwareness(states, this.doc.clientID, this.user.id),
+      ...(touched ? { agentTouches: this.touches.touches() } : {}),
     });
+    if (touched) this.scheduleTouchExpiry();
+  }
+
+  /** Drop each agent touch when it expires (its fade has finished by then). */
+  private scheduleTouchExpiry() {
+    if (this.touchTimer) clearTimeout(this.touchTimer);
+    this.touchTimer = null;
+    const next = this.touches.nextExpiryIn();
+    if (next === null || this.destroyed) return;
+    this.touchTimer = setTimeout(() => {
+      this.touchTimer = null;
+      if (this.destroyed) return;
+      if (this.touches.sweep()) this.update({ agentTouches: this.touches.touches() });
+      this.scheduleTouchExpiry();
+    }, next + 20);
   }
 
   private update(patch: Partial<CollabSessionState>) {

@@ -13,6 +13,7 @@
 
 import {
   isCollabRejectReason,
+  splitAgentName,
   type CollabLoaderData,
   type CollabRejectReason,
 } from '@classmoji/collab';
@@ -109,22 +110,26 @@ export interface CollabPeer {
   slideId: string | null;
   /** An agent editing on someone's behalf (`name` is without the " (agent)" suffix). */
   agent: boolean;
+  /** An agent's tag: `agent`, or `agent 2` while one person has several agent sessions here. */
+  agentTag?: string;
 }
 
-const AGENT_SUFFIX = ' (agent)';
-
-/** An awareness name split into the person's name and whether it is an agent. */
-export function agentName(name: string, flagged = false): { name: string; agent: boolean } {
-  if (name.endsWith(AGENT_SUFFIX)) {
-    return { name: name.slice(0, -AGENT_SUFFIX.length).trim() || name, agent: true };
-  }
-  return { name, agent: flagged };
+/** An awareness name split into the person's name, whether it is an agent, and its tag. */
+export function agentName(
+  name: string,
+  flagged = false
+): { name: string; agent: boolean; tag?: string } {
+  const split = splitAgentName(name);
+  if (split.tag) return { name: split.name, agent: true, tag: split.tag };
+  return flagged ? { name, agent: true, tag: 'agent' } : { name, agent: false };
 }
 
-/** The label for a peer: "Name" or "Name (agent)". */
-export function peerLabel(peer: Pick<CollabPeer, 'name' | 'agent'> & { self?: boolean }): string {
+/** The label for a peer: "Name", "Name (agent)", "Name (agent 2)" or "Name (you)". */
+export function peerLabel(
+  peer: Pick<CollabPeer, 'name' | 'agent'> & { self?: boolean; agentTag?: string }
+): string {
   if (peer.self) return `${peer.name} (you)`;
-  return peer.agent ? `${peer.name}${AGENT_SUFFIX}` : peer.name;
+  return peer.agent ? `${peer.name} (${peer.agentTag ?? 'agent'})` : peer.name;
 }
 
 /**
@@ -158,13 +163,20 @@ export function peersFromAwareness(
       key,
       name: who.name,
       agent: who.agent,
+      ...(who.tag ? { agentTag: who.tag } : {}),
       color: typeof user.color === 'string' && user.color ? user.color : '#6b7280',
       self,
       slideId,
     });
   }
   const peers = [...byKey.values()];
-  peers.sort((a, b) => Number(b.self) - Number(a.self) || a.name.localeCompare(b.name));
+  peers.sort(
+    (a, b) =>
+      Number(b.self) - Number(a.self) ||
+      a.name.localeCompare(b.name) ||
+      Number(a.agent) - Number(b.agent) ||
+      (a.agentTag ?? '').localeCompare(b.agentTag ?? '', undefined, { numeric: true })
+  );
   return peers;
 }
 

@@ -102,6 +102,7 @@ import RevealSlides, { type RevealSlidesHandle } from '~/components/RevealSlides
 import { useDeckCollab } from '~/components/collab/useDeckCollab';
 import CollabHeaderControls from '~/components/collab/CollabHeaderControls';
 import SlideCollabOverlay from '~/components/collab/SlideCollabOverlay';
+import type { SlideAgentTouch } from '~/components/SlideOverview/SlideGrid';
 import { CollabRejectedBanner } from '~/components/collab/CollabNotices';
 import LiveLeaveDialog from '~/components/collab/LiveLeaveDialog';
 import LockDescriptions from '~/components/collab/LockDescriptions';
@@ -3314,12 +3315,24 @@ export default function SlideViewer() {
   const peersOnSlide = currentLiveSlide
     ? peers.filter(peer => !peer.self && peer.slideId === currentLiveSlide)
     : [];
+  // Slides an agent just changed (the latest batch per slide), while they show.
+  const agentTouchBySlide = useMemo(() => {
+    const out = new Map<string, SlideAgentTouch>();
+    for (const touch of collabState.agentTouches) {
+      out.set(touch.id, { name: touch.name, color: touch.color, batch: touch.batch });
+    }
+    return out;
+  }, [collabState.agentTouches]);
+  const liveAgentTouch = currentLiveSlide
+    ? (agentTouchBySlide.get(currentLiveSlide) ?? null)
+    : null;
   const collabBadges = useCallback(
     (id: string | null) => {
       if (!id) return null;
       const lock = bridgeState.locks[id];
       const here = peers.filter(peer => !peer.self && peer.slideId === id);
-      if (!lock && here.length === 0) return null;
+      const agentTouch = agentTouchBySlide.get(id) ?? null;
+      if (!lock && here.length === 0 && !agentTouch) return null;
       return {
         lock: lock
           ? { name: lock.holder.name, color: lock.holder.color, mine: lock.state === 'mine' }
@@ -3329,10 +3342,12 @@ export default function SlideViewer() {
           name: peer.name,
           color: peer.color,
           agent: peer.agent,
+          ...(peer.agentTag ? { agentTag: peer.agentTag } : {}),
         })),
+        agentTouch,
       };
     },
-    [bridgeState.locks, peers]
+    [bridgeState.locks, peers, agentTouchBySlide]
   );
   const syncStatus = deriveSyncStatus(collabState);
 
@@ -3803,6 +3818,7 @@ export default function SlideViewer() {
                 <SlideCollabOverlay
                   lock={liveOverlayLock}
                   peersHere={peersOnSlide}
+                  agentTouch={liveAgentTouch}
                   onTakeOver={handleTakeOver}
                 />
               )}

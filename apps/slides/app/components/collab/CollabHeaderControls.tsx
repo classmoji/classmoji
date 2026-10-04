@@ -49,10 +49,15 @@ export function PeerAvatar({
   peer,
   size = 'md',
 }: {
-  peer: Pick<CollabPeer, 'name' | 'color'> & { self?: boolean; agent?: boolean };
+  peer: Pick<CollabPeer, 'name' | 'color'> & { self?: boolean; agent?: boolean; agentTag?: string };
   size?: 'sm' | 'md';
 }) {
-  const label = peerLabel({ name: peer.name, agent: peer.agent ?? false, self: peer.self });
+  const label = peerLabel({
+    name: peer.name,
+    agent: peer.agent ?? false,
+    self: peer.self,
+    ...(peer.agentTag ? { agentTag: peer.agentTag } : {}),
+  });
   return (
     <span
       role="img"
