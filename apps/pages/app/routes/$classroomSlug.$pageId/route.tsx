@@ -27,7 +27,10 @@ import {
   LiveRejectedBanner,
 } from '~/components/editor/collab/LiveNotices.tsx';
 import {
+  SAVE_VERSION_WAIT_MS,
+  applyPageMeta,
   autoReloadAllowed,
+  checkpointAnswersSaveVersion,
   claimStaleReload,
   deriveSyncStatus,
   isCollabMode,
@@ -175,6 +178,7 @@ const PageRoute = () => {
     mediaDownloads,
     uploadCapability,
     collab,
+    liveCheckpoint,
     previewChanges,
   } = useLoaderData<typeof import('./route.server.ts').loader>();
   // Stored refs stay in the document; these are the URLs to display them with.
@@ -216,7 +220,14 @@ const PageRoute = () => {
   const { session, state: liveState } = useCollabSession(liveMode ? collab : null);
   const liveRefused = liveMode ? liveState.rejected : null;
   const liveEditable = liveMode && !liveRefused;
-  const widthClass = widthClasses[page.width] || 'max-w-4xl';
+  // Title and width changed by someone else on a live page arrive as a room
+  // message and apply in place (no reload); otherwise the loader's.
+  const liveMeta = liveMode ? liveState.pageMeta : null;
+  const { title: pageTitle, width: pageWidth } = applyPageMeta(
+    { title: page.title, width: page.width },
+    liveMeta
+  );
+  const widthClass = widthClasses[pageWidth] || 'max-w-4xl';
   const editorRef = useRef<{ getContent: () => unknown } | null>(null);
   const fetcher = useFetcher();
   const titleFetcher = useFetcher();
@@ -304,7 +315,7 @@ const PageRoute = () => {
 
   // Title editing state
   const [isEditingTitle, setIsEditingTitle] = useState(false);
-  const [titleValue, setTitleValue] = useState(page.title || 'Untitled');
+  const [titleValue, setTitleValue] = useState(pageTitle || 'Untitled');
 
   // Explicit save — called by Cmd/Ctrl+S or Save button
   const handleSave = useCallback(() => {
@@ -480,9 +491,9 @@ const PageRoute = () => {
 
   // Update title when page changes
   useEffect(() => {
-    setTitleValue(page.title || 'Untitled');
+    setTitleValue(pageTitle || 'Untitled');
     setIsEditingTitle(false);
-  }, [page.id, page.title]);
+  }, [page.id, pageTitle]);
 
   // Post-accept/discard success notice (round-tripped via redirect param).
   // Keyed on notice+sha so each accept is handled exactly once — the stripped
@@ -654,7 +665,7 @@ const PageRoute = () => {
   // Title editing handlers
   const saveTitle = () => {
     const trimmed = titleValue.trim();
-    if (trimmed && trimmed !== page.title) {
+    if (trimmed && trimmed !== pageTitle) {
       titleFetcher.submit(
         { intent: 'update-title', title: trimmed },
         { method: 'POST', encType: 'application/json' }
@@ -664,7 +675,7 @@ const PageRoute = () => {
   };
 
   const cancelTitleEdit = () => {
-    setTitleValue(page.title || 'Untitled');
+    setTitleValue(pageTitle || 'Untitled');
     setIsEditingTitle(false);
   };
 
@@ -770,16 +781,38 @@ const PageRoute = () => {
     };
   }, [liveMode, shownCoverRef, assets, page.id]);
 
-  // "Save version": a checkpoint of the live document now.
+  // "Save version": a checkpoint of the live document now. The request being
+  // accepted is not the version being saved: the toast waits for the room's
+  // checkpoint message (up to SAVE_VERSION_WAIT_MS, "Saving version…" until).
   const versionFetcher = useFetcher<{ success?: boolean; error?: string }>();
   const handledVersionRef = useRef<unknown>(null);
+  const [versionPendingSince, setVersionPendingSince] = useState<number | null>(null);
   useEffect(() => {
     if (versionFetcher.state !== 'idle' || !versionFetcher.data) return;
     if (handledVersionRef.current === versionFetcher.data) return;
     handledVersionRef.current = versionFetcher.data;
-    if (versionFetcher.data.success) toast.success('Version saved.');
+    if (versionFetcher.data.success) setVersionPendingSince(Date.now());
     else toast.error(versionFetcher.data.error ?? 'The version could not be saved. Try again.');
   }, [versionFetcher.state, versionFetcher.data]);
+  const liveCheckpointSeq = liveState.lastCheckpoint?.seq ?? null;
+  useEffect(() => {
+    const checkpoint = liveState.lastCheckpoint;
+    if (!checkpoint || !checkpointAnswersSaveVersion(checkpoint, versionPendingSince)) return;
+    setVersionPendingSince(null);
+    if (checkpoint.error) toast.error('The version could not be saved to GitHub. Try again.');
+    else toast.success('Version saved.');
+    // Each message once, by its number.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveCheckpointSeq]);
+  useEffect(() => {
+    if (versionPendingSince === null) return;
+    const timer = window.setTimeout(
+      () => setVersionPendingSince(null),
+      Math.max(0, versionPendingSince + SAVE_VERSION_WAIT_MS - Date.now())
+    );
+    return () => window.clearTimeout(timer);
+  }, [versionPendingSince]);
+  const savingVersion = versionFetcher.state !== 'idle' || versionPendingSince !== null;
   const handleSaveVersion = useCallback(() => {
     versionFetcher.submit(
       { intent: 'save-version' },
@@ -794,7 +827,9 @@ const PageRoute = () => {
         peers: liveState.peers,
         syncStatus: liveSyncStatus,
         onSaveVersion: canSaveVersion ? handleSaveVersion : null,
-        savingVersion: versionFetcher.state !== 'idle',
+        savingVersion,
+        // The room's latest message, else what the loader read.
+        checkpoint: liveState.lastCheckpoint ?? liveCheckpoint ?? null,
       }
     : null;
 
@@ -804,12 +839,12 @@ const PageRoute = () => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault();
-        if (canSaveVersion && versionFetcher.state === 'idle') handleSaveVersion();
+        if (canSaveVersion && !savingVersion) handleSaveVersion();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [liveMode, canSaveVersion, versionFetcher.state, handleSaveVersion]);
+  }, [liveMode, canSaveVersion, savingVersion, handleSaveVersion]);
 
   // Leaving while this browser's edits have not reached the server (or while
   // it is offline) could lose them: warn on unload, and hold in-app
@@ -860,7 +895,11 @@ const PageRoute = () => {
       {!isEmbedded && (
         <Header
           classroom={classroom}
-          page={page}
+          page={
+            pageTitle === page.title && pageWidth === page.width
+              ? page
+              : { ...page, title: pageTitle, width: pageWidth }
+          }
           saveStatus={saveEnabled ? saveStatus : undefined}
           hasUnsavedChanges={saveEnabled ? hasUnsavedChanges : undefined}
           canEdit={canEdit}
@@ -1001,7 +1040,7 @@ const PageRoute = () => {
               className={`text-5xl font-bold text-gray-900 dark:text-white mb-6 ${canEdit ? 'cursor-text hover:bg-gray-50 dark:hover:bg-gray-800 rounded px-2 py-1 -mx-2 -my-1' : ''}`}
               onClick={() => canEdit && setIsEditingTitle(true)}
             >
-              {page.title || 'Untitled'}
+              {pageTitle || 'Untitled'}
             </h1>
           )}
         </div>

@@ -23,6 +23,12 @@ import {
 } from '../../app/utils/collabEnv.server.ts';
 import {
   LIVE_CONNECT_GRACE_MS,
+  SAVE_VERSION_WAIT_MS,
+  applyPageMeta,
+  checkpointAnswersSaveVersion,
+  parseStatelessMessage,
+  relativeTimeFrom,
+  savedToGitHubStatus,
   autoReloadAllowed,
   claimStaleReload,
   deriveSyncStatus,
@@ -463,5 +469,77 @@ test.describe('agents in presence', () => {
     expect(initialsOf('Claude (agent)')).toBe('C');
     expect(initialsOf('Ada (Countess) Lovelace')).toBe('AL');
     expect(initialsOf('(agent)')).toBe('A');
+  });
+});
+
+test.describe('messages from the room', () => {
+  test('checkpoint and page-meta parse; anything else is ignored', () => {
+    expect(
+      parseStatelessMessage(
+        JSON.stringify({ type: 'checkpoint', at: '2026-10-03T10:00:00Z', commit: 'abc1234def' })
+      )
+    ).toEqual({ type: 'checkpoint', at: '2026-10-03T10:00:00Z', commit: 'abc1234def' });
+    expect(
+      parseStatelessMessage({ type: 'checkpoint', at: '2026-10-03T10:00:00Z', error: 'refused' })
+    ).toEqual({ type: 'checkpoint', at: '2026-10-03T10:00:00Z', error: 'refused' });
+    expect(parseStatelessMessage('{"type":"page-meta","title":"Week 2","width":3}')).toEqual({
+      type: 'page-meta',
+      title: 'Week 2',
+      width: 3,
+    });
+    expect(parseStatelessMessage('{"type":"checkpoint"}')).toBeNull();
+    expect(parseStatelessMessage('{"type":"page-meta"}')).toBeNull();
+    expect(parseStatelessMessage('{"type":"deck-meta","title":"x"}')).toBeNull();
+    expect(parseStatelessMessage('not json')).toBeNull();
+  });
+
+  test('a title/width message applies over the loader, field by field', () => {
+    const loaded = { title: 'Syllabus', width: 2 };
+    expect(applyPageMeta(loaded, null)).toEqual(loaded);
+    expect(applyPageMeta(loaded, { title: 'Course syllabus' })).toEqual({
+      title: 'Course syllabus',
+      width: 2,
+    });
+    expect(applyPageMeta(loaded, { width: 4 })).toEqual({ title: 'Syllabus', width: 4 });
+    expect(applyPageMeta(loaded, { title: '   ' })).toEqual(loaded);
+  });
+});
+
+test.describe('saved to GitHub', () => {
+  const now = Date.parse('2026-10-03T12:00:00Z');
+
+  test('relative times', () => {
+    expect(relativeTimeFrom('2026-10-03T11:59:40Z', now)).toBe('just now');
+    expect(relativeTimeFrom('2026-10-03T11:58:00Z', now)).toBe('2 minutes ago');
+    expect(relativeTimeFrom('2026-10-03T11:00:00Z', now)).toBe('1 hour ago');
+    expect(relativeTimeFrom('2026-10-01T12:00:00Z', now)).toBe('2 days ago');
+    expect(relativeTimeFrom('nonsense', now)).toBe('');
+  });
+
+  test('saved: when, with the commit on hover', () => {
+    expect(
+      savedToGitHubStatus({ at: '2026-10-03T11:55:00Z', commit: '0123456789abcdef' }, now)
+    ).toEqual({ tone: 'saved', label: 'Saved to GitHub 5 minutes ago', title: 'Commit 0123456' });
+  });
+
+  test('not saved: a short reason on hover; nothing known: nothing shown', () => {
+    const status = savedToGitHubStatus(
+      { at: '2026-10-03T11:55:00Z', error: `push refused: ${'x'.repeat(300)}` },
+      now
+    );
+    expect(status?.tone).toBe('unsaved');
+    expect(status?.label).toBe('Not saved to GitHub yet');
+    expect(status?.title?.length).toBeLessThanOrEqual(120);
+    expect(savedToGitHubStatus(null, now)).toBeNull();
+  });
+
+  test('Save version is answered only by a checkpoint after it was accepted', () => {
+    const accepted = Date.parse('2026-10-03T12:00:00Z');
+    expect(checkpointAnswersSaveVersion({ at: '2026-10-03T12:00:05Z' }, accepted)).toBe(true);
+    // A little clock skew between this browser and the worker is allowed.
+    expect(checkpointAnswersSaveVersion({ at: '2026-10-03T11:59:50Z' }, accepted)).toBe(true);
+    expect(checkpointAnswersSaveVersion({ at: '2026-10-03T11:50:00Z' }, accepted)).toBe(false);
+    expect(checkpointAnswersSaveVersion({ at: '2026-10-03T12:00:05Z' }, null)).toBe(false);
+    expect(SAVE_VERSION_WAIT_MS).toBe(60_000);
   });
 });

@@ -168,6 +168,24 @@ test.describe('CollabSession', () => {
     session.destroy();
   });
 
+  test('room messages: checkpoints and title/width, numbered as they arrive', () => {
+    const { session, provider } = open();
+    provider.args.onStateless({
+      payload: JSON.stringify({ type: 'checkpoint', at: '2026-10-03T12:00:00Z', commit: 'abc' }),
+    });
+    const first = session.getState().lastCheckpoint;
+    expect(first).toMatchObject({ at: '2026-10-03T12:00:00Z', commit: 'abc' });
+    provider.args.onStateless({ payload: JSON.stringify({ type: 'page-meta', title: 'Week 2' }) });
+    expect(session.getState().pageMeta).toMatchObject({ title: 'Week 2' });
+    provider.args.onStateless({
+      payload: JSON.stringify({ type: 'checkpoint', at: '2026-10-03T12:01:00Z', error: 'x' }),
+    });
+    expect(session.getState().lastCheckpoint!.seq).toBeGreaterThan(first!.seq);
+    provider.args.onStateless({ payload: 'garbage' });
+    expect(session.getState().lastCheckpoint).toMatchObject({ error: 'x' });
+    session.destroy();
+  });
+
   test('an unknown reason is read as forbidden', () => {
     const { session, provider } = open();
     provider.args.onAuthenticationFailed({ reason: 'permission-denied' });

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
 
 import { rejectionNotice, type LiveRefusal } from '~/utils/collab.ts';
 
@@ -19,7 +19,11 @@ function Bar({
   children?: ReactNode;
 }) {
   return (
-    <div data-testid={testId} className={`sticky ${isEmbedded ? 'top-0' : 'top-12'} z-30`}>
+    <div
+      role="alert"
+      data-testid={testId}
+      className={`sticky ${isEmbedded ? 'top-0' : 'top-12'} z-30`}
+    >
       <div className="border-y border-amber-300 dark:border-amber-700/70 bg-amber-50/95 dark:bg-amber-950/90 backdrop-blur px-4 sm:px-6 lg:px-8 py-2">
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
           <span className="text-sm font-semibold text-amber-900 dark:text-amber-100">
@@ -86,25 +90,56 @@ export function LeaveLiveDialog({
   onStay: () => void;
   onLeave: () => void;
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // Focus moves into the dialog and comes back to where it was when it closes.
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    return () => previous?.focus?.();
+  }, []);
+
+  // Tab and Shift+Tab stay inside the dialog; Escape stays on the page.
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      onStay();
+      return;
+    }
+    if (event.key !== 'Tab' || !panelRef.current) return;
+    const focusable = [...panelRef.current.querySelectorAll<HTMLElement>('button')];
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="leave-live-title"
+      aria-describedby="leave-live-body"
       data-testid="leave-live-dialog"
-      onKeyDown={event => {
-        if (event.key === 'Escape') onStay();
-      }}
+      onKeyDown={onKeyDown}
     >
-      <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl ring-1 ring-stone-200 dark:bg-neutral-900 dark:ring-neutral-800">
+      <div
+        ref={panelRef}
+        className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl ring-1 ring-stone-200 dark:bg-neutral-900 dark:ring-neutral-800"
+      >
         <h2
           id="leave-live-title"
           className="text-base font-semibold text-gray-900 dark:text-gray-100"
         >
           {offline ? 'You’re offline' : 'Your latest edits haven’t synced yet'}
         </h2>
-        <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
+        <p id="leave-live-body" className="mt-2 text-sm text-gray-600 dark:text-gray-300">
           If you leave now, edits that haven’t synced will be lost.
         </p>
         <div className="mt-4 flex justify-end gap-2">

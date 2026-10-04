@@ -304,3 +304,133 @@ export function liveUnreachable({
 }): boolean {
   return !hasSynced && !refused && status !== 'connected' && elapsedMs >= LIVE_CONNECT_GRACE_MS;
 }
+
+// ─── Messages from the collab server ─────────────────────────────────────────
+
+/** The last checkpoint covering this page, as the header shows it. */
+export interface LiveCheckpoint {
+  /** ISO time of the run. */
+  at: string;
+  commit?: string;
+  /** Why the run did not save this page (absent when it did). */
+  error?: string;
+}
+
+/** Stateless messages the collab server broadcasts to a page's room. */
+export type LiveStatelessMessage =
+  | ({ type: 'checkpoint' } & LiveCheckpoint)
+  | { type: 'page-meta'; title?: string; width?: number };
+
+/** A stateless payload as one of ours, or null for anything else. */
+export function parseStatelessMessage(payload: unknown): LiveStatelessMessage | null {
+  let value: unknown = payload;
+  if (typeof payload === 'string') {
+    try {
+      value = JSON.parse(payload);
+    } catch {
+      return null;
+    }
+  }
+  if (!value || typeof value !== 'object') return null;
+  const message = value as Record<string, unknown>;
+  if (message.type === 'checkpoint') {
+    if (typeof message.at !== 'string' || !message.at) return null;
+    return {
+      type: 'checkpoint',
+      at: message.at,
+      ...(typeof message.commit === 'string' && message.commit ? { commit: message.commit } : {}),
+      ...(typeof message.error === 'string' && message.error ? { error: message.error } : {}),
+    };
+  }
+  if (message.type === 'page-meta') {
+    const title = typeof message.title === 'string' ? message.title : undefined;
+    const width =
+      typeof message.width === 'number' && Number.isInteger(message.width)
+        ? message.width
+        : undefined;
+    if (title === undefined && width === undefined) return null;
+    return {
+      type: 'page-meta',
+      ...(title !== undefined ? { title } : {}),
+      ...(width !== undefined ? { width } : {}),
+    };
+  }
+  return null;
+}
+
+/** "just now", "2 minutes ago", "3 hours ago", "4 days ago". */
+export function relativeTimeFrom(iso: string, now: number): string {
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return '';
+  const seconds = Math.max(0, Math.round((now - then) / 1000));
+  if (seconds < 45) return 'just now';
+  const unit = (value: number, word: string) => `${value} ${word}${value === 1 ? '' : 's'} ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return unit(minutes, 'minute');
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return unit(hours, 'hour');
+  return unit(Math.round(hours / 24), 'day');
+}
+
+/** The longest reason shown in the "not saved" tooltip. */
+const REASON_CAP = 120;
+
+/**
+ * The header's "saved to GitHub" line: when the last checkpoint covering the
+ * page saved it (tooltip: the commit), or that it has not been saved yet
+ * (tooltip: a short reason). Null before anything is known.
+ */
+export function savedToGitHubStatus(
+  checkpoint: LiveCheckpoint | null,
+  now: number
+): { tone: 'saved' | 'unsaved'; label: string; title: string | undefined } | null {
+  if (!checkpoint) return null;
+  if (checkpoint.error) {
+    const reason = checkpoint.error.replace(/\s+/g, ' ').trim();
+    return {
+      tone: 'unsaved',
+      label: 'Not saved to GitHub yet',
+      title: reason.length > REASON_CAP ? `${reason.slice(0, REASON_CAP - 1)}…` : reason,
+    };
+  }
+  const when = relativeTimeFrom(checkpoint.at, now);
+  return {
+    tone: 'saved',
+    label: when ? `Saved to GitHub ${when}` : 'Saved to GitHub',
+    title: checkpoint.commit ? `Commit ${checkpoint.commit.slice(0, 7)}` : undefined,
+  };
+}
+
+/** How long "Saving version…" waits for the checkpoint that answers it. */
+export const SAVE_VERSION_WAIT_MS = 60_000;
+
+/**
+ * Whether a checkpoint message answers a pending "Save version": it arrived
+ * after the request was accepted (allowing for clock skew between this
+ * browser and the worker).
+ */
+export function checkpointAnswersSaveVersion(
+  checkpoint: LiveCheckpoint,
+  pendingSince: number | null,
+  skewMs = 30_000
+): boolean {
+  if (pendingSince === null) return false;
+  const at = Date.parse(checkpoint.at);
+  return Number.isNaN(at) || at >= pendingSince - skewMs;
+}
+
+/**
+ * The page's title and width with a live `page-meta` message applied on top
+ * of the loader's (each field only when the message carries it; a blank
+ * title is not applied).
+ */
+export function applyPageMeta<T extends string | null>(
+  loaded: { title: T; width: number },
+  meta: { title?: string; width?: number } | null | undefined
+): { title: T | string; width: number } {
+  if (!meta) return loaded;
+  return {
+    title: typeof meta.title === 'string' && meta.title.trim() ? meta.title : loaded.title,
+    width: typeof meta.width === 'number' ? meta.width : loaded.width,
+  };
+}

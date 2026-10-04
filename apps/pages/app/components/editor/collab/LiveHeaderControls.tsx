@@ -1,23 +1,36 @@
-import { IconCloudCheck, IconCloudOff, IconRefresh, IconSparkles } from '@tabler/icons-react';
+import { useEffect, useState } from 'react';
+import {
+  IconBrandGithub,
+  IconCloudCheck,
+  IconCloudOff,
+  IconRefresh,
+  IconSparkles,
+} from '@tabler/icons-react';
 
 import {
   SYNC_STATUS_LABEL,
   initialsOf,
   peerLabel,
+  savedToGitHubStatus,
   type CollabPeer,
+  type LiveCheckpoint,
   type SyncStatus,
 } from '~/utils/collab.ts';
 
 /** Avatars shown before the rest collapse into "+N". */
 const MAX_AVATARS = 4;
+/** The floating indicator of an embed has less room. */
+const MAX_AVATARS_COMPACT = 3;
 
 export interface LiveHeaderControlsProps {
   peers: CollabPeer[];
   syncStatus: SyncStatus;
+  /** The last checkpoint covering this page (null before anything is known). */
+  checkpoint?: LiveCheckpoint | null;
   /** Null while the editor cannot ask for a version (refused, not synced). */
   onSaveVersion: (() => void) | null;
   savingVersion: boolean;
-  /** The floating indicator of an embedded editor: status and Save version only. */
+  /** The floating indicator of an embedded editor: smaller, same contents. */
   compact?: boolean;
 }
 
@@ -30,49 +43,77 @@ const statusStyle: Record<SyncStatus, string> = {
 function StatusIcon({ status }: { status: SyncStatus }) {
   if (status === 'synced') return <IconCloudCheck size={16} aria-hidden />;
   if (status === 'offline') return <IconCloudOff size={16} aria-hidden />;
-  return <IconRefresh size={16} className="animate-spin" aria-hidden />;
+  return <IconRefresh size={16} className="motion-safe:animate-spin" aria-hidden />;
+}
+
+/** Re-render every `ms` so a relative time stays true. */
+function useNow(ms: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), ms);
+    return () => window.clearInterval(timer);
+  }, [ms]);
+  return now;
+}
+
+/** One person (or agent) on the page. */
+export function PeerAvatar({ peer }: { peer: CollabPeer }) {
+  const label = peerLabel(peer);
+  return (
+    <span
+      role="img"
+      title={label}
+      aria-label={label}
+      data-agent={peer.agent ? 'true' : undefined}
+      className="relative inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-semibold text-white ring-2 ring-white dark:ring-[#191919]"
+      style={{ backgroundColor: peer.color }}
+    >
+      <span aria-hidden>{initialsOf(peer.name)}</span>
+      {peer.agent && (
+        <span
+          aria-hidden
+          className="absolute -bottom-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-violet-600 text-white ring-2 ring-white dark:bg-violet-500 dark:ring-[#191919]"
+        >
+          <IconSparkles size={9} stroke={2.5} />
+        </span>
+      )}
+    </span>
+  );
 }
 
 /**
  * The live editor's header controls: who is on the page, whether this
- * browser's edits have reached the server, and "Save version".
+ * browser's edits have reached the server, whether the page is saved to
+ * GitHub, and "Save version".
  */
 const LiveHeaderControls = ({
   peers,
   syncStatus,
+  checkpoint = null,
   onSaveVersion,
   savingVersion,
   compact = false,
 }: LiveHeaderControlsProps) => {
-  const shown = compact ? [] : peers.slice(0, MAX_AVATARS);
-  const hidden = compact ? [] : peers.slice(MAX_AVATARS);
+  const max = compact ? MAX_AVATARS_COMPACT : MAX_AVATARS;
+  const shown = peers.slice(0, max);
+  const hidden = peers.slice(max);
+  const now = useNow(30_000);
+  const saved = savedToGitHubStatus(checkpoint, now);
 
   return (
-    <div className="flex items-center gap-3 text-sm" data-testid="live-header-controls">
+    <div
+      className={`flex items-center ${compact ? 'gap-2 text-xs' : 'gap-3 text-sm'}`}
+      data-testid="live-header-controls"
+    >
       {shown.length > 0 && (
         <div className="flex -space-x-1.5" data-testid="live-peers">
           {shown.map(peer => (
-            <span
-              key={peer.key}
-              title={peerLabel(peer)}
-              aria-label={peerLabel(peer)}
-              data-agent={peer.agent ? 'true' : undefined}
-              className="relative inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-semibold text-white ring-2 ring-white dark:ring-[#191919]"
-              style={{ backgroundColor: peer.color }}
-            >
-              {initialsOf(peer.name)}
-              {peer.agent && (
-                <span
-                  aria-hidden
-                  className="absolute -bottom-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-violet-600 text-white ring-2 ring-white dark:bg-violet-500 dark:ring-[#191919]"
-                >
-                  <IconSparkles size={9} stroke={2.5} />
-                </span>
-              )}
-            </span>
+            <PeerAvatar key={peer.key} peer={peer} />
           ))}
           {hidden.length > 0 && (
             <span
+              role="img"
+              aria-label={hidden.map(peerLabel).join(', ')}
               title={hidden.map(peerLabel).join(', ')}
               className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-gray-200 px-1 text-[10px] font-semibold text-gray-700 ring-2 ring-white dark:bg-neutral-700 dark:text-gray-200 dark:ring-[#191919]"
             >
@@ -83,6 +124,8 @@ const LiveHeaderControls = ({
       )}
 
       <span
+        role="status"
+        aria-live="polite"
         className={`flex items-center gap-1 ${statusStyle[syncStatus]}`}
         data-testid="live-sync-status"
         data-status={syncStatus}
@@ -91,12 +134,30 @@ const LiveHeaderControls = ({
         {SYNC_STATUS_LABEL[syncStatus]}
       </span>
 
+      {saved && (
+        <span
+          role="status"
+          aria-live="polite"
+          title={saved.title}
+          data-testid="live-saved-status"
+          data-tone={saved.tone}
+          className={`flex items-center gap-1 ${
+            saved.tone === 'saved'
+              ? 'text-gray-500 dark:text-gray-400'
+              : 'text-amber-600 dark:text-amber-400'
+          } ${compact ? 'hidden sm:flex' : ''}`}
+        >
+          <IconBrandGithub size={compact ? 12 : 14} aria-hidden />
+          {saved.label}
+        </span>
+      )}
+
       {onSaveVersion && (
         <button
           type="button"
           onClick={onSaveVersion}
           disabled={savingVersion}
-          className="px-2.5 py-1 text-sm font-medium rounded transition-colors text-gray-700 ring-1 ring-gray-300 hover:bg-gray-100 disabled:opacity-60 disabled:cursor-not-allowed dark:text-gray-200 dark:ring-neutral-600 dark:hover:bg-neutral-800"
+          className={`${compact ? 'px-2 py-0.5 text-xs' : 'px-2.5 py-1 text-sm'} font-medium rounded transition-colors text-gray-700 ring-1 ring-gray-300 hover:bg-gray-100 disabled:opacity-60 disabled:cursor-not-allowed dark:text-gray-200 dark:ring-neutral-600 dark:hover:bg-neutral-800`}
         >
           {savingVersion ? 'Saving version…' : 'Save version'}
         </button>

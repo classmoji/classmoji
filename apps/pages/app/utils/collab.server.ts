@@ -126,6 +126,29 @@ export function mergePreviewLive(
   );
 }
 
+/**
+ * Tell the room the page's title or width changed (best effort): every open
+ * editor applies it without reloading. A failure is logged, never surfaced —
+ * the change itself is already saved.
+ */
+export async function notifyPageMeta(
+  env: CollabEnv,
+  pageId: string,
+  meta: { title?: string; width?: number }
+): Promise<void> {
+  try {
+    await collabInternalRequest<unknown>(
+      env,
+      'POST',
+      pageInternalPath(pageId, 'meta-changed'),
+      meta,
+      { timeoutMs: 3000 }
+    );
+  } catch (error) {
+    console.warn('[pages] Could not tell the live room about a title/width change:', error);
+  }
+}
+
 /** "Save version": ask for a checkpoint now. */
 export function requestCheckpoint(env: CollabEnv, pageId: string, actor: CollabActor) {
   const body: CheckpointRequest = { actor };

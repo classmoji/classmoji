@@ -27,8 +27,10 @@ import {
 
 import {
   normalizeRejectReason,
+  parseStatelessMessage,
   peersFromAwareness,
   type CollabPeer,
+  type LiveCheckpoint,
   type LiveRefusal,
   type ProviderStatus,
 } from '~/utils/collab.ts';
@@ -49,6 +51,8 @@ export interface CollabProviderCallbacks {
    * 4409: the room was closed (flag off, page deleted) and the route reloads.
    */
   onClose(data: { event: { code?: number; reason?: string } | null | undefined }): void;
+  /** A stateless message from the server (JSON payload). */
+  onStateless(data: { payload: string }): void;
 }
 
 export interface CollabProviderArgs extends CollabProviderCallbacks {
@@ -78,6 +82,10 @@ export interface CollabSessionState {
   peers: CollabPeer[];
   /** When the session was opened (ms since epoch). */
   openedAt: number;
+  /** The last checkpoint message this session received, numbered as it arrives. */
+  lastCheckpoint: (LiveCheckpoint & { seq: number }) | null;
+  /** Title/width changed outside the document, numbered as it arrives. */
+  pageMeta: { title?: string; width?: number; seq: number } | null;
 }
 
 export const INITIAL_SESSION_STATE: CollabSessionState = {
@@ -89,6 +97,8 @@ export const INITIAL_SESSION_STATE: CollabSessionState = {
   rejected: null,
   peers: [],
   openedAt: 0,
+  lastCheckpoint: null,
+  pageMeta: null,
 };
 
 const asStatus = (value: unknown): ProviderStatus =>
@@ -138,6 +148,7 @@ export class CollabSession {
       // 4403 when it fails. That is a close, not an auth message: without
       // this the provider would just reconnect while the editor stayed
       // editable over a document that may never sync again.
+      onStateless: ({ payload }) => this.receive(payload),
       onClose: ({ event }) => {
         if (event?.code === COLLAB_CLOSE_FORBIDDEN) this.reject('forbidden');
         else if (event?.code === COLLAB_CLOSE_RELOAD) {
@@ -210,6 +221,22 @@ export class CollabSession {
    * The server refused the room. The provider would otherwise retry forever,
    * so it is destroyed at once; the route decides what the person sees.
    */
+  private seq = 0;
+
+  /** A stateless message: a checkpoint result, or the page's title/width. */
+  private receive(payload: string) {
+    const message = parseStatelessMessage(payload);
+    if (!message || this.destroyed) return;
+    this.seq += 1;
+    if (message.type === 'checkpoint') {
+      const { type: _type, ...checkpoint } = message;
+      this.update({ lastCheckpoint: { ...checkpoint, seq: this.seq } });
+    } else {
+      const { type: _type, ...meta } = message;
+      this.update({ pageMeta: { ...meta, seq: this.seq } });
+    }
+  }
+
   private reject(reason: unknown) {
     this.end(normalizeRejectReason(reason));
   }

@@ -48,6 +48,7 @@ import {
   collabEditorData,
   fetchLiveSnapshot,
   liveEditingEnv,
+  notifyPageMeta,
   readEditorName,
   requestCheckpoint,
 } from '~/utils/collab.server.ts';
@@ -260,12 +261,27 @@ export const loader = async ({
   // URLs of the assets they reference and to render the page read-only until
   // the room has synced. If the collab server does not answer, git's copy
   // serves that purpose instead (the editor itself then shows it is offline).
+  // The last checkpoint covering the page, for the header's "saved to GitHub"
+  // line until the room's own messages take over.
+  let liveCheckpoint: { at: string; error?: string } | null = null;
   const readContent = async () => {
     if (collab && liveEnv) {
       try {
         // Short: a collab server that does not answer must not hold up the
         // page; git's copy is good enough for resolving assets.
         const snapshot = await fetchLiveSnapshot(liveEnv, page.id, { timeoutMs: 3000 });
+        const { lastCheckpointAt, lastCheckpointError } = snapshot as {
+          lastCheckpointAt?: unknown;
+          lastCheckpointError?: unknown;
+        };
+        if (typeof lastCheckpointAt === 'string' && lastCheckpointAt) {
+          liveCheckpoint = {
+            at: lastCheckpointAt,
+            ...(typeof lastCheckpointError === 'string' && lastCheckpointError
+              ? { error: lastCheckpointError }
+              : {}),
+          };
+        }
         return {
           format: 'json' as const,
           content: Array.isArray(snapshot.content?.blocks) ? snapshot.content.blocks : [],
@@ -454,6 +470,7 @@ export const loader = async ({
     coverImage,
     // Live editing: the room to join, or null for the git editor / a reader.
     collab,
+    liveCheckpoint,
     // The preview's added/edited block ids and removed count (preview only).
     previewChanges,
     // Display-only: `{ storedRef: signedUrl }`. Absent keys mean "use the ref
@@ -1042,6 +1059,7 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
         title: data.title as string,
         updated_at: new Date(),
       });
+      if (liveEnv) await notifyPageMeta(liveEnv, pageId, { title: data.title as string });
       return Response.json({ success: true });
     } catch (error: unknown) {
       return Response.json(
@@ -1057,6 +1075,7 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
         width: data.width as number,
         updated_at: new Date(),
       });
+      if (liveEnv) await notifyPageMeta(liveEnv, pageId, { width: data.width as number });
       return Response.json({ success: true });
     } catch (error: unknown) {
       return Response.json(
