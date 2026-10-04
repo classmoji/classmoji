@@ -176,6 +176,8 @@ export class DeckBridge {
   private mediaPending = new Set<string>();
   private readonly cleanups: Array<() => void> = [];
   private destroyed = false;
+  private flushing = false;
+  private flushAgain = false;
 
   constructor(opts: DeckBridgeOptions) {
     this.opts = opts;
@@ -463,6 +465,24 @@ export class DeckBridge {
 
   /** Write the person's changes into the doc (see the module comment). */
   flushLocal(): void {
+    if (this.flushing) {
+      // Re-entered (a confirmed claim asks for a flush mid-flush): run again after.
+      this.flushAgain = true;
+      return;
+    }
+    this.flushing = true;
+    try {
+      this.flushOnce();
+    } finally {
+      this.flushing = false;
+    }
+    if (this.flushAgain) {
+      this.flushAgain = false;
+      this.flushLocal();
+    }
+  }
+
+  private flushOnce(): void {
     const slidesEl = this.slidesEl;
     if (!slidesEl || this.destroyed) return;
     if (this.flushTimer) {
