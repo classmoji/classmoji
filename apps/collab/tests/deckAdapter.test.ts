@@ -163,6 +163,20 @@ describe('authorize', () => {
     expect(await ok('student')).toBe(false);
     expect(await ok('stranger')).toBe(false);
     expect(canEditDeck('ASSISTANT', { created_by: 'x', allow_team_edit: true }, 'y')).toBe(true);
+    // Refusals of members carry their role (audited); strangers' do not.
+    expect(await adapter.authorize({ userId: 'student', docId: SLIDE.id })).toMatchObject({
+      ok: false,
+      reason: 'forbidden',
+      classroomId: 'class-1',
+      role: 'STUDENT',
+    });
+    expect(await adapter.authorize({ userId: 'stranger', docId: SLIDE.id })).not.toHaveProperty(
+      'role'
+    );
+    expect(await adapter.authorize({ userId: 'teacher', docId: SLIDE.id })).toMatchObject({
+      ok: true,
+      role: 'TEACHER',
+    });
   });
 
   it('refuses unflagged classrooms, locked classrooms, and non-decks', async () => {

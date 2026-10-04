@@ -303,13 +303,17 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
   async authorize({ userId, docId }: { userId: string; docId: string }): Promise<AuthorizeResult> {
     const slide = await this.deps.findSlide(docId);
     if (!slide || !isDeckSlide(slide)) return { ok: false, reason: 'not-found' };
-    if (!slide.classroom?.collab_enabled) return { ok: false, reason: 'collab-disabled' };
     const role = await this.deps.findRole(userId, slide.classroom_id);
-    if (!canEditDeck(role, slide, userId)) return { ok: false, reason: 'forbidden' };
-    if (!canMutateClassroom({ status: slide.classroom.status as never, role: role as Role })) {
-      return { ok: false, reason: 'classroom-locked' };
+    // A member's refusal is audited (ACCESS_DENIED needs their role).
+    const member = role ? { classroomId: slide.classroom_id, role } : {};
+    if (!slide.classroom?.collab_enabled) {
+      return { ok: false, reason: 'collab-disabled', ...member };
     }
-    return { ok: true, classroomId: slide.classroom_id };
+    if (!canEditDeck(role, slide, userId)) return { ok: false, reason: 'forbidden', ...member };
+    if (!canMutateClassroom({ status: slide.classroom.status as never, role: role as Role })) {
+      return { ok: false, reason: 'classroom-locked', ...member };
+    }
+    return { ok: true, classroomId: slide.classroom_id, role: role as string };
   }
 
   async locate(docId: string) {
