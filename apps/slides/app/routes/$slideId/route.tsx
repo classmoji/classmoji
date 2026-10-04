@@ -1759,12 +1759,13 @@ export const action = async ({
   }
 
   // ── Save paths ─────────────────────────────────────────────────────────────
-  // A live deck is never saved from here: a stale editor tab posting the old
-  // save gets told to reload instead of overwriting deck.json under collab.
-  if (liveEnv && (intent == null || intent === '')) {
+  // A live deck is never saved from here: only the git worker writes its
+  // deck.json. Every intent a live deck uses has returned above, so anything
+  // else (a stale editor tab's save, an unknown intent) stops here.
+  if (liveEnv) {
     return data(
       { error: 'This deck is edited live now. Reload the page to keep editing.', live: true },
-      { status: 409 }
+      { status: 400 }
     );
   }
 
