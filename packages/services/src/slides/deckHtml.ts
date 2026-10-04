@@ -29,6 +29,7 @@ import { randomBytes } from 'node:crypto';
 import { splitStyleDeclarations, stripRuntimeSectionAttrs } from './deckRuntimeAttrs.ts';
 import {
   BLOCK_ID_ATTR,
+  HTML_BLOCK_FRAME_SELECTOR,
   HTML_BLOCK_SELECTOR,
   INERT_ATTR_PREFIX,
   SVG_BLOCK_SELECTOR,
@@ -237,7 +238,9 @@ function renderSection(slide: DeckSlide, includeNotes: boolean): string {
     return `<section${attrStr}>\n${inner}\n${aside ? `${aside}\n` : ''}</section>`;
   }
 
-  return `<section${attrStr}>${neutralizeHtmlBlocksInHtml(slide.html ?? '')}${aside}</section>`;
+  // The block rules run over html and notes together: an unclosed block in
+  // the html would otherwise take the notes into it.
+  return `<section${attrStr}>${secureSlideBlocksInHtml(`${slide.html ?? ''}${aside}`)}</section>`;
 }
 
 /**
@@ -863,9 +866,7 @@ function insideHtmlBlock($: CheerioAPI, el: Element): boolean {
 /** Html-block frames whose sandbox would let them out get inert sources. Returns the count. */
 function neutralizeHtmlBlocksIn($: CheerioAPI): number {
   let count = 0;
-  $(
-    `${HTML_BLOCK_SELECTOR} iframe, ${HTML_BLOCK_SELECTOR} object, ${HTML_BLOCK_SELECTOR} embed`
-  ).each((_i, node) => {
+  $(HTML_BLOCK_FRAME_SELECTOR).each((_i, node) => {
     const el = node as Element;
     const inside = insideHtmlBlock($, el);
     const blocked = (name: string) =>
@@ -882,60 +883,77 @@ function neutralizeHtmlBlocksIn($: CheerioAPI): number {
 
 /**
  * Slide html with every html-block frame that may not load made inert — the
- * generator's pass (render-view and thumbnails open the generated document
- * as is). Html with no html block, or none to change, comes back byte for
- * byte.
+ * html-block rule alone. Html with no html block, or none to change, comes
+ * back byte for byte.
  */
 export function neutralizeHtmlBlocksInHtml(html: string): string {
-  if (!/data-block-type\s*=\s*["']?html/i.test(html)) return html;
+  if (!/data-block-type/i.test(html)) return html;
   const $ = cheerio.load(html, null, false);
   if (neutralizeHtmlBlocksIn($) === 0) return html;
   return serializeBrowserForm($);
 }
 
-function lowerAttribs(el: Element): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [name, value] of Object.entries(el.attribs)) out[name.toLowerCase()] = value;
-  return out;
+/**
+ * Slide html with both block rules applied — the generator's pass, since
+ * render-view, thumbnails and the stored document are opened as they are:
+ * html-block frames that may not load made inert, svg blocks held to their
+ * lists. Html with nothing to change comes back byte for byte.
+ */
+export function secureSlideBlocksInHtml(html: string): string {
+  if (!/data-block-type/i.test(html)) return html;
+  const $ = cheerio.load(html, null, false);
+  const changed = sanitizeSvgBlocksIn($) + neutralizeHtmlBlocksIn($);
+  return changed === 0 ? html : serializeBrowserForm($);
 }
 
 /** cheerio's local name and namespace for an element (svg names keep their case). */
 function svgAllowed(el: Element): boolean {
   return (
     isAllowedSvgElement(el.tagName, el.namespace ?? null) &&
-    isAllowedSvgAnimation(el.tagName, lowerAttribs(el))
+    isAllowedSvgAnimation(el.tagName, el.attribs)
   );
 }
 
-function stripHandlers(el: Element): void {
+function stripHandlers(el: Element): number {
+  let removed = 0;
   for (const name of Object.keys(el.attribs)) {
-    if (name.toLowerCase().startsWith('on')) delete el.attribs[name];
+    if (name.toLowerCase().startsWith('on')) {
+      delete el.attribs[name];
+      removed++;
+    }
   }
+  return removed;
 }
 
 /** The svg-block lists applied under `root` (cheerio twin of deckBlocks sanitizeSvgTree). */
-function sanitizeSvgTreeIn(root: Element): void {
-  stripHandlers(root);
+function sanitizeSvgTreeIn(root: Element): number {
+  let changed = stripHandlers(root);
   const visit = (parent: Element): void => {
     for (const node of [...parent.children] as AnyNode[]) {
       if (node.type === 'tag' || node.type === 'script' || node.type === 'style') {
         const el = node as Element;
         if (!svgAllowed(el)) {
           removeNode(el);
+          changed++;
           continue;
         }
         // cheerio keys `xlink:href` as `href` (namespace kept aside) — the
         // link rule reads both the same way.
         for (const [name, value] of Object.entries(el.attribs)) {
-          if (!isAllowedSvgAttr(name, value)) delete el.attribs[name];
+          if (!isAllowedSvgAttr(name, value)) {
+            delete el.attribs[name];
+            changed++;
+          }
         }
         visit(el);
       } else if (node.type !== 'text') {
         removeNode(node);
+        changed++;
       }
     }
   };
   visit(root);
+  return changed;
 }
 
 function removeNode(node: AnyNode): void {
@@ -953,20 +971,26 @@ function removeNode(node: AnyNode): void {
   node.next = null;
 }
 
-/** Every svg block held to the lists: content sanitized, anything else in the block dropped. */
-function sanitizeSvgBlocksIn($: CheerioAPI): void {
+/** Every svg block held to the lists: content sanitized, anything else in the block dropped. Returns the changes. */
+function sanitizeSvgBlocksIn($: CheerioAPI): number {
+  let changed = 0;
   $(SVG_BLOCK_SELECTOR).each((_i, node) => {
     const block = node as Element;
-    stripHandlers(block);
+    changed += stripHandlers(block);
     for (const child of [...block.children] as AnyNode[]) {
       if (child.type === 'text') continue;
       const isContent =
         child.type === 'tag' &&
         ((child as Element).attribs['class'] ?? '').split(/\s+/).includes('sl-block-content');
-      if (isContent) sanitizeSvgTreeIn(child as Element);
-      else removeNode(child);
+      if (isContent) {
+        changed += sanitizeSvgTreeIn(child as Element);
+      } else {
+        removeNode(child);
+        changed++;
+      }
     }
   });
+  return changed;
 }
 
 /**
@@ -1108,10 +1132,15 @@ export class SlideBlockError extends Error {
   }
 }
 
+/** A top-level block by id (the blocks readSlideBlocks lists). */
 function findBlock($: CheerioAPI, blockId: string): Element {
   const matches = $('.sl-block')
     .toArray()
-    .filter(el => (el as Element).attribs[BLOCK_ID_ATTR] === blockId) as Element[];
+    .filter(
+      el =>
+        (el as Element).attribs[BLOCK_ID_ATTR] === blockId &&
+        $(el).parents('.sl-block').length === 0
+    ) as Element[];
   if (matches.length === 0) throw new SlideBlockError(`No block '${blockId}' on this slide`);
   return matches[0];
 }

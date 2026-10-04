@@ -162,6 +162,17 @@ describe('block_add', () => {
     expect(() => apply(ops)).toThrow(/already has a block 'same'/);
   });
 
+  it('refuses an id a nested block on the slide already has', () => {
+    const start = deck();
+    start.slides[0].html =
+      '<div class="sl-block" data-block-type="text"><div class="sl-block-content">' +
+      '<div class="sl-block" data-block-type="svg" data-cm-block-id="inner01"></div></div></div>';
+    const ops: DeckOp[] = [
+      { op: 'block_add', slide: 's1', type: 'html', box: BOX, source: 'a', block_id: 'inner01' },
+    ];
+    expect(() => apply(ops, start)).toThrow(/already has a block 'inner01'/);
+  });
+
   it('adds to a stack child, refuses the stack container', () => {
     const { deck: next } = apply([
       { op: 'block_add', slide: 'c2', type: 'html', box: BOX, source: 'x' },
@@ -381,6 +392,10 @@ describe('iframe src', () => {
     '../other/index.html',
     '/content/o/r/../../x',
     'games/../../x.html',
+    'games/%2e%2e/%2E%2E/x.html',
+    '/content/o/r/%2e%2e/x',
+    'games%2f..%2fx.html',
+    'games/%zz.html',
     'a b.html',
     'a\\b.html',
     '',

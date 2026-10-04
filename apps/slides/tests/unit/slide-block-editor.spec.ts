@@ -80,10 +80,19 @@ test.describe('svgFromSource', () => {
       '',
       '<div>no</div>',
       '<svg xmlns="http://www.w3.org/2000/svg"></svg><svg xmlns="http://www.w3.org/2000/svg"></svg>',
-      '<svg xmlns="http://www.w3.org/2000/svg"><rect></svg>',
-      '<svg><rect/></svg>', // no SVG namespace: not an svg document
+      'text <svg></svg>',
+      '<p>a</p><svg></svg>',
     ]) {
       expect(svgFromSource(text, doc).ok, text).toBe(false);
+    }
+  });
+
+  test('reads loose markup as the browser does (no xmlns, an unclosed element)', () => {
+    for (const text of [
+      '<svg><rect/></svg>',
+      '<svg xmlns="http://www.w3.org/2000/svg"><rect></svg>',
+    ]) {
+      expect(svgFromSource(text, doc).ok, text).toBe(true);
     }
   });
 
@@ -238,5 +247,28 @@ test.describe('svg and html block content at display time', () => {
     expect(editable('text')).toBeNull();
     lockSourceBlockContent(root);
     expect(editable('svg')).toBe('false');
+  });
+});
+
+test.describe('svgFromSource reads the source the way the slide will', () => {
+  test('attribute names that differ only in case cannot hide an animation target', () => {
+    const result = svgFromSource(
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><a>' +
+        '<animate attributeName="href" values="#x;javascript:void(0)" ATTRIBUTENAME="fill" VALUES="red"/>' +
+        '<rect width="10" height="10"/></a></svg>',
+      doc
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.svg.querySelector('animate')).toBeNull();
+    expect(result.svg.outerHTML).not.toContain('javascript:');
+  });
+
+  test('an xml prolog and comments around the drawing are fine', () => {
+    const result = svgFromSource(
+      '<?xml version="1.0"?>\n<!-- exported -->\n<svg viewBox="0 0 1 1"><rect width="1" height="1"/></svg>',
+      doc
+    );
+    expect(result.ok).toBe(true);
   });
 });

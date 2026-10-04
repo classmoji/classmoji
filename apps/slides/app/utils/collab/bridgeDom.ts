@@ -15,6 +15,7 @@ import {
   RUNTIME_SECTION_ATTRS,
   RUNTIME_SECTION_CLASSES,
   isBlockedHtmlBlockAttr,
+  isBlockedSvgBlockAttr,
   splitStyleDeclarations,
 } from '@classmoji/services/slides/runtime-attrs';
 import { EDITOR_BLOCK_CLASSES, isRenderableAttr, type DeckStructure } from '@classmoji/collab';
@@ -231,7 +232,8 @@ export function applySectionAttrs(
  * Make event-handler attributes and `javascript:` URLs inert on every element
  * under (and including) `root`, for display: each is renamed in place to
  * `data-cm-inert-<name>`. So are the sources of a frame inside an html block
- * whose sandbox would let it out (deckBlocks.ts). Nothing stored changes —
+ * whose sandbox would let it out, and svg-block attributes off the svg lists
+ * (deckBlocks.ts). Nothing stored changes —
  * `restoreInertMarkup` (run by serialization) puts the authored attributes
  * back.
  */
@@ -239,7 +241,9 @@ export function stripUnsafeMarkup(root: Element | DocumentFragment): void {
   for (const el of elementsUnder(root)) {
     const attrs = Array.from(el.attributes);
     const renders = (attr: Attr) =>
-      isRenderableAttr(attr.name, attr.value) && !isBlockedHtmlBlockAttr(el, attr.name);
+      isRenderableAttr(attr.name, attr.value) &&
+      !isBlockedHtmlBlockAttr(el, attr.name) &&
+      !isBlockedSvgBlockAttr(el, attr.name);
     if (attrs.every(renders)) continue;
     // Renamed in place (same position), so putting them back restores the
     // element's markup byte for byte.

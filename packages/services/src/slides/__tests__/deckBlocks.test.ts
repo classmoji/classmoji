@@ -18,6 +18,7 @@ import {
   parseDeckHtml,
   readSlideBlocks,
   removeSlideBlock,
+  secureSlideBlocksInHtml,
   SlideBlockError,
   SlideHtmlError,
   updateSlideBlock,
@@ -31,8 +32,10 @@ import {
   htmlBlockMarkup,
   htmlBlockSource,
   htmlBlockSrcdoc,
+  isAllowedSvgAnimation,
   isAllowedSvgAttr,
   isAllowedSvgLink,
+  isBlockedFrameAttr,
   isSafeHtmlBlockSandbox,
   mintBlockId,
 } from '../deckBlocks.ts';
@@ -418,5 +421,101 @@ describe('blocks through the deck round trip', () => {
     expect(readSlideBlocks(p1.deck.slides[0].html ?? '')[0].source).toBe(
       '<!DOCTYPE html><p>1 < 2</p>'
     );
+  });
+});
+
+describe('block rules: harder inputs', () => {
+  const deckWith = (html: string, notes?: string): string =>
+    generateDeckHtml(
+      {
+        version: 1,
+        theme: 'white',
+        codeTheme: 'github',
+        slides: [{ id: 's1', html, ...(notes !== undefined ? { notes } : {}) }],
+      },
+      { title: 't' }
+    );
+  const looseFrame = '<iframe srcdoc="&lt;b&gt;x&lt;/b&gt;"></iframe>';
+
+  it('a declarative shadow root inside an html block never attaches', () => {
+    const html =
+      '<div class="sl-block" data-block-type="html"><div class="sl-block-content"><div>' +
+      `<template shadowrootmode="open">${looseFrame}</template></div></div></div>`;
+    expect(normalizeSlideHtml(html)).toContain('<template data-cm-inert-shadowrootmode="open">');
+    expect(deckWith(html)).toContain('data-cm-inert-shadowrootmode="open"');
+  });
+
+  it('a frame that is itself marked as the html block is held to the rule', () => {
+    const html = `<iframe class="sl-block" data-block-type="html" srcdoc="x"></iframe>`;
+    expect(normalizeSlideHtml(html)).toContain('data-cm-inert-srcdoc="x"');
+    expect(deckWith(html)).toContain('data-cm-inert-srcdoc="x"');
+  });
+
+  it('the generator applies the rules to notes and to blocks left open into the notes', () => {
+    const block = `<div class="sl-block" data-block-type="html"><div class="sl-block-content">${looseFrame}</div></div>`;
+    expect(deckWith('<p>x</p>', block)).not.toMatch(/\ssrcdoc=/);
+    const unclosed = '<div class="sl-block" data-block-type="html"><div class="sl-block-content">';
+    expect(deckWith(unclosed, looseFrame)).not.toMatch(/\ssrcdoc=/);
+  });
+
+  it('a block type written as a character reference is still the same type', () => {
+    const html = `<div class="sl-block" data-block-type="&#104;tml">${looseFrame}</div>`;
+    expect(deckWith(html)).not.toMatch(/\ssrcdoc=/);
+  });
+
+  it('the generator holds svg blocks to the lists and leaves clean ones byte for byte', () => {
+    const dirty =
+      '<div class="sl-block" data-block-type="svg"><div class="sl-block-content"><svg viewBox="0 0 1 1">' +
+      '<a href="javascript:void(0)"><rect width="1" height="1"></rect></a></svg></div></div>';
+    expect(secureSlideBlocksInHtml(dirty)).not.toContain('javascript:');
+    const clean = browserFixture('svg-block').roundtrip;
+    expect(secureSlideBlocksInHtml(clean)).toBe(clean);
+  });
+
+  it('element names that are also object keys are ordinary elements', () => {
+    expect(isBlockedFrameAttr('constructor', 'a', null, true)).toBe(false);
+    expect(isBlockedFrameAttr('toString', 'src', null, true)).toBe(false);
+    const html =
+      '<div class="sl-block" data-block-type="html"><div class="sl-block-content"><constructor a="1"></constructor></div></div>';
+    expect(() => normalizeSlideHtml(html)).not.toThrow();
+  });
+
+  it('animations are read whole: every attributeName, any prefix, every value list', () => {
+    expect(
+      isAllowedSvgAnimation('animate', [
+        ['attributeName', 'href'],
+        ['ATTRIBUTENAME', 'fill'],
+      ])
+    ).toBe(false);
+    expect(isAllowedSvgAnimation('set', [['attributeName', 'foo:href']])).toBe(false);
+    expect(
+      isAllowedSvgAnimation('animate', [
+        ['attributeName', 'fill'],
+        ['values', 'red;#x;javascript:void(0)'],
+      ])
+    ).toBe(false);
+    expect(isAllowedSvgAnimation('animate', { attributeName: 'r', values: '1;2' })).toBe(true);
+  });
+
+  it('a script URL anywhere in an svg attribute value is dropped', () => {
+    expect(isAllowedSvgAttr('values', '#a;javascript:void(0)')).toBe(false);
+    expect(isAllowedSvgAttr('fill', 'red')).toBe(true);
+  });
+
+  it('a long run of comments before the source is handled in linear time', () => {
+    const source = `${'<!---->'.repeat(20_000)}x`;
+    const started = Date.now();
+    expect(htmlBlockSource(htmlBlockSrcdoc(source))).toBe(source);
+    const doctyped = `${'<!-- c -->'.repeat(5_000)}<!doctype html><p>x</p>`;
+    expect(htmlBlockSrcdoc(doctyped)).toContain(`<!doctype html>${HTML_BLOCK_STORAGE_SHIM}<p>`);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('block edits reach only top-level blocks', () => {
+    const nested =
+      '<div class="sl-block" data-block-type="text" data-cm-block-id="outer001" style="left: 0px;">' +
+      '<div class="sl-block-content"><div class="sl-block" data-block-type="svg" data-cm-block-id="dup00001">' +
+      '<div class="sl-block-content"></div></div></div></div>';
+    expect(() => removeSlideBlock(nested, 'dup00001')).toThrow(SlideBlockError);
   });
 });

@@ -64,7 +64,10 @@ describe('stageFilename', () => {
     expect(() => stageFilename('my game.js', 'x', 'slide')).toThrow(/keeps its name exactly/);
     expect(() => stageFilename('.env', 'x', 'slide')).toThrow(/keeps its name exactly/);
     expect(() => stageFilename('Makefile', 'x', 'slide')).toThrow(/extension/);
-    expect(() => stageFilename(`${'a'.repeat(150)}.js`, 'games/x', 'slide')).toThrow(/160/);
+    expect(() => stageFilename(`${'a'.repeat(101)}.js`, 'games/x', 'slide')).toThrow(/100/);
+    expect(() =>
+      stageFilename(`${'a'.repeat(90)}.js`, `${'f'.repeat(40)}/${'g'.repeat(40)}`, 'slide')
+    ).toThrow(/160/);
   });
 });
 

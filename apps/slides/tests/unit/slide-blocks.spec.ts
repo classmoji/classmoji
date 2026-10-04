@@ -148,3 +148,37 @@ test.describe('svg block lists (DOM)', () => {
     expect(root.innerHTML).toBe(html);
   });
 });
+
+test.describe('harder inputs on display', () => {
+  test('svg-block attributes off the lists render inert and are stored as authored', () => {
+    const html =
+      '<div class="sl-block" data-block-type="svg"><div class="sl-block-content"><svg viewBox="0 0 1 1">' +
+      '<a href="javascript:void(0)"><animate attributeName="href" values="#a;#b"></animate>' +
+      '<rect width="1" height="1"></rect></a></svg></div></div>';
+    const fragment = safeInnerHtml(doc, html);
+    expect(fragment.querySelector('a')?.hasAttribute('href')).toBe(false);
+    expect(fragment.querySelector('animate')?.getAttribute('data-cm-inert-attributeName')).toBe(
+      'href'
+    );
+    const section = sectionFromMarkup(doc, `<section data-cm-id="s1">${html}</section>`);
+    expect(serializeSection(section).html).toBe(holder(html).innerHTML);
+  });
+
+  test('an element named like an object key inside an html block renders', () => {
+    const html =
+      '<div class="sl-block" data-block-type="html"><div class="sl-block-content">' +
+      '<constructor a="1"></constructor></div></div>';
+    expect(() => safeInnerHtml(doc, html)).not.toThrow();
+    expect(() => neutralizeHtmlBlockFrames(holder(html))).not.toThrow();
+  });
+
+  test('a frame marked as the html block itself, and a shadow-root template, stay inert', () => {
+    const root = holder(
+      '<iframe class="sl-block" data-block-type="html" srcdoc="x"></iframe>' +
+        '<div class="sl-block" data-block-type="html"><template shadowrootmode="open"><p>x</p></template></div>'
+    );
+    expect(neutralizeHtmlBlockFrames(root)).toBe(2);
+    expect(root.querySelector('iframe')?.getAttribute('data-cm-inert-srcdoc')).toBe('x');
+    expect(root.querySelector('template')?.hasAttribute('shadowrootmode')).toBe(false);
+  });
+});

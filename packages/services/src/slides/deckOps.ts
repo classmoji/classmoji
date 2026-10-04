@@ -376,7 +376,15 @@ export function checkBlockFrameSrc(src: string): string {
   if (!value) refuse('it is empty');
   if (FRAME_SRC_BAD_CHARS.test(value)) refuse('it contains spaces or backslashes');
   const path = value.split(/[?#]/)[0];
-  if (path.split('/').includes('..')) refuse("'..' is not allowed");
+  // Checked as the browser will read it: `%2e%2e` is `..` once loaded.
+  if (/%(?:2f|5c)/i.test(path)) refuse('encoded slashes are not allowed');
+  let decoded = path;
+  try {
+    decoded = decodeURIComponent(path);
+  } catch {
+    refuse('it is not a valid URL path');
+  }
+  if (decoded.split('/').includes('..')) refuse("'..' is not allowed");
   if (/^[a-z][a-z0-9+.-]*:/i.test(value)) {
     let url: URL | null = null;
     try {
@@ -765,7 +773,10 @@ export function applyDeckOps(
       case 'block_add': {
         const slide = blockSlide(deck, op.slide, 'block_add');
         const html = slide.html ?? '';
-        const taken = new Set(readSlideBlocks(html, { content: false }).map(block => block.id));
+        // Every block id on the slide, nested blocks included.
+        const taken = new Set(
+          [...html.matchAll(/data-cm-block-id="([^"]*)"/g)].map(match => match[1])
+        );
         let blockId = op.block_id;
         if (blockId !== undefined && taken.has(blockId)) {
           throw new DeckOpError(`Slide '${op.slide}' already has a block '${blockId}'`);

@@ -83,6 +83,7 @@ export function stageFilename(
   if (targetType !== 'slide') refuse('folder is for slide decks; page files keep flat names.');
   const normalized = normalizeStageFolder(folder);
   const trimmed = name.trim();
+  if (trimmed.length > 100) refuse('In a folder the file name can be at most 100 characters.');
   if (!SEGMENT.test(trimmed)) {
     refuse(
       `In a folder the file keeps its name exactly, so "${trimmed.slice(0, 60)}" may use only ` +

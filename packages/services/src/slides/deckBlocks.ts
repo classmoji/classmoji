@@ -68,13 +68,25 @@ export function isSafeHtmlBlockSandbox(value: string | null | undefined): boolea
     .every(token => HTML_BLOCK_SANDBOX_ALLOWED.has(token.toLowerCase()));
 }
 
-/** Elements that load a document, and the attributes that tell them which. */
-const FRAME_SOURCE_ATTRS: Readonly<Record<string, ReadonlySet<string>>> = {
-  iframe: new Set(['srcdoc', 'src', 'data-src']),
-  // No sandbox exists for these: inside an html block they never load.
-  object: new Set(['data', 'data-src']),
-  embed: new Set(['src', 'data-src']),
-};
+/**
+ * Elements that load a document (or attach one), and the attributes that
+ * tell them which. Only an iframe has a sandbox; inside an html block the
+ * others never load, and a `<template>` never becomes a shadow root.
+ */
+const FRAME_SOURCE_ATTRS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['iframe', new Set(['srcdoc', 'src', 'data-src'])],
+  ['object', new Set(['data', 'data-src'])],
+  ['embed', new Set(['src', 'data-src'])],
+  ['template', new Set(['shadowrootmode', 'shadowroot'])],
+]);
+
+/**
+ * Every element {@link FRAME_SOURCE_ATTRS} names inside an html block, or that
+ * is itself one (for `querySelectorAll` and cheerio alike).
+ */
+export const HTML_BLOCK_FRAME_SELECTOR = Array.from(FRAME_SOURCE_ATTRS.keys())
+  .flatMap(tag => [`${HTML_BLOCK_SELECTOR} ${tag}`, `${tag}${HTML_BLOCK_SELECTOR}`])
+  .join(', ');
 
 /**
  * Whether attribute `name` of an element named `tagName` must not render,
@@ -89,7 +101,7 @@ export function isBlockedFrameAttr(
 ): boolean {
   if (!insideHtmlBlock) return false;
   const tag = tagName.toLowerCase();
-  const sources = FRAME_SOURCE_ATTRS[tag];
+  const sources = FRAME_SOURCE_ATTRS.get(tag);
   if (!sources || !sources.has(name.toLowerCase())) return false;
   return tag !== 'iframe' || !isSafeHtmlBlockSandbox(sandbox);
 }
@@ -97,7 +109,7 @@ export function isBlockedFrameAttr(
 /** {@link isBlockedFrameAttr} for a DOM element. */
 export function isBlockedHtmlBlockAttr(el: Element, name: string): boolean {
   const tag = el.localName;
-  if (!(tag in FRAME_SOURCE_ATTRS)) return false;
+  if (!FRAME_SOURCE_ATTRS.has(tag)) return false;
   return isBlockedFrameAttr(
     tag,
     name,
@@ -113,11 +125,8 @@ export function isBlockedHtmlBlockAttr(el: Element, name: string): boolean {
  */
 export function neutralizeHtmlBlockFrames(root: Element | Document | DocumentFragment): number {
   let renamed = 0;
-  const frames = Array.from(
-    root.querySelectorAll(
-      `${HTML_BLOCK_SELECTOR} iframe, ${HTML_BLOCK_SELECTOR} object, ${HTML_BLOCK_SELECTOR} embed`
-    )
-  );
+  const frames = Array.from(root.querySelectorAll(HTML_BLOCK_FRAME_SELECTOR));
+  if ((root as Element).matches?.(HTML_BLOCK_FRAME_SELECTOR)) frames.unshift(root as Element);
   for (const el of frames) {
     const attrs = Array.from(el.attributes);
     if (!attrs.some(attr => isBlockedHtmlBlockAttr(el, attr.name))) continue;
@@ -149,19 +158,35 @@ export const HTML_BLOCK_STORAGE_SHIM =
   'catch(e){}try{Object.defineProperty(window,n,{value:m(),configurable:true,enumerable:true})}' +
   'catch(e){}})})();</script>';
 
-/** A leading doctype (after whitespace / comments): the shim goes after it, keeping standards mode. */
-const LEADING_DOCTYPE_RE = /^(?:\s|<!--[\s\S]*?-->)*<!doctype[^>]*>/i;
+/**
+ * The leading doctype (after whitespace and comments) of `html`, or '' — the
+ * shim goes after it, keeping standards mode. A scan, not a regex: linear in
+ * the input whatever it holds.
+ */
+function leadingDoctype(html: string): string {
+  let at = 0;
+  for (;;) {
+    while (at < html.length && /\s/.test(html[at])) at++;
+    if (!html.startsWith('<!--', at)) break;
+    const end = html.indexOf('-->', at + 4);
+    if (end === -1) return '';
+    at = end + 3;
+  }
+  if (html.slice(at, at + 9).toLowerCase() !== '<!doctype') return '';
+  const close = html.indexOf('>', at);
+  return close === -1 ? '' : html.slice(0, close + 1);
+}
 
 /** The srcdoc for an html block's source: the storage shim, then the source. */
 export function htmlBlockSrcdoc(source: string): string {
-  const doctype = source.match(LEADING_DOCTYPE_RE)?.[0];
+  const doctype = leadingDoctype(source);
   if (doctype) return doctype + HTML_BLOCK_STORAGE_SHIM + source.slice(doctype.length);
   return HTML_BLOCK_STORAGE_SHIM + source;
 }
 
 /** The source an author wrote, from a frame's srcdoc (the storage shim taken out). */
 export function htmlBlockSource(srcdoc: string): string {
-  const doctype = srcdoc.match(LEADING_DOCTYPE_RE)?.[0] ?? '';
+  const doctype = leadingDoctype(srcdoc);
   if (srcdoc.startsWith(HTML_BLOCK_STORAGE_SHIM, doctype.length)) {
     return doctype + srcdoc.slice(doctype.length + HTML_BLOCK_STORAGE_SHIM.length);
   }
@@ -249,7 +274,7 @@ const SVG_ANIMATION_ELEMENTS: ReadonlySet<string> = new Set([
 
 // eslint-disable-next-line no-control-regex -- browsers ignore these inside a URL scheme
 const URL_NOISE_RE = /[\u0000- \u007f]/g;
-const SCRIPT_SCHEME_RE = /^(?:javascript|vbscript):/;
+const SCRIPT_SCHEME_RE = /(?:javascript|vbscript):/;
 const ATTR_NAME_RE = /^[a-zA-Z_][\w:.-]*$/;
 const LINK_DATA_IMAGE_RE = /^data:image\/(?:png|jpe?g|gif|webp|avif|svg\+xml)[;,]/i;
 
@@ -268,7 +293,7 @@ function hasScriptScheme(value: string): boolean {
   return SCRIPT_SCHEME_RE.test(value.replace(URL_NOISE_RE, '').toLowerCase());
 }
 
-/** Whether an attribute may stay on an element inside an svg block. */
+/** Whether an attribute may stay on an element inside an svg block (no script URL anywhere in it). */
 export function isAllowedSvgAttr(name: string, value: string): boolean {
   if (!ATTR_NAME_RE.test(name)) return false;
   const lower = name.toLowerCase();
@@ -278,37 +303,64 @@ export function isAllowedSvgAttr(name: string, value: string): boolean {
   return !hasScriptScheme(value);
 }
 
+/** An element's attributes as `[name, value]` pairs, or a record of them. */
+export type SvgAttrList =
+  | ReadonlyArray<readonly [string, string]>
+  | Readonly<Record<string, string>>;
+
+const ANIMATED_VALUE_ATTRS: ReadonlySet<string> = new Set(['values', 'to', 'from', 'by']);
+
 /**
  * Whether an animation element may stay: SMIL may animate geometry, colour or
- * transforms, never a link target or a handler (`attributeName` href/on*), and
- * no animated value may be a script URL. `attrs` keys are lowercase.
+ * transforms, never a link target or a handler (`attributeName` href/src/on*,
+ * under any prefix), and no animated value may hold a script URL. Every
+ * attribute is read, whatever its case, so names that differ only in case
+ * (possible in parsed XML) cannot hide one another.
  */
-export function isAllowedSvgAnimation(
-  localName: string,
-  attrs: Readonly<Record<string, string>>
-): boolean {
+export function isAllowedSvgAnimation(localName: string, attrs: SvgAttrList): boolean {
   if (!SVG_ANIMATION_ELEMENTS.has(localName.toLowerCase())) return true;
-  const target = (attrs['attributename'] ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/^xlink:/, '');
-  if (target === 'href' || target === 'src' || target.startsWith('on')) return false;
-  for (const key of ['values', 'to', 'from', 'by']) {
-    const value = attrs[key];
-    if (
-      value != null &&
-      /(?:javascript|vbscript):/.test(value.replace(URL_NOISE_RE, '').toLowerCase())
-    ) {
+  const pairs = Array.isArray(attrs)
+    ? (attrs as ReadonlyArray<readonly [string, string]>)
+    : Object.entries(attrs as Readonly<Record<string, string>>);
+  for (const [rawName, value] of pairs) {
+    const name = rawName.toLowerCase();
+    if (name === 'attributename') {
+      const target = value.trim().toLowerCase();
+      const local = target.slice(target.lastIndexOf(':') + 1);
+      if (local === 'href' || local === 'src' || local.startsWith('on')) return false;
+    } else if (ANIMATED_VALUE_ATTRS.has(name) && hasScriptScheme(value)) {
       return false;
     }
   }
   return true;
 }
 
-function lowerAttrs(el: Element): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const attr of Array.from(el.attributes)) out[attr.name.toLowerCase()] = attr.value;
-  return out;
+/**
+ * Whether attribute `name` of `el` must not render in an svg block, on display
+ * (the live editor renames it inert rather than dropping it): it is off the
+ * list, or it drives an animation that is.
+ */
+export function isBlockedSvgBlockAttr(el: Element, name: string): boolean {
+  if (el.namespaceURI !== SVG_NS || el.closest(SVG_BLOCK_SELECTOR) === null) return false;
+  if (!isAllowedSvgAttr(name, el.getAttribute(name) ?? '')) return true;
+  const lower = name.toLowerCase();
+  if (lower !== 'attributename' && !ANIMATED_VALUE_ATTRS.has(lower)) return false;
+  return !isAllowedSvgAnimation(el.localName, attrPairs(el));
+}
+
+function attrPairs(el: Element): Array<[string, string]> {
+  return Array.from(el.attributes, attr => [attr.name, attr.value] as [string, string]);
+}
+
+/** Two attribute names that differ only in case (parsed XML can carry both). */
+function hasCaseTwins(el: Element): boolean {
+  const seen = new Set<string>();
+  for (const attr of Array.from(el.attributes)) {
+    const lower = attr.name.toLowerCase();
+    if (seen.has(lower)) return true;
+    seen.add(lower);
+  }
+  return false;
 }
 
 /**
@@ -328,7 +380,8 @@ export function sanitizeSvgTree(root: Element): void {
         const el = node as Element;
         if (
           !isAllowedSvgElement(el.localName, el.namespaceURI) ||
-          !isAllowedSvgAnimation(el.localName, lowerAttrs(el))
+          hasCaseTwins(el) ||
+          !isAllowedSvgAnimation(el.localName, attrPairs(el))
         ) {
           el.remove();
           continue;

@@ -71,14 +71,18 @@ export type SvgSourceResult = { ok: true; svg: SVGSVGElement } | { ok: false; er
  * (`normalizeSvgBlockSource`), with the DOM. Imported into `doc`.
  */
 export function svgFromSource(text: string, doc: Document): SvgSourceResult {
-  const parsed = new (doc.defaultView?.DOMParser ?? DOMParser)().parseFromString(
-    text.trim(),
-    'image/svg+xml'
-  );
-  const root = parsed.documentElement;
+  // Parsed as HTML, like the server and every browser that later reads the
+  // slide: the tree checked here is the tree that gets shown.
+  const template = doc.createElement('template');
+  template.innerHTML = text.trim();
+  const nodes = Array.from(template.content.childNodes);
+  const elements = nodes.filter(node => node.nodeType === 1) as Element[];
+  const strayText = nodes.some(node => node.nodeType === 3 && (node.textContent ?? '').trim());
+  const root = elements[0];
   if (
+    elements.length !== 1 ||
+    strayText ||
     !root ||
-    parsed.getElementsByTagName('parsererror').length > 0 ||
     root.localName !== 'svg' ||
     root.namespaceURI !== SVG_NS
   ) {
