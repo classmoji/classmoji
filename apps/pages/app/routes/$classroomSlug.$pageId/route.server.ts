@@ -42,6 +42,21 @@ import {
   canonicalizeOpsAssets,
   resolveDocumentAssets,
 } from '~/utils/assetRefs.server.ts';
+import type { CollabLoaderData } from '@classmoji/collab';
+import {
+  classroomCollabEnabled,
+  collabEditorData,
+  fetchLiveSnapshot,
+  liveEditingEnv,
+  readEditorName,
+  requestCheckpoint,
+} from '~/utils/collab.server.ts';
+import {
+  acceptPreviewLive,
+  livePageBlocks,
+  normalizePageBlocks,
+} from '~/utils/collabPreview.server.ts';
+import { previewBlockChanges, type PreviewChanges } from '~/components/preview/previewHighlight.ts';
 
 /**
  * The most a JSON request to the page action may send.
@@ -93,6 +108,12 @@ async function loadUploadCapability(page: {
     return null;
   }
 }
+
+/**
+ * What a writer that predates live editing is told when it posts to a page
+ * that is now edited live (a tab opened before the classroom switched over).
+ */
+const LIVE_PAGE_MESSAGE = 'This page is now edited live. Reload to keep editing.';
 
 /** Extensions a page cover may have — the image half of the upload allowlist. */
 const COVER_IMAGE_EXTENSION = /\.(png|jpe?g|gif|webp|svg)$/i;
@@ -194,6 +215,22 @@ export const loader = async ({
   // Staff asked for a preview but no branch exists → render main with a notice.
   const previewMissing = Boolean(canEdit && wantsPreview && !previewStatus?.exists);
 
+  // ── Live editing ─────────────────────────────────────────────────────────
+  // A classroom with `collab_enabled` edits pages live: an editor joins the
+  // page's room on the collab server and the document comes from there, not
+  // from content.json. Only for someone who edits, and not while a preview
+  // branch is shown (that is a read-only render of git).
+  const liveEnv = canEdit ? liveEditingEnv(page.classroom) : null;
+  const collab: CollabLoaderData | null =
+    liveEnv && !previewActive && authData?.userId
+      ? await collabEditorData({
+          env: liveEnv,
+          pageId: page.id,
+          userId: authData.userId,
+          userLogin: authData.userLogin,
+        })
+      : null;
+
   // Load content. This loader serves two surfaces, and they read differently.
   //
   // The EDITOR (canEdit, and any preview-branch read) goes to GitHub: this read
@@ -209,19 +246,36 @@ export const loader = async ({
   // The VIEWER reads by sha through the delivery layer, so a student sees a
   // save the moment it returns rather than up to a minute later, and a page
   // view costs no GitHub call.
-  const {
-    format,
-    content,
-    coverImage: jsonCoverImage,
-    sha: contentFileSha,
-  } = await loadPageContent(
-    pageForContent,
-    previewActive
-      ? { ref: previewBranch, skipCache: true }
-      : canEdit
-        ? { skipCache: true }
-        : { viaWorker: true }
-  );
+  //
+  // A LIVE editor gets its document from the room. The blocks are still read
+  // here — from the live document, through the collab server — but only to
+  // sign the URLs of the assets they reference and to draw the cover before
+  // the room has synced. If the collab server does not answer, git's copy
+  // serves that purpose instead (the editor itself then shows it is offline).
+  const readContent = async () => {
+    if (collab && liveEnv) {
+      try {
+        const snapshot = await fetchLiveSnapshot(liveEnv, page.id);
+        return {
+          format: 'json' as const,
+          content: Array.isArray(snapshot.content?.blocks) ? snapshot.content.blocks : [],
+          coverImage: snapshot.content?.coverImage ?? null,
+          sha: null,
+        };
+      } catch (error) {
+        console.warn('[pages] Live snapshot unavailable; resolving assets from git:', error);
+      }
+    }
+    return loadPageContent(
+      pageForContent,
+      previewActive
+        ? { ref: previewBranch, skipCache: true }
+        : canEdit
+          ? { skipCache: true }
+          : { viaWorker: true }
+    );
+  };
+  const { format, content, coverImage: jsonCoverImage, sha: contentFileSha } = await readContent();
 
   let viewerContent: unknown;
 
@@ -238,6 +292,20 @@ export const loader = async ({
   }
 
   // Cover image: prefer JSON metadata, fall back to DB columns (legacy pages)
+  // Which blocks the pending preview adds or edits, against the page as it is
+  // now (the live document in a live-edited classroom, main otherwise). The
+  // rendered preview highlights them; there is no diff view.
+  let previewChanges: PreviewChanges | null = null;
+  if (previewActive && Array.isArray(viewerContent)) {
+    const liveBlocks = await livePageBlocks(
+      { ...pageForContent, id: page.id },
+      liveEditingEnv(page.classroom)
+    );
+    if (liveBlocks) {
+      previewChanges = previewBlockChanges(liveBlocks, normalizePageBlocks(viewerContent));
+    }
+  }
+
   const coverImage =
     jsonCoverImage ||
     (page.header_image_url
@@ -326,8 +394,11 @@ export const loader = async ({
 
   // The provider's own diff UI for the pending preview (branch segment
   // URL-encoded — preview branch names contain slashes).
+  //
+  // Not for a live-edited classroom: a preview there is reviewed as the
+  // rendered page with its changes highlighted, never as a diff.
   const diffUrl =
-    gitOrg?.login && repoName
+    !classroomCollabEnabled(page.classroom) && gitOrg?.login && repoName
       ? gitWeb({
           provider: gitOrg.provider,
           login: gitOrg.login,
@@ -369,8 +440,14 @@ export const loader = async ({
           }
         : null,
     },
-    content: viewerContent,
+    // The editor's document in a live-edited page comes from the room, so
+    // the blocks are not shipped (they were read only to resolve assets).
+    content: collab ? null : viewerContent,
     coverImage,
+    // Live editing: the room to join, or null for the git editor / a reader.
+    collab,
+    // The preview's added/edited block ids and removed count (preview only).
+    previewChanges,
     // Display-only: `{ storedRef: signedUrl }`. Absent keys mean "use the ref
     // as-is" (an external image, or the delivery layer switched off).
     resolvedAssets,
@@ -392,7 +469,7 @@ export const loader = async ({
     // of clobbering a concurrent write. null = no content.json yet (fresh or
     // legacy-HTML page) → the first save creates it without a precondition.
     // Editor-only: null for non-editors and in read-only preview mode.
-    contentSha: canEdit && !previewActive && format === 'json' ? contentFileSha : null,
+    contentSha: canEdit && !previewActive && !collab && format === 'json' ? contentFileSha : null,
     // Preview state is staff-only; students/anonymous always get null.
     preview: canEdit
       ? {
@@ -510,6 +587,85 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
     }
   }
   const { intent } = data;
+
+  // ── Live editing ───────────────────────────────────────────────────────────
+  // In a live-edited classroom the git worker is the only writer of
+  // content.json. Every intent that would write it from here is refused —
+  // the loader never hands out these paths for such a page, so this only
+  // meets a tab opened before the classroom switched over (or a stray post).
+  const liveEnv = liveEditingEnv(page.classroom);
+  if (liveEnv && intent === 'save') {
+    // `conflict` without a report: the editor's "reload" banner. No `code`,
+    // which would start the whole-document fallback against this refusal.
+    return Response.json({ conflict: true, message: LIVE_PAGE_MESSAGE }, { status: 409 });
+  }
+  if (liveEnv && (intent === 'set-header-image' || intent === 'upload-header-image')) {
+    return Response.json({ error: LIVE_PAGE_MESSAGE }, { status: 409 });
+  }
+
+  if (intent === 'save-version') {
+    if (!liveEnv) return Response.json({ error: 'Invalid action' }, { status: 400 });
+    try {
+      const name = await readEditorName(authData.userId, authData.userLogin);
+      await requestCheckpoint(liveEnv, pageId, { userId: authData.userId, name });
+      return Response.json({ success: true, savedVersion: true });
+    } catch (error: unknown) {
+      console.error('[pages] Save version failed:', error);
+      return Response.json(
+        { error: 'The version could not be saved. Try again.' },
+        { status: 502 }
+      );
+    }
+  }
+
+  if (liveEnv && intent === 'preview-accept') {
+    try {
+      const name = await readEditorName(authData.userId, authData.userLogin);
+      let resolutions: Array<{ id?: unknown; choose?: unknown }> | null = null;
+      if (data.resolutions != null) {
+        try {
+          const parsed =
+            typeof data.resolutions === 'string' ? JSON.parse(data.resolutions) : data.resolutions;
+          if (Array.isArray(parsed)) resolutions = parsed;
+        } catch {
+          return Response.json(
+            { error: 'Malformed resolutions payload — expected [{id, choose}]' },
+            { status: 400 }
+          );
+        }
+      }
+      const result = await acceptPreviewLive({
+        page: { ...actionPage, id: page.id },
+        env: liveEnv,
+        actor: { userId: authData.userId, name },
+        resolutions,
+      });
+      if (result.merged) {
+        const autoParam = result.autoMerged > 0 ? `&auto_merged=${result.autoMerged}` : '';
+        return redirect(`/${page.classroom.slug}/${pageId}?notice=preview-accepted${autoParam}`);
+      }
+      if (result.conflict) {
+        return Response.json(
+          {
+            conflict: true,
+            units: result.units,
+            unitPreviews: null,
+            autoMerged: result.autoMerged,
+            oursSha: result.oursSha,
+            theirsSha: result.theirsSha,
+          },
+          { status: 409 }
+        );
+      }
+      return Response.json({ error: result.error }, { status: result.status });
+    } catch (error: unknown) {
+      console.error('[pages] Live preview accept failed:', error);
+      return Response.json(
+        { error: 'The preview could not be merged into the live page. Try again.' },
+        { status: 502 }
+      );
+    }
+  }
 
   if (intent === 'save') {
     // Phase 7.5: a save-conflict chooser re-submit carries the SAME posted
