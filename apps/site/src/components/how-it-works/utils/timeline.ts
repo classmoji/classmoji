@@ -1,7 +1,7 @@
 import type { DemoBase, Step } from '../types/demo';
 
 /** Fixed design size of every demo stage; it is scaled to fit its card. */
-export const STAGE = { width: 720, height: 540 } as const;
+export const STAGE = { width: 840, height: 540 } as const;
 
 export const EASE_OUT: [number, number, number, number] = [0.23, 1, 0.32, 1];
 
