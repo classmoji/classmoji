@@ -5,6 +5,7 @@
  * driver script's contract with the MCP, and that the route module exports
  * nothing but its loader (so no server code can reach the client bundle).
  */
+import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 import type { DeckJson } from '@classmoji/services/slides';
 import {
@@ -21,7 +22,14 @@ const deck = {
   codeTheme: 'github',
   slides: [
     { id: 'a', html: '<h1>A</h1>' },
-    { id: 'stack', html: '', children: [{ id: 'b1', html: '' }, { id: 'b2', html: '' }] },
+    {
+      id: 'stack',
+      html: '',
+      children: [
+        { id: 'b1', html: '' },
+        { id: 'b2', html: '' },
+      ],
+    },
     { id: 'c', html: '' },
   ],
 } as unknown as DeckJson;
@@ -52,6 +60,16 @@ test.describe('render-view', () => {
     expect(script).toContain(JSON.stringify(VIEW_META_ELEMENT_ID));
     // A still frame: transitions and animations jump to their end state.
     expect(script).toContain('transition-duration: 0s !important');
+  });
+
+  test('renders the deck standalone, with the draggable-block rules', () => {
+    // Outside the slides app there is no global.css: without these rules an
+    // .sl-block falls into normal flow and the slide stacks.
+    const source = readFileSync(
+      new URL('../../app/utils/deckView.server.ts', import.meta.url),
+      'utf8'
+    );
+    expect(source).toMatch(/generateDeckHtml\(deck, \{[^}]*standalone: true/);
   });
 
   test('the route module exports only its loader', () => {

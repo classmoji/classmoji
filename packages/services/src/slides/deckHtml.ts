@@ -156,7 +156,28 @@ export interface GenerateDeckOptions {
   themeUrls?: DeckThemeUrls;
   /** false → omit all `<aside class="notes">` (rendering convenience, not a security boundary). */
   includeNotes?: boolean;
+  /**
+   * true → also emit {@link SL_BLOCK_CSS}, for a document a browser opens ON
+   * ITS OWN (the thumbnail and render-view routes). The stored index.html
+   * never carries it: the viewer, presenter and editor lift `.slides` into the
+   * slides app, whose global.css already positions blocks.
+   */
+  standalone?: boolean;
 }
+
+/**
+ * The slides app's draggable-block rules (apps/slides/app/styles/global.css,
+ * "SL-BLOCK SYSTEM"), minus the editing-mode chrome. An `.sl-block` carries
+ * only left/top/width/height inline; without `position: absolute` it falls
+ * into normal flow and the slide stacks. The image rule undoes the theme's
+ * `.reveal img { max-width: 95% }`, which would shrink cropped block images.
+ * Keep in step with global.css.
+ */
+export const SL_BLOCK_CSS =
+  '.reveal section{position:relative}' +
+  '.sl-block{position:absolute;box-sizing:border-box;contain:layout}' +
+  '.sl-block-content{width:100%;height:100%;overflow:visible}' +
+  ".reveal .sl-block[data-block-type='image'] .sl-block-content img{max-width:none}";
 
 function builtinThemeUrl(theme: string): string {
   const name = (BUILTIN_THEMES as readonly string[]).includes(theme) ? theme : 'white';
@@ -210,7 +231,9 @@ function renderSection(slide: DeckSlide, includeNotes: boolean): string {
  *
  * Rules (plan §2):
  * - Emits NO implicit styles — the sl-block visibility override lives in
- *   `customCss` (seeded at import), starter styling seeded at create.
+ *   `customCss` (seeded at import), starter styling seeded at create. The
+ *   one exception is opt-in: `standalone` adds the block-positioning rules
+ *   for routes that open the document outside the slides app.
  * - themeDark/codeThemeDark → light/dark/`not all` media link trio, else a
  *   single canonical link.
  * - Builtin themes via jsDelivr reveal.js@5.1.0; shared:/custom: themes via
@@ -220,7 +243,7 @@ function renderSection(slide: DeckSlide, includeNotes: boolean): string {
  *   hash:true, controls:true, progress:true, center:true, transition:'slide').
  */
 export function generateDeckHtml(deck: DeckJson, opts: GenerateDeckOptions): string {
-  const { title, themeUrls, includeNotes = true } = opts;
+  const { title, themeUrls, includeNotes = true, standalone = false } = opts;
   const theme = deck.theme || 'white';
   const codeTheme = deck.codeTheme || 'github';
 
@@ -281,6 +304,10 @@ export function generateDeckHtml(deck: DeckJson, opts: GenerateDeckOptions): str
     ...codeLinks,
   ];
 
+  // Before the deck's own CSS, so a deck can still override a block rule.
+  if (standalone) {
+    headLines.push(`  <style data-cm-standalone>${SL_BLOCK_CSS}</style>`);
+  }
   if (deck.customCss != null) {
     headLines.push(`  <style>${deck.customCss}</style>`);
   }
@@ -621,8 +648,8 @@ export function parseDeckHtml(html: string, opts: ParseOptions = {}): ParsedDeck
   const codeTheme = declaredCodeTheme ?? codeSlots.light ?? 'github';
   const codeThemeDark = codeSlots.dark;
 
-  // ── Head <style> → customCss ──
-  const styleBlocks = $('head style')
+  // ── Head <style> → customCss (never the generator's standalone block rules) ──
+  const styleBlocks = $('head style:not([data-cm-standalone])')
     .toArray()
     .map(el => $(el).html() ?? '');
   const customCss = styleBlocks.length > 0 ? styleBlocks.join('\n') : undefined;

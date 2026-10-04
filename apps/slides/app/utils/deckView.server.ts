@@ -366,7 +366,14 @@ export async function deckViewLoader({
     ? signedThemeUrls
     : publicDeckThemeUrls(signedThemeUrls, gitOrgLogin, repo);
 
-  const generated = generateDeckHtml(deck, { title: slide.title, themeUrls, includeNotes: false });
+  // standalone: this page is the deck on its own, outside the slides app's
+  // global.css — without the block rules, draggable blocks stack.
+  const generated = generateDeckHtml(deck, {
+    title: slide.title,
+    themeUrls,
+    includeNotes: false,
+    standalone: true,
+  });
   const html =
     (deliveryCtx
       ? await resolveDeckAssets(generated, deliveryCtx)

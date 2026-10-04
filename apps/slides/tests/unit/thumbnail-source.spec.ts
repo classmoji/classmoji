@@ -237,6 +237,11 @@ test.describe('the resource-route invariant', () => {
     expect(typeof thumbnailSourceRoute.loader).toBe('function');
     expect(ROUTE_SOURCE).not.toContain('export default');
   });
+
+  test('renders the deck standalone, with the draggable-block rules', () => {
+    // No global.css here: a first slide built from .sl-blocks would stack.
+    expect(ROUTE_SOURCE).toMatch(/generateDeckHtml\(deck, \{[^}]*standalone: true/);
+  });
 });
 
 test.describe('the render token travels in a host-scoped cookie', () => {

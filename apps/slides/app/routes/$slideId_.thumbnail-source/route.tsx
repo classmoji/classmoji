@@ -397,6 +397,9 @@ export const loader = async ({
     // Speaker notes never reach the screenshot service. Not stripped after the
     // fact — never emitted.
     includeNotes: false,
+    // Opened on its own, outside the slides app's global.css: carry the
+    // draggable-block rules, or a first slide built from blocks stacks.
+    standalone: true,
   });
 
   const html =
