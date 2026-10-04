@@ -45,6 +45,8 @@ export const EMPTY_BRIDGE_STATE: BridgeUiState = {
   heldSlideId: null,
   currentSlideId: null,
   revision: 0,
+  conflicts: {},
+  theme: 'white',
 };
 
 export interface UseDeckCollabArgs {

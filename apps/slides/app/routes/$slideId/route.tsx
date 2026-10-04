@@ -97,6 +97,7 @@ import SlideCollabOverlay from '~/components/collab/SlideCollabOverlay';
 import { CollabRejectedBanner } from '~/components/collab/CollabNotices';
 import LiveLeaveDialog from '~/components/collab/LiveLeaveDialog';
 import LockDescriptions from '~/components/collab/LockDescriptions';
+import SlideConflictNotice from '~/components/collab/SlideConflictNotice';
 import {
   claimStaleReload,
   deriveSyncStatus,
@@ -3736,6 +3737,17 @@ export default function SlideViewer() {
               />
               {/* Live editing: what screen readers hear for read-only slides */}
               {collabMode && isEditing && <LockDescriptions locks={bridgeState.locks} />}
+              {/* Live editing: GitHub also changed the slide being edited */}
+              {collabMode &&
+                isEditing &&
+                currentLiveSlide &&
+                bridgeState.conflicts[currentLiveSlide] && (
+                  <SlideConflictNotice
+                    notice={bridgeState.conflicts[currentLiveSlide]}
+                    theme={bridgeState.theme}
+                    onDismiss={() => bridgeRef.current?.dismissConflict(currentLiveSlide)}
+                  />
+                )}
               {/* Live editing: lock badge and who else is on this slide */}
               {collabMode && isEditing && (
                 <SlideCollabOverlay

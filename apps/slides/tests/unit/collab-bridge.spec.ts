@@ -20,6 +20,8 @@ import {
   deckToYDoc,
   getLock,
   insertSlide,
+  readSlideConflicts,
+  recordSlideConflict,
   LOCK_DISCONNECT_GRACE_MS,
   markDisconnected,
   installLockArbiter,
@@ -585,6 +587,31 @@ test.describe('live deck bridge', () => {
     t.bridge.flushLocal();
     expect(t.session.pending).toBe(0);
     expect(t.remoteHtml('aaaa0001')).toBe(stored);
+    t.bridge.destroy();
+  });
+
+  test('a conflict notice reaches only the person whose version was kept', async () => {
+    const t = setup();
+    t.remote.transact(() => {
+      recordSlideConflict(t.remote, 'aaaa0002', {
+        at: 1,
+        sha: 'abc1234',
+        html: '<h2>GitHub</h2>',
+        holderUserId: 'user-me',
+      });
+      recordSlideConflict(t.remote, 'aaaa0003', {
+        at: 1,
+        sha: 'abc1234',
+        html: '<h2>x</h2>',
+        holderUserId: 'someone-else',
+      });
+    });
+    await tick();
+    expect(Object.keys(t.states.at(-1)?.conflicts ?? {})).toEqual(['aaaa0002']);
+    t.bridge.dismissConflict('aaaa0002');
+    t.session.ack();
+    expect(readSlideConflicts(t.remote).has('aaaa0002')).toBe(false);
+    expect(t.states.at(-1)?.conflicts).toEqual({});
     t.bridge.destroy();
   });
 

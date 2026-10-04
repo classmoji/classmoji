@@ -34,8 +34,12 @@ import {
   acquireLock,
   allLocks,
   applyLocalStructure,
+  deckConflicts,
   deckMeta,
   deckSlideList,
+  dismissSlideConflict,
+  readSlideConflicts,
+  type SlideConflictNotice,
   deckSlides,
   getLock,
   isConfirmedFor,
@@ -110,6 +114,10 @@ export interface BridgeUiState {
   currentSlideId: string | null;
   /** Bumped whenever a remote change was rendered into the editor. */
   revision: number;
+  /** Slides where an outside push differed and this person's version was kept. */
+  conflicts: Record<string, SlideConflictNotice>;
+  /** The deck's theme (for showing a slide outside the editor). */
+  theme: string;
 }
 
 export interface DeckBridgeOptions {
@@ -205,6 +213,11 @@ export class DeckBridge {
     meta.observe(onDocChange as never);
     this.cleanups.push(() => slides.unobserveDeep(onDocChange));
     this.cleanups.push(() => meta.unobserve(onDocChange as never));
+
+    const conflictsMap = deckConflicts(this.doc);
+    const onConflicts = () => this.emit();
+    conflictsMap.observe(onConflicts);
+    this.cleanups.push(() => conflictsMap.unobserve(onConflicts));
 
     const locks = this.doc.getMap('locks');
     const onLocks = () => this.onLocksChanged();
@@ -473,6 +486,21 @@ export class DeckBridge {
     if (map instanceof Y.Map && map.has('hasNotes')) {
       this.doc.transact(() => map.delete('hasNotes'), BRIDGE_ORIGIN);
     }
+  }
+
+  /** Conflict notices addressed to this person. */
+  private myConflicts(): Record<string, SlideConflictNotice> {
+    const out: Record<string, SlideConflictNotice> = {};
+    for (const [slideId, notice] of readSlideConflicts(this.doc)) {
+      if (notice.holderUserId === this.session.user.id) out[slideId] = notice;
+    }
+    return out;
+  }
+
+  /** Dismiss the notice for a slide (it was read). */
+  dismissConflict(slideId: string): void {
+    dismissSlideConflict(this.doc, slideId, BRIDGE_ORIGIN);
+    this.emit();
   }
 
   /** Whether the editor may make a section editable (not while someone else holds it). */
@@ -1263,6 +1291,8 @@ export class DeckBridge {
       heldSlideId: this.held?.slideId ?? null,
       currentSlideId: this.currentSlideId(),
       revision: this.revision,
+      conflicts: this.myConflicts(),
+      theme: readDeckThemes(this.doc).theme,
     };
     const key = json(state);
     if (key === this.lastState) return;
