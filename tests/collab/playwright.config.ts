@@ -23,6 +23,9 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   use: {
     ...devices['Desktop Chrome'],
+    // COLLAB_E2E_CHANNEL=chrome runs against the installed Google Chrome
+    // instead of Playwright's downloaded Chromium.
+    ...(process.env.COLLAB_E2E_CHANNEL ? { channel: process.env.COLLAB_E2E_CHANNEL } : {}),
     actionTimeout: 15_000,
     navigationTimeout: 45_000,
     trace: 'retain-on-failure',
