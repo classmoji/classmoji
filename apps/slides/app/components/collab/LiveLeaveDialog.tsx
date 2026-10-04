@@ -16,16 +16,13 @@ export default function LiveLeaveDialog({
   const bodyId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
   const stayRef = useRef<HTMLButtonElement>(null);
+  const stayCb = useRef(onStay);
+  stayCb.current = onStay;
 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     stayRef.current?.focus();
-    return () => previous?.focus?.();
-  }, []);
 
-  const stayCb = useRef(onStay);
-  stayCb.current = onStay;
-  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -39,7 +36,7 @@ export default function LiveLeaveDialog({
       if (focusable.length === 0) return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
-      const inside = dialogRef.current?.contains(document.activeElement);
+      const inside = dialogRef.current?.contains(document.activeElement) ?? false;
       if (event.shiftKey && (document.activeElement === first || !inside)) {
         event.preventDefault();
         last.focus();
@@ -49,33 +46,11 @@ export default function LiveLeaveDialog({
       }
     };
     document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      previous?.focus?.();
+    };
   }, []);
-
-  return () => previous?.focus?.();
-  }, []);
-
-  const onKeyDown = (event: React.KeyboardEvent) => {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      onStay();
-      return;
-    }
-    if (event.key !== 'Tab') return;
-    const focusable = Array.from(
-      dialogRef.current?.querySelectorAll<HTMLElement>('button:not([disabled])') ?? []
-    );
-    if (focusable.length === 0) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  };
 
   return (
     <div
