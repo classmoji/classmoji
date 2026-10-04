@@ -24,7 +24,14 @@ import * as Y from 'yjs';
 import { blockToNode } from '@blocknote/core';
 import { updateYFragment } from 'y-prosemirror';
 import { COVER_IMAGE_KEY, FRAGMENT, META_MAP, type PageCoverImage } from '@classmoji/page-schema';
-import { getServerEditor } from '@classmoji/page-schema/server';
+import {
+  blocksToYDoc,
+  getServerEditor,
+  pageContentToYDoc,
+  yDocToBlocks,
+} from '@classmoji/page-schema/server';
+
+import { CollabHttpError } from './types.ts';
 
 export interface PageBlock {
   id?: string;
@@ -325,7 +332,118 @@ export function unwrapBrokenColumnLists(doc: Y.Doc): boolean {
     }
     if (lifted.length > 0) parent.insert(index + 1, lifted);
     parent.delete(index, 1);
+    // A blockGroup may not be empty: keep one blank paragraph.
+    if (parent.length === 0 && parent instanceof Y.XmlElement && parent.nodeName === 'blockGroup') {
+      insertFresh(doc, parent, 0, blankParagraph(), pmSchema());
+    }
     changed = true;
   }
   return changed;
+}
+
+// ─── Guards before a server write ──────────────────────────────────────────
+
+/** A blank paragraph with a fresh id (a page always keeps at least one block). */
+export function blankParagraph(): PageBlock {
+  return {
+    id: `b${crypto.randomUUID().replace(/-/g, '').slice(0, 10)}`,
+    type: 'paragraph',
+    props: { textColor: 'default', backgroundColor: 'default', textAlignment: 'left' },
+    content: [],
+    children: [],
+  };
+}
+
+/** `blocks`, or one blank paragraph when it is empty. */
+export function nonEmpty(blocks: PageBlock[]): PageBlock[] {
+  return blocks.length > 0 ? blocks : [blankParagraph()];
+}
+
+/** Every block id in a block tree. */
+export function blockIds(blocks: PageBlock[], out = new Set<string>()): Set<string> {
+  for (const block of blocks) {
+    if (block?.id) out.add(block.id);
+    if (Array.isArray(block?.children)) blockIds(block.children, out);
+  }
+  return out;
+}
+
+/** Every block id in the raw live Y tree (blockContainer / columnList / column). */
+export function liveBlockIds(doc: Y.Doc): Set<string> {
+  const ids = new Set<string>();
+  const walk = (node: Y.XmlElement | Y.XmlFragment) => {
+    for (const child of node.toArray()) {
+      if (!(child instanceof Y.XmlElement)) continue;
+      const id = idOf(child);
+      if (
+        id &&
+        (child.nodeName === 'blockContainer' ||
+          child.nodeName === 'columnList' ||
+          child.nodeName === 'column')
+      ) {
+        ids.add(id);
+      }
+      walk(child);
+    }
+  };
+  walk(doc.getXmlFragment(FRAGMENT));
+  return ids;
+}
+
+/**
+ * Refuse to write when the clone read dropped something the live doc holds
+ * (an element the schema rejects): reconciling against that read would
+ * delete it for everyone. 409 `unreadable-live-doc`, nothing written.
+ */
+export function assertReadable(doc: Y.Doc, current: PageBlock[]): void {
+  const read = blockIds(current);
+  const missing = [...liveBlockIds(doc)].filter(id => !read.has(id));
+  if (missing.length > 0) {
+    throw new CollabHttpError(409, {
+      error: 'unreadable-live-doc',
+      message: 'The live page holds blocks the server cannot read; nothing was changed',
+      ids: missing.slice(0, 20),
+    });
+  }
+}
+
+/**
+ * Prove `blocks` convert under the page schema BEFORE any live write (a
+ * conversion failing half-way through a reconcile would leave a partial
+ * write). 422 `invalid-block`.
+ */
+export function assertConvertible(blocks: PageBlock[], what = 'blocks'): void {
+  try {
+    blocksToYDoc(blocks).destroy();
+  } catch (err) {
+    throw new CollabHttpError(422, {
+      error: 'invalid-block',
+      message: `${what} do not fit the page schema: ${err instanceof Error ? err.message : String(err)}`,
+    });
+  }
+}
+
+/**
+ * Content from outside the live doc (a merge base, an outside push, a
+ * preview) in the exact shape the live doc reads back as: through the schema
+ * (defaults filled, the same normalisation), so a 3-way merge sees no
+ * phantom differences. 422 `invalid-block` when it does not convert.
+ */
+export function throughSchema(
+  blocks: unknown[],
+  normalize: (blocks: unknown[]) => unknown[],
+  what: string
+): PageBlock[] {
+  const prepared = normalize(blocks) as PageBlock[];
+  try {
+    const doc = pageContentToYDoc({ blocks: prepared });
+    const out = yDocToBlocks(doc) as PageBlock[];
+    doc.destroy();
+    return out;
+  } catch (err) {
+    throw new CollabHttpError(422, {
+      error: 'invalid-block',
+      message: `${what} do not fit the page schema: ${err instanceof Error ? err.message : String(err)}`,
+    });
+  }
 }

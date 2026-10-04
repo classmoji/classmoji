@@ -113,12 +113,29 @@ export class PrismaCollabDocStore implements CollabDocStore {
          "state" = ''::bytea,
          "dirty_since" = NULL,
          "updated_at" = ${NOW_UTC}
-       WHERE "kind" = $1 AND "doc_id" = $2
+       WHERE "kind" = $1 AND "doc_id" = $2 AND "version" = "pushed_version"
        RETURNING "epoch"`,
       kind,
       docId
     );
     return rows[0] ?? null;
+  }
+
+  async markReseedClassroom(
+    classroomId: string
+  ): Promise<{ kind: CollabKind; doc_id: string; epoch: number }[]> {
+    return getPrisma().$queryRawUnsafe<{ kind: CollabKind; doc_id: string; epoch: number }[]>(
+      `UPDATE "collab_docs" SET
+         "epoch" = "epoch" + 1,
+         "state" = ''::bytea,
+         "dirty_since" = NULL,
+         "updated_at" = ${NOW_UTC}
+       WHERE "classroom_id" = $1
+         AND "version" = "pushed_version"
+         AND octet_length("state") > 0
+       RETURNING "kind", "doc_id", "epoch"`,
+      classroomId
+    );
   }
 
   async setSourceSha(kind: CollabKind, docId: string, sourceSha: string | null): Promise<void> {

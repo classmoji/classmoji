@@ -1,17 +1,25 @@
 /**
  * The internal HTTP API (`${COLLAB_URL}/internal`), for the apps, MCP,
  * hook-station — never browsers. Every route needs `x-collab-secret`
- * (COLLAB_INTERNAL_SECRET; a fixed dev secret when NODE_ENV !== 'production').
+ * (COLLAB_INTERNAL_SECRET; see @classmoji/collab/env).
  *
- *   GET  /internal/:kind/:id/snapshot    → { epoch, version, live, content }
- *   POST /internal/:kind/:id/ops         { ops, actor } → { version }
- *   POST /internal/page/:id/cover        { coverImage, actor } → { version }
- *   POST /internal/:kind/:id/external    { sha } → { action: 'merged' | 'reseeded' | 'none', … }
- *   POST /internal/:kind/:id/checkpoint  { message?, actor } → { version }
- *   POST /internal/:kind/:id/close       { reason } → { closed }
+ *   GET  /internal/:kind/:id/snapshot       → { epoch, version, live, content }
+ *   POST /internal/:kind/:id/ops            { ops, actor } → { version }
+ *   POST /internal/page/:id/cover           { coverImage, actor } → { version }
+ *   POST /internal/:kind/:id/merge-preview  { base, theirs, resolutions?, actor }
+ *        → { applied: true, version } | 409 { error: 'conflicts', conflicts, autoMerged? }
+ *   POST /internal/:kind/:id/external       { sha, before? }
+ *        → { action: 'merged' | 'reseeded' | 'none', … } | 409 { error: 'no-merge-base' }
+ *   POST /internal/:kind/:id/checkpoint     { message?, actor } → { version }
+ *   POST /internal/:kind/:id/close          { reason } → { closed }   (sockets: 4409 reload)
+ *   POST /internal/classroom/:id/flag       { enabled } → { closed, reseeded }
  *
- * `sha` on /external is the COMMIT the outside push landed as (theirs is
- * read at that ref); the base is the row's `source_sha` blob.
+ * /external: `sha` is the COMMIT the outside push landed as (theirs is read
+ * at that ref), `before` the commit before it. Base = the file at `before`
+ * when readable, else the row's `source_sha` blob; with neither, the live
+ * doc is kept and the call answers 409 `no-merge-base` (the caller retries /
+ * alerts). A `sha` equal to the row's `pushed_commit`, or whose file is the
+ * blob the doc already descends from, is a no-op.
  */
 import { timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -24,6 +32,7 @@ import {
   type PageCoverImage,
 } from '@classmoji/collab';
 
+import { CollabAuthError } from './auth.ts';
 import { CollabHttpError } from './adapters/types.ts';
 import type { CollabRuntime } from './server.ts';
 import { currentEpoch, isReseedMarker } from './store/types.ts';
@@ -92,14 +101,26 @@ function requireCover(value: unknown): PageCoverImage | null {
   return { url: cover.url, position: cover.position };
 }
 
-type Route = { kind: CollabKind; id: string; action: string };
+type Route =
+  | { scope: 'doc'; kind: CollabKind; id: string; action: string }
+  | { scope: 'classroom'; id: string; action: string };
+
+const DOC_ACTIONS: Record<string, 'GET' | 'POST'> = {
+  snapshot: 'GET',
+  ops: 'POST',
+  cover: 'POST',
+  'merge-preview': 'POST',
+  external: 'POST',
+  checkpoint: 'POST',
+  close: 'POST',
+};
+const CLASSROOM_ACTIONS: Record<string, 'GET' | 'POST'> = { flag: 'POST' };
 
 function parseRoute(pathname: string): Route | null {
-  // /internal/:kind/:id/:action
+  // /internal/:kind/:id/:action  |  /internal/classroom/:id/:action
   const parts = pathname.split('/').filter(Boolean);
   if (parts.length !== 4 || parts[0] !== 'internal') return null;
-  const [, kind, rawId, action] = parts;
-  if (!isCollabKind(kind)) return null;
+  const [, scope, rawId, action] = parts;
   let id: string;
   try {
     id = decodeURIComponent(rawId);
@@ -107,7 +128,27 @@ function parseRoute(pathname: string): Route | null {
     return null;
   }
   if (!id || id.includes(':')) return null;
-  return { kind, id, action };
+  if (scope === 'classroom') return { scope: 'classroom', id, action };
+  if (!isCollabKind(scope)) return null;
+  return { scope: 'doc', kind: scope, id, action };
+}
+
+/** A refusal from loading a doc (CollabAuthError) as an HTTP answer. */
+function authErrorResponse(err: CollabAuthError): {
+  status: number;
+  body: Record<string, unknown>;
+} {
+  if (err.cause instanceof CollabHttpError)
+    return { status: err.cause.status, body: err.cause.body };
+  const status =
+    err.reason === 'stale-epoch'
+      ? 409
+      : err.reason === 'legacy-html'
+        ? 422
+        : err.reason === 'forbidden'
+          ? 403
+          : 503;
+  return { status, body: { error: err.reason } };
 }
 
 export async function handleInternal(
@@ -124,26 +165,49 @@ export async function handleInternal(
     if (!route) return send(response, 404, { error: 'not-found' });
 
     const method = request.method ?? 'GET';
-    const allowed = route.action === 'snapshot' ? 'GET' : 'POST';
-    const known = ['snapshot', 'ops', 'cover', 'external', 'checkpoint', 'close'];
-    if (!known.includes(route.action)) return send(response, 404, { error: 'not-found' });
+    const allowed = (route.scope === 'doc' ? DOC_ACTIONS : CLASSROOM_ACTIONS)[route.action];
+    if (!allowed) return send(response, 404, { error: 'not-found' });
     if (method !== allowed) {
       response.setHeader('Allow', allowed);
       return send(response, 405, { error: 'method-not-allowed' });
     }
 
     const body = method === 'POST' ? await readJson(request) : {};
-    const result = await dispatch(route, body, runtime);
+    const result =
+      route.scope === 'doc'
+        ? await dispatch(route, body, runtime)
+        : await dispatchClassroom(route, body, runtime);
     return send(response, 200, result);
   } catch (err) {
     if (err instanceof CollabHttpError) return send(response, err.status, err.body);
+    if (err instanceof CollabAuthError) {
+      const { status, body } = authErrorResponse(err);
+      return send(response, status, body);
+    }
     console.error(`[collab] internal ${request.method} ${url.pathname} failed:`, err);
     return send(response, 500, { error: 'internal-error' });
   }
 }
 
+async function dispatchClassroom(
+  { id, action }: Extract<Route, { scope: 'classroom' }>,
+  body: Record<string, unknown>,
+  runtime: CollabRuntime
+): Promise<unknown> {
+  if (action === 'flag') {
+    if (typeof body.enabled !== 'boolean') {
+      throw new CollabHttpError(400, {
+        error: 'invalid-flag',
+        message: 'enabled must be a boolean',
+      });
+    }
+    return runtime.classroomFlagChanged(id, body.enabled);
+  }
+  throw new CollabHttpError(404, { error: 'not-found' });
+}
+
 async function dispatch(
-  { kind, id, action }: Route,
+  { kind, id, action }: Extract<Route, { scope: 'doc' }>,
   body: Record<string, unknown>,
   runtime: CollabRuntime
 ): Promise<unknown> {
@@ -171,6 +235,41 @@ async function dispatch(
         adapter.setCover!(ctx, coverImage)
       );
       return { version };
+    }
+
+    case 'merge-preview': {
+      const actor = requireActor(body.actor);
+      const adapter = await runtime.adapter(kind);
+      if (!adapter.mergePreview) {
+        throw new CollabHttpError(501, { error: 'not-implemented', kind });
+      }
+      if (
+        !body.base ||
+        typeof body.base !== 'object' ||
+        !body.theirs ||
+        typeof body.theirs !== 'object'
+      ) {
+        throw new CollabHttpError(400, {
+          error: 'invalid-content',
+          message: 'base and theirs are required (snapshot shape)',
+        });
+      }
+      const args = {
+        base: body.base as never,
+        theirs: body.theirs as never,
+        resolutions: (body.resolutions ?? null) as never,
+      };
+      const { result, version } = await runtime.withLiveEdit(kind, id, actor, ctx =>
+        adapter.mergePreview!(ctx, args)
+      );
+      if (result.conflicts.length > 0) {
+        throw new CollabHttpError(409, {
+          error: 'conflicts',
+          conflicts: result.conflicts,
+          ...(typeof result.autoMerged === 'number' ? { autoMerged: result.autoMerged } : {}),
+        });
+      }
+      return { applied: true, version };
     }
 
     case 'external':
@@ -251,31 +350,48 @@ async function external(
       message: 'sha (the pushed commit) is required',
     });
   }
+  const before = typeof body.before === 'string' && body.before ? body.before : null;
   const adapter = await runtime.adapter(kind);
   if (!(await adapter.locate(id))) throw new CollabHttpError(404, { error: 'not-found' });
 
   const row = await runtime.deps.store.get(kind, id);
-  const loaded = !!runtime.loadedDocument(kind, id);
-  const dirty =
-    (!!row && !isReseedMarker(row) && row.version > row.pushed_version) ||
-    runtime.hasUnstoredChanges(kind, id);
+  // Our own checkpoint (or a replay of it): nothing to merge.
+  if (row?.pushed_commit && row.pushed_commit === sha) {
+    return { action: 'none', reason: 'own-push', epoch: currentEpoch(row) };
+  }
 
-  if (loaded || dirty) {
+  const merge = async () => {
+    // Pages: page.ts mergeExternal (base at `before`, else source_sha; no
+    // base → 409 no-merge-base; theirs == source_sha → noop).
+    // TODO(slice D, deck.ts): use `args.before` as the merge base when it is
+    // readable, return `{ noop: true }` when deck.json at `sha` is the blob at
+    // row.source_sha, and never fall back to `base ?? ours` (that takes
+    // theirs wholesale) — refuse with 409 no-merge-base instead.
     const { result, version } = await runtime.withLiveEdit(
       kind,
       id,
       EXTERNAL_ACTOR,
-      ctx => adapter.mergeExternal(ctx, { sha }),
+      ctx => adapter.mergeExternal(ctx, { sha, before }),
       { external: true }
     );
+    if (result.noop) return { action: 'none', reason: 'already-merged', version };
     await runtime.deps.store.setSourceSha(kind, id, result.sourceSha);
     return { action: 'merged', version, conflicts: result.conflicts };
-  }
+  };
+
+  const loaded = !!runtime.loadedDocument(kind, id);
+  const dirty =
+    (!!row && !isReseedMarker(row) && row.version > row.pushed_version) ||
+    runtime.hasUnstoredChanges(kind, id);
+  if (loaded || dirty) return merge();
 
   if (!row || isReseedMarker(row)) {
     // Nothing buffered: the next open seeds from git anyway.
     return { action: 'none', epoch: currentEpoch(row) };
   }
+  // Clean and closed: reseed on next open. markReseed refuses a row that
+  // turned dirty meanwhile — then merge instead.
   const marked = await runtime.deps.store.markReseed(kind, id);
-  return { action: 'reseeded', epoch: marked?.epoch ?? currentEpoch(row) + 1 };
+  if (!marked) return merge();
+  return { action: 'reseeded', epoch: marked.epoch };
 }

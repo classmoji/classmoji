@@ -53,6 +53,9 @@ type TasksTrigger = (
   options: TriggerOptions
 ) => Promise<unknown>;
 
+/** How long a trigger may take before the store moves on (it runs under the doc's save lock). */
+export const TRIGGER_TIMEOUT_MS = 5_000;
+
 /** The real trigger via `@trigger.dev/sdk` (TRIGGER_SECRET_KEY from env). */
 export function createTaskCheckpointTrigger(
   config: Pick<CollabConfig, 'checkpointDelay' | 'checkpointMaxDelay'>,
@@ -60,10 +63,11 @@ export function createTaskCheckpointTrigger(
   loadTrigger: () => Promise<TasksTrigger> = async () => {
     const { tasks } = await import('@trigger.dev/sdk');
     return (id, payload, options) => tasks.trigger(id, payload, options);
-  }
+  },
+  timeoutMs: number = TRIGGER_TIMEOUT_MS
 ): CheckpointTrigger {
   let warned = false;
-  let trigger: Promise<TasksTrigger> | null = null;
+  let loading: Promise<TasksTrigger> | null = null;
 
   return {
     async trigger(payload, { now }) {
@@ -74,20 +78,31 @@ export function createTaskCheckpointTrigger(
         }
         return;
       }
+      let timer: NodeJS.Timeout | undefined;
       try {
-        trigger ??= loadTrigger();
-        await (
-          await trigger
-        )(
-          CONTENT_CHECKPOINT_TASK,
-          payload,
-          checkpointTriggerOptions(payload.classroomId, now, config)
-        );
+        // A rejected load is not cached: the next trigger tries again.
+        loading ??= loadTrigger().catch(err => {
+          loading = null;
+          throw err;
+        });
+        const call = (async () =>
+          (await loading!)(
+            CONTENT_CHECKPOINT_TASK,
+            payload,
+            checkpointTriggerOptions(payload.classroomId, now, config)
+          ))();
+        const timeout = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`timed out after ${timeoutMs} ms`)), timeoutMs);
+          timer.unref();
+        });
+        await Promise.race([call, timeout]);
       } catch (err) {
         console.error(
           `[collab] could not trigger ${CONTENT_CHECKPOINT_TASK} for classroom ${payload.classroomId}:`,
           err
         );
+      } finally {
+        if (timer) clearTimeout(timer);
       }
     },
   };

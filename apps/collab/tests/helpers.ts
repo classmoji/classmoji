@@ -14,6 +14,7 @@ import { SCHEMA_VERSION } from '@classmoji/page-schema';
 
 import { createAdapterRegistry } from '../src/adapters/registry.ts';
 import { createPageAdapter, type PageRecord } from '../src/adapters/page.ts';
+import type { CollabAdapter } from '../src/adapters/types.ts';
 import type { CollabSession, SessionResolver } from '../src/auth.ts';
 import type { CheckpointTrigger } from '../src/checkpoint.ts';
 import { loadConfig, type CollabConfig } from '../src/config.ts';
@@ -108,11 +109,24 @@ export class MemoryStore implements CollabDocStore {
 
   async markReseed(kind: CollabKind, docId: string) {
     const row = this.rows.get(this.key(kind, docId));
-    if (!row) return null;
+    if (!row || row.version !== row.pushed_version) return null;
     row.epoch += 1;
     row.state = new Uint8Array();
     row.dirty_since = null;
     return { epoch: row.epoch };
+  }
+
+  async markReseedClassroom(classroomId: string) {
+    const out: { kind: CollabKind; doc_id: string; epoch: number }[] = [];
+    for (const row of this.rows.values()) {
+      if (row.classroom_id !== classroomId) continue;
+      if (row.version !== row.pushed_version || row.state.byteLength === 0) continue;
+      row.epoch += 1;
+      row.state = new Uint8Array();
+      row.dirty_since = null;
+      out.push({ kind: row.kind, doc_id: row.doc_id, epoch: row.epoch });
+    }
+    return out;
   }
 
   async setSourceSha(kind: CollabKind, docId: string, sourceSha: string | null) {
@@ -146,6 +160,10 @@ export interface FakeWorld {
   /** Content at a ref (commit sha) per page: `${pageId}@${ref}`. */
   contentAt: Map<string, { blocks: unknown[]; coverImage?: unknown }>;
   blobs: Map<string, string>;
+  /** Blob sha of a page's content.json at the default branch (default 'seed-sha'). */
+  headSha: Map<string, string>;
+  /** Make a lookup throw (an unexpected error, e.g. a DB blip). */
+  fail: { role?: boolean; content?: boolean };
 }
 
 export function makePage(id: string, overrides: Partial<PageRecord['classroom']> = {}): PageRecord {
@@ -172,6 +190,8 @@ export function createWorld(): FakeWorld {
     content: new Map(),
     contentAt: new Map(),
     blobs: new Map(),
+    headSha: new Map(),
+    fail: {},
   };
 }
 
@@ -181,9 +201,11 @@ export function pageAdapterFor(world: FakeWorld) {
       return world.pages.get(id) ?? null;
     },
     async findRole(userId, classroomId) {
+      if (world.fail.role) throw new Error('database unavailable');
       return world.roles.get(`${userId}:${classroomId}`) ?? null;
     },
     async loadContent(page, { ref }) {
+      if (world.fail.content) throw new Error('GitHub unavailable');
       if (ref) {
         const at = world.contentAt.get(`${page.id}@${ref}`);
         if (!at) return { format: 'none', blocks: null, coverImage: null, sha: null };
@@ -202,7 +224,7 @@ export function pageAdapterFor(world: FakeWorld) {
         format: 'json',
         blocks: c.blocks,
         coverImage: (c.coverImage as never) ?? null,
-        sha: 'seed-sha',
+        sha: world.headSha.get(page.id) ?? 'seed-sha',
       };
     },
     async readBlob(_page, sha) {
@@ -235,7 +257,7 @@ export interface TestServer {
 }
 
 export async function startServer(
-  options: { storeDebounceMs?: number; deck?: null } = {}
+  options: { storeDebounceMs?: number; deck?: CollabAdapter | null } = {}
 ): Promise<TestServer> {
   const store = new MemoryStore();
   const sessions = new FakeSessions();
@@ -260,7 +282,7 @@ export async function startServer(
       store,
       sessions,
       checkpoints,
-      adapters: createAdapterRegistry({ page: pageAdapterFor(world), deck: null }),
+      adapters: createAdapterRegistry({ page: pageAdapterFor(world), deck: options.deck ?? null }),
     },
   });
   await runtime.listen();

@@ -54,4 +54,35 @@ describe('createTaskCheckpointTrigger (tasks.trigger mocked)', () => {
     expect(error).toHaveBeenCalled();
     error.mockRestore();
   });
+
+  it('gives up on a trigger that hangs (bounded time under the save lock)', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const hang = () => new Promise<never>(() => {});
+    const t = createTaskCheckpointTrigger(
+      config,
+      { TRIGGER_SECRET_KEY: 'k' },
+      async () => hang,
+      50
+    );
+    const started = Date.now();
+    await t.trigger(payload, { now: false });
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(error).toHaveBeenCalled();
+    error.mockRestore();
+  });
+
+  it('does not cache a failed SDK load', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const trigger = vi.fn(async () => ({}));
+    const load = vi
+      .fn<() => Promise<typeof trigger>>()
+      .mockRejectedValueOnce(new Error('import failed'))
+      .mockResolvedValue(trigger);
+    const t = createTaskCheckpointTrigger(config, { TRIGGER_SECRET_KEY: 'k' }, load);
+    await t.trigger(payload, { now: false });
+    await t.trigger(payload, { now: false });
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(trigger).toHaveBeenCalledTimes(1);
+    error.mockRestore();
+  });
 });

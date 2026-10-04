@@ -9,7 +9,7 @@
  */
 import type { Connection, onAuthenticatePayload } from '@hocuspocus/server';
 import {
-  COLLAB_FORBIDDEN_CLOSE_CODE,
+  COLLAB_CLOSE_FORBIDDEN,
   parseRoom,
   type CollabConnectionContext,
   type CollabRejectReason,
@@ -40,12 +40,29 @@ export class CollabAuthError extends Error {
   /** Server-side detail for the log; never sent. */
   readonly detail: string;
 
-  constructor(reason: CollabRejectReason, detail: string) {
-    super(`collab: ${reason} (${detail})`);
+  constructor(reason: CollabRejectReason, detail: string, options?: { cause?: unknown }) {
+    super(`collab: ${reason} (${detail})`, options);
     this.name = 'CollabAuthError';
     this.reason = reason;
     this.detail = detail;
   }
+}
+
+/**
+ * Any error as a refusal the client can act on: a CollabAuthError as is;
+ * anything unexpected (DB blip, git read failure) as `unavailable` — "try
+ * again", never a permanent read-only state.
+ */
+export function asAuthError(err: unknown, where: string): CollabAuthError {
+  if (err instanceof CollabAuthError) return err;
+  console.error(`[collab] ${where} failed:`, err);
+  return new CollabAuthError(
+    'unavailable',
+    `${where}: ${err instanceof Error ? err.message : String(err)}`,
+    {
+      cause: err,
+    }
+  );
 }
 
 export interface AuthDeps {
@@ -72,6 +89,20 @@ function parseToken(token: string): { schemaVersion: number } | null {
  * the doc) is answered only to someone allowed to edit it.
  */
 export async function authenticate(
+  payload: Pick<
+    onAuthenticatePayload,
+    'documentName' | 'token' | 'requestHeaders' | 'connectionConfig'
+  >,
+  deps: AuthDeps
+): Promise<CollabConnectionContext> {
+  try {
+    return await authenticateOrRefuse(payload, deps);
+  } catch (err) {
+    throw asAuthError(err, `authenticating ${payload.documentName}`);
+  }
+}
+
+async function authenticateOrRefuse(
   payload: Pick<
     onAuthenticatePayload,
     'documentName' | 'token' | 'requestHeaders' | 'connectionConfig'
@@ -204,7 +235,7 @@ export class AccessRechecker {
           `[collab] access lost: user ${ctx.userId} on ${ctx.kind}:${ctx.docId}; closing socket`
         );
         this.tracked.delete(entry);
-        connection.webSocket.close(COLLAB_FORBIDDEN_CLOSE_CODE, 'Forbidden');
+        connection.webSocket.close(COLLAB_CLOSE_FORBIDDEN, 'Forbidden');
       })
     );
   }

@@ -16,7 +16,13 @@
  * - Refuse with `CollabHttpError` (status + JSON body); anything else is a 500.
  */
 import type * as Y from 'yjs';
-import type { CollabActor, CollabKind, PageCoverImage, SnapshotContent } from '@classmoji/collab';
+import type {
+  CollabActor,
+  CollabKind,
+  CollabMergeResolution,
+  PageCoverImage,
+  SnapshotContent,
+} from '@classmoji/collab';
 
 import type { CollabDocRow } from '../store/types.ts';
 
@@ -95,6 +101,14 @@ export interface LiveEditContext {
 export interface ExternalMergeArgs {
   /** The `sha` from the request: the commit the outside push landed as. */
   sha: string;
+  /**
+   * The push's `before` commit, when hook-station sends it. The merge base is
+   * the content file at `before` when it is readable (so exactly the outside
+   * change is diffed), else the blob at the row's `source_sha`. With NO
+   * readable base the adapter must not take theirs wholesale: refuse with
+   * CollabHttpError(409, { error: 'no-merge-base' }) and keep the live doc.
+   */
+  before?: string | null;
 }
 
 export interface ExternalMergeResult {
@@ -102,6 +116,28 @@ export interface ExternalMergeResult {
   sourceSha: string | null;
   /** Units the 3-way merge could not decide (theirs was taken provisionally). */
   conflicts: number;
+  /**
+   * True when theirs is what the live doc already descends from (the file at
+   * `sha` IS the blob at source_sha: our own push, a replay, or an older
+   * push): nothing was applied.
+   */
+  noop?: boolean;
+}
+
+/** `POST /internal/:kind/:id/merge-preview`. */
+export interface MergePreviewArgs<K extends CollabKind = CollabKind> {
+  /** The content the preview started from (snapshot shape). */
+  base: SnapshotContent<K>;
+  /** The preview (snapshot shape). */
+  theirs: SnapshotContent<K>;
+  /** Chooser decisions, `{ id, choose }` per conflict id; absent = none. */
+  resolutions?: CollabMergeResolution[] | null;
+}
+
+export interface MergePreviewResult {
+  /** Conflicts left after `resolutions`; non-empty = NOTHING was applied. */
+  conflicts: unknown[];
+  autoMerged?: number;
 }
 
 // ─── The adapter ───────────────────────────────────────────────────────────
@@ -157,6 +193,41 @@ export interface CollabAdapter<K extends CollabKind = CollabKind, Op = unknown> 
    * handled by the server: epoch + 1, reseed on next open.)
    */
   mergeExternal(ctx: LiveEditContext, args: ExternalMergeArgs): Promise<ExternalMergeResult>;
+
+  /**
+   * Merge a preview into the live doc: base/theirs as sent, ours = the live
+   * doc read INSIDE `ctx.transact`. Conflicts (after resolutions) → return
+   * them and write nothing; otherwise apply live → merged id-aware in that
+   * one transaction. No op cap (the cap is for external requests). The route
+   * answers 501 when an adapter has no `mergePreview`.
+   */
+  mergePreview?(
+    ctx: LiveEditContext,
+    args: MergePreviewArgs<K>
+  ): MergePreviewResult | Promise<MergePreviewResult>;
+
+  /**
+   * The blob sha of the doc's content file in git now (null = no file). When
+   * present, opening a CLEAN row whose source_sha differs reseeds it (epoch +
+   * 1, refusal `stale-epoch`) instead of serving content git has moved past.
+   * A failed read is logged and the row is served.
+   */
+  currentSourceSha?(docId: string): Promise<string | null>;
+
+  /**
+   * Called once each time a document is loaded into memory (afterLoadDocument),
+   * before anyone edits it: start per-document machinery (deck: lock
+   * arbitration and disconnect cleanup, so a restarted server drops stale locks).
+   */
+  attach?(document: Y.Doc): void;
+
+  /**
+   * Root shared types (by name) whose changes are EPHEMERAL: a transaction
+   * that touches only these (deck: `locks` claims and heartbeats) is not an
+   * edit — no version bump, no worker trigger, no co-author. Default: none
+   * for pages, `['locks']` for decks.
+   */
+  readonly ephemeralRoots?: readonly string[];
 
   /** Page only: set or clear the cover (`POST /internal/page/:id/cover`). */
   setCover?(ctx: LiveEditContext, coverImage: PageCoverImage | null): void;

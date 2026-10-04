@@ -70,8 +70,17 @@ export interface CollabDocStore {
     state: Uint8Array;
   }): Promise<StoredVersion | null>;
 
-  /** Turn the row into a reseed marker: epoch + 1, empty state, clean. */
+  /**
+   * Turn a CLEAN row (`version = pushed_version`) into a reseed marker:
+   * epoch + 1, empty state. Null when there is no row or it is dirty — a
+   * dirty row holds unpushed edits and is never discarded.
+   */
   markReseed(kind: CollabKind, docId: string): Promise<{ epoch: number } | null>;
+
+  /** `markReseed` for every clean, non-marker row of a classroom. */
+  markReseedClassroom(
+    classroomId: string
+  ): Promise<{ kind: CollabKind; doc_id: string; epoch: number }[]>;
 
   /** Record the content-file blob sha the live doc now descends from. */
   setSourceSha(kind: CollabKind, docId: string, sourceSha: string | null): Promise<void>;

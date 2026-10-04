@@ -21,12 +21,17 @@ import {
   type CollabAdapter,
   type ExternalMergeResult,
   type LiveEditContext,
+  type MergePreviewResult,
   type SeedResult,
 } from './types.ts';
 import {
+  assertConvertible,
+  assertReadable,
   brokenColumnLists,
+  nonEmpty,
   readCover,
   reconcileBlocks,
+  throughSchema,
   unwrapBrokenColumnLists,
   writeCover,
   type PageBlock,
@@ -88,6 +93,46 @@ export const defaultPageAdapterDeps: PageAdapterDeps = {
 
 function blocksOf(doc: Y.Doc): PageBlock[] {
   return yDocToBlocks(doc) as PageBlock[];
+}
+
+function arrayOf(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new CollabHttpError(400, {
+      error: 'invalid-content',
+      message: 'blocks must be an array',
+    });
+  }
+  return value;
+}
+
+function sameJson(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
+/** The chooser's `[{ id, choose }]` → merge3Blocks' `{ [id]: choice }`. */
+function resolutionsRecord(resolutions: unknown): Record<string, 'ours' | 'theirs'> {
+  if (resolutions == null) return {};
+  if (!Array.isArray(resolutions)) {
+    throw new CollabHttpError(400, {
+      error: 'invalid-resolutions',
+      message: 'resolutions must be an array',
+    });
+  }
+  const out: Record<string, 'ours' | 'theirs'> = {};
+  for (const entry of resolutions as { id?: unknown; choose?: unknown }[]) {
+    if (
+      !entry ||
+      typeof entry.id !== 'string' ||
+      (entry.choose !== 'ours' && entry.choose !== 'theirs')
+    ) {
+      throw new CollabHttpError(400, {
+        error: 'invalid-resolutions',
+        message: "each resolution is { id, choose: 'ours' | 'theirs' }",
+      });
+    }
+    out[entry.id] = entry.choose;
+  }
+  return out;
 }
 
 function asHttpError(err: unknown): never {
@@ -157,12 +202,27 @@ export function createPageAdapter(
       }
       const { blocks, cover } = requireJson(loaded, `page ${docId}`);
       // Deterministic ids for any id-less block — the ids MCP derives on read,
-      // so an agent's ops name blocks the live doc actually has.
-      const doc = pageContentToYDoc({
-        blocks: pageContent.ensureBlockIds(blocks),
-        coverImage: cover,
-      });
+      // so an agent's ops name blocks the live doc actually has — and the
+      // multi-column invariants restored, so the seed always opens.
+      const prepared = nonEmpty(
+        pageContent.normalizeBlockStructure(pageContent.ensureBlockIds(blocks)) as PageBlock[]
+      );
+      let doc: Y.Doc;
+      try {
+        doc = pageContentToYDoc({ blocks: prepared, coverImage: cover });
+      } catch (err) {
+        throw new CollabHttpError(422, {
+          error: 'invalid-block',
+          message: `page ${docId} content.json does not fit the page schema: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
       return { doc, sourceSha: loaded.sha, classroomId: page.classroom_id };
+    },
+
+    async currentSourceSha(docId) {
+      const page = await mustFindPage(docId);
+      const loaded = await deps.loadContent(page, {});
+      return loaded.format === 'none' ? null : loaded.sha;
     },
 
     snapshot(doc): PageSnapshotContent {
@@ -180,12 +240,17 @@ export function createPageAdapter(
     applyOps(ctx: LiveEditContext, ops) {
       ctx.transact(doc => {
         const current = blocksOf(doc);
+        assertReadable(doc, current);
         let next: PageBlock[];
         try {
           next = pageContent.ensureBlockIds(pageContent.applyBlockOps(current, ops)) as PageBlock[];
         } catch (err) {
           asHttpError(err);
         }
+        next = nonEmpty(next);
+        // Every node is built once BEFORE the first write: a bad block is a
+        // 422 with nothing written, never half a reconcile.
+        assertConvertible(next, 'ops');
         reconcileBlocks(doc, current, next);
       });
     },
@@ -194,41 +259,107 @@ export function createPageAdapter(
       ctx.transact(doc => writeCover(doc, coverImage));
     },
 
-    async mergeExternal(ctx, { sha }): Promise<ExternalMergeResult> {
+    async mergeExternal(ctx, { sha, before }): Promise<ExternalMergeResult> {
       const page = await mustFindPage(ctx.ref.docId);
+      const normalize = (blocks: unknown[]) =>
+        pageContent.normalizeBlockStructure(pageContent.ensureBlockIds(blocks));
 
       // theirs: the content file at the pushed commit.
       const theirsLoaded = await deps.loadContent(page, { ref: sha });
-      const theirs = requireJson(theirsLoaded, `page ${page.id} at ${sha}`);
+      const theirsRaw = requireJson(theirsLoaded, `page ${page.id} at ${sha}`);
 
-      // base: what the live doc descends from (seeded from or last pushed).
-      let base: { blocks: PageBlock[]; cover: PageCoverImage | null } = { blocks: [], cover: null };
+      // Already ours (our own push, a replay, an older push): nothing to do.
+      if (theirsLoaded.sha && theirsLoaded.sha === ctx.row?.source_sha) {
+        return { sourceSha: theirsLoaded.sha, conflicts: 0, noop: true };
+      }
+
+      // base: the file at `before` (exactly the outside change), else the
+      // blob the live doc descends from.
+      let baseRaw: { blocks: PageBlock[]; cover: PageCoverImage | null } | null = null;
+      if (before && !/^0+$/.test(before)) {
+        try {
+          const loaded = await deps.loadContent(page, { ref: before });
+          if (loaded.format === 'json') {
+            baseRaw = { blocks: loaded.blocks as PageBlock[], cover: loaded.coverImage ?? null };
+          }
+        } catch (err) {
+          console.warn(`[collab] page ${page.id}: base at ${before} unreadable:`, err);
+        }
+      }
       const baseSha = ctx.row?.source_sha;
-      if (baseSha) {
+      if (!baseRaw && baseSha) {
         const text = await deps.readBlob(page, baseSha);
         if (text != null) {
           const parsed = parsePageContent(text);
-          base = { blocks: parsed.blocks as PageBlock[], cover: parsed.coverImage ?? null };
+          baseRaw = { blocks: parsed.blocks as PageBlock[], cover: parsed.coverImage ?? null };
         }
       }
+      if (!baseRaw) {
+        // Taking theirs wholesale would revert every live edit. Keep the live
+        // doc and refuse; the caller retries / alerts.
+        console.error(
+          `[collab] OUTSIDE PUSH NOT MERGED: page ${page.id} has no readable merge base (before=${before ?? '-'}, source_sha=${baseSha ?? '-'}); live doc kept`
+        );
+        throw new CollabHttpError(409, {
+          error: 'no-merge-base',
+          message: 'No readable merge base for the outside push; the live page was kept',
+        });
+      }
+
+      const base = throughSchema(baseRaw.blocks, normalize, 'merge base');
+      const theirs = throughSchema(theirsRaw.blocks, normalize, 'pushed content');
 
       let conflicts = 0;
       // ours is read INSIDE the transaction, so typing that landed while the
       // files were fetched is part of the merge, not reverted by it.
       ctx.transact(doc => {
         const ours = blocksOf(doc);
-        const result = pageContent.merge3Blocks(base.blocks, ours, theirs.blocks);
+        assertReadable(doc, ours);
+        const result = pageContent.merge3Blocks(base, ours, theirs);
         conflicts = result.conflicts.length;
-        const merged = pageContent.normalizeBlockStructure(
-          pageContent.ensureBlockIds(result.merged)
-        ) as PageBlock[];
+        const merged = nonEmpty(normalize(result.merged) as PageBlock[]);
+        assertConvertible(merged, 'merged content');
         reconcileBlocks(doc, ours, merged);
-        if (JSON.stringify(theirs.cover) !== JSON.stringify(base.cover)) {
-          writeCover(doc, theirs.cover);
+        if (JSON.stringify(theirsRaw.cover) !== JSON.stringify(baseRaw.cover)) {
+          writeCover(doc, theirsRaw.cover);
         }
       });
 
       return { sourceSha: theirsLoaded.sha, conflicts };
+    },
+
+    mergePreview(ctx, { base, theirs, resolutions }): MergePreviewResult {
+      const normalize = (blocks: unknown[]) =>
+        pageContent.normalizeBlockStructure(pageContent.ensureBlockIds(blocks));
+      const baseBlocks = throughSchema(arrayOf(base?.blocks), normalize, 'base');
+      const theirsBlocks = throughSchema(arrayOf(theirs?.blocks), normalize, 'preview');
+      const chosen = resolutionsRecord(resolutions);
+
+      let result: MergePreviewResult = { conflicts: [] };
+      ctx.transact(doc => {
+        const ours = blocksOf(doc);
+        assertReadable(doc, ours);
+        const merge = pageContent.merge3Blocks(baseBlocks, ours, theirsBlocks, {
+          resolutions: chosen,
+        });
+        if (merge.conflicts.length > 0) {
+          result = { conflicts: merge.conflicts, autoMerged: merge.autoMerged };
+          return; // nothing written
+        }
+        const merged = nonEmpty(normalize(merge.merged) as PageBlock[]);
+        assertConvertible(merged, 'merged content');
+        reconcileBlocks(doc, ours, merged);
+        // Cover: today's accept rule — a preview-side change wins, anything
+        // else keeps the live cover.
+        const liveCover = readCover(doc);
+        const baseCover = base?.coverImage ?? null;
+        const theirsCover = theirs?.coverImage ?? null;
+        if (sameJson(liveCover, baseCover) && !sameJson(theirsCover, baseCover)) {
+          writeCover(doc, theirsCover);
+        }
+        result = { conflicts: [], autoMerged: merge.autoMerged };
+      });
+      return result;
     },
 
     repair(document, transact) {

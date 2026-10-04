@@ -432,14 +432,15 @@ describe('internal API', () => {
     });
   });
 
-  it('close checkpoints and closes every socket', async () => {
+  it('close checkpoints and closes every socket with 4409 reload', async () => {
     const a = open();
     await a.synced;
     server.world.pages.set(PAGE, makePage(PAGE, { collab_enabled: false }));
     const res = await internal(server, 'POST', `/page/${PAGE}/close`, { reason: 'flag-off' });
     expect(res.body).toEqual({ closed: 1 });
     expect(server.checkpoints.calls.some(c => c.payload.reason === 'flag-off' && c.now)).toBe(true);
-    await waitFor(() => a.closeCodes.includes(4403), 3000, '4403 close');
+    await waitFor(() => a.closeCodes.includes(4409), 3000, '4409 close');
+    expect(a.closeCodes).not.toContain(4403);
   });
 
   it('external: reseeds a clean doc nobody has open under a new epoch', async () => {
