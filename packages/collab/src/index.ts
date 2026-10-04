@@ -8,4 +8,5 @@ export * from './rooms.ts';
 export * from './api.ts';
 export * from './fractionalIndex.ts';
 export * from './color.ts';
+export * from './syncDisplay.ts';
 export * from './deck/index.ts';

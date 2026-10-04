@@ -16,6 +16,7 @@ import {
   type LiveCheckpoint,
   type SyncStatus,
 } from '~/utils/collab.ts';
+import { useDisplayedSyncStatus } from '~/hooks/useDisplayedSyncStatus.ts';
 
 import SaveVersionPopover from './SaveVersionPopover.tsx';
 
@@ -104,6 +105,8 @@ const LiveHeaderControls = ({
   const hidden = peers.slice(max);
   const now = useNow(30_000);
   const saved = savedToGitHubStatus(checkpoint, now);
+  // Debounced for display only: a keystroke's round trip never flashes it.
+  const shownStatus = useDisplayedSyncStatus(syncStatus);
 
   return (
     <div
@@ -131,12 +134,12 @@ const LiveHeaderControls = ({
       <span
         role="status"
         aria-live="polite"
-        className={`flex items-center gap-1 ${statusStyle[syncStatus]}`}
+        className={`flex items-center gap-1 ${statusStyle[shownStatus]}`}
         data-testid="live-sync-status"
-        data-status={syncStatus}
+        data-status={shownStatus}
       >
-        <StatusIcon status={syncStatus} />
-        {SYNC_STATUS_LABEL[syncStatus]}
+        <StatusIcon status={shownStatus} />
+        {SYNC_STATUS_LABEL[shownStatus]}
       </span>
 
       {saved && (
