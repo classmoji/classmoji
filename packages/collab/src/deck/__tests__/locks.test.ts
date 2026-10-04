@@ -9,6 +9,7 @@ import {
   expireLocks,
   getLock,
   installLockArbiter,
+  isConfirmedFor,
   lockArbitration,
   lockState,
   releaseLock,
@@ -103,9 +104,9 @@ describe('server cleanup', () => {
   });
 });
 
-describe('arbiter: lowest clientID wins a simultaneous claim', () => {
+describe('arbiter', () => {
   for (const order of ['low first', 'high first'] as const) {
-    it(`two free claims (${order})`, () => {
+    it(`claims arriving one after the other: the first stands (${order})`, () => {
       const server = peer(1);
       installLockArbiter(server);
       const low = peer(10, server);
@@ -115,13 +116,34 @@ describe('arbiter: lowest clientID wins a simultaneous claim', () => {
       const updates = [Y.encodeStateAsUpdate(low), Y.encodeStateAsUpdate(high)];
       if (order === 'high first') updates.reverse();
       for (const update of updates) Y.applyUpdate(server, update);
-      expect(getLock(server, 's1')?.name).toBe('Low');
+      const first = order === 'low first' ? 'Low' : 'High';
+      expect(getLock(server, 's1')?.name).toBe(first);
       sync(server, low);
       sync(server, high);
-      expect(getLock(low, 's1')?.name).toBe('Low');
-      expect(getLock(high, 's1')?.name).toBe('Low');
+      expect(getLock(low, 's1')?.name).toBe(first);
+      expect(getLock(high, 's1')?.name).toBe(first);
+      // Only the winner sees its claim confirmed.
+      const winner = order === 'low first' ? low : high;
+      const loser = order === 'low first' ? high : low;
+      expect(isConfirmedFor(getLock(winner, 's1'), winner.clientID)).toBe(true);
+      expect(isConfirmedFor(getLock(loser, 's1'), loser.clientID)).toBe(false);
     });
   }
+
+  it('claims arriving in one transaction: the lowest clientID wins', () => {
+    const server = peer(1);
+    installLockArbiter(server);
+    const low = peer(10, server);
+    const high = peer(20, server);
+    acquireLock(low, 's1', holder(low, 'Low'), { now: 5 });
+    acquireLock(high, 's1', holder(high, 'High'), { now: 5 });
+    Y.applyUpdate(
+      server,
+      Y.mergeUpdates([Y.encodeStateAsUpdate(high), Y.encodeStateAsUpdate(low)])
+    );
+    expect(getLock(server, 's1')?.name).toBe('Low');
+    expect(isConfirmedFor(getLock(server, 's1'), 10)).toBe(true);
+  });
 
   it('never undoes a takeover (a claim made on top of the previous lock)', () => {
     const server = peer(1);
@@ -137,18 +159,21 @@ describe('arbiter: lowest clientID wins a simultaneous claim', () => {
     });
     Y.applyUpdate(server, Y.encodeStateAsUpdate(high));
     expect(getLock(server, 's1')?.name).toBe('High');
+    expect(isConfirmedFor(getLock(server, 's1'), 20)).toBe(true);
   });
 
-  it('reports nothing for an ordinary single claim', () => {
+  it('a heartbeat keeps the stamp; a single claim is stamped once', () => {
     const server = peer(1);
     let fixes: unknown[] = [];
     server.on('afterTransaction', tr => {
-      fixes = lockArbitration(server, tr);
+      fixes = lockArbitration(server, tr, () => 7);
     });
     const a = peer(10, server);
     acquireLock(a, 's1', holder(a, 'A'), { now: 0 });
     Y.applyUpdate(server, Y.encodeStateAsUpdate(a));
-    expect(fixes).toEqual([]);
+    expect(fixes).toEqual([
+      { slideId: 's1', lock: expect.objectContaining({ clientId: 10, confirmed: 7 }) },
+    ]);
     expect(deckLocks(server).size).toBe(1);
   });
 });

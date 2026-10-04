@@ -36,6 +36,23 @@ export const LOCK_EXPIRE_IDLE_MS = 120_000;
 
 export type LockHolder = Pick<SlideLock, 'userId' | 'name' | 'color' | 'clientId'>;
 
+/**
+ * A lock as stored. `confirmed` is the SERVER's stamp: the arbiter writes it
+ * on the lock it decided holds the slide. A client treats its claim as won
+ * only once its own lock comes back stamped — a round trip through the
+ * arbiter, not merely the server's ack of the write.
+ */
+export interface StampedLock extends SlideLock {
+  confirmed?: number;
+}
+
+/** This client's claim on the slide, confirmed by the server. */
+export function isConfirmedFor(lock: SlideLock | null, clientId: number): boolean {
+  return (
+    !!lock && lock.clientId === clientId && typeof (lock as StampedLock).confirmed === 'number'
+  );
+}
+
 export function isSlideLock(value: unknown): value is SlideLock {
   const v = value as SlideLock | null;
   return (
@@ -113,13 +130,18 @@ export function acquireLock(
   if (state === 'held' || (state === 'stale' && !ctx.takeover)) {
     return { ok: false, holder: current as SlideLock };
   }
-  const lock: SlideLock = {
+  const refresh = state === 'mine' && current;
+  const lock: StampedLock = {
     userId: holder.userId,
     name: holder.name,
     color: holder.color,
     clientId: holder.clientId,
-    since: state === 'mine' && current ? current.since : ctx.now,
+    since: refresh ? current.since : ctx.now,
     lastActive: ctx.now,
+    // A refresh keeps the server's confirmation; a new claim waits for one.
+    ...(refresh && typeof (current as StampedLock).confirmed === 'number'
+      ? { confirmed: (current as StampedLock).confirmed }
+      : {}),
   };
   doc.transact(() => deckLocks(doc).set(slideId, lock), origin);
   return { ok: true, lock, tookOver: state === 'stale' };
@@ -233,7 +255,7 @@ export class LockActivity {
   }
 }
 
-// ─── Server arbiter: lowest clientID wins a simultaneous claim ────────────────
+// ─── Server arbiter ───────────────────────────────────────────────────────────
 
 type ItemLike = {
   id: { client: number; clock: number };
@@ -244,32 +266,41 @@ type ItemLike = {
   content: { getContent?: () => unknown[] };
 };
 
-function sameId(a: ItemLike['origin'], b: ItemLike['origin']): boolean {
+function sameId(a: ItemLike['origin'], b: ItemLike['origin'] | ItemLike['id']): boolean {
   if (a === b) return true;
   return !!a && !!b && a.client === b.client && a.clock === b.clock;
 }
 
-function lockOf(item: ItemLike): SlideLock | null {
+function lockOf(item: ItemLike): StampedLock | null {
   const value = item.content?.getContent?.()[0];
-  return isSlideLock(value) ? value : null;
+  return isSlideLock(value) ? (value as StampedLock) : null;
 }
 
 /**
- * The corrections a transaction needs so that, among claims made concurrently
- * on one slide (sibling items with the same left origin — none of them saw the
- * others), the claim with the lowest clientId holds the lock. A takeover (an
- * item whose origin is the previous lock) is never second-guessed.
+ * What a transaction's lock writes resolve to, per slide:
  *
- * Considers every value item for a touched key that this transaction inserted
- * or deleted: the merge discards a losing concurrent claim without any visible
- * map change, but its item (and content) is still there until GC runs after
- * the transaction. Reads Yjs internals (`_map`, item `left`/`origin`) — kept to
- * this one function and pinned by tests.
+ *  - A lock that was current BEFORE the transaction beats any claim made
+ *    without seeing it (a sibling: same left origin). First come, first served.
+ *  - A claim made ON TOP of the current lock (its origin is that lock: the
+ *    holder's own heartbeat, or a takeover after idle/disconnect) stands.
+ *  - Claims arriving in the same transaction on a free slide: the lowest
+ *    clientID wins.
+ *
+ * Yjs's own map merge would pick the highest clientID, and silently — a
+ * losing concurrent write never shows as a change — so every value item the
+ * transaction inserted or deleted for a touched key is inspected (their
+ * content survives until GC, after the transaction). The winner is returned
+ * with the server's `confirmed` stamp when it lacks one; the client waits for
+ * that stamp before writing html.
+ *
+ * Reads Yjs internals (`_map`, item `left`/`origin`) — kept to this one
+ * function and pinned by tests.
  */
 export function lockArbitration(
   doc: Y.Doc,
-  transaction: Y.Transaction
-): Array<{ slideId: string; lock: SlideLock }> {
+  transaction: Y.Transaction,
+  stamp: () => number = () => Date.now()
+): Array<{ slideId: string; lock: StampedLock }> {
   const locks = deckLocks(doc);
   const lockMap = (locks as unknown as { _map: Map<string, ItemLike> })._map;
   const touched = new Set<string>();
@@ -277,7 +308,6 @@ export function lockArbitration(
     if (type !== (locks as unknown)) continue;
     for (const key of keys) if (key) touched.add(key);
   }
-  // A losing claim leaves no visible change; find its key via the inserts.
   for (const [client, afterClock] of transaction.afterState) {
     const beforeClock = transaction.beforeState.get(client) ?? 0;
     if (afterClock <= beforeClock) continue;
@@ -294,37 +324,94 @@ export function lockArbitration(
     }
   }
 
-  const fresh = (item: ItemLike): boolean => {
-    const before = transaction.beforeState.get(item.id.client) ?? 0;
-    return item.id.clock >= before || Y.isDeleted(transaction.deleteSet, item.id as Y.ID);
-  };
+  const inserted = (item: ItemLike): boolean =>
+    item.id.clock >= (transaction.beforeState.get(item.id.client) ?? 0);
+  const deletedNow = (item: ItemLike): boolean =>
+    Y.isDeleted(transaction.deleteSet, item.id as Y.ID);
 
-  const fixes: Array<{ slideId: string; lock: SlideLock }> = [];
+  const fixes: Array<{ slideId: string; lock: StampedLock }> = [];
   for (const slideId of touched) {
     const current = lockMap.get(slideId);
     if (!current || current.deleted) continue; // released
-    const currentLock = lockOf(current);
-    if (!currentLock) continue;
-    let best = currentLock;
-    for (let item = current.left; item; item = item.left) {
-      if (!fresh(item) || !sameId(item.origin, current.origin)) continue;
-      const rival = lockOf(item);
-      if (rival && rival.clientId < best.clientId) best = rival;
+    if (!lockOf(current)) continue;
+
+    // The chain of value items, newest first; split into this transaction's
+    // claims and the value the slide had before it.
+    const claims: ItemLike[] = [];
+    let previous: ItemLike | null = null;
+    for (let item: ItemLike | null = current; item; item = item.left) {
+      if (inserted(item)) {
+        claims.push(item);
+        continue;
+      }
+      // The newest pre-existing item was the value before this transaction —
+      // if it was still alive then (current now, or deleted by this one).
+      if (item === current || deletedNow(item)) previous = item;
+      break;
     }
-    if (best.clientId !== currentLock.clientId) fixes.push({ slideId, lock: best });
+    if (claims.length === 0) continue;
+
+    let winner: ItemLike;
+    const previousLock = previous ? lockOf(previous) : null;
+    if (previous && previousLock) {
+      // Claims that saw the previous lock (built on it, directly or through
+      // another such claim in this transaction).
+      const informed = new Set<ItemLike>();
+      for (const claim of [...claims].reverse()) {
+        if (
+          sameId(claim.origin, previous.id) ||
+          [...informed].some(i => sameId(claim.origin, i.id))
+        ) {
+          informed.add(claim);
+        }
+      }
+      if (informed.size === 0) {
+        winner = previous;
+      } else {
+        winner = pickLowest([...informed]);
+      }
+    } else {
+      winner = pickLowest(claims);
+    }
+
+    const winnerLock = lockOf(winner) as StampedLock;
+    const currentLock = lockOf(current) as StampedLock;
+    const needsStamp = typeof winnerLock.confirmed !== 'number';
+    if (winner !== current || needsStamp) {
+      fixes.push({
+        slideId,
+        lock: needsStamp ? { ...winnerLock, confirmed: stamp() } : winnerLock,
+      });
+    } else if (currentLock.clientId !== winnerLock.clientId) {
+      fixes.push({ slideId, lock: winnerLock });
+    }
   }
   return fixes;
 }
 
+/** Among claims, the lowest clientID's newest item (its own later heartbeat wins over its claim). */
+function pickLowest(items: ItemLike[]): ItemLike {
+  let best: ItemLike | null = null;
+  for (const item of items) {
+    const lock = lockOf(item);
+    if (!lock) continue;
+    const bestLock = best ? lockOf(best) : null;
+    // `items` is newest first, so the first item seen per client is its newest.
+    if (!bestLock || lock.clientId < bestLock.clientId) best = item;
+  }
+  return best ?? items[0];
+}
+
 /**
- * Server: enforce `lockArbitration` after every transaction. Returns an
- * uninstall function.
+ * Server: enforce `lockArbitration` after every transaction, stamping the
+ * winning lock. Returns an uninstall function.
  */
 export function installLockArbiter(doc: Y.Doc, origin: unknown = 'lock-arbiter'): () => void {
   let applying = false;
+  let seq = 0;
   const handler = (transaction: Y.Transaction): void => {
     if (applying || transaction.origin === origin) return;
-    const fixes = lockArbitration(doc, transaction);
+    const fixes = lockArbitration(doc, transaction, () => ++seq);
     if (fixes.length === 0) return;
     applying = true;
     try {
