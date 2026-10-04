@@ -106,6 +106,14 @@ export function cssAttrValue(id: string): string {
 }
 
 /**
+ * The mark sits in the gutter, not on the text: the block is padded past the
+ * 3px bar and pulled left by the same amount, so the first letter stays where
+ * it is and is never covered. Same in light and dark (the dark rules only
+ * change colours).
+ */
+export const MARK_OFFSET = 'padding-left: 0.75rem; margin-left: -0.75rem;';
+
+/**
  * The stylesheet that marks the changed and added blocks inside `scope` (a
  * class on the viewer's wrapper). Each block's own content row is marked, so a
  * nested change marks the nested block only. Light and dark variants.
@@ -118,13 +126,13 @@ export function previewHighlightCss(changes: PreviewChanges, scope: string): str
   const added = selector(changes.added);
   if (changed.length > 0) {
     rules.push(
-      `${changed.join(',\n')} { background-color: rgba(245, 158, 11, 0.14); box-shadow: inset 3px 0 0 rgb(245, 158, 11); border-radius: 4px; }`,
+      `${changed.join(',\n')} { background-color: rgba(245, 158, 11, 0.14); box-shadow: inset 3px 0 0 rgb(245, 158, 11); border-radius: 4px; ${MARK_OFFSET} }`,
       `${changed.map(s => `.dark ${s}`).join(',\n')} { background-color: rgba(245, 158, 11, 0.16); box-shadow: inset 3px 0 0 rgb(251, 191, 36); }`
     );
   }
   if (added.length > 0) {
     rules.push(
-      `${added.join(',\n')} { background-color: rgba(16, 185, 129, 0.12); box-shadow: inset 3px 0 0 rgb(16, 185, 129); border-radius: 4px; }`,
+      `${added.join(',\n')} { background-color: rgba(16, 185, 129, 0.12); box-shadow: inset 3px 0 0 rgb(16, 185, 129); border-radius: 4px; ${MARK_OFFSET} }`,
       `${added.map(s => `.dark ${s}`).join(',\n')} { background-color: rgba(16, 185, 129, 0.15); box-shadow: inset 3px 0 0 rgb(52, 211, 153); }`
     );
   }

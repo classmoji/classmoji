@@ -116,3 +116,11 @@ test.describe('the preview bar summary', () => {
 test('an id cannot close the style element', () => {
   expect(cssAttrValue('</style><script>')).not.toContain('<');
 });
+
+test('the mark sits in the gutter, so the first letter is not covered', () => {
+  const css = previewHighlightCss({ changed: ['b'], added: ['d'], removed: 0 }, 'scope');
+  const rules = css.split('\n').filter(line => line.includes('box-shadow: inset 3px'));
+  expect(rules.length).toBe(4);
+  // Light rules carry the offset; dark rules only recolour (they inherit it).
+  expect(css.match(/padding-left: 0\.75rem; margin-left: -0\.75rem;/g)).toHaveLength(2);
+});
