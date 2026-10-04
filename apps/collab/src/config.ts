@@ -5,16 +5,13 @@
  * | env                          | dev default                 | prod default |
  * |------------------------------|-----------------------------|--------------|
  * | COLLAB_PORT                  | 7700 (devport 7700 + id*10) | 7700         |
- * | COLLAB_INTERNAL_SECRET       | DEV_INTERNAL_SECRET         | (required)   |
+ * | COLLAB_INTERNAL_SECRET       | DEV_COLLAB_INTERNAL_SECRET  | (required)   |
  * | COLLAB_ALLOWED_ORIGINS       | (none) — plus WEBAPP/PAGES/SLIDES_URL     |
  * | COLLAB_CHECKPOINT_DELAY      | 10s                         | 1m           |
  * | COLLAB_CHECKPOINT_MAX_DELAY  | 30s                         | 4m           |
  */
 
-import { DEV_COLLAB_INTERNAL_SECRET } from '@classmoji/collab';
-
-/** Used for `x-collab-secret` when NODE_ENV !== 'production' and none is set. */
-export const DEV_INTERNAL_SECRET = DEV_COLLAB_INTERNAL_SECRET;
+import { resolveCollabInternalSecret } from '@classmoji/collab/env';
 
 export interface CollabConfig {
   production: boolean;
@@ -52,10 +49,10 @@ export function originOf(url: string | undefined): string | null {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollabConfig {
   const production = env.NODE_ENV === 'production';
 
-  const secret = env.COLLAB_INTERNAL_SECRET?.trim();
-  if (production && !secret) {
-    throw new Error('COLLAB_INTERNAL_SECRET is required in production');
-  }
+  // Shared resolution (@classmoji/collab/env): the env value, else the dev
+  // secret outside production.
+  const secret = resolveCollabInternalSecret(env);
+  if (!secret) throw new Error('COLLAB_INTERNAL_SECRET is required in production');
 
   const allowedOrigins = new Set<string>();
   for (const url of [env.WEBAPP_URL, env.PAGES_URL, env.SLIDES_URL]) {
@@ -69,7 +66,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollabConfig {
 
   return {
     production,
-    internalSecret: secret || DEV_INTERNAL_SECRET,
+    internalSecret: secret,
     allowedOrigins,
     checkpointDelay: duration(
       env.COLLAB_CHECKPOINT_DELAY,

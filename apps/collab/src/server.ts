@@ -25,6 +25,8 @@ import {
   type CollabRoom,
 } from '@classmoji/collab';
 
+import { DEFAULT_COLLAB_PORT } from '@classmoji/collab/env';
+
 import { AccessRechecker, authenticate, type SessionResolver } from './auth.ts';
 import type { AdapterRegistry } from './adapters/registry.ts';
 import { CollabHttpError, type CollabAdapter, type LiveEditContext } from './adapters/types.ts';
@@ -33,7 +35,7 @@ import type { CollabConfig } from './config.ts';
 import { handleRequest } from './http.ts';
 import { currentEpoch, isReseedMarker, type CollabDocStore } from './store/types.ts';
 
-export const DEFAULT_COLLAB_PORT = 7700;
+export { DEFAULT_COLLAB_PORT };
 
 /** The port from COLLAB_PORT, else the default. */
 export function collabPort(env: NodeJS.ProcessEnv = process.env): number {
