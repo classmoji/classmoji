@@ -51,12 +51,15 @@ or `stale-epoch`) when the room closed or moved. Refusals at connect:
 `apps/collab/Dockerfile` + `apps/collab/fly.toml`, deployed by
 `.github/workflows/deploy-fly-{prod,staging,dev}.yml` (apps
 `classmoji-collab`, `classmoji-collab-staging`, `classmoji-collab-dev`; each
-job skips with a notice until its Fly app exists). Staging and dev deploy the
+job skips with a notice until its Fly app exists. An app that exists with no
+machines yet counts as existing: CI's first deploy creates its one machine,
+with the secrets already staged on it). Staging and dev deploy the
 production config as-is, with no scale-to-zero wrapper, and
 `scripts/fly-staging-autostop.sh` deliberately leaves collab out.
 
-- One machine. A new Fly app's first deploy creates two: provision with
-  `fly deploy --ha=false`, or `fly scale count 1 --app <app>` right after.
+- One machine. A new Fly app's first deploy creates two by default; every
+  CI collab deploy passes `--ha=false` so it creates one. Deploying by hand,
+  pass `--ha=false` too, or `fly scale count 1 --app <app>` right after.
   Keep the `rolling` strategy (on one machine it stops the old process
   before starting the new); never bluegreen or canary.
 - `kill_timeout = 30s` so the SIGTERM flush of pending stores completes.
@@ -66,12 +69,21 @@ production config as-is, with no scale-to-zero wrapper, and
   awareness heartbeat (about every 15 s) keeps editors' sockets busy, and
   providers reconnect on their own.
 - `GET /health` is the Fly check.
-- Hostname: browsers authenticate with the better-auth session cookie, so
-  the WebSocket host must be under the cookie domain (production default
-  `.classmoji.io`), e.g. `collab.classmoji.io` / `collab-staging.classmoji.io`
-  with a Fly certificate and a DNS record (grey-cloud, like the other apps).
+- Hostnames: browsers authenticate with the better-auth session cookie, so
+  the WebSocket host must be under that environment's cookie domain.
+  Production is `collab.classmoji.io` (cookie domain `.classmoji.io`);
+  staging is `collab.staging.classmoji.io`, under staging's cookie domain
+  `.staging.classmoji.io` (a `collab-staging.classmoji.io` host would never
+  receive the staging cookie). Each has a Fly certificate and a DNS record
+  (grey-cloud, like the other apps). `collab` is in `RESERVED_SUBDOMAINS`
+  (`packages/utils/src/subdomains.ts`), so no class site can claim it.
 
 ### Fly secrets (per app)
+
+The collab apps' secrets come from Infisical: `classmoji-collab-staging`
+from the `sta` environment, `classmoji-collab` from `prod`. Staging's
+`COOKIE_PREFIX` is `classmoji-staging` (the webapp's staging prefix), which
+is what lets collab read the staging session cookie.
 
 | Secret | Why |
 |---|---|
@@ -113,7 +125,9 @@ the worker pulls every Infisical secret at deploy (`syncEnvVars` in
 Without them `content-checkpoint` cannot report results, `collab-external`
 cannot reach collab, and the sweeper cannot check whether a doc is live.
 
-**Trigger.dev plan:** `collab-sweeper` runs every 5 minutes. On a free
+**Trigger.dev plan:** `collab-sweeper` runs every 30 minutes, so a
+checkpoint whose trigger was lost is re-run up to about 40 minutes after the
+doc went dirty, and a doc stuck unsaved is alerted after 1 to 1.5 hours. On a free
 Trigger.dev plan a cron more frequent than hourly is rejected when the
 schedule is deployed (all environments, including Development); it needs a
 paid plan.

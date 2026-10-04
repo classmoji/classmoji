@@ -1,6 +1,6 @@
 /**
  * collabSweeperCore.ts — the body of the `collab-sweeper` scheduled task
- * (every 5 minutes). Three passes over `collab_docs`:
+ * (every 30 minutes). Three passes over `collab_docs`:
  *
  * 1. LOST TRIGGERS. A row dirty for longer than 2 × COLLAB_CHECKPOINT_MAX_DELAY
  *    that no checkpoint run has looked at since it became dirty (or whose last
@@ -22,6 +22,9 @@
  * SQL lives in `CollabSweeperDb` (`collabSweeperDb.ts`); this file is the
  * policy, unit-tested with a stub.
  */
+
+/** The sweeper's schedule: every 30 minutes. */
+export const COLLAB_SWEEPER_CRON = '*/30 * * * *';
 
 export const SWEEP_IDLE_RESEED_MS = 7 * 24 * 60 * 60 * 1000;
 export const SWEEP_ERROR_ALERT_MS = 60 * 60 * 1000;

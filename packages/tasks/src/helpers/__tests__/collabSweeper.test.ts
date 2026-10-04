@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  COLLAB_SWEEPER_CRON,
   SWEEP_ERROR_ALERT_MS,
   SWEEP_IDLE_RESEED_MS,
   checkpointDelays,
@@ -32,6 +33,16 @@ function makeDeps(db: Partial<CollabSweeperDb>, over: Partial<CollabSweeperDeps>
   };
   return { deps, log, triggerCheckpoint };
 }
+
+describe('schedule', () => {
+  it('runs every 30 minutes', () => {
+    expect(COLLAB_SWEEPER_CRON).toBe('*/30 * * * *');
+  });
+
+  it('alerts on stuck docs later than one sweep interval, so a sweep sees each one', () => {
+    expect(SWEEP_ERROR_ALERT_MS).toBeGreaterThan(30 * 60 * 1000);
+  });
+});
 
 describe('durations', () => {
   it('parses collab duration strings', () => {

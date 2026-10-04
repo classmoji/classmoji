@@ -1,5 +1,5 @@
 /**
- * collab-sweeper — every 5 minutes: re-trigger checkpoints nobody ran, alert
+ * collab-sweeper — every 30 minutes: re-trigger checkpoints nobody ran, alert
  * on live docs stuck unsaved for over an hour, and turn week-idle clean
  * buffers into reseed markers so git is the only copy at rest. Policy in
  * `helpers/collabSweeperCore.ts`, SQL in `helpers/collabSweeperDb.ts`.
@@ -14,6 +14,7 @@ import { resolveCollabEnv } from '@classmoji/collab/env'; // eslint-disable-line
 
 import {
   checkpointDelays,
+  COLLAB_SWEEPER_CRON,
   runCollabSweep,
   type SweepDocRef,
 } from '../helpers/collabSweeperCore.ts';
@@ -42,7 +43,11 @@ async function isLive(ref: SweepDocRef): Promise<boolean | null> {
 
 export const collabSweeper = schedules.task({
   id: 'collab-sweeper',
-  cron: '*/5 * * * *',
+  // Every 30 minutes. The cadence only bounds how late each pass notices:
+  // a lost trigger is re-run between 2 × COLLAB_CHECKPOINT_MAX_DELAY and that
+  // plus 30 minutes after the doc went dirty, and the stuck-error alert fires
+  // 1 to 1.5 hours in. None of the thresholds needs to change with it.
+  cron: COLLAB_SWEEPER_CRON,
   maxDuration: 240,
   run: async () => {
     const delays = checkpointDelays();
