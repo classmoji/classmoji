@@ -25,6 +25,7 @@
 import { ClassmojiService } from '@classmoji/services';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
+import { closeLiveDocBeforeDelete } from '../collab/lifecycle.ts';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import {
@@ -232,6 +233,9 @@ export const pageDeleteTool: ToolDefinition<PageDeleteArgs> = {
   },
   handler: async (args, ctx) => {
     const page = await loadPageInClassroom(args.page_id, ctx);
+
+    // A live-edited page: checkpoint it and close its editors first.
+    await closeLiveDocBeforeDelete('page', page.id, page.classroom_id);
 
     // Orchestrated delete: GitHub content-repo folder (failure tolerated —
     // logged and skipped inside the service) + DB row + manifest refresh.

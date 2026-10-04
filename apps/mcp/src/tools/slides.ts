@@ -22,6 +22,7 @@
 import { slideService } from '@classmoji/services/slides';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
+import { closeLiveDocBeforeDelete } from '../collab/lifecycle.ts';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import { MEMBER, isStaff } from '../resources/shape.ts';
@@ -297,6 +298,9 @@ export const slideDeleteTool: ToolDefinition<SlideDeleteArgs> = {
   handler: async (args, ctx) => {
     const slide = await loadSlideInClassroom(args.slide_id, ctx);
     await assertSlideEditable(slide, ctx);
+
+    // A live-edited deck: checkpoint it and close its editors first.
+    await closeLiveDocBeforeDelete('deck', slide.id, slide.classroom_id);
 
     // Orchestrated delete. Shared themes are never deleted from MCP.
     const result = await slideService.deleteSlide({ slideId: slide.id });
