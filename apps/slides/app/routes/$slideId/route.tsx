@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { gitWeb } from '@classmoji/utils';
-import { useLoaderData, useFetcher, data, redirect } from 'react-router';
+import { useBlocker, useLoaderData, useFetcher, data, redirect } from 'react-router';
 import { Tooltip, Popconfirm } from 'antd';
 import getPrisma from '@classmoji/database';
 import { ContentService } from '@classmoji/content';
@@ -97,6 +97,8 @@ import {
   claimStaleReload,
   deriveSyncStatus,
   isCollabMode,
+  liveLeaveRisk,
+  mayAutoReloadStale,
   rejectionNotice,
 } from '~/utils/collab/collab';
 import { BRIDGE_ORIGIN } from '~/utils/collab/DeckBridge';
@@ -2943,7 +2945,11 @@ export default function SlideViewer() {
     const reason = collabState.rejected;
     if (!reason) return;
     if (rejectionNotice(reason).action === 'reload' && collab) {
-      if (claimStaleReload(window.sessionStorage, collab.room)) {
+      // Only when nothing typed here is still on its way; else the banner asks.
+      const unsent =
+        !mayAutoReloadStale(collabState.unsyncedChanges) ||
+        Boolean(bridgeRef.current?.hasPendingLocal());
+      if (!unsent && claimStaleReload(window.sessionStorage, collab.room)) {
         window.location.reload();
         return;
       }
@@ -2954,7 +2960,38 @@ export default function SlideViewer() {
       setIsEditing(false);
     }
     setWantsLiveEdit(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per refusal
   }, [collabState.rejected, collab]);
+
+  // The deck was closed under us (live editing switched off, deck deleted).
+  useEffect(() => {
+    if (collabState.reloadRequired) window.location.reload();
+  }, [collabState.reloadRequired]);
+
+  // Live editing: leaving while edits are still on their way loses them.
+  const liveRiskRef = useRef<() => boolean>(() => false);
+  liveRiskRef.current = () =>
+    collabMode &&
+    liveLeaveRisk({
+      editing: isEditingRef.current && !collabState.rejected,
+      unsyncedChanges: collabState.unsyncedChanges,
+      status: collabState.status,
+      localPending: Boolean(bridgeRef.current?.hasPendingLocal()),
+    });
+  useEffect(() => {
+    if (!collabMode) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!liveRiskRef.current()) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [collabMode]);
+  const liveBlocker = useBlocker(
+    ({ currentLocation, nextLocation }) =>
+      collabMode && currentLocation.pathname !== nextLocation.pathname && liveRiskRef.current()
+  );
 
   useEffect(() => {
     const data = versionFetcher.data;
@@ -3482,6 +3519,41 @@ export default function SlideViewer() {
             reason={collabState.rejected}
             reloadAttempted={staleReloadAttempted}
           />
+        )}
+
+        {/* Live editing: in-app navigation while edits are still syncing */}
+        {liveBlocker.state === 'blocked' && (
+          <div
+            className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/30 dark:bg-black/50"
+            role="dialog"
+            aria-modal="true"
+            data-testid="live-leave-dialog"
+          >
+            <div className="w-[calc(100%-2rem)] max-w-sm rounded-xl bg-white p-5 shadow-xl ring-1 ring-gray-200 dark:bg-gray-800 dark:ring-gray-700">
+              <div className="font-semibold text-gray-900 dark:text-gray-100">
+                Your latest changes haven&rsquo;t synced yet
+              </div>
+              <div className="mt-1 text-sm text-gray-600 dark:text-gray-300">
+                If you leave now, they may be lost.
+              </div>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => liveBlocker.reset?.()}
+                  className="px-3 py-1.5 text-sm rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
+                >
+                  Stay
+                </button>
+                <button
+                  type="button"
+                  onClick={() => liveBlocker.proceed?.()}
+                  className="px-3 py-1.5 text-sm font-medium rounded-md bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400"
+                >
+                  Leave anyway
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* Preview-branch chrome (staff only — `preview` is null otherwise) */}

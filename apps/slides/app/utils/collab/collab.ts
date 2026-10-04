@@ -62,8 +62,19 @@ export function deriveSyncStatus({
  * `error.reason ?? 'permission-denied'`; any reason that is not one of ours
  * is treated as forbidden (the safe reading: stop editing).
  */
-export function normalizeRejectReason(reason: unknown): CollabRejectReason {
-  if (reason === 'stale-epoch' || reason === 'schema-mismatch') return reason;
+/**
+ * Why live editing stopped. `unavailable`: the server could not check access
+ * (a database blip) — try again, never a permanent read-only.
+ */
+export type LiveRejectReason = CollabRejectReason | 'unavailable';
+
+/** Close code of a deck closed under its editors (flag off, deck deleted): reload. */
+export const COLLAB_RELOAD_CLOSE_CODE = 4409;
+
+export function normalizeRejectReason(reason: unknown): LiveRejectReason {
+  if (reason === 'stale-epoch' || reason === 'schema-mismatch' || reason === 'unavailable') {
+    return reason;
+  }
   return 'forbidden';
 }
 
@@ -73,12 +84,14 @@ export interface RejectionNotice {
   message: string | null;
 }
 
-export function rejectionNotice(reason: CollabRejectReason): RejectionNotice {
+export function rejectionNotice(reason: LiveRejectReason): RejectionNotice {
   switch (reason) {
     case 'stale-epoch':
       return { action: 'reload', message: null };
     case 'schema-mismatch':
       return { action: 'prompt', message: 'Reload to get the latest editor.' };
+    case 'unavailable':
+      return { action: 'prompt', message: "Couldn't connect to live editing. Try again." };
     case 'forbidden':
     default:
       return { action: 'readonly', message: 'You can no longer edit this deck.' };
@@ -148,6 +161,33 @@ export function initialsOf(name: string): string {
 
 /** Session-storage key recording that a stale room already reloaded once. */
 export const STALE_RELOAD_KEY = 'classmoji:collab-stale-reload';
+
+/**
+ * A stale room reloads on its own only when nothing typed here is still
+ * waiting for the server (a reload would drop it); otherwise the banner asks.
+ */
+export function mayAutoReloadStale(unsyncedChanges: number): boolean {
+  return unsyncedChanges === 0;
+}
+
+/**
+ * Leaving the page loses edits the server has not acknowledged yet: warn
+ * (beforeunload, in-app navigation) while editing live and not in sync.
+ */
+export function liveLeaveRisk({
+  editing,
+  unsyncedChanges,
+  status,
+  localPending,
+}: {
+  editing: boolean;
+  unsyncedChanges: number;
+  status: ProviderStatus;
+  localPending: boolean;
+}): boolean {
+  if (!editing) return false;
+  return localPending || unsyncedChanges > 0 || status !== 'connected';
+}
 
 /**
  * Whether a `stale-epoch` refusal for `room` may reload the page now. Once per

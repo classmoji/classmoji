@@ -21,6 +21,7 @@ export const hocuspocusProviderFactory: CollabProviderFactory = ({
   onStatus,
   onUnsyncedChanges,
   onAuthenticationFailed,
+  onClose,
 }) =>
   new HocuspocusProvider({
     url,
@@ -31,6 +32,7 @@ export const hocuspocusProviderFactory: CollabProviderFactory = ({
     onStatus,
     onUnsyncedChanges,
     onAuthenticationFailed,
+    onClose: ({ event }) => onClose({ event }),
   });
 
 const noopSubscribe = () => () => {};

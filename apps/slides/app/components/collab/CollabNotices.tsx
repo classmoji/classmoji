@@ -1,6 +1,4 @@
-import type { CollabRejectReason } from '@classmoji/collab';
-
-import { rejectionNotice } from '~/utils/collab/collab';
+import { rejectionNotice, type LiveRejectReason } from '~/utils/collab/collab';
 
 const reload = () => window.location.reload();
 
@@ -13,7 +11,7 @@ export function CollabRejectedBanner({
   reason,
   reloadAttempted,
 }: {
-  reason: CollabRejectReason;
+  reason: LiveRejectReason;
   reloadAttempted: boolean;
 }) {
   const notice = rejectionNotice(reason);

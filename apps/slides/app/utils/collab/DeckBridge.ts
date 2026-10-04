@@ -414,6 +414,20 @@ export class DeckBridge {
     }
   }
 
+  /** Edits made here that have not been written into the doc yet. */
+  hasPendingLocal(): boolean {
+    if (!this.slidesEl) return false;
+    // Undelivered DOM changes count: absorb them (this schedules the flush).
+    if (this.observer) this.onMutations(this.observer.takeRecords());
+    return (
+      this.flushTimer !== null ||
+      this.dirtyStructure ||
+      this.dirtyTheme ||
+      this.dirtySlides.size > 0 ||
+      this.pendingEdits.size > 0
+    );
+  }
+
   currentSlideId(): string | null {
     const slide = this.reveal?.getCurrentSlide?.() as HTMLElement | undefined;
     return slide?.getAttribute('data-cm-id') ?? null;

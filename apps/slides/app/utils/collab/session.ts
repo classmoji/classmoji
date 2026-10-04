@@ -13,10 +13,16 @@
  */
 import * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
-import type { CollabLoaderData, CollabRejectReason, CollabTokenPayload } from '@classmoji/collab';
+import {
+  COLLAB_FORBIDDEN_CLOSE_CODE,
+  type CollabLoaderData,
+  type CollabTokenPayload,
+} from '@classmoji/collab';
 
 import {
+  COLLAB_RELOAD_CLOSE_CODE,
   normalizeRejectReason,
+  type LiveRejectReason,
   peersFromAwareness,
   type CollabPeer,
   type ProviderStatus,
@@ -39,6 +45,8 @@ export interface CollabProviderArgs {
   onStatus(data: { status: ProviderStatus | string }): void;
   onUnsyncedChanges(data: { number: number }): void;
   onAuthenticationFailed(data: { reason: string }): void;
+  /** The socket closed: 4403 = access re-check failed, 4409 = deck closed (reload). */
+  onClose(data: { event: { code?: number } | null | undefined }): void;
 }
 
 export type CollabProviderFactory = (args: CollabProviderArgs) => CollabProviderLike;
@@ -49,7 +57,9 @@ export interface CollabSessionState {
   hasSynced: boolean;
   synced: boolean;
   unsyncedChanges: number;
-  rejected: CollabRejectReason | null;
+  rejected: LiveRejectReason | null;
+  /** The server closed the deck under us (flag off, deck deleted): reload the route. */
+  reloadRequired: boolean;
   peers: CollabPeer[];
 }
 
@@ -59,6 +69,7 @@ export const INITIAL_SESSION_STATE: CollabSessionState = {
   synced: false,
   unsyncedChanges: 0,
   rejected: null,
+  reloadRequired: false,
   peers: [],
 };
 
@@ -96,6 +107,13 @@ export class DeckCollabSession {
         for (const listener of this.unsyncedListeners) listener(number);
       },
       onAuthenticationFailed: ({ reason }) => this.reject(reason),
+      onClose: ({ event }) => {
+        if (event?.code === COLLAB_FORBIDDEN_CLOSE_CODE) this.reject('forbidden');
+        else if (event?.code === COLLAB_RELOAD_CLOSE_CODE) {
+          this.destroyProvider();
+          this.update({ reloadRequired: true, status: 'disconnected' });
+        }
+      },
     });
 
     this.onAwarenessChange = () => this.refreshPeers();
