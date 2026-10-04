@@ -1,3 +1,4 @@
+import type { BlockConfig } from '@blocknote/core';
 import { createReactBlockSpec, type ReactCustomBlockRenderProps } from '@blocknote/react';
 import { useEffect, useRef, useState } from 'react';
 import { createHighlighterCore } from '@shikijs/core';
@@ -10,11 +11,7 @@ const terminalPropSchema = {
   title: { default: '' },
 };
 
-type TerminalRenderProps = ReactCustomBlockRenderProps<
-  'terminal',
-  typeof terminalPropSchema,
-  'none'
->;
+type TerminalRenderProps = ReactCustomBlockRenderProps<BlockConfig<'terminal', typeof terminalPropSchema, 'none'>>;
 
 export const Terminal = createReactBlockSpec(
   {

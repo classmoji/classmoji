@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import type { BlockConfig } from '@blocknote/core';
 import { createReactBlockSpec, type ReactCustomBlockRenderProps } from '@blocknote/react';
 import { IconFileText } from '@tabler/icons-react';
 import { useNavigate } from 'react-router';
@@ -188,11 +189,7 @@ const pageLinkPropSchema = {
   pageTitle: { default: '' },
 };
 
-type PageLinkRenderProps = ReactCustomBlockRenderProps<
-  'pageLink',
-  typeof pageLinkPropSchema,
-  'none'
->;
+type PageLinkRenderProps = ReactCustomBlockRenderProps<BlockConfig<'pageLink', typeof pageLinkPropSchema, 'none'>>;
 
 export const PageLink = createReactBlockSpec(
   {

@@ -1,3 +1,4 @@
+import type { BlockConfig } from '@blocknote/core';
 import { createReactBlockSpec, type ReactCustomBlockRenderProps } from '@blocknote/react';
 import { useState, useRef } from 'react';
 import { IconCamera } from '@tabler/icons-react';
@@ -12,7 +13,7 @@ const profilePropSchema = {
   links: { default: '' },
 };
 
-type ProfileRenderProps = ReactCustomBlockRenderProps<'profile', typeof profilePropSchema, 'none'>;
+type ProfileRenderProps = ReactCustomBlockRenderProps<BlockConfig<'profile', typeof profilePropSchema, 'none'>>;
 
 export const Profile = createReactBlockSpec(
   {

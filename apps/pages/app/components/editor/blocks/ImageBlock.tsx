@@ -39,14 +39,7 @@ import { imageSizesFor, responsiveImageAttrs } from '~/utils/imageSizes.ts';
  * Tabler `IconPhoto` instead of the react-icons glyph BlockNote ships.
  */
 
-type ImageRenderProps = Omit<
-  ReactCustomBlockRenderProps<
-    ReturnType<typeof createImageBlockConfig>['type'],
-    ReturnType<typeof createImageBlockConfig>['propSchema'],
-    ReturnType<typeof createImageBlockConfig>['content']
-  >,
-  'contentRef'
->;
+type ImageRenderProps = ReactCustomBlockRenderProps<typeof createImageBlockConfig>;
 
 /**
  * The `<img>` itself: BlockNote's, plus the two attributes it has no seam for.

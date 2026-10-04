@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import type { BlockConfig } from '@blocknote/core';
 import { createReactBlockSpec, type ReactCustomBlockRenderProps } from '@blocknote/react';
 import {
   IconArrowUp,
@@ -556,7 +557,7 @@ const navGridPropSchema = {
   columns: { default: 2, values: [1, 2] },
 };
 
-type NavGridRenderProps = ReactCustomBlockRenderProps<'navGrid', typeof navGridPropSchema, 'none'>;
+type NavGridRenderProps = ReactCustomBlockRenderProps<BlockConfig<'navGrid', typeof navGridPropSchema, 'none'>>;
 
 const navGridImplementation = {
   toExternalHTML: function NavGridExternalHTML(props: NavGridRenderProps) {
