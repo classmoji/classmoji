@@ -42,7 +42,7 @@ interface ClassroomForRepositoryCreation {
  * Github installation tokens use `x-access-token`; GitLab OAuth tokens use
  * `oauth2`, on the org's instance (its base_url; the default instance when unset).
  */
-function authedRemote(
+export function authedRemote(
   gitOrganization: GitOrganizationLike,
   token: string,
   fullPath: string

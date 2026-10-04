@@ -106,7 +106,9 @@ export class GitCommandError extends Error {
 /** A push refused because the branch moved (rebuild on the new head and retry). */
 export function isNonFastForward(error: unknown): boolean {
   const msg = error instanceof GitCommandError ? error.stderr : String(error);
-  return /non-fast-forward|fetch first|\[rejected\]|updates were rejected|cannot lock ref|incorrect old value/i.test(msg);
+  return /non-fast-forward|fetch first|\[rejected\]|updates were rejected|cannot lock ref|incorrect old value/i.test(
+    msg
+  );
 }
 
 /** The clone failed because the repository does not exist (or is invisible to the token). */
@@ -131,11 +133,7 @@ function gitEnv(author: GitIdentity, committer: GitIdentity): NodeJS.ProcessEnv 
   };
 }
 
-function run(
-  args: string[],
-  env: NodeJS.ProcessEnv,
-  input?: Buffer | string
-): Promise<Buffer> {
+function run(args: string[], env: NodeJS.ProcessEnv, input?: Buffer | string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const child = spawn('git', args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
     const out: Buffer[] = [];
@@ -231,7 +229,8 @@ export function bareRepo(gitDir: string, env: NodeJS.ProcessEnv) {
     for (const [name, change] of changes) {
       const current = entries.get(name);
       if (typeof change === 'string') {
-        if (current?.type === 'tree') throw new Error(`Cannot replace directory ${name} with a file`);
+        if (current?.type === 'tree')
+          throw new Error(`Cannot replace directory ${name} with a file`);
         // Keep an existing executable bit; new files are plain.
         const mode = current?.type === 'blob' && current.mode === '100755' ? '100755' : '100644';
         entries.set(name, { mode, type: 'blob', sha: change });
@@ -296,8 +295,7 @@ export async function commitFilesToRemote(input: CommitFilesInput): Promise<Comm
       env
     );
     const repo = bareRepo(gitDir, env);
-    const branch =
-      input.branch ?? (await repo.gitStr(['symbolic-ref', '--short', 'HEAD']));
+    const branch = input.branch ?? (await repo.gitStr(['symbolic-ref', '--short', 'HEAD']));
     let parent = await repo.gitStr(['rev-parse', 'HEAD']);
 
     const packsAtStart = await repo.packCount();
@@ -331,7 +329,15 @@ export async function commitFilesToRemote(input: CommitFilesInput): Promise<Comm
       } catch (error) {
         if (attempts >= maxAttempts || !isNonFastForward(error)) throw error;
         const before = await repo.packCount();
-        await repo.git(['fetch', '--depth', '1', '--filter=blob:none', '--no-tags', 'origin', branch]);
+        await repo.git([
+          'fetch',
+          '--depth',
+          '1',
+          '--filter=blob:none',
+          '--no-tags',
+          'origin',
+          branch,
+        ]);
         explicitPacks += (await repo.packCount()) - before;
         parent = await repo.gitStr(['rev-parse', 'FETCH_HEAD']);
         commit = await build(parent);

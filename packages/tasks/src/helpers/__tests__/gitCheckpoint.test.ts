@@ -30,9 +30,7 @@ const sh = (args: string[], cwd?: string) =>
 
 /** ~40 KB of text per seeded file, so a thin pack would have real delta bases. */
 const bigText = (label: string) =>
-  Array.from({ length: 800 }, (_, i) => `${label} line ${i} lorem ipsum dolor sit amet`).join(
-    '\n'
-  );
+  Array.from({ length: 800 }, (_, i) => `${label} line ${i} lorem ipsum dolor sit amet`).join('\n');
 
 let root: string;
 let remote: string;
@@ -80,8 +78,7 @@ function pushOutside(file: string, content: string) {
 
 const remoteHead = () => sh(['--git-dir', remote, 'rev-parse', 'refs/heads/main']);
 const remoteFile = (p: string, ref = 'main') => sh(['--git-dir', remote, 'show', `${ref}:${p}`]);
-const remoteMode = (p: string) =>
-  sh(['--git-dir', remote, 'ls-tree', 'main', p]).split(' ')[0];
+const remoteMode = (p: string) => sh(['--git-dir', remote, 'ls-tree', 'main', p]).split(' ')[0];
 
 beforeEach(() => {
   root = mkdtempSync(path.join(tmpdir(), 'gitcheckpoint-test-'));
@@ -157,7 +154,9 @@ describe('commitFilesToRemote', () => {
     await repo.git(['cat-file', '-p', blob]);
     expect(await repo.packCount()).toBeGreaterThan(before);
     // And the clone itself held no blobs: the tree lists them, the pack lacks them.
-    const packs = readdirSync(path.join(gitDir, 'objects', 'pack')).filter(f => f.endsWith('.pack'));
+    const packs = readdirSync(path.join(gitDir, 'objects', 'pack')).filter(f =>
+      f.endsWith('.pack')
+    );
     expect(packs.length).toBeGreaterThan(1);
   });
 
@@ -222,7 +221,12 @@ describe('commitFilesToRemote', () => {
   it('refuses unsafe or conflicting paths before touching git', async () => {
     for (const bad of ['/abs', '../x', 'a//b', '.git/config', 'a/./b', '']) {
       await expect(
-        commitFilesToRemote({ remoteUrl, files: [{ path: bad, content: 'x' }], message: 'm', author: ID })
+        commitFilesToRemote({
+          remoteUrl,
+          files: [{ path: bad, content: 'x' }],
+          message: 'm',
+          author: ID,
+        })
       ).rejects.toThrow(/Invalid repo path/);
     }
     await expect(
