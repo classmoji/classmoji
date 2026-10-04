@@ -11,6 +11,7 @@ import {
   liveLeaveRisk,
   mayAutoReloadStale,
   checkpointAnswersSaveVersion,
+  checkpointFromRow,
   initialsOf,
   normalizeRejectReason,
   parseStatelessMessage,
@@ -173,5 +174,41 @@ test.describe('refusals and closes', () => {
       'me'
     );
     expect(peers[0]).toMatchObject({ agent: true, slideId: 's9', name: 'Ada' });
+  });
+});
+
+test.describe('saved to GitHub before runs were recorded', () => {
+  test('clean with no recorded run: saved, no time; the commit in the tooltip when known', () => {
+    expect(savedToGitHubStatus({ at: '', commit: 'c972c0c5aa' }, Date.now())).toEqual({
+      tone: 'saved',
+      label: 'Saved to GitHub',
+      title: 'Commit c972c0c',
+    });
+    expect(savedToGitHubStatus({ at: '' }, Date.now())).toEqual({
+      tone: 'saved',
+      label: 'Saved to GitHub',
+      title: undefined,
+    });
+    // It answers no pending Save version (only a real run does).
+    expect(checkpointAnswersSaveVersion({ at: '' }, Date.now())).toBe(false);
+  });
+
+  test('which rows read as saved', () => {
+    const row = {
+      last_checkpoint_at: null,
+      last_checkpoint_error: null,
+      pushed_commit: 'c972c0c5aa',
+      version: 4,
+      pushed_version: 4,
+    };
+    expect(checkpointFromRow(row)).toEqual({ at: '', commit: 'c972c0c5aa' });
+    expect(checkpointFromRow({ ...row, pushed_commit: null })).toEqual({ at: '' });
+    expect(checkpointFromRow({ ...row, version: 5 })).toBeNull(); // unpushed edits
+    expect(checkpointFromRow(null)).toEqual({ at: '' }); // only git has it
+    const at = new Date('2026-10-04T03:00:00Z');
+    expect(checkpointFromRow({ ...row, last_checkpoint_at: at })).toEqual({
+      at: at.toISOString(),
+      commit: 'c972c0c5aa',
+    });
   });
 });

@@ -39,6 +39,7 @@ import {
   deckInternalPath,
   type CollabEnv,
 } from './env.server.ts';
+import { checkpointFromRow } from './collab.ts';
 import { changedSlideIds } from './previewHighlight.ts';
 
 /** The classroom flag, read defensively (absent on an older row = off). */
@@ -62,24 +63,25 @@ export function liveEditingEnv(classroom: unknown): CollabEnv | null {
 
 /**
  * The last checkpoint covering the deck, for the header's "saved to GitHub"
- * line until the room's own messages take over. Null before any run.
+ * line until the room's own messages take over. A deck with nothing unpushed
+ * but no recorded run (pushed before runs were recorded, or never opened
+ * live) is saved too, time unknown (`at: ''`). Null while there are unpushed
+ * edits and no run on record.
  */
 export async function readDeckCheckpoint(
   slideId: string
 ): Promise<{ at: string; commit?: string; error?: string } | null> {
   const row = await getPrisma().collabDoc.findUnique({
     where: { kind_doc_id: { kind: 'deck', doc_id: slideId } },
-    select: { last_checkpoint_at: true, last_checkpoint_error: true, pushed_commit: true },
+    select: {
+      last_checkpoint_at: true,
+      last_checkpoint_error: true,
+      pushed_commit: true,
+      version: true,
+      pushed_version: true,
+    },
   });
-  if (!row?.last_checkpoint_at) return null;
-  return {
-    at: row.last_checkpoint_at.toISOString(),
-    ...(row.last_checkpoint_error
-      ? { error: row.last_checkpoint_error }
-      : row.pushed_commit
-        ? { commit: row.pushed_commit }
-        : {}),
-  };
+  return checkpointFromRow(row);
 }
 
 export async function readDeckEpoch(slideId: string): Promise<number> {

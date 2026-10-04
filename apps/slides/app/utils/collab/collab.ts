@@ -181,7 +181,7 @@ export function initialsOf(name: string): string {
 
 /** The last checkpoint covering this deck, as the header shows it. */
 export interface LiveCheckpoint {
-  /** ISO time of the run. */
+  /** ISO time of the run; '' when the deck is saved but the time is not known. */
   at: string;
   commit?: string;
   /** Why the run did not save this deck (absent when it did). */
@@ -257,7 +257,7 @@ export function savedToGitHubStatus(
       title: reason.length > REASON_CAP ? `${reason.slice(0, REASON_CAP - 1)}…` : reason,
     };
   }
-  const when = relativeTimeFrom(checkpoint.at, now);
+  const when = checkpoint.at ? relativeTimeFrom(checkpoint.at, now) : '';
   return {
     tone: 'saved',
     label: when ? `Saved to GitHub ${when}` : 'Saved to GitHub',
@@ -265,7 +265,28 @@ export function savedToGitHubStatus(
   };
 }
 
-/** How long "Saving version…" waits for the checkpoint that answers it. */
+/** The header's checkpoint from a collab_docs row (null row = only git has the deck). */
+export function checkpointFromRow(
+  row: {
+    last_checkpoint_at: Date | null;
+    last_checkpoint_error: string | null;
+    pushed_commit: string | null;
+    version: number;
+    pushed_version: number;
+  } | null
+): LiveCheckpoint | null {
+  if (!row) return { at: '' };
+  const commit = row.pushed_commit ? { commit: row.pushed_commit } : {};
+  if (row.last_checkpoint_at) {
+    return {
+      at: row.last_checkpoint_at.toISOString(),
+      ...(row.last_checkpoint_error ? { error: row.last_checkpoint_error } : commit),
+    };
+  }
+  return row.version === row.pushed_version ? { at: '', ...commit } : null;
+}
+/** How long "Saving version…" waits
+ for the checkpoint that answers it. */
 export const SAVE_VERSION_WAIT_MS = 60_000;
 
 /** A checkpoint message that arrived after "Save version" was accepted (clock skew allowed). */
@@ -274,7 +295,7 @@ export function checkpointAnswersSaveVersion(
   pendingSince: number | null,
   skewMs = 30_000
 ): boolean {
-  if (pendingSince === null) return false;
+  if (pendingSince === null || !checkpoint.at) return false;
   const at = Date.parse(checkpoint.at);
   return Number.isNaN(at) || at >= pendingSince - skewMs;
 }
