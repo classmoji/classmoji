@@ -11,14 +11,23 @@
  * - New blobs with `hash-object -w`; trees rebuilt with `ls-tree -z` +
  *   `mktree -z --missing` along the CHANGED paths only. Never the index and
  *   never `read-tree`: in a blob-less clone both fault in every blob.
- * - `commit-tree -p <head>`, then `push --no-thin`. A thin pack makes
- *   pack-objects use the parent's blobs at the same paths as delta bases, which
- *   lazily fetches each one; `--no-thin` sends the new blobs whole.
+ * - `commit-tree -p <head>`, then a push that sends the new blobs whole. A
+ *   thin pack makes pack-objects use the parent's blobs at the same paths as
+ *   delta bases, and in a partial clone it lazily fetches each one first.
+ *   `--no-thin` stops that over ssh:// and file://, but NOT over https: git's
+ *   remote helper drops the option (`thin` is in transport-helper's
+ *   unsupported list) and runs `send-pack --stateless-rpc --thin` regardless —
+ *   verified against GitHub, where the spike's ssh push had hidden it. So the
+ *   push also runs with the clone's promisor config detached
+ *   (`withoutPromisor`): with no promisor remote, pack-objects marks a missing
+ *   preferred base as not found and skips it ("we don't have to include it
+ *   anyway") instead of fetching it. The config is restored after the push —
+ *   the rejection path's `fetch --filter` needs it.
  * - Never a force push. A non-fast-forward rejection fetches the new head
  *   (trees only) and rebuilds the same file set on it, up to `maxAttempts`.
  *
  * Self-contained (node + the git binary) so it can be unit-tested against a
- * local bare repository over file://.
+ * local bare repository, over file:// and over smart HTTP (`git http-backend`).
  */
 
 import { spawn } from 'node:child_process';
@@ -254,7 +263,41 @@ export function bareRepo(gitDir: string, env: NodeJS.ProcessEnv) {
     }
   }
 
-  return { git, gitStr, readTree, writeTree, applyChanges, packCount };
+  /**
+   * Run `fn` with the clone's promisor-remote config removed, then put it back.
+   * Git treats a remote as a promisor when it has `promisor = true` OR a
+   * `partialclonefilter`, and git < 2.44-ish also records
+   * `extensions.partialClone`; all three have to go for pack-objects to stop
+   * lazy-fetching.
+   */
+  async function withoutPromisor<T>(fn: () => Promise<T>): Promise<T> {
+    let saved: Array<[string, string]> = [];
+    try {
+      const out = await gitStr([
+        'config',
+        '--local',
+        '--get-regexp',
+        '^(extensions\\.partialclone|remote\\.origin\\.(promisor|partialclonefilter))$',
+      ]);
+      saved = out
+        .split('\n')
+        .filter(Boolean)
+        .map(line => {
+          const space = line.indexOf(' ');
+          return [line.slice(0, space), line.slice(space + 1)] as [string, string];
+        });
+    } catch {
+      // Exit 1: none set (not a partial clone) — nothing to detach.
+    }
+    for (const [key] of saved) await git(['config', '--local', '--unset-all', key]);
+    try {
+      return await fn();
+    } finally {
+      for (const [key, value] of saved) await git(['config', '--local', key, value]);
+    }
+  }
+
+  return { git, gitStr, readTree, writeTree, applyChanges, packCount, withoutPromisor };
 }
 
 /**
@@ -324,7 +367,8 @@ export async function commitFilesToRemote(input: CommitFilesInput): Promise<Comm
       attempts++;
       await input.beforePush?.({ attempt: attempts, commit, parent });
       try {
-        await repo.git(['push', '--no-thin', 'origin', `${commit}:refs/heads/${branch}`]);
+        const ref = `${commit}:refs/heads/${branch}`;
+        await repo.withoutPromisor(() => repo.git(['push', '--no-thin', 'origin', ref]));
         break;
       } catch (error) {
         if (attempts >= maxAttempts || !isNonFastForward(error)) throw error;

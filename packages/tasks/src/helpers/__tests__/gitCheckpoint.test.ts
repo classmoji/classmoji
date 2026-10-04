@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -270,5 +270,125 @@ describe('redactGitSecrets', () => {
       'https://***@github.com/o/r.git'
     );
     expect(redactGitSecrets('token ghs_abcDEF123 here')).toBe('token ghs_*** here');
+  });
+});
+
+// ─── Smart HTTP: where `--no-thin` is silently dropped ───────────────────────
+
+/**
+ * A minimal smart-HTTP git server: node in front of `git http-backend` (CGI),
+ * serving every bare repo under `projectRoot`. Enough for clone, fetch
+ * (filters + lazy fetches) and push. In its OWN process: the tests drive git
+ * synchronously, which would block a server living on this event loop.
+ */
+const GIT_HTTP_SERVER = `
+const { spawn } = require('node:child_process');
+const http = require('node:http');
+const [backend, projectRoot] = process.argv.slice(1);
+const server = http.createServer((req, res) => {
+  const url = new URL(req.url || '/', 'http://localhost');
+  const child = spawn(backend, [], { env: { ...process.env,
+    GIT_PROJECT_ROOT: projectRoot, GIT_HTTP_EXPORT_ALL: '1',
+    REQUEST_METHOD: req.method || 'GET', PATH_INFO: decodeURIComponent(url.pathname),
+    QUERY_STRING: url.search.slice(1), CONTENT_TYPE: req.headers['content-type'] || '',
+    HTTP_CONTENT_ENCODING: String(req.headers['content-encoding'] || ''),
+    GIT_PROTOCOL: String(req.headers['git-protocol'] || ''), REMOTE_ADDR: '127.0.0.1' } });
+  req.pipe(child.stdin);
+  let head = Buffer.alloc(0); let done = false;
+  child.stdout.on('data', chunk => {
+    if (done) { res.write(chunk); return; }
+    head = Buffer.concat([head, chunk]);
+    const end = head.indexOf('\\r\\n\\r\\n');
+    if (end < 0) return;
+    done = true;
+    for (const line of head.subarray(0, end).toString().split('\\r\\n')) {
+      const i = line.indexOf(':'); const name = line.slice(0, i).trim(); const value = line.slice(i + 1).trim();
+      if (name.toLowerCase() === 'status') res.statusCode = Number(value.split(' ')[0]);
+      else res.setHeader(name, value);
+    }
+    res.write(head.subarray(end + 4));
+  });
+  child.stdout.on('end', () => res.end());
+});
+server.listen(0, '127.0.0.1', () => console.log(server.address().port));
+`;
+
+function startGitHttp(projectRoot: string): Promise<{ child: ChildProcess; base: string }> {
+  const backend = path.join(sh(['--exec-path']), 'git-http-backend');
+  const child = spawn(process.execPath, ['-e', GIT_HTTP_SERVER, backend, projectRoot], {
+    env: ENV,
+    stdio: ['ignore', 'pipe', 'inherit'],
+  });
+  return new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.stdout?.once('data', (d: Buffer) =>
+      resolve({ child, base: `http://127.0.0.1:${d.toString().trim()}` })
+    );
+  });
+}
+
+describe('commitFilesToRemote over smart HTTP', () => {
+  let server: ChildProcess;
+  let httpUrl: string;
+
+  beforeEach(async () => {
+    // Anonymous pushes over HTTP need receive-pack switched on.
+    sh(['--git-dir', remote, 'config', 'http.receivepack', 'true']);
+    const started = await startGitHttp(root);
+    server = started.child;
+    httpUrl = `${started.base}/remote.git`;
+  });
+
+  afterEach(() => {
+    // Only the server this test started, by its own handle.
+    server.kill();
+  });
+
+  it('positive control: a plain `push --no-thin` over HTTP DOES fetch the old blobs', async () => {
+    const gitDir = path.join(root, 'probe.git');
+    sh(['clone', '--depth', '1', '--filter=blob:none', '--bare', httpUrl, gitDir]);
+    const repo = bareRepo(gitDir, ENV);
+    const blob = await repo.gitStr(['hash-object', '-w', '--stdin'], bigText('intro') + '\nedit');
+    const tree = await repo.applyChanges(
+      await repo.gitStr(['rev-parse', 'HEAD^{tree}']),
+      new Map([['pages', new Map([['intro', new Map([['content.json', blob]])]])]])
+    );
+    const commit = await repo.gitStr(['commit-tree', tree, '-p', 'HEAD'], 'probe\n');
+    const before = await repo.packCount();
+    await repo.git(['push', '--no-thin', 'origin', `${commit}:refs/heads/main`]);
+    // The helper dropped --no-thin, so pack-objects faulted the base blob in.
+    expect(await repo.packCount()).toBeGreaterThan(before);
+  });
+
+  it('pushes edits to existing files without fetching any old content', async () => {
+    const result = await commitFilesToRemote({
+      remoteUrl: httpUrl,
+      files: [
+        { path: 'pages/intro/content.json', content: bigText('intro') + '\nedited' },
+        { path: 'slides/week-1/index.html', content: bigText('html') + '\nedited' },
+      ],
+      message: 'over http\n',
+      author: ID,
+    });
+    expect(result.pushed).toBe(true);
+    expect(result.lazyFetches).toBe(0);
+    expect(remoteFile('pages/intro/content.json')).toBe(bigText('intro') + '\nedited');
+    expect(remoteFile('pages/lab-1/content.json')).toBe(bigText('lab'));
+  });
+
+  it('rebuilds after a rejection over HTTP (promisor config restored for the fetch)', async () => {
+    const result = await commitFilesToRemote({
+      remoteUrl: httpUrl,
+      files: [{ path: 'pages/intro/content.json', content: bigText('intro') + '\nours' }],
+      message: 'ours\n',
+      author: ID,
+      beforePush: async ({ attempt }) => {
+        if (attempt === 1) pushOutside('pages/lab-1/assets/b.txt', 'uploaded');
+      },
+    });
+    expect(result.attempts).toBe(2);
+    expect(result.lazyFetches).toBe(0);
+    expect(remoteFile('pages/lab-1/assets/b.txt')).toBe('uploaded');
+    expect(remoteFile('pages/intro/content.json')).toBe(bigText('intro') + '\nours');
   });
 });
