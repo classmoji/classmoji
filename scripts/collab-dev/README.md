@@ -21,22 +21,18 @@ collab server needs `TRIGGER_SECRET_KEY` to queue it. The key lives in
 `TRIGGER_PROJECT_ID`, `TRIGGER_DEV_MACHINE`). Never `cat` it.
 
 ```bash
-CLASSMOJI_ENV_OVERLAY=~/.config/classmoji-collab/trigger-dev.env npm run dev
+CLASSMOJI_ENV_OVERLAY=~/.config/classmoji-collab/trigger-dev.env ENABLE_TEST_LOGIN=true npm run dev
 ```
 
-> **Needs a small change in `scripts/dev.sh` first (not made yet).**
-> `dev.sh` runs `set -a; source .env` itself, and `.env` has
-> `TRIGGER_SECRET_KEY=""`, so a key exported before `npm run dev` gets
-> overwritten. The fix is to read an overlay file right after `.env` is
-> sourced (step 1 of `dev.sh`, still inside `set -a`):
->
-> ```bash
-> if [ -n "$CLASSMOJI_ENV_OVERLAY" ] && [ -f "$CLASSMOJI_ENV_OVERLAY" ]; then
->   source "$CLASSMOJI_ENV_OVERLAY"
-> fi
-> ```
->
-> Without it the editors still work, but nothing is ever pushed to GitHub.
+`dev.sh` reads the overlay file right after `.env`, so its values win over the
+empty ones in `.env`. `ENABLE_TEST_LOGIN=true` turns on the `?as=` sign-in
+links below. To keep the stack running after you close the terminal, prefix
+with `nohup` and end with `> /tmp/classmoji-dev-collab-live-editing.log 2>&1 &`.
+
+Right after a fresh start (or after clearing Vite caches), the first page load
+in each app triggers Vite's dependency optimisation and a reload; a page opened
+during that window can show "Cannot read properties of null (reading
+'useContext')". Reload once and it's gone.
 
 Check it started: `tail -f /tmp/classmoji-dev-collab-live-editing.log`.
 `.dev-context` should list Collab, and the log should show the `trigger`
@@ -154,9 +150,12 @@ as `<name> (agent)` in the editors. To clean up afterwards, run
 Run this with the stack up and the seed done:
 
 ```bash
-COLLAB_E2E=1 npx dotenv -e .env -- ./scripts/devport.sh run \
+COLLAB_E2E=1 COLLAB_E2E_CHANNEL=chrome npx dotenv -e .env -- ./scripts/devport.sh run \
   npx playwright test -c tests/collab
 ```
+
+`COLLAB_E2E_CHANNEL=chrome` uses the installed Google Chrome instead of
+Playwright's own Chromium download.
 
 It covers four things:
 
