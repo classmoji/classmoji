@@ -12,7 +12,11 @@
  * the git worker is the only thing that writes content.json.
  */
 
-import type { CollabLoaderData, CollabRejectReason } from '@classmoji/collab';
+import {
+  isCollabRejectReason,
+  type CollabLoaderData,
+  type CollabRejectReason,
+} from '@classmoji/collab';
 
 export type { CollabLoaderData, CollabRejectReason };
 
@@ -96,25 +100,19 @@ export function liveLeaveUnsafe({
 
 /**
  * Why a live session ended, as the client acts on it: the server's refusal
- * reasons (`stale-epoch`, `schema-mismatch`, `forbidden`, `unavailable`), or
- * `reload` — the server closed the room (flag turned off, page deleted;
- * close code 4409) and the route must be loaded again.
+ * reasons (`COLLAB_REJECT_REASONS`), or `reload` — the server closed the room
+ * (flag turned off, page deleted; close code `COLLAB_CLOSE_RELOAD`) and the
+ * route must be loaded again.
  */
-export type LiveRefusal = CollabRejectReason | 'unavailable' | 'reload';
-
-/** WebSocket close code: the room was closed; reload the route. */
-export const COLLAB_RELOAD_CLOSE_CODE = 4409;
+export type LiveRefusal = CollabRejectReason | 'reload';
 
 /**
  * A refusal reason as the client acts on it. Hocuspocus sends
  * `error.reason ?? 'permission-denied'`; any reason that is not one of ours
  * is treated as forbidden (the safe reading: stop editing).
  */
-export function normalizeRejectReason(reason: unknown): LiveRefusal {
-  if (reason === 'stale-epoch' || reason === 'schema-mismatch' || reason === 'unavailable') {
-    return reason;
-  }
-  return 'forbidden';
+export function normalizeRejectReason(reason: unknown): CollabRejectReason {
+  return isCollabRejectReason(reason) ? reason : 'forbidden';
 }
 
 export interface RejectionNotice {
@@ -136,6 +134,11 @@ export function rejectionNotice(reason: LiveRefusal): RejectionNotice {
       return { action: 'prompt', message: 'Reload to get the latest editor.' };
     case 'unavailable':
       return { action: 'prompt', message: 'Couldn’t connect to live editing. Try again.' };
+    case 'legacy-html':
+      return {
+        action: 'readonly',
+        message: 'This page uses an older format and can’t be edited live yet.',
+      };
     case 'forbidden':
     default:
       return { action: 'readonly', message: 'You can no longer edit this page.' };

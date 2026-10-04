@@ -119,6 +119,20 @@ test.describe('CollabSession', () => {
     session.destroy();
   });
 
+  test('a 4409 close for a reseeded room is a stale room, not a plain reload', () => {
+    const { session, provider } = open();
+    provider.args.onClose({ event: { code: 4409, reason: 'stale-epoch' } });
+    expect(session.getState().rejected).toBe('stale-epoch');
+    session.destroy();
+  });
+
+  test('a legacy-html refusal is its own reason', () => {
+    const { session, provider } = open();
+    provider.args.onAuthenticationFailed({ reason: 'legacy-html' });
+    expect(session.getState().rejected).toBe('legacy-html');
+    session.destroy();
+  });
+
   test('an `unavailable` refusal is its own reason, not forbidden', () => {
     const { session, provider } = open();
     provider.args.onAuthenticationFailed({ reason: 'unavailable' });

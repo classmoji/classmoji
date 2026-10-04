@@ -19,13 +19,13 @@
 import * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 import {
-  COLLAB_FORBIDDEN_CLOSE_CODE,
+  COLLAB_CLOSE_FORBIDDEN,
+  COLLAB_CLOSE_RELOAD,
   type CollabLoaderData,
   type CollabTokenPayload,
 } from '@classmoji/collab';
 
 import {
-  COLLAB_RELOAD_CLOSE_CODE,
   normalizeRejectReason,
   peersFromAwareness,
   type CollabPeer,
@@ -48,7 +48,7 @@ export interface CollabProviderCallbacks {
    * The socket closed. 4403: the server's periodic re-check refused access;
    * 4409: the room was closed (flag off, page deleted) and the route reloads.
    */
-  onClose(data: { event: { code?: number } | null | undefined }): void;
+  onClose(data: { event: { code?: number; reason?: string } | null | undefined }): void;
 }
 
 export interface CollabProviderArgs extends CollabProviderCallbacks {
@@ -139,8 +139,13 @@ export class CollabSession {
       // this the provider would just reconnect while the editor stayed
       // editable over a document that may never sync again.
       onClose: ({ event }) => {
-        if (event?.code === COLLAB_FORBIDDEN_CLOSE_CODE) this.reject('forbidden');
-        else if (event?.code === COLLAB_RELOAD_CLOSE_CODE) this.end('reload');
+        if (event?.code === COLLAB_CLOSE_FORBIDDEN) this.reject('forbidden');
+        else if (event?.code === COLLAB_CLOSE_RELOAD) {
+          // The close reason is `reload` or the refusal behind it; a reseeded
+          // room is a stale one (reloads only with nothing unsynced here).
+          if (event.reason === 'stale-epoch') this.reject('stale-epoch');
+          else this.end('reload');
+        }
       },
     });
 
