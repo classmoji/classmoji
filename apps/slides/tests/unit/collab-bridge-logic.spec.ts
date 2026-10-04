@@ -260,3 +260,14 @@ test.describe('Reveal lazy loading is not an edit', () => {
     expect(serializeSection(section).html).toBe(before);
   });
 });
+
+test.describe('editor state is not content', () => {
+  test('an open block editor never reaches the stored html', () => {
+    const doc = dom(
+      `<div class="slides"><section data-cm-id="b1"><div class="sl-block editing" data-block-type="text"><div class="sl-block-content" contenteditable="true"><p>typing</p></div></div><div class="sl-block editing-code" contenteditable="false"><div class="sandpack-embed"></div></div></section></div>`
+    );
+    const html = serializeSection(doc.querySelector('section') as HTMLElement).html ?? '';
+    expect(html).not.toMatch(/editing|contenteditable/);
+    expect(html).toContain('<div class="sl-block" data-block-type="text">');
+  });
+});

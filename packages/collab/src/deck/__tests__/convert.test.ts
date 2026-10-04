@@ -235,3 +235,32 @@ describe('isRenderableAttr', () => {
     expect(isRenderableAttr('data-background-iframe', 'javascript:x')).toBe(false);
   });
 });
+
+describe('editor block state never reaches the deck', () => {
+  it('strips the open-block classes from sl-blocks only, byte-identical otherwise', async () => {
+    const { stripEditorBlockState } = await import('../render.ts');
+    const html =
+      '<div class="sl-block editing" style="left: 1px;"><div class="sl-block-content">x</div></div>' +
+      '<div class="sl-block editing-code" data-block-type="sandpack"></div>' +
+      '<p class="editing">an authored class on a paragraph</p>';
+    expect(stripEditorBlockState(html)).toBe(
+      '<div class="sl-block" style="left: 1px;"><div class="sl-block-content">x</div></div>' +
+        '<div class="sl-block" data-block-type="sandpack"></div>' +
+        '<p class="editing">an authored class on a paragraph</p>'
+    );
+    const clean = '<div class="sl-block"><p>hi</p></div>';
+    expect(stripEditorBlockState(clean)).toBe(clean);
+  });
+
+  it('yDocToDeck (snapshots and checkpoints) leaves already-stored editor state out', () => {
+    const deck: DeckJson = {
+      version: 1,
+      theme: 'white',
+      codeTheme: 'github',
+      slides: [{ id: 'a', html: '<div class="sl-block editing"><p>x</p></div>' }],
+    };
+    expect(yDocToDeck(deckToYDoc(deck)).slides[0].html).toBe(
+      '<div class="sl-block"><p>x</p></div>'
+    );
+  });
+});

@@ -15,7 +15,7 @@ import {
   RUNTIME_SECTION_CLASSES,
   splitStyleDeclarations,
 } from '@classmoji/services/slides/runtime-attrs';
-import { isRenderableAttr, type DeckStructure } from '@classmoji/collab';
+import { EDITOR_BLOCK_CLASSES, isRenderableAttr, type DeckStructure } from '@classmoji/collab';
 
 import { cleanSectionAttrs } from '../deckOpsDiff.ts';
 import { cleanupEditorContainer, undoRevealLazyLoad } from '../editorCleanup.ts';
@@ -130,6 +130,10 @@ export function serializeSection(el: HTMLElement): SerializedSection {
     clone.removeAttribute('aria-describedby');
   }
   for (const cls of COLLAB_SECTION_CLASSES) clone.classList.remove(cls);
+  // An open block editor (BlockHandles) is editor state, never content.
+  for (const block of Array.from(clone.querySelectorAll('.sl-block'))) {
+    for (const cls of EDITOR_BLOCK_CLASSES) block.classList.remove(cls);
+  }
   if ((clone.getAttribute('class') ?? '') === '') clone.removeAttribute('class');
 
   return {

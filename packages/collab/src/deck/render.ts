@@ -68,3 +68,27 @@ export function renderSlideSection(slide: DeckSlide, opts: RenderSectionOptions 
 export function renderDeckSections(deck: DeckJson, opts: RenderSectionOptions = {}): string {
   return deck.slides.map(slide => renderSlideSection(slide, opts)).join('\n');
 }
+
+/**
+ * Classes the slides editor puts on a `.sl-block` while a person works on it
+ * (BlockHandles: double-click to edit text, or code in a Sandpack). Editor
+ * state, never content.
+ */
+export const EDITOR_BLOCK_CLASSES = ['editing', 'editing-code'] as const;
+
+const CLASS_ATTR_RE = /\sclass="([^"]*)"/g;
+
+/**
+ * `html` with the editor's transient `.sl-block` classes removed (string
+ * level; elements without `sl-block` untouched). Html that has none comes
+ * back unchanged, byte for byte.
+ */
+export function stripEditorBlockState(html: string): string {
+  if (!html.includes('sl-block') || !/\bediting/.test(html)) return html;
+  return html.replace(CLASS_ATTR_RE, (whole, value: string) => {
+    const tokens = value.split(/\s+/).filter(Boolean);
+    if (!tokens.includes('sl-block')) return whole;
+    const kept = tokens.filter(t => !(EDITOR_BLOCK_CLASSES as readonly string[]).includes(t));
+    return kept.length === tokens.length ? whole : ` class="${kept.join(' ')}"`;
+  });
+}

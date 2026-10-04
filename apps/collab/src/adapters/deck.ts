@@ -301,6 +301,17 @@ export function opsOutcome(applied: Array<Record<string, unknown>>): ApplyOpsRes
   return { ...(insertedIds.length ? { insertedIds } : {}), ...(touchedId ? { touchedId } : {}) };
 }
 
+function docName(document: Y.Doc): string {
+  return (document as Y.Doc & { name?: string }).name ?? 'deck';
+}
+
+/** The server dropping someone's slide lock, with why (debug level). */
+function logLockDrop(document: Y.Doc, slideIds: string[], reason: string): void {
+  console.debug(
+    `[collab] ${docName(document)}: dropped lock(s) ${slideIds.join(', ')} — ${reason}`
+  );
+}
+
 function asHttpError(err: unknown): never {
   if (err instanceof DeckOpError || err instanceof SlideHtmlError) {
     throw new CollabHttpError(422, { error: 'invalid-op', message: err.message });
@@ -414,11 +425,15 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
   clearGoneLocks(document: Y.Doc): { expired: string[]; nextInMs: number | null } {
     const connected = connectedClients(document);
     if (!connected) return { expired: [], nextInMs: null };
-    return expireGoneLocks(
+    const result = expireGoneLocks(
       document,
       { now: this.deps.now(), connected, notBefore: this.startedAt },
       LOCK_ORIGIN
     );
+    if (result.expired.length > 0) {
+      logLockDrop(document, result.expired, 'holder gone past the grace');
+    }
+    return result;
   }
 
   /**
@@ -674,7 +689,12 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
       if (added && added.length > 0) markReconnected(document, added, LOCK_ORIGIN);
       if (removed.length > 0) {
         // Gone: keep their slide for the grace period, then sweep it.
-        markDisconnected(document, removed, this.deps.now(), LOCK_ORIGIN);
+        const marked = markDisconnected(document, removed, this.deps.now(), LOCK_ORIGIN);
+        if (marked.length > 0) {
+          console.debug(
+            `[collab] ${docName(document)}: holder(s) ${removed.join(', ')} left; grace for ${marked.join(', ')}`
+          );
+        }
         const timer = setTimeout(() => {
           graceTimers.delete(timer);
           clearGone();
@@ -701,11 +721,12 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
     const sweep = () => {
       clearGone();
       // Idle holders (a frozen tab still connected).
-      expireLocks(
+      const idle = expireLocks(
         document,
         { now: this.deps.now(), activity, maxIdleMs: LOCK_EXPIRE_IDLE_MS },
         LOCK_ORIGIN
       );
+      if (idle.length > 0) logLockDrop(document, idle, 'idle or past a disconnect grace');
     };
     sweep();
     const timer = setInterval(sweep, LOCK_SWEEP_MS);

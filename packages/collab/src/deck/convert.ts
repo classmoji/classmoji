@@ -23,6 +23,7 @@ import {
   F,
   META_FIELDS,
 } from './shape.ts';
+import { stripEditorBlockState } from './render.ts';
 import { setYText } from './text.ts';
 
 // ─── Accessors ────────────────────────────────────────────────────────────────
@@ -177,7 +178,8 @@ function slideToJson(entry: DeckSlideEntry, kids: DeckSlideEntry[] | undefined):
   if (entry.container) {
     values.children = (kids ?? []).map(kid => slideToJson(kid, undefined));
   } else {
-    values.html = readSlideHtml(map) ?? '';
+    // Editor state that slipped into a slide (an open block editor) is never content.
+    values.html = stripEditorBlockState(readSlideHtml(map) ?? '');
   }
   const notes = readSlideNotes(map);
   if (notes !== undefined) values.notes = notes;

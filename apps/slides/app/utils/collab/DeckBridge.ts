@@ -30,6 +30,7 @@
  */
 import * as Y from 'yjs';
 import {
+  LOCK_RELEASE_IDLE_MS,
   LockActivity,
   acquireLock,
   allLocks,
@@ -90,6 +91,23 @@ import {
   shouldRenderRemoteHtml,
   type SlideLockView,
 } from './bridgeLogic.ts';
+
+/**
+ * Lock transitions on the console at debug level (hidden by default): which
+ * slide, what happened, and where the change came from.
+ */
+function debugLock(what: string, slideId: string, tr: Y.Transaction | null, action: string) {
+  const origin = tr?.origin;
+  const from =
+    origin == null
+      ? 'local'
+      : typeof origin === 'string'
+        ? origin
+        : ((origin as { constructor?: { name?: string } }).constructor?.name ?? 'remote');
+  console.debug(
+    `[collab] ${what} (slide ${slideId}, from ${from}${tr?.local ? '' : ', remote'}) → ${action}`
+  );
+}
 
 /** Origin of every transaction the bridge writes (observers skip their own). */
 export const BRIDGE_ORIGIN = 'deck-editor';
@@ -220,7 +238,7 @@ export class DeckBridge {
     this.cleanups.push(() => conflictsMap.unobserve(onConflicts));
 
     const locks = this.doc.getMap('locks');
-    const onLocks = () => this.onLocksChanged();
+    const onLocks = (_event: unknown, tr: Y.Transaction) => this.onLocksChanged(tr);
     locks.observe(onLocks as never);
     this.cleanups.push(() => locks.unobserve(onLocks as never));
 
@@ -233,7 +251,7 @@ export class DeckBridge {
           this.emit();
           return;
         }
-        this.onLocksChanged();
+        this.onLocksChanged(null);
       })
     );
   }
@@ -769,9 +787,10 @@ export class DeckBridge {
     this.applyLockChrome();
     const holder = this.otherHolder(id);
     const now = this.clock();
-    if (now - (this.lastNotified.get(id) ?? 0) > 5000) {
+    // Only ever about a person who actually holds it, by name.
+    if (holder && now - (this.lastNotified.get(id) ?? 0) > 5000) {
       this.lastNotified.set(id, now);
-      this.opts.notify(`${holder ? editingLabel(holder.name) : 'Someone is editing'} this slide.`);
+      this.opts.notify(`${editingLabel(holder.name)} this slide.`);
     }
   }
 
@@ -869,7 +888,12 @@ export class DeckBridge {
         ) {
           // Off-screen slides wait until they are shown: re-rendering a slide
           // nobody is looking at restarts its Sandpack and iframes for nothing.
-          if (entry.id === this.currentSlideId() || !this.deferOffscreen) {
+          // Nor is html rendered into a slide someone here is working on (the
+          // caret, an open block editor): it waits until they are done.
+          const now =
+            (entry.id === this.currentSlideId() || !this.deferOffscreen) &&
+            !this.busyIn(entry.id, el);
+          if (now) {
             this.renderHtml(entry.id, el, yHtml);
             this.deferred.delete(entry.id);
           } else {
@@ -1201,8 +1225,11 @@ export class DeckBridge {
 
   private releaseOthers(keep: string): void {
     if (this.held && this.held.slideId !== keep) {
-      releaseLock(this.doc, this.held.slideId, this.doc.clientID, BRIDGE_ORIGIN);
+      // Forget it first: the release below is observed synchronously and must
+      // not read as our lock being taken.
+      const slideId = this.held.slideId;
       this.held = null;
+      releaseLock(this.doc, slideId, this.doc.clientID, BRIDGE_ORIGIN);
     }
     // Stray locks of ours (another tab of this page shares no clientID, so
     // these are from this doc only — e.g. a claim that lost and came back).
@@ -1227,30 +1254,53 @@ export class DeckBridge {
     if (this.pendingEdits.size > 0) this.flushLocal();
   }
 
-  private onLocksChanged(): void {
+  private onLocksChanged(tr: Y.Transaction | null): void {
     const held = this.held;
-    // Only judge a lost lock against the server's state (not mid-reconnect).
-    if (held && this.session.ready) {
+    // Our own lock writes (claims, releases, heartbeats) are never a loss;
+    // only judge against the server's state (not mid-reconnect).
+    if (held && tr?.origin !== BRIDGE_ORIGIN && this.session.ready) {
       const lock = getLock(this.doc, held.slideId);
-      if (!lock || lock.clientId !== this.doc.clientID) {
+      if (!lock) {
+        // Gone, and nobody else holds it (the server cleared it, e.g. while we
+        // were away). Nothing was taken from anyone: keep what is on screen,
+        // and if the person is still on this slide, quietly hold it again —
+        // any edit waits for the new claim to be confirmed, then is written.
         this.held = null;
-        if (!lock && this.pendingEdits.has(held.slideId)) {
-          // Released under us (the server dropped it while we were away) and
-          // nobody else took it: claim it again; the edit waits for the stamp.
+        const now = this.clock();
+        const stillHere =
+          this.caretSlideId() === held.slideId ||
+          now - held.lastEditAt < LOCK_RELEASE_IDLE_MS ||
+          this.pendingEdits.has(held.slideId) ||
+          this.dirtySlides.has(held.slideId);
+        debugLock(
+          'lock vanished; nobody holds it',
+          held.slideId,
+          tr,
+          stillHere ? 'reclaim' : 'drop'
+        );
+        if (stillHere) {
           this.claim(held.slideId);
-        } else {
-          // Taken: a claim that came first, or a takeover after we idled or
-          // dropped. The doc's html wins; this slide shows as theirs.
-          const el = this.slidesEl?.querySelector(
-            `section[data-cm-id="${CSS.escape(held.slideId)}"]`
-          ) as HTMLElement | null;
-          const map = deckSlides(this.doc).get(held.slideId);
-          this.pendingEdits.delete(held.slideId);
-          if (el && map instanceof Y.Map) this.revertSlide(held.slideId, el, map);
+          const again = this.held as Held | null;
+          if (again?.slideId === held.slideId) again.lastEditAt = held.lastEditAt;
+          this.pendingEdits.add(held.slideId);
+          this.scheduleFlush();
         }
+      } else if (lock.clientId !== this.doc.clientID) {
+        // Taken by someone else: a claim that came first, or a takeover after
+        // we idled or dropped. The doc's html wins; this slide shows as theirs.
+        debugLock(`lock taken by ${lock.name}`, held.slideId, tr, 'revert');
+        this.held = null;
+        const el = this.slidesEl?.querySelector(
+          `section[data-cm-id="${CSS.escape(held.slideId)}"]`
+        ) as HTMLElement | null;
+        const map = deckSlides(this.doc).get(held.slideId);
+        this.pendingEdits.delete(held.slideId);
+        if (el && map instanceof Y.Map) this.revertSlide(held.slideId, el, map);
       } else {
         this.checkClaim();
       }
+    } else if (held) {
+      this.checkClaim();
     }
     this.applyLockChrome();
     this.emit();
@@ -1315,10 +1365,22 @@ export class DeckBridge {
     }
   }
 
+  /** Someone here is working in this slide: the caret, or an open block editor. */
+  private busyIn(slideId: string, el: HTMLElement): boolean {
+    return this.caretSlideId() === slideId || el.querySelector('.editing, .editing-code') !== null;
+  }
+
   private tick(): void {
+    // Remote html that waited on the shown slide while someone worked in it.
+    const shown = this.currentSlideId();
+    if (shown && this.deferred.has(shown)) this.renderDeferred([shown]);
     const held = this.held;
     if (held) {
-      const focused = this.caretSlideId() === held.slideId && document.hasFocus();
+      // Still working on it: the caret is in it, or it is the slide on screen
+      // (the properties panel and block handles edit the shown slide without
+      // a caret in it), and the window has focus.
+      const onIt = this.caretSlideId() === held.slideId || this.currentSlideId() === held.slideId;
+      const focused = onIt && document.hasFocus();
       if (
         shouldRelease({
           now: this.clock(),
@@ -1329,8 +1391,8 @@ export class DeckBridge {
       ) {
         this.flushLocal();
         if (this.held === held) {
-          releaseLock(this.doc, held.slideId, this.doc.clientID, BRIDGE_ORIGIN);
           this.held = null;
+          releaseLock(this.doc, held.slideId, this.doc.clientID, BRIDGE_ORIGIN);
           this.applyLockChrome();
         }
       } else {
@@ -1343,8 +1405,9 @@ export class DeckBridge {
 
   private releaseAll(): void {
     if (this.held) {
-      releaseLock(this.doc, this.held.slideId, this.doc.clientID, BRIDGE_ORIGIN);
+      const slideId = this.held.slideId;
       this.held = null;
+      releaseLock(this.doc, slideId, this.doc.clientID, BRIDGE_ORIGIN);
     }
     this.releaseOthers('');
   }
@@ -1380,6 +1443,10 @@ export class DeckBridge {
       if (!el || !(map instanceof Y.Map) || !base) continue;
       const yHtml = readSlideHtml(map);
       if (yHtml === base.yHtml || this.held?.slideId === id || this.pendingEdits.has(id)) continue;
+      if (this.busyIn(id, el)) {
+        this.deferred.add(id); // still being worked on here: later
+        continue;
+      }
       this.renderHtml(id, el, yHtml);
     }
     this.emit();

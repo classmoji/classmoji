@@ -238,6 +238,7 @@ function setup() {
     },
     cached,
     slideCalls,
+    reveal,
   };
 }
 
@@ -766,6 +767,50 @@ test.describe('live deck bridge', () => {
     fakeNow = Date.now() + LOCK_DISCONNECT_GRACE_MS + 1;
     await tick(1100);
     expect(t.states.at(-1)?.locks['aaaa0003']?.canTakeOver).toBe(true);
+    t.bridge.destroy();
+  });
+
+  test('moving on to another slide releases the first quietly (no revert, no notice)', () => {
+    const t = setup();
+    const a = t.section('aaaa0002');
+    a.innerHTML = '<h2>Two, edited</h2>';
+    t.bridge.flushLocal();
+    t.session.ack();
+    t.session.ack();
+    expect(t.remoteHtml('aaaa0002')).toBe('<h2>Two, edited</h2>');
+    // Typing in another slide claims it, which releases the first.
+    t.section('aaaa0003').innerHTML = '<h2>Three, edited</h2>';
+    t.bridge.flushLocal();
+    t.session.ack();
+    t.session.ack();
+    expect(t.notices).toEqual([]);
+    expect(a.innerHTML).toBe('<h2>Two, edited</h2>');
+    expect(getLock(t.remote, 'aaaa0002')).toBeNull();
+    expect(getLock(t.remote, 'aaaa0003')?.clientId).toBe(t.session.doc.clientID);
+    expect(t.remoteHtml('aaaa0003')).toBe('<h2>Three, edited</h2>');
+    t.bridge.destroy();
+  });
+
+  test('remote html waits while a block editor is open on the shown slide', async () => {
+    const t = setup();
+    t.setCurrent('aaaa0003');
+    t.section('aaaa0003').insertAdjacentHTML(
+      'beforeend',
+      '<div class="sl-block editing"><div class="sl-block-content">open</div></div>'
+    );
+    t.bridge.flushLocal(); // (the block is new local content: claim + write)
+    t.session.ack();
+    t.session.ack();
+    // Someone else's html for it arrives (e.g. after this person's lock lapsed).
+    t.bridge.detach(); // drop our lock so the remote change is renderable
+    t.bridge.attach(t.reveal, { setThemes: () => {} });
+    (deckSlides(t.remote).get('aaaa0003') as Y.Map<unknown>).set('html', '<h2>remote</h2>');
+    await tick();
+    expect(t.section('aaaa0003').querySelector('.editing')).not.toBeNull();
+    // The editor closes: the waiting change lands on the next tick.
+    t.section('aaaa0003').querySelector('.editing')?.classList.remove('editing');
+    await tick(1100);
+    expect(t.section('aaaa0003').innerHTML).toBe('<h2>remote</h2>');
     t.bridge.destroy();
   });
 
