@@ -166,20 +166,42 @@ function setup() {
     section.classList.add('editing-mode');
   }
 
+  // A Reveal stand-in with Reveal's index semantics: a CACHED current index
+  // (stale after slides move until slide() is called), getIndices(el) computed
+  // from the DOM (v undefined for a horizontal slide), and slide() that moves
+  // the current slide and blurs the editor, as the real one does.
   let current = slidesEl.querySelector('section') as HTMLElement;
+  const cached = { h: 0, v: 0 };
+  const horizontal = () => Array.from(slidesEl.children) as HTMLElement[];
+  const indicesOf = (el: HTMLElement) => {
+    const vertical = el.parentElement !== slidesEl;
+    const h = Math.max(horizontal().indexOf(vertical ? (el.parentElement as HTMLElement) : el), 0);
+    const v = vertical
+      ? Array.from((el.parentElement as HTMLElement).children).indexOf(el)
+      : undefined;
+    return { h, v };
+  };
+  const slideCalls: Array<[number, number]> = [];
   const reveal = {
     getSlidesElement: () => slidesEl,
     getRevealElement: () => revealEl,
     getCurrentSlide: () => current,
-    getIndices: () => ({ h: 0, v: 0 }),
+    getIndices: (el?: HTMLElement) => (el ? indicesOf(el) : { ...cached }),
     on() {},
     off() {},
-    // Reveal's slide()/sync() blur the editor (what happened in the browser).
-    sync() {
+    sync() {},
+    layout() {},
+    slide(h: number, v = 0) {
+      slideCalls.push([h, v]);
+      cached.h = h;
+      cached.v = v;
+      const top = horizontal()[h];
+      const kids = top
+        ? (Array.from(top.children).filter(c => c.tagName === 'SECTION') as HTMLElement[])
+        : [];
+      current = kids.length > 0 ? kids[v] : top;
       (document.activeElement as HTMLElement | null)?.blur?.();
     },
-    layout() {},
-    slide() {},
   } as unknown as RevealApi;
   bridge.deferOffscreen = false;
   bridge.attach(reveal, {
@@ -208,7 +230,14 @@ function setup() {
     notices,
     states,
     themes,
-    setCurrent: (id: string) => (current = section(id)),
+    setCurrent: (id: string) => {
+      current = section(id);
+      const at = indicesOf(current);
+      cached.h = at.h;
+      cached.v = at.v ?? 0;
+    },
+    cached,
+    slideCalls,
   };
 }
 
@@ -669,10 +698,11 @@ test.describe('live deck bridge', () => {
     t.bridge.destroy();
   });
 
-  test('a remote insert keeps the focus and caret of someone typing', async () => {
+  test('a remote insert before the current slide: Reveal follows, focus and caret stay', async () => {
     const t = setup();
-    const el = t.section('aaaa0002');
-    t.setCurrent('aaaa0002');
+    const el = t.section('aaaa0003');
+    t.setCurrent('aaaa0003'); // third slide: h = 2
+    expect(t.cached.h).toBe(2);
     el.setAttribute('tabindex', '-1'); // jsdom focuses only focusable elements
     el.focus();
     const text = el.querySelector('h2')?.firstChild as Text;
@@ -680,10 +710,24 @@ test.describe('live deck bridge', () => {
     insertSlide(t.remote, 'newer001', { html: '<p>remote</p>' }, { parent: null, after: null });
     await tick();
     expect(t.order()[0]).toBe('newer001');
+    // Reveal points at the same slide's new index (number, hash, arrows follow)…
+    expect(t.cached).toEqual({ h: 3, v: 0 });
+    expect(t.slideCalls.at(-1)).toEqual([3, 0]);
+    // …and the person typing keeps focus and caret.
     expect(document.activeElement).toBe(el);
     const selection = window.getSelection();
     expect(selection?.anchorNode).toBe(text);
     expect(selection?.anchorOffset).toBe(2);
+    t.bridge.destroy();
+  });
+
+  test('a remote insert after the current slide leaves Reveal alone', async () => {
+    const t = setup();
+    t.setCurrent('aaaa0002');
+    insertSlide(t.remote, 'later001', { html: '<p>end</p>' }, { parent: null, after: 'aaaa0003' });
+    await tick();
+    expect(t.slideCalls).toEqual([]);
+    expect(t.cached).toEqual({ h: 1, v: 0 });
     t.bridge.destroy();
   });
 

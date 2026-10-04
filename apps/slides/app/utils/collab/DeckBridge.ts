@@ -1025,15 +1025,23 @@ export class DeckBridge {
     }
   }
 
+  /**
+   * Keep Reveal on the same slide after a structure change. Its cached index
+   * goes stale when slides are inserted or moved before the current one, so
+   * compare that slide's real position with the cache (a horizontal slide's
+   * `v` is undefined from getIndices(el), 0 in the cache) and re-point Reveal
+   * when they differ — slide number, progress, hash and arrows follow. Its
+   * slide() blurs the editor; the caller restores focus and the caret.
+   */
   private goTo(slideId: string | null): void {
     if (!slideId || !this.reveal || !this.slidesEl) return;
     const el = this.slidesEl.querySelector(`section[data-cm-id="${CSS.escape(slideId)}"]`);
     if (!el) return;
-    // Already showing it: leave Reveal alone (its slide() blurs the editor).
-    if (this.reveal.getCurrentSlide?.() === el) return;
     const indices = this.reveal.getIndices(el as HTMLElement);
     const now = this.reveal.getIndices();
-    if (indices.h !== now.h || indices.v !== now.v) this.reveal.slide(indices.h, indices.v ?? 0);
+    if (indices.h !== now.h || (indices.v ?? 0) !== (now.v ?? 0)) {
+      this.reveal.slide(indices.h, indices.v ?? 0);
+    }
   }
 
   private caretSlideId(): string | null {
