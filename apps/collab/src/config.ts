@@ -11,6 +11,7 @@
  * | COLLAB_CHECKPOINT_MAX_DELAY  | 30s                         | 4m           |
  */
 
+import { AGENT_TOUCH_EXPIRE_MS } from '@classmoji/collab';
 import { resolveCollabInternalSecret } from '@classmoji/collab/env';
 
 export interface CollabConfig {
@@ -25,6 +26,15 @@ export interface CollabConfig {
   storeMaxDebounceMs: number;
   /** How often each connection's access is re-checked (ms). */
   recheckIntervalMs: number;
+  /** An agent session stays in awareness this long after its last op (ms). */
+  agentPresenceMs: number;
+  /**
+   * How often a present agent's awareness state is sent again (ms): well
+   * inside the 30-s timeout after which clients drop a state nobody renewed.
+   */
+  agentRenewMs: number;
+  /** How long a batch's `touched` list stays in the agent's state (ms). */
+  agentTouchMs: number;
 }
 
 const DURATION = /^\d+[smhdw]$/;
@@ -91,5 +101,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollabConfig {
     storeDebounceMs: 2_000,
     storeMaxDebounceMs: 10_000,
     recheckIntervalMs: 60_000,
+    agentPresenceMs: 60_000,
+    agentRenewMs: 10_000,
+    agentTouchMs: AGENT_TOUCH_EXPIRE_MS,
   };
 }

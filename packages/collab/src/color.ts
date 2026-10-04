@@ -1,9 +1,8 @@
 /**
- * A deterministic cursor/avatar colour for a user id, so every client shows
- * the same person in the same colour without coordinating. Mid-saturation
- * hues readable on both light and dark backgrounds.
+ * Cursor/avatar colours: mid-saturation hues readable on both light and dark
+ * backgrounds.
  */
-const PALETTE = [
+export const USER_COLORS = [
   '#e5484d', // red
   '#f76b15', // orange
   '#d6a000', // amber
@@ -16,10 +15,20 @@ const PALETTE = [
   '#3e63dd', // indigo
 ] as const;
 
-export function userColor(userId: string): string {
+/** The 31-hash both colour pickers start from. */
+export function colorHash(value: string): number {
   let hash = 0;
-  for (let i = 0; i < userId.length; i++) {
-    hash = (hash * 31 + userId.charCodeAt(i)) | 0;
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash * 31 + value.charCodeAt(i)) | 0;
   }
-  return PALETTE[Math.abs(hash) % PALETTE.length];
+  return Math.abs(hash);
+}
+
+/**
+ * A deterministic cursor/avatar colour for a user id, so every client shows
+ * the same person in the same colour without coordinating.
+ */
+export function userColor(userId: string): string {
+  const hash = colorHash(userId);
+  return USER_COLORS[hash % USER_COLORS.length];
 }

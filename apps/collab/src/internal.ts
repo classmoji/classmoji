@@ -13,6 +13,7 @@
  *   POST /internal/:kind/:id/checkpoint     { message?, actor } → { version }
  *   POST /internal/:kind/:id/close          { reason } → { closed }   (sockets: 4409 reload)
  *   POST /internal/:kind/:id/preview-changed {} → { broadcast }  (stateless { type: 'preview-changed' })
+ *   POST /internal/:kind/:id/cursor         { actor, page? | slide? } → { shown }  (agent caret; no edit)
  *   POST /internal/classroom/:id/flag       { enabled } → { closed, reseeded }
  *
  * /external: `sha` is the COMMIT the outside push landed as (theirs is read
@@ -28,9 +29,12 @@ import * as Y from 'yjs';
 import {
   COLLAB_SECRET_HEADER,
   isCollabKind,
+  normalizeAgentSession,
   type CollabActor,
   type CollabKind,
+  type CursorRequest,
   type PageCoverImage,
+  type PageCursorPoint,
 } from '@classmoji/collab';
 
 import { CollabAuthError } from './auth.ts';
@@ -87,7 +91,59 @@ function requireActor(value: unknown): CollabActor {
       message: 'actor { userId, name } is required',
     });
   }
-  return { userId: actor.userId, name: actor.name };
+  const agentSession = normalizeAgentSession(actor.agentSession);
+  return { userId: actor.userId, name: actor.name, ...(agentSession ? { agentSession } : {}) };
+}
+
+const MAX_ID_LENGTH = 200;
+
+function cursorPoint(value: unknown, needsBlock: boolean): Partial<PageCursorPoint> {
+  const raw = (value ?? {}) as Record<string, unknown>;
+  if (typeof raw !== 'object' || Array.isArray(raw)) throw invalidCursor();
+  const point: Partial<PageCursorPoint> = {};
+  if (raw.blockId !== undefined) {
+    if (typeof raw.blockId !== 'string' || !raw.blockId || raw.blockId.length > MAX_ID_LENGTH) {
+      throw invalidCursor();
+    }
+    point.blockId = raw.blockId;
+  } else if (needsBlock) {
+    throw invalidCursor();
+  }
+  if (raw.offset !== undefined) {
+    if (typeof raw.offset !== 'number' || !Number.isInteger(raw.offset) || raw.offset < 0) {
+      throw invalidCursor();
+    }
+    point.offset = raw.offset;
+  }
+  if (raw.at !== undefined) {
+    if (raw.at !== 'start' && raw.at !== 'end') throw invalidCursor();
+    point.at = raw.at;
+  }
+  return point;
+}
+
+function invalidCursor(): CollabHttpError {
+  return new CollabHttpError(400, {
+    error: 'invalid-cursor',
+    message:
+      'page { blockId, offset? | at?, selectTo? { blockId?, offset? | at? } } or slide (an id) is required',
+  });
+}
+
+/** The `/cursor` body for this kind. */
+function requireCursor(kind: CollabKind, body: Record<string, unknown>): CursorRequest {
+  const actor = requireActor(body.actor);
+  if (kind === 'deck') {
+    if (typeof body.slide !== 'string' || !body.slide || body.slide.length > MAX_ID_LENGTH) {
+      throw invalidCursor();
+    }
+    return { actor, slide: body.slide };
+  }
+  if (!body.page || typeof body.page !== 'object') throw invalidCursor();
+  const page = body.page as Record<string, unknown>;
+  const point = cursorPoint(page, true) as PageCursorPoint;
+  const selectTo = page.selectTo === undefined ? undefined : cursorPoint(page.selectTo, false);
+  return { actor, page: { ...point, ...(selectTo ? { selectTo } : {}) } };
 }
 
 function requireCover(value: unknown): PageCoverImage | null {
@@ -117,6 +173,7 @@ const DOC_ACTIONS: Record<string, 'GET' | 'POST'> = {
   close: 'POST',
   'meta-changed': 'POST',
   'preview-changed': 'POST',
+  cursor: 'POST',
 };
 const CLASSROOM_ACTIONS: Record<string, 'GET' | 'POST'> = { flag: 'POST' };
 const GLOBAL_ACTIONS: Record<string, 'GET' | 'POST'> = { 'checkpoint-result': 'POST' };
@@ -261,6 +318,9 @@ async function dispatch(
       const insertedIds = result && 'insertedIds' in result ? result.insertedIds : undefined;
       return { epoch, version, ...(insertedIds ? { insertedIds } : {}) };
     }
+
+    case 'cursor':
+      return runtime.agentCursor(kind, id, requireCursor(kind, body));
 
     case 'preview-changed':
       // No-op when nobody has the doc open.

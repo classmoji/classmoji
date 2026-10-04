@@ -27,6 +27,7 @@ import {
   canEditDeck,
   writersOf,
   createDeckAdapter,
+  opsOutcome,
   type DeckAdapterDeps,
   type DeckRecord,
 } from '../src/adapters/deck.ts';
@@ -664,6 +665,39 @@ describe('guarded ops', () => {
     const tail = deck.slides.slice(-2);
     expect(result.insertedIds).toEqual([tail[0].id, tail[1].id, tail[1].children?.[0].id]);
     expect(result.touchedId).toBe(tail[1].id);
+    expect(result.touchedIds).toEqual([
+      'aaaa0001',
+      tail[0].id,
+      tail[1].id,
+      tail[1].children?.[0].id,
+    ]);
+  });
+
+  it('touchedIds leave out deleted slides; the presence stays on one that is still there', () => {
+    expect(
+      opsOutcome([
+        { op: 'update', id: 'a' },
+        { op: 'insert', ids: ['n1'], children: {} },
+        { op: 'move', id: 'b' },
+        { op: 'delete', id: 'n1' },
+        { op: 'reorder', count: 3 },
+      ])
+    ).toEqual({ insertedIds: ['n1'], touchedId: 'b', touchedIds: ['a', 'b'] });
+    expect(opsOutcome([{ op: 'update', id: 'a' }, { op: 'delete', id: 'a' }])).toEqual({});
+    // A slide touched twice counts where it was touched last; at most the last 40.
+    const many = Array.from({ length: 45 }, (_, i) => ({ op: 'update', id: `s${i}` }));
+    const outcome = opsOutcome([...many, { op: 'update', id: 's0' }]);
+    expect(outcome.touchedIds).toHaveLength(40);
+    expect(outcome.touchedIds?.at(-1)).toBe('s0');
+    expect(outcome.touchedIds?.[0]).toBe('s6');
+  });
+
+  it('hasItem finds top-level and stacked slides', () => {
+    const adapter = createDeckAdapter(makeDeps());
+    const document = liveDoc();
+    expect(adapter.hasItem(document, 'aaaa0002')).toBe(true);
+    expect(adapter.hasItem(document, 'aaaa0005')).toBe(true);
+    expect(adapter.hasItem(document, 'nope')).toBe(false);
   });
 });
 

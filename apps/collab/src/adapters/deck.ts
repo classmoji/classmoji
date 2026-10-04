@@ -45,6 +45,7 @@ import {
   type MergeResolution,
 } from '@classmoji/services/slides';
 import {
+  AGENT_TOUCHED_MAX,
   DECK_SCHEMA_VERSION,
   LOCK_EXPIRE_IDLE_MS,
   LockActivity,
@@ -280,25 +281,47 @@ function replaceSlide(deck: DeckJson, slide: DeckSlide): void {
 
 /**
  * From applyDeckOps' report: the ids minted for inserts, in op order (a new
- * stack followed by its children), and the last slide the ops touched (the
- * agent's presence shows there).
+ * stack followed by its children), the last slide the ops wrote (the agent's
+ * presence shows there), and every slide they inserted, updated or moved and
+ * did not delete afterwards (`touchedIds`, at most AGENT_TOUCHED_MAX — the
+ * last ones). Deletes are left out of both: there is no slide to show.
  */
 export function opsOutcome(applied: Array<Record<string, unknown>>): ApplyOpsResult {
   const insertedIds: string[] = [];
+  const touched: string[] = [];
+  const touch = (id: string) => {
+    const at = touched.indexOf(id);
+    if (at !== -1) touched.splice(at, 1);
+    touched.push(id);
+  };
   let touchedId: string | undefined;
   for (const entry of applied) {
     if (entry.op === 'insert' && Array.isArray(entry.ids)) {
       const children = (entry.children ?? {}) as Record<string, string[]>;
       for (const id of entry.ids as string[]) {
         insertedIds.push(id);
-        for (const child of children[id] ?? []) insertedIds.push(child);
+        touch(id);
+        for (const child of children[id] ?? []) {
+          insertedIds.push(child);
+          touch(child);
+        }
         touchedId = id;
       }
+    } else if (entry.op === 'delete' && typeof entry.id === 'string') {
+      const at = touched.indexOf(entry.id);
+      if (at !== -1) touched.splice(at, 1);
+      if (touchedId === entry.id) touchedId = touched.at(-1);
     } else if (typeof entry.id === 'string') {
+      touch(entry.id);
       touchedId = entry.id;
     }
   }
-  return { ...(insertedIds.length ? { insertedIds } : {}), ...(touchedId ? { touchedId } : {}) };
+  const touchedIds = touched.slice(-AGENT_TOUCHED_MAX);
+  return {
+    ...(insertedIds.length ? { insertedIds } : {}),
+    ...(touchedId ? { touchedId } : {}),
+    ...(touchedIds.length ? { touchedIds } : {}),
+  };
 }
 
 function docName(document: Y.Doc): string {
@@ -448,6 +471,10 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
         return !slide || itemHash(slide) !== hash;
       })
       .map(([id]) => id);
+  }
+
+  hasItem(doc: Y.Doc, id: string): boolean {
+    return flattenSlides(yDocToDeck(doc)).has(id);
   }
 
   applyOps(ctx: LiveEditContext, ops: DeckOp[]): ApplyOpsResult {

@@ -17,6 +17,12 @@ export const COLLAB_INTERNAL_PREFIX = '/internal';
 export interface CollabActor {
   userId: string;
   name: string;
+  /**
+   * The agent session making it (MCP: the client's `Mcp-Session-Id`). Each
+   * session of a user is its own presence, colour and label; without one, all
+   * of a user's sessions share one. A key only (`normalizeAgentSession`).
+   */
+  agentSession?: string;
 }
 
 export interface PageCoverImage {
@@ -69,6 +75,32 @@ export interface OpsResponse {
   version: number;
   /** Ids minted/kept for inserted items, in op order. */
   insertedIds?: string[];
+}
+
+/** A point in a page: a block, then a character offset or its start/end. */
+export interface PageCursorPoint {
+  blockId: string;
+  /** Characters into the block's own text (clamped); wins over `at`. */
+  offset?: number;
+  /** Default `end`. */
+  at?: 'start' | 'end';
+}
+
+/**
+ * `POST /internal/:kind/:id/cursor` — place an agent's presence without
+ * changing content. Page: `page` (a caret, or a selection to `selectTo`);
+ * deck: `slide` (the slide id it points at). `{ shown: false }` when nobody
+ * has the doc open (there is no one to show it to); 404 `not-found` for an
+ * unknown block or slide.
+ */
+export interface CursorRequest {
+  actor: CollabActor;
+  page?: PageCursorPoint & { selectTo?: Partial<PageCursorPoint> };
+  slide?: string;
+}
+
+export interface CursorResponse {
+  shown: boolean;
 }
 
 /** 409 from a guarded `/ops`. */

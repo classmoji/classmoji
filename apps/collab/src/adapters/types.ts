@@ -17,10 +17,12 @@
  */
 import type * as Y from 'yjs';
 import type {
+  AgentCursor,
   CollabActor,
   CollabKind,
   CollabMergeResolution,
   PageCoverImage,
+  PageCursorPoint,
   SnapshotContent,
 } from '@classmoji/collab';
 
@@ -151,6 +153,14 @@ export interface ApplyOpsResult {
   insertedIds?: string[];
   /** The last item the ops touched (agent presence: page blockId / deck slide). */
   touchedId?: string;
+  /**
+   * What the ops inserted or changed and is still there (deletes left out:
+   * they have nothing to show), in op order, at most AGENT_TOUCHED_MAX (the
+   * last ones). Editors highlight these for a few seconds.
+   */
+  touchedIds?: string[];
+  /** Page: the block whose last text the agent's caret goes to the end of. */
+  cursorBlockId?: string;
 }
 
 /** `POST /internal/:kind/:id/merge-preview`. */
@@ -268,6 +278,22 @@ export interface CollabAdapter<K extends CollabKind = CollabKind, Op = unknown> 
    * for pages, `['locks']` for decks.
    */
   readonly ephemeralRoots?: readonly string[];
+
+  /**
+   * Page only: an agent caret in the live doc (`cursor` as y-prosemirror's
+   * cursor plugin reads it), or null when the block is gone. `scope:
+   * 'subtree'` measures the block with its children (the end of what an op
+   * wrote); `'own'` only the block's own text (what an agent points at).
+   */
+  cursorAt?(
+    doc: Y.Doc,
+    point: PageCursorPoint,
+    selectTo?: Partial<PageCursorPoint> | null,
+    scope?: 'own' | 'subtree'
+  ): AgentCursor | null;
+
+  /** Whether the live doc has this block / slide (anywhere in the tree). */
+  hasItem?(doc: Y.Doc, id: string): boolean;
 
   /** Page only: set or clear the cover (`POST /internal/page/:id/cover`). */
   setCover?(ctx: LiveEditContext, coverImage: PageCoverImage | null): void;

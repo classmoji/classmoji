@@ -15,6 +15,7 @@ import { SCHEMA_VERSION, parsePageContent, type PageCoverImage } from '@classmoj
 import { pageContentToYDoc, yDocToBlocks } from '@classmoji/page-schema/server';
 import type { PageSnapshotContent } from '@classmoji/collab';
 import { itemHash } from '@classmoji/collab/hash';
+import { AGENT_TOUCHED_MAX } from '@classmoji/collab';
 
 import {
   CollabHttpError,
@@ -38,9 +39,61 @@ import {
   writeCover,
   type PageBlock,
 } from './pageDoc.ts';
+import { findBlockElement, pageCursor } from './pageCursor.ts';
 
 const pageContent = ClassmojiService.pageContent;
 type BlockOp = Parameters<typeof pageContent.applyBlockOps>[1][number];
+
+/**
+ * What a batch of page ops inserted or changed and is still in the page, in
+ * op order (an id touched twice counts where it was touched last), at most
+ * AGENT_TOUCHED_MAX — and the block the agent's caret goes to: the one the
+ * last op that wrote anything wrote last.
+ */
+export function touchedBlocks(
+  ops: BlockOp[],
+  remints: Map<string, string>,
+  next: PageBlock[]
+): { touchedIds?: string[]; cursorBlockId?: string } {
+  const present = new Set<string>();
+  const index = (blocks: PageBlock[]) => {
+    for (const block of blocks) {
+      if (block?.id) present.add(block.id);
+      if (Array.isArray(block?.children)) index(block.children);
+    }
+  };
+  index(next);
+  const order: string[] = [];
+  const touch = (id: string | undefined) => {
+    if (!id) return;
+    const at = order.indexOf(id);
+    if (at !== -1) order.splice(at, 1);
+    order.push(id);
+  };
+  let cursorBlockId: string | undefined;
+  ops.forEach((op, i) => {
+    if (op.op === 'insert') {
+      for (const block of op.blocks as PageBlock[]) {
+        const id = block.id ? (remints.get(`${i}:${block.id}`) ?? block.id) : undefined;
+        touch(id);
+        cursorBlockId = id ?? cursorBlockId;
+      }
+    } else if (op.op === 'update' || op.op === 'move') {
+      touch(op.id);
+      cursorBlockId = op.id;
+    } else if (op.op === 'replace_all') {
+      order.length = 0;
+      const blocks = pageContent.ensureBlockIds(op.blocks) as PageBlock[];
+      for (const block of blocks) touch(block.id);
+      cursorBlockId = blocks.at(-1)?.id ?? cursorBlockId;
+    }
+  });
+  const ids = order.filter(id => present.has(id)).slice(-AGENT_TOUCHED_MAX);
+  return {
+    ...(ids.length > 0 ? { touchedIds: ids } : {}),
+    ...(cursorBlockId && present.has(cursorBlockId) ? { cursorBlockId } : {}),
+  };
+}
 
 /** The page row the adapter needs (a `page.findById` with its classroom). */
 export interface PageRecord {
@@ -303,16 +356,24 @@ export function createPageAdapter(
           }
         });
         if (insertedIds.length > 0) result.insertedIds = insertedIds;
-        const last = ops.at(-1);
-        result.touchedId =
-          last?.op === 'insert' ? insertedIds.at(-1) : last && 'id' in last ? last.id : undefined;
         next = nonEmpty(next);
+        Object.assign(result, touchedBlocks(ops, remints, next));
+        // Presence shows at the block written last (a delete leaves it where it was).
+        if (result.cursorBlockId) result.touchedId = result.cursorBlockId;
         // Every node is built once BEFORE the first write: a bad block is a
         // 422 with nothing written, never half a reconcile.
         assertConvertible(next, 'ops');
         reconcileBlocks(doc, current, next);
       });
       return result;
+    },
+
+    cursorAt(doc, point, selectTo, scope) {
+      return pageCursor(doc, point, selectTo ?? null, scope ?? 'own');
+    },
+
+    hasItem(doc, id) {
+      return findBlockElement(doc, id) !== null;
     },
 
     setCover(ctx, coverImage) {

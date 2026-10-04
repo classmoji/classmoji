@@ -315,6 +315,8 @@ export async function startServer(
     /** Reuse a store (and world) — a restart. */
     store?: MemoryStore;
     world?: FakeWorld;
+    /** Settings to override (agent presence timings, …). */
+    config?: Partial<CollabConfig>;
   } = {}
 ): Promise<TestServer> {
   const store = options.store ?? new MemoryStore();
@@ -331,6 +333,7 @@ export async function startServer(
     storeDebounceMs: options.storeDebounceMs ?? 30,
     storeMaxDebounceMs: Math.max(200, (options.storeDebounceMs ?? 0) * 2),
     recheckIntervalMs: 60 * 60 * 1000, // tests call sweep() themselves
+    ...options.config,
   };
   const runtime = createCollabServer({
     port: 0,

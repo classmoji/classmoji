@@ -20,16 +20,24 @@ import {
 } from '@hocuspocus/server';
 import { Database } from '@hocuspocus/extension-database';
 import {
+  AGENT_TOUCHED_MAX,
   COLLAB_CLOSE_RELOAD,
+  agentColor,
+  agentDisplayName,
+  normalizeAgentSession,
   parseRoom,
   roomName,
   userColor,
+  type AgentCursor,
+  type AgentTouched,
   type CheckpointReason,
   type CollabActor,
   type CollabConnectionContext,
   type CollabKind,
   type CollabRoom,
   type CollabStatelessMessage,
+  type CursorRequest,
+  type CursorResponse,
 } from '@classmoji/collab';
 import { DEFAULT_COLLAB_PORT } from '@classmoji/collab/env';
 
@@ -41,7 +49,12 @@ import {
   type SessionResolver,
 } from './auth.ts';
 import type { AdapterRegistry } from './adapters/registry.ts';
-import { CollabHttpError, type CollabAdapter, type LiveEditContext } from './adapters/types.ts';
+import {
+  CollabHttpError,
+  type ApplyOpsResult,
+  type CollabAdapter,
+  type LiveEditContext,
+} from './adapters/types.ts';
 import type { CheckpointTrigger } from './checkpoint.ts';
 import type { CollabConfig } from './config.ts';
 import { handleRequest } from './http.ts';
@@ -97,9 +110,6 @@ export interface DirectEditContext {
 /** Origin context of the server's own repair transactions. */
 const REPAIR_CONTEXT = { repair: true } as const;
 
-/** How long an agent stays in awareness after its edit. */
-const AGENT_PRESENCE_MS = 10_000;
-
 /**
  * "Now" triggers within this window of each other share one debounced run
  * (trailing payload wins), so a later one carries the earlier one's message
@@ -136,10 +146,35 @@ interface LoadedDoc {
   pendingEditors: Map<string, string>;
 }
 
+/**
+ * One agent session in one document's awareness. Its own Y.Doc gives it a
+ * clientID nobody else uses; its own Awareness numbers its states.
+ */
 interface AgentPresence {
-  doc: Y.Doc;
+  key: string;
+  docName: string;
+  userId: string;
+  /** The agent session (`normalizeAgentSession`), or '-' when the actor sent none. */
+  session: string;
+  /** Order of first activity in this document (labels number by it). */
+  order: number;
+  ydoc: Y.Doc;
   awareness: Awareness;
-  timer: NodeJS.Timeout | null;
+  /** The person's name; `label` adds the agent tag. */
+  name: string;
+  label: string;
+  /** Fixed for the presence's life. */
+  color: string;
+  /** What it last touched: page `blockId`, deck `slide`. */
+  focus: { blockId?: string; slide?: string };
+  touched: AgentTouched | null;
+  seq: number;
+  /** Pages: its caret. */
+  cursor: AgentCursor | null;
+  expireTimer: NodeJS.Timeout | null;
+  touchTimer: NodeJS.Timeout | null;
+  /** Sent to the document at least once under the current clientID. */
+  published: boolean;
 }
 
 /** The root shared type a (possibly nested) type belongs to. */
@@ -166,6 +201,8 @@ export class CollabRuntime {
 
   private readonly loaded = new Map<string, LoadedDoc>();
   private readonly agents = new Map<string, AgentPresence>();
+  private agentRenewTimer: NodeJS.Timeout | null = null;
+  private agentOrder = 0;
   private readonly lastNow = new Map<
     string,
     { reason: CheckpointReason; message?: string; at: number }
@@ -198,12 +235,15 @@ export class CollabRuntime {
         {
           extensionName: 'classmoji-collab',
           afterLoadDocument: async payload => this.afterLoad(payload),
-          connected: async ({ connection, requestHeaders, context }) => {
+          connected: async ({ connection, requestHeaders, context, documentName }) => {
             this.rechecker.track(
               connection as Connection<CollabConnectionContext>,
               requestHeaders.get('cookie') ?? ''
             );
             this.auditConnection('COLLAB_JOIN', context);
+            // A client that reconnects still knows the agents' old states and
+            // ignores them sent again unchanged (same clock): send them anew.
+            this.republishAgents(documentName);
           },
           onChange: async payload => this.onChange(payload),
           onDisconnect: async payload => {
@@ -235,6 +275,7 @@ export class CollabRuntime {
 
   async destroy(): Promise<void> {
     this.rechecker.stop();
+    for (const presence of [...this.agents.values()]) this.dropAgent(presence, false);
     await this.server.destroy();
   }
 
@@ -652,7 +693,8 @@ export class CollabRuntime {
     let result: T;
     try {
       const document = connection.document!;
-      if (!options.external) this.showAgent(document, actor);
+      // Shown while the edit runs (what it touched before carries over).
+      if (!options.external) this.publishAgent(this.agentPresence(document, actor));
       const ctx: LiveEditContext = {
         ref: { kind, docId, classroomId: located.classroomId, epoch, room },
         actor,
@@ -661,14 +703,7 @@ export class CollabRuntime {
         transact: write => document.transact(() => write(document), { source: 'local', context }),
       };
       result = await fn(ctx, adapter);
-      const touched = (result as { touchedId?: unknown } | undefined)?.touchedId;
-      if (!options.external && typeof touched === 'string') {
-        this.showAgent(
-          document,
-          actor,
-          kind === 'deck' ? { slide: touched } : { blockId: touched }
-        );
-      }
+      if (!options.external) this.agentEdited(document, actor, kind, adapter, result);
     } finally {
       await connection.disconnect();
     }
@@ -679,45 +714,233 @@ export class CollabRuntime {
     return { result, version: row?.version ?? 0, epoch: row?.epoch ?? epoch };
   }
 
+  // ─── Agent presence ───────────────────────────────────────────────────────
+
   /**
-   * The agent as a peer in awareness for a few seconds: `<name> (agent)`.
-   * One awareness client per (doc, actor), so concurrent agents don't clear
-   * each other's presence.
+   * An agent session as a peer in the document's awareness: `<name> (agent)`
+   * (`(agent 1)`, `(agent 2)` while one person has several sessions there),
+   * in a colour of its own. It stays `agentPresenceMs` after its last op or
+   * cursor move and is sent again every `agentRenewMs`, so clients — which
+   * drop a state not renewed within 30 s — keep showing it, and a client that
+   * reconnects gets it back (see `connected`).
    */
-  private showAgent(
-    document: Document,
-    actor: CollabActor,
-    focus: { blockId?: string; slide?: string } = {}
-  ): void {
-    const key = `${document.name}\u0000${actor.userId}`;
+  private agentPresence(document: Document, actor: CollabActor): AgentPresence {
+    const session = normalizeAgentSession(actor.agentSession) ?? '-';
+    const key = `${document.name}\u0000${actor.userId}\u0000${session}`;
     let presence = this.agents.get(key);
     if (!presence) {
-      const doc = new Y.Doc();
-      presence = { doc, awareness: new Awareness(doc), timer: null };
+      const siblings = this.agentSiblings(document.name, actor.userId);
+      const ydoc = new Y.Doc();
+      presence = {
+        key,
+        docName: document.name,
+        userId: actor.userId,
+        session,
+        order: ++this.agentOrder,
+        ydoc,
+        awareness: new Awareness(ydoc),
+        name: actor.name,
+        label: agentDisplayName(actor.name, null),
+        color: agentColor(`${actor.userId}:${session}`, [
+          userColor(actor.userId),
+          ...siblings.map(sibling => sibling.color),
+        ]),
+        focus: {},
+        touched: null,
+        seq: 0,
+        cursor: null,
+        expireTimer: null,
+        touchTimer: null,
+        published: false,
+      };
       this.agents.set(key, presence);
+      this.relabelAgents(document.name, actor.userId);
+    } else if (actor.name && actor.name !== presence.name) {
+      presence.name = actor.name;
+      this.relabelAgents(document.name, actor.userId);
     }
-    const { doc, awareness } = presence;
-    awareness.setLocalState({
-      user: { name: `${actor.name} (agent)`, color: userColor(actor.userId), agent: true },
-      // What the agent last touched: page `blockId`, deck `slide`.
-      ...focus,
+    const kept = presence;
+    if (kept.expireTimer) clearTimeout(kept.expireTimer);
+    kept.expireTimer = setTimeout(() => this.dropAgent(kept), this.deps.config.agentPresenceMs);
+    kept.expireTimer.unref();
+    this.startAgentRenewal();
+    return kept;
+  }
+
+  /** After an edit: what it touched, its caret, then publish. */
+  private agentEdited(
+    document: Document,
+    actor: CollabActor,
+    kind: CollabKind,
+    adapter: CollabAdapter,
+    result: unknown
+  ): void {
+    const presence = this.agentPresence(document, actor);
+    const outcome = (result && typeof result === 'object' ? result : {}) as ApplyOpsResult;
+    if (typeof outcome.touchedId === 'string') {
+      presence.focus =
+        kind === 'deck' ? { slide: outcome.touchedId } : { blockId: outcome.touchedId };
+    }
+    const ids = Array.isArray(outcome.touchedIds)
+      ? outcome.touchedIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
+      : [];
+    if (ids.length > 0) {
+      presence.seq += 1;
+      presence.touched = { ids: ids.slice(-AGENT_TOUCHED_MAX), seq: presence.seq };
+      // Gone from the state once editors have shown it, so someone who opens
+      // the doc later is not shown an old batch as new.
+      if (presence.touchTimer) clearTimeout(presence.touchTimer);
+      presence.touchTimer = setTimeout(() => {
+        presence.touchTimer = null;
+        if (this.agents.get(presence.key) !== presence) return;
+        presence.touched = null;
+        this.publishAgent(presence);
+      }, this.deps.config.agentTouchMs);
+      presence.touchTimer.unref();
+    }
+    if (kind === 'page' && typeof outcome.cursorBlockId === 'string' && adapter.cursorAt) {
+      const cursor = adapter.cursorAt(
+        document,
+        { blockId: outcome.cursorBlockId },
+        null,
+        'subtree'
+      );
+      if (cursor) presence.cursor = cursor;
+    }
+    this.publishAgent(presence);
+  }
+
+  /**
+   * `POST /internal/:kind/:id/cursor`: move an agent's caret (page) or point
+   * it at a slide (deck) without changing content. Nobody has the doc open →
+   * `{ shown: false }`; an unknown block or slide → 404.
+   */
+  async agentCursor(
+    kind: CollabKind,
+    docId: string,
+    request: CursorRequest
+  ): Promise<CursorResponse> {
+    const adapter = await this.adapter(kind);
+    const document = this.loadedDocument(kind, docId);
+    if (!document || document.getConnections().length === 0) return { shown: false };
+    if (kind === 'page') {
+      const point = request.page;
+      if (!point || !adapter.cursorAt) {
+        throw new CollabHttpError(400, { error: 'invalid-cursor', message: 'page is required' });
+      }
+      const cursor = adapter.cursorAt(document, point, point.selectTo ?? null, 'own');
+      if (!cursor) throw new CollabHttpError(404, { error: 'not-found', what: 'block' });
+      const presence = this.agentPresence(document, request.actor);
+      presence.focus = { blockId: point.blockId };
+      presence.cursor = cursor;
+      this.publishAgent(presence);
+    } else {
+      const slide = request.slide;
+      if (!slide || !adapter.hasItem) {
+        throw new CollabHttpError(400, { error: 'invalid-cursor', message: 'slide is required' });
+      }
+      if (!adapter.hasItem(document, slide)) {
+        throw new CollabHttpError(404, { error: 'not-found', what: 'slide' });
+      }
+      const presence = this.agentPresence(document, request.actor);
+      presence.focus = { slide };
+      this.publishAgent(presence);
+    }
+    return { shown: true };
+  }
+
+  /** One person's agent sessions in a document, by first activity. */
+  private agentSiblings(docName: string, userId: string): AgentPresence[] {
+    return [...this.agents.values()]
+      .filter(presence => presence.docName === docName && presence.userId === userId)
+      .sort((a, b) => a.order - b.order);
+  }
+
+  /**
+   * Number one person's sessions in a document again; publish the ones
+   * renamed. A renamed session that was already shown comes back as a new
+   * awareness client: editors build a caret's name tag once per client and
+   * never rename it.
+   */
+  private relabelAgents(docName: string, userId: string): void {
+    const siblings = this.agentSiblings(docName, userId);
+    siblings.forEach((presence, i) => {
+      const label = agentDisplayName(presence.name, siblings.length > 1 ? i + 1 : null);
+      if (label === presence.label) return;
+      presence.label = label;
+      if (presence.published) this.rekeyAgent(presence);
+      this.publishAgent(presence);
+    });
+  }
+
+  /** A fresh clientID for a presence (the old one leaves awareness). */
+  private rekeyAgent(presence: AgentPresence): void {
+    const document = this.hocuspocus.documents.get(presence.docName);
+    if (document) removeAwarenessStates(document.awareness, [presence.ydoc.clientID], 'agent');
+    presence.awareness.destroy();
+    presence.ydoc.destroy();
+    presence.ydoc = new Y.Doc();
+    presence.awareness = new Awareness(presence.ydoc);
+    presence.published = false;
+    // Editors already show its last batch; as a new client it would read as new.
+    presence.touched = null;
+    if (presence.touchTimer) clearTimeout(presence.touchTimer);
+    presence.touchTimer = null;
+  }
+
+  /**
+   * Send the agent's state (always as a newer one) into its document's
+   * awareness, which broadcasts it. A document unloaded meanwhile is skipped;
+   * when it is loaded again the next renewal shows the agent there.
+   */
+  private publishAgent(presence: AgentPresence): void {
+    if (this.agents.get(presence.key) !== presence) return;
+    const document = this.hocuspocus.documents.get(presence.docName);
+    if (!document) return;
+    presence.awareness.setLocalState({
+      user: { name: presence.label, color: presence.color, agent: true },
+      ...presence.focus,
+      ...(presence.touched ? { touched: presence.touched } : {}),
+      ...(presence.cursor ? { cursor: presence.cursor } : {}),
     });
     applyAwarenessUpdate(
       document.awareness,
-      encodeAwarenessUpdate(awareness, [doc.clientID]),
+      encodeAwarenessUpdate(presence.awareness, [presence.ydoc.clientID]),
       'agent'
     );
+    presence.published = true;
+  }
 
-    if (presence.timer) clearTimeout(presence.timer);
-    presence.timer = setTimeout(() => {
-      this.agents.delete(key);
-      if (this.hocuspocus.documents.get(document.name) === document) {
-        removeAwarenessStates(document.awareness, [doc.clientID], 'agent');
-      }
-      awareness.destroy();
-      doc.destroy();
-    }, AGENT_PRESENCE_MS);
-    presence.timer.unref();
+  /** Every agent present in this document, sent again. */
+  private republishAgents(docName: string): void {
+    for (const presence of this.agents.values()) {
+      if (presence.docName === docName) this.publishAgent(presence);
+    }
+  }
+
+  private startAgentRenewal(): void {
+    if (this.agentRenewTimer) return;
+    this.agentRenewTimer = setInterval(() => {
+      for (const presence of [...this.agents.values()]) this.publishAgent(presence);
+    }, this.deps.config.agentRenewMs);
+    this.agentRenewTimer.unref();
+  }
+
+  /** The session's time is up (or the server stops): out of awareness. */
+  private dropAgent(presence: AgentPresence, relabel = true): void {
+    if (this.agents.get(presence.key) !== presence) return;
+    this.agents.delete(presence.key);
+    if (presence.expireTimer) clearTimeout(presence.expireTimer);
+    if (presence.touchTimer) clearTimeout(presence.touchTimer);
+    const document = this.hocuspocus.documents.get(presence.docName);
+    if (document) removeAwarenessStates(document.awareness, [presence.ydoc.clientID], 'agent');
+    presence.awareness.destroy();
+    presence.ydoc.destroy();
+    if (relabel) this.relabelAgents(presence.docName, presence.userId);
+    if (this.agents.size === 0 && this.agentRenewTimer) {
+      clearInterval(this.agentRenewTimer);
+      this.agentRenewTimer = null;
+    }
   }
 }
 
