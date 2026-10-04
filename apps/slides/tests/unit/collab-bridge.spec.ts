@@ -687,6 +687,27 @@ test.describe('live deck bridge', () => {
     t.bridge.destroy();
   });
 
+  test('my own lock from a tab that is gone: not shown, picked up by editing the slide', async () => {
+    const t = setup();
+    // A lock of this same user, from an old client that is not connected.
+    acquireLock(
+      t.remote,
+      'aaaa0003',
+      { userId: 'user-me', name: 'Ada Lovelace', color: '#0090ff', clientId: 4242 },
+      { now: Date.now() }
+    );
+    await tick();
+    expect(t.states.at(-1)?.locks['aaaa0003']).toBeUndefined();
+    expect(t.section('aaaa0003').getAttribute('contenteditable')).toBe('true');
+    t.section('aaaa0003').innerHTML = '<h2>Three, mine again</h2>';
+    t.bridge.flushLocal();
+    t.session.ack(); // the takeover reaches the server and is stamped
+    t.session.ack(); // the html, once confirmed
+    expect(getLock(t.remote, 'aaaa0003')?.clientId).toBe(t.session.doc.clientID);
+    expect(t.remoteHtml('aaaa0003')).toBe('<h2>Three, mine again</h2>');
+    t.bridge.destroy();
+  });
+
   test('Done: flushes and releases the lock', () => {
     const t = setup();
     t.section('aaaa0002').innerHTML = '<h2>bye</h2>';

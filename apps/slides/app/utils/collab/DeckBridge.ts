@@ -461,7 +461,14 @@ export class DeckBridge {
       this.doc,
       slideId,
       this.holder(),
-      { ...this.lockContext(slideId), takeover: true },
+      {
+        ...this.lockContext(slideId),
+        takeover: true,
+        // Your own lock from a gone tab: no waiting.
+        ...(this.isOwnGoneLock(getLock(this.doc, slideId))
+          ? { idleMs: Number.POSITIVE_INFINITY }
+          : {}),
+      },
       BRIDGE_ORIGIN
     );
     if (!result.ok) return false;
@@ -676,6 +683,7 @@ export class DeckBridge {
       }
 
       if (ser.html === undefined || ser.html === base.domHtml) continue;
+      if (this.isOwnGoneLock(getLock(this.doc, id))) this.takeOver(id);
       switch (
         decideLocalEdit(this.lockStateOf(id), this.held?.slideId === id && this.held.confirmed)
       ) {
@@ -1102,10 +1110,29 @@ export class DeckBridge {
   }
 
   private lockStateOf(slideId: string): LockState {
-    return lockState(getLock(this.doc, slideId), this.doc.clientID, this.lockContext(slideId));
+    const lock = getLock(this.doc, slideId);
+    if (this.isOwnGoneLock(lock)) return 'stale';
+    return lockState(lock, this.doc.clientID, this.lockContext(slideId));
+  }
+
+  /**
+   * A lock this same person left in a tab that is gone (a reload, a crash):
+   * theirs to pick up at once — no grace period against themselves.
+   */
+  private isOwnGoneLock(lock: SlideLock | null): boolean {
+    return (
+      !!lock &&
+      lock.clientId !== this.doc.clientID &&
+      lock.userId === this.session.user.id &&
+      this.session.ready &&
+      !this.session.connectedClients().has(lock.clientId)
+    );
   }
 
   private lockedByOther(slideId: string): boolean {
+    // Your own lock from a tab that is gone stays editable: focusing the
+    // slide picks it up.
+    if (this.isOwnGoneLock(getLock(this.doc, slideId))) return false;
     const state = this.lockStateOf(slideId);
     return state === 'held' || state === 'stale';
   }
@@ -1243,6 +1270,9 @@ export class DeckBridge {
       // Write the slide being left before its lock goes.
       if (this.held) this.flushLocal();
       this.claim(id);
+    } else if (this.isOwnGoneLock(getLock(this.doc, id))) {
+      if (this.held) this.flushLocal();
+      this.takeOver(id);
     }
   }
 
@@ -1332,6 +1362,8 @@ export class DeckBridge {
     if (this.destroyed) return;
     const locks: Record<string, SlideLockView> = {};
     for (const [slideId, lock] of allLocks(this.doc)) {
+      // Your own lock from a gone tab is not shown: focusing the slide picks it up.
+      if (this.isOwnGoneLock(lock)) continue;
       const state = lockState(lock, this.doc.clientID, this.lockContext(slideId));
       locks[slideId] = lockView(slideId, lock, state);
     }
