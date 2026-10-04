@@ -3,6 +3,7 @@ import { createAppAuth } from '@octokit/auth-app';
 import { createHmac, timingSafeEqual } from 'crypto';
 import jwt from 'jsonwebtoken';
 import { GitProvider, type RepoPagesInfo } from './GitProvider.ts';
+import { watchRateLimits } from './rateLimitWatch.ts';
 import type {
   CommitRecord,
   ContributorRecord,
@@ -226,6 +227,9 @@ export class GitHubProvider extends GitProvider {
       });
 
       const octokit = await app.getInstallationOctokit(Number(this.installationId));
+      // Visibility only: warns when the installation's quota runs low and logs
+      // every secondary-limit refusal. Never changes a request.
+      watchRateLimits(octokit, `installation ${this.installationId}`);
 
       GitHubProvider.#installationCache.set(cacheKey, {
         octokit,
@@ -577,6 +581,23 @@ export class GitHubProvider extends GitProvider {
       repo: name,
     });
     return { id: String(data.id), name: data.name, url: data.html_url, node_id: data.node_id };
+  }
+
+  /**
+   * The repository's size as GitHub reports it (KB), or null when it cannot be
+   * read. Reporting only — never throws.
+   */
+  async getRepositorySizeKb(org: string, name: string): Promise<number | null> {
+    try {
+      const octokit = await this.#getOctokit();
+      const { data } = await octokit.request('GET /repos/{owner}/{repo}', {
+        owner: org,
+        repo: name,
+      });
+      return typeof data.size === 'number' ? data.size : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
