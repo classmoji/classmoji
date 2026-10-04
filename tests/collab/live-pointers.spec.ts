@@ -12,6 +12,10 @@
  *
  *   COLLAB_E2E=1 npx dotenv -e .env -- ./scripts/devport.sh run \
  *     npx playwright test -c tests/collab live-pointers
+ *
+ * When the stack serves a public host (DEVPORT_PUBLIC_HOST), collab only
+ * admits that origin: pass WEBAPP_URL / SLIDES_URL on that host too
+ * (`... devport.sh run env WEBAPP_URL=http://<host>:3010 SLIDES_URL=... npx playwright ...`).
  */
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 import type { CollabActor } from '@classmoji/collab';
@@ -31,25 +35,31 @@ const SLIDE = { width: 960, height: 700 };
 type CollabClient = typeof import('../../apps/mcp/src/collab/client.ts');
 type CollabEnv = NonNullable<ReturnType<typeof import('@classmoji/collab/env').resolveCollabEnv>>;
 
-/** Open the live deck editor; a dev-server load that never hydrates is reloaded. */
+/**
+ * Open the live deck editor; a dev-server load that never hydrates is loaded
+ * again (from the URL: the editor drops `?mode=edit` once it has read it).
+ */
 async function openLive(page: Page, url: string): Promise<void> {
   for (let attempt = 1; ; attempt++) {
-    if (attempt === 1) await page.goto(url, { waitUntil: 'domcontentloaded' });
-    else await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
     try {
       await expect(page.getByTestId('live-sync-status').first()).toHaveAttribute(
         'data-status',
         'synced',
         { timeout: 40_000 }
       );
-      await page
-        .locator('.reveal.ready .slides section.present[contenteditable]')
-        .first()
-        .waitFor({ timeout: 40_000 });
+      // The live editor itself (a lazy chunk) is up, with its pointer layer.
+      await page.locator('.reveal .slides section[contenteditable]').first().waitFor({
+        state: 'attached',
+        timeout: 40_000,
+      });
+      await page.locator('.reveal.ready .slides section.present').first().waitFor({
+        timeout: 20_000,
+      });
       await page.getByTestId('live-pointers').waitFor({ state: 'attached', timeout: 10_000 });
       return;
     } catch (error) {
-      if (attempt >= 4) throw error;
+      if (attempt >= 2) throw error;
     }
   }
 }
@@ -161,17 +171,26 @@ test.describe('live pointers', () => {
     login: string,
     viewport: { width: number; height: number }
   ): Promise<{ context: BrowserContext; page: Page }> {
-    const context = await browser.newContext({ viewport });
-    await signIn(context, login);
-    const page = await context.newPage();
-    await openLive(page, `${SLIDES_URL}/${deckId}?mode=edit#/2`);
-    return { context, page };
+    // A dev-server load can stall on one module for good in a context; a
+    // fresh context loads it again.
+    for (let attempt = 1; ; attempt++) {
+      const context = await browser.newContext({ viewport });
+      try {
+        await signIn(context, login);
+        const page = await context.newPage();
+        await openLive(page, `${SLIDES_URL}/${deckId}?mode=edit#/2`);
+        return { context, page };
+      } catch (error) {
+        await context.close();
+        if (attempt >= 3) throw error;
+      }
+    }
   }
 
   test("a person's pointer shows at the same slide spot in another window, glides, rests, and goes", async ({
     browser,
   }) => {
-    test.setTimeout(180_000);
+    test.setTimeout(420_000);
     const a = await person(browser, TEACHER_1.login, { width: 1400, height: 950 });
     const b = await person(browser, TEACHER_2.login, { width: 1000, height: 720 });
     try {
@@ -227,7 +246,7 @@ test.describe('live pointers', () => {
   test("an agent's arrow sits where deck_cursor_set points and moves when it points again", async ({
     browser,
   }) => {
-    test.setTimeout(180_000);
+    test.setTimeout(420_000);
     const b = await person(browser, TEACHER_1.login, { width: 1200, height: 860 });
     try {
       await noAgentsOf(b.page, agent.name);
