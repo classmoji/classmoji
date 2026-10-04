@@ -10,11 +10,9 @@ export default [
   {
     rules: {
       'no-console': 'off',
-    },
-  },
-  {
-    files: ['vitest.config.ts'],
-    rules: {
+      // The import resolver can't follow package-exports subpaths
+      // (@classmoji/page-schema/server, @classmoji/auth/*) — same
+      // accommodation as apps/mcp; tsc typechecks the real paths.
       'import/no-unresolved': 'off',
     },
   },

@@ -16,12 +16,7 @@
  * - Refuse with `CollabHttpError` (status + JSON body); anything else is a 500.
  */
 import type * as Y from 'yjs';
-import type {
-  CollabActor,
-  CollabKind,
-  PageCoverImage,
-  SnapshotContent,
-} from '@classmoji/collab';
+import type { CollabActor, CollabKind, PageCoverImage, SnapshotContent } from '@classmoji/collab';
 
 import type { CollabDocRow } from '../store/types.ts';
 

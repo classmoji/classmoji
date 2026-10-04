@@ -1,30 +1,27 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { Server } from '@hocuspocus/server';
 
-import { collabPort, createCollabServer, DEFAULT_COLLAB_PORT } from '../src/server.ts';
+import { collabPort, DEFAULT_COLLAB_PORT } from '../src/server.ts';
+import { startServer, type TestServer } from './helpers.ts';
 
 describe('collab server HTTP', () => {
-  let server: Server;
-  let base: string;
+  let server: TestServer;
 
   beforeAll(async () => {
-    server = createCollabServer({ port: 0, stopOnSignals: false, quiet: true });
-    await server.listen();
-    base = `http://127.0.0.1:${server.address.port}`;
+    server = await startServer();
   });
 
   afterAll(async () => {
-    await server.destroy();
+    await server.close();
   });
 
   it('answers GET /health with 200', async () => {
-    const res = await fetch(`${base}/health`);
+    const res = await fetch(`${server.httpUrl}/health`);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ status: 'ok' });
   });
 
   it('answers anything else with 404, not the Hocuspocus banner', async () => {
-    const res = await fetch(`${base}/`);
+    const res = await fetch(`${server.httpUrl}/`);
     expect(res.status).toBe(404);
   });
 });
