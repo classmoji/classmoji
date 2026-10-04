@@ -2,6 +2,7 @@ import { defineConfig } from 'astro/config';
 import { fileURLToPath } from 'url';
 import tailwindcss from '@tailwindcss/vite';
 import mdx from '@astrojs/mdx';
+import react from '@astrojs/react';
 import starlight from '@astrojs/starlight';
 import starlightThemeBlack from 'starlight-theme-black';
 
@@ -111,6 +112,8 @@ export default defineConfig({
       ],
     }),
     mdx(),
+    // React islands: the animated "How it works" demos on the home page.
+    react(),
   ],
   server: {
     // Round and easy to remember, and clear of every other app: the webapp is

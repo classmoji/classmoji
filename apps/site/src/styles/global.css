@@ -1,5 +1,9 @@
 @import 'tailwindcss';
 
+/* The site is light-only: `dark:` styles apply under a `.dark` class, which
+   nothing sets, instead of following the OS setting. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --color-primary: #1f883d;
   --color-primary-dark: #1a7f37;
@@ -8,6 +12,130 @@
     'Mona Sans Variable', 'Mona Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica,
     Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+/* Classmoji app tokens for the "How it works" section (src/components/how-it-works),
+   the same values as the webapp's design system. */
+@theme {
+  --color-page: #fafaf9;
+  --color-page-dark: #0a0d17;
+  --color-app: #fafaf9;
+  --color-app-dark: #0a0d17;
+  --color-panel: #ffffff;
+  --color-panel-dark: #171a25;
+  --color-panel-hover: #f7f9fd;
+  --color-panel-hover-dark: #1e2232;
+  --color-line: #dfe4ee;
+  --color-line-dark: #262a38;
+  --color-line-2: #c9d0de;
+  --color-line-2-dark: #323648;
+  --color-line-strong: #a7afbf;
+  --color-line-strong-dark: #474c62;
+  --color-edge: #e7e5e4;
+  --color-edge-dark: #262626;
+  --color-ink-0: #14151a;
+  --color-ink-1: #2b2d35;
+  --color-ink-2: #5b5f69;
+  --color-ink-3: #6d707b;
+  --color-ink-4: #8a8d97;
+  --color-inkd-0: #f1f2f6;
+  --color-inkd-1: #d9dbe3;
+  --color-inkd-2: #a4a9b8;
+  --color-inkd-3: #9398a6;
+  --color-inkd-4: #767c8c;
+  --color-accent: #21883d;
+  --color-accent-hover: #1b7334;
+  --color-accent-soft: #e6f4ea;
+  --color-accent-soft-dark: #23204a;
+  --color-accent-ink: #14532d;
+  --color-accent-ink-dark: #b7b0ff;
+  --color-navhover: rgba(20, 21, 26, 0.08);
+  --color-navhover-dark: rgba(241, 242, 246, 0.08);
+  --color-bar: #e4e8f1;
+  --color-bar-dark: #262a38;
+  --color-mint-bg: #e3f3e8;
+  --color-mint-line: #c1dfcb;
+  --color-mint-ink: #1a6b3e;
+  --color-mint-bg-dark: #13291b;
+  --color-mint-line-dark: #1f4a2e;
+  --color-mint-ink-dark: #7fd497;
+  --color-peach-bg: #fdecea;
+  --color-peach-line: #f7cfca;
+  --color-peach-ink: #8a2a16;
+  --color-peach-bg-dark: #3a1e1a;
+  --color-peach-line-dark: #5c2e27;
+  --color-peach-ink-dark: #f5b29d;
+  --color-sky-bg: #e6effb;
+  --color-sky-line: #c9d9ee;
+  --color-sky-ink: #1d4f8f;
+  --color-sky-bg-dark: #172741;
+  --color-sky-line-dark: #24406a;
+  --color-sky-ink-dark: #a9c8f5;
+  --color-lilac-bg: #ece9ff;
+  --color-lilac-line: #d6d0fa;
+  --color-lilac-ink: #4a3fbb;
+  --color-lilac-bg-dark: #23204a;
+  --color-lilac-line-dark: #3a3570;
+  --color-lilac-ink-dark: #c9c2ff;
+  --color-amber-bg: #fbf1dc;
+  --color-amber-line: #ead8b1;
+  --color-amber-ink: #8a5a12;
+  --color-amber-bg-dark: #33270f;
+  --color-amber-line-dark: #5a4718;
+  --color-amber-ink-dark: #f1cf75;
+  --color-rose-bg: #fde5ea;
+  --color-rose-line: #f5c5d0;
+  --color-rose-ink: #9a1f3a;
+  --color-rose-bg-dark: #3b1822;
+  --color-rose-line-dark: #612a39;
+  --color-rose-ink-dark: #f7a8ba;
+  --color-claude: #d97757;
+  --color-quiz: #ffd60a;
+  --color-quiz-hover: #f2c900;
+  --color-quiz-ring: #f6d46b;
+  --color-quiz-soft: #fff8db;
+  --color-question: #1f5fd6;
+  --color-question-line: #c7d8f5;
+  --color-question-dark: #8db4ff;
+  --color-question-line-dark: #2a3f66;
+  --color-term: #0f1117;
+
+  --shadow-card: 0 1px 2px rgba(20, 10, 40, 0.04);
+  --shadow-float: 0 10px 30px rgba(20, 25, 50, 0.12), 0 2px 6px rgba(20, 25, 50, 0.06);
+}
+
+/* "How it works" demo animations: the terminal caret and the typing dots. */
+@keyframes demo-caret-blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}
+.demo-caret {
+  animation: demo-caret-blink 1s linear infinite;
+}
+@keyframes demo-typing-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+.demo-typing-dot {
+  animation: demo-typing-dot 1.2s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .demo-caret,
+  .demo-typing-dot {
+    animation: none;
+  }
 }
 
 html {
