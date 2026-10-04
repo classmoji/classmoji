@@ -15,7 +15,7 @@ import {
   RUNTIME_SECTION_CLASSES,
   splitStyleDeclarations,
 } from '@classmoji/services/slides/runtime-attrs';
-import type { DeckStructure } from '@classmoji/collab';
+import { isRenderableAttr, type DeckStructure } from '@classmoji/collab';
 
 import { cleanSectionAttrs } from '../deckOpsDiff.ts';
 import { cleanupEditorContainer, undoRevealLazyLoad } from '../editorCleanup.ts';
@@ -159,6 +159,10 @@ export function applySectionAttrs(
   for (const [name, value] of Object.entries(attrs)) {
     const lower = name.toLowerCase();
     if (lower === 'class' || lower === 'style') continue;
+    if (!isRenderableAttr(name, value)) {
+      if (el.hasAttribute(name)) el.removeAttribute(name);
+      continue;
+    }
     if (el.getAttribute(name) !== value) el.setAttribute(name, value);
   }
 
@@ -196,6 +200,30 @@ export function applySectionAttrs(
   }
 }
 
+/**
+ * Drop event-handler attributes and `javascript:` URLs from every element
+ * under (and including) `root` — at display time only; nothing stored changes.
+ * Iframe sandboxing is left as authored.
+ */
+export function stripUnsafeMarkup(root: Element | DocumentFragment): void {
+  const elements: Element[] = [];
+  if ((root as Element).attributes) elements.push(root as Element);
+  elements.push(...Array.from(root.querySelectorAll('*')));
+  for (const el of elements) {
+    for (const attr of Array.from(el.attributes)) {
+      if (!isRenderableAttr(attr.name, attr.value)) el.removeAttribute(attr.name);
+    }
+  }
+}
+
+/** `html` with unsafe markup stripped (for innerHTML). */
+export function safeInnerHtml(doc: Document, html: string): DocumentFragment {
+  const template = doc.createElement('template');
+  template.innerHTML = html;
+  stripUnsafeMarkup(template.content);
+  return template.content;
+}
+
 /** Editor chrome on a section the bridge created or re-rendered. */
 export function prepareEditorSection(el: HTMLElement, editable: boolean): void {
   const targets = [el, ...sectionChildren(el)];
@@ -212,6 +240,7 @@ export function prepareEditorSection(el: HTMLElement, editable: boolean): void {
 export function sectionFromMarkup(doc: Document, markup: string): HTMLElement {
   const template = doc.createElement('template');
   template.innerHTML = markup.trim();
+  stripUnsafeMarkup(template.content);
   const el = template.content.firstElementChild;
   if (!el || !isSection(el)) throw new Error('slide markup is not a <section>');
   return el as HTMLElement;

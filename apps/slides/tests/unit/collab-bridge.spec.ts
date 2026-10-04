@@ -564,6 +564,28 @@ test.describe('live deck bridge', () => {
     t.bridge.destroy();
   });
 
+  test('display drops event handlers and script URLs; the stored html is untouched', async () => {
+    const t = setup();
+    const stored =
+      '<p onclick="x()">hi</p><a href=" JavaScript:alert(1)">l</a><img src="/a.png" onerror="y()">';
+    (deckSlides(t.remote).get('aaaa0001') as Y.Map<unknown>).set('html', stored);
+    const attrs = (deckSlides(t.remote).get('aaaa0001') as Y.Map<unknown>).get(
+      'attrs'
+    ) as Y.Map<string>;
+    attrs.set('onmouseover', 'z()');
+    attrs.set('data-background-iframe', 'javascript:alert(2)');
+    await tick();
+    const el = t.section('aaaa0001');
+    expect(el.innerHTML).not.toMatch(/onclick|onerror|javascript/i);
+    expect(el.querySelector('img')?.getAttribute('src')).toBe('/a.png');
+    expect(el.hasAttribute('onmouseover')).toBe(false);
+    expect(el.hasAttribute('data-background-iframe')).toBe(false);
+    t.bridge.flushLocal();
+    expect(t.session.pending).toBe(0);
+    expect(t.remoteHtml('aaaa0001')).toBe(stored);
+    t.bridge.destroy();
+  });
+
   test('Done: flushes and releases the lock', () => {
     const t = setup();
     t.section('aaaa0002').innerHTML = '<h2>bye</h2>';

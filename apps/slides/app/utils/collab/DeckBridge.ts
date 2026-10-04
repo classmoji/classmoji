@@ -69,6 +69,7 @@ import {
   applySectionAttrs,
   arrangeChildren,
   prepareEditorSection,
+  safeInnerHtml,
   scanDeckDom,
   sectionChildren,
   sectionFromMarkup,
@@ -286,7 +287,15 @@ export class DeckBridge {
         });
       }
     }
-    return this.documentShell(deck.theme, deck.codeTheme, sections);
+    return this.documentShell(deck.theme, deck.codeTheme, this.safeMarkup(sections));
+  }
+
+  /** Section markup with unsafe attributes stripped (display only). */
+  private safeMarkup(sections: string): string {
+    if (typeof document === 'undefined') return sections;
+    const holder = document.createElement('div');
+    holder.appendChild(safeInnerHtml(document, sections));
+    return holder.innerHTML;
   }
 
   /** The live deck as a static document (view mode after editing). */
@@ -295,7 +304,7 @@ export class DeckBridge {
     const sections = this.displaySlides(deck.slides)
       .map(slide => renderSlideSection(slide, { mapHtml: html => this.mapMedia(html) }))
       .join('\n');
-    return this.documentShell(deck.theme, deck.codeTheme, sections);
+    return this.documentShell(deck.theme, deck.codeTheme, this.safeMarkup(sections));
   }
 
   /** Slides as displayed: `media://` refs in section attributes made playable. */
@@ -898,7 +907,7 @@ export class DeckBridge {
   private renderHtml(id: string, el: HTMLElement, yHtml: string | undefined): void {
     this.revision++;
     this.mutateDom(() => {
-      el.innerHTML = this.mapMedia(yHtml ?? '');
+      el.replaceChildren(safeInnerHtml(el.ownerDocument, this.mapMedia(yHtml ?? '')));
       prepareEditorSection(el, !this.lockedByOther(id));
     });
     const base = this.baseline.get(id);

@@ -8,6 +8,22 @@ import type { DeckJson, DeckSlide } from '@classmoji/services/slides';
 
 const ATTR_NAME_RE = /^[a-zA-Z][\w:-]*$/;
 const EVENT_ATTR_RE = /^on/i;
+// eslint-disable-next-line no-control-regex -- browsers ignore these inside a URL scheme
+const URL_NOISE_RE = /[\u0000-\u0020\u007f]/g;
+
+/** A `javascript:` URL, however it is spaced or cased. */
+export function isScriptUrl(value: string): boolean {
+  return value.replace(URL_NOISE_RE, '').toLowerCase().startsWith('javascript:');
+}
+
+/**
+ * Whether an attribute may be put on an element the editor renders: a valid
+ * name, no event handler, no `javascript:` value. Display-time only — what is
+ * stored is never rewritten by this.
+ */
+export function isRenderableAttr(name: string, value: string): boolean {
+  return ATTR_NAME_RE.test(name) && !EVENT_ATTR_RE.test(name) && !isScriptUrl(value);
+}
 
 export function escapeAttrValue(value: string): string {
   return value

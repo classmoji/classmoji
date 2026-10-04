@@ -223,3 +223,15 @@ describe('planScopeOrder', () => {
     expect([...seq].sort()).toEqual(seq);
   });
 });
+
+describe('isRenderableAttr', () => {
+  it('refuses handlers, bad names and javascript: URLs, however written', async () => {
+    const { isRenderableAttr } = await import('../render.ts');
+    expect(isRenderableAttr('href', '/x')).toBe(true);
+    expect(isRenderableAttr('onclick', 'x()')).toBe(false);
+    expect(isRenderableAttr('OnLoad', 'x()')).toBe(false);
+    expect(isRenderableAttr('1bad', 'x')).toBe(false);
+    expect(isRenderableAttr('href', ' JaVa\tScript:alert(1)')).toBe(false);
+    expect(isRenderableAttr('data-background-iframe', 'javascript:x')).toBe(false);
+  });
+});
