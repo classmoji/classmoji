@@ -50,6 +50,11 @@ describe('reserved registries', () => {
     expect(isReservedSubdomain('cs52')).toBe(false);
   });
 
+  it('refuses the webhook and live-collaboration hosts', () => {
+    expect(isReservedSubdomain('hooks')).toBe(true);
+    expect(isReservedSubdomain('collab')).toBe(true);
+  });
+
   it('refuses the platform-owned first path segments', () => {
     expect(isReservedPageSlug('schedule')).toBe(true);
     expect(isReservedPageSlug('sign-in')).toBe(true);
