@@ -22,6 +22,7 @@ import {
 } from '@classmoji/services/slides';
 import {
   type CheckpointRequest,
+  type CloseRequest,
   type CollabActor,
   type CollabLoaderData,
   type OpsRequest,
@@ -107,6 +108,15 @@ export function applyLiveDeckOps(
 ) {
   const body: OpsRequest<DeckOp> = { ops, actor };
   return collabInternalRequest<OpsResponse>(env, 'POST', deckInternalPath(slideId, 'ops'), body);
+}
+
+/**
+ * Close the live deck before it is deleted: the collab server flushes it and
+ * disconnects every editor (they reload onto a deck that no longer exists).
+ */
+export function closeLiveDeck(env: CollabEnv, slideId: string) {
+  const body: CloseRequest = { reason: 'deleted' };
+  return collabInternalRequest<unknown>(env, 'POST', deckInternalPath(slideId, 'close'), body);
 }
 
 export function requestDeckCheckpoint(env: CollabEnv, slideId: string, actor: CollabActor) {

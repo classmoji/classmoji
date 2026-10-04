@@ -9,6 +9,7 @@
 import { useState } from 'react';
 import { useLoaderData, useNavigation, Form, redirect, useActionData } from 'react-router';
 import { assertSlideAccess } from '@classmoji/auth/server';
+import { closeLiveDeck, liveEditingEnv } from '~/utils/collab/collab.server';
 import { isMediaBackedFileSlide, slideService } from '@classmoji/services/slides';
 import { useUser } from '~/root';
 import { webappClassUrl } from '~/utils/webappLinks';
@@ -120,6 +121,18 @@ export const action = async ({
   // Verify the slide belongs to this classroom
   if ((slide as { classroom?: { slug?: string } }).classroom?.slug !== classroomSlug) {
     return { error: 'Slide does not belong to this classroom' };
+  }
+
+  // A deck edited live is closed on the collab server first, so nobody keeps
+  // typing into a deck that is about to disappear. Best effort: the delete
+  // goes ahead even if the collab server cannot be reached.
+  const liveEnv = liveEditingEnv((slide as { classroom?: unknown }).classroom);
+  if (liveEnv) {
+    try {
+      await closeLiveDeck(liveEnv, slideId);
+    } catch (error: unknown) {
+      console.warn('[slides] Could not close the live deck before deleting it:', error);
+    }
   }
 
   // Delete the slide.
