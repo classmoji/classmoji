@@ -69,6 +69,8 @@ export interface CollabSessionState {
   lastCheckpoint: (LiveCheckpoint & { seq: number }) | null;
   /** The deck's title when it changed while open. */
   liveTitle: string | null;
+  /** Bumped per "a preview changed" message (the route refreshes its loader). */
+  previewSeq: number;
 }
 
 export const INITIAL_SESSION_STATE: CollabSessionState = {
@@ -81,6 +83,7 @@ export const INITIAL_SESSION_STATE: CollabSessionState = {
   peers: [],
   lastCheckpoint: null,
   liveTitle: null,
+  previewSeq: 0,
 };
 
 const asStatus = (value: unknown): ProviderStatus =>
@@ -236,6 +239,8 @@ export class DeckCollabSession {
     if (message.type === 'checkpoint') {
       const { type: _type, ...checkpoint } = message;
       this.update({ lastCheckpoint: { ...checkpoint, seq: ++this.seq } });
+    } else if (message.type === 'preview-changed') {
+      this.update({ previewSeq: this.state.previewSeq + 1 });
     } else if (message.title) {
       this.update({ liveTitle: message.title });
     }

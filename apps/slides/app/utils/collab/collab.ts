@@ -191,7 +191,8 @@ export interface LiveCheckpoint {
 /** Stateless messages the collab server broadcasts to a deck's room. */
 export type LiveStatelessMessage =
   | ({ type: 'checkpoint' } & LiveCheckpoint)
-  | { type: 'deck-meta'; title?: string };
+  | { type: 'deck-meta'; title?: string }
+  | { type: 'preview-changed' };
 
 /** A stateless payload as one of ours, or null for anything else. */
 export function parseStatelessMessage(payload: unknown): LiveStatelessMessage | null {
@@ -214,6 +215,7 @@ export function parseStatelessMessage(payload: unknown): LiveStatelessMessage | 
       ...(typeof message.error === 'string' && message.error ? { error: message.error } : {}),
     };
   }
+  if (message.type === 'preview-changed') return { type: 'preview-changed' };
   if (message.type === 'deck-meta') {
     if (typeof message.title !== 'string' || !message.title) return null;
     return { type: 'deck-meta', title: message.title };

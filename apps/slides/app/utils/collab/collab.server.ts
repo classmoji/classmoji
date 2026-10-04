@@ -133,6 +133,24 @@ export function applyLiveDeckOps(
 }
 
 /**
+ * Tell the room a preview of the deck appeared, changed or went away, so open
+ * editors refresh their preview banner. Best effort: never fails the caller.
+ */
+export async function notifyPreviewChanged(env: CollabEnv, slideId: string): Promise<void> {
+  try {
+    await collabInternalRequest<unknown>(
+      env,
+      'POST',
+      deckInternalPath(slideId, 'preview-changed'),
+      {},
+      { timeoutMs: 3000 }
+    );
+  } catch (error) {
+    console.warn('[slides] Could not tell the live deck about a preview change:', error);
+  }
+}
+
+/**
  * Close the live deck before it is deleted: the collab server flushes it and
  * disconnects every editor (they reload onto a deck that no longer exists).
  */
@@ -261,6 +279,7 @@ export async function acceptDeckPreviewLive({
     throw error;
   }
   await discardDeckPreview(slide as never);
+  await notifyPreviewChanged(env, slide.id);
   return { ok: true };
 }
 

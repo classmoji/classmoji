@@ -1,6 +1,13 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { gitWeb } from '@classmoji/utils';
-import { useBlocker, useLoaderData, useFetcher, data, redirect } from 'react-router';
+import {
+  useBlocker,
+  useLoaderData,
+  useFetcher,
+  useRevalidator,
+  data,
+  redirect,
+} from 'react-router';
 import { Tooltip, Popconfirm } from 'antd';
 import getPrisma from '@classmoji/database';
 import { ContentService } from '@classmoji/content';
@@ -83,6 +90,7 @@ import {
   acceptDeckPreviewLive,
   deckCollabData,
   liveEditingEnv,
+  notifyPreviewChanged,
   previewChangedSlides,
   readDeckCheckpoint,
   readEditorName,
@@ -1759,6 +1767,7 @@ export const action = async ({
   if (intent === 'preview-discard') {
     try {
       await discardDeckPreview(slide);
+      if (liveEnv) await notifyPreviewChanged(liveEnv, slideId);
       return redirect(`/${slideId}?notice=preview-discarded`);
     } catch (error: unknown) {
       console.error('Failed to discard preview:', error);
@@ -2988,6 +2997,15 @@ export default function SlideViewer() {
     setWantsLiveEdit(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per refusal
   }, [collabState.rejected, collab]);
+
+  // A preview appeared, changed or went away (an agent, or another editor):
+  // refresh the loader so the pending-preview banner is current. No polling.
+  const revalidator = useRevalidator();
+  useEffect(() => {
+    if (collabState.previewSeq > 0) revalidator.revalidate();
+    // Once per message.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collabState.previewSeq]);
 
   // The deck was closed under us (live editing switched off, deck deleted).
   useEffect(() => {

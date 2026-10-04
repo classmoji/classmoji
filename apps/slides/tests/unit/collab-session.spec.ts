@@ -143,6 +143,9 @@ test.describe('refusals and closes', () => {
     t.args().onStateless({ payload: JSON.stringify({ type: 'deck-meta', title: 'Renamed' }) });
     expect(t.session.getState().liveTitle).toBe('Renamed');
     t.args().onStateless({ payload: 'not json' });
+    t.args().onStateless({ payload: JSON.stringify({ type: 'preview-changed' }) });
+    t.args().onStateless({ payload: JSON.stringify({ type: 'preview-changed' }) });
+    expect(t.session.getState().previewSeq).toBe(2);
     expect(parseStatelessMessage({ type: 'other' })).toBeNull();
 
     const now = Date.parse('2026-10-04T03:02:00Z');
