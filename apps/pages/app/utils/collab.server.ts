@@ -11,11 +11,13 @@
 
 import type {
   CheckpointRequest,
+  CloseRequest,
   CollabActor,
   CollabLoaderData,
   PageSnapshotContent,
   SnapshotResponse,
 } from '@classmoji/collab';
+import { resolveCollabEnv } from '@classmoji/collab/env';
 import { prisma } from '~/utils/db.server.ts';
 import {
   buildCollabLoaderData,
@@ -128,4 +130,60 @@ export function mergePreviewLive(
 export function requestCheckpoint(env: CollabEnv, pageId: string, actor: CollabActor) {
   const body: CheckpointRequest = { actor };
   return collabInternalRequest<unknown>(env, 'POST', pageInternalPath(pageId, 'checkpoint'), body);
+}
+
+// ─── Page delete ─────────────────────────────────────────────────────────────
+
+/** Whether a page's live room must be closed before the page is deleted. */
+export function closeBeforeDelete({
+  classroomFlagged,
+  hasCollabDoc,
+}: {
+  classroomFlagged: boolean;
+  hasCollabDoc: boolean;
+}): boolean {
+  return classroomFlagged || hasCollabDoc;
+}
+
+/**
+ * Close a page's live room before the page is deleted: the collab server
+ * checkpoints what it holds, then disconnects every editor (they reload and
+ * find the page gone). Needed when the classroom edits live or a buffered
+ * document exists (the flag may have been turned off since).
+ *
+ * `ok: false` means the room could not be closed — the delete should wait,
+ * or a buffered document could be pushed back after the page is gone. A 404
+ * (no such room or document on the server) is fine.
+ */
+export async function closeLivePageForDelete(
+  page: { id: string; classroom: unknown },
+  reason: 'deleted' = 'deleted'
+): Promise<{ ok: boolean }> {
+  const row = await prisma.collabDoc.findUnique({
+    where: { kind_doc_id: { kind: 'page', doc_id: page.id } },
+    select: { epoch: true },
+  });
+  if (
+    !closeBeforeDelete({
+      classroomFlagged: classroomCollabEnabled(page.classroom),
+      hasCollabDoc: Boolean(row),
+    })
+  ) {
+    return { ok: true };
+  }
+  // Server-to-server only, so the browser's WebSocket URL is not required.
+  const env = resolveCollabEnv();
+  if (!env) {
+    console.error('[pages] Cannot close the live room before deleting page', page.id);
+    return { ok: false };
+  }
+  try {
+    const body: CloseRequest = { reason };
+    await collabInternalRequest(env, 'POST', pageInternalPath(page.id, 'close'), body);
+    return { ok: true };
+  } catch (error) {
+    if ((error as { status?: number }).status === 404) return { ok: true };
+    console.error('[pages] Closing the live room before delete failed:', error);
+    return { ok: false };
+  }
 }

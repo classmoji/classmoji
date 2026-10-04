@@ -38,6 +38,7 @@ import {
   type CollabLoaderData,
 } from '../../app/utils/collab.ts';
 import { LIVE_PAGE_MESSAGE, joinsLiveRoom, liveIntentRefusal } from '../../app/utils/liveGates.ts';
+import { closeBeforeDelete } from '../../app/utils/collab.server.ts';
 
 const source = (relative: string) =>
   readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
@@ -311,6 +312,7 @@ test.describe('refusals', () => {
     expect(normalizeRejectReason('stale-epoch')).toBe('stale-epoch');
     expect(normalizeRejectReason('schema-mismatch')).toBe('schema-mismatch');
     expect(normalizeRejectReason('unavailable')).toBe('unavailable');
+    expect(normalizeRejectReason('legacy-html')).toBe('legacy-html');
     expect(normalizeRejectReason('forbidden')).toBe('forbidden');
     expect(normalizeRejectReason('permission-denied')).toBe('forbidden');
     expect(normalizeRejectReason(undefined)).toBe('forbidden');
@@ -328,7 +330,12 @@ test.describe('refusals', () => {
       message: 'Couldn’t connect to live editing. Try again.',
     });
     expect(rejectionNotice('forbidden').action).toBe('readonly');
+    expect(rejectionNotice('legacy-html')).toEqual({
+      action: 'readonly',
+      message: 'This page uses an older format and can’t be edited live yet.',
+    });
     for (const reason of [
+      'legacy-html',
       'reload',
       'stale-epoch',
       'schema-mismatch',
@@ -422,5 +429,13 @@ test.describe('readCoverValue', () => {
     expect(readCoverValue({ url: '' })).toBeNull();
     expect(readCoverValue(null)).toBeNull();
     expect(readCoverValue('pages/a.png')).toBeNull();
+  });
+});
+
+test.describe('page delete closes the live room first', () => {
+  test('when the classroom is flagged or a buffered document exists', () => {
+    expect(closeBeforeDelete({ classroomFlagged: true, hasCollabDoc: false })).toBe(true);
+    expect(closeBeforeDelete({ classroomFlagged: false, hasCollabDoc: true })).toBe(true);
+    expect(closeBeforeDelete({ classroomFlagged: false, hasCollabDoc: false })).toBe(false);
   });
 });
