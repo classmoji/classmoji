@@ -228,28 +228,23 @@ export async function acceptDeckPreviewLive({
 }
 
 /**
- * Slides the preview adds or changes compared with the live deck (or main),
- * for the preview view's highlight. Best effort: an unreachable collab server
- * falls back to `fallback` (main's deck).
+ * Slides the preview adds or changes compared with where it branched from
+ * (its merge base with main) — what the preview itself changed, not what
+ * others have changed in the live deck since. For the rendered preview's
+ * outline. Best effort: an unreadable base outlines nothing.
  */
 export async function previewChangedSlides({
-  env,
-  slideId,
+  slide,
   preview,
-  fallback,
 }: {
-  env: CollabEnv | null;
-  slideId: string;
+  slide: SlideTarget;
   preview: DeckJson;
-  fallback: DeckJson | null;
 }): Promise<string[]> {
-  let reference: DeckJson | null = fallback;
-  if (env) {
-    try {
-      reference = (await fetchLiveDeck(env, slideId)).content;
-    } catch (error) {
-      console.warn('[slides] live deck unavailable for the preview highlight:', error);
-    }
+  try {
+    const { base } = await readPreviewDecks(slide);
+    return base ? changedSlideIds(base, preview) : [];
+  } catch (error) {
+    console.warn('[slides] preview base unavailable for the highlight:', error);
+    return [];
   }
-  return reference ? changedSlideIds(reference, preview) : [];
 }

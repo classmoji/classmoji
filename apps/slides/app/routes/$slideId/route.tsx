@@ -451,18 +451,13 @@ export const loader = async ({
   // never reach a preview through it. Notes rules below are unchanged (the
   // canViewSpeakerNotes strip applies to this content too).
   // Live classrooms review a preview as the rendered deck with the slides it
-  // changes (against the live deck) outlined — no diff.
+  // changes (against where it branched) outlined — no diff.
   let previewChangedIds: string[] | null = null;
   if (previewActive && !contentResult) {
     try {
       const loaded = await loadDeck(slide, { ref: previewBranch, skipCache: true });
       if (liveEnv) {
-        previewChangedIds = await previewChangedSlides({
-          env: liveEnv,
-          slideId,
-          preview: loaded.deck,
-          fallback: null,
-        });
+        previewChangedIds = await previewChangedSlides({ slide, preview: loaded.deck });
       }
       const themeUrls = await resolveDeliveryThemeUrls(loaded.deck, gitOrgLogin, repo, deliveryCtx);
       contentResult = {
