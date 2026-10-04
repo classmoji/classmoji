@@ -109,6 +109,9 @@ enum AuditLogAction {
   DELETE
   ACCESS_DENIED
   VIEW
+  COLLAB_JOIN
+  COLLAB_LEAVE
+  COLLAB_CHECKPOINT
 }
 
 enum AIConversationType {
@@ -2654,6 +2657,15 @@ model CollabDoc {
   pushed_commit  String?
   /// When unsaved changes began (null when clean).
   dirty_since    DateTime?
+  /// Co-authors since the last push: `{ userId, name }[]`. Merged by the
+  /// collab store hook; cleared/trimmed by the worker after a push.
+  editors               Json?
+  /// When the last checkpoint run for this doc finished.
+  last_checkpoint_at    DateTime?
+  /// Refusal/failure code + message of the last run; null when it succeeded.
+  last_checkpoint_error String?
+  /// Last outside-push conflict: `{ at, sha, ids[] }`.
+  last_conflict         Json?
   created_at     DateTime  @default(now())
   updated_at     DateTime  @updatedAt
 
