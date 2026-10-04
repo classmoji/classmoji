@@ -15,6 +15,13 @@ import { FRAGMENT, serializePageContent } from '@classmoji/page-schema'; // esli
 // eslint-disable-next-line import/no-unresolved
 import { blocksToYDoc, pageContentToYDoc, yDocToPageContent } from '@classmoji/page-schema/server';
 import { ClassmojiService } from '@classmoji/services';
+import { deckToYDoc, yDocToDeck } from '@classmoji/collab'; // eslint-disable-line import/no-unresolved
+import {
+  generateDeckHtml,
+  prepareDeckForSave,
+  type DeckJson,
+  type SlideContentTarget,
+} from '@classmoji/services/slides'; // eslint-disable-line import/no-unresolved
 
 import { checkPageRender, fragmentBlockIds, shortColumnLists } from '../checkpointGuards.ts';
 import {
@@ -570,5 +577,52 @@ describe('runContentCheckpoint', () => {
     const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
     expect(report).toMatchObject({ commit: null, pushed: false, docs: [] });
     expect(deps.remoteUrl).not.toHaveBeenCalled();
+  });
+});
+
+describe('runContentCheckpoint with the real deck converter', () => {
+  it('commits exactly the deck.json and index.html saveDeck would write', async () => {
+    const deck: DeckJson = {
+      version: 1,
+      theme: 'white',
+      codeTheme: 'github',
+      config: { center: false },
+      slides: [
+        {
+          id: 'aaaa1111',
+          html: '<h1>Title</h1>',
+          notes: 'Say hi',
+          attrs: { 'data-transition': 'fade' },
+        },
+        {
+          id: 'bbbb2222',
+          children: [
+            { id: 'cccc3333', html: '<p>Down 1</p>' },
+            { id: 'dddd4444', html: '<p>Down 2</p>', hidden: true },
+          ],
+        },
+        { id: 'eeee5555', html: '<pre><code>x = 1</code></pre>' },
+      ],
+    };
+    const doc = deckToYDoc(deck);
+    const prisma = makePrisma([row('deck', 'deck-a', doc, 2)]);
+    const { deps } = makeDeps(prisma, {
+      loadDeckRenderer: async () => yDocToDeck as unknown as (d: Y.Doc) => DeckLike,
+      prepareDeckForSave: (slide, d, options) =>
+        prepareDeckForSave(
+          slide as unknown as SlideContentTarget,
+          d as unknown as DeckJson,
+          options as never
+        ),
+    });
+    const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
+    expect(report.docs[0]).toMatchObject({ status: 'pushed', clean: true });
+
+    // What saveDeck commits for this deck: two-space JSON + newline, and the
+    // generated index.html with notes.
+    expect(remoteFile('slides/week-1/deck.json') + '\n').toBe(JSON.stringify(deck, null, 2) + '\n');
+    expect(remoteFile('slides/week-1/index.html')).toBe(
+      generateDeckHtml(deck, { title: 'Week 1', includeNotes: true }).trimEnd()
+    );
   });
 });
