@@ -541,6 +541,10 @@ model Classroom {
   // through). Defaults true: new classrooms get the delivery layer, and an env
   // without the signing secrets still behaves exactly as it did before.
   content_delivery_enabled     Boolean         @default(true)
+  // Live collaborative editing (pages and slides through the collab service).
+  // Off by default: a classroom without it keeps today's editors and save
+  // paths untouched. Turning it off checkpoints and closes the open rooms.
+  collab_enabled               Boolean         @default(false)
   // When the asset map was last rebuilt FROM THE REPO'S TREE — a full sync, and
   // only a full sync. This is what `ensureContentAssets` measures its 24h
   // refresh against, deliberately NOT the newest `content_assets.synced_at`:
@@ -2616,4 +2620,45 @@ model MediaObject {
   /// media list, and the resolver's own lookup.
   @@index([classroom_id, status])
   @@map("media_objects")
+}
+
+/// The live document of a page or deck being edited collaboratively — the
+/// buffer between the collab service and git. The collab service stores the
+/// full Yjs state here on every (debounced) change and bumps `version`; the
+/// content-checkpoint worker renders it, pushes one commit, and records the
+/// version it pushed. `version == pushed_version` means clean: git holds
+/// everything. At rest git is the only copy; a clean row may be dropped.
+///
+/// No foreign keys: `doc_id` names a Page or a Slide depending on `kind`, and
+/// the row must outlive a racing delete long enough for a final checkpoint.
+model CollabDoc {
+  /// 'page' | 'deck'
+  kind           String
+  /// Page.id or Slide.id (a DECK slide)
+  doc_id         String
+  classroom_id   String
+  /// Part of the room name; bumped when the doc is reseeded from git so a
+  /// stale browser reloads instead of syncing old content into the new doc.
+  epoch          Int       @default(1)
+  /// Full Y.encodeStateAsUpdate of the document.
+  state          Bytes
+  /// SCHEMA_VERSION the state was written with.
+  schema_version Int
+  /// Bumped on each store.
+  version        Int       @default(0)
+  /// The version included in the last successful push.
+  pushed_version Int       @default(0)
+  /// Blob sha of the content file last seeded from / pushed.
+  source_sha     String?
+  /// Commit sha of the last checkpoint.
+  pushed_commit  String?
+  /// When unsaved changes began (null when clean).
+  dirty_since    DateTime?
+  created_at     DateTime  @default(now())
+  updated_at     DateTime  @updatedAt
+
+  @@id([kind, doc_id])
+  /// The worker gathers a classroom's dirty docs (one content repo, one commit).
+  @@index([classroom_id])
+  @@map("collab_docs")
 }
