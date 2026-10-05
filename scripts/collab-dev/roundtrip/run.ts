@@ -95,10 +95,15 @@ const pageContent = ClassmojiService.pageContent;
 
 // ─── CLI ─────────────────────────────────────────────────────────────────────
 
+// Repos to check by default: the dev classroom's, plus any listed in
+// COLLAB_ROUNDTRIP_REPOS (comma-separated `org/repo`). Course repos are
+// passed in, never hardcoded.
 const DEFAULT_REPOS = [
   'classmoji-development/content-musashibot-testing',
-  'dartmouth-cs52/content-26f',
-  'dartmouth-cs52/content-dartmouth-cs52-26w',
+  ...(process.env.COLLAB_ROUNDTRIP_REPOS ?? '')
+    .split(',')
+    .map(repo => repo.trim())
+    .filter(Boolean),
 ];
 
 function parseArgs(argv: string[]) {
