@@ -40,8 +40,10 @@ import {
   isSafeHtmlBlockSandbox,
   MAX_SLIDE_HTML_LENGTH,
   mintBlockId,
+  scopeAnimationNames,
+  scopeSvgSheets,
   scopeSvgStyleText,
-  SVG_SCOPE_SUFFIX,
+  svgScopeSuffix,
 } from '../deckBlocks.ts';
 import { MAX_SLIDE_HTML } from '../deckOps.ts';
 import { browserFixture } from './fixtures/browserSerialization.ts';
@@ -267,11 +269,12 @@ describe('svg block lists', () => {
         '<animate attributeName="r" values="1;2"/><style>.a{fill:red}</style>' +
         '<text title="a<b">t</text></svg>'
     );
+    const { key, sheets } = scopeSvgSheets(['.a{fill:red}']);
     expect(out).toBe(
-      '<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 200 100" ' +
-        'preserveAspectRatio="xMidYMid meet"><a><circle r="5"></circle></a><use href="#a"></use>' +
-        '<image href="https://x/y.png"></image><image></image>' +
-        '<animate attributeName="r" values="1;2"></animate><style>.a{fill:red}</style>' +
+      `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" data-cm-scope="${key}" ` +
+        'viewBox="0 0 200 100" preserveAspectRatio="xMidYMid meet"><a><circle r="5"></circle></a>' +
+        '<use href="#a"></use><image href="https://x/y.png"></image><image></image>' +
+        `<animate attributeName="r" values="1;2"></animate><style>${sheets[0]}</style>` +
         '<text title="a&lt;b">t</text></svg>'
     );
   });
@@ -550,106 +553,194 @@ describe('html block frames delegate fullscreen only', () => {
   });
 });
 
-describe("scopeSvgStyleText: a drawing's styles stay in the drawing", () => {
-  const S = SVG_SCOPE_SUFFIX;
-  const ILLUSTRATOR =
-    '.st0{fill:#E6332A;}\n.st1{fill:none;stroke:#1D1D1B;stroke-width:2;}\n' +
-    '@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}\n' +
-    'g > .st0{opacity:.5}';
+describe('svg sheets are held to their drawing (selector prefixing)', () => {
+  const K = 'dkey1';
+  const S = svgScopeSuffix(K);
 
-  it('wraps rules in a prelude-less @scope, suffixes selectors, keeps unscopable at-rules first', () => {
-    expect(scopeSvgStyleText(ILLUSTRATOR)).toBe(
-      '@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}\n' +
-        `@scope {\n.st0${S}{fill:#E6332A;}\n.st1${S}{fill:none;stroke:#1D1D1B;stroke-width:2;}\n` +
-        `g > .st0${S}{opacity:.5}\n}`
+  it('suffixes every selector on its subject, before a pseudo-element; :root and :scope are the drawing', () => {
+    expect(
+      scopeSvgStyleText(
+        '.st0{fill:red}\n#mermaid-1 .node rect, svg text::before , .x:after{fill:blue}\n' +
+          ':root{--c:red} :scope rect{fill:var(--c)}',
+        K
+      )
+    ).toBe(
+      `.st0${S}{fill:red}\n#mermaid-1 .node rect${S}, svg text${S}::before, .x${S}:after{fill:blue}\n` +
+        `[data-cm-scope=${K}]${S}{--c:red} [data-cm-scope=${K}] rect${S}{fill:var(--c)}`
     );
   });
 
-  it('selectors that name the drawing itself (diagram tools) still reach it', () => {
-    expect(scopeSvgStyleText('#mermaid-1 .node rect, svg text{fill:red}svg{color:blue}')).toBe(
-      `@scope {\n#mermaid-1 .node rect${S}, svg text${S}{fill:red}svg${S}{color:blue}\n}`
+  it('keyframes get the key and the drawing animations follow them', () => {
+    const css =
+      '@keyframes spin{to{transform:rotate(360deg)}}.g{animation:spin 2s linear infinite}' +
+      '.h{animation-name: spin, other}';
+    expect(scopeSvgStyleText(css, K)).toBe(
+      `@keyframes spin_cm-${K}{to{transform:rotate(360deg)}}` +
+        `.g${S}{animation:spin_cm-${K} 2s linear infinite}.h${S}{animation-name: spin_cm-${K}, other}`
+    );
+    expect(scopeAnimationNames('animation: spin 1s; fill: red', new Set(['spin']), K)).toBe(
+      `animation: spin_cm-${K} 1s; fill: red`
     );
   });
 
-  it('the suffix goes before a pseudo-element and before trailing comments', () => {
-    expect(scopeSvgStyleText('a::before , b:after, c /* note */ {x:y}')).toBe(
-      `@scope {\na${S}::before, b${S}:after, c${S} /* note */ {x:y}\n}`
-    );
+  it('group rules are entered; @import, @scope and unknown at-rules are dropped; definitions kept', () => {
+    expect(
+      scopeSvgStyleText(
+        '@import url(x.css);@media (min-width:1px){.a{fill:red}}@scope (.x){.a{}}@font-face{font-family:x}@foo{.b{}}',
+        K
+      )
+    ).toBe(`@media (min-width:1px){.a${S}{fill:red}}@font-face{font-family:x}`);
   });
 
-  it('selectors naming :scope or & are taken as written; group rules are entered', () => {
-    expect(scopeSvgStyleText(':scope rect{}@media (min-width:1px){.a{fill:red}}.p{ .q{} }')).toBe(
-      `@scope {\n:scope rect{}@media (min-width:1px){.a${S}{fill:red}}.p${S}{ .q{} }\n}`
+  it('rules that cannot be held to the drawing are dropped; stray braces cannot end anything early', () => {
+    expect(scopeSvgStyleText('.a{fill:red}}.leak{fill:blue}garbage; .b > {x:y}', K)).toBe(
+      `.a${S}{fill:red}/**/.leak${S}{fill:blue}`
     );
+    expect(scopeSvgStyleText('a{b:url({)}}.evil{fill:red}', K)).toBe(
+      `a${S}{b:url({)}/**/.evil${S}{fill:red}`
+    );
+    expect(scopeSvgStyleText('.a{fill:red', K)).toBe(`.a${S}{fill:red}`);
+  });
+
+  it('a drawing gets one key from its sheets; the same sheets, the same key; idempotent', () => {
+    const first = scopeSvgSheets(['.st0{fill:red}', '@keyframes k{}.a{animation:k 1s}']);
+    expect(first.key).toMatch(/^d[0-9a-z]+$/);
+    expect([...first.names]).toEqual(['k']);
+    expect(scopeSvgSheets(['.st0{fill:red}', '@keyframes k{}.a{animation:k 1s}']).key).toBe(
+      first.key
+    );
+    expect(scopeSvgSheets(first.sheets)).toEqual(first);
+    expect(scopeSvgSheets(['.st0{fill:blue}']).key).not.toBe(first.key);
+  });
+
+  it('nothing to scope: no key, sheets emptied', () => {
+    expect(scopeSvgSheets(['', '  \r ', '@import url(x);'])).toEqual({
+      key: null,
+      sheets: ['', '', ''],
+      names: new Set(),
+    });
   });
 
   it.each([
-    ILLUSTRATOR,
-    '.cls-1{fill:red}',
-    '@import url(x.css);.a{fill:red}',
-    '@media (min-width: 10px){.a{fill:red}}',
+    '.st0{fill:#E6332A;}\n.st1{fill:none;stroke:#1D1D1B;stroke-width:2;}\n@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}\ng > .st0{opacity:.5;animation:spin 1s}',
     '.a{content:"}"}.b{fill:blue}',
-    '.a{fill:red}}.leak{fill:blue}',
-    '.a{fill:red',
     '.a{fill:red}/* open',
     '.a{content:"open',
-    '@scope { .a{} }',
-    '@scope (svg) { .a{} }',
-    '@scope {.a{}} .b{}',
     '.a\\{fill:red}',
     '.a{fill:red\\',
-    'a{b:url({)}}.evil{fill:red}',
     'a{b:u\\72l({)}}.evil{fill:red}',
     'a{b:"x\f}}.evil{fill:red}"}',
-    '@keyframes k\\ \r',
-    '"(\\ \r',
+    'rect\\:after{x:y}',
+    'animation:k 1s\\\n{}',
+    '[data-cm-scope=dold] .a:where([data-cm-scope=dold], [data-cm-scope=dold] *){}',
   ])('is idempotent for %j', css => {
-    const once = scopeSvgStyleText(css);
-    expect(scopeSvgStyleText(once)).toBe(once);
+    const once = scopeSvgSheets([css]);
+    expect(scopeSvgSheets(once.sheets)).toEqual(once);
   });
 
-  it('a stray close brace cannot end the scope early', () => {
-    expect(scopeSvgStyleText('.a{fill:red}}.leak{fill:blue}')).toBe(
-      `@scope {\n.a${S}{fill:red}/**/.leak${S}{fill:blue}\n}`
+  it('seeded fuzz: idempotent, and every emitted style rule carries the scope', () => {
+    const atoms = [
+      '.a',
+      'svg',
+      ' ',
+      ' > ',
+      ', ',
+      '{',
+      '}',
+      ';',
+      'fill:red',
+      ':root',
+      '&',
+      '::before',
+      ':after',
+      ':not(',
+      ')',
+      '[',
+      ']',
+      '"',
+      "'",
+      '/*',
+      '*/',
+      '\\',
+      '\\}',
+      '\n',
+      '\r',
+      '\f',
+      'url(',
+      'u\\72l(',
+      '@media x',
+      '@keyframes k',
+      '@font-face',
+      '@scope',
+      '@import "x"',
+      '@layer a',
+      'animation:k 1s',
+      '_cm-dabc',
+    ];
+    let seed = 42;
+    const rand = (n: number) => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed % n;
+    };
+    for (let n = 0; n < 3000; n++) {
+      let css = '';
+      for (let i = 1 + rand(12); i > 0; i--) css += atoms[rand(atoms.length)];
+      const once = scopeSvgSheets([css]);
+      expect(scopeSvgSheets(once.sheets), JSON.stringify(css)).toEqual(once);
+    }
+  });
+});
+
+describe('svg sheets on the server: stored and rendered held to their drawing', () => {
+  const block = (svgInner: string, attrs = '') =>
+    `<div class="sl-block" data-block-type="svg" data-cm-block-id="b1" style="left: 0px; top: 0px; width: 10px; height: 10px;">` +
+    `<div class="sl-block-content"><svg viewBox="0 0 10 10"${attrs}>${svgInner}</svg></div></div>`;
+
+  it('normalizeSlideHtml scopes the sheets and marks the drawing; a second pass changes nothing', () => {
+    const html = block('<defs><style>.st0{fill:red}</style></defs><rect class="st0"></rect>');
+    const once = normalizeSlideHtml(html);
+    const { key, sheets } = scopeSvgSheets(['.st0{fill:red}']);
+    expect(once).toContain(`<svg viewBox="0 0 10 10" data-cm-scope="${key}">`);
+    expect(once).toContain(`<style>${sheets[0]}</style>`);
+    expect(normalizeSlideHtml(once)).toBe(once);
+    expect(secureSlideBlocksInHtml(once)).toBe(once);
+  });
+
+  it('the generator and normalizeSvgBlockSource apply it too; inline animations follow', () => {
+    const src =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><style>@keyframes spin{to{opacity:0}}</style>' +
+      '<rect style="animation: spin 1s"></rect></svg>';
+    const out = normalizeSvgBlockSource(src);
+    const { key } = scopeSvgSheets(['@keyframes spin{to{opacity:0}}']);
+    expect(out).toContain(`@keyframes spin_cm-${key}`);
+    expect(out).toContain(`style="animation: spin_cm-${key} 1s"`);
+    expect(secureSlideBlocksInHtml(block('<style>.a{fill:red}</style>'))).toContain(
+      `.a${svgScopeSuffix(scopeSvgSheets(['.a{fill:red}']).key as string)}{fill:red}`
     );
   });
 
-  it('braces inside strings, comments and an unquoted url() are not structure', () => {
-    expect(scopeSvgStyleText('.a{content:"}"}/* } */.b{fill:blue}')).toBe(
-      `@scope {\n.a${S}{content:"}"}/* } */.b${S}{fill:blue}\n}`
-    );
-    expect(scopeSvgStyleText('a{b:url({)}}.evil{fill:red}')).toBe(
-      `@scope {\na${S}{b:url({)}/**/.evil${S}{fill:red}\n}`
-    );
-    expect(scopeSvgStyleText('a{b:u\\72l({)}}.evil{fill:red}')).toBe(
-      `@scope {\na${S}{b:u\\72l({)}/**/.evil${S}{fill:red}\n}`
+  it('a drawing whose sheets were removed loses its mark', () => {
+    expect(normalizeSlideHtml(block('<rect></rect>', ' data-cm-scope="dstale"'))).not.toContain(
+      'data-cm-scope'
     );
   });
 
-  it('newlines read as CSS reads them (\\r, \\f end a string)', () => {
-    expect(scopeSvgStyleText('a{b:"x\f}}.evil{fill:red}"}')).toBe(
-      `@scope {\na${S}{b:"x\n}/**/.evil${S}{fill:red}"}"\n}`
+  it('svg outside svg blocks is not touched', () => {
+    const html = '<svg><style>.a{fill:red}</style></svg>';
+    expect(secureSlideBlocksInHtml(html)).toBe(html);
+  });
+
+  it('an html block frame allow beyond fullscreen is stored inert (server side)', () => {
+    const html = htmlBlockMarkup({ id: 'b1', box: BOX, source: 'x' }).replace(
+      'allow="fullscreen"',
+      'allow="camera; microphone"'
     );
-  });
-
-  it('a cut-off sheet is closed inside the scope', () => {
-    expect(scopeSvgStyleText('.a{fill:red')).toBe(`@scope {\n.a${S}{fill:red}\n}`);
-    expect(scopeSvgStyleText('.a{fill:red}/* x')).toBe(`@scope {\n.a${S}{fill:red}/* x*/\n}`);
-    expect(scopeSvgStyleText('.a{fill:red\\')).toBe(`@scope {\n.a${S}{fill:red}\n}`);
-  });
-
-  it('@import is dropped; an empty sheet is left alone; only @font-face stays unwrapped', () => {
-    expect(scopeSvgStyleText('@import url(x.css);.a{}')).toBe(`@scope {\n.a${S}{}\n}`);
-    expect(scopeSvgStyleText('@import url(x.css);')).toBe('');
-    expect(scopeSvgStyleText('')).toBe('');
-    expect(scopeSvgStyleText('  \n ')).toBe('  \n ');
-    expect(scopeSvgStyleText('@font-face{font-family:x;src:url(a.woff)}')).toBe(
-      '@font-face{font-family:x;src:url(a.woff)}'
+    const out = normalizeSlideHtml(html);
+    expect(out).toContain('data-cm-inert-allow="camera; microphone"');
+    expect(out).not.toMatch(/ allow="/);
+    expect(normalizeSlideHtml(htmlBlockMarkup({ id: 'b1', box: BOX, source: 'x' }))).toContain(
+      ' allow="fullscreen"'
     );
-  });
-
-  it('a scope with a prelude is nested inside the drawing scope, as written', () => {
-    expect(scopeSvgStyleText('@scope (.x) { .a{} }')).toBe('@scope {\n@scope (.x) { .a{} }\n}');
   });
 });
 

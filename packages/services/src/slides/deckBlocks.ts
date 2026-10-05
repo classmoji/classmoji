@@ -499,18 +499,48 @@ export function sanitizeSvgBlocks(root: Element | Document | DocumentFragment): 
 }
 
 // ─── svg blocks: styles stay in their drawing ───────────────────────────────
+//
+// A drawing's `<style>` sheets are rewritten so that every rule applies only
+// to the drawing: its outermost `<svg>` carries `data-cm-scope="<key>"` and
+// every selector gets `:where([data-cm-scope="<key>"], [data-cm-scope="<key>"] *)`
+// on its subject (no specificity), so `.st0` / `.cls-1` from drawing tools
+// never reach another drawing or the page, while selectors naming the drawing
+// itself (`svg rect`, `#diagram-id .node`) still match. `:root` / `:scope`
+// mean the drawing. `@keyframes` names get `_cm-<key>` (and the drawing's
+// `animation` declarations follow), so two drawings' `spin` — or the page's —
+// never collide. `@import` and rules that cannot be held to the drawing are
+// dropped. Plain selector syntax, so every browser applies it (no `@scope`).
+//
+// The key is a hash of the drawing's sheets in their scoped form (with a
+// placeholder key), so it is the same however often, and wherever (server or
+// browser), the sheets are scoped: the rewrite is idempotent.
 
-/**
- * At-rules a scoped sheet keeps outside its `@scope` block: they define
- * names, select nothing, and are not valid inside `@scope`.
- */
-const UNSCOPED_AT_RULES: ReadonlySet<string> = new Set([
-  'charset',
-  'namespace',
+/** The attribute on a drawing's `<svg>` naming its scope. */
+export const SVG_SCOPE_ATTR = 'data-cm-scope';
+
+const KEY_PLACEHOLDER = 'dk';
+
+/** Appended to a selector's subject: the drawing's root or anything inside it. */
+export function svgScopeSuffix(key: string): string {
+  return `:where(${svgScopeRoot(key)}, ${svgScopeRoot(key)} *)`;
+}
+
+/** The drawing's root as a selector (the key is an identifier: no quotes needed, none used). */
+function svgScopeRoot(key: string): string {
+  return `[${SVG_SCOPE_ATTR}=${key}]`;
+}
+
+const ANY_SUFFIX_RE = /:where\(\[data-cm-scope=[0-9a-z]+\], \[data-cm-scope=[0-9a-z]+\] \*\)/g;
+const ANY_ROOT_RE = /\[data-cm-scope=[0-9a-z]+\]/g;
+const ROOT_PSEUDO_RE = /:(?:root|scope)(?![\w-])/gi;
+const KEYFRAMES_SUFFIX_RE = /_cm-[0-9a-z]+$/;
+
+/** Statement at-rules a scoped sheet keeps (they select nothing). */
+const KEPT_STATEMENTS: ReadonlySet<string> = new Set(['charset', 'namespace', 'layer']);
+
+/** Block at-rules a scoped sheet keeps as written (they define, never select). */
+const KEPT_BLOCKS: ReadonlySet<string> = new Set([
   'font-face',
-  'keyframes',
-  '-webkit-keyframes',
-  '-moz-keyframes',
   'property',
   'counter-style',
   'font-feature-values',
@@ -518,8 +548,13 @@ const UNSCOPED_AT_RULES: ReadonlySet<string> = new Set([
   'page',
 ]);
 
-/** At-rules a scoped sheet drops: an imported sheet could not be scoped. */
-const DROPPED_AT_RULES: ReadonlySet<string> = new Set(['import']);
+/** Keyframes at-rules (their names get the drawing's key). */
+const KEYFRAMES_RULES: ReadonlySet<string> = new Set([
+  'keyframes',
+  '-webkit-keyframes',
+  '-moz-keyframes',
+  '-o-keyframes',
+]);
 
 /** Conditional group rules whose style rules are scoped like top-level ones. */
 const GROUP_AT_RULES: ReadonlySet<string> = new Set([
@@ -530,15 +565,12 @@ const GROUP_AT_RULES: ReadonlySet<string> = new Set([
   'starting-style',
 ]);
 
-/**
- * Appended to every selector in a drawing's sheet: the rule applies to the
- * drawing's `<svg>` itself and what is inside it, wherever the rest of the
- * selector matches. Within `@scope` a selector without `:scope` is matched
- * below the root only, so `svg rect` or `#diagram-id .node` (as diagram
- * tools write them) would no longer reach the drawing; one naming `:scope`
- * is taken as written. `:where` adds no specificity.
- */
-export const SVG_SCOPE_SUFFIX = ':where(:scope, :scope *)';
+const ANIMATION_PROPS: ReadonlySet<string> = new Set([
+  'animation',
+  'animation-name',
+  '-webkit-animation',
+  '-webkit-animation-name',
+]);
 
 interface CssChunk {
   text: string;
@@ -616,7 +648,7 @@ function cssChunks(css: string): CssChunk[] {
     if (c === '/' && css[i + 1] === '*') {
       const close = css.indexOf('*/', i + 2);
       if (close === -1) {
-        push(css.length, false, '*/' + '}'.repeat(depth));
+        push(css.length, depth > 0, '*/' + '}'.repeat(depth));
         return chunks;
       }
       i = close + 2;
@@ -624,7 +656,7 @@ function cssChunks(css: string): CssChunk[] {
       let j = i + 1;
       while (j < css.length && css[j] !== c && css[j] !== '\n') j += css[j] === '\\' ? 2 : 1;
       if (j >= css.length) {
-        push(css.length, false, c + '}'.repeat(depth));
+        push(css.length, depth > 0, c + '}'.repeat(depth));
         return chunks;
       }
       i = j + 1;
@@ -642,7 +674,7 @@ function cssChunks(css: string): CssChunk[] {
           // An unquoted url runs to its `)`: nothing inside it is structure.
           while (j < css.length && css[j] !== ')') j += css[j] === '\\' ? 2 : 1;
           if (j >= css.length) {
-            push(css.length, false, ')' + '}'.repeat(depth));
+            push(css.length, depth > 0, ')' + '}'.repeat(depth));
             return chunks;
           }
           i = j + 1;
@@ -720,55 +752,174 @@ function closesItsTokens(text: string): boolean {
   return true;
 }
 
-const LEGACY_PSEUDO_ELEMENT_RE = /:(?:before|after|first-line|first-letter)$/i;
+const LEGACY_PSEUDO_ELEMENT_RE = /^:(?:before|after|first-line|first-letter)(?![\w-])/i;
 
 /**
- * One selector with {@link SVG_SCOPE_SUFFIX} on its subject: after its last
- * token (comments and space after it stay after it), before a pseudo-element.
- * A selector naming `:scope` or `&` is taken as written; one that ends in a
- * combinator or a bare colon is left alone (it matches nothing either way).
+ * `text` with `fn` applied to the runs outside strings, comments and escapes
+ * (those are copied as they are).
  */
-function scopeSelector(selector: string): string {
-  if (/:scope\b/i.test(selector) || selector.includes('&')) return selector.trim();
+function mapPlainCss(text: string, fn: (plain: string) => string): string {
+  let out = '';
+  let plain = '';
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    let end = -1;
+    if (c === '\\') {
+      end = Math.min(i + 2, text.length);
+    } else if (c === '"' || c === "'") {
+      end = i + 1;
+      while (end < text.length && text[end] !== c && text[end] !== '\n') {
+        end += text[end] === '\\' ? 2 : 1;
+      }
+      end = Math.min(end + 1, text.length);
+    } else if (c === '/' && text[i + 1] === '*') {
+      const close = text.indexOf('*/', i + 2);
+      end = close === -1 ? text.length : close + 2;
+    }
+    if (end === -1) {
+      plain += c;
+      continue;
+    }
+    out += fn(plain) + text.slice(i, end);
+    plain = '';
+    i = end - 1;
+  }
+  return out + fn(plain);
+}
+
+/**
+ * One selector held to the drawing: `:root` / `:scope` become the drawing's
+ * root, and the scope suffix goes on the subject — after its last token,
+ * before a pseudo-element. A selector already scoped (any key) is re-keyed.
+ * Null when it cannot be held to the drawing (empty, or ending in a
+ * combinator or a bare colon): its rule is dropped.
+ */
+function scopeSelector(selector: string, key: string): string | null {
+  const sel = mapPlainCss(selector, plain =>
+    plain
+      .replace(ANY_SUFFIX_RE, '')
+      .replace(ANY_ROOT_RE, ':root')
+      .replace(ROOT_PSEUDO_RE, svgScopeRoot(key))
+  );
   let end = -1;
   let pseudo = -1;
   let depth = 0;
-  for (let i = 0; i < selector.length; i++) {
-    const c = selector[i];
-    if (c === '/' && selector[i + 1] === '*') {
-      const close = selector.indexOf('*/', i + 2);
-      i = close === -1 ? selector.length : close + 1;
+  for (let i = 0; i < sel.length; i++) {
+    const c = sel[i];
+    if (c === '/' && sel[i + 1] === '*') {
+      const close = sel.indexOf('*/', i + 2);
+      i = close === -1 ? sel.length : close + 1;
       continue;
     }
     if (/\s/.test(c)) continue;
     if (c === '\\') {
       i++;
     } else if (c === '"' || c === "'") {
-      for (i++; i < selector.length && selector[i] !== c; i++) if (selector[i] === '\\') i++;
+      for (i++; i < sel.length && sel[i] !== c; i++) if (sel[i] === '\\') i++;
     } else if (c === '(' || c === '[') {
       depth++;
     } else if ((c === ')' || c === ']') && depth > 0) {
       depth--;
-    } else if (c === ':' && selector[i + 1] === ':' && depth === 0 && pseudo === -1) {
+    } else if (
+      c === ':' &&
+      depth === 0 &&
+      pseudo === -1 &&
+      (sel[i + 1] === ':' || LEGACY_PSEUDO_ELEMENT_RE.test(sel.slice(i)))
+    ) {
       pseudo = i;
     }
-    end = Math.min(i + 1, selector.length);
+    end = Math.min(i + 1, sel.length);
   }
-  if (end === -1) return selector.trim();
-  let cut = pseudo !== -1 ? pseudo : end;
-  if (pseudo === -1) {
-    const legacy = LEGACY_PSEUDO_ELEMENT_RE.exec(selector.slice(0, end));
-    if (legacy) cut = legacy.index;
-  }
-  if (/[:>+~([,]$/.test(selector.slice(0, cut).trimEnd())) return selector.trim();
-  return (selector.slice(0, cut) + SVG_SCOPE_SUFFIX + selector.slice(cut)).trim();
+  // Empty, unbalanced, or ending in a backslash that would escape the suffix.
+  const tailSlashes = /\\+$/.exec(sel.slice(0, end))?.[0].length ?? 0;
+  if (end === -1 || depth !== 0 || tailSlashes % 2 === 1) return null;
+  const cut = pseudo !== -1 ? pseudo : end;
+  if (/[:>+~([,]$/.test(sel.slice(0, cut).trimEnd()) || !sel.slice(0, cut).trim()) return null;
+  return (sel.slice(0, cut) + svgScopeSuffix(key) + sel.slice(cut)).trim();
 }
 
-/** A rule list with every style rule's selectors scoped (group rules entered, others kept). */
-function scopeRuleList(css: string): string {
+/** `name` with its drawing key, when it is a keyframes name the drawing defines. */
+function keyedName(name: string, names: ReadonlySet<string>, key: string): string {
+  const base = name.replace(KEYFRAMES_SUFFIX_RE, '');
+  return names.has(base) ? `${base}_cm-${key}` : name;
+}
+
+/**
+ * Declarations with `animation` / `animation-name` values pointing at the
+ * drawing's own keyframes by their keyed names. Nested rules are left as
+ * written. Also used for `style` attributes inside the drawing.
+ */
+export function scopeAnimationNames(
+  decls: string,
+  names: ReadonlySet<string>,
+  key: string
+): string {
+  if (names.size === 0 || !/animation/i.test(decls)) return decls;
+  const out: string[] = [];
+  let from = 0;
+  let depth = 0;
+  const flush = (to: number) => {
+    const decl = decls.slice(from, to);
+    const colon = decl.indexOf(':');
+    const prop = colon === -1 ? '' : decl.slice(0, colon).trim().toLowerCase();
+    if (!ANIMATION_PROPS.has(prop) || decl.includes('{')) {
+      out.push(decl);
+      return;
+    }
+    const value = decl
+      .slice(colon + 1)
+      .replace(
+        /(^|[\s,])(-?[A-Za-z_][\w-]*)(?=$|[\s,!;])/g,
+        (_m, lead: string, ident: string) => lead + keyedName(ident, names, key)
+      );
+    out.push(decl.slice(0, colon + 1) + value);
+  };
+  for (let i = 0; i < decls.length; i++) {
+    const c = decls[i];
+    if (c === '\\') i++;
+    else if (c === '"' || c === "'") {
+      for (i++; i < decls.length && decls[i] !== c && decls[i] !== '\n'; i++) {
+        if (decls[i] === '\\') i++;
+      }
+    } else if (c === '/' && decls[i + 1] === '*') {
+      const close = decls.indexOf('*/', i + 2);
+      i = close === -1 ? decls.length : close + 1;
+    } else if (c === '{' || c === '(') depth++;
+    else if ((c === '}' || c === ')') && depth > 0) depth--;
+    else if (c === ';' && depth === 0) {
+      flush(i);
+      out.push(';');
+      from = i + 1;
+    }
+  }
+  flush(decls.length);
+  return out.join('');
+}
+
+/** Keyframes names a sheet defines (keys taken off), at any group depth. */
+function keyframesNames(css: string, out: Set<string>): Set<string> {
+  for (const chunk of cssChunks(css)) {
+    if (chunk.at === null || chunk.open === -1) continue;
+    if (KEYFRAMES_RULES.has(chunk.at)) {
+      if (/^-?[A-Za-z_][\w-]*$/.test(chunk.prelude)) {
+        out.add(chunk.prelude.replace(KEYFRAMES_SUFFIX_RE, ''));
+      }
+    } else if (GROUP_AT_RULES.has(chunk.at)) {
+      keyframesNames(chunk.text.slice(chunk.open + 1, chunk.block ? -1 : undefined), out);
+    }
+  }
+  return out;
+}
+
+/** A rule list held to the drawing (see the section comment). */
+function scopeRuleList(css: string, key: string, names: ReadonlySet<string>): string {
   return cssChunks(css)
     .map(chunk => {
-      if (chunk.open === -1) return chunk.text;
+      if (chunk.open === -1) {
+        if (chunk.at === null || !KEPT_STATEMENTS.has(chunk.at)) return '';
+        // Ended by its own `;`, so what follows is never read as part of it.
+        return chunk.text.trimEnd().endsWith(';') ? chunk.text : `${chunk.text};`;
+      }
       const head = chunk.text.slice(0, chunk.open);
       const body = chunk.text.slice(chunk.open + 1, chunk.block ? -1 : undefined);
       const close = chunk.block ? '}' : '';
@@ -776,14 +927,24 @@ function scopeRuleList(css: string): string {
         const lead = /^\s*/.exec(head)?.[0] ?? '';
         const trail = /\s*$/.exec(head.slice(lead.length))?.[0] ?? '';
         const core = head.slice(lead.length, head.length - trail.length);
-        // Nothing to name in an empty prelude; one whose strings or comments
-        // run on is left exactly as written (still inside the scope).
-        if (!core || !closesItsTokens(core)) return chunk.text;
-        const selectors = splitSelectorList(core).map(scopeSelector);
-        return `${lead}${selectors.join(', ')}${trail}{${body}${close}`;
+        if (!core || !closesItsTokens(core)) return '';
+        const selectors = splitSelectorList(core).map(s => scopeSelector(s, key));
+        // A selector that cannot be held to the drawing drops its rule; so
+        // does one that would read back as an at-rule.
+        if (selectors.some(s => s === null) || selectors[0]?.startsWith('@')) return '';
+        return `${lead}${selectors.join(', ')}${trail}{${scopeAnimationNames(body, names, key)}${close}`;
       }
-      if (GROUP_AT_RULES.has(chunk.at)) return `${head}{${scopeRuleList(body)}${close}`;
-      return chunk.text;
+      if (GROUP_AT_RULES.has(chunk.at)) {
+        return `${head}{${scopeRuleList(body, key, names)}${close}`;
+      }
+      if (KEYFRAMES_RULES.has(chunk.at)) {
+        const named = /^(\s*(?:\/\*[\s\S]*?\*\/\s*)*@[-\w]+\s+)(-?[A-Za-z_][\w-]*)(\s*)$/.exec(
+          head
+        );
+        if (!named) return chunk.text;
+        return `${named[1]}${keyedName(named[2], names, key)}${named[3]}{${body}${close}`;
+      }
+      return KEPT_BLOCKS.has(chunk.at) ? chunk.text : '';
     })
     .join('');
 }
@@ -795,104 +956,129 @@ function trimCss(css: string): string {
   return slashes % 2 === 1 ? `${trimmed} ` : trimmed;
 }
 
-/**
- * An svg `<style>` sheet scoped to its drawing: its rules wrapped in a
- * prelude-less `@scope { … }`, which applies them only inside the `<style>`
- * element's parent (the drawing's `<svg>`, see {@link scopeSvgStyles}), each
- * selector carrying {@link SVG_SCOPE_SUFFIX} so it can still name that
- * `<svg>`. The `.st0` / `.cls-1` classes drawing tools export never reach
- * another drawing or the page. At-rules that cannot be scoped
- * ({@link UNSCOPED_AT_RULES}: `@keyframes`, `@font-face`, …) go first,
- * outside the scope; `@import` is dropped. Idempotent: a sheet already in
- * this form comes back byte for byte; an empty sheet is left as it is.
- */
-export function scopeSvgStyleText(css: string): string {
-  // As CSS reads it: one kind of newline; a backslash at the very end escapes nothing.
-  let src = css.replace(/\r\n?|\f/g, '\n');
+/** As CSS reads it: one kind of newline; a backslash at the very end escapes nothing. */
+function preprocessCss(css: string): string {
+  const src = css.replace(/\r\n?|\f/g, '\n');
   const trailing = /\\+$/.exec(src)?.[0].length ?? 0;
-  if (trailing % 2 === 1) src = src.slice(0, -1);
-
-  const chunks = cssChunks(src).filter(c => c.at === null || !DROPPED_AT_RULES.has(c.at));
-  const unscoped = (c: CssChunk) => c.at !== null && UNSCOPED_AT_RULES.has(c.at);
-  const kept = chunks.filter(unscoped);
-  const scoped = chunks.filter(c => !unscoped(c));
-  // Each kept rule ends in its own `;` or `}`, so what follows it can never
-  // be read as part of it; its end is kept as is (a newline can end a string).
-  const head = kept
-    .map(c => {
-      const text = c.text.replace(/^\s+/, '');
-      return c.open === -1 && !text.endsWith(';') ? `${text};` : text;
-    })
-    .join('\n');
-  const only = scoped.length === 1 ? scoped[0] : null;
-  const already = only !== null && only.at === 'scope' && only.prelude === '' && only.block;
-  const inner = already
-    ? only.text.trim().slice(only.text.trim().indexOf('{') + 1, -1)
-    : scoped.map(c => c.text).join('');
-  const body = trimCss(scopeRuleList(trimCss(inner)));
-  if (!body) return head || (chunks.length === 0 && !src.trim() ? css : '');
-  const wrapped = `@scope {\n${body}\n}`;
-  return head ? `${head}\n${wrapped}` : wrapped;
+  return trailing % 2 === 1 ? src.slice(0, -1) : src;
 }
 
-/** Top-level rules a scoped sheet may hold (CSSOM names), whatever their content. */
-const SCOPED_SHEET_RULES = new Set([
-  'CSSScopeRule',
-  'CSSNamespaceRule',
-  'CSSFontFaceRule',
-  'CSSKeyframesRule',
-  'CSSPropertyRule',
-  'CSSCounterStyleRule',
-  'CSSFontFeatureValuesRule',
-  'CSSFontPaletteValuesRule',
-  'CSSPageRule',
-]);
+/** One sheet held to the drawing with scope `key` (names: the drawing's keyframes). */
+export function scopeSvgStyleText(
+  css: string,
+  key: string,
+  names: ReadonlySet<string> = keyframesNames(preprocessCss(css), new Set())
+): string {
+  if (!css.trim()) return '';
+  return trimCss(scopeRuleList(trimCss(preprocessCss(css)), key, names));
+}
+
+/** A string hash (cyrb53), base 36: the same in every engine. */
+function hashKey(text: string): string {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+
+/** A drawing's sheets held to it: the sheets' new text, the scope key (null: nothing to scope), the keyframes names. */
+export interface ScopedSvgSheets {
+  key: string | null;
+  sheets: string[];
+  names: ReadonlySet<string>;
+}
 
 /**
- * In a browser that has `@scope`: whether the browser itself reads `css`
- * as a scoped sheet (every top-level rule an `@scope` or an unscoped
- * at-rule) — the check behind the text transform. True where it can't tell.
+ * All `<style>` sheets of one drawing, scoped together (one key; keyframes
+ * defined in one sheet and used in another follow). Idempotent, and the same
+ * on the server and in the browser.
  */
-function browserReadsAsScoped(css: string): boolean {
+export function scopeSvgSheets(sheets: readonly string[]): ScopedSvgSheets {
+  const names = new Set<string>();
+  for (const css of sheets) keyframesNames(preprocessCss(css), names);
+  const canonical = sheets.map(css => scopeSvgStyleText(css, KEY_PLACEHOLDER, names));
+  if (canonical.every(css => !css.trim())) return { key: null, sheets: canonical, names };
+  const key = `d${hashKey(canonical.join('\u0000'))}`;
+  return { key, sheets: sheets.map(css => scopeSvgStyleText(css, key, names)), names };
+}
+
+/**
+ * In a browser: whether it reads every style rule of the scoped sheet as held
+ * to the drawing (each selector naming the scope) — the check behind the text
+ * rewrite. True where it can't tell.
+ */
+function browserReadsAsScoped(css: string, key: string): boolean {
   const g = globalThis as unknown as {
-    CSSScopeRule?: unknown;
     CSSStyleSheet?: new () => { replaceSync(text: string): void; cssRules: ArrayLike<object> };
   };
-  if (typeof g.CSSScopeRule !== 'function' || typeof g.CSSStyleSheet !== 'function') return true;
+  if (typeof g.CSSStyleSheet !== 'function') return true;
+  const marks = [`${SVG_SCOPE_ATTR}="${key}"]`, `${SVG_SCOPE_ATTR}=${key}]`];
+  const held = (rules: ArrayLike<object>): boolean =>
+    Array.from(rules).every(rule => {
+      const r = rule as { selectorText?: string; cssRules?: ArrayLike<object>; name?: string };
+      if (typeof r.selectorText === 'string') {
+        return splitSelectorList(r.selectorText).every(part => marks.some(m => part.includes(m)));
+      }
+      if (/Keyframes/.test(rule.constructor.name)) return true;
+      return r.cssRules ? held(r.cssRules) : true;
+    });
   try {
     const sheet = new g.CSSStyleSheet();
+    if (typeof sheet.replaceSync !== 'function') return true;
     sheet.replaceSync(css);
-    return Array.from(sheet.cssRules).every(rule =>
-      SCOPED_SHEET_RULES.has((rule as { constructor: { name: string } }).constructor.name)
-    );
+    return held(sheet.cssRules);
   } catch {
     return true;
   }
 }
 
+/** The outermost `<svg>` elements at or under `root`. */
+function outermostSvgs(root: Element): Element[] {
+  if (root.namespaceURI === SVG_NS && root.localName === 'svg') return [root];
+  return Array.from(root.getElementsByTagNameNS(SVG_NS, 'svg')).filter(svg => {
+    for (let el = svg.parentElement; el && el !== root; el = el.parentElement) {
+      if (el.namespaceURI === SVG_NS && el.localName === 'svg') return false;
+    }
+    return true;
+  });
+}
+
 /**
- * Every svg `<style>` under `root` scoped to its drawing: moved, when nested
- * (drawing tools put it in `<defs>`), to be a child of the outermost `<svg>`
- * holding it — just before the branch it sat in, so sheets keep their order
- * — and its text scoped ({@link scopeSvgStyleText}). A sheet the browser
- * would not read as scoped is emptied. Idempotent.
+ * Every drawing at or under `root` (DOM) with its `<style>` sheets held to it:
+ * {@link scopeSvgSheets} applied to its sheets, `data-cm-scope` set on its
+ * `<svg>` (removed when it has nothing to scope), and its elements' `style`
+ * attributes pointed at its keyed keyframes. A sheet the browser would not
+ * read as held to the drawing is emptied. Idempotent.
  */
 export function scopeSvgStyles(root: Element): void {
-  for (const style of Array.from(root.getElementsByTagNameNS(SVG_NS, 'style'))) {
-    let top: Element | null = null;
-    for (let el = style.parentElement; el; el = el.parentElement) {
-      if (el.namespaceURI === SVG_NS && el.localName === 'svg') top = el;
-      if (el === root) break;
+  for (const svg of outermostSvgs(root)) {
+    const styles = Array.from(svg.getElementsByTagNameNS(SVG_NS, 'style'));
+    const scoped = scopeSvgSheets(styles.map(style => style.textContent ?? ''));
+    styles.forEach((style, i) => {
+      let next = scoped.sheets[i];
+      if (scoped.key && next.trim() && !browserReadsAsScoped(next, scoped.key)) next = '';
+      if (next !== (style.textContent ?? '')) style.textContent = next;
+    });
+    if (scoped.key) {
+      if (svg.getAttribute(SVG_SCOPE_ATTR) !== scoped.key)
+        svg.setAttribute(SVG_SCOPE_ATTR, scoped.key);
+    } else if (svg.hasAttribute(SVG_SCOPE_ATTR)) {
+      svg.removeAttribute(SVG_SCOPE_ATTR);
     }
-    if (top && style.parentElement !== top) {
-      let branch: Element = style;
-      while (branch.parentElement && branch.parentElement !== top) branch = branch.parentElement;
-      top.insertBefore(style, branch);
+    if (scoped.key && scoped.names.size > 0) {
+      for (const el of [svg, ...Array.from(svg.querySelectorAll('[style]'))]) {
+        const value = el.getAttribute('style');
+        if (value === null) continue;
+        const next = scopeAnimationNames(value, scoped.names, scoped.key);
+        if (next !== value) el.setAttribute('style', next);
+      }
     }
-    const css = style.textContent ?? '';
-    let next = scopeSvgStyleText(css);
-    if (next && !browserReadsAsScoped(next)) next = '';
-    if (next !== css) style.textContent = next;
   }
 }
 

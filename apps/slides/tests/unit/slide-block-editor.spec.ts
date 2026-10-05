@@ -10,7 +10,7 @@ import { JSDOM } from 'jsdom';
 import {
   htmlBlockMarkup,
   HTML_BLOCK_SANDBOX,
-  SVG_SCOPE_SUFFIX,
+  scopeSvgSheets,
 } from '@classmoji/services/slides/runtime-attrs';
 
 import {
@@ -281,7 +281,7 @@ test.describe('svgFromSource reads the source the way the slide will', () => {
 });
 
 test.describe("svgFromSource scopes a drawing's styles", () => {
-  test('a <style> in <defs> lands under the <svg>, wrapped in @scope', () => {
+  test('the sheet is held to the drawing, which carries its scope key; the sheet stays where it was', () => {
     const result = svgFromSource(
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><defs><style>.cls-1{fill:red}</style>' +
         '</defs><rect class="cls-1" width="10" height="10"/></svg>',
@@ -289,9 +289,9 @@ test.describe("svgFromSource scopes a drawing's styles", () => {
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const first = result.svg.firstElementChild;
-    expect(first?.localName).toBe('style');
-    expect(first?.textContent).toBe(`@scope {\n.cls-1${SVG_SCOPE_SUFFIX}{fill:red}\n}`);
+    const { key, sheets } = scopeSvgSheets(['.cls-1{fill:red}']);
+    expect(result.svg.getAttribute('data-cm-scope')).toBe(key);
+    expect(result.svg.querySelector('defs style')?.textContent).toBe(sheets[0]);
   });
 });
 

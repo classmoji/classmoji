@@ -14,8 +14,8 @@ import {
   neutralizeHtmlBlockFrames,
   offListSvgBlockNodes,
   sanitizeSvgBlocks,
+  scopeSvgSheets,
   scopeSvgStyles,
-  SVG_SCOPE_SUFFIX,
 } from '@classmoji/services/slides/runtime-attrs';
 
 import {
@@ -191,40 +191,47 @@ test.describe('svg block styles stay in their drawing (DOM)', () => {
     '<div class="sl-block" data-block-type="svg" data-cm-block-id="b1">' +
     `<div class="sl-block-content">${inner}</div></div>`;
 
-  test('a <style> in <defs> moves to the drawing root, before its branch, scoped', () => {
+  test('sheets are held to the drawing with one key, in place; keyframes and inline animations follow', () => {
     const root = holder(
       svgBlock(
-        '<svg viewBox="0 0 10 10"><defs><linearGradient id="g"></linearGradient>' +
-          '<style>.st0{fill:red}</style></defs><rect class="st0"></rect></svg>'
+        '<svg viewBox="0 0 10 10"><defs><style>.st0{fill:red}@keyframes spin{to{opacity:0}}</style></defs>' +
+          '<style>.b{animation:spin 1s}</style><rect class="st0" style="animation: spin 2s"></rect></svg>'
       )
     );
     sanitizeSvgBlocks(root);
+    const scoped = scopeSvgSheets([
+      '.st0{fill:red}@keyframes spin{to{opacity:0}}',
+      '.b{animation:spin 1s}',
+    ]);
     const svg = root.querySelector('svg') as Element;
-    expect(svg.firstElementChild?.localName).toBe('style');
-    expect(svg.firstElementChild?.textContent).toBe(
-      `@scope {\n.st0${SVG_SCOPE_SUFFIX}{fill:red}\n}`
+    expect(svg.getAttribute('data-cm-scope')).toBe(scoped.key);
+    expect(Array.from(svg.querySelectorAll('style')).map(s => s.textContent)).toEqual(
+      scoped.sheets
     );
-    expect(svg.querySelector('defs style')).toBeNull();
-    expect(svg.querySelector('defs linearGradient')).not.toBeNull();
+    expect(svg.querySelector('defs style')).not.toBeNull();
+    expect(svg.querySelector('rect')?.getAttribute('style')).toBe(
+      `animation: spin_cm-${scoped.key} 2s`
+    );
   });
 
-  test('sheets keep their order; a nested <svg> scopes to the outermost one; idempotent', () => {
+  test('idempotent, the same through scopeSvgStyles; a drawing with no sheets carries no key', () => {
     const root = holder(
       svgBlock(
         '<svg><style>.a{fill:red}</style><g><svg><style>.b{fill:blue}</style></svg></g></svg>'
-      )
+      ) + svgBlock('<svg data-cm-scope="dstale"><rect></rect></svg>')
     );
     sanitizeSvgBlocks(root);
     const once = root.innerHTML;
-    const outer = root.querySelector('.sl-block-content > svg') as Element;
-    const styles = Array.from(outer.children).filter(el => el.localName === 'style');
-    expect(styles.map(s => s.textContent)).toEqual([
-      `@scope {\n.a${SVG_SCOPE_SUFFIX}{fill:red}\n}`,
-      `@scope {\n.b${SVG_SCOPE_SUFFIX}{fill:blue}\n}`,
-    ]);
+    const [outer, plain] = Array.from(root.querySelectorAll('.sl-block-content > svg'));
+    expect(outer.getAttribute('data-cm-scope')).toBe(
+      scopeSvgSheets(['.a{fill:red}', '.b{fill:blue}']).key
+    );
+    expect(plain.hasAttribute('data-cm-scope')).toBe(false);
     sanitizeSvgBlocks(root);
     expect(root.innerHTML).toBe(once);
-    scopeSvgStyles(root.querySelector('.sl-block-content') as Element);
+    for (const content of Array.from(root.querySelectorAll('.sl-block-content'))) {
+      scopeSvgStyles(content);
+    }
     expect(root.innerHTML).toBe(once);
   });
 

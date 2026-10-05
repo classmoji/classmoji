@@ -33,6 +33,7 @@ import {
   HTML_BLOCK_SELECTOR,
   INERT_ATTR_PREFIX,
   SVG_BLOCK_SELECTOR,
+  SVG_SCOPE_ATTR,
   cssPx,
   htmlBlockFrameMarkup,
   htmlBlockSource,
@@ -40,6 +41,8 @@ import {
   isAllowedSvgAttr,
   isAllowedSvgElement,
   isBlockedFrameAttr,
+  scopeAnimationNames,
+  scopeSvgSheets,
   type BlockBox,
 } from './deckBlocks.ts';
 import type { DeckConfig, DeckExtraCss, DeckJson, DeckSlide } from './deckTypes.ts';
@@ -870,7 +873,7 @@ function neutralizeHtmlBlocksIn($: CheerioAPI): number {
     const el = node as Element;
     const inside = insideHtmlBlock($, el);
     const blocked = (name: string) =>
-      isBlockedFrameAttr(el.tagName, name, el.attribs['sandbox'], inside);
+      isBlockedFrameAttr(el.tagName, name, el.attribs['sandbox'], inside, el.attribs[name]);
     if (!Object.keys(el.attribs).some(blocked)) return;
     renameAttribs(el, name => {
       if (!blocked(name)) return name;
@@ -926,7 +929,7 @@ function stripHandlers(el: Element): number {
 }
 
 /** The svg-block lists applied under `root` (cheerio twin of deckBlocks sanitizeSvgTree). */
-function sanitizeSvgTreeIn(root: Element): number {
+function sanitizeSvgTreeIn($: CheerioAPI, root: Element): number {
   let changed = stripHandlers(root);
   const visit = (parent: Element): void => {
     for (const node of [...parent.children] as AnyNode[]) {
@@ -953,6 +956,66 @@ function sanitizeSvgTreeIn(root: Element): number {
     }
   };
   visit(root);
+  return changed + scopeSvgStylesIn($, root);
+}
+
+/** A `<style>` element's sheet (its text; the lists leave nothing else in it). */
+function sheetText(el: Element): string {
+  return (el.children as AnyNode[])
+    .map(n => (n.type === 'text' ? (n as unknown as { data: string }).data : ''))
+    .join('');
+}
+
+/**
+ * Every drawing at or under `root` with its `<style>` sheets held to it — the
+ * cheerio twin of deckBlocks `scopeSvgStyles`, from the same pure rewrite
+ * (`scopeSvgSheets`), so the server stores what the editor shows. Returns the
+ * changes.
+ */
+function scopeSvgStylesIn($: CheerioAPI, root: Element): number {
+  let changed = 0;
+  const isSvg = (el: Element) => el.tagName === 'svg' && el.namespace === SVG_NS;
+  const drawings = isSvg(root)
+    ? [root]
+    : ($(root).find('svg').toArray() as Element[]).filter(
+        svg =>
+          isSvg(svg) &&
+          $(svg)
+            .parentsUntil(root)
+            .filter((_i, el) => isSvg(el as Element)).length === 0
+      );
+  for (const svg of drawings) {
+    const styles = ($(svg).find('style').toArray() as Element[]).filter(
+      el => el.namespace === SVG_NS
+    );
+    const scoped = scopeSvgSheets(styles.map(sheetText));
+    styles.forEach((style, i) => {
+      const next = scoped.sheets[i];
+      if (next === sheetText(style)) return;
+      $(style).text(next);
+      changed++;
+    });
+    if (scoped.key) {
+      if (svg.attribs[SVG_SCOPE_ATTR] !== scoped.key) {
+        svg.attribs[SVG_SCOPE_ATTR] = scoped.key;
+        changed++;
+      }
+    } else if (SVG_SCOPE_ATTR in svg.attribs) {
+      delete svg.attribs[SVG_SCOPE_ATTR];
+      changed++;
+    }
+    if (scoped.key && scoped.names.size > 0) {
+      for (const el of [svg, ...($(svg).find('[style]').toArray() as Element[])]) {
+        const value = el.attribs['style'];
+        if (value === undefined) continue;
+        const next = scopeAnimationNames(value, scoped.names, scoped.key);
+        if (next !== value) {
+          el.attribs['style'] = next;
+          changed++;
+        }
+      }
+    }
+  }
   return changed;
 }
 
@@ -983,7 +1046,7 @@ function sanitizeSvgBlocksIn($: CheerioAPI): number {
         child.type === 'tag' &&
         ((child as Element).attribs['class'] ?? '').split(/\s+/).includes('sl-block-content');
       if (isContent) {
-        changed += sanitizeSvgTreeIn(child as Element);
+        changed += sanitizeSvgTreeIn($, child as Element);
       } else {
         removeNode(child);
         changed++;
@@ -1021,7 +1084,7 @@ export function normalizeSvgBlockSource(svg: string): string {
   for (const [name, value] of Object.entries(root.attribs)) {
     if (!isAllowedSvgAttr(name, value)) delete root.attribs[name];
   }
-  sanitizeSvgTreeIn(root);
+  sanitizeSvgTreeIn($, root);
   const attribs = root.attribs;
   const viewBoxKey = Object.keys(attribs).find(k => k.toLowerCase() === 'viewbox');
   if (!viewBoxKey) {

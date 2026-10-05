@@ -30,6 +30,7 @@ import {
   blockMarkup,
   escapeBlockAttr,
   htmlBlockMarkup,
+  MAX_SLIDE_HTML_LENGTH,
   mintBlockId,
   type BlockBox,
 } from './deckBlocks.ts';
@@ -53,7 +54,7 @@ import type { DeckJson, DeckSlide } from './deckTypes.ts';
 export { SlideHtmlError, readSlideBlocks, type SlideBlockInfo } from './deckHtml.ts';
 
 /** The most characters a slide's html may hold (the op schemas' html cap). */
-export const MAX_SLIDE_HTML = 200_000;
+export const MAX_SLIDE_HTML = MAX_SLIDE_HTML_LENGTH;
 
 // ─── Op schemas ──────────────────────────────────────────────────────────────
 
