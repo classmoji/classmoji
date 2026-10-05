@@ -26,7 +26,7 @@ import {
   type DeckJson,
 } from '@classmoji/services/slides';
 import { firstSlideOnly } from '../../app/routes/$slideId_.thumbnail-source/route.tsx';
-import { deckDocumentView, deckFolderOfDocument } from '../../app/utils/slideDocumentAccess.ts';
+import { deckDocumentRights, deckFolderOfDocument } from '../../app/utils/slideDocumentAccess.ts';
 
 /** A slide is its id; a stack is the list of its children's ids. */
 type Outline = Array<string | string[]>;
@@ -184,67 +184,69 @@ test.describe('the stored document through /content/...', () => {
     expect(deckFolderOfDocument('/index.html')).toBeNull();
   });
 
+  const EDITOR = { canEdit: true, canViewSpeakerNotes: true };
+  const STUDENT = { canEdit: false, canViewSpeakerNotes: false };
+  const STUDENT_WITH_NOTES = { canEdit: false, canViewSpeakerNotes: true };
+
   test('an editor of the deck gets it whole', async () => {
     const asked: string[] = [];
-    const view = await deckDocumentView({
+    const rights = await deckDocumentRights({
       path: PATH,
       classroomIds: ['c1'],
       findDecks: async (_ids, folder) => {
         asked.push(folder);
         return [{ id: 'deck-1' }];
       },
-      canEditDeck: async () => true,
+      rightsFor: async () => EDITOR,
     });
-    expect(view).toBe('whole');
+    expect(rights).toEqual(EDITOR);
     expect(asked).toEqual(['slides/week-1']);
   });
 
-  test('a viewer gets it without its hidden slides', async () => {
-    const view = await deckDocumentView({
-      path: PATH,
-      classroomIds: ['c1'],
-      findDecks: async () => [{ id: 'deck-1' }],
-      canEditDeck: async () => false,
-    });
-    expect(view).toBe('without-hidden');
+  test('a viewer gets the flags its deck row gives it', async () => {
+    for (const given of [STUDENT, STUDENT_WITH_NOTES]) {
+      const rights = await deckDocumentRights({
+        path: PATH,
+        classroomIds: ['c1'],
+        findDecks: async () => [{ id: 'deck-1' }],
+        rightsFor: async () => given,
+      });
+      expect(rights).toEqual(given);
+    }
   });
 
-  test('any doubt reads as a viewer: refused check, unknown folder, no classroom', async () => {
-    const refused = await deckDocumentView({
+  test('any doubt grants nothing: refused check, unknown folder, no classroom', async () => {
+    const refused = await deckDocumentRights({
       path: PATH,
       classroomIds: ['c1'],
       findDecks: async () => [{ id: 'deck-1' }],
-      canEditDeck: async () => {
+      rightsFor: async () => {
         throw new Response('Forbidden', { status: 403 });
       },
     });
-    const unknown = await deckDocumentView({
+    const unknown = await deckDocumentRights({
       path: PATH,
       classroomIds: ['c1'],
       findDecks: async () => [],
-      canEditDeck: async () => true,
+      rightsFor: async () => EDITOR,
     });
-    const noClassroom = await deckDocumentView({
+    const noClassroom = await deckDocumentRights({
       path: PATH,
       classroomIds: [],
       findDecks: async () => [{ id: 'deck-1' }],
-      canEditDeck: async () => true,
+      rightsFor: async () => EDITOR,
     });
-    expect([refused, unknown, noClassroom]).toEqual([
-      'without-hidden',
-      'without-hidden',
-      'without-hidden',
-    ]);
+    expect([refused, unknown, noClassroom]).toEqual([STUDENT, STUDENT, STUDENT]);
   });
 
-  test('a second deck row that grants edit still wins', async () => {
-    const view = await deckDocumentView({
+  test('a second deck row that grants a flag still wins', async () => {
+    const rights = await deckDocumentRights({
       path: PATH,
       classroomIds: ['c1', 'c2'],
       findDecks: async () => [{ id: 'other-classroom' }, { id: 'mine' }],
-      canEditDeck: async deck => deck.id === 'mine',
+      rightsFor: async deck => (deck.id === 'mine' ? EDITOR : STUDENT),
     });
-    expect(view).toBe('whole');
+    expect(rights).toEqual(EDITOR);
   });
 });
 
@@ -270,13 +272,23 @@ test.describe('every surface goes through the one rule', () => {
     'routes/$slideId_.speaker/route.tsx',
   ]) {
     test(`${file} strips hidden slides for non-editors`, () => {
-      expect(read(file)).toMatch(/canEdit[\s\S]{0,80}stripHiddenSlidesFromHtml\(/);
+      expect(read(file)).toMatch(
+        /canEdit[\s\S]{0,80}stripHiddenSlidesFromHtml\(|deckHtmlForViewer\(slideContent, \{ canEdit, canViewSpeakerNotes \}\)/
+      );
     });
   }
 
-  test('the content proxy filters a deck document', () => {
+  for (const file of ['routes/$slideId/route.tsx', 'routes/$slideId_.follow/route.tsx']) {
+    test(`${file} strips speaker notes through the shared helper`, () => {
+      const source = read(file);
+      expect(source).toContain('deckHtmlForViewer(slideContent, { canEdit, canViewSpeakerNotes })');
+      expect(source).not.toMatch(/<aside\\s\+class/);
+    });
+  }
+
+  test('the content proxy filters a deck document by the same rule', () => {
     const source = read('routes/content.$org.$repo.$/route.tsx');
-    expect(source).toContain('deckDocumentView(');
-    expect(source).toContain("'without-hidden') text = stripHiddenSlidesFromHtml(text)");
+    expect(source).toContain('deckDocumentRights(');
+    expect(source).toContain('deckHtmlForViewer(text, rights)');
   });
 });

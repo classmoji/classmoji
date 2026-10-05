@@ -47,7 +47,7 @@
 import { fetchContent, getMimeType, isBinaryFile } from '~/utils/contentProxy';
 import { contentProxySafetyHeaders, withNosniff } from '~/utils/contentProxyHeaders';
 import {
-  deckDocumentView,
+  deckDocumentRights,
   deckFolderOfDocument,
   isWithinContentPath,
   slideDocumentDecision,
@@ -56,8 +56,9 @@ import { assertSlideAccess, getAuthSession } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
 import {
   SLIDE_FILE_EXTENSIONS,
+  deckHtmlForViewer,
   mayHaveHiddenSlides,
-  stripHiddenSlidesFromHtml,
+  mayHaveSpeakerNotes,
 } from '@classmoji/services/slides';
 import { getContentRepoName } from '@classmoji/utils';
 import getPrisma from '@classmoji/database';
@@ -412,12 +413,14 @@ async function serveContent({ params, request }: ContentLoaderArgs): Promise<Res
     return new Response(binaryContent.buffer, { headers });
   }
 
-  // 5. A deck's stored document carries its hidden slides. Only the deck's
-  // editors get it whole (#436); everyone else gets what the viewer would show
-  // them. The answer now depends on who asked, so no shared cache may keep it.
+  // 5. A deck's stored document carries its hidden slides and its speaker
+  // notes. Only the deck's editors get the hidden slides and only callers
+  // allowed the notes get those (#436) — the `/{slideId}` loader's rule, via
+  // the same `deckHtmlForViewer`, with both flags read in one pass. The answer
+  // now depends on who asked, so no shared cache may keep it.
   let text = result.content as string;
-  if (deckFolderOfDocument(path) && mayHaveHiddenSlides(text)) {
-    const view = await deckDocumentView({
+  if (deckFolderOfDocument(path) && (mayHaveHiddenSlides(text) || mayHaveSpeakerNotes(text))) {
+    const rights = await deckDocumentRights({
       path,
       classroomIds: authorizedClassroomIds,
       findDecks: (classroomIds, contentPath) =>
@@ -429,11 +432,20 @@ async function serveContent({ params, request }: ContentLoaderArgs): Promise<Res
           },
           include: { classroom: { include: { git_organization: true } } },
         }),
-      canEditDeck: async deck =>
-        (await assertSlideAccess({ request, slideId: deck.id, slide: deck, accessType: 'view' }))
-          .canEdit,
+      rightsFor: async deck => {
+        const access = await assertSlideAccess({
+          request,
+          slideId: deck.id,
+          slide: deck,
+          accessType: 'view',
+        });
+        return {
+          canEdit: Boolean(access.canEdit),
+          canViewSpeakerNotes: Boolean(access.canViewSpeakerNotes),
+        };
+      },
     });
-    if (view === 'without-hidden') text = stripHiddenSlidesFromHtml(text);
+    text = deckHtmlForViewer(text, rights);
     headers['Cache-Control'] = 'private, max-age=60';
   }
 

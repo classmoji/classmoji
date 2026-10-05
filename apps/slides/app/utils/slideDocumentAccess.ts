@@ -146,36 +146,54 @@ export interface DeckSlideRef {
   id: string;
 }
 
+/** What one deck row lets this caller see — `assertSlideAccess`'s two flags. */
+export interface DeckDocumentRights {
+  canEdit: boolean;
+  canViewSpeakerNotes: boolean;
+}
+
+/** Nothing beyond the slides a viewer is shown. */
+export const VIEWER_ONLY_RIGHTS: DeckDocumentRights = {
+  canEdit: false,
+  canViewSpeakerNotes: false,
+};
+
 /**
- * Does this caller get a deck document as stored, or without its hidden
- * slides?
+ * What this caller may see of a deck document: its hidden slides (editors
+ * only) and its speaker notes (staff, or anyone who can view when the deck
+ * sets `show_speaker_notes`) — the same two flags the `/{slideId}` loader
+ * strips by, via `deckHtmlForViewer`.
  *
- * Only a caller who can EDIT the deck gets it whole, which is the same line the
- * viewer draws (`canEdit` from `assertSlideAccess`). Every match is checked and
- * any one that grants edit wins, for the reason `slideDocumentDecision` gives.
- * Anything else — no deck row at this folder, a viewer, a refused check —
- * gets the filtered copy, so the answer only ever errs towards hiding.
+ * Every match is checked and each flag is granted by any one that grants it,
+ * for the reason `slideDocumentDecision` gives. Anything else — no deck row at
+ * this folder, a refused check — grants nothing, so the answer only ever errs
+ * towards hiding.
  */
-export async function deckDocumentView<T extends DeckSlideRef>({
+export async function deckDocumentRights<T extends DeckSlideRef>({
   path,
   classroomIds,
   findDecks,
-  canEditDeck,
+  rightsFor,
 }: {
   path: string;
   classroomIds: readonly string[];
   findDecks: (classroomIds: readonly string[], contentPath: string) => Promise<T[]>;
-  canEditDeck: (slide: T) => Promise<boolean>;
-}): Promise<'whole' | 'without-hidden'> {
+  rightsFor: (slide: T) => Promise<DeckDocumentRights>;
+}): Promise<DeckDocumentRights> {
   const folder = deckFolderOfDocument(path);
-  if (!folder || classroomIds.length === 0) return 'without-hidden';
+  if (!folder || classroomIds.length === 0) return VIEWER_ONLY_RIGHTS;
 
+  const rights = { ...VIEWER_ONLY_RIGHTS };
   for (const slide of await findDecks(classroomIds, folder)) {
+    let granted: DeckDocumentRights;
     try {
-      if (await canEditDeck(slide)) return 'whole';
+      granted = await rightsFor(slide);
     } catch {
       continue;
     }
+    rights.canEdit ||= granted.canEdit;
+    rights.canViewSpeakerNotes ||= granted.canViewSpeakerNotes;
+    if (rights.canEdit && rights.canViewSpeakerNotes) break;
   }
-  return 'without-hidden';
+  return rights;
 }
