@@ -24,9 +24,15 @@ import {
 import {
   LIVE_CONNECT_GRACE_MS,
   offerCopyUnsaved,
+  SAVE_VERSION_MESSAGES,
   SAVE_VERSION_WAIT_MS,
   applyPageMeta,
   checkpointAnswersSaveVersion,
+  isSaveVersionRequestId,
+  newSaveVersionRequestId,
+  saveVersionGate,
+  saveVersionOutcome,
+  savedToGitHubAnnouncement,
   initialCheckpoint,
   parseStatelessMessage,
   relativeTimeFrom,
@@ -263,7 +269,8 @@ test.describe('git writes are refused for a live classroom (action)', () => {
   test('a save gets the reload banner, without a fallback-triggering code', () => {
     const refusal = liveIntentRefusal('save', true);
     expect(refusal?.status).toBe(409);
-    expect(refusal?.body).toEqual({ conflict: true, message: LIVE_PAGE_MESSAGE });
+    // `live`: the git editor says the page is now live and offers a copy-out.
+    expect(refusal?.body).toEqual({ conflict: true, live: true, message: LIVE_PAGE_MESSAGE });
     expect(refusal?.body).not.toHaveProperty('code');
   });
 
@@ -501,6 +508,23 @@ test.describe('messages from the room', () => {
     expect(parseStatelessMessage('{"type":"preview-changed"}')).toEqual({
       type: 'preview-changed',
     });
+    // The Save version requests a run answers, and "nothing to save"; junk ids dropped.
+    expect(
+      parseStatelessMessage({
+        type: 'checkpoint',
+        at: '2026-10-03T10:00:00Z',
+        requestIds: ['req-aaaaaaaa', 'bad id', 7],
+        alreadySaved: true,
+      })
+    ).toEqual({
+      type: 'checkpoint',
+      at: '2026-10-03T10:00:00Z',
+      requestIds: ['req-aaaaaaaa'],
+      alreadySaved: true,
+    });
+    expect(
+      parseStatelessMessage({ type: 'checkpoint', at: '2026-10-03T10:00:00Z', requestIds: 'x' })
+    ).toEqual({ type: 'checkpoint', at: '2026-10-03T10:00:00Z' });
     expect(parseStatelessMessage('{"type":"checkpoint"}')).toBeNull();
     expect(parseStatelessMessage('{"type":"page-meta"}')).toBeNull();
     expect(parseStatelessMessage('{"type":"deck-meta","title":"x"}')).toBeNull();
@@ -533,7 +557,30 @@ test.describe('saved to GitHub', () => {
   test('saved: when, with the commit on hover', () => {
     expect(
       savedToGitHubStatus({ at: '2026-10-03T11:55:00Z', commit: '0123456789abcdef' }, now)
-    ).toEqual({ tone: 'saved', label: 'Saved to GitHub 5 minutes ago', title: 'Commit 0123456' });
+    ).toEqual({
+      tone: 'saved',
+      label: 'Saved to GitHub 5 minutes ago',
+      title: 'Commit 0123456',
+      editsSince: false,
+    });
+  });
+
+  test('edits since the checkpoint are said, and announced without the time', () => {
+    const status = savedToGitHubStatus({ at: '2026-10-03T11:55:00Z' }, now, true);
+    expect(status?.label).toBe('Saved to GitHub 5 minutes ago · edits since');
+    expect(status?.editsSince).toBe(true);
+    expect(savedToGitHubAnnouncement(status)).toBe('Edits since the last save to GitHub');
+    const clean = savedToGitHubStatus({ at: '2026-10-03T11:55:00Z' }, now);
+    const later = savedToGitHubStatus({ at: '2026-10-03T11:55:00Z' }, now + 30 * 60_000);
+    // The visible line follows the clock; the announcement does not.
+    expect(clean?.label).not.toBe(later?.label);
+    expect(savedToGitHubAnnouncement(clean)).toBe(savedToGitHubAnnouncement(later));
+    expect(savedToGitHubAnnouncement(clean)).toBe('Saved to GitHub');
+    // A failed run is never "saved with edits since".
+    const failed = savedToGitHubStatus({ at: '2026-10-03T11:55:00Z', error: 'refused' }, now, true);
+    expect(failed?.editsSince).toBe(false);
+    expect(savedToGitHubAnnouncement(failed)).toBe('Not saved to GitHub yet');
+    expect(savedToGitHubAnnouncement(null)).toBe('');
   });
 
   test('not saved: a short reason on hover; nothing known: nothing shown', () => {
@@ -555,6 +602,52 @@ test.describe('saved to GitHub', () => {
     expect(checkpointAnswersSaveVersion({ at: '2026-10-03T11:50:00Z' }, accepted)).toBe(false);
     expect(checkpointAnswersSaveVersion({ at: '2026-10-03T12:00:05Z' }, null)).toBe(false);
     expect(SAVE_VERSION_WAIT_MS).toBe(60_000);
+  });
+
+  test('Save version is answered by the message naming its request, not by time', () => {
+    const since = Date.parse('2026-10-03T12:00:00Z');
+    const pending = { id: 'req-aaaaaaaa', since };
+    // A routine run landing just after the click does not answer it.
+    expect(saveVersionOutcome({ at: '2026-10-03T12:00:05Z' }, pending)).toBeNull();
+    expect(
+      saveVersionOutcome({ at: '2026-10-03T12:00:05Z', requestIds: ['req-bbbbbbbb'] }, pending)
+    ).toBeNull();
+    expect(
+      saveVersionOutcome({ at: '2026-10-03T12:00:05Z', requestIds: ['req-aaaaaaaa'] }, pending)
+    ).toBe('saved');
+    expect(
+      saveVersionOutcome(
+        { at: '2026-10-03T12:00:05Z', requestIds: ['req-aaaaaaaa'], alreadySaved: true },
+        pending
+      )
+    ).toBe('already-saved');
+    expect(
+      saveVersionOutcome(
+        { at: '2026-10-03T12:00:05Z', requestIds: ['req-aaaaaaaa'], error: 'push refused' },
+        pending
+      )
+    ).toBe('failed');
+    expect(saveVersionOutcome({ at: '2026-10-03T12:00:05Z' }, null)).toBeNull();
+    // A server that echoes no id: matched by time, as before.
+    expect(saveVersionOutcome({ at: '2026-10-03T12:00:05Z' }, { id: null, since })).toBe('saved');
+    expect(saveVersionOutcome({ at: '2026-10-03T11:50:00Z' }, { id: null, since })).toBeNull();
+    expect(SAVE_VERSION_MESSAGES['already-saved']).toBe('Already saved.');
+    expect(SAVE_VERSION_MESSAGES.saved).toBe('Version saved.');
+  });
+
+  test('request ids: generated ids pass the server check, junk does not', () => {
+    const id = newSaveVersionRequestId();
+    expect(isSaveVersionRequestId(id)).toBe(true);
+    expect(newSaveVersionRequestId()).not.toBe(id);
+    for (const bad of ['', 'short', 'x'.repeat(65), 'has space1', '<script>1', 42, null]) {
+      expect(isSaveVersionRequestId(bad)).toBe(false);
+    }
+  });
+
+  test('Save version waits for this browser to sync, and not offline', () => {
+    expect(saveVersionGate('synced')).toBe('now');
+    expect(saveVersionGate('syncing')).toBe('wait');
+    expect(saveVersionGate('offline')).toBe('offline');
   });
 });
 
@@ -582,14 +675,17 @@ test.describe('live editing on but unreachable', () => {
   });
 
   test('git writes are refused with a sentence, other intents carry on', () => {
-    for (const intent of ['save', 'set-header-image', 'upload-header-image']) {
+    // preview-accept too: without the live service it would merge into git's copy.
+    for (const intent of ['save', 'set-header-image', 'upload-header-image', 'preview-accept']) {
       expect(liveIntentRefusal(intent, false, true)).toEqual({
         status: 409,
         body: { error: LIVE_UNAVAILABLE_MESSAGE },
       });
     }
     expect(liveIntentRefusal('update-title', false, true)).toBeNull();
+    expect(liveIntentRefusal('preview-discard', false, true)).toBeNull();
     expect(liveIntentRefusal('save', false, false)).toBeNull();
+    expect(liveIntentRefusal('preview-accept', false, false)).toBeNull();
   });
 });
 
@@ -649,6 +745,7 @@ test.describe('saved to GitHub before checkpoint times were recorded', () => {
       tone: 'saved',
       label: 'Saved to GitHub',
       title: 'Commit abcdef1',
+      editsSince: false,
     });
     // Seeded from git, never pushed by live editing: saved, no commit known.
     const seeded = initialCheckpoint({
@@ -660,6 +757,7 @@ test.describe('saved to GitHub before checkpoint times were recorded', () => {
       tone: 'saved',
       label: 'Saved to GitHub',
       title: undefined,
+      editsSince: false,
     });
   });
 
@@ -679,6 +777,16 @@ test.describe('saved to GitHub before checkpoint times were recorded', () => {
         row: row(),
       })
     ).toEqual({ at: '2026-10-03T12:00:00Z', commit: 'abcdef1234567', error: 'push refused' });
+  });
+
+  test('a recorded checkpoint with live edits after it says so', () => {
+    expect(
+      initialCheckpoint({
+        lastCheckpointAt: '2026-10-03T12:00:00Z',
+        lastCheckpointError: null,
+        row: row({ version: 6 }),
+      })
+    ).toEqual({ at: '2026-10-03T12:00:00Z', commit: 'abcdef1234567', editsSince: true });
   });
 
   test('a time-less checkpoint never answers a pending Save version', () => {

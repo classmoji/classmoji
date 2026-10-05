@@ -43,7 +43,7 @@ import {
   resolveDocumentAssets,
 } from '~/utils/assetRefs.server.ts';
 import type { CollabLoaderData } from '@classmoji/collab';
-import { initialCheckpoint, type LiveCheckpoint } from '~/utils/collab.ts';
+import { initialCheckpoint, isSaveVersionRequestId, type LiveCheckpoint } from '~/utils/collab.ts';
 import {
   collabEditorData,
   fetchLiveSnapshot,
@@ -490,7 +490,8 @@ export const loader = async ({
     coverImage,
     // Live editing: the room to join, or null for the git editor / a reader.
     collab,
-    liveCheckpoint,
+    // Assigned inside `readContent`, which TypeScript's narrowing does not follow.
+    liveCheckpoint: liveCheckpoint as LiveCheckpoint | null,
     liveUnavailable,
     // The preview's added/edited block ids and removed count (preview only).
     previewChanges,
@@ -652,13 +653,23 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
     if (!liveEnv) return Response.json({ error: 'Invalid action' }, { status: 400 });
     try {
       const name = await readEditorName(authData.userId, authData.userLogin);
-      await requestCheckpoint(
+      const requestId = isSaveVersionRequestId(data.requestId) ? data.requestId : undefined;
+      const answer = await requestCheckpoint(
         liveEnv,
         pageId,
         { userId: authData.userId, name },
-        versionNote(data.message)
+        versionNote(data.message),
+        requestId
       );
-      return Response.json({ success: true, savedVersion: true });
+      // The id comes back only from a server that answers by it; without it
+      // the page falls back to matching the checkpoint message by time.
+      const echoed = requestId && answer?.requestId === requestId ? requestId : undefined;
+      return Response.json({
+        success: true,
+        savedVersion: true,
+        ...(echoed ? { requestId: echoed } : {}),
+        ...(echoed && answer?.alreadySaved === true ? { alreadySaved: true } : {}),
+      });
     } catch (error: unknown) {
       console.error('[pages] Save version failed:', error);
       return Response.json(

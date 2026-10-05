@@ -88,6 +88,11 @@ export interface CollabSessionState {
   openedAt: number;
   /** The last checkpoint message this session received, numbered as it arrives. */
   lastCheckpoint: (LiveCheckpoint & { seq: number }) | null;
+  /**
+   * The document changed (here or anywhere else) since the room's last
+   * successful checkpoint message, or since the first sync when none came yet.
+   */
+  editedSinceCheckpoint: boolean;
   /** Title/width changed outside the document, numbered as it arrives. */
   pageMeta: { title?: string; width?: number; seq: number } | null;
   /** Numbered each time the page's pending preview was created, changed or removed. */
@@ -105,6 +110,7 @@ export const INITIAL_SESSION_STATE: CollabSessionState = {
   agentTouches: [],
   openedAt: 0,
   lastCheckpoint: null,
+  editedSinceCheckpoint: false,
   pageMeta: null,
   previewChangedSeq: 0,
 };
@@ -175,10 +181,15 @@ export class CollabSession {
       },
     });
 
-    // Local edits: every document update that did not come from the provider
+    // Any change after the first sync is one GitHub does not have yet. Local
+    // edits: every document update that did not come from the provider
     // (remote updates carry the provider as their origin).
     this.onDocUpdate = (_update, origin) => {
-      if (origin === this.provider || this.destroyed) return;
+      if (this.destroyed) return;
+      if (this.state.hasSynced && !this.state.editedSinceCheckpoint) {
+        this.update({ editedSinceCheckpoint: true });
+      }
+      if (origin === this.provider) return;
       if (!this.state.localUnsynced) this.update({ localUnsynced: true });
     };
     this.doc.on('update', this.onDocUpdate);
@@ -247,7 +258,11 @@ export class CollabSession {
     this.seq += 1;
     if (message.type === 'checkpoint') {
       const { type: _type, ...checkpoint } = message;
-      this.update({ lastCheckpoint: { ...checkpoint, seq: this.seq } });
+      this.update({
+        lastCheckpoint: { ...checkpoint, seq: this.seq },
+        // A saved page is GitHub's copy again; a failed run changes nothing.
+        ...(checkpoint.error ? {} : { editedSinceCheckpoint: false }),
+      });
     } else if (message.type === 'preview-changed') {
       this.update({ previewChangedSeq: this.seq });
     } else {

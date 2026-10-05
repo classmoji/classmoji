@@ -35,19 +35,26 @@ import {
   LiveRejectedBanner,
 } from '~/components/editor/collab/LiveNotices.tsx';
 import {
+  SAVE_VERSION_MESSAGES,
+  SAVE_VERSION_SYNC_WAIT_MS,
   SAVE_VERSION_WAIT_MS,
   offerCopyUnsaved,
   applyPageMeta,
   autoReloadAllowed,
-  checkpointAnswersSaveVersion,
   claimStaleReload,
   deriveSyncStatus,
   isCollabMode,
   liveLeaveUnsafe,
   liveUnreachable,
+  newSaveVersionRequestId,
   rejectionNotice,
   saveMachineryEnabled,
+  saveVersionGate,
+  saveVersionOutcome,
+  type PendingSaveVersion,
+  type SaveVersionOutcome,
 } from '~/utils/collab.ts';
+import { LIVE_PAGE_MESSAGE } from '~/utils/liveGates.ts';
 import { createAssetResolver } from '~/utils/liveAssets.ts';
 import type { PageEditorHandle } from '~/components/editor/PageEditor.tsx';
 import {
@@ -238,6 +245,9 @@ const PageRoute = () => {
     [liveState.agentTouches]
   );
   const liveEditable = liveMode && !liveRefused;
+  // The title: on a live page only once the room has synced, and never once
+  // it refused this session.
+  const titleEditable = liveMode ? liveEditable && liveState.hasSynced : canEdit;
   // Title and width changed by someone else on a live page arrive as a room
   // message and apply in place (no reload); otherwise the loader's.
   const liveMeta = liveMode ? liveState.pageMeta : null;
@@ -861,49 +871,132 @@ const PageRoute = () => {
     };
   }, [liveMode, shownCoverRef, assets, liveAssetResolver]);
 
-  // "Save version": a checkpoint of the live document now. The request being
-  // accepted is not the version being saved: the toast waits for the room's
-  // checkpoint message (up to SAVE_VERSION_WAIT_MS, "Saving version…" until).
-  const versionFetcher = useFetcher<{ success?: boolean; error?: string }>();
+  // "Save version": a checkpoint of the live document now, once this
+  // browser's edits are on the server (it waits for them, briefly). The
+  // request being accepted is not the version being saved: the toast waits
+  // for the room's checkpoint message naming this request (up to
+  // SAVE_VERSION_WAIT_MS, "Saving version…" until), unless the server says at
+  // once that there was nothing to save.
+  const versionFetcher = useFetcher<{
+    success?: boolean;
+    error?: string;
+    requestId?: string;
+    alreadySaved?: boolean;
+  }>();
   const handledVersionRef = useRef<unknown>(null);
-  const [versionPendingSince, setVersionPendingSince] = useState<number | null>(null);
+  const [pendingVersion, setPendingVersion] = useState<PendingSaveVersion | null>(null);
+  // Asked for while this browser's edits were on their way: sent once they arrive.
+  const [queuedVersion, setQueuedVersion] = useState<{ message?: string; since: number } | null>(
+    null
+  );
+  // The id of the request in flight, and its answer if the room's message
+  // beat the action's reply.
+  const inflightVersionIdRef = useRef<string | null>(null);
+  const earlyVersionOutcomeRef = useRef<SaveVersionOutcome | null>(null);
+  const announceVersion = useCallback((outcome: SaveVersionOutcome | 'unconfirmed') => {
+    if (outcome === 'saved' || outcome === 'already-saved') {
+      toast.success(SAVE_VERSION_MESSAGES[outcome]);
+    } else {
+      toast.error(SAVE_VERSION_MESSAGES[outcome]);
+    }
+  }, []);
   useEffect(() => {
     if (versionFetcher.state !== 'idle' || !versionFetcher.data) return;
     if (handledVersionRef.current === versionFetcher.data) return;
     handledVersionRef.current = versionFetcher.data;
-    if (versionFetcher.data.success) setVersionPendingSince(Date.now());
-    else toast.error(versionFetcher.data.error ?? 'The version could not be saved. Try again.');
-  }, [versionFetcher.state, versionFetcher.data]);
+    const data = versionFetcher.data;
+    const early = earlyVersionOutcomeRef.current;
+    inflightVersionIdRef.current = null;
+    earlyVersionOutcomeRef.current = null;
+    if (!data.success) {
+      toast.error(data.error ?? 'The version could not be saved. Try again.');
+    } else if (data.alreadySaved) {
+      announceVersion('already-saved');
+    } else if (early && data.requestId) {
+      announceVersion(early);
+    } else {
+      setPendingVersion({ id: data.requestId ?? null, since: Date.now() });
+    }
+  }, [versionFetcher.state, versionFetcher.data, announceVersion]);
   const liveCheckpointSeq = liveState.lastCheckpoint?.seq ?? null;
   useEffect(() => {
     const checkpoint = liveState.lastCheckpoint;
-    if (!checkpoint || !checkpointAnswersSaveVersion(checkpoint, versionPendingSince)) return;
-    setVersionPendingSince(null);
-    if (checkpoint.error) toast.error('The version could not be saved to GitHub. Try again.');
-    else toast.success('Version saved.');
+    if (!checkpoint) return;
+    const inflight = inflightVersionIdRef.current;
+    if (!pendingVersion && inflight) {
+      // Answered before the action replied: kept for the reply.
+      earlyVersionOutcomeRef.current =
+        saveVersionOutcome(checkpoint, { id: inflight, since: Date.now() }) ??
+        earlyVersionOutcomeRef.current;
+      return;
+    }
+    const outcome = saveVersionOutcome(checkpoint, pendingVersion);
+    if (!outcome) return;
+    setPendingVersion(null);
+    announceVersion(outcome);
     // Each message once, by its number.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveCheckpointSeq]);
   useEffect(() => {
-    if (versionPendingSince === null) return;
+    if (pendingVersion === null) return;
     const timer = window.setTimeout(
-      () => setVersionPendingSince(null),
-      Math.max(0, versionPendingSince + SAVE_VERSION_WAIT_MS - Date.now())
+      () => {
+        setPendingVersion(null);
+        announceVersion('unconfirmed');
+      },
+      Math.max(0, pendingVersion.since + SAVE_VERSION_WAIT_MS - Date.now())
     );
     return () => window.clearTimeout(timer);
-  }, [versionPendingSince]);
-  const savingVersion = versionFetcher.state !== 'idle' || versionPendingSince !== null;
-  const handleSaveVersion = useCallback(
+  }, [pendingVersion, announceVersion]);
+  const submitSaveVersion = useCallback(
     (message?: string) => {
+      const requestId = newSaveVersionRequestId();
+      inflightVersionIdRef.current = requestId;
+      earlyVersionOutcomeRef.current = null;
       versionFetcher.submit(
-        { intent: 'save-version', ...(message ? { message } : {}) },
+        { intent: 'save-version', requestId, ...(message ? { message } : {}) },
         { method: 'POST', encType: 'application/json' }
       );
     },
     [versionFetcher]
   );
-
   const liveSyncStatus = deriveSyncStatus(liveState);
+  const offlineVersionMessage = 'You’re offline. Save a version once you’re back online.';
+  const handleSaveVersion = useCallback(
+    (message?: string) => {
+      const gate = saveVersionGate(liveSyncStatus);
+      if (gate === 'offline') toast.error(offlineVersionMessage);
+      else if (gate === 'wait') setQueuedVersion({ message, since: Date.now() });
+      else submitSaveVersion(message);
+    },
+    [liveSyncStatus, submitSaveVersion]
+  );
+  // A queued version goes as soon as everything here has synced; offline, or
+  // still not synced after SAVE_VERSION_SYNC_WAIT_MS, the person is told.
+  useEffect(() => {
+    if (!queuedVersion) return;
+    if (liveSyncStatus === 'synced') {
+      setQueuedVersion(null);
+      submitSaveVersion(queuedVersion.message);
+      return;
+    }
+    if (liveSyncStatus === 'offline') {
+      setQueuedVersion(null);
+      toast.error(offlineVersionMessage);
+      return;
+    }
+    const timer = window.setTimeout(
+      () => {
+        setQueuedVersion(null);
+        toast.error('Your latest edits haven’t reached the server yet. Try again.');
+      },
+      Math.max(0, queuedVersion.since + SAVE_VERSION_SYNC_WAIT_MS - Date.now())
+    );
+    return () => window.clearTimeout(timer);
+  }, [queuedVersion, liveSyncStatus, submitSaveVersion]);
+  const savingVersion =
+    versionFetcher.state !== 'idle' || pendingVersion !== null || queuedVersion !== null;
+
   const canSaveVersion = liveEditable && liveState.hasSynced;
   const liveHeader = liveMode
     ? {
@@ -913,6 +1006,10 @@ const PageRoute = () => {
         savingVersion,
         // The room's latest message, else what the loader read.
         checkpoint: liveState.lastCheckpoint ?? liveCheckpoint ?? null,
+        // Changed since: what this session saw, else what the loader knew.
+        editsSince:
+          liveState.editedSinceCheckpoint ||
+          (!liveState.lastCheckpoint && Boolean(liveCheckpoint?.editsSince)),
       }
     : null;
 
@@ -1069,21 +1166,44 @@ const PageRoute = () => {
         >
           <div className="border-y border-amber-300 dark:border-amber-700/70 bg-amber-50/95 dark:bg-amber-950/90 backdrop-blur px-4 sm:px-6 lg:px-8 py-2">
             <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-              <div className="text-sm text-amber-900 dark:text-amber-100">
-                <span className="font-semibold">
-                  This page changed since you opened it — reload to get the latest before saving.
-                </span>{' '}
-                <span className="text-amber-700 dark:text-amber-300">
-                  Your unsaved changes here will be discarded.
-                </span>
+              {fetcherData?.live ? (
+                /* The classroom switched to live editing while this tab had
+                   unsaved edits: they can only be carried over by hand. */
+                <div className="text-sm text-amber-900 dark:text-amber-100">
+                  <span className="font-semibold">{fetcherData.message ?? LIVE_PAGE_MESSAGE}</span>{' '}
+                  <span className="text-amber-700 dark:text-amber-300">
+                    Your unsaved changes here are not in the live page. Copy them before you reload.
+                  </span>
+                </div>
+              ) : (
+                <div className="text-sm text-amber-900 dark:text-amber-100">
+                  <span className="font-semibold">
+                    This page changed since you opened it — reload to get the latest before saving.
+                  </span>{' '}
+                  <span className="text-amber-700 dark:text-amber-300">
+                    Your unsaved changes here will be discarded.
+                  </span>
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                {fetcherData?.live && (
+                  <button
+                    type="button"
+                    onClick={handleCopyUnsaved}
+                    data-testid="save-conflict-copy"
+                    className="rounded px-3 py-1 text-sm font-medium transition-colors text-amber-900 ring-1 ring-amber-400 hover:bg-amber-100 dark:text-amber-100 dark:ring-amber-600 dark:hover:bg-amber-900/60"
+                  >
+                    Copy my changes
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleConflictReload}
+                  className="rounded px-3 py-1 text-sm font-medium transition-colors bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400"
+                >
+                  Reload
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={handleConflictReload}
-                className="rounded px-3 py-1 text-sm font-medium transition-colors bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400"
-              >
-                Reload
-              </button>
             </div>
           </div>
         </div>
@@ -1114,7 +1234,7 @@ const PageRoute = () => {
             />
           )}
 
-          {canEdit && isEditingTitle ? (
+          {titleEditable && isEditingTitle ? (
             <input
               type="text"
               value={titleValue}
@@ -1131,8 +1251,8 @@ const PageRoute = () => {
             />
           ) : (
             <h1
-              className={`text-5xl font-bold text-gray-900 dark:text-white mb-6 ${canEdit ? 'cursor-text hover:bg-gray-50 dark:hover:bg-gray-800 rounded px-2 py-1 -mx-2 -my-1' : ''}`}
-              onClick={() => canEdit && setIsEditingTitle(true)}
+              className={`text-5xl font-bold text-gray-900 dark:text-white mb-6 ${titleEditable ? 'cursor-text hover:bg-gray-50 dark:hover:bg-gray-800 rounded px-2 py-1 -mx-2 -my-1' : ''}`}
+              onClick={() => titleEditable && setIsEditingTitle(true)}
             >
               {pageTitle || 'Untitled'}
             </h1>
@@ -1140,7 +1260,7 @@ const PageRoute = () => {
         </div>
 
         {page.is_draft && (
-          <span className="inline-block px-2 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-800 rounded-full mb-2">
+          <span className="inline-block px-2 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200 rounded-full mb-2">
             Draft
           </span>
         )}

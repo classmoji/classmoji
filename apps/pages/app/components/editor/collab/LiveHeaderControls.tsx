@@ -11,6 +11,7 @@ import {
   SYNC_STATUS_LABEL,
   initialsOf,
   peerLabel,
+  savedToGitHubAnnouncement,
   savedToGitHubStatus,
   type CollabPeer,
   type LiveCheckpoint,
@@ -30,6 +31,8 @@ export interface LiveHeaderControlsProps {
   syncStatus: SyncStatus;
   /** The last checkpoint covering this page (null before anything is known). */
   checkpoint?: LiveCheckpoint | null;
+  /** The page has changed since that checkpoint. */
+  editsSince?: boolean;
   /**
    * Save a version, with an optional note (the checkpoint's message). Null
    * while the editor cannot ask for one (refused, not synced).
@@ -96,6 +99,7 @@ const LiveHeaderControls = ({
   peers,
   syncStatus,
   checkpoint = null,
+  editsSince = false,
   onSaveVersion,
   savingVersion,
   compact = false,
@@ -104,7 +108,10 @@ const LiveHeaderControls = ({
   const shown = peers.slice(0, max);
   const hidden = peers.slice(max);
   const now = useNow(30_000);
-  const saved = savedToGitHubStatus(checkpoint, now);
+  const saved = savedToGitHubStatus(checkpoint, now, editsSince);
+  // Announced on its own, without the relative time: the visible line
+  // re-renders on the clock, and a screen reader must not hear every tick.
+  const savedAnnouncement = savedToGitHubAnnouncement(saved);
   // Debounced for display only: a keystroke's round trip never flashes it.
   const shownStatus = useDisplayedSyncStatus(syncStatus);
 
@@ -142,13 +149,15 @@ const LiveHeaderControls = ({
         {SYNC_STATUS_LABEL[shownStatus]}
       </span>
 
+      <span role="status" aria-live="polite" className="sr-only">
+        {savedAnnouncement}
+      </span>
       {saved && (
         <span
-          role="status"
-          aria-live="polite"
           title={saved.title}
           data-testid="live-saved-status"
           data-tone={saved.tone}
+          data-edits-since={saved.editsSince ? 'true' : undefined}
           className={`flex items-center gap-1 ${
             saved.tone === 'saved'
               ? 'text-gray-500 dark:text-gray-400'

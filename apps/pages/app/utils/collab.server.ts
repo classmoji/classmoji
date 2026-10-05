@@ -202,15 +202,29 @@ export async function notifyPreviewChanged(env: CollabEnv, pageId: string): Prom
   }
 }
 
-/** "Save version": ask for a checkpoint now. */
+/**
+ * "Save version": ask for a checkpoint now. `requestId` (this browser's) is
+ * echoed back, and names the checkpoint message that answers the request;
+ * `alreadySaved` says there was nothing to save.
+ */
 export function requestCheckpoint(
   env: CollabEnv,
   pageId: string,
   actor: CollabActor,
-  message?: string
+  message?: string,
+  requestId?: string
 ) {
-  const body: CheckpointRequest = { actor, ...(message ? { message } : {}) };
-  return collabInternalRequest<unknown>(env, 'POST', pageInternalPath(pageId, 'checkpoint'), body);
+  const body: CheckpointRequest & { requestId?: string } = {
+    actor,
+    ...(message ? { message } : {}),
+    ...(requestId ? { requestId } : {}),
+  };
+  return collabInternalRequest<{ version?: number; requestId?: unknown; alreadySaved?: unknown }>(
+    env,
+    'POST',
+    pageInternalPath(pageId, 'checkpoint'),
+    body
+  );
 }
 
 // ─── Page delete ─────────────────────────────────────────────────────────────

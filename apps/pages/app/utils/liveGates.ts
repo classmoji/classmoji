@@ -37,10 +37,18 @@ export function joinsLiveRoom({
 const GIT_WRITE_INTENTS = new Set(['save', 'set-header-image', 'upload-header-image']);
 
 /**
+ * Also refused while live editing is unreachable with unsaved live edits:
+ * accepting a preview, which without the live service would merge it into
+ * git's copy (a live classroom accepts through the collab server instead).
+ */
+const UNAVAILABLE_REFUSED_INTENTS = new Set([...GIT_WRITE_INTENTS, 'preview-accept']);
+
+/**
  * The action's answer to an intent that would write content.json for a page
  * that is edited live, or null to carry on. A save gets `conflict` with no
- * report (the git editor's "reload" banner) and no `code`, which would start
- * the editor's whole-document fallback against this same refusal.
+ * report and no `code` (which would start the editor's whole-document
+ * fallback against this same refusal), and `live: true`, so the git editor
+ * says the page is now edited live and offers to copy the unsaved changes.
  */
 export function liveIntentRefusal(
   intent: unknown,
@@ -49,12 +57,15 @@ export function liveIntentRefusal(
   liveUnavailable = false
 ): { status: number; body: Record<string, unknown> } | null {
   if (!liveClassroom && !liveUnavailable) return null;
-  if (typeof intent !== 'string' || !GIT_WRITE_INTENTS.has(intent)) return null;
+  if (typeof intent !== 'string') return null;
   if (liveUnavailable && !liveClassroom) {
-    return { status: 409, body: { error: LIVE_UNAVAILABLE_MESSAGE } };
+    return UNAVAILABLE_REFUSED_INTENTS.has(intent)
+      ? { status: 409, body: { error: LIVE_UNAVAILABLE_MESSAGE } }
+      : null;
   }
+  if (!GIT_WRITE_INTENTS.has(intent)) return null;
   if (intent === 'save') {
-    return { status: 409, body: { conflict: true, message: LIVE_PAGE_MESSAGE } };
+    return { status: 409, body: { conflict: true, live: true, message: LIVE_PAGE_MESSAGE } };
   }
   return { status: 409, body: { error: LIVE_PAGE_MESSAGE } };
 }

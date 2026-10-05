@@ -192,6 +192,36 @@ test.describe('CollabSession', () => {
     session.destroy();
   });
 
+  test('edits since the last checkpoint: any change after the first sync, until a save', () => {
+    const { session, provider } = open();
+    provider.args.onStatus({ status: 'connected' });
+    // The first sync's own update is the page as it is, not an edit.
+    const seed = new Y.Doc();
+    seed.getText('t').insert(0, 'seeded');
+    Y.applyUpdate(session.doc, Y.encodeStateAsUpdate(seed), provider);
+    provider.args.onSynced({ state: true });
+    expect(session.getState().editedSinceCheckpoint).toBe(false);
+
+    // A peer's edit counts as much as one's own.
+    const peer = new Y.Doc();
+    peer.getText('t').insert(0, 'peer ');
+    Y.applyUpdate(session.doc, Y.encodeStateAsUpdate(peer), provider);
+    expect(session.getState().editedSinceCheckpoint).toBe(true);
+
+    // A failed run leaves it; a saved one clears it; the next edit sets it again.
+    provider.args.onStateless({
+      payload: JSON.stringify({ type: 'checkpoint', at: '2026-10-03T12:00:00Z', error: 'x' }),
+    });
+    expect(session.getState().editedSinceCheckpoint).toBe(true);
+    provider.args.onStateless({
+      payload: JSON.stringify({ type: 'checkpoint', at: '2026-10-03T12:01:00Z', commit: 'abc' }),
+    });
+    expect(session.getState().editedSinceCheckpoint).toBe(false);
+    session.doc.getText('t').insert(0, 'mine ');
+    expect(session.getState().editedSinceCheckpoint).toBe(true);
+    session.destroy();
+  });
+
   test('an unknown reason is read as forbidden', () => {
     const { session, provider } = open();
     provider.args.onAuthenticationFailed({ reason: 'permission-denied' });
