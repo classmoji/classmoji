@@ -185,7 +185,8 @@ test.describe('agent activity', () => {
         'page',
         pageId,
         [{ op: 'insert', blocks: [para(idA, textA)], position: { at: 'end' } }],
-        agentA
+        agentA,
+        null
       );
       const lastOpAt = Date.now();
 
@@ -218,7 +219,8 @@ test.describe('agent activity', () => {
             position: { at: 'end' },
           },
         ],
-        agentB
+        agentB,
+        null
       );
       await expect
         .poll(async () => (await carets(page)).map(c => c.label).sort(), { timeout: 3_000 })
@@ -271,7 +273,8 @@ test.describe('agent activity', () => {
           'page',
           pageId,
           leftovers.map(id => ({ op: 'delete', id })),
-          { userId: agentA.userId, name: agentA.name, agentSession: `e2e-cleanup-${RUN}` }
+          { userId: agentA.userId, name: agentA.name, agentSession: `e2e-cleanup-${RUN}` },
+          null
         );
       }
       await context.close();
@@ -317,7 +320,8 @@ test.describe('agent activity', () => {
       'deck',
       deckId,
       [{ op: 'update', id: current, html: slide!.html }],
-      agentA
+      agentA,
+      null
     );
 
     // One look at the frame and the chip together (they fade and go after ~5 s).

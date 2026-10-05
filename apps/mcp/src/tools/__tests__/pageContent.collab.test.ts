@@ -767,6 +767,33 @@ describe('preview-changed notifications', () => {
 
 describe('live write refusals', () => {
   it.each([
+    [409, 'collab-disabled', 'LIVE_DISABLED', /turned off.*Re-read/],
+    [413, 'body-too-large', 'PAYLOAD_TOO_LARGE', /too large.*Split/],
+  ])('%s %s is a clear agent error', async (status, error, code, message) => {
+    route('POST', 'ops', () => ({ status, body: { error } }));
+    await expect(
+      pageContentApplyTool.handler(
+        { classroom: 'org/x', page_id: PAGE_ID, expected_sha: 'live:1.7', ops: [UPDATE_OP] },
+        CTX
+      )
+    ).rejects.toMatchObject({ code, message: expect.stringMatching(message) });
+  });
+
+  it('postOps refuses a missing pin argument instead of defaulting', async () => {
+    const { postOps } = await import('../../collab/client.ts');
+    expect(() =>
+      postOps(
+        { httpUrl: 'http://x', secret: 's' } as never,
+        'page',
+        'p',
+        [],
+        CTX as never,
+        undefined as never
+      )
+    ).toThrow(/pass the pin/);
+  });
+
+  it.each([
     [409, 'content-missing'],
     [422, 'legacy-html'],
   ])('%s %s points the agent at preview mode', async (status, code) => {

@@ -331,10 +331,15 @@ export function postOps(
   actor: CollabActor,
   since: { epoch: number; version: number } | null
 ): Promise<OpsResponse> {
+  // Explicit either way: a pin is judged; null is an unpinned write (the
+  // server remembers only what it creates). Never a silent default.
+  if (since === undefined) {
+    throw new TypeError('postOps: pass the pin { epoch, version }, or null for an unpinned write');
+  }
   return collabRequest<OpsResponse>(env, 'POST', docPath(kind, id, 'ops'), {
     ops,
     actor,
-    ...(since ? { expect_since: since } : { remember: true }),
+    ...(since !== null ? { expect_since: since } : { remember: true }),
   });
 }
 
@@ -576,6 +581,25 @@ export function liveWriteError(
         "changed. Use mode: 'preview', or ask someone to open it in the web editor.",
       'LIVE_UNREADABLE',
       { reason: error.code }
+    );
+  }
+  if (error.status === 409 && error.code === 'collab-disabled') {
+    // The flag went off between the tool's check and the write.
+    return new ToolError(
+      'invalid_params',
+      `Live editing was just turned off for this classroom, so nothing was changed. Re-read the ` +
+        `${what} (it now reads from git) and apply again with the sha that read returns.`,
+      'LIVE_DISABLED',
+      { reason: error.code }
+    );
+  }
+  if (error.status === 413) {
+    return new ToolError(
+      'invalid_params',
+      `These ops are too large for one live edit, so nothing was changed. Split them into ` +
+        'smaller batches (or move big html/svg into uploaded files embedded with an iframe block).',
+      'PAYLOAD_TOO_LARGE',
+      { reason: error.code ?? 'body-too-large' }
     );
   }
   if (error.status === 409) {

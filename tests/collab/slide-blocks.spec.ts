@@ -154,7 +154,8 @@ test.describe('svg and html slide blocks', () => {
       'deck',
       deckId,
       [{ op: 'insert', slides: [{ html: `<h2>Blocks ${RUN}</h2>` }], position: { at: 'end' } }],
-      agent
+      agent,
+      null
     );
     const slideId = (inserted.insertedIds as string[] | undefined)?.[0];
     expect(slideId, 'inserted slide id').toBeTruthy();
@@ -196,7 +197,8 @@ test.describe('svg and html slide blocks', () => {
             source: SVG_SOURCE,
           },
         ],
-        agent
+        agent,
+        null
       );
 
       for (const page of pages) {
@@ -248,7 +250,7 @@ test.describe('svg and html slide blocks', () => {
     } finally {
       for (const context of contexts) await context.close();
       if (slideId) {
-        await client.postOps(env, 'deck', deckId, [{ op: 'delete', id: slideId }], agent);
+        await client.postOps(env, 'deck', deckId, [{ op: 'delete', id: slideId }], agent, null);
       }
     }
   });
