@@ -212,6 +212,8 @@ export interface LiveCheckpoint {
   requestIds?: string[];
   /** With `requestIds`: there was nothing to push for this deck. */
   alreadySaved?: true;
+  /** The deck held edits this run did not push (made while it ran, or refused). */
+  editsSince?: boolean;
 }
 
 /** Stateless messages the collab server broadcasts to a deck's room. */
@@ -244,6 +246,7 @@ export function parseStatelessMessage(payload: unknown): LiveStatelessMessage | 
       ...(typeof message.error === 'string' && message.error ? { error: message.error } : {}),
       ...(requestIds.length > 0 ? { requestIds } : {}),
       ...(message.alreadySaved === true ? { alreadySaved: true as const } : {}),
+      ...(message.editsSince === true ? { editsSince: true } : {}),
     };
   }
   if (message.type === 'preview-changed') return { type: 'preview-changed' };
@@ -277,7 +280,8 @@ const REASON_CAP = 120;
  */
 export function savedToGitHubStatus(
   checkpoint: LiveCheckpoint | null,
-  now: number
+  now: number,
+  editsSince = false
 ): { tone: 'saved' | 'unsaved'; label: string; title: string | undefined } | null {
   if (!checkpoint) return null;
   if (checkpoint.error) {
@@ -289,9 +293,11 @@ export function savedToGitHubStatus(
     };
   }
   const when = checkpoint.at ? relativeTimeFrom(checkpoint.at, now) : '';
+  const saved = when ? `Saved to GitHub ${when}` : 'Saved to GitHub';
   return {
     tone: 'saved',
-    label: when ? `Saved to GitHub ${when}` : 'Saved to GitHub',
+    // The deck changed since: the save is the last one, not the deck as it is.
+    label: editsSince ? `${saved} · edits since` : saved,
     title: checkpoint.commit ? `Commit ${checkpoint.commit.slice(0, 7)}` : undefined,
   };
 }
@@ -312,12 +318,39 @@ export function checkpointFromRow(
     return {
       at: row.last_checkpoint_at.toISOString(),
       ...(row.last_checkpoint_error ? { error: row.last_checkpoint_error } : commit),
+      ...(row.version > row.pushed_version ? { editsSince: true } : {}),
     };
   }
   return row.version === row.pushed_version ? { at: '', ...commit } : null;
 }
 /** How long "Saving version…" waits for the checkpoint that answers it. */
 export const SAVE_VERSION_WAIT_MS = 60_000;
+
+/**
+ * Run `then` once this editor's live edits have reached the collab server
+ * (written into the deck and acknowledged) — or after `maxMs` regardless, so
+ * a flaky connection never blocks. A checkpoint the server takes before that
+ * would miss the last keystrokes.
+ */
+export function whenLocalEditsSent(
+  bridge: { flushLocal(): void; hasPendingLocal(): boolean } | null,
+  session: { getState(): { unsyncedChanges: number } } | null,
+  maxMs: number,
+  then: () => void
+): void {
+  bridge?.flushLocal();
+  const startedAt = Date.now();
+  const check = () => {
+    const pending =
+      Boolean(bridge?.hasPendingLocal()) || (session?.getState().unsyncedChanges ?? 0) > 0;
+    if (pending && Date.now() - startedAt < maxMs) {
+      setTimeout(check, 150);
+      return;
+    }
+    then();
+  };
+  check();
+}
 
 /** A fresh Save-version request id (the collab contract: 8–64 of `[A-Za-z0-9_-]`). */
 export function newSaveVersionRequestId(): string {
@@ -336,17 +369,6 @@ export function saveVersionAnswer(
   if (!requestId || !checkpoint.requestIds?.includes(requestId)) return null;
   if (checkpoint.error) return 'error';
   return checkpoint.alreadySaved ? 'already-saved' : 'saved';
-}
-
-/** A checkpoint message that arrived after "Save version" was accepted (clock skew allowed). */
-export function checkpointAnswersSaveVersion(
-  checkpoint: LiveCheckpoint,
-  pendingSince: number | null,
-  skewMs = 30_000
-): boolean {
-  if (pendingSince === null || !checkpoint.at) return false;
-  const at = Date.parse(checkpoint.at);
-  return Number.isNaN(at) || at >= pendingSince - skewMs;
 }
 
 // ─── Stale rooms ─────────────────────────────────────────────────────────────

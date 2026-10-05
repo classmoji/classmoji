@@ -136,6 +136,7 @@ export default function CollabHeaderControls({
   checkpoint = null,
   onSaveVersion,
   savingVersion,
+  editsSince = false,
 }: {
   peers: CollabPeer[];
   /** `connecting` while the first connection is being made (nothing is wrong yet). */
@@ -145,9 +146,11 @@ export default function CollabHeaderControls({
   /** Null while a version cannot be asked for (refused, not synced). */
   onSaveVersion: ((message: string) => void) | null;
   savingVersion: boolean;
+  /** The deck changed since that checkpoint ("· edits since"). */
+  editsSince?: boolean;
 }) {
   const now = useNow(30_000);
-  const saved = savedToGitHubStatus(checkpoint, now);
+  const saved = savedToGitHubStatus(checkpoint, now, editsSince);
   const savedTitle = checkpoint?.error ? checkpointErrorReason(checkpoint.error) : saved?.title;
   const savedAnnouncement = useSavedAnnouncement(checkpoint, saved?.tone ?? null);
   // Debounced for display only: a keystroke's round trip never flashes it.

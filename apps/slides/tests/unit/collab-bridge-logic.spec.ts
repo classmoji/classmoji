@@ -33,6 +33,7 @@ import {
   newSaveVersionRequestId,
   parseStatelessMessage,
   saveVersionAnswer,
+  whenLocalEditsSent,
 } from '../../app/utils/collab/collab.ts';
 import { changedSlideIds } from '../../app/utils/collab/previewHighlight.ts';
 
@@ -382,5 +383,39 @@ test.describe('Save version answers', () => {
     );
     expect(failed && failed.type === 'checkpoint' && saveVersionAnswer(failed, id)).toBe('error');
     expect(mine && mine.type === 'checkpoint' && saveVersionAnswer(mine, null)).toBeNull();
+  });
+});
+
+test.describe('waiting for local edits before a checkpoint', () => {
+  test('runs once the edits are written and acknowledged, never before', async () => {
+    let pendingLocal = true;
+    let unsynced = 2;
+    let flushed = 0;
+    let ran = false;
+    whenLocalEditsSent(
+      { flushLocal: () => void flushed++, hasPendingLocal: () => pendingLocal },
+      { getState: () => ({ unsyncedChanges: unsynced }) },
+      5000,
+      () => {
+        ran = true;
+      }
+    );
+    expect(flushed).toBe(1);
+    expect(ran).toBe(false);
+    pendingLocal = false;
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect(ran).toBe(false); // written, not yet acknowledged
+    unsynced = 0;
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect(ran).toBe(true);
+  });
+
+  test('a flaky connection never blocks it past the bound', async () => {
+    let ran = false;
+    whenLocalEditsSent(null, { getState: () => ({ unsyncedChanges: 1 }) }, 300, () => {
+      ran = true;
+    });
+    await new Promise(resolve => setTimeout(resolve, 600));
+    expect(ran).toBe(true);
   });
 });

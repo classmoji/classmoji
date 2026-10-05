@@ -72,6 +72,11 @@ export interface CollabSessionState {
   agentTouches: AgentTouch[];
   /** The last checkpoint message (seq increments per message). */
   lastCheckpoint: (LiveCheckpoint & { seq: number }) | null;
+  /**
+   * The deck changed (here or anywhere) since the room's last successful
+   * checkpoint message, or since the first sync when none came yet.
+   */
+  editedSinceCheckpoint: boolean;
   /** The deck's title when it changed while open. */
   liveTitle: string | null;
   /** Bumped per "a preview changed" message (the route refreshes its loader). */
@@ -88,6 +93,7 @@ export const INITIAL_SESSION_STATE: CollabSessionState = {
   peers: [],
   agentTouches: [],
   lastCheckpoint: null,
+  editedSinceCheckpoint: false,
   liveTitle: null,
   previewSeq: 0,
 };
@@ -126,6 +132,7 @@ export class DeckCollabSession {
   private destroyed = false;
   private providerDestroyed = false;
   private readonly onAwarenessChange: () => void;
+  private readonly onDocUpdate: () => void;
   private readonly touches: AgentTouchTracker;
   private touchTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -167,6 +174,14 @@ export class DeckCollabSession {
         }
       },
     });
+
+    this.onDocUpdate = () => {
+      if (this.destroyed) return;
+      if (this.state.hasSynced && !this.state.editedSinceCheckpoint) {
+        this.update({ editedSinceCheckpoint: true });
+      }
+    };
+    this.doc.on('update', this.onDocUpdate);
 
     this.onAwarenessChange = () => this.refreshPeers();
     const awareness = this.provider.awareness;
@@ -251,6 +266,7 @@ export class DeckCollabSession {
     if (this.touchTimer) clearTimeout(this.touchTimer);
     this.touchTimer = null;
     this.provider.awareness?.off('change', this.onAwarenessChange);
+    this.doc.off('update', this.onDocUpdate);
     this.destroyProvider();
     this.doc.destroy();
     this.listeners.clear();
@@ -276,7 +292,12 @@ export class DeckCollabSession {
     if (!message || this.destroyed) return;
     if (message.type === 'checkpoint') {
       const { type: _type, ...checkpoint } = message;
-      this.update({ lastCheckpoint: { ...checkpoint, seq: ++this.seq } });
+      this.update({
+        lastCheckpoint: { ...checkpoint, seq: ++this.seq },
+        // A saved deck is GitHub's copy again, unless the server says edits
+        // arrived that the run did not take; a failed run changes nothing.
+        ...(checkpoint.error ? {} : { editedSinceCheckpoint: checkpoint.editsSince === true }),
+      });
     } else if (message.type === 'preview-changed') {
       this.update({ previewSeq: this.state.previewSeq + 1 });
     } else if (message.title) {

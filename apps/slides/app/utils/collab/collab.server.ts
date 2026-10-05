@@ -39,7 +39,7 @@ import {
   deckInternalPath,
   type CollabEnv,
 } from './env.server.ts';
-import { checkpointFromRow } from './collab.ts';
+import { checkpointFromRow, type LiveCheckpoint } from './collab.ts';
 import { changedSlideIds } from './previewHighlight.ts';
 
 /** The classroom flag, read defensively (absent on an older row = off). */
@@ -68,9 +68,7 @@ export function liveEditingEnv(classroom: unknown): CollabEnv | null {
  * live) is saved too, time unknown (`at: ''`). Null while there are unpushed
  * edits and no run on record.
  */
-export async function readDeckCheckpoint(
-  slideId: string
-): Promise<{ at: string; commit?: string; error?: string } | null> {
+export async function readDeckCheckpoint(slideId: string): Promise<LiveCheckpoint | null> {
   const row = await getPrisma().collabDoc.findUnique({
     where: { kind_doc_id: { kind: 'deck', doc_id: slideId } },
     select: {

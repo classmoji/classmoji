@@ -11,7 +11,6 @@ import { AGENT_TOUCH_EXPIRE_MS, type CollabLoaderData } from '@classmoji/collab'
 import {
   liveLeaveRisk,
   mayAutoReloadStale,
-  checkpointAnswersSaveVersion,
   checkpointFromRow,
   initialsOf,
   normalizeRejectReason,
@@ -143,6 +142,19 @@ test.describe('refusals and closes', () => {
       }),
     });
     expect(t.session.getState().lastCheckpoint).toMatchObject({ commit: 'abcdef1234', seq: 1 });
+    // "· edits since": changed after the first sync, cleared by a checkpoint
+    // unless the server says the run left edits behind.
+    t.args().onSynced({ state: true });
+    t.session.doc.getMap('x').set('k', 1);
+    expect(t.session.getState().editedSinceCheckpoint).toBe(true);
+    t.args().onStateless({
+      payload: JSON.stringify({ type: 'checkpoint', at: '2026-10-04T03:01:00Z' }),
+    });
+    expect(t.session.getState().editedSinceCheckpoint).toBe(false);
+    t.args().onStateless({
+      payload: JSON.stringify({ type: 'checkpoint', at: '2026-10-04T03:02:00Z', editsSince: true }),
+    });
+    expect(t.session.getState().editedSinceCheckpoint).toBe(true);
     t.args().onStateless({ payload: JSON.stringify({ type: 'deck-meta', title: 'Renamed' }) });
     expect(t.session.getState().liveTitle).toBe('Renamed');
     t.args().onStateless({ payload: 'not json' });
@@ -164,9 +176,9 @@ test.describe('refusals and closes', () => {
       label: 'Not saved to GitHub yet',
       title: 'push refused',
     });
-    expect(checkpointAnswersSaveVersion({ at: '2026-10-04T03:00:00Z' }, null)).toBe(false);
-    expect(checkpointAnswersSaveVersion({ at: '2026-10-04T03:00:00Z' }, now - 110_000)).toBe(true);
-    expect(checkpointAnswersSaveVersion({ at: '2026-10-04T02:00:00Z' }, now)).toBe(false);
+    expect(
+      savedToGitHubStatus({ at: '2026-10-04T03:00:00Z', commit: 'abcdef1234' }, now, true)?.label
+    ).toMatch(/ · edits since$/);
   });
 
   test('an agent on a slide is placed there', () => {
@@ -192,7 +204,6 @@ test.describe('saved to GitHub before runs were recorded', () => {
       title: undefined,
     });
     // It answers no pending Save version (only a real run does).
-    expect(checkpointAnswersSaveVersion({ at: '' }, Date.now())).toBe(false);
   });
 
   test('which rows read as saved', () => {
@@ -211,6 +222,11 @@ test.describe('saved to GitHub before runs were recorded', () => {
     expect(checkpointFromRow({ ...row, last_checkpoint_at: at })).toEqual({
       at: at.toISOString(),
       commit: 'c972c0c5aa',
+    });
+    expect(checkpointFromRow({ ...row, last_checkpoint_at: at, version: 6 })).toEqual({
+      at: at.toISOString(),
+      commit: 'c972c0c5aa',
+      editsSince: true,
     });
   });
 });

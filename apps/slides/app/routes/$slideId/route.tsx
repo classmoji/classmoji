@@ -117,6 +117,7 @@ import {
   isCollabMode,
   newSaveVersionRequestId,
   saveVersionAnswer,
+  whenLocalEditsSent,
   liveLeaveRisk,
   mayAutoReloadStale,
   rejectionNotice,
@@ -2221,7 +2222,7 @@ const LIVE_CONNECT_TIMEOUT_MS = 10_000;
 const DONE_WAIT_MS = 5_000;
 /** View mode after Done re-renders remote edits at most this often. */
 const VIEW_REFRESH_MS = 2_000;
-/** How long Present waits for local live edits to reach the server. */
+/** How long Present and Save version wait for local live edits to reach the server. */
 const PRESENT_LOCAL_WAIT_MS = 3_000;
 /** Present goes ahead after this with no answer from the save at all. */
 const PRESENT_GIVE_UP_MS = 25_000;
@@ -3198,15 +3199,18 @@ export default function SlideViewer() {
 
   const handleSaveVersion = useCallback(
     (message: string) => {
-      bridgeRef.current?.flushLocal();
       // Registered before sending: the answer may arrive before the reply.
       const requestId = newSaveVersionRequestId();
       versionRequestRef.current = requestId;
       setVersionPending(true);
-      versionFetcher.submit(
-        { intent: 'collab-save-version', requestId, ...(message ? { message } : {}) },
-        { method: 'post' }
-      );
+      // The version holds what was just typed: sent first, then asked for.
+      whenLocalEditsSent(bridgeRef.current, sessionRef.current, PRESENT_LOCAL_WAIT_MS, () => {
+        if (versionRequestRef.current !== requestId) return;
+        versionFetcher.submit(
+          { intent: 'collab-save-version', requestId, ...(message ? { message } : {}) },
+          { method: 'post' }
+        );
+      });
     },
     [versionFetcher]
   );
@@ -3480,20 +3484,9 @@ export default function SlideViewer() {
       event.preventDefault();
       if (presentPending) return;
       setPresentPending(true);
-      const liveBridge = bridgeRef.current;
-      liveBridge?.flushLocal();
-      const startedAt = Date.now();
-      const waitForLocal = () => {
-        const pending =
-          Boolean(liveBridge?.hasPendingLocal()) ||
-          (sessionRef.current?.getState().unsyncedChanges ?? 0) > 0;
-        if (pending && Date.now() - startedAt < PRESENT_LOCAL_WAIT_MS) {
-          setTimeout(waitForLocal, 150);
-          return;
-        }
-        presentFetcher.submit({}, { method: 'post', action: `/${slide.id}/present` });
-      };
-      waitForLocal();
+      whenLocalEditsSent(bridgeRef.current, sessionRef.current, PRESENT_LOCAL_WAIT_MS, () =>
+        presentFetcher.submit({}, { method: 'post', action: `/${slide.id}/present` })
+      );
     },
     [collabMode, presentPending, presentFetcher, slide.id]
   );
@@ -3811,6 +3804,11 @@ export default function SlideViewer() {
                 }
                 savingVersion={versionFetcher.state !== 'idle' || versionPending}
                 checkpoint={collabState.lastCheckpoint ?? liveCheckpoint}
+                // Changed since: what this session saw, else what the loader knew.
+                editsSince={
+                  collabState.editedSinceCheckpoint ||
+                  (!collabState.lastCheckpoint && Boolean(liveCheckpoint?.editsSince))
+                }
               />
             )}
             {collabMode && isEditing && (
