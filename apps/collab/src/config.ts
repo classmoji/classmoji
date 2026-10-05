@@ -17,6 +17,8 @@ import { AGENT_TOUCH_EXPIRE_MS } from '@classmoji/collab';
 const CHECKPOINT_NOW_MAX_DELAY = '10s';
 import { resolveCollabInternalSecret } from '@classmoji/collab/env';
 
+import { CHECKPOINT_WARM_INTERVAL_MS } from './warm.ts';
+
 export interface CollabConfig {
   production: boolean;
   internalSecret: string;
@@ -54,6 +56,11 @@ export interface CollabConfig {
   checkpointWatchdogNowMarginMs: number;
   /** Consecutive lost triggers re-sent per classroom before giving up to the sweeper. */
   checkpointWatchdogRetries: number;
+  /**
+   * Warm-up runs of the checkpoint worker (warm.ts): at most one per
+   * classroom per this many ms while a person has a live doc open.
+   */
+  checkpointWarmIntervalMs: number;
 }
 
 const DURATION = /^\d+[smhdw]$/;
@@ -127,5 +134,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollabConfig {
     checkpointWatchdogMarginMs: 120_000,
     checkpointWatchdogNowMarginMs: 30_000,
     checkpointWatchdogRetries: 3,
+    checkpointWarmIntervalMs: CHECKPOINT_WARM_INTERVAL_MS,
   };
 }

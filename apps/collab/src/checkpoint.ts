@@ -14,6 +14,10 @@
  *   re-trigger on the same key would vanish into it too. After a loss the
  *   keys also move to a new `generation` (`checkpoint:<id>:<n>`).
  *
+ * - while a person has a live doc open: a warm-up run (`{ warm: true }`, no
+ *   concurrency key, no debounce, never watched) at most once a minute per
+ *   classroom (warm.ts), so the worker is warm when a checkpoint is waited on.
+ *
  * `concurrencyKey: classroomId` with the task's queue (concurrency 1) keeps
  * one push per content repo at a time. A trigger that fails is logged and
  * dropped: the edits are safe in collab_docs and the next store re-triggers.
@@ -36,6 +40,12 @@ export interface CheckpointTrigger {
     payload: ContentCheckpointPayload,
     options: CheckpointTriggerOptions
   ): Promise<void | boolean>;
+  /**
+   * A warm-up run for the classroom (warm.ts): `{ classroomId, warm: true }`,
+   * no concurrency key, no debounce, nothing watched. Optional: a trigger
+   * without it just never warms.
+   */
+  warm?(classroomId: string): Promise<void | boolean>;
 }
 
 export interface TriggerOptions {
@@ -81,6 +91,22 @@ export function checkpointTriggerOptions(
       };
 }
 
+/**
+ * A warm-up's options: NO concurrencyKey (the classroom's slot is for real
+ * checkpoints; un-keyed runs share their own pool of the task's queue), no
+ * debounce, a `warm` tag to tell them apart in the dashboard, and a TTL of
+ * one warm-up interval: one that could not start by then is dropped, the
+ * next one replaces it.
+ */
+export interface WarmTriggerOptions {
+  tags: string[];
+  ttl: string;
+}
+
+export function warmTriggerOptions(): WarmTriggerOptions {
+  return { tags: ['warm'], ttl: '1m' };
+}
+
 /** `10s` / `4m` / `1h` / `2d` / `1w` → ms (the config's duration format). */
 export function durationMs(value: string): number {
   const m = /^(\d+)([smhdw])$/.exec(value.trim());
@@ -94,7 +120,7 @@ export function durationMs(value: string): number {
 type TasksTrigger = (
   id: string,
   payload: ContentCheckpointPayload,
-  options: TriggerOptions
+  options: TriggerOptions | WarmTriggerOptions
 ) => Promise<unknown>;
 
 /** How long a trigger may take before the store moves on (it runs under the doc's save lock). */
@@ -114,41 +140,50 @@ export function createTaskCheckpointTrigger(
   let warned = false;
   let loading: Promise<TasksTrigger> | null = null;
 
+  /** One `tasks.trigger`, bounded; false when triggering is not configured. */
+  async function send(
+    payload: ContentCheckpointPayload,
+    options: TriggerOptions | WarmTriggerOptions
+  ): Promise<void | boolean> {
+    if (!env.TRIGGER_SECRET_KEY) {
+      if (!warned) {
+        console.warn('[collab] TRIGGER_SECRET_KEY is not set; checkpoints are not triggered');
+        warned = true;
+      }
+      return false;
+    }
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      // A rejected load is not cached: the next trigger tries again.
+      loading ??= loadTrigger().catch(err => {
+        loading = null;
+        throw err;
+      });
+      const call = (async () => (await loading!)(CONTENT_CHECKPOINT_TASK, payload, options))();
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`timed out after ${timeoutMs} ms`)), timeoutMs);
+        timer.unref();
+      });
+      await Promise.race([call, timeout]);
+    } catch (err) {
+      console.error(
+        `[collab] could not trigger ${CONTENT_CHECKPOINT_TASK}${payload.warm ? ' (warm-up)' : ''} for classroom ${payload.classroomId}:`,
+        err
+      );
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   return {
-    async trigger(payload, { now, plain, generation }) {
-      if (!env.TRIGGER_SECRET_KEY) {
-        if (!warned) {
-          console.warn('[collab] TRIGGER_SECRET_KEY is not set; checkpoints are not triggered');
-          warned = true;
-        }
-        return false;
-      }
-      let timer: NodeJS.Timeout | undefined;
-      try {
-        // A rejected load is not cached: the next trigger tries again.
-        loading ??= loadTrigger().catch(err => {
-          loading = null;
-          throw err;
-        });
-        const call = (async () =>
-          (await loading!)(
-            CONTENT_CHECKPOINT_TASK,
-            payload,
-            checkpointTriggerOptions(payload.classroomId, now, config, { plain, generation })
-          ))();
-        const timeout = new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error(`timed out after ${timeoutMs} ms`)), timeoutMs);
-          timer.unref();
-        });
-        await Promise.race([call, timeout]);
-      } catch (err) {
-        console.error(
-          `[collab] could not trigger ${CONTENT_CHECKPOINT_TASK} for classroom ${payload.classroomId}:`,
-          err
-        );
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
+    trigger(payload, { now, plain, generation }) {
+      return send(
+        payload,
+        checkpointTriggerOptions(payload.classroomId, now, config, { plain, generation })
+      );
+    },
+    warm(classroomId) {
+      return send({ classroomId, warm: true }, warmTriggerOptions());
     },
   };
 }

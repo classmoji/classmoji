@@ -66,6 +66,7 @@ import { handleRequest } from './http.ts';
 import { recordAudit, type AuditSink } from './audit.ts';
 import { summarizeStructure, watchDeckStructure, type StructuralOp } from './structureAudit.ts';
 import { currentEpoch, isReseedMarker, type CollabDocStore } from './store/types.ts';
+import { CheckpointWarmer } from './warm.ts';
 
 export { DEFAULT_COLLAB_PORT };
 
@@ -263,6 +264,8 @@ export class CollabRuntime {
     { requests: Map<string, CheckpointRequestRef & { at: number }>; message?: string }
   >();
   private destroyed = false;
+  /** Warm-ups of the checkpoint worker while people have live docs open (warm.ts). */
+  private readonly warmer: CheckpointWarmer | null;
   /**
    * What each Yjs update's transaction was (ephemeral? structural ops?),
    * keyed by the update's bytes. Hocuspocus runs `onChange` a microtask
@@ -279,6 +282,15 @@ export class CollabRuntime {
     this.deps = options.deps;
     const { config } = options.deps;
     this.rechecker = new AccessRechecker(options.deps, config.recheckIntervalMs);
+    const { checkpoints } = options.deps;
+    const warm = checkpoints.warm?.bind(checkpoints);
+    this.warmer = warm
+      ? new CheckpointWarmer({
+          send: classroomId => warm(classroomId),
+          isActive: classroomId => this.classroomHasPeople(classroomId),
+          intervalMs: config.checkpointWarmIntervalMs,
+        })
+      : null;
 
     this.server = new Server<CollabConnectionContext>({
       name: 'classmoji-collab',
@@ -310,6 +322,10 @@ export class CollabRuntime {
               requestHeaders.get('cookie') ?? ''
             );
             this.auditConnection('COLLAB_JOIN', context);
+            // Sockets are people (agents edit over direct connections).
+            const classroomId =
+              entry?.classroomId ?? (context as Partial<CollabConnectionContext>)?.classroomId;
+            if (classroomId) this.warmer?.connected(classroomId);
             // A client that reconnects still knows the agents' old states and
             // ignores them sent again unchanged (same clock): send them anew.
             this.republishAgents(documentName);
@@ -317,6 +333,10 @@ export class CollabRuntime {
           onChange: async payload => this.onChange(payload),
           onDisconnect: async payload => {
             this.auditConnection('COLLAB_LEAVE', payload.context);
+            const classroomId =
+              this.loaded.get(payload.documentName)?.classroomId ??
+              (payload.context as Partial<CollabConnectionContext> | undefined)?.classroomId;
+            if (classroomId) this.warmer?.disconnected(classroomId);
             await this.onLastLeave(payload);
           },
           afterStoreDocument: async payload => this.afterStore(payload),
@@ -345,6 +365,7 @@ export class CollabRuntime {
   async destroy(): Promise<void> {
     this.destroyed = true;
     this.rechecker.stop();
+    this.warmer?.stop();
     for (const watch of this.watches.values()) if (watch.timer) clearTimeout(watch.timer);
     this.watches.clear();
     for (const presence of [...this.agents.values()]) this.dropAgent(presence, false);
@@ -959,6 +980,19 @@ export class CollabRuntime {
       }
     }
     return best;
+  }
+
+  /** True when a browser has any loaded doc of the classroom open (agents don't count). */
+  classroomHasPeople(classroomId: string): boolean {
+    for (const document of this.hocuspocus.documents.values()) {
+      if (
+        this.loaded.get(document.name)?.classroomId === classroomId &&
+        document.getConnections().length > 0
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** True when a browser has the doc open (direct connections don't count). */
