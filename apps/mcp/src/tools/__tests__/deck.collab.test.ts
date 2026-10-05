@@ -402,15 +402,18 @@ describe('per-slide staleness check (judged by the live service)', () => {
     expect(calls.find(call => call.method === 'GET')?.search).toBe('');
   });
 
-  it("maps the server's block-changed (slide order included) to BLOCK_CHANGED", async () => {
+  it("maps the server's block-changed to BLOCK_CHANGED, naming order and theme in words", async () => {
     route('POST', 'ops', () => ({
       status: 409,
-      body: { error: 'block-changed', changedIds: ['__order__'] },
+      body: { error: 'block-changed', changedIds: ['__order__', '__meta__'] },
     }));
-    await expect(apply([{ op: 'reorder', order: ['bbb', 'aaa'] }])).rejects.toMatchObject({
+    const error = await apply([{ op: 'reorder', order: ['bbb', 'aaa'] }]).catch((e: unknown) => e);
+    expect(error).toMatchObject({
       code: 'BLOCK_CHANGED',
-      data: { changed_ids: ['__order__'] },
+      data: { changed_ids: [], order_changed: true, theme_changed: true },
     });
+    expect((error as Error).message).toMatch(/the slide order; the theme/);
+    expect((error as Error).message).not.toMatch(/__/);
   });
 
   it('refuses a pin from another epoch before sending anything', async () => {

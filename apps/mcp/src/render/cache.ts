@@ -68,12 +68,18 @@ export class LruCache<V> {
     return slot.value;
   }
 
-  set(key: string, value: V): void {
+  /**
+   * `keepAge`: an entry that only grows (more images of the same render)
+   * keeps the age it had, so the TTL still counts from the first render.
+   */
+  set(key: string, value: V, options: { keepAge?: boolean } = {}): void {
+    const prior = this.map.get(key);
     this.drop(key);
     const bytes = this.options.sizeOf ? this.options.sizeOf(value) : 1;
     const maxBytes = this.options.maxBytes ?? Number.POSITIVE_INFINITY;
     if (bytes > maxBytes) return;
-    this.map.set(key, { value, bytes, at: this.now() });
+    const at = options.keepAge && prior ? prior.at : this.now();
+    this.map.set(key, { value, bytes, at });
     this.total += bytes;
     while (this.map.size > this.options.maxEntries || this.total > maxBytes) {
       const oldest = this.map.keys().next().value;

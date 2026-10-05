@@ -452,7 +452,7 @@ async function dispatch(
           'apply'
         );
       }
-      return { version };
+      return { version, epoch };
     }
 
     case 'merge-preview': {

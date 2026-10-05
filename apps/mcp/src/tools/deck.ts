@@ -316,7 +316,13 @@ const AGENT_BLOCK_TYPES = new Set(['html', 'svg', 'iframe']);
 function agentBlocks(html: string | undefined, content: boolean): SlideBlockInfo[] {
   if (!html || !html.includes('sl-block')) return [];
   const stored = readSlideBlocks(html, { content: false });
-  const withIds = readSlideBlocks(ensureSlideBlockIds(html), { content });
+  let withIds: SlideBlockInfo[];
+  try {
+    withIds = readSlideBlocks(ensureSlideBlockIds(html), { content });
+  } catch {
+    // html the normalizer refuses: list what is stored, as a read always did.
+    withIds = [];
+  }
   // Same blocks, same order: only the missing ids differ.
   if (withIds.length !== stored.length) {
     return readSlideBlocks(html, { content }).filter(

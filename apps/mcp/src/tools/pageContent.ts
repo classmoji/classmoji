@@ -1717,8 +1717,11 @@ async function setCoverLive(
 
   const actor = await actorFor(ctx);
   let version: number;
+  let epoch = snapshot.epoch;
   try {
-    ({ version } = await postCover(env, page.id, nextCover, actor));
+    const answer = await postCover(env, page.id, nextCover, actor);
+    version = answer.version;
+    if (typeof answer.epoch === 'number') epoch = answer.epoch;
   } catch (error) {
     throw liveWriteError(error, 'page', { previewHint: false });
   }
@@ -1733,9 +1736,9 @@ async function setCoverLive(
       tool: 'page_cover_set',
       ...(nextCover ? { url: nextCover.url, position: nextCover.position } : { removed: true }),
       ...(current ? { prior_url: current.url, prior_position: current.position } : {}),
-      new_sha: liveSha(snapshot.epoch, version),
+      new_sha: liveSha(epoch, version),
       // Distinct per write: two cover sets inside the audit's 5 s window both stay.
-      value: liveSha(snapshot.epoch, version),
+      value: liveSha(epoch, version),
       committed_to: 'live',
     } as Prisma.InputJsonValue,
   });
@@ -1745,7 +1748,7 @@ async function setCoverLive(
   return ok({
     success: true,
     cover_image: await coverPayload(page, nextCover),
-    new_sha: liveSha(snapshot.epoch, version),
+    new_sha: liveSha(epoch, version),
     version,
   });
 }

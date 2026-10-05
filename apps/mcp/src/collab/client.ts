@@ -155,13 +155,25 @@ export function notALiveVersion(kind: 'page' | 'deck'): ToolError {
 export function blockChangedError(kind: 'page' | 'deck', ids: string[]): ToolError {
   const what = kind === 'page' ? 'block' : 'slide';
   const read = kind === 'page' ? 'page_content_get' : 'deck_get';
-  const named = ids.map(id => `'${id}'`).join(', ');
+  // '__order__' / '__meta__' are the order and the theme, not items.
+  const items = ids.filter(id => id !== '__order__' && id !== '__meta__');
+  const orderChanged = ids.includes('__order__');
+  const themeChanged = ids.includes('__meta__');
+  const parts = [
+    ...(items.length > 0 ? [`${what}s: ${items.map(id => `'${id}'`).join(', ')}`] : []),
+    ...(orderChanged ? [`the ${what} order`] : []),
+    ...(themeChanged ? ['the theme'] : []),
+  ];
   return new ToolError(
     'invalid_params',
-    `Someone changed what these ops touch since you read it (${what}s: ${named}), so nothing ` +
-      `was applied. Re-read with ${read} and retry, or use mode: 'preview'.`,
+    `Someone changed what these ops touch since you read it (${parts.join('; ') || what + 's'}), ` +
+      `so nothing was applied. Re-read with ${read} and retry, or use mode: 'preview'.`,
     'BLOCK_CHANGED',
-    { changed_ids: ids }
+    {
+      changed_ids: items,
+      ...(orderChanged ? { order_changed: true } : {}),
+      ...(themeChanged ? { theme_changed: true } : {}),
+    }
   );
 }
 

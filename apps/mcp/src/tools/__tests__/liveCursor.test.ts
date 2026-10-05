@@ -30,7 +30,8 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
-const { pageCursorSetTool, deckCursorSetTool } = await import('../liveCursor.ts');
+const { pageCursorSetTool, deckCursorSetTool, clearDeckSizeCache } =
+  await import('../liveCursor.ts');
 
 const PAGE_ID = '11111111-1111-4111-8111-111111111111';
 const DECK_ID = '33333333-3333-4333-8333-333333333333';
@@ -95,6 +96,7 @@ const fakeFetch = vi.fn(async (url: string | URL, init?: RequestInit) => {
 const parse = (result: { content: Array<{ text: string }> }) => JSON.parse(result.content[0].text);
 
 beforeEach(() => {
+  clearDeckSizeCache();
   for (const m of Object.values(mocks)) m.mockReset();
   calls = [];
   respond = () => ({ status: 200, body: { shown: true } });
@@ -236,6 +238,12 @@ describe('deck_cursor_set', () => {
     );
     const sent = calls.find(call => call.path.endsWith('/cursor'))?.body;
     expect(sent).toMatchObject({ x: 960, y: 350 });
+    // The size is read once per deck, not on every pointer move.
+    await deckCursorSetTool.handler(
+      { classroom: 'org/x', slide_id: DECK_ID, slide: 'aaa', x: 0, y: 0 },
+      ctx()
+    );
+    expect(calls.filter(call => call.path.endsWith('/snapshot'))).toHaveLength(1);
     // The size read is not an agent read: nothing is remembered for a pin.
     expect(calls.find(call => call.path.endsWith('/snapshot'))).toBeDefined();
   });

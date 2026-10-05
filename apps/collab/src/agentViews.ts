@@ -79,7 +79,13 @@ export class AgentViews {
     const existing = this.entries.get(k);
     if (existing && now - existing.at <= this.ttl) {
       const replaces = existing.origin === 'apply' && origin === 'read';
-      if (!replaces) return;
+      if (!replaces) {
+        // Kept as first recorded, but alive again: a re-read extends its life.
+        existing.at = now;
+        this.entries.delete(k);
+        this.entries.set(k, existing);
+        return;
+      }
     }
     this.drop(k);
     const bytes = viewBytes(view) + k.length * 2;

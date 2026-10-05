@@ -209,7 +209,7 @@ export async function pageRenderResult(
     const prior = key ? pageCache.get(key) : undefined;
     const merged = new Map([...(prior?.images ?? []), ...images]);
     cached = { result: rest, images: merged };
-    if (key) pageCache.set(key, cached);
+    if (key) pageCache.set(key, cached, { keepAge: true });
   }
   if (!cached) throw new ToolError('internal', 'The page could not be rendered', 'RENDER_FAILED');
   const entry = cached;

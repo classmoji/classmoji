@@ -417,6 +417,17 @@ describe('AgentViews', () => {
     expect(views.recall(key(2))).toBe(reread);
   });
 
+  it('a repeat read keeps the first view but extends its life', () => {
+    let now = 0;
+    const views = new AgentViews({ ttlMs: 1000, now: () => now });
+    const first = view(1, 'first');
+    views.remember(key(1), first, 'read');
+    now = 900;
+    views.remember(key(1), view(1, 'again'), 'read');
+    now = 1500;
+    expect(views.recall(key(1))).toBe(first);
+  });
+
   it('expires after the TTL', () => {
     let now = 0;
     const views = new AgentViews({ ttlMs: 1000, now: () => now });

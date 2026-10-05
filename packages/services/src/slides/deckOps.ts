@@ -456,7 +456,8 @@ export function prepareDeckOps(ops: DeckOp[], ctx: DeckFrameContext | null): Dec
 /**
  * A slide's html with a `data-cm-block-id` on every top-level block, each
  * one different — blocks made before block ids (or a pasted copy repeating
- * an earlier block's id; the first keeps it) get one DERIVED from the
+ * an earlier block's id, the first keeps it; or an id block ops cannot
+ * name) get one DERIVED from the
  * block's markup and position (8 hex chars, unique on the slide), so the
  * same html always yields the same ids: a read can report them
  * (deck_outline / deck_get) and a block op that names one finds it, with the
@@ -472,7 +473,8 @@ export function ensureSlideBlockIds(html: string): string {
   const seen = new Set<string>();
   const needsId = top.map(el => {
     const id = el.attribs[BLOCK_ID_ATTR];
-    if (!id || seen.has(id)) return true;
+    // Missing, repeated, or one a block op could not name (blockIdSchema).
+    if (!id || seen.has(id) || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) return true;
     seen.add(id);
     return false;
   });

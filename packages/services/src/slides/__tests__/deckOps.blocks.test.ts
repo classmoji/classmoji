@@ -416,6 +416,13 @@ describe('blocks made before block ids', () => {
     expect(ids[1]).toMatch(/^[0-9a-f]{8}$/);
   });
 
+  it('an id block ops could not name gets a derived one', () => {
+    const one = OLD.slice(0, OLD.indexOf('</div></div>') + '</div></div>'.length);
+    const odd = one.replace('class="sl-block"', 'class="sl-block" data-cm-block-id="has space"');
+    const [block] = readSlideBlocks(ensureSlideBlockIds(normalizeSlideHtml(odd)));
+    expect(block.id).toMatch(/^[0-9a-f]{8}$/);
+  });
+
   it('block_delete reaches one by the derived id', () => {
     const [first, second] = readSlideBlocks(ensureSlideBlockIds(html(oldDeck(), 's1'))).map(
       b => b.id as string

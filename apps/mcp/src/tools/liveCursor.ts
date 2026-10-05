@@ -49,18 +49,34 @@ async function deckSize(
   env: Parameters<typeof fetchSnapshot>[0],
   deckId: string
 ): Promise<{ width: number; height: number }> {
+  const known = sizes.get(deckId);
+  if (known && Date.now() - known.at < SIZE_TTL_MS) return known.size;
   try {
     const snapshot = await fetchSnapshot(env, 'deck', deckId);
     const config = (snapshot.content as { config?: { width?: unknown; height?: unknown } }).config;
     const width = Number(config?.width);
     const height = Number(config?.height);
-    return {
+    const size = {
       width: Number.isFinite(width) && width > 0 ? width : DECK_SLIDE_SIZE.width,
       height: Number.isFinite(height) && height > 0 ? height : DECK_SLIDE_SIZE.height,
     };
+    sizes.delete(deckId);
+    sizes.set(deckId, { size, at: Date.now() });
+    if (sizes.size > SIZE_MAX) sizes.delete(sizes.keys().next().value as string);
+    return size;
   } catch {
     return DECK_SLIDE_SIZE;
   }
+}
+
+/** Deck sizes rarely change: one read per deck per few minutes, not per pointer move. */
+const SIZE_TTL_MS = 5 * 60 * 1000;
+const SIZE_MAX = 500;
+const sizes = new Map<string, { size: { width: number; height: number }; at: number }>();
+
+/** Tests only. */
+export function clearDeckSizeCache(): void {
+  sizes.clear();
 }
 
 /** A 404 from collab names the missing block/slide; anything else maps like a write. */
