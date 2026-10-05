@@ -105,7 +105,16 @@ export async function holdSingleInstance(
 ): Promise<{ stop(): Promise<void> }> {
   const started = Date.now();
   for (;;) {
-    if (await lock.acquire()) break;
+    let held = false;
+    try {
+      held = await lock.acquire();
+    } catch (err) {
+      // The database not answering yet (a restart, a cold compute): retry
+      // within the window, then fail loudly.
+      if (Date.now() - started >= retryForMs) throw err;
+      log.warn('[collab] instance lock: database not answering yet; retrying', err);
+    }
+    if (held) break;
     if (Date.now() - started >= retryForMs) {
       throw new SingleInstanceError(
         'another collab server holds the instance lock on this database: collab must run as ONE instance (see apps/collab/README.md "ONE INSTANCE ONLY"); this one exits'

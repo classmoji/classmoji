@@ -125,3 +125,26 @@ describe.runIf(!!url)('the Postgres advisory lock (real database)', () => {
     }
   });
 });
+
+describe('holdSingleInstance: a database that is not up yet', () => {
+  it('retries an acquire that throws within the window', async () => {
+    let n = 0;
+    const lock: InstanceLock = {
+      async acquire() {
+        if (n++ < 2) throw new Error('connection refused');
+        return true;
+      },
+      async release() {},
+    };
+    const warn = vi.fn();
+    const held = await holdSingleInstance(lock, {
+      retryForMs: 60_000,
+      retryEveryMs: 1,
+      onLost: () => {},
+      log: { warn, error: warn },
+    });
+    expect(n).toBe(3);
+    expect(warn).toHaveBeenCalledTimes(2);
+    await held.stop();
+  });
+});

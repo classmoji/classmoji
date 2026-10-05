@@ -31,7 +31,11 @@ export interface CheckpointTriggerOptions {
 }
 
 export interface CheckpointTrigger {
-  trigger(payload: ContentCheckpointPayload, options: CheckpointTriggerOptions): Promise<void>;
+  /** `false`: not sent because triggering is not configured (dev without a key). */
+  trigger(
+    payload: ContentCheckpointPayload,
+    options: CheckpointTriggerOptions
+  ): Promise<void | boolean>;
 }
 
 export interface TriggerOptions {
@@ -117,7 +121,7 @@ export function createTaskCheckpointTrigger(
           console.warn('[collab] TRIGGER_SECRET_KEY is not set; checkpoints are not triggered');
           warned = true;
         }
-        return;
+        return false;
       }
       let timer: NodeJS.Timeout | undefined;
       try {

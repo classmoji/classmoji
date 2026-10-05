@@ -614,3 +614,26 @@ describe('ephemeral changes (deck conflict notices)', () => {
     expect(server.checkpoints.calls).toHaveLength(triggers);
   });
 });
+
+describe('ephemeral detection per update (nested transactions)', () => {
+  it('an edit whose cleanup runs a nested lock-only transaction is still an edit', async () => {
+    const adapter = fakeDeckAdapter(
+      vi.fn((document: Y.Doc) => {
+        // Like the lock arbiter's stamp or the conflict prune: a server write
+        // to an ephemeral root, made while the edit's transaction cleans up.
+        document.getMap('slides').observe(() => {
+          document.transact(() => document.getMap('locks').set('x', Math.random()), {
+            source: 'local',
+            skipStoreHooks: true,
+          });
+        });
+      })
+    );
+    await server.close();
+    await setup({ deck: adapter });
+    const a = open(roomName('deck', 'deck-1', 1), { schemaVersion: 1 });
+    await a.synced;
+    a.doc.transact(() => a.doc.getMap('slides').set('s1', 'edited'));
+    await waitFor(() => server.store.storeCalls === 1, 3000, 'edit stored');
+  });
+});

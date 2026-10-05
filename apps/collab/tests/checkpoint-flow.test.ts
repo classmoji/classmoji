@@ -390,3 +390,72 @@ describe('loadedDocument', () => {
     expect(server.runtime.loadedDocument('page', PAGE)?.name).toBe(roomName('page', PAGE, 2));
   });
 });
+
+describe('watchdog: Save version requests', () => {
+  it('re-sends an unanswered request even when a routine run pushed the row', async () => {
+    await server.close();
+    await setup({
+      config: {
+        checkpointNowMaxDelay: '1s',
+        checkpointWatchdogNowMarginMs: 100,
+        checkpointWatchdogMarginMs: 60_000,
+      },
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await internal(server, 'POST', `/page/${PAGE}/ops`, {
+        ops: [insertOp('n1', 'A')],
+        actor: agent,
+      });
+      const res = await internal(server, 'POST', `/page/${PAGE}/checkpoint`, {
+        actor,
+        requestId: 'req-lost-0001',
+      });
+      expect(res.body.alreadySaved).toBeUndefined();
+      // A routine run pushed the row; the run carrying the request never ran.
+      const row = server.store.rows.get(`page:${PAGE}`)!;
+      Object.assign(row, {
+        pushed_version: row.version,
+        dirty_since: null,
+        last_checkpoint_at: new Date(),
+      });
+      await waitFor(
+        () =>
+          server.checkpoints.calls.some(
+            c => c.plain && c.payload.requests?.some(r => r.id === 'req-lost-0001')
+          ),
+        4000,
+        'request re-sent'
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe('a person leaving while an agent edits', () => {
+  it('is still a last leave when the agent finishes after them', async () => {
+    await server.close();
+    await setup({ storeDebounceMs: 60_000 });
+    const a = open();
+    await a.synced;
+    a.doc.transact(() => textOf(a.doc, 'p1').insert(0, 'x'));
+    await waitFor(() => server.runtime.hasUnstoredChanges('page', PAGE), 3000, 'edit');
+    // An agent's edit holds a direct connection open while the person leaves.
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    const agentEdit = server.runtime.withLiveEdit('page', PAGE, agent, async () => {
+      await gate;
+    });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    a.destroy();
+    await new Promise(resolve => setTimeout(resolve, 100));
+    release();
+    await agentEdit;
+    await waitFor(
+      () => server.checkpoints.calls.some(c => c.now && c.payload.reason === 'last-leave'),
+      3000,
+      'last-leave'
+    );
+  });
+});
