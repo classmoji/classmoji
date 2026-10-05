@@ -253,30 +253,29 @@ test.describe('live editing', () => {
       )
       .toBe(true);
 
-    const head = await contentHead();
-    expect(head).not.toBe(headBefore);
-
-    // The thing itself, not the counters: GitHub's content.json and deck.json
-    // carry both people's edits.
+    // The thing itself, not the counters: poll GitHub's content.json and
+    // deck.json until they carry both people's edits. Row counters alone can
+    // read "settled" just before the final leave-time store lands.
     const { ContentService } = await services();
     const { org, repo } = await contentRepo();
     const page = await prisma.page.findUniqueOrThrow({ where: { id: pageId } });
     const deck = await prisma.slide.findUniqueOrThrow({ where: { id: deckId } });
-    const pageFile = await ContentService.getContent({
-      gitOrganization: org,
-      repo,
-      path: `${page.content_path}/content.json`,
-      skipCache: true,
-    });
-    const deckFile = await ContentService.getContent({
-      gitOrganization: org,
-      repo,
-      path: `${deck.content_path}/deck.json`,
-      skipCache: true,
-    });
-    expect(pageFile?.content).toContain(TOKEN_1);
-    expect(pageFile?.content).toContain(TOKEN_2);
-    expect(deckFile?.content).toContain(SLIDE_EDIT_A.trim());
-    expect(deckFile?.content).toContain(SLIDE_EDIT_B.trim());
+    const read = async (path: string) =>
+      (await ContentService.getContent({ gitOrganization: org, repo, path, skipCache: true }))
+        ?.content ?? '';
+    await expect
+      .poll(
+        async () => {
+          const pageText = await read(`${page.content_path}/content.json`);
+          const deckText = await read(`${deck.content_path}/deck.json`);
+          return (
+            [TOKEN_1, TOKEN_2].every(t => pageText.includes(t)) &&
+            [SLIDE_EDIT_A.trim(), SLIDE_EDIT_B.trim()].every(t => deckText.includes(t))
+          );
+        },
+        { timeout: 150_000, intervals: [3_000, 5_000] }
+      )
+      .toBe(true);
+    expect(await contentHead()).not.toBe(headBefore);
   });
 });
