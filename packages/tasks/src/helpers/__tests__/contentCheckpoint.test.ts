@@ -212,6 +212,18 @@ function makePrisma(rows: Row[]) {
     // Only the editors trim runs through $executeRaw: interpret it (credited
     // AND stamped at or below the pushed version; no stamp counts as 0).
     $executeRaw: vi.fn(async (sql: TemplateStringsArray, ...values: unknown[]) => {
+      if (sql.join('?').includes('last_checkpoint_error')) {
+        // A whole-run failure stamped on the classroom's dirty rows.
+        const [at, text, classroomId] = values as [Date, string, string];
+        let n = 0;
+        for (const r of rows) {
+          if (r.classroom_id !== classroomId || r.version <= r.pushed_version) continue;
+          if (r.state.byteLength === 0) continue;
+          Object.assign(r, { last_checkpoint_at: at, last_checkpoint_error: text });
+          n++;
+        }
+        return n;
+      }
       if (!sql.join('?').includes('editors')) throw new Error('unexpected $executeRaw');
       const [userIds, pushedVersion, kind, docId, epoch] = values as [
         string[],
@@ -1270,5 +1282,50 @@ describe('Save-version requests and the remaining gaps', () => {
     expect(report.docs[0].reason).toMatch(/could not merge it/);
     // Still unsaved and recorded: the sweeper alerts on it.
     expect(prisma.rows[0].last_checkpoint_error).toMatch(/^outside-edit-pending: /);
+  });
+});
+
+describe("whole-run failures and other docs' refusals", () => {
+  it('a run that fails as a whole stamps the dirty rows (a failed run, not a lost trigger)', async () => {
+    const prisma = makePrisma([row('page', 'page-a', blocksToYDoc([para('a1', 'x')]), 2)]);
+    prisma.classroom.findUnique.mockResolvedValueOnce({ ...CLASSROOM, content_repo: '' } as never);
+    const { deps } = makeDeps(prisma);
+    const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
+    expect(report.failure?.kind).toBe('retry');
+    expect(prisma.rows[0]).toMatchObject({
+      last_checkpoint_at: NOW,
+      last_checkpoint_error: expect.stringMatching(/^failed: .*no content repo/),
+    });
+  });
+
+  it("another doc's refusal does not answer a request for a doc an earlier run pushed", async () => {
+    const prisma = makePrisma([
+      row('page', 'page-a', blocksToYDoc([para('a', 'a')]), 1, {
+        pushed_version: 1,
+        pushed_commit: 'd'.repeat(40),
+      }),
+      // Refused: another schema.
+      row('page', 'page-b', blocksToYDoc([para('b', 'b')]), 1, { schema_version: 999 }),
+    ]);
+    const { deps, notifyCheckpointResult } = makeDeps(prisma);
+    const report = await runContentCheckpoint(
+      {
+        classroomId: 'class-1',
+        reason: 'save-version',
+        requests: [{ id: 'req-clean-0002', kind: 'page', docId: 'page-a' }],
+      },
+      { runId: 'r', finalAttempt: true },
+      deps
+    );
+    expect(report.failure?.kind).toBe('abort');
+    const sent = (notifyCheckpointResult.mock.calls[0] as unknown[])[0] as {
+      docs: Array<Record<string, unknown>>;
+    };
+    expect(sent.docs.find(d => d.id === 'page-a')).toMatchObject({
+      requestIds: ['req-clean-0002'],
+      alreadySaved: true,
+      commit: 'd'.repeat(40),
+    });
+    expect(sent.docs.find(d => d.id === 'page-a')).not.toHaveProperty('error');
   });
 });

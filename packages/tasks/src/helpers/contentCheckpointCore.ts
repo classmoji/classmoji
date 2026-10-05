@@ -116,7 +116,8 @@ export interface CheckpointPrisma {
         source_sha: true;
         pushed_commit: true;
         editors: true;
-        state: true;
+        /** Omitted when only the counters are needed. */
+        state?: true;
       };
     }): Promise<CheckpointRow | null>;
     updateMany(args: {
@@ -1148,13 +1149,33 @@ export async function runContentCheckpoint(
     attempts: 0,
     docs: [],
   };
+  // The run failed as a whole: it threw, so some docs have no outcome of their own.
+  let runLevelFailure = false;
   try {
     await checkpointDocs(payload, ctx, deps, report);
   } catch (error) {
     report.failure = { kind: 'retry', message: errMessage(error), error };
+    runLevelFailure = true;
   }
 
   const at = deps.now?.() ?? new Date();
+  // A run that failed as a whole still visited the classroom's dirty rows:
+  // stamp them, so collab's watchdog and the sweeper see a run that FAILED
+  // (and alert on it), not a trigger that went missing.
+  if (runLevelFailure && report.failure) {
+    const text = `failed: ${report.failure.message}`.slice(0, 500);
+    try {
+      await deps.prisma.$executeRaw`
+        UPDATE collab_docs SET last_checkpoint_at = ${at}, last_checkpoint_error = ${text}
+        WHERE classroom_id = ${payload.classroomId}
+          AND version > pushed_version
+          AND octet_length(state) > 0`;
+    } catch (e) {
+      log.warn('content-checkpoint: could not record the run failure on its rows', {
+        error: errMessage(e),
+      });
+    }
+  }
   // Persist the outcome of every doc that is NOT pushed/unchanged (those were
   // written with their row update above).
   for (const doc of report.docs) {
@@ -1226,7 +1247,9 @@ export async function runContentCheckpoint(
     if (reported.has(key)) continue;
     const [kind, ...rest] = key.split(':');
     const docId = rest.join(':');
-    if (report.failure) {
+    // Only a failure of the whole run is this doc's answer; a failure of
+    // ANOTHER doc says nothing about this one (an earlier run pushed it).
+    if (runLevelFailure && report.failure) {
       if (!answerFailures) continue;
       entries.push({
         kind,
@@ -1251,7 +1274,6 @@ export async function runContentCheckpoint(
           source_sha: true,
           pushed_commit: true,
           editors: true,
-          state: true,
         },
       })
       .catch(() => null);
