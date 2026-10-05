@@ -273,3 +273,17 @@ describe('audit.create dedup key', () => {
     });
   });
 });
+
+describe('audit.service live-editing actions', () => {
+  it.each(['COLLAB_JOIN', 'COLLAB_LEAVE', 'COLLAB_CHECKPOINT'] as const)(
+    'records %s (not skipped as an unknown action)',
+    async action => {
+      findFirstMock.mockResolvedValue(null);
+      createMock.mockResolvedValue({ id: 'a' });
+      await audit.create({ ...baseEntry, resource_type: 'page', action });
+      expect(createMock).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ action }) })
+      );
+    }
+  );
+});

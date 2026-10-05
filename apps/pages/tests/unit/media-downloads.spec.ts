@@ -199,7 +199,11 @@ test.describe('/api/media-download', () => {
     const auth = source('../../app/utils/auth.server.ts');
     expect(auth).toContain('acceptedOnly = false,');
     // The filter itself lives in the one role lookup assertPageAccess uses.
+    // (`~/utils/classroomRole.server.ts` re-exports `@classmoji/auth/classroom-role`.)
     expect(source('../../app/utils/classroomRole.server.ts')).toContain(
+      "from '@classmoji/auth/classroom-role'"
+    );
+    expect(source('../../../../packages/auth/src/classroomRole.ts')).toContain(
       '...(acceptedOnly ? { has_accepted_invite: true } : {}),'
     );
     // Without one, it is the same 404 as every other refusal.

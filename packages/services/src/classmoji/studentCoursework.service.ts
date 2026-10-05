@@ -11,8 +11,14 @@
  *     shown for it (repo link, commit count, issue link, Individual/Group,
  *     grades, graders, late hours, and the submission id regrades and token
  *     extensions are keyed on).
- *   - QUIZ: their attempts, scored by the shared counting-attempt selector.
- *     Status, first match wins: Completed > In progress > Closed > Not started.
+ *   - QUIZ: their attempts, scored by the shared selector over late-penalised
+ *     scores (`countingQuizScore`): the row shows the raw percentage of the
+ *     attempt that counts, and its late hours. Status, first match wins:
+ *     Completed > In progress > Closed > Not started.
+ *
+ * REPO and QUIZ rows carry the same late and extension fields: hours late
+ * after the hours bought, the price of an hour, the hours bought, and where
+ * Extend buys them (the submission for a repo, the assignment for a quiz).
  *   - FORM: their SUBMITTED response. Status: Submitted > Closed > Not
  *     submitted, where Closed is a CLOSED form or one past its close date (the
  *     fill page treats both as closed). A PUBLIC form records no student
@@ -25,10 +31,13 @@
 
 import getPrisma from '@classmoji/database';
 import {
+  countingQuizScore,
+  effectiveDeadline,
   gitContextFor,
   gitWeb,
   effectiveTokensPerHour,
   isClosed,
+  lateHours,
   openToStudents,
   quizStanding,
   titleToIdentifier,
@@ -38,6 +47,7 @@ import { pagesUrl } from '../emails/escape.ts';
 import * as formResponseService from './formResponse.service.ts';
 import * as helperService from './helper.service.ts';
 import * as quizAttemptService from './quizAttempt.service.ts';
+import { netQuizExtensionHours } from './quizGradeItems.service.ts';
 
 export type CourseworkType = 'REPO' | 'QUIZ' | 'FORM';
 
@@ -61,9 +71,14 @@ export type CourseworkAction =
   | { kind: 'OPEN'; href: string }
   | { kind: 'FILL_OUT'; href: string };
 
+/** What Extend buys hours on: a repo submission, or a quiz assignment. */
+export type ExtensionTarget =
+  | { kind: 'REPO'; gitRepoAssignmentId: string }
+  | { kind: 'QUIZ'; assignmentId: string };
+
 /** Everything the student's repo assignment row has always shown. */
 export interface RepoRowFields {
-  /** The GitRepoAssignment id: what regrade requests and token extensions key on. */
+  /** The GitRepoAssignment id: what regrade requests key on. */
   gitRepoAssignmentId: string;
   /** The student's (or their team's) own repository, or the name it will have. */
   repositoryTitle: string;
@@ -77,15 +92,6 @@ export interface RepoRowFields {
   grades: { id: string; emoji: string }[];
   graders: { id: string; name: string | null }[];
   gradersSummary: string;
-  numLateHours: number;
-  isLateOverride: boolean;
-  tokensPerHour: number;
-  /**
-   * Extension hours the student has bought with tokens and not cancelled.
-   * The deadline shown stays the assignment's own; these hours say how far
-   * past it the student is still on time.
-   */
-  extensionHours: number;
   /** How the work is submitted: a push (REPO) or closing the issue (ISSUE). */
   submissionMode: 'REPO' | 'ISSUE' | null;
   /** When it was submitted (the issue closed, or the counted push). */
@@ -111,10 +117,47 @@ export interface StudentCourseworkRow {
   tracked: boolean;
   /** Nothing left to do: under Completed, never Up next. */
   done: boolean;
-  /** QUIZ: the counting attempt's percentage (0-100). */
+  /**
+   * QUIZ: the raw percentage (0-100) of the attempt that counts for the
+   * grade (picked over late-penalised scores); its late hours are
+   * `numLateHours`.
+   */
   score: number | null;
   /** QUIZ: when the counting attempt completed. */
   scoredAt: string | null;
+  /**
+   * REPO and QUIZ: whole hours late after the hours bought. A repo still open
+   * is late up to now; a quiz is late by its counting attempt. 0 otherwise.
+   */
+  numLateHours: number;
+  /** REPO: a late override waives lateness (and Extend). */
+  isLateOverride: boolean;
+  /** The price of one extension hour (the assignment's, else the classroom's); 0 = none sold. */
+  tokensPerHour: number;
+  /**
+   * Extension hours the student has bought and not cancelled (never below
+   * 0). The deadline shown stays the assignment's own; these hours say how
+   * far past it the student is still on time.
+   */
+  extensionHours: number;
+  /** When the work was submitted: the repo's submission, the quiz's counting attempt. */
+  submittedAt: string | null;
+  /**
+   * QUIZ: past the due date plus the hours bought with no completed attempt
+   * and none in progress. Shown as missing, not as hours late. A running
+   * attempt shows only In progress (the grade still counts 0 until an
+   * attempt completes).
+   */
+  missing: boolean;
+  /**
+   * The hours Extend starts at: what clears the lateness. REPO: its late
+   * hours. QUIZ past the due date plus the hours bought with no completed
+   * attempt (missing, or an attempt still running): the hours from there to
+   * now, rounded up; otherwise the late hours of the attempt that counts.
+   */
+  suggestedExtensionHours: number;
+  /** Where Extend buys hours, or null where it is not offered. */
+  extend: ExtensionTarget | null;
   /** QUIZ: attempts used, and the cap (0 = unlimited). */
   attemptsUsed: number | null;
   maxAttempts: number | null;
@@ -161,13 +204,33 @@ export type RepoSubmission = Awaited<
 const iso = (value: Date | string | null | undefined) =>
   value ? new Date(value).toISOString() : null;
 
+/** The late and extension fields every REPO and QUIZ row carries. */
+type LateFields = Pick<
+  StudentCourseworkRow,
+  'numLateHours' | 'isLateOverride' | 'tokensPerHour' | 'extensionHours' | 'submittedAt'
+>;
+
+const NO_LATE_FIELDS: LateFields &
+  Pick<StudentCourseworkRow, 'missing' | 'extend' | 'suggestedExtensionHours'> = {
+  numLateHours: 0,
+  isLateOverride: false,
+  tokensPerHour: 0,
+  extensionHours: 0,
+  submittedAt: null,
+  missing: false,
+  suggestedExtensionHours: 0,
+  extend: null,
+};
+
+const HOUR_MS = 3_600_000;
+
 const repoFields = (
   ra: RepoSubmission,
   gitOrgLogin: string | null,
   git: GitWebContext | null,
   now: Date,
   classroomTokensPerHour: number
-): RepoRowFields => {
+): { repo: RepoRowFields; late: LateFields } => {
   const login = gitOrgLogin ?? ra.git_repo?.classroom?.git_organization?.login ?? null;
   const web = gitWeb(
     git ??
@@ -215,7 +278,7 @@ const repoFields = (
           : 0;
   const numLateHours = Math.max(0, hoursPastDeadline - extensionHours);
 
-  return {
+  const repo: RepoRowFields = {
     gitRepoAssignmentId: ra.id,
     // Named the way GitHub does: the student's own repo when it exists,
     // otherwise the repository's slug, the prefix theirs will be cut under.
@@ -237,14 +300,18 @@ const repoFields = (
       .map(g => g.name)
       .filter(Boolean)
       .join(', '),
+    submissionMode: ra.assignment?.submission_mode ?? null,
+    closedAt: iso(ra.closed_at),
+  };
+  const late: LateFields = {
     numLateHours,
     isLateOverride: Boolean(ra.is_late_override),
     // The assignment's own price, else the classroom's default.
     tokensPerHour: effectiveTokensPerHour(ra.assignment?.tokens_per_hour, classroomTokensPerHour),
     extensionHours,
-    submissionMode: ra.assignment?.submission_mode ?? null,
-    closedAt: iso(ra.closed_at),
+    submittedAt: submittedAtMs !== null ? iso(ra.closed_at) : null,
   };
+  return { repo, late };
 };
 
 /** Current rows first, soonest due first; then done rows, latest due first. Undated rows last. */
@@ -277,6 +344,8 @@ export const listPublishedAssignments = (classroomId: string) =>
       student_deadline: true,
       // A quiz takes no new attempt from its close date on.
       closes_at: true,
+      // Its extension price; empty = the classroom's.
+      tokens_per_hour: true,
       quiz_id: true,
       form_id: true,
       module: { select: { id: true, title: true } },
@@ -320,7 +389,7 @@ export const listForStudent = async ({
 
   // One read per type for this student. A type whose read fails shows no rows
   // (its statuses would be guesses); the other types still show.
-  const [repoSubmissions, quizJoin, formJoin, classroomTokensPerHour] = await Promise.all([
+  const [repoSubmissions, quizJoin, formJoin, settings] = await Promise.all([
     givenSubmissions ??
       (hasRepos
         ? helperService
@@ -341,6 +410,12 @@ export const listForStudent = async ({
             },
           }),
           quizAttemptService.findForUserByQuizIds(userId, quizIds),
+          // The hours this student bought on each quiz (net of refunds).
+          netQuizExtensionHours({
+            classroomId,
+            studentId: userId,
+            assignmentIds: assignments.flatMap(a => (a.type === 'QUIZ' ? [a.id] : [])),
+          }),
         ]).catch(degraded('quiz', context, null))
       : null,
     formIds.length
@@ -352,20 +427,20 @@ export const listForStudent = async ({
           formResponseService.findSubmittedForUserByFormIds(userId, formIds),
         ]).catch(degraded('form', context, null))
       : null,
-    // The classroom's extension price, for repo rows whose assignment sets
-    // none. A failed read prices them at 0 (no Extend) rather than hiding the
-    // rows.
-    hasRepos
+    // The classroom's extension price, for rows whose assignment sets none,
+    // and its late penalty, which decides a quiz's counting attempt. A failed
+    // read prices them at 0 (no Extend) rather than hiding the rows.
+    hasRepos || quizIds.length
       ? (async () =>
-          (
-            await getPrisma().classroomSettings.findUnique({
-              where: { classroom_id: classroomId },
-              select: { default_tokens_per_hour: true },
-            })
-          )?.default_tokens_per_hour ?? 0)().catch(degraded('extension price', context, 0))
-      : 0,
+          getPrisma().classroomSettings.findUnique({
+            where: { classroom_id: classroomId },
+            select: { default_tokens_per_hour: true, late_penalty_points_per_hour: true },
+          }))().catch(degraded('classroom settings', context, null))
+      : null,
   ]);
-  const [quizzes, attempts] = quizJoin ?? [[], []];
+  const classroomTokensPerHour = settings?.default_tokens_per_hour ?? 0;
+  const latePenaltyPerHour = settings?.late_penalty_points_per_hour ?? 0;
+  const [quizzes, attempts, quizHours] = quizJoin ?? [[], [], new Map<string, number>()];
   const [forms, submittedResponses] = formJoin ?? [[], []];
 
   // First submission row per assignment wins: the student's own before their
@@ -398,11 +473,29 @@ export const listForStudent = async ({
       const ra = submissionByAssignment.get(a.id);
       // No submission row yet: no student repo to open, so no row (as before).
       if (!ra) continue;
-      const repo = repoFields(ra, gitOrgLogin, git, now, classroomTokensPerHour);
+      const { repo, late } = repoFields(ra, gitOrgLogin, git, now, classroomTokensPerHour);
       const href = repo.issueUrl ?? repo.repoUrl;
       const submitted = ra.status === 'CLOSED';
+      // Hours can be bought at any time, before the deadline or after it,
+      // submitted or not. Nothing to buy: no deadline, no price, a late
+      // override, or work submitted on time that cannot change any more
+      // (graded, or submitted by closing the issue; a push-mode row
+      // submitted on time can still take a later push inside the hours).
+      const settledOnTime =
+        submitted &&
+        late.numLateHours === 0 &&
+        (repo.gradesReleased || repo.submissionMode !== 'REPO');
+      const extendable =
+        a.student_deadline !== null &&
+        late.tokensPerHour > 0 &&
+        !late.isLateOverride &&
+        !settledOnTime;
       rows.push({
         ...base,
+        ...late,
+        missing: false,
+        suggestedExtensionHours: late.numLateHours,
+        extend: extendable ? { kind: 'REPO', gitRepoAssignmentId: ra.id } : null,
         type: 'REPO',
         title: a.title,
         deadline: iso(a.student_deadline),
@@ -416,10 +509,21 @@ export const listForStudent = async ({
     } else if (a.type === 'QUIZ' && a.quiz_id) {
       const quiz = quizById.get(a.quiz_id);
       if (!quiz) continue;
-      const standing = quizStanding(
-        attempts.filter(attempt => attempt.quiz_id === quiz.id),
-        quiz.grading_strategy
-      );
+      const own = attempts.filter(attempt => attempt.quiz_id === quiz.id);
+      const standing = quizStanding(own, quiz.grading_strategy);
+      // Hours bought move this student's due date for every attempt.
+      const extensionHours = Math.max(0, quizHours.get(a.id) ?? 0);
+      const counting = countingQuizScore(own, quiz.grading_strategy, {
+        studentDeadline: a.student_deadline,
+        extensionHours,
+        latePenaltyPerHour,
+      });
+      const due = effectiveDeadline(a.student_deadline, extensionHours);
+      // Past the (extended) due date with no completed attempt. Missing only
+      // when none is running either: a running attempt reads In progress.
+      const overdue = !standing.completed && due !== null && now.getTime() > due.getTime();
+      const missing = overdue && !standing.inProgress;
+      const tokensPerHour = effectiveTokensPerHour(a.tokens_per_hour, classroomTokensPerHour);
       // The row is open to this student (published, past Opens), so what is
       // left to ask is whether the close date has passed: from then on no new
       // attempt starts.
@@ -433,15 +537,40 @@ export const listForStudent = async ({
             : 'NOT_STARTED';
       const canStart =
         !closed && (quiz.max_attempts === 0 || standing.attemptsUsed < quiz.max_attempts);
+      const someAttemptLate = own.some(
+        attempt =>
+          attempt.completed_at != null &&
+          lateHours(attempt.completed_at, a.student_deadline, extensionHours) > 0
+      );
+      // Offered where there is a due date and a price, and the hours can
+      // still change something: a new attempt can start, one is running, or
+      // a completed attempt is late. Not on a closed quiz the student never
+      // took, nor on one completed on time with no attempt left to start.
+      const extendable =
+        a.student_deadline !== null &&
+        tokensPerHour > 0 &&
+        !(closed && !standing.completed && !standing.inProgress) &&
+        (canStart || standing.inProgress !== null || someAttemptLate);
       rows.push({
         ...base,
+        numLateHours: counting.late_hours,
+        isLateOverride: false,
+        tokensPerHour,
+        extensionHours,
+        submittedAt: iso(counting.counting?.completed_at),
+        missing,
+        suggestedExtensionHours:
+          overdue && due !== null
+            ? Math.ceil((now.getTime() - due.getTime()) / HOUR_MS)
+            : counting.late_hours,
+        extend: extendable ? { kind: 'QUIZ', assignmentId: a.id } : null,
         type: 'QUIZ',
         title: quiz.name,
         deadline: iso(a.student_deadline),
         status,
         done: status === 'COMPLETED' || status === 'CLOSED',
-        score: standing.score,
-        scoredAt: iso(standing.counting?.completed_at),
+        score: counting.raw_percentage,
+        scoredAt: iso(counting.counting?.completed_at),
         attemptsUsed: standing.attemptsUsed,
         maxAttempts: quiz.max_attempts,
         href: `/student/${classroomSlug}/quizzes?quiz=${encodeURIComponent(quiz.id)}`,
@@ -473,6 +602,7 @@ export const listForStudent = async ({
               : 'NOT_SUBMITTED';
       rows.push({
         ...base,
+        ...NO_LATE_FIELDS,
         type: 'FORM',
         title: a.title,
         deadline: iso(a.student_deadline ?? form.closes_at),

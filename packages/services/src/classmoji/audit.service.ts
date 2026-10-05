@@ -8,6 +8,10 @@ const VALID_ACTIONS = [
   'DELETE',
   'ACCESS_DENIED',
   'VIEW',
+  // Live editing: joining/leaving a room, and each checkpoint push of a doc.
+  'COLLAB_JOIN',
+  'COLLAB_LEAVE',
+  'COLLAB_CHECKPOINT',
 ] satisfies AuditLogAction[];
 // Valid Role values from Prisma schema
 const VALID_ROLES = ['OWNER', 'TEACHER', 'STUDENT', 'ASSISTANT'];

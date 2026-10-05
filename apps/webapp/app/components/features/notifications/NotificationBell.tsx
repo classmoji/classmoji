@@ -23,6 +23,12 @@ interface Props {
   membershipRoles: Record<string, NotificationRole[]>;
 }
 
+/** The status a followed feedback post moved to, from the notification's metadata. */
+const feedbackStatusLabel = (metadata: unknown) => {
+  const label = (metadata as { status_label?: unknown } | null)?.status_label;
+  return typeof label === 'string' ? label.toLowerCase() : 'updated';
+};
+
 const iconBtn: React.CSSProperties = {
   width: 36,
   height: 36,
@@ -259,7 +265,11 @@ export function NotificationBell({ initialItems, initialUnreadCount, membershipR
                       {n.title}
                     </div>
                     <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 2 }}>
-                      {n.classroom?.name ? `${n.classroom.name} | ` : ''}
+                      {n.type === 'FEEDBACK_STATUS_CHANGED'
+                        ? `Feedback · now ${feedbackStatusLabel(n.metadata)} | `
+                        : n.classroom?.name
+                          ? `${n.classroom.name} | `
+                          : ''}
                       {formatRelative(n.created_at)}
                     </div>
                   </div>

@@ -1,5 +1,6 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useFetcher } from 'react-router';
+import { Button, ConfigProvider, Modal, theme } from 'antd';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { IconExternalLink, IconGitBranch } from '@tabler/icons-react';
@@ -18,6 +19,7 @@ import {
   reasonLabel,
   sideNotesDiffer,
   slideSideHtml,
+  slideTitleFromDom,
   type ChooserCopy,
   type ChooserVariant,
   type ConflictUnit,
@@ -27,6 +29,7 @@ import {
   type SlideSide,
   type UnitPreviews,
 } from './conflictChooser.ts';
+import { useIsDarkMode } from '~/hooks/useIsDarkMode';
 
 dayjs.extend(relativeTime);
 
@@ -104,13 +107,21 @@ function usePreviewActions() {
     );
   };
 
-  const discard = () => {
-    if (!window.confirm('Discard the pending preview? Its changes will be permanently deleted.')) {
-      return;
-    }
+  // Discard asks first, in the app's own modal.
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const discard = () => setConfirmingDiscard(true);
+  const confirmDiscard = () => {
+    setConfirmingDiscard(false);
     setPending('discard');
     fetcher.submit({ intent: 'preview-discard' }, { method: 'POST' });
   };
+  const discardConfirm = (
+    <DiscardPreviewConfirm
+      open={confirmingDiscard}
+      onCancel={() => setConfirmingDiscard(false)}
+      onConfirm={confirmDiscard}
+    />
+  );
 
   const conflictUnits = fetcher.data?.conflict ? (fetcher.data.units ?? []) : null;
   const orderConflict = fetcher.data?.conflict ? (fetcher.data.orderConflict ?? null) : null;
@@ -131,8 +142,49 @@ function usePreviewActions() {
     autoMerged,
     conflictOursSha,
     error,
+    discardConfirm,
   };
 }
+
+/** "Discard the pending preview?" — the app's modal, in the page's colour scheme. */
+const DiscardPreviewConfirm = ({
+  open,
+  onCancel,
+  onConfirm,
+}: {
+  open: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) => {
+  const isDark = useIsDarkMode();
+  return (
+    <ConfigProvider theme={{ algorithm: isDark ? theme.darkAlgorithm : theme.defaultAlgorithm }}>
+      <Modal
+        open={open}
+        title="Discard the pending preview?"
+        onCancel={onCancel}
+        width={420}
+        centered
+        footer={[
+          <Button key="keep" onClick={onCancel}>
+            Keep it
+          </Button>,
+          <Button
+            key="discard"
+            danger
+            type="primary"
+            onClick={onConfirm}
+            data-testid="preview-discard-confirm"
+          >
+            Discard
+          </Button>,
+        ]}
+      >
+        Its changes will be permanently deleted.
+      </Modal>
+    </ConfigProvider>
+  );
+};
 
 // ─── Conflict chooser (Phase 7; save variant 7.5) ────────────────────────────
 
@@ -252,20 +304,48 @@ const SlideFrame = ({ side, showNotes }: { side: SlideSide; showNotes: boolean }
   );
 };
 
-/** Numbered id list for an ordering conflict side (fallback when previews are
- * missing — e.g. the save-merge chooser, which carries no `unit_previews`). */
-const OrderList = ({ ids }: { ids: string[] }) => (
-  <ol className="space-y-0.5 text-xs text-gray-700 dark:text-gray-300 max-h-36 overflow-y-auto">
-    {ids.map((id, position) => (
-      <li key={`${id}-${position}`} className="flex gap-1.5">
-        <span className="w-5 shrink-0 text-right tabular-nums text-gray-400 dark:text-gray-500">
-          {position + 1}.
-        </span>
-        <span className="truncate font-mono text-[11px]">{id}</span>
-      </li>
-    ))}
-  </ol>
-);
+/** Numbered slide list for an ordering conflict side (fallback when previews
+ * are missing — the live accept and the save-merge chooser carry no
+ * `unit_previews`): each slide's title as the deck on screen shows it. */
+const OrderList = ({ ids }: { ids: string[] }) => {
+  const titles = useSlideTitles(ids);
+  return (
+    <ol className="space-y-0.5 text-xs text-gray-700 dark:text-gray-300 max-h-36 overflow-y-auto">
+      {ids.map((id, position) => {
+        const title = titles[id];
+        return (
+          <li key={`${id}-${position}`} className="flex gap-1.5" data-slide-id={id}>
+            <span className="w-5 shrink-0 text-right tabular-nums text-gray-400 dark:text-gray-500">
+              {position + 1}.
+            </span>
+            {title ? (
+              <span className="truncate">{title}</span>
+            ) : (
+              <span className="truncate italic text-gray-500 dark:text-gray-400" title={id}>
+                {title === '' ? 'Untitled slide' : 'Slide not on screen'}
+              </span>
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
+};
+
+/**
+ * Titles of the slides in the deck on screen (outside React, read as the
+ * list renders): '' for a slide with no text, null for one not on screen.
+ */
+function useSlideTitles(ids: string[]): Record<string, string | null> {
+  const key = ids.join('|');
+  return useMemo(() => {
+    if (typeof document === 'undefined') return {};
+    const root = document.querySelector('.reveal .slides') ?? document;
+    return Object.fromEntries(ids.map(id => [id, slideTitleFromDom(root, id)]));
+    // `key` stands for `ids`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+}
 
 /** Filmstrip layout: a horizontal row (top-level slide order) or a vertical
  * column (a stack's child order — mirroring how a vertical stack actually lays
@@ -630,7 +710,14 @@ const actionButtonBase =
  * Persistent top bar shown while previewing the pending branch.
  * Amber identity in both light and dark modes; fixed under the slides navbar.
  */
-export const PreviewBar = ({ preview }: { preview: PreviewInfo }) => {
+export const PreviewBar = ({
+  preview,
+  changedSlides = null,
+}: {
+  preview: PreviewInfo;
+  /** Live decks: how many slides the preview changes (they are outlined). */
+  changedSlides?: number | null;
+}) => {
   const {
     busy,
     pending,
@@ -643,6 +730,7 @@ export const PreviewBar = ({ preview }: { preview: PreviewInfo }) => {
     autoMerged,
     conflictOursSha,
     error,
+    discardConfirm,
   } = usePreviewActions();
   const age = preview.oldestCommitAt ? dayjs(preview.oldestCommitAt).fromNow() : null;
 
@@ -661,6 +749,11 @@ export const PreviewBar = ({ preview }: { preview: PreviewInfo }) => {
                 · {preview.commitsAhead} commit{preview.commitsAhead === 1 ? '' : 's'}
                 {age ? ` · ${age}` : ''}
               </span>
+              {changedSlides != null && changedSlides > 0 && (
+                <span className="text-amber-700 dark:text-amber-300" data-testid="preview-changed">
+                  · {changedSlides} changed slide{changedSlides === 1 ? '' : 's'} outlined
+                </span>
+              )}
             </div>
 
             <div className="flex items-center gap-2">
@@ -711,6 +804,7 @@ export const PreviewBar = ({ preview }: { preview: PreviewInfo }) => {
       {busy && pending === 'accept' && (
         <SlideMergeProgressOverlay label="Merging preview into the live deck — this can take a few seconds…" />
       )}
+      {discardConfirm}
     </>
   );
 };
@@ -731,12 +825,18 @@ export const PendingPreviewBanner = ({ preview }: { preview: PreviewInfo }) => {
     autoMerged,
     conflictOursSha,
     error,
+    discardConfirm,
   } = usePreviewActions();
   const age = preview.oldestCommitAt ? dayjs(preview.oldestCommitAt).fromNow() : null;
 
   return (
     <>
-      <div data-testid="pending-preview-banner" className="fixed top-14 left-0 right-0 z-40">
+      <div
+        data-testid="pending-preview-banner"
+        className="fixed left-0 right-0 z-40"
+        // Under the navbar's measured height (3.5rem unless live editing measured it).
+        style={{ top: 'var(--slides-nav-h, 3.5rem)' }}
+      >
         <div className="border-b border-amber-200 dark:border-amber-800/70 bg-amber-50/90 dark:bg-amber-950/80 backdrop-blur px-4 sm:px-6 lg:px-8 py-1.5">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-amber-900 dark:text-amber-100">
             <span className="inline-flex items-center gap-1.5">
@@ -792,6 +892,7 @@ export const PendingPreviewBanner = ({ preview }: { preview: PreviewInfo }) => {
       {busy && pending === 'accept' && (
         <SlideMergeProgressOverlay label="Merging preview into the live deck — this can take a few seconds…" />
       )}
+      {discardConfirm}
     </>
   );
 };

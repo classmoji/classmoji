@@ -16,7 +16,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
 import SandpackEmbed from './SandpackEmbed.tsx';
-import { parseFromHtml, updateFilesInElement } from './utils.ts';
+import { parseFromHtml, syncEditedFiles } from './utils.ts';
 
 interface SandpackRendererProps {
   containerSelector?: string;
@@ -40,6 +40,22 @@ export default function SandpackRenderer({
   const observedRef = useRef(new WeakSet<HTMLElement>());
 
   /**
+   * Edit-mode handler syncing code edits back into the embed's JSON script.
+   * Only real edits are written (and only then is the deck marked changed):
+   * Sandpack reports its full file map on mount, template defaults included,
+   * and that must not land in the stored block (see syncEditedFiles).
+   */
+  const filesChangeHandler = useCallback(
+    (embedEl: HTMLElement) =>
+      isEditing
+        ? (files: Record<string, string>, baseline: Record<string, string>) => {
+            if (syncEditedFiles(embedEl, files, baseline)) onContentChange?.();
+          }
+        : undefined,
+    [isEditing, onContentChange]
+  );
+
+  /**
    * Mount a Sandpack component into an embed element
    */
   const mountSandpack = useCallback(
@@ -59,13 +75,7 @@ export default function SandpackRenderer({
         embedEl.appendChild(mountPoint);
       }
 
-      // Handle file changes - sync back to the JSON script tag
-      const handleFilesChange = isEditing
-        ? (files: Record<string, string>) => {
-            updateFilesInElement(embedEl, files);
-            onContentChange?.();
-          }
-        : undefined;
+      const handleFilesChange = filesChangeHandler(embedEl);
 
       // Create React root and render Sandpack
       const root = createRoot(mountPoint as HTMLElement);
@@ -85,7 +95,7 @@ export default function SandpackRenderer({
       // Store root for cleanup
       rootsRef.current.set(embedEl, root);
     },
-    [slideTheme, onContentChange, isEditing]
+    [slideTheme, filesChangeHandler]
   );
 
   /**
@@ -118,13 +128,7 @@ export default function SandpackRenderer({
       // Parse fresh configuration from the element
       const config = parseFromHtml(embedEl);
 
-      // Handle file changes - sync back to the JSON script tag
-      const handleFilesChange = isEditing
-        ? (files: Record<string, string>) => {
-            updateFilesInElement(embedEl, files);
-            onContentChange?.();
-          }
-        : undefined;
+      const handleFilesChange = filesChangeHandler(embedEl);
 
       // Re-render with new config
       root.render(
@@ -140,7 +144,7 @@ export default function SandpackRenderer({
         />
       );
     },
-    [slideTheme, onContentChange, isEditing]
+    [slideTheme, filesChangeHandler]
   );
 
   /**
@@ -266,12 +270,7 @@ export default function SandpackRenderer({
 
       // Only re-render if theme is 'auto'
       if (config.theme === 'auto') {
-        const handleFilesChange = isEditing
-          ? (files: Record<string, string>) => {
-              updateFilesInElement(embedEl, files);
-              onContentChange?.();
-            }
-          : undefined;
+        const handleFilesChange = filesChangeHandler(embedEl);
 
         root.render(
           <SandpackEmbed
@@ -287,7 +286,7 @@ export default function SandpackRenderer({
         );
       }
     });
-  }, [slideTheme, isEditing, onContentChange]);
+  }, [slideTheme, filesChangeHandler]);
 
   // This component doesn't render anything itself
   return null;

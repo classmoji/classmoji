@@ -34,12 +34,7 @@ const ProfileDropdown = ({ children, placement = 'bottomRight' }: ProfileDropdow
           size={40}
         />
         <div className="flex-1 min-w-0">
-          <div className="font-semibold text-sm text-ink-0 truncate">
-            {user?.name}
-          </div>
-          {user?.login && (
-            <div className="text-xs text-ink-3 truncate">@{user.login}</div>
-          )}
+          <div className="font-semibold text-sm text-ink-0 truncate">{user?.name}</div>
         </div>
       </div>
 

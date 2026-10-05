@@ -15,11 +15,13 @@
     "format:check": "prettier --check \"**/*.{js,jsx,ts,tsx,json,md}\""
   },
   "dependencies": {
+    "@classmoji/collab": "*",
     "@classmoji/database": "*",
     "@classmoji/services": "*",
     "@classmoji/tasks": "*",
     "@classmoji/utils": "*",
     "@octokit/webhooks": "^14.1.1",
+    "@trigger.dev/sdk": "4.6.4",
     "fastify": "^5.1.0",
     "fastify-raw-body": "^5.0.0"
   },

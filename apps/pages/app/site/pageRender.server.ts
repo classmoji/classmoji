@@ -204,7 +204,7 @@ export async function renderPageForViewer(
  * strictly better than a 503, and this is the one surface with anonymous
  * readers and a shared cache in front of it.
  */
-async function resolveSiteAssets(
+export async function resolveSiteAssets(
   ctx: ReturnType<typeof assetResolveContext>,
   blocks: unknown[]
 ): Promise<{
@@ -245,7 +245,7 @@ async function resolveSiteAssets(
  * Same contract as `resolveSiteAssets`, for the same reason — these are the two
  * resolves on the anonymous path, and neither is worth a 503.
  */
-async function resolveSiteCover(
+export async function resolveSiteCover(
   ctx: ReturnType<typeof assetResolveContext>,
   cover: { url: string; position?: number } | null
 ): Promise<{ url: string; position?: number } | null> {

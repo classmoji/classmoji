@@ -9,17 +9,29 @@
  * screen does not use is absent, not nulled.
  *
  *   - `buildQuizResultRows` — the results page: one row per student, each
- *     carrying that student's attempts, scored by the quiz's grading strategy.
+ *     carrying that student's attempts, scored by the quiz's grading strategy
+ *     over late-penalised scores, with each attempt's late hours; plus a row
+ *     for every rostered student with no attempt (not started, or a counted
+ *     0 once the deadline has passed).
  *   - `quizDrawerView` / `attemptDrawerView` — the attempt drawers (preview,
  *     staff review, student) and the `QuizAttemptInterface` they render.
  *   - `studentQuizAttemptView` / `studentQuizAttemptsSummaryView` — the
  *     student quiz list's attempts table and per-quiz summary. The service
  *     (`quiz.getQuizzesForStudent`) selects the attempt columns the list and
  *     its scoring read, which is still more than the table shows (timing and
- *     grading columns), so the view narrows again here.
+ *     grading columns), so the view narrows again here. `studentQuizScoring`
+ *     picks the attempt that counts and each attempt's late hours, the way
+ *     the student's grade does.
  */
 
-import { countingQuizAttempt } from '@classmoji/utils';
+import {
+  countingQuizScore,
+  lateHours as lateHoursOf,
+  quizGradeItem,
+  type QuizGradeAssignment,
+  type QuizLateContext,
+  type ScorableQuizAttempt,
+} from '@classmoji/utils';
 import type { QuizEvaluationRecordV2 } from '@classmoji/utils/quiz-agent';
 
 /** The attempt fields the student quiz list reads (table columns and tab filters). */
@@ -30,7 +42,10 @@ export interface StudentQuizAttemptView {
   completed_at: Date | string | null;
   partialCreditScore: number | null;
   focusMetrics: { totalMs: number; focusedMs: number; percentage: number } | null;
+  /** The attempt that counts for the grade (after the late penalty). */
   isCounting: boolean;
+  /** Whole hours this attempt completed past the due date plus the hours bought. */
+  lateHours: number;
 }
 
 export const studentQuizAttemptView = (attempt: {
@@ -41,6 +56,7 @@ export const studentQuizAttemptView = (attempt: {
   partialCreditScore: number | null;
   focusMetrics: { totalMs: number; focusedMs: number; percentage: number } | null;
   isCounting: boolean;
+  lateHours: number;
 }): StudentQuizAttemptView => ({
   id: attempt.id,
   attemptNumber: attempt.attemptNumber,
@@ -55,13 +71,17 @@ export const studentQuizAttemptView = (attempt: {
       }
     : null,
   isCounting: attempt.isCounting,
+  lateHours: attempt.lateHours,
 });
 
 /** The per-quiz summary fields the student quiz list reads. */
 export interface StudentQuizAttemptsSummaryView {
   count: number;
   canCreateNew: boolean;
+  /** The raw percentage of the attempt that counts for the grade. */
   currentScore: number | null;
+  /** That attempt's late hours, shown beside the score. */
+  currentLateHours: number;
   maxAttempts: number;
 }
 
@@ -72,13 +92,37 @@ export interface StudentQuizAttemptsSummaryView {
  */
 export const studentQuizAttemptsSummaryView = (
   summary: { count?: number; canCreateNew?: boolean; currentScore?: number | null } | undefined,
-  maxAttempts: number
+  maxAttempts: number,
+  currentLateHours = 0
 ): StudentQuizAttemptsSummaryView => ({
   count: summary?.count ?? 0,
   canCreateNew: summary?.canCreateNew ?? false,
   currentScore: summary?.currentScore ?? null,
+  currentLateHours,
   maxAttempts,
 });
+
+/**
+ * A student's attempts on one quiz, scored the way their grade is: the
+ * attempt that counts is picked over late-penalised scores
+ * (`countingQuizScore`), and the student is shown its raw percentage and its
+ * late hours. `late` is null where nothing is late: a staff member's preview,
+ * or a quiz with no assignment; the pick is then over raw scores.
+ */
+export const studentQuizScoring = <T extends ScorableQuizAttempt>(
+  attempts: readonly T[],
+  gradingStrategy: string | null | undefined,
+  late: QuizLateContext | null
+) => {
+  const score = countingQuizScore(attempts, gradingStrategy, late ?? { studentDeadline: null });
+  return {
+    countingAttemptId: score.counting_attempt_id,
+    currentScore: score.raw_percentage,
+    currentLateHours: score.late_hours,
+    lateHoursOf: (attempt: Pick<ScorableQuizAttempt, 'completed_at'>) =>
+      late ? lateHoursOf(attempt.completed_at, late.studentDeadline, late.extensionHours) : 0,
+  };
+};
 
 /** The quiz fields the attempt drawers and `QuizAttemptInterface` read. */
 export interface QuizDrawerView {
@@ -294,6 +338,12 @@ export interface QuizResultAttempt {
   firstAttemptScore: number | null;
   focusMetrics: QuizFocusMetrics | null;
   isCounting: boolean;
+  /**
+   * Whole hours past the student's due date (plus the hours they bought), by
+   * `completed_at`; null where lateness does not apply (a staff member's or
+   * other non-student's attempt, or a quiz with no due date).
+   */
+  lateHours: number | null;
 }
 
 export interface QuizResultStudent {
@@ -301,11 +351,23 @@ export interface QuizResultStudent {
   user: QuizResultUser;
   attempts: QuizResultAttempt[];
   attemptCount: number;
+  /** The raw percentage of the attempt that counts (picked after the late penalty). */
   currentScore: number | null;
+  /** What that attempt counts for after the late penalty; equals `currentScore` when on time. */
+  countedScore: number | null;
+  /** That attempt's late hours, or null where lateness does not apply. */
+  lateHours: number | null;
+  /**
+   * A rostered student who counts 0 in the gradebook: no completed attempt
+   * once the due date (plus the hours they bought) has passed, even with an
+   * attempt still running.
+   */
+  countsAsZero: boolean;
   bestScore: number | null;
   firstAttemptScore: number | null;
   countingAttemptId: string | null;
-  latestAttempt: Date | string;
+  /** When the newest attempt started; null for a student with no attempt. */
+  latestAttempt: Date | string | null;
 }
 
 /** The viewer's own attempt on this quiz: enough to resume or restart a preview. */
@@ -330,6 +392,14 @@ export interface QuizAttemptSource {
     login?: string | null;
     image?: string | null;
   } | null;
+}
+
+/** A STUDENT on the roster, as the membership lookup returns them (any extra field is ignored). */
+export interface QuizRosterStudent {
+  id: string;
+  name?: string | null;
+  login?: string | null;
+  image?: string | null;
 }
 
 const toUser = (userId: string, user: QuizAttemptSource['user']): QuizResultUser => ({
@@ -361,14 +431,43 @@ const score = (value: number | null | undefined) => (typeof value === 'number' ?
 
 const time = (value: Date | string | null) => (value ? new Date(value).getTime() : 0);
 
+/**
+ * What lateness is measured against on the results page: the assignment's due
+ * date, each student's net hours bought, the classroom's penalty, and who is
+ * a STUDENT (anyone else's attempts are previews, never late).
+ */
+export interface QuizResultsLateContext {
+  studentDeadline: Date | string | null;
+  latePenaltyPerHour: number;
+  /** student id → net hours bought on this quiz's assignment. */
+  extensionHours: ReadonlyMap<string, number>;
+  studentIds: ReadonlySet<string>;
+}
+
 export const buildQuizResultRows = ({
   attempts,
   gradingStrategy,
   viewerId,
+  late = null,
+  roster = null,
 }: {
   attempts: QuizAttemptSource[];
   gradingStrategy: string | null | undefined;
   viewerId: string;
+  /** Null for a quiz with no assignment: nothing is late. */
+  late?: QuizResultsLateContext | null;
+  /**
+   * The STUDENT roster and the quiz's assignment. Every rostered student gets
+   * a row, and whether they count 0 follows the gradebook's rule
+   * (`quizGradeItem`). Null: rows for students with attempts only, nobody
+   * counts 0.
+   */
+  roster?: {
+    students: readonly QuizRosterStudent[];
+    /** Null for a quiz with no assignment: nobody counts 0. */
+    assignment: QuizGradeAssignment | null;
+    now: Date;
+  } | null;
 }): { students: QuizResultStudent[]; viewerAttempt: QuizViewerAttempt | null } => {
   const byStudent = new Map<
     string,
@@ -391,22 +490,67 @@ export const buildQuizResultRows = ({
       firstAttemptScore: score(attempt.first_attempt_percentage),
       focusMetrics: focusMetricsOf(attempt),
       isCounting: false,
+      lateHours: null,
     });
   }
 
-  const students = Array.from(byStudent.entries()).map(([userId, student]) => {
+  const rostered = new Set(roster?.students.map(s => String(s.id)) ?? []);
+  // The gradebook's zero rule, for a rostered student's attempts (any state).
+  const countsAsZero = (userId: string, sources: QuizAttemptSource[]) => {
+    if (!roster?.assignment || !rostered.has(userId)) return false;
+    const item = quizGradeItem({
+      assignment: roster.assignment,
+      gradingStrategy,
+      attempts: sources,
+      extensionHours: late?.extensionHours.get(userId) ?? 0,
+      latePenaltyPerHour: late?.latePenaltyPerHour ?? 0,
+      // This page is shown only where quizzes are.
+      quizzesVisible: true,
+      now: roster.now,
+    });
+    return item?.counts_as_zero === true;
+  };
+
+  const withAttempts = Array.from(byStudent.entries()).map(([userId, student]) => {
     const completed = student.attempts.filter(a => a.completed_at && a.partialCreditScore !== null);
-    // The shared selector, read over the attempt rows themselves.
-    const countingId = countingQuizAttempt(student.sources, gradingStrategy)?.id;
-    const counting = student.attempts.find(a => a.id === countingId) ?? null;
+    // Lateness applies to students on the roster when the quiz has a due date.
+    const lateContext =
+      late && late.studentDeadline != null && late.studentIds.has(userId)
+        ? {
+            studentDeadline: late.studentDeadline,
+            extensionHours: late.extensionHours.get(userId) ?? 0,
+            latePenaltyPerHour: late.latePenaltyPerHour,
+          }
+        : null;
+    // The shared selector over late-penalised scores, read over the attempt
+    // rows themselves (raw scores where nothing is late).
+    const score = countingQuizScore(
+      student.sources,
+      gradingStrategy,
+      lateContext ?? { studentDeadline: null }
+    );
+    const counting = student.attempts.find(a => a.id === score.counting_attempt_id) ?? null;
     const sorted = [...student.attempts].sort((a, b) => time(b.started_at) - time(a.started_at));
+    const lateOf = (attempt: QuizResultAttempt) =>
+      lateContext && attempt.completed_at
+        ? lateHoursOf(attempt.completed_at, lateContext.studentDeadline, lateContext.extensionHours)
+        : null;
+
+    const zero = countsAsZero(userId, student.sources);
 
     return {
       userId,
       user: student.user,
-      attempts: sorted.map(attempt => ({ ...attempt, isCounting: attempt.id === counting?.id })),
+      attempts: sorted.map(attempt => ({
+        ...attempt,
+        isCounting: attempt.id === counting?.id,
+        lateHours: lateOf(attempt),
+      })),
       attemptCount: student.attempts.length,
       currentScore: counting?.partialCreditScore ?? null,
+      countedScore: zero ? 0 : score.grade,
+      lateHours: counting && lateContext ? score.late_hours : null,
+      countsAsZero: zero,
       bestScore:
         completed.length > 0 ? Math.max(...completed.map(a => a.partialCreditScore ?? 0)) : null,
       firstAttemptScore: counting?.firstAttemptScore ?? null,
@@ -414,6 +558,29 @@ export const buildQuizResultRows = ({
       latestAttempt: sorted[0].started_at,
     };
   });
+
+  // Rostered students with no attempt, after those with one, in roster order.
+  const notStarted = (roster?.students ?? [])
+    .filter(s => !byStudent.has(String(s.id)))
+    .map((s): QuizResultStudent => {
+      const userId = String(s.id);
+      const zero = countsAsZero(userId, []);
+      return {
+        userId,
+        user: toUser(userId, { id: userId, name: s.name, login: s.login, image: s.image }),
+        attempts: [],
+        attemptCount: 0,
+        currentScore: null,
+        countedScore: zero ? 0 : null,
+        lateHours: null,
+        countsAsZero: zero,
+        bestScore: null,
+        firstAttemptScore: null,
+        countingAttemptId: null,
+        latestAttempt: null,
+      };
+    });
+  const students: QuizResultStudent[] = [...withAttempts, ...notStarted];
 
   // First match in the order the attempts arrived — the service returns them
   // newest first, so this is the viewer's latest preview.

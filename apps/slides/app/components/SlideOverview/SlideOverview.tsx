@@ -6,6 +6,7 @@ import type { SlideData, StackData } from './hooks/useSlideStructure';
 import SlideGrid from './SlideGrid';
 import NewStackDropZone from './NewStackDropZone';
 import SlideThumbnail from './SlideThumbnail';
+import type { SlideCollabBadge } from './SlideGrid';
 
 /**
  * Custom collision detection that tries pointerWithin first,
@@ -17,6 +18,10 @@ interface SlideOverviewProps {
   onClose?: () => void;
   onContentChange?: () => void;
   onNavigate?: (stackIndex: number, slideIndex: number) => void;
+  /** Live editing: lock holders and people per slide (by data-cm-id). */
+  collabBadges?: (slideId: string | null) => SlideCollabBadge | null;
+  /** Live editing: re-read the slides when the deck changes. */
+  refreshKey?: unknown;
 }
 
 const customCollisionDetection: CollisionDetection = args => {
@@ -46,6 +51,8 @@ export default function SlideOverview({
   onClose,
   onContentChange,
   onNavigate,
+  collabBadges,
+  refreshKey,
 }: SlideOverviewProps) {
   // Parse the current slide structure from Reveal.js DOM
   // Pass onContentChange so the hook can auto-sync after state updates
@@ -59,7 +66,7 @@ export default function SlideOverview({
     moveStack,
     deleteSlide,
     createStack,
-  } = useSlideStructure(revealInstance, onContentChange);
+  } = useSlideStructure(revealInstance, onContentChange, refreshKey);
 
   // Track which item is being dragged
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -212,6 +219,7 @@ export default function SlideOverview({
               onDeleteSlide={handleDeleteSlide}
               activeId={activeId}
               activeType={activeType}
+              collabBadges={collabBadges}
             />
           )}
         </div>

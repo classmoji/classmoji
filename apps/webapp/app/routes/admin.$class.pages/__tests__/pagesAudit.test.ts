@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   findByClassroomId: vi.fn(),
   getRecentViewersForPaths: vi.fn(),
   updateMany: vi.fn(),
+  closeLivePageForDelete: vi.fn(),
 }));
 
 vi.mock('~/utils/helpers', () => ({
@@ -47,6 +48,10 @@ vi.mock('@classmoji/services', () => ({
       getRecentViewersForPaths: (...a: unknown[]) => mocks.getRecentViewersForPaths(...a),
     },
   },
+}));
+
+vi.mock('~/utils/collab.server', () => ({
+  closeLivePageForDelete: (...a: unknown[]) => mocks.closeLivePageForDelete(...a),
 }));
 
 vi.mock('@classmoji/database', () => ({
@@ -114,6 +119,7 @@ beforeEach(() => {
   });
   mocks.deletePage.mockResolvedValue({ success: true });
   mocks.updateMany.mockResolvedValue({ count: 1 });
+  mocks.closeLivePageForDelete.mockResolvedValue({ ok: true });
 });
 
 describe('pages action — audit rows', () => {
@@ -230,5 +236,47 @@ describe('pages action — writes stay inside the authorized classroom', () => {
     ).rejects.toBeInstanceOf(Response);
     expect(mocks.updateMany).not.toHaveBeenCalled();
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+});
+
+describe('pages action — a live room is closed before the page is deleted', () => {
+  it('closes the room for the page, with the authorized classroom, before deleting', async () => {
+    const flagged = { ...CLASSROOM, collab_enabled: true };
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: 'owner-1',
+      classroom: flagged,
+      membership: { id: 'm-1', role: 'OWNER' },
+    });
+
+    const result = await route.action(actionArgs({ intent: 'delete', pageId: OWN_PAGE }));
+
+    expect(result).toEqual({ success: true, intent: 'delete' });
+    expect(mocks.closeLivePageForDelete).toHaveBeenCalledExactlyOnceWith({
+      pageId: OWN_PAGE,
+      classroom: flagged,
+    });
+    expect(mocks.closeLivePageForDelete.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.deletePage.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('refuses the delete, deleting and auditing nothing, when the room cannot be closed', async () => {
+    mocks.closeLivePageForDelete.mockResolvedValue({ ok: false });
+
+    const result = await route.action(actionArgs({ intent: 'delete', pageId: OWN_PAGE }));
+
+    expect(result).toEqual({ error: 'This page could not be deleted right now. Try again.' });
+    expect(mocks.deletePage).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('does not touch the live room of a page outside the authorized classroom', async () => {
+    mocks.findById.mockResolvedValue({ id: FOREIGN_PAGE, classroom_id: 'class-2', title: 'X' });
+
+    const result = await route.action(actionArgs({ intent: 'delete', pageId: FOREIGN_PAGE }));
+
+    expect(result).toEqual({ error: 'Page not found' });
+    expect(mocks.closeLivePageForDelete).not.toHaveBeenCalled();
+    expect(mocks.deletePage).not.toHaveBeenCalled();
   });
 });

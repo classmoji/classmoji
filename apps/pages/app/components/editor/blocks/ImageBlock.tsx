@@ -1,4 +1,5 @@
-import { createImageBlockConfig, imageParse } from '@blocknote/core';
+import { imageParse } from '@blocknote/core';
+import { imageConfig, imageMeta } from '@classmoji/page-schema';
 import {
   createReactBlockSpec,
   ImageToExternalHTML,
@@ -39,14 +40,7 @@ import { imageSizesFor, responsiveImageAttrs } from '~/utils/imageSizes.ts';
  * Tabler `IconPhoto` instead of the react-icons glyph BlockNote ships.
  */
 
-type ImageRenderProps = Omit<
-  ReactCustomBlockRenderProps<
-    ReturnType<typeof createImageBlockConfig>['type'],
-    ReturnType<typeof createImageBlockConfig>['propSchema'],
-    ReturnType<typeof createImageBlockConfig>['content']
-  >,
-  'contentRef'
->;
+type ImageRenderProps = ReactCustomBlockRenderProps<typeof imageConfig>;
 
 /**
  * The `<img>` itself: BlockNote's, plus the two attributes it has no seam for.
@@ -92,14 +86,14 @@ function ResponsiveImagePreview(props: ImageRenderProps) {
  */
 type FileWrapperProps = Parameters<typeof ResizableFileBlockWrapper>[0];
 
-export const ResponsiveImage = createReactBlockSpec(createImageBlockConfig, options => ({
+export const ResponsiveImage = createReactBlockSpec(imageConfig, options => ({
   // BlockNote's own for its image block, and not optional: `fileBlockAccept` is
   // what marks the block as a file block — `data-file-block` on its DOM, which
   // every file-block style is scoped under, the upload tab's `accept`, and the
   // MIME matching that turns a dropped or pasted image into an image block
   // rather than a generic file. `runsBefore` keeps its HTML parse ahead of the
   // file block's, as BlockNote orders them.
-  meta: { fileBlockAccept: ['image/*'] },
+  meta: imageMeta,
   runsBefore: ['file'],
   parse: imageParse(options),
   render: props => (

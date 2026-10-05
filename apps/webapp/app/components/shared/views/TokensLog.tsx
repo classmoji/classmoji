@@ -1,6 +1,7 @@
 import { Table, Tag, Avatar, Button } from 'antd';
 import dayjs from 'dayjs';
 import { IconCoin } from '@tabler/icons-react';
+import { transactionAssignmentTitle } from '@classmoji/utils';
 
 import { useRole, useGlobalFetcher } from '~/hooks';
 
@@ -20,6 +21,12 @@ interface TokenTransaction {
   student: Record<string, unknown>;
   created_at: string | Date;
   amount: number;
+  description?: string | null;
+  hours_purchased?: number | null;
+  assignment_id?: string | null;
+  git_repo_assignment_id?: string | null;
+  assignment?: { title?: string | null } | null;
+  git_repo_assignment?: { assignment?: { title?: string | null } | null } | null;
   [key: string]: unknown;
 }
 
@@ -136,10 +143,16 @@ const TokensLog = ({ transactions, students }: TokensLogProps) => {
       key: 'balance_after',
     },
     {
+      // The quiz assignment a row names, else its repo submission's; a quiz
+      // extension whose assignment was deleted by the title it was bought
+      // under. A grant or removal names none, whatever its text says.
       title: 'Assignment',
-      dataIndex: ['repository_issue', 'assignment', 'title'],
       key: 'assignment',
       width: 300,
+      render: (_: unknown, record: TokenTransaction) =>
+        transactionAssignmentTitle(record) ?? (
+          <span className="text-gray-400 dark:text-gray-500">—</span>
+        ),
     },
     {
       title: 'Description',

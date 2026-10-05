@@ -1,18 +1,12 @@
 import { createReactBlockSpec } from '@blocknote/react';
+import { dividerConfig } from '@classmoji/page-schema';
 
-export const Divider = createReactBlockSpec(
-  {
-    type: 'divider',
-    propSchema: {},
-    content: 'none',
+export const Divider = createReactBlockSpec(dividerConfig, {
+  render: () => {
+    return (
+      <div className="divider-block" contentEditable={false}>
+        <hr />
+      </div>
+    );
   },
-  {
-    render: () => {
-      return (
-        <div className="divider-block" contentEditable={false}>
-          <hr />
-        </div>
-      );
-    },
-  }
-);
+});

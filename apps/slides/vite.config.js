@@ -19,7 +19,9 @@ export default () => {
       alias: {
         '.prisma/client/index-browser': '../../node_modules/.prisma/client/index-browser.js',
       },
-      dedupe: ['react', 'react-dom', 'react-router', 'react-router-dom'],
+      // yjs too: two copies in one bundle break live editing ("Yjs was
+      // already imported") — the bridge's doc and the provider's would differ.
+      dedupe: ['react', 'react-dom', 'react-router', 'react-router-dom', 'yjs'],
     },
     optimizeDeps: {
       include: [
@@ -28,6 +30,10 @@ export default () => {
         'react-router',
         'react-router-dom',
         'reveal.js',
+        // Live editing: pre-bundled together so every importer gets one yjs.
+        'yjs',
+        'y-protocols/awareness',
+        '@hocuspocus/provider',
       ],
       entries: ['./app/root.jsx'],
       exclude: [
@@ -45,6 +51,11 @@ export default () => {
       // HMR websocket on app port + 1 — the vite default (24678) is shared by
       // every vite app in the monorepo, so concurrent dev servers race for it.
       hmr: { port: (process.env.PORT ? Number(process.env.PORT) : 6500) + 1 },
+      // Playwright writes its HTML report and per-test artifacts inside this
+      // app while specs run; a watched write there would reload open editors.
+      watch: {
+        ignored: ['**/playwright-report/**', '**/test-results/**'],
+      },
     },
     build: {
       sourcemap: process.env.NODE_ENV === 'production' ? 'hidden' : true,

@@ -9,7 +9,12 @@ import { assertClassroomAccess } from '~/utils/helpers';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { formatDuration } from '~/utils/quizUtils';
 import { useGitWeb } from '~/hooks/useGitWeb';
-import { studentQuizAttemptView, studentQuizAttemptsSummaryView } from '~/utils/quizPayloads';
+import {
+  studentQuizAttemptView,
+  studentQuizAttemptsSummaryView,
+  studentQuizScoring,
+} from '~/utils/quizPayloads';
+import { effectiveDeadline } from '@classmoji/utils';
 import { useStartQuiz } from '~/components/features/quiz/useStartQuiz';
 
 const { Text } = Typography;
@@ -27,6 +32,8 @@ interface QuizAttempt {
   partialCreditScore: number | null;
   completed_at: string | Date | null;
   isCounting: boolean;
+  /** Whole hours past the due date plus the hours bought. */
+  lateHours: number;
   focusMetrics: FocusMetrics | null;
   [key: string]: unknown;
 }
@@ -35,6 +42,7 @@ interface AttemptsSummary {
   count: number;
   maxAttempts: number;
   currentScore: number | null;
+  currentLateHours: number;
   canCreateNew: boolean;
   [key: string]: unknown;
 }
@@ -45,7 +53,10 @@ interface StudentQuiz {
   assignmentTitle: string;
   repository_id: string | null;
   include_code_context: boolean;
+  /** The due date plus the hours the student bought on it. */
   dueDate: string | Date | null;
+  /** Hours the student bought on this quiz (net of refunds, never below 0). */
+  extensionHours: number;
   /** Past its close date: no new attempt starts. */
   closed: boolean;
   weight: number;
@@ -62,6 +73,13 @@ interface StudentQuiz {
 interface GitHubRepo {
   name: string;
 }
+
+/** How late an attempt completed, as the Assignments page says it. */
+const LateTag = ({ hours }: { hours: number }) => (
+  <span className="inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-700 dark:text-orange-300 whitespace-nowrap">
+    {hours}h late
+  </span>
+);
 
 const getGradingStrategyLabel = (strategy: string) => {
   switch (strategy) {
@@ -119,8 +137,40 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     throw error;
   }
 
+  // Lateness is a student's: their due date moves by the hours they bought,
+  // their attempts are late past it, and the attempt that counts is picked
+  // after the classroom's late penalty, as in their grade. Whoever is on the
+  // STUDENT roster is graded as a student (the grade loader reads that
+  // roster), a teaching assistant who is also a student included; the access
+  // gate hands back the highest role, so a staff role is checked for a
+  // STUDENT membership too. A staff-only preview and a quiz in no module are
+  // never late.
+  const isStudent =
+    membership?.role === 'STUDENT' ||
+    (await ClassmojiService.classroomMembership.hasRole(classroom.id, userId, 'STUDENT'));
+  const assignmentIds = quizzes.flatMap(quiz => (quiz.assignment ? [quiz.assignment.id] : []));
+  const boughtHours =
+    isStudent && assignmentIds.length > 0
+      ? await ClassmojiService.quizGradeItems.netQuizExtensionHours({
+          classroomId: classroom.id,
+          studentId: userId,
+          assignmentIds,
+        })
+      : new Map<string, number>();
+  const penalty: unknown = classroom.settings?.late_penalty_points_per_hour;
+  const latePenaltyPerHour = typeof penalty === 'number' ? penalty : 0;
+
   // Transform quizzes for frontend compatibility
   const transformedQuizzes = quizzes.map(quiz => {
+    const extensionHours =
+      isStudent && quiz.assignment ? Math.max(0, boughtHours.get(quiz.assignment.id) ?? 0) : 0;
+    const scoring = studentQuizScoring(
+      quiz.attempts || [],
+      quiz.grading_strategy,
+      isStudent && quiz.assignment
+        ? { studentDeadline: quiz.assignment.student_deadline, extensionHours, latePenaltyPerHour }
+        : null
+    );
     return {
       id: quiz.id?.toString() || quiz.id,
       name: quiz.name,
@@ -131,7 +181,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       // has one, so this list shows what the Assignments page and the calendar
       // show. A quiz in no module keeps its own (the service's `closed` reads
       // the same way).
-      dueDate: quiz.assignment ? quiz.assignment.student_deadline : quiz.due_date,
+      // With the hours the student bought added.
+      dueDate: quiz.assignment
+        ? effectiveDeadline(quiz.assignment.student_deadline, extensionHours)
+        : quiz.due_date,
+      extensionHours,
       closed: quiz.closed,
       weight: quiz.assignment ? quiz.assignment.weight : quiz.weight,
       questionCount: quiz.question_count || 5,
@@ -141,14 +195,26 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       // Attempt metadata from the service, narrowed to what this list reads —
       // the service's attempt columns are wider (see ~/utils/quizPayloads).
       attemptCount: quiz.attemptCount || 0,
-      attempts: (quiz.attempts || []).map(studentQuizAttemptView),
-      attemptsSummary: studentQuizAttemptsSummaryView(quiz.attemptsSummary, quiz.max_attempts ?? 1),
+      // The attempt that counts (the trophy) and the score shown are the
+      // ones the student's grade uses.
+      attempts: (quiz.attempts || []).map(attempt =>
+        studentQuizAttemptView({
+          ...attempt,
+          isCounting: attempt.id === scoring.countingAttemptId,
+          lateHours: scoring.lateHoursOf(attempt),
+        })
+      ),
+      attemptsSummary: studentQuizAttemptsSummaryView(
+        { ...quiz.attemptsSummary, currentScore: scoring.currentScore },
+        quiz.max_attempts ?? 1,
+        scoring.currentLateHours
+      ),
 
       // Backward compatibility
       attemptStatus:
         quiz.attemptsSummary?.count > 0 ? quiz.attempts[0]?.status || 'in_progress' : null,
       // `??`, not `||`: a 0 is a score.
-      score: quiz.attemptsSummary?.currentScore ?? null,
+      score: scoring.currentScore,
     };
   });
 
@@ -324,9 +390,14 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
         dataIndex: 'status',
         key: 'status',
         width: 110,
-        render: (status: string) => {
+        render: (status: string, record: QuizAttempt) => {
           if (status === 'completed') {
-            return <Badge status="success" text="Completed" />;
+            return (
+              <Space size="small">
+                <Badge status="success" text="Completed" />
+                {record.lateHours > 0 && <LateTag hours={record.lateHours} />}
+              </Space>
+            );
           }
           return <Badge status="processing" text="In Progress" />;
         },
@@ -484,13 +555,18 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
                 : 'red';
 
         const strategyLabel = getGradingStrategyLabel(record.gradingStrategy);
+        const { currentLateHours } = record.attemptsSummary;
 
+        // The raw score of the attempt that counts, with its late hours beside it.
         return (
-          <Tooltip title={`Graded by: ${strategyLabel}`}>
-            <Tag color={color}>
-              {currentScore}% <small>({strategyLabel})</small>
-            </Tag>
-          </Tooltip>
+          <Space size="small">
+            <Tooltip title={`Graded by: ${strategyLabel}`}>
+              <Tag color={color} style={{ margin: 0 }}>
+                {currentScore}% <small>({strategyLabel})</small>
+              </Tag>
+            </Tooltip>
+            {currentLateHours > 0 && <LateTag hours={currentLateHours} />}
+          </Space>
         );
       },
     },
@@ -498,9 +574,14 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       title: 'Due Date',
       dataIndex: 'dueDate',
       key: 'dueDate',
-      render: (dueDate: string | null) => (
-        <div>
+      render: (dueDate: string | null, record: StudentQuiz) => (
+        <div className="flex flex-col items-start gap-1">
           <Countdown deadline={dueDate} />
+          {dueDate && record.extensionHours > 0 && (
+            <span className="text-xs font-medium px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300">
+              +{record.extensionHours}h applied
+            </span>
+          )}
         </div>
       ),
     },

@@ -6,11 +6,11 @@ import type { StudentCourseworkRow } from '@classmoji/services';
 import { CourseworkTypeTag } from '~/components/features/assignments/CourseworkTags';
 import { useStartQuiz } from '~/components/features/quiz/useStartQuiz';
 
-/** An Up next row: a coursework row without the repo details the card never shows. */
-export type UpNextRow = Omit<StudentCourseworkRow, 'repo'> & {
-  /** Extension hours the student bought on a repo row; 0 otherwise. */
-  extensionHours?: number;
-};
+/**
+ * An Up next row: a coursework row without the repo details the card never
+ * shows. `extensionHours` is what the student bought on a repo or a quiz.
+ */
+export type UpNextRow = Omit<StudentCourseworkRow, 'repo'>;
 
 interface UpNextCardProps {
   /** What the student still owes, soonest due first (studentCoursework.upNext). */

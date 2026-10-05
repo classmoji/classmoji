@@ -1,4 +1,10 @@
-import { useLoaderData, useFetcher, useOutletContext } from 'react-router';
+import {
+  useLoaderData,
+  useFetcher,
+  useOutletContext,
+  useBlocker,
+  useRevalidator,
+} from 'react-router';
 import { useAssetMap, useAssetRetry } from '~/hooks/useAssetMap.ts';
 import type { AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
 import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from 'react';
@@ -9,7 +15,7 @@ import Header from '~/components/layout/Header.tsx';
 import HeaderImage from '~/components/editor/HeaderImage.tsx';
 import { PageMediaProvider, usePageMedia } from '~/components/editor/media/PageMedia.tsx';
 import { fetchMediaDisplayUrl } from '~/components/editor/media/mediaDisplayUrl.ts';
-import { useCoverUpload } from '~/components/editor/media/useCoverUpload.ts';
+import { useCoverUpload, type LiveCoverTarget } from '~/components/editor/media/useCoverUpload.ts';
 import type { UploadCapability } from '@classmoji/services/media/router';
 import {
   PreviewBar,
@@ -18,6 +24,44 @@ import {
   ConflictPanel,
 } from '~/components/preview/PreviewControls.tsx';
 import { diffBlockOps, type BlockOp } from '~/components/editor/blockOpsDiff.ts';
+import { useCollabSession } from '~/components/editor/collab/useCollabSession.ts';
+import { agentTouchCss } from '~/components/editor/collab/agentTouch.ts';
+import { useLiveCover } from '~/components/editor/collab/useLiveCover.ts';
+import LiveHeaderControls from '~/components/editor/collab/LiveHeaderControls.tsx';
+import {
+  LeaveLiveDialog,
+  LiveUnavailableNotice,
+  LiveUnreachableNotice,
+  LiveRejectedBanner,
+} from '~/components/editor/collab/LiveNotices.tsx';
+import {
+  SAVE_VERSION_MESSAGES,
+  SAVE_VERSION_SYNC_WAIT_MS,
+  SAVE_VERSION_WAIT_MS,
+  offerCopyUnsaved,
+  applyPageMeta,
+  autoReloadAllowed,
+  claimStaleReload,
+  deriveSyncStatus,
+  isCollabMode,
+  liveLeaveUnsafe,
+  liveUnreachable,
+  newSaveVersionRequestId,
+  rejectionNotice,
+  saveMachineryEnabled,
+  saveVersionGate,
+  saveVersionOutcome,
+  type PendingSaveVersion,
+  type SaveVersionOutcome,
+} from '~/utils/collab.ts';
+import { LIVE_PAGE_MESSAGE } from '~/utils/liveGates.ts';
+import { createAssetResolver } from '~/utils/liveAssets.ts';
+import type { PageEditorHandle } from '~/components/editor/PageEditor.tsx';
+import {
+  hasPreviewChanges,
+  previewChangesSummary,
+  previewHighlightCss,
+} from '~/components/preview/previewHighlight.ts';
 import {
   opsPathEligible,
   deriveSaveMergeReport,
@@ -78,11 +122,14 @@ function ChooseCoverFromMedia({ onChoose }: { onChoose: (ref: string) => void })
 function CoverAdder({
   fetcher,
   capability,
+  live = null,
 }: {
   fetcher: ReturnType<typeof useFetcher>;
   capability: UploadCapability | null;
+  /** Live editing: the cover is set in the live document, not by the action. */
+  live?: LiveCoverTarget | null;
 }) {
-  const cover = useCoverUpload(fetcher, capability);
+  const cover = useCoverUpload(fetcher, capability, live);
 
   return (
     <div className="flex items-center gap-2 mb-2">
@@ -118,10 +165,12 @@ function CoverAdder({
       {fetcher.state === 'idle' && !cover.uploading && (
         <ChooseCoverFromMedia
           onChoose={ref =>
-            fetcher.submit(
-              { intent: 'set-header-image', url: ref, position: 50 },
-              { method: 'POST', encType: 'application/json' }
-            )
+            live
+              ? live.setCover({ url: ref, position: 50 })
+              : fetcher.submit(
+                  { intent: 'set-header-image', url: ref, position: 50 },
+                  { method: 'POST', encType: 'application/json' }
+                )
           }
         />
       )}
@@ -139,11 +188,16 @@ const PageRoute = () => {
     preview,
     notice,
     noticeAutoMerged,
+    noticePreviewKept,
     contentSha,
     resolvedAssets,
     resolvedSrcSets,
     mediaDownloads,
     uploadCapability,
+    collab,
+    liveCheckpoint,
+    liveUnavailable,
+    previewChanges,
   } = useLoaderData<typeof import('./route.server.ts').loader>();
   // Stored refs stay in the document; these are the URLs to display them with.
   const assets = useAssetMap(resolvedAssets, page.id);
@@ -175,9 +229,34 @@ const PageRoute = () => {
   // Preview mode is strictly read-only — editing chrome is suppressed while
   // rendering the pending preview branch (plan §3b).
   const isPreview = Boolean(preview?.active);
-  const canEdit = canEditRole && !isPreview;
-  const widthClass = widthClasses[page.width] || 'max-w-4xl';
-  const editorRef = useRef<{ getContent: () => unknown } | null>(null);
+  // Live editing switched on but unreachable, with unsaved live edits: the
+  // page is shown read-only (the loader explains why below the header).
+  const canEdit = canEditRole && !isPreview && !liveUnavailable;
+  // Live editing (a classroom with collab on): the document is the room's,
+  // and none of the git save machinery below runs — no ops diff, chooser,
+  // merged adoption, Cmd-S save, unload warning or unsaved tracking.
+  const liveMode = canEdit && isCollabMode(collab);
+  const saveEnabled = saveMachineryEnabled({ canEdit, collab });
+  const { session, state: liveState } = useCollabSession(liveMode ? collab : null);
+  const liveRefused = liveMode ? liveState.rejected : null;
+  // Blocks an agent just changed: a fading mark in the agent's colour.
+  const agentTouchStyles = useMemo(
+    () => agentTouchCss(liveState.agentTouches, 'page-editor'),
+    [liveState.agentTouches]
+  );
+  const liveEditable = liveMode && !liveRefused;
+  // The title: on a live page only once the room has synced, and never once
+  // it refused this session.
+  const titleEditable = liveMode ? liveEditable && liveState.hasSynced : canEdit;
+  // Title and width changed by someone else on a live page arrive as a room
+  // message and apply in place (no reload); otherwise the loader's.
+  const liveMeta = liveMode ? liveState.pageMeta : null;
+  const { title: pageTitle, width: pageWidth } = applyPageMeta(
+    { title: page.title, width: page.width },
+    liveMeta
+  );
+  const widthClass = widthClasses[pageWidth] || 'max-w-4xl';
+  const editorRef = useRef<PageEditorHandle | null>(null);
   const fetcher = useFetcher();
   const titleFetcher = useFetcher();
   const coverFetcher = useFetcher();
@@ -264,11 +343,11 @@ const PageRoute = () => {
 
   // Title editing state
   const [isEditingTitle, setIsEditingTitle] = useState(false);
-  const [titleValue, setTitleValue] = useState(page.title || 'Untitled');
+  const [titleValue, setTitleValue] = useState(pageTitle || 'Untitled');
 
   // Explicit save — called by Cmd/Ctrl+S or Save button
   const handleSave = useCallback(() => {
-    if (!canEdit || !editorRef.current) return;
+    if (!saveEnabled || !editorRef.current) return;
 
     const currentContent = editorRef.current.getContent();
     const currentContentStr = JSON.stringify(currentContent);
@@ -328,7 +407,7 @@ const PageRoute = () => {
       { intent: 'save', content: currentContentStr, content_sha: contentToken },
       { method: 'POST', encType: 'application/json' }
     );
-  }, [canEdit, fetcher, contentToken, page.id]);
+  }, [saveEnabled, fetcher, contentToken, page.id]);
 
   // Apply the save-merge chooser's decisions (Phase 7.5): re-submit the SAME
   // posted content with one {id, choose} per conflict and the report's
@@ -403,7 +482,7 @@ const PageRoute = () => {
   // Track editor changes (mark unsaved, but don't auto-save)
   const handleEditorChange = useCallback(
     (document: unknown) => {
-      if (!canEdit) return;
+      if (!saveEnabled) return;
 
       const currentContentStr = JSON.stringify(document);
       // Compared against the normalized baseline (P2) — an unchanged document
@@ -413,7 +492,7 @@ const PageRoute = () => {
       setHasUnsavedChanges(true);
       setSaveStatus('unsaved');
     },
-    [canEdit]
+    [saveEnabled]
   );
 
   /**
@@ -440,9 +519,9 @@ const PageRoute = () => {
 
   // Update title when page changes
   useEffect(() => {
-    setTitleValue(page.title || 'Untitled');
+    setTitleValue(pageTitle || 'Untitled');
     setIsEditingTitle(false);
-  }, [page.id, page.title]);
+  }, [page.id, pageTitle]);
 
   // Post-accept/discard success notice (round-tripped via redirect param).
   // Keyed on notice+sha so each accept is handled exactly once — the stripped
@@ -465,7 +544,9 @@ const PageRoute = () => {
       // Skipped when this session has unsaved edits: remounting would discard
       // them, and the next save's 3-way merge reconciles them against the new
       // main instead.
-      if (!hasUnsavedChanges) {
+      // Live: nothing to adopt — the accept went into the live document, which
+      // every open editor already has.
+      if (!liveMode && !hasUnsavedChanges) {
         pendingBaselineShaRef.current = contentSha;
         savedBaselineRef.current = null;
         setEditorDoc(content);
@@ -478,6 +559,9 @@ const PageRoute = () => {
           ? `Preview merged —${noticeAutoMerged} change${noticeAutoMerged === 1 ? '' : 's'} merged automatically; changes are now live.`
           : 'Preview merged —changes are now live.'
       );
+      if (noticePreviewKept) {
+        toast.info('The preview is still listed. Discard it when you no longer need it.');
+      }
     } else if (notice === 'preview-discarded') {
       toast.success('Preview discarded.');
     }
@@ -485,8 +569,17 @@ const PageRoute = () => {
     const url = new URL(window.location.href);
     url.searchParams.delete('notice');
     url.searchParams.delete('auto_merged');
+    url.searchParams.delete('preview_kept');
     window.history.replaceState({}, '', url);
-  }, [notice, noticeAutoMerged, content, contentSha, hasUnsavedChanges]);
+  }, [
+    notice,
+    noticeAutoMerged,
+    noticePreviewKept,
+    content,
+    contentSha,
+    hasUnsavedChanges,
+    liveMode,
+  ]);
 
   // Baseline capture is the editor's onReady (P2), not the raw loader JSON —
   // see handleEditorReady below.
@@ -567,9 +660,9 @@ const PageRoute = () => {
   // toasted by `CoverAdder`'s upload hook, which owns `coverFetcher` — the
   // cover flow has no inline status indicator of its own.
 
-  // Cmd/Ctrl+S to save
+  // Cmd/Ctrl+S to save (the git editor only: a live page has nothing to save)
   useEffect(() => {
-    if (!canEdit) return;
+    if (!saveEnabled) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
@@ -580,11 +673,11 @@ const PageRoute = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [canEdit, handleSave]);
+  }, [saveEnabled, handleSave]);
 
-  // Warn before closing with unsaved changes
+  // Warn before closing with unsaved changes (the git editor only)
   useEffect(() => {
-    if (!canEdit) return;
+    if (!saveEnabled) return;
 
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (hasUnsavedChanges && !skipUnloadWarningRef.current) {
@@ -595,12 +688,12 @@ const PageRoute = () => {
 
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [canEdit, hasUnsavedChanges]);
+  }, [saveEnabled, hasUnsavedChanges]);
 
   // Title editing handlers
   const saveTitle = () => {
     const trimmed = titleValue.trim();
-    if (trimmed && trimmed !== page.title) {
+    if (trimmed && trimmed !== pageTitle) {
       titleFetcher.submit(
         { intent: 'update-title', title: trimmed },
         { method: 'POST', encType: 'application/json' }
@@ -610,7 +703,7 @@ const PageRoute = () => {
   };
 
   const cancelTitleEdit = () => {
-    setTitleValue(page.title || 'Untitled');
+    setTitleValue(pageTitle || 'Untitled');
     setIsEditingTitle(false);
   };
 
@@ -633,6 +726,366 @@ const PageRoute = () => {
     };
   }, []);
 
+  // ── Live editing ───────────────────────────────────────────────────────────
+
+  // A session that ended. A closed room (flag off, page deleted) reloads the
+  // route at once. A stale one (the document was reseeded since this page
+  // loaded) reloads only when this browser has no edits the server has not
+  // acknowledged, and only once per room, so a disagreement between the
+  // loader and the server cannot loop. Everything else waits for the person.
+  const [autoReloadSkipped, setAutoReloadSkipped] = useState(false);
+  const liveLocalUnsynced = liveState.localUnsynced;
+  useEffect(() => {
+    if (!liveRefused || !collab) return;
+    if (rejectionNotice(liveRefused).action !== 'reload') return;
+    if (!autoReloadAllowed(liveRefused, liveLocalUnsynced)) {
+      setAutoReloadSkipped(true);
+      return;
+    }
+    if (liveRefused === 'reload') {
+      window.location.reload();
+      return;
+    }
+    let storage: Storage | null = null;
+    try {
+      storage = window.sessionStorage;
+    } catch {
+      storage = null;
+    }
+    if (claimStaleReload(storage, collab.room)) window.location.reload();
+    else setAutoReloadSkipped(true);
+    // Decided once, when the session ends: later edits cannot happen (the
+    // editor is read-only once refused).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveRefused, collab]);
+
+  // A live page never reloads on its own, so news the loader carries — above
+  // all a preview an agent just left or someone accepted — is fetched again
+  // when the room says the preview changed, and (as a fallback for a message
+  // missed while away) whenever the tab comes back into view.
+  const liveRevalidator = useRevalidator();
+  const liveRevalidatorRef = useRef(liveRevalidator);
+  liveRevalidatorRef.current = liveRevalidator;
+  const refreshLoader = useCallback(() => {
+    const revalidator = liveRevalidatorRef.current;
+    if (revalidator.state !== 'idle') return;
+    void revalidator.revalidate();
+  }, []);
+  useEffect(() => {
+    if (!liveMode) return;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refreshLoader();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [liveMode, refreshLoader]);
+  const previewChangedSeq = liveState.previewChangedSeq;
+  useEffect(() => {
+    if (liveMode && previewChangedSeq > 0) refreshLoader();
+  }, [liveMode, previewChangedSeq, refreshLoader]);
+
+  // Edits the server never acknowledged are lost on reload; before that, the
+  // person can take them along as text.
+  const handleCopyUnsaved = useCallback(async () => {
+    const text = editorRef.current?.getMarkdown?.() ?? '';
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success('Copied. Paste it back after reloading.');
+    } catch {
+      toast.error('Couldn’t copy. Select the text on the page and copy it yourself.');
+    }
+  }, []);
+
+  // Until the room arrives the page is shown read-only; only after a grace
+  // period does it say the live editor could not be reached.
+  const [connectClock, setConnectClock] = useState(0);
+  const waitingForRoom = liveMode && !liveState.hasSynced && !liveRefused;
+  useEffect(() => {
+    if (!waitingForRoom) return;
+    const timer = window.setInterval(() => setConnectClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [waitingForRoom]);
+  const showUnreachable =
+    liveMode &&
+    liveUnreachable({
+      hasSynced: liveState.hasSynced,
+      refused: Boolean(liveRefused),
+      status: liveState.status,
+      elapsedMs: liveState.openedAt ? connectClock - liveState.openedAt : 0,
+    });
+
+  // The cover lives in the live document. Until the room has synced, the
+  // loader's cover stands in for it.
+  const liveCover = useLiveCover(
+    liveMode ? (session?.doc ?? null) : null,
+    liveState.hasSynced,
+    coverImage
+  );
+  const shownCover = liveMode ? liveCover.cover : coverImage;
+  const liveCoverTarget = useMemo<LiveCoverTarget | null>(
+    () =>
+      liveEditable
+        ? { pageId: page.id, setCover: liveCover.setCover, remember: assets.remember }
+        : null,
+    [liveEditable, page.id, liveCover.setCover, assets.remember]
+  );
+  // Assets that arrive after the page loaded (a peer's image, an agent's
+  // file, an accepted preview, a push made on GitHub) are not in this
+  // browser's display map. On a live page a miss is asked for, in batches.
+  const liveAssetResolver = useMemo(
+    () =>
+      createAssetResolver({
+        pageId: page.id,
+        onResolved: ({ assets: urls, srcSets: sets }) => {
+          for (const [ref, url] of Object.entries(urls)) assets.remember(ref, url);
+          if (Object.keys(sets).length > 0) {
+            setMergedSrcSets(current => ({ ...current, ...sets }));
+          }
+        },
+      }),
+    [page.id, assets]
+  );
+  const liveResolveFileUrl = useCallback(
+    async (url: string) => {
+      const known = assets.displayUrl(url);
+      if (known !== url) return known;
+      return (await liveAssetResolver.resolve(url)) ?? url;
+    },
+    [assets, liveAssetResolver]
+  );
+
+  // The cover is drawn as a CSS background, outside BlockNote: it asks itself.
+  const [, setCoverUrlTick] = useState(0);
+  const shownCoverRef = shownCover?.url ?? null;
+  useEffect(() => {
+    if (!liveMode || !shownCoverRef) return;
+    if (assets.displayUrl(shownCoverRef) !== shownCoverRef) return;
+    let cancelled = false;
+    void liveAssetResolver.resolve(shownCoverRef).then(url => {
+      if (cancelled || !url) return;
+      assets.remember(shownCoverRef, url);
+      setCoverUrlTick(tick => tick + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [liveMode, shownCoverRef, assets, liveAssetResolver]);
+
+  // "Save version": a checkpoint of the live document now, once this
+  // browser's edits are on the server (it waits for them, briefly). The
+  // request being accepted is not the version being saved: the toast waits
+  // for the room's checkpoint message naming this request (up to
+  // SAVE_VERSION_WAIT_MS, "Saving version…" until), unless the server says at
+  // once that there was nothing to save.
+  const versionFetcher = useFetcher<{
+    success?: boolean;
+    error?: string;
+    requestId?: string;
+    alreadySaved?: boolean;
+  }>();
+  const handledVersionRef = useRef<unknown>(null);
+  const [pendingVersion, setPendingVersion] = useState<PendingSaveVersion | null>(null);
+  // Asked for while this browser's edits were on their way: sent once they
+  // arrive, and only for the page it was asked on.
+  const [queuedVersion, setQueuedVersion] = useState<{
+    message?: string;
+    since: number;
+    pageId: string;
+  } | null>(null);
+  // The id of the request in flight, and its answer if the room's message
+  // beat the action's reply.
+  const inflightVersionIdRef = useRef<string | null>(null);
+  const earlyVersionOutcomeRef = useRef<SaveVersionOutcome | null>(null);
+  const announceVersion = useCallback((outcome: SaveVersionOutcome | 'unconfirmed') => {
+    if (outcome === 'saved' || outcome === 'already-saved') {
+      toast.success(SAVE_VERSION_MESSAGES[outcome]);
+    } else {
+      toast.error(SAVE_VERSION_MESSAGES[outcome]);
+    }
+  }, []);
+  useEffect(() => {
+    if (versionFetcher.state !== 'idle' || !versionFetcher.data) return;
+    if (handledVersionRef.current === versionFetcher.data) return;
+    handledVersionRef.current = versionFetcher.data;
+    const data = versionFetcher.data;
+    const early = earlyVersionOutcomeRef.current;
+    const inflight = inflightVersionIdRef.current;
+    inflightVersionIdRef.current = null;
+    earlyVersionOutcomeRef.current = null;
+    // Asked on a page this view has since left: nothing to say here.
+    if (inflight === null) return;
+    if (!data.success) {
+      toast.error(data.error ?? 'The version could not be saved. Try again.');
+    } else if (data.alreadySaved) {
+      announceVersion('already-saved');
+    } else if (early && data.requestId) {
+      announceVersion(early);
+    } else {
+      setPendingVersion({ id: data.requestId ?? null, since: Date.now() });
+    }
+  }, [versionFetcher.state, versionFetcher.data, announceVersion]);
+  const liveCheckpointSeq = liveState.lastCheckpoint?.seq ?? null;
+  // Checked on each new message, and again when a request becomes pending (a
+  // message that arrived in between is not lost): matching is by id, so a
+  // second look at the same message is harmless, and a repeated answer for a
+  // settled request finds nothing pending.
+  useEffect(() => {
+    const checkpoint = liveState.lastCheckpoint;
+    if (!checkpoint) return;
+    const inflight = inflightVersionIdRef.current;
+    if (!pendingVersion) {
+      // Answered before the action replied: kept for the reply.
+      if (inflight) {
+        earlyVersionOutcomeRef.current =
+          saveVersionOutcome(checkpoint, { id: inflight, since: Date.now() }) ??
+          earlyVersionOutcomeRef.current;
+      }
+      return;
+    }
+    const outcome = saveVersionOutcome(checkpoint, pendingVersion);
+    if (!outcome) return;
+    setPendingVersion(null);
+    announceVersion(outcome);
+    // The message by its number; `lastCheckpoint` changes only with it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveCheckpointSeq, pendingVersion, announceVersion]);
+  // Another page in the same view: nothing asked on the last one carries over.
+  useEffect(() => {
+    setPendingVersion(null);
+    setQueuedVersion(null);
+    inflightVersionIdRef.current = null;
+    earlyVersionOutcomeRef.current = null;
+  }, [page.id]);
+  useEffect(() => {
+    if (pendingVersion === null) return;
+    const timer = window.setTimeout(
+      () => {
+        setPendingVersion(null);
+        announceVersion('unconfirmed');
+      },
+      Math.max(0, pendingVersion.since + SAVE_VERSION_WAIT_MS - Date.now())
+    );
+    return () => window.clearTimeout(timer);
+  }, [pendingVersion, announceVersion]);
+  const submitSaveVersion = useCallback(
+    (message?: string) => {
+      const requestId = newSaveVersionRequestId();
+      inflightVersionIdRef.current = requestId;
+      earlyVersionOutcomeRef.current = null;
+      versionFetcher.submit(
+        { intent: 'save-version', requestId, ...(message ? { message } : {}) },
+        { method: 'POST', encType: 'application/json' }
+      );
+    },
+    [versionFetcher]
+  );
+  const liveSyncStatus = deriveSyncStatus(liveState);
+  const offlineVersionMessage = 'You’re offline. Save a version once you’re back online.';
+  const handleSaveVersion = useCallback(
+    (message?: string) => {
+      const gate = saveVersionGate(liveSyncStatus);
+      if (gate === 'offline') toast.error(offlineVersionMessage);
+      else if (gate === 'wait') setQueuedVersion({ message, since: Date.now(), pageId: page.id });
+      else submitSaveVersion(message);
+    },
+    [liveSyncStatus, submitSaveVersion, page.id]
+  );
+  // A queued version goes as soon as everything here has synced; offline, or
+  // still not synced after SAVE_VERSION_SYNC_WAIT_MS, the person is told.
+  useEffect(() => {
+    if (!queuedVersion) return;
+    if (queuedVersion.pageId !== page.id) {
+      setQueuedVersion(null);
+      return;
+    }
+    if (liveSyncStatus === 'synced') {
+      setQueuedVersion(null);
+      submitSaveVersion(queuedVersion.message);
+      return;
+    }
+    if (liveSyncStatus === 'offline') {
+      setQueuedVersion(null);
+      toast.error(offlineVersionMessage);
+      return;
+    }
+    const timer = window.setTimeout(
+      () => {
+        setQueuedVersion(null);
+        toast.error('Your latest edits haven’t reached the server yet. Try again.');
+      },
+      Math.max(0, queuedVersion.since + SAVE_VERSION_SYNC_WAIT_MS - Date.now())
+    );
+    return () => window.clearTimeout(timer);
+  }, [queuedVersion, liveSyncStatus, submitSaveVersion, page.id]);
+  const savingVersion =
+    versionFetcher.state !== 'idle' || pendingVersion !== null || queuedVersion !== null;
+
+  const canSaveVersion = liveEditable && liveState.hasSynced;
+  const liveHeader = liveMode
+    ? {
+        peers: liveState.peers,
+        syncStatus: liveSyncStatus,
+        onSaveVersion: canSaveVersion ? handleSaveVersion : null,
+        savingVersion,
+        // The room's latest message, else what the loader read.
+        checkpoint: liveState.lastCheckpoint ?? liveCheckpoint ?? null,
+        // Changed since: what this session saw, else what the loader knew.
+        editsSince:
+          liveState.editedSinceCheckpoint ||
+          (!liveState.lastCheckpoint && Boolean(liveCheckpoint?.editsSince)),
+      }
+    : null;
+
+  // Cmd/Ctrl+S on a live page: never the browser's "save page"; a version.
+  useEffect(() => {
+    if (!liveMode) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault();
+        if (canSaveVersion && !savingVersion) handleSaveVersion();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [liveMode, canSaveVersion, savingVersion, handleSaveVersion]);
+
+  // Leaving while this browser's edits have not reached the server (or while
+  // it is offline) could lose them: warn on unload, and hold in-app
+  // navigation for a choice.
+  const liveUnsafe =
+    liveMode &&
+    liveLeaveUnsafe({
+      hasSynced: liveState.hasSynced,
+      refused: Boolean(liveRefused),
+      syncStatus: liveSyncStatus,
+    });
+  useEffect(() => {
+    if (!liveUnsafe) return;
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [liveUnsafe]);
+  const leaveBlocker = useBlocker(
+    ({ currentLocation, nextLocation }) =>
+      liveUnsafe &&
+      (currentLocation.pathname !== nextLocation.pathname ||
+        currentLocation.search !== nextLocation.search)
+  );
+  // Once everything has synced, a held navigation goes ahead by itself.
+  useEffect(() => {
+    if (leaveBlocker.state === 'blocked' && !liveUnsafe) leaveBlocker.proceed();
+  }, [leaveBlocker, liveUnsafe]);
+
+  // The rendered preview marks the blocks it adds or edits (never a diff).
+  const previewHighlightStyle =
+    isPreview && previewChanges && hasPreviewChanges(previewChanges)
+      ? previewHighlightCss(previewChanges, 'preview-highlight')
+      : null;
+  const previewSummary = isPreview && previewChanges ? previewChangesSummary(previewChanges) : null;
+
   return (
     <PageMediaProvider
       classroomId={classroom.id}
@@ -645,18 +1098,30 @@ const PageRoute = () => {
       {!isEmbedded && (
         <Header
           classroom={classroom}
-          page={page}
-          saveStatus={canEdit ? saveStatus : undefined}
-          hasUnsavedChanges={canEdit ? hasUnsavedChanges : undefined}
+          page={
+            pageTitle === page.title && pageWidth === page.width
+              ? page
+              : { ...page, title: pageTitle, width: pageWidth }
+          }
+          saveStatus={saveEnabled ? saveStatus : undefined}
+          hasUnsavedChanges={saveEnabled ? hasUnsavedChanges : undefined}
           canEdit={canEdit}
-          onSave={canEdit ? handleSave : undefined}
+          onSave={saveEnabled ? handleSave : undefined}
+          live={liveHeader}
         />
       )}
 
       {/* Preview-branch chrome (staff only — `preview` is null otherwise).
           Keyed on page.id so the preview fetcher's conflict state resets on
           same-route navigation (P4) instead of ghosting onto the next page. */}
-      {preview?.active && <PreviewBar key={page.id} preview={preview} isEmbedded={isEmbedded} />}
+      {preview?.active && (
+        <PreviewBar
+          key={page.id}
+          preview={preview}
+          isEmbedded={isEmbedded}
+          changesSummary={previewSummary}
+        />
+      )}
       {preview?.missing && <NoPreviewNotice />}
       {preview && !preview.active && preview.exists && (
         <PendingPreviewBanner key={page.id} preview={preview} />
@@ -666,7 +1131,41 @@ const PageRoute = () => {
           pick a side per block, then the same content re-submits with the
           choices. The editor (and lastPostedContentRef) preserve the document
           until the resolution completes. */}
-      {canEdit && saveMergeReport && (
+      {liveMode && liveRefused && (
+        <LiveRejectedBanner
+          reason={liveRefused}
+          isEmbedded={isEmbedded}
+          autoReloading={!autoReloadSkipped && rejectionNotice(liveRefused).action === 'reload'}
+          onCopyUnsaved={
+            offerCopyUnsaved({
+              refused: true,
+              hasSynced: liveState.hasSynced,
+              localUnsynced: liveState.localUnsynced,
+            })
+              ? handleCopyUnsaved
+              : null
+          }
+        />
+      )}
+      {showUnreachable && <LiveUnreachableNotice isEmbedded={isEmbedded} />}
+      {canEditRole && liveUnavailable && <LiveUnavailableNotice isEmbedded={isEmbedded} />}
+
+      {/* Embedded editors have no header: the live status floats instead. */}
+      {isEmbedded && liveHeader && (
+        <div className="fixed bottom-3 right-3 z-40 rounded-full bg-white/95 px-3 py-1.5 shadow-md ring-1 ring-stone-200 backdrop-blur dark:bg-neutral-900/95 dark:ring-neutral-700">
+          <LiveHeaderControls {...liveHeader} compact />
+        </div>
+      )}
+
+      {leaveBlocker.state === 'blocked' && (
+        <LeaveLiveDialog
+          offline={liveSyncStatus === 'offline'}
+          onStay={() => leaveBlocker.reset()}
+          onLeave={() => leaveBlocker.proceed()}
+        />
+      )}
+
+      {saveEnabled && saveMergeReport && (
         <div className={`sticky ${isEmbedded ? 'top-0' : 'top-12'} z-30 shadow-lg`}>
           <ConflictPanel
             variant="save"
@@ -683,53 +1182,82 @@ const PageRoute = () => {
       {/* Save-conflict notice (F2): the last save 409'd — content.json changed
           under this editor session (another editor, an MCP apply). Amber, same
           visual language as the preview chrome. */}
-      {canEdit && saveConflict && (
+      {saveEnabled && saveConflict && (
         <div
           data-testid="save-conflict-banner"
           className={`sticky ${isEmbedded ? 'top-0' : 'top-12'} z-30`}
         >
           <div className="border-y border-amber-300 dark:border-amber-700/70 bg-amber-50/95 dark:bg-amber-950/90 backdrop-blur px-4 sm:px-6 lg:px-8 py-2">
             <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-              <div className="text-sm text-amber-900 dark:text-amber-100">
-                <span className="font-semibold">
-                  This page changed since you opened it — reload to get the latest before saving.
-                </span>{' '}
-                <span className="text-amber-700 dark:text-amber-300">
-                  Your unsaved changes here will be discarded.
-                </span>
+              {fetcherData?.live ? (
+                /* The classroom switched to live editing while this tab had
+                   unsaved edits: they can only be carried over by hand. */
+                <div className="text-sm text-amber-900 dark:text-amber-100">
+                  <span className="font-semibold">{fetcherData.message ?? LIVE_PAGE_MESSAGE}</span>{' '}
+                  <span className="text-amber-700 dark:text-amber-300">
+                    Your unsaved changes here are not in the live page. Copy them before you reload.
+                  </span>
+                </div>
+              ) : (
+                <div className="text-sm text-amber-900 dark:text-amber-100">
+                  <span className="font-semibold">
+                    This page changed since you opened it — reload to get the latest before saving.
+                  </span>{' '}
+                  <span className="text-amber-700 dark:text-amber-300">
+                    Your unsaved changes here will be discarded.
+                  </span>
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                {fetcherData?.live && (
+                  <button
+                    type="button"
+                    onClick={handleCopyUnsaved}
+                    data-testid="save-conflict-copy"
+                    className="rounded px-3 py-1 text-sm font-medium transition-colors text-amber-900 ring-1 ring-amber-400 hover:bg-amber-100 dark:text-amber-100 dark:ring-amber-600 dark:hover:bg-amber-900/60"
+                  >
+                    Copy my changes
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleConflictReload}
+                  className="rounded px-3 py-1 text-sm font-medium transition-colors bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400"
+                >
+                  Reload
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={handleConflictReload}
-                className="rounded px-3 py-1 text-sm font-medium transition-colors bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400"
-              >
-                Reload
-              </button>
             </div>
           </div>
         </div>
       )}
 
-      {coverImage?.url && (
+      {shownCover?.url && (
         <HeaderImage
-          imageUrl={assets.displayUrl(coverImage.url) as string}
-          position={coverImage.position ?? 50}
-          editMode={canEdit}
+          imageUrl={assets.displayUrl(shownCover.url) as string}
+          position={shownCover.position ?? 50}
+          editMode={liveMode ? liveEditable && liveState.hasSynced : canEdit}
           pageId={page.id}
           uploadCapability={uploadCapability}
+          live={liveCoverTarget ? { storedUrl: shownCover.url, target: liveCoverTarget } : null}
+          highlighted={isPreview && Boolean(previewChanges?.coverChanged)}
         />
       )}
 
       <div
-        className={`mx-auto px-4 sm:px-6 lg:px-8 pb-16 ${widthClass} ${coverImage?.url ? 'mt-12' : 'mt-16'}`}
+        className={`mx-auto px-4 sm:px-6 lg:px-8 pb-16 ${widthClass} ${shownCover?.url ? 'mt-12' : 'mt-16'}`}
       >
         <div>
           {/* "Add cover" button — always visible in edit mode when no image */}
-          {!coverImage?.url && canEdit && (
-            <CoverAdder fetcher={coverFetcher} capability={uploadCapability} />
+          {!shownCover?.url && canEdit && (!liveMode || (liveEditable && liveState.hasSynced)) && (
+            <CoverAdder
+              fetcher={coverFetcher}
+              capability={uploadCapability}
+              live={liveCoverTarget}
+            />
           )}
 
-          {canEdit && isEditingTitle ? (
+          {titleEditable && isEditingTitle ? (
             <input
               type="text"
               value={titleValue}
@@ -746,16 +1274,16 @@ const PageRoute = () => {
             />
           ) : (
             <h1
-              className={`text-5xl font-bold text-gray-900 dark:text-white mb-6 ${canEdit ? 'cursor-text hover:bg-gray-50 dark:hover:bg-gray-800 rounded px-2 py-1 -mx-2 -my-1' : ''}`}
-              onClick={() => canEdit && setIsEditingTitle(true)}
+              className={`text-5xl font-bold text-gray-900 dark:text-white mb-6 ${titleEditable ? 'cursor-text hover:bg-gray-50 dark:hover:bg-gray-800 rounded px-2 py-1 -mx-2 -my-1' : ''}`}
+              onClick={() => titleEditable && setIsEditingTitle(true)}
             >
-              {page.title || 'Untitled'}
+              {pageTitle || 'Untitled'}
             </h1>
           )}
         </div>
 
         {page.is_draft && (
-          <span className="inline-block px-2 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-800 rounded-full mb-2">
+          <span className="inline-block px-2 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200 rounded-full mb-2">
             Draft
           </span>
         )}
@@ -766,6 +1294,59 @@ const PageRoute = () => {
             <div className="flex items-center justify-center py-12">
               <div className="text-gray-500 dark:text-gray-400">Loading content...</div>
             </div>
+          ) : liveMode ? (
+            /* Live editor: mounted once the room's document has arrived */
+            // `session.room === collab.room`: after a navigation the loader
+            // names the new room one render before the effect opens it, and
+            // the editor must never bind to the previous page's document.
+            session && collab && session.room === collab.room && liveState.hasSynced ? (
+              <Suspense
+                fallback={
+                  <div className="flex items-center justify-center py-12">
+                    <div className="text-gray-500 dark:text-gray-400">Loading editor...</div>
+                  </div>
+                }
+              >
+                {agentTouchStyles && (
+                  <style data-testid="agent-touch-styles">{agentTouchStyles}</style>
+                )}
+                <PageEditor
+                  key={session.room}
+                  ref={editorRef}
+                  initialContent={null}
+                  pageId={page.id}
+                  darkMode={darkMode}
+                  resolveFileUrl={liveResolveFileUrl}
+                  srcSets={srcSets}
+                  displayUrl={assets.displayUrl}
+                  onAssetUploaded={assets.remember}
+                  uploadCapability={uploadCapability}
+                  editable={liveEditable}
+                  collab={{ doc: session.doc, provider: session.provider, user: collab.user }}
+                />
+              </Suspense>
+            ) : (
+              /* Until the room arrives: the page as the loader read it, read-only. */
+              <Suspense
+                fallback={
+                  <div className="flex items-center justify-center py-12">
+                    <div className="text-gray-500 dark:text-gray-400">Loading content...</div>
+                  </div>
+                }
+              >
+                <div data-testid="live-pre-sync">
+                  <BlockNoteViewer
+                    key={`${page.id}:${assetEpoch}:pre-sync`}
+                    content={content}
+                    darkMode={darkMode}
+                    resolveFileUrl={assets.resolveFileUrl}
+                    srcSets={srcSets}
+                    displayUrl={assets.displayUrl}
+                    pageId={page.id}
+                  />
+                </div>
+              </Suspense>
+            )
           ) : canEdit ? (
             /* Editor for instructors */
             <Suspense
@@ -803,20 +1384,23 @@ const PageRoute = () => {
                 </div>
               }
             >
-              <BlockNoteViewer
-                // The epoch rebuilds the viewer after a 403 retry — BlockNote
-                // asks for a file URL once per mount, so a refreshed map only
-                // reaches it through a remount. Safe here and only here: the
-                // viewer holds no unsaved state, the editor does.
-                key={`${page.id}:${assetEpoch}`}
-                content={content}
-                darkMode={darkMode}
-                resolveFileUrl={assets.resolveFileUrl}
-                srcSets={srcSets}
-                displayUrl={assets.displayUrl}
-                pageId={page.id}
-                mediaDownloads={mediaDownloads}
-              />
+              {previewHighlightStyle && <style>{previewHighlightStyle}</style>}
+              <div className={previewHighlightStyle ? 'preview-highlight' : undefined}>
+                <BlockNoteViewer
+                  // The epoch rebuilds the viewer after a 403 retry — BlockNote
+                  // asks for a file URL once per mount, so a refreshed map only
+                  // reaches it through a remount. Safe here and only here: the
+                  // viewer holds no unsaved state, the editor does.
+                  key={`${page.id}:${assetEpoch}`}
+                  content={content}
+                  darkMode={darkMode}
+                  resolveFileUrl={assets.resolveFileUrl}
+                  srcSets={srcSets}
+                  displayUrl={assets.displayUrl}
+                  pageId={page.id}
+                  mediaDownloads={mediaDownloads}
+                />
+              </div>
             </Suspense>
           )}
         </div>

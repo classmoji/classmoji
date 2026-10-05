@@ -2,8 +2,12 @@
  * POST /mcp — the Streamable HTTP endpoint.
  *
  * STATELESS by locked decision 3: a fresh McpServer + transport per request,
- * `sessionIdGenerator: undefined` (no Mcp-Session-Id is ever issued or
- * accepted), bearer token only. S3 (session binding) is N/A by construction.
+ * `sessionIdGenerator: undefined`, bearer token only; nothing is kept per
+ * session and S3 (session binding) is N/A by construction. The one exception
+ * is an identity hint: an `initialize` answer carries a fresh Mcp-Session-Id,
+ * which clients send back on every later request (MCP spec), and that id
+ * tells one person's agent sessions apart in live editing (presence, colour,
+ * label). It authorizes nothing; see agentSessionFrom.
  *
  * The SDK's StreamableHTTPServerTransport works on Node's raw
  * IncomingMessage/ServerResponse, so we `reply.hijack()` and hand it the raw
@@ -19,6 +23,8 @@ import { UnauthorizedError } from '../mcp/errors.ts';
 import { buildMcpServer } from '../mcp/registry.ts';
 import { registerAllResources } from '../resources/index.ts';
 import { canonicalTimeZone } from '@classmoji/utils';
+import { normalizeAgentSession } from '@classmoji/collab';
+import { randomUUID } from 'node:crypto';
 
 /**
  * The caller's rendering-zone hint. Validated against Intl and dropped when
@@ -29,6 +35,30 @@ export const TIMEZONE_HEADER = 'x-classmoji-timezone';
 
 export function timezoneHintFrom(headers: Headers): string | null {
   return canonicalTimeZone(headers.get(TIMEZONE_HEADER));
+}
+
+/** The Streamable HTTP session header. */
+export const SESSION_HEADER = 'mcp-session-id';
+
+/**
+ * The agent session a request belongs to: the Mcp-Session-Id it carries, when
+ * that is a plain token (else null — the caller's sessions then share one
+ * presence). Client-supplied and never trusted: it only keys the caller's OWN
+ * agent presence, under the user the bearer token resolved to.
+ */
+export function agentSessionFrom(headers: Headers): string | null {
+  return normalizeAgentSession(headers.get(SESSION_HEADER));
+}
+
+/** A JSON-RPC body (or batch) that opens a session. */
+export function isInitializeRequest(body: unknown): boolean {
+  const messages = Array.isArray(body) ? body : [body];
+  return messages.some(
+    message =>
+      Boolean(message) &&
+      typeof message === 'object' &&
+      (message as { method?: unknown }).method === 'initialize'
+  );
 }
 
 /** RFC 9728 §5.1: challenge advertises where our protected-resource metadata lives. */
@@ -65,7 +95,11 @@ export default async function mcpRoutes(fastify: FastifyInstance) {
     let viewer;
     try {
       const headers = toFetchHeaders(request);
-      viewer = { ...(await resolveViewer(headers)), timezoneHint: timezoneHintFrom(headers) };
+      viewer = {
+        ...(await resolveViewer(headers)),
+        timezoneHint: timezoneHintFrom(headers),
+        agentSession: agentSessionFrom(headers),
+      };
     } catch (error) {
       const message = error instanceof UnauthorizedError ? error.message : 'Authentication failed';
       if (!(error instanceof UnauthorizedError)) request.log.error(error);
@@ -80,6 +114,8 @@ export default async function mcpRoutes(fastify: FastifyInstance) {
 
     // Hand the raw streams to the SDK transport; Fastify must not touch the reply.
     reply.hijack();
+    // A new session's id (the transport's own writeHead keeps it).
+    if (isInitializeRequest(request.body)) reply.raw.setHeader(SESSION_HEADER, randomUUID());
     const cleanup = () => {
       void transport.close();
       void server.close();

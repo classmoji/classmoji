@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { GITLAB_ANTD_BUTTON, GITLAB_BUTTON_LOGO } from '~/components/ui/gitlabButton';
 import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 import { useNavigate, useSearchParams } from 'react-router';
 import { Alert, Button, Card, Form, Input, Select } from 'antd';
@@ -135,7 +136,12 @@ const GitLabClassroomForm = ({
                 Gitlab: <span className="font-medium">{new URL(gitlab.host).host}</span>
               </p>
             )}
-            <Button type="primary" href={CONNECT_URL} icon={<GitlabLogo size={16} />}>
+            {/* Gitlab orange, like "Continue with Gitlab" on sign-in. */}
+            <Button
+              href={CONNECT_URL}
+              icon={<GitlabLogo size={16} className={GITLAB_BUTTON_LOGO} />}
+              className={GITLAB_ANTD_BUTTON}
+            >
               Connect Gitlab
             </Button>
           </div>

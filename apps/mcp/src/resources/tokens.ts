@@ -7,9 +7,17 @@
  * keyed to the viewer's own user id, never a request-supplied one.
  * Compact rows: the web loader embeds the full student User row and raw
  * relations; here the ledger keeps scalar fields + assignment context only.
+ *
+ * Each row names the assignment it is about: a quiz extension through its own
+ * `assignment` link, a repository extension or grade token through its
+ * submission's assignment. `assignment_id` is that assignment's id (the one
+ * extension_purchase takes for a quiz). A quiz extension whose assignment was
+ * deleted keeps no link, so its title is read back from the row's
+ * description, the "<title> · +N h" snapshot written with it.
  */
 
 import { ClassmojiService } from '@classmoji/services';
+import { transactionAssignmentTitle } from '@classmoji/utils';
 import type { ResourceDefinition } from '../mcp/registry.ts';
 import { STUDENT_ONLY, classroomCtx } from './shape.ts';
 
@@ -22,6 +30,10 @@ interface TransactionRow {
   description: string;
   is_cancelled: boolean;
   created_at: Date;
+  /** A quiz extension's assignment (set null if the assignment is deleted). */
+  assignment_id?: string | null;
+  git_repo_assignment_id?: string | null;
+  assignment?: { id: string; title?: string | null } | null;
   git_repo_assignment?: {
     id: string;
     assignment?: { id: string; title?: string | null } | null;
@@ -35,7 +47,8 @@ export const tokensResource: ResourceDefinition = {
   title: 'My token ledger',
   description:
     'Your token balance and transaction history in this classroom (grants, purchases, refunds, ' +
-    'removals). Students only.',
+    'removals). Each row names the assignment it is about (assignment_id, assignment_title), ' +
+    'quiz extensions included. Students only.',
   scope: 'read',
   roles: STUDENT_ONLY,
   handler: async (_vars, ctx) => {
@@ -59,7 +72,11 @@ export const tokensResource: ResourceDefinition = {
         description: t.description,
         is_cancelled: t.is_cancelled,
         created_at: t.created_at,
-        assignment_title: t.git_repo_assignment?.assignment?.title ?? null,
+        assignment_id: t.assignment_id ?? t.git_repo_assignment?.assignment?.id ?? null,
+        // The live title; for a quiz extension whose assignment is gone, the
+        // title its description was written with. Grants and removals name
+        // none: their description is free text.
+        assignment_title: transactionAssignmentTitle(t),
         grade_emoji: t.assignment_grade?.emoji ?? null,
       })),
     };

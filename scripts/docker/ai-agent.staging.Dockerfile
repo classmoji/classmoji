@@ -12,6 +12,7 @@ ENV NODE_OPTIONS="--max-old-space-size=2048"
 # Manifests only, so the npm ci layer stays cached until deps actually change.
 COPY package.json package-lock.json .npmrc ./
 COPY apps/admin/package.json apps/admin/
+COPY apps/collab/package.json apps/collab/
 COPY apps/ai-agent/package.jso[n] apps/ai-agent/
 COPY apps/content/package.json apps/content/
 COPY apps/hook-station/package.json apps/hook-station/
@@ -21,10 +22,12 @@ COPY apps/site/package.json apps/site/
 COPY apps/slides/package.json apps/slides/
 COPY apps/webapp/package.json apps/webapp/
 COPY packages/auth/package.json packages/auth/
+COPY packages/collab/package.json packages/collab/
 COPY packages/content/package.json packages/content/
 COPY packages/content-signing/package.json packages/content-signing/
 COPY packages/database/package.json packages/database/
 COPY packages/eslint-config/package.json packages/eslint-config/
+COPY packages/page-schema/package.json packages/page-schema/
 COPY packages/services/package.json packages/services/
 COPY packages/tasks/package.json packages/tasks/
 COPY packages/ui-components/package.json packages/ui-components/

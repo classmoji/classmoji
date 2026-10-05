@@ -12,31 +12,50 @@ const mocks = vi.hoisted(() => ({
   findByAssignmentId: vi.fn(),
   doesGradeExist: vi.fn(),
   addGrade: vi.fn(),
-  removeGrade: vi.fn(),
   update: vi.fn(),
   assignToStudent: vi.fn(),
+  lockLedgers: vi.fn(),
+  lockSubmission: vi.fn(),
+  // The grade transaction's client: who the submission pays, the grade being
+  // replaced, and its conditional delete.
+  tx: {
+    gitRepoAssignment: { findUnique: vi.fn() },
+    teamMembership: { findMany: vi.fn() },
+    assignmentGrade: { findFirst: vi.fn(), deleteMany: vi.fn() },
+  },
+}));
+
+vi.mock('@classmoji/database', () => ({
+  default: () => ({
+    $transaction: (fn: (tx: unknown) => unknown) => fn(mocks.tx),
+  }),
 }));
 
 vi.mock('../../git/index.ts', () => ({ getGitProvider: () => ({}) }));
 
 vi.mock('../../classmoji/index.ts', () => ({
   default: {
-    regradeRequest: { findOpenByAssignmentId: (...a: unknown[]) => mocks.findOpenByAssignmentId(...a) },
+    regradeRequest: {
+      findOpenByAssignmentId: (...a: unknown[]) => mocks.findOpenByAssignmentId(...a),
+    },
     emojiMapping: { findByClassroomId: (...a: unknown[]) => mocks.findByClassroomId(...a) },
     assignmentGrade: {
       findByAssignmentId: (...a: unknown[]) => mocks.findByAssignmentId(...a),
       doesGradeExist: (...a: unknown[]) => mocks.doesGradeExist(...a),
       addGrade: (...a: unknown[]) => mocks.addGrade(...a),
-      removeGrade: (...a: unknown[]) => mocks.removeGrade(...a),
       update: (...a: unknown[]) => mocks.update(...a),
     },
-    token: { assignToStudent: (...a: unknown[]) => mocks.assignToStudent(...a) },
+    token: {
+      assignToStudent: (...a: unknown[]) => mocks.assignToStudent(...a),
+      lockLedgers: (...a: unknown[]) => mocks.lockLedgers(...a),
+      lockSubmission: (...a: unknown[]) => mocks.lockSubmission(...a),
+    },
   },
 }));
 
 const helper = await import('../index.ts');
-const HelperService = (helper as { default?: unknown; HelperService?: unknown }).HelperService ??
-  helper.default;
+const HelperService =
+  (helper as { default?: unknown; HelperService?: unknown }).HelperService ?? helper.default;
 
 type Svc = { addGradeToGitRepoAssignment: (p: unknown) => Promise<unknown> };
 const svc = HelperService as Svc;
@@ -63,7 +82,21 @@ describe('addGradeToGitRepoAssignment with a numeric scale', () => {
     mocks.findByAssignmentId.mockResolvedValue([]);
     mocks.doesGradeExist.mockResolvedValue(false);
     mocks.addGrade.mockResolvedValue({ id: 'grade-new' });
+    mocks.tx.gitRepoAssignment.findUnique.mockResolvedValue({
+      git_repo: { student_id: 'student-1', team_id: null },
+    });
+    mocks.tx.assignmentGrade.findFirst.mockResolvedValue({
+      emoji: 'score-85',
+      token_transaction: null,
+    });
+    mocks.tx.assignmentGrade.deleteMany.mockResolvedValue({ count: 1 });
   });
+
+  /** Grade ids the call deleted. */
+  const removed = () =>
+    mocks.tx.assignmentGrade.deleteMany.mock.calls.map(
+      call => (call[0] as { where: { id: string } }).where.id
+    );
 
   it("replaces the same grader's earlier score", async () => {
     mocks.findByAssignmentId.mockResolvedValue([
@@ -72,8 +105,8 @@ describe('addGradeToGitRepoAssignment with a numeric scale', () => {
 
     await svc.addGradeToGitRepoAssignment(payload('score-90'));
 
-    expect(mocks.removeGrade).toHaveBeenCalledWith('grade-old');
-    expect(mocks.addGrade).toHaveBeenCalledWith('ra-1', 'ta-1', 'score-90');
+    expect(removed()).toEqual(['grade-old']);
+    expect(mocks.addGrade).toHaveBeenCalledWith('ra-1', 'ta-1', 'score-90', mocks.tx);
   });
 
   it("leaves another grader's score in place", async () => {
@@ -83,8 +116,8 @@ describe('addGradeToGitRepoAssignment with a numeric scale', () => {
 
     await svc.addGradeToGitRepoAssignment(payload('score-90'));
 
-    expect(mocks.removeGrade).not.toHaveBeenCalled();
-    expect(mocks.addGrade).toHaveBeenCalledWith('ra-1', 'ta-1', 'score-90');
+    expect(removed()).toEqual([]);
+    expect(mocks.addGrade).toHaveBeenCalledWith('ra-1', 'ta-1', 'score-90', mocks.tx);
   });
 
   it('is a no-op when the grader gives the same score again', async () => {
@@ -94,7 +127,7 @@ describe('addGradeToGitRepoAssignment with a numeric scale', () => {
 
     await svc.addGradeToGitRepoAssignment(payload('score-90'));
 
-    expect(mocks.removeGrade).not.toHaveBeenCalled();
+    expect(removed()).toEqual([]);
     expect(mocks.addGrade).not.toHaveBeenCalled();
   });
 
@@ -107,11 +140,16 @@ describe('addGradeToGitRepoAssignment with a numeric scale', () => {
         token_transaction: { id: 'tx-1', amount: 3 },
       },
     ]);
+    mocks.tx.assignmentGrade.findFirst.mockResolvedValue({
+      emoji: 'score-85',
+      token_transaction: { amount: 3 },
+    });
 
     await svc.addGradeToGitRepoAssignment(payload('score-100'));
 
     expect(mocks.assignToStudent).toHaveBeenCalledWith(
-      expect.objectContaining({ studentId: 'student-1', amount: -3, type: 'REMOVAL' })
+      expect.objectContaining({ studentId: 'student-1', amount: -3, type: 'REMOVAL' }),
+      mocks.tx
     );
   });
 
@@ -139,8 +177,8 @@ describe('addGradeToGitRepoAssignment with a numeric scale', () => {
 
     await svc.addGradeToGitRepoAssignment(payload('+1'));
 
-    expect(mocks.removeGrade).not.toHaveBeenCalled();
-    expect(mocks.addGrade).toHaveBeenCalledWith('ra-1', 'ta-1', '+1');
+    expect(removed()).toEqual([]);
+    expect(mocks.addGrade).toHaveBeenCalledWith('ra-1', 'ta-1', '+1', mocks.tx);
   });
 
   it('accepts anything when the classroom has no scale yet', async () => {
@@ -148,6 +186,6 @@ describe('addGradeToGitRepoAssignment with a numeric scale', () => {
 
     await svc.addGradeToGitRepoAssignment(payload('rocket'));
 
-    expect(mocks.addGrade).toHaveBeenCalledWith('ra-1', 'ta-1', 'rocket');
+    expect(mocks.addGrade).toHaveBeenCalledWith('ra-1', 'ta-1', 'rocket', mocks.tx);
   });
 });

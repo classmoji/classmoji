@@ -86,7 +86,7 @@ test.describe('failures the uploader has to hear about', () => {
   test('the video block toasts a failure that is neither a refusal nor a cancel', () => {
     const upload = VIDEO_BLOCK_SOURCE.slice(VIDEO_BLOCK_SOURCE.indexOf('const upload = async'));
     expect(upload).toContain(
-      'if (!(error instanceof UploadRefused) && !(error instanceof UploadCancelled)) {\n            toast.error(UPLOAD_INTERRUPTED);'
+      'if (!(error instanceof UploadRefused) && !(error instanceof UploadCancelled)) {\n          toast.error(UPLOAD_INTERRUPTED);'
     );
     // Nothing is swallowed silently any more.
     expect(upload).not.toContain('// Already toasted by the upload handler.');

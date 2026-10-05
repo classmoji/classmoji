@@ -88,6 +88,13 @@
       "persistent": true,
       "cache": false
     },
+    "collab:dev": {
+      "persistent": true,
+      "cache": false
+    },
+    "collab:start": {
+      "dependsOn": ["^db:generate"]
+    },
     "admin:build": {},
     "admin:start": {
       "dependsOn": ["^db:generate"]
@@ -249,6 +256,13 @@
     "COOKIE_PREFIX",
     "MCP_PUBLIC_URL",
     "MCP_PORT",
+    "COLLAB_PORT",
+    "COLLAB_URL",
+    "COLLAB_WS_URL",
+    "COLLAB_INTERNAL_SECRET",
+    "COLLAB_ALLOWED_ORIGINS",
+    "COLLAB_CHECKPOINT_DELAY",
+    "COLLAB_CHECKPOINT_MAX_DELAY",
     "ENABLE_TEST_LOGIN",
     "DEVPORT_ID",
     "DEVPORT_NAME",

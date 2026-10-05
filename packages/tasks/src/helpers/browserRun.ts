@@ -150,6 +150,8 @@ export function redactRenderToken(text: string): string {
   return (
     text
       .replace(/cm_render=[^;\s"',}\]&]*/gi, 'cm_render=[redacted]')
+      // The MCP's view token (deck_render / page_render) travels the same way.
+      .replace(/cm_view=[^;\s"',}\]&]*/gi, 'cm_view=[redacted]')
       // `(?<![\w-])` so this does not re-match the `render=` inside the
       // `cm_render=[redacted]` the rule above just wrote — which would swallow
       // the `;` that ends the cookie and mangle the rest of the header.

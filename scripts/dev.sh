@@ -15,6 +15,12 @@ if [ -f "$PROJECT_DIR/.env" ]; then
   echo "📄 Loading environment from .env..."
   set -a  # Auto-export all variables
   source "$PROJECT_DIR/.env"
+  # Optional dev-only overlay of local overrides kept OUTSIDE the repo (e.g. a
+  # Trigger.dev dev key, TRIGGER_DEV_MACHINE), so values .env leaves empty
+  # don't wipe what you need. Point CLASSMOJI_ENV_OVERLAY at the file.
+  if [ -n "$CLASSMOJI_ENV_OVERLAY" ] && [ -f "$CLASSMOJI_ENV_OVERLAY" ]; then
+    source "$CLASSMOJI_ENV_OVERLAY"
+  fi
   set +a
 else
   echo "⚠️  No .env file found! Copy .env.example to .env first."
@@ -28,7 +34,8 @@ source "$SCRIPT_DIR/devport-env.sh"
 
 # Step 3: Export all devport vars so they're available to subprocesses
 export DATABASE_URL WEBAPP_URL QUIZ_AGENT_URL AI_AGENT_URL SLIDES_URL PAGES_URL MCP_PUBLIC_URL ADMIN_URL SITE_BASE_DOMAIN
-export WEBAPP_PORT HOOK_PORT QUIZ_AGENT_PORT SLIDES_PORT PAGES_PORT MCP_PORT ADMIN_PORT
+export COLLAB_URL COLLAB_WS_URL COLLAB_INTERNAL_SECRET
+export WEBAPP_PORT HOOK_PORT QUIZ_AGENT_PORT SLIDES_PORT PAGES_PORT MCP_PORT ADMIN_PORT COLLAB_PORT
 export DEVPORT_ID DEVPORT_NAME
 
 # Trigger.dev dev branch (opt-in): set TRIGGER_DEV_MACHINE in .env (e.g.
@@ -55,11 +62,13 @@ fi
 # Step 4: Clean up orphaned processes from previous sessions of THIS devport only
 # Only kills ports assigned to current DEVPORT_ID, not other devports or main
 cleanup_ports() {
-  local ports="$WEBAPP_PORT $HOOK_PORT $QUIZ_AGENT_PORT $SLIDES_PORT $PAGES_PORT $MCP_PORT $ADMIN_PORT"
+  local ports="$WEBAPP_PORT $HOOK_PORT $QUIZ_AGENT_PORT $SLIDES_PORT $PAGES_PORT $MCP_PORT $ADMIN_PORT $COLLAB_PORT"
   local killed=false
   for port in $ports; do
-    if lsof -ti:$port >/dev/null 2>&1; then
-      lsof -ti:$port | xargs kill -9 2>/dev/null && killed=true
+    # Listeners only: a client connected to the port (a browser, another
+    # devport's proxy) must not be killed with it.
+    if lsof -ti tcp:$port -sTCP:LISTEN >/dev/null 2>&1; then
+      lsof -ti tcp:$port -sTCP:LISTEN | xargs kill -9 2>/dev/null && killed=true
     fi
   done
   if [ "$killed" = true ]; then
@@ -76,11 +85,11 @@ cleanup_ports
 # Set log file name and prefixes based on devport
 if [ -n "$DEVPORT_NAME" ]; then
   LOG_FILE="/tmp/classmoji-dev-${DEVPORT_NAME}.log"
-  PREFIX_BASE="web:$DEVPORT_NAME,slides:$DEVPORT_NAME,pages:$DEVPORT_NAME,admin:$DEVPORT_NAME,hook:$DEVPORT_NAME,mcp:$DEVPORT_NAME,trigger:$DEVPORT_NAME,smee-gh,smee-stripe,smee-gitlab,quiz:$DEVPORT_NAME"
+  PREFIX_BASE="web:$DEVPORT_NAME,slides:$DEVPORT_NAME,pages:$DEVPORT_NAME,admin:$DEVPORT_NAME,hook:$DEVPORT_NAME,mcp:$DEVPORT_NAME,collab:$DEVPORT_NAME,trigger:$DEVPORT_NAME,smee-gh,smee-stripe,smee-gitlab,quiz:$DEVPORT_NAME"
   DB_NAME="classmoji_${DEVPORT_NAME//-/_}"
 else
   LOG_FILE="/tmp/classmoji-dev.log"
-  PREFIX_BASE="web,slides,pages,admin,hook,mcp,trigger,smee-gh,smee-stripe,smee-gitlab,quiz"
+  PREFIX_BASE="web,slides,pages,admin,hook,mcp,collab,trigger,smee-gh,smee-stripe,smee-gitlab,quiz"
   DB_NAME="classmoji"
 fi
 
@@ -111,6 +120,7 @@ DEVPORT_ID=${DEVPORT_ID:-0}
 - Admin:      http://localhost:$ADMIN_PORT
 - Hook:       http://localhost:$HOOK_PORT
 - MCP:        http://localhost:$MCP_PORT
+- Collab:     http://localhost:$COLLAB_PORT (ws://localhost:$COLLAB_PORT)
 - Quiz Agent: http://localhost:$QUIZ_AGENT_PORT
 - Trigger.dev dev branch: ${TRIGGER_DEV_BRANCH:-default}
 
@@ -140,13 +150,14 @@ if [ "$RUN_FANOUT" = true ]; then
   if [ -n "$AI_AGENT_CMD" ]; then
     concurrently \
       --names "$PREFIX" \
-      --prefix-colors "cyan,magenta,yellow,magentaBright,green,blueBright,blue,red,white,gray,bgMagenta" \
+      --prefix-colors "cyan,magenta,yellow,magentaBright,green,blueBright,greenBright,blue,red,white,gray,bgMagenta" \
       "PORT=$WEBAPP_PORT turbo run web:dev --log-prefix=none" \
       "PORT=$SLIDES_PORT turbo run slides:dev --filter=@classmoji/slides --log-prefix=none" \
       "PORT=$PAGES_PORT turbo run pages:dev --filter=@classmoji/pages --log-prefix=none" \
       "PORT=$ADMIN_PORT turbo run admin:dev --filter=@classmoji/admin --log-prefix=none" \
       "PORT=$HOOK_PORT turbo run hook:dev --log-prefix=none" \
       "MCP_PORT=$MCP_PORT turbo run mcp:dev --log-prefix=none" \
+      "COLLAB_PORT=$COLLAB_PORT turbo run collab:dev --log-prefix=none" \
       "turbo run trigger:dev --log-prefix=none" \
       "turbo run hook:github --log-prefix=none" \
       "turbo run hook:stripe --log-prefix=none" \
@@ -157,13 +168,14 @@ if [ "$RUN_FANOUT" = true ]; then
   else
     concurrently \
       --names "$PREFIX" \
-      --prefix-colors "cyan,magenta,yellow,magentaBright,green,blueBright,blue,red,white,bgMagenta" \
+      --prefix-colors "cyan,magenta,yellow,magentaBright,green,blueBright,greenBright,blue,red,white,bgMagenta" \
       "PORT=$WEBAPP_PORT turbo run web:dev --log-prefix=none" \
       "PORT=$SLIDES_PORT turbo run slides:dev --filter=@classmoji/slides --log-prefix=none" \
       "PORT=$PAGES_PORT turbo run pages:dev --filter=@classmoji/pages --log-prefix=none" \
       "PORT=$ADMIN_PORT turbo run admin:dev --filter=@classmoji/admin --log-prefix=none" \
       "PORT=$HOOK_PORT turbo run hook:dev --log-prefix=none" \
       "MCP_PORT=$MCP_PORT turbo run mcp:dev --log-prefix=none" \
+      "COLLAB_PORT=$COLLAB_PORT turbo run collab:dev --log-prefix=none" \
       "turbo run trigger:dev --log-prefix=none" \
       "turbo run hook:github --log-prefix=none" \
       "turbo run hook:stripe --log-prefix=none" \
@@ -176,13 +188,14 @@ else
   if [ -n "$AI_AGENT_CMD" ]; then
     concurrently \
       --names "$PREFIX" \
-      --prefix-colors "cyan,magenta,yellow,magentaBright,green,blueBright,blue,red,white,bgMagenta" \
+      --prefix-colors "cyan,magenta,yellow,magentaBright,green,blueBright,greenBright,blue,red,white,bgMagenta" \
       "PORT=$WEBAPP_PORT turbo run web:dev --log-prefix=none" \
       "PORT=$SLIDES_PORT turbo run slides:dev --filter=@classmoji/slides --log-prefix=none" \
       "PORT=$PAGES_PORT turbo run pages:dev --filter=@classmoji/pages --log-prefix=none" \
       "PORT=$ADMIN_PORT turbo run admin:dev --filter=@classmoji/admin --log-prefix=none" \
       "PORT=$HOOK_PORT turbo run hook:dev --log-prefix=none" \
       "MCP_PORT=$MCP_PORT turbo run mcp:dev --log-prefix=none" \
+      "COLLAB_PORT=$COLLAB_PORT turbo run collab:dev --log-prefix=none" \
       "turbo run trigger:dev --log-prefix=none" \
       "turbo run hook:github --log-prefix=none" \
       "turbo run hook:stripe --log-prefix=none" \
@@ -192,13 +205,14 @@ else
   else
     concurrently \
       --names "$PREFIX" \
-      --prefix-colors "cyan,magenta,yellow,magentaBright,green,blueBright,blue,red,white,bgMagenta" \
+      --prefix-colors "cyan,magenta,yellow,magentaBright,green,blueBright,greenBright,blue,red,white,bgMagenta" \
       "PORT=$WEBAPP_PORT turbo run web:dev --log-prefix=none" \
       "PORT=$SLIDES_PORT turbo run slides:dev --filter=@classmoji/slides --log-prefix=none" \
       "PORT=$PAGES_PORT turbo run pages:dev --filter=@classmoji/pages --log-prefix=none" \
       "PORT=$ADMIN_PORT turbo run admin:dev --filter=@classmoji/admin --log-prefix=none" \
       "PORT=$HOOK_PORT turbo run hook:dev --log-prefix=none" \
       "MCP_PORT=$MCP_PORT turbo run mcp:dev --log-prefix=none" \
+      "COLLAB_PORT=$COLLAB_PORT turbo run collab:dev --log-prefix=none" \
       "turbo run trigger:dev --log-prefix=none" \
       "turbo run hook:github --log-prefix=none" \
       "turbo run hook:stripe --log-prefix=none" \

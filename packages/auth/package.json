@@ -10,6 +10,7 @@
     "./server": "./src/server.ts",
     "./client": "./src/client.ts",
     "./predicates": "./src/predicates.ts",
+    "./classroom-role": "./src/classroomRole.ts",
     "./oauth-redirect": "./src/oauthRedirect.ts",
     "./secret": "./src/secret.ts",
     "./mcp-token": "./src/mcpToken.ts",

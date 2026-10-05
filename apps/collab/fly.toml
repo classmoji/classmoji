@@ -1,0 +1,73 @@
+# fly.toml app configuration file for classmoji-collab (live editing server)
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+# Staging/dev deploys reuse this file with `--app classmoji-collab-staging` /
+# `--app classmoji-collab-dev` (see .github/workflows/deploy-fly-*.yml), so
+# nothing per-environment may live in [env]. Per-env config (DATABASE_URL,
+# BETTER_AUTH_SECRET, COOKIE_PREFIX, WEBAPP_URL, PAGES_URL, SLIDES_URL,
+# COLLAB_INTERNAL_SECRET, TRIGGER_SECRET_KEY, GITHUB_APP_ID, ...) is set as Fly
+# secrets on each app. Full list: apps/collab/README.md.
+#
+# ONE MACHINE ONLY, in every environment. The live Y.Doc of every open room is
+# held in this process's memory; a second machine would hold its own copy of
+# the same room and the two would overwrite each other's stores (see "ONE
+# INSTANCE ONLY" in apps/collab/README.md). Fly's first deploy of a new app
+# creates TWO machines for high availability: provision with
+# `fly deploy --ha=false` or run `fly scale count 1 --app <app>` right after,
+# and never switch the deploy strategy to bluegreen/canary (both run the old
+# and new machine side by side).
+
+app = 'classmoji-collab'
+primary_region = 'iad'
+
+# Hocuspocus flushes every debounced document store on SIGINT/SIGTERM before
+# exiting (stopOnSignals). Fly's default 5 s can cut that short on a deploy or
+# restart; give it room.
+kill_signal = 'SIGTERM'
+kill_timeout = '30s'
+
+[build]
+
+[deploy]
+  # Rolling on a single machine replaces it in place: the old process stops
+  # (and flushes) before the new one starts, so two never serve at once.
+  strategy = 'rolling'
+
+[env]
+  COLLAB_PORT = '7700'
+  NODE_ENV = 'production'
+
+[http_service]
+  internal_port = 7700
+  force_https = true
+  # Never scale to zero: open rooms and their unsaved state live in memory.
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+
+  # WebSockets go through the Fly proxy, which drops a connection after 60 s
+  # with no traffic in either direction. Hocuspocus sends no pings of its own,
+  # but every connected editor's awareness state is re-sent about every 15 s
+  # (y-protocols heartbeat), and providers reconnect and resync on their own
+  # if a socket is dropped anyway.
+  #
+  # Every editor holds one long-lived connection, and with a single machine
+  # there is nowhere else to route: lift Fly's default connection limits
+  # (soft 20 / hard 25), which would otherwise refuse the 26th editor.
+  [http_service.concurrency]
+    type = 'connections'
+    soft_limit = 1000
+    hard_limit = 2000
+
+  [[http_service.checks]]
+    interval = '15s'
+    timeout = '5s'
+    grace_period = '30s'
+    method = 'GET'
+    path = '/health'
+
+[[vm]]
+  memory = '1gb'
+  cpus = 1
+  memory_mb = 1024

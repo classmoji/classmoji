@@ -1,6 +1,6 @@
 import { redirect } from 'react-router';
 import type { Route } from './+types/route';
-import { COOKIE_DOMAIN } from '@classmoji/auth/secret';
+import { COOKIE_DOMAIN, COOKIE_PREFIX } from '@classmoji/auth/secret';
 import { GitHubProvider } from '@classmoji/services';
 import getPrisma from '@classmoji/database';
 import { SURVEY_QUESTIONS, SURVEY_SKIPPED } from '@classmoji/utils';
@@ -43,6 +43,98 @@ const MEMBERSHIP_TO_PATH: Record<string, string> = {
 };
 
 /**
+ * A `redirect=` value we will follow: a same-origin absolute path only.
+ * `//host` and `/\host` are protocol-relative to a browser, so both are refused.
+ */
+function safeRedirectPath(raw: string | null): string | null {
+  if (!raw) return null;
+  return /^\/(?![/\\])/.test(raw) ? raw : null;
+}
+
+/**
+ * Create a Better Auth session row for `userId` and return the Set-Cookie
+ * header for it. The ONE session-creation path of this route: `?role=` and
+ * `?as=` both end here.
+ */
+async function createTestSession(request: Request, userId: string): Promise<string> {
+  const sessionToken = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + 8 * 60 * 60 * 1000); // 8 hours
+
+  await getPrisma().session.create({
+    data: {
+      token: sessionToken,
+      user_id: userId,
+      expires_at: expiresAt,
+      ip_address: request.headers.get('x-forwarded-for') || '127.0.0.1',
+      user_agent: request.headers.get('user-agent') || 'test-login',
+    },
+  });
+
+  // Pre-record a skip for every survey question so the picker's one-off
+  // prompt (a blocking overlay) never appears in front of a Playwright spec.
+  await getPrisma().surveyResponse.createMany({
+    data: SURVEY_QUESTIONS.map(q => ({
+      user_id: userId,
+      question_key: q.key,
+      answer: SURVEY_SKIPPED,
+      context: 'unknown',
+    })),
+    skipDuplicates: true,
+  });
+
+  // Use the SAME resolved cookie domain as the real OAuth path (derived from
+  // SITE_BASE_DOMAIN, COOKIE_DOMAIN as override — see @classmoji/auth
+  // secret.ts) so the dev session spans app.lvh.me AND {sub}.lvh.me exactly
+  // like production. In bare localhost dev it is host-only, and a host-only
+  // cookie for `localhost` is sent to every port — webapp, pages and slides.
+  const cookieDomain = COOKIE_DOMAIN;
+  return (
+    `${COOKIE_PREFIX}.session_token=${sessionToken}; Path=/; HttpOnly; SameSite=Lax` +
+    (cookieDomain ? `; Domain=${cookieDomain}` : '')
+  );
+}
+
+/**
+ * `?as=<username>`: sign in as an EXISTING user found by their Github
+ * username, without any GitHub token. For seeded local users (e.g. the live
+ * editing test teachers) that never went through OAuth. Unknown users are
+ * refused — this never creates one.
+ */
+async function loginAsUsername(request: Request, username: string, redirectParam: string | null) {
+  const account = await getPrisma().account.findFirst({
+    where: { provider_id: 'github', username: { equals: username, mode: 'insensitive' } },
+    include: { user: true },
+  });
+  if (!account?.user) {
+    throw new Response(`No user with Github username "${username}" in this database`, {
+      status: 404,
+    });
+  }
+
+  const cookie = await createTestSession(request, account.user.id);
+  console.log(`[test-login] Created session for ${account.username} (as=${username})`);
+
+  let redirectPath = safeRedirectPath(redirectParam);
+  if (!redirectPath) {
+    // Default: the user's first staff classroom, else the picker.
+    const membership = await getPrisma().classroomMembership.findFirst({
+      where: {
+        user_id: account.user.id,
+        role: { in: ['OWNER', 'TEACHER', 'ASSISTANT'] },
+        classroom: { is_archived: false },
+      },
+      orderBy: { created_at: 'asc' },
+      include: { classroom: true },
+    });
+    redirectPath = membership
+      ? `/${MEMBERSHIP_TO_PATH[membership.role]}/${membership.classroom.slug}/dashboard`
+      : '/select-organization';
+  }
+
+  return redirect(redirectPath, { headers: { 'Set-Cookie': cookie } });
+}
+
+/**
  * Test-only login route that bypasses GitHub OAuth.
  * Creates a Better Auth session directly in the database.
  * Only works in development mode.
@@ -53,20 +145,25 @@ const MEMBERSHIP_TO_PATH: Record<string, string> = {
  *   /test-login?role=teacher - Login as teacher (uses GITHUB_INSTRUCTOR_TOKEN)
  *   /test-login?role=ta      - Login as TA (uses GITHUB_TA_TOKEN)
  *   /test-login?role=student - Login as student (uses GITHUB_STUDENT_TOKEN)
+ *   /test-login?as=<username>[&redirect=/path]
+ *                            - Login as an existing user by Github username
+ *                              (no token needed; unknown users get a 404)
  */
 export const loader = async ({ request }: Route.LoaderArgs) => {
   // Belt-and-suspenders: NODE_ENV is the standard guard, but production
   // misconfiguration (forgetting NODE_ENV=production) would otherwise expose a
   // login-as-anyone backdoor. Require an explicit allow flag too.
-  if (
-    process.env.NODE_ENV !== 'development' ||
-    process.env.ENABLE_TEST_LOGIN !== 'true'
-  ) {
+  if (process.env.NODE_ENV !== 'development' || process.env.ENABLE_TEST_LOGIN !== 'true') {
     throw new Response('Not Found', { status: 404 });
   }
 
-  // Get role from query param, default to 'admin'
   const url = new URL(request.url);
+  const as = url.searchParams.get('as')?.trim();
+  if (as) {
+    return loginAsUsername(request, as, url.searchParams.get('redirect'));
+  }
+
+  // Get role from query param, default to 'admin'
   const role = url.searchParams.get('role')?.toLowerCase() || 'admin';
 
   // Validate role
@@ -131,33 +228,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
     const user = account.user;
 
-    // Create a Better Auth session
-    const sessionToken = crypto.randomUUID();
-    const expiresAt = new Date(Date.now() + 8 * 60 * 60 * 1000); // 8 hours
-
-    await getPrisma().session.create({
-      data: {
-        token: sessionToken,
-        user_id: user.id,
-        expires_at: expiresAt,
-        ip_address: request.headers.get('x-forwarded-for') || '127.0.0.1',
-        user_agent: request.headers.get('user-agent') || 'test-login',
-      },
-    });
-
+    const sessionCookie = await createTestSession(request, user.id);
     console.log(`[test-login] Created session for ${account.username} (role=${role})`);
-
-    // Pre-record a skip for every survey question so the picker's one-off
-    // prompt (a blocking overlay) never appears in front of a Playwright spec.
-    await getPrisma().surveyResponse.createMany({
-      data: SURVEY_QUESTIONS.map(q => ({
-        user_id: user.id,
-        question_key: q.key,
-        answer: SURVEY_SKIPPED,
-        context: 'unknown',
-      })),
-      skipDuplicates: true,
-    });
 
     // Find the user's classroom membership matching the requested role
     // This allows us to redirect directly to the dashboard, bypassing /select-organization
@@ -192,14 +264,6 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       console.log(`[test-login] Redirecting directly to ${redirectPath}`);
     }
 
-    // Set Better Auth session cookie and redirect. Use the SAME resolved
-    // cookie domain as the real OAuth path (derived from SITE_BASE_DOMAIN,
-    // COOKIE_DOMAIN as override — see @classmoji/auth secret.ts) so the dev
-    // session spans app.lvh.me AND {sub}.lvh.me exactly like production.
-    const cookieDomain = COOKIE_DOMAIN;
-    const sessionCookie =
-      `classmoji.session_token=${sessionToken}; Path=/; HttpOnly; SameSite=Lax` +
-      (cookieDomain ? `; Domain=${cookieDomain}` : '');
     return redirect(redirectPath, {
       headers: {
         'Set-Cookie': sessionCookie,

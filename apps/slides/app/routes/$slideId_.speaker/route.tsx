@@ -10,6 +10,7 @@ import {
   resolveDeckAssets,
 } from '~/utils/deckDelivery.server';
 import { deckOnlyRefusal } from '~/utils/slideKind';
+import { checkpointBeforePresenting, readEditorName } from '~/utils/collab/collab.server';
 
 /**
  * Speaker route - Remote speaker notes view
@@ -46,7 +47,7 @@ export const loader = async ({
   }
 
   // Authorization: require speakerNotes access (staff, or viewers when show_speaker_notes=true)
-  const { canEdit } = await assertSlideAccess({
+  const { canEdit, userId } = await assertSlideAccess({
     request,
     slideId,
     slide,
@@ -77,7 +78,20 @@ export const loader = async ({
   let slideContent: string | null = null;
   let contentError: string | null = null;
 
-  const contentResult = await readDeckText(slide, gitOrgLogin, repo, filePath, 'speaker');
+  // Live classroom, opened by someone who edits the deck: save first, as
+  // presenting does (bounded; then what git has). Never on a student's load.
+  const live =
+    canEdit &&
+    Boolean(userId) &&
+    (await checkpointBeforePresenting(
+      slide,
+      { userId: userId as string, name: await readEditorName(userId as string) },
+      { timeoutMs: 10_000 }
+    )) !== 'not-live';
+
+  const contentResult = await readDeckText(slide, gitOrgLogin, repo, filePath, 'speaker', {
+    skipCache: live,
+  });
 
   if (contentResult) {
     // Sign the deck's references BEFORE the fragment is cut out: the speaker
