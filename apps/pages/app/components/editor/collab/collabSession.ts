@@ -260,8 +260,9 @@ export class CollabSession {
       const { type: _type, ...checkpoint } = message;
       this.update({
         lastCheckpoint: { ...checkpoint, seq: this.seq },
-        // A saved page is GitHub's copy again; a failed run changes nothing.
-        ...(checkpoint.error ? {} : { editedSinceCheckpoint: false }),
+        // A saved page is GitHub's copy again, unless the server says edits
+        // arrived that the run did not take; a failed run changes nothing.
+        ...(checkpoint.error ? {} : { editedSinceCheckpoint: checkpoint.editsSince === true }),
       });
     } else if (message.type === 'preview-changed') {
       this.update({ previewChangedSeq: this.seq });

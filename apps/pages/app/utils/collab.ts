@@ -335,8 +335,9 @@ export interface LiveCheckpoint {
   /** Nothing was left to save: the page was already on GitHub as it is. */
   alreadySaved?: boolean;
   /**
-   * Loader only: the live document has edits the last checkpoint did not
-   * take (the buffer's version is ahead of the pushed one).
+   * The live document has edits this checkpoint did not take (the buffer's
+   * version is ahead of the pushed one): from the loader, or the room's
+   * message when the server says so.
    */
   editsSince?: boolean;
 }
@@ -371,6 +372,7 @@ export function parseStatelessMessage(payload: unknown): LiveStatelessMessage | 
       ...(typeof message.error === 'string' && message.error ? { error: message.error } : {}),
       ...(requestIds.length > 0 ? { requestIds } : {}),
       ...(message.alreadySaved === true ? { alreadySaved: true } : {}),
+      ...(message.editsSince === true ? { editsSince: true } : {}),
     };
   }
   if (message.type === 'preview-changed') return { type: 'preview-changed' };
@@ -486,7 +488,7 @@ export function saveVersionGate(syncStatus: SyncStatus): 'now' | 'wait' | 'offli
 
 /** A Save version the server accepted and this browser is waiting on. */
 export interface PendingSaveVersion {
-  /** The request's id, when the server echoed it (null: an older server). */
+  /** The request's id, as the server echoed it (null: it did not, so nothing can answer it). */
   id: string | null;
   /** When the server accepted it (ms since epoch). */
   since: number;
@@ -504,37 +506,17 @@ export const SAVE_VERSION_MESSAGES: Record<SaveVersionOutcome | 'unconfirmed', s
 
 /**
  * The outcome a checkpoint message gives a pending Save version, or null when
- * it is not the answer to it. Matched by the request's id; only when the
- * server did not echo one (an older server) by time instead.
+ * it is not the answer to it: only the message naming the request's id
+ * answers it (a routine run landing just after the click does not). Pure and
+ * idempotent, so a message may be checked again.
  */
 export function saveVersionOutcome(
   checkpoint: LiveCheckpoint,
   pending: PendingSaveVersion | null
 ): SaveVersionOutcome | null {
-  if (!pending) return null;
-  const answers =
-    pending.id !== null
-      ? Boolean(checkpoint.requestIds?.includes(pending.id))
-      : checkpointAnswersSaveVersion(checkpoint, pending.since);
-  if (!answers) return null;
+  if (!pending?.id || !checkpoint.requestIds?.includes(pending.id)) return null;
   if (checkpoint.error) return 'failed';
   return checkpoint.alreadySaved ? 'already-saved' : 'saved';
-}
-
-/**
- * Whether a checkpoint message answers a pending "Save version" by time: it
- * arrived after the request was accepted (allowing for clock skew between
- * this browser and the worker). The fallback for a server that does not echo
- * request ids.
- */
-export function checkpointAnswersSaveVersion(
-  checkpoint: LiveCheckpoint,
-  pendingSince: number | null,
-  skewMs = 30_000
-): boolean {
-  if (pendingSince === null || checkpoint.at === null) return false;
-  const at = Date.parse(checkpoint.at);
-  return Number.isNaN(at) || at >= pendingSince - skewMs;
 }
 
 /**

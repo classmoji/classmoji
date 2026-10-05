@@ -27,7 +27,6 @@ import {
   SAVE_VERSION_MESSAGES,
   SAVE_VERSION_WAIT_MS,
   applyPageMeta,
-  checkpointAnswersSaveVersion,
   isSaveVersionRequestId,
   newSaveVersionRequestId,
   saveVersionGate,
@@ -515,12 +514,14 @@ test.describe('messages from the room', () => {
         at: '2026-10-03T10:00:00Z',
         requestIds: ['req-aaaaaaaa', 'bad id', 7],
         alreadySaved: true,
+        editsSince: true,
       })
     ).toEqual({
       type: 'checkpoint',
       at: '2026-10-03T10:00:00Z',
       requestIds: ['req-aaaaaaaa'],
       alreadySaved: true,
+      editsSince: true,
     });
     expect(
       parseStatelessMessage({ type: 'checkpoint', at: '2026-10-03T10:00:00Z', requestIds: 'x' })
@@ -594,16 +595,6 @@ test.describe('saved to GitHub', () => {
     expect(savedToGitHubStatus(null, now)).toBeNull();
   });
 
-  test('Save version is answered only by a checkpoint after it was accepted', () => {
-    const accepted = Date.parse('2026-10-03T12:00:00Z');
-    expect(checkpointAnswersSaveVersion({ at: '2026-10-03T12:00:05Z' }, accepted)).toBe(true);
-    // A little clock skew between this browser and the worker is allowed.
-    expect(checkpointAnswersSaveVersion({ at: '2026-10-03T11:59:50Z' }, accepted)).toBe(true);
-    expect(checkpointAnswersSaveVersion({ at: '2026-10-03T11:50:00Z' }, accepted)).toBe(false);
-    expect(checkpointAnswersSaveVersion({ at: '2026-10-03T12:00:05Z' }, null)).toBe(false);
-    expect(SAVE_VERSION_WAIT_MS).toBe(60_000);
-  });
-
   test('Save version is answered by the message naming its request, not by time', () => {
     const since = Date.parse('2026-10-03T12:00:00Z');
     const pending = { id: 'req-aaaaaaaa', since };
@@ -628,9 +619,17 @@ test.describe('saved to GitHub', () => {
       )
     ).toBe('failed');
     expect(saveVersionOutcome({ at: '2026-10-03T12:00:05Z' }, null)).toBeNull();
-    // A server that echoes no id: matched by time, as before.
-    expect(saveVersionOutcome({ at: '2026-10-03T12:00:05Z' }, { id: null, since })).toBe('saved');
-    expect(saveVersionOutcome({ at: '2026-10-03T11:50:00Z' }, { id: null, since })).toBeNull();
+    // A reply that named no id: nothing answers it (it times out as unconfirmed).
+    expect(
+      saveVersionOutcome(
+        { at: '2026-10-03T12:00:05Z', requestIds: ['req-aaaaaaaa'] },
+        {
+          id: null,
+          since,
+        }
+      )
+    ).toBeNull();
+    expect(SAVE_VERSION_WAIT_MS).toBe(60_000);
     expect(SAVE_VERSION_MESSAGES['already-saved']).toBe('Already saved.');
     expect(SAVE_VERSION_MESSAGES.saved).toBe('Version saved.');
   });
@@ -787,9 +786,5 @@ test.describe('saved to GitHub before checkpoint times were recorded', () => {
         row: row({ version: 6 }),
       })
     ).toEqual({ at: '2026-10-03T12:00:00Z', commit: 'abcdef1234567', editsSince: true });
-  });
-
-  test('a time-less checkpoint never answers a pending Save version', () => {
-    expect(checkpointAnswersSaveVersion({ at: null }, Date.now())).toBe(false);
   });
 });

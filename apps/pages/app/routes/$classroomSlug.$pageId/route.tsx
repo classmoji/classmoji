@@ -885,10 +885,13 @@ const PageRoute = () => {
   }>();
   const handledVersionRef = useRef<unknown>(null);
   const [pendingVersion, setPendingVersion] = useState<PendingSaveVersion | null>(null);
-  // Asked for while this browser's edits were on their way: sent once they arrive.
-  const [queuedVersion, setQueuedVersion] = useState<{ message?: string; since: number } | null>(
-    null
-  );
+  // Asked for while this browser's edits were on their way: sent once they
+  // arrive, and only for the page it was asked on.
+  const [queuedVersion, setQueuedVersion] = useState<{
+    message?: string;
+    since: number;
+    pageId: string;
+  } | null>(null);
   // The id of the request in flight, and its answer if the room's message
   // beat the action's reply.
   const inflightVersionIdRef = useRef<string | null>(null);
@@ -906,8 +909,11 @@ const PageRoute = () => {
     handledVersionRef.current = versionFetcher.data;
     const data = versionFetcher.data;
     const early = earlyVersionOutcomeRef.current;
+    const inflight = inflightVersionIdRef.current;
     inflightVersionIdRef.current = null;
     earlyVersionOutcomeRef.current = null;
+    // Asked on a page this view has since left: nothing to say here.
+    if (inflight === null) return;
     if (!data.success) {
       toast.error(data.error ?? 'The version could not be saved. Try again.');
     } else if (data.alreadySaved) {
@@ -919,24 +925,37 @@ const PageRoute = () => {
     }
   }, [versionFetcher.state, versionFetcher.data, announceVersion]);
   const liveCheckpointSeq = liveState.lastCheckpoint?.seq ?? null;
+  // Checked on each new message, and again when a request becomes pending (a
+  // message that arrived in between is not lost): matching is by id, so a
+  // second look at the same message is harmless, and a repeated answer for a
+  // settled request finds nothing pending.
   useEffect(() => {
     const checkpoint = liveState.lastCheckpoint;
     if (!checkpoint) return;
     const inflight = inflightVersionIdRef.current;
-    if (!pendingVersion && inflight) {
+    if (!pendingVersion) {
       // Answered before the action replied: kept for the reply.
-      earlyVersionOutcomeRef.current =
-        saveVersionOutcome(checkpoint, { id: inflight, since: Date.now() }) ??
-        earlyVersionOutcomeRef.current;
+      if (inflight) {
+        earlyVersionOutcomeRef.current =
+          saveVersionOutcome(checkpoint, { id: inflight, since: Date.now() }) ??
+          earlyVersionOutcomeRef.current;
+      }
       return;
     }
     const outcome = saveVersionOutcome(checkpoint, pendingVersion);
     if (!outcome) return;
     setPendingVersion(null);
     announceVersion(outcome);
-    // Each message once, by its number.
+    // The message by its number; `lastCheckpoint` changes only with it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveCheckpointSeq]);
+  }, [liveCheckpointSeq, pendingVersion, announceVersion]);
+  // Another page in the same view: nothing asked on the last one carries over.
+  useEffect(() => {
+    setPendingVersion(null);
+    setQueuedVersion(null);
+    inflightVersionIdRef.current = null;
+    earlyVersionOutcomeRef.current = null;
+  }, [page.id]);
   useEffect(() => {
     if (pendingVersion === null) return;
     const timer = window.setTimeout(
@@ -966,15 +985,19 @@ const PageRoute = () => {
     (message?: string) => {
       const gate = saveVersionGate(liveSyncStatus);
       if (gate === 'offline') toast.error(offlineVersionMessage);
-      else if (gate === 'wait') setQueuedVersion({ message, since: Date.now() });
+      else if (gate === 'wait') setQueuedVersion({ message, since: Date.now(), pageId: page.id });
       else submitSaveVersion(message);
     },
-    [liveSyncStatus, submitSaveVersion]
+    [liveSyncStatus, submitSaveVersion, page.id]
   );
   // A queued version goes as soon as everything here has synced; offline, or
   // still not synced after SAVE_VERSION_SYNC_WAIT_MS, the person is told.
   useEffect(() => {
     if (!queuedVersion) return;
+    if (queuedVersion.pageId !== page.id) {
+      setQueuedVersion(null);
+      return;
+    }
     if (liveSyncStatus === 'synced') {
       setQueuedVersion(null);
       submitSaveVersion(queuedVersion.message);
@@ -993,7 +1016,7 @@ const PageRoute = () => {
       Math.max(0, queuedVersion.since + SAVE_VERSION_SYNC_WAIT_MS - Date.now())
     );
     return () => window.clearTimeout(timer);
-  }, [queuedVersion, liveSyncStatus, submitSaveVersion]);
+  }, [queuedVersion, liveSyncStatus, submitSaveVersion, page.id]);
   const savingVersion =
     versionFetcher.state !== 'idle' || pendingVersion !== null || queuedVersion !== null;
 

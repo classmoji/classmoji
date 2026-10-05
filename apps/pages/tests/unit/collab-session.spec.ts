@@ -219,6 +219,16 @@ test.describe('CollabSession', () => {
     expect(session.getState().editedSinceCheckpoint).toBe(false);
     session.doc.getText('t').insert(0, 'mine ');
     expect(session.getState().editedSinceCheckpoint).toBe(true);
+    // The server says edits arrived that the run did not take: they still show.
+    provider.args.onStateless({
+      payload: JSON.stringify({
+        type: 'checkpoint',
+        at: '2026-10-03T12:02:00Z',
+        commit: 'def',
+        editsSince: true,
+      }),
+    });
+    expect(session.getState().editedSinceCheckpoint).toBe(true);
     session.destroy();
   });
 
