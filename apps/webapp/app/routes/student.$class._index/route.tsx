@@ -2,6 +2,7 @@ import { redirect } from 'react-router';
 import type { Route } from './+types/route';
 import { ClassmojiService } from '@classmoji/services';
 import { requireStudentAccess } from '~/utils/helpers';
+import { staffRedirectFromStudentRoute } from '~/utils/studentRouteRedirect.server';
 
 /**
  * Student classroom index route - redirects to configured default page
@@ -21,6 +22,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     });
     classroom = result.classroom;
   } catch (error: unknown) {
+    // Staff go to their own section's dashboard, as the layout sends them
+    // (#403). The layout's redirect normally wins; this keeps the index from
+    // sending them to / if it ever doesn't.
+    const staffRedirect = await staffRedirectFromStudentRoute(request, params.class!, error);
+    if (staffRedirect) return staffRedirect;
     // If auth fails (401/403), redirect to home instead of showing error
     if (error instanceof Response && (error.status === 401 || error.status === 403)) {
       return redirect('/');
