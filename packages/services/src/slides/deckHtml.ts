@@ -27,6 +27,7 @@ import { randomBytes } from 'node:crypto';
 // issue #361). The list lives in deckRuntimeAttrs.ts, the browser-safe module
 // the slides client imports so the two strippers can never drift.
 import { splitStyleDeclarations, stripRuntimeSectionAttrs } from './deckRuntimeAttrs.ts';
+import { domhandlerSlideTree, mayHaveHiddenSlides, removeHiddenSlides } from './hiddenSlides.ts';
 import {
   BLOCK_ID_ATTR,
   HTML_BLOCK_FRAME_SELECTOR,
@@ -907,6 +908,22 @@ export function secureSlideBlocksInHtml(html: string): string {
   const $ = cheerio.load(html, null, false);
   const changed = sanitizeSvgBlocksIn($) + neutralizeHtmlBlocksIn($);
   return changed === 0 ? html : serializeBrowserForm($);
+}
+
+/**
+ * A deck document (or `.slides` fragment) without its hidden slides — what
+ * every non-editor is sent (issue #436, rule in hiddenSlides.ts). Html with no
+ * hidden slide comes back byte for byte.
+ */
+export function stripHiddenSlidesFromHtml(html: string): string {
+  if (!mayHaveHiddenSlides(html)) return html;
+  // Fragment mode would drop <html>/<head>/<body> from a whole document.
+  const isDocument = /<(?:!doctype|html|body)[\s>]/i.test(html);
+  const $ = isDocument ? cheerio.load(html) : cheerio.load(html, null, false);
+  const container = $('.slides').first();
+  const root = container.length ? container[0] : $.root()[0];
+  if (removeHiddenSlides<AnyNode>(root, domhandlerSlideTree) === 0) return html;
+  return serializeBrowserForm($);
 }
 
 /** cheerio's local name and namespace for an element (svg names keep their case). */

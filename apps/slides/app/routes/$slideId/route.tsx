@@ -31,6 +31,7 @@ import {
   saveDeckWithMerge,
   slideFileService,
   slideService,
+  stripHiddenSlidesFromHtml,
   type DeckJson,
   type DeckShaSource,
   type DeckThemeUrls,
@@ -549,6 +550,13 @@ export const loader = async ({
       // Remove all <aside class="notes">...</aside> blocks
       // Using regex since we're dealing with simple HTML structure
       slideContent = slideContent.replace(/<aside\s+class="notes"[^>]*>[\s\S]*?<\/aside>/gi, '');
+    }
+
+    // Hidden slides reach only the deck's editors (#436). The client hides
+    // them in view mode as well, but a payload a student can read must not
+    // carry them; the editor's copy keeps them so a save cannot drop them.
+    if (!canEdit && slideContent) {
+      slideContent = stripHiddenSlidesFromHtml(slideContent);
     }
   } else {
     contentError = 'Failed to load slide content';

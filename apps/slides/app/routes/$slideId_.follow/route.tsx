@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { useLoaderData } from 'react-router';
 import getPrisma from '@classmoji/database';
 import { assertSlideAccess } from '@classmoji/auth/server';
-import { isDeckSlide } from '@classmoji/services/slides';
+import { isDeckSlide, stripHiddenSlidesFromHtml } from '@classmoji/services/slides';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import RevealPresenter from '~/components/RevealPresenter';
 import {
@@ -115,6 +115,12 @@ export const loader = async ({
     // Followers are typically students/public who shouldn't see notes unless show_speaker_notes is enabled
     if (!canViewSpeakerNotes && slideContent) {
       slideContent = slideContent.replace(/<aside\s+class="notes"[^>]*>[\s\S]*?<\/aside>/gi, '');
+    }
+
+    // Hidden slides reach only the deck's editors (#436); the presenter skips
+    // them too, so the indices it broadcasts still line up.
+    if (!canEdit && slideContent) {
+      slideContent = stripHiddenSlidesFromHtml(slideContent);
     }
   } else {
     contentError = 'Failed to load slide content';

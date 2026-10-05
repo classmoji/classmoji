@@ -46,10 +46,19 @@
 
 import { fetchContent, getMimeType, isBinaryFile } from '~/utils/contentProxy';
 import { contentProxySafetyHeaders, withNosniff } from '~/utils/contentProxyHeaders';
-import { isWithinContentPath, slideDocumentDecision } from '~/utils/slideDocumentAccess';
+import {
+  deckDocumentView,
+  deckFolderOfDocument,
+  isWithinContentPath,
+  slideDocumentDecision,
+} from '~/utils/slideDocumentAccess';
 import { assertSlideAccess, getAuthSession } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
-import { SLIDE_FILE_EXTENSIONS } from '@classmoji/services/slides';
+import {
+  SLIDE_FILE_EXTENSIONS,
+  mayHaveHiddenSlides,
+  stripHiddenSlidesFromHtml,
+} from '@classmoji/services/slides';
 import { getContentRepoName } from '@classmoji/utils';
 import getPrisma from '@classmoji/database';
 
@@ -384,7 +393,7 @@ async function serveContent({ params, request }: ContentLoaderArgs): Promise<Res
   // back — in a bookmarked `/content/...` link and in the presenter's own
   // client-side fallback, which is the one place a stale deck is worst. A
   // minute keeps the proxy cheap without outliving a save by much.
-  const headers = {
+  const headers: Record<string, string> = {
     'Content-Type': mimeType,
     'Cache-Control': binary ? 'public, max-age=3600' : 'public, max-age=60',
     'X-Content-Source': result.source, // Debug header
@@ -403,5 +412,30 @@ async function serveContent({ params, request }: ContentLoaderArgs): Promise<Res
     return new Response(binaryContent.buffer, { headers });
   }
 
-  return new Response(result.content as string, { headers });
+  // 5. A deck's stored document carries its hidden slides. Only the deck's
+  // editors get it whole (#436); everyone else gets what the viewer would show
+  // them. The answer now depends on who asked, so no shared cache may keep it.
+  let text = result.content as string;
+  if (deckFolderOfDocument(path) && mayHaveHiddenSlides(text)) {
+    const view = await deckDocumentView({
+      path,
+      classroomIds: authorizedClassroomIds,
+      findDecks: (classroomIds, contentPath) =>
+        getPrisma().slide.findMany({
+          where: {
+            classroom_id: { in: [...classroomIds] },
+            kind: 'DECK',
+            content_path: contentPath,
+          },
+          include: { classroom: { include: { git_organization: true } } },
+        }),
+      canEditDeck: async deck =>
+        (await assertSlideAccess({ request, slideId: deck.id, slide: deck, accessType: 'view' }))
+          .canEdit,
+    });
+    if (view === 'without-hidden') text = stripHiddenSlidesFromHtml(text);
+    headers['Cache-Control'] = 'private, max-age=60';
+  }
+
+  return new Response(text, { headers });
 }

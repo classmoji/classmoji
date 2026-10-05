@@ -1,5 +1,5 @@
 /**
- * slideDocumentAccess.ts — the two path rules the legacy content proxy needs
+ * slideDocumentAccess.ts — the path rules the legacy content proxy needs
  * now that a slide can BE a document.
  *
  * `/content/{org}/{repo}/{path}` authorizes a PATH against a REPO: prove the
@@ -125,4 +125,57 @@ export function slideDocumentRedirect(slideId: string): Response {
     status: 302,
     headers: nonDeckHeaders({ Location: `/${encodeURIComponent(slideId)}` }),
   });
+}
+
+/**
+ * The deck folder whose stored document `path` is, or null.
+ *
+ * A deck's generated document is `<content_path>/index.html`. That file holds
+ * every slide, hidden ones included (#436), so the proxy cannot hand it out as
+ * just another asset.
+ */
+export function deckFolderOfDocument(path: string): string | null {
+  const suffix = '/index.html';
+  if (!path.endsWith(suffix)) return null;
+  const folder = path.slice(0, -suffix.length);
+  return folder || null;
+}
+
+/** The least a deck row has to carry for the rule below to act on it. */
+export interface DeckSlideRef {
+  id: string;
+}
+
+/**
+ * Does this caller get a deck document as stored, or without its hidden
+ * slides?
+ *
+ * Only a caller who can EDIT the deck gets it whole, which is the same line the
+ * viewer draws (`canEdit` from `assertSlideAccess`). Every match is checked and
+ * any one that grants edit wins, for the reason `slideDocumentDecision` gives.
+ * Anything else — no deck row at this folder, a viewer, a refused check —
+ * gets the filtered copy, so the answer only ever errs towards hiding.
+ */
+export async function deckDocumentView<T extends DeckSlideRef>({
+  path,
+  classroomIds,
+  findDecks,
+  canEditDeck,
+}: {
+  path: string;
+  classroomIds: readonly string[];
+  findDecks: (classroomIds: readonly string[], contentPath: string) => Promise<T[]>;
+  canEditDeck: (slide: T) => Promise<boolean>;
+}): Promise<'whole' | 'without-hidden'> {
+  const folder = deckFolderOfDocument(path);
+  if (!folder || classroomIds.length === 0) return 'without-hidden';
+
+  for (const slide of await findDecks(classroomIds, folder)) {
+    try {
+      if (await canEditDeck(slide)) return 'whole';
+    } catch {
+      continue;
+    }
+  }
+  return 'without-hidden';
 }

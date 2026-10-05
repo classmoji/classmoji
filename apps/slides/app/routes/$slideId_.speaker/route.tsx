@@ -1,7 +1,7 @@
 import { useLoaderData } from 'react-router';
 import getPrisma from '@classmoji/database';
 import { assertSlideAccess } from '@classmoji/auth/server';
-import { isDeckSlide } from '@classmoji/services/slides';
+import { isDeckSlide, stripHiddenSlidesFromHtml } from '@classmoji/services/slides';
 import SpeakerView from '~/components/SpeakerView';
 import {
   deckAccessFor,
@@ -112,7 +112,9 @@ export const loader = async ({
 
     // Parse the HTML to extract just the slides content
     const parser = await import('cheerio');
-    const $ = parser.load(html ?? '');
+    // Hidden slides reach only the deck's editors (#436): a student is let in
+    // here when the deck shows its notes.
+    const $ = parser.load(canEdit ? (html ?? '') : stripHiddenSlidesFromHtml(html ?? ''));
     slideContent = $('.slides').html();
   } else {
     contentError = 'Failed to load slide content';
