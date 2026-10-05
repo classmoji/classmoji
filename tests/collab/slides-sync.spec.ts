@@ -4,8 +4,14 @@
  * Needs the dev stack (collab + trigger:dev) on the devport, the collab seed,
  * ENABLE_TEST_LOGIN=true. Opt-in, like the rest of this suite:
  *
- *   COLLAB_E2E=1 npx dotenv -e .env -- ./scripts/devport.sh run \
+ *   COLLAB_E2E=1 COLLAB_E2E_CHANNEL=chrome npx dotenv -e .env -- ./scripts/devport.sh run \
+ *     env WEBAPP_URL=http://<host>:3010 SLIDES_URL=http://<host>:6510 PAGES_URL=http://<host>:7110 \
  *     npx playwright test -c tests/collab slides-sync
+ *
+ * The URLs must be the host the collab server allows as an origin (on a
+ * devport with DEVPORT_PUBLIC_HOST set, that host — localhost is refused and
+ * the editor stays "Connecting"); COLLAB_E2E_CHANNEL=chrome when Playwright's
+ * own Chromium is not installed.
  *
  * Pinned: (1) a slide that changes hands never loses the last holder's edit —
  * it shows while the slide is held, even with the other person's caret

@@ -3474,6 +3474,9 @@ export default function SlideViewer() {
   const handlePresentClick = useCallback(
     (event: React.MouseEvent<HTMLAnchorElement>) => {
       if (!collabMode) return; // git decks: the plain link
+      // A new tab (⌘/Ctrl/middle click) keeps the plain link: the presenter's
+      // own load saves first (bounded) on the server.
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
       event.preventDefault();
       if (presentPending) return;
       setPresentPending(true);
