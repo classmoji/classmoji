@@ -834,10 +834,10 @@ describe('lock arbitration judged by the server', () => {
     // Holder 5 claims after attach: the arbiter confirms it.
     acquireLock(document, 'aaaa0001', holder(5), { now: deps.now() });
     expect(getLock(document, 'aaaa0001')).toHaveProperty('confirmed');
-    const takeover = (html?: string) => {
+    const takeover = (html?: string, as = holder(8)) => {
       const peer = cloneYDoc(document);
       peer.clientID = 8;
-      acquireLock(peer, 'aaaa0001', holder(8), {
+      acquireLock(peer, 'aaaa0001', as, {
         now: deps.now(),
         idleMs: LOCK_TAKEOVER_IDLE_MS,
         takeover: true,
@@ -877,6 +877,26 @@ describe('lock arbitration judged by the server', () => {
     deps.tick(LOCK_DISCONNECT_GRACE_MS + 1_000);
     takeover();
     expect(getLock(document, 'aaaa0001')).toMatchObject({ clientId: 8 });
+    document.destroy();
+  });
+
+  it("a refused claim does not restart the holder's idle clock", () => {
+    const { deps, document, takeover } = setupTakeover();
+    deps.tick(10_000);
+    takeover(); // refused: the holder was active 10 s ago
+    expect(getLock(document, 'aaaa0001')).toMatchObject({ clientId: 5 });
+    deps.tick(LOCK_TAKEOVER_IDLE_MS - 9_000); // the holder: idle ~61 s in all
+    takeover();
+    expect(getLock(document, 'aaaa0001')).toMatchObject({ clientId: 8 });
+    document.destroy();
+  });
+
+  it('the same person picks their slide up from a new tab at once (old tab gone)', () => {
+    const { deps, document, takeover } = setupTakeover();
+    document.awareness.disconnect(5); // the old tab reloaded
+    deps.tick(1_000);
+    takeover(undefined, { ...holder(8), userId: 'u5' });
+    expect(getLock(document, 'aaaa0001')).toMatchObject({ clientId: 8, userId: 'u5' });
     document.destroy();
   });
 

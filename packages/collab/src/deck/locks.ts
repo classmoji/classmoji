@@ -294,7 +294,7 @@ export function expireGoneLocks(
     connected: ReadonlySet<number>;
     graceMs?: number;
     notBefore?: number;
-    /** Server receive time of the entry's last change (LockActivity.changedAt). */
+    /** When the server last saw the holder active (LockActivity.holderActiveAt). */
     observedAt?: (slideId: string) => number | undefined;
   },
   origin: unknown = null
@@ -382,33 +382,55 @@ export function expireLocks(
  */
 export class LockActivity {
   private readonly seen = new Map<string, number>();
-  /** When the entry changed BEFORE its latest change (the arbiter's view of a claim). */
-  private readonly prior = new Map<string, number>();
-  /** Entries this observer saw change (not merely found when it started). */
-  private readonly observed = new Set<string>();
+  /**
+   * Per slide: who holds it and when the HOLDER was last seen active (its
+   * claim, heartbeats and edits of its own entry). The server's own writes
+   * (`serverOrigin`: arbiter stamps and reverts, disconnect marks) and
+   * someone else's claim the arbiter has not accepted never count as the
+   * holder's activity. `at` undefined: not seen since this observer started.
+   */
+  private readonly holders = new Map<string, { clientId: number; at?: number }>();
   private readonly map: Y.Map<unknown>;
   private readonly clock: () => number;
+  private readonly serverOrigin: unknown;
   private readonly handler: (event: Y.YMapEvent<unknown>) => void;
 
-  constructor(doc: Y.Doc, clock: () => number = Date.now) {
+  constructor(
+    doc: Y.Doc,
+    clock: () => number = Date.now,
+    { serverOrigin }: { serverOrigin?: unknown } = {}
+  ) {
     this.map = deckLocks(doc);
     this.clock = clock;
+    this.serverOrigin = serverOrigin;
     const start = clock();
-    this.map.forEach((_value, key) => this.seen.set(key, start));
+    this.map.forEach((value, key) => {
+      this.seen.set(key, start);
+      if (isSlideLock(value)) this.holders.set(key, { clientId: value.clientId });
+    });
     this.handler = event => {
       const now = this.clock();
+      const server =
+        this.serverOrigin !== undefined && event.transaction.origin === this.serverOrigin;
       for (const key of event.keysChanged) {
-        if (this.map.has(key)) {
-          const was = this.seen.get(key);
-          if (was === undefined) this.prior.delete(key);
-          else this.prior.set(key, was);
-          this.seen.set(key, now);
-          this.observed.add(key);
-        } else {
-          this.seen.delete(key);
-          this.prior.delete(key);
-          this.observed.delete(key);
+        const value = this.map.get(key);
+        if (this.map.has(key)) this.seen.set(key, now);
+        else this.seen.delete(key);
+        if (!isSlideLock(value)) {
+          this.holders.delete(key);
+          continue;
         }
+        const held = this.holders.get(key);
+        if (!held) {
+          this.holders.set(key, { clientId: value.clientId, ...(server ? {} : { at: now }) });
+        } else if (held.clientId === value.clientId) {
+          if (!server) held.at = now;
+        } else if (server || this.serverOrigin === undefined) {
+          // The arbiter accepted a new holder (or, without a server origin to
+          // tell, any change of holder counts).
+          this.holders.set(key, { clientId: value.clientId, at: now });
+        }
+        // else: someone else's claim, pending the arbiter — not the holder's activity.
       }
     };
     this.map.observe(this.handler);
@@ -420,24 +442,9 @@ export class LockActivity {
     return at === undefined ? 0 : Math.max(0, now - at);
   }
 
-  /**
-   * ms the entry had been idle when its LATEST change arrived — for judging
-   * a claim after the observer has already stamped it (Yjs runs observers
-   * before `afterTransaction`). 0 when the entry is new.
-   */
-  idleBeforeLastChangeMs(slideId: string, now: number = this.clock()): number {
-    const at = this.prior.get(slideId);
-    return at === undefined ? 0 : Math.max(0, now - at);
-  }
-
-  /** When this observer last saw the entry change; undefined if it never did. */
-  changedAt(slideId: string): number | undefined {
-    return this.observed.has(slideId) ? this.seen.get(slideId) : undefined;
-  }
-
-  /** `changedAt` for the change before the latest one. */
-  priorChangeAt(slideId: string): number | undefined {
-    return this.observed.has(slideId) ? this.prior.get(slideId) : undefined;
+  /** When the slide's holder was last seen active here; undefined when unknown. */
+  holderActiveAt(slideId: string): number | undefined {
+    return this.holders.get(slideId)?.at;
   }
 
   destroy(): void {
@@ -497,7 +504,7 @@ export function lockArbitration(
    * Whether the previous holder of `slideId` may be taken over now, judged
    * from the server's state. Omitted: every informed claim stands.
    */
-  mayTakeOver?: (slideId: string, previous: StampedLock) => boolean
+  mayTakeOver?: (slideId: string, previous: StampedLock, claim: StampedLock) => boolean
 ): Array<{ slideId: string; lock: StampedLock }> {
   const locks = deckLocks(doc);
   const lockMap = (locks as unknown as { _map: Map<string, ItemLike> })._map;
@@ -576,10 +583,12 @@ export function lockArbitration(
       }
       // The holder's own writes always stand; anyone else's only when the
       // server agrees the holder may be taken over.
-      const takeoverOk = mayTakeOver ? mayTakeOver(slideId, previousLock) : true;
-      const legit = [...informed].filter(
-        claim => lockOf(claim)?.clientId === previousLock.clientId || takeoverOk
-      );
+      const legit = [...informed].filter(claim => {
+        const lock = lockOf(claim);
+        if (!lock) return false;
+        if (lock.clientId === previousLock.clientId) return true;
+        return mayTakeOver ? mayTakeOver(slideId, previousLock, lock) : true;
+      });
       winner = legit.length === 0 ? previous : pickLowest(legit);
     } else {
       winner = pickLowest(claims);
@@ -620,7 +629,7 @@ function pickLowest(items: ItemLike[]): ItemLike {
 export function installLockArbiter(
   doc: Y.Doc,
   origin: unknown = 'lock-arbiter',
-  mayTakeOver?: (slideId: string, previous: StampedLock) => boolean
+  mayTakeOver?: (slideId: string, previous: StampedLock, claim: StampedLock) => boolean
 ): () => void {
   let applying = false;
   let seq = 0;

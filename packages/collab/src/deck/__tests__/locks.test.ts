@@ -211,8 +211,8 @@ describe('arbiter', () => {
   it('a takeover (a claim made on top of the previous lock) stands when the server agrees', () => {
     const server = peer(1);
     const judged: string[] = [];
-    installLockArbiter(server, 'lock-arbiter', (slideId, previous) => {
-      judged.push(`${slideId}:${previous.clientId}`);
+    installLockArbiter(server, 'lock-arbiter', (slideId, previous, claim) => {
+      judged.push(`${slideId}:${previous.clientId}->${claim.clientId}`);
       return true; // the holder is idle / gone, by the server's own view
     });
     const low = peer(10, server);
@@ -227,7 +227,7 @@ describe('arbiter', () => {
     Y.applyUpdate(server, Y.encodeStateAsUpdate(high));
     expect(getLock(server, 's1')?.name).toBe('High');
     expect(isConfirmedFor(getLock(server, 's1'), 20)).toBe(true);
-    expect(judged).toEqual(['s1:10']);
+    expect(judged).toEqual(['s1:10->20']);
   });
 
   it('reverts a takeover of a holder the server sees as active (the client lied about idleness)', () => {
@@ -294,20 +294,34 @@ describe('arbiter', () => {
 });
 
 describe('server-observed times', () => {
-  it('LockActivity: idle before the latest change, and when it changed while observed', () => {
+  it("LockActivity: the holder's activity ignores server writes and pending claims by others", () => {
     let now = 1_000;
+    const SERVER = 'server';
     const doc = peer(1);
-    const activity = new LockActivity(doc, () => now);
-    expect(activity.changedAt('s1')).toBeUndefined();
+    const activity = new LockActivity(doc, () => now, { serverOrigin: SERVER });
+    expect(activity.holderActiveAt('s1')).toBeUndefined();
     acquireLock(doc, 's1', holder(doc, 'A'), { now: 0 });
-    expect(activity.changedAt('s1')).toBe(1_000);
-    expect(activity.idleBeforeLastChangeMs('s1', 1_000)).toBe(0); // new entry
-    now = 70_000;
-    touchLock(doc, 's1', doc.clientID, 999);
-    // Judged as the claim/heartbeat arrives: idle since the previous change.
-    expect(activity.idleBeforeLastChangeMs('s1', 70_000)).toBe(69_000);
-    expect(activity.priorChangeAt('s1')).toBe(1_000);
-    expect(activity.changedAt('s1')).toBe(70_000);
+    expect(activity.holderActiveAt('s1')).toBe(1_000);
+    now = 5_000;
+    // The server's own write on the holder's entry (a stamp, a disconnect mark).
+    doc.transact(() => deckLocks(doc).set('s1', { ...getLock(doc, 's1')!, confirmed: 1 }), SERVER);
+    expect(activity.holderActiveAt('s1')).toBe(1_000);
+    // Someone else's claim, not (yet) accepted.
+    now = 9_000;
+    const other = { ...getLock(doc, 's1')!, clientId: 99, userId: 'u-B' };
+    doc.transact(() => deckLocks(doc).set('s1', other));
+    expect(activity.holderActiveAt('s1')).toBe(1_000);
+    // The arbiter puts the holder back: still not the holder's activity.
+    doc.transact(() => deckLocks(doc).set('s1', { ...other, clientId: 1, userId: 'u-A' }), SERVER);
+    expect(activity.holderActiveAt('s1')).toBe(1_000);
+    // The holder's own heartbeat is.
+    now = 12_000;
+    touchLock(doc, 's1', 1, 12_000);
+    expect(activity.holderActiveAt('s1')).toBe(12_000);
+    // The arbiter accepting a new holder starts that holder's clock.
+    now = 80_000;
+    doc.transact(() => deckLocks(doc).set('s1', { ...other, clientId: 99 }), SERVER);
+    expect(activity.holderActiveAt('s1')).toBe(80_000);
   });
 
   it('goneSince never trusts a client clock that runs ahead of the server', () => {

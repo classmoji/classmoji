@@ -500,7 +500,7 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
       // A gone holder keeps the slide until the grace from when they went —
       // never counted from before this process started (see goneSince).
       if (connected && !connected.has(lock.clientId)) {
-        const observedAt = activity?.changedAt(slideId);
+        const observedAt = activity?.holderActiveAt(slideId);
         if (!goneLockExpired(lock, { now, notBefore: this.startedAt, observedAt })) {
           out.set(slideId, lock);
         }
@@ -523,7 +523,7 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
         now: this.deps.now(),
         connected,
         notBefore: this.startedAt,
-        observedAt: slideId => activity?.changedAt(slideId),
+        observedAt: slideId => activity?.holderActiveAt(slideId),
       },
       LOCK_ORIGIN
     );
@@ -780,42 +780,59 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
   }
 
   /**
+   * The arbiter's judgement of a claim on a slide someone else held: the
+   * server's own view, never the claimant's.
+   *  - The same person picking their slide up again from a new tab (the old
+   *    one gone or marked disconnected): allowed at once.
+   *  - Otherwise once the holder is past the disconnect grace (marked, or
+   *    gone from awareness), or idle LOCK_TAKEOVER_IDLE_MS by the holder's
+   *    own activity as the server saw it (never the server's writes or
+   *    other people's refused claims). After a restart, with nothing seen
+   *    yet, from the holder's `lastActive` but not before the process start.
+   * A little slack covers the claimant measuring from a later receive time.
+   */
+  mayTakeOver(
+    document: Y.Doc,
+    activity: LockActivity,
+    slideId: string,
+    previous: StampedLock,
+    claim: StampedLock
+  ): boolean {
+    const now = this.deps.now();
+    const connected = connectedClients(document);
+    const marked = typeof previous.disconnectedAt === 'number';
+    const absent = !!connected && !connected.has(previous.clientId);
+    if (claim.userId === previous.userId && (marked || absent)) return true;
+    if (marked) {
+      return (
+        now - (previous.disconnectedAt as number) >= LOCK_DISCONNECT_GRACE_MS - TAKEOVER_SLACK_MS
+      );
+    }
+    if (absent) {
+      return goneLockExpired(previous, {
+        now: now + TAKEOVER_SLACK_MS,
+        notBefore: this.startedAt,
+        observedAt: activity.holderActiveAt(slideId),
+      });
+    }
+    const activeAt =
+      activity.holderActiveAt(slideId) ??
+      Math.max(Math.min(previous.lastActive, now), this.startedAt);
+    return now - activeAt >= LOCK_TAKEOVER_IDLE_MS - TAKEOVER_SLACK_MS;
+  }
+
+  /**
    * Start lock bookkeeping on a live document (idempotent): the arbiter, the
    * release of a disconnected client's locks, and a periodic sweep that also
    * clears locks left in a stored state by clients long gone. Stops when the
    * document is destroyed (Hocuspocus unloads it).
    */
-  /**
-   * The arbiter's judgement of a claim on a slide someone else held: the
-   * server's own view, never the claimant's. Takeover is allowed once the
-   * holder is past the disconnect grace (marked, or gone from awareness),
-   * or was idle LOCK_TAKEOVER_IDLE_MS when the claim arrived. A little slack
-   * covers the claimant having measured from a later receive time.
-   */
-  mayTakeOver(document: Y.Doc, activity: LockActivity, slideId: string, previous: StampedLock) {
-    const now = this.deps.now();
-    if (typeof previous.disconnectedAt === 'number') {
-      return now - previous.disconnectedAt >= LOCK_DISCONNECT_GRACE_MS - TAKEOVER_SLACK_MS;
-    }
-    const connected = connectedClients(document);
-    if (connected && !connected.has(previous.clientId)) {
-      return goneLockExpired(previous, {
-        now: now + TAKEOVER_SLACK_MS,
-        notBefore: this.startedAt,
-        observedAt: activity.priorChangeAt(slideId),
-      });
-    }
-    return (
-      activity.idleBeforeLastChangeMs(slideId, now) >= LOCK_TAKEOVER_IDLE_MS - TAKEOVER_SLACK_MS
-    );
-  }
-
   attach(document: Y.Doc): void {
     if (this.attached.has(document)) return;
-    const activity = new LockActivity(document, this.deps.now);
+    const activity = new LockActivity(document, this.deps.now, { serverOrigin: LOCK_ORIGIN });
     this.attached.set(document, { activity });
-    const uninstall = installLockArbiter(document, LOCK_ORIGIN, (slideId, previous) =>
-      this.mayTakeOver(document, activity, slideId, previous)
+    const uninstall = installLockArbiter(document, LOCK_ORIGIN, (slideId, previous, claim) =>
+      this.mayTakeOver(document, activity, slideId, previous, claim)
     );
     // Outside-push notices for slides that are gone (deleted since): pruned
     // now and whenever slides are deleted. Presence, not content.
