@@ -9,6 +9,7 @@ import {
 } from '@classmoji/services/slides/runtime-attrs';
 
 import { useToast } from '~/hooks';
+import { lockHolderOf } from '~/utils/collab/bridgeDom';
 import ImageUploadModal from './ImageUploadModal';
 import { useElementSelection } from './properties/ElementSelectionContext';
 import {
@@ -310,6 +311,13 @@ export default function SlideToolbar({
   const addSlideBelow = useCallback(() => {
     const currentSlide = getCurrentSlide();
     if (!currentSlide || !revealInstance) return;
+    // Live editing: adding below wraps the slide into a stack, which moves it
+    // — not while someone else holds it (it would only be put back).
+    const holder = currentSlideHolder ?? lockHolderOf(currentSlide);
+    if (holder !== null) {
+      toast.info(`${holder.trim() || 'Someone'} is editing this slide`);
+      return;
+    }
 
     const newSlide = createNewSlide();
     const parent = currentSlide.parentElement;
@@ -347,7 +355,7 @@ export default function SlideToolbar({
 
     revealInstance.layout(); // Recalculate slide positioning
     onContentChange?.();
-  }, [getCurrentSlide, revealInstance, onContentChange]);
+  }, [getCurrentSlide, revealInstance, onContentChange, currentSlideHolder, toast]);
 
   // ─────────────────────────────────────────────────────────────
   // Delete Current Slide
@@ -844,9 +852,29 @@ document.querySelector('h1').addEventListener('click', () => {
       <ToolbarButton onClick={addSlideRight} title="Add slide to right">
         → Add
       </ToolbarButton>
-      <ToolbarButton onClick={addSlideBelow} title="Add slide below (vertical)">
-        ↓ Add
-      </ToolbarButton>
+      <Tooltip
+        title={
+          heldByOther
+            ? `${currentSlideHolder?.trim() || 'Someone'} is editing this slide`
+            : 'Add slide below (vertical)'
+        }
+        mouseEnterDelay={0.1}
+        mouseLeaveDelay={0}
+      >
+        <button
+          onClick={addSlideBelow}
+          // Focusable while held, so keyboard users reach the reason.
+          aria-disabled={heldByOther}
+          data-testid="toolbar-add-slide-below"
+          className={`px-2 py-1 text-sm font-medium rounded-sm transition-colors ${
+            heldByOther
+              ? 'text-gray-400 dark:text-gray-500 cursor-not-allowed'
+              : 'text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600'
+          }`}
+        >
+          ↓ Add
+        </button>
+      </Tooltip>
       <Popconfirm
         title="Delete Slide"
         description="Are you sure you want to delete this slide?"
