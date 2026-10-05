@@ -1296,4 +1296,58 @@ test.describe('live deck bridge', () => {
     expect(text.toString()).toBe('THEIRS first notes mine');
     t.bridge.destroy();
   });
+
+  test('a release that crossed the server stamp is let go again (Done inside one round trip)', async () => {
+    const t = setup();
+    t.section('aaaa0002').innerHTML = '<h2>quick</h2>';
+    t.bridge.flushLocal(); // claim sent, not stamped yet
+    t.bridge.detach(); // Done before the stamp comes back: released locally
+    // The server applies the claim (stamping it: a newer entry) and then the
+    // delete, which only removes the entry the client had seen.
+    t.session.ack();
+    await tick();
+    t.session.ack(); // our second release reaches the server
+    expect(getLock(t.remote, 'aaaa0002')).toBeNull();
+    expect(getLock(t.session.doc, 'aaaa0002')).toBeNull();
+    t.bridge.destroy();
+  });
+
+  test('a lock naming this editor that it does not hold is adopted while the caret is in it', async () => {
+    const t = setup();
+    caretIn(t, 'aaaa0002');
+    // What a release that crossed the server's disconnect mark leaves behind:
+    // the server's (stamped) entry for our own client id.
+    t.remote.getMap('locks').set('aaaa0002', {
+      userId: 'user-me',
+      name: 'Ada Lovelace',
+      color: '#0090ff',
+      clientId: t.session.doc.clientID,
+      since: Date.now(),
+      lastActive: Date.now(),
+      confirmed: Date.now(),
+    });
+    await tick();
+    expect(t.states.at(-1)?.heldSlideId).toBe('aaaa0002');
+    t.section('aaaa0002').querySelector('h2')!.textContent = 'Two, typed after';
+    t.bridge.flushLocal();
+    t.session.ack();
+    expect(t.remoteHtml('aaaa0002')).toBe('<h2>Two, typed after</h2>');
+    await tick(400); // the debounce settles: nothing left waiting
+    t.session.ack();
+    expect(t.bridge.hasPendingLocal()).toBe(false);
+    // Not on that slide: such a lock is let go.
+    t.remote.getMap('locks').set('aaaa0003', {
+      userId: 'user-me',
+      name: 'Ada Lovelace',
+      color: '#0090ff',
+      clientId: t.session.doc.clientID,
+      since: Date.now(),
+      lastActive: Date.now(),
+      confirmed: Date.now(),
+    });
+    await tick();
+    t.session.ack();
+    expect(getLock(t.remote, 'aaaa0003')).toBeNull();
+    t.bridge.destroy();
+  });
 });

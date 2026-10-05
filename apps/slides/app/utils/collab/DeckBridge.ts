@@ -1542,8 +1542,40 @@ export class DeckBridge {
     } else if (held) {
       this.checkClaim();
     }
+    if (tr?.origin !== BRIDGE_ORIGIN) this.healOwnLocks();
     this.applyLockChrome();
     this.emit();
+  }
+
+  /**
+   * A lock that names this editor but is not the one it holds: a release
+   * that crossed the server's stamp or disconnect mark in flight (a map
+   * delete only removes the entries the client had seen, so the server's
+   * newer one survives it). Taken back when the person is still on that
+   * slide (the caret, or an edit waiting), let go again otherwise — never
+   * left to block everyone until it times out.
+   */
+  private healOwnLocks(): void {
+    if (!this.session.ready || this.destroyed) return;
+    const mine = this.doc.clientID;
+    for (const [slideId, lock] of allLocks(this.doc)) {
+      if (lock.clientId !== mine || this.held?.slideId === slideId) continue;
+      const wanted =
+        !this.held &&
+        !!this.slidesEl &&
+        (this.caretSlideId() === slideId ||
+          this.pendingEdits.has(slideId) ||
+          this.dirtySlides.has(slideId));
+      if (wanted) {
+        debugLock('own lock not held here', slideId, null, 'adopt');
+        this.held = this.newHeld(slideId);
+        this.checkClaim();
+        if (this.pendingEdits.has(slideId) || this.dirtySlides.has(slideId)) this.scheduleFlush();
+      } else {
+        debugLock('own lock not held here', slideId, null, 'release');
+        releaseLock(this.doc, slideId, mine, BRIDGE_ORIGIN);
+      }
+    }
   }
 
   /** Slides someone else holds are read-only; ours carry a quiet marker. */
@@ -1647,6 +1679,7 @@ export class DeckBridge {
         this.checkClaim();
       }
     }
+    this.healOwnLocks();
     if (this.pendingEdits.size > 0) this.flushLocal();
     if (this.mediaRetry) {
       this.mediaRetry = false;
