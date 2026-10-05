@@ -505,8 +505,9 @@ async function dispatch(
         };
         return answer;
       }
-      // Whoever saves the version co-authors it.
-      await runtime.deps.store.addEditors(kind, id, [actor]);
+      // Whoever saves the version co-authors it — unless it only flushes
+      // (present before showing): then only the people who edited are credited.
+      if (body.flushOnly !== true) await runtime.deps.store.addEditors(kind, id, [actor]);
       const message =
         typeof body.message === 'string' && body.message.trim() ? body.message.trim() : undefined;
       await runtime.triggerCheckpoint(located.classroomId, 'save-version', true, message, {

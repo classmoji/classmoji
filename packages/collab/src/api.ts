@@ -230,6 +230,12 @@ export interface CheckpointRequest {
    * mints one.
    */
   requestId?: string;
+  /**
+   * A checkpoint asked for only to push what is buffered (e.g. before
+   * presenting): the requester is NOT added as a co-author. People who
+   * edited are still credited.
+   */
+  flushOnly?: boolean;
 }
 
 /** A Save-version request id: 8–64 of `[A-Za-z0-9_-]`. */

@@ -459,3 +459,25 @@ describe('a person leaving while an agent edits', () => {
     );
   });
 });
+
+describe('flush-only checkpoints', () => {
+  it('a flushOnly checkpoint does not credit the requester; a Save version does', async () => {
+    await internal(server, 'POST', `/page/${PAGE}/ops`, {
+      ops: [insertOp('n1', 'A')],
+      actor: { userId: 'editor-1', name: 'Ed' },
+    });
+    const presenter = { userId: 'presenter-1', name: 'Pat' };
+    await internal(server, 'POST', `/page/${PAGE}/checkpoint`, {
+      actor: presenter,
+      flushOnly: true,
+    });
+    expect((await server.store.get('page', PAGE))!.editors.map(e => e.userId)).toEqual([
+      'editor-1',
+    ]);
+    await internal(server, 'POST', `/page/${PAGE}/checkpoint`, { actor: presenter });
+    expect((await server.store.get('page', PAGE))!.editors.map(e => e.userId)).toEqual([
+      'editor-1',
+      'presenter-1',
+    ]);
+  });
+});
