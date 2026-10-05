@@ -523,6 +523,7 @@ describe('page_content_apply', () => {
     expect(mocks.ensurePreviewBranch).toHaveBeenCalledTimes(1);
     const saveOpts = mocks.savePageContent.mock.calls[0][2] as Record<string, unknown>;
     expect(saveOpts).toMatchObject({ expectedSha: 'sha-1', branch: PREVIEW_BRANCH });
+    expect(saveOpts.createOnly).toBeUndefined(); // an existing content.json is updated under its sha
 
     // The updated block landed (id preserved through the update op).
     const savedBlocks = mocks.savePageContent.mock.calls[0][1] as Array<{
@@ -662,6 +663,7 @@ describe('page_content_apply', () => {
     // A sha-less create: put() would 409 any expectedSha against a missing
     // file, so the lock is GitHub's own create semantics (422 on existence).
     expect(saveOpts.expectedSha).toBeUndefined();
+    expect(saveOpts.createOnly).toBe(true);
   });
 
   it('create race: a 422 from the sha-less create maps to CONTENT_CONFLICT', async () => {
@@ -865,6 +867,8 @@ describe('page_content_apply', () => {
       // index.html's sha names a different file: as content.json's expectedSha
       // it would 409 every first write (GitHub sees a missing file + a sha).
       expect(saveOpts.expectedSha).toBeUndefined();
+      // Create-only: a content.json made since the read is refused, not overwritten.
+      expect(saveOpts.createOnly).toBe(true);
       expect(saveOpts.branch).toBeUndefined();
     });
 
@@ -877,6 +881,7 @@ describe('page_content_apply', () => {
       expect(mocks.ensurePreviewBranch).toHaveBeenCalledTimes(1);
       const saveOpts = mocks.savePageContent.mock.calls[0][2] as Record<string, unknown>;
       expect(saveOpts.expectedSha).toBeUndefined();
+      expect(saveOpts.createOnly).toBe(true);
       expect(saveOpts.branch).toBe(PREVIEW_BRANCH);
 
       mocks.getPreviewStatus.mockResolvedValue({ exists: true, commits_ahead: 1 });

@@ -397,6 +397,34 @@ describe('pageContent.savePageContent', () => {
     expect((failure as Error & { status?: number }).status).toBe(409);
   });
 
+  it('a plain save is an update: no createOnly reaches put', async () => {
+    await savePageContent(page, blocks, { coverImage: null, expectedSha: 'sha-1' });
+
+    expect(callArg(putMock).expectedSha).toBe('sha-1');
+    expect('createOnly' in callArg(putMock)).toBe(false);
+  });
+
+  it('createOnly reaches put (no sha), and an existing content.json is refused with 409', async () => {
+    // The caller read no content.json (a legacy index.html page): a file that
+    // exists at write time — made since that read, or too corrupt to load — is
+    // put's 409, never an overwrite.
+    getContentMock.mockResolvedValueOnce(null); // cover re-read: no content.json on the branch
+    putMock.mockRejectedValueOnce(
+      Object.assign(new Error('File already exists (create-only write refused)'), { status: 409 })
+    );
+
+    const failure = await savePageContent(page, blocks, {
+      createOnly: true,
+      branch: 'preview/pages/syllabus',
+    }).catch((e: Error) => e);
+
+    const arg = callArg(putMock);
+    expect(arg.createOnly).toBe(true);
+    expect(arg.expectedSha).toBeUndefined();
+    expect(arg.branch).toBe('preview/pages/syllabus');
+    expect((failure as Error & { status?: number }).status).toBe(409);
+  });
+
   it('forwards branch to put AND to the preserving re-read (as ref)', async () => {
     getContentMock.mockResolvedValueOnce({
       content: JSON.stringify({ blocks: [], coverImage: cover }),
@@ -2353,7 +2381,10 @@ describe('pageContent prepare / write / record', () => {
   });
 
   it('write commits the prepared bytes with the default message', async () => {
-    const result = await writePageContent(keyedPage, { path: 'pages/syllabus/content.json', content: 'X' });
+    const result = await writePageContent(keyedPage, {
+      path: 'pages/syllabus/content.json',
+      content: 'X',
+    });
     expect(result).toEqual({ sha: 'new-sha', commit: 'commit-1' });
     expect(callArg(putMock)).toMatchObject({
       path: 'pages/syllabus/content.json',

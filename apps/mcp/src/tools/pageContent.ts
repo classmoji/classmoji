@@ -924,8 +924,9 @@ async function applyPageEdits(args: PageContentApplyArgs, ctx: ToolContext): Pro
   // expectedSha + missing file as deleted-since-read). That covers a legacy
   // HTML page too: its sha is index.html's, which the caller's precondition was
   // checked against above, but the write creates content.json beside it.
-  // A conflict the write does report (409, or 422 on a sha-less create) maps
-  // to CONTENT_CONFLICT below.
+  // The create is create-only: a content.json that exists at write time (made
+  // since the read, or one too corrupt to load) is refused with a 409 —
+  // CONTENT_CONFLICT below — never overwritten.
   const isCreate = content.format !== 'json';
 
   let saved: { sha: string; commit: string };
@@ -933,7 +934,7 @@ async function applyPageEdits(args: PageContentApplyArgs, ctx: ToolContext): Pro
     saved = await ClassmojiService.pageContent.savePageContent(page, newBlocks, {
       // Also enforced GitHub-side at write time: catches a racing writer
       // between our read and this commit.
-      ...(isCreate ? {} : { expectedSha: expectedSha ?? args.expected_sha }),
+      ...(isCreate ? { createOnly: true } : { expectedSha: expectedSha ?? args.expected_sha }),
       ...(committedTo === 'preview'
         ? { branch: ClassmojiService.pageContent.previewBranchName(page.content_path) }
         : {}),

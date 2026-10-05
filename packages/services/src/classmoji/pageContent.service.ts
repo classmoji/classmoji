@@ -568,9 +568,10 @@ export async function writePageContent(
   prepared: Pick<PreparedPageContent, 'path' | 'content'>,
   {
     expectedSha,
+    createOnly,
     message,
     branch,
-  }: { expectedSha?: string; message?: string; branch?: string } = {}
+  }: { expectedSha?: string; createOnly?: boolean; message?: string; branch?: string } = {}
 ): Promise<{ sha: string; commit: string }> {
   const { gitOrganization, repo } = contentRepoFor(page);
   return ContentService.put({
@@ -580,6 +581,7 @@ export async function writePageContent(
     content: prepared.content,
     message: message ?? `Update page: ${page.title}`,
     ...(expectedSha ? { expectedSha } : {}),
+    ...(createOnly ? { createOnly: true } : {}),
     ...(branch ? { branch } : {}),
   });
 }
@@ -600,6 +602,11 @@ export async function writePageContent(
  *   `preparePageContent`.
  * @param options.expectedSha - Optimistic-lock sha; mismatch → error with
  *   status 409 (propagated from ContentService.put).
+ * @param options.createOnly - The caller read NO content.json (a legacy
+ *   index.html page, or no content file) and is creating one: a content.json
+ *   that exists at write time — created since the read, or one too corrupt to
+ *   load — is refused with status 409 instead of overwritten. Exclusive with
+ *   `expectedSha`.
  * @param options.message - Commit message (default `Update page: <title>`).
  * @param options.branch - Branch to commit to (default: repo default branch).
  * @returns The new file sha, the commit sha, and the coverImage AS STORED —
@@ -614,11 +621,13 @@ export async function savePageContent(
   {
     coverImage,
     expectedSha,
+    createOnly,
     message,
     branch,
   }: {
     coverImage?: PageCoverImage | null;
     expectedSha?: string;
+    createOnly?: boolean;
     message?: string;
     branch?: string;
   } = {}
@@ -629,6 +638,7 @@ export async function savePageContent(
   });
   const result = await writePageContent(page, prepared, {
     ...(expectedSha ? { expectedSha } : {}),
+    ...(createOnly ? { createOnly: true } : {}),
     ...(message !== undefined ? { message } : {}),
     ...(branch ? { branch } : {}),
   });
