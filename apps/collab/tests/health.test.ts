@@ -36,6 +36,25 @@ describe('collab server HTTP', () => {
     }
   });
 
+  it('survives a malformed request target (a scanner probe) and keeps serving', async () => {
+    const { request } = await import('node:http');
+    const { port, hostname } = new URL(server.httpUrl);
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = request(
+        { host: hostname, port: Number(port), path: '//%2e%2e%2f%2eenv', method: 'GET' },
+        res => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        }
+      );
+      req.on('error', reject);
+      req.end();
+    });
+    expect(status).toBe(404);
+    const health = await fetch(`${server.httpUrl}/health`);
+    expect(health.status).toBe(200);
+  });
+
   it('answers anything else with 404, not the Hocuspocus banner', async () => {
     const res = await fetch(`${server.httpUrl}/`);
     expect(res.status).toBe(404);

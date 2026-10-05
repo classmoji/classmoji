@@ -261,7 +261,7 @@ function authErrorResponse(err: CollabAuthError): {
 export async function handleInternal(
   request: IncomingMessage,
   response: ServerResponse,
-  url: URL,
+  url: { pathname: string; searchParams: URLSearchParams },
   runtime: CollabRuntime
 ): Promise<void> {
   try {
