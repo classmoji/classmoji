@@ -20,8 +20,12 @@
  * engine lived inline in deck.ts.
  */
 
+import { createHash } from 'node:crypto';
+import * as cheerio from 'cheerio';
+import type { Element } from 'domhandler';
 import { z } from 'zod';
 import {
+  BLOCK_ID_ATTR,
   HTML_BLOCK_FRAME_STYLE,
   blockMarkup,
   escapeBlockAttr,
@@ -449,6 +453,43 @@ export function prepareDeckOps(ops: DeckOp[], ctx: DeckFrameContext | null): Dec
   });
 }
 
+/**
+ * A slide's html with a `data-cm-block-id` on every top-level block, each
+ * one different — blocks made before block ids (or a pasted copy repeating
+ * an earlier block's id; the first keeps it) get one DERIVED from the
+ * block's markup and position (8 hex chars, unique on the slide), so the
+ * same html always yields the same ids: a read can report them
+ * (deck_outline / deck_get) and a block op that names one finds it, with the
+ * id then stored by the write. The html comes back unchanged when every
+ * block already has its own id.
+ */
+export function ensureSlideBlockIds(html: string): string {
+  if (!html.includes('sl-block')) return html;
+  const $ = cheerio.load(html, null, false);
+  const top = ($('.sl-block').toArray() as Element[]).filter(
+    el => $(el).parents('.sl-block').length === 0
+  );
+  const seen = new Set<string>();
+  const needsId = top.map(el => {
+    const id = el.attribs[BLOCK_ID_ATTR];
+    if (!id || seen.has(id)) return true;
+    seen.add(id);
+    return false;
+  });
+  if (!needsId.includes(true)) return html;
+  const taken = new Set([...html.matchAll(/data-cm-block-id="([^"]*)"/g)].map(m => m[1]));
+  const derive = (seed: string) => createHash('sha1').update(seed).digest('hex').slice(0, 8);
+  top.forEach((el, index) => {
+    if (!needsId[index]) return;
+    const seed = `${index}|${$.html(el)}`;
+    let id = derive(seed);
+    for (let n = 1; taken.has(id); n++) id = derive(`${seed}|${n}`);
+    taken.add(id);
+    el.attribs[BLOCK_ID_ATTR] = id;
+  });
+  return normalizeSlideHtml($.html());
+}
+
 /** The frame inside an iframe block: today's lazy-loaded embed (attributes in name order). */
 function iframeEmbedMarkup(src: string): string {
   return (
@@ -772,7 +813,7 @@ export function applyDeckOps(
 
       case 'block_add': {
         const slide = blockSlide(deck, op.slide, 'block_add');
-        const html = slide.html ?? '';
+        const html = ensureSlideBlockIds(slide.html ?? '');
         // Every block id on the slide, nested blocks included.
         const taken = new Set(
           [...html.matchAll(/data-cm-block-id="([^"]*)"/g)].map(match => match[1])
@@ -800,7 +841,8 @@ export function applyDeckOps(
             `block_update for '${op.block_id}' must set at least one of box, source, src`
           );
         }
-        const html = slide.html ?? '';
+        // Blocks from before block ids carry the id a read derived for them.
+        const html = ensureSlideBlockIds(slide.html ?? '');
         const block = readSlideBlocks(html, { content: false }).find(b => b.id === op.block_id);
         if (!block) {
           throw new DeckOpError(
@@ -836,7 +878,9 @@ export function applyDeckOps(
 
       case 'block_delete': {
         const slide = blockSlide(deck, op.slide, 'block_delete');
-        slide.html = blockEdit(op.slide, () => removeSlideBlock(slide.html ?? '', op.block_id));
+        slide.html = blockEdit(op.slide, () =>
+          removeSlideBlock(ensureSlideBlockIds(slide.html ?? ''), op.block_id)
+        );
         applied.push({ op: 'block_delete', slide: op.slide, block_id: op.block_id });
         break;
       }

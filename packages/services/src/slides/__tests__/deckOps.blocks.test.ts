@@ -17,6 +17,7 @@ import {
   checkBlockFrameSrc,
   deckOpSchema,
   deckOpsPayloadSchema,
+  ensureSlideBlockIds,
   prepareDeckOps,
   readSlideBlocks,
   resolveDeckFrameSrc,
@@ -369,6 +370,58 @@ describe('block_delete', () => {
     expect(() => apply([{ op: 'block_delete', slide: 'stack', block_id: 'x' }])).toThrow(
       /vertical stack container/
     );
+  });
+});
+
+describe('blocks made before block ids', () => {
+  const OLD =
+    '<div class="sl-block" data-block-type="iframe" style="left: 10px; top: 10px; width: 200px; height: 100px;">' +
+    '<div class="sl-block-content"><iframe data-src="https://example.com/a"></iframe></div></div>' +
+    '<div class="sl-block" data-block-type="iframe" style="left: 10px; top: 200px; width: 200px; height: 100px;">' +
+    '<div class="sl-block-content"><iframe data-src="https://example.com/a"></iframe></div></div>';
+  const oldDeck = (): DeckJson =>
+    ({ ...deck(), slides: [{ id: 's1', html: normalizeSlideHtml(OLD) }] }) as DeckJson;
+
+  it('derive the same unique ids every time, and leave an all-ids slide alone', () => {
+    const start = html(oldDeck(), 's1');
+    expect(readSlideBlocks(start).map(b => b.id)).toEqual([null, null]);
+    const once = ensureSlideBlockIds(start);
+    const ids = readSlideBlocks(once).map(b => b.id);
+    expect(ids).toHaveLength(2);
+    for (const id of ids) expect(id).toMatch(/^[0-9a-f]{8}$/);
+    expect(new Set(ids).size).toBe(2); // identical blocks, distinct ids
+    expect(ensureSlideBlockIds(start)).toBe(once);
+    expect(ensureSlideBlockIds(once)).toBe(once);
+  });
+
+  it('block_update reaches one by the derived id, and the write stores the ids', () => {
+    const [first, second] = readSlideBlocks(ensureSlideBlockIds(html(oldDeck(), 's1'))).map(
+      b => b.id as string
+    );
+    const { deck: out } = apply(
+      [{ op: 'block_update', slide: 's1', block_id: second, box: { left: 300 } }],
+      oldDeck()
+    );
+    const blocks = readSlideBlocks(html(out, 's1'));
+    expect(blocks.map(b => b.id)).toEqual([first, second]);
+    expect(blocks[1].box.left).toBe(300);
+  });
+
+  it('a pasted copy repeating an id gets its own; the first keeps it', () => {
+    const one = OLD.slice(0, OLD.indexOf('</div></div>') + '</div></div>'.length);
+    const tagged = one.replace('class="sl-block"', 'class="sl-block" data-cm-block-id="b1"');
+    const out = ensureSlideBlockIds(normalizeSlideHtml(tagged + tagged));
+    const ids = readSlideBlocks(out).map(b => b.id);
+    expect(ids[0]).toBe('b1');
+    expect(ids[1]).toMatch(/^[0-9a-f]{8}$/);
+  });
+
+  it('block_delete reaches one by the derived id', () => {
+    const [first, second] = readSlideBlocks(ensureSlideBlockIds(html(oldDeck(), 's1'))).map(
+      b => b.id as string
+    );
+    const { deck: out } = apply([{ op: 'block_delete', slide: 's1', block_id: first }], oldDeck());
+    expect(readSlideBlocks(html(out, 's1')).map(b => b.id)).toEqual([second]);
   });
 });
 
