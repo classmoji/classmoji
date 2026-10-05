@@ -764,7 +764,8 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
     'Applies granular slide operations (update / insert / move / delete / reorder / set_theme) ' +
     'to a deck. Pass expected_sha (+ sha_source) from deck_get or deck_outline, or your last ' +
     'new_sha; CONTENT_CONFLICT means that sha is stale or unknown — re-read. ' +
-    "In live mode it is the version ('live:E.V'), required except for pure inserts; edits " +
+    "In live mode it is the version ('live:E.V'), required except for pure inserts (their " +
+    'new_sha covers only what they add); edits ' +
     'elsewhere do not block you, but ops on slides someone changed since are refused ' +
     '(BLOCK_CHANGED, ids named). ' +
     "mode: 'live' edits the deck itself (with live editing on, people in the editor see it at " +

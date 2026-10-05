@@ -745,7 +745,8 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
     "page's BlockNote content. Pass expected_sha from page_content_get or " +
     'page_content_outline, or the new_sha of your last apply; CONTENT_CONFLICT means that sha ' +
     "is stale or unknown — re-read for a fresh one. In live mode it is the version ('live:E.V'), " +
-    'required except for pure inserts; edits elsewhere since do not block you, but ops on ' +
+    'required except for pure inserts (their new_sha covers only what they add); edits ' +
+    'elsewhere since do not block you, but ops on ' +
     'blocks someone changed since are refused (BLOCK_CHANGED, ids named). ' +
     "mode: 'live' edits the page itself (with live editing on, people in the editor " +
     "see it at once); mode: 'preview' stages the edits — students never see them — for review " +
@@ -1725,8 +1726,8 @@ async function setCoverLive(
   } catch (error) {
     throw liveWriteError(error, 'page', { previewHint: false });
   }
-  // The cover changes no block: the live service remembers the page as the
-  // cover set found it, so new_sha is checkable per block like a read.
+  // A cover set shows the agent no block: new_sha vouches for nothing, so an
+  // op pinned to it is refused (unknown-pin) until the agent re-reads.
 
   await writeAudit(ctx, {
     resource_type: 'PAGES',

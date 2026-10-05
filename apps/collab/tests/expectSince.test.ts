@@ -225,28 +225,55 @@ describe('expect_since on pages', () => {
     expect((await machine().apply([update('p2', 'agent')], next)).status).toBe(200);
   });
 
-  it('a pure insert (no pin) leaves a per-block pin behind', async () => {
-    const inserted = await machine().apply(
-      [{ op: 'insert', blocks: [{ type: 'paragraph', content: 'n' }], position: { at: 'end' } }],
-      null
-    );
+  const INSERT = {
+    op: 'insert',
+    blocks: [{ type: 'paragraph', content: 'n' }],
+    position: { at: 'end' },
+  };
+
+  it("a pure insert's (unpinned) version vouches only for what it inserted", async () => {
+    const inserted = await machine().apply([INSERT], null);
     expect(inserted.status).toBe(200);
+    const [newId] = inserted.body.insertedIds as string[];
     const pin = { epoch: 1, version: inserted.body.version as number };
     await personEdits(doc => textOf(doc, 'p2').insert(0, 'typed '));
-    expect((await machine().apply([update('p1', 'agent')], pin)).status).toBe(200);
-    const refused = await machine().apply([update('p2', 'agent')], pin);
-    expect(refused.body).toEqual({ error: 'block-changed', changedIds: ['p2'] });
+    // Its own block: fine, typing elsewhere notwithstanding.
+    expect((await machine().apply([update(newId, 'agent')], pin)).status).toBe(200);
+    // A block it was never shown, even untouched since: refused until a read.
+    const refused = await machine().apply([update('p1', 'agent')], pin);
+    expect(refused.body).toEqual({ error: 'block-changed', changedIds: ['p1'] });
+    const whole = await machine().apply(
+      [{ op: 'replace_all', blocks: [paragraph('z', 'z')] }],
+      pin
+    );
+    expect(whole.status).toBe(409);
+    const reread = await machine().read();
+    expect((await machine().apply([update('p1', 'agent')], reread)).status).toBe(200);
   });
 
-  it('a cover set with remember leaves a per-block pin behind', async () => {
+  it("read p1, a person edits p1, an unpinned insert: the insert's version cannot overwrite p1", async () => {
+    await machine().read();
+    await personEdits(doc => textOf(doc, 'p1').insert(0, 'person '));
+    const inserted = await machine().apply([INSERT], null);
+    const pin = { epoch: 1, version: inserted.body.version as number };
+    const res = await machine().apply([update('p1', 'agent, from its old read')], pin);
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'block-changed', changedIds: ['p1'] });
+    const now = await machine().read();
+    expect(JSON.stringify(now.content.blocks)).toContain('person One');
+  });
+
+  it("a cover set's version vouches for nothing (unknown-version: re-read)", async () => {
     const res = await internal(server, 'POST', `/page/${PAGE}/cover`, {
       actor: AGENT,
       coverImage: { url: 'pages/page-1/assets/a.png', position: 50 },
-      remember: true,
     });
     expect(res.status).toBe(200);
+    expect(res.body.epoch).toBe(1);
     const pin = { epoch: 1, version: res.body.version as number };
-    expect((await machine().apply([update('p1', 'agent')], pin)).status).toBe(200);
+    const refused = await machine().apply([update('p1', 'agent')], pin);
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toBe('unknown-version');
   });
 
   it('agents of different users never share a view', async () => {
@@ -371,6 +398,21 @@ describe('expect_since on decks', () => {
     await personEdits(setHtml('aaaa0002', '<h2>typed</h2>'), 'deck', DECK_ID);
     const res = await apply([{ op: 'reorder', order: ['aaaa0003', 'aaaa0001', 'aaaa0002'] }], pin);
     expect(res.status).toBe(200);
+  });
+
+  it("an unpinned insert's version does not vouch for the slide order or the theme", async () => {
+    const inserted = await apply(
+      [{ op: 'insert', slides: [{ html: '<p>n</p>' }], position: { at: 'end' } }],
+      null
+    );
+    expect(inserted.status).toBe(200);
+    const pin = { epoch: 1, version: inserted.body.version as number };
+    const theme = await apply([{ op: 'set_theme', code_theme: 'monokai' }], pin);
+    expect(theme.body).toEqual({ error: 'block-changed', changedIds: ['__meta__'] });
+    // (No read here: a read at this version would replace the insert's view.)
+    const ids = ['aaaa0001', 'aaaa0002', 'aaaa0003', ...(inserted.body.insertedIds as string[])];
+    const order = await apply([{ op: 'reorder', order: [...ids].reverse() }], pin);
+    expect(order.body).toEqual({ error: 'block-changed', changedIds: ['__order__'] });
   });
 
   it('set_theme is refused when someone changed the theme since the read', async () => {

@@ -320,7 +320,8 @@ export function fetchSnapshot<K extends CollabKind>(
  * at that version, inside the live transaction (409 block-changed /
  * unknown-version / stale-epoch, nothing applied). Either way the server
  * remembers the agent's view of the version the write leaves, so the
- * returned version is a pin too.
+ * returned version is a pin too — unpinned (pure inserts), one that vouches
+ * only for what the write inserted; anything else needs a re-read.
  */
 export function postOps(
   env: CollabEnv,
@@ -347,8 +348,6 @@ export function postCover(
   return collabRequest<OpsResponse>(env, 'POST', docPath('page', pageId, 'cover'), {
     coverImage,
     actor,
-    // The agent's view of the new version: its pin is judged per block.
-    remember: true,
   });
 }
 

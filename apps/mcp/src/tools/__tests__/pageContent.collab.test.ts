@@ -841,12 +841,12 @@ describe('live cover', () => {
       body: {
         coverImage: { url: 'pages/syllabus/assets/new.png', position: 40 },
         actor: { userId: 'teacher-1', name: 'Ada Lovelace' },
-        // The live service remembers the agent's view: new_sha is a per-block pin.
-        remember: true,
       },
     });
     expect(mocks.savePageContent).not.toHaveBeenCalled();
     expect(mocks.pageQuickUpdate).toHaveBeenCalledTimes(1);
+    // A cover set vouches for no block: nothing is remembered for its new_sha.
+    expect(calls.find(call => call.method === 'POST')?.body).not.toHaveProperty('remember');
     expect(mocks.auditCreate.mock.calls[0][0].data).toMatchObject({
       tool: 'page_cover_set',
       value: 'live:1.9',

@@ -357,7 +357,9 @@ async function dispatch(
       const expect = requireExpect(body.expect);
       const since = requireExpectSince(body.expect_since);
       // Track the caller's view of the version this write leaves (an agent's
-      // next pin), whenever it pins one or asks.
+      // next pin), whenever it pins one or asks. Unpinned, that view holds
+      // only what the write itself created: the caller was shown nothing
+      // else, so anything else needs a read first.
       const remember = since !== null || body.remember === true;
       if (expect && !adapter.checkExpect) {
         throw new CollabHttpError(501, { error: 'expect-unsupported', kind });
@@ -392,7 +394,7 @@ async function dispatch(
                 }
               }
               write(doc);
-              if (pre) after = viewAfterWrite(base ?? pre, pre, adapter.itemView!(doc));
+              if (pre) after = viewAfterWrite(base ?? NOTHING_SEEN, pre, adapter.itemView!(doc));
             }),
         };
         return adapter.applyOps(guarded, ops);
@@ -436,22 +438,11 @@ async function dispatch(
       const coverImage = requireCover(body.coverImage);
       const adapter = await runtime.adapter(kind);
       if (!adapter.setCover) throw new CollabHttpError(404, { error: 'not-found' });
-      // `remember`: the caller's view of the new version is the doc as the
-      // cover set found it (a cover changes no block), so its new pin is
-      // judged per block like a read's.
-      let after: ItemView | null = null;
-      const { version, epoch } = await runtime.withLiveEdit(kind, id, actor, async ctx => {
-        const result = await adapter.setCover!(ctx, coverImage);
-        if (body.remember === true && adapter.itemView) after = adapter.itemView(ctx.document);
-        return result;
-      });
-      if (after) {
-        agentViewsFor(runtime).remember(
-          { userId: actor.userId, session: actor.agentSession, kind, docId: id, epoch, version },
-          after,
-          'apply'
-        );
-      }
+      // Records no view: a cover set shows the caller no block, so its new
+      // version vouches for nothing (an op pinned to it is unknown-version).
+      const { version, epoch } = await runtime.withLiveEdit(kind, id, actor, ctx =>
+        adapter.setCover!(ctx, coverImage)
+      );
       return { version, epoch };
     }
 
@@ -735,6 +726,9 @@ function requireExpect(value: unknown): Record<string, string> | null {
   const entries = Object.entries(value as Record<string, string>);
   return entries.length > 0 ? Object.fromEntries(entries) : null;
 }
+
+/** The view of a caller that was shown nothing (an unpinned write's base). */
+const NOTHING_SEEN: ItemView = { items: new Map(), order: [] };
 
 interface ExpectSince {
   epoch: number;

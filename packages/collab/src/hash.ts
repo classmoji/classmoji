@@ -208,8 +208,9 @@ export function changedTargets(then: ItemView, now: ItemView, targets: OpTargets
 }
 
 /**
- * The agent's view after its write: `base` is what it was shown (or `pre`
- * when it pinned nothing), `pre`/`post` the live doc right before and after
+ * The agent's view after its write: `base` is what it was shown (an empty
+ * view when it pinned nothing — then only what the write created counts as
+ * seen), `pre`/`post` the live doc right before and after
  * its ops, in one transaction. An item the write created, or one the agent
  * saw as it was, takes its new hash; one someone else changed since the
  * agent's view keeps the agent's (stale) hash, or stays out when the agent
